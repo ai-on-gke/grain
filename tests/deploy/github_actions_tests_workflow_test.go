@@ -244,7 +244,7 @@ func TestGitHubCIChangesUINGE2EPaths(t *testing.T) {
 		".github/workflows/tests.yml":    "true",
 		"ui/src/App.jsx":                 "false",
 		"ui-hub/src/App.jsx":             "false",
-		"pkg/orchestrator/foo.go":        "false",
+		"pkg/orchestrator/foo.go":        "true",
 		"docs/design.md":                 "false",
 	}
 	for path, want := range cases {
