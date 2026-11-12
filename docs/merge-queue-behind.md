@@ -179,8 +179,8 @@ Both belong on the surface that *states the problem* -- the sentence
    predicate, and it is built (grain/task-479). `POST
    /api/tasks/{id}/force-merge` -- the "Force merge" button on the task
    pane, `ui.Client.ForceMerge`, `grain force-merge [-override-gates <gates>] <id> <reason>` (and `grain pr submit <pr> -override-gates <gates> -reason <why>`) --
-   records the override on the task; when any review gate (`security-review`
-   or `review`) is unsatisfied, `overrideGates` / `-override-gates` must
+   records the override on the task; when any review gate (`security-review`,
+   `review` or `targeted-review`, which `review` also covers) is unsatisfied, `overrideGates` / `-override-gates` must
    name each skipped gate explicitly; the next `SyncPullRequests` cycle
    reads it, `mayMerge` takes the forced arm, and **grain performs the
    merge itself**, so the task moves to merged, the queue row closes, and
