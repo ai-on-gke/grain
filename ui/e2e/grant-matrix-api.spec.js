@@ -119,12 +119,22 @@ test("every method and argument variant is granted, round-trips and is removed t
       }));
       results.push(...cells);
       const [cCheck, cAttach, cPatch] = cells;
-      // A grant grain refuses on every task may be refused by check
-      // too, as long as it says the same thing the writes do: then the
-      // form and the save agree.
+      // A grant grain refuses on every task must be refused by check
+      // too, with the same reason the writes give: then the form and the
+      // save agree.
       const checkRefused = Boolean(checked.error || !checked.recorded);
-      if (checkRefused && refusal && refusal.test(checked.error || "")) {
-        cCheck.outcome = "refused";
+      if (refusal) {
+        if (!checkRefused)
+          fail(
+            cCheck,
+            `check passed ${JSON.stringify(args)}: ${checked.recorded}`,
+          );
+        else if (!refusal.test(checked.error || ""))
+          fail(
+            cCheck,
+            `check refusal does not say ${refusal}: ${checked.error}`,
+          );
+        else cCheck.outcome = "refused";
       } else if (checkRefused) {
         fail(cCheck, `check refused a valid set: ${checked.error}`);
         continue;

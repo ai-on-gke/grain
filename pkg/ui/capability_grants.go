@@ -280,6 +280,8 @@ func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.
 	if check.Unchecked {
 		if err := model.CheckCapabilityGrantArgsOffline(s); err != nil {
 			check.Error, check.Fields = err.Error(), grantFieldErrors(err)
+		} else if errMsg, fields := postNormalizeGrantRefusal(s); errMsg != "" {
+			check.Error, check.Fields = errMsg, fields
 		} else {
 			check.Recorded = s
 		}
@@ -290,7 +292,12 @@ func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.
 		check.Error, check.Fields = err.Error(), grantFieldErrors(err)
 		return check
 	}
-	check.Recorded = names[0]
+	recorded := names[0]
+	if errMsg, fields := postNormalizeGrantRefusal(recorded); errMsg != "" {
+		check.Error, check.Fields = errMsg, fields
+		return check
+	}
+	check.Recorded = recorded
 	if spec, err := model.CapabilityGrantSpec(check.Recorded); err == nil {
 		check.Args = spec.With
 	}
@@ -300,6 +307,33 @@ func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.
 		check.Changed = check.Recorded != s
 	}
 	return check
+}
+
+// postNormalizeGrantRefusal refuses normalized capability references that
+// validate against their server's JSON schema yet cannot be attached as a
+// capability grant: a task's own repository target or write target
+// (repo#target, repo#write {repo, base}), CI-only repo#write {repo} access,
+// and an api#* scope set limited to a repository outside its reach.
+func postNormalizeGrantRefusal(grant string) (string, map[string]string) {
+	if msg, ok := taskRepoGrantRefusal(grant); ok {
+		return msg, nil
+	}
+	if _, ok := model.RepoWriteTarget(grant); ok {
+		return model.CIOnlyRefusal(grant), nil
+	}
+	if g, ok, err := model.ParseAPIGrant(grant); ok {
+		if err != nil {
+			return err.Error(), nil
+		}
+		if err := g.OutsideRepoLimit(); err != nil {
+			var fields map[string]string
+			if g.Repo != "" {
+				fields = map[string]string{"repo": err.Error()}
+			}
+			return err.Error(), fields
+		}
+	}
+	return "", nil
 }
 
 // protocolCapabilityID is the capability_id a grant string names, without
