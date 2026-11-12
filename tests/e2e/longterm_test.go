@@ -891,14 +891,25 @@ func runLongTermTestHarness(t *testing.T, cfg longTermConfig, isSustained bool) 
 	closedMerged := 0
 	escalated := 0
 	awaitingAck := 0
+	answered := 0
 	nonTerminal := 0
 
 	for _, tk := range finalTasks {
 		st := states[tk.ID]
 		switch st {
 		case model.StateClosed:
-			closedMerged++
 			metrics.recordTaskDone(model.DefaultTeamID)
+			// A child an agent proposed whose own run ended on words --
+			// a further proposal, a summary -- is a report-only task,
+			// and closes on its answer with nothing to merge
+			// (model.ClosesOnAnswer). Which tasks draw that plan depends
+			// on dispatch order, so treating every close as a merge made
+			// this test fail whenever one did.
+			if closedOnAnswer(ctx, t, store, tk) {
+				answered++
+				continue
+			}
+			closedMerged++
 			branch := model.BranchName(tk.ID)
 			if tk.Target != nil && generator.pushedBranch(tk.ID) {
 				bare := barePaths[tk.Target.Owner+"/"+tk.Target.Name]
@@ -920,8 +931,8 @@ func runLongTermTestHarness(t *testing.T, cfg longTermConfig, isSustained bool) 
 	}
 
 	t.Logf("=== Long Term Test Results Summary ===")
-	t.Logf("  Total Work Tasks: %d | Closed/Merged: %d | Escalated: %d | AwaitingAck: %d | NonTerminal: %d",
-		len(finalTasks), closedMerged, escalated, awaitingAck, nonTerminal)
+	t.Logf("  Total Work Tasks: %d | Closed/Merged: %d | Closed/Answered: %d | Escalated: %d | AwaitingAck: %d | NonTerminal: %d",
+		len(finalTasks), closedMerged, answered, escalated, awaitingAck, nonTerminal)
 	t.Logf("  Initial Pushes: %d (Clean: %d, Conflicts: %d, BrokenMain: %d, Questions: %d, Proposals: %d)",
 		metrics.initialPushes, metrics.cleanTasks, metrics.conflictsInjected, metrics.brokenMainEvents, metrics.questionsAsked, metrics.proposalsFiled)
 	t.Logf("  Repairs Dispatched: %d (Resolved: %d, Failed: %d)",
@@ -944,9 +955,30 @@ func runLongTermTestHarness(t *testing.T, cfg longTermConfig, isSustained bool) 
 	}
 
 	// Invariant 2: Progress was made across teams
-	if closedMerged+awaitingAck+escalated == 0 {
+	if closedMerged+answered+awaitingAck+escalated == 0 {
 		t.Fatalf("no tasks reached terminal state during the run")
 	}
+}
+
+// closedOnAnswer reports whether tk was closed by model.ClosesOnAnswer:
+// it has no change linked and carries the note that close posts.
+func closedOnAnswer(ctx context.Context, t *testing.T, store *model.Store, tk model.Task) bool {
+	t.Helper()
+	for _, l := range tk.Links {
+		if l.Kind.IsChange() {
+			return false
+		}
+	}
+	comments, err := store.Comments(ctx, tk.ID)
+	if err != nil {
+		t.Fatalf("reading %s's conversation: %v", tk.ID, err)
+	}
+	for _, c := range comments {
+		if strings.Contains(c.Body, model.AnsweredClosedNote) {
+			return true
+		}
+	}
+	return false
 }
 
 // longTermTeam is a team the harness files work under: a name on each
