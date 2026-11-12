@@ -333,7 +333,8 @@ func TestADefaultBranchWithNoFinishedVerdictRaisesANotice(t *testing.T) {
 }
 
 // A pull request's run whose head branch is main, or a fork's, is not the
-// default branch: it neither files a repair nor closes one.
+// default branch: it neither files a repair nor closes one, by its verdict
+// or through the goal's reading of its job rows.
 func TestADefaultBranchRepairIgnoresPullRequestAndForkRuns(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -356,5 +357,50 @@ func TestADefaultBranchRepairIgnoresPullRequestAndForkRuns(t *testing.T) {
 	}
 	if ids := baseRepairs(t, ctx, store, repo); len(ids) != 0 {
 		t.Fatalf("a pull request's or a fork's red run filed repairs %v", ids)
+	}
+
+	// With main really red, a fork's pull request opened from its own main
+	// goes green: its job rows say "main" too, but neither its verdict nor
+	// the goal's reading of those rows closes the repair.
+	red, redJobs := testsRun(t, ctx, store, repo, 22, "main", "failure", now, map[string]string{"go unit": "failure"})
+	if err := handleGitHubBaseVerdict(ctx, deps, red, redJobs, now); err != nil {
+		t.Fatal(err)
+	}
+	ids := baseRepairs(t, ctx, store, repo)
+	if len(ids) != 1 {
+		t.Fatalf("a red push to main filed %v, want one repair", ids)
+	}
+	g, err := store.TaskGoal(ctx, ids[0])
+	if err != nil || g == nil {
+		t.Fatalf("repair %s has no goal (%v)", ids[0], err)
+	}
+	later := now.Add(time.Hour)
+	forkGreen, forkGreenJobs := testsRun(t, ctx, store, repo, 23, "main", "success", later, map[string]string{"go unit": "success"})
+	forkGreen.Event, forkGreen.HeadRepo = "pull_request", "mallory/widgets"
+	if err := handleGitHubBaseVerdict(ctx, deps, forkGreen, forkGreenJobs, later); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileTaskGoal(ctx, deps, *g, later); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := store.State(ctx, ids[0]); st == model.StateClosed {
+		t.Fatalf("a fork's green pull request run closed repair %s", ids[0])
+	}
+
+	// A green push that concluded before the repair was filed, delivered
+	// late, does not close it either; the next green push does.
+	stale, staleJobs := testsRun(t, ctx, store, repo, 24, "main", "success", now.Add(-time.Minute), map[string]string{"go unit": "success"})
+	if err := handleGitHubBaseVerdict(ctx, deps, stale, staleJobs, later); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := store.State(ctx, ids[0]); st == model.StateClosed {
+		t.Fatalf("a green run older than repair %s closed it", ids[0])
+	}
+	pushed, pushedJobs := testsRun(t, ctx, store, repo, 25, "main", "success", later, map[string]string{"go unit": "success"})
+	if err := handleGitHubBaseVerdict(ctx, deps, pushed, pushedJobs, later); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := store.State(ctx, ids[0]); st != model.StateClosed {
+		t.Fatalf("a green push to main left repair %s %s, want closed", ids[0], st)
 	}
 }
