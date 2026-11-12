@@ -67,7 +67,17 @@ func (a HTTPApprover) Approve(ctx context.Context, r Request) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	approval, err := a.doJSON(ctx, http.MethodPost, endpoint, body)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	// The ask itself is not cut short by ctx: the server records the
+	// pending approval before it answers, so a call cancelled mid-ask
+	// would leave an approval in the inbox that nothing ever expires
+	// (it has no ID to expire yet). Finish the ask, bounded, and let the
+	// loop below see ctx and expire what it created.
+	createCtx, cancelCreate := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	approval, err := a.doJSON(createCtx, http.MethodPost, endpoint, body)
+	cancelCreate()
 	if err != nil {
 		return false, fmt.Errorf("asking for approval: %w", err)
 	}

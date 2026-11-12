@@ -57,6 +57,7 @@ package reviewedmerge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -126,6 +127,28 @@ type Forge interface {
 	FirstParent(ctx context.Context, repo, sha string) (string, error)
 }
 
+// ForgeError is a check that could not be made because the forge's
+// records could not be read, as against one the policy refused: the commit
+// may well have been reviewed, and nothing was decided about it. It is
+// still not a pass -- whoever asked must not publish or run the commit --
+// but it says to try again, not that the commit was unreviewed.
+type ForgeError struct {
+	// What is what was being read: "the pull requests for <sha>".
+	What string
+	Err  error
+}
+
+func (e *ForgeError) Error() string { return "could not read " + e.What + ": " + e.Err.Error() }
+
+func (e *ForgeError) Unwrap() error { return e.Err }
+
+// IsForgeError is whether err, from Check or CheckChain, is a ForgeError
+// rather than the policy's refusal.
+func IsForgeError(err error) bool {
+	var fe *ForgeError
+	return errors.As(err, &fe)
+}
+
 // Merge is how one commit reached its branch.
 type Merge struct {
 	Commit string `json:"commit"`
@@ -172,7 +195,7 @@ func (p Policy) isMerger(login string) bool {
 func (p Policy) Check(ctx context.Context, f Forge, sha string) (Merge, error) {
 	pulls, err := f.PullsForCommit(ctx, p.Repo, sha)
 	if err != nil {
-		return Merge{}, fmt.Errorf("reading the pull requests for %s: %w", short(sha), err)
+		return Merge{}, &ForgeError{What: "the pull requests for " + short(sha), Err: err}
 	}
 	var delivered []Pull
 	for _, pr := range pulls {
@@ -207,7 +230,7 @@ func (p Policy) Check(ctx context.Context, f Forge, sha string) (Merge, error) {
 func (p Policy) approvedBy(ctx context.Context, f Forge, pr Pull) (string, string, error) {
 	reviews, err := f.Reviews(ctx, p.Repo, pr.Number)
 	if err != nil {
-		return "", "", fmt.Errorf("reading the reviews of pull request #%d: %w", pr.Number, err)
+		return "", "", &ForgeError{What: fmt.Sprintf("the reviews of pull request #%d", pr.Number), Err: err}
 	}
 	// The latest of each reviewer's deciding reviews, the way the forge
 	// counts them toward a requirement: a comment after an approval does
@@ -278,7 +301,7 @@ func (p Policy) CheckChain(ctx context.Context, f Forge, sha, since string, max 
 		}
 		parent, err := f.FirstParent(ctx, p.Repo, at)
 		if err != nil {
-			return Record{}, fmt.Errorf("reading %s's first parent: %w", short(at), err)
+			return Record{}, &ForgeError{What: short(at) + "'s first parent", Err: err}
 		}
 		if parent == "" {
 			return Record{}, fmt.Errorf("%s's first-parent chain never reaches %s", short(sha), short(since))
