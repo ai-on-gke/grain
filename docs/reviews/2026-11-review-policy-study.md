@@ -356,7 +356,7 @@ another review of the same head already reads.
    | targeted, after | ≤1 | ≈$1 | — |
 
    The ≤1 run/day left are agentd-contract changes touching unclassified
-   paths, until item 3. experimental/grain's `edition-trust-boundary`
+   paths, which item 2 gives a contract review of their own. experimental/grain's `edition-trust-boundary`
    should get the same treatment, but its trigger file is in that
    repository.
 2. **Per-trigger edits:**
