@@ -39,7 +39,11 @@ fields:
 # pipeline steward for the same reason). A manager only reads releases,
 # schedules and declarations.
 # task-admin: tasks, merge:write, ci and notifications:write.
-# dispatch-control: run-now and undefer (dispatch:write).
+# Not dispatch-control: the only scope it adds to task-admin is
+# dispatch:write (run-now, pause and resume dispatch), which the sandbox
+# channel this body's `grain api` calls go through refuses
+# (model.IsSandboxDeniedAPIScope), so it would widen what the run holds
+# without giving it anything it can use. Undefer is tasks:write.
 # self-debug: tasks:read on every repository, which is how it reads the
 # edition's release tasks. The read of the edition's own repository is
 # granted to this template in grain's settings, not here: this repository
@@ -49,7 +53,6 @@ capabilities:
   - {capability: "https://grain.dev/capabilities/api#schedules:read", with: {repo: ai-on-gke/grain}}
   - {capability: "https://grain.dev/capabilities/api#repos:read", with: {repo: ai-on-gke/grain}}
   - {capability: "https://grain.dev/capabilities/api#task-admin", with: {repo: ai-on-gke/grain}}
-  - {capability: "https://grain.dev/capabilities/api#dispatch-control", with: {repo: ai-on-gke/grain}}
   - {capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}
   - "https://grain.dev/capabilities/api#self-debug"
 body: |
@@ -142,7 +145,7 @@ body: |
   - **A task that is stuck.** Read why (`grain task read <id>`), then:
     - queued for hours behind the backlog: raise its priority
       (`grain api PATCH /api/tasks/<id> --body '{"priority": 8}'`, or
-      `9` for a release blocker), or `POST /api/tasks/<id>/run-now`;
+      `9` for a release blocker);
     - deferred or parked on time with nothing left to wait for:
       `POST /api/tasks/<id>/undefer`;
     - failed on an infrastructure fault or a flake: `POST /api/tasks/<id>/retry`;
