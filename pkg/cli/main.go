@@ -99,7 +99,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -492,6 +491,7 @@ Commands:
                                        git host with no forge API, whose login is git's credential helper
   default-model [-if-none | -if-unserved] <model>
                                        set the model tasks run on when nothing more specific chose one
+  qa [status|enable|disable]           inspect or configure the quality control engine and PR rollout (Settings -> Tasks)
   gcp-key list|get|set|delete          manage this deployment's GCP service-account keys
   capability-servers list|add|remove|enable|disable|bind-secret
                                        manage this deployment's capability servers (mcpServers)
@@ -730,6 +730,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdDeclarations(ctx, c, out, cmdArgs)
 	case "settings":
 		return cmdSettings(ctx, c, out, cmdArgs)
+	case "qa":
+		return cmdQA(ctx, c, out, cmdArgs)
 	case "sandbox-budget":
 		return cmdSandboxBudget(ctx, c, out, cmdArgs)
 	case "sandbox":
@@ -759,55 +761,4 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 	default:
 		return unknownCommandError{cmd}
 	}
-}
-
-// unknownCommandError is a command dispatchCLI does not have; Main prints
-// the usage for it (the sandbox CLI's, inside a sandbox).
-type unknownCommandError struct{ cmd string }
-
-func (e unknownCommandError) Error() string { return fmt.Sprintf("unknown command %q", e.cmd) }
-
-// taskID reads the task id positional argument. It is not parsed as a
-// number: ids are decimal today because that is what Store.NewTaskID
-// allocates, but Task.ID is an opaque string and nothing here is entitled
-// to assume otherwise.
-func taskID(s string) (string, error) {
-	if s == "" {
-		return "", usageErrorf("a task id is required")
-	}
-	return s, nil
-}
-
-// stringList is a repeatable flag.Value -- one -capability per capability
-// ID, rather than a single comma-joined flag a capability ID containing
-// a comma could never round-trip through.
-type stringList []string
-
-func (s *stringList) String() string { return strings.Join(*s, ",") }
-func (s *stringList) Set(v string) error {
-	*s = append(*s, v)
-	return nil
-}
-
-// printer renders CLI output either as a human-readable table (the
-// default) or as JSON (-json) -- the same shape a script or another
-// program (the UI included, per this command's own doc comment) would
-// want instead of text meant for a terminal.
-type printer struct{ json bool }
-
-// note is a line about the listing rather than a line of it -- what was
-// left out of a task list and how to ask for it (list.go's hiddenNote).
-// It goes to stderr so that a listing stays a listing: `grain list |
-// wc -l` counts tasks, and -json emits JSON and nothing else.
-func (p *printer) note(text string) {
-	if p.json || text == "" {
-		return
-	}
-	fmt.Fprintln(os.Stderr, text)
-}
-
-func (p *printer) encode(v any) {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	_ = enc.Encode(v)
 }

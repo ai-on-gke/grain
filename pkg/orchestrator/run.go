@@ -3329,6 +3329,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	if err != nil {
 		return unprepared(err)
 	}
+	if _, err := resolveTaskQAAssignment(ctx, store, cfg, task, d.RunID, cfg.now()); err != nil {
+		return unprepared(err)
+	}
 
 	// Before the agent's first turn: a run whose sandbox never got its repo
 	// has nothing to do. Capability placements are applied just below before
