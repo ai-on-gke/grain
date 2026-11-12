@@ -42,7 +42,7 @@ import {
 } from "@angular/core";
 import { NgTemplateOutlet } from "@angular/common";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
-import type { DiffPreview, Task, TaskDetail } from "../api/models";
+import type { DiffPreview, Task, TaskDetail, AttachmentUpload } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { HelpService } from "../services/help.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
@@ -51,6 +51,8 @@ import { isHuman } from "../sessions/session-view";
 import { ActorChipComponent } from "../shared/actor-chip.component";
 import { MarkdownDirective, annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
+import { ConversationComponent } from "../shared/conversation/conversation.component";
+
 import {
   type FilterId,
   type InboxAction,
@@ -678,43 +680,6 @@ const ONE_KEY = new Set(["approve"]);
                       >; the value never comes back to the page.
                     </p>
                   }
-                  <textarea
-                    #replyBox
-                    class="reply-textarea"
-                    rows="3"
-                    aria-label="Reply to the agent"
-                    placeholder="Your reply goes to the agent and it resumes"
-                    data-testid="reply-input"
-                    [value]="draft()"
-                    [disabled]="!can(commentsRoute, sel) || !!sel.gone"
-                    (input)="onDraft(sel, $any($event.target).value)"
-                  ></textarea>
-                  @if (replyBlock(sel); as why) {
-                    <p class="rbac-note" data-testid="reply-blocked">
-                      {{ why }}
-                    </p>
-                  }
-                  <div class="action-bar">
-                    <div class="action-btn-group">
-                      <button
-                        type="button"
-                        class="btn-primary"
-                        data-testid="send-reply"
-                        [disabled]="
-                          !draft().trim() ||
-                          !!store.busy() ||
-                          !can(commentsRoute, sel) ||
-                          !!replyBlock(sel)
-                        "
-                        (click)="sendReply(sel)"
-                      >
-                        Send to #{{ target()?.taskId ?? sel.taskId }}
-                      </button>
-                      <ng-container
-                        *ngTemplateOutlet="actions; context: { $implicit: sel }"
-                      />
-                    </div>
-                  </div>
                 }
                 @case ("access") {
                   @if (store.selectedDetail()?.pendingAccess; as pa) {
@@ -967,150 +932,41 @@ const ONE_KEY = new Set(["approve"]);
               </div>
 
               @if (sel.taskId) {
-                <div class="evidence-card" data-testid="inspector-conversation">
-                  <div class="inbox-conv-head">
-                    <h3 class="section-title">
-                      Conversation
-                      @if (inspectorComments().length) {
-                        <span class="muted tabular"
-                          >· {{ inspectorComments().length }}</span
-                        >
-                      }
-                    </h3>
-                    @if (isTaskRunning(sel)) {
-                      <span class="status-pill setup">Live</span>
-                    }
-                  </div>
-
-                  @if (inspectorComments().length) {
-                    <div
-                      #convLog
-                      class="inbox-conv-log"
-                      role="log"
-                      aria-label="Task conversation"
-                    >
-                      @for (c of inspectorComments(); track c.id) {
-                        <article
-                          class="msg"
-                          [class.is-human]="human(c)"
-                          [class.is-handover]="c.handover"
-                          [attr.data-testid]="'inbox-msg-' + c.id"
-                        >
-                          <span class="msg-meta">
-                            <span class="msg-author"
-                              ><g-actor-chip
-                                [label]="actorLabel(c)"
-                                [kind]="c.authorKind"
-                                [behalf]="c.onBehalfOfLabel || c.onBehalfOf"
-                            /></span>
-                            @if (c.id === sel.task?.questionCommentId) {
-                              <span class="status-pill reply">Question</span>
-                            }
-                            @if (c.handover) {
-                              <span class="status-pill neutral"
-                                >Handover note</span
-                              >
-                            }
-                            <time class="mono" [attr.datetime]="c.createdAt">{{
-                              c.createdAt ? ago(c.createdAt) : ""
-                            }}</time>
-                          </span>
-                          <div class="msg-body" [gMarkdown]="c.body"></div>
-                        </article>
-                      }
-                    </div>
-                  } @else if (store.selectedDetail()) {
-                    <p class="muted evidence-text">No messages yet.</p>
-                  } @else {
-                    <p class="muted evidence-text">Reading conversation…</p>
-                  }
-
-                  @if (
-                    isTaskRunning(sel) && store.selectedTranscript();
-                    as liveOut
-                  ) {
-                    <pre
-                      class="inbox-live-transcript"
-                      data-testid="inbox-live-transcript"
-                      aria-label="Live run transcript"
-                      >{{ liveOut }}</pre>
-                  }
-
-                  @if (sel.kind !== "reply" && !sel.gone) {
-                    <div class="inbox-talk-composer">
-                      <textarea
-                        #talkBox
-                        class="reply-textarea"
-                        rows="2"
-                        aria-label="Message the agent on this task"
-                        [placeholder]="talkPlaceholder(sel)"
-                        data-testid="inbox-talk-input"
-                        [value]="talkDraft()"
-                        [disabled]="!can(commentsRoute, sel)"
-                        (input)="onTalkDraft(sel, $any($event.target).value)"
-                        (keydown.control.enter)="onTalkShortcut($event, sel)"
-                        (keydown.meta.enter)="onTalkShortcut($event, sel)"
-                      ></textarea>
-                      @if (talkBlock(sel); as why) {
-                        <p class="rbac-note" data-testid="talk-blocked">
-                          {{ why }}
-                        </p>
-                      }
-                      <div class="inbox-talk-actions">
-                        <span class="muted composer-hint">
-                          @if (isAwaitingReplyHold(sel)) {
-                            Replying clears the hold and resumes the agent{{
-                              canWake(sel) ? " · Ctrl+Enter sends" : ""
-                            }}
-                          } @else {
-                            e focuses{{
-                              canWake(sel) ? " · Ctrl+Enter wakes agent" : ""
-                            }}
-                          }
-                        </span>
-                        <div class="inbox-talk-btns">
-                          @if (!isAwaitingReplyHold(sel)) {
-                            <button
-                              type="button"
-                              class="btn-tonal"
-                              data-testid="inbox-send-comment"
-                              [disabled]="
-                                !talkDraft().trim() ||
-                                !!store.busy() ||
-                                !can(commentsRoute, sel) ||
-                                !!talkBlock(sel)
-                              "
-                              (click)="sendTalk(sel, false)"
-                            >
-                              Comment only
-                            </button>
-                          }
-                          <button
-                            type="button"
-                            class="btn-primary"
-                            data-testid="inbox-send-wake"
-                            [title]="
-                              !canWake(sel) ? wakeDeniedReason(sel) : null
-                            "
-                            [disabled]="
-                              !talkDraft().trim() ||
-                              !!store.busy() ||
-                              !canWake(sel) ||
-                              !!talkBlock(sel)
-                            "
-                            (click)="sendTalk(sel, true)"
-                          >
-                            {{
-                              isAwaitingReplyHold(sel)
-                                ? "Reply & resume agent"
-                                : "Send & wake agent"
-                            }}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  }
-                </div>
+                <g-conversation
+                  data-testid="inspector-conversation"
+                  [taskId]="sel.taskId"
+                  [comments]="inspectorComments()"
+                  [transcript]="
+                    isTaskRunning(sel) ? store.selectedTranscript() : null
+                  "
+                  [questionCommentId]="
+                    sel.kind === 'reply' ? sel.task?.questionCommentId : undefined
+                  "
+                  [config]="{
+                    placeholder:
+                      sel.kind === 'reply'
+                        ? 'Your reply goes to the agent and it resumes'
+                        : talkPlaceholder(sel),
+                    submitLabel:
+                      sel.kind === 'reply'
+                        ? 'Send to #' + (target()?.taskId ?? sel.taskId)
+                        : this.isAwaitingReplyHold(sel)
+                          ? 'Reply & resume agent'
+                          : 'Talk to ' + sel.taskId,
+                    secondaryLabel:
+                      sel.kind !== 'reply' && !this.isAwaitingReplyHold(sel)
+                        ? 'Comment only'
+                        : undefined,
+                    disabled:
+                      !can(commentsRoute, sel) ||
+                      !!sel.gone ||
+                      (sel.kind !== 'reply' && !!talkBlock(sel)) ||
+                      (sel.kind === 'reply' && !!replyBlock(sel)),
+                    deniedReason:
+                      sel.kind === 'reply' ? replyBlock(sel) : talkBlock(sel),
+                  }"
+                  (send)="onConversationSend(sel, $event)"
+                />
               }
 
               @if (store.selectedDiff(); as diff) {
@@ -1294,13 +1150,13 @@ const ONE_KEY = new Set(["approve"]);
     }
   `,
   imports: [
+    ActorChipComponent,
     NgTemplateOutlet,
     RouterLink,
     ConfirmDialogComponent,
     TipDirective,
     StatusIconComponent,
-    ActorChipComponent,
-    MarkdownDirective,
+            ConversationComponent,
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
@@ -1718,6 +1574,25 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   // sendReply posts to the task the composer was opened for. The store
   // reads the task again first and refuses if that task no longer waits
   // on the same question.
+
+  protected onConversationSend(
+    sel: InboxEntry,
+    ev: { body: string; attachments: AttachmentUpload[]; action?: string },
+  ): void {
+    if (sel.kind === "reply") {
+      this.draft.set(ev.body);
+
+      this.sendReply(sel);
+    } else {
+      this.talkDraft.set(ev.body);
+      if (ev.action === "secondary") {
+        this.sendTalk(sel, false);
+      } else {
+        this.sendTalk(sel, this.isAwaitingReplyHold(sel) ? true : false);
+      }
+    }
+  }
+
   protected async sendReply(sel: InboxEntry): Promise<void> {
     const tgt = this.target() ?? (sel.taskId ? { taskId: sel.taskId } : null);
     if (!tgt || !this.draft().trim() || this.replyBlock(sel)) return;

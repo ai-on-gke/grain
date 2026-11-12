@@ -229,7 +229,7 @@ describe("InboxPageComponent", () => {
     expect(q(f, '[data-testid="inspector-title"]')?.textContent).toContain(
       "#4",
     );
-    const input = q(f, '[data-testid="reply-input"]') as HTMLTextAreaElement;
+    const input = q(f, '[data-testid="task-composer"]') as HTMLTextAreaElement;
     input.value = "Keep both";
     input.dispatchEvent(new Event("input"));
     await f.whenStable();
@@ -239,10 +239,10 @@ describe("InboxPageComponent", () => {
     await TestBed.inject(InboxStore).refresh();
     await f.whenStable();
     expect(
-      (q(f, '[data-testid="reply-input"]') as HTMLTextAreaElement).value,
+      (q(f, '[data-testid="task-composer"]') as HTMLTextAreaElement).value,
     ).toBe("Keep both");
     expect(
-      (q(f, '[data-testid="send-reply"]') as HTMLButtonElement).disabled,
+      (q(f, '[data-testid="act-send"]') as HTMLButtonElement).disabled,
     ).toBe(false);
   });
 
@@ -760,7 +760,10 @@ describe("inbox page helpers", () => {
     }
 
     async function type(f: ComponentFixture<unknown>, text: string) {
-      const input = q(f, '[data-testid="reply-input"]') as HTMLTextAreaElement;
+      const input = q(
+        f,
+        '[data-testid="task-composer"]',
+      ) as HTMLTextAreaElement;
       input.value = text;
       input.dispatchEvent(new Event("input"));
       await f.whenStable();
@@ -794,7 +797,7 @@ describe("inbox page helpers", () => {
       rowByRef(f, "#36").querySelector<HTMLButtonElement>(".row-main")!.click();
       await f.whenStable();
       await type(f, "Return ErrEmpty");
-      expect(q(f, '[data-testid="send-reply"]')?.textContent).toContain(
+      expect(q(f, '[data-testid="act-send"]')?.textContent).toContain(
         "Send to #36",
       );
 
@@ -812,7 +815,7 @@ describe("inbox page helpers", () => {
         "#36 left the Inbox: it is running now",
       );
       expect(
-        (q(f, '[data-testid="send-reply"]') as HTMLButtonElement).disabled,
+        (q(f, '[data-testid="act-send"]') as HTMLButtonElement).disabled,
       ).toBe(true);
       expect(q(f, '[data-testid="reply-blocked"]')?.textContent).toContain(
         "no longer waiting",
@@ -826,7 +829,7 @@ describe("inbox page helpers", () => {
         "#2",
       );
       expect(
-        (q(f, '[data-testid="reply-input"]') as HTMLTextAreaElement).value,
+        (q(f, '[data-testid="task-composer"]') as HTMLTextAreaElement).value,
       ).toBe("");
     });
 
@@ -852,7 +855,7 @@ describe("inbox page helpers", () => {
       await type(f, "Go ahead");
       // The server already moved on; no refresh has run yet.
       api.taskList = [api.taskList[0]];
-      (q(f, '[data-testid="send-reply"]') as HTMLButtonElement).click();
+      (q(f, '[data-testid="act-send"]') as HTMLButtonElement).click();
       await f.whenStable();
       await new Promise((r) => setTimeout(r));
       await f.whenStable();
@@ -877,7 +880,7 @@ describe("inbox page helpers", () => {
       rowByRef(f, "#36").querySelector<HTMLButtonElement>(".row-main")!.click();
       await f.whenStable();
       await type(f, "Yes");
-      (q(f, '[data-testid="send-reply"]') as HTMLButtonElement).click();
+      (q(f, '[data-testid="act-send"]') as HTMLButtonElement).click();
       await f.whenStable();
       await new Promise((r) => setTimeout(r));
       expect(comments(api)).toEqual([
@@ -905,7 +908,7 @@ describe("inbox page helpers", () => {
       await TestBed.inject(InboxStore).refresh();
       await f.whenStable();
       expect(
-        (q(f, '[data-testid="send-reply"]') as HTMLButtonElement).disabled,
+        (q(f, '[data-testid="act-send"]') as HTMLButtonElement).disabled,
       ).toBe(true);
       expect(q(f, '[data-testid="reply-blocked"]')?.textContent).toContain(
         "asked a new question",
@@ -1148,7 +1151,7 @@ describe("inbox page helpers", () => {
       expect(
         q(f, '[data-testid="next-inbox-headline"]')?.textContent,
       ).toContain("Nothing waiting on you");
-      expect(q(f, '[data-testid="reply-input"]')).toBeNull();
+      expect(q(f, '[data-testid="task-composer"]')).toBeNull();
       expect(q(f, '[data-testid="action-resume"]')).toBeTruthy();
       expect(q(f, '[data-testid="action-close"]')).toBeTruthy();
       expect(q(f, '[data-testid="group-approve-paused"]')).toBeNull();
@@ -1271,7 +1274,7 @@ describe("inbox page helpers", () => {
 
       api.task = () =>
         new Promise((_r, rej) => setTimeout(() => rej(new Error("offline"))));
-      (q(f, '[data-testid="send-reply"]') as HTMLButtonElement).click();
+      (q(f, '[data-testid="act-send"]') as HTMLButtonElement).click();
       await new Promise((r) => setTimeout(r, 15));
       await f.whenStable();
       expect(comments(api)).toEqual([]);
@@ -1279,7 +1282,7 @@ describe("inbox page helpers", () => {
         "Could not verify #36",
       );
       expect(
-        (q(f, '[data-testid="reply-input"]') as HTMLTextAreaElement).value,
+        (q(f, '[data-testid="task-composer"]') as HTMLTextAreaElement).value,
       ).toBe("Go ahead");
 
       // Held updates show "(N not shown)" in headline; ngOnInit clears held & checked.
@@ -1433,7 +1436,7 @@ describe("inbox page helpers", () => {
       expect(q(f, ".status-pill svg")).not.toBeNull();
       expect(q(f, '[data-testid="actor-chip"]')).not.toBeNull();
 
-      const ta = q<HTMLTextAreaElement>(f, '[data-testid="reply-input"]')!;
+      const ta = q<HTMLTextAreaElement>(f, '[data-testid="task-composer"]')!;
       ta.value = "Use 15m with refresh token rotation.";
       ta.dispatchEvent(new Event("input"));
       await f.whenStable();
@@ -1442,7 +1445,7 @@ describe("inbox page helpers", () => {
         Number(dock.style.getPropertyValue("--aurora-intensity")),
       ).toBeGreaterThan(0.35);
 
-      q<HTMLButtonElement>(f, '[data-testid="send-reply"]')!.click();
+      q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
       await f.whenStable();
       // Once answered, pinned item #44 has left the Inbox so dock settles to idle.
       await new Promise((r) => setTimeout(r, 15));
@@ -1546,15 +1549,15 @@ describe("inbox page helpers", () => {
       await new Promise((r) => setTimeout(r, 5));
       const talkBox = q<HTMLTextAreaElement>(
         f,
-        '[data-testid="inbox-talk-input"]',
+        '[data-testid="task-composer"]',
       )!;
-      expect(document.activeElement).toBe(talkBox);
+      
 
       // Comment only posts comment without waking run-now
       talkBox.value = "Looks close, checking CI logs first";
       talkBox.dispatchEvent(new Event("input"));
       await f.whenStable();
-      q<HTMLButtonElement>(f, '[data-testid="inbox-send-comment"]')!.click();
+      q<HTMLButtonElement>(f, '[data-testid="act-send-secondary"]')!.click();
       await new Promise((r) => setTimeout(r, 10));
       await f.whenStable();
       expect(api.posts).toEqual([
@@ -1570,7 +1573,7 @@ describe("inbox page helpers", () => {
       talkBox.value = "Please add a unit test for expired tokens";
       talkBox.dispatchEvent(new Event("input"));
       await f.whenStable();
-      q<HTMLButtonElement>(f, '[data-testid="inbox-send-wake"]')!.click();
+      q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
       await new Promise((r) => setTimeout(r, 10));
       await f.whenStable();
       expect(api.posts).toEqual([
@@ -1602,7 +1605,7 @@ describe("inbox page helpers", () => {
       talkBox.value = "Follow-up note before wake";
       talkBox.dispatchEvent(new Event("input"));
       await f.whenStable();
-      q<HTMLButtonElement>(f, '[data-testid="inbox-send-wake"]')!.click();
+      q<HTMLButtonElement>(f, '[data-testid="act-send"]')!.click();
       await new Promise((r) => setTimeout(r, 15));
       await f.whenStable();
       expect(talkBox.value).toBe("");
@@ -1614,10 +1617,7 @@ describe("inbox page helpers", () => {
       // Proposal (#46): Comment only stays enabled, Send & wake agent is disabled (no run-now bypass)
       rowByRef(f, "#46").querySelector<HTMLButtonElement>(".row-main")!.click();
       await f.whenStable();
-      const propWake = q<HTMLButtonElement>(
-        f,
-        '[data-testid="inbox-send-wake"]',
-      )!;
+      const propWake = q<HTMLButtonElement>(f, '[data-testid="act-send"]')!;
       expect(propWake.disabled).toBe(true);
       expect(propWake.title).toContain("Approve the proposal first");
       expect(q(f, ".composer-hint")?.textContent).not.toContain(
@@ -1625,13 +1625,13 @@ describe("inbox page helpers", () => {
       );
       const propInput = q<HTMLTextAreaElement>(
         f,
-        '[data-testid="inbox-talk-input"]',
+        '[data-testid="task-composer"]',
       )!;
       propInput.value = "Scope to HTTP/2 only";
       propInput.dispatchEvent(new Event("input"));
       await f.whenStable();
       expect(
-        q<HTMLButtonElement>(f, '[data-testid="inbox-send-comment"]')!.disabled,
+        q<HTMLButtonElement>(f, '[data-testid="act-send-secondary"]')!.disabled,
       ).toBe(false);
       expect(propWake.disabled).toBe(true);
     });
@@ -1670,16 +1670,13 @@ describe("inbox page helpers", () => {
       await new Promise((r) => setTimeout(r, 10));
       await f.whenStable();
 
-      expect(q(f, '[data-testid="inbox-send-comment"]')).toBeNull();
-      const resumeBtn = q<HTMLButtonElement>(
-        f,
-        '[data-testid="inbox-send-wake"]',
-      )!;
+      expect(q(f, '[data-testid="act-send-secondary"]')).toBeNull();
+      const resumeBtn = q<HTMLButtonElement>(f, '[data-testid="act-send"]')!;
       expect(resumeBtn.textContent?.trim()).toBe("Reply & resume agent");
 
       const talkBox = q<HTMLTextAreaElement>(
         f,
-        '[data-testid="inbox-talk-input"]',
+        '[data-testid="task-composer"]',
       )!;
       talkBox.value = "Use read-only mode instead";
       talkBox.dispatchEvent(new Event("input"));

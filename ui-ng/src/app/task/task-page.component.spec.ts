@@ -416,7 +416,7 @@ describe("TaskPageComponent", () => {
 
     // Composer is hidden while parked on a secret unless operator clicks "Reply in words instead".
     expect(q(f, '[data-testid="act-reply"]')).toBeNull();
-    expect(q(f, '[data-testid="task-composer"]')).toBeNull();
+    expect(q(f, '[data-testid="act-send"]')).toBeNull();
     expect(q(f, '[data-testid="park"]')!.textContent).toContain("GH_TOKEN");
 
     // 1. Save secret -> PUT /api/tasks/{id}/secret
@@ -438,7 +438,7 @@ describe("TaskPageComponent", () => {
       '[data-testid="secret-reply-words-toggle"]',
     )!.click();
     await f.whenStable();
-    expect(q(f, '[data-testid="task-composer"]')).toBeTruthy();
+    expect(q(f, '[data-testid="act-send"]')).toBeTruthy();
 
     // 2. Grant pending access -> POST /api/tasks/{id}/access-request/grant
     q<HTMLButtonElement>(f, '[data-testid="access-grant-btn"]')!.click();
@@ -1099,7 +1099,7 @@ describe("duration", () => {
         questionCommentId: 1,
       };
       const f = await render(api);
-      expect(q(f, '[data-testid="task-composer"]')).toBeNull();
+      expect(q(f, '[data-testid="act-send"]')).toBeNull();
       q<HTMLButtonElement>(f, '[data-testid="act-retry"]')!.click();
       await settle(f);
       expect(q(f, '[data-testid="confirm-dialog"]')!.textContent).toContain(
@@ -1118,16 +1118,16 @@ describe("duration", () => {
       TestBed.resetTestingModule();
       const api2 = new FakeApi();
       const f2 = await render(api2);
-      const box = q<HTMLTextAreaElement>(f2, '[data-testid="task-composer"]')!;
+      const box = q<HTMLTextAreaElement>(f2, '[data-testid="act-send"]')!;
       box.value = "Do both";
       box.dispatchEvent(new Event("input"));
       await settle(f2);
-      expect(q(f2, '[data-testid="task-send"]')!.textContent).toContain(
+      expect(q(f2, '[data-testid="act-send"]')!.textContent).toContain(
         "Send to #7",
       );
 
       api2.detail = { ...api2.detail, questionCommentId: 99 };
-      q<HTMLButtonElement>(f2, '[data-testid="task-send"]')!.click();
+      q<HTMLButtonElement>(f2, '[data-testid="act-send"]')!.click();
       await settle(f2);
       expect(api2.calls.filter((c) => c.method === "POST")).toEqual([]);
       expect(q(f2, '[data-testid="task-action-error"]')!.textContent).toContain(

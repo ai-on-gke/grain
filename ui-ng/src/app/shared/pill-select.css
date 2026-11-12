@@ -1,26 +1,8 @@
-/* Copyright 2026 Google LLC
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-/* Reusable GM3 dropdown pill (<g-pill-select>) & semantic priority chip (<g-priority-chip>). */
-
 g-pill-select,
 g-priority-chip {
   display: inline-flex;
   flex-shrink: 0;
 }
-
 .pill-select-wrap,
 .prio-wrap {
   position: relative;
@@ -28,7 +10,6 @@ g-priority-chip {
   align-items: center;
   flex-shrink: 0;
 }
-
 .pill-select-btn {
   display: inline-flex;
   align-items: center;
@@ -46,17 +27,14 @@ g-priority-chip {
     background-color 140ms var(--md-sys-motion-effects),
     border-color 140ms var(--md-sys-motion-effects);
 }
-
 :root[data-theme="dark"] .pill-select-btn {
   background: var(--md-sys-color-surface-container);
 }
-
 .pill-select-btn:hover:not(:disabled),
 .pill-select-btn.is-open {
   background: var(--md-sys-color-surface-container-high);
   border-color: var(--md-sys-color-outline);
 }
-
 .pill-select-btn.is-inverse {
   background: color-mix(
     in srgb,
@@ -70,7 +48,6 @@ g-priority-chip {
     transparent
   );
 }
-
 .pill-select-btn.is-inverse:hover:not(:disabled),
 .pill-select-btn.is-inverse.is-open {
   background: color-mix(
@@ -79,37 +56,30 @@ g-priority-chip {
     var(--md-sys-color-inverse-surface)
   );
 }
-
 .pill-select-btn:focus-visible,
 .prio-chip:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: 2px;
 }
-
 .pill-select-prefix {
   color: var(--md-sys-color-on-surface-variant);
   font-weight: 400;
 }
-
 .pill-select-btn.is-inverse .pill-select-prefix {
   color: inherit;
   opacity: 0.78;
 }
-
 .pill-select-chevron {
   color: var(--md-sys-color-on-surface-variant);
   flex: none;
   transition: transform 150ms var(--md-sys-motion-spatial);
 }
-
 .pill-select-btn.is-inverse .pill-select-chevron {
   color: inherit;
 }
-
 .pill-select-btn.is-open .pill-select-chevron {
   transform: rotate(180deg);
 }
-
 .pop-menu.pill-select-menu {
   position: absolute;
   z-index: 45;
@@ -128,21 +98,17 @@ g-priority-chip {
   color: var(--md-sys-color-on-surface);
   box-shadow: var(--md-sys-elevation-dialog);
 }
-
 :root[data-theme="dark"] .pop-menu.pill-select-menu {
   background: var(--md-sys-color-surface-container);
 }
-
 .pop-menu.pill-select-menu.align-left {
   left: 0;
   right: auto;
 }
-
 .pop-menu.pill-select-menu.open-up {
   top: auto;
   bottom: calc(100% + 4px);
 }
-
 .pop-menu.pill-select-menu li > button {
   display: flex;
   align-items: center;
@@ -159,33 +125,26 @@ g-priority-chip {
   cursor: pointer;
   white-space: nowrap;
 }
-
 .pop-menu.pill-select-menu li > button:hover,
 .pop-menu.pill-select-menu li > button[aria-selected="true"],
 .pop-menu.pill-select-menu li > button[aria-current="true"] {
   background: var(--md-sys-color-surface-container-high);
 }
-
 .pop-menu.pill-select-menu li > button:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: -2px;
 }
-
 .pill-opt-label {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
 .pill-check {
   color: var(--md-sys-color-primary);
   flex: none;
   margin-left: auto;
 }
-
-/* ---------- Semantic GM3 Priority Chips ---------- */
-
 .prio-chip {
   display: inline-flex;
   align-items: center;
@@ -202,54 +161,45 @@ g-priority-chip {
     filter 120ms var(--md-sys-motion-effects),
     background-color 120ms var(--md-sys-motion-effects);
 }
-
 .prio-chip.static {
   cursor: default;
 }
-
 .prio-chip:not(.static):hover:not(:disabled) {
   filter: brightness(0.95);
 }
-
 :root[data-theme="dark"] .prio-chip:not(.static):hover:not(:disabled) {
   filter: brightness(1.1);
 }
-
 .prio-chip.prio-urgent,
 .prio-dot.prio-urgent {
   background: var(--md-sys-color-error-container);
   color: var(--md-sys-color-on-error-container);
   border-color: transparent;
 }
-
 .prio-chip.prio-high,
 .prio-dot.prio-high {
   background: var(--md-sys-color-warning-container, #fef0db);
   color: var(--md-sys-color-on-warning-container, #6d3a00);
   border-color: transparent;
 }
-
 .prio-chip.prio-normal,
 .prio-dot.prio-normal {
   background: var(--md-sys-color-surface-container-high);
   color: var(--md-sys-color-on-surface-variant);
   border-color: transparent;
 }
-
 .prio-chip.prio-low,
 .prio-dot.prio-low {
   background: var(--md-sys-color-surface-container-low);
   color: var(--md-sys-color-on-surface-variant);
   border: 1px solid var(--md-sys-color-outline-variant);
 }
-
 .prio-chip.prio-lowest,
 .prio-dot.prio-lowest {
   background: var(--md-sys-color-surface-container-low);
   color: var(--md-sys-color-on-surface-variant);
   border: 1px dashed var(--md-sys-color-outline-variant);
 }
-
 .prio-dot {
   display: inline-grid;
   place-items: center;
@@ -258,7 +208,6 @@ g-priority-chip {
   border-radius: 5px;
   flex: none;
 }
-
 .prio-chevron {
   opacity: 0.72;
   margin-left: 1px;

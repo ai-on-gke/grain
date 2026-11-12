@@ -31,12 +31,7 @@ import {
 } from "@angular/core";
 import { Router, RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
-import type {
-  Attempt,
-  CapabilityOption,
-  Comment,
-  GrainConfig,
-} from "../api/models";
+import type { AttachmentUpload, Attempt, CapabilityOption, Comment, GrainConfig } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
@@ -44,10 +39,11 @@ import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { isHuman } from "../sessions/session-view";
 import { ActorChipComponent } from "../shared/actor-chip.component";
+import { ConversationComponent } from "../shared/conversation/conversation.component";
+
 import {
   AttachmentListComponent,
-  AttachmentPickerComponent,
-  filesFromTransfer,
+    filesFromTransfer,
   readFilesAsUploads,
 } from "../shared/attachments";
 import { ciChip } from "../shared/chips";
@@ -120,14 +116,13 @@ export function duration(from?: string, to?: string): string {
     ConfirmDialogComponent,
     MarkdownDirective,
     PriorityChipComponent,
-    ActorChipComponent,
-    AttachmentListComponent,
-    AttachmentPickerComponent,
-    GrantsPickerComponent,
+        AttachmentListComponent,
+        GrantsPickerComponent,
     TaskGatesBarComponent,
     TaskChangesTabComponent,
     ForceMergeDialogComponent,
     TaskEditPanelComponent,
+    ConversationComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
@@ -591,6 +586,23 @@ export function duration(from?: string, to?: string): string {
         }
 
         <!-- Inline Pending Approval / Gate Panels -->
+        
+        @if (store.actionError(); as err) {
+          <p
+            class="banner banner-error"
+            role="alert"
+            data-testid="task-action-error"
+          >
+            {{ err }}
+            <button
+              type="button"
+              class="btn-text"
+              (click)="store.actionError.set(null)"
+            >
+              Dismiss
+            </button>
+          </p>
+        }
         <g-task-gates-bar
           [task]="t"
           (acted)="acted.emit()"
@@ -682,150 +694,29 @@ export function duration(from?: string, to?: string): string {
                       <strong>Asked:</strong> {{ t.questionSummary }}
                     </div>
                   }
-                  @if (t.attachments?.length) {
-                    <g-attachment-list
-                      [taskId]="t.id"
-                      [repo]="t.repo"
-                      [attachments]="t.attachments"
-                    />
-                  }
-                  @if ((t.olderComments ?? 0) > 0) {
-                    <button
-                      type="button"
-                      class="btn-outlined"
-                      style="align-self: flex-start"
-                      data-testid="load-older-comments"
-                      [disabled]="store.isBusy('older-comments', t.id)"
-                      (click)="store.loadOlderComments()"
-                    >
-                      {{
-                        store.isBusy("older-comments", t.id)
-                          ? "Loading earlier comments…"
-                          : "Load earlier comments (" + t.olderComments + ")"
-                      }}
-                    </button>
-                  }
-                  <div
-                    class="chat-log task-log"
-                    role="log"
-                    aria-label="Conversation"
-                  >
-                    @for (c of comments(); track c.id) {
-                      <article
-                        class="msg"
-                        [class.is-human]="human(c)"
-                        [class.is-handover]="c.handover"
-                        [class.is-question]="c.id === t.questionCommentId"
-                        [attr.data-testid]="'tmsg-' + c.id"
-                      >
-                        <span class="msg-meta">
-                          <span class="msg-author">
-                            <g-actor-chip
-                              [label]="actorLabel(c)"
-                              [kind]="c.authorKind"
-                              [behalf]="c.onBehalfOfLabel || c.onBehalfOf"
-                            />
-                          </span>
-                          @if (c.id === t.questionCommentId) {
-                            <span class="status-pill reply">Question</span>
-                          }
-                          @if (c.handover) {
-                            <span class="status-pill neutral"
-                              >Handover note</span
-                            >
-                          }
-                          <time class="mono" [attr.datetime]="c.createdAt">{{
-                            ago(c.createdAt)
-                          }}</time>
-                        </span>
-                        <div class="msg-body" [gMarkdown]="c.body"></div>
-                        @if (c.attachments?.length) {
-                          <g-attachment-list
-                            [taskId]="t.id"
-                            [repo]="t.repo"
-                            [attachments]="c.attachments"
-                          />
-                        }
-                      </article>
-                    } @empty {
-                      <p class="empty-state">No comments yet.</p>
-                    }
-                  </div>
-                  @if (
-                    can("POST /api/tasks/{id}/comments") &&
-                    t.state !== "closed" &&
-                    (!parked() || allowWordsOnParked()) &&
-                    !isStopped()
-                  ) {
-                    <form
-                      class="chat-composer"
-                      (submit)="send($event)"
-                      (dragover)="$event.preventDefault()"
-                      (drop)="onComposerDrop($event)"
-                    >
-                      <textarea
-                        #composer
-                        class="reply-textarea"
-                        rows="2"
-                        data-testid="task-composer"
-                        [attr.aria-label]="
-                          t.state === 'awaiting_reply'
-                            ? 'Reply to the agent'
-                            : 'Comment on this task'
-                        "
-                        [placeholder]="
-                          t.state === 'awaiting_reply'
-                            ? 'Reply to the agent'
-                            : 'Comment on this task'
-                        "
-                        [value]="store.draft()"
-                        (input)="onDraft(val($event))"
-                        (paste)="onComposerPaste($event)"
-                        (keydown.control.enter)="onEnter($event)"
-                        (keydown.meta.enter)="onEnter($event)"
-                      ></textarea>
-                      <g-attachment-picker
-                        testid="task-attach"
-                        [staged]="store.stagedAttachments()"
-                        [disabled]="store.isBusy('send', t.id)"
-                        (stagedChange)="store.stagedAttachments.set($event)"
-                      />
-                      @if (replyBlocked(); as why) {
-                        <p
-                          class="muted dock-note"
-                          role="status"
-                          data-testid="reply-blocked"
-                        >
-                          {{ why }}
-                        </p>
-                      }
-                      <div class="composer-actions">
-                        <span class="muted composer-hint"
-                          >Ctrl+Enter sends · paste or drop files</span
-                        >
-                        <button
-                          type="submit"
-                          class="btn-primary"
-                          data-testid="task-send"
-                          [disabled]="
-                            (!store.draft().trim() &&
-                              store.stagedAttachments().length === 0) ||
-                            store.isBusy('send', t.id) ||
-                            !!replyBlocked()
-                          "
-                        >
-                          {{
-                            (replyTarget()?.reply ??
-                            t.state === "awaiting_reply")
-                              ? "Send to #" + (replyTarget()?.taskId ?? t.id)
-                              : "Comment on #" + (replyTarget()?.taskId ?? t.id)
-                          }}
-                        </button>
-                      </div>
-                    </form>
-                  }
+                  <g-conversation
+                    [taskId]="t.id"
+                    [repo]="t.repo"
+                    [comments]="comments()"
+                    [questionCommentId]="t.questionCommentId"
+                    [olderCount]="t.olderComments ?? 0"
+                    [loadingOlder]="store.isBusy('older-comments', t.id)"
+                    (loadEarlier)="store.loadOlderComments()"
+                    [config]="{
+                      placeholder:
+                        t.state === 'awaiting_reply'
+                          ? 'Reply to the agent'
+                          : 'Comment on this task',
+                      submitLabel: 'Send to #' + t.id,
+                      disabled: store.isBusy('send', t.id),
+                      hidden:
+                        t.state === 'closed' ||
+                        (this.parked() && !this.allowWordsOnParked()) ||
+                        this.isStopped(),
+                    }"
+                    (send)="onConversationSend($event)"
+                  />
                 }
-
                 @case ("runs") {
                   <h2 class="sr-only">Runs</h2>
                   @if (attempts().length === 0) {
@@ -2229,6 +2120,16 @@ export class TaskDetailComponent implements OnDestroy {
   protected async onConfirm(c: ConfirmRequest, ok: boolean): Promise<void> {
     this.confirming.set(null);
     if (ok) await c.run();
+  }
+
+  protected onConversationSend(ev: {
+    body: string;
+    attachments: AttachmentUpload[];
+    action?: string;
+  }): void {
+    this.store.draft.set(ev.body);
+    this.store.stagedAttachments.set(ev.attachments);
+    this.submitComment();
   }
 
   private async submitComment(): Promise<void> {
