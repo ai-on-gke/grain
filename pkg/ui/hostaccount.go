@@ -311,10 +311,17 @@ func restrictAPISocketDir(dir, sock string) error {
 				"(-api-socket <dir>/grain.sock, with <dir> new or holding only the socket)", dir, e.Name())
 		}
 	}
-	// Group search is kept, so the ACL mask a setfacl -m u:<account>:x
-	// leaves stays --x; group read and write, and everything for others,
-	// go.
-	if want := perm & 0o710; want != perm {
+	// On a directory carrying an access ACL the group bits are its mask,
+	// so group search is kept there and the mask a setfacl -m
+	// u:<account>:x leaves stays --x. Without one they are the owning
+	// group's own, and search for it would let that whole group reach the
+	// socket, so the directory goes to 0700. Group read and write, and
+	// everything for others, go either way.
+	keep := os.FileMode(0o700)
+	if hasAccessACL(dir) {
+		keep = 0o710
+	}
+	if want := perm & keep; want != perm {
 		if err := os.Chmod(dir, want); err != nil {
 			return fmt.Errorf("restricting %s: %w", dir, err)
 		}

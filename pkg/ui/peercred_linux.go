@@ -30,6 +30,14 @@ func ownedByThisAccount(fi fs.FileInfo) bool {
 	return ok && int(st.Uid) == os.Geteuid()
 }
 
+// hasAccessACL reports whether dir carries an extended access ACL (one a
+// setfacl -m left), whose mask its group mode bits then are
+// (restrictAPISocketDir). A filesystem without ACLs has none.
+func hasAccessACL(dir string) bool {
+	n, err := syscall.Getxattr(dir, "system.posix_acl_access", nil)
+	return err == nil && n > 0
+}
+
 // peerUID is the uid of the process at the other end of c, a unix socket
 // connection, as the kernel recorded it when that process connected
 // (SO_PEERCRED).
