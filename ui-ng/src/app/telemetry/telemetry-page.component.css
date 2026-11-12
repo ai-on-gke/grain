@@ -212,3 +212,91 @@ g-telemetry-page {
   background: var(--md-sys-color-surface-container-low);
   font-size: 13px;
 }
+
+/* Throughput chart: time axis, hover band and a hover card. */
+.tel-chart-wrap {
+  position: relative;
+}
+
+.tel-chart-svg:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.tel-axis-label {
+  font-size: 9px;
+  fill: var(--md-sys-color-on-surface-variant);
+}
+
+.tel-hit {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.tel-hover-band {
+  fill: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+
+.is-dim .tel-bar-completed,
+.is-dim .tel-bar-filed {
+  opacity: 0.45;
+}
+
+.tel-merge-dot.is-active {
+  stroke-width: 2;
+}
+
+.tel-tip {
+  position: absolute;
+  top: 0;
+  z-index: 3;
+  min-width: 180px;
+  padding: 10px 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font-size: 12px;
+  line-height: 18px;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 14%);
+  transform: translateX(8px);
+  pointer-events: none;
+}
+
+.tel-tip.is-left {
+  transform: translateX(calc(-100% - 8px));
+}
+
+.tel-legend-item.is-active {
+  color: var(--md-sys-color-on-surface);
+  font-weight: 600;
+}
+
+.tel-legend-item.is-dim {
+  opacity: 0.45;
+}
+
+.tel-tip-when {
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.tel-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tel-tip-row strong {
+  margin-left: auto;
+  padding-left: 12px;
+}
+
+.tel-tip-row.is-muted {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+:root[data-theme="dark"] .tel-tip {
+  background: var(--md-sys-color-surface-container-high);
+}

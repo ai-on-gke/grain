@@ -347,7 +347,55 @@ export interface ThroughputPoint {
   completed: number;
   filed: number;
   landed: number;
+  runsFinished: number;
+  since: string;
+  until: string;
+  /** Left edge and width of the bucket's full slot, for hover bands. */
+  slotX: number;
+  slotW: number;
   label: string;
+}
+
+export interface ThroughputTick {
+  x: number;
+  label: string;
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+/** "Nov 11" for day-scale buckets, "14:00" for hour-scale ones (local time). */
+export function bucketTickLabel(iso: string, spanSeconds: number): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  if (spanSeconds >= 86400 * 0.5)
+    return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** "Nov 11, 14:54 – Nov 12, 04:54" (local time), for the hover card. */
+export function bucketRangeLabel(since: string, until: string): string {
+  const f = (iso: string) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  };
+  const a = f(since);
+  const b = f(until);
+  return a && b ? `${a} – ${b}` : a || b;
 }
 
 export interface ThroughputChartGeometry {
@@ -406,12 +454,13 @@ export function buildThroughputGeometry(
   mergeLine: string;
   mergeArea: string;
   maxVal: number;
+  ticks: ThroughputTick[];
 } {
   const list = buckets ?? [];
   const merges = mergeBuckets ?? [];
   const count = Math.max(list.length, merges.length);
   if (count === 0) {
-    return { bars: [], mergeLine: "", mergeArea: "", maxVal: 0 };
+    return { bars: [], mergeLine: "", mergeArea: "", maxVal: 0, ticks: [] };
   }
   let maxVal = 1;
   for (let i = 0; i < count; i++) {
@@ -455,6 +504,11 @@ export function buildThroughputGeometry(
       completed,
       filed,
       landed,
+      runsFinished: b?.runsFinished ?? 0,
+      since: b?.since || m?.since || "",
+      until: b?.until || m?.until || "",
+      slotX: Number((slotW * i).toFixed(1)),
+      slotW: Number(slotW.toFixed(1)),
       label: `${sinceLabel || "Slice " + (i + 1)}: ${completed} completed, ${filed} filed, ${landed} merged`,
     });
     linePts.push(`${cx.toFixed(1)},${mergeY.toFixed(1)}`);
@@ -469,7 +523,19 @@ export function buildThroughputGeometry(
       ? `M ${firstX},${baselineY} L ${linePts.join(" L ")} L ${lastX},${baselineY} Z`
       : "";
 
-  return { bars, mergeLine, mergeArea, maxVal };
+  // About six evenly spaced time labels along the bottom edge.
+  const first = bars[0];
+  const span =
+    (new Date(first.until).getTime() - new Date(first.since).getTime()) /
+      1000 || 0;
+  const step = Math.max(1, Math.ceil(count / 6));
+  const ticks: ThroughputTick[] = [];
+  for (let i = 0; i < count; i += step) {
+    const label = bucketTickLabel(bars[i].since, span);
+    if (label) ticks.push({ x: bars[i].mergeX, label });
+  }
+
+  return { bars, mergeLine, mergeArea, maxVal, ticks };
 }
 
 // SPACE guardrail: team contributors are ALWAYS returned strictly in

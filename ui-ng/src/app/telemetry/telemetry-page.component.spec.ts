@@ -474,6 +474,56 @@ describe("TelemetryPageComponent", () => {
     expect(root.querySelector('[data-testid="chart-tools"]')).not.toBeNull();
   });
 
+  it("shows a time axis and updates the hover card on pointer and arrow keys", async () => {
+    const { fixture, root } = await setup();
+
+    const ticks = [
+      ...root.querySelectorAll(
+        '[data-testid="chart-throughput"] .tel-axis-label',
+      ),
+    ].map((e) => e.textContent?.trim());
+    expect(
+      ticks.some((t) =>
+        /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+$/.test(
+          t || "",
+        ),
+      ),
+    ).toBe(true);
+    expect(root.querySelector('[data-testid="tp-tip"]')).toBeNull();
+
+    const hit1 = root.querySelector('[data-testid="tp-hit-1"]')!;
+    hit1.dispatchEvent(new MouseEvent("mouseenter", { bubbles: false }));
+    fixture.detectChanges();
+    const tip = root.querySelector('[data-testid="tp-tip"]');
+    expect(tip?.textContent).toContain("Filed");
+    expect(tip?.textContent).toContain("10");
+    expect(tip?.textContent).toContain("Completed");
+    expect(tip?.textContent).toContain("8");
+    expect(tip?.textContent).toContain("Merged");
+    expect(tip?.textContent).toContain("7");
+    expect(tip?.textContent).toContain("11");
+
+    root
+      .querySelector(".tel-chart-wrap")!
+      .dispatchEvent(new MouseEvent("mouseleave", { bubbles: false }));
+    fixture.detectChanges();
+    expect(root.querySelector('[data-testid="tp-tip"]')).toBeNull();
+
+    const chart = root.querySelector('[data-testid="chart-throughput"]')!;
+    chart.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }),
+    );
+    fixture.detectChanges();
+    expect(root.querySelector('[data-testid="tp-tip"]')?.textContent).toContain(
+      "9",
+    );
+    chart.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    fixture.detectChanges();
+    expect(root.querySelector('[data-testid="tp-tip"]')).toBeNull();
+  });
+
   it("switches 24h / 7d / 30d windows and filters by WAI-ARIA GM3 repository popover", async () => {
     const { fixture, root, api } = await setup();
 

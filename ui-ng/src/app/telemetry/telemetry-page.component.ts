@@ -43,6 +43,7 @@ import {
   type UsageResponse,
   buildAlphabeticalContributors,
   buildThroughputGeometry,
+  bucketRangeLabel,
   formatCompactNum,
   formatDurationSec,
   formatPct,
@@ -456,70 +457,157 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                   No bucketed throughput samples recorded in this window yet.
                 </p>
               } @else {
-                <svg
-                  class="tel-chart-svg"
-                  viewBox="0 0 520 148"
-                  role="img"
-                  [attr.aria-label]="
-                    'Throughput and merges chart over ' +
-                    window() +
-                    ', peak ' +
-                    geo.maxVal +
-                    ' per slice'
-                  "
-                  data-testid="chart-throughput"
-                >
-                  <line x1="0" y1="10" x2="520" y2="10" class="tel-grid-line" />
-                  <line x1="0" y1="70" x2="520" y2="70" class="tel-grid-line" />
-                  <line
-                    x1="0"
-                    y1="130"
-                    x2="520"
-                    y2="130"
-                    class="tel-grid-line"
-                  />
-
-                  @for (b of geo.bars; track b.index) {
-                    <g>
-                      <title>{{ b.label }}</title>
-                      <rect
-                        class="tel-bar-filed"
-                        [attr.x]="b.x"
-                        [attr.y]="b.filedY"
-                        [attr.width]="b.width"
-                        [attr.height]="b.filedH"
-                        rx="3"
-                      />
-                      <rect
-                        class="tel-bar-completed"
-                        [attr.x]="b.x"
-                        [attr.y]="b.completedY"
-                        [attr.width]="b.width"
-                        [attr.height]="b.completedH"
-                        rx="3"
-                      />
-                    </g>
-                  }
-                  @if (geo.mergeArea) {
-                    <path class="tel-merge-area" [attr.d]="geo.mergeArea" />
-                  }
-                  @if (geo.mergeLine) {
-                    <polyline
-                      class="tel-merge-line"
-                      [attr.points]="geo.mergeLine"
+                <div class="tel-chart-wrap" (mouseleave)="tpHover.set(null)">
+                  <svg
+                    class="tel-chart-svg"
+                    viewBox="0 0 520 148"
+                    role="img"
+                    tabindex="0"
+                    [attr.aria-label]="
+                      'Throughput and merges chart over ' +
+                      window() +
+                      ', peak ' +
+                      geo.maxVal +
+                      ' per slice. Use the left and right arrow keys to read each slice.'
+                    "
+                    data-testid="chart-throughput"
+                    (keydown)="onThroughputKey($event, geo.bars.length)"
+                    (blur)="tpHover.set(null)"
+                  >
+                    <line
+                      x1="0"
+                      y1="10"
+                      x2="520"
+                      y2="10"
+                      class="tel-grid-line"
                     />
-                  }
-                  @for (b of geo.bars; track b.index) {
-                    <circle
-                      class="tel-merge-dot"
-                      [attr.cx]="b.mergeX"
-                      [attr.cy]="b.mergeY"
-                      r="3"
+                    <line
+                      x1="0"
+                      y1="70"
+                      x2="520"
+                      y2="70"
+                      class="tel-grid-line"
+                    />
+                    <line
+                      x1="0"
+                      y1="130"
+                      x2="520"
+                      y2="130"
+                      class="tel-grid-line"
+                    />
+                    <text x="2" y="8" class="tel-axis-label">
+                      {{ geo.maxVal }}
+                    </text>
+
+                    @if (tpHover() !== null && geo.bars[tpHover()!]; as hb) {
+                      <rect
+                        class="tel-hover-band"
+                        [attr.x]="hb.slotX"
+                        y="4"
+                        [attr.width]="hb.slotW"
+                        height="126"
+                        rx="4"
+                      />
+                    }
+                    @for (b of geo.bars; track b.index) {
+                      <g
+                        [class.is-dim]="
+                          tpHover() !== null && tpHover() !== b.index
+                        "
+                      >
+                        <rect
+                          class="tel-bar-filed"
+                          [attr.x]="b.x"
+                          [attr.y]="b.filedY"
+                          [attr.width]="b.width"
+                          [attr.height]="b.filedH"
+                          rx="3"
+                        />
+                        <rect
+                          class="tel-bar-completed"
+                          [attr.x]="b.x"
+                          [attr.y]="b.completedY"
+                          [attr.width]="b.width"
+                          [attr.height]="b.completedH"
+                          rx="3"
+                        />
+                      </g>
+                    }
+                    @if (geo.mergeArea) {
+                      <path class="tel-merge-area" [attr.d]="geo.mergeArea" />
+                    }
+                    @if (geo.mergeLine) {
+                      <polyline
+                        class="tel-merge-line"
+                        [attr.points]="geo.mergeLine"
+                      />
+                    }
+                    @for (b of geo.bars; track b.index) {
+                      <circle
+                        class="tel-merge-dot"
+                        [class.is-active]="tpHover() === b.index"
+                        [attr.cx]="b.mergeX"
+                        [attr.cy]="b.mergeY"
+                        [attr.r]="tpHover() === b.index ? 4.5 : 3"
+                      />
+                    }
+                    @for (t of geo.ticks; track t.x) {
+                      <text
+                        class="tel-axis-label"
+                        text-anchor="middle"
+                        [attr.x]="t.x"
+                        y="145"
+                      >
+                        {{ t.label }}
+                      </text>
+                    }
+                    <!-- Hit areas last, so they sit on top of everything. -->
+                    @for (b of geo.bars; track b.index) {
+                      <rect
+                        class="tel-hit"
+                        [attr.x]="b.slotX"
+                        y="0"
+                        [attr.width]="b.slotW"
+                        height="132"
+                        [attr.data-testid]="'tp-hit-' + b.index"
+                        (mouseenter)="tpHover.set(b.index)"
+                      />
+                    }
+                  </svg>
+                  @if (tpHover() !== null && geo.bars[tpHover()!]; as hb) {
+                    <div
+                      class="tel-tip"
+                      role="status"
+                      data-testid="tp-tip"
+                      [class.is-left]="hb.mergeX > 300"
+                      [style.left.%]="
+                        ((hb.mergeX > 300 ? hb.slotX : hb.slotX + hb.slotW) /
+                          520) *
+                        100
+                      "
                     >
-                      <title>{{ b.label }}</title>
-                    </circle>
+                      <div class="tel-tip-when">
+                        {{ rangeLabel(hb.since, hb.until) }}
+                      </div>
+                      <div class="tel-tip-row">
+                        <span class="tel-swatch is-filed"></span>Filed
+                        <strong class="tabular">{{ hb.filed }}</strong>
+                      </div>
+                      <div class="tel-tip-row">
+                        <span class="tel-swatch is-primary"></span>Completed
+                        <strong class="tabular">{{ hb.completed }}</strong>
+                      </div>
+                      <div class="tel-tip-row">
+                        <span class="tel-swatch is-tertiary"></span>Merged
+                        <strong class="tabular">{{ hb.landed }}</strong>
+                      </div>
+                      <div class="tel-tip-row is-muted">
+                        Runs finished
+                        <strong class="tabular">{{ hb.runsFinished }}</strong>
+                      </div>
+                    </div>
                   }
-                </svg>
+                </div>
               }
             </article>
 
@@ -626,6 +714,12 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                       [attr.width]="o.widthPct * 4"
                       height="16"
                       [attr.fill]="o.color"
+                      [attr.opacity]="
+                        outcomeHover() && outcomeHover() !== o.key ? 0.35 : 1
+                      "
+                      style="cursor: pointer"
+                      (mouseenter)="outcomeHover.set(o.key)"
+                      (mouseleave)="outcomeHover.set(null)"
                     >
                       <title>
                         {{ o.key }}: {{ o.count }} ({{ fmtPct(o.share) }})
@@ -635,7 +729,16 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                 </svg>
                 <div class="tel-legend">
                   @for (o of outcomeRows(); track o.key) {
-                    <span class="tel-legend-item tabular">
+                    <span
+                      class="tel-legend-item tabular"
+                      [class.is-active]="outcomeHover() === o.key"
+                      [class.is-dim]="
+                        outcomeHover() && outcomeHover() !== o.key
+                      "
+                      style="cursor: pointer"
+                      (mouseenter)="outcomeHover.set(o.key)"
+                      (mouseleave)="outcomeHover.set(null)"
+                    >
                       <span
                         class="tel-swatch"
                         [style.background]="o.color"
@@ -1396,6 +1499,29 @@ export class TelemetryPageComponent implements OnInit {
     const o = this.report()?.runs?.outcomes ?? {};
     return (o["succeeded"] ?? 0) + (o["completed"] ?? 0);
   });
+
+  /** Index of the throughput slice under the pointer or keyboard focus. */
+  protected readonly tpHover = signal<number | null>(null);
+  protected readonly outcomeHover = signal<string | null>(null);
+
+  protected rangeLabel(since: string, until: string): string {
+    return bucketRangeLabel(since, until);
+  }
+
+  protected onThroughputKey(ev: KeyboardEvent, count: number): void {
+    if (!count) return;
+    const cur = this.tpHover();
+    if (ev.key === "ArrowRight") {
+      this.tpHover.set(cur === null ? 0 : Math.min(count - 1, cur + 1));
+    } else if (ev.key === "ArrowLeft") {
+      this.tpHover.set(cur === null ? count - 1 : Math.max(0, cur - 1));
+    } else if (ev.key === "Escape") {
+      this.tpHover.set(null);
+    } else {
+      return;
+    }
+    ev.preventDefault();
+  }
 
   protected readonly throughputGeo = computed(() =>
     buildThroughputGeometry(
