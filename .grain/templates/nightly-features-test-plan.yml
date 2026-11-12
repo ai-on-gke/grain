@@ -32,6 +32,12 @@ body: |
     - Formulate concrete, reproducible test and walkthrough procedures (e.g.
       running `grain demo` with Playwright browser interactions, exercising CLI
       subcommands in isolated environments, or multi-step API workflows).
+    - For a UI feature, test the new UI at `/next/` (`ui-ng/`) first: it is
+      the new experience and the classic `ui/` is being deprecated ("Two
+      UIs" in `PROMPT.md`). Walk the classic page only where the feature
+      lives there alone (`ui-ng/src/app/shell/nav.ts` shows which
+      destinations still fall back to it), and plan new e2e coverage as
+      `ui/e2e/next-*.spec.js` specs rather than classic ones.
   - Author a new test plan document under `docs/test-plans/YYYY-MM-DD.md` (using
     the current date) capturing the full analysis and plan.
   - Commit the new test plan file to the task's branch.
@@ -47,6 +53,9 @@ body: |
     - Provide complete instructions instructing the assigned agent to execute the
       walkthrough/test against a real environment (`grain demo`, Playwright browser,
       or live CLI backend), stubbing only unavailable external boundaries.
+      A UI walkthrough names the `/next/` pages to drive and says to walk
+      the classic page only where `/next/` has none yet; links to grain
+      tasks in the body stay on classic routes (`/tasks/<id>`).
     - Instruct the agent to capture deterministic reproductions for any bugs or
       flaws found, fix scoped and safe bugs directly in the task, add regression
       tests, and run CI checks.
