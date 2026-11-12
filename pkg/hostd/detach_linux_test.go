@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -1299,5 +1300,79 @@ func TestADetachRacingExitOverUnixSocketKeepsTheSpool(t *testing.T) {
 	if err != nil || exit.Code != 9 || first.String()+rest.String() != "unix-race-ok\n" {
 		t.Fatalf("Attach after unix detach racing Exit = %+v, %v, stdout %q; want Exit code 9 and full output",
 			exit, err, first.String()+rest.String())
+	}
+}
+
+// endlessStdin is a stdin that never ends, counting what has been read of it.
+type endlessStdin struct{ n atomic.Int64 }
+
+func (r *endlessStdin) Read(p []byte) (int, error) {
+	r.n.Add(int64(len(p)))
+	return len(p), nil
+}
+
+// Detaching while a stdin frame is blocked on a hostd that has stopped
+// reading must still end the stream: abort may not wait on the send lock
+// that the blocked write holds.
+func TestDetachingWhileStdinIsBlockedOnHostdEndsTheStream(t *testing.T) {
+	dir, err := os.MkdirTemp("", "hostd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "hostd.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	// A hostd that starts the process and then reads nothing more.
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		t.Cleanup(func() { conn.Close() })
+		if _, _, err := readFrame(conn); err != nil {
+			return
+		}
+		_ = writeJSON(conn, frameStarted, Started{PID: 1, ID: "blocked"})
+	}()
+	stdin := &endlessStdin{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan Started, 1)
+	c := Client{
+		Socket:    sock,
+		Detach:    func(context.Context) bool { return true },
+		OnStarted: func(s Started) { started <- s },
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Detach: true}, stdin, nil, nil)
+		done <- err
+	}()
+	<-started
+	// Wait for stdin to stop being read: its send is blocked on the socket.
+	deadline := time.Now().Add(10 * time.Second)
+	for last := int64(-1); ; {
+		n := stdin.n.Load()
+		if n > 0 && n == last {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stdin never blocked (read %d bytes)", n)
+		}
+		last = n
+		time.Sleep(100 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrDetached) {
+			t.Fatalf("Run after detaching = %v, want ErrDetached", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after detaching while a stdin frame was blocked")
 	}
 }

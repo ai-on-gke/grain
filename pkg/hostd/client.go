@@ -403,33 +403,59 @@ func (c Client) Attach(ctx context.Context, id string, cur Cursor, stdout, stder
 // 1-byte truncated frame header written under send's lock makes hostd's
 // control loop read io.ErrUnexpectedEOF instead of mistaking a detached or
 // abandoned stream for a daemon that read the process's Exit and hung up.
+// abort first unblocks a send stuck writing to a hostd that has stopped
+// reading (stdin a process does not consume), which would otherwise hold
+// the lock and hang the abort; a send it cuts short has already left the
+// stream mid-frame, and then the extra byte is not written, since it could
+// complete that frame.
 func streamPipe(conn net.Conn) (send func(byte, []byte) error, abort func()) {
 	var mu sync.Mutex
-	aborted := false
+	aborted, short := false, false
 	send = func(typ byte, p []byte) error {
 		mu.Lock()
 		defer mu.Unlock()
 		if aborted {
 			return net.ErrClosed
 		}
-		return writeFrame(conn, typ, p)
+		w := &countingWriter{w: conn}
+		err := writeFrame(w, typ, p)
+		if err != nil && w.n > 0 {
+			short = true
+		}
+		return err
 	}
 	abort = func() {
+		r, isMux := conn.(interface{ Reset() error })
+		if isMux {
+			_ = r.Reset()
+		} else {
+			_ = conn.SetWriteDeadline(time.Now())
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		if aborted {
 			return
 		}
 		aborted = true
-		if r, ok := conn.(interface{ Reset() error }); ok {
-			_ = r.Reset()
-		} else {
+		if !isMux && !short {
 			_ = conn.SetWriteDeadline(time.Now().Add(50 * time.Millisecond))
 			_, _ = conn.Write([]byte{frameSignal})
 		}
 		_ = conn.Close()
 	}
 	return send, abort
+}
+
+// countingWriter counts the bytes written through it.
+type countingWriter struct {
+	w io.Writer
+	n int
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += n
+	return n, err
 }
 
 // stream reads a started or attached process's frames until its exit,
