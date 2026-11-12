@@ -26,8 +26,9 @@
 //     and the earlier slice is still loaded;
 //  4. #comment=FIRST pages back to the oldest comment, highlights it, and
 //     leaves it focused and on screen;
-//  5. COMPACTED (compactedThrough=CT): after Show earlier, no comment at or
-//     before CT is visible until the collapsed group is opened.
+//  5. COMPACTED (compactedThrough=CT): after Show earlier, every comment at
+//     or before CT has its body folded in a closed "Summarised by
+//     compaction" <details> and says "summarised"; none after CT does.
 // and screenshots each state into OUT.
 import { createRequire } from "node:module";
 const require = createRequire(`${process.env.UI_DIR}/package.json`);
@@ -88,7 +89,7 @@ for (const [vw, vh] of [[1440, 900], [390, 844]]) {
     check(added.length > 0 && added.every((i) => i < Math.min(...head)) && after.length === new Set(after).size,
       `${tag}: Show earlier adds ${added.length} strictly older comments`);
 
-    const body = `poll probe ${tag}`;
+    const body = `poll probe ${tag} ${Date.now()}`;
     await post(`/api/tasks/${TASK}/comments`, { body });
     t0 = Date.now();
     await page.getByText(body).first().waitFor({ timeout: 30000 });
@@ -123,12 +124,15 @@ for (const [vw, vh] of [[1440, 900], [390, 844]]) {
       await showEarlier(page).click();
       await page.waitForFunction(() => document.querySelectorAll("[data-comment-id]").length > 50);
       await page.waitForTimeout(500);
-      const all = await ids(page);
-      const vis = await visibleIds(page);
-      const hiddenCompacted = all.filter((i) => i <= Number(CT)).length;
-      const visibleCompacted = vis.filter((i) => i <= Number(CT)).length;
-      check(hiddenCompacted > 0 && visibleCompacted === 0,
-        `${tag}: compacted task loads ${hiddenCompacted} comments at or before compactedThrough=${CT}, ${visibleCompacted} of them visible (visible ${Math.min(...vis)}..${Math.max(...vis)})`);
+      const rows = await page.$$eval("[data-comment-id]", (els) => els.map((e) => {
+        const d = e.querySelector("details.timeline-summarised");
+        return { id: Number(e.getAttribute("data-comment-id")), folded: !!d && !d.open,
+          label: /· summarised/.test(e.textContent) };
+      }));
+      const ct = Number(CT);
+      const before = rows.filter((r) => r.id <= ct), afterCt = rows.filter((r) => r.id > ct);
+      check(before.length > 0 && before.every((r) => r.folded && r.label) && afterCt.every((r) => !r.folded && !r.label),
+        `${tag}: compacted task: ${before.filter((r) => r.folded).length}/${before.length} comments at or before compactedThrough=${CT} folded and labelled summarised; ${afterCt.filter((r) => r.folded).length}/${afterCt.length} after it folded`);
       await page.screenshot({ path: `${OUT}/${tag}-compacted.png` });
     }
     await ctx.close();

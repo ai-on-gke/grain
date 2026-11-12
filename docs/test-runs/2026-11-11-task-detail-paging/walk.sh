@@ -18,8 +18,8 @@
 # start with comments_before= / attempts_before=, while a writer posts a
 # person's comment through the API and inserts a finished run (with usage)
 # through <sql-cmd> (e.g. "sqlite3 db" or "psql -q ...") every 0.2s. It then
-# checks: no duplicate comment or attempt ids, and every id from the first up
-# to the head page's newest is present (no gaps). Last, it checks the
+# checks: no duplicate comment or attempt ids, and every one of the task's
+# own comment ids up to the head page's newest is present (no gaps). Last, it checks the
 # head-page cache: 30 rounds of "post a comment, GET the head with the
 # previous ETag" must each answer 200 with the new comment on top.
 dir=$1 port=$2 task=$3 sql=$4
@@ -30,7 +30,7 @@ out=$(mktemp -d)
 ( i=0; while [ ! -e "$out/stop" ]; do i=$((i+1))
     post /comments "{\"body\":\"concurrent comment $i\"}"
     n=$((10000 + i))
-    echo "INSERT INTO task_run (id,task_id,sandbox,attempt,started_at,finished_at,outcome,detail) VALUES ('$task-$n','$task','sb',$n,'2026-11-01 00:00:00','2026-11-01 00:00:01','succeeded','');" | $sql
+    echo "INSERT INTO task_run (id,task_id,sandbox,attempt,started_at,finished_at,outcome,detail) VALUES ('$task-w$$-$n','$task','sb',$n,'2026-11-01 00:00:00','2026-11-01 00:00:01','succeeded','');" | $sql
     sleep 0.2
   done; echo "$i" > "$out/writes" ) &
 head=$(get '?comments_limit=100&attempts_limit=50')
@@ -50,7 +50,10 @@ done
 touch "$out/stop"; wait
 firstC=$(sort -n "$out/c" | head -n1)
 echo "pages=$pages writes=$(cat "$out/writes") comments=$(wc -l < "$out/c") dupComments=$(sort "$out/c" | uniq -d | wc -l) attempts=$(wc -l < "$out/a") dupAttempts=$(sort "$out/a" | uniq -d | wc -l)"
-echo "comment ids $firstC..$newestC: missing=$(comm -23 <(seq "$firstC" "$newestC") <(sort -n "$out/c" | uniq) | wc -l)"
+# Comment ids are global across tasks, so the expected set is this task's
+# own ids up to the head page's newest, read unpaged once the writer stops.
+get '' | jq -r --argjson n "$newestC" '.comments[].id | select(. <= $n)' | sort -n > "$out/want"
+echo "comment ids $firstC..$newestC: want=$(wc -l < "$out/want") missing=$(comm -23 "$out/want" <(sort -n "$out/c" | uniq) | wc -l) extra=$(comm -13 "$out/want" <(sort -n "$out/c" | uniq) | wc -l)"
 echo "attempts 1..600 + head: missing=$(comm -23 <(seq 1 600 | sort) <(sort "$out/a" | uniq) | wc -l) newestHead=$newestA"
 # Head-page cache invalidation.
 etag=$(curl -s -D - -o /dev/null -H "Authorization: Bearer $tok" "$base?comments_limit=50&attempts_limit=20" | tr -d '\r' | sed -n 's/^[Ee][Tt]ag: //p')
