@@ -679,7 +679,12 @@ import "strconv"
 // 146 adds `grain_config`.`qa` (model.Config.QA): the deployment-wide quality
 // control engine and single-instance PR rollout configuration, stored as JSON
 // and defaulting to empty (engine off).
-const SchemaVersion = 146
+// 147 adds `github_ci_job`.`event` and `head_repo` (model.GitHubCIJob.Event,
+// HeadRepo): the event that triggered the job's workflow run and the
+// repository its head came from, so the default-branch readings can leave
+// out a pull request's jobs, including one from a fork whose own branch is
+// named main (grain/task-4846).
+const SchemaVersion = 147
 
 const taskQAAssignmentTable = `CREATE TABLE IF NOT EXISTS ` + "`task_qa_assignment`" + ` (
   ` + "`root_origin`" + `           TEXT     NOT NULL,
@@ -1029,6 +1034,8 @@ const gitHubCIJobTable = `CREATE TABLE IF NOT EXISTS ` + "`github_ci_job`" + ` (
   ` + "`via`" + `           TEXT     NOT NULL DEFAULT '',
   ` + "`recorded_at`" + `   DATETIME NOT NULL,
   ` + "`updated_at`" + `    DATETIME NOT NULL,
+  ` + "`event`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`head_repo`" + `     TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`repo`" + `, ` + "`check_run_id`" + `)
 )`
 

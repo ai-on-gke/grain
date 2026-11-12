@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/ghwebhook"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -61,7 +62,7 @@ func stage1Run(t *testing.T, ctx context.Context, store *model.Store, repo model
 		j := model.GitHubCIJob{
 			Repo: repo.String(), CheckRunID: id*100 + n, Source: model.GitHubCISource, App: model.GitHubActionsApp,
 			Ref: ref, Commit: run.HeadSHA, Workflow: "nightly", RunID: id, RunAttempt: 1, JobName: name,
-			Conclusion: c, CompletedAt: &at, RunURL: run.HTMLURL, UpdatedAt: at,
+			Conclusion: c, CompletedAt: &at, RunURL: run.HTMLURL, Event: event, UpdatedAt: at,
 		}
 		if j.Failed() {
 			j.FailingStep, j.FailureTail = "go test", "--- FAIL: TestLongThing ("+name+")"
@@ -330,5 +331,87 @@ func TestASkippedScheduledStage1NeitherFilesARepairNorClosesOne(t *testing.T) {
 	}
 	if n, _ := store.OpenNotification(ctx, subject); n == nil {
 		t.Fatalf("an idle-gated scheduled run cleared %s while repair %s is open", subject, ids[0])
+	}
+}
+
+// A nightly-green goal reads job rows, and a pull request's run -- a fork's
+// opened from its own main among them -- records the same ref as main's. Only
+// a run stamped as a branch run of the repository itself meets the goal.
+func TestAGreenForkPullRequestOnMainDoesNotMeetANightlyGreenGoal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	declared := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	g := model.TaskGoal{TaskID: "repair", Kind: model.GoalNightlyGreen, DeclaredAt: declared,
+		Spec: model.GoalSpec{Repo: repo.String(), Workflow: "nightly"}}
+
+	green := map[string]string{"go-long": "success", "kvm": "success"}
+	stage1Run(t, ctx, store, repo, 40, "main", "push", "failure", declared.Add(time.Hour),
+		map[string]string{"go-long": "failure", "kvm": "success"})
+	_, forkJobs := stage1Run(t, ctx, store, repo, 41, "main", "pull_request", "success", declared.Add(2*time.Hour), green)
+	for _, j := range forkJobs {
+		j.HeadRepo = "mallory/widgets"
+		if err := store.PutGitHubCIJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, unstamped := stage1Run(t, ctx, store, repo, 42, "main", "", "success", declared.Add(3*time.Hour), green)
+	if len(unstamped) == 0 {
+		t.Fatal("no unstamped rows recorded")
+	}
+
+	r, err := nightlyGreenReading(ctx, store, g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.met || r.measure != "go-long" {
+		t.Fatalf("a fork's green pull request on main read as %+v, want main's own red run 40", r)
+	}
+
+	stage1Run(t, ctx, store, repo, 43, "main", "schedule", "success", declared.Add(4*time.Hour), green)
+	if r, err = nightlyGreenReading(ctx, store, g); err != nil || !r.met {
+		t.Fatalf("a green scheduled run on main read as %+v (%v), want met", r, err)
+	}
+}
+
+// A job only a workflow_job delivery recorded does not know its run's event;
+// the concluded branch run that owns it stamps it, so the default-branch
+// readings can count it.
+func TestAConcludedBranchRunStampsItsWebhookJobs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	now := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	j, ok := gitHubCIJobFromEvent(repo, ghwebhook.Event{
+		Action: "completed", CheckRunID: 901, CheckName: "go unit", CheckConclusion: "success",
+		HeadRef: "main", WorkflowName: "Tests", WorkflowRun: 9, RunAttempt: 1,
+	}, now)
+	if !ok {
+		t.Fatal("delivery not recorded")
+	}
+	if err := store.PutGitHubCIJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	run := ConcludedGitHubWorkflowRun{Repo: repo, WorkflowName: "Tests", RunID: 9, Attempt: 1,
+		Conclusion: "success", Ref: "main", Event: "push", HeadRepo: "acme/widgets"}
+	jobs, err := ensureGitHubWorkflowRunJobs(ctx, Deps{Store: store}, run, now)
+	if err != nil || len(jobs) != 1 || jobs[0].Event != "push" {
+		t.Fatalf("ensureGitHubWorkflowRunJobs = %+v, %v; want the one job stamped push", jobs, err)
+	}
+	got, err := store.GetGitHubCIJob(ctx, repo.String(), 901)
+	if err != nil || got == nil || got.Event != "push" || got.HeadRepo != "acme/widgets" || got.Conclusion != "success" {
+		t.Fatalf("stored job = %+v, %v; want stamped push from acme/widgets, still success", got, err)
+	}
+	if !gitHubCIJobOnBranch(repo, *got) {
+		t.Fatal("a stamped push job is not on the branch")
+	}
+	// A later delivery that does not name the event keeps the stamp.
+	if err := store.PutGitHubCIJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = store.GetGitHubCIJob(ctx, repo.String(), 901); got.Event != "push" {
+		t.Fatalf("a redelivered workflow_job cleared the event: %+v", got)
 	}
 }

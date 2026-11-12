@@ -376,6 +376,9 @@ func nightlyGreenReading(ctx context.Context, store *model.Store, g model.TaskGo
 	if err != nil {
 		return goalReading{}, err
 	}
+	// ListGitHubCIJobs matched the goal's repository by name already; this
+	// is for telling a row's head repository from it.
+	repo, _ := model.ParseRepo(g.Spec.Repo)
 	// Jobs come newest first; the first matching run that idle-gate did not
 	// turn off, and that was not cancelled before its verdict, is the
 	// newest verdict.
@@ -383,6 +386,13 @@ func nightlyGreenReading(ctx context.Context, store *model.Store, g model.TaskGo
 	byRun := map[int64][]model.GitHubCIJob{}
 	for _, j := range jobs {
 		if !strings.EqualFold(j.Workflow, g.Spec.Workflow) || j.RunID == 0 || !stage1Ref(j.Ref, "") && !isDefaultLike(j.Ref) {
+			continue
+		}
+		// A pull request's run records the same ref as the branch it was
+		// opened from, a fork's own main among them: only a job a concluded
+		// branch run of this repository stamped is a verdict on main or an
+		// rc tag.
+		if !gitHubCIJobOnBranch(repo, j) {
 			continue
 		}
 		if _, seen := byRun[j.RunID]; !seen {
