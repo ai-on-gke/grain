@@ -33,7 +33,7 @@ import { NgTemplateOutlet } from "@angular/common";
 import { MarkdownDirective } from "../code-highlight";
 import { ActorChipComponent } from "../actor-chip.component";
 import { ago } from "../../tasks/task-view";
-import { isHuman } from "../../sessions/session-view";
+import { isHuman } from "../../sessions/session-helpers";
 import {
   AttachmentListComponent,
   AttachmentPickerComponent,

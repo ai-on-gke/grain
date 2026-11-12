@@ -34,7 +34,7 @@ import {
   isStaleEdit,
   lastLine,
   sessionStatus,
-} from "./session-view";
+} from "./session-helpers";
 
 // POLL_MS is the classic UI's refresh: every 3 s with ETags, so a reply
 // shows up without the reader doing anything, events or not.
@@ -702,6 +702,7 @@ export class SessionsStore {
     if (!plan.tasks.length) return null;
     let origin: string | null = null;
     const ok = await this.run("launch-plan", async () => {
+      const ordered = topologicalPlanOrder(plan.tasks);
       const root = await this.api.post<Task>("POST /api/tasks", undefined, {
         title: plan.title || "Workstream",
         description:
@@ -713,32 +714,51 @@ export class SessionsStore {
       });
       if (!root?.id) throw new Error("root task ID missing");
       origin = `task:${root.id}`;
+      const createdIds: string[] = [root.id];
       const keyToTaskId = new Map<string, string>();
-      const ordered = topologicalPlanOrder(plan.tasks);
-      for (const item of ordered) {
-        const depIds = [...(item.dependsOn ?? []), ...(item.after ?? [])]
-          .map((k) => keyToTaskId.get(k) ?? (/^\d+$/.test(k) ? k : ""))
-          .filter(Boolean);
-        const created = await this.api.post<Task>(
-          "POST /api/tasks",
-          undefined,
-          {
-            title: item.title,
-            description: item.description || "",
-            ...(item.repo || plan.repo ? { repo: item.repo || plan.repo } : {}),
-            ...(item.base || plan.base ? { base: item.base || plan.base } : {}),
-            ...(item.model ? { model: item.model } : {}),
-            ...(item.priority ? { priority: item.priority } : {}),
-            ...(depIds.length ? { dependsOn: depIds } : {}),
-            origin,
-            parentId: root.id,
-            approved: true,
-          },
-        );
-        if (created?.id) {
-          if (item.key) keyToTaskId.set(item.key, created.id);
-          keyToTaskId.set(item.title, created.id);
+      try {
+        for (const item of ordered) {
+          const depIds = [...(item.dependsOn ?? []), ...(item.after ?? [])]
+            .map((k) => keyToTaskId.get(k) ?? (/^\d+$/.test(k) ? k : ""))
+            .filter(Boolean);
+          const created = await this.api.post<Task>(
+            "POST /api/tasks",
+            undefined,
+            {
+              title: item.title,
+              description: item.description || "",
+              ...(item.repo || plan.repo
+                ? { repo: item.repo || plan.repo }
+                : {}),
+              ...(item.base || plan.base
+                ? { base: item.base || plan.base }
+                : {}),
+              ...(item.model ? { model: item.model } : {}),
+              ...(item.priority ? { priority: item.priority } : {}),
+              ...(depIds.length ? { dependsOn: depIds } : {}),
+              origin,
+              approved: true,
+            },
+          );
+          if (created?.id) {
+            createdIds.push(created.id);
+            if (item.key) keyToTaskId.set(item.key, created.id);
+            keyToTaskId.set(item.title, created.id);
+          }
         }
+      } catch (err) {
+        await Promise.allSettled(
+          [...createdIds].reverse().map((id) =>
+            this.api.post(
+              "POST /api/tasks/{id}/close",
+              { id },
+              {
+                reason: "workstream plan creation rolled back after error",
+              },
+            ),
+          ),
+        );
+        throw err;
       }
     });
     return ok ? origin : null;

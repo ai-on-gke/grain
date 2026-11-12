@@ -17,6 +17,7 @@ import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { ConsoleSessionList, Task, TaskDetail } from "../api/models";
+import { AccessService } from "../services/access.service";
 import { SessionsStore } from "../sessions/sessions.store";
 import { DirectorShaperComponent } from "./director-shaper.component";
 
@@ -125,6 +126,39 @@ describe("DirectorShaperComponent", () => {
       el.querySelector('[data-testid="shaper-apply-save"]') as HTMLButtonElement
     ).click();
     expect(saved).toHaveLength(1);
+    f.destroy();
+  });
+
+  it("blocks sending to a repo-less Director session when tasks:write has repoLimits", async () => {
+    const api = new FakeApi();
+    await TestBed.configureTestingModule({
+      imports: [DirectorShaperComponent],
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    }).compileComponents();
+
+    const access = TestBed.inject(AccessService);
+    access.setConfig({
+      access: {
+        role: "grain/operator",
+        full: false,
+        scopes: ["tasks:write"],
+        repoLimits: { "tasks:write": ["acme/widgets"] },
+      },
+    });
+
+    const f = TestBed.createComponent(DirectorShaperComponent);
+    f.componentRef.setInput("current", { title: "Demo" });
+    f.detectChanges();
+    await f.whenStable();
+    f.detectChanges();
+
+    const composer = f.nativeElement.querySelector(
+      '[data-testid="task-composer"]',
+    ) as HTMLTextAreaElement;
+    expect(composer?.disabled).toBe(true);
     f.destroy();
   });
 });

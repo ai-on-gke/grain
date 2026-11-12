@@ -10,8 +10,8 @@
 }
 
 .sessions-split.has-canvas {
-  grid-template-columns: minmax(210px, 250px) minmax(360px, 1fr) minmax(
-      340px,
+  grid-template-columns: minmax(200px, 240px) minmax(300px, 1fr) minmax(
+      300px,
       44vw
     );
 }

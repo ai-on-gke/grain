@@ -35,7 +35,7 @@ import {
   errorText,
   grantName,
   isApiCapability,
-} from "../sessions/session-view";
+} from "../sessions/session-helpers";
 import { type PillOption, PillSelectComponent } from "./pill-select.component";
 
 export interface GrantAttachEvent {

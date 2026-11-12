@@ -54,7 +54,7 @@ import {
   otherGrants,
   sessionStatus,
   toggleRows,
-} from "./session-view";
+} from "./session-helpers";
 import {
   buildAgentModelOptions,
   extractSessionArtifacts,
@@ -1032,11 +1032,11 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
-    this.store.start();
+    this.store.retain("sessions-page");
   }
 
   ngOnDestroy(): void {
-    this.store.stop();
+    this.store.release("sessions-page");
   }
 
   protected statusOf = sessionStatus;

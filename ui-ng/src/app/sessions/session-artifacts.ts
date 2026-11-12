@@ -151,20 +151,25 @@ export function wrapSandboxedHtml(
   theme: "light" | "dark" = "light",
 ): string {
   const csp =
-    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none';";
+    "default-src 'none'; base-uri 'none'; form-action 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none';";
   const themeStyle =
     theme === "dark"
       ? "html{color-scheme:dark;background:#111318;color:#e2e8f0;font-family:system-ui,-apple-system,sans-serif;}"
       : "html{color-scheme:light;background:#ffffff;color:#0f172a;font-family:system-ui,-apple-system,sans-serif;}";
-  const trimmed = html.trim();
-  if (/<html[\s>]/i.test(trimmed) || /<!doctype/i.test(trimmed)) {
-    const inject = `<meta http-equiv="Content-Security-Policy" content="${csp}"><style>${themeStyle}</style>`;
-    if (/<head[\s>]/i.test(trimmed)) {
-      return trimmed.replace(/<head([^>]*)>/i, `<head$1>${inject}`);
+  // Strip any attacker-supplied base or http-equiv directives (e.g. refresh or
+  // permissive CSP attempts) before injecting our strict CSP at the head start.
+  const sanitized = html
+    .trim()
+    .replace(/<meta\b[^>]*\bhttp-equiv\b[^>]*>/gi, "")
+    .replace(/<base\b[^>]*>/gi, "");
+  if (/<html[\s>]/i.test(sanitized) || /<!doctype/i.test(sanitized)) {
+    const inject = `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${themeStyle}</style>`;
+    if (/<head[\s>]/i.test(sanitized)) {
+      return sanitized.replace(/<head([^>]*)>/i, `<head$1>${inject}`);
     }
-    return `<!doctype html><html><head>${inject}</head>${trimmed}</html>`;
+    return `<!doctype html><html><head>${inject}</head>${sanitized}</html>`;
   }
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${themeStyle}body{margin:16px;}</style></head><body>${trimmed}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${themeStyle}body{margin:16px;}</style></head><body>${sanitized}</body></html>`;
 }
 
 export function buildAgentModelOptions(
@@ -220,7 +225,11 @@ export function topologicalPlanOrder<
   const out: T[] = [];
   const visit = (i: number) => {
     if (visited[i] === 2) return;
-    if (visited[i] === 1) return; // Cycle guard: fall through cleanly.
+    if (visited[i] === 1) {
+      throw new Error(
+        `Dependency cycle in workstream plan involving "${tasks[i].key || tasks[i].title}"`,
+      );
+    }
     visited[i] = 1;
     const deps = [...(tasks[i].dependsOn ?? []), ...(tasks[i].after ?? [])];
     for (const d of deps) {

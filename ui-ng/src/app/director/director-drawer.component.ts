@@ -31,7 +31,7 @@ import { RouterLink } from "@angular/router";
 import type { AttachmentUpload } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { AccessService } from "../services/access.service";
-import { DIRECTOR_ID } from "../sessions/session-view";
+import { DIRECTOR_ID } from "../sessions/session-helpers";
 import { SessionsStore } from "../sessions/sessions.store";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
 import { DialogTrapDirective } from "../shared/dialog-trap.directive";
@@ -62,7 +62,7 @@ import { extractGrainDrafts } from "./director-draft";
       ></div>
       <aside
         class="director-drawer is-overlay"
-        role="complementary"
+        role="dialog"
         aria-label="Director"
         aria-modal="true"
         data-testid="director-drawer"
@@ -251,12 +251,12 @@ export class DirectorDrawerComponent implements OnInit, OnDestroy {
     return null;
   });
 
-  protected readonly canWrite = computed(() =>
-    this.access.can(
-      "POST /api/tasks/{id}/comments",
-      this.detail()?.repo || undefined,
-    ),
-  );
+  protected readonly canWrite = computed(() => {
+    const repo = this.detail()?.repo;
+    return repo
+      ? this.access.can("POST /api/tasks/{id}/comments", repo)
+      : this.access.canGlobalScope("tasks:write");
+  });
   protected readonly canStop = computed(() =>
     this.access.can("POST /api/console-sessions/{id}/cancel"),
   );

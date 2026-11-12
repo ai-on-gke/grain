@@ -2,7 +2,8 @@
   position: fixed;
   inset: 0;
   z-index: 44;
-  background: var(--grain-scrim, rgba(15, 23, 42, 0.36));
+  background: var(--md-sys-color-scrim);
+  backdrop-filter: blur(1px);
 }
 
 .director-drawer {

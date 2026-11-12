@@ -26,7 +26,7 @@ import {
 } from "@angular/core";
 import type { AttachmentUpload } from "../api/models";
 import { AccessService } from "../services/access.service";
-import { DIRECTOR_ID } from "../sessions/session-view";
+import { DIRECTOR_ID } from "../sessions/session-helpers";
 import { SessionsStore } from "../sessions/sessions.store";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
@@ -185,12 +185,12 @@ export class DirectorShaperComponent implements OnInit, OnDestroy {
     return prop ? diffDraftFields(this.current(), prop) : [];
   });
 
-  protected readonly canWrite = computed(() =>
-    this.access.can(
-      "POST /api/tasks/{id}/comments",
-      this.detail()?.repo || undefined,
-    ),
-  );
+  protected readonly canWrite = computed(() => {
+    const repo = this.detail()?.repo;
+    return repo
+      ? this.access.can("POST /api/tasks/{id}/comments", repo)
+      : this.access.canGlobalScope("tasks:write");
+  });
 
   ngOnInit(): void {
     this.sessions.setDirectorWatch("shaper", true);

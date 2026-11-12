@@ -40,7 +40,7 @@ import type {
 import { InboxStore } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
-import { DIRECTOR_ID, errorText } from "../sessions/session-view";
+import { DIRECTOR_ID, errorText } from "../sessions/session-helpers";
 import { DirectorShaperComponent } from "../director/director-shaper.component";
 import type { TaskShapeFields } from "../director/director-draft";
 import {

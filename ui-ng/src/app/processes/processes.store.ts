@@ -19,7 +19,7 @@ import { GrainEvents } from "../api/grain-events.service";
 import type { TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
-import { errorText } from "../sessions/session-view";
+import { errorText } from "../sessions/session-helpers";
 import {
   type Composition,
   type CreateScheduleRequest,

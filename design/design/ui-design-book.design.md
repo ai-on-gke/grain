@@ -237,6 +237,9 @@ it rather than copy it.
 | Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
+| Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
+| Director shaper | `director/director-shaper.component.ts` | in-sheet task shaping with `grain-draft` diff & Apply |
+| Session canvas | `sessions/session-canvas.component.ts` | coplanar right-hand Docs, sandboxed HTML Mocks, `grain-plan` DAG, Memory editor |
 
 Rules:
 
@@ -252,7 +255,7 @@ Rules:
 
 ## 5. Interaction
 
-- **Keyboard first.** `c` new task, `/` filter, `?` help, `1`–`9`
+- **Keyboard first.** `c` new task, `d` / `Alt+D` Director drawer, `/` filter, `?` help, `1`–`9`
   destinations, `j`/`k` step, `x` select, `Shift+F` full-screen conversation.
   Every shortcut is listed in Help. Shortcuts never fire while typing
   (`isTypingTarget`).

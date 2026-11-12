@@ -1173,6 +1173,10 @@ body {
 }
 
 @media (max-width: 599.95px) {
+  :root {
+    --grain-topbar-height: 52px;
+    --grain-bottombar-height: 92px;
+  }
   .live-pill .hide-phone,
   .hide-phone {
     display: none;
@@ -1180,6 +1184,10 @@ body {
 }
 
 @media (max-height: 480px) and (orientation: landscape) {
+  :root {
+    --grain-topbar-height: 48px;
+    --grain-bottombar-height: 52px;
+  }
   .app-shell {
     grid-template-rows: 48px 1fr 0 52px;
     grid-template-columns: 1fr;

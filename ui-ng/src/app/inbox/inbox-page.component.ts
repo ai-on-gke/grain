@@ -53,7 +53,7 @@ import { DirectorContextService } from "../director/director-context.service";
 import { HelpService } from "../services/help.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { ThemeService } from "../services/theme.service";
-import { isHuman } from "../sessions/session-view";
+import { isHuman } from "../sessions/session-helpers";
 import { ActorChipComponent } from "../shared/actor-chip.component";
 import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";

@@ -69,7 +69,23 @@ describe("session-artifacts helpers", () => {
     const wrapped = wrapSandboxedHtml("<div>Hi</div>", "dark");
     expect(wrapped).toContain("Content-Security-Policy");
     expect(wrapped).toContain("connect-src 'none'");
+    expect(wrapped).toContain("base-uri 'none'");
     expect(wrapped).toContain("color-scheme:dark");
+
+    const hostile = wrapSandboxedHtml(
+      '<!doctype html><html><head><base href="https://evil.test"><meta http-equiv="refresh" content="0;url=https://evil.test"></head><body><h1>Safe</h1></body></html>',
+      "light",
+    );
+    expect(hostile).not.toContain("<base");
+    expect(hostile).not.toContain('http-equiv="refresh"');
+    expect(hostile).toContain("Content-Security-Policy");
+
+    expect(() =>
+      topologicalPlanOrder([
+        { key: "a", title: "Step A", dependsOn: ["b"] },
+        { key: "b", title: "Step B", dependsOn: ["a"] },
+      ]),
+    ).toThrow(/Dependency cycle/);
 
     const opts = buildAgentModelOptions(
       [

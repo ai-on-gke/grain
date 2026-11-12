@@ -42,7 +42,7 @@ import {
   extractSessionArtifacts,
   wrapSandboxedHtml,
 } from "./session-artifacts";
-import { errorText } from "./session-view";
+import { errorText } from "./session-helpers";
 import { SessionsStore } from "./sessions.store";
 
 export type CanvasTab = "docs" | "html" | "plan" | "memory";
@@ -532,18 +532,30 @@ export class SessionCanvasComponent implements OnInit {
     this.sanitizer.bypassSecurityTrustHtml(this.wrappedSrcdoc()),
   );
 
-  protected readonly canReadMemory = computed(() =>
-    this.access.can("GET /api/memory/documents", this.repo() || undefined),
-  );
-  protected readonly canWriteMemory = computed(() =>
-    this.access.can("PUT /api/memory/documents", this.repo() || undefined),
-  );
-  protected readonly canLaunchTasks = computed(() =>
-    this.access.can("POST /api/tasks", this.repo() || undefined),
-  );
-  protected readonly canApproveProposals = computed(() =>
-    this.access.can("POST /api/tasks/{id}/approve", this.repo() || undefined),
-  );
+  protected readonly canReadMemory = computed(() => {
+    const r = this.repo();
+    return r
+      ? this.access.can("GET /api/memory/documents", r)
+      : this.access.canGlobalScope("memory:read");
+  });
+  protected readonly canWriteMemory = computed(() => {
+    const r = this.repo();
+    return r
+      ? this.access.can("PUT /api/memory/documents", r)
+      : this.access.canGlobalScope("memory:write");
+  });
+  protected readonly canLaunchTasks = computed(() => {
+    const r = this.repo();
+    return r
+      ? this.access.can("POST /api/tasks", r)
+      : this.access.canGlobalScope("tasks:write");
+  });
+  protected readonly canApproveProposals = computed(() => {
+    const r = this.repo();
+    return r
+      ? this.access.can("POST /api/tasks/{id}/approve", r)
+      : this.access.canGlobalScope("tasks:admin");
+  });
 
   constructor() {
     effect(() => {

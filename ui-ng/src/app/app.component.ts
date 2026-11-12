@@ -1386,14 +1386,13 @@ export class AppComponent implements OnInit, OnDestroy {
       this.onCustomizeNavClosed();
       return;
     }
-    if (this.directorCtx.isOpen()) {
-      ev.preventDefault();
-      this.directorCtx.close(true);
-      return;
-    }
     if (this.createOpen()) this.closeCreate(ev, true);
     else if (this.railMoreOpen()) this.closeRailMore(ev, true);
     else if (this.moreOpen()) this.closeMore(ev, true);
+    else if (this.directorCtx.isOpen()) {
+      ev.preventDefault();
+      this.directorCtx.close(true);
+    }
   }
 
   protected closeCreate(ev: Event, refocus: boolean): void {

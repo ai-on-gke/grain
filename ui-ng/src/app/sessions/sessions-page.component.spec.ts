@@ -758,4 +758,50 @@ describe("SessionsPageComponent", () => {
     expect(q(f, '[data-testid="session-canvas"]')).not.toBeNull();
     expect(q(f, '[data-testid="canvas-html-iframe"]')).not.toBeNull();
   });
+
+  it("rolls back created tasks when launchWorkstreamPlan fails mid-plan and keeps SessionsStore retained across drawer watch toggles", async () => {
+    let createdSeq = 0;
+    const api = new FakeApi();
+    const basePost = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if (route === "POST /api/tasks") {
+        api.calls.push({ method: "POST", route, params, body });
+        createdSeq += 1;
+        if (createdSeq === 3) {
+          return Promise.reject(new Error("boom on child #2"));
+        }
+        return Promise.resolve({
+          id: `t-${createdSeq}`,
+          title: "created",
+          state: "proposed",
+        });
+      }
+      return basePost(route, params, body);
+    };
+
+    const f = await render(api);
+    const store = TestBed.inject(SessionsStore);
+
+    // Toggling Director watch while SessionsPage is mounted must NOT drop the page retainer.
+    store.setDirectorWatch("drawer", true);
+    store.setDirectorWatch("drawer", false);
+    const readsBefore = api.reads.length;
+    await new Promise((r) => setTimeout(r, 2600));
+    expect(api.reads.length).toBeGreaterThan(readsBefore);
+
+    const origin = await store.launchWorkstreamPlan({
+      title: "Broken plan",
+      tasks: [
+        { key: "a", title: "First child" },
+        { key: "b", title: "Second child", dependsOn: ["a"] },
+      ],
+    });
+    expect(origin).toBeNull();
+    expect(store.actionError()).toContain("boom on child #2");
+    const closedIds = api.calls
+      .filter((c) => c.route === "POST /api/tasks/{id}/close")
+      .map((c) => (c.params as { id: string }).id);
+    expect(closedIds).toEqual(["t-2", "t-1"]);
+    f.destroy();
+  });
 });
