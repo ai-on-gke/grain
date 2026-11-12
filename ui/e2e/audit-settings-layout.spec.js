@@ -19,6 +19,16 @@ import { expect, test } from "./fixtures.js";
 // audit beside them with their principals as stored, each table inside
 // its card -- on a wide screen and on a phone, with nothing pushing the
 // page sideways.
+//
+// The page lists the newest AUDIT_LIMIT (100) config changes, and the
+// seeded ones are the oldest there are: on a worker whose store other
+// files' settings saves had already filled, the operator's row a day ago
+// fell off the page and this failed for nothing the page did. A
+// worker-scoped demoArgs value of its own -- the default target repo,
+// spelled out, so the demo is the default one -- gives this file a
+// worker and a freshly seeded store of its own (fixtures.js).
+test.use({ demoArgs: ["-default-target-repo=acme/widgets"] });
+
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
