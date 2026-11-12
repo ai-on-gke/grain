@@ -881,7 +881,11 @@ func runLongTermTestHarness(t *testing.T, cfg longTermConfig, isSustained bool) 
 			closedMerged++
 			metrics.recordTaskDone(model.DefaultTeamID)
 			branch := model.BranchName(tk.ID)
-			if tk.Target != nil {
+			// Only a change that opened a pull request has a branch to
+			// land. A proposed sub-task whose run only proposed a
+			// follow-up closes as an answered report-only task
+			// (model.ClosesOnAnswer), with nothing pushed.
+			if tk.Target != nil && model.TaskPullRequest(tk) != nil {
 				bare := barePaths[tk.Target.Owner+"/"+tk.Target.Name]
 				if !branchIsAncestor(t, bare, "main", branch) {
 					t.Errorf("task %s was closed/merged but main in %s does not contain %s", tk.ID, tk.Target, branch)
