@@ -686,21 +686,26 @@ func (s *Server) waitDrained(ctx context.Context) {
 	}
 }
 
-// DrainExitGrace bounds how long a drained hostd waits, before it exits,
-// for the daemons attached to detached processes that have just ended to
-// read their Exit frames.
+// DrainExitGrace bounds how long attach waits, after writing a detached
+// process's Exit frame, for the daemon to hang up having read it; one
+// that has not by then leaves the process and its spool kept.
 const DrainExitGrace = 5 * time.Second
 
-// waitExitsDelivered waits, for up to DrainExitGrace, until no detached
-// process that has ended still has a stream attached whose daemon has not
-// read its Exit (attach releases the process once the daemon hangs up
-// after the Exit, or lets go when its connection fails). Without it the last run to end races hostd's exit:
+// waitExitsDelivered waits until no detached process that has ended still
+// has a stream attached whose daemon has not read its Exit (attach
+// releases the process once the daemon hangs up after the Exit, lets go
+// when its connection fails, and keeps the spool when DrainExitGrace
+// passes first). It waits twice DrainExitGrace at most, so attach's own
+// grace -- which starts a poll after the process ended -- runs out first:
+// a session closed on a stream still inside its grace looks to attach
+// like the daemon hanging up, and the spool would go with it. Without it
+// the last run to end races hostd's exit:
 // Serve closes the remote session and the sockets the moment nothing
 // runs, so the daemon streaming that run sees its stream drop rather than
 // the Exit, and waits for a host to come back before the run can finish
 // from the spool it kept.
 func (s *Server) waitExitsDelivered(ctx context.Context) {
-	timeout := time.NewTimer(DrainExitGrace)
+	timeout := time.NewTimer(2 * DrainExitGrace)
 	defer timeout.Stop()
 	for {
 		s.mu.Lock()
@@ -718,7 +723,7 @@ func (s *Server) waitExitsDelivered(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-timeout.C:
-			s.logf("hostd: drained, but %d attached stream(s) have not delivered their process's exit within %s; exiting anyway (the final spool is kept)", pending, DrainExitGrace)
+			s.logf("hostd: drained, but %d attached stream(s) have not delivered their process's exit within %s; exiting anyway (the final spool is kept)", pending, 2*DrainExitGrace)
 			return
 		case <-s.changed:
 		case <-time.After(s.poll()):
