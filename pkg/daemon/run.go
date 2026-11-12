@@ -739,6 +739,9 @@ func Run(ctx context.Context, cfg Config) error {
 			DiskOvercommit:       cfg.DiskOvercommit,
 			DefaultNetworkAccess: cfg.networkAccess,
 			Access:               access,
+			// Whether grain-sandbox-egress is enforced, so external
+			// capability grants are only admitted where it is.
+			NetworkPolicyEnforced: cfg.K8sNetworkPolicy,
 		})
 		accessLive = granuleSandboxes.Live
 		sandboxes = granuleSandboxes
@@ -1499,24 +1502,8 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 				return newCapabilityRegistryWithStore(store, CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
 			}
 			ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live),
-				// Wired before BuildCIService resumes the runs a restart left
-				// unconcluded, which read all of this as they go.
-				CIServiceWiring{
-					SandboxImage: live.CurrentSandboxImage,
-					// A trusted release runs only from a branch the repository
-					// has reviewed into, whoever asked for it (grain/task-949),
-					// and the same branches are the only ones whose jobs write
-					// the shared Go build cache every sandbox reads.
-					ReleaseRefRefusal: CiReleaseRefRefusal(store, githubClient),
-					GoCacheJobs:       pkgCache.goCacheJobs(),
-					// The attached capability servers a job's capability
-					// references are minted through, and the relay their ports
-					// and mcp_endpoints reach a job's sandbox through, the same
-					// ones a task's are.
-					CapabilityServers: func() orchestrator.CapabilityServers { return capabilityServerLookup(live) },
-					Ports:             capabilityPorts,
-					PortsURL:          capabilityPortsURL,
-				})
+				WithDaemonCIWiring(live.CurrentSandboxImage, CiReleaseRefRefusal(store, githubClient), pkgCache,
+					func() orchestrator.CapabilityServers { return capabilityServerLookup(live) }, capabilityPorts, capabilityPortsURL))
 			LiveCI.Store(ciService)
 			defer ciService.Detach()
 			log.Printf("grain daemon: grain CI is on for repos whose CI mode is \"Use Grain CI\" (Settings -> Repos); "+

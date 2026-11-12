@@ -1664,6 +1664,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 				Title:     "Declared Nightly Maintenance",
 				Target:    &declRepo,
 				AutoMerge: true,
+				// A declared `sandbox: {disk-gb: 100}` (grain/task-4591),
+				// so the template page shows a sized template.
+				Sandbox: model.SandboxShape{DiskGB: 100},
 			},
 		}},
 		Suites: []model.DeclaredSuiteFile{{

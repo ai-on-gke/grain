@@ -288,6 +288,8 @@ type declaredTemplateView struct {
 	Admission string `json:"admission,omitempty"`
 	// Hosting is the template's hosting: "unattended" or "console".
 	Hosting string `json:"hosting,omitempty"`
+	// Sandbox is the template's sandbox: the shape its tasks ask for.
+	Sandbox *model.SandboxShape `json:"sandbox,omitempty"`
 	// NothingNeeded is the template's nothing-needed: "" for close.
 	NothingNeeded string              `json:"nothingNeeded,omitempty"`
 	CustomFields  map[string][]string `json:"customFields,omitempty"`
@@ -354,6 +356,11 @@ func (v *declarationsView) fill(declared model.RepoDeclarations, now time.Time, 
 		stems[t.Template.ID] = model.DeclarationStem(t.Path)
 	}
 	for _, t := range declared.Templates {
+		var sandbox *model.SandboxShape
+		if !t.Template.Sandbox.IsZero() {
+			sb := t.Template.Sandbox
+			sandbox = &sb
+		}
 		v.Templates = append(v.Templates, declaredTemplateView{
 			Path:         t.Path,
 			Stem:         model.DeclarationStem(t.Path),
@@ -368,6 +375,7 @@ func (v *declarationsView) fill(declared model.RepoDeclarations, now time.Time, 
 			KeepRunning:  t.Template.KeepRunning,
 			Admission:    string(t.Template.Admission),
 			Hosting:      string(t.Template.Hosting),
+			Sandbox:      sandbox,
 			CustomFields: t.Template.CustomFields,
 			Push:         t.Push,
 
@@ -606,6 +614,9 @@ func (p *printer) declarations(v declarationsView) {
 		}
 		if t.Hosting != "" {
 			fmt.Printf("  hosting:    %s\n", t.Hosting)
+		}
+		if t.Sandbox != nil {
+			fmt.Printf("  sandbox:    %s\n", t.Sandbox.Describe())
 		}
 		if len(t.CustomFields) > 0 {
 			values := make([]string, 0, len(t.CustomFields))

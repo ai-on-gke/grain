@@ -199,6 +199,21 @@ func ConfigRepoProposalHold(child Task) string {
 		"propose_config_change instead)", what, ConfigRepo())
 }
 
+// proposerPriorityCeiling is the priority parent may give the work it
+// files on its own permission. That is its own priority, except for a
+// gating review that only ReviewPriorityFloor raised: grain lifts a
+// review to the floor so it dispatches ahead of ordinary work, and that
+// lift is not a person's say-so for its follow-ups to jump the queue
+// too. A review that inherited more than the floor from the change it
+// gates, or whose priority a person set, keeps its own.
+func proposerPriorityCeiling(parent Task) int {
+	if parent.Origin.Reason == ReasonReview && parent.Priority <= ReviewPriorityFloor &&
+		!slices.Contains(parent.Tags, ReviewPriorityHandSetTag) {
+		return DefaultTaskPriority
+	}
+	return parent.Priority
+}
+
 // PersonOnlyProposalSettings is why child, a proposal parent filed, asks
 // for something only a person may give it, phrased to finish "filed for
 // a person to approve: ..." -- "" when it asks for nothing of the kind.
@@ -233,7 +248,7 @@ func PersonOnlyProposalSettings(child, parent Task) string {
 		why = append(why, "it asks to keep running (keep_running), restarting every time its run exits, "+
 			"which only a person may ask of a task")
 	}
-	if ceiling := max(parent.Priority, DefaultTaskPriority); child.Priority > ceiling {
+	if ceiling := max(proposerPriorityCeiling(parent), DefaultTaskPriority); child.Priority > ceiling {
 		why = append(why, fmt.Sprintf("it asks for priority %d, above the %d its proposer may give it "+
 			"(the higher of its proposer's own priority and the default), which would dispatch it ahead "+
 			"of work a person queued", child.Priority, ceiling))

@@ -25,6 +25,7 @@
             "polyfills": ["zone.js"],
             "tsConfig": "tsconfig.app.json",
             "baseHref": "/next/",
+            "assets": [{ "glob": "**/*", "input": "public" }],
             "styles": ["../ui-shared/tokens.css", "src/styles.css"]
           },
           "configurations": {

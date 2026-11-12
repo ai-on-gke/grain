@@ -5627,6 +5627,10 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// grants either side of a Reads or Writes edit, for the grant
 	// attach/detach events it notes once it lands (unified-grants Q5).
 	var repoBefore, repoAfter []string
+	// priorityBefore and priorityAfter are the task's priority either
+	// side of a Priority edit, carried onto its open gating reviews once
+	// it lands (model.CarryPriorityToReviews).
+	var priorityBefore, priorityAfter int
 	if err := c.mutate(model.WithOwnerChange(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), c.requestActor(ctx)), id, func(task *model.Task) error {
 		if req.Reads != nil || req.Writes != nil {
 			repoBefore = model.TaskRepoAccessKeys(*task)
@@ -5697,10 +5701,19 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			task.Base = *req.Base
 		}
 		if req.Priority != nil {
+			priorityBefore = task.Priority
 			if *req.Priority == 0 {
 				task.Priority = model.DefaultTaskPriority
 			} else {
 				task.Priority = *req.Priority
+			}
+			priorityAfter = task.Priority
+			// A review's priority set by hand is the person's call, and a
+			// later edit to the reviewed task's must not lower it
+			// (model.CarryPriorityToReviews).
+			if task.Origin.Reason == model.ReasonReview && priorityAfter != priorityBefore &&
+				!slices.Contains(task.Tags, model.ReviewPriorityHandSetTag) {
+				task.Tags = append(task.Tags, model.ReviewPriorityHandSetTag)
 			}
 		}
 		if forkPR != nil && !hasLinkTo(task.Links, forkPR.Link()) {
@@ -6068,6 +6081,11 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		return nil
 	}); err != nil {
 		return Task{}, err
+	}
+	if priorityBefore != priorityAfter {
+		if _, err := c.Store.CarryPriorityToReviews(ctx, id, priorityBefore, priorityAfter); err != nil {
+			return Task{}, err
+		}
 	}
 	c.noteGrantChanges(ctx, id, repoBefore, repoAfter)
 	if titleChanged || descriptionChanged {
@@ -6961,6 +6979,15 @@ func (c *Client) AddCommentReopening(ctx context.Context, id, body string, uploa
 	if err != nil {
 		return err
 	}
+	if state == model.StateClosed {
+		// Refused before the comment is written, so it is not left on a
+		// task that will never be reopened to read it.
+		if task, err := c.Store.GetTask(ctx, id); err == nil && task != nil {
+			if err := rolledOverRefusal(*task); err != nil {
+				return err
+			}
+		}
+	}
 	if err := c.AddCommentWithAuthor(ctx, id, body, uploads, author); err != nil {
 		return err
 	}
@@ -6968,6 +6995,18 @@ func (c *Client) AddCommentReopening(ctx context.Context, id, body string, uploa
 		return nil
 	}
 	return c.ReopenBecause(ctx, id, "reopened to send a comment")
+}
+
+// rolledOverRefusal refuses to reopen a task that was rolled over: it has
+// handed its pull request, goal, dependents and parks to its successor,
+// and reopening it would put a second copy of the same durable work back
+// in the queue with none of them.
+func rolledOverRefusal(task model.Task) error {
+	if to := model.RolledOverTo(task); to != "" {
+		return validationErrorf("task %s was rolled over to task %s, which carries its work on; "+
+			"reopen or comment on task %s instead", task.ID, to, to)
+	}
+	return nil
 }
 
 // AddRelayedComment is a person's answer that a console session carries
@@ -8111,6 +8150,14 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	if task == nil {
 		return &NotFoundError{ID: id}
 	}
+	// A task rolled over has handed its pull request, goal, dependents
+	// and parks to its successor: reopening it would put a second copy
+	// of the same durable work back in the queue with none of them.
+	if !closed {
+		if err := rolledOverRefusal(*task); err != nil {
+			return err
+		}
+	}
 	now := c.now()
 	who := c.requestActor(ctx)
 	by := who.Actor
@@ -8135,6 +8182,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 		}
 	}
 	var obs *model.Observation
+	var closedAt *time.Time
 	changed := false
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		changed = (o.ClosedAt == nil) == closed
@@ -8152,6 +8200,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 			obs = o
 			return
 		}
+		closedAt = o.ClosedAt
 		o.ClosedAt = nil
 		o.RunNowAt = nil
 	}); err != nil {
@@ -8159,7 +8208,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	}
 	if !closed {
 		if changed {
-			detail := c.queueUndeliveredOnReopen(ctx, id, now)
+			detail := c.queueUndeliveredOnReopen(ctx, id, closedAt, now)
 			c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventReopened, At: now,
 				By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason, Detail: detail})
 		}
@@ -8216,7 +8265,13 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 // what agents and grain say never sends a task anywhere. Best-effort
 // like the event itself: the reopen is written, and failing it now
 // would say it was not.
-func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, now time.Time) string {
+//
+// A task with no delivered mark (DeliveredCommentID nil: its only runs
+// failed yet still left an answer, or ran before the column existed)
+// falls back to timing, as that field's other readers do: a person's
+// comment posted at or after closedAt, the close this reopen undoes, was
+// left while the task was closed and no run has seen it.
+func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, closedAt *time.Time, now time.Time) string {
 	task, err := c.Store.GetTask(ctx, id)
 	if err != nil || task == nil || !model.AwaitsAck(*task) {
 		return ""
@@ -8232,6 +8287,9 @@ func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, now ti
 		return ""
 	}
 	pending := model.UndeliveredPersonComment(comments, obs)
+	if pending == nil && closedAt != nil && (obs == nil || obs.DeliveredCommentID == nil) {
+		pending = personCommentSince(comments, obs, *closedAt)
+	}
 	if pending == nil {
 		return ""
 	}
@@ -8248,6 +8306,24 @@ func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, now ti
 		return detail + "; queued"
 	}
 	return detail
+}
+
+// personCommentSince is the newest person's comment created at or after
+// since and past any question the task is parked on, or nil.
+func personCommentSince(comments []model.Comment, obs *model.Observation, since time.Time) *model.Comment {
+	for i := len(comments) - 1; i >= 0; i-- {
+		cm := comments[i]
+		if cm.CreatedAt.Before(since) {
+			return nil
+		}
+		if obs != nil && obs.PendingQuestionCommentID != nil && cm.ID <= *obs.PendingQuestionCommentID {
+			return nil
+		}
+		if model.CommentByPerson(cm) {
+			return &comments[i]
+		}
+	}
+	return nil
 }
 
 // recordTaskEvent writes a close or reopen's event, and only logs a

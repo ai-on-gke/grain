@@ -58,6 +58,10 @@ type attributedRoute struct {
 	// recorded reads back who the write recorded. created is the
 	// response's task id, for a route that files one.
 	recorded func(t *testing.T, ctx context.Context, client *ui.Client, id, created string) model.Principal
+	// serial is a route whose client or setup swaps package-level state
+	// (figmaOAuthClient's endpoint), so its rows run one at a time
+	// rather than in parallel with the rest of the matrix.
+	serial bool
 }
 
 // sender issues one request the way a row of the matrix asks.
@@ -630,6 +634,7 @@ var attributedRoutes = map[string]attributedRoute{
 	// secret store and writes a config_audit row naming who connected it.
 	"POST /api/capability-servers/figma-oauth-exchange": {
 		client:      figmaOAuthClient,
+		serial:      true,
 		body:        `{"id":"https://grain.dev/capabilities/figma","account":"design","code":"c0de","redirectUri":"https://grain.example/settings/capabilities"}`,
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
@@ -829,6 +834,26 @@ var attributedRoutes = map[string]attributedRoute{
 			}
 			return model.Principal{Kind: model.PrincipalHuman, ID: acc.AcceptedBy}
 		},
+	},
+	// Revoking is a person's alone too; the revocation clears who
+	// accepted, so who revoked is read from the config audit log.
+	"POST /api/declarations/revoke": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			ctx := context.Background()
+			gcp := `gcp#gcp-key={"permission_set":"publisher"}`
+			if _, _, err := client.Store.NoteCIJobDeclaration(ctx, model.RepoRef{Owner: "acme", Name: "widgets"},
+				"publish", "abc123", []string{gcp}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Store.AcceptDeclaration(ctx, "ci:acme/widgets:publish", "alice@example.com",
+				[]string{"capabilities:admin"}, []string{gcp}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			return ""
+		},
+		body:     `{"id":"ci:acme/widgets:publish"}`,
+		recorded: lastConfigAudit,
 	},
 }
 
@@ -1175,6 +1200,12 @@ func TestEveryMutatingRouteIsAttributed(t *testing.T) {
 		}
 		for _, way := range ways {
 			t.Run(pattern+"/"+way.name, func(t *testing.T) {
+				// Each row builds its own store and server, so the
+				// matrix's few hundred rows run in parallel: run one
+				// after another they took most of the go job's budget.
+				if !route.serial {
+					t.Parallel()
+				}
 				var client *ui.Client
 				if route.client != nil {
 					client = route.client(t)

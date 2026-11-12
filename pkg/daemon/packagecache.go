@@ -599,11 +599,3 @@ func (p *PackageCache) SetGitConnections(r gitproxy.ConnectionResolver) {
 	}
 	p.credentials.SetConnections(r)
 }
-
-// goCacheJobs is c's Go build-cache writer registry, nil for no cache.
-func (c *PackageCache) goCacheJobs() *pkgcache.JobTokenSet {
-	if c == nil {
-		return nil
-	}
-	return c.GoCacheJobs
-}

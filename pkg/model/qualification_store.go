@@ -346,6 +346,9 @@ func (s *Store) CreateQualificationRun(ctx context.Context, candidate Candidate,
 			// and branch, landing the way the plan and the template say
 			// (ComposeQualificationTask).
 			comp := ComposeQualificationTask(tmpl, candidate.Repo, candidate.Branch, plan.RequireApproval)
+			if err := refuseCompositionSandboxAboveMax(ctx, tx, comp); err != nil {
+				return err
+			}
 			customFields, err := declarations.apply(ctx, comp.CustomFields)
 			if err != nil {
 				return err
