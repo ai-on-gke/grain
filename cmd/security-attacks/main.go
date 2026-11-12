@@ -231,41 +231,84 @@ const (
 	Live     Status = "live"
 )
 
-// result is one top-level test's outcome and what it printed.
+// result is one test's outcome and what it printed.
 type result struct {
-	status Status
-	output []string
-	own    []string // the lines of output the top-level test printed itself, not its subtests
+	status    Status
+	output    []string
+	own       []string // the lines of output this test printed itself, not its subtests
+	subs      map[string]*result
+	subOrder  []string
+	subReason string // reason from a skipped subtest when it decided status
 }
 
-var reasonLine = regexp.MustCompile(`^\s+\S+\.go:\d+: (.*)$`)
+func (r *result) sub(name string) *result {
+	if r.subs == nil {
+		r.subs = map[string]*result{}
+	}
+	s, ok := r.subs[name]
+	if !ok {
+		s = &result{status: Running}
+		r.subs[name] = s
+		r.subOrder = append(r.subOrder, name)
+	}
+	return s
+}
+
+var (
+	ownReasonLine = regexp.MustCompile(`^    \S+\.go:\d+: (.*)$`)
+	reasonLine    = regexp.MustCompile(`^\s+\S+\.go:\d+: (.*)$`)
+)
 
 // skipReason is a skipped test's reason: the last file:line message the
-// top-level test printed itself, which is its t.Skip call's own. A
-// subtest's message -- a parallel subtest's can come after the parent's
-// skip -- is not.
+// test printed itself (indented four spaces, not an eight-space continuation
+// line of a multi-line message), which is its t.Skip call's own. A subtest's
+// message -- a parallel subtest's can come after the parent's skip -- is not.
 func (r *result) skipReason() string {
+	if r.subReason != "" {
+		return r.subReason
+	}
 	for i := len(r.own) - 1; i >= 0; i-- {
-		if m := reasonLine.FindStringSubmatch(r.own[i]); m != nil {
+		if m := ownReasonLine.FindStringSubmatch(r.own[i]); m != nil {
 			return m[1]
 		}
 	}
 	return ""
 }
 
-// finish settles a skipped test's status from its reason (skipReason). An
-// earlier t.Log, or a subtest's output, that happens to start "known
-// gap:" does not excuse a skip for some other reason.
+// finish settles a skipped test's status from its reason (skipReason), and
+// promotes any skipped subtest onto a parent that Go marked PASS. An earlier
+// t.Log, a multi-line continuation, or a subtest's output that happens to
+// start "known gap:" does not excuse a skip for some other reason.
 func (r *result) finish() {
-	if r.status != Skip {
-		return
+	if r.status == Skip {
+		reason := strings.ToLower(r.skipReason())
+		switch {
+		case strings.HasPrefix(reason, "known gap:"):
+			r.status = KnownGap
+		case strings.HasPrefix(reason, "infrastructure:"):
+			r.status = Infra
+		}
 	}
-	reason := strings.ToLower(r.skipReason())
-	switch {
-	case strings.HasPrefix(reason, "known gap:"):
-		r.status = KnownGap
-	case strings.HasPrefix(reason, "infrastructure:"):
-		r.status = Infra
+	switch r.status {
+	case Pass, KnownGap, Infra:
+		// Go marks a parent PASS even when its subtests skip, so promote
+		// the strictest skipped subtest (unexcused Skip > Infra > KnownGap).
+		for _, name := range r.subOrder {
+			s := r.subs[name]
+			s.finish()
+			label := name
+			if sr := s.skipReason(); sr != "" {
+				label += ": " + sr
+			}
+			switch {
+			case s.status == Skip && r.status != Skip:
+				r.status, r.subReason = Skip, label
+			case s.status == Infra && (r.status == Pass || r.status == KnownGap):
+				r.status, r.subReason = Infra, label
+			case s.status == KnownGap && r.status == Pass:
+				r.status, r.subReason = KnownGap, label
+			}
+		}
 	}
 }
 
@@ -347,9 +390,18 @@ func parseJSON(r io.Reader, log io.Writer) *pkgRun {
 			r.output = append(r.output, line)
 			if sub == "" {
 				r.own = append(r.own, line)
+			} else {
+				r.sub(sub).own = append(r.sub(sub).own, line)
 			}
 		case sub != "":
-			// Subtests are their parent's business: it fails when they do.
+			switch ev.Action {
+			case "pass":
+				run.test(top).sub(sub).status = Pass
+			case "fail":
+				run.test(top).sub(sub).status = Fail
+			case "skip":
+				run.test(top).sub(sub).status = Skip
+			}
 		case ev.Action == "run":
 			run.test(top)
 		case ev.Action == "pass":
@@ -367,58 +419,61 @@ func parseJSON(r io.Reader, log io.Writer) *pkgRun {
 }
 
 var (
-	verdictLine = regexp.MustCompile(`^--- (PASS|FAIL|SKIP): (Test[^\s/]*) `)
-	headerLine  = regexp.MustCompile(`^=== (?:RUN|NAME|CONT|PAUSE)\s+(Test\S*)$`)
+	verdictLine     = regexp.MustCompile(`^--- (PASS|FAIL|SKIP): (Test[^\s/]*) `)
+	subVerdictLine  = regexp.MustCompile(`^(\s+)--- (PASS|FAIL|SKIP): (Test\S*) `)
+	headerLine      = regexp.MustCompile(`^=== (?:RUN|NAME|CONT|PAUSE)\s+(Test\S*)$`)
+	pkgBoundaryLine = regexp.MustCompile(`^(?:PASS$|FAIL$|ok\s+|FAIL\t|\?\s+|=== |testing: warning:)`)
 )
 
-func isTextBoundary(line string) bool {
-	if line == "PASS" || line == "FAIL" {
-		return true
-	}
-	for _, p := range []string{"ok ", "ok\t", "FAIL\t", "? ", "?\t", "=== ", "--- "} {
-		if strings.HasPrefix(line, p) {
-			return true
-		}
-	}
-	return false
-}
-
-// parseText reads `go test -v` output: only unindented --- lines are
-// top-level verdicts. An indented line belongs to the test the last ===
-// header named -- -v streams a test's messages ahead of its verdict -- or,
-// in output that is not streamed, to the verdict just above it. Unindented
-// stdout/stderr lines a running test prints directly (log.Printf, daemon
-// output) do not clear cur, because Go's chattyPrinter does not repeat
-// === NAME after them.
+// parseText reads `go test -v` output: unindented --- lines are top-level
+// verdicts and indented --- lines are subtest verdicts. An indented message
+// line belongs to the test or subtest the last === header named -- -v streams
+// messages ahead of verdicts -- or, in unstreamed output, to the verdict just
+// above it. Unindented stdout/stderr from code under test does not drop the
+// current test context; only package-level boundary lines do.
 func parseText(r io.Reader) *pkgRun {
 	run := newPkgRun()
-	var cur *result
-	own := false
+	var cur, target *result
+	indent := "    "
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1<<20), 16<<20)
 	for sc.Scan() {
 		line := sc.Text()
 		if m := verdictLine.FindStringSubmatch(line); m != nil {
-			cur, own = run.test(m[2]), true
+			cur = run.test(m[2])
+			target, indent = cur, "    "
 			cur.status = map[string]Status{"PASS": Pass, "FAIL": Fail, "SKIP": Skip}[m[1]]
 			continue
 		}
+		if m := subVerdictLine.FindStringSubmatch(line); m != nil {
+			if top, sub, ok := strings.Cut(m[3], "/"); ok {
+				cur = run.test(top)
+				s := cur.sub(sub)
+				s.status = map[string]Status{"PASS": Pass, "FAIL": Fail, "SKIP": Skip}[m[2]]
+				target, indent = s, m[1]+"    "
+				continue
+			}
+		}
 		if m := headerLine.FindStringSubmatch(line); m != nil {
 			top, sub, _ := strings.Cut(m[1], "/")
-			cur, own = run.test(top), sub == ""
-			continue
-		}
-		if cur != nil && strings.HasPrefix(line, "    ") {
-			cur.output = append(cur.output, line)
-			// Unstreamed, a subtest's lines are indented four spaces more
-			// than its parent's.
-			if own && !strings.HasPrefix(line, "        ") {
-				cur.own = append(cur.own, line)
+			cur = run.test(top)
+			if sub == "" {
+				target = cur
+			} else {
+				target = cur.sub(sub)
 			}
+			indent = "    "
 			continue
 		}
-		if isTextBoundary(line) {
-			cur, own = nil, false
+		if pkgBoundaryLine.MatchString(line) {
+			cur, target = nil, nil
+			continue
+		}
+		if cur != nil {
+			cur.output = append(cur.output, line)
+			if target != nil && strings.HasPrefix(line, indent) && !strings.HasPrefix(line, indent+"    ") {
+				target.own = append(target.own, "    "+strings.TrimPrefix(line, indent))
+			}
 		}
 	}
 	for _, r := range run.tests {
