@@ -211,6 +211,94 @@ func TestMigration142HostQualifiesQualificationAndWorkflowRunOwners(t *testing.T
 	verify("second run")
 }
 
+// Migration 144 moves a bare-owner repository's releases onto the host
+// the one target repo spelling it says, its candidates and qualification
+// runs with them, and leaves on the default host every repository
+// nothing settles.
+func TestMigration144HostQualifiesReleaseOwners(t *testing.T) {
+	t.Parallel()
+	store, db, ctx := openStore(t)
+	if err := store.PutConfig(ctx, testConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetTargetRepos(ctx, []string{
+		// Only off the default host: its releases move there.
+		"ghe.example.com/acme/widgets",
+		// On two hosts: ambiguous, so its releases stay.
+		"acme/gadgets", "ghe.example.com/acme/gadgets",
+		// Only on the default host: stays.
+		"acme/tools",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The rows a build before 144 wrote: bare owners throughout, one
+	// release, candidate and qualification run per repository.
+	for i, name := range []string{"widgets", "gadgets", "tools"} {
+		id := int64(i + 1)
+		for _, stmt := range []struct {
+			query string
+			args  []any
+		}{
+			{"INSERT INTO `release` (`id`,`owner`,`repo`,`name`,`status`,`created_at`) VALUES (?,'acme',?,'myfeat','active',?)",
+				[]any{id, name, now}},
+			{"INSERT INTO `release_candidate` (`id`,`release_id`,`owner`,`repo`,`number`,`branch`,`status`,`created_at`) " +
+				"VALUES (?,?,'acme',?,1,'release/myfeat-rc.1','active',?)", []any{id, id, name, now}},
+			{"INSERT INTO `qualification_run` (`id`,`owner`,`name`,`candidate_id`,`created_at`) VALUES (?,'acme',?,?,?)",
+				[]any{id, name, id, now}},
+		} {
+			if _, err := db.ExecContext(ctx, stmt.query, stmt.args...); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	migrate := func() {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 143 WHERE `id` = 1"); err != nil {
+			t.Fatal(err)
+		}
+		if err := model.New(db).Init(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := map[string][]string{
+		"widgets": {"ghe.example.com/acme"},
+		"gadgets": {"acme"},
+		"tools":   {"acme"},
+	}
+	verify := func(round string) {
+		t.Helper()
+		for _, q := range []struct{ table, name string }{
+			{"release", "repo"}, {"release_candidate", "repo"}, {"qualification_run", "name"},
+		} {
+			for name, want := range want {
+				if got := ownersOf(t, ctx, db, "SELECT `owner` FROM `"+q.table+"` WHERE `"+q.name+"` = ?", name); !reflect.DeepEqual(got, want) {
+					t.Errorf("%s: `%s` owners for %s = %v, want %v", round, q.table, name, got, want)
+				}
+			}
+		}
+	}
+	migrate()
+	verify("first run")
+	release, err := store.GetRelease(ctx, offHostWidgets, "myfeat")
+	if err != nil || release == nil || release.Repo != offHostWidgets {
+		t.Fatalf("release myfeat of %s after migrating = (%+v, %v), want the moved one", offHostWidgets, release, err)
+	}
+	if got, err := store.GetRelease(ctx, widgets, "myfeat"); err != nil || got != nil {
+		t.Errorf("release myfeat of %s after migrating = (%+v, %v), want none: it was %s's", widgets, got, err, offHostWidgets)
+	}
+	candidate, err := store.CurrentCandidateForRelease(ctx, release.ID)
+	if err != nil || candidate == nil || candidate.Repo != offHostWidgets {
+		t.Errorf("candidate of the moved release = (%+v, %v), want it in %s", candidate, err, offHostWidgets)
+	}
+	if run, err := store.CandidateQualificationRun(ctx, release.ID); err != nil || run == nil || run.Repo != offHostWidgets {
+		t.Errorf("qualification run of the moved candidate = (%+v, %v), want it in %s", run, err, offHostWidgets)
+	}
+	migrate()
+	verify("second run")
+}
+
 func ownersOf(t *testing.T, ctx context.Context, db *sql.DB, query string, args ...any) []string {
 	t.Helper()
 	rows, err := db.QueryContext(ctx, query, args...)

@@ -668,7 +668,11 @@ import "strconv"
 // 143 adds `template`.`sandbox` (model.Template.Sandbox): the sandbox
 // shape every task filed from a template asks for, as JSON, empty for
 // none (grain/task-4591).
-const SchemaVersion = 143
+// 144 changes no table: it rewrites the owner column of `release`,
+// `release_candidate` and `qualification_run` to StoredOwner, for the
+// repositories a target repo places on another host (migrateReleaseOwners,
+// grain/task-4489).
+const SchemaVersion = 144
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

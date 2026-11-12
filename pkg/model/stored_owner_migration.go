@@ -251,3 +251,81 @@ func storedOwnerRowExists(ctx context.Context, tx *sql.Tx, table, owner, name st
 	}
 	return n > 0, nil
 }
+
+// migrateReleaseOwners is migration 144: it host-qualifies the owner
+// column of release, release_candidate and qualification_run, which
+// before it were written with a bare Owner even for a repository off the
+// default host (grain/task-4489) -- a candidate read back with no host at
+// all, so its qualification plan, stored host-qualified since 142, was
+// never found, and cutting and promoting it targeted the default host.
+//
+// A repository's releases move together, onto the host of the one target
+// repo (Config.TargetRepos) spelled with its owner and name, when exactly
+// one is and it is off the default host -- the rule 142 placed
+// qualification plans by, so a moved candidate finds the plan that moved
+// with it. A candidate moves with its release, and a qualification run
+// with its candidate. Everything else stays on the default host, with
+// what 142 logs for the ambiguous; so is a repository whose destination
+// already holds releases of its own, since two releases of one name
+// cannot both be current there.
+//
+// Idempotent: a host-qualified owner is never looked at again.
+func migrateReleaseOwners(ctx context.Context, tx *sql.Tx) error {
+	targets, err := targetHostsByRepo(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("host-qualifying release owners: %w", err)
+	}
+	var repos [][2]string
+	err = each(ctx, tx, "SELECT DISTINCT `owner`,`repo` FROM `release` ORDER BY `owner`,`repo`", nil, func(rows *sql.Rows) error {
+		var owner, name string
+		if err := rows.Scan(&owner, &name); err != nil {
+			return err
+		}
+		if !strings.Contains(owner, "/") {
+			repos = append(repos, [2]string{owner, name})
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("host-qualifying release owners: reading release: %w", err)
+	}
+
+	for _, key := range repos {
+		owner, name := key[0], key[1]
+		repo, ok, why := targets.resolve(owner, name)
+		if !ok {
+			if why != "" {
+				log.Printf("schema 144: left the releases of %s/%s on the default host: %s", owner, name, why)
+			}
+			continue
+		}
+		stored := repo.StoredOwner()
+		var n int
+		if err := tx.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM `release` WHERE `owner` = ? AND `repo` = ?", stored, name).Scan(&n); err != nil {
+			return fmt.Errorf("host-qualifying release owners: reading release: %w", err)
+		}
+		if n > 0 {
+			log.Printf("schema 144: left the releases of %s/%s on the default host: %s already has releases of its own", owner, name, repo)
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE `release` SET `owner` = ? WHERE `owner` = ? AND `repo` = ?",
+			stored, owner, name); err != nil {
+			return fmt.Errorf("moving the releases of %s/%s to %s: %w", owner, name, repo, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE `release_candidate` SET `owner` = ? WHERE `owner` = ? AND `repo` = ? "+
+				"AND `release_id` IN (SELECT `id` FROM `release` WHERE `owner` = ? AND `repo` = ?)",
+			stored, owner, name, stored, name); err != nil {
+			return fmt.Errorf("moving the release candidates of %s/%s to %s: %w", owner, name, repo, err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE `qualification_run` SET `owner` = ? WHERE `owner` = ? AND `name` = ? "+
+				"AND `candidate_id` IN (SELECT `id` FROM `release_candidate` WHERE `owner` = ? AND `repo` = ?)",
+			stored, owner, name, stored, name); err != nil {
+			return fmt.Errorf("moving the qualification runs of %s/%s to %s: %w", owner, name, repo, err)
+		}
+	}
+	return nil
+}

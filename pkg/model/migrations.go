@@ -1046,6 +1046,12 @@ var Migrations = []Migration{
 			"ALTER TABLE `template` ADD COLUMN `sandbox` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version: 144,
+		Description: "host-qualify the owner column of release, release_candidate and qualification_run " +
+			"(StoredOwner) for repositories a target repo places off the default host (grain/task-4489)",
+		Up: migrateReleaseOwners,
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99
