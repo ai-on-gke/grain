@@ -51,3 +51,19 @@ func TestOpenSharedDoesNotCacheAStoreKMSRefused(t *testing.T) {
 		t.Fatalf("after KMS answers again = %q, %v", v, err)
 	}
 }
+
+// TestOpenSharedDoesNotShareAStoreWithItsOwnKeySource: the cache is keyed
+// by file paths alone, so a Config that names its own KeySource must get
+// a Store of its own rather than one loading its key from elsewhere.
+func TestOpenSharedDoesNotShareAStoreWithItsOwnKeySource(t *testing.T) {
+	s, _, _ := wrappedStore(t)
+	cfg := Config{File: s.File(), KeyFile: s.KeyFile()}
+	shared := OpenShared(cfg)
+	if OpenShared(cfg) != shared {
+		t.Fatal("OpenShared did not share the store for the same files")
+	}
+	cfg.KeySource = FileKeySource{Path: s.KeyFile()}
+	if OpenShared(cfg) == shared {
+		t.Fatal("a Config with its own KeySource was handed the shared store")
+	}
+}

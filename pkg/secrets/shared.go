@@ -31,8 +31,14 @@ var sharedStores sync.Map
 // a reload), so sharing it loses nothing. An unreadable store (a key not
 // imported yet, KMS refusing) is not cached, so the next call opens it
 // afresh. Like Open, it mints a key on a fresh install; callers that
-// must never mint check for the key file first.
+// must never mint check for the key file first. A Config naming its own
+// KeySource is not shared: the cache is keyed by file paths alone, and a
+// caller that chose where its key comes from must not be handed a Store
+// that loads it from somewhere else.
 func OpenShared(cfg Config) *Store {
+	if cfg.KeySource != nil {
+		return Open(cfg)
+	}
 	id := filepath.Clean(cfg.KeyFile) + "\x00" + filepath.Clean(cfg.File)
 	if v, ok := sharedStores.Load(id); ok {
 		return v.(*Store)
