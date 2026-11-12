@@ -109,3 +109,39 @@ func TestAVerbatimTemplateSandboxIsHeldToTheCeiling(t *testing.T) {
 		t.Fatalf("importing a verbatim 9999-CPU sandbox = %v, want it refused naming cpus", err)
 	}
 }
+
+// TestAnUnknownTemplateSandboxKeyIsRefused refuses a `sandbox:` mapping
+// with a key it does not know -- `disk_gb` for `disk-gb`, say -- rather
+// than importing the template at the deployment's default without a word.
+func TestAnUnknownTemplateSandboxKeyIsRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, db := openDB(t)
+	if err := store.PutTemplate(ctx, model.Template{
+		ID: "template-1", Name: "Publish", Title: "Publish images", Body: "push them",
+		Sandbox: model.SandboxShape{DiskGB: 100}, CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := staterepo.Export(ctx, db, dir); err != nil {
+		t.Fatalf("exporting: %v", err)
+	}
+	path := filepath.Join(dir, filepath.FromSlash(staterepo.DumpPath("template")))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := strings.Replace(string(raw), "sandbox: {disk-gb: 100}", "sandbox: {disk_gb: 100}", 1)
+	if edited == string(raw) {
+		t.Fatalf("%s does not carry the sandbox block to edit:\n%s", path, raw)
+	}
+	if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, otherDB := openDB(t)
+	err = staterepo.ImportTables(ctx, otherDB, dir, staterepo.SettingsTables)
+	if err == nil || !strings.Contains(err.Error(), `unknown key "disk_gb"`) {
+		t.Fatalf("importing a sandbox with disk_gb = %v, want it refused naming the key", err)
+	}
+}

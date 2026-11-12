@@ -1353,6 +1353,16 @@ func decodeIntoRow(path, id string, f declFieldShape, node *yaml.Node, row map[s
 		return nil
 	case shapeSandbox:
 		if node.Kind == yaml.MappingNode && !isBase64Mapping(node) {
+			// A key the mapping does not know (`disk_gb`, `memoryMb`) is
+			// refused by name rather than dropped, which would import the
+			// template at the deployment's default without a word.
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				switch k := node.Content[i].Value; k {
+				case "cpus", "memory-mb", "disk-gb":
+				default:
+					return fmt.Errorf("staterepo: %s, %s: %s: unknown key %q (want cpus, memory-mb or disk-gb)", path, id, f.key, k)
+				}
+			}
 			var raw struct {
 				CPUs     int `yaml:"cpus"`
 				MemoryMB int `yaml:"memory-mb"`
