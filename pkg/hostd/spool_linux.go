@@ -641,6 +641,15 @@ func (s *Server) control(conn net.Conn, p *proc, stdin io.WriteCloser) {
 				s.logf("hostd: refused signal %q for pid %d", m.Signal, info.PID)
 				continue
 			}
+			// Once reaped, the process group's id is free for reuse, and
+			// attach keeps this connection open after the Exit until the
+			// daemon hangs up: a signal sent then must not reach whatever
+			// group has taken the id since.
+			select {
+			case <-p.done:
+				continue
+			default:
+			}
 			_ = syscall.Kill(-info.PID, sig)
 		}
 	}
