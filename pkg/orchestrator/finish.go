@@ -381,7 +381,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// (model.SuspendRequested, recorded as parked), which no failure
 	// streak counts and which the next attempt's prompt reads to say what
 	// it waited on (parkedResumeSection).
-	if susp, ok, err := requestedSuspension(ctx, store, task.ID, result); err != nil {
+	if susp, ok, err := requestedSuspension(ctx, store, task, result); err != nil {
 		return err
 	} else if ok {
 		susp.RunID, susp.CreatedAt = runID, now
@@ -4284,8 +4284,13 @@ func emptyBranchDetail(empty *noCommitsError) string {
 // call replaces what an earlier one asked for. Its detail keeps the
 // words a park always had (model.ParkedDetail, ParkedUntilDetail), which
 // the next prompt reads back, for the two forms that are parks.
-func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
+//
+// task is the task as the run was dispatched with it, before any park it
+// made: parkLinks checks the run's word on which links its parks wrote
+// against the links that were already there.
+func requestedSuspension(ctx context.Context, store *model.Store, task model.Task,
 	result *agent.Result) (model.Suspension, bool, error) {
+	taskID := task.ID
 	susp := model.Suspension{Kind: model.SuspendRequested}
 	targets, err := parkedOn(ctx, store, taskID, result)
 	if err != nil {
@@ -4298,7 +4303,7 @@ func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
 			susp.Detail += ": " + reason
 		}
 		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged || parkedUntilMerged(result),
-			Links: parkLinks(result, targets)}.JSON()
+			Links: parkLinks(result, targets, task.Links)}.JSON()
 		return susp, true, nil
 	}
 	if until, ok := parkedUntil(result); ok {
@@ -4395,7 +4400,13 @@ func parkedUntilMerged(result *agent.Result) bool {
 // (mcp.ResumeLaterTaken). A run may park more than once, and only the
 // first park on a target writes its link, so these are gathered over
 // every park the run made.
-func parkLinks(result *agent.Result, targets []string) []string {
+//
+// The tool results are the run's own transcript, so they are not taken
+// on their word: the resumption deletes every link named here, and a
+// result that named one the task already had before the run (before)
+// would strip a declared dependency. Those are dropped, whatever the
+// result says.
+func parkLinks(result *agent.Result, targets []string, before []model.Link) []string {
 	if result == nil {
 		return nil
 	}
@@ -4409,12 +4420,22 @@ func parkLinks(result *agent.Result, targets []string) []string {
 			continue
 		}
 		for _, id := range taken.Links {
-			if slices.Contains(targets, id) && !slices.Contains(links, id) {
+			if slices.Contains(targets, id) && !slices.Contains(links, id) && !dependsOnBefore(before, id) {
 				links = append(links, id)
 			}
 		}
 	}
 	return links
+}
+
+// dependsOnBefore reports whether links has a depends-on link to id.
+func dependsOnBefore(links []model.Link, id string) bool {
+	for _, l := range links {
+		if l.Kind == model.LinkDependsOn && l.Target == id {
+			return true
+		}
+	}
+	return false
 }
 
 // parkedOn is the tasks a run parked its task on through wait_for_task,
