@@ -49,7 +49,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/systemlog"
@@ -90,6 +89,8 @@ type Options struct {
 	CloudIdentityEndpoint string
 	Addr                  string
 	Actor                 string
+	DBDriver              string
+	DBDSN                 string
 	Repo                  model.RepoRef // -default-target-repo
 	Open                  bool
 	Observability         bool
@@ -340,13 +341,13 @@ func Run(opts Options) error {
 	// every demo that was stopped (docs/test-runs/
 	// 2026-11-09-demo-config-change.md, finding 3).
 	defer os.RemoveAll(dir)
-	removeOnSignal(dir)
-	db, err := sqlite.Open(sqlite.DefaultConfig(dir))
+	db, driver, closeDB, err := openDemoDB(ctx, dir, opts.DBDriver, opts.DBDSN)
 	if err != nil {
-		return fmt.Errorf("grain demo: opening the throwaway store: %v", err)
+		return err
 	}
-	defer db.Close()
-	cfg.SourceDB, cfg.DBDriver = db, "sqlite"
+	defer closeDB()
+	removeOnSignal(dir, closeDB)
+	cfg.SourceDB, cfg.DBDriver = db, driver
 	// The release-approval signing key: a deployment keeps it in its
 	// data directory, which a demo has none of, so an Inbox Approve or a
 	// rollback over -github-sim answered 500
@@ -736,6 +737,7 @@ func Run(opts Options) error {
 	if baseBranch != nil {
 		srv = baseBranchDemoHandler(srv, baseBranch)
 	}
+	srv = accessRequestDemoHandler(srv, store)
 	if opts.GitHubSim {
 		if simClient, ok := cfg.GitHubBranches.(github.Client); ok {
 			srv = githubSimDemoHandler(srv, simClient)
@@ -3005,7 +3007,7 @@ func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events o
 // the demo was started ignoring (SIGINT, for a job a shell put in the
 // background) is left ignored: catching it would remove the directory
 // from under a demo the re-raised signal then does not stop.
-func removeOnSignal(dir string) {
+func removeOnSignal(dir string, cleanup ...func()) {
 	var watch []os.Signal
 	for _, sig := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
 		if !signal.Ignored(sig) {
@@ -3019,6 +3021,11 @@ func removeOnSignal(dir string) {
 	signal.Notify(sigs, watch...)
 	go func() {
 		sig := <-sigs
+		for _, fn := range cleanup {
+			if fn != nil {
+				fn()
+			}
+		}
 		_ = os.RemoveAll(dir)
 		signal.Stop(sigs)
 		if p, err := os.FindProcess(os.Getpid()); err == nil && p.Signal(sig) == nil {
