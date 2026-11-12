@@ -84,12 +84,14 @@ body: |
      `vX.Y.Z-rc.N-discarded` (release-train-assets.yml), or a branch
      `release/vX.Y.Z` (release.yml). Your version is that `vX.Y.Z`.
   3. Before pinning, check that the version still needs a manager:
-     - `grain task list --state proposed,queued,running,awaiting_reply,awaiting_submit --search 'Release manager for vX.Y.Z'`
+     - `grain task list --state proposed,queued,running,awaiting_reply,awaiting_submit,deferred,failed --search 'Release manager for vX.Y.Z'`
        finds another open manager (task 4747, `Release manager for
        v3.6.0...`, was filed by hand and counts). So does any other open
        `Release manager for the newest rc` whose conversation pins the
-       same `vX.Y.Z` (`grain task list --search 'Release manager for'`,
-       then `grain task read <id>`).
+       same `vX.Y.Z` (the same `--state` list with
+       `--search 'Release manager for'`, then `grain task read <id>`).
+       Keep `deferred` in the list: a manager between check-ins is
+       parked by `resume_later`, which defers it.
      - The version is already done: core `vX.Y.Z` is tagged and its
        `publish-release.yml` run is green, and the edition's `vX.Y.Z` is
        released (its release task closed merged, its images published).
@@ -138,7 +140,9 @@ body: |
 
   - **A red check nobody owns** (on `main`, on the rc, or the reason the
     rcs keep being discarded). First search for an owner:
-    `grain task list --state proposed,queued,running,awaiting_reply,awaiting_submit --search '<test, job or check name>'`,
+    `grain task list --state proposed,queued,running,awaiting_reply,awaiting_submit,deferred,failed --search '<test, job or check name>'`
+    (a repair waiting on CI with `resume_later` is `deferred`, and a
+    `failed` one is retried below, not replaced),
     and the repairs above. If one exists, drive it (below). Otherwise file
     **one focused fix** with `propose_task`: the failing check, the run
     URL, the failure tail and what you think the cause is, in
