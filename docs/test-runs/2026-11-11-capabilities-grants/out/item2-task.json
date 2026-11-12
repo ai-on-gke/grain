@@ -1,0 +1,7 @@
+{
+  "id": "2",
+  "state": "awaiting_reply",
+  "capabilities": [
+    "https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/widgets\"}"
+  ]
+}

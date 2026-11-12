@@ -327,10 +327,10 @@ test("removing a scope set lists the task, template, schedule and workflow job h
       const row = page.getByTestId(`api-scope-set-${SET}`);
       await row.getByRole("button", { name: "Remove" }).click();
       const dialog = page.getByRole("dialog");
-      const canonicalGrant = `https://grain.dev/capabilities/api#${SET}`;
       await expect(dialog).toContainText(
-        `4 grants hold ${canonicalGrant}, and will grant nothing once it is removed:`,
+        `4 grants hold https://grain.dev/capabilities/api#${SET}, and will grant nothing once it is removed:`,
       );
+      const canonicalGrant = `https://grain.dev/capabilities/api#${SET}`;
       for (const [holder, expectedGrant] of [
         [`task:${made.task}`, canonicalGrant],
         [`template:${made.template}`, canonicalGrant],

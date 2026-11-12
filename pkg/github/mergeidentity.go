@@ -47,15 +47,29 @@ type MergeTokenSource interface {
 	MergeIdentityFor(owner, repo string) string
 }
 
+// MergeRefusalSource is a MergeTokenSource that can say why it gave no
+// merge token when the reason is not the credential's own (an App that
+// could not mint one): "" leaves ErrNoMergeToken's own hint standing.
+type MergeRefusalSource interface {
+	MergeRefusalFor(owner, repo string) string
+}
+
 // ErrNoMergeToken is a merge refused before it was asked because the
 // repository's merge credential gave no token. It is never retried under
 // the push credential: that is exactly the merge-as-a-person the merge
 // credential is there to stop.
 type ErrNoMergeToken struct {
 	Owner, Repo, Identity string
+	// Reason, when set, is why (MergeRefusalSource), in place of the
+	// hint about the App's installation.
+	Reason string
 }
 
 func (e *ErrNoMergeToken) Error() string {
+	if e.Reason != "" {
+		return fmt.Sprintf("%s/%s merges through %s, which gave no token: %s; grain does not merge under the push credential instead",
+			e.Owner, e.Repo, e.Identity, e.Reason)
+	}
 	return fmt.Sprintf("%s/%s merges through %s, which gave no token: grain does not merge under the push credential instead "+
 		"(check the App's installation on %s/%s and its private key)", e.Owner, e.Repo, e.Identity, e.Owner, e.Repo)
 }
@@ -80,7 +94,11 @@ func (c *RESTClient) forMerge(owner, repo string) (*RESTClient, error) {
 		return c, nil
 	}
 	if token == nil || *token == "" {
-		return nil, &ErrNoMergeToken{Owner: owner, Repo: repo, Identity: src.MergeIdentityFor(owner, repo)}
+		refused := &ErrNoMergeToken{Owner: owner, Repo: repo, Identity: src.MergeIdentityFor(owner, repo)}
+		if r, ok := src.(MergeRefusalSource); ok {
+			refused.Reason = r.MergeRefusalFor(owner, repo)
+		}
+		return nil, refused
 	}
 	merger := *c
 	merger.Tokens = mergeTokens{token: token}
