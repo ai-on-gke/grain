@@ -1052,6 +1052,12 @@ var Migrations = []Migration{
 			"leaving what each schedule adds to its template (grain/task-4607)",
 		Up: migrateScheduleOwnSettings,
 	},
+	{
+		Version: 145,
+		Description: "host-qualify the owner column of release, release_candidate and qualification_run " +
+			"(StoredOwner) for repositories a target repo places off the default host (grain/task-4489)",
+		Up: migrateReleaseOwners,
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99
