@@ -1542,8 +1542,14 @@ check_reviewed_merge() {
     [ "$since" != "$commit" ] || since=""
   fi
   out="${TMPDIR:-/tmp}/reviewed-merge-$short.json"
-  local rc=0
-  go run ./cmd/reviewed-merge -repo "$GRAIN_CI_REPO" -commit "$commit" ${since:+-since "$since"} \
+  # Built, not go run: go run exits 1 whatever the program exits with,
+  # which would hide the forge error's 3 behind a refusal's message.
+  local rc=0 bin="${TMPDIR:-/tmp}/reviewed-merge-$short"
+  if ! go build -o "$bin" ./cmd/reviewed-merge; then
+    echo "release-images.sh: refusing to publish $short: could not build cmd/reviewed-merge to check its reviewed merge (above)" >&2
+    return 1
+  fi
+  "$bin" -repo "$GRAIN_CI_REPO" -commit "$commit" ${since:+-since "$since"} \
     -branches "${RELEASE_REVIEWED_BRANCHES:-main,release/v*}" -mergers "${GRAIN_MERGE_LOGINS:-}" >"$out" || rc=$?
   case "$rc" in
     0) ;;
