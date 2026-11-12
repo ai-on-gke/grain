@@ -376,6 +376,15 @@ mapfile -t j < <(stage1_run success 100 1 "$recent" "go, shuffled and repeated (
 qualify "$(jobs_file q-shard "${j[@]}")"
 check "check-qualification: a matrix shard's failure is its job's" 2 "RERUN nightly go-long flake"
 
+# v3.6.0-rc.12: grant-matrix-ui is in nightly.yml but not Stage 1's table.
+# Its failure once asked for a retry by display name, which ran nothing.
+mapfile -t j < <(stage1_run success 100 1 "$recent")
+qualify "$(jobs_file q-advisory "${j[@]}" "$(gh_job "grant matrix through the UI" failure 100 1 "$recent")" \
+  "$(gh_job "grant matrix through the UI" failure 101 1 $((recent + 600)))")" "$(checks_file q-checks-advisory success)"
+check "check-qualification: a job outside Stage 1's table carries no verdict" 0 \
+  "ADVISORY grant matrix through the UI: not a Stage 1 job, so no verdict and no retry (failure,failure)" "Qualification: PASS $tag."
+lacks "check-qualification: a job outside Stage 1's table is not re-run" "RERUN"
+
 mapfile -t j < <(stage1_run success 100 1 "$recent" "govulncheck=failure" "sustained load=failure")
 qualify "$(jobs_file q-two "${j[@]}")"
 check "check-qualification: two jobs may each use a flake retry" 2 "RERUN nightly loadtest flake" "RERUN nightly vulns flake"

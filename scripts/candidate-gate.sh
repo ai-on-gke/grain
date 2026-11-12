@@ -483,6 +483,16 @@ check_qualification() {
   judge() {
     local stage="$1" job="$2" attempts="$3" last fails=0 tail=0 a
     local -a list=()
+    # A nightly.yml job outside CHECK_QUALIFICATION_JOBS (grant-matrix-ui,
+    # say) is not Stage 1's: it carries no verdict, so it is neither red
+    # nor re-run. A re-run could not reach it anyway -- the train
+    # dispatches nightly.yml with job ids, and known() has only the
+    # display name of a job it does not know, which matches no job, so the
+    # "retry" ran nothing and judged nothing.
+    if [ "$stage" = nightly ] && ! jq -e --arg j "$job" 'any(.[]; .id == $j)' <<< "$names" >/dev/null; then
+      [ "$attempts" = skipped ] || echo "ADVISORY $job: not a Stage 1 job, so no verdict and no retry ($attempts)"
+      return
+    fi
     IFS=, read -r -a list <<< "$attempts"
     for a in "${list[@]}"; do
       [ "$a" != failure ] || fails=$((fails + 1))
