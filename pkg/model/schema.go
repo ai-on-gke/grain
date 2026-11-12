@@ -665,7 +665,11 @@ import "strconv"
 // the default host), which every other repo-keyed table already holds,
 // for rows their schedule or a target repo places on another host
 // (migrateStoredOwners, grain/task-4335).
-const SchemaVersion = 142
+// 143 changes no table: it clears the copies of a template's admission,
+// hosting and grants off the schedules that fire it, which until then
+// every firing wrote over what the schedule adds to its template
+// (migrateScheduleOwnSettings, grain/task-4607).
+const SchemaVersion = 143
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

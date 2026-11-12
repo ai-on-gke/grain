@@ -1039,6 +1039,12 @@ var Migrations = []Migration{
 			"or a target repo places off the default host (grain/task-4335)",
 		Up: migrateStoredOwners,
 	},
+	{
+		Version: 143,
+		Description: "take the copies of a template's admission, hosting and grants off the schedules that fire it, " +
+			"leaving what each schedule adds to its template (grain/task-4607)",
+		Up: migrateScheduleOwnSettings,
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99
