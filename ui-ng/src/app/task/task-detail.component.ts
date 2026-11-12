@@ -66,6 +66,10 @@ import { TipDirective } from "../shared/tip.directive";
 import { ago, levelOf, priorityOf, stateLabel } from "../tasks/task-view";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { TaskChangesTabComponent } from "./task-changes-tab.component";
+import {
+  ForceMergeDialogComponent,
+  type ForceMergeRequest,
+} from "./force-merge-dialog.component";
 import { TaskEditPanelComponent } from "./task-edit-panel.component";
 import { TaskGatesBarComponent } from "./task-gates-bar.component";
 import { TaskStore } from "./task.store";
@@ -122,6 +126,7 @@ export function duration(from?: string, to?: string): string {
     GrantsPickerComponent,
     TaskGatesBarComponent,
     TaskChangesTabComponent,
+    ForceMergeDialogComponent,
     TaskEditPanelComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -131,8 +136,7 @@ export function duration(from?: string, to?: string): string {
     "./task-detail.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
-    "../shared/pill-select.css",
-  ],
+    ],
   host: {
     "(document:click)": "onDocClick($event)",
   },
@@ -141,7 +145,7 @@ export function duration(from?: string, to?: string): string {
       class="view-panel is-active task-page"
       [class.is-pane]="pane()"
       aria-labelledby="task-title"
-      [attr.inert]="confirming() ? '' : null"
+      [attr.inert]="confirming() || forceMergeReq() ? '' : null"
     >
       @if (store.loadError(); as err) {
         <div class="stage-header">
@@ -1009,7 +1013,7 @@ export function duration(from?: string, to?: string): string {
 
                 @case ("changes") {
                   <h2 class="sr-only">Changes and CI</h2>
-                  <g-task-changes-tab
+                  <g-task-changes-tab (forceMerge)="forceMergeReq.set($event)"
                     [task]="t"
                     [prUrl]="prUrl()"
                     [prLabel]="prLabel()"
@@ -1295,6 +1299,10 @@ export function duration(from?: string, to?: string): string {
       <g-confirm-dialog [request]="c" (done)="onConfirm(c, $event)" />
     }
 
+    @if (forceMergeReq(); as f) {
+      <g-force-merge-dialog [request]="f" (done)="forceMergeReq.set(null)" />
+    }
+
     <ng-template #treeNode let-n let-level="level">
       <li class="tree-item">
         <span class="tree-row" [class.is-root]="n.root">
@@ -1364,6 +1372,7 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly confirmClose = signal(false);
   protected readonly closePr = signal(false);
   protected readonly confirming = signal<ConfirmRequest | null>(null);
+  protected readonly forceMergeReq = signal<ForceMergeRequest | null>(null);
   protected readonly editOpen = signal(false);
   protected readonly moreMenuOpen = signal(false);
   protected readonly compactOpen = signal(false);

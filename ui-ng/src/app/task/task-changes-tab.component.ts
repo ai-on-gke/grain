@@ -177,7 +177,7 @@ import { TaskStore } from "./task.store";
             class="btn-outlined danger"
             data-testid="changes-force-merge-open"
             [disabled]="store.isBusy('force-merge', task().id)"
-            (click)="openForceMerge()"
+            (click)="emitForceMerge()"
           >
             Force merge…
           </button>
@@ -459,78 +459,7 @@ import { TaskStore } from "./task.store";
     </div>
 
     <!-- Force Merge Gate-Override Confirmation Dialog -->
-    @if (forceOpen()) {
-      <div class="scrim" aria-hidden="true" (click)="closeForceMerge()"></div>
-      <div
-        class="g-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="force-merge-title"
-        data-testid="force-merge-dialog"
-      >
-        <h2 id="force-merge-title">Force merge #{{ task().id }}</h2>
-        <p class="muted">
-          Overrides merge-queue checks for the current head commit and records
-          your reason permanently on the task and pull request.
-        </p>
-
-        @if (unsatisfiedGates().length) {
-          <p style="margin: 8px 0 4px; font-size: 13px; font-weight: 500">
-            Tick unsatisfied gates to override:
-          </p>
-          <ul class="force-gate-list">
-            @for (g of unsatisfiedGates(); track g.id) {
-              <li>
-                <label class="check-row">
-                  <input
-                    type="checkbox"
-                    [attr.data-testid]="'override-gate-' + g.id"
-                    [checked]="overrideGateIds().has(g.id)"
-                    (change)="toggleOverrideGate(g.id)"
-                  />
-                  <span>{{ g.label || g.id }} ({{ g.state }})</span>
-                </label>
-              </li>
-            }
-          </ul>
-        }
-
-        <label
-          class="field"
-          style="display: flex; flex-direction: column; gap: 4px"
-        >
-          <span>Reason (required)</span>
-          <input
-            type="text"
-            class="force-reason-input"
-            data-testid="force-merge-reason"
-            placeholder="Why override the merge gates?"
-            [value]="forceReason()"
-            (input)="forceReason.set($any($event.target).value)"
-          />
-        </label>
-
-        <div class="dialog-actions" style="margin-top: 12px">
-          <button type="button" class="btn-text" (click)="closeForceMerge()">
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="btn-primary danger"
-            data-testid="force-merge-confirm"
-            [disabled]="
-              !forceReason().trim() ||
-              missingRequiredGateOverrides() ||
-              store.isBusy('force-merge', task().id)
-            "
-            (click)="confirmForceMerge()"
-          >
-            Force merge
-          </button>
-        </div>
-      </div>
-    }
-  `,
+    `,
 })
 export class TaskChangesTabComponent implements OnDestroy {
   protected readonly store = inject(TaskStore);
@@ -559,18 +488,44 @@ export class TaskChangesTabComponent implements OnDestroy {
   protected readonly ciLoading = signal(false);
   protected readonly ciError = signal<string | null>(null);
 
-  protected readonly forceOpen = signal(false);
-  protected readonly forceReason = signal("");
+  readonly forceMerge =
+    output<import("./force-merge-dialog.component").ForceMergeRequest>();
+
+  protected emitForceMerge(): void {
+    const t = this.task();
+    this.forceMerge.emit({
+      task: t,
+      unsatisfiedGates: this.unsatisfiedGates(),
+      head: this.preview()?.head || t.ci?.commit,
+      run: (reason, overrideGates, head) =>
+        this.store
+          .act(
+            "force-merge",
+            (id) =>
+              this.api.post(
+                "POST /api/tasks/{id}/force-merge",
+                { id },
+                {
+                  reason,
+                  ...(head ? { head } : {}),
+                  ...(overrideGates.length ? { overrideGates } : {}),
+                },
+              ),
+            t.id,
+          )
+          .then((ok) => {
+            if (ok) {
+              this.snackbar.show(`Force-merge queued for #${t.id}`);
+              this.acted.emit();
+            }
+            return ok;
+          }),
+    });
+  }
+
   protected readonly overrideGateIds = signal<ReadonlySet<string>>(new Set());
 
-  private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
-    if (ev.key === "Escape" && this.forceOpen()) {
-      ev.preventDefault();
-      ev.stopPropagation();
-      this.zone.run(() => this.closeForceMerge());
-    }
-  };
-
+  
   protected readonly submitOff = computed(() => submitBlock(this.task()));
 
   protected readonly hasChangelist = computed(
@@ -630,13 +585,6 @@ export class TaskChangesTabComponent implements OnDestroy {
     ),
   );
 
-  protected readonly missingRequiredGateOverrides = computed(() => {
-    const picked = this.overrideGateIds();
-    return this.unsatisfiedGates().some(
-      (g) => g.id.includes("review") && !picked.has(g.id),
-    );
-  });
-
   constructor() {
     effect(() => {
       const id = this.task().id;
@@ -654,8 +602,7 @@ export class TaskChangesTabComponent implements OnDestroy {
   }
 
   ngOnDestroy(): void {
-    this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
-  }
+      }
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
     return this.access.can(route, this.task().repo || undefined);
@@ -847,156 +794,6 @@ export class TaskChangesTabComponent implements OnDestroy {
     );
     if (ok) {
       this.snackbar.show(`Retrying merge for #${t.id}`);
-      this.acted.emit();
-    }
-  }
-
-  private previousFocus: HTMLElement | null = null;
-  private inertElements: HTMLElement[] = [];
-  private dialogWrapper: HTMLElement | null = null;
-
-  private trapFocus = (ev: KeyboardEvent) => {
-    if (ev.key !== "Tab" || !this.dialogWrapper) return;
-    const focusables = Array.from(
-      this.dialogWrapper.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-      ),
-    ).filter(
-      (el) => !el.hasAttribute("disabled") && !el.getAttribute("aria-hidden"),
-    );
-
-    if (focusables.length === 0) {
-      ev.preventDefault();
-      return;
-    }
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-
-    if (ev.shiftKey && this.doc.activeElement === first) {
-      last.focus();
-      ev.preventDefault();
-    } else if (!ev.shiftKey && this.doc.activeElement === last) {
-      first.focus();
-      ev.preventDefault();
-    }
-  };
-
-  private captureEscape = (ev: KeyboardEvent) => {
-    if (ev.key === "Escape") {
-      ev.preventDefault();
-      ev.stopPropagation();
-      this.zone.run(() => this.closeForceMerge());
-    }
-  };
-
-  protected openForceMerge(): void {
-    this.forceReason.set("");
-    const pre = new Set<string>();
-    for (const g of this.unsatisfiedGates()) {
-      if (!g.id.includes("review")) pre.add(g.id);
-    }
-    this.overrideGateIds.set(pre);
-    this.forceOpen.set(true);
-    this.previousFocus = this.doc.activeElement as HTMLElement;
-
-    this.zone.runOutsideAngular(() => {
-      setTimeout(() => {
-        const dialog = this.doc.querySelector(
-          '[data-testid="force-merge-dialog"]',
-        ) as HTMLElement;
-        if (!dialog) return;
-        this.dialogWrapper = dialog.parentElement;
-
-        // Hoist
-        if (this.dialogWrapper) {
-          try {
-            this.doc.body.appendChild(this.dialogWrapper);
-          } catch {
-            /* ignore */
-          }
-        }
-
-        // Mark page inert
-        this.inertElements = [];
-        for (let i = 0; i < this.doc.body.children.length; i++) {
-          const child = this.doc.body.children[i] as HTMLElement;
-          if (
-            child !== this.dialogWrapper &&
-            !child.hasAttribute("inert") &&
-            child.tagName !== "SCRIPT" &&
-            child.tagName !== "STYLE"
-          ) {
-            child.setAttribute("inert", "");
-            this.inertElements.push(child);
-          }
-        }
-
-        // Initial focus
-        const focusables = dialog.querySelectorAll<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-        );
-        if (focusables.length > 0) focusables[0].focus();
-
-        this.doc.addEventListener("keydown", this.trapFocus, true);
-        this.doc.addEventListener("keydown", this.captureEscape, true);
-      }, 0);
-    });
-  }
-
-  protected closeForceMerge(): void {
-    this.forceOpen.set(false);
-    this.doc.removeEventListener("keydown", this.trapFocus, true);
-    this.doc.removeEventListener("keydown", this.captureEscape, true);
-
-    for (const el of this.inertElements) {
-      el.removeAttribute("inert");
-    }
-    this.inertElements = [];
-
-    if (this.previousFocus) {
-      this.previousFocus.focus();
-    }
-    // We let Angular destroy the element, wait, if we moved it to document.body, Angular will fail to destroy it correctly?
-    // It's safer to let it stay in body if we want, or move it back?
-    // Actually, Angular's ViewContainerRef handles destroying even if moved in DOM in many cases, but it's risky.
-    // Let's move it back to the component before Angular removes it.
-    if (this.dialogWrapper && this.dialogWrapper.parentNode === this.doc.body) {
-      this.dialogWrapper.remove();
-    }
-  }
-
-  protected toggleOverrideGate(gateId: string): void {
-    this.overrideGateIds.update((s) => {
-      const next = new Set(s);
-      if (next.has(gateId)) next.delete(gateId);
-      else next.add(gateId);
-      return next;
-    });
-  }
-
-  protected async confirmForceMerge(): Promise<void> {
-    const t = this.task();
-    const reason = this.forceReason().trim();
-    if (!reason || this.missingRequiredGateOverrides()) return;
-    const overrideGates = [...this.overrideGateIds()];
-    const head = this.preview()?.head || t.ci?.commit;
-    const ok = await this.store.act(
-      "force-merge",
-      (id) =>
-        this.api.post(
-          "POST /api/tasks/{id}/force-merge",
-          { id },
-          {
-            reason,
-            ...(head ? { head } : {}),
-            ...(overrideGates.length ? { overrideGates } : {}),
-          },
-        ),
-      t.id,
-    );
-    if (ok) {
-      this.closeForceMerge();
-      this.snackbar.show(`Force-merge queued for #${t.id}`);
       this.acted.emit();
     }
   }

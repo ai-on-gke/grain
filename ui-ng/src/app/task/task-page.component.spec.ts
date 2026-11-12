@@ -1023,4 +1023,31 @@ describe("duration", () => {
       expect(openWs?.getAttribute("href")).toContain("/workstreams/task:7");
     });
   });
+
+  it("opens force-merge dialog outside inert section, traps focus, and closes on Escape", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, state: "awaiting_submit", mergeGates: [{ id: "ci", label: "CI", state: "failing" }] };
+    const f = await render(api, "changes");
+
+    const openBtn = q<HTMLButtonElement>(f, '[data-testid="changes-force-merge-open"]')!;
+    openBtn.focus();
+    openBtn.click();
+    await settle(f);
+
+    const dialog = q(f, '[data-testid="force-merge-dialog"]')!;
+    expect(dialog).toBeTruthy();
+    expect(dialog.closest('[inert]')).toBeNull();
+    
+    const section = q(f, 'section.view-panel')!;
+    expect(section.hasAttribute('inert')).toBe(true);
+
+    
+    // Press escape
+    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await settle(f);
+
+    expect(q(f, '[data-testid="force-merge-dialog"]')).toBeNull();
+    expect(section.hasAttribute('inert')).toBe(false);
+    expect(document.activeElement).toBe(openBtn);
+  });
 });

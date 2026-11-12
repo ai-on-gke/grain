@@ -108,7 +108,7 @@ const FRAMEWORKS: readonly PillOption[] = [
     GrantsPickerComponent,
   ],
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["./new-task-sheet.component.css", "../shared/pill-select.css"],
+  styleUrls: ["./new-task-sheet.component.css", ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "(document:keydown.escape)": "onEscape($event)",
@@ -1658,6 +1658,7 @@ export class NewTaskSheetComponent {
         d.reads.length > 0 ||
         d.writes.length > 0 ||
         d.capabilities !== null ||
+        d.model ||
         d.sandboxCpus > 0 ||
         d.sandboxMemoryMb > 0;
 

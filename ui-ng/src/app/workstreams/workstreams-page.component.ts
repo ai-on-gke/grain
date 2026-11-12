@@ -126,8 +126,7 @@ function saveView(v: WsView): void {
   styleUrls: [
     "./workstreams-page.css",
     "./workstreams-shared.css",
-    "../shared/pill-select.css",
-  ],
+    ],
   host: {
     "(document:keydown)": "onKey($event)",
   },
