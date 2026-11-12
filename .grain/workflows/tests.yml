@@ -657,9 +657,9 @@ jobs:
             ./pkg/declschema/... ./pkg/demo/... ./pkg/designdoc/... ./pkg/dispatch/... ./pkg/dispatchcondition/... \
             ./pkg/forge/... ./pkg/forkhead/... ./pkg/gcpsetup/... ./pkg/ghwebhook/... ./pkg/github/... ./pkg/gitproxy/... ./pkg/gitrefs/... \
             ./pkg/granule/... ./pkg/grit/... ./pkg/gritapi/... ./pkg/hostd/... ./pkg/hostinit/... ./pkg/hostscriptcli/... ./pkg/whererun/... ./pkg/workflows/... \
-            ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
+            ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/infrasig/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
-            ./pkg/infrasig/... ./pkg/mergelogins/... ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
+            ./pkg/mergelogins/... ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
             ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/hub/... ./pkg/registryauth/... ./pkg/hubenv/... \
             ./pkg/releaseapproval/... ./pkg/releasenotes/... ./pkg/reviewedmerge/... ./pkg/repodecl/... ./pkg/runhost/... ./pkg/safepath/... \
             ./pkg/sandboxaccess/... ./pkg/sandboxaddr/... ./pkg/sandboxcli/... ./pkg/sandboximage/... ./pkg/schedulefilter/... ./pkg/secrets/... \

@@ -15,9 +15,13 @@
 package daemon
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A repository whose connection names a merge credential hands that
@@ -56,5 +60,47 @@ func TestCredentialTokenSourceHandsOutTheMergeCredentialForMerges(t *testing.T) 
 	}
 	if tok, ok := src.MergeTokenFor("acme", "lost"); !ok || tok != nil {
 		t.Errorf("MergeTokenFor(missing credential) = %v, %v, want configured with no token", tok, ok)
+	}
+}
+
+// A repository pushed with a credential whose forge calls go through its
+// host's own tool is never merged "through" a merge credential: that
+// transport drops the request's Authorization header and authenticates as
+// the tool's login, so the merge would be the person's while grain
+// recorded it as the merge credential's. It is refused instead, and says
+// why.
+func TestCredentialTokenSourceRefusesAMergeCredentialBehindAForgeCommand(t *testing.T) {
+	credentials, err := gitproxy.LoadCredentialSet(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetAmbientOn("depot", gitproxy.CredentialHost{Host: depotTestHost, Kind: model.GitHostGitHub},
+		gitproxy.AmbientSourceAuto); err != nil {
+		t.Fatal(err)
+	}
+	if !credentials.ForgeViaCommand("depot") {
+		t.Fatal("the fixture's depot credential does not go through its host's tool")
+	}
+	if err := credentials.SetToken("merger", "merger-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := credentials.SetHost("merger", gitproxy.CredentialHost{Host: depotTestHost, Kind: model.GitHostGitHub}); err != nil {
+		t.Fatal(err)
+	}
+	src := credentialTokenSource{credentials: credentials,
+		teamCredential:  func(host, owner, repo string) (string, bool) { return "depot", true },
+		mergeCredential: func(host, owner, repo string) (string, bool) { return "merger", true }}
+	owner := depotTestHost + "/" + depotTestOwner
+	if tok, ok := src.MergeTokenFor(owner, depotTestRepo); !ok || tok != nil {
+		t.Errorf("MergeTokenFor = %v, %v, want configured with no token", tok, ok)
+	}
+	if got := src.MergeRefusalFor(owner, depotTestRepo); !strings.Contains(got, "depot") {
+		t.Errorf("MergeRefusalFor = %q, want it to name the push credential", got)
+	}
+	client := github.NewClient(nil, src)
+	err = client.MergePullRequestWithMessage(owner, depotTestRepo, 7, "abc", "t", "m")
+	var refused *github.ErrNoMergeToken
+	if !errors.As(err, &refused) || refused.Reason == "" {
+		t.Fatalf("merge err = %v, want an ErrNoMergeToken with a reason", err)
 	}
 }
