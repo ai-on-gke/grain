@@ -1,4 +1,4 @@
-/* Task detail page and split pane layout (spec D-24). */
+/* Task detail page and split pane layout (spec D-24, < 5.5 kB). */
 
 g-task-page {
   display: contents;
@@ -30,6 +30,11 @@ g-task-page {
   align-items: center;
   gap: 8px;
   margin-top: 12px;
+}
+
+.task-more-wrap {
+  position: relative;
+  display: inline-flex;
 }
 
 .confirm-inline {
@@ -110,11 +115,6 @@ g-task-page {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
-}
-
-.facts select {
-  font: inherit;
-  font-size: 13px;
 }
 
 .description {
@@ -213,6 +213,40 @@ g-task-page {
   margin: 0;
   padding-left: 18px;
   font-size: 13px;
+}
+
+.dep-edit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.dep-id-input {
+  width: 120px;
+  padding: 5px 8px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: 12px;
+}
+
+.compact-card {
+  margin: 10px 20px 0;
+  padding: 12px 16px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+:root[data-theme="dark"] .compact-card {
+  background: var(--md-sys-color-surface-container);
 }
 
 @media (max-width: 1079.95px) {

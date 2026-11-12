@@ -12,28 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { GrainConfig, Task } from "../api/models";
+import type {
+  AttachmentUpload,
+  GrainConfig,
+  Task,
+  Template,
+} from "../api/models";
 
-// The fields this sheet renders, in newTaskForm.js's builtin order. The
-// rest of the classic form (attachments, capabilities, reads and writes,
-// templates, sandbox shape, review) stays on the classic page, linked
-// from the sheet, until later milestones bring them over.
+// All 22 builtin fields from ui/src/newTaskForm.js.
 export type FieldId =
   | "title"
   | "description"
+  | "attachments"
+  | "customFields"
   | "repo"
   | "newBranch"
   | "base"
+  | "writes"
+  | "reads"
   | "autoMerge"
+  | "noPort"
+  | "fixesBaseBranch"
+  | "grants"
   | "model"
   | "dependsOn"
+  | "agentBackendId"
   | "networkAccess"
   | "nothingNeededAction"
+  | "reviewTemplateId"
   | "promptExtension"
+  | "sandboxShape"
   | "approved"
   | "atFront";
 
 export type Visibility = "shown" | "more" | "hidden";
+
+export interface SandboxPreset {
+  name: string;
+  label?: string;
+  cpus: number;
+  memoryMb: number;
+  diskGb?: number;
+}
 
 export interface FieldConfig {
   visibility: Visibility;
@@ -41,29 +61,42 @@ export interface FieldConfig {
   label: string;
   helpText: string;
   default: unknown;
-  // repo: whether "No repository" is offered (allow_no_repo).
   allowNoRepo?: boolean;
-  // model, networkAccess: the values the picker offers (offered).
   offered?: string[];
+  presets?: SandboxPreset[];
+  defaultPreset?: string;
+  allowCustomNumbers?: boolean;
 }
 
-// NO_REPO is the repository picker's value for a task with no repository
-// (it answers in a comment). "" is the deployment's default target,
-// which the server fills in (Config.DefaultTarget).
 export const NO_REPO = "__none__";
 
+// Clean, fast top-of-sheet layout by default: core fields are "shown", while
+// secondary repo/capability/execution controls sit cleanly in collapsible sections
+// ("Capabilities & context" and "More options") unless a deployment's
+// newTaskForm config explicitly promotes or hides them.
 const BUILTIN: Record<FieldId, { visibility: Visibility; order: number }> = {
   title: { visibility: "shown", order: 10 },
   description: { visibility: "shown", order: 20 },
+  attachments: { visibility: "shown", order: 25 },
+  customFields: { visibility: "shown", order: 30 },
   repo: { visibility: "shown", order: 40 },
   newBranch: { visibility: "shown", order: 45 },
   base: { visibility: "shown", order: 50 },
   autoMerge: { visibility: "shown", order: 70 },
   model: { visibility: "shown", order: 100 },
   dependsOn: { visibility: "shown", order: 110 },
+  // Collapsible Capabilities & Context / Advanced fields:
+  grants: { visibility: "more", order: 155 },
+  reads: { visibility: "more", order: 160 },
+  writes: { visibility: "more", order: 165 },
+  noPort: { visibility: "more", order: 175 },
+  fixesBaseBranch: { visibility: "more", order: 180 },
+  agentBackendId: { visibility: "more", order: 200 },
   networkAccess: { visibility: "more", order: 210 },
   nothingNeededAction: { visibility: "more", order: 220 },
+  reviewTemplateId: { visibility: "more", order: 230 },
   promptExtension: { visibility: "more", order: 235 },
+  sandboxShape: { visibility: "more", order: 240 },
   approved: { visibility: "shown", order: 300 },
   atFront: { visibility: "shown", order: 310 },
 };
@@ -79,10 +112,17 @@ function builtinDefault(id: FieldId, config: GrainConfig | null): unknown {
     case "nothingNeededAction":
       return "close";
     case "newBranch":
+    case "noPort":
+    case "fixesBaseBranch":
       return false;
+    case "writes":
+    case "reads":
     case "dependsOn":
+    case "attachments":
       return [];
     case "repo":
+    case "grants":
+    case "customFields":
       return undefined;
     default:
       return "";
@@ -100,13 +140,23 @@ interface FormLayer {
       default?: unknown;
       allow_no_repo?: boolean;
       offered?: string[];
+      presets?: SandboxPreset[];
+      default_preset?: string;
+      allow_custom_numbers?: boolean;
     } | null
   >;
+  capabilities?: {
+    defaults?: string[];
+    offered?: string[];
+    hidden?: string[];
+  };
 }
 
 interface FormConfig {
   default?: FormLayer;
+  boards?: Record<string, FormLayer>;
   repos?: Record<string, FormLayer>;
+  templates?: Record<string, FormLayer>;
 }
 
 function repoLayer(form: FormConfig, repo: string): FormLayer | null {
@@ -117,12 +167,10 @@ function repoLayer(form: FormConfig, repo: string): FormLayer | null {
   return key ? form.repos[key] : null;
 }
 
-// resolveFields is resolveNewTaskForm (ui/src/newTaskForm.js) for the
-// fields this sheet renders: the builtin list, then the deployment's
-// settings/new-task-form.yml layer, then the picked repository's.
 export function resolveFields(
   config: GrainConfig | null,
   repo = "",
+  templateId = "",
 ): Record<FieldId, FieldConfig> {
   const out = {} as Record<FieldId, FieldConfig>;
   for (const id of Object.keys(BUILTIN) as FieldId[]) {
@@ -135,12 +183,15 @@ export function resolveFields(
   }
   const form = (config?.["newTaskForm"] as FormConfig | null) ?? null;
   if (!form) return out;
-  const layers = [form.default, repoLayer(form, repo)].filter(
-    (l): l is FormLayer => !!l,
-  );
+  const layers = [
+    form.default,
+    repoLayer(form, repo),
+    templateId ? form.templates?.[templateId] : null,
+  ].filter((l): l is FormLayer => !!l);
   for (const layer of layers) {
-    for (const [id, fc] of Object.entries(layer.fields ?? {})) {
-      const f = out[id as FieldId];
+    for (const [rawId, fc] of Object.entries(layer.fields ?? {})) {
+      const id = (rawId === "legacyCapabilities" ? "grants" : rawId) as FieldId;
+      const f = out[id];
       if (!f || !fc) continue;
       if (fc.visibility) f.visibility = fc.visibility;
       if (typeof fc.order === "number") f.order = fc.order;
@@ -149,18 +200,50 @@ export function resolveFields(
       if (fc.default !== undefined && fc.default !== null) {
         f.default = fc.default;
       }
-      if (typeof fc.allow_no_repo === "boolean")
+      if (typeof fc.allow_no_repo === "boolean") {
         f.allowNoRepo = fc.allow_no_repo;
+      }
       if (Array.isArray(fc.offered)) f.offered = fc.offered;
+      if (Array.isArray(fc.presets)) f.presets = fc.presets;
+      if (typeof fc.default_preset === "string") {
+        f.defaultPreset = fc.default_preset;
+      }
+      if (typeof fc.allow_custom_numbers === "boolean") {
+        f.allowCustomNumbers = fc.allow_custom_numbers;
+      }
     }
   }
   return out;
 }
 
-// targetableRepos is what the repository picker offers (ui/src/state.js
-// targetableRepos): the config repository plus the deployment's allowed
-// target repos; with no allowlist, every repo a task has used. Offering
-// repos off the allowlist would file tasks that only park.
+export function defaultCapabilitiesForRepo(
+  config: GrainConfig | null,
+  repo: string,
+): string[] {
+  if (!config) return [];
+  const form = (config["newTaskForm"] as FormConfig | null) ?? null;
+  if (form) {
+    const rl = repoLayer(form, repo);
+    if (Array.isArray(rl?.capabilities?.defaults)) {
+      return [...rl.capabilities.defaults];
+    }
+    if (Array.isArray(form.default?.capabilities?.defaults)) {
+      return [...form.default.capabilities.defaults];
+    }
+  }
+  const repoDefs = config.repoDefaultCapabilities;
+  if (repoDefs && repo && repo !== NO_REPO) {
+    const k = Object.keys(repoDefs).find(
+      (x) => x.toLowerCase() === repo.toLowerCase(),
+    );
+    if (k && Array.isArray(repoDefs[k])) return [...repoDefs[k]];
+  }
+  if (Array.isArray(config.defaultCapabilities)) {
+    return [...config.defaultCapabilities];
+  }
+  return (config.capabilities ?? []).filter((c) => c.default).map((c) => c.id);
+}
+
 export function targetableRepos(
   config: GrainConfig | null,
   tasks: readonly Task[],
@@ -171,10 +254,12 @@ export function targetableRepos(
     const k = r.toLowerCase();
     if (!seen.has(k)) seen.set(k, r);
   };
-  const dep = config?.["deployment"] as { targetRepos?: string[] } | undefined;
+  const dep = config?.["deployment"] as
+    { targetRepos?: string[]; repos?: { repo?: string }[] } | undefined;
   const allowed = [
     ...((config?.["targetRepos"] as string[] | undefined) ?? []),
     ...(dep?.targetRepos ?? []),
+    ...(dep?.repos?.map((x) => x.repo).filter(Boolean) ?? []),
   ];
   add(config?.["configRepo"]);
   if (allowed.length) allowed.forEach(add);
@@ -182,8 +267,6 @@ export function targetableRepos(
   return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
 
-// defaultTargetIn is the deployment's default target when the picker
-// offers it, else "".
 export function defaultTargetIn(
   config: GrainConfig | null,
   options: readonly string[],
@@ -193,11 +276,6 @@ export function defaultTargetIn(
   return options.find((o) => o.toLowerCase() === pref.toLowerCase()) ?? "";
 }
 
-// openingRepo is where the picker starts (NewTaskOverlay.jsx): the
-// opener's repo, else the deployment's default target, else the form's
-// repo default ("none" meaning no repository), else "" -- the server's
-// default target -- never just the first repo alphabetically
-// (grain/task-1533).
 export function openingRepo(
   config: GrainConfig | null,
   options: readonly string[],
@@ -212,9 +290,6 @@ export function openingRepo(
   return d;
 }
 
-// Tasks that say nothing about where a repo's work lives now (state.js
-// suggestsBase): failed or closed ones, stacked reviews and repairs, and
-// anything not filed by a person.
 function suggestsBase(t: Task): boolean {
   const x = t as Task & { stacked?: boolean; authorKind?: string };
   if (x.state === "failed" || x.state === "closed") return false;
@@ -222,8 +297,6 @@ function suggestsBase(t: Task): boolean {
   return !x.authorKind || x.authorKind === "human";
 }
 
-// lastBaseForRepo is the base branch the newest hand-filed task on a
-// repo used, so the next one starts there too (state.js lastBaseForRepo).
 export function lastBaseForRepo(tasks: readonly Task[], repo: string): string {
   if (!repo || repo === NO_REPO) return "";
   let latest: Task | null = null;
@@ -234,27 +307,70 @@ export function lastBaseForRepo(tasks: readonly Task[], repo: string): string {
   return (latest as (Task & { base?: string }) | null)?.base ?? "";
 }
 
-// hasHistory says whether picking the repo has a base to suggest at all.
 export function hasHistory(tasks: readonly Task[], repo: string): boolean {
   return tasks.some((t) => t.repo === repo && suggestsBase(t));
+}
+
+// Extracts a repository template stem suitable for POST /api/tasks/from-template
+// (pkg/ui/tasks_from_template.go FromTemplateStem), or "" when the template
+// must be launched through POST /api/tasks { templateId }.
+export function fromTemplateStem(repo: string, tmpl: Template): string {
+  if (!repo || repo === NO_REPO || tmpl.system) return "";
+  const id = tmpl.id.trim();
+  if (!id) return "";
+  const [owner, name] = repo.trim().toLowerCase().split("/");
+  if (!owner || !name) return "";
+  const prefix = `declared:template:${owner}:${name}:`;
+  if (id.toLowerCase().startsWith(prefix)) {
+    const stem = id.slice(prefix.length);
+    if (stem && !/[:/\\]/.test(stem) && !stem.startsWith(".")) return stem;
+  }
+  if (tmpl.declaredIn?.repo) {
+    if (tmpl.declaredIn.repo.toLowerCase() !== repo.trim().toLowerCase()) {
+      return "";
+    }
+    const lastColon = id.lastIndexOf(":");
+    const stem = lastColon >= 0 ? id.slice(lastColon + 1) : id;
+    if (stem && !/[:/\\]/.test(stem) && !stem.startsWith(".")) return stem;
+  }
+  if (!/[:/\\]/.test(id) && !id.startsWith(".")) {
+    return id;
+  }
+  return "";
 }
 
 export interface NewTaskDraft {
   title: string;
   description: string;
+  attachments: AttachmentUpload[];
+  customFields: Record<string, string | string[]>;
   repo: string; // NO_REPO: none; "": the deployment's default target
   base: string;
   newBranch: boolean;
   newBranchName: string;
+  reads: string[];
+  writes: { repo: string; base?: string }[];
   autoMerge: boolean;
+  noPort: boolean;
+  fixesBaseBranch: boolean;
+  capabilities: string[] | null; // null = use deployment defaults unless edited
   model: string;
+  agentFramework: string;
+  agentBackendId: string;
   dependsOn: string[];
   networkAccess: string;
   nothingNeededAction: string;
+  reviewTemplateId: string;
+  reviewers: string[];
   promptExtension: string;
+  sandboxCpus: number;
+  sandboxMemoryMb: number;
+  sandboxDiskGb: number;
   approved: boolean;
   atFront: boolean;
   origin?: string;
+  parentId?: string;
+  generatedFrom?: string;
   workstream?: boolean;
   autoApproveProposals?: boolean;
 }
@@ -267,57 +383,101 @@ export function emptyDraft(
   const repos = targetableRepos(config, tasks);
   const repo = openingRepo(config, repos, prefill.repo);
   const f = resolveFields(config, repo);
+  const seededCustom: Record<string, string | string[]> = {};
+  for (const cf of config?.customFields ?? []) {
+    if (cf.default !== undefined && cf.default !== null && cf.default !== "") {
+      seededCustom[cf.name] = Array.isArray(cf.default)
+        ? cf.default.map(String)
+        : String(cf.default);
+    }
+  }
   return {
     title: "",
     description: "",
+    attachments: [],
+    customFields: seededCustom,
     repo,
     base: lastBaseForRepo(tasks, repo),
     newBranch: !!f.newBranch.default,
     newBranchName: "",
+    reads: [],
+    writes: [],
     autoMerge: !!f.autoMerge.default,
+    noPort: !!f.noPort.default,
+    fixesBaseBranch: !!f.fixesBaseBranch.default,
+    capabilities: null,
     model: String(f.model.default ?? ""),
+    agentFramework: "",
+    agentBackendId: String(f.agentBackendId.default ?? ""),
     dependsOn: [],
     networkAccess: String(f.networkAccess.default ?? ""),
     nothingNeededAction: String(f.nothingNeededAction.default || "close"),
+    reviewTemplateId: String(f.reviewTemplateId.default ?? ""),
+    reviewers: [],
     promptExtension: String(f.promptExtension.default ?? ""),
+    sandboxCpus: 0,
+    sandboxMemoryMb: 0,
+    sandboxDiskGb: 0,
     approved: !!f.approved.default,
     atFront: !!f.atFront.default,
     ...prefill,
   };
 }
 
-// buildPayload is the POST /api/tasks body for a draft, matching what
-// the classic NewTaskOverlay sends for the same fields: a task creating
-// its branch is filed onto that branch with newBranchFrom as its base;
-// a task with no repository says noRepo and names no base.
 export function buildPayload(
   d: NewTaskDraft,
   config: GrainConfig | null,
+  templateOpts?: { templateId: string; fields: Record<string, string> } | null,
 ): Record<string, unknown> {
   const none = d.repo === NO_REPO;
   const creating = d.newBranch && !none;
+  const shapeIgnored = !!config?.["sandboxShapeIgnored"];
+  const hasCustom = Object.keys(d.customFields ?? {}).some((k) => {
+    const v = d.customFields[k];
+    return Array.isArray(v) ? v.length > 0 : String(v ?? "").trim() !== "";
+  });
+
   return {
     title: d.title.trim(),
     description: d.description,
+    ...(templateOpts
+      ? { templateId: templateOpts.templateId, fields: templateOpts.fields }
+      : {}),
     repo: none ? "" : d.repo,
     noRepo: none,
     ...(creating
       ? { base: d.newBranchName.trim(), newBranch: true, newBranchFrom: d.base }
       : { base: none ? "" : d.base }),
     autoMerge: d.autoMerge,
+    ...(d.noPort ? { noPort: true } : {}),
+    ...(d.fixesBaseBranch && !none ? { fixesBaseBranch: true } : {}),
     model: d.model,
-    // "" is the deployment's own setting; a deployment that cannot honour
-    // a per-task network (sandboxShapeIgnored) gets no override.
-    networkAccess: config?.["sandboxShapeIgnored"] ? "" : d.networkAccess,
+    ...(d.agentFramework ? { agentFramework: d.agentFramework } : {}),
+    ...(d.agentBackendId ? { agentBackendId: d.agentBackendId } : {}),
+    networkAccess: shapeIgnored ? "" : d.networkAccess,
+    ...(!shapeIgnored && d.sandboxCpus > 0
+      ? { sandboxCpus: d.sandboxCpus }
+      : {}),
+    ...(!shapeIgnored && d.sandboxMemoryMb > 0
+      ? { sandboxMemoryMb: d.sandboxMemoryMb }
+      : {}),
+    ...(!shapeIgnored && d.sandboxDiskGb > 0
+      ? { sandboxDiskGb: d.sandboxDiskGb }
+      : {}),
     nothingNeededAction: d.nothingNeededAction,
+    ...(d.reviewTemplateId ? { reviewTemplateId: d.reviewTemplateId } : {}),
+    ...(d.reviewers.length ? { reviewers: d.reviewers } : {}),
     promptExtension: d.promptExtension,
     dependsOn: d.dependsOn,
-    reads: [],
-    writes: [],
-    attachments: [],
+    reads: d.reads,
+    writes: d.writes,
+    attachments: d.attachments,
+    ...(d.capabilities !== null ? { capabilities: d.capabilities } : {}),
+    ...(hasCustom ? { customFields: d.customFields } : {}),
     approved: d.approved,
     atFront: d.atFront,
     ...(d.origin !== undefined ? { origin: d.origin } : {}),
+    ...(d.parentId ? { parentId: d.parentId } : {}),
     ...(d.autoApproveProposals !== undefined
       ? { autoApproveProposals: d.autoApproveProposals }
       : {}),
@@ -325,17 +485,26 @@ export function buildPayload(
 }
 
 export interface Problem {
-  field: "title" | "newBranchName";
+  field: "title" | "newBranchName" | "templateField";
   message: string;
 }
 
-// validate says what stops the draft being filed, or null. A hidden New
-// branch field asks for no name: nobody could type one.
 export function validate(
   d: NewTaskDraft,
   fields?: Record<FieldId, FieldConfig>,
+  template?: Template | null,
+  templateValues?: Record<string, string>,
 ): Problem | null {
-  if (!d.title.trim()) {
+  if (template) {
+    for (const tf of template.fields ?? []) {
+      if (tf.required && !(templateValues?.[tf.name] ?? "").trim()) {
+        return {
+          field: "templateField",
+          message: `Fill in required template field "${tf.label || tf.name}".`,
+        };
+      }
+    }
+  } else if (!d.title.trim()) {
     return { field: "title", message: "Give the task a title." };
   }
   const branchShown = !fields || fields.newBranch.visibility !== "hidden";
@@ -353,9 +522,6 @@ export function validate(
   return null;
 }
 
-// directorMessage is what "Ask the Director" sends: the draft as a
-// request to file (or shape) the task, so the Director can ask what is
-// missing before anything runs.
 export function directorMessage(d: NewTaskDraft): string {
   const lines = [
     "Please help me file this as a task (ask me anything that is missing):",

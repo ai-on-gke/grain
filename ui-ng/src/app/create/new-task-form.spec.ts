@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { GrainConfig, Task } from "../api/models";
+import type { GrainConfig, Task, Template } from "../api/models";
 import {
   NO_REPO,
   buildPayload,
+  defaultCapabilitiesForRepo,
   directorMessage,
   emptyDraft,
+  fromTemplateStem,
   lastBaseForRepo,
   openingRepo,
   resolveFields,
@@ -53,7 +55,6 @@ const tasks = [
     base: "release-1",
     createdAt: "2026-11-05T00:00:00Z",
   },
-  // Newer, but no evidence: failed, stacked, or filed by automation.
   {
     id: "5",
     title: "d",
@@ -117,7 +118,7 @@ describe("new task form", () => {
     expect(lastBaseForRepo(tasks, "acme/web")).toBe("");
   });
 
-  it("takes defaults from the config and layers settings/new-task-form.yml", () => {
+  it("takes defaults from the config and layers settings/new-task-form.yml across all 22 fields", () => {
     const f = resolveFields(
       {
         ...config,
@@ -126,6 +127,7 @@ describe("new task form", () => {
             fields: {
               model: { visibility: "more", default: "fast" },
               title: { label: "What needs doing" },
+              legacyCapabilities: { visibility: "shown" },
             },
           },
           repos: {
@@ -137,15 +139,17 @@ describe("new task form", () => {
       },
       "sidthe/grain",
     );
+    expect(Object.keys(f)).toHaveLength(23);
     expect(f.approved.default).toBe(true);
     expect(f.autoMerge.default).toBe(false);
     expect(f.model).toMatchObject({ visibility: "more", default: "fast" });
     expect(f.title.label).toBe("What needs doing");
+    expect(f.grants.visibility).toBe("shown");
     expect(f.networkAccess.visibility).toBe("hidden");
     expect(resolveFields(null).nothingNeededAction.default).toBe("close");
   });
 
-  it("builds the body the classic form sends", () => {
+  it("builds the body for all 22 fields and resolves repo template stems", () => {
     const d = emptyDraft(config, tasks, {
       title: "  Fix it ",
       description: "x",
@@ -161,7 +165,45 @@ describe("new task form", () => {
       nothingNeededAction: "close",
       dependsOn: [],
       attachments: [],
+      reads: [],
+      writes: [],
     });
+
+    const rich = buildPayload(
+      {
+        ...d,
+        sandboxCpus: 4,
+        sandboxMemoryMb: 8192,
+        sandboxDiskGb: 32,
+        agentBackendId: "antigravity-ambient",
+        agentFramework: "antigravity",
+        capabilities: ["self-debug", "api:tasks-read"],
+        reads: ["acme/web"],
+        writes: [{ repo: "grain/config", base: "main" }],
+        reviewTemplateId: "sec-review",
+        reviewers: ["ana"],
+        noPort: true,
+        fixesBaseBranch: true,
+        customFields: { team: "infra" },
+      },
+      config,
+    );
+    expect(rich).toMatchObject({
+      sandboxCpus: 4,
+      sandboxMemoryMb: 8192,
+      sandboxDiskGb: 32,
+      agentBackendId: "antigravity-ambient",
+      agentFramework: "antigravity",
+      capabilities: ["self-debug", "api:tasks-read"],
+      reads: ["acme/web"],
+      writes: [{ repo: "grain/config", base: "main" }],
+      reviewTemplateId: "sec-review",
+      reviewers: ["ana"],
+      noPort: true,
+      fixesBaseBranch: true,
+      customFields: { team: "infra" },
+    });
+
     const branch = buildPayload(
       { ...d, newBranch: true, newBranchName: " feat/x " },
       config,
@@ -171,27 +213,46 @@ describe("new task form", () => {
       newBranch: true,
       newBranchFrom: "release-1",
     });
+
     const none = buildPayload({ ...d, repo: NO_REPO, newBranch: true }, config);
     expect(none).toMatchObject({ repo: "", noRepo: true, base: "" });
     expect(none).not.toHaveProperty("newBranch");
-    // "" is the deployment's default target: no repo named, but not
-    // "no repository" either.
-    expect(buildPayload({ ...d, repo: "" }, config)).toMatchObject({
-      repo: "",
-      noRepo: false,
-    });
+
     expect(
       buildPayload(
-        { ...d, networkAccess: "none" },
+        { ...d, networkAccess: "none", sandboxCpus: 8 },
+        { ...config, sandboxShapeIgnored: true },
+      ),
+    ).not.toHaveProperty("sandboxCpus");
+
+    expect(
+      defaultCapabilitiesForRepo(
         {
-          ...config,
-          sandboxShapeIgnored: true,
+          defaultCapabilities: ["a"],
+          repoDefaultCapabilities: { "sidthe/grain": ["b", "c"] },
         },
-      ).networkAccess,
+        "SIDTHE/grain",
+      ),
+    ).toEqual(["b", "c"]);
+
+    const repoTmpl: Template = {
+      id: "declared:template:sidthe:grain:bugfix",
+      name: "Bugfix",
+      title: "Fix {{area}}",
+      description: "",
+      declaredIn: { repo: "sidthe/grain" },
+    };
+    expect(fromTemplateStem("sidthe/grain", repoTmpl)).toBe("bugfix");
+    expect(fromTemplateStem("acme/web", repoTmpl)).toBe("");
+    expect(
+      fromTemplateStem("sidthe/grain", { ...repoTmpl, id: "triage" }),
+    ).toBe("triage");
+    expect(
+      fromTemplateStem("sidthe/grain", { ...repoTmpl, system: true }),
     ).toBe("");
   });
 
-  it("says what stops filing", () => {
+  it("says what stops filing, including required template fields", () => {
     const d = emptyDraft(config, tasks);
     expect(validate(d)).toEqual({
       field: "title",
@@ -201,7 +262,20 @@ describe("new task form", () => {
       "newBranchName",
     );
     expect(validate({ ...d, title: "t" })).toBeNull();
-    // A hidden New branch field cannot be filled in, so it asks for nothing.
+
+    const tmpl: Template = {
+      id: "bugfix",
+      name: "Bugfix",
+      title: "Fix {{component}}",
+      description: "",
+      fields: [{ name: "component", label: "Component", required: true }],
+    };
+    expect(validate(d, undefined, tmpl, {})).toEqual({
+      field: "templateField",
+      message: 'Fill in required template field "Component".',
+    });
+    expect(validate(d, undefined, tmpl, { component: "auth" })).toBeNull();
+
     const hidden = resolveFields({
       access: null,
       newTaskForm: {

@@ -18,7 +18,7 @@ import { Router, provideRouter } from "@angular/router";
 import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
-import type { Task } from "../api/models";
+import type { Task, Template } from "../api/models";
 import { InboxStore } from "../inbox/inbox.store";
 import { SnackbarService } from "../services/snackbar.service";
 import {
@@ -28,18 +28,32 @@ import {
 import { CreateTaskService } from "./create-task.service";
 import { NewTaskSheetComponent } from "./new-task-sheet.component";
 
-type Call = { route: string; params?: unknown; body?: unknown };
+type Call = { route: string; params?: unknown; body?: unknown; query?: string };
 
 class FakeApi {
   calls: Call[] = [];
   fail: Record<string, unknown> = {};
-  cfg = {
+  templates: Template[] = [
+    {
+      id: "declared:template:sidthe:grain:bugfix",
+      name: "Bugfix template",
+      title: "Fix {{area}}",
+      description: "Fix bug in {{area}}",
+      declaredIn: { repo: "sidthe/grain" },
+      fields: [{ name: "area", label: "Area", required: true }],
+    },
+  ];
+  cfg: Record<string, unknown> = {
     access: null,
     approvedByDefault: true,
     defaultTarget: "sidthe/grain",
     models: ["fast", "smart"],
     defaultModel: "smart",
-    deployment: { repos: [{ repo: "sidthe/grain" }] },
+    capabilities: [{ id: "self-debug", name: "Self debug", ready: true }],
+    defaultCapabilities: [],
+    agentBackends: [{ id: "agy-ambient", name: "Antigravity ambient" }],
+    customFields: [{ name: "component", label: "Component", type: "string" }],
+    deployment: { repos: [{ repo: "sidthe/grain" }, { repo: "acme/web" }] },
   };
   config = () => Promise.resolve(this.cfg);
   tasks = () =>
@@ -60,8 +74,33 @@ class FakeApi {
   openNotifications = () => Promise.resolve([]);
   localScriptApprovals = () => Promise.resolve([]);
   getIfChanged = () => this.tasks().then((body) => ({ body, changed: true }));
-  get = (route: string) => {
+  get = (route: string, params?: unknown, query?: string) => {
+    this.calls.push({ route, params, query });
     if (route === "GET /api/tasks") return Promise.resolve({ tasks: [] });
+    if (route === "GET /api/templates") {
+      return Promise.resolve(this.templates);
+    }
+    if (route === "GET /api/templates/{id}/composition") {
+      return Promise.resolve({
+        kind: "task",
+        repo: "sidthe/grain",
+        tasks: [
+          {
+            title: "Fix auth",
+            fields: [
+              { name: "repo", values: ["sidthe/grain"], source: "template" },
+              { name: "model", values: ["smart"], source: "deployment" },
+            ],
+          },
+        ],
+      });
+    }
+    if (route === "GET /api/deployment/reachable-repos") {
+      return Promise.resolve(["sidthe/grain", "acme/web"]);
+    }
+    if (route === "GET /api/repos/{owner}/{name}/branches") {
+      return Promise.resolve(["main", "release-1"]);
+    }
     return Promise.resolve({
       sessions: [{ id: "director", title: "Director", taskId: "1" }],
     });
@@ -73,7 +112,12 @@ class FakeApi {
       delete this.fail[route];
       return new Promise((_, reject) => setTimeout(() => reject(err)));
     }
-    if (route === "POST /api/tasks") return Promise.resolve({ id: "42" });
+    if (
+      route === "POST /api/tasks" ||
+      route === "POST /api/tasks/from-template"
+    ) {
+      return Promise.resolve({ id: "42" });
+    }
     return Promise.resolve({});
   };
 }
@@ -119,9 +163,21 @@ function type(sel: string, value: string): void {
   el.dispatchEvent(new Event("input"));
 }
 
+async function pickPill(
+  f: ComponentFixture<unknown>,
+  testid: string,
+  optValue: string,
+): Promise<void> {
+  q<HTMLButtonElement>(`[data-testid="${testid}"]`)!.click();
+  await f.whenStable();
+  q<HTMLButtonElement>(`[data-testid="${testid}-opt-${optValue}"]`)!.click();
+  await f.whenStable();
+}
+
 async function settle(f: ComponentFixture<unknown>): Promise<void> {
   await f.whenStable();
-  await new Promise((r) => setTimeout(r));
+  await new Promise((r) => setTimeout(r, 15));
+  f.detectChanges();
   await f.whenStable();
 }
 
@@ -132,7 +188,7 @@ describe("NewTaskSheetComponent", () => {
     TestBed.resetTestingModule();
   });
 
-  it("opens as a modal with focus on the title and the deployment's defaults", async () => {
+  it("opens as a modal with focus on title, zero <select>s, zero Classic links, and deployment defaults", async () => {
     const api = new FakeApi();
     const f = await render(api);
     expect(q('[data-testid="new-task-sheet"]')).toBeNull();
@@ -140,20 +196,25 @@ describe("NewTaskSheetComponent", () => {
     const sheet = q('[data-testid="new-task-sheet"]')!;
     expect(sheet.getAttribute("aria-modal")).toBe("true");
     expect(document.activeElement).toBe(q('[data-testid="nt-title"]'));
-    expect(q<HTMLSelectElement>('[data-testid="nt-repo"]')!.value).toBe(
-      "sidthe/grain",
-    );
+    expect(q('[data-testid="nt-repo"]')?.textContent).toContain("sidthe/grain");
     expect(
       q('[data-testid="approved-switch"]')!.getAttribute("aria-checked"),
     ).toBe("true");
     expect(q('[data-testid="new-task-submit"]')!.textContent?.trim()).toBe(
       "Create and start",
     );
-    // Standing session tasks are not offered as dependencies.
-    const deps = [
-      ...q<HTMLSelectElement>('[data-testid="nt-depends"]')!.options,
-    ];
-    expect(deps.map((o) => o.value)).toEqual(["", "4"]);
+
+    // Zero native <select> elements & zero Classic links anywhere in the sheet.
+    expect(sheet.querySelectorAll("select")).toHaveLength(0);
+    expect(q('[data-testid="classic-form"]')).toBeNull();
+    expect(sheet.textContent).not.toContain("classic UI");
+
+    // Standing session tasks are not offered as dependencies in <g-pill-select>.
+    q<HTMLButtonElement>('[data-testid="nt-depends"]')!.click();
+    await f.whenStable();
+    const depMenu = q('[data-testid="nt-depends-menu"]')!;
+    expect(depMenu.textContent).toContain("#4 Inbox split");
+    expect(depMenu.textContent).not.toContain("#1 Director");
   });
 
   it("asks for a title instead of filing an empty task", async () => {
@@ -165,10 +226,12 @@ describe("NewTaskSheetComponent", () => {
     expect(q('[data-testid="new-task-error"]')?.textContent).toContain(
       "Give the task a title.",
     );
-    expect(api.calls).toHaveLength(0);
+    expect(api.calls.filter((c) => c.route.startsWith("POST "))).toHaveLength(
+      0,
+    );
   });
 
-  it("files a proposal when Approve is off, and offers Open and Discard", async () => {
+  it("files a proposal when Approve is off, attaches dependencies via <g-pill-select>, and offers Open and Discard", async () => {
     const api = new FakeApi();
     const f = await render(api);
     await open(f);
@@ -178,13 +241,11 @@ describe("NewTaskSheetComponent", () => {
     expect(q('[data-testid="new-task-submit"]')!.textContent?.trim()).toBe(
       "Save as proposal",
     );
-    const deps = q<HTMLSelectElement>('[data-testid="nt-depends"]')!;
-    deps.value = "4";
-    deps.dispatchEvent(new Event("change"));
-    await f.whenStable();
+    await pickPill(f, "nt-depends", "4");
     q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
     await settle(f);
-    expect(api.calls[0]).toMatchObject({
+    const created = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(created).toMatchObject({
       route: "POST /api/tasks",
       body: {
         title: "Write the Sessions docs",
@@ -199,10 +260,113 @@ describe("NewTaskSheetComponent", () => {
     expect(snack.secondary?.label).toBe("Open");
     expect(snack.action?.label).toBe("Discard");
     await TestBed.inject(SnackbarService).runAction(snack.id);
-    expect(api.calls[1]).toMatchObject({
-      route: "POST /api/tasks/{id}/close",
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/close"),
+    ).toMatchObject({
       params: { id: "42" },
       body: { close_pull_request: false },
+    });
+  });
+
+  it("launches a repo-declared template with live composition preview via POST /api/tasks/from-template", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+
+    await pickPill(f, "nt-template", "declared:template:sidthe:grain:bugfix");
+    await settle(f);
+
+    // Composition preview is rendered.
+    expect(q('[data-testid="nt-composition-preview"]')?.textContent).toContain(
+      "Preview: Fix auth",
+    );
+
+    // Required template field validation blocks empty submit.
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+    expect(q('[data-testid="new-task-error"]')?.textContent).toContain("Area");
+
+    // Fill template field and submit -> calls POST /api/tasks/from-template!
+    type('[data-testid="nt-tfield-area"]', "auth");
+    await settle(f);
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    const fromTmpl = api.calls.find(
+      (c) => c.route === "POST /api/tasks/from-template",
+    );
+    expect(fromTmpl).toMatchObject({
+      route: "POST /api/tasks/from-template",
+      body: {
+        repo: "sidthe/grain",
+        template: "bugfix",
+        fields: { area: "auth" },
+        approved: true,
+      },
+    });
+  });
+
+  it("supports attachments, capabilities/grants, reads/writes, network, sandbox shape, backend, and custom fields", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+
+    type('[data-testid="nt-title"]', "Full 22-field parity check");
+    type('[data-testid="nt-cf-component"]', "scheduler");
+
+    // Upload a file attachment via hidden file input.
+    const fileInput = q<HTMLInputElement>(
+      '[data-testid="nt-attachments-input"]',
+    )!;
+    const file = new File(["repro log"], "repro.txt", { type: "text/plain" });
+    Object.defineProperty(fileInput, "files", { value: [file] });
+    fileInput.dispatchEvent(new Event("change"));
+    await settle(f);
+    expect(q('[data-testid="staged-att-0"]')?.textContent).toContain(
+      "repro.txt",
+    );
+
+    // Expand Capabilities & repo context section and toggle capability + read repo.
+    q<HTMLButtonElement>('[data-testid="caps-options"]')!.click();
+    await f.whenStable();
+    q<HTMLButtonElement>('[data-testid="nt-grants-cap-self-debug"]')!.click();
+    await pickPill(f, "nt-reads", "acme/web");
+
+    // Expand More options and set sandbox shape, network, backend, noPort.
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await f.whenStable();
+    expect(
+      q('[data-testid="new-task-sheet"]')!.querySelectorAll("select"),
+    ).toHaveLength(0);
+    q<HTMLButtonElement>('[data-testid="nt-tier-medium"]')!.click();
+    await pickPill(f, "nt-network", "none");
+    await pickPill(f, "nt-backend", "agy-ambient");
+    const noPort = q<HTMLInputElement>('[data-testid="nt-no-port"]')!;
+    noPort.checked = true;
+    noPort.dispatchEvent(new Event("change"));
+
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      title: "Full 22-field parity check",
+      customFields: { component: "scheduler" },
+      capabilities: ["self-debug"],
+      reads: ["acme/web"],
+      sandboxCpus: 4,
+      sandboxMemoryMb: 8192,
+      sandboxDiskGb: 32,
+      networkAccess: "none",
+      agentBackendId: "agy-ambient",
+      noPort: true,
+      attachments: [
+        {
+          filename: "repro.txt",
+          contentType: "text/plain",
+          content: btoa("repro log"),
+        },
+      ],
     });
   });
 
@@ -215,7 +379,6 @@ describe("NewTaskSheetComponent", () => {
     const f = await render(api);
     await open(f);
     type('[data-testid="nt-title"]', "x");
-    // From a switch, not a text field: anywhere in the sheet counts.
     const sw = q<HTMLButtonElement>('[data-testid="front-switch"]')!;
     sw.focus();
     sw.dispatchEvent(
@@ -227,7 +390,9 @@ describe("NewTaskSheetComponent", () => {
       }),
     );
     await settle(f);
-    expect(api.calls).toHaveLength(1);
+    expect(api.calls.filter((c) => c.route === "POST /api/tasks")).toHaveLength(
+      1,
+    );
     expect(q('[data-testid="new-task-error"]')?.textContent).toContain(
       "repo not allowed",
     );
@@ -307,7 +472,6 @@ describe("NewTaskSheetComponent", () => {
     type('[data-testid="nt-title"]', "typed early");
     release();
     await settle(f);
-    // The config's approvedByDefault does not undo the person's click.
     expect(
       q('[data-testid="approved-switch"]')!.getAttribute("aria-checked"),
     ).toBe(chosen);
@@ -331,7 +495,7 @@ describe("NewTaskSheetComponent", () => {
 
   it("explains why filing is not allowed for this role", async () => {
     const api = new FakeApi();
-    (api.cfg as Record<string, unknown>)["access"] = {
+    api.cfg["access"] = {
       full: false,
       role: "viewer",
       roles: ["viewer"],

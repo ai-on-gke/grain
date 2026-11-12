@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { NgTemplateOutlet } from "@angular/common";
+import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
+  NgZone,
   type OnDestroy,
+  ViewEncapsulation,
   computed,
   effect,
   inject,
@@ -26,28 +28,46 @@ import {
   signal,
   untracked,
   viewChild,
-  ViewEncapsulation,
 } from "@angular/core";
 import { Router, RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
-import type { Attempt, Comment } from "../api/models";
+import type {
+  Attempt,
+  CapabilityOption,
+  Comment,
+  GrainConfig,
+} from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
-import { AccessService } from "../services/access.service";
-import { SnackbarService } from "../services/snackbar.service";
 import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
-import { authorOf, isHuman } from "../sessions/session-view";
+import { AccessService } from "../services/access.service";
+import { SnackbarService } from "../services/snackbar.service";
+import { isHuman } from "../sessions/session-view";
+import { ActorChipComponent } from "../shared/actor-chip.component";
+import {
+  AttachmentListComponent,
+  AttachmentPickerComponent,
+  filesFromTransfer,
+  readFilesAsUploads,
+} from "../shared/attachments";
+import { ciChip } from "../shared/chips";
 import { MarkdownDirective } from "../shared/code-highlight";
 import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import { submitBlock } from "../shared/gates";
+import {
+  type GrantAttachEvent,
+  GrantsPickerComponent,
+} from "../shared/grants-picker.component";
 import { PriorityChipComponent } from "../shared/priority-chip.component";
 import { TipDirective } from "../shared/tip.directive";
-import { ciChip } from "../shared/chips";
-import { submitBlock } from "../shared/gates";
 import { ago, levelOf, priorityOf, stateLabel } from "../tasks/task-view";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
+import { TaskChangesTabComponent } from "./task-changes-tab.component";
+import { TaskEditPanelComponent } from "./task-edit-panel.component";
+import { TaskGatesBarComponent } from "./task-gates-bar.component";
 import { TaskStore } from "./task.store";
 
 export type TaskTab = "conversation" | "runs" | "changes" | "tree" | "details";
@@ -83,12 +103,10 @@ export function duration(from?: string, to?: string): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-// TaskDetailComponent is the body of the task page (spec D-24): the
-// actions its state allows, Conversation, Runs, Changes and CI and Work
-// tree tabs, and Details beside them on a wide screen (a tab on narrower
-// ones). The full page (/next/task/:id?tab=runs) and the Tasks pane
-// (/next/tasks?task=:id&pane=runs) both render it; the pane keeps its
-// tab in ?pane= so the list's ?tab= is left alone.
+// TaskDetailComponent is the body of the task page (spec D-24): inline
+// approval/secret/config/script gates, Conversation, Runs, Changes and CI,
+// Workstream, and Details, shared across /task/:id, Tasks split pane, and
+// Workstreams detail right pane with zero Classic UI links.
 @Component({
   selector: "g-task-detail",
   imports: [
@@ -98,6 +116,13 @@ export function duration(from?: string, to?: string): string {
     ConfirmDialogComponent,
     MarkdownDirective,
     PriorityChipComponent,
+    ActorChipComponent,
+    AttachmentListComponent,
+    AttachmentPickerComponent,
+    GrantsPickerComponent,
+    TaskGatesBarComponent,
+    TaskChangesTabComponent,
+    TaskEditPanelComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
@@ -108,6 +133,9 @@ export function duration(from?: string, to?: string): string {
     "../shared/code-highlight.css",
     "../shared/pill-select.css",
   ],
+  host: {
+    "(document:click)": "onDocClick($event)",
+  },
   template: `
     <section
       class="view-panel is-active task-page"
@@ -145,6 +173,11 @@ export function duration(from?: string, to?: string): string {
             <span [class]="'status-pill ' + tone()" data-testid="task-state">{{
               label(t.state)
             }}</span>
+            @if (t.paused) {
+              <span class="status-pill proposal" data-testid="task-paused-pill"
+                >Paused</span
+              >
+            }
             <span class="muted">{{ t.repo || "No repository" }}</span>
             @if (t.owner) {
               <span class="muted">· owned by {{ t.owner }}</span>
@@ -209,7 +242,7 @@ export function duration(from?: string, to?: string): string {
           <div class="task-actions" role="group" aria-label="Task actions">
             @if (
               (t.state === "proposed" ||
-                (t.state === "deferred" && !$any(t).approved)) &&
+                (t.state === "deferred" && !t.approved)) &&
               can("POST /api/tasks/{id}/approve")
             ) {
               <button
@@ -278,6 +311,51 @@ export function duration(from?: string, to?: string): string {
                 Submit
               </button>
             }
+            @if (
+              t.paused &&
+              t.state !== "closed" &&
+              can("POST /api/tasks/{id}/resume")
+            ) {
+              <button
+                type="button"
+                class="btn-tonal"
+                data-testid="act-resume-pause"
+                [disabled]="store.isBusy('resume', t.id)"
+                (click)="resumePaused()"
+              >
+                Resume
+              </button>
+            } @else if (
+              !t.paused &&
+              t.state !== "closed" &&
+              can("POST /api/tasks/{id}/pause")
+            ) {
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="act-pause"
+                [disabled]="store.isBusy('pause', t.id)"
+                (click)="pause(false)"
+              >
+                Pause
+              </button>
+            }
+            @if (
+              t.state !== "running" &&
+              t.state !== "closed" &&
+              can("POST /api/tasks/{id}/run-now")
+            ) {
+              <button
+                type="button"
+                class="btn-tonal"
+                data-testid="act-run-now"
+                gTip="Dispatch ahead of the queue on the next cycle"
+                [disabled]="store.isBusy('run-now', t.id)"
+                (click)="runNow()"
+              >
+                Run now
+              </button>
+            }
             @if (pane() && priorityEditable()) {
               <g-priority-chip
                 [priority]="prio(t)"
@@ -287,6 +365,17 @@ export function duration(from?: string, to?: string): string {
                 menuTestid="pane-priority-menu"
                 (priorityChange)="setDirectPriority($event)"
               />
+            }
+            @if (can("PATCH /api/tasks/{id}")) {
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="act-edit"
+                [attr.aria-expanded]="editOpen()"
+                (click)="editOpen.set(!editOpen())"
+              >
+                {{ editOpen() ? "Close edit" : "Edit" }}
+              </button>
             }
             @if (
               (t.state === "proposed" || t.state === "queued") &&
@@ -303,7 +392,7 @@ export function duration(from?: string, to?: string): string {
             }
             @if (
               (t.state === "queued" ||
-                (t.state === "deferred" && $any(t).approved)) &&
+                (t.state === "deferred" && t.approved)) &&
               can("POST /api/tasks/{id}/withdraw-approval")
             ) {
               <button
@@ -395,12 +484,89 @@ export function duration(from?: string, to?: string): string {
                 </button>
               }
             }
-            <a
-              class="btn-text"
-              [href]="'/tasks/' + t.id"
-              gTip="This task in the classic UI"
-              >Classic</a
-            >
+
+            <!-- Overflow Lifecycle Menu (Rollover, Compact, Recreate Sandbox, Immediate Pause) -->
+            @if (hasOverflowActions()) {
+              <span #moreWrap class="task-more-wrap">
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="act-more"
+                  aria-haspopup="menu"
+                  [attr.aria-expanded]="moreMenuOpen()"
+                  (click)="toggleMoreMenu($event)"
+                >
+                  More ▾
+                </button>
+                @if (moreMenuOpen()) {
+                  <ul
+                    class="pop-menu align-left"
+                    role="menu"
+                    aria-label="More lifecycle actions"
+                    data-testid="act-more-menu"
+                  >
+                    @if (
+                      t.state === "running" &&
+                      !t.paused &&
+                      can("POST /api/tasks/{id}/pause")
+                    ) {
+                      <li>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="act-pause-immediate"
+                          (click)="pause(true)"
+                        >
+                          Pause immediately
+                        </button>
+                      </li>
+                    }
+                    @if (
+                      t.state !== "closed" &&
+                      can("POST /api/tasks/{id}/compact")
+                    ) {
+                      <li>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="act-compact-open"
+                          (click)="openCompact()"
+                        >
+                          Compact context…
+                        </button>
+                      </li>
+                    }
+                    @if (
+                      t.state !== "closed" &&
+                      can("POST /api/tasks/{id}/rollover")
+                    ) {
+                      <li>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="act-rollover"
+                          (click)="rollover()"
+                        >
+                          Rollover session
+                        </button>
+                      </li>
+                    }
+                    @if (can("POST /api/tasks/{id}/sandbox/recreate")) {
+                      <li>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="act-recreate-sandbox"
+                          (click)="recreateSandbox()"
+                        >
+                          Recreate sandbox
+                        </button>
+                      </li>
+                    }
+                  </ul>
+                }
+              </span>
+            }
           </div>
         </header>
 
@@ -419,6 +585,61 @@ export function duration(from?: string, to?: string): string {
               Dismiss
             </button>
           </p>
+        }
+
+        <!-- Inline Pending Approval / Gate Panels -->
+        <g-task-gates-bar
+          [task]="t"
+          (acted)="acted.emit()"
+          (replyInWordsChange)="onReplyInWords($event)"
+        />
+
+        <!-- Deferred Inline Task Editor (PATCH /api/tasks/{id}, Brief, Goal) -->
+        @defer (when editOpen()) {
+          @if (editOpen()) {
+            <g-task-edit-panel
+              [task]="t"
+              (acted)="acted.emit()"
+              (closed)="editOpen.set(false)"
+            />
+          }
+        }
+
+        <!-- Inline Compact Context Box -->
+        @if (compactOpen()) {
+          <section class="compact-card" data-testid="compact-card">
+            <h2 class="section-title">Compact context for #{{ t.id }}</h2>
+            <p class="muted" style="margin: 0; font-size: 12px">
+              Provide a handover note to compact immediately, or leave empty to
+              ask the next run to compact first.
+            </p>
+            <textarea
+              class="reply-textarea"
+              rows="3"
+              data-testid="compact-handover-input"
+              placeholder="Optional handover summary…"
+              [value]="compactHandover()"
+              (input)="compactHandover.set(val($event))"
+            ></textarea>
+            <div class="task-actions" style="margin-top: 4px">
+              <button
+                type="button"
+                class="btn-primary"
+                data-testid="compact-submit"
+                [disabled]="store.isBusy('compact', t.id)"
+                (click)="submitCompact()"
+              >
+                Compact context
+              </button>
+              <button
+                type="button"
+                class="btn-text"
+                (click)="compactOpen.set(false)"
+              >
+                Cancel
+              </button>
+            </div>
+          </section>
         }
 
         <div class="task-layout">
@@ -453,17 +674,33 @@ export function duration(from?: string, to?: string): string {
               @switch (current()) {
                 @case ("conversation") {
                   <h2 class="sr-only">Conversation</h2>
-                  @if (parked(); as what) {
-                    <div class="banner park-card" data-testid="park">
-                      This task is waiting for {{ what }}. Grant or set it on
-                      the <a [href]="'/tasks/' + t.id">classic task page</a>; a
-                      credential must never go into the conversation.
-                    </div>
-                  }
                   @if (t.questionSummary && t.state === "awaiting_reply") {
                     <div class="question-card" data-testid="question">
                       <strong>Asked:</strong> {{ t.questionSummary }}
                     </div>
+                  }
+                  @if (t.attachments?.length) {
+                    <g-attachment-list
+                      [taskId]="t.id"
+                      [repo]="t.repo"
+                      [attachments]="t.attachments"
+                    />
+                  }
+                  @if ((t.olderComments ?? 0) > 0) {
+                    <button
+                      type="button"
+                      class="btn-outlined"
+                      style="align-self: flex-start"
+                      data-testid="load-older-comments"
+                      [disabled]="store.isBusy('older-comments', t.id)"
+                      (click)="store.loadOlderComments()"
+                    >
+                      {{
+                        store.isBusy("older-comments", t.id)
+                          ? "Loading earlier comments…"
+                          : "Load earlier comments (" + t.olderComments + ")"
+                      }}
+                    </button>
                   }
                   <div
                     class="chat-log task-log"
@@ -479,7 +716,13 @@ export function duration(from?: string, to?: string): string {
                         [attr.data-testid]="'tmsg-' + c.id"
                       >
                         <span class="msg-meta">
-                          <span class="msg-author">{{ author(c) }}</span>
+                          <span class="msg-author">
+                            <g-actor-chip
+                              [label]="actorLabel(c)"
+                              [kind]="c.authorKind"
+                              [behalf]="c.onBehalfOfLabel || c.onBehalfOf"
+                            />
+                          </span>
                           @if (c.id === t.questionCommentId) {
                             <span class="status-pill reply">Question</span>
                           }
@@ -493,6 +736,13 @@ export function duration(from?: string, to?: string): string {
                           }}</time>
                         </span>
                         <div class="msg-body" [gMarkdown]="c.body"></div>
+                        @if (c.attachments?.length) {
+                          <g-attachment-list
+                            [taskId]="t.id"
+                            [repo]="t.repo"
+                            [attachments]="c.attachments"
+                          />
+                        }
                       </article>
                     } @empty {
                       <p class="empty-state">No comments yet.</p>
@@ -501,10 +751,15 @@ export function duration(from?: string, to?: string): string {
                   @if (
                     can("POST /api/tasks/{id}/comments") &&
                     t.state !== "closed" &&
-                    !parked() &&
+                    (!parked() || allowWordsOnParked()) &&
                     !isStopped()
                   ) {
-                    <form class="chat-composer" (submit)="send($event)">
+                    <form
+                      class="chat-composer"
+                      (submit)="send($event)"
+                      (dragover)="$event.preventDefault()"
+                      (drop)="onComposerDrop($event)"
+                    >
                       <textarea
                         #composer
                         class="reply-textarea"
@@ -522,9 +777,16 @@ export function duration(from?: string, to?: string): string {
                         "
                         [value]="store.draft()"
                         (input)="onDraft(val($event))"
+                        (paste)="onComposerPaste($event)"
                         (keydown.control.enter)="onEnter($event)"
                         (keydown.meta.enter)="onEnter($event)"
                       ></textarea>
+                      <g-attachment-picker
+                        testid="task-attach"
+                        [staged]="store.stagedAttachments()"
+                        [disabled]="store.isBusy('send', t.id)"
+                        (stagedChange)="store.stagedAttachments.set($event)"
+                      />
                       @if (replyBlocked(); as why) {
                         <p
                           class="muted dock-note"
@@ -536,14 +798,15 @@ export function duration(from?: string, to?: string): string {
                       }
                       <div class="composer-actions">
                         <span class="muted composer-hint"
-                          >Ctrl+Enter sends</span
+                          >Ctrl+Enter sends · paste or drop files</span
                         >
                         <button
                           type="submit"
                           class="btn-primary"
                           data-testid="task-send"
                           [disabled]="
-                            !store.draft().trim() ||
+                            (!store.draft().trim() &&
+                              store.stagedAttachments().length === 0) ||
                             store.isBusy('send', t.id) ||
                             !!replyBlocked()
                           "
@@ -578,7 +841,7 @@ export function duration(from?: string, to?: string): string {
                           <th scope="col">Duration</th>
                           <th scope="col">Prompt</th>
                           <th scope="col">
-                            <span class="sr-only">Transcript</span>
+                            <span class="sr-only">Transcript &amp; Audit</span>
                           </th>
                         </tr>
                       </thead>
@@ -607,25 +870,110 @@ export function duration(from?: string, to?: string): string {
                             </td>
                             <td class="tabular">{{ tokens(a) }}</td>
                             <td>
-                              <button
-                                type="button"
-                                class="btn-text"
-                                [attr.data-testid]="'transcript-' + a.number"
-                                [attr.aria-label]="
-                                  'Transcript of run ' + a.number
-                                "
-                                [attr.aria-pressed]="
-                                  store.transcriptFor() === a.number
-                                "
-                                (click)="showTranscript(a)"
+                              <div
+                                style="display: flex; gap: 4px; flex-wrap: wrap"
                               >
-                                Transcript
-                              </button>
+                                <button
+                                  type="button"
+                                  class="btn-text"
+                                  [attr.data-testid]="'transcript-' + a.number"
+                                  [attr.aria-label]="
+                                    'Transcript of run ' + a.number
+                                  "
+                                  [attr.aria-pressed]="
+                                    store.transcriptFor() === a.number
+                                  "
+                                  (click)="showTranscript(a)"
+                                >
+                                  Transcript
+                                </button>
+                                @if (
+                                  can(
+                                    "GET /api/tasks/{id}/attempts/{number}/capability-audit"
+                                  )
+                                ) {
+                                  <button
+                                    type="button"
+                                    class="btn-text"
+                                    [attr.data-testid]="'audit-' + a.number"
+                                    [attr.aria-pressed]="
+                                      store.auditFor() === a.number
+                                    "
+                                    (click)="
+                                      store.loadCapabilityAudit(a.number)
+                                    "
+                                  >
+                                    Audit{{
+                                      a.capabilityAuditCount
+                                        ? " (" + a.capabilityAuditCount + ")"
+                                        : ""
+                                    }}
+                                  </button>
+                                }
+                              </div>
                             </td>
                           </tr>
                         }
                       </tbody>
                     </table>
+
+                    @if ((t.olderAttempts ?? 0) > 0) {
+                      <button
+                        type="button"
+                        class="btn-outlined"
+                        style="align-self: flex-start"
+                        data-testid="load-older-attempts"
+                        [disabled]="store.isBusy('older-attempts', t.id)"
+                        (click)="store.loadOlderAttempts()"
+                      >
+                        {{
+                          store.isBusy("older-attempts", t.id)
+                            ? "Loading earlier runs…"
+                            : "Load earlier runs (" + t.olderAttempts + ")"
+                        }}
+                      </button>
+                    }
+
+                    @if (store.auditFor(); as auditNum) {
+                      <section
+                        class="transcript"
+                        data-testid="capability-audit"
+                        aria-label="Capability audit log"
+                      >
+                        <h3 class="section-title">
+                          Run {{ auditNum }} capability audit
+                        </h3>
+                        @if (store.auditError(); as err) {
+                          <p class="banner banner-error" role="alert">
+                            {{ err }}
+                          </p>
+                        } @else if (store.auditRecords() === null) {
+                          <p class="muted">Loading audit…</p>
+                        } @else if (store.auditRecords()!.length === 0) {
+                          <p class="muted">
+                            No capability audit entries recorded for run
+                            {{ auditNum }}.
+                          </p>
+                        } @else {
+                          <ul class="plain-list">
+                            @for (rec of store.auditRecords(); track $index) {
+                              <li>
+                                <code class="mono">{{ rec.grant }}</code>
+                                @if (rec.note) {
+                                  <span> — {{ rec.note }}</span>
+                                }
+                                @if (rec.record) {
+                                  <pre class="transcript-text">{{
+                                    formatAuditRecord(rec.record)
+                                  }}</pre>
+                                }
+                              </li>
+                            }
+                          </ul>
+                        }
+                      </section>
+                    }
+
                     @if (store.transcriptFor(); as n) {
                       <section
                         class="transcript"
@@ -662,40 +1010,12 @@ export function duration(from?: string, to?: string): string {
 
                 @case ("changes") {
                   <h2 class="sr-only">Changes and CI</h2>
-                  <dl class="facts" data-testid="changes">
-                    <dt>Branch</dt>
-                    <dd class="mono">{{ t.branch || "—" }}</dd>
-                    <dt>Pull request</dt>
-                    <dd>
-                      @if (prUrl(); as url) {
-                        <a
-                          [href]="url"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          >{{ prLabel() }}</a
-                        >
-                      } @else {
-                        None yet
-                      }
-                    </dd>
-                    <dt>Merge</dt>
-                    <dd>
-                      {{
-                        t.autoMerge
-                          ? "Merges on its own once CI and review pass"
-                          : "Waits for someone to submit it"
-                      }}
-                    </dd>
-                    @if (t.mergeQueueState) {
-                      <dt>Merge queue</dt>
-                      <dd>{{ t.mergeQueueState }}</dd>
-                    }
-                  </dl>
-                  <p class="muted">
-                    The diff and CI checks are on the
-                    <a [href]="'/tasks/' + t.id">classic task page</a> until the
-                    CI milestone brings them here.
-                  </p>
+                  <g-task-changes-tab
+                    [task]="t"
+                    [prUrl]="prUrl()"
+                    [prLabel]="prLabel()"
+                    (acted)="acted.emit()"
+                  />
                 }
 
                 @case ("tree") {
@@ -736,9 +1056,10 @@ export function duration(from?: string, to?: string): string {
                   } @else {
                     <p class="muted">Loading…</p>
                   }
+
+                  <h2 class="section-title">Waits on</h2>
                   @if (t.dependsOn?.length) {
-                    <h2 class="section-title">Waits on</h2>
-                    <ul class="plain-list">
+                    <ul class="plain-list" data-testid="depends-on-list">
                       @for (d of t.dependsOn; track d) {
                         <li>
                           <a
@@ -747,14 +1068,55 @@ export function duration(from?: string, to?: string): string {
                             [queryParamsHandling]="pane() ? 'merge' : ''"
                             >#{{ d }}</a
                           >
+                          @if (can("POST /api/tasks/{id}/depends-on")) {
+                            <button
+                              type="button"
+                              class="btn-text"
+                              [attr.data-testid]="'dep-remove-' + d"
+                              [attr.aria-label]="'Remove dependency on #' + d"
+                              (click)="setDependency(d, false)"
+                            >
+                              ×
+                            </button>
+                          }
                         </li>
                       }
                     </ul>
+                  } @else {
+                    <p class="muted" style="margin: 0; font-size: 13px">
+                      No task dependencies.
+                    </p>
                   }
+                  @if (can("POST /api/tasks/{id}/depends-on")) {
+                    <div class="dep-edit-row">
+                      <input
+                        type="text"
+                        class="dep-id-input"
+                        data-testid="dep-add-input"
+                        placeholder="Task #ID"
+                        aria-label="Task ID this waits on"
+                        [value]="newDepId()"
+                        (input)="newDepId.set(val($event))"
+                      />
+                      <button
+                        type="button"
+                        class="btn-tonal"
+                        data-testid="dep-add-btn"
+                        [disabled]="
+                          !newDepId().trim() || store.isBusy('depends-on', t.id)
+                        "
+                        (click)="addDependencyFromInput()"
+                      >
+                        Add dependency
+                      </button>
+                    </div>
+                  }
+
                   @if (can("POST /api/tasks")) {
                     <button
                       type="button"
                       class="btn-outlined"
+                      style="align-self: flex-start"
                       data-testid="tree-follow-up"
                       (click)="followUp()"
                     >
@@ -785,6 +1147,13 @@ export function duration(from?: string, to?: string): string {
                 [gMarkdown]="t.description"
               ></div>
             }
+            @if (t.attachments?.length) {
+              <g-attachment-list
+                [taskId]="t.id"
+                [repo]="t.repo"
+                [attachments]="t.attachments"
+              />
+            }
             <dl class="facts">
               <dt>Priority</dt>
               <dd>
@@ -799,20 +1168,36 @@ export function duration(from?: string, to?: string): string {
               </dd>
               <dt>Repository</dt>
               <dd>{{ t.repo || "None" }}</dd>
+              @if (t.base) {
+                <dt>Base</dt>
+                <dd class="mono">{{ t.base }}</dd>
+              }
               <dt>Model</dt>
-              <dd>{{ $any(t).model || "Deployment default" }}</dd>
+              <dd>{{ t.model || "Deployment default" }}</dd>
+              @if (t.agentBackendId) {
+                <dt>Connection</dt>
+                <dd class="mono">{{ t.agentBackendId }}</dd>
+              }
+              @if (t.networkAccess) {
+                <dt>Network</dt>
+                <dd>{{ t.networkAccess }}</dd>
+              }
               <dt>Filed</dt>
               <dd>
                 {{ ago(t.createdAt) }} ago by
                 {{ t.authorLabel || t.author || "unknown" }}
               </dd>
-              @if ($any(t).approvedByLabel) {
+              @if (t.approvedByLabel) {
                 <dt>Approved by</dt>
-                <dd>{{ $any(t).approvedByLabel }}</dd>
+                <dd>{{ t.approvedByLabel }}</dd>
               }
               @if (t.admission && t.admission !== "standard") {
                 <dt>Admission</dt>
                 <dd>{{ t.admission }} (starts past worker limits)</dd>
+              }
+              @if (t.goal; as g) {
+                <dt>Goal</dt>
+                <dd>{{ g.kind }}</dd>
               }
               <dt>Capabilities</dt>
               <dd>{{ capCount() }}</dd>
@@ -821,6 +1206,71 @@ export function duration(from?: string, to?: string): string {
                 <dd>{{ t.closedReason }}</dd>
               }
             </dl>
+
+            <!-- Capabilities & Grants Editor -->
+            @if (can("POST /api/tasks/{id}/capabilities")) {
+              <h3 class="section-subtitle">Manage capabilities &amp; grants</h3>
+              <g-grants-picker
+                testid="task-grants"
+                [offered]="offeredCapabilities()"
+                [held]="t.capabilities ?? []"
+                [repo]="t.repo"
+                [disabled]="store.isBusy('capability', t.id)"
+                (attachGrant)="onAttachCapability($event)"
+                (detachGrant)="onDetachCapability($event)"
+              />
+            }
+
+            <!-- Dependencies Quick Editor in Details -->
+            @if (can("POST /api/tasks/{id}/depends-on")) {
+              <h3 class="section-subtitle">Dependencies</h3>
+              @if (t.dependsOn?.length) {
+                <div style="display: flex; flex-wrap: wrap; gap: 6px">
+                  @for (d of t.dependsOn; track d) {
+                    <span class="status-pill neutral">
+                      <a
+                        [routerLink]="linkTo(d)"
+                        [queryParams]="linkQuery(d)"
+                        [queryParamsHandling]="pane() ? 'merge' : ''"
+                        >#{{ d }}</a
+                      >
+                      <button
+                        type="button"
+                        class="btn-text"
+                        style="padding: 0 4px; min-height: auto"
+                        [attr.aria-label]="'Remove dependency #' + d"
+                        (click)="setDependency(d, false)"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  }
+                </div>
+              }
+              <div class="dep-edit-row">
+                <input
+                  type="text"
+                  class="dep-id-input"
+                  data-testid="details-dep-input"
+                  placeholder="Add task #ID"
+                  aria-label="Add dependency task ID"
+                  [value]="newDepId()"
+                  (input)="newDepId.set(val($event))"
+                />
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="details-dep-add"
+                  [disabled]="
+                    !newDepId().trim() || store.isBusy('depends-on', t.id)
+                  "
+                  (click)="addDependencyFromInput()"
+                >
+                  Add
+                </button>
+              </div>
+            }
+
             @if (transitions().length) {
               <h3 class="section-subtitle">History</h3>
               <ol class="history">
@@ -887,6 +1337,8 @@ export class TaskDetailComponent implements OnDestroy {
   private readonly snackbar = inject(SnackbarService);
   private readonly create = inject(CreateTaskService);
   private readonly router = inject(Router);
+  private readonly doc = inject(DOCUMENT);
+  private readonly zone = inject(NgZone);
 
   readonly id = input.required<string>();
   readonly tab = input<string>();
@@ -907,24 +1359,41 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly dur = duration;
   protected readonly prio = priorityOf;
   protected readonly level = levelOf;
-  protected readonly author = authorOf;
   protected readonly human = isHuman;
+
   protected readonly confirmClose = signal(false);
   protected readonly closePr = signal(false);
   protected readonly confirming = signal<ConfirmRequest | null>(null);
+  protected readonly editOpen = signal(false);
+  protected readonly moreMenuOpen = signal(false);
+  protected readonly compactOpen = signal(false);
+  protected readonly compactHandover = signal("");
+  protected readonly allowWordsOnParked = signal(false);
+  protected readonly newDepId = signal("");
+  protected readonly offeredCapabilities = signal<CapabilityOption[]>([]);
+
   protected readonly replyTarget = signal<{
     taskId: string;
     questionCommentId?: number;
     reply: boolean;
   } | null>(null);
+
   private readonly heading = viewChild<ElementRef<HTMLElement>>("heading");
   private readonly closeYes =
     viewChild<ElementRef<HTMLButtonElement>>("closeYes");
   private readonly closeBtn =
     viewChild<ElementRef<HTMLButtonElement>>("closeBtn");
-
   private readonly composer =
     viewChild<ElementRef<HTMLTextAreaElement>>("composer");
+  private readonly moreWrap = viewChild<ElementRef<HTMLElement>>("moreWrap");
+
+  private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
+    if (ev.key === "Escape" && this.moreMenuOpen()) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.zone.run(() => this.closeMoreMenu());
+    }
+  };
 
   protected readonly t = computed(() => this.store.detail());
   protected readonly partOfStream = computed(() => {
@@ -933,8 +1402,6 @@ export class TaskDetailComponent implements OnDestroy {
   });
   protected readonly current = computed<TaskTab>(() => {
     const v = this.tab();
-    // Details sits beside the tabs on a wide screen; its tab there would
-    // show it twice.
     if (
       v === "details" &&
       !this.pane() &&
@@ -945,14 +1412,13 @@ export class TaskDetailComponent implements OnDestroy {
     }
     return isTab(v) ? v : "conversation";
   });
-  // What a parked task waits for, if it is a grant rather than a reply:
-  // those are never answered with a comment.
+  // What a parked task waits for, if it is a grant rather than a reply.
   protected readonly parked = computed(() => {
-    const t = this.t() as (Record<string, unknown> & { state?: string }) | null;
+    const t = this.t();
     if (!t || t.state !== "awaiting_reply") return "";
-    if (t["pendingSecret"]) return "a secret";
-    if (t["pendingAccess"]) return "an access grant";
-    if (t["pendingConfigChange"]) return "a configuration change";
+    if (t.pendingSecret) return "a secret";
+    if (t.pendingAccess) return "an access grant";
+    if (t.pendingConfigChange) return "a configuration change";
     return "";
   });
   protected readonly isStopped = computed(() => {
@@ -962,6 +1428,19 @@ export class TaskDetailComponent implements OnDestroy {
       (!!t.turnStopped || t.reason?.reason === "awaiting_reply/stopped")
     );
   });
+  protected readonly hasOverflowActions = computed(() => {
+    const t = this.t();
+    if (!t) return false;
+    return (
+      (t.state !== "closed" &&
+        (this.can("POST /api/tasks/{id}/compact") ||
+          this.can("POST /api/tasks/{id}/rollover"))) ||
+      this.can("POST /api/tasks/{id}/sandbox/recreate") ||
+      (t.state === "running" &&
+        !t.paused &&
+        this.can("POST /api/tasks/{id}/pause"))
+    );
+  });
   protected readonly replyBlocked = computed(() => {
     const tgt = this.replyTarget();
     const t = this.t();
@@ -969,7 +1448,9 @@ export class TaskDetailComponent implements OnDestroy {
     if (!t || t.id !== tgt.taskId) {
       return `Switched away from #${tgt.taskId}; this message will not be sent.`;
     }
-    if (tgt.reply) return replyRefusal(t, tgt.taskId, tgt.questionCommentId);
+    if (tgt.reply && !(t.pendingSecret && this.allowWordsOnParked())) {
+      return replyRefusal(t, tgt.taskId, tgt.questionCommentId);
+    }
     if (
       t.state === "closed" ||
       !!t.turnStopped ||
@@ -979,8 +1460,6 @@ export class TaskDetailComponent implements OnDestroy {
     }
     return "";
   });
-  // Details is a tab only where it is not beside the tabs (CSS hides the
-  // aside below 1080px); the tab is always reachable by URL.
   protected readonly visibleTabs = computed(() => TABS);
   protected readonly comments = computed<Comment[]>(
     () => this.t()?.comments ?? [],
@@ -1010,9 +1489,7 @@ export class TaskDetailComponent implements OnDestroy {
       ["proposed", "queued", "deferred"].includes(this.t()?.state ?? ""),
   );
   protected readonly capCount = computed(() => {
-    const n = (
-      (this.t() as { capabilities?: unknown[] } | null)?.capabilities ?? []
-    ).length;
+    const n = (this.t()?.capabilities ?? []).length;
     return n ? `${n} granted` : "None beyond the defaults";
   });
   protected readonly tone = computed(() => {
@@ -1036,7 +1513,6 @@ export class TaskDetailComponent implements OnDestroy {
         ? "Closing leaves its pull request behind. This cannot be undone."
         : "Close this task?",
   );
-  // The pull request is "owner/repo#N" (pkg/ui Task.PullRequest).
   protected readonly prUrl = computed(() => {
     const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(
       String(this.t()?.pullRequest ?? ""),
@@ -1050,11 +1526,26 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     return t ? ciChip(t) : null;
   });
-  // submitOff is why Submit is off (failing or unreported CI), or "".
   protected readonly submitOff = computed(() => {
     const t = this.t();
     return t ? submitBlock(t) : "";
   });
+
+  protected actorLabel(c: Comment): string {
+    if (c.authorKind === "automation" && c.author === "console-session") {
+      return "Grain";
+    }
+    return c.authorLabel || c.author || "Unknown";
+  }
+
+  protected formatAuditRecord(raw: unknown): string {
+    if (typeof raw === "string") return raw;
+    try {
+      return JSON.stringify(raw, null, 2);
+    } catch {
+      return String(raw);
+    }
+  }
 
   protected tabQuery(tab: TaskTab): Record<string, string> {
     return { [this.pane() ? "pane" : "tab"]: tab };
@@ -1067,8 +1558,6 @@ export class TaskDetailComponent implements OnDestroy {
     }
   }
 
-  // Another task from the work tree or the dependency list: in the pane
-  // it is selected there; on the full page it opens as a page.
   protected linkTo(id: string): unknown[] {
     return this.pane() ? [] : ["/task", id];
   }
@@ -1087,11 +1576,15 @@ export class TaskDetailComponent implements OnDestroy {
       untracked(() => {
         this.confirmClose.set(false);
         this.confirming.set(null);
+        this.editOpen.set(false);
+        this.compactOpen.set(false);
+        this.moreMenuOpen.set(false);
+        this.allowWordsOnParked.set(false);
+        this.newDepId.set("");
         this.replyTarget.set(null);
         this.store.open(id);
       });
     });
-    // Ensure workstream context when inspecting a task that belongs to a tree.
     effect(() => {
       const t = this.t();
       const tree = this.store.tree();
@@ -1099,15 +1592,12 @@ export class TaskDetailComponent implements OnDestroy {
         untracked(() => this.wsStore.ensureLoaded(false));
       }
     });
-    // The work tree is read when its tab opens (or the task changes).
     effect(() => {
       if (this.current() === "tree") {
         this.id();
         untracked(() => void this.store.loadTree());
       }
     });
-    // Runs opens on the newest run's transcript; leaving Runs forgets it,
-    // and a live run's polling stops with one last read once it finishes.
     effect(() => {
       if (this.current() !== "runs") {
         untracked(() => this.store.resetTranscript());
@@ -1124,9 +1614,20 @@ export class TaskDetailComponent implements OnDestroy {
         if (a?.finishedAt && this.watchingLive) this.showTranscript(a);
       });
     });
+    void this.loadConfigCapabilities();
+  }
+
+  private async loadConfigCapabilities(): Promise<void> {
+    try {
+      const cfg = (await this.api.config()) as GrainConfig | null;
+      if (cfg?.capabilities) this.offeredCapabilities.set(cfg.capabilities);
+    } catch {
+      // Optional config read for capabilities list.
+    }
   }
 
   ngOnDestroy(): void {
+    this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
     this.store.close();
   }
 
@@ -1135,7 +1636,39 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected val(ev: Event): string {
-    return (ev.target as HTMLTextAreaElement).value;
+    return (ev.target as HTMLInputElement | HTMLTextAreaElement).value;
+  }
+
+  protected onReplyInWords(open: boolean): void {
+    this.allowWordsOnParked.set(open);
+    if (open) {
+      setTimeout(() => this.composer()?.nativeElement.focus());
+    }
+  }
+
+  protected toggleMoreMenu(ev: Event): void {
+    ev.stopPropagation();
+    if (this.moreMenuOpen()) {
+      this.closeMoreMenu();
+    } else {
+      this.moreMenuOpen.set(true);
+      this.zone.runOutsideAngular(() => {
+        this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
+      });
+    }
+  }
+
+  private closeMoreMenu(): void {
+    this.moreMenuOpen.set(false);
+    this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
+  }
+
+  protected onDocClick(ev: Event): void {
+    if (!this.moreMenuOpen()) return;
+    const target = ev.target as Node | null;
+    if (target && !this.moreWrap()?.nativeElement.contains(target)) {
+      this.closeMoreMenu();
+    }
   }
 
   protected outcomeTone(a: Attempt): string {
@@ -1146,7 +1679,7 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   protected tokens(a: Attempt): string {
-    const n = (a as Attempt & { promptTokens?: number }).promptTokens;
+    const n = a.promptTokens;
     return n ? `${n.toLocaleString()} tokens` : "—";
   }
 
@@ -1180,8 +1713,6 @@ export class TaskDetailComponent implements OnDestroy {
 
   // ---------- actions ----------
 
-  // After an action the button that was pressed may be gone with the old
-  // state, so focus goes to the heading; the snackbar announces the rest.
   private done(message: string): void {
     this.snackbar.show(message);
     this.acted.emit();
@@ -1224,6 +1755,190 @@ export class TaskDetailComponent implements OnDestroy {
       await this.store.act("stop", this.post("POST /api/tasks/{id}/stop"), id)
     ) {
       this.done(`Stopped #${id}; it waits for your reply`);
+    }
+  }
+
+  protected async pause(immediate: boolean): Promise<void> {
+    this.closeMoreMenu();
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
+    if (
+      await this.store.act(
+        "pause",
+        this.post("POST /api/tasks/{id}/pause", { immediate }),
+        id,
+      )
+    ) {
+      this.done(immediate ? `Paused #${id} immediately` : `Paused #${id}`);
+    }
+  }
+
+  protected async resumePaused(): Promise<void> {
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
+    if (
+      await this.store.act(
+        "resume",
+        this.post("POST /api/tasks/{id}/resume"),
+        id,
+      )
+    ) {
+      this.done(`Resumed #${id}`);
+    }
+  }
+
+  protected async runNow(): Promise<void> {
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
+    if (
+      await this.store.act(
+        "run-now",
+        this.post("POST /api/tasks/{id}/run-now", {}),
+        id,
+      )
+    ) {
+      this.done(`Queued #${id} to run next`);
+    }
+  }
+
+  protected openCompact(): void {
+    this.closeMoreMenu();
+    this.compactHandover.set("");
+    this.compactOpen.set(true);
+  }
+
+  protected async submitCompact(): Promise<void> {
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
+    const handover = this.compactHandover().trim();
+    if (
+      await this.store.act(
+        "compact",
+        this.post("POST /api/tasks/{id}/compact", {
+          ...(handover ? { handover } : {}),
+        }),
+        id,
+      )
+    ) {
+      this.compactOpen.set(false);
+      this.done(`Compacted context for #${id}`);
+    }
+  }
+
+  protected async rollover(): Promise<void> {
+    this.closeMoreMenu();
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
+    let nextId = "";
+    const ok = await this.store.act(
+      "rollover",
+      async (x) => {
+        const res = await this.api.post<{
+          successor?: string;
+          task?: { id?: string };
+          id?: string;
+        }>("POST /api/tasks/{id}/rollover", { id: x }, {});
+        nextId = res?.successor || res?.task?.id || res?.id || "";
+      },
+      id,
+    );
+    if (ok) {
+      this.done(
+        nextId ? `Rolled over #${id} to #${nextId}` : `Rolled over #${id}`,
+      );
+      if (nextId && !this.pane()) {
+        void this.router.navigate(["/task", nextId]);
+      }
+    }
+  }
+
+  protected async recreateSandbox(): Promise<void> {
+    this.closeMoreMenu();
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
+    if (
+      await this.store.act(
+        "recreate-sandbox",
+        this.post("POST /api/tasks/{id}/sandbox/recreate", {}),
+        id,
+      )
+    ) {
+      this.done(`Recreated warm sandbox for #${id}`);
+    }
+  }
+
+  protected async addDependencyFromInput(): Promise<void> {
+    const raw = this.newDepId().replace(/^#/, "").trim();
+    if (!raw) return;
+    await this.setDependency(raw, true);
+    this.newDepId.set("");
+  }
+
+  protected async setDependency(depId: string, attach: boolean): Promise<void> {
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const id = t.id;
+    const ok = await this.store.act(
+      "depends-on",
+      this.post("POST /api/tasks/{id}/depends-on", { id: depId, attach }),
+      id,
+    );
+    if (ok) {
+      this.acted.emit();
+      this.snackbar.show(
+        attach
+          ? `#${id} now waits on #${depId}`
+          : `Removed dependency #${depId}`,
+      );
+    }
+  }
+
+  protected async onAttachCapability(ev: GrantAttachEvent): Promise<void> {
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const body = ev.id
+      ? { id: ev.id, attach: true }
+      : ev.capability
+        ? {
+            capability: ev.capability,
+            ...(ev.with ? { with: ev.with } : {}),
+            attach: true,
+          }
+        : { grant: ev.grant || ev.recorded, attach: true };
+    const ok = await this.store.act(
+      "capability",
+      this.post("POST /api/tasks/{id}/capabilities", body),
+      t.id,
+    );
+    if (ok) {
+      this.acted.emit();
+      this.snackbar.show(`Granted ${ev.recorded} on #${t.id}`);
+    }
+  }
+
+  protected async onDetachCapability(ev: {
+    id?: string;
+    grant?: string;
+  }): Promise<void> {
+    const t = this.t();
+    if (!t || t.id !== this.id()) return;
+    const body = ev.id
+      ? { id: ev.id, attach: false }
+      : { grant: ev.grant, attach: false };
+    const ok = await this.store.act(
+      "capability",
+      this.post("POST /api/tasks/{id}/capabilities", body),
+      t.id,
+    );
+    if (ok) {
+      this.acted.emit();
+      this.snackbar.show(`Removed capability from #${t.id}`);
     }
   }
 
@@ -1346,8 +2061,6 @@ export class TaskDetailComponent implements OnDestroy {
     }
   }
 
-  // Closing queued, proposed or deferred work can be undone by reopening;
-  // anything further along asks first and offers no Undo.
   protected async close(confirmed: boolean): Promise<void> {
     const t = this.t();
     if (!t || t.id !== this.id()) return;
@@ -1356,7 +2069,6 @@ export class TaskDetailComponent implements OnDestroy {
     const reversible = ["queued", "proposed", "deferred"].includes(state);
     if (!reversible && !confirmed) {
       this.confirmClose.set(true);
-      // Focus moves onto the confirmation, which replaced the button.
       setTimeout(() => this.closeYes()?.nativeElement.focus());
       return;
     }
@@ -1424,18 +2136,23 @@ export class TaskDetailComponent implements OnDestroy {
     }
   }
 
-  // Follow up opens New task waiting on this one, on the same repository.
   protected followUp(): void {
     const t = this.t();
     if (!t) return;
     this.create.open({
       dependsOn: [t.id],
       ...(t.repo ? { repo: t.repo } : {}),
+      ...(t.base ? { base: t.base } : {}),
       title: `Follow up on #${t.id}: `,
     });
   }
 
   protected onDraft(value: string): void {
+    this.lockReplyTarget();
+    this.store.draft.set(value);
+  }
+
+  private lockReplyTarget(): void {
     if (!this.replyTarget()) {
       const t = this.t();
       if (t && t.id === this.id()) {
@@ -1446,7 +2163,38 @@ export class TaskDetailComponent implements OnDestroy {
         });
       }
     }
-    this.store.draft.set(value);
+  }
+
+  protected async onComposerPaste(ev: ClipboardEvent): Promise<void> {
+    const files = filesFromTransfer(ev.clipboardData);
+    if (!files.length) return;
+    ev.preventDefault();
+    this.lockReplyTarget();
+    const cur = this.store.stagedAttachments();
+    const { uploads, error } = await readFilesAsUploads(files, cur.length);
+    if (error) {
+      this.store.actionError.set(error);
+      return;
+    }
+    if (uploads.length) {
+      this.store.stagedAttachments.set([...cur, ...uploads]);
+    }
+  }
+
+  protected async onComposerDrop(ev: DragEvent): Promise<void> {
+    ev.preventDefault();
+    const files = filesFromTransfer(ev.dataTransfer);
+    if (!files.length) return;
+    this.lockReplyTarget();
+    const cur = this.store.stagedAttachments();
+    const { uploads, error } = await readFilesAsUploads(files, cur.length);
+    if (error) {
+      this.store.actionError.set(error);
+      return;
+    }
+    if (uploads.length) {
+      this.store.stagedAttachments.set([...cur, ...uploads]);
+    }
   }
 
   protected async onConfirm(c: ConfirmRequest, ok: boolean): Promise<void> {
@@ -1463,8 +2211,9 @@ export class TaskDetailComponent implements OnDestroy {
       questionCommentId: t.questionCommentId,
       reply: t.state === "awaiting_reply",
     };
+    const allowSecretWords = !!(t.pendingSecret && this.allowWordsOnParked());
     const ok = await this.store.send(tgt.taskId, (fresh) => {
-      if (tgt.reply) {
+      if (tgt.reply && !allowSecretWords) {
         return replyRefusal(fresh, tgt.taskId, tgt.questionCommentId);
       }
       if (!fresh) return `#${tgt.taskId} could not be read.`;
@@ -1479,6 +2228,7 @@ export class TaskDetailComponent implements OnDestroy {
     });
     if (ok) {
       this.replyTarget.set(null);
+      this.allowWordsOnParked.set(false);
       this.done("Sent");
     }
   }

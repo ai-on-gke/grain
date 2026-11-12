@@ -25,6 +25,27 @@ export interface AccessInfo {
   repoLimits?: Record<string, string[]>;
 }
 
+export interface CustomFieldDeclaration {
+  name: string;
+  label?: string;
+  type: "string" | "enum" | "bool" | "number" | string;
+  options?: string[];
+  description?: string;
+  default?: unknown;
+  position?: string;
+  multiple?: boolean;
+  showOnRow?: boolean;
+}
+
+export interface AgentBackendOption {
+  id: string;
+  name?: string;
+  framework?: string;
+  models?: string[];
+  disabled?: boolean;
+  team?: string;
+}
+
 export interface GrainConfig {
   access?: AccessInfo | null;
   viewerOwner?: string;
@@ -32,12 +53,83 @@ export interface GrainConfig {
   // The build stamp (api/version.ts); a string on older servers.
   version?: string | Record<string, unknown>;
   stateRepoSyncFailure?: unknown;
+  capabilities?: CapabilityOption[];
+  defaultCapabilities?: string[];
+  repoDefaultCapabilities?: Record<string, string[]>;
+  agentBackends?: AgentBackendOption[];
+  agentFramework?: string;
+  models?: string[];
+  defaultModel?: string;
+  customFields?: CustomFieldDeclaration[];
   [key: string]: unknown;
 }
 
 export interface PullRequestRef {
   number?: number;
   url?: string;
+  [key: string]: unknown;
+}
+
+export interface AttachmentUpload {
+  filename: string;
+  contentType: string;
+  content: string;
+}
+
+export interface AttachmentMeta {
+  id: string | number;
+  filename: string;
+  contentType?: string;
+  size?: number;
+}
+
+export interface HumanReviewView {
+  source?: string;
+  category?: string;
+  reason?: string;
+  reviewTask?: string;
+  run?: string;
+  at?: string;
+}
+
+export interface TaskPaused {
+  at: string;
+  by: string;
+  byKind?: string;
+  bySource?: string;
+  byLabel?: string;
+  fromState: string;
+  immediate?: boolean;
+  graceUntil?: string;
+}
+
+export interface GoalSpec {
+  repo?: string;
+  branch?: string;
+  publishing?: boolean;
+  task?: string;
+  number?: number;
+  tasks?: string[];
+  until?: string;
+  repos?: string[];
+  cl?: number;
+  workflow?: string;
+}
+
+export interface GoalDecl {
+  kind: string;
+  spec: GoalSpec;
+  on_met?: string;
+  on_limit?: string;
+  max_resumes?: number;
+  max_stall?: string;
+}
+
+export interface TaskGoalView extends GoalDecl {
+  metAt?: string;
+  limitNotifiedAt?: string;
+  resumesWithoutProgress?: number;
+  outcome?: string;
   [key: string]: unknown;
 }
 
@@ -56,7 +148,7 @@ export interface Task {
   reviewQuestions?: string;
   reviewFindings?: unknown[];
   humanApprovedBy?: string;
-  humanReviewHold?: { category?: string }[];
+  humanReviewHold?: HumanReviewView[];
   autoMerge?: boolean;
   pullRequest?: PullRequestRef | string | null;
   prClosedAt?: string;
@@ -64,12 +156,35 @@ export interface Task {
   merged?: boolean;
   closedReason?: string;
   mergeQueueState?: string;
+  mergeQueueNote?: string;
   mergeQueueStalledAt?: string;
   mergeQueueBlockedAt?: string;
   redBaseBranch?: unknown;
   stall?: string;
   deferredUntil?: string;
+  reads?: string[];
   writes?: { repo: string; base?: string }[];
+  capabilities?: string[];
+  customFields?: Record<string, string | string[]>;
+  reviewers?: string[];
+  reviewTemplateId?: string;
+  reviewTemplateName?: string;
+  sandboxCpus?: number;
+  sandboxMemoryMb?: number;
+  sandboxDiskGb?: number;
+  agentFramework?: string;
+  agentBackendId?: string;
+  model?: string;
+  networkAccess?: string;
+  nothingNeededAction?: string;
+  promptExtension?: string;
+  noPort?: boolean;
+  keepRunning?: boolean;
+  hosting?: string;
+  paused?: TaskPaused | null;
+  runNowAt?: string;
+  runNowStale?: boolean;
+  goal?: TaskGoalView | null;
   consoleSession?: unknown;
   interactive?: boolean;
   // What the current run is doing, in a sentence, and when it said so;
@@ -95,6 +210,7 @@ export interface Task {
   // Who the task belongs to and who filed it (pkg/ui tasks.go Task).
   owner?: string;
   creator?: string;
+  approved?: boolean;
   approvedBy?: string;
   approvedByLabel?: string;
   approvedByKind?: string;
@@ -116,11 +232,16 @@ export interface Task {
   autoApproveProposals?: boolean;
   externalRef?: string;
   continues?: string;
+  rolledOverFrom?: string;
+  rolledOverTo?: string;
   startedAt?: string;
   endedAt?: string;
   closedAt?: string;
   filedVia?: string;
   changelists?: string[];
+  changeTargetKind?: string;
+  clReview?: unknown;
+  clSubmit?: unknown;
   derivedFrom?: string[];
   designs?: string[];
   // Open dependencies and the state of each (GET /api/tasks).
@@ -160,6 +281,7 @@ export interface AccessRequestItem {
   requiresPerson?: boolean;
   held?: boolean;
   error?: string;
+  substituteGrant?: string;
 }
 
 export interface AccessRequestView {
@@ -167,6 +289,198 @@ export interface AccessRequestView {
   reason: string;
   items: AccessRequestItem[];
   createdAt: string;
+}
+
+export interface PendingConfigChange {
+  summary: string;
+  description?: string;
+  branch: string;
+  base?: string;
+  baseSha?: string;
+  headSha: string;
+  prNumber?: number;
+  files?: string[];
+  diff: string;
+  validation?: { ok: boolean; error?: string };
+  createdAt?: string;
+}
+
+export interface TaskCIStatus {
+  runId?: string;
+  commit?: string;
+  startedAt?: string;
+  conclusion?: string;
+  finishedAt?: string;
+  detail?: string;
+}
+
+export interface CIRunStep {
+  name: string;
+  status?: string;
+  conclusion?: string;
+  exitCode?: number;
+  startedAt?: string;
+  finishedAt?: string;
+  output?: string;
+  outputTruncated?: boolean;
+}
+
+export interface CIRunJob {
+  id?: string | number;
+  name: string;
+  status?: string;
+  conclusion?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  steps?: CIRunStep[];
+}
+
+export interface CIRun {
+  id: string;
+  provider?: string;
+  repo?: string;
+  ref?: string;
+  branch?: string;
+  commit?: string;
+  event?: string;
+  workflow?: string;
+  taskId?: string;
+  url?: string;
+  status: string;
+  conclusion?: string;
+  detail?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  jobs?: CIRunJob[];
+  fault?: { kind?: string; summary?: string; detail?: string };
+}
+
+export interface CIRunsResponse {
+  enabled?: boolean;
+  runs: CIRun[];
+  matched?: number;
+  faults?: { kind?: string; summary?: string; detail?: string }[];
+}
+
+export interface CompareResponse {
+  base: string;
+  head: string;
+  mergeBase?: string;
+  merged?: boolean;
+  diff: string;
+}
+
+export interface CapabilityMethod {
+  ref: string;
+  capability: string;
+  method: string;
+  description?: string;
+  args?: Record<string, unknown>;
+  requiresArgs?: boolean;
+  releasable?: boolean;
+  policyRefusal?: string;
+}
+
+export interface APIScopeSetRow {
+  name: string;
+  description?: string;
+  scopes?: string[];
+  source?: string;
+  catalogue?: { disabled?: boolean };
+}
+
+export interface APIScopeSetsResponse {
+  sets: APIScopeSetRow[];
+  error?: string;
+  path?: string;
+}
+
+export interface GrantCheck {
+  grant?: string;
+  recorded: string;
+  error?: string;
+  fields?: { field: string; message: string }[];
+  catalogueRefusal?: boolean;
+}
+
+export interface CapabilityAuditEntry {
+  grant: string;
+  attemptId?: string;
+  at: string;
+  hostd?: string;
+  record?: unknown;
+  note?: string;
+}
+
+export interface TaskContextView {
+  brief?: string;
+  original_description?: string;
+  compacted_through?: number;
+  handover?: string;
+  handover_stale?: boolean;
+  summarised?: number;
+  brief_edits?: {
+    brief?: string;
+    reason?: string;
+    by?: string;
+    at?: string;
+  }[];
+}
+
+export interface TemplateField {
+  name: string;
+  label?: string;
+  options?: string[];
+  default?: string;
+  required?: boolean;
+}
+
+export interface Template {
+  id: string;
+  name: string;
+  title: string;
+  description: string;
+  fields?: TemplateField[];
+  repo?: string;
+  base?: string;
+  priority?: number;
+  autoMerge?: boolean;
+  networkAccess?: string;
+  nothingNeededAction?: string;
+  model?: string;
+  interactive?: boolean;
+  keepRunning?: boolean;
+  admission?: string;
+  hosting?: string;
+  reads?: string[];
+  writes?: { repo: string; base?: string }[];
+  reviewers?: string[];
+  customFields?: Record<string, string | string[]>;
+  capabilities?: string[];
+  declaredIn?: { repo: string; file?: string; path?: string };
+  system?: boolean;
+  revision?: string;
+}
+
+export interface ComposedField {
+  name: string;
+  values?: string[];
+  source: string;
+  sources?: string[];
+}
+
+export interface ComposedTask {
+  templateId?: string;
+  templateName?: string;
+  title: string;
+  fields: ComposedField[];
+}
+
+export interface Composition {
+  kind: string;
+  repo?: string;
+  base?: string;
+  tasks: ComposedTask[];
 }
 
 export interface Comment {
@@ -181,12 +495,7 @@ export interface Comment {
   summary?: string;
   handover?: boolean;
   createdAt?: string;
-  attachments?: {
-    id: string;
-    filename: string;
-    contentType?: string;
-    size?: number;
-  }[];
+  attachments?: AttachmentMeta[];
 }
 
 export interface Attempt {
@@ -194,6 +503,7 @@ export interface Attempt {
   startedAt?: string;
   agentStartedAt?: string;
   promptTokens?: number;
+  capabilityAuditCount?: number;
   // The grain hostd this attempt's host work went to (model.TaskRunHostd).
   hostd?: {
     hostd: string;
@@ -204,15 +514,29 @@ export interface Attempt {
   finishedAt?: string;
   outcome?: string;
   detail?: string;
+  setupNote?: string;
   model?: string;
+  agentFramework?: string;
 }
 
 export interface TaskDetail extends Task {
   comments?: Comment[];
   attempts?: Attempt[];
+  olderComments?: number;
+  olderAttempts?: number;
+  compactedThrough?: number;
+  attachments?: AttachmentMeta[];
+  localScriptApprovals?: LocalScriptApproval[];
   pendingAccess?: AccessRequestView | null;
-  pendingSecret?: { name: string; secret?: string; key?: string } | null;
-  pendingConfigChange?: unknown;
+  pendingSecret?: {
+    name: string;
+    secret?: string;
+    key?: string;
+    set?: boolean;
+  } | null;
+  pendingConfigChange?: PendingConfigChange | null;
+  ci?: TaskCIStatus | null;
+  ciFaults?: { kind?: string; summary?: string; detail?: string }[];
 }
 
 // One standing conversation (pkg/ui console_sessions.go
@@ -220,6 +544,7 @@ export interface TaskDetail extends Task {
 export interface ConsoleSession {
   id: string;
   title: string;
+  team?: string;
   taskId?: string;
   capabilities?: string[];
   missingShippedDefaults?: string[];
@@ -227,6 +552,11 @@ export interface ConsoleSession {
   effectiveNetworkAccess?: string;
   tasksApproved?: boolean;
   keepRunning?: boolean;
+  hosting?: string;
+  reads?: string[];
+  readsAll?: boolean;
+  writes?: { repo: string; base?: string }[];
+  googleChatSpace?: string;
   model?: string;
   crowded?: boolean;
   crowdedNote?: string;
@@ -239,6 +569,8 @@ export interface CapabilityOption {
   name?: string;
   description?: string;
   ready?: boolean;
+  grantable?: boolean;
+  default?: boolean;
   needs?: string;
 }
 
@@ -268,12 +600,19 @@ export interface Notification {
 export interface LocalScriptApproval {
   id: string;
   taskId: string;
+  call?: string;
   tool?: string;
   script?: string;
   args?: string[];
   stdinBytes?: number;
   stdinPreview?: string;
   stdinTruncated?: boolean;
+  stdinSha256?: string;
+  status?: string;
+  deadline?: string;
+  requested?: string;
+  answeredBy?: string;
+  answeredAt?: string;
 }
 
 // DiffPreview is GET /api/tasks/{id}/diff-preview (pkg/ui/diff_preview.go):

@@ -16,9 +16,11 @@ import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type {
+  AttachmentUpload,
   CapabilityOption,
   ConsoleSession,
   ConsoleSessionList,
+  GrainConfig,
   Task,
   TaskDetail,
 } from "../api/models";
@@ -35,9 +37,17 @@ import {
 export const POLL_MS = 3000;
 export const COMMENTS_QUERY = "comments_limit=50&attempts_limit=20";
 
-// rowKey is what about a list row means its detail may have moved.
 function rowKey(t: Task | undefined): string {
   return t ? `${t.state}|${t.updatedAt ?? ""}|${t.activityAt ?? ""}` : "";
+}
+
+export function liveSessionRunKey(
+  task: Task | null | undefined,
+  detail: TaskDetail | null | undefined,
+): string {
+  if (!task || task.state !== "running" || task.activityBySetup) return "";
+  const open = (detail?.attempts ?? []).find((a) => !a.finishedAt);
+  return open ? `attempt-${open.number}` : "live";
 }
 
 export interface SessionRow {
@@ -46,10 +56,36 @@ export interface SessionRow {
   line: string;
 }
 
-// SessionsStore is the Sessions page's state: the standing
-// conversations, the selected one's task with its messages, and the
-// calls that talk to it. A session's conversation is the comments of its
-// task (pkg/ui console_sessions.go).
+export interface CreateSessionOptions {
+  title?: string;
+  message?: string;
+  team?: string;
+  model?: string;
+  networkAccess?: string;
+  capabilities?: string[];
+  attachments?: AttachmentUpload[];
+}
+
+export interface UpdateSessionPatch {
+  title?: string;
+  team?: string;
+  model?: string;
+  networkAccess?: string;
+  tasksApproved?: boolean;
+  keepRunning?: boolean;
+  adoptShippedDefaults?: boolean;
+  reads?: string[];
+  writes?: { repo: string; base?: string }[];
+}
+
+const RUN_FIXED_KEYS: (keyof UpdateSessionPatch)[] = [
+  "model",
+  "networkAccess",
+  "adoptShippedDefaults",
+  "reads",
+  "writes",
+];
+
 @Injectable({ providedIn: "root" })
 export class SessionsStore {
   private readonly api = inject(GrainApi);
@@ -58,21 +94,22 @@ export class SessionsStore {
 
   readonly sessions = signal<ConsoleSession[]>([]);
   readonly offered = signal<CapabilityOption[]>([]);
+  readonly networkOptions = signal<string[]>(["open", "none"]);
+  readonly models = signal<string[]>([]);
+  readonly defaultModel = signal<string>("");
   readonly tasks = signal<Record<string, Task>>({});
   readonly details = signal<Record<string, TaskDetail>>({});
   readonly selectedId = signal<string>(DIRECTOR_ID);
   readonly loaded = signal(false);
   readonly loadError = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
-  // busy holds the actions in flight ("send", "stop", "restart", a
-  // capability id, ...), so only those controls wait, and two at once do
-  // not clear each other.
   readonly busy = signal<ReadonlySet<string>>(new Set());
-  // detailError is why the selected conversation could not be read.
   readonly detailError = signal<string | null>(null);
   readonly drafts = signal<Record<string, string>>({});
+  readonly stagedAttachments = signal<Record<string, AttachmentUpload[]>>({});
+  // Tracks sessions whose running turn predates a run-fixed edit (grants, model, network).
+  readonly staleRuns = signal<Record<string, string>>({});
 
-  // The Director first, then the rest in the server's order.
   readonly rows = computed<SessionRow[]>(() => {
     const tasks = this.tasks();
     const details = this.details();
@@ -82,9 +119,6 @@ export class SessionsStore {
     return list.map((session) => {
       const d = session.taskId ? details[session.taskId] : undefined;
       const t = session.taskId ? tasks[session.taskId] : undefined;
-      // The list is read every poll and the detail of a session not on
-      // screen only when its list row moves, so the list wins for state
-      // and activity; the detail adds the messages.
       const task = d || t ? ({ ...d, ...t } as Task) : null;
       return {
         session,
@@ -93,19 +127,35 @@ export class SessionsStore {
       };
     });
   });
+
   readonly selected = computed<SessionRow | null>(() => {
     const id = this.selectedId();
     return this.rows().find((r) => r.session.id === id) ?? null;
   });
+
   readonly selectedDetail = computed<TaskDetail | null>(() => {
     const tid = this.selected()?.session.taskId;
     return tid ? (this.details()[tid] ?? null) : null;
   });
+
   readonly status = computed(() => sessionStatus(this.selected()?.task));
 
-  // What each detail was read for (rowKey of its list row), so a
-  // background session's detail is read again when its row moves.
+  readonly currentLiveKey = computed(() =>
+    liveSessionRunKey(this.selected()?.task, this.selectedDetail()),
+  );
+
+  // True when a run-fixed setting/grant was saved while the current turn was already running.
+  readonly needsApplyNow = computed(() => {
+    const sid = this.selectedId();
+    const recorded = this.staleRuns()[sid];
+    if (!recorded) return false;
+    const live = this.currentLiveKey();
+    if (!live) return false;
+    return recorded === live || recorded === "live" || live === "live";
+  });
+
   private readonly fetchedFor = new Map<string, string>();
+  private configLoaded = false;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private eventSub: { unsubscribe(): void } | null = null;
@@ -114,6 +164,10 @@ export class SessionsStore {
 
   start(): void {
     void this.refresh();
+    if (!this.configLoaded) {
+      this.configLoaded = true;
+      void this.loadConfigModels();
+    }
     if (!this.eventSub) {
       this.eventSub = this.events.events().subscribe(() => {
         void this.refresh();
@@ -126,6 +180,18 @@ export class SessionsStore {
           POLL_MS,
         );
       });
+    }
+  }
+
+  private async loadConfigModels(): Promise<void> {
+    try {
+      const cfg = (await this.api.config()) as GrainConfig | null;
+      if (Array.isArray(cfg?.models)) this.models.set(cfg.models);
+      if (typeof cfg?.defaultModel === "string") {
+        this.defaultModel.set(cfg.defaultModel);
+      }
+    } catch {
+      // Optional model list read.
     }
   }
 
@@ -143,8 +209,6 @@ export class SessionsStore {
     void this.refresh();
   }
 
-  // refresh reads everything once; a call made while one is in flight
-  // runs once more after it rather than piling up.
   refresh(): Promise<void> {
     if (this.refreshing) {
       this.pending = true;
@@ -173,8 +237,6 @@ export class SessionsStore {
         `Sessions could not be read: ${errorText(list.reason)}. This page tries again on its own.`,
       );
     }
-    // An unchanged answer still seeds an empty map: another reader of the
-    // same URL may have taken the fresh copy (getIfChanged shares tags).
     if (
       tasks.status === "fulfilled" &&
       (tasks.value.changed || Object.keys(this.tasks()).length === 0)
@@ -185,16 +247,51 @@ export class SessionsStore {
     }
     this.loaded.set(true);
     await this.loadDetails();
+    this.pruneFinishedStaleRuns();
+  }
+
+  private pruneFinishedStaleRuns(): void {
+    const stale = this.staleRuns();
+    const keys = Object.keys(stale);
+    if (!keys.length) return;
+    let changed = false;
+    const next = { ...stale };
+    for (const sid of keys) {
+      const row = this.rows().find((r) => r.session.id === sid);
+      const detail = row?.session.taskId
+        ? this.details()[row.session.taskId]
+        : undefined;
+      const live = liveSessionRunKey(row?.task, detail);
+      if (
+        !live ||
+        (stale[sid] !== "live" && live !== "live" && stale[sid] !== live)
+      ) {
+        delete next[sid];
+        changed = true;
+      }
+    }
+    if (changed) this.staleRuns.set(next);
+  }
+
+  private markLiveRunStale(sessionId: string): void {
+    const row = this.rows().find((r) => r.session.id === sessionId);
+    const detail = row?.session.taskId
+      ? this.details()[row.session.taskId]
+      : undefined;
+    const live = liveSessionRunKey(row?.task, detail);
+    if (live) {
+      this.staleRuns.update((m) => ({ ...m, [sessionId]: live }));
+    }
   }
 
   private applyList(list: ConsoleSessionList): void {
     this.sessions.set(list.sessions ?? []);
     if (list.capabilities) this.offered.set(list.capabilities);
+    if (list.networkAccessOptions?.length) {
+      this.networkOptions.set(list.networkAccessOptions);
+    }
   }
 
-  // loadDetails reads the selected session's conversation every time and
-  // each other session's when its list row has moved since, for its last
-  // line. Only the selected one's failure is shown.
   private async loadDetails(): Promise<void> {
     const sel = this.selected()?.session.taskId;
     const tasks = this.tasks();
@@ -244,35 +341,62 @@ export class SessionsStore {
     this.drafts.update((m) => ({ ...m, [id]: text }));
   }
 
-  // send posts the draft as a message on the session's task, which starts
-  // a run with the session's grants. The draft clears once the server has
-  // it, and stays (with the error) when it does not.
+  attachmentsFor(id: string): AttachmentUpload[] {
+    return this.stagedAttachments()[id] ?? [];
+  }
+
+  setAttachments(id: string, list: AttachmentUpload[]): void {
+    this.stagedAttachments.update((m) => ({ ...m, [id]: list }));
+  }
+
   async send(): Promise<boolean> {
     const row = this.selected();
     const taskId = row?.session.taskId;
     const typed = row ? this.draftFor(row.session.id) : "";
     const body = typed.trim();
-    // One send at a time: a second Enter before the first lands would
-    // post the message twice, and each post starts a run.
-    if (!row || !taskId || !body || this.isBusy("send")) return false;
+    const attachments = row ? this.attachmentsFor(row.session.id) : [];
+    if (
+      !row ||
+      !taskId ||
+      (!body && attachments.length === 0) ||
+      this.isBusy("send")
+    ) {
+      return false;
+    }
     return this.run("send", async () => {
       await this.api.post(
         "POST /api/tasks/{id}/comments",
         { id: taskId },
-        { body, attachments: [] },
+        { body, attachments },
       );
-      // Keep anything typed while the message was on its way.
       if (this.draftFor(row.session.id) === typed) {
         this.setDraft(row.session.id, "");
+      }
+      if (this.attachmentsFor(row.session.id) === attachments) {
+        this.setAttachments(row.session.id, []);
       }
     });
   }
 
-  stopTurn(): Promise<boolean> {
+  async stopTurn(): Promise<boolean> {
     const id = this.selectedId();
-    return this.run("stop", () =>
+    const ok = await this.run("stop", () =>
       this.api.post("POST /api/console-sessions/{id}/cancel", { id }),
     );
+    if (ok) {
+      this.staleRuns.update((m) => {
+        const next = { ...m };
+        delete next[id];
+        return next;
+      });
+    }
+    return ok;
+  }
+
+  // Apply now stops the in-flight turn (POST /api/console-sessions/{id}/cancel)
+  // while preserving the session & transcript so the next turn picks up the saved grants/model.
+  applyNow(): Promise<boolean> {
+    return this.stopTurn();
   }
 
   restart(carryHandover: boolean): Promise<boolean> {
@@ -284,21 +408,41 @@ export class SessionsStore {
         { carryHandover },
       );
       if (res?.sessions) this.applyList(res);
+      this.staleRuns.update((m) => {
+        const next = { ...m };
+        delete next[id];
+        return next;
+      });
     });
   }
 
-  // create starts a new session and returns its id.
-  async create(title: string, message: string): Promise<string | null> {
+  async create(
+    titleOrOpts: string | CreateSessionOptions,
+    message = "",
+  ): Promise<string | null> {
+    const opts: CreateSessionOptions =
+      typeof titleOrOpts === "string"
+        ? { title: titleOrOpts, message }
+        : titleOrOpts;
     let created: string | null = null;
     const ok = await this.run("create", async () => {
+      const payload: Record<string, unknown> = {
+        title: opts.title?.trim() || undefined,
+        message: opts.message?.trim() || undefined,
+        attachments: opts.attachments ?? [],
+      };
+      if (opts.team?.trim()) payload["team"] = opts.team.trim();
+      if (opts.model?.trim()) payload["model"] = opts.model.trim();
+      if (opts.networkAccess?.trim()) {
+        payload["networkAccess"] = opts.networkAccess.trim();
+      }
+      if (opts.capabilities?.length) {
+        payload["capabilities"] = opts.capabilities;
+      }
       const res = await this.api.post<ConsoleSessionList>(
         "POST /api/console-sessions",
         undefined,
-        {
-          title: title.trim() || undefined,
-          message: message.trim() || undefined,
-          attachments: [],
-        },
+        payload,
       );
       if (res?.sessions) this.applyList(res);
       created = res?.created ?? null;
@@ -313,10 +457,6 @@ export class SessionsStore {
     });
   }
 
-  // toggleCapability grants or removes one capability. The PUT takes the
-  // whole list, with the list it was computed from as
-  // expectCapabilities; when the server says that list is stale it is
-  // read again and the same edit is made to it, once.
   toggleCapability(capId: string): Promise<boolean> {
     const id = this.selectedId();
     const session = this.sessions().find((s) => s.id === id);
@@ -326,13 +466,38 @@ export class SessionsStore {
       const rest = current.filter((c) => c !== capId);
       return on ? [...rest, capId] : rest;
     };
+    return this.mutateCapabilities(id, capId, edit);
+  }
+
+  setCapabilities(nextList: string[]): Promise<boolean> {
+    const id = this.selectedId();
+    const prev = this.sessions().find((s) => s.id === id)?.capabilities ?? [];
+    const added = nextList.filter((x) => !prev.includes(x));
+    const removed = new Set(prev.filter((x) => !nextList.includes(x)));
+    return this.mutateCapabilities(id, "grants", (current) => {
+      const base = current.filter((x) => !removed.has(x));
+      for (const a of added) {
+        if (!base.includes(a)) base.push(a);
+      }
+      return base;
+    });
+  }
+
+  private async mutateCapabilities(
+    id: string,
+    busyKey: string,
+    edit: (current: string[]) => string[],
+  ): Promise<boolean> {
+    const session = this.sessions().find((s) => s.id === id);
+    if (!session) return false;
+    this.markLiveRunStale(id);
     const put = (current: string[]) =>
       this.api.put(
         "PUT /api/console-sessions/{id}",
         { id },
         { capabilities: edit(current), expectCapabilities: current },
       );
-    return this.run(capId, async () => {
+    return this.run(busyKey, async () => {
       try {
         await put(session.capabilities ?? []);
       } catch (err) {
@@ -346,6 +511,15 @@ export class SessionsStore {
         await put(row.capabilities ?? []);
       }
     });
+  }
+
+  async updateSettings(patch: UpdateSessionPatch): Promise<boolean> {
+    const id = this.selectedId();
+    const touchesRunFixed = RUN_FIXED_KEYS.some((k) => patch[k] !== undefined);
+    if (touchesRunFixed) this.markLiveRunStale(id);
+    return this.run("settings", () =>
+      this.api.put("PUT /api/console-sessions/{id}", { id }, patch),
+    );
   }
 
   private async run(

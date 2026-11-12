@@ -64,13 +64,26 @@ class FakeApi {
           authorKind: "human",
           authorLabel: "Ana",
           body: "File a task to bump Go",
+          attachments: [
+            {
+              id: 77,
+              filename: "trace.png",
+              contentType: "image/png",
+              size: 1024,
+            },
+          ],
         },
       ],
     },
-    "9": { id: "9", title: "Release help", state: "running", comments: [] },
+    "9": {
+      id: "9",
+      title: "Release help",
+      state: "running",
+      attempts: [{ number: 3, startedAt: "2026-11-12T00:00:00Z" }],
+      comments: [],
+    },
   };
   calls: Call[] = [];
-  // fail makes the next call to a route throw this error once.
   fail: Record<string, unknown> = {};
 
   private record(
@@ -83,9 +96,6 @@ class FakeApi {
     const err = this.fail[route];
     if (err) {
       delete this.fail[route];
-      // Rejected later, as HttpClient does: a synchronously rejected
-      // promise trips zone.js's unhandled-rejection check before await
-      // attaches its handler.
       return new Promise<never>((_, reject) => setTimeout(() => reject(err)));
     }
     return null;
@@ -94,6 +104,21 @@ class FakeApi {
   get = (route: string) => {
     const e = this.record("GET", route);
     if (e) return e;
+    if (route === "GET /api/api-scope-sets") {
+      return Promise.resolve({
+        sets: [{ name: "tasks-read", description: "Read tasks" }],
+      });
+    }
+    if (route === "GET /api/capability-methods") {
+      return Promise.resolve([
+        {
+          ref: "gchat#post",
+          capability: "gchat",
+          method: "post",
+          description: "Post to Chat",
+        },
+      ]);
+    }
     const list: ConsoleSessionList = {
       sessions: structuredClone(this.sessions),
       capabilities: this.offered,
@@ -114,6 +139,11 @@ class FakeApi {
   post = (route: string, params?: unknown, body?: unknown) => {
     const e = this.record("POST", route, params, body);
     if (e) return e;
+    if (route === "POST /api/capability-grants/check") {
+      const req = body as { grants: { grant?: string; capability?: string }[] };
+      const g = req.grants[0];
+      return Promise.resolve([{ recorded: g.grant || `${g.capability}={}` }]);
+    }
     if (route === "POST /api/console-sessions") {
       this.sessions = [
         ...this.sessions,
@@ -146,10 +176,20 @@ class FakeApi {
   put = (route: string, params?: unknown, body?: unknown) => {
     const e = this.record("PUT", route, params, body);
     if (e) return e;
-    const b = body as { capabilities: string[] };
+    const b = body as Partial<ConsoleSession> & { capabilities?: string[] };
     const id = (params as { id: string }).id;
     this.sessions = this.sessions.map((s) =>
-      s.id === id ? { ...s, capabilities: b.capabilities } : s,
+      s.id === id
+        ? {
+            ...s,
+            ...(b.capabilities ? { capabilities: b.capabilities } : {}),
+            ...(b.team !== undefined ? { team: b.team } : {}),
+            ...(b.model !== undefined ? { model: b.model } : {}),
+            ...(b.networkAccess !== undefined
+              ? { networkAccess: b.networkAccess }
+              : {}),
+          }
+        : s,
     );
     return Promise.resolve({});
   };
@@ -160,7 +200,12 @@ class FakeApi {
     this.sessions = this.sessions.filter((s) => s.id !== id);
     return Promise.resolve({});
   };
-  config = () => Promise.resolve({ access: null });
+  config = () =>
+    Promise.resolve({
+      access: null,
+      models: ["gemini-fast", "gemini-pro"],
+      defaultModel: "gemini-pro",
+    });
 }
 
 async function render(
@@ -183,11 +228,11 @@ async function render(
   return fixture;
 }
 
-// settle lets a click's promise chain (save, then read again) finish.
 async function settle(f: ComponentFixture<unknown>): Promise<void> {
   await f.whenStable();
-  await new Promise((r) => setTimeout(r));
+  await new Promise((r) => setTimeout(r, 15));
   await TestBed.inject(SessionsStore).refresh();
+  f.detectChanges();
   await f.whenStable();
 }
 
@@ -205,7 +250,7 @@ describe("SessionsPageComponent", () => {
     TestBed.resetTestingModule();
   });
 
-  it("lists the Director first with its status and last line, and shows its conversation", async () => {
+  it("lists the Director first with conversation attachments, zero Classic links, and zero <select>s", async () => {
     const api = new FakeApi();
     api.sessions = [...api.sessions].reverse();
     const f = await render(api);
@@ -216,8 +261,6 @@ describe("SessionsPageComponent", () => {
       "Director",
       "Release help",
     ]);
-    // /sessions shows the Director on a wide screen, but no conversation is
-    // the page on a phone, so nothing is marked current until one is open.
     expect(items[0].getAttribute("aria-current")).toBeNull();
     expect(items[0].textContent).toContain("Asked");
     expect(items[0].textContent).toContain("File a task to bump Go");
@@ -226,6 +269,19 @@ describe("SessionsPageComponent", () => {
     expect(text(f, '[data-testid="msg-1"] .msg-author')).toBe("Grain");
     expect(q(f, '[data-testid="msg-2"]')?.classList).toContain("is-human");
     expect(q(f, '[data-testid="stop"]')).toBeNull();
+
+    // Renders comment attachments inline/downloadable.
+    const att = q(f, '[data-testid="attachment-77"]') as HTMLAnchorElement;
+    expect(att).toBeTruthy();
+    expect(att.getAttribute("href")).toBe("/api/tasks/1/attachments/77");
+
+    // Zero Classic escape links and zero native <select> elements.
+    const root = f.nativeElement as HTMLElement;
+    expect(root.querySelectorAll("select")).toHaveLength(0);
+    expect(root.querySelector('a[href="/director"]')).toBeNull();
+    expect(root.querySelector('a[href*="?settings=1"]')).toBeNull();
+    expect(root.textContent).not.toContain("Classic");
+    expect(root.textContent).not.toContain("manage in classic");
   });
 
   it("sends with Enter, keeps Shift+Enter for a new line, and clears the draft once sent", async () => {
@@ -251,6 +307,112 @@ describe("SessionsPageComponent", () => {
       body: { body: "Please file it", attachments: [] },
     });
     expect(TestBed.inject(SessionsStore).draftFor("director")).toBe("");
+  });
+
+  it("uploads composer file attachments on POST /api/tasks/{id}/comments", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    const input = q(
+      f,
+      '[data-testid="session-attach-input"]',
+    ) as HTMLInputElement;
+    const file = new File(["shot-bytes"], "screen.png", { type: "image/png" });
+    Object.defineProperty(input, "files", { value: [file] });
+    input.dispatchEvent(new Event("change"));
+    await settle(f);
+
+    expect(text(f, '[data-testid="staged-att-0"]')).toContain("screen.png");
+    const sendBtn = q(f, '[data-testid="send"]') as HTMLButtonElement;
+    expect(sendBtn.disabled).toBe(false);
+    sendBtn.click();
+    await settle(f);
+
+    const sent = api.calls.find(
+      (c) => c.route === "POST /api/tasks/{id}/comments",
+    );
+    expect(sent).toMatchObject({
+      params: { id: "1" },
+      body: {
+        body: "",
+        attachments: [
+          {
+            filename: "screen.png",
+            contentType: "image/png",
+            content: btoa("shot-bytes"),
+          },
+        ],
+      },
+    });
+    expect(q(f, '[data-testid="staged-att-0"]')).toBeNull();
+  });
+
+  it("shows Apply now banner when editing grants or model on a live running turn and cancels the turn on click", async () => {
+    const api = new FakeApi();
+    const f = await render(api, "rel");
+    expect(q(f, '[data-testid="apply-now-banner"]')).toBeNull();
+
+    // Toggle a capability while session 'rel' has a live running turn.
+    (q(f, '[data-testid="cap-self-debug"]') as HTMLButtonElement).click();
+    await settle(f);
+
+    expect(q(f, '[data-testid="apply-now-banner"]')).toBeTruthy();
+    (q(f, '[data-testid="apply-now-btn"]') as HTMLButtonElement).click();
+    await settle(f);
+
+    expect(
+      api.calls.find(
+        (c) => c.route === "POST /api/console-sessions/{id}/cancel",
+      ),
+    ).toMatchObject({ params: { id: "rel" } });
+    expect(q(f, '[data-testid="apply-now-banner"]')).toBeNull();
+  });
+
+  it("edits API-scope grants, model, and team visibility in the session settings drawer", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+
+    (
+      q(f, '[data-testid="session-settings-toggle"]') as HTMLButtonElement
+    ).click();
+    await f.whenStable();
+    const drawer = q(f, '[data-testid="session-settings-panel"]')!;
+    expect(drawer).toBeTruthy();
+    expect(drawer.querySelectorAll("select")).toHaveLength(0);
+
+    // Save team visibility
+    const teamIn = q(
+      f,
+      '[data-testid="session-team-input"]',
+    ) as HTMLInputElement;
+    teamIn.value = "platform";
+    teamIn.dispatchEvent(new Event("input"));
+    (q(f, '[data-testid="session-team-save"]') as HTMLButtonElement).click();
+    await settle(f);
+    expect(
+      api.calls.find(
+        (c) =>
+          c.method === "PUT" &&
+          (c.body as { team?: string })?.team === "platform",
+      ),
+    ).toBeTruthy();
+
+    // Add API scope grant via <g-grants-picker>
+    (
+      q(f, '[data-testid="session-grants-add-open"]') as HTMLButtonElement
+    ).click();
+    await settle(f);
+    (
+      q(f, '[data-testid="session-grants-attach"]') as HTMLButtonElement
+    ).click();
+    await settle(f);
+
+    expect(
+      api.calls.find((c) => c.route === "POST /api/capability-grants/check"),
+    ).toBeTruthy();
+    const lastPut = api.calls.filter((c) => c.method === "PUT").at(-1);
+    expect(
+      (lastPut?.body as { capabilities: string[] }).capabilities,
+    ).toContain("api:tasks-read");
   });
 
   it("keeps the draft and shows the error when the message does not go through", async () => {
@@ -292,8 +454,6 @@ describe("SessionsPageComponent", () => {
     const box = q(f, '[data-testid="cap-self-debug"]') as HTMLButtonElement;
     expect(box.getAttribute("aria-pressed")).toBe("false");
 
-    // Somebody else granted something meanwhile: the first save is
-    // refused as stale, the list is read again and the edit made on it.
     api.sessions[0] = {
       ...api.sessions[0],
       capabilities: [...api.sessions[0].capabilities!, "other"],
@@ -349,21 +509,27 @@ describe("SessionsPageComponent", () => {
     });
   });
 
-  it("starts a new session from the dialog", async () => {
+  it("starts a new session from the dialog with optional team", async () => {
     const api = new FakeApi();
     const f = await render(api);
     (q(f, '[data-testid="new-session"]') as HTMLButtonElement).click();
     await f.whenStable();
     const dialog = q(f, '[data-testid="new-session-dialog"]')!;
     expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(dialog.querySelectorAll("select")).toHaveLength(0);
     const name = q(f, '[data-testid="new-session-name"]') as HTMLInputElement;
     name.value = "New one";
     name.dispatchEvent(new Event("input"));
+    const team = q(f, '[data-testid="new-session-team"]') as HTMLInputElement;
+    team.value = "sre";
+    team.dispatchEvent(new Event("input"));
     (q(f, '[data-testid="new-session-create"]') as HTMLButtonElement).click();
     await settle(f);
     expect(
       api.calls.find((c) => c.route === "POST /api/console-sessions"),
-    ).toMatchObject({ body: { title: "New one", attachments: [] } });
+    ).toMatchObject({
+      body: { title: "New one", team: "sre", attachments: [] },
+    });
     expect(q(f, '[data-testid="new-session-dialog"]')).toBeNull();
   });
 
@@ -406,7 +572,6 @@ describe("SessionsPageComponent", () => {
     expect(api.reads.filter((r) => r.endsWith(":9")).length).toBe(
       readsBefore + 1,
     );
-    // Nothing moved: no further read of the background conversation.
     await settle(f);
     expect(api.reads.filter((r) => r.endsWith(":9")).length).toBe(
       readsBefore + 1,

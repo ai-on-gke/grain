@@ -1,4 +1,4 @@
-/* Sessions page layout (spec D-8). Attached via ViewEncapsulation.None
+/* Sessions page layout (spec D-8, < 5.5 kB). Attached via ViewEncapsulation.None
  * on SessionsPageComponent so initial shell bundle stays lean. */
 
 .sessions-split {
@@ -114,6 +114,19 @@
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
 }
 
+.apply-now-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 20px;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  font-size: 13px;
+}
+
 .cap-toggles {
   display: flex;
   flex-wrap: wrap;
@@ -170,12 +183,43 @@
   color: var(--md-sys-color-on-surface-variant);
 }
 
-.cap-api-link {
-  color: var(--md-sys-color-primary);
-}
-
 .cap-note {
   margin-left: auto;
+}
+
+.session-settings-drawer {
+  padding: 12px 20px;
+  background: var(--md-sys-color-surface);
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.session-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.session-setting-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.session-setting-field input[type="text"] {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: 13px;
 }
 
 .crowded-note {

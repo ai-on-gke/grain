@@ -1,0 +1,120 @@
+/* Changes & CI tab layout, CI job/step accordion, and force-merge dialog (< 4.5 kB). */
+
+.changes-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.changes-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.gates-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ci-runs-card,
+.diff-card {
+  padding: 12px 16px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+:root[data-theme="dark"] .ci-runs-card,
+:root[data-theme="dark"] .diff-card {
+  background: var(--md-sys-color-surface-container);
+}
+
+.ci-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ci-run-row {
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ci-run-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.ci-job-block {
+  margin-left: 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--md-sys-color-outline-variant);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ci-step-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.ci-step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.ci-step-log {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  font-family: var(--grain-font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.force-gate-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.force-reason-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+  font-size: 13px;
+}

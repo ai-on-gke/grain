@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -27,13 +28,23 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
-import { DOCUMENT } from "@angular/common";
 import { Router, RouterLink } from "@angular/router";
-import type { Comment } from "../api/models";
+import type { AttachmentUpload, Comment } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { ActorChipComponent } from "../shared/actor-chip.component";
+import {
+  AttachmentListComponent,
+  AttachmentPickerComponent,
+  filesFromTransfer,
+  readFilesAsUploads,
+} from "../shared/attachments";
 import { MarkdownDirective } from "../shared/code-highlight";
+import { GrantsPickerComponent } from "../shared/grants-picker.component";
+import {
+  type PillOption,
+  PillSelectComponent,
+} from "../shared/pill-select.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import {
@@ -57,10 +68,9 @@ export function clock(iso: string | undefined, now = new Date()): string {
     : d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-// SessionsPageComponent is Sessions (spec D-8): the standing
-// conversations on the left, the selected one on the right with its
-// capability toggles above the messages and the composer below. On a
-// phone the list and the conversation are separate screens.
+// SessionsPageComponent is Sessions (spec D-8) with zero Classic fallbacks:
+// standing conversations on the left, live "Apply now" banner on run-fixed
+// edits, per-method/API grants & team/model settings, and file attachments.
 @Component({
   selector: "g-sessions-page",
   imports: [
@@ -69,12 +79,17 @@ export function clock(iso: string | undefined, now = new Date()): string {
     StatusIconComponent,
     ActorChipComponent,
     MarkdownDirective,
+    AttachmentListComponent,
+    AttachmentPickerComponent,
+    GrantsPickerComponent,
+    PillSelectComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "./sessions-page.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/pill-select.css",
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
@@ -140,6 +155,11 @@ export function clock(iso: string | undefined, now = new Date()): string {
                       }}</span
                     >
                   </span>
+                  @if (r.session.team) {
+                    <span class="muted" style="font-size: 11px"
+                      >Team: {{ r.session.team }}</span
+                    >
+                  }
                   @if (r.line) {
                     <span class="session-line">{{ r.line }}</span>
                   }
@@ -169,6 +189,13 @@ export function clock(iso: string | undefined, now = new Date()): string {
               <h2 class="chat-title" id="chat-title" tabindex="-1" #chatTitle>
                 {{ row.session.title }}
               </h2>
+              @if (row.session.team) {
+                <span
+                  class="status-pill neutral"
+                  data-testid="session-team-pill"
+                  >{{ row.session.team }}</span
+                >
+              }
               <span
                 [class]="'status-pill ' + st.tone"
                 data-testid="chat-status"
@@ -190,12 +217,23 @@ export function clock(iso: string | undefined, now = new Date()): string {
                   Stop
                 </button>
               }
-              <a
-                class="btn-text"
-                [href]="classicHref()"
-                gTip="Open this session in the classic UI (attachments, grants by method, settings)"
-                >Classic</a
-              >
+              @if (canEditCaps()) {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="session-settings-toggle"
+                  [attr.aria-expanded]="settingsOpen()"
+                  (click)="toggleSettingsPanel()"
+                >
+                  {{
+                    settingsOpen()
+                      ? "Close settings"
+                      : apiGrants() > 0
+                        ? "Grants & settings (" + apiGrants() + " API)"
+                        : "Grants & settings"
+                  }}
+                </button>
+              }
               @if (row.session.id !== director && canDelete()) {
                 <button
                   #deleteBtn
@@ -213,6 +251,31 @@ export function clock(iso: string | undefined, now = new Date()): string {
               <p class="chat-activity" data-testid="chat-activity">
                 {{ a }}
               </p>
+            }
+
+            <!-- Live Run Stale Grants/Model Banner ("Apply now") -->
+            @if (store.needsApplyNow()) {
+              <div
+                class="apply-now-banner"
+                role="status"
+                data-testid="apply-now-banner"
+              >
+                <span
+                  >Saved. This turn is already running with the previous
+                  grants/model — restart the turn to apply them right now.</span
+                >
+                @if (canStop()) {
+                  <button
+                    type="button"
+                    class="btn-primary"
+                    data-testid="apply-now-btn"
+                    [disabled]="store.isBusy('stop')"
+                    (click)="applyNow()"
+                  >
+                    Apply now (restart turn)
+                  </button>
+                }
+              </div>
             }
 
             <div
@@ -245,18 +308,104 @@ export function clock(iso: string | undefined, now = new Date()): string {
               @for (g of grants(); track g) {
                 <span class="cap-held" data-testid="cap-held">{{ g }}</span>
               }
-              @if (apiGrants() > 0) {
-                <a class="cap-api-link" [href]="classicHref()"
-                  >{{ apiGrants() }} API grant{{
-                    apiGrants() === 1 ? "" : "s"
-                  }}
-                  · manage in classic</a
+              @if (apiGrants() > 0 && !settingsOpen()) {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="cap-api-manage"
+                  (click)="toggleSettingsPanel()"
                 >
+                  {{ apiGrants() }} API grant{{ apiGrants() === 1 ? "" : "s" }}
+                </button>
+              }
+              @if (
+                row.session.missingShippedDefaults?.length && canEditCaps()
+              ) {
+                <button
+                  type="button"
+                  class="btn-tonal"
+                  data-testid="adopt-shipped-defaults"
+                  [disabled]="store.isBusy('settings')"
+                  (click)="adoptDefaults()"
+                >
+                  Adopt shipped defaults
+                </button>
               }
               <span class="muted cap-note"
                 >Changes apply from the next run.</span
               >
             </div>
+
+            <!-- Inline Session Settings & Per-Method / API-Scope Grants Drawer -->
+            @if (settingsOpen() && canEditCaps()) {
+              <div
+                class="session-settings-drawer"
+                data-testid="session-settings-panel"
+              >
+                <div class="session-settings-grid">
+                  <div class="session-setting-field">
+                    <span>Model</span>
+                    <g-pill-select
+                      [options]="modelOptions()"
+                      [value]="row.session.model || ''"
+                      ariaLabel="Session model"
+                      align="left"
+                      testid="session-model"
+                      [disabled]="store.isBusy('settings')"
+                      (valueChange)="saveModel($event)"
+                    />
+                  </div>
+                  <div class="session-setting-field">
+                    <span>Network access</span>
+                    <g-pill-select
+                      [options]="networkOptions()"
+                      [value]="row.session.networkAccess || ''"
+                      ariaLabel="Session network access"
+                      align="left"
+                      testid="session-network"
+                      [disabled]="store.isBusy('settings')"
+                      (valueChange)="saveNetwork($event)"
+                    />
+                  </div>
+                  <label class="session-setting-field">
+                    <span>Visible to team / members</span>
+                    <div style="display: flex; gap: 6px">
+                      <input
+                        type="text"
+                        data-testid="session-team-input"
+                        placeholder="default (everyone allowed)"
+                        [value]="teamDraft()"
+                        (input)="teamDraft.set(inputValue($event))"
+                      />
+                      <button
+                        type="button"
+                        class="btn-tonal"
+                        data-testid="session-team-save"
+                        [disabled]="store.isBusy('settings')"
+                        (click)="saveTeam()"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </label>
+                </div>
+
+                <div>
+                  <span
+                    class="cap-label"
+                    style="display: block; margin-bottom: 6px"
+                    >Method &amp; API scope grants</span
+                  >
+                  <g-grants-picker
+                    testid="session-grants"
+                    [offered]="store.offered()"
+                    [held]="row.session.capabilities ?? []"
+                    [disabled]="store.isBusy('grants')"
+                    (heldChange)="onSessionGrantsChange($event)"
+                  />
+                </div>
+              </div>
+            }
 
             @if (showFresh()) {
               <div class="crowded-note" data-testid="fresh-chat">
@@ -357,6 +506,12 @@ export function clock(iso: string | undefined, now = new Date()): string {
                     }}</time>
                   </span>
                   <div class="msg-body" [gMarkdown]="c.body"></div>
+                  @if (c.attachments?.length && row.session.taskId) {
+                    <g-attachment-list
+                      [taskId]="row.session.taskId"
+                      [attachments]="c.attachments"
+                    />
+                  }
                 </article>
               } @empty {
                 @if (store.detailError(); as err) {
@@ -370,7 +525,12 @@ export function clock(iso: string | undefined, now = new Date()): string {
             </div>
 
             @if (canWrite() && row.session.taskId) {
-              <form class="chat-composer" (submit)="send($event)">
+              <form
+                class="chat-composer"
+                (submit)="send($event)"
+                (dragover)="$event.preventDefault()"
+                (drop)="onComposerDrop($event)"
+              >
                 <textarea
                   #composer
                   class="reply-textarea"
@@ -380,18 +540,29 @@ export function clock(iso: string | undefined, now = new Date()): string {
                   [placeholder]="'Message ' + row.session.title"
                   [value]="draft()"
                   (input)="onDraft($event)"
+                  (paste)="onComposerPaste($event)"
                   (keydown.enter)="onEnter($event)"
                 ></textarea>
+                <g-attachment-picker
+                  testid="session-attach"
+                  [staged]="stagedAttachments()"
+                  [disabled]="store.isBusy('send')"
+                  (stagedChange)="onStagedChange($event)"
+                />
                 <div class="composer-actions">
                   <span class="muted composer-hint"
-                    >Enter sends · Shift+Enter adds a line</span
+                    >Enter sends · Shift+Enter adds a line · paste or drop
+                    files</span
                   >
                   <button
                     type="submit"
                     class="btn-primary"
                     data-testid="send"
                     gTip="Send; each message starts a run with this session's grants"
-                    [disabled]="!draft().trim() || store.isBusy('send')"
+                    [disabled]="
+                      (!draft().trim() && stagedAttachments().length === 0) ||
+                      store.isBusy('send')
+                    "
                   >
                     Send
                   </button>
@@ -421,8 +592,8 @@ export function clock(iso: string | undefined, now = new Date()): string {
           <h2 id="new-session-title">New session</h2>
           <p class="muted">
             A standing conversation with its own interactive agent. It starts
-            with the deployment's default grants; change them from the
-            conversation.
+            with the deployment's default grants; customize team visibility,
+            model, or grants below.
           </p>
           <label class="field">
             <span>Name</span>
@@ -436,6 +607,27 @@ export function clock(iso: string | undefined, now = new Date()): string {
             />
           </label>
           <label class="field">
+            <span>Visible to team (optional)</span>
+            <input
+              type="text"
+              data-testid="new-session-team"
+              [value]="newTeam()"
+              (input)="newTeam.set(inputValue($event))"
+              placeholder="Default team"
+            />
+          </label>
+          <div class="field">
+            <span>Model</span>
+            <g-pill-select
+              [options]="modelOptions()"
+              [value]="newModel()"
+              ariaLabel="New session model"
+              align="left"
+              testid="new-session-model"
+              (valueChange)="newModel.set($event)"
+            />
+          </div>
+          <label class="field">
             <span>First message (optional)</span>
             <textarea
               rows="4"
@@ -444,6 +636,12 @@ export function clock(iso: string | undefined, now = new Date()): string {
               (input)="newMessage.set(inputValue($event))"
             ></textarea>
           </label>
+          <g-attachment-picker
+            testid="new-session-attach"
+            [staged]="newAttachments()"
+            [disabled]="store.isBusy('create')"
+            (stagedChange)="newAttachments.set($event)"
+          />
           @if (store.actionError(); as err) {
             <p
               class="banner banner-error"
@@ -463,7 +661,9 @@ export function clock(iso: string | undefined, now = new Date()): string {
               data-testid="new-session-create"
               [disabled]="
                 store.isBusy('create') ||
-                (!newName().trim() && !newMessage().trim())
+                (!newName().trim() &&
+                  !newMessage().trim() &&
+                  newAttachments().length === 0)
               "
             >
               Start session
@@ -520,19 +720,19 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);
 
-  // The :id route parameter (withComponentInputBinding); none on
-  // /sessions, which shows the Director on a wide screen. /sessions and
-  // /sessions/:id are two routes, so moving between them makes a new
-  // page; the store (drafts, cached conversations) is shared and stays.
   readonly id = input<string>();
-  // ?new=1 (the create menu's New session) opens the New session dialog.
   readonly new = input<string>();
 
   protected readonly director = DIRECTOR_ID;
   protected readonly freshOpen = signal(false);
+  protected readonly settingsOpen = signal(false);
+  protected readonly teamDraft = signal("");
   protected readonly newOpen = signal(false);
   protected readonly newName = signal("");
+  protected readonly newTeam = signal("");
+  protected readonly newModel = signal("");
   protected readonly newMessage = signal("");
+  protected readonly newAttachments = signal<AttachmentUpload[]>([]);
   protected readonly confirmDelete = signal(false);
 
   private readonly log = viewChild<ElementRef<HTMLElement>>("log");
@@ -571,6 +771,9 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly draft = computed(() =>
     this.store.draftFor(this.store.selectedId()),
   );
+  protected readonly stagedAttachments = computed(() =>
+    this.store.attachmentsFor(this.store.selectedId()),
+  );
   protected readonly capRows = computed(() =>
     toggleRows(
       this.store.offered(),
@@ -583,47 +786,59 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly apiGrants = computed(() =>
     apiGrantCount(this.store.selected()?.session),
   );
-  // The activity line: what the run is doing, or why it is waiting.
+  protected readonly modelOptions = computed<PillOption[]>(() => {
+    const models = this.store.models();
+    const cur = this.store.selected()?.session.model;
+    const all = cur && !models.includes(cur) ? [cur, ...models] : models;
+    const def = this.store.defaultModel();
+    return [
+      {
+        value: "",
+        label: def ? `Deployment default (${def})` : "Deployment default",
+      },
+      ...all.map((m) => ({ value: m, label: m })),
+    ];
+  });
+  protected readonly networkOptions = computed<PillOption[]>(() => [
+    { value: "", label: "Deployment default" },
+    ...this.store.networkOptions().map((v) => ({
+      value: v,
+      label: v === "open" ? "Open" : v === "none" ? "None" : v,
+    })),
+  ]);
   protected readonly activity = computed(() => {
     const t = this.store.selected()?.task;
     return t && (t.state === "running" || t.state === "queued")
       ? (t.activity ?? "")
       : "";
   });
-  // "Start a fresh chat" is offered whenever the conversation is open,
-  // as the classic page does; the spec's crowded-only gate waits on the
-  // server reporting crowding reliably.
   protected readonly showFresh = computed(() => {
     const t = this.store.selected()?.task;
     return this.canRestart() && !!t && t.state !== "closed";
-  });
-  protected readonly classicHref = computed(() => {
-    const id = this.store.selectedId();
-    return id === DIRECTOR_ID ? "/director" : `/sessions/${id}`;
   });
 
   private lastCount = 0;
   private lastSession = "";
 
   constructor() {
-    // Follows the route only: select() reads the store's own selection,
-    // which must not become a dependency that undoes other selections.
     effect(() => {
       const id = this.id() || DIRECTOR_ID;
       untracked(() => {
         this.store.select(id);
         this.freshOpen.set(false);
+        this.settingsOpen.set(false);
         this.confirmDelete.set(false);
       });
     });
-    // Waits for access to be known (canCreate is tracked), so a request
-    // that arrives before the config does is not dropped.
+    effect(() => {
+      const team = this.store.selected()?.session.team ?? "";
+      untracked(() => this.teamDraft.set(team));
+    });
     effect(() => {
       if (!this.new()) return;
       const allowed = this.canCreate();
       untracked(() => {
         if (allowed) this.openNew();
-        // Drop the parameter so Back and a reload do not reopen it.
         void this.router.navigate([], {
           queryParams: { new: null },
           queryParamsHandling: "merge",
@@ -631,14 +846,11 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
         });
       });
     });
-    // Keep the newest message in view when one arrives, unless the
-    // reader has scrolled up to read something older.
     effect(() => {
       const n = this.comments().length;
       const sid = this.store.selectedId();
       const el = this.log()?.nativeElement;
       if (!el) return;
-      // A different conversation starts at its newest message.
       if (sid !== this.lastSession) {
         this.lastSession = sid;
         this.lastCount = 0;
@@ -680,12 +892,91 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     return (ev.target as HTMLInputElement | HTMLTextAreaElement).value;
   }
 
+  protected toggleSettingsPanel(): void {
+    const next = !this.settingsOpen();
+    this.settingsOpen.set(next);
+    if (next) {
+      this.teamDraft.set(this.store.selected()?.session.team ?? "");
+    }
+  }
+
+  protected async saveModel(model: string): Promise<void> {
+    if (await this.store.updateSettings({ model })) {
+      this.snackbar.show(
+        model ? `Model set to ${model}` : "Using default model",
+      );
+    }
+  }
+
+  protected async saveNetwork(networkAccess: string): Promise<void> {
+    if (await this.store.updateSettings({ networkAccess })) {
+      this.snackbar.show("Updated network access");
+    }
+  }
+
+  protected async saveTeam(): Promise<void> {
+    const team = this.teamDraft().trim();
+    if (await this.store.updateSettings({ team })) {
+      this.snackbar.show(
+        team ? `Visible to team ${team}` : "Updated team visibility",
+      );
+    }
+  }
+
+  protected async adoptDefaults(): Promise<void> {
+    if (await this.store.updateSettings({ adoptShippedDefaults: true })) {
+      this.snackbar.show("Adopted shipped default capabilities");
+    }
+  }
+
+  protected async onSessionGrantsChange(next: string[]): Promise<void> {
+    await this.store.setCapabilities(next);
+  }
+
+  protected async applyNow(): Promise<void> {
+    if (await this.store.applyNow()) {
+      this.snackbar.show(
+        "Stopped active turn; next message runs with new settings",
+      );
+    }
+  }
+
   protected onDraft(ev: Event): void {
     this.store.setDraft(this.store.selectedId(), this.inputValue(ev));
   }
 
-  // Enter sends; Shift+Enter (and Enter while an IME is composing) adds
-  // a line as usual.
+  protected onStagedChange(list: AttachmentUpload[]): void {
+    this.store.setAttachments(this.store.selectedId(), list);
+  }
+
+  protected async onComposerPaste(ev: ClipboardEvent): Promise<void> {
+    const files = filesFromTransfer(ev.clipboardData);
+    if (!files.length) return;
+    ev.preventDefault();
+    const sid = this.store.selectedId();
+    const cur = this.store.attachmentsFor(sid);
+    const { uploads, error } = await readFilesAsUploads(files, cur.length);
+    if (error) {
+      this.store.actionError.set(error);
+      return;
+    }
+    if (uploads.length) this.store.setAttachments(sid, [...cur, ...uploads]);
+  }
+
+  protected async onComposerDrop(ev: DragEvent): Promise<void> {
+    ev.preventDefault();
+    const files = filesFromTransfer(ev.dataTransfer);
+    if (!files.length) return;
+    const sid = this.store.selectedId();
+    const cur = this.store.attachmentsFor(sid);
+    const { uploads, error } = await readFilesAsUploads(files, cur.length);
+    if (error) {
+      this.store.actionError.set(error);
+      return;
+    }
+    if (uploads.length) this.store.setAttachments(sid, [...cur, ...uploads]);
+  }
+
   protected onEnter(ev: Event): void {
     const k = ev as KeyboardEvent;
     if (k.shiftKey || k.isComposing) return;
@@ -711,7 +1002,10 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
 
   protected openNew(): void {
     this.newName.set("");
+    this.newTeam.set("");
+    this.newModel.set("");
     this.newMessage.set("");
+    this.newAttachments.set([]);
     this.newOpen.set(true);
     setTimeout(() => this.newTitle()?.nativeElement.focus());
   }
@@ -723,7 +1017,13 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
 
   protected async create(ev: Event): Promise<void> {
     ev.preventDefault();
-    const id = await this.store.create(this.newName(), this.newMessage());
+    const id = await this.store.create({
+      title: this.newName(),
+      message: this.newMessage(),
+      team: this.newTeam(),
+      model: this.newModel(),
+      attachments: this.newAttachments(),
+    });
     if (id) {
       this.newOpen.set(false);
       await this.router.navigate(["/sessions", id]);
@@ -751,8 +1051,6 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   }
 
   protected onEscape(ev: Event): void {
-    // Something nearer the focus (a menu, a tooltip) already took it, or
-    // a modal outside this page (the New task sheet) owns the key.
     if (ev.defaultPrevented) return;
     const outer = this.doc.querySelector('[aria-modal="true"]');
     if (outer && !outer.closest("g-sessions-page")) return;
@@ -765,17 +1063,18 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     } else if (this.freshOpen()) {
       ev.preventDefault();
       this.freshOpen.set(false);
+    } else if (this.settingsOpen()) {
+      ev.preventDefault();
+      this.settingsOpen.set(false);
     }
   }
 
-  // The delete dialog opens with focus on Cancel, the safe choice.
   private readonly focusDelete = effect(() => {
     if (this.confirmDelete()) {
       setTimeout(() => this.deleteCancel()?.nativeElement.focus());
     }
   });
 
-  // A modal keeps Tab inside itself.
   protected onTab(ev: KeyboardEvent): void {
     const dialog = this.doc.querySelector<HTMLElement>(
       'g-sessions-page [aria-modal="true"]',
@@ -783,7 +1082,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     if (!dialog) return;
     const items = Array.from(
       dialog.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input, textarea, select, a[href], [tabindex]:not([tabindex="-1"])',
+        'button:not([disabled]), input, textarea, a[href], [tabindex]:not([tabindex="-1"])',
       ),
     );
     if (items.length === 0) return;
