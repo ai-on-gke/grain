@@ -311,15 +311,16 @@ func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.
 
 // postNormalizeGrantRefusal refuses normalized capability references that
 // validate against their server's JSON schema yet cannot be attached as a
-// capability grant: a task's own repository target or write target
-// (repo#target, repo#write {repo, base}), CI-only repo#write {repo} access,
-// and an api#* scope set limited to a repository outside its reach.
+// capability grant anywhere: a task's own repository target or write
+// target (repo#target, repo#write {repo, base}) and an api#* scope set
+// limited to a repository outside its reach. CI-only repo#write {repo}
+// is not refused here: the repos page's CI capabilities list grants it
+// and checks it through this same call, so it is refused for a task only
+// when the check names one (markCatalogueRefusals' CatalogueRefusal) and
+// by the task writes themselves.
 func postNormalizeGrantRefusal(grant string) (string, map[string]string) {
 	if msg, ok := taskRepoGrantRefusal(grant); ok {
 		return msg, nil
-	}
-	if _, ok := model.RepoWriteTarget(grant); ok {
-		return model.CIOnlyRefusal(grant), nil
 	}
 	if g, ok, err := model.ParseAPIGrant(grant); ok {
 		if err != nil {

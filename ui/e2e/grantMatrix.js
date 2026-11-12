@@ -119,6 +119,19 @@ export function expectedRefusal(ref, variant) {
   return lookup(EXPECTED_REFUSALS, ref, variant) || null;
 }
 
+// TASK_ONLY_REFUSALS are EXPECTED_REFUSALS that only a task refuses: the
+// repos page's CI capabilities list grants them through the same POST
+// /api/capability-grants/check, so the bare check records them and only
+// a check naming a task (subject) refuses them, in catalogueRefusal.
+const TASK_ONLY_REFUSALS = {
+  "https://grain.dev/capabilities/repo#write oneOf[0]": true,
+  "https://grain.dev/capabilities/repo#write oneOf[0] full": true,
+};
+
+export function refusedOnlyForTasks(ref, variant) {
+  return Boolean(lookup(TASK_ONLY_REFUSALS, ref, variant));
+}
+
 function lookup(table, ref, variant) {
   return table[`${ref} ${variant}`] || table[`${ref} *`];
 }
