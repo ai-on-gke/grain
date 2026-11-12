@@ -320,3 +320,91 @@ PASS
 		}
 	}
 }
+
+// A test that writes unindented log.Printf or daemon output to stderr
+// before calling t.Skip or t.Fatal under `go test -v` gets no second
+// `=== NAME` header from Go's chattyPrinter; parseText still keeps its
+// indented file:line diagnostic and skip reason.
+func TestUnindentedOutputDoesNotDropAVerboseTestsReason(t *testing.T) {
+	verbose := `=== RUN   TestLiveInfra
+2026/11/12 01:45:00 starting granule VM...
+    real_test.go:55: infrastructure: /dev/kvm busy on this host
+--- SKIP: TestLiveInfra (0.10s)
+=== RUN   TestLiveFail
+2026/11/12 01:45:01 dialing metadata endpoint
+    real_test.go:88: open-network guest reached 169.254.169.254
+--- FAIL: TestLiveFail (1.20s)
+FAIL
+FAIL	github.com/ai-on-gke/grain/pkg/orchestrator	1.30s
+`
+	run := parseText(strings.NewReader(verbose))
+	if got := run.tests["TestLiveInfra"]; got == nil || got.status != Infra || got.reason() != "infrastructure: /dev/kvm busy on this host" {
+		t.Errorf("TestLiveInfra = %+v (reason %q), want Infra with its skip reason", got, got.reason())
+	}
+	if got := run.tests["TestLiveFail"]; got == nil || got.status != Fail || got.reason() != "open-network guest reached 169.254.169.254" {
+		t.Errorf("TestLiveFail = %+v (reason %q), want Fail with its diagnostic", got, got.reason())
+	}
+}
+
+// One failing path in a package makes `go test` exit 1 for the whole
+// package; passing sibling paths in the same package (including "<pkg>:
+// other tests") stay PASS, while a non-zero exit that no test failure
+// explains still fails closed.
+func TestAFailingPathDoesNotBlamePassingSiblingsInItsPackage(t *testing.T) {
+	root := writeTree(t, map[string]string{"tests/security/a_test.go": "package security\n"})
+	m := Manifest{
+		Packages: []string{"./tests/security"},
+		Paths: []Path{
+			{Name: "sec-bad", Task: 1, Title: "t", Mode: modeInProcess, Package: "./tests/security", Tests: []string{"TestSecBad"}},
+			{Name: "sec-ok", Task: 1, Title: "t", Mode: modeInProcess, Package: "./tests/security", Tests: []string{"TestSecOK"}},
+			{Name: "pkg-bad", Task: 2, Title: "t", Mode: modeInProcess, Package: "./pkg/model", Tests: []string{"TestPkgBad"}},
+			{Name: "pkg-ok", Task: 2, Title: "t", Mode: modeInProcess, Package: "./pkg/model", Tests: []string{"TestPkgOK"}},
+			{Name: "pkg-teardown", Task: 3, Title: "t", Mode: modeInProcess, Package: "./pkg/teardown", Tests: []string{"TestPassThenExit1"}},
+		},
+	}
+	fake := func(dir string, args []string, out io.Writer) (int, error) {
+		switch args[len(args)-1] {
+		case "./tests/security":
+			io.WriteString(out, events("example/tests/security", map[string][2]string{
+				"TestSecBad":        {"fail", "viewer got 200"},
+				"TestSecOK":         {"pass", ""},
+				"TestUnnamedPasses": {"pass", ""},
+			}))
+			json.NewEncoder(out).Encode(testEvent{Action: "fail", Package: "example/tests/security"})
+			return 1, nil
+		case "./pkg/model":
+			io.WriteString(out, events("example/pkg/model", map[string][2]string{
+				"TestPkgBad": {"fail", "schedule fired unapproved"},
+				"TestPkgOK":  {"pass", ""},
+			}))
+			json.NewEncoder(out).Encode(testEvent{Action: "fail", Package: "example/pkg/model"})
+			return 1, nil
+		default:
+			io.WriteString(out, events("example/pkg/teardown", map[string][2]string{
+				"TestPassThenExit1": {"pass", ""},
+			}))
+			json.NewEncoder(out).Encode(testEvent{Action: "output", Package: "example/pkg/teardown", Output: "TestMain cleanup leaked a goroutine\n"})
+			json.NewEncoder(out).Encode(testEvent{Action: "fail", Package: "example/pkg/teardown"})
+			return 1, nil
+		}
+	}
+	got := map[string]Verdict{}
+	for _, v := range RunInProcess(root, m, time.Minute, io.Discard, io.Discard, fake) {
+		got[v.Path.Name] = v
+	}
+	for name, want := range map[string]Status{
+		"sec-bad":                       Fail,
+		"sec-ok":                        Pass,
+		"./tests/security: other tests": Pass,
+		"pkg-bad":                       Fail,
+		"pkg-ok":                        Pass,
+		"pkg-teardown":                  Fail,
+	} {
+		if got[name].Status != want {
+			t.Errorf("path %s = %s (%s), want %s", name, got[name].Status, got[name].Detail, want)
+		}
+	}
+	if !strings.Contains(got["pkg-teardown"].Detail, "TestMain cleanup leaked a goroutine") {
+		t.Errorf("pkg-teardown detail = %q, want TestMain failure reason", got["pkg-teardown"].Detail)
+	}
+}
