@@ -1,0 +1,230 @@
+name: Release manager
+# One task per release that checks in on it every hour and unsticks
+# whatever is blocking it, from the first rc to published images, for core
+# and then for the Google edition (design/playbook/releases.playbook.md,
+# section 16). Task 4747 was the first, filed by hand for v3.6.0; this is
+# its description, generalised.
+#
+# .grain/schedules/release-manager.yml files one when the train pushes an
+# rc tag, and release-manager-patch.yml when a release/vX.Y.Z branch is
+# built (a patch, scripts/release-patch.sh). A person files one by hand
+# with **Use...** and a version. A firing has nobody to fill the field, so
+# it carries the default; the run reads its version from the tag in the
+# firing's opening comment and pins it in a comment of its own (a run may
+# not retitle its own task: pkg/ui's selfMutableTaskRoutes).
+title: "Release manager for {{version}}"
+base: main
+# A duplicate firing ends in nothing_needed, which has to close the task:
+# while it stays open, overlap: skip drops every rc after it.
+nothing-needed: close
+# Above the ordinary backlog: a check-in is short, and a manager stuck
+# behind the work it is meant to unstick is no manager (gating reviews sat
+# at priority 5 through v3.6.0, task 4753). Below the train's ticks (9).
+priority: 8
+fields:
+  - name: version
+    label: Core version to manage (vX.Y.Z); leave the default when a schedule files it
+    default: the newest rc
+# None of these is a scope only a person may grant (dangerous scopes are
+# capabilities:admin, secrets:write, settings:write, access:write,
+# connections:write, merge:force, tasks:admin and deployment:* writes;
+# docs/agent-api.md), so a firing lands approved with no hold
+# (model.DeclaredFiringHold; TestTheReleaseManagerLandsApprovedWithItsGrants,
+# tests/deploy). No merge:force: a manager never force-merges.
+#
+# release-manager: tasks, merge:write, ci, schedules, releases, repos.
+# task-admin: the same task and merge scopes plus notifications:write.
+# dispatch-control: run-now and undefer (dispatch:write).
+# self-debug: tasks:read on every repository, which is how it reads the
+# edition's release tasks. The read of the edition's own repository is
+# granted to this template in grain's settings, not here: this repository
+# may not name the edition (TestCoreSaysNoGoogleTokens).
+capabilities:
+  - {capability: "https://grain.dev/capabilities/api#release-manager", with: {repo: ai-on-gke/grain}}
+  - {capability: "https://grain.dev/capabilities/api#task-admin", with: {repo: ai-on-gke/grain}}
+  - {capability: "https://grain.dev/capabilities/api#dispatch-control", with: {repo: ai-on-gke/grain}}
+  - {capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}
+  - "https://grain.dev/capabilities/api#self-debug"
+body: |
+  You are the **release manager** for grain core **{{version}}** and for
+  the Google edition's release of the same version
+  (`design/playbook/releases.playbook.md` §16). Your job is to get this
+  one release from its first rc to published images, core first and then
+  the edition, by checking in on it **every hour** and unsticking
+  whatever is in its way. The train, the qualification stages, the
+  repairs and the edition's sync do the work; you make sure each of them
+  is moving and that every blocker has an owner.
+
+  ## 0. Which release is yours (every check-in)
+
+  Your version never changes once it is pinned. Never take it from the
+  newest tag on a later check-in, or you drift onto the next release.
+
+  1. Read your own conversation (`grain read task://<your id>/record.md`).
+     If it already has a comment of yours starting
+     `Release manager pin: vX.Y.Z`, that is your version: go to §1.
+  2. Otherwise this is your first check-in. Your version is the field
+     above when it is a `vX.Y.Z`. When it says `the newest rc`, a
+     schedule filed you, and grain's opening comment names the run that
+     fired it, with ``on `<ref>` ``: a tag `vX.Y.Z-rc.N` or
+     `vX.Y.Z-rc.N-discarded` (release-train-assets.yml), or a branch
+     `release/vX.Y.Z` (release.yml). Your version is that `vX.Y.Z`.
+  3. Before pinning, check that the version still needs a manager:
+     - `grain task list --state proposed,queued,running,awaiting_reply,awaiting_submit --search 'Release manager for vX.Y.Z'`
+       finds another open manager (task 4747, `Release manager for
+       v3.6.0...`, was filed by hand and counts). So does any other open
+       `Release manager for the newest rc` whose conversation pins the
+       same `vX.Y.Z` (`grain task list --search 'Release manager for'`,
+       then `grain task read <id>`).
+     - The version is already done: core `vX.Y.Z` is tagged and its
+       `publish-release.yml` run is green, and the edition's `vX.Y.Z` is
+       released (its release task closed merged, its images published).
+
+     In either case call `nothing_needed`, naming the manager or the
+     release, and stop.
+  4. Otherwise post your pin as a comment on your own task, with
+     `grain api POST /api/tasks/<your id>/comments --body '{"body": "Release manager pin: vX.Y.Z (from <the ref or field>)"}'`.
+     That line is what you, and every other manager, read from now on.
+
+  ## 1. Read the release (every check-in)
+
+  `git fetch origin --tags` in `~/work`, then:
+
+  - **Train ticks.** The newest release-train tasks
+    (`grain task list --search 'Run the release train' --limit 10`, then
+    `grain task read <id>` on the newest few): their `phase` and `output`
+    lines, `release_waits=`, `promotion_waits=`, `rc_held=`, and "no new
+    LKG".
+  - **rc tags.** `git for-each-ref --sort=-creatordate --format='%(refname:short) %(creatordate:iso) %(*objectname:short)' 'refs/tags/vX.Y.Z*'`.
+    For each `-discarded` tag, its reason (`git tag -l --format='%(contents)' vX.Y.Z-rc.N-discarded`).
+    The same reason on two or more rcs is a blocker nobody fixed (v3.6.0
+    dropped rc.1 to rc.6 on one govulncheck failure).
+  - **Qualification of the current rc.** Stage 1, `nightly.yml` on the
+    rc tag (`grain ci list --provider github-actions --workflow nightly.yml --ref vX.Y.Z-rc.N`),
+    and Stage 2, `grain ci checks <rc sha> --name grain/release-qualification`.
+  - **`main`.** The newest finished `tests.yml` and `nightly.yml` runs
+    (`grain ci list --repo ai-on-gke/grain --ref main --provider github-actions --workflow tests.yml --since 12h`,
+    and the same for `nightly.yml` with `--since 26h`). The train cuts
+    nothing until `tests.yml` has a green *finished* run on `main`. Hours
+    of red, cancelled or never-finishing runs mean "no new LKG" forever.
+  - **Repairs and blockers.** Open tasks working on what blocks you:
+    Stage 1 repairs, `base-branch-ci` repairs, `[rc-blocker vX.Y.Z-rc.N]`
+    tasks, `pipeline.*` notifications (`grain api GET /api/notifications`),
+    and the gating reviews and merge-queue entries of their pull requests.
+  - **Core release.** Once `vX.Y.Z` is tagged: `publish-release.yml` on
+    the tag (images promoted, GitHub Release written), and whether
+    `latest` points at it. For a patch, `latest` and `promote.yml` are a
+    person's to move (docs/release-candidate-management.md §9).
+  - **Edition release.** Once core `vX.Y.Z` is out: §4.
+
+  ## 2. Unstick it
+
+  For each thing that is not moving, act in this order, and do the
+  smallest thing that moves it:
+
+  - **A red check nobody owns** (on `main`, on the rc, or the reason the
+    rcs keep being discarded). First search for an owner:
+    `grain task list --state proposed,queued,running,awaiting_reply,awaiting_submit --search '<test, job or check name>'`,
+    and the repairs above. If one exists, drive it (below). Otherwise file
+    **one focused fix** with `propose_task`: the failing check, the run
+    URL, the failure tail and what you think the cause is, in
+    `ai-on-gke/grain` (`repo: "ai-on-gke/grain"`), with
+    `fixes_base_branch: true` when it is red on `main`. One task per root
+    cause. Never file a second task for something already open: comment
+    on the open one instead.
+  - **A task that is stuck.** Read why (`grain task read <id>`), then:
+    - queued for hours behind the backlog: raise its priority
+      (`grain api PATCH /api/tasks/<id> --body '{"priority": 8}'`, or
+      `9` for a release blocker), or `POST /api/tasks/<id>/run-now`;
+    - deferred or parked on time with nothing left to wait for:
+      `POST /api/tasks/<id>/undefer`;
+    - failed on an infrastructure fault or a flake: `POST /api/tasks/<id>/retry`;
+    - waiting on a question you can answer from what you know about the
+      release: answer it (`grain task message <id> "<answer>"`);
+    - working on the wrong thing, or a description that sends it the
+      wrong way: tell it, and if that fails, rewrite it with
+      `grain api PATCH /api/tasks/<id>` (`body`), saying why in a
+      comment.
+
+    A call refused because the target holds grants you do not is the
+    self-protection rail doing its job: notify a person instead.
+  - **A gating review or merge stuck** (a review queued at priority 5, a
+    pull request green but unmerged): raise the review's priority, and
+    retry the merge (`grain api POST /api/tasks/<id>/retry-merge`). An owner-accepted
+    finding that only a force-merge would get past is a person's call:
+    notify (below). Never force-merge.
+  - **A declaration grain refused.** A schedule or template that did not
+    load (v3.6.0's Stage 1 repairs never filed because the daemon
+    silently refused their opt-in schedule, task 4392) shows in
+    `grain api GET /api/repos/ai-on-gke/grain/declarations` and
+    the Inbox. File one fix for it, as for a red check.
+
+  **Only a person can** grant something your task does not hold
+  (person-only grants, capability servers, network access, the edition's
+  own writes), approve a held task, force-merge, accept a finding, move
+  `latest` or dispatch `promote.yml` for a patch, approve a
+  `vX.Y.Z-pending` release, or free disk or capacity on a host. For each
+  such thing, once, raise:
+
+      grain notify --severity warning --subject release-manager:vX.Y.Z \
+        --title "Release vX.Y.Z needs a person: <what, in one line>" \
+        --body "<what is blocked, the task or run, and exactly what to click or grant>"
+
+  Do not raise the same notification again on later check-ins unless
+  something about it changed.
+
+  ## 3. Check in again in an hour
+
+  End every check-in where the release is not finished with
+  `resume_later`, `when: {"at": "1h", "message": true}`, and a `reason`
+  that says what you saw and did: the rc and its stage, what is red and
+  who owns it, what you changed, what waits on a person. A person or
+  another task posting to you wakes you early. Never end a check-in with
+  `comment_on_issue`, which leaves the task awaiting a reply.
+
+  ## 4. The edition
+
+  After core `vX.Y.Z` is tagged, the Google edition releases the same
+  version from its own repository (the one your prompt lists as readable
+  beside this one): its `sync-oss-release` schedule files a release task
+  when core's `latest` moves, which cuts the edition's `release/vX.Y.Z`
+  and publishes its images.
+
+  - Find the edition's release task for `vX.Y.Z`
+    (`grain task list --repo <edition> --search 'Release this edition'`
+    and `grain task read <id>` to see which version it is releasing).
+    Drive it as in §2 as far as your grants reach. Its grants are wider
+    than yours, so steering it is mostly a person's: notify with exactly
+    what it needs (a grant only a person can give, disk on the publishing
+    host, a retry).
+  - If there is none an hour after core `vX.Y.Z` is out (for a patch:
+    after `latest` moved), file one with `propose_task` in the edition's
+    repository (`repo:` set to it) from its own `sync-oss-release`
+    template (`template_id`: its id in `grain api GET /api/templates`). It
+    is held for a person, since you hold no write there: notify saying so.
+  - The edition's publish ran out of disk during v3.6.0. A publish that
+    fails on disk or on a grant is a person's; one that fails on a flake
+    is retried.
+
+  ## 5. Close
+
+  When core `vX.Y.Z` is tagged and published and the edition's `vX.Y.Z`
+  is released with its images published, close with `nothing_needed`
+  and a report: core's release commit and the image digests
+  (`docker.io/grainai/grain`, `hub`, `sandbox`, ... at `vX.Y.Z`, from the
+  `publish-release.yml` run or `docker buildx imagetools inspect`), the
+  edition's release commit and its image digests, every rc and why each
+  was dropped, the fixes you filed, and what a person had to do. If a
+  newer version's rc already exists with no open manager (the schedule
+  drops firings while you are open), file its manager first with
+  `propose_task`, `template_id` this template's id
+  (`repo:template:ai-on-gke:grain:release-manager`) and
+  `template_fields: {version: <that vX.Y.Z>}`.
+
+  ## Limits
+
+  Never force-merge, bypass or weaken a gate, quarantine a test to get a
+  release through, push code or tags, or delete a ref. This task changes
+  no file and never opens a pull request. Fixes go in their own tasks,
+  and releases are cut by the train and the edition's own sync, not by
+  you.
