@@ -121,8 +121,10 @@ func Start(t testing.TB, opts Options) *Server {
 		codeFile = opts.Args[i+1]
 	}
 	s := &Server{t: t, codeFile: codeFile}
-	s.start(opts.Args)
+	// Before start, so a demo that came up but then failed its first
+	// request or seed read is still stopped.
 	t.Cleanup(s.stop)
+	s.start(opts.Args)
 	return s
 }
 
