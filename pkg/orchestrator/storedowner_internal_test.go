@@ -23,8 +23,9 @@ import (
 
 type stubCollaboratorClient struct {
 	github.Client
-	perms map[string]string
-	calls []string
+	perms        map[string]string
+	calls        []string
+	branchOwners []string
 }
 
 func (c *stubCollaboratorClient) CollaboratorPermission(owner, repo, username string) (string, error) {
@@ -36,7 +37,13 @@ func (c *stubCollaboratorClient) CollaboratorPermission(owner, repo, username st
 	return "none", nil
 }
 
+func (c *stubCollaboratorClient) BranchExists(owner, repo, branch string) (bool, error) {
+	c.branchOwners = append(c.branchOwners, owner)
+	return true, nil
+}
+
 func TestSenderTrustedSeparatesHostsSharingOwnerAndName(t *testing.T) {
+	t.Parallel()
 	client := &stubCollaboratorClient{
 		perms: map[string]string{
 			"ghe.example.com/acme/widgets:alice": "write",
@@ -61,6 +68,7 @@ func TestSenderTrustedSeparatesHostsSharingOwnerAndName(t *testing.T) {
 }
 
 func TestSyncPollKeySeparatesHostsSharingOwnerNameAndNumber(t *testing.T) {
+	t.Parallel()
 	gheRef := model.PullRequestRef{
 		Repo:   model.RepoRef{Host: "ghe.example.com", Owner: "acme", Name: "widgets"},
 		Number: 7,
@@ -79,5 +87,34 @@ func TestSyncPollKeySeparatesHostsSharingOwnerNameAndNumber(t *testing.T) {
 	}
 	if defKey.Subject != "acme/widgets#7" {
 		t.Errorf("default Subject = %q, want acme/widgets#7", defKey.Subject)
+	}
+}
+
+func TestSameRepoHeadBranchAndHeadPushableAcceptBareHeadRepoOffDefaultHost(t *testing.T) {
+	t.Parallel()
+	ghe := model.RepoRef{Host: "ghe.example.com", Owner: "acme", Name: "widgets"}
+	sameRepoDetail := github.PullRequestDetail{
+		HeadRef:  "grain/task-1",
+		BaseRef:  "main",
+		HeadRepo: "acme/widgets",
+	}
+	if !sameRepoHeadBranch(ghe, sameRepoDetail) {
+		t.Fatal("sameRepoHeadBranch rejected a same-repo PR whose HeadRepo is bare owner/name on a non-default host")
+	}
+	forkDetail := sameRepoDetail
+	forkDetail.HeadRepo = "bob/widgets"
+	if sameRepoHeadBranch(ghe, forkDetail) {
+		t.Fatal("sameRepoHeadBranch accepted a fork PR")
+	}
+
+	fake := &stubCollaboratorClient{}
+	if !headPushable(fake, ghe, sameRepoDetail) {
+		t.Fatal("headPushable rejected a same-repo PR whose HeadRepo is bare owner/name on a non-default host")
+	}
+	if len(fake.branchOwners) != 1 || fake.branchOwners[0] != "ghe.example.com/acme" {
+		t.Fatalf("BranchExists owners = %v, want [ghe.example.com/acme]", fake.branchOwners)
+	}
+	if headPushable(fake, ghe, forkDetail) {
+		t.Fatal("headPushable accepted a fork PR")
 	}
 }

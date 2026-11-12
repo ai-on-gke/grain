@@ -267,3 +267,71 @@ func TestPollScheduleStatsSummarizesTrackedAndBackedOffPRs(t *testing.T) {
 		t.Errorf("Stats after Reset(pr3) = %+v, want 1 backed off and max 60s", got)
 	}
 }
+
+func TestAGrainWriteOnAHostQualifiedRepoResetsOnlyThatHost(t *testing.T) {
+	saved := polls
+	t.Cleanup(func() { polls = saved })
+	low := false
+	polls = newTestSchedule(&low)
+	now := time.Date(2026, 10, 26, 4, 0, 0, 0, time.UTC)
+	ghePR := PollKey{Scope: "1", Subject: PullRequestSubject("ghe.example.com/acme", "widgets", 7), Aspect: "pull request"}
+	gheBranch := PollKey{Scope: "1", Subject: BranchSubject("ghe.example.com/acme", "widgets", "grain/x/task-1"), Aspect: "path triggers"}
+	portPR := PollKey{Scope: "1", Subject: PullRequestSubject("127.0.0.1:8443/acme", "widgets", 7), Aspect: "pull request"}
+	defPR := PollKey{Scope: "1", Subject: PullRequestSubject("acme", "widgets", 7), Aspect: "pull request"}
+	idle := func() {
+		for _, k := range []PollKey{ghePR, gheBranch, portPR, defPR} {
+			for i := 0; i < 4; i++ {
+				polls.Observe(k, "same", now)
+			}
+		}
+	}
+	due := func(k PollKey) bool { return polls.Due(k, PollNormal, false, now.Add(time.Second)) }
+
+	idle()
+	noteWrite("POST", "/repos/ghe.example.com/acme/widgets/issues/7/comments")
+	if !due(ghePR) || due(defPR) || due(portPR) {
+		t.Errorf("comment on GHE #7: ghe=%v (want true), def=%v, port=%v (want false)", due(ghePR), due(defPR), due(portPR))
+	}
+
+	idle()
+	noteWrite("PATCH", "/repos/ghe.example.com/acme/widgets/git/refs/heads/grain/x/task-1")
+	if !due(gheBranch) || due(ghePR) || due(defPR) {
+		t.Errorf("branch update on GHE: branch=%v (want true), ghePR=%v, defPR=%v", due(gheBranch), due(ghePR), due(defPR))
+	}
+
+	idle()
+	noteWrite("PUT", "/repos/ghe.example.com/acme/widgets/pulls/7/merge")
+	if !due(ghePR) || !due(gheBranch) || due(defPR) {
+		t.Errorf("merge on GHE: ghePR=%v gheBranch=%v (want true), defPR=%v (want false)", due(ghePR), due(gheBranch), due(defPR))
+	}
+
+	idle()
+	noteWrite("POST", "/repos/127.0.0.1:8443/acme/widgets/merges")
+	if !due(portPR) || due(ghePR) || due(defPR) {
+		t.Errorf("merge on host:port: portPR=%v (want true), ghePR=%v, defPR=%v", due(portPR), due(ghePR), due(defPR))
+	}
+}
+
+type staticJSONTransport map[string]string
+
+func (m staticJSONTransport) Request(_, path string, _ map[string]string, _ []byte) (ApiResponse, error) {
+	if body, ok := m[path]; ok {
+		return ApiResponse{Status: 200, Body: []byte(body)}, nil
+	}
+	return ApiResponse{Status: 200, Body: []byte(`[]`)}, nil
+}
+
+func TestMergeRequirementsUsesBareOwnerForRequestedTeams(t *testing.T) {
+	t.Parallel()
+	client := NewClient(staticJSONTransport{
+		"/repos/ghe.example.com/acme/widgets/branches/main":               `{}`,
+		"/repos/ghe.example.com/acme/widgets/pulls/7/requested_reviewers": `{"users":[{"login":"alice"}],"teams":[{"slug":"platform"}]}`,
+	}, StaticToken{})
+	req, err := client.MergeRequirements("ghe.example.com/acme", "widgets", 7, "main")
+	if err != nil {
+		t.Fatalf("MergeRequirements: %v", err)
+	}
+	if len(req.RequestedTeams) != 1 || req.RequestedTeams[0] != "@acme/platform" {
+		t.Fatalf("RequestedTeams = %v, want [@acme/platform]", req.RequestedTeams)
+	}
+}
