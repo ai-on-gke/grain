@@ -72,3 +72,40 @@ func TestATemplatesSandboxShapeRoundTripsThroughTheStateRepository(t *testing.T)
 		}
 	}
 }
+
+// TestAVerbatimTemplateSandboxIsHeldToTheCeiling refuses a template whose
+// `sandbox:` is written as the column's JSON text rather than the mapping
+// when that text is above the ceiling the mapping is held to: the
+// verbatim spelling is no way around ValidateTemplateSandbox.
+func TestAVerbatimTemplateSandboxIsHeldToTheCeiling(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, db := openDB(t)
+	if err := store.PutTemplate(ctx, model.Template{
+		ID: "template-1", Name: "Publish", Title: "Publish images", Body: "push them",
+		Sandbox: model.SandboxShape{CPUs: 4}, CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := staterepo.Export(ctx, db, dir); err != nil {
+		t.Fatalf("exporting: %v", err)
+	}
+	path := filepath.Join(dir, filepath.FromSlash(staterepo.DumpPath("template")))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := strings.Replace(string(raw), "sandbox: {cpus: 4}", `sandbox: '{"cpus":9999}'`, 1)
+	if edited == string(raw) {
+		t.Fatalf("%s does not carry the sandbox block to edit:\n%s", path, raw)
+	}
+	if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, otherDB := openDB(t)
+	err = staterepo.ImportTables(ctx, otherDB, dir, staterepo.SettingsTables)
+	if err == nil || !strings.Contains(err.Error(), "cpus is 9999") {
+		t.Fatalf("importing a verbatim 9999-CPU sandbox = %v, want it refused naming cpus", err)
+	}
+}

@@ -134,3 +134,17 @@ func TestSandboxShapeEncodesAndDescribes(t *testing.T) {
 		t.Errorf("Describe = %q, want %q", got, want)
 	}
 }
+
+// TestDecodeSandboxShapeDropsAShapeAboveTheCeiling reads stored text
+// ValidateTemplateSandbox would refuse as no shape at all, so a row
+// written around the validation files at the deployment's default.
+func TestDecodeSandboxShapeDropsAShapeAboveTheCeiling(t *testing.T) {
+	for _, text := range []string{`{"cpus":9999}`, `{"memoryMb":-1}`, `{"diskGb":64}{`} {
+		if got := model.DecodeSandboxShape(text); !got.IsZero() {
+			t.Errorf("model.DecodeSandboxShape(%s) = %+v, want no shape", text, got)
+		}
+	}
+	if got := model.DecodeSandboxShape(`{"cpus":4,"diskGb":100}`); got != (model.SandboxShape{CPUs: 4, DiskGB: 100}) {
+		t.Errorf("DecodeSandboxShape of a valid shape = %+v", got)
+	}
+}

@@ -57,8 +57,9 @@ func refuseCompositionSandboxAboveMax(ctx context.Context, q querier, comp Compo
 }
 
 // RefuseCompositionSandboxAboveMax is refuseCompositionSandboxAboveMax for
-// a caller outside the store that files a composition it got from
-// TemplateComposition straight in, as the release-notes filer does.
+// a filer outside this package that composes a template's task itself and
+// files it approved without passing through ui.Client
+// (orchestrator.syncRepoReleaseNotes).
 func (s *Store) RefuseCompositionSandboxAboveMax(ctx context.Context, comp Composition) error {
 	return refuseCompositionSandboxAboveMax(ctx, s.db, comp)
 }

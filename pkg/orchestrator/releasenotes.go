@@ -359,11 +359,14 @@ func syncRepoReleaseNotes(ctx context.Context, deps Deps, tags github.ReleaseTag
 			errs = append(errs, fmt.Errorf("orchestrator: composing release-notes task for %s %s: %w", repo, version, err))
 			continue
 		}
-		if comp.Target == nil || !comp.Target.Same(repo) {
-			continue
-		}
+		// TemplateComposition does not hold the template's sandbox shape
+		// to this deployment's maximum, and nothing at dispatch does, so
+		// this filing asks it as a schedule's would.
 		if err := deps.Store.RefuseCompositionSandboxAboveMax(ctx, comp); err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: release-notes task for %s %s: %w", repo, version, err))
+			continue
+		}
+		if comp.Target == nil || !comp.Target.Same(repo) {
 			continue
 		}
 		comp = filterReleaseNotesDefaultGrants(comp, tmpl, cat)

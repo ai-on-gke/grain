@@ -96,8 +96,8 @@ func EncodeSandboxShape(s SandboxShape) string {
 }
 
 // DecodeSandboxShape is EncodeSandboxShape's inverse. Text this build
-// cannot read is no shape at all, rather than an error on every read of
-// the template table.
+// cannot read, or a shape ValidateTemplateSandbox refuses, is no shape at
+// all, rather than an error on every read of the template table.
 func DecodeSandboxShape(text string) SandboxShape {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -105,6 +105,9 @@ func DecodeSandboxShape(text string) SandboxShape {
 	}
 	var s SandboxShape
 	if err := json.Unmarshal([]byte(text), &s); err != nil {
+		return SandboxShape{}
+	}
+	if ValidateTemplateSandbox(s) != nil {
 		return SandboxShape{}
 	}
 	return s
