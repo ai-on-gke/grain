@@ -290,9 +290,9 @@ func TestMigration144HostQualifiesReleaseOwners(t *testing.T) {
 	}
 	candidate, err := store.CurrentCandidateForRelease(ctx, release.ID)
 	if err != nil || candidate == nil || candidate.Repo != offHostWidgets {
-		t.Errorf("candidate of the moved release = (%+v, %v), want it in %s", candidate, err, offHostWidgets)
+		t.Fatalf("candidate of the moved release = (%+v, %v), want it in %s", candidate, err, offHostWidgets)
 	}
-	if run, err := store.CandidateQualificationRun(ctx, release.ID); err != nil || run == nil || run.Repo != offHostWidgets {
+	if run, err := store.CandidateQualificationRun(ctx, candidate.ID); err != nil || run == nil || run.Repo != offHostWidgets {
 		t.Errorf("qualification run of the moved candidate = (%+v, %v), want it in %s", run, err, offHostWidgets)
 	}
 	migrate()

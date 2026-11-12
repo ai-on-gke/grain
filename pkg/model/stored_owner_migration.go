@@ -35,8 +35,10 @@ var qualificationOwnerTables = []string{
 // migrateStoredOwners is migration 142: it host-qualifies the owner
 // column of the qualification plan tables and scheduled_workflow_run,
 // which before it were written with a bare Owner even for a repository
-// off the default host (grain/task-4335). Every other repo-keyed table
-// already holds StoredOwner, which ForgetRepo matches on.
+// off the default host (grain/task-4335). release, release_candidate
+// and qualification_run had the same fault and are migration 144's
+// (migrateReleaseOwners); every other repo-keyed table already holds
+// StoredOwner, which ForgetRepo matches on.
 //
 // A bare owner says nothing about which host its row was meant for, so a
 // row is only moved where something else does:
