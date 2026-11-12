@@ -234,9 +234,9 @@ stage1_names=("go, shuffled and repeated (1)" "go, shuffled and repeated (2)" "s
   "metadata and model scalability" "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation"
   "postgres concurrency and stress" "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "ui e2e, repeated (2)"
   "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" "pkg/cli stress under load" "upgrade from previous versions"
-  "real KVM sandboxes" "twenty two-VM boots" "real kubernetes")
+  "real KVM sandboxes" "twenty two-VM boots" "real kubernetes" "security attack paths")
 stage1_ids=(go-long staterepo-soak loadtest scalability merge-stress long-term-test long-sim postgres-stress
-  tunnel-stress ui-e2e-long installer-variants vulns image-vulns cmd-grain-stress upgrade-test kvm-sandboxes kvm-route-stress real-kubernetes)
+  tunnel-stress ui-e2e-long installer-variants vulns image-vulns cmd-grain-stress upgrade-test kvm-sandboxes kvm-route-stress real-kubernetes security-attacks)
 
 # gh_job <name> <conclusion|in_progress> [<run-id>] [<attempt>] [<created-epoch>] [<sha>]: one
 # job, as GET /repos/{owner}/{repo}/actions/runs/{id}/jobs?filter=all lists it.

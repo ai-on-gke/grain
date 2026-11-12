@@ -231,9 +231,31 @@ Today `nightly.yml` has not run on GitHub Actions in over a week because relying
 
 | Job(s) | Workflow | Required now | Required once WIF infra lands |
 | --- | --- | --- | --- |
-| `go-long` (4 shards), `staterepo-soak`, `loadtest`, `scalability`, `merge-stress`, `long-term-test`, `long-sim`, `postgres-stress`, `tunnel-stress`, `ui-e2e-long` (3 passes), `installer-variants`, `vulns`, `image-vulns`, `cmd-grain-stress`, `upgrade-test`, `kvm-sandboxes`, `kvm-route-stress`, `real-kubernetes` | `nightly.yml` | **Yes (all 18 jobs, `success` required; `skipped` is a failure)** | **Yes** |
+| `go-long` (4 shards), `staterepo-soak`, `loadtest`, `scalability`, `merge-stress`, `long-term-test`, `long-sim`, `postgres-stress`, `tunnel-stress`, `ui-e2e-long` (3 passes), `installer-variants`, `vulns`, `image-vulns`, `cmd-grain-stress`, `upgrade-test`, `kvm-sandboxes`, `kvm-route-stress`, `real-kubernetes`, `security-attacks` | `nightly.yml` | **Yes (all 19 jobs, `success` required; `skipped` is a failure)** | **Yes** |
 | `real-vm`, `real-kubernetes` | `tests.yml` | **Yes (Stage 0)** — on GitHub-hosted `ubuntu-latest` (nested KVM; single-node `kind`), whenever the change touches the Go backend; each fails, never skips, when `/dev/kvm` is missing or an expected test does not run and pass. Stage 1 runs the same suites on every RC as `kvm-sandboxes` (a superset of `real-vm`'s tests) and `real-kubernetes` above | **Yes** |
 | `smoke` (`GCE and GKE lifecycle`) | `gcp-smoke.yml` (`GCP_WIF_PROVIDER`, `GCP_SA_EMAIL`) | **No (advisory)** — stays in `CANDIDATE_GATE_ADVISORY` and skips every step while WIF variables are unset; a skipped job carries no verdict | **Yes** — dispatched in Stage 1 once WIF variables are set, with non-skipping assertion and transient cloud quota/IAM errors routed through `infra` retry (§4) |
+
+#### The security attack gate (`security-attacks`)
+
+The operator asked (2026-11-10) that the user-attack checks run every night and gate every rc. `nightly.yml`'s `security-attacks` job runs every attack path in [`tests/security/attacks.yaml`](../../tests/security/attacks.yaml) through `cmd/security-attacks`. The paths come from the regression suites of five tasks:
+
+- 3981: the role x route authorization matrix and IDOR;
+- 3982: escalation through tasks, templates, grants and approvals;
+- 3983: credential exposure to non-admins;
+- 3984: sandbox -> host and cross-run credential reach;
+- 3965: insider risk through grain/config Submit and `.grain` declarations.
+
+`security-attacks` is a required Stage 1 job. A red `security-attacks` discards the rc like any other Stage 1 failure, after the usual one flake retry (§3).
+
+- **One verdict per attack path.** The job summary has a table of every path, the task whose suite holds it, and its result: PASS, FAIL, PASS (known gap), INFRA or LIVE. A path passes only when every test it names ran and passed.
+- **Fail closed.** These all fail their path: a failed test, a test that never ran (a rename, a package that did not build, a panic, a timeout) and a skipped test. So does a setup step that fails before anything is judged. Two skip reasons are reported by name instead of failing:
+  - `known gap:` is a documented, filed hole. The test pins it until a fix lands and the test starts passing.
+  - `infrastructure:` means the runner lacks what the test needs, which says nothing about the attack.
+
+  Every other test in a `tests/security` package is run too, and judged as the path `<package>: other tests`.
+- **Complete.** `cmd/security-attacks check` runs first. It also runs on every pull request, as `cmd/security-attacks`'s unit test `TestTheManifestCoversEveryTestPackageUnderTestsSecurity`. It fails if a `tests/security` test package is missing from the manifest's `packages`, or if a path names a test that no longer exists. A new suite has to be added to the manifest before it merges.
+- **Live paths.** Some paths need a real sandbox (`mode: live-vm`, `live-k8s`). They run inside `kvm-sandboxes` and `real-kubernetes`, on the VM and cluster those jobs already set up. `cmd/security-attacks judge` reports them in those jobs' summaries, and a log the suite never wrote fails them. Both jobs are required in Stage 1 (the table above), so a failed live path fails its job and gates the rc too.
+- **Triage.** On failure, the job's last step prints the failed paths' names. grain hands the end of that log to the `nightly-ci-review` triage task and the Stage 1 repair task, so both see the names.
 
 #### The image vulnerability gate (`image-vulns`)
 
@@ -457,7 +479,7 @@ Every run of the four-item `release-qualification` agent suite boots multiple sa
    - **Stage 1 (`nightly.yml` on GitHub Actions):** Costs **zero model tokens** and zero deployment sandboxes. Any Go race, soak, stress, installer, or upgrade regression fails in Stage 1 and discards the RC **before a single qualification agent task is filed**.
    - **Stage 2 (`release-qualification` agent suite):** Starts **only after Stage 1 is 100% green**. Inside Stage 2, the three targeted functional items (`qualification-mergequeue`, `-ci-diagnostics`, `-base-triage`) run first; `qualification-system-smoke` depends on them, and fail-fast cancellation stops remaining items if any item confirms red after its retry.
 2. **Acceptable cadence and quota ceiling:**
-   - **Continuous loop (§15, 2026-11-10).** With no cap and one rc always qualifying, Stage 1 runs back to back while `main` moves: at ~60–90 minutes a run, at most ~16–24 rc qualifications a day, typically fewer (a tick only cuts when `main` has a new known-good fix or feature). Stage 1 is 18 hosted jobs on `ubuntu-latest`, all GitHub-hosted (KVM jobs use the hosted runners' nested virtualisation; there are no self-hosted runners), timeouts summing to ~1,310 job-minutes (23 jobs once `go-long` and `ui-e2e-long` fan out) and typically ~400–500 actually used, so ~6,000–10,000 runner-minutes a day at the ceiling; one run uses ~23 concurrent jobs, inside a hosted organisation's concurrency limit, and runs never overlap because only one rc qualifies at a time. Nothing needs splitting into per-rc and every-N-hours jobs today; if a job ever must (a scarce self-hosted runner), the verdict would combine as: per-rc jobs on the rc's own run, plus the N-hourly job's newest green run on a commit at or before the rc's, no older than N hours.
+   - **Continuous loop (§15, 2026-11-10).** With no cap and one rc always qualifying, Stage 1 runs back to back while `main` moves: at ~60–90 minutes a run, at most ~16–24 rc qualifications a day, typically fewer (a tick only cuts when `main` has a new known-good fix or feature). Stage 1 is 19 hosted jobs on `ubuntu-latest`, all GitHub-hosted (KVM jobs use the hosted runners' nested virtualisation; there are no self-hosted runners), timeouts summing to ~1,370 job-minutes (24 jobs once `go-long` and `ui-e2e-long` fan out) and typically ~400–500 actually used, so ~6,000–10,000 runner-minutes a day at the ceiling; one run uses ~24 concurrent jobs, inside a hosted organisation's concurrency limit, and runs never overlap because only one rc qualifies at a time. Nothing needs splitting into per-rc and every-N-hours jobs today; if a job ever must (a scarce self-hosted runner), the verdict would combine as: per-rc jobs on the rc's own run, plus the N-hourly job's newest green run on a commit at or before the rc's, no older than N hours.
    - With `RELEASE_MAX_PER_DAY=1` and ~60–90 minutes per full qualification cycle, Stage 2 runs **once a day** when the day's first rc qualifies. It runs again only for each red rc before that, **0 times when `main` is idle**, and never after the day's release. That is ~4 agent tasks a day, plus ~4 per red rc. (Before 2026-11-09, `RELEASE_MIN_INTERVAL_MINUTES=120` allowed up to 6–8 cycles per 24 hours.)
 3. **Admission priority & quota awareness:**
    - Qualification suite tasks dispatch ahead of normal backlog tasks (`PriorityReleaseGate` / elevated task priority) so full worker queues do not starve releases for 14 hours, while remaining below `priority-dispatch` interactive console and steward sessions and respecting hard host sandbox RAM caps.
@@ -519,7 +541,7 @@ Nothing in this playbook design is implemented by this document. Once approved, 
 1. **Workflow — Trigger and shard `.github/workflows/nightly.yml` as Stage 1 RC qualification**
    - Trigger `nightly.yml` on `push: tags: ['v*-rc.*']` as well as `workflow_dispatch` (adding an optional `jobs` input for selective single-job retry and `cancel-in-progress: false` on RC tags).
    - Extend `upgrade-test` in `nightly.yml` to verify both `latest -> RC` and multi-version baseline -> RC schema upgrades.
-   - Verify all 14 hosted `nightly.yml` jobs run and pass end-to-end on GitHub Actions.
+   - Verify all 19 hosted `nightly.yml` jobs run and pass end-to-end on GitHub Actions.
 
 2. **Workflow — Continuous `.github/workflows/release-train.yml` and auto-promotion**
    - Remove `RELEASE_STAGING_URL`, the `GRAIN_API_URL` / `GRAIN_API_TOKEN` hard failure on hosted runners, the 24-hour soak check, and `-pending` staging.

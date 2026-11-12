@@ -150,7 +150,8 @@ cmd-grain-stress=pkg/cli stress under load
 upgrade-test=upgrade from previous versions
 kvm-sandboxes=real KVM sandboxes
 kvm-route-stress=twenty two-VM boots
-real-kubernetes=real kubernetes}"
+real-kubernetes=real kubernetes
+security-attacks=security attack paths}"
 # Jobs that carry no verdict of their own: nightly.yml's roll-up of the
 # jobs above, which on a retry judges only the job retried.
 CHECK_QUALIFICATION_IGNORE="${CHECK_QUALIFICATION_IGNORE-stage-1=stage 1 qualification verdict}"

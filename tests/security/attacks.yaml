@@ -1,0 +1,225 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The user-attack regression suites nightly.yml's security-attacks job
+# runs, one entry per attack path, each naming the top-level tests that
+# hold it shut. cmd/security-attacks reads this file: `run` runs every
+# in-process path and judges it, `judge` judges the live paths from the
+# logs of nightly's real-sandbox jobs, and `check` fails when this file
+# and the tree disagree -- a test package under tests/security that is
+# not listed in `packages`, or a test named here that no longer exists.
+#
+# A path passes only when every test it names ran and passed. A test that
+# failed, did not run (a renamed test, a package that did not build, a
+# panic) or skipped counts against it, except a skip whose reason starts
+# "known gap:" (a documented, filed hole the test pins until it is
+# closed) or "infrastructure:" (the runner lacked something the test
+# needs, which says nothing about the attack), both of which are reported
+# by name instead.
+#
+# mode:
+#   in-process  run by the security-attacks job itself
+#   live-vm     run by nightly's kvm-sandboxes job inside a real granule VM
+#   live-k8s    run by nightly's real-kubernetes job against a real kind
+#               cluster
+
+# Every test package under tests/security, each run whole: a test in one
+# of them that no path names is still run, and reported under the path
+# "<package>: other tests".
+packages:
+  - ./tests/security
+
+paths:
+  # Task 3981: role x route authorization matrix and IDOR.
+  - name: role-route-matrix
+    task: 3981
+    title: every API route asked as every role, agent, gma_ credential and nobody
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestRouteAuthorizationMatrix
+  - name: idor-horizontal-access
+    task: 3981
+    title: another repository's or another task's objects by id
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestHorizontalObjectAccess
+      - TestAgentRunIsHeldToItsOwnTask
+      - TestExternalCredentialRevokesOnlyItself
+      - TestNoEscalationThroughTheAPI
+
+  # Task 3982: escalation through tasks, templates, grants and approvals.
+  - name: escalation-task-filing-and-templates
+    task: 3982
+    title: a non-admin filing a task or template wider than its role
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestPath1NonAdminTaskFilingAndTemplateGrantCeilings
+      - TestPath1KnownGapPerTaskSandboxShapeUncapped
+      - TestPath1SandboxShapeCeilings
+  - name: escalation-task-edit-approve-rerun
+    task: 3982
+    title: a non-admin editing, approving, running or retrying a wider task
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestPath2NonAdminTaskEditApproveRunNowAndRetryCeilings
+      - TestPath2ExternalTokenApprovalCeiling
+  - name: escalation-access-requests
+    task: 3982
+    title: a non-admin granting an access request past its own ceilings
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestPath3NonAdminAccessRequestGrantCeilings
+  - name: escalation-agent-mediated
+    task: 3982
+    title: an agent steering another task or clearing a person's hold
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestPath4AgentMediatedEscalationAndSandboxCLIBoundaries
+      - TestPath4KnownGapAgentCrossTaskPromptSteering
+  - name: escalation-merge-gates
+    task: 3982
+    title: a non-admin submitting, force-merging or releasing a held review
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestPath5NonAdminMergeSubmitForceMergeAndHumanReviewRelease
+  - name: escalation-schedules-and-consoles
+    task: 3982
+    title: a non-admin schedule, console session or live PTY wider than its role
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestPath6NonAdminScheduleConsoleSessionAndLivePTYCeilings
+
+  # Task 3983: credential exposure to non-admins.
+  - name: credential-exposure-read-routes
+    task: 3983
+    title: every planted credential, read back through every GET route and a console
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestNonAdminReadsNoPlantedCredential
+  - name: credential-exposure-console-input
+    task: 3983
+    title: a delegated person driving a console that holds more than its role
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestDelegatePersonCannotDriveAConsoleHoldingMoreThanItsRole
+
+  # Task 3984: sandbox -> host and cross-run credential reach.
+  - name: sandbox-metadata-loopback-peers
+    task: 3984
+    title: an open-network sandbox reaching cloud metadata, host loopback or a peer
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestOpenFenceBlocksMetadataLoopbackAndPeerDNS
+  - name: sandbox-token-listener
+    task: 3984
+    title: a sandbox reading another attempt's gcp-key token listener
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestGCPKeyTokenListenerIsolatesAttemptsAndRequiresLoopback
+  - name: sandbox-git-proxy-attempt-binding
+    task: 3984
+    title: a sandbox replaying, spoofing or redirecting another attempt's git grant
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestGitProxyEnforcesAttemptBindingSpoofingAndRedirectSafety
+  - name: sandbox-daemon-api
+    task: 3984
+    title: a sandbox calling internal or unscoped daemon API routes
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestDaemonAPIFromSandboxBlocksInternalAndUnscopedRoutes
+  - name: sandbox-agent-cli-host
+    task: 3984
+    title: a host-side agent CLI reaching outside its containment
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestAgentCLIHostContainment
+  - name: sandbox-package-cache
+    task: 3984
+    title: a sandbox poisoning the shared Go cache or minting another repository's GHCR token
+    mode: in-process
+    package: ./tests/security
+    tests:
+      - TestPackageCacheGoCacheRejectsUnauthenticatedWrites
+      - TestPackageCacheGHCRTokenChecksSandboxRepoScope
+  - name: live-vm-metadata-host-peers
+    task: 3984
+    title: a real open-network granule VM reaching cloud metadata, the host or a peer VM
+    mode: live-vm
+    package: ./pkg/orchestrator
+    tests:
+      - TestGranuleSandboxOpenNetworkFenceBlocksMetadataHostAndPeers
+      - TestGranuleSandboxNetworkNoneIsolationOutsideGuestVM
+  - name: live-k8s-metadata
+    task: 3984
+    title: a real open-network pod on Calico reaching cloud metadata
+    mode: live-k8s
+    package: ./pkg/orchestrator
+    tests:
+      - TestK8sSandboxesAgainstARealKindCluster
+
+  # Task 3965: insider risk via config-repo Submit and .grain declarations.
+  - name: insider-config-change
+    task: 3965
+    title: a limited role submitting, approving or repointing a grain/config change
+    mode: in-process
+    package: ./pkg/ui
+    tests:
+      - TestALimitedRoleCannotSubmitAConfigChange
+      - TestApprovingAConfigChangeNeedsTheScopesItConfers
+      - TestRepointingTheConfigRepoNeedsAnUnlimitedRole
+      - TestAcceptingADeclarationNeedsTheScopesItsGrantsNeed
+  - name: insider-repo-declarations
+    task: 3965
+    title: a repository's own .grain schedule, template or suite firing person-only grants
+    mode: in-process
+    package: ./pkg/model
+    tests:
+      - TestARepoDeclaredScheduleGrantingAGCPKeyFilesUnapproved
+      - TestDeclaredGrantNeedsPerson
+      - TestAnAcceptedDeclaredScheduleFiresApprovedUntilItWidens
+      - TestAnOperatorScheduleFiringADeclaredTemplateIsAcceptedUnderTheTemplate
+      - TestADeclaredAutoApprovedSuiteIsHeldUntilAccepted
+      - TestDeclaredItemScopes
+      - TestACIJobsDeclaredGCPKeyNeedsAcceptance
+      - TestPersonStandsBehindAnAcceptedDeclaredFiring
+  - name: insider-declaration-catalogue-hold
+    task: 3965
+    title: a declared grant nobody accepted reaching a run
+    mode: in-process
+    package: ./pkg/orchestrator
+    tests:
+      - TestCatalogueHoldHoldsARequiresPersonGrantNobodyApproved
+  - name: insider-ci-job-declarations
+    task: 3965
+    title: a repository's CI job declaration running unaccepted
+    mode: in-process
+    package: ./pkg/daemon
+    tests:
+      - TestACIJobsUnacceptedDeclarationRefusesIt

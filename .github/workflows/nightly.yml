@@ -1549,6 +1549,14 @@ jobs:
             exit 1
           fi
 
+      # The live-vm attack paths (tests/security/attacks.yaml), judged
+      # from the suite's log: a real open-network guest reaching cloud
+      # metadata, the host or a peer VM. A log the suite never wrote fails
+      # every path rather than skipping it.
+      - name: Security attack paths in a real VM
+        if: ${{ !cancelled() }}
+        run: go run ./cmd/security-attacks judge -mode live-vm -log /tmp/granule-vm.log -summary "$GITHUB_STEP_SUMMARY"
+
   kvm-route-stress:
     name: twenty two-VM boots
     needs: [idle-gate]
@@ -1881,6 +1889,103 @@ jobs:
             exit "$status"
           fi
 
+      # The live-k8s attack paths (tests/security/attacks.yaml), judged
+      # from the suite's log: a real open-network pod on Calico reaching
+      # cloud metadata.
+      - name: Security attack paths in a real cluster
+        if: ${{ !cancelled() }}
+        run: go run ./cmd/security-attacks judge -mode live-k8s -log /tmp/real-k8s.log -summary "$GITHUB_STEP_SUMMARY"
+
+  # The user-attack regression suites, one verdict per attack path: every
+  # path tests/security/attacks.yaml lists (role x route matrix and IDOR,
+  # escalation through tasks, templates, grants and approvals, credential
+  # exposure to non-admins, sandbox -> host and cross-run credential
+  # reach, insider risk through grain/config and .grain declarations),
+  # run and judged by cmd/security-attacks. It fails closed: a test that
+  # failed, never ran or skipped fails its path, except a skip the test
+  # itself marks "known gap:" or "infrastructure:", which the summary
+  # names. The live paths run inside kvm-sandboxes and real-kubernetes,
+  # on the VM and cluster those jobs already set up, and are judged there.
+  security-attacks:
+    name: security attack paths
+    needs: [idle-gate]
+    if: needs.idle-gate.outputs.run == 'true' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',security-attacks,'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: ${{ github.workflow }}-security-attacks-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # What the suites need to run rather than skip: bubblewrap for the
+      # containment tests, and initdb/pg_ctl on PATH for the hub consent
+      # tests, which go-long's runner removes and so skips there.
+      - name: Install what the attack suites need
+        run: |
+          set -euo pipefail
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            bubblewrap expect zstd socat psmisc iproute2 iptables
+          if ! compgen -G '/usr/lib/postgresql/*/bin/initdb' >/dev/null; then
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql
+          fi
+          pgbin="$(compgen -G '/usr/lib/postgresql/*/bin' | sort -V | tail -n 1)"
+          test -x "$pgbin/initdb" && test -x "$pgbin/pg_ctl"
+          echo "$pgbin" >> "$GITHUB_PATH"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          git config --global user.name "grain-ci"
+          git config --global user.email "grain-ci@example.com"
+
+      - name: Every tests/security package is in the job
+        run: go run ./cmd/security-attacks check
+
+      - name: Security attack paths
+        run: |
+          go run ./cmd/security-attacks run -timeout 40m \
+            -log /tmp/security-attacks.log -summary "$GITHUB_STEP_SUMMARY" -failed /tmp/security-attacks.failed
+
+      - name: Upload the attack suites' log
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: security-attacks-log
+          path: /tmp/security-attacks.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # Last, so the failed paths' names end the log: the tail grain hands
+      # the nightly-ci-review and Stage 1 repair tasks.
+      - name: Name the failed attack paths
+        if: failure()
+        run: |
+          if [ -s /tmp/security-attacks.failed ]; then
+            echo "Failed attack paths (tests/security/attacks.yaml):"
+            sed 's/^/  - /' /tmp/security-attacks.failed
+          else
+            echo "security-attacks failed before any attack path was judged (setup, the manifest check or the runner itself): every path counts as failed, not skipped."
+          fi
+
   # The one verdict Stage 1 hands the release train: every hosted job in
   # the playbook's Stage 1 table ran and succeeded. GitHub calls a run
   # with skipped jobs a success; this does not, so a job that never ran
@@ -1889,7 +1994,8 @@ jobs:
   # repair for it. A dispatch naming `jobs` (a flake retry) is
   # judged on the jobs it named. The KVM and real-kubernetes jobs
   # (kvm-sandboxes, kvm-route-stress, real-kubernetes) are required like
-  # the rest; scripts/candidate-gate.sh's CHECK_QUALIFICATION_JOBS lists
+  # the rest, and with them security-attacks' live paths, which they run
+  # and judge; scripts/candidate-gate.sh's CHECK_QUALIFICATION_JOBS lists
   # the same jobs, and tests/deploy/nightly_rc_qualification_test.go
   # keeps the two in step.
   stage-1:
@@ -1915,6 +2021,7 @@ jobs:
       - kvm-sandboxes
       - kvm-route-stress
       - real-kubernetes
+      - security-attacks
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -160,7 +160,7 @@ runs() {
 # grain-test, unless it names another).
 stage1_ids=(go-long staterepo-soak loadtest scalability merge-stress long-term-test long-sim postgres-stress
   tunnel-stress ui-e2e-long installer-variants vulns image-vulns cmd-grain-stress upgrade-test kvm-sandboxes kvm-route-stress
-  real-kubernetes)
+  real-kubernetes security-attacks)
 qualification() {
   local sha="${2:-}" app="${3:-grain-test}" app_id=42 check=success check2="" attempts=() a id t jobs runs=() ids
   [ "$app" = grain-test ] || app_id=15368
@@ -1078,7 +1078,7 @@ if [ -n "$api" ]; then
     for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
       "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
       "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" \
-      "pkg/cli stress under load" "upgrade from previous versions" "real KVM sandboxes" "twenty two-VM boots" "real kubernetes"; do
+      "pkg/cli stress under load" "upgrade from previous versions" "real KVM sandboxes" "twenty two-VM boots" "real kubernetes" "security attack paths"; do
       [ $first = 1 ] || printf ','
       first=0
       printf '{"run_id":7,"run_attempt":1,"workflow_name":"nightly","head_sha":"%s","name":"%s","status":"completed","conclusion":"%s","created_at":"%s"}' \
@@ -1143,7 +1143,7 @@ runs "$c2" "$c4"
   for name in "go, shuffled and repeated (1)" "state repository soak" "sustained load" "metadata and model scalability" \
     "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation" "postgres concurrency and stress" \
     "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" \
-    "pkg/cli stress under load" "upgrade from previous versions" "real KVM sandboxes" "twenty two-VM boots" "real kubernetes"; do
+    "pkg/cli stress under load" "upgrade from previous versions" "real KVM sandboxes" "twenty two-VM boots" "real kubernetes" "security attack paths"; do
     [ $first = 1 ] || printf ','
     first=0
     printf '{"id":%s,"run_id":7,"run_attempt":1,"workflow_name":"nightly","head_sha":"%s","name":"%s","status":"completed","conclusion":"%s","created_at":"%s","started_at":null,"completed_at":null}' \
