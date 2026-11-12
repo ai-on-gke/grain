@@ -1634,3 +1634,58 @@ func TestGitHubWorkflowRunScheduleReviewsSlowRunOnAnotherBranch(t *testing.T) {
 		t.Fatalf("no review filed for release-1's slow nightly failure (run 4001); tasks: %+v", tasks)
 	}
 }
+
+// A github_workflow_run schedule whose previous firing is still open drops
+// the new one and says which task holds it and in what state, as a timed
+// schedule's skip does. Walkthrough 2026-11-11 §7 found the release
+// train's Stage 1 trigger recording "#2 from the previous firing is still
+// open (state unknown)" while #2 sat queued.
+func TestWorkflowRunScheduleSkipNamesTheOpenFiringsState(t *testing.T) {
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	t.Cleanup(orchestrator.SetGitHubCIBudgetLow(false))
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	tmplID := model.GitHubWorkflowReviewTemplateID("nightly")
+	sched := model.Schedule{
+		ID: "sched-stage1", Title: "Release train (Stage 1 verdict)", Target: repo, Enabled: true,
+		Overlap: model.OverlapSkip, TemplateID: &tmplID,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceGitHubWorkflowRun,
+			GitHubWorkflowRun: &model.GitHubWorkflowRunTrigger{Workflow: "nightly.yml", Branches: []string{"main"}}},
+	}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatal(err)
+	}
+	head := headSHA(t, client, repo, "main")
+	run := func(id int64, at time.Time) githubsim.WorkflowRun {
+		return githubsim.WorkflowRun{ID: id, Name: "nightly", Path: ".github/workflows/nightly.yml", HeadBranch: "main",
+			HeadSHA: head, Event: "schedule", Status: "completed", Conclusion: "failure", RunAttempt: 1, CreatedAt: at,
+			Jobs: []githubsim.WorkflowJob{{Name: "go-long", Conclusion: "failure", Log: "--- FAIL: TestX\n"}}}
+	}
+	sim.WorkflowRuns = []githubsim.WorkflowRun{run(4001, baseTime)}
+	runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime.Add(time.Minute))
+	sim.WorkflowRuns = append([]githubsim.WorkflowRun{run(4002, baseTime.Add(time.Hour))}, sim.WorkflowRuns...)
+	runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime.Add(time.Hour+time.Minute))
+
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("filed %d tasks, want 1 (the second firing is skipped behind the first)", len(tasks))
+	}
+	skips, err := store.ScheduleSkips(ctx, sched.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skips) != 1 {
+		t.Fatalf("recorded %d skips, want 1: %+v", len(skips), skips)
+	}
+	k := skips[0]
+	if k.TaskID != tasks[0].ID || k.TaskState != model.StateQueued || k.Outcome != model.ScheduleSkipDropped {
+		t.Errorf("skip = task %q state %q outcome %q, want task %q state queued, dropped", k.TaskID, k.TaskState, k.Outcome, tasks[0].ID)
+	}
+	if s := k.Summary(); strings.Contains(s, "state unknown") || !strings.Contains(s, "queued") {
+		t.Errorf("skip summary = %q, want it to name the open firing as queued", s)
+	}
+}
