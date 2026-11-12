@@ -57,6 +57,35 @@ describe("DeclarationAcceptancesPanel", () => {
     });
   });
 
+  it("revokes an accepted declaration, and offers no Revoke on one nobody accepted", async () => {
+    const accepted = {
+      ...widened,
+      requested: [gcp],
+      awaiting: false,
+      unaccepted: [],
+    };
+    const fresh = {
+      ...widened,
+      id: "ci:acme/widgets:publish",
+      kind: "ci-job",
+      accepted: undefined,
+      acceptedBy: undefined,
+      acceptedCommit: undefined,
+      acceptedAt: undefined,
+    };
+    api.mockImplementation((path) =>
+      Promise.resolve(path === "/api/declarations" ? [accepted, fresh] : {}),
+    );
+    render(<DeclarationAcceptancesPanel showError={() => {}} />);
+    const revoke = await screen.findAllByRole("button", { name: "Revoke" });
+    expect(revoke).toHaveLength(1);
+    await userEvent.click(revoke[0]);
+    expect(api).toHaveBeenCalledWith("/api/declarations/revoke", {
+      method: "POST",
+      body: JSON.stringify({ id: accepted.id }),
+    });
+  });
+
   it("says so when no declaration has asked for anything", async () => {
     api.mockResolvedValue([]);
     render(<DeclarationAcceptancesPanel showError={() => {}} />);

@@ -146,7 +146,7 @@ func waitOutInfraFailure(ctx context.Context, store *model.Store, client github.
 		}
 	}
 	for _, r := range runs {
-		if err := rerunner.RerunFailedJobs(e.ref.Repo.Owner, e.ref.Repo.Name, r.id); err != nil {
+		if err := rerunner.RerunFailedJobs(e.ref.Repo.StoredOwner(), e.ref.Repo.Name, r.id); err != nil {
 			log.Printf("orchestrator: re-running the failed jobs of run %d for %s: %v -- handling the "+
 				"infrastructure failure as an ordinary red (the connection needs `actions: write`)",
 				r.id, e.ref, err)

@@ -59,6 +59,13 @@ type waitOnResponse struct {
 // about it. orchestrator.processResult is what notices, as the run ends,
 // that it parked, and leaves the task queued rather than finishing it.
 // The comment posted here is for the person reading the task's page.
+//
+// Each target is described as id may be told it (model.Store.WaitTargetFor):
+// a run may wait on a task in any repository, but one in a repository its
+// task cannot read comes back with its title and closing note withheld.
+// This is the only filter on the MCP tool's path, whose `grain mcpserver`
+// calls in with the daemon's own credential rather than the run's, so the
+// agent API gate's own trimming of this route never sees it.
 func (c *Client) WaitOn(ctx context.Context, id string, ids []string, park bool) ([]model.WaitTarget, error) {
 	self, err := c.Store.GetTask(ctx, id)
 	if err != nil {
@@ -76,7 +83,7 @@ func (c *Client) WaitOn(ctx context.Context, id string, ids []string, park bool)
 	}
 	targets := make([]model.WaitTarget, 0, len(links))
 	for _, l := range links {
-		target, err := c.Store.WaitTargetAt(ctx, l.Target, c.now())
+		target, err := c.Store.WaitTargetFor(ctx, *self, l.Target, c.now())
 		if err != nil {
 			return nil, err
 		}
@@ -129,7 +136,10 @@ func hasDependency(links []model.Link, target string) bool {
 func parkedComment(targets []model.WaitTarget) string {
 	names := make([]string, len(targets))
 	for i, t := range targets {
-		names[i] = fmt.Sprintf("#%s (%s)", t.ID, t.Title)
+		names[i] = "#" + t.ID
+		if !t.Withheld {
+			names[i] += fmt.Sprintf(" (%s)", t.Title)
+		}
 	}
 	return "grain: this task's run parked it, waiting on " + strings.Join(names, ", ") +
 		". It goes back in the queue once every one of them has closed; closing one, or " +
@@ -382,7 +392,7 @@ func (c *Client) ciResumeHead(ctx context.Context, self model.Task) string {
 	if reader == nil {
 		return ""
 	}
-	head, err := reader.GetBranchHead(repo.Owner, repo.Name, branch)
+	head, err := reader.GetBranchHead(repo.StoredOwner(), repo.Name, branch)
 	if err != nil || head == nil {
 		return ""
 	}
@@ -484,7 +494,7 @@ func (c *Client) validateCIResume(ctx context.Context, self model.Task, when *mo
 			return nil
 		}
 		if prReader != nil {
-			head, herr := prReader.GetBranchHead(repo.Owner, repo.Name, branch)
+			head, herr := prReader.GetBranchHead(repo.StoredOwner(), repo.Name, branch)
 			if herr != nil {
 				// Transient forge read error: do not refuse a potentially valid wait.
 				return nil
@@ -492,10 +502,10 @@ func (c *Client) validateCIResume(ctx context.Context, self model.Task, when *mo
 			if head == nil || strings.TrimSpace(head.SHA) == "" {
 				return validationErrorf("cannot wait on CI: branch %q does not exist on %s (push the branch first)", branch, repo)
 			}
-			if checks, cerr := prReader.ListCheckRuns(repo.Owner, repo.Name, head.SHA); cerr != nil || hasExternalCheckRuns(checks) {
+			if checks, cerr := prReader.ListCheckRuns(repo.StoredOwner(), repo.Name, head.SHA); cerr != nil || hasExternalCheckRuns(checks) {
 				return nil
 			}
-			if state, serr := prReader.ActionsState(repo.Owner, repo.Name, head.SHA); serr == nil && state.Runs > 0 {
+			if state, serr := prReader.ActionsState(repo.StoredOwner(), repo.Name, head.SHA); serr == nil && state.Runs > 0 {
 				return nil
 			}
 		}
@@ -520,7 +530,7 @@ func (c *Client) validateCIResume(ctx context.Context, self model.Task, when *mo
 			if base == "" {
 				base = "main"
 			}
-			if baseChecks, bcerr := prReader.ListCheckRuns(repo.Owner, repo.Name, base); bcerr == nil && hasExternalCheckRuns(baseChecks) {
+			if baseChecks, bcerr := prReader.ListCheckRuns(repo.StoredOwner(), repo.Name, base); bcerr == nil && hasExternalCheckRuns(baseChecks) {
 				return nil
 			}
 		}

@@ -2024,7 +2024,17 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 				}
 			}
 		}
-		if shape := sandboxShapeOfField(key, raw); !shape.IsZero() {
+		shape := sandboxShapeOfField(key, raw)
+		if gateKey(key) == "sandbox" {
+			// A template's own sandbox shape (POST/PATCH /api/templates,
+			// model.Template.Sandbox) is every task it files' shape, so
+			// it is held to the same ceilings a task's own fields are.
+			var sb model.SandboxShape
+			if json.Unmarshal(raw, &sb) == nil {
+				shape = sb
+			}
+		}
+		if !shape.IsZero() {
 			switch {
 			case opts.role != nil:
 				if err := s.roleSandboxShapeRefusal(ctx, opts.role, shape, "set "+key); err != nil {
@@ -2568,6 +2578,9 @@ func (s *Server) checkFilingTemplate(ctx context.Context, tmpl model.Template, k
 		if err := roleTemplateWithin(opts.role, key, tmpl, allowedRepo, opts.normalize); err != nil {
 			return err
 		}
+		if err := s.roleSandboxShapeRefusal(ctx, opts.role, tmpl.Sandbox, "set "+key+" to template "+tmpl.ID); err != nil {
+			return err
+		}
 		if tmpl.AutoMerge {
 			return fmt.Errorf("%s cannot set %s: template %s sets autoMerge, which requires an unlimited role (grain/operator)", opts.role.label(), key, tmpl.ID)
 		}
@@ -2611,6 +2624,11 @@ func (s *Server) checkFilingTemplate(ctx context.Context, tmpl model.Template, k
 	default:
 		if err := model.TemplateWithinTask(*opts.acting, tmpl); err != nil {
 			return err
+		}
+		if above := tmpl.Sandbox.Above(model.EffectiveSandboxShape(*opts.acting)); len(above) > 0 {
+			return fmt.Errorf("template %s asks for a larger sandbox than the agent's own task %s runs in (%s); "+
+				"propose the work with propose_task instead, which files it for a person to approve",
+				tmpl.ID, opts.acting.ID, strings.Join(above, ", "))
 		}
 		if tmpl.AutoMerge {
 			return fmt.Errorf("template %s is auto-merge: %w", tmpl.ID, errAgentAutoMerge)

@@ -214,6 +214,10 @@ describe("ProcessesList", () => {
       "title",
       "Declared in acme/widgets, .grain/workflows/nightly.yml",
     );
+    const modeChip = within(rowsOf("suite")[0])
+      .getByText("run until clean (max 3)")
+      .closest(".MuiChip-root");
+    expect(modeChip).toHaveAttribute("title", "run until clean (max 3)");
   });
 
   // The server sends system: true on a workflow schedule, since it fires

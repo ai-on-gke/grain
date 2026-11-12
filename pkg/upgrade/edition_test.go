@@ -289,6 +289,34 @@ func TestVerifyStepPassesAnImageOfThisEdition(t *testing.T) {
 	}
 }
 
+// grain/task-4512: a deployment running an edition's build on a host
+// showing none of its signals settled on the oss track, and then refused
+// every upgrade onto its own edition's images -- the very image it was
+// running included. With the edition naming its track as the build's own
+// (installtrack.SetBuildTrack), the track the daemon detects is the
+// edition's, and that edition's image passes the verify step.
+func TestASignalLessDeploymentOnAnEditionBuildAcceptsItsOwnEdition(t *testing.T) {
+	t.Cleanup(installtrack.SetBuildTrack(installtracktest.Track))
+	// The daemon's probe (pkg/daemon newUpgrader), minus the live host.
+	track := (installtrack.Probe{Hostname: "ci-runner.example.com"}).Detect().Track
+	if track != installtracktest.Track {
+		t.Fatalf("signal-less Detect().Track = %q, want the build's own %q", track, installtracktest.Track)
+	}
+	dir := t.TempDir()
+	pulled := filepath.Join(dir, "pulled")
+	u := editionUpgrader(t, dir, pulled, track, installtracktest.Repository, string(installtracktest.Track))
+	if err := u.Start("main"); err != nil {
+		t.Fatalf("Start = %v", err)
+	}
+	status := waitForPhase(t, u, PhaseOK)
+	if verify := stepByName(t, status, stepVerify); verify.State != StepDone || !strings.Contains(verify.Detail, "acme edition's build") {
+		t.Errorf("verify step = %+v, want it done, naming the acme edition", verify)
+	}
+	if got := pulledLines(t, pulled); len(got) != 1 || !strings.HasPrefix(got[0], installtracktest.Repository+":") {
+		t.Errorf("pulled %v, want one pull from %s", got, installtracktest.Repository)
+	}
+}
+
 // A repository that cannot be pulled fails the upgrade with what to do
 // about it. Nothing tries another repository: one pull, of the
 // configured repository's tag, and no hint pointing at another edition.

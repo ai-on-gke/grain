@@ -1,0 +1,36 @@
+schema=131
+-- task_grant 2
+api:ci-read
+api:tasks:read@acme/widgets
+https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}
+https://grain.dev/capabilities/api#test-quarantine={}
+release-gate-read
+repo-read:acme/lib
+repo-write:acme/other
+-- template_grant
+api:ci-read
+api:tasks:read@acme/widgets
+https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}
+https://grain.dev/capabilities/api#test-quarantine={}
+release-gate-read
+repo-read:acme/lib
+repo-write:acme/other
+-- schedule_grant
+api:ci-read
+api:tasks:read@acme/widgets
+https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}
+https://grain.dev/capabilities/api#test-quarantine={}
+release-gate-read
+repo-read:acme/lib
+repo-write:acme/other
+-- task_grant_wait
+api:ci-read@acme/widgets
+-- grain_config.default_capabilities
+["api:tasks:read@acme/widgets", "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}", "api:ci-read", "https://grain.dev/capabilities/api#test-quarantine={}", "repo-read:acme/lib", "repo-write:acme/other", "release-gate-read"]
+-- repo_config acme/widgets default/ci
+["api:tasks:read@acme/widgets", "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}", "api:ci-read", "https://grain.dev/capabilities/api#test-quarantine={}", "repo-read:acme/lib", "repo-write:acme/other", "release-gate-read"]
+["repo-read:acme/lib", "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}", "repo-write:acme/other"]
+-- console session ops
+{"Capabilities":["api:tasks:read@acme/widgets","https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}","repo-read:acme/lib"],"declinedDefaults":["api:ci-read@acme/widgets"]}
+-- capability_policy catalogue defaults
+{"task":["api:tasks:read"],"ci":["repo-read:acme/lib"],"repos":{"acme/widgets":{"task":["api:ci-read@acme/widgets"],"ci":["repo-write:acme/other"]}}}

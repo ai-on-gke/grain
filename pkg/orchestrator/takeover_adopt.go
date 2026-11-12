@@ -133,7 +133,7 @@ func openPullRequestDetail(deps Deps, ref model.PullRequestRef) (github.PullRequ
 	if deps.Client == nil {
 		return github.PullRequestDetail{}, errors.New("this deployment has no GitHub client to read pull requests through")
 	}
-	detail, err := deps.Client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	detail, err := deps.Client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return github.PullRequestDetail{}, readPullRequestErr(ref, err)
 	}
@@ -605,7 +605,7 @@ func PullRequestStatusOf(ctx context.Context, deps Deps, ref model.PullRequestRe
 	out := model.PullRequestReport{PR: ref.String(), Reviews: []model.PullRequestReviewInfo{}}
 	var detail github.PullRequestDetail
 	if deps.Client != nil {
-		d, err := deps.Client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		d, err := deps.Client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil {
 			return out, readPullRequestErr(ref, err)
 		}
@@ -780,13 +780,13 @@ func pullRequestReviews(ctx context.Context, store *model.Store, ref model.PullR
 // pullRequestThreads is ref's inline review threads, oldest first, with
 // whether each is resolved where the client can say.
 func pullRequestThreads(client github.Client, ref model.PullRequestRef) ([]model.PullRequestThread, error) {
-	comments, err := client.ListReviewComments(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	comments, err := client.ListReviewComments(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return nil, err
 	}
 	resolved := map[int]bool{}
 	if lister, ok := client.(reviewThreadLister); ok {
-		if threads, err := lister.ListReviewThreads(ref.Repo.Owner, ref.Repo.Name, ref.Number); err == nil {
+		if threads, err := lister.ListReviewThreads(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number); err == nil {
 			for _, th := range threads {
 				for _, id := range th.CommentIDs {
 					resolved[id] = th.Resolved
