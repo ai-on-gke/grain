@@ -393,7 +393,7 @@ sandbox:
   by hand is: the deployment's maximum, and a limited role's own ceiling
   for whoever files, writes or schedules it. An agent can't file from, or
   write, a template larger than its own task's sandbox. A schedule, suite,
-  path trigger or qualification run firing a template above the
+  path trigger, qualification run or release-notes filing firing a template above the
   deployment's maximum files nothing, and the firing fails saying so. On a deployment whose sandboxes are host directories, which
   have no shape, the form and the API leave the template's shape off. A
   schedule firing there files the shape anyway, and the run fails at
