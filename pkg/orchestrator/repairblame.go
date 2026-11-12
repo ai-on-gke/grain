@@ -81,6 +81,10 @@ func recordRepairBlame(ctx context.Context, store *model.Store, client github.Cl
 	return nil
 }
 
+// maxBlameCommitLookups is how many of a repair's Fixes-commit: trailers
+// are mapped to the merge that brought them: one forge read each.
+const maxBlameCommitLookups = 10
+
 // repairCulprits is the tasks a merged repair blames and the evidence in
 // a phrase, for the log; see recordRepairBlame.
 func repairCulprits(ctx context.Context, store *model.Store, client github.Client, task model.Task, kind string,
@@ -118,6 +122,13 @@ func repairCulprits(ctx context.Context, store *model.Store, client github.Clien
 				continue
 			}
 			culprits = append(culprits, id)
+		}
+		// Each commit costs a forge read inside the sync cycle, and the
+		// trailers are agent-written, so only the first few are looked up.
+		if len(shas) > maxBlameCommitLookups {
+			log.Printf("orchestrator: %s names %d commits in Fixes-commit: trailers; reading only the first %d",
+				task.ID, len(shas), maxBlameCommitLookups)
+			shas = shas[:maxBlameCommitLookups]
 		}
 		for _, sha := range shas {
 			id, err := taskMergedAs(ctx, store, client, ref.Repo, sha)
