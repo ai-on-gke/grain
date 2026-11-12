@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -244,5 +245,182 @@ func TestRetriggerOnGitHubActionsBoundsEachRunOnItsOwn(t *testing.T) {
 	}
 	if len(sim.RerunJobs) != 0 {
 		t.Fatalf("re-ran jobs %v of a spent run", sim.RerunJobs)
+	}
+}
+
+// Re-running a workflow_dispatch, release, pull_request_target or
+// deployment run on GitHub Actions re-runs it with its release secrets,
+// base-branch tokens and dispatch inputs intact: the sandbox door ignores
+// such runs, and POST /api/ci/runs/{id}/rerun holds them to a person
+// (matching TestCIRunReleaseSecretsAreAPersonsToFire).
+func TestRetriggerOnGitHubActionsHoldsDispatchAndReleaseRunsToAPerson(t *testing.T) {
+	now := time.Now().UTC()
+	sim, srv, client := rerunSim(t, 1,
+		githubsim.WorkflowRun{ID: 760, Name: "Promote", Path: ".github/workflows/promote.yml",
+			HeadBranch: "grain/mine", HeadSHA: "bbb222", Event: "workflow_dispatch", Conclusion: "failure",
+			CreatedAt: now, Jobs: []githubsim.WorkflowJob{{Name: "promote", Conclusion: "failure"}}},
+		githubsim.WorkflowRun{ID: 761, Name: "Release", Path: ".github/workflows/release.yml",
+			HeadBranch: "grain/mine", HeadSHA: "bbb222", Event: "release", Conclusion: "failure",
+			CreatedAt: now, Jobs: []githubsim.WorkflowJob{{Name: "publish", Conclusion: "failure"}}},
+		githubsim.WorkflowRun{ID: 762, Name: "PR Target", Path: ".github/workflows/target.yml",
+			HeadBranch: "grain/mine", HeadSHA: "bbb222", Event: "pull_request_target", Conclusion: "failure",
+			CreatedAt: now, Jobs: []githubsim.WorkflowJob{{Name: "label", Conclusion: "failure"}}},
+	)
+
+	if _, err := (ui.SandboxCLIActions{Client: client}).RerunGitHubChecks(context.Background(), "mine",
+		gitproxy.CIStartRequest{FailedOnly: true}); err != nil {
+		t.Fatalf("sandbox retrigger: %v", err)
+	}
+	if !slices.Equal(sim.RerunFailedJobs, []int64{710}) {
+		t.Fatalf("sandbox re-ran %v, want only 710 (pull_request), never 760/761/762", sim.RerunFailedJobs)
+	}
+
+	sim.RerunFailedJobs = nil
+	for _, id := range []string{"gha:acme:widgets:760", "gha:acme:widgets:761", "gha:acme:widgets:762"} {
+		code, body := asAgent(t, srv, "writer", http.MethodPost, "/api/ci/runs/"+id+"/rerun", `{}`, "re-running")
+		if code != http.StatusForbidden {
+			t.Fatalf("ci:write agent re-running %s: %d %s, want 403", id, code, body)
+		}
+	}
+	if len(sim.RerunFailedJobs)+len(sim.RerunRuns)+len(sim.RerunJobs) != 0 {
+		t.Fatalf("agent re-ran privileged runs: %v %v %v", sim.RerunFailedJobs, sim.RerunRuns, sim.RerunJobs)
+	}
+
+	rec := doAs(t, srv, "carol", http.MethodPost, "/api/ci/runs/gha:acme:widgets:760/rerun", `{}`)
+	if rec.Code != http.StatusAccepted || !slices.Equal(sim.RerunFailedJobs, []int64{760}) {
+		t.Fatalf("person re-running 760: %d %s, re-runs %v; want 202 and [760]", rec.Code, rec.Body, sim.RerunFailedJobs)
+	}
+}
+
+// An in-place review may re-run the reviewed task's checks only while its
+// target and branch match the reviewed task's and while the review itself
+// is still open; and even with an open pull request pinning the head SHA,
+// a fork's run at the same SHA on a same-named branch is ignored.
+func TestRetriggerOnGitHubActionsChecksInPlaceReviewClosedCallerAndPinnedPRFork(t *testing.T) {
+	now := time.Now().UTC()
+	sim, srv, client := rerunSim(t, 1, githubsim.WorkflowRun{ID: 770, Name: "Tests", Path: ".github/workflows/tests.yml",
+		HeadBranch: "grain/mine", HeadSHA: "bbb222", HeadRepo: "stranger/widgets", Event: "pull_request", Conclusion: "failure",
+		CreatedAt: now, Jobs: []githubsim.WorkflowJob{{Name: "go", Conclusion: "failure"}}})
+	ctx := context.Background()
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	other := model.RepoRef{Owner: "acme", Name: "other"}
+
+	client.Config.GitHubPullRequests = prHead("bbb222")
+	if err := client.Store.UpdateTask(ctx, "mine", func(tk *model.Task) error {
+		tk.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#12"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mismatched branch or repo on LinkPushesReviewedBranch is refused.
+	for _, bad := range []model.Task{
+		{ID: "rev-branch", Intent: model.IntentImplement, Title: "rev", Target: &repo, Branch: "grain/rev-branch",
+			Origin: model.Origin{Reason: model.ReasonReview}, Links: []model.Link{{Kind: model.LinkPushesReviewedBranch, Target: "theirs"}}},
+		{ID: "rev-repo", Intent: model.IntentImplement, Title: "rev", Target: &other, Branch: "grain/theirs",
+			Origin: model.Origin{Reason: model.ReasonReview}, Links: []model.Link{{Kind: model.LinkPushesReviewedBranch, Target: "theirs"}}},
+	} {
+		if err := client.Store.PutTask(ctx, bad); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := (ui.SandboxCLIActions{Client: client}).RerunGitHubChecks(ctx, bad.ID,
+			gitproxy.CIStartRequest{FailedOnly: true}); err == nil {
+			t.Fatalf("%s with mismatched LinkPushesReviewedBranch was allowed to re-run", bad.ID)
+		}
+	}
+	if len(sim.RerunFailedJobs) != 0 {
+		t.Fatalf("mismatched reviews re-ran %v", sim.RerunFailedJobs)
+	}
+
+	// A matching open in-place review re-runs mine's own 710, ignoring the
+	// stranger fork's 770 even though PR #12 pins HeadSHA bbb222.
+	rev := model.Task{ID: "rev-ok", Intent: model.IntentImplement, Title: "rev", Target: &repo, Branch: "grain/mine",
+		Origin: model.Origin{Reason: model.ReasonReview}, Links: []model.Link{{Kind: model.LinkPushesReviewedBranch, Target: "mine"}}}
+	if err := client.Store.PutTask(ctx, rev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (ui.SandboxCLIActions{Client: client}).RerunGitHubChecks(ctx, "rev-ok",
+		gitproxy.CIStartRequest{FailedOnly: true}); err != nil {
+		t.Fatalf("open in-place review retrigger: %v", err)
+	}
+	if !slices.Equal(sim.RerunFailedJobs, []int64{710}) {
+		t.Fatalf("open in-place review re-ran %v, want [710] (not stranger fork's 770)", sim.RerunFailedJobs)
+	}
+
+	// Once closed (superseded), the review's sandbox cannot spend another attempt.
+	closedAt := now
+	if err := client.Store.ObserveField(ctx, "rev-ok", now, func(o *model.Observation) {
+		o.ClosedAt = &closedAt
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (ui.SandboxCLIActions{Client: client}).RerunGitHubChecks(ctx, "rev-ok",
+		gitproxy.CIStartRequest{FailedOnly: true}); err == nil {
+		t.Fatal("closed in-place review was allowed to re-run")
+	}
+
+	// Short/non-hex commit prefix is rejected on the API route too.
+	if code, body := asAgent(t, srv, "writer", http.MethodPost, "/api/ci/runs/gha:acme:widgets:710/rerun",
+		`{"commit":"b"}`, "short prefix"); code != http.StatusBadRequest {
+		t.Fatalf("1-char commit prefix: %d %s, want 400", code, body)
+	}
+}
+
+// Re-running a completed run invalidates its cached finished detail so
+// GET /api/ci/runs/{id} immediately serves the new attempt, and multi-job
+// --jobs requests either map to a supported GitHub endpoint or fail cleanly
+// before calling the forge.
+func TestRetriggerOnGitHubActionsEvictsCacheAndValidatesMultiJobSelection(t *testing.T) {
+	now := time.Now().UTC()
+	sim, srv, client := rerunSim(t, 1, githubsim.WorkflowRun{ID: 780, Name: "Matrix", Path: ".github/workflows/matrix.yml",
+		HeadBranch: "grain/mine", HeadSHA: "bbb222", Event: "pull_request", Conclusion: "failure",
+		CreatedAt: now, Jobs: []githubsim.WorkflowJob{
+			{Name: "unit", Conclusion: "failure"},
+			{Name: "e2e", Conclusion: "failure"},
+			{Name: "docs", Conclusion: "success"},
+		}})
+	actions := ui.SandboxCLIActions{Client: client}
+	ctx := context.Background()
+
+	// Warm the 10-minute finished-run cache entry for 710.
+	before := decode[ci.Run](t, doAs(t, srv, "carol", http.MethodGet, "/api/ci/runs/gha:acme:widgets:710", ""))
+	if before.Actions == nil || before.Actions.RunAttempt != 1 || before.Actions.Status != "completed" {
+		t.Fatalf("before = %+v", before.Actions)
+	}
+
+	// Duplicate job names deduplicate to one RerunWorkflowJob call.
+	if _, err := actions.RerunGitHubChecks(ctx, "mine", gitproxy.CIStartRequest{Jobs: []string{"go", "go"}}); err != nil {
+		t.Fatalf("run-job go,go: %v", err)
+	}
+	if len(sim.RerunJobs) != 1 {
+		t.Fatalf("duplicate job names posted %v, want 1 job rerun", sim.RerunJobs)
+	}
+
+	// Simulate GitHub starting attempt 2 of 710; GET /api/ci/runs/{id} must
+	// see attempt 2 immediately rather than serving attempt 1 from cache.
+	sim.AddWorkflowRun(githubsim.WorkflowRun{ID: 710, Name: "Tests", Path: ".github/workflows/tests.yml",
+		HeadBranch: "grain/mine", HeadSHA: "bbb222", Event: "pull_request", Status: "in_progress", RunAttempt: 2,
+		CreatedAt: now, Jobs: []githubsim.WorkflowJob{{Name: "go", Status: "in_progress"}, {Name: "lint", Conclusion: "success"}}})
+	after := decode[ci.Run](t, doAs(t, srv, "carol", http.MethodGet, "/api/ci/runs/gha:acme:widgets:710", ""))
+	if after.Actions == nil || after.Actions.RunAttempt != 2 || after.Actions.Status != "in_progress" {
+		t.Fatalf("after re-run, GET /api/ci/runs served stale cache: %+v, want attempt 2 in_progress", after.Actions)
+	}
+
+	// Partial subset of >=2 jobs (1 failed + 1 passed out of 3 jobs) in one
+	// workflow run is refused before posting anything to GitHub.
+	sim.RerunJobs, sim.RerunFailedJobs, sim.RerunRuns = nil, nil, nil
+	if _, err := actions.RerunGitHubChecks(ctx, "mine", gitproxy.CIStartRequest{Jobs: []string{"unit", "docs"}}); err == nil {
+		t.Fatal("partial multi-job subset in 3-job workflow was accepted")
+	}
+	if len(sim.RerunJobs)+len(sim.RerunFailedJobs)+len(sim.RerunRuns) != 0 {
+		t.Fatalf("refused multi-job subset still posted %v %v %v", sim.RerunJobs, sim.RerunFailedJobs, sim.RerunRuns)
+	}
+
+	// Naming the exact failed jobs of 780 uses rerun-failed-jobs cleanly.
+	if _, err := actions.RerunGitHubChecks(ctx, "mine", gitproxy.CIStartRequest{Jobs: []string{"unit", "e2e"}}); err != nil {
+		t.Fatalf("re-running exact failed set unit,e2e: %v", err)
+	}
+	if !slices.Equal(sim.RerunFailedJobs, []int64{780}) {
+		t.Fatalf("exact failed set posted RerunFailedJobs=%v, want [780]", sim.RerunFailedJobs)
 	}
 }

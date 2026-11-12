@@ -147,7 +147,12 @@ func (a SandboxCLIActions) RerunGitHubChecks(ctx context.Context, taskID string,
 
 // RerunTaskActions re-runs taskID's own Actions runs (RerunGitHubChecks).
 func (c *Client) RerunTaskActions(ctx context.Context, taskID string, req ActionsRerunRequest) (ActionsRerunResult, error) {
-	task, err := SandboxCLIActions{Client: c}.resolveCITask(ctx, taskID)
+	if c.Store != nil {
+		if obs, err := c.Store.GetObservation(ctx, taskID); err == nil && obs != nil && obs.ClosedAt != nil {
+			return ActionsRerunResult{}, forbiddenErrorf("task %s is closed, so its run cannot re-run checks", taskID)
+		}
+	}
+	task, err := c.resolveCITask(ctx, taskID)
 	if err != nil {
 		return ActionsRerunResult{}, err
 	}
@@ -158,14 +163,22 @@ func (c *Client) RerunTaskActions(ctx context.Context, taskID string, req Action
 	if branch == "" {
 		return ActionsRerunResult{}, validationErrorf("task %s has no branch of its own for CI to run on", taskID)
 	}
+	if want := strings.TrimSpace(req.Commit); want != "" && !isHexCommitSHA(want) {
+		return ActionsRerunResult{}, validationErrorf("commit %q is not a hex commit SHA", want)
+	}
 	repo := *task.Target
+	headRepo := task.Target.StoredOwner() + "/" + task.Target.Name
 	head := ""
 	if pr := model.TaskPullRequest(*task); pr != nil && (pr.Repo.Same(*task.Target) || model.IsUpstreamRepoFor(*task.Target, pr.Repo)) {
 		// A pull request from a fork runs its checks in the repository
 		// it is opened against.
 		repo = pr.Repo
-		if c.Config.GitHubPullRequests != nil {
-			if detail, err := c.Config.GitHubPullRequests.GetPullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number); err == nil {
+		prReader := c.Config.GitHubPullRequests
+		if prReader == nil {
+			prReader, _ = forgeReader[PullRequestReader](c)
+		}
+		if prReader != nil {
+			if detail, err := prReader.GetPullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number); err == nil {
 				head = detail.HeadSHA
 			}
 		}
@@ -181,7 +194,7 @@ func (c *Client) RerunTaskActions(ctx context.Context, taskID string, req Action
 			"a run re-runs only its own pull request's checks, at its head", want, taskID, shortHead(head))
 	}
 	resetPullRequestPolls(*task)
-	return c.rerunActions(ctx, repo, branch, head, 0, req)
+	return c.rerunActions(ctx, repo, headRepo, branch, head, 0, req)
 }
 
 // RerunActionsRun re-runs req of the Actions run id names (a gha: id):
@@ -196,15 +209,18 @@ func (c *Client) RerunActionsRun(ctx context.Context, id string, req ActionsReru
 	if err != nil {
 		return ActionsRerunResult{}, err
 	}
-	return c.rerunActions(ctx, repo, "", "", runID, req)
+	return c.rerunActions(ctx, repo, "", "", "", runID, req)
 }
 
 // rerunActions is both doors' work. With onlyRun it re-runs that run
-// alone, at its own head; otherwise every run on branch at head (the
-// branch's newest commit with runs when head is "").
-func (c *Client) rerunActions(ctx context.Context, repo model.RepoRef, branch, head string, onlyRun int64,
+// alone, at its own head; otherwise every check run on branch (owned by
+// headRepo) at head (the branch's newest commit with runs when head is "").
+func (c *Client) rerunActions(ctx context.Context, repo model.RepoRef, headRepo, branch, head string, onlyRun int64,
 	req ActionsRerunRequest) (ActionsRerunResult, error) {
 
+	if want := strings.TrimSpace(req.Commit); want != "" && !isHexCommitSHA(want) {
+		return ActionsRerunResult{}, validationErrorf("commit %q is not a hex commit SHA", want)
+	}
 	if refused := c.actionsRefusal(ctx, repo); refused != nil {
 		return ActionsRerunResult{}, validationErrorf("%s", refused.reason)
 	}
@@ -227,19 +243,23 @@ func (c *Client) rerunActions(ctx context.Context, repo model.RepoRef, branch, h
 		if run == nil {
 			return ActionsRerunResult{}, &NotFoundError{ID: ActionsRunID(repo.String(), onlyRun)}
 		}
+		if c.requestActor(ctx).Actor.Kind != model.PrincipalHuman && isPersonOnlyActionsEvent(run.Event) {
+			return ActionsRerunResult{}, forbiddenErrorf("only a person may re-run a %s GitHub Actions run (%s): "+
+				"GitHub re-runs it with the release secrets and inputs it started with",
+				run.Event, ActionsRunID(repo.String(), onlyRun))
+		}
 		runs, head, branch = []github.WorkflowRun{*run}, run.HeadSHA, run.HeadBranch
 	} else {
 		listed, err := reader.ListActionsRuns(owner, repo.Name, github.ActionsRunsQuery{Branch: branch, Limit: actionsRerunListLimit})
 		if err != nil {
 			return ActionsRerunResult{}, fmt.Errorf("listing %s's GitHub Actions runs on %s: %w", repo, branch, err)
 		}
-		if head == "" {
-			// No pull request pins the head: keep the runs of the branch
-			// in repo itself, not a fork's branch of the same name.
-			listed = slices.DeleteFunc(listed, func(run github.WorkflowRun) bool {
-				return run.HeadRepo != "" && !strings.EqualFold(run.HeadRepo, repo.StoredOwner()+"/"+repo.Name)
-			})
-		}
+		listed = slices.DeleteFunc(listed, func(run github.WorkflowRun) bool {
+			if headRepo != "" && run.HeadRepo != "" && !strings.EqualFold(run.HeadRepo, headRepo) {
+				return true
+			}
+			return !isTaskCheckActionsEvent(run.Event)
+		})
 		if head == "" && len(listed) > 0 {
 			// Newest first: the branch's newest commit with runs.
 			head = listed[0].HeadSHA
@@ -302,6 +322,7 @@ func (c *Client) rerunActions(ctx context.Context, repo model.RepoRef, branch, h
 		if err != nil {
 			return res, rerunRefusal(id, err)
 		}
+		c.actionsCache().invalidateRun(repo, run.ID)
 		res.Runs = append(res.Runs, ActionsRerunRun{ID: id, Workflow: runWorkflow(run), Mode: mode, Attempt: max(run.RunAttempt, 1) + 1})
 	}
 	if len(res.Runs) == 0 && spentErr != nil {
@@ -320,8 +341,10 @@ func (c *Client) rerunActionsJobs(reader github.ActionsReader, rerunner github.A
 
 	owner := repo.StoredOwner()
 	type pick struct {
-		run  github.WorkflowRun
-		jobs []github.ActionsRunJob
+		run     github.WorkflowRun
+		allJobs []github.ActionsRunJob
+		jobs    []github.ActionsRunJob
+		mode    string // "job", "failed" or "all"
 	}
 	var picks []*pick
 	found := map[string]bool{}
@@ -332,6 +355,7 @@ func (c *Client) rerunActionsJobs(reader github.ActionsReader, rerunner github.A
 			return res, fmt.Errorf("listing the jobs of %s: %w", ActionsRunID(repo.String(), run.ID), err)
 		}
 		var p *pick
+		seenInRun := map[int64]bool{}
 		for _, job := range listed {
 			names = append(names, job.Name)
 			for _, want := range jobs {
@@ -350,8 +374,12 @@ func (c *Client) rerunActionsJobs(reader github.ActionsReader, rerunner github.A
 						"(grain ci wait) before re-running the job", job.Name, ActionsRunID(repo.String(), run.ID), orUnknown(run.Status))
 				}
 				found[want] = true
+				if seenInRun[job.ID] {
+					continue
+				}
+				seenInRun[job.ID] = true
 				if p == nil {
-					p = &pick{run: run}
+					p = &pick{run: run, allJobs: listed}
 					picks = append(picks, p)
 				}
 				p.jobs = append(p.jobs, job)
@@ -368,16 +396,44 @@ func (c *Client) rerunActionsJobs(reader github.ActionsReader, rerunner github.A
 		if err := rerunBudgetSpent(repo, p.run, res.Head); err != nil {
 			return res, err
 		}
+		switch {
+		case len(p.jobs) == 1:
+			p.mode = "job"
+		case len(p.jobs) == len(p.allJobs):
+			p.mode = "all"
+		case sameJobIDs(p.jobs, failedActionsJobs(p.allJobs)):
+			p.mode = "failed"
+		default:
+			var picked []string
+			for _, j := range p.jobs {
+				picked = append(picked, j.Name)
+			}
+			return res, validationErrorf("cannot re-run %s together in %s (%s): GitHub Actions re-runs one job "+
+				"(grain ci run-job <job>), all failed jobs (grain ci retrigger), or every job (grain ci retrigger --all) "+
+				"of a workflow run at once", strings.Join(picked, ", "), ActionsRunID(repo.String(), p.run.ID), runWorkflow(p.run))
+		}
 	}
 	for _, p := range picks {
 		id := ActionsRunID(repo.String(), p.run.ID)
 		run := ActionsRerunRun{ID: id, Workflow: runWorkflow(p.run), Mode: "jobs", Attempt: max(p.run.RunAttempt, 1) + 1}
+		var jobIDs []int64
 		for _, job := range p.jobs {
-			if err := rerunner.RerunWorkflowJob(owner, repo.Name, job.ID); err != nil {
-				return res, rerunRefusal(id, err)
-			}
 			run.Jobs = append(run.Jobs, job.Name)
+			jobIDs = append(jobIDs, job.ID)
 		}
+		var err error
+		switch p.mode {
+		case "all":
+			err = rerunner.RerunWorkflowRun(owner, repo.Name, p.run.ID)
+		case "failed":
+			err = rerunner.RerunFailedJobs(owner, repo.Name, p.run.ID)
+		default:
+			err = rerunner.RerunWorkflowJob(owner, repo.Name, p.jobs[0].ID)
+		}
+		if err != nil {
+			return res, rerunRefusal(id, err)
+		}
+		c.actionsCache().invalidateRun(repo, p.run.ID, jobIDs...)
 		res.Runs = append(res.Runs, run)
 	}
 	return res, nil
@@ -406,11 +462,79 @@ func rerunRefusal(id string, err error) error {
 }
 
 func actionsRunFailed(run github.WorkflowRun) bool {
-	switch strings.ToLower(run.Conclusion) {
+	return actionsConclusionFailed(run.Conclusion)
+}
+
+func actionsConclusionFailed(conclusion string) bool {
+	switch strings.ToLower(strings.TrimSpace(conclusion)) {
 	case "failure", "cancelled", "timed_out", "startup_failure":
 		return true
 	}
 	return false
+}
+
+func failedActionsJobs(jobs []github.ActionsRunJob) []github.ActionsRunJob {
+	var out []github.ActionsRunJob
+	for _, j := range jobs {
+		if actionsConclusionFailed(j.Conclusion) {
+			out = append(out, j)
+		}
+	}
+	return out
+}
+
+func sameJobIDs(a, b []github.ActionsRunJob) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	have := make(map[int64]bool, len(b))
+	for _, j := range b {
+		have[j.ID] = true
+	}
+	for _, j := range a {
+		if !have[j.ID] {
+			return false
+		}
+	}
+	return true
+}
+
+// isTaskCheckActionsEvent is whether event is an ordinary branch or pull
+// request check run a sandbox may re-run on its own head without any CI
+// grant (never a workflow_dispatch, release, pull_request_target or
+// schedule run, which carry release secrets, base-branch tokens or manual
+// inputs).
+func isTaskCheckActionsEvent(event string) bool {
+	switch strings.ToLower(strings.TrimSpace(event)) {
+	case "", "push", "pull_request", "merge_group", "dynamic":
+		return true
+	}
+	return false
+}
+
+// isPersonOnlyActionsEvent is whether re-running event on GitHub Actions
+// places release secrets, base-branch tokens or manual dispatch inputs
+// that grain's CI authorization holds to a person
+// (Client.withholdReleaseSecrets).
+func isPersonOnlyActionsEvent(event string) bool {
+	switch strings.ToLower(strings.TrimSpace(event)) {
+	case "workflow_dispatch", "release", "pull_request_target", "deployment":
+		return true
+	}
+	return false
+}
+
+func isHexCommitSHA(s string) bool {
+	if len(s) < 4 || len(s) > 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func runWorkflow(run github.WorkflowRun) string {
