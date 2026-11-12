@@ -56,9 +56,7 @@ class FakeSettingsApi {
   deploymentBody: Record<string, unknown> = {
     defaultModel: "gemini-2.5-pro",
     targetRepos: ["acme/platform"],
-    agentBackends: [
-      { id: "vertex-main", framework: "antigravity" },
-    ],
+    agentBackends: [{ id: "vertex-main", framework: "antigravity" }],
   };
 
   config = () => Promise.resolve(structuredClone(this.configBody));
@@ -119,7 +117,7 @@ class FakeSettingsApi {
       return Promise.resolve({
         currentVersion: "v3.6.0",
         phase: "downloading",
-        cancellable: true
+        cancellable: true,
       });
     }
     if (key === "GET /api/upgrade/targets") {
@@ -374,7 +372,10 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
     console.log("DOM2:", el.innerHTML);
-    console.log("FOUND_INPUT_IN_HTML:", el.innerHTML.includes('input-agent-key-antigravity'));
+    console.log(
+      "FOUND_INPUT_IN_HTML:",
+      el.innerHTML.includes("input-agent-key-antigravity"),
+    );
     const keyInput = el.querySelector<HTMLInputElement>(
       '[data-testid="input-agent-key-antigravity"]',
     )!;
@@ -415,7 +416,8 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
     expect(
-      el.querySelector('[data-testid="key-check-result-antigravity"]')?.textContent,
+      el.querySelector('[data-testid="key-check-result-antigravity"]')
+        ?.textContent,
     ).toContain("200 OK");
 
     // Add a new Vertex backend connection
@@ -426,7 +428,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       )!,
       "vertex-eu",
     );
-    
+
     harness.detectChanges();
     el.querySelector<HTMLButtonElement>(
       '[data-testid="add-model-backend"]',
@@ -546,9 +548,9 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       '[data-testid="cancel-upgrade-btn"]',
     )!.click();
     await new Promise((r) => setTimeout(r, 200));
-    expect(api.calls.some((c) => c.key === "DELETE /api/upgrade/scheduled")).toBe(
-      true,
-    );
+    expect(
+      api.calls.some((c) => c.key === "DELETE /api/upgrade/scheduled"),
+    ).toBe(true);
 
     el.querySelector<HTMLButtonElement>(
       '[data-testid="start-upgrade-btn"]',

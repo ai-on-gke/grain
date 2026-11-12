@@ -52,13 +52,7 @@ export function routePath(key: RouteKey, params: RouteParams = {}): string {
     const v = params[name];
     if (v === undefined) throw new Error(`${key}: missing {${name}}`);
     const s = String(v);
-    return rest
-      ? s
-          .split("/")
-          .filter(Boolean)
-          .map((seg) => encodeURIComponent(seg))
-          .join("/")
-      : encodeURIComponent(s);
+    return encodeURIComponent(s);
   });
 }
 
