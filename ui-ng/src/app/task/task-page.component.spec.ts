@@ -19,6 +19,7 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { DiffPreview, TaskDetail } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
+import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { TaskPageComponent, backFrom, duration } from "./task-page.component";
 import { TaskStore } from "./task.store";
@@ -276,6 +277,14 @@ function q<T extends HTMLElement = HTMLElement>(
   sel: string,
 ): T | null {
   return (f.nativeElement as HTMLElement).querySelector<T>(sel);
+}
+
+// Opens the header's overflow menu when the task has one.
+async function openMore(f: ComponentFixture<unknown>): Promise<void> {
+  const more = q<HTMLButtonElement>(f, '[data-testid="act-more"]');
+  if (!more) return;
+  more.click();
+  await settle(f);
 }
 
 describe("TaskPageComponent", () => {
@@ -588,6 +597,145 @@ describe("TaskPageComponent", () => {
       },
     });
   });
+
+  it("queries CI runs by repo and ref, reads the run detail, and labels unstarted runs pending", async () => {
+    const api = new FakeApi();
+    api.ciRuns = [
+      api.ciRuns[0],
+      { id: "run-92", event: "push", ref: "grain/task-7", jobs: [] },
+    ] as unknown as FakeApi["ciRuns"];
+    const f = await render(api, "changes");
+
+    const list = api.calls.filter((c) => c.route === "GET /api/ci/runs");
+    expect(list.length).toBeGreaterThan(0);
+    for (const c of list) {
+      expect(c.query).toBe("repo=acme%2Fweb&ref=grain%2Ftask-7&limit=10");
+    }
+    expect(
+      api.calls.some(
+        (c) =>
+          c.route === "GET /api/ci/runs/{id}" &&
+          (c.params as { id?: string })?.id === "run-91",
+      ),
+    ).toBe(true);
+    expect(
+      q(f, '[data-testid="ci-run-run-92"] .status-pill')!.textContent!.trim(),
+    ).toBe("pending");
+    expect(
+      q(f, '[data-testid="ci-run-run-91"] .status-pill')!.textContent!.trim(),
+    ).toBe("failure");
+  });
+
+  it("does not query CI runs with an undefined repo or ref when the task has no branch", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, branch: undefined } as TaskDetail;
+    await render(api, "changes");
+    const list = api.calls.filter((c) => c.route === "GET /api/ci/runs");
+    expect(list.every((c) => !c.query?.includes("undefined"))).toBe(true);
+  });
+
+  it("treats an access item with a substitute grant as grantable and re-checks by re-reading the task", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      pendingAccess: {
+        summary: "Read CI results",
+        createdAt: "2026-11-12T00:00:00Z",
+        items: [
+          {
+            kind: "capability",
+            grant: "grain#ci",
+            error: "acme/web is not gated by grain CI",
+            substitute: true,
+            substituteGrant: "api:ci-read@acme/web",
+          },
+        ],
+      },
+    } as TaskDetail;
+    const f = await render(api);
+
+    const box = q<HTMLInputElement>(f, '[data-testid="access-item-0"]')!;
+    expect(box.disabled).toBe(false);
+    expect(box.checked).toBe(true);
+    expect(q(f, '[data-testid="access-items-list"]')!.textContent).toContain(
+      "api:ci-read@acme/web",
+    );
+    const grant = q<HTMLButtonElement>(f, '[data-testid="access-grant-btn"]')!;
+    expect(grant.disabled).toBe(false);
+    grant.click();
+    await settle(f);
+    expect(
+      api.calls.find(
+        (c) => c.route === "POST /api/tasks/{id}/access-request/grant",
+      ),
+    ).toMatchObject({ params: { id: "7" }, body: {} });
+
+    api.calls.length = 0;
+    q<HTMLButtonElement>(f, '[data-testid="access-check-btn"]')!.click();
+    await settle(f);
+    expect(api.calls.some((c) => c.route === "GET /api/tasks/{id}")).toBe(true);
+    expect(
+      api.calls.some(
+        (c) => c.route === "POST /api/tasks/{id}/access-request/check",
+      ),
+    ).toBe(false);
+  });
+
+  it("hides Release hold from a role without full access", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [{ category: "security", reason: "Auth path touched" }],
+    };
+    const f = await render(api);
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeTruthy();
+
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        full: false,
+        role: "grain/contributor",
+        scopes: ["tasks:read", "tasks:write"],
+      },
+    } as never);
+    await settle(f);
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+  });
+
+  it("offers Rollover for a durable idle task but not Recreate sandbox", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, admission: "durable" } as TaskDetail;
+    const f = await render(api);
+    await openMore(f);
+    expect(q(f, '[data-testid="act-rollover"]')).toBeTruthy();
+    expect(q(f, '[data-testid="act-recreate-sandbox"]')).toBeNull();
+  });
+
+  it("offers Recreate sandbox but not Rollover while the task is running", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      admission: "durable",
+      state: "running",
+    } as TaskDetail;
+    const f = await render(api);
+    await openMore(f);
+    expect(q(f, '[data-testid="act-recreate-sandbox"]')).toBeTruthy();
+    expect(q(f, '[data-testid="act-rollover"]')).toBeNull();
+  });
+
+  for (const [label, patch] of [
+    ["a non-durable task", {}],
+    ["a console session", { admission: "durable", consoleSession: true }],
+    ["a closed task", { admission: "durable", state: "closed" }],
+  ] as const) {
+    it(`does not offer Rollover for ${label}`, async () => {
+      const api = new FakeApi();
+      api.detail = { ...api.detail, ...patch } as TaskDetail;
+      const f = await render(api);
+      await openMore(f);
+      expect(q(f, '[data-testid="act-rollover"]')).toBeNull();
+    });
+  }
 
   it("edits task fields via PATCH /api/tasks/{id}, updates depends-on, capabilities, pause/resume, and run-now", async () => {
     const api = new FakeApi();
@@ -1026,28 +1174,34 @@ describe("duration", () => {
 
   it("opens force-merge dialog outside inert section, traps focus, and closes on Escape", async () => {
     const api = new FakeApi();
-    api.detail = { ...api.detail, state: "awaiting_submit", mergeGates: [{ id: "ci", label: "CI", state: "failing" }] };
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      mergeGates: [{ id: "ci", label: "CI", state: "failing" }],
+    };
     const f = await render(api, "changes");
 
-    const openBtn = q<HTMLButtonElement>(f, '[data-testid="changes-force-merge-open"]')!;
+    const openBtn = q<HTMLButtonElement>(
+      f,
+      '[data-testid="changes-force-merge-open"]',
+    )!;
     openBtn.focus();
     openBtn.click();
     await settle(f);
 
     const dialog = q(f, '[data-testid="force-merge-dialog"]')!;
     expect(dialog).toBeTruthy();
-    expect(dialog.closest('[inert]')).toBeNull();
-    
-    const section = q(f, 'section.view-panel')!;
-    expect(section.hasAttribute('inert')).toBe(true);
+    expect(dialog.closest("[inert]")).toBeNull();
 
-    
+    const section = q(f, "section.view-panel")!;
+    expect(section.hasAttribute("inert")).toBe(true);
+
     // Press escape
-    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     await settle(f);
 
     expect(q(f, '[data-testid="force-merge-dialog"]')).toBeNull();
-    expect(section.hasAttribute('inert')).toBe(false);
+    expect(section.hasAttribute("inert")).toBe(false);
     expect(document.activeElement).toBe(openBtn);
   });
 });

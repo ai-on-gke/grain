@@ -17,7 +17,6 @@ import {
   ChangeDetectionStrategy,
   Component,
   NgZone,
-  type OnDestroy,
   ViewEncapsulation,
   computed,
   effect,
@@ -600,7 +599,6 @@ export class TaskChangesTabComponent {
     });
   }
 
-
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
     return this.access.can(route, this.task().repo || undefined);
   }
@@ -645,11 +643,16 @@ export class TaskChangesTabComponent {
       this.ciLoading.set(true);
       try {
         const t = this.task();
-        const res = await this.api.get<CIRunsResponse | CIRun[]>(
-          "GET /api/ci/runs",
-          undefined,
-          `repo=${encodeURIComponent(t.repo!)}&ref=${encodeURIComponent(t.branch!)}&limit=10`,
-        );
+        // GET /api/ci/runs has no task filter (pkg/ui/ci.go ciRunFilterFrom):
+        // scope by repo + ref, and fall back to the task's own run id.
+        const res: CIRunsResponse | CIRun[] =
+          t.repo && t.branch
+            ? await this.api.get<CIRunsResponse | CIRun[]>(
+                "GET /api/ci/runs",
+                undefined,
+                `repo=${encodeURIComponent(t.repo)}&ref=${encodeURIComponent(t.branch)}&limit=10`,
+              )
+            : [];
         if (this.task().id !== id) return;
         const runs = Array.isArray(res) ? res : (res?.runs ?? []);
         this.ciRuns.set(runs);

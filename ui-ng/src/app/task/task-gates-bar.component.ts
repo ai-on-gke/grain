@@ -125,7 +125,7 @@ const REVIEW_CATEGORIES = [
               <h2 id="gate-access-h" class="gate-card-title">
                 Waiting for an access grant: {{ pa.summary }}
               </h2>
-              @if (can("POST /api/tasks/{id}/access-request/check")) {
+              @if (can("GET /api/tasks/{id}")) {
                 <button
                   type="button"
                   class="btn-text"
@@ -147,8 +147,8 @@ const REVIEW_CATEGORIES = [
                     <input
                       type="checkbox"
                       [attr.data-testid]="'access-item-' + $index"
-                      [checked]="!unticked().has($index) && !it.error"
-                      [disabled]="!!it.error"
+                      [checked]="!unticked().has($index) && isGrantable(it)"
+                      [disabled]="!isGrantable(it)"
                       (change)="toggleAccessItem($index)"
                     />
                     <span class="mono">{{ formatAccessItem(it) }}</span>
@@ -476,15 +476,22 @@ export class TaskGatesBarComponent {
     () => this.checkedOverride() ?? this.task().pendingAccess?.items ?? [],
   );
 
+  // An item is grantable when it is not already held and either checked
+  // clean or carries the substitute grant the server will apply instead
+  // (pkg/ui/task_access_request.go GrantAccessRequest grants *Substitute).
+  protected isGrantable(it: AccessRequestItem): boolean {
+    return !it.held && (!it.error || !!it.substitute || !!it.substituteGrant);
+  }
+
   protected readonly grantableCount = computed(
-    () => this.displayItems().filter((it) => !it.error).length,
+    () => this.displayItems().filter((it) => this.isGrantable(it)).length,
   );
 
   protected readonly chosenIndexes = computed(() => {
     const off = this.unticked();
     const out: number[] = [];
     this.displayItems().forEach((it, idx) => {
-      if (!it.error && !off.has(idx)) out.push(idx);
+      if (this.isGrantable(it) && !off.has(idx)) out.push(idx);
     });
     return out;
   });
