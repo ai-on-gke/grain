@@ -2151,7 +2151,7 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			// and capabilities resent here are what the API shows --
 			// the template's beside those -- which refuseIgnoredScheduleContent
 			// has already held to that. Storing them would put the copy
-			// of the template's grants back that schema 143 took off.
+			// of the template's grants back that schema 144 took off.
 			if req.Capabilities != nil && s.TemplateID == nil {
 				s.Grants = grants
 			}
