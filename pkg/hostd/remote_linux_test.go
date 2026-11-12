@@ -19,6 +19,7 @@ package hostd
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -424,7 +425,7 @@ func TestADrainedHostdDeliversTheLastRunsExitBeforeExiting(t *testing.T) {
 // for the controller having read the Exit and delete the spool.
 func TestARemoteSessionDropWhileExitIsInFlightKeepsTheSpool(t *testing.T) {
 	ctl := startController(t, "s3cret")
-	ts := startServer(t, "", func(s *Server) {
+	startServer(t, "", func(s *Server) {
 		s.drainExitGrace = 2 * time.Second
 		s.Remote = Dialer{Server: ctl.http.URL, Token: "s3cret", Host: "workstation", Build: "test-build"}.Dial
 		s.RemoteMinBackoff = 20 * time.Millisecond
@@ -456,16 +457,23 @@ func TestARemoteSessionDropWhileExitIsInFlightKeepsTheSpool(t *testing.T) {
 	if err := json.Unmarshal(payload, &started); err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(5 * time.Second); !listed(t, ts, started.ID).Exited; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("child never exited")
+	// Read until frameExit arrives on stConn without closing stConn: attach
+	// has now deterministically written frameExit and entered DrainExitGrace.
+	for {
+		typ, _, err := readFrame(stConn)
+		if err != nil {
+			t.Fatalf("reading before Exit: %v", err)
+		}
+		if typ == frameExit {
+			break
 		}
 	}
-	// Give attach one poll cycle to write frameExit and enter the grace wait,
-	// send a late signal (which control must ignore on a reaped process), and
-	// drop the session before the stream is closed cleanly.
-	time.Sleep(150 * time.Millisecond)
+	// Send a late signal (which control must ignore on a reaped process) and
+	// flush a request over the same mux session before dropping it.
 	_ = writeJSON(stConn, frameSignal, SignalMsg{Signal: "TERM"})
+	if _, err := ctl.client().Processes(ctx); err != nil {
+		t.Fatal(err)
+	}
 	ctl.drop()
 
 	waitConnected(t, ctl.remote, 2)
@@ -520,12 +528,15 @@ func TestAServeCancelWhileExitIsHeldKeepsTheSpool(t *testing.T) {
 	if err := json.Unmarshal(payload, &started); err != nil {
 		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(5 * time.Second); !listed(t, ts, started.ID).Exited; time.Sleep(10 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("child never exited")
+	for {
+		typ, _, err := readFrame(stConn)
+		if err != nil {
+			t.Fatalf("reading before Exit: %v", err)
+		}
+		if typ == frameExit {
+			break
 		}
 	}
-	time.Sleep(150 * time.Millisecond)
 	ts.cancel()
 	select {
 	case err := <-ts.done:
@@ -539,5 +550,105 @@ func TestAServeCancelWhileExitIsHeldKeepsTheSpool(t *testing.T) {
 	exit, _, err := ts2.client.Attach(ctx, started.ID, Cursor{}, &out, nil)
 	if err != nil || exit.Code != 6 || out.String() != "cancel-ok\n" {
 		t.Fatalf("Attach on restarted hostd = %+v, %q, %v; want Exit code 6 and kept spool output", exit, out.String(), err)
+	}
+}
+
+type holdExitConn struct {
+	net.Conn
+	onExit    func()
+	reset     chan struct{}
+	resetOnce sync.Once
+	hdr       [5]byte
+	hdrN      int
+	rem       uint32
+}
+
+func (c *holdExitConn) Reset() error {
+	defer c.resetOnce.Do(func() { close(c.reset) })
+	if r, ok := c.Conn.(interface{ Reset() error }); ok {
+		return r.Reset()
+	}
+	return nil
+}
+
+func (c *holdExitConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	for i := 0; i < n; {
+		if c.rem > 0 {
+			take := min(uint32(n-i), c.rem)
+			c.rem -= take
+			i += int(take)
+			continue
+		}
+		c.hdr[c.hdrN] = b[i]
+		c.hdrN++
+		i++
+		if c.hdrN == 5 {
+			typ := c.hdr[0]
+			c.rem = binary.BigEndian.Uint32(c.hdr[1:5])
+			c.hdrN = 0
+			if typ == frameExit && c.onExit != nil {
+				fn := c.onExit
+				c.onExit = nil
+				fn()
+				<-c.reset
+				return 0, errors.New("stream reset on detach")
+			}
+		}
+	}
+	return n, err
+}
+
+// A daemon detaching (Client.Detach) over a live remote mux session while
+// hostd's frameExit is already in flight must reset the stream rather than
+// closing it with FrameCloseWrite, so hostd keeps the spool for the next
+// daemon instead of mistaking the detach for a read Exit.
+func TestADetachRacingExitOverRemoteSessionKeepsTheSpool(t *testing.T) {
+	ctl := startController(t, "s3cret")
+	ts := startServer(t, "", func(s *Server) {
+		s.Poll = 20 * time.Millisecond
+		s.drainExitGrace = 2 * time.Second
+		s.Remote = Dialer{Server: ctl.http.URL, Token: "s3cret", Host: "workstation", Build: "test-build"}.Dial
+		s.RemoteMinBackoff = 20 * time.Millisecond
+		s.RemoteMaxBackoff = 200 * time.Millisecond
+	})
+	waitConnected(t, ctl.remote, 1)
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	started := make(chan Started, 1)
+	c := Client{
+		Dial: func(ctx context.Context) (net.Conn, error) {
+			raw, err := ctl.remote.Dial(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return &holdExitConn{Conn: raw, onExit: cancelRun, reset: make(chan struct{})}, nil
+		},
+		Detach:    func(context.Context) bool { return true },
+		OnStarted: func(s Started) { started <- s },
+	}
+	var first bytes.Buffer
+	_, err := c.Run(runCtx, Request{
+		Kind: KindCLI, Name: "sh",
+		Args:   []string{"-c", "echo race-ok; exit 7"},
+		Detach: true, Run: "run-race", Task: "11",
+	}, nil, &first, nil)
+	if !errors.Is(err, ErrDetached) {
+		t.Fatalf("Run detaching in flight with Exit = %v, want ErrDetached", err)
+	}
+	st := <-started
+	deadline := time.Now().Add(5 * time.Second)
+	for listed(t, ts, st.ID).Attached {
+		if time.Now().After(deadline) {
+			t.Fatal("attach never let go after stream reset")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var rest bytes.Buffer
+	exit, _, err := ctl.client().Attach(context.Background(), st.ID, Cursor{Stdout: int64(first.Len())}, &rest, nil)
+	if err != nil || exit.Code != 7 || first.String()+rest.String() != "race-ok\n" {
+		t.Fatalf("Attach after detach racing Exit = %+v, %v, stdout %q; want Exit code 7 and full output",
+			exit, err, first.String()+rest.String())
 	}
 }

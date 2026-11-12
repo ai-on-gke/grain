@@ -406,10 +406,23 @@ func (c Client) Attach(ctx context.Context, id string, cur Cursor, stdout, stder
 	return c.stream(ctx, conn, send, true, cur, stdout, stderr)
 }
 
+// abortStream closes conn without a clean stream EOF where the transport
+// supports it (mux.Stream.Reset sends FrameReset rather than
+// FrameCloseWrite), so hostd never mistakes a detached or abandoned stream
+// for a daemon that read the process's Exit and hung up.
+func abortStream(conn net.Conn) {
+	if r, ok := conn.(interface{ Reset() error }); ok {
+		_ = r.Reset()
+	}
+	_ = conn.Close()
+}
+
 // stream reads a started or attached process's frames until its exit,
 // advancing cur by what it writes to stdout and stderr.
 func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byte) error, detachable bool,
 	cur Cursor, stdout, stderr io.Writer) (Exit, Cursor, error) {
+	var endMu sync.Mutex
+	readExit := false
 	finished := make(chan struct{})
 	defer close(finished)
 	detached := make(chan struct{})
@@ -418,8 +431,15 @@ func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byt
 		case <-finished:
 		case <-ctx.Done():
 			if detachable && c.Detach != nil && c.Detach(ctx) {
-				close(detached)
-				conn.Close()
+				endMu.Lock()
+				alreadyRead := readExit
+				if !alreadyRead {
+					close(detached)
+				}
+				endMu.Unlock()
+				if !alreadyRead {
+					abortStream(conn)
+				}
 				return
 			}
 			b, _ := json.Marshal(SignalMsg{Signal: "KILL"})
@@ -427,7 +447,7 @@ func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byt
 			select {
 			case <-finished:
 			case <-time.After(WaitDelay + time.Second):
-				conn.Close()
+				abortStream(conn)
 			}
 		}
 	}()
@@ -457,6 +477,9 @@ func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byt
 			}
 			cur.Stderr += int64(len(payload))
 		case frameExit:
+			endMu.Lock()
+			readExit = true
+			endMu.Unlock()
 			var e Exit
 			if err := json.Unmarshal(payload, &e); err != nil {
 				return Exit{Code: -1}, cur, err
