@@ -28,6 +28,19 @@ for (const [name, viewport] of [
 ]) {
   test(`Settings → Audit fits a ${name} screen`, async ({ page }) => {
     await page.setViewportSize(viewport);
+    // The page asks for the newest 100 config changes, and by the time
+    // this spec runs the suite's other settings saves can have pushed the
+    // seeded rows -- a day old -- past them. Ask the real server for its
+    // most (pkg/ui maxConfigAudit) instead, so they are still on the page.
+    await page.route(/\/api\/deployment\/config-audit\?/, async (route) => {
+      const url = new URL(route.request().url());
+      url.searchParams.set("limit", "500");
+      try {
+        await route.continue({ url: url.toString() });
+      } catch (err) {
+        if (!/closed|handled/i.test(String(err))) throw err;
+      }
+    });
     await page.goto("/settings/audit");
 
     const config = page.getByTestId("config-audit-table");
