@@ -330,12 +330,7 @@ func (c Client) Run(ctx context.Context, req Request, stdin io.Reader, stdout, s
 	}
 	defer conn.Close()
 
-	var sendMu sync.Mutex
-	send := func(typ byte, p []byte) error {
-		sendMu.Lock()
-		defer sendMu.Unlock()
-		return writeFrame(conn, typ, p)
-	}
+	send, abort := streamPipe(conn)
 	b, _ := json.Marshal(req)
 	if err := send(frameRequest, b); err != nil {
 		return Exit{Code: -1}, err
@@ -367,7 +362,7 @@ func (c Client) Run(ctx context.Context, req Request, stdin io.Reader, stdout, s
 		}
 		_ = send(frameStdinClose, nil)
 	}()
-	exit, _, err := c.stream(ctx, conn, send, req.Detach, Cursor{}, stdout, stderr)
+	exit, _, err := c.stream(ctx, conn, send, abort, req.Detach, Cursor{}, stdout, stderr)
 	return exit, err
 }
 
@@ -382,12 +377,7 @@ func (c Client) Attach(ctx context.Context, id string, cur Cursor, stdout, stder
 		return Exit{Code: -1}, cur, err
 	}
 	defer conn.Close()
-	var sendMu sync.Mutex
-	send := func(typ byte, p []byte) error {
-		sendMu.Lock()
-		defer sendMu.Unlock()
-		return writeFrame(conn, typ, p)
-	}
+	send, abort := streamPipe(conn)
 	b, _ := json.Marshal(Request{Op: OpAttach, ID: id, Cursor: cur})
 	if err := send(frameRequest, b); err != nil {
 		return Exit{Code: -1}, cur, err
@@ -403,23 +393,48 @@ func (c Client) Attach(ctx context.Context, id string, cur Cursor, stdout, stder
 	default:
 		return Exit{Code: -1}, cur, fmt.Errorf("hostd: unexpected frame %q", typ)
 	}
-	return c.stream(ctx, conn, send, true, cur, stdout, stderr)
+	return c.stream(ctx, conn, send, abort, true, cur, stdout, stderr)
 }
 
-// abortStream closes conn without a clean stream EOF where the transport
-// supports it (mux.Stream.Reset sends FrameReset rather than
-// FrameCloseWrite), so hostd never mistakes a detached or abandoned stream
-// for a daemon that read the process's Exit and hung up.
-func abortStream(conn net.Conn) {
-	if r, ok := conn.(interface{ Reset() error }); ok {
-		_ = r.Reset()
+// streamPipe serializes outbound frames on conn and provides abort, which
+// ends conn without a clean EOF on any transport: mux.Stream.Reset sends
+// FrameReset rather than FrameCloseWrite, and on a Unix socket (where Close
+// delivers a clean io.EOF even with unread frames in our receive buffer) a
+// 1-byte truncated frame header written under send's lock makes hostd's
+// control loop read io.ErrUnexpectedEOF instead of mistaking a detached or
+// abandoned stream for a daemon that read the process's Exit and hung up.
+func streamPipe(conn net.Conn) (send func(byte, []byte) error, abort func()) {
+	var mu sync.Mutex
+	aborted := false
+	send = func(typ byte, p []byte) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if aborted {
+			return net.ErrClosed
+		}
+		return writeFrame(conn, typ, p)
 	}
-	_ = conn.Close()
+	abort = func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if aborted {
+			return
+		}
+		aborted = true
+		if r, ok := conn.(interface{ Reset() error }); ok {
+			_ = r.Reset()
+		} else {
+			_ = conn.SetWriteDeadline(time.Now().Add(50 * time.Millisecond))
+			_, _ = conn.Write([]byte{frameSignal})
+		}
+		_ = conn.Close()
+	}
+	return send, abort
 }
 
 // stream reads a started or attached process's frames until its exit,
 // advancing cur by what it writes to stdout and stderr.
-func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byte) error, detachable bool,
+func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byte) error, abort func(), detachable bool,
 	cur Cursor, stdout, stderr io.Writer) (Exit, Cursor, error) {
 	var endMu sync.Mutex
 	readExit := false
@@ -438,7 +453,7 @@ func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byt
 				}
 				endMu.Unlock()
 				if !alreadyRead {
-					abortStream(conn)
+					abort()
 				}
 				return
 			}
@@ -447,7 +462,7 @@ func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byt
 			select {
 			case <-finished:
 			case <-time.After(WaitDelay + time.Second):
-				abortStream(conn)
+				abort()
 			}
 		}
 	}()
@@ -478,7 +493,13 @@ func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byt
 			cur.Stderr += int64(len(payload))
 		case frameExit:
 			endMu.Lock()
-			readExit = true
+			select {
+			case <-detached:
+				endMu.Unlock()
+				return Exit{Code: -1}, cur, ErrDetached
+			default:
+				readExit = true
+			}
 			endMu.Unlock()
 			var e Exit
 			if err := json.Unmarshal(payload, &e); err != nil {

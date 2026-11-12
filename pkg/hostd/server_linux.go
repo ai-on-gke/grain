@@ -644,9 +644,10 @@ func (s *Server) waitDrained(ctx context.Context) {
 				p.cancel(killCanceled)
 			}
 			if handedOver {
+				s.waitExitsDelivered(ctx, true)
 				s.logf("hostd: handing %d live detached process(es) over to the new build", kept)
 			} else {
-				s.waitExitsDelivered(ctx)
+				s.waitExitsDelivered(ctx, false)
 				s.logf("hostd: drained; exiting so the new build takes over")
 			}
 			return
@@ -701,19 +702,21 @@ func (s *Server) exitGrace() time.Duration {
 	return DrainExitGrace
 }
 
-// waitExitsDelivered waits until no detached process that has ended still
-// has a stream attached whose daemon has not read its Exit (attach
-// releases the process once the daemon cleanly hangs up after the Exit,
-// lets go keeping the spool when its session or stream breaks, and keeps
-// the spool when DrainExitGrace passes first). It waits twice
+// waitExitsDelivered waits until no ended process still has a stream attached
+// whose daemon has not read its Exit (attach releases a detached process once
+// the daemon cleanly hangs up after the Exit, lets go keeping the spool when
+// its session or stream breaks, and keeps the spool when DrainExitGrace passes
+// first; run waits the same way for a protocol-1 start, which has no spool).
+// On a handover (nonDetachedOnly) only protocol-1 exits are waited for:
+// detached spools survive on disk for the replacement hostd. It waits twice
 // DrainExitGrace at most, so attach's own grace -- which starts after any
 // final output is pumped -- ordinarily runs out first. Without it
 // the last run to end races hostd's exit:
 // Serve closes the remote session and the sockets the moment nothing
 // runs, so the daemon streaming that run sees its stream drop rather than
 // the Exit, and waits for a host to come back before the run can finish
-// from the spool it kept.
-func (s *Server) waitExitsDelivered(ctx context.Context) {
+// from the spool it kept (or loses a protocol-1 start outright).
+func (s *Server) waitExitsDelivered(ctx context.Context, nonDetachedOnly bool) {
 	wait := 2 * s.exitGrace()
 	timeout := time.NewTimer(wait)
 	defer timeout.Stop()
@@ -721,7 +724,10 @@ func (s *Server) waitExitsDelivered(ctx context.Context) {
 		s.mu.Lock()
 		pending := 0
 		for _, p := range s.procs {
-			if p.detached && p.info.Exited && p.info.Attached {
+			if nonDetachedOnly && p.detached {
+				continue
+			}
+			if p.info.Exited && p.info.Attached {
 				pending++
 			}
 		}
@@ -877,12 +883,12 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		_ = writeJSON(conn, frameProcesses, s.Processes())
 		return
 	case OpAttach:
-		p := s.lookup(req.ID)
-		if p == nil || !p.detached {
+		p, gen := s.claimAttach(req.ID)
+		if p == nil {
 			s.refuse(conn, fmt.Sprintf("no detached process %q", req.ID))
 			return
 		}
-		s.attach(ctx, conn, p, req.Cursor, nil)
+		s.attach(ctx, conn, p, gen, req.Cursor, nil)
 		return
 	case OpCancel:
 		s.release(req.ID, "cancelled by the daemon")
@@ -1093,7 +1099,9 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 
 	// The daemon's side: stdin, signals, and its going away.
 	done := make(chan struct{})
+	gone := make(chan struct{})
 	go func() {
+		defer close(gone)
 		stdinOpen := true
 		closeStdin := func() {
 			if stdinOpen {
@@ -1146,6 +1154,11 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 					s.logf("hostd: refused signal %q for pid %d", m.Signal, pid)
 					continue
 				}
+				select {
+				case <-done:
+					continue
+				default:
+				}
 				_ = syscall.Kill(-pid, sig)
 			}
 		}
@@ -1157,7 +1170,30 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 	killed := entry.killKind
 	s.mu.Unlock()
 	exit := s.reap(cmd, err, runCtx, req, killed)
-	sendJSON(frameExit, exit)
+	exitBytes, _ := json.Marshal(exit)
+	if req.Kind != KindCapability {
+		s.mu.Lock()
+		entry.info.Exited = true
+		entry.info.Exit = &exit
+		entry.info.Attached = true
+		s.mu.Unlock()
+		s.signalChanged()
+		defer func() {
+			s.mu.Lock()
+			entry.info.Attached = false
+			s.mu.Unlock()
+			s.signalChanged()
+		}()
+	}
+	if err := send(frameExit, exitBytes); err == nil && req.Kind != KindCapability {
+		grace := time.NewTimer(s.exitGrace())
+		select {
+		case <-gone:
+		case <-ctx.Done():
+		case <-grace.C:
+		}
+		grace.Stop()
+	}
 }
 
 // reap turns cmd's Wait into an Exit, and kills whatever the process left

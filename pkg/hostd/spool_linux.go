@@ -93,6 +93,19 @@ func (s *Server) lookup(id string) *proc {
 	return s.procs[id]
 }
 
+func (s *Server) claimAttach(id string) (*proc, int) {
+	s.init()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.procs[id]
+	if p == nil || !p.detached {
+		return nil, 0
+	}
+	p.attachGen++
+	p.info.Attached = true
+	return p, p.attachGen
+}
+
 // Processes is OpProcesses' listing: every process hostd is running, and
 // every detached one whose final spool no daemon has read yet.
 func (s *Server) Processes() []Process {
@@ -101,6 +114,9 @@ func (s *Server) Processes() []Process {
 	defer s.mu.Unlock()
 	out := make([]Process, 0, len(s.procs))
 	for _, p := range s.procs {
+		if !p.detached && p.info.Exited {
+			continue
+		}
 		info := p.info
 		if p.detached {
 			info.Cursor = spoolSizes(info.Spool)
@@ -158,6 +174,25 @@ func (s *Server) release(id, why string) {
 		return
 	}
 	s.drop(id)
+	if info.Spool != "" {
+		_ = os.RemoveAll(info.Spool)
+	}
+}
+
+// releaseReadExit atomically removes an ended detached process and its spool
+// only if gen is still the active attach generation, so a concurrent OpAttach
+// that superseded gen between Exit grace ending and release cannot have the
+// spool deleted from under it.
+func (s *Server) releaseReadExit(p *proc, gen int) {
+	s.mu.Lock()
+	if p.attachGen != gen || s.procs[p.info.ID] != p {
+		s.mu.Unlock()
+		return
+	}
+	info := p.info
+	delete(s.procs, info.ID)
+	s.mu.Unlock()
+	s.signalChanged()
 	if info.Spool != "" {
 		_ = os.RemoveAll(info.Spool)
 	}
@@ -267,12 +302,14 @@ func (s *Server) startDetached(ctx context.Context, conn net.Conn, req *Request,
 	if b, err := json.Marshal(p.info); err == nil {
 		_ = os.WriteFile(filepath.Join(dir, spoolProcess), b, 0o600)
 	}
+	p.attachGen = 1
+	p.info.Attached = true
 	s.add(id, p)
 	onAdded()
 	s.logf("hostd: started %s %q detached as pid %d (id %s, run %s, deadline %s, spool %s)",
 		req.Kind, req.Name, pid, id, req.Run, deadline.Format(time.RFC3339), dir)
 	go s.watchDetached(p)
-	s.attach(ctx, conn, p, Cursor{}, stdinW)
+	s.attach(ctx, conn, p, 1, Cursor{}, stdinW)
 }
 
 func (s *Server) watchDetached(p *proc) {
@@ -446,11 +483,8 @@ func writeExitFile(dir string, e Exit) error {
 // The connection going away, a newer attach superseding this one, or
 // hostd detaching streams for a handover ends the stream and leaves the
 // process running.
-func (s *Server) attach(ctx context.Context, conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser) {
+func (s *Server) attach(ctx context.Context, conn net.Conn, p *proc, gen int, cur Cursor, stdin io.WriteCloser) {
 	s.mu.Lock()
-	p.attachGen++
-	gen := p.attachGen
-	p.info.Attached = true
 	info := p.info
 	s.mu.Unlock()
 	defer func() {
@@ -581,13 +615,7 @@ func (s *Server) attach(ctx context.Context, conn net.Conn, p *proc, cur Cursor,
 			// have attached again meanwhile; that stream delivers the Exit
 			// and releases the process, so this one must not remove the
 			// spool from under it.
-			s.mu.Lock()
-			current = p.attachGen == gen
-			s.mu.Unlock()
-			if !current {
-				return
-			}
-			s.release(info.ID, "its exit was read")
+			s.releaseReadExit(p, gen)
 			return
 		}
 		if s.handedOverNow() {

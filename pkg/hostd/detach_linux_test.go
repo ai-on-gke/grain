@@ -19,6 +19,7 @@ package hostd
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1207,5 +1208,96 @@ func TestATruncatedFrameDuringExitGraceKeepsTheSpool(t *testing.T) {
 	exit, _, err := ts.client.Attach(context.Background(), st.ID, Cursor{}, &out, nil)
 	if err != nil || exit.Code != 8 || out.String() != "trunc-ok\n" {
 		t.Fatalf("Attach after truncated frame = %+v, %v, stdout %q; want kept Exit (code 8) and output", exit, err, out.String())
+	}
+}
+
+type holdExitUnixConn struct {
+	net.Conn
+	onExit    func()
+	closed    chan struct{}
+	closeOnce sync.Once
+	hdr       [5]byte
+	hdrN      int
+	rem       uint32
+}
+
+func (c *holdExitUnixConn) Close() error {
+	defer c.closeOnce.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+func (c *holdExitUnixConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	for i := 0; i < n; {
+		if c.rem > 0 {
+			take := min(uint32(n-i), c.rem)
+			c.rem -= take
+			i += int(take)
+			continue
+		}
+		c.hdr[c.hdrN] = b[i]
+		c.hdrN++
+		i++
+		if c.hdrN == 5 {
+			typ := c.hdr[0]
+			c.rem = binary.BigEndian.Uint32(c.hdr[1:5])
+			c.hdrN = 0
+			if typ == frameExit && c.onExit != nil {
+				fn := c.onExit
+				c.onExit = nil
+				fn()
+				<-c.closed
+				return 0, net.ErrClosed
+			}
+		}
+	}
+	return n, err
+}
+
+// A daemon detaching (Client.Detach) over a local Unix domain socket while
+// hostd's frameExit is already in flight must not send a clean EOF (which
+// AF_UNIX Close delivers even when unread frames sit in the receive buffer),
+// so hostd keeps the spool for the replacement daemon.
+func TestADetachRacingExitOverUnixSocketKeepsTheSpool(t *testing.T) {
+	ts := startServer(t, "", func(s *Server) {
+		s.Poll = 20 * time.Millisecond
+		s.drainExitGrace = 2 * time.Second
+	})
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	started := make(chan Started, 1)
+	c := Client{
+		Dial: func(ctx context.Context) (net.Conn, error) {
+			raw, err := (&net.Dialer{}).DialContext(ctx, "unix", ts.srv.Socket)
+			if err != nil {
+				return nil, err
+			}
+			return &holdExitUnixConn{Conn: raw, onExit: cancelRun, closed: make(chan struct{})}, nil
+		},
+		Detach:    func(context.Context) bool { return true },
+		OnStarted: func(s Started) { started <- s },
+	}
+	var first bytes.Buffer
+	_, err := c.Run(runCtx, Request{
+		Kind: KindCLI, Name: "sh",
+		Args:   []string{"-c", "echo unix-race-ok; exit 9"},
+		Detach: true, Run: "run-unix-race", Task: "44",
+	}, nil, &first, nil)
+	if !errors.Is(err, ErrDetached) {
+		t.Fatalf("Run detaching in flight with Exit over unix socket = %v, want ErrDetached", err)
+	}
+	st := <-started
+	deadline := time.Now().Add(5 * time.Second)
+	for listed(t, ts, st.ID).Attached {
+		if time.Now().After(deadline) {
+			t.Fatal("attach never let go after unix socket abort")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var rest bytes.Buffer
+	exit, _, err := ts.client.Attach(context.Background(), st.ID, Cursor{Stdout: int64(first.Len())}, &rest, nil)
+	if err != nil || exit.Code != 9 || first.String()+rest.String() != "unix-race-ok\n" {
+		t.Fatalf("Attach after unix detach racing Exit = %+v, %v, stdout %q; want Exit code 9 and full output",
+			exit, err, first.String()+rest.String())
 	}
 }

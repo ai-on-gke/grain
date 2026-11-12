@@ -652,3 +652,108 @@ func TestADetachRacingExitOverRemoteSessionKeepsTheSpool(t *testing.T) {
 			exit, err, first.String()+rest.String())
 	}
 }
+
+// A protocol-1 (non-detached) run ending on a drained remote hostd must also
+// have its Exit delivered before Serve closes the mux session, since it has
+// no spool to re-attach to on the replacement hostd.
+func TestADrainedHostdDeliversANonDetachedRunsExitBeforeExiting(t *testing.T) {
+	ctl := startController(t, "s3cret")
+	ts := startRemoteServer(t, ctl, "s3cret", "")
+	release := filepath.Join(ts.dir, "release-nondetach")
+	started := make(chan Started, 1)
+	c := ctl.client()
+	c.OnStarted = func(s Started) { started <- s }
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	type result struct {
+		exit Exit
+		err  error
+	}
+	done := make(chan result, 1)
+	var out bytes.Buffer
+	go func() {
+		exit, err := c.Run(ctx, Request{
+			Kind: KindCLI, Name: "sh",
+			Args: []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.02; done; echo plain-done; exit 3`, "sh", ts.dir, filepath.Base(release)},
+			Run:  "run-plain", Task: "12",
+		}, nil, &out, nil)
+		done <- result{exit, err}
+	}()
+	<-started
+	if err := ts.client.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := <-done
+	if r.err != nil || r.exit.Code != 3 || out.String() != "plain-done\n" {
+		t.Fatalf("non-detached run across drain = %+v, %v, stdout %q; want Exit (code 3) and output", r.exit, r.err, out.String())
+	}
+	select {
+	case err := <-ts.done:
+		ts.done <- err
+	case <-time.After(15 * time.Second):
+		t.Fatal("hostd did not exit once its non-detached run ended and its Exit was read")
+	}
+}
+
+// A detached start admitted during a Cutover has its Exit delivered before
+// Serve closes the remote session when all runs end together.
+func TestACutoverDeliversDetachedRunsExitsBeforeExiting(t *testing.T) {
+	ctl := startController(t, "s3cret")
+	ts := startRemoteServer(t, ctl, "s3cret", "")
+	hold := filepath.Join(ts.dir, "hold-cutover")
+	started := make(chan Started, 1)
+	c := ctl.client()
+	c.Detach = func(context.Context) bool { return true }
+	c.OnStarted = func(s Started) { started <- s }
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	holderDone := make(chan error, 1)
+	go func() {
+		_, err := c.Run(ctx, Request{
+			Kind: KindCLI, Name: "sh",
+			Args:   []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.02; done`, "sh", ts.dir, filepath.Base(hold)},
+			Detach: true, Run: "run-hold", Task: "13",
+		}, nil, nil, nil)
+		holderDone <- err
+	}()
+	<-started
+	if err := ts.client.Cutover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fastStarted := make(chan Started, 1)
+	fc := ctl.client()
+	fc.Detach = func(context.Context) bool { return true }
+	fc.OnStarted = func(s Started) { fastStarted <- s }
+	var fastOut bytes.Buffer
+	fastDone := make(chan error, 1)
+	go func() {
+		exit, err := fc.Run(ctx, Request{
+			Kind: KindCLI, Name: "sh",
+			Args:   []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.02; done; echo fast-ok; exit 2`, "sh", ts.dir, filepath.Base(hold)},
+			Detach: true, Run: "run-fast", Task: "14",
+		}, nil, &fastOut, nil)
+		if err == nil && exit.Code != 2 {
+			err = fmt.Errorf("exit = %+v, want code 2", exit)
+		}
+		fastDone <- err
+	}()
+	<-fastStarted
+	if err := os.WriteFile(hold, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-holderDone; err != nil {
+		t.Fatalf("holder run across cutover = %v", err)
+	}
+	if err := <-fastDone; err != nil || fastOut.String() != "fast-ok\n" {
+		t.Fatalf("detached run started during cutover = %v, stdout %q; want nil and fast-ok", err, fastOut.String())
+	}
+	select {
+	case err := <-ts.done:
+		ts.done <- err
+	case <-time.After(15 * time.Second):
+		t.Fatal("hostd did not exit after cutover")
+	}
+}
