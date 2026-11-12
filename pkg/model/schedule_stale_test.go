@@ -76,3 +76,162 @@ func TestStaleSchedulesNamesAScheduleThatStoppedRunning(t *testing.T) {
 		t.Errorf("workflow-dark's reason = %q, want it to say the repository's CI mode drops .grain/workflows/live-agent.yml", dark.Reason)
 	}
 }
+
+// A workflow kept on grain CI in a ci_mode: github repository has to keep its
+// own `on: schedule` cron so a `.grain/schedules/` entry with `workflow:` and
+// `grain-ci: true` parses (repodecl.scheduledWorkflowStem). That cron's own
+// schedule row is still dropped at every firing, so its LastRunAt never moves;
+// StaleSchedules skips it once an enabled grain-ci schedule on the same
+// repository runs that workflow on the default branch.
+func TestStaleSchedulesSkipsADroppedWorkflowCronCoveredByAGrainCISchedule(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 12, 13, 0, 0, 0, time.UTC)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	daily := model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 5*60 + 53}
+	ran := now.Add(-7 * time.Hour)
+	tmpl := model.WorkflowReviewTemplateID("live-secrets-repo")
+
+	for _, base := range []string{"main", ""} {
+		t.Run("base="+base, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			store := openTestStore(t)
+			if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGitHub}); err != nil {
+				t.Fatal(err)
+			}
+			cronID := model.RepoDeclaredID(model.DeclaredSchedule, repo, "workflow.live-secrets-repo")
+			peerID := model.RepoDeclaredID(model.DeclaredSchedule, repo, "live-secrets-repo")
+			for _, s := range []model.Schedule{
+				{ID: cronID, Title: "live-secrets-repo cron", Target: repo, TemplateID: &tmpl,
+					Recurrence: daily, Enabled: true, CreatedAt: now.Add(-30 * 24 * time.Hour), NextRunAt: now.Add(time.Hour)},
+				{ID: peerID, Title: "Live secrets repository", Target: repo, Base: base, TemplateID: &tmpl,
+					GrainCI: true, Recurrence: daily, Enabled: true, LastRunAt: &ran,
+					CreatedAt: now.Add(-2 * 24 * time.Hour), NextRunAt: now.Add(time.Hour)},
+			} {
+				if err := store.PutSchedule(ctx, s); err != nil {
+					t.Fatalf("PutSchedule(%s): %v", s.ID, err)
+				}
+			}
+
+			stale, err := store.StaleSchedules(ctx, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(stale) != 0 {
+				t.Fatalf("StaleSchedules = %+v, want empty when %s runs the workflow on the default branch", stale, peerID)
+			}
+		})
+	}
+}
+
+// When no enabled default-branch schedule actually runs the workflow under the
+// repository's CI mode, the dropped workflow cron stays flagged.
+func TestStaleSchedulesKeepsADroppedWorkflowCronFlaggedWithoutACoveringSchedule(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 11, 12, 13, 0, 0, 0, time.UTC)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	otherRepo := model.RepoRef{Owner: "acme", Name: "gadgets"}
+	daily := model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 5*60 + 53}
+	ran := now.Add(-7 * time.Hour)
+	tmpl := model.WorkflowReviewTemplateID("live-secrets-repo")
+	otherTmpl := model.WorkflowReviewTemplateID("other-workflow")
+
+	cases := []struct {
+		name   string
+		ciMode model.CIMode
+		peers  []model.Schedule
+	}{
+		{
+			name:   "no peer schedule",
+			ciMode: model.CIModeGitHub,
+		},
+		{
+			name:   "peer lacks grain-ci",
+			ciMode: model.CIModeGitHub,
+			peers: []model.Schedule{{
+				ID: "peer", Title: "peer", Target: repo, Base: "main", TemplateID: &tmpl,
+				GrainCI: false, Recurrence: daily, Enabled: true, LastRunAt: &ran,
+				CreatedAt: now.Add(-2 * 24 * time.Hour), NextRunAt: now.Add(time.Hour),
+			}},
+		},
+		{
+			name:   "peer is disabled",
+			ciMode: model.CIModeGitHub,
+			peers: []model.Schedule{{
+				ID: "peer", Title: "peer", Target: repo, Base: "main", TemplateID: &tmpl,
+				GrainCI: true, Recurrence: daily, Enabled: false, LastRunAt: &ran,
+				CreatedAt: now.Add(-2 * 24 * time.Hour), NextRunAt: now.Add(time.Hour),
+			}},
+		},
+		{
+			name:   "peer runs on a non-default branch",
+			ciMode: model.CIModeGitHub,
+			peers: []model.Schedule{{
+				ID: "peer", Title: "peer", Target: repo, Base: "candidate", TemplateID: &tmpl,
+				GrainCI: true, Recurrence: daily, Enabled: true, LastRunAt: &ran,
+				CreatedAt: now.Add(-2 * 24 * time.Hour), NextRunAt: now.Add(time.Hour),
+			}},
+		},
+		{
+			name:   "peer targets another repository",
+			ciMode: model.CIModeGitHub,
+			peers: []model.Schedule{{
+				ID: "peer", Title: "peer", Target: otherRepo, Base: "main", TemplateID: &tmpl,
+				GrainCI: true, Recurrence: daily, Enabled: true, LastRunAt: &ran,
+				CreatedAt: now.Add(-2 * 24 * time.Hour), NextRunAt: now.Add(time.Hour),
+			}},
+		},
+		{
+			name:   "peer runs a different workflow stem",
+			ciMode: model.CIModeGitHub,
+			peers: []model.Schedule{{
+				ID: "peer", Title: "peer", Target: repo, Base: "main", TemplateID: &otherTmpl,
+				GrainCI: true, Recurrence: daily, Enabled: true, LastRunAt: &ran,
+				CreatedAt: now.Add(-2 * 24 * time.Hour), NextRunAt: now.Add(time.Hour),
+			}},
+		},
+		{
+			name:   "ci_mode none drops grain-ci schedules too",
+			ciMode: model.CIModeNone,
+			peers: []model.Schedule{{
+				ID: "peer", Title: "peer", Target: repo, Base: "main", TemplateID: &tmpl,
+				GrainCI: true, Recurrence: daily, Enabled: true, LastRunAt: &ran,
+				CreatedAt: now.Add(-2 * 24 * time.Hour), NextRunAt: now.Add(time.Hour),
+			}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			store := openTestStore(t)
+			if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: tc.ciMode}); err != nil {
+				t.Fatal(err)
+			}
+			cronID := model.RepoDeclaredID(model.DeclaredSchedule, repo, "workflow.live-secrets-repo")
+			if err := store.PutSchedule(ctx, model.Schedule{
+				ID: cronID, Title: "live-secrets-repo cron", Target: repo, TemplateID: &tmpl,
+				Recurrence: daily, Enabled: true, CreatedAt: now.Add(-30 * 24 * time.Hour), NextRunAt: now.Add(time.Hour),
+			}); err != nil {
+				t.Fatalf("PutSchedule(%s): %v", cronID, err)
+			}
+			for _, p := range tc.peers {
+				if err := store.PutSchedule(ctx, p); err != nil {
+					t.Fatalf("PutSchedule(%s): %v", p.ID, err)
+				}
+			}
+
+			stale, err := store.StaleSchedules(ctx, now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(stale) != 1 || stale[0].ID != cronID {
+				t.Fatalf("StaleSchedules = %+v, want [%s]", stale, cronID)
+			}
+			if stale[0].Reason == "" {
+				t.Errorf("StaleSchedules[0].Reason is empty, want CI-mode drop explanation")
+			}
+		})
+	}
+}
