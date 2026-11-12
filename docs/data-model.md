@@ -1240,7 +1240,7 @@ What a pause does, by what the task is doing:
 - **Running.** By default the run is told, in the operator's own voice
   (delivered into the live session on its next tool result, as any
   comment is), to commit and push what it wants kept, write its handover
-  with `write_handover`, and stop, within a grace period
+  with `grain handover write --file <path>`, and stop, within a grace period
   (`ui.Config.PauseGrace`, default 2 minutes). The orchestrator's
   `task-pauses` reconciler cancels the run once the period has passed,
   or on the next cycle for `immediate`; a run that stops by itself ends

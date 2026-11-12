@@ -725,7 +725,7 @@ func TestWalkthroughMultiAttemptHandoverWindowResetAndSuspendedPrompt(t *testing
 		if !strings.Contains(prompt1, model.PromptThreadCutNotice) {
 			t.Errorf("Attempt 1 prompt missing PromptThreadCutNotice")
 		}
-		if !strings.Contains(prompt1, "Before you finish, write this task's handover (write_handover)") {
+		if !strings.Contains(prompt1, "Before you finish, write this task's handover (`grain handover write --file <path>`)") {
 			t.Errorf("Attempt 1 prompt missing initial handoverRequest")
 		}
 		if st, err := store.State(ctx, "1"); err != nil || st != model.StateAwaitingReply {
@@ -776,7 +776,7 @@ func TestWalkthroughMultiAttemptHandoverWindowResetAndSuspendedPrompt(t *testing
 		if !strings.Contains(prompt2, h1Text) {
 			t.Errorf("Attempt 2 prompt missing H1 handover text")
 		}
-		if !strings.Contains(prompt2, "Before you finish, consider replacing that handover with a fresh one (write_handover)") {
+		if !strings.Contains(prompt2, "Before you finish, consider replacing that handover with a fresh one (`grain handover write --file <path>`)") {
 			t.Errorf("Attempt 2 prompt missing revising handoverRequest")
 		}
 		if st, err := store.State(ctx, "1"); err != nil || st != model.StateAwaitingReply {
