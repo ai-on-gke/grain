@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -122,6 +123,25 @@ var legacyNameExempt = []string{
 	"tests/hygiene/legacy_capability_names_test.go",
 }
 
+// legacyNameExactRefused are the tracked files where legacyNameExact
+// does not apply, so a literal that is exactly a retired name is refused
+// too. These files hold the grants grain ships rather than reads: the
+// Director's defaults, the starter local policy init writes, the Settings
+// capability rows, and the release-server providers whose CI publish
+// grant the sandbox guest cache waits on. They spell the canonical
+// reference and nothing older (grain/task-4482). The bare method names
+// those providers keep as their registry key (image-signing, ...) are
+// not retired spellings in Go literals, and stay.
+var legacyNameExactRefused = []string{
+	"pkg/cli/init_workstation.go",
+	"pkg/model/console_session.go",
+	"pkg/model/sandbox_guest_cache.go",
+	"pkg/ui/capability_status.go",
+	"pkg/capability/packagepublish/packagepublish.go",
+	"pkg/capability/imagesigning/imagesigning.go",
+	"pkg/capability/registrypush/registrypush.go",
+}
+
 // legacyNameExact reports a literal that is exactly a retired bare name
 // (or a bare prefix such as "repo-read:"): the keys of alias tables
 // (model.CanonicalLegacyGrant's) and the constants that name them, which
@@ -205,7 +225,7 @@ func goStringHits(rel string, src []byte) []legacyHit {
 				return true
 			}
 			for _, name := range legacyNamesIn(s, false) {
-				if !legacyNameExact(s, name) {
+				if !legacyNameExact(s, name) || slices.Contains(legacyNameExactRefused, rel) {
 					hits = append(hits, legacyHit{rel: rel, line: fset.Position(n.Pos()).Line, name: name, text: s})
 				}
 			}
@@ -441,6 +461,17 @@ func TestLegacyNameMatcherCatchesWhatItShould(t *testing.T) {
 			t.Errorf("legacyNamesIn(%q) = %q, want nothing", tc.text, got)
 		case tc.want != "" && (len(got) == 0 || got[0] != tc.want):
 			t.Errorf("legacyNamesIn(%q) = %q, want %q", tc.text, got, tc.want)
+		}
+	}
+	// An exact retired name is an alias table's key anywhere else, and
+	// refused in the files that ship grants.
+	src := []byte("package p\n\nconst c = \"github-sandbox\"\n")
+	if hits := goStringHits("pkg/other/other.go", src); len(hits) != 0 {
+		t.Errorf("goStringHits refused an exact retired name outside legacyNameExactRefused: %+v", hits)
+	}
+	for _, rel := range legacyNameExactRefused {
+		if hits := goStringHits(rel, src); len(hits) != 1 {
+			t.Errorf("goStringHits(%s) = %+v, want the exact retired name refused", rel, hits)
 		}
 	}
 	if !historyMarker.MatchString("grain#ci (formerly grain-ci)") {

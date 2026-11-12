@@ -54,6 +54,11 @@ import (
 // Grantable, which is the half a deployment configured perfectly can
 // still fail on.
 type CapabilityStatus struct {
+	// ID is the grant this row reports on as it is granted now: the
+	// canonical reference its provider's bare name was retired onto
+	// (model.CanonicalLegacyGrant -- github-sandbox's is
+	// https://grain.dev/capabilities/github#sandbox-repo={}), the same id
+	// the CI picker offers (ciCapabilityIDs) and a default list stores.
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -252,14 +257,8 @@ const defaultSecretKey = secrets.AgentCredentialKey
 var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"gcp-key":                    "GCP key",
 	"gemini-key":                 "Gemini key",
-	"github-sandbox":             "GitHub sandbox",
-	"bootstrap-playbooks":        "Bootstrap playbooks",
 	model.GrainCIGrant:           "grain CI",
 	model.GrainCICapability:      "grain CI",
-	"registry-push":              "Registry push",
-	"package-publish":            "Package publish",
-	"image-signing":              "Image signing",
-	"read-issues":                "Read issues",
 	model.GitHubReadIssuesGrant:  "Read issues",
 	model.GitHubSandboxRepoGrant: "GitHub sandbox",
 })
@@ -524,7 +523,9 @@ func (c *Client) capabilitiesWithReadiness(cfg *model.Config, repoConfigs []mode
 	}
 	out := make([]Capability, 0, len(rows))
 	for _, row := range rows {
-		if status, ok := byID[row.ID]; ok {
+		// A status row is keyed by the canonical grant; a picker row
+		// may still be offered by the bare name it was retired from.
+		if status, ok := statusFor(byID, row.ID); ok {
 			ready := status.Ready
 			row.Ready = &ready
 			row.Needs = append(append([]string{}, status.MissingConfig...), status.MissingSecrets...)
@@ -556,17 +557,12 @@ func (c *Client) ciCapabilitiesWithReadiness(cfg *model.Config, repoConfigs []mo
 	byID := make(map[string]CapabilityStatus, len(statuses))
 	for _, s := range statuses {
 		byID[s.ID] = s
-		// A retired provider's status answers for the release server's
-		// method it became, which is what the CI picker offers.
-		if _, ok := model.CIGrantRuleFor(s.ID); ok {
-			byID[model.CanonicalLegacyGrant(s.ID)] = s
-		}
 	}
 
 	ciIDs := c.ciCapabilityIDs()
 	out := make([]Capability, 0, len(ciIDs))
 	for _, id := range ciIDs {
-		if status, ok := byID[id]; ok {
+		if status, ok := statusFor(byID, id); ok {
 			ready := status.Ready
 			row := Capability{
 				ID:          id,
@@ -585,6 +581,17 @@ func (c *Client) ciCapabilitiesWithReadiness(cfg *model.Config, repoConfigs []mo
 		}
 	}
 	return out
+}
+
+// statusFor is the status row for the capability a picker offers as id:
+// byID is keyed by CapabilityStatus.ID, the canonical grant, and id may
+// be that grant or the retired bare name it became.
+func statusFor(byID map[string]CapabilityStatus, id string) (CapabilityStatus, bool) {
+	if s, ok := byID[id]; ok {
+		return s, true
+	}
+	s, ok := byID[model.CanonicalLegacyGrant(id)]
+	return s, ok
 }
 
 // capabilityStatuses builds every CapabilityStatus for cfg -- the
@@ -648,8 +655,8 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 			slices.Sort(defaultRepos)
 		}
 		status := CapabilityStatus{
-			ID:            spec.Name,
-			Name:          capabilityDisplayName(spec.Name),
+			ID:            canonical,
+			Name:          capabilityDisplayName(canonical),
 			Description:   spec.Description,
 			Grantable:     grantable,
 			CIOnly:        spec.CIOnly,

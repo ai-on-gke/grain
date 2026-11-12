@@ -36,10 +36,12 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
+// capabilityStatus is the status row for id, which may be the retired
+// bare name of the canonical grant the row is keyed by.
 func capabilityStatus(t *testing.T, statuses []ui.CapabilityStatus, id string) ui.CapabilityStatus {
 	t.Helper()
 	for _, s := range statuses {
-		if s.ID == id {
+		if s.ID == model.CanonicalLegacyGrant(id) {
 			return s
 		}
 	}
@@ -147,7 +149,9 @@ func TestCapabilitiesListsEveryKnownCapabilityOnAFreshStore(t *testing.T) {
 		ids = append(ids, s.ID)
 	}
 	sort.Strings(ids)
-	want := []string{"github-sandbox", "image-signing", "package-publish", "registry-push"}
+	// Each row is keyed by the canonical grant its provider's bare name
+	// was retired onto, the id the CI picker offers too.
+	want := []string{model.GitHubSandboxRepoGrant, model.ImageSigningRef + "={}", model.PackagePublishRef + "={}", model.RegistryPushRef + "={}"}
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("capability ids = %v, want %v", ids, want)
 	}

@@ -459,7 +459,7 @@ export default function RepoReleaseWorkflowSettings({
                     Grain keeps the cache warm by itself wherever it can
                     (grain/task-457), so what is left to warn about is the
                     case where it cannot: this repository publishes the
-                    guest, but its CI holds no package-publish, and a job
+                    guest, but its CI holds no release#package-publish, and a job
                     grain dispatched would stop on its first step for want
                     of the credential. That is an operator decision, not a
                     field to fill in.
@@ -474,8 +474,10 @@ export default function RepoReleaseWorkflowSettings({
                     VM, tens of minutes on the longest job in the suite, on
                     every branch at once. Grain would keep filling it for you,
                     but this repository&apos;s CI is not granted{" "}
-                    <code>package-publish</code>, so a job it dispatched could
-                    not push. Grant that, or name{" "}
+                    <code style={{ overflowWrap: "anywhere" }}>
+                      https://grain.dev/capabilities/release#package-publish
+                    </code>
+                    , so a job it dispatched could not push. Grant that, or name{" "}
                     <code>{settings.sandboxGuestCacheJob}</code> among the jobs
                     dispatched after a merge, below.
                   </Alert>
