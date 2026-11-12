@@ -105,9 +105,11 @@ async function startDemoServer(tmpDir, demoArgs) {
   // with its own other workers, with a second copy of the suite, or with
   // whatever a developer already has listening.
   //
-  // TMPDIR is the worker's own directory so that the throwaway SQLite
-  // store `grain demo` creates for itself (os.MkdirTemp, in demo.go)
-  // lands somewhere this fixture can delete when the worker is done.
+  // TMPDIR is the worker's own directory so that the throwaway store
+  // `grain demo` creates for itself (os.MkdirTemp, in demo.go) -- SQLite
+  // by default, or an embedded PostgreSQL under GRAIN_E2E_DB_DRIVER=postgres
+  // (GRAIN_E2E_DB_DSN names a server to take a fresh schema on instead)
+  // -- lands somewhere this fixture can delete when the worker is done.
   const dbArgs = [];
   if (
     process.env.GRAIN_E2E_DB_DRIVER &&
@@ -199,9 +201,10 @@ export const test = base.extend({
     async ({ demoArgs }, use) => {
       const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "grain-e2e-run-"));
       const { url, proc, code } = await startDemoServer(tmpDir, demoArgs);
-      // Nothing here handles a signal, so SIGKILL rather than a polite
-      // SIGTERM the process would only be killed for failing to answer.
-      // The store is a temp directory nobody else has the path to.
+      // Stopped with SIGTERM first (see finally below): the store is a
+      // temp directory nobody else has the path to, but under
+      // GRAIN_E2E_DB_DRIVER=postgres it is also a server or a schema
+      // that only the demo's own signal handler takes down.
       const stopped = new Promise((resolve) => proc.on("exit", resolve));
       try {
         await use({ url, code });
