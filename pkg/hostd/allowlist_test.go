@@ -717,7 +717,7 @@ clis:
   patterned:
     path: /opt/cli
     paths_under: [ROOT]
-    env: [GIT_*, JAVA_*, DYLD_*, NODE_*, PYTHON*, PERL*, RUBY*, P*]
+    env: [GIT_*, JAVA_*, DYLD_*, NODE_*, PYTHON*, PERL*, RUBY*, P*, CLASS*, XDG_*]
   exact:
     path: /opt/cli
     paths_under: [ROOT]
@@ -748,6 +748,7 @@ capabilities:
 		"PS4=$(touch /tmp/pwned)",
 		"DYLD_INSERT_LIBRARIES=" + stage + "/lib.jar",
 		"PERL5DB=BEGIN{}",
+		"PYTHONWARNINGS=all:0:antigravity.x:0:0",
 		// Admitted before only because they sat under paths_under: the stage
 		// directory, which the daemon writes.
 		"GCONV_PATH=" + stage,
@@ -758,6 +759,8 @@ capabilities:
 		"PERLLIB=" + stage,
 		"RUBYLIB=" + stage,
 		"ZDOTDIR=" + stage,
+		"CLASSPATH=" + stage + "/lib.jar",
+		"XDG_CONFIG_HOME=" + stage,
 	}
 	for _, kv := range denied {
 		for _, req := range []Request{
@@ -773,7 +776,7 @@ capabilities:
 
 	// Names beside the deny set are still open: GITHUB_* is not GIT_*.
 	if _, err := a.Check(&Request{Kind: KindCLI, Name: "open", Env: []string{
-		"GITHUB_TOKEN=x", "GITLAB_HOST=x", "JAVA_HOME=" + stage, "NODE_ENV=production", "PYTHONUNBUFFERED=1", "PS1=$ ",
+		"GITHUB_TOKEN=x", "GITLAB_HOST=x", "JAVA_HOME=" + stage, "NODE_ENV=production", "PYTHONUNBUFFERED=1", "PS1=$ ", "XDG_CACHE_HOME=" + stage,
 	}}, host); err != nil {
 		t.Fatalf("open check of names outside the deny set failed: %v", err)
 	}

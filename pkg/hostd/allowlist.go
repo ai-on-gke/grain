@@ -598,7 +598,9 @@ var envDenyV2 = []string{
 	"PROMPT_COMMAND",
 	"PS4",
 	"ZDOTDIR",
-	// Interpreter module paths.
+	// Interpreter module paths, and Python's warning filters, whose
+	// dotted category is imported at startup (with BROWSER, a known
+	// stdlib-only way to run a command).
 	"NODE_PATH",
 	"PYTHONHOME",
 	"PYTHONUSERBASE",
@@ -606,14 +608,18 @@ var envDenyV2 = []string{
 	"PERLLIB",
 	"PERL5DB",
 	"RUBYLIB",
-	// The JVM's agent and option variables.
+	"PYTHONWARNINGS",
+	// The JVM's class path, agent and option variables.
+	"CLASSPATH",
 	"JAVA_TOOL_OPTIONS",
 	"JDK_JAVA_OPTIONS",
 	"_JAVA_OPTIONS",
 	// git's config (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT and
 	// GIT_CONFIG_KEY_n set core.pager, core.sshCommand, ...) and the
-	// commands it runs (GIT_SSH_COMMAND, GIT_ASKPASS, GIT_EXEC_PATH, ...).
+	// commands it runs (GIT_SSH_COMMAND, GIT_ASKPASS, GIT_EXEC_PATH, ...),
+	// and XDG_CONFIG_HOME, whose git/config is git's global config.
 	"GIT_*",
+	"XDG_CONFIG_HOME",
 }
 
 // envDenyMatches reports whether name is one of patterns, where a
