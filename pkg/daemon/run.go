@@ -1487,6 +1487,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	if err := orchestrator.RecoverOrphanedRunsExcept(ctx, store, githubClient, time.Now().UTC(), adoptedRuns); err != nil {
 		log.Printf("grain daemon: recovering orphaned runs: %v", err)
 	}
+	// Their processes run on in a hostd that did not answer, until it is
+	// back to cancel them.
+	adopted.cancelAbandoned(ctx, store)
 	orchestrator.SyncSandboxLedger(ctx, orchestrator.Deps{
 		Store:      store,
 		Ledger:     cfg.Ledger,
