@@ -611,4 +611,37 @@ describe("NewTaskSheetComponent", () => {
     await settle(f);
     expect(q('[data-testid="nt-reads-opt-acme/docs"]')).toBeTruthy();
   });
+
+  it("keeps primary target picker strictly within targetRepos when an allowlist is set", async () => {
+    const api = new FakeApi();
+    api.cfg = {
+      ...api.cfg,
+      targetRepos: ["acme/web"],
+      defaultTarget: "acme/web",
+      deployment: { targetRepos: ["acme/web"] },
+    };
+    const baseGet = api.get;
+    api.get = ((route: string, params?: unknown, query?: string) => {
+      if (route === "GET /api/deployment/reachable-repos") {
+        api.calls.push({ route });
+        return Promise.resolve({
+          available: true,
+          repos: [
+            { repo: "acme/api", push: true },
+            { repo: "acme/docs", push: false },
+          ],
+        });
+      }
+      return baseGet(route, params, query);
+    }) as typeof api.get;
+
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    q<HTMLButtonElement>('[data-testid="nt-repo"]')!.click();
+    await settle(f);
+    expect(q('[data-testid="nt-repo-opt-acme/web"]')).toBeTruthy();
+    expect(q('[data-testid="nt-repo-opt-acme/api"]')).toBeNull();
+  });
 });

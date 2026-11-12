@@ -49,6 +49,7 @@ import {
   readFilesAsUploads,
 } from "../shared/attachments";
 import { GrantsPickerComponent } from "../shared/grants-picker.component";
+import { hasExplicitTargetAllowlist } from "../shared/instance-repos";
 import {
   type PillOption,
   PillSelectComponent,
@@ -1105,9 +1106,15 @@ export class NewTaskSheetComponent {
   });
 
   protected readonly repos = computed(() => {
-    const base = targetableRepos(this.config(), this.inbox.tasks());
-    // Target pickers offer only repos the deployment can push to
-    // (pkg/gitproxy/reach.go ReachableRepo.Push); reads use every reachable repo.
+    const cfg = this.config();
+    const base = targetableRepos(cfg, this.inbox.tasks());
+    // Match classic NewTaskOverlay.jsx: when the deployment has an explicit
+    // targetRepos allowlist, filing against any off-list repo is refused by
+    // the server, so never merge GitHub-wide reachablePushRepos into target
+    // or write pickers. Only offer reachablePushRepos when no allowlist is set.
+    if (hasExplicitTargetAllowlist(cfg)) {
+      return base;
+    }
     const extra = this.reachablePushRepos();
     const seen = new Set(base.map((r) => r.toLowerCase()));
     const merged = [...base];
