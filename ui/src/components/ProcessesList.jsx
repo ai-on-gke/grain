@@ -699,7 +699,11 @@ function ProcessRow({
             />
           )}
           {isSchedule && (
-            <Chip size="small" label={describeRecurrence(s.recurrence)} />
+            <Chip
+              size="small"
+              label={describeRecurrence(s.recurrence)}
+              title={describeRecurrence(s.recurrence)}
+            />
           )}
           {isSchedule && s.suiteId && (
             <Chip
@@ -707,6 +711,7 @@ function ProcessRow({
               variant="outlined"
               icon={<ItemGlyph kind="suites" />}
               label={`Suite: ${s.suiteName || s.suiteId}`}
+              title={`Suite: ${s.suiteName || s.suiteId}`}
             />
           )}
           {isSchedule && s.templateId && (
@@ -715,6 +720,7 @@ function ProcessRow({
               variant="outlined"
               icon={<ItemGlyph kind="templates" />}
               label={`Template: ${s.templateName || s.templateId}`}
+              title={`Template: ${s.templateName || s.templateId}`}
             />
           )}
           {isSchedule && s.overlap === "allow" && (
@@ -740,7 +746,11 @@ function ProcessRow({
           )}
           {r.kind === "suite" && (
             <>
-              <Chip size="small" label={describeMode(s)} />
+              <Chip
+                size="small"
+                label={describeMode(s)}
+                title={describeMode(s)}
+              />
               <Chip
                 size="small"
                 variant="outlined"
