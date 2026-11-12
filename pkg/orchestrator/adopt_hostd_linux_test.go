@@ -337,7 +337,29 @@ func TestAdoptedHostdRunCancelledAtDrainCapEndsInterruptedNotFailed(t *testing.T
 	go func() {
 		resumeDone <- orchestrator.ResumeAdoptedRun(ctx, deps, next, adopted[0])
 	}()
-	time.Sleep(50 * time.Millisecond)
+	// Drain only once the resumed run is attached. A drain sent before
+	// then -- the 50ms sleep this replaced, on a loaded runner -- could
+	// reach drain_cap, kill the CLI and exit hostd before the run dialed
+	// it, and with no hostd coming back in this test (no
+	// ReattachTimeout) the attach then failed as unreachable, not
+	// interrupted.
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		procs, err := client.Processes(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(procs) == 1 && procs[0].Attached {
+			break
+		}
+		select {
+		case err := <-resumeDone:
+			t.Fatalf("ResumeAdoptedRun returned before it attached: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the resumed run never attached: %+v", procs)
+		}
+	}
 	if err := client.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
