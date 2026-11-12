@@ -883,8 +883,40 @@ The floor is grain's, not a person's: a review only it raised may still
 file follow-ups at no more than the default priority without a person's
 approval.
 
-**Incremental, debounced re-review.** When the head moves, the review of
-each kind is filed again for the new head:
+**A head that moves without changing the change is not reviewed again**
+(grain/task-4808). The change is the pull request's diff against where its
+head forked from its base, `git diff $(git merge-base <base> <head>) <head>`.
+An empty "rerun CI" commit doesn't change it, and nor does a merge of the
+base that resolved no conflict, whether the task's agent or grain's merge
+queue made it. Before a head move files anything, grain compares that diff
+file by file with the diff at the head the reviews last read. It compares
+patches the way `git patch-id` does, ignoring line numbers and blob ids.
+When the two are identical:
+
+- every gating review's result carries to the new head as it stands:
+  still running, passed, findings or questions. Carried findings block
+  exactly as they did. Grain's security review carries the same way, and
+  so does its trust-boundary clearance;
+- no review is filed, and no ungated trigger fires again either;
+- the task says once per head: "Head moved to `<sha>` without changing the
+  change; reviews carried from `<sha>`."
+
+A person's approval is not carried. It was given at the head they read, and
+a head move consumes it as before. So a `human: required` trigger, or a
+path only a human may release, asks for their Submit again at the new head,
+and owner approvals are asked for again. One exception predates this
+change: a base merge that leaves a cleared change's trust-boundary patches
+unchanged keeps a Submit given at the cleared head.
+
+A merge that resolved a conflict changes the patch of the file it
+resolved, and a commit of the change's own changes its diff. Both are
+reviewed again, as below. So is any head grain can't compare: a diff
+GitHub won't serve, a binary file, a file list too long to read, repository
+rules that changed under it, or a gating trigger that the base's rules added
+or dropped.
+
+**Incremental, debounced re-review.** When the head moves and the change
+did change, the review of each kind is filed again for the new head:
 
 - If the last review of that kind finished -- clean, or with findings the
   push may have addressed -- or is still running, the new one is

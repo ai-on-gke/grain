@@ -141,6 +141,14 @@ func judgePullRequestTriggers(ctx context.Context, store *model.Store, client gi
 	// The gating triggers that matched, by the review template they name.
 	byKind := map[string][]reviewMatch{}
 	var kinds []string
+	// The ungated firings, filed once it is known this head is not one
+	// whose change its last judged head already proposed (samechange.go).
+	type ungatedFiring struct {
+		rule  model.RepoPathTrigger
+		group string
+		paths []string
+	}
+	var ungated []ungatedFiring
 	for _, rule := range rules {
 		if !rule.Trigger.WatchesBranch(detail.BaseRef, def) {
 			continue
@@ -177,12 +185,21 @@ func judgePullRequestTriggers(ctx context.Context, store *model.Store, client gi
 			continue
 		}
 		for _, group := range sortedKeys(groups) {
-			if _, err := filePullRequestTrigger(ctx, store, *current, ref, headSHA, rule, group, groups[group], now); err != nil {
-				errs = append(errs, err)
-			}
+			ungated = append(ungated, ungatedFiring{rule: rule, group: group, paths: groups[group]})
 		}
 	}
 	sort.Strings(kinds)
+	if from, carried, ok := carriedPathTriggerGates(ctx, store, client, *current, ref, headSHA, known,
+		kinds, byKind, gates, securityReviewID, coveredBySecurityReview); ok {
+		// The head moved without changing the change: every gating
+		// review's result stands, and nothing is filed again.
+		return carryPathTriggerGate(ctx, store, *current, ref, from, headSHA, carried, now)
+	}
+	for _, f := range ungated {
+		if _, err := filePullRequestTrigger(ctx, store, *current, ref, headSHA, f.rule, f.group, f.paths, now); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	for _, kind := range kinds {
 		matches := byKind[kind]
 		firings := func(taskID, template string) {
