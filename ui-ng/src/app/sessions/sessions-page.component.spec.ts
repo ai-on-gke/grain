@@ -105,6 +105,25 @@ class FakeApi {
   get = (route: string) => {
     const e = this.record("GET", route);
     if (e) return e;
+    if (route === "GET /api/agent-models") {
+      return Promise.resolve({
+        available: true,
+        models: [
+          {
+            id: "gemini-3.1-pro-high",
+            label: "Gemini 3.1 Pro",
+            effort: "high",
+            family: "gemini-3.1-pro",
+          },
+        ],
+      });
+    }
+    if (route === "GET /api/tasks/{id}/tree") {
+      return Promise.resolve({ nodes: [] });
+    }
+    if (route === "GET /api/memory/documents") {
+      return Promise.resolve({ documents: [] });
+    }
     if (route === "GET /api/api-scope-sets") {
       return Promise.resolve({
         sets: [{ name: "tasks-read", description: "Read tasks" }],
@@ -709,5 +728,34 @@ describe("SessionsPageComponent", () => {
     f.detectChanges();
     await f.whenStable();
     expect(q(f, '[data-testid="composer"]')).not.toBeNull();
+  });
+
+  it("exposes inline header model picker and toggles the coplanar Workspace Canvas", async () => {
+    const api = new FakeApi();
+    api.details["1"] = {
+      ...api.details["1"],
+      comments: [
+        ...api.details["1"].comments!,
+        {
+          id: 99,
+          author: "grain",
+          authorKind: "automation",
+          body: "```html\n<title>Canvas Mock</title><div>Hi</div>\n```",
+        },
+      ],
+    };
+    const f = await render(api);
+    expect(q(f, '[data-testid="chat-head-model"]')).not.toBeNull();
+    expect(text(f, '[data-testid="session-canvas-toggle"]')).toContain(
+      "Canvas (1)",
+    );
+
+    (
+      q(f, '[data-testid="open-artifact-html-99-1"]') as HTMLButtonElement
+    ).click();
+    await f.whenStable();
+    f.detectChanges();
+    expect(q(f, '[data-testid="session-canvas"]')).not.toBeNull();
+    expect(q(f, '[data-testid="canvas-html-iframe"]')).not.toBeNull();
   });
 });

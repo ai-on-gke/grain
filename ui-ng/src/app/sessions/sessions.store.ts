@@ -16,6 +16,8 @@ import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type {
+  AgentModel,
+  AgentModelsResponse,
   AttachmentUpload,
   CapabilityOption,
   ConsoleSession,
@@ -24,6 +26,8 @@ import type {
   Task,
   TaskDetail,
 } from "../api/models";
+import type { GrainPlanBlock } from "../director/director-draft";
+import { topologicalPlanOrder } from "./session-artifacts";
 import {
   DIRECTOR_ID,
   errorText,
@@ -98,6 +102,8 @@ export class SessionsStore {
   readonly offered = signal<CapabilityOption[]>([]);
   readonly networkOptions = signal<string[]>(["open", "none"]);
   readonly models = signal<string[]>([]);
+  readonly agentModels = signal<AgentModel[]>([]);
+  readonly agentModelsError = signal<string | null>(null);
   readonly defaultModel = signal<string>("");
   readonly tasks = signal<Record<string, Task>>({});
   readonly details = signal<Record<string, TaskDetail>>({});
@@ -239,6 +245,18 @@ export class SessionsStore {
       }
     } catch {
       // Optional model list read.
+    }
+    if (typeof this.api.get !== "function") return;
+    try {
+      const am = await this.api.get<AgentModelsResponse>(
+        "GET /api/agent-models",
+      );
+      if (am?.available && Array.isArray(am.models)) {
+        this.agentModels.set(am.models);
+      }
+      this.agentModelsError.set(am?.error || null);
+    } catch {
+      // Fall back to config().models cleanly when unavailable.
     }
   }
 
@@ -678,6 +696,52 @@ export class SessionsStore {
         await this.api.put("PUT /api/console-sessions/{id}", { id }, p);
       }
     });
+  }
+
+  async launchWorkstreamPlan(plan: GrainPlanBlock): Promise<string | null> {
+    if (!plan.tasks.length) return null;
+    let origin: string | null = null;
+    const ok = await this.run("launch-plan", async () => {
+      const root = await this.api.post<Task>("POST /api/tasks", undefined, {
+        title: plan.title || "Workstream",
+        description:
+          plan.summary ||
+          `Launched from session plan (${plan.tasks.length} tasks).`,
+        ...(plan.repo ? { repo: plan.repo } : {}),
+        ...(plan.base ? { base: plan.base } : {}),
+        approved: false,
+      });
+      if (!root?.id) throw new Error("root task ID missing");
+      origin = `task:${root.id}`;
+      const keyToTaskId = new Map<string, string>();
+      const ordered = topologicalPlanOrder(plan.tasks);
+      for (const item of ordered) {
+        const depIds = [...(item.dependsOn ?? []), ...(item.after ?? [])]
+          .map((k) => keyToTaskId.get(k) ?? (/^\d+$/.test(k) ? k : ""))
+          .filter(Boolean);
+        const created = await this.api.post<Task>(
+          "POST /api/tasks",
+          undefined,
+          {
+            title: item.title,
+            description: item.description || "",
+            ...(item.repo || plan.repo ? { repo: item.repo || plan.repo } : {}),
+            ...(item.base || plan.base ? { base: item.base || plan.base } : {}),
+            ...(item.model ? { model: item.model } : {}),
+            ...(item.priority ? { priority: item.priority } : {}),
+            ...(depIds.length ? { dependsOn: depIds } : {}),
+            origin,
+            parentId: root.id,
+            approved: true,
+          },
+        );
+        if (created?.id) {
+          if (item.key) keyToTaskId.set(item.key, created.id);
+          keyToTaskId.set(item.title, created.id);
+        }
+      }
+    });
+    return ok ? origin : null;
   }
 
   private async run(
