@@ -154,9 +154,14 @@ func TestCallerSuppliedCommandHost(t *testing.T) {
 			return authfix.Fix{}, false
 		})
 		t.Cleanup(unregisterExec)
-		noSummaryCfg := cfg
-		noSummaryCfg.AuthFixSummary = ""
-		hostsrig.LapsedLogin(t, noSummaryCfg)
+		// Drop the source's own LoginFix and name the registered fix's
+		// summary, so the lapsed clone passes only by surfacing that fix:
+		// LapsedLogin accepts LoginFix instead, and with no AuthFixSummary
+		// any lapsed-login refusal at all.
+		execFixCfg := cfg
+		execFixCfg.Source.LoginFix = ""
+		execFixCfg.AuthFixSummary = "workstation login expired"
+		hostsrig.LapsedLogin(t, execFixCfg)
 	})
 	t.Run("LapsedLoginRedirect", func(t *testing.T) {
 		gitproxytest.Install()
