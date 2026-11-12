@@ -187,6 +187,9 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 	}); err != nil {
 		return fmt.Errorf("orchestrator: queueing %s to carry out its owner's decision: %w", task.ID, err)
 	}
+	if err := sendBackFromResumeLater(ctx, store, task.ID, "its owner's review decision", now); err != nil {
+		return err
+	}
 
 	then := "Once it has pushed, the change goes through as it would have after a clean review."
 	switch {
