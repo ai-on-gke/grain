@@ -67,6 +67,11 @@ const (
 	// OffsetCIAPI is the listener a CI job holding api grants calls
 	// grain's API through (pkg/capability/ciapi).
 	OffsetCIAPI = 4
+	// OffsetHostScriptHeld is no service of the daemon's, and is never
+	// to be given one: the host-script capability server binds 9733,
+	// this offset in the default block (intree.DefaultHostScriptPort),
+	// and running sandboxes hold that port. The next singleton takes 6.
+	OffsetHostScriptHeld = 5
 
 	OffsetModelProxyBase = 16
 	OffsetModelProxyEnd  = 48
