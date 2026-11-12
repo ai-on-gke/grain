@@ -539,6 +539,16 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 			case <-gone:
 			case <-time.After(DrainExitGrace):
 			}
+			// A daemon that lost this stream before reading the Exit may
+			// have attached again meanwhile; that stream delivers the Exit
+			// and releases the process, so this one must not remove the
+			// spool from under it.
+			s.mu.Lock()
+			current = p.attachGen == gen
+			s.mu.Unlock()
+			if !current {
+				return
+			}
 			s.release(info.ID, "its exit was read")
 			return
 		}
