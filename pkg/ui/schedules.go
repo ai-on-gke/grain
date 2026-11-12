@@ -2146,7 +2146,13 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			if req.AutoApproveProposals != nil {
 				s.AutoApproveProposals = *req.AutoApproveProposals
 			}
-			if req.Capabilities != nil {
+			// Only on a schedule with no template: one that fires a
+			// template stores what it adds to it (model.Schedule.Grants),
+			// and capabilities resent here are what the API shows --
+			// the template's beside those -- which refuseIgnoredScheduleContent
+			// has already held to that. Storing them would put the copy
+			// of the template's grants back that schema 143 took off.
+			if req.Capabilities != nil && s.TemplateID == nil {
 				s.Grants = grants
 			}
 			if req.Reads != nil {
