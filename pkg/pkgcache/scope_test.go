@@ -386,3 +386,238 @@ func TestGitHubAnonymousUploadPackIsStillCached(t *testing.T) {
 		t.Errorf("upstream hits = %d, want 1 (a public pack is still shared)", got)
 	}
 }
+
+func TestGHCRTrailingDotAndMirrorHostsEnforceRepoScope(t *testing.T) {
+	f := newFakePrivateGHCR(t, deploymentBasic)
+	s, _ := newTestServer(t, Config{
+		Client:         f.client(),
+		GHCRRegistry:   "http://ghcr.io",
+		DockerRegistry: "http://ghcr.io",
+		Credentials:    staticCreds{"acme/private-service": "ghp_deployment_pat"},
+		RepoScope: scopeByAddr(map[string][]string{
+			scopedSandboxAddr: {"acme/private-service"},
+		}),
+	})
+	byDigest := "/v2/acme/private-service/manifests/" + f.digest
+
+	// A trailing dot in Host ("ghcr.io.") or another registry mirror pointed
+	// at ghcr.io must never bypass scopedOCIClient or spend Credentials for
+	// an unscoped sandbox.
+	trailingDotOut := ghcrRequest(http.MethodGet, byDigest, unscopedSandboxAddr)
+	trailingDotOut.Host = "ghcr.io."
+	dockerMirrorOut := ghcrRequest(http.MethodGet, byDigest, unscopedSandboxAddr)
+	dockerMirrorOut.Host = "registry-1.docker.io"
+	for _, req := range []*http.Request{trailingDotOut, dockerMirrorOut} {
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		if rec.Code == http.StatusOK || bytes.Contains(rec.Body.Bytes(), f.manifest) {
+			t.Fatalf("unscoped request (%s %s) pulled private manifest: %d %q", req.Host, req.URL.Path, rec.Code, rec.Body.String())
+		}
+	}
+
+	// An in-scope sandbox reaching "ghcr.io." still resolves through the
+	// scoped GHCR client and caches per repository rather than globally.
+	trailingDotIn := ghcrRequest(http.MethodGet, byDigest, scopedSandboxAddr)
+	trailingDotIn.Host = "ghcr.io."
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, trailingDotIn)
+	if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), f.manifest) {
+		t.Fatalf("in-scope trailing-dot request: got %d %q, want private manifest", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	s.ServeHTTP(rec, trailingDotOut)
+	if rec.Code == http.StatusOK || bytes.Contains(rec.Body.Bytes(), f.manifest) {
+		t.Fatalf("unscoped trailing-dot request hit cached private manifest: %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGHCRTokenScopeRejectsActionSmugglingPathConfusionAndMultiScopeBypass(t *testing.T) {
+	var mu sync.Mutex
+	type upstreamCall struct {
+		method, path, scope, auth string
+	}
+	var calls []upstreamCall
+	resetCalls := func() {
+		mu.Lock()
+		calls = nil
+		mu.Unlock()
+	}
+	takeCalls := func() []upstreamCall {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]upstreamCall(nil), calls...)
+	}
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls = append(calls, upstreamCall{
+			method: r.Method,
+			path:   r.URL.Path,
+			scope:  strings.Join(r.URL.Query()["scope"], " | "),
+			auth:   r.Header.Get("Authorization"),
+		})
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token":"tok"}`))
+	}))
+	t.Cleanup(up.Close)
+
+	client := &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "tcp", up.Listener.Addr().String())
+		},
+	}}
+	scope := scopeByAddr(map[string][]string{
+		scopedSandboxAddr: {"acme/in-scope"},
+	})
+	creds := staticCreds{
+		"acme/in-scope":     "ghp_deployment_pat",
+		"acme/out-of-scope": "ghp_deployment_pat",
+	}
+
+	// 1. Default pull-only mode: extra colons in scope must not smuggle push/delete,
+	// and ?scope= on a /v2/<other-repo>/... path must never receive Basic auth.
+	pullSrv, _ := newTestServer(t, Config{
+		Client:       client,
+		GHCRRegistry: "http://ghcr.io",
+		Credentials:  creds,
+		RepoScope:    scope,
+	})
+
+	resetCalls()
+	rec := httptest.NewRecorder()
+	pullSrv.ServeHTTP(rec, ghcrRequest(http.MethodGet, "/token?service=ghcr.io&scope=repository:acme/in-scope/sub:push,delete:pull", scopedSandboxAddr))
+	if got := takeCalls(); len(got) != 1 || got[0].auth != deploymentBasic || got[0].scope != "repository:acme/in-scope/sub:pull" {
+		t.Fatalf("colon-smuggling token request sent %+v, want pull-only scope with deployment Basic auth", got)
+	}
+
+	resetCalls()
+	rec = httptest.NewRecorder()
+	pullSrv.ServeHTTP(rec, ghcrRequest(http.MethodGet, "/v2/acme/out-of-scope/manifests/latest?scope=repository:acme/in-scope:pull", scopedSandboxAddr))
+	for _, c := range takeCalls() {
+		if c.auth != "" {
+			t.Fatalf("/v2/ out-of-scope path with ?scope= received credential: %+v", c)
+		}
+	}
+
+	// 2. AllowRegistryPush mode: multi-scope GET, POST /token, and ?scope= on
+	// an out-of-scope PUT must never spend the credential on acme/out-of-scope.
+	pushSrv, _ := newTestServer(t, Config{
+		Client:            client,
+		GHCRRegistry:      "http://ghcr.io",
+		Credentials:       creds,
+		RepoScope:         scope,
+		AllowRegistryPush: true,
+	})
+
+	resetCalls()
+	rec = httptest.NewRecorder()
+	pushSrv.ServeHTTP(rec, ghcrRequest(http.MethodGet, "/token?service=ghcr.io&scope=repository:acme/in-scope:pull&scope=repository:acme/out-of-scope:pull,push", scopedSandboxAddr))
+	if got := takeCalls(); len(got) != 1 || got[0].scope != "repository:acme/in-scope:pull" {
+		t.Fatalf("multi-scope GET forwarded %+v, want narrowed single in-scope repository", got)
+	}
+
+	resetCalls()
+	postTok := httptest.NewRequest(http.MethodPost, "/token?service=ghcr.io&scope=repository:acme/in-scope:pull", strings.NewReader("scope=repository:acme/out-of-scope:pull,push"))
+	postTok.Host = "ghcr.io"
+	postTok.RemoteAddr = scopedSandboxAddr + ":40000"
+	rec = httptest.NewRecorder()
+	pushSrv.ServeHTTP(rec, postTok)
+	for _, c := range takeCalls() {
+		if c.auth != "" {
+			t.Fatalf("POST /token received deployment credential: %+v", c)
+		}
+	}
+
+	resetCalls()
+	putOut := httptest.NewRequest(http.MethodPut, "/v2/acme/out-of-scope/manifests/latest?scope=repository:acme/in-scope:pull", strings.NewReader(`{}`))
+	putOut.Host = "ghcr.io"
+	putOut.RemoteAddr = scopedSandboxAddr + ":40000"
+	rec = httptest.NewRecorder()
+	pushSrv.ServeHTTP(rec, putOut)
+	for _, c := range takeCalls() {
+		if c.auth != "" {
+			t.Fatalf("out-of-scope PUT with in-scope ?scope= received deployment credential: %+v", c)
+		}
+	}
+}
+
+func TestOCIPullWithCallerAuthorizationIsNeverCachedForOthers(t *testing.T) {
+	manifest := []byte(`{"schemaVersion":2,"callerPrivate":true}`)
+	sum := sha256.Sum256(manifest)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+
+	var hits int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		if r.Header.Get("Authorization") != "Bearer sandbox-a-private-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+		_, _ = w.Write(manifest)
+	}))
+	t.Cleanup(up.Close)
+
+	s, _ := newTestServer(t, Config{
+		Client: &http.Client{Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "tcp", up.Listener.Addr().String())
+			},
+		}},
+		GCRRegistry: "http://gcr.io",
+	})
+
+	reqA := httptest.NewRequest(http.MethodGet, "/v2/secret-proj/app/manifests/"+digest, nil)
+	reqA.Host = "gcr.io"
+	reqA.Header.Set("Authorization", "Bearer sandbox-a-private-token")
+	recA := httptest.NewRecorder()
+	s.ServeHTTP(recA, reqA)
+	if recA.Code != http.StatusOK || !bytes.Equal(recA.Body.Bytes(), manifest) {
+		t.Fatalf("credentialed pull: got %d %q", recA.Code, recA.Body.String())
+	}
+	if got := recA.Header().Get(cacheStatusHeader); got != "pass" {
+		t.Errorf("credentialed OCI pull cache status = %q, want pass", got)
+	}
+
+	reqB := httptest.NewRequest(http.MethodGet, "/v2/secret-proj/app/manifests/"+digest, nil)
+	reqB.Host = "gcr.io"
+	recB := httptest.NewRecorder()
+	s.ServeHTTP(recB, reqB)
+	if recB.Code == http.StatusOK || bytes.Contains(recB.Body.Bytes(), manifest) {
+		t.Fatalf("anonymous caller was served private OCI manifest cached from another sandbox's token: %d %q", recB.Code, recB.Body.String())
+	}
+	if got := atomic.LoadInt32(&hits); got != 2 {
+		t.Errorf("upstream hits = %d, want 2", got)
+	}
+}
+
+func TestGitHubReleaseAssetCachedBeforeAnonKeyIsNotServed(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(up.Close)
+
+	s, cache := newTestServer(t, Config{GitHubURL: up.URL})
+	assetPath := "/acme/private-service/releases/download/v1.0.0/tool.tar.gz"
+	preFixKey := up.URL + assetPath
+	w, err := cache.NewWriter(KindGitHub, preFixKey)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Write([]byte("pre-fix-private-asset")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !w.Commit(Meta{URL: preFixKey}) {
+		t.Fatal("Commit stored nothing")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/github"+assetPath, nil)
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), "pre-fix-private-asset") || rec.Header().Get(cacheStatusHeader) == "hit" {
+		t.Fatalf("served pre-fix URL-keyed GitHub asset to anonymous caller: %d %q", rec.Code, rec.Body.String())
+	}
+}

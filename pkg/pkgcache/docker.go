@@ -183,7 +183,8 @@ func (s *Server) serveDocker(w http.ResponseWriter, r *http.Request) {
 
 	var fallbackURL string
 	var fallbackClient *http.Client
-	if registryURL == s.dockerRegistry() || strings.Contains(registryURL, "registry-1.docker.io") || strings.Contains(registryURL, "docker.io") {
+	anon := githubAnonymous(r)
+	if anon && (registryURL == s.dockerRegistry() || strings.Contains(registryURL, "registry-1.docker.io") || strings.Contains(registryURL, "docker.io")) {
 		fallbackURL = s.dockerScheme() + "://mirror.gcr.io" + dockerAPIPrefix + escapedSubpath
 		if encoded := q.Encode(); encoded != "" {
 			fallbackURL += "?" + encoded
@@ -192,7 +193,11 @@ func (s *Server) serveDocker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if (section == "blobs" || section == "manifests") && dockerDigest(ref) {
-		obj := object{kind: KindDocker, url: upstream, client: client, cacheable: true, key: keyScope + dockerBlobKeyPrefix + ref, digest: ref, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
+		// Only anonymous requests are stored or answered from disk: a pull
+		// bringing its own Authorization or Cookie may be fetching a private
+		// image with a sandbox-supplied token, which must never land in the
+		// shared oci-blob: namespace for other sandboxes to read by digest.
+		obj := object{kind: KindDocker, url: upstream, client: client, cacheable: anon, key: keyScope + dockerBlobKeyPrefix + ref, digest: ref, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
 		s.serve(w, r, obj)
 		return
 	}
@@ -261,7 +266,8 @@ func (s *Server) serveDockerDirect(w http.ResponseWriter, r *http.Request, regis
 
 	var fallbackURL string
 	var fallbackClient *http.Client
-	if registryURL == s.dockerRegistry() || strings.Contains(registryURL, "registry-1.docker.io") || strings.Contains(registryURL, "docker.io") {
+	anon := githubAnonymous(r)
+	if anon && (registryURL == s.dockerRegistry() || strings.Contains(registryURL, "registry-1.docker.io") || strings.Contains(registryURL, "docker.io")) {
 		fallbackURL = s.dockerScheme() + "://mirror.gcr.io/" + strings.TrimPrefix(escapedPath, "/")
 		if r.URL.RawQuery != "" {
 			fallbackURL += "?" + r.URL.RawQuery
@@ -271,7 +277,7 @@ func (s *Server) serveDockerDirect(w http.ResponseWriter, r *http.Request, regis
 
 	_, section, ref, ok := splitDockerRef(trimmed)
 	if ok && (section == "blobs" || section == "manifests") && dockerDigest(ref) {
-		obj := object{kind: KindDocker, url: upstream, client: client, cacheable: true, key: keyScope + dockerBlobKeyPrefix + ref, digest: ref, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
+		obj := object{kind: KindDocker, url: upstream, client: client, cacheable: anon, key: keyScope + dockerBlobKeyPrefix + ref, digest: ref, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
 		s.serve(w, r, obj)
 		return
 	}
@@ -495,35 +501,87 @@ func (s *Server) isGHCRRegistry(host string) bool {
 	return h == "ghcr.io" || h == hostOnly(DefaultGHCRRegistry)
 }
 
-// extractRepoFromScope extracts owner and repo from OCI scope parameter(s).
-func extractRepoFromScope(query url.Values) (owner, repo string, ok bool) {
+// parseRepositoryScope parses one "repository:<name>[:<actions>]" token from
+// an OCI scope parameter into (targetWithOptionalHost, owner, repo, actions,
+// hasActions, ok). Actions start at the first ':' after the first '/', since
+// an OCI repository path never contains ':' while an optional registry host
+// prefix before the first '/' may carry ':port' ("ghcr.io:443/owner/repo:pull").
+func parseRepositoryScope(part string) (target, owner, repo, actions string, hasActions, ok bool) {
+	rest, ok := strings.CutPrefix(part, "repository:")
+	if !ok {
+		return "", "", "", "", false, false
+	}
+	rest = strings.TrimPrefix(rest, "//")
+	slash := strings.Index(rest, "/")
+	if slash <= 0 {
+		return "", "", "", "", false, false
+	}
+	if colonRel := strings.Index(rest[slash:], ":"); colonRel >= 0 {
+		colon := slash + colonRel
+		actions = rest[colon+1:]
+		rest = rest[:colon]
+		hasActions = true
+	}
+	target = rest
+	noHost := rest
+	first := noHost[:slash]
+	if strings.Contains(first, ".") || strings.Contains(first, ":") {
+		noHost = noHost[slash+1:]
+	}
+	noHost = strings.Trim(noHost, "/")
+	owner, repo, ok = strings.Cut(noHost, "/")
+	if !ok || !validOCIRepo(owner, repo) {
+		return "", "", "", "", false, false
+	}
+	return target, owner, repo, actions, hasActions, true
+}
+
+func validOCIRepo(owner, repo string) bool {
+	if !validOCISegment(owner) || repo == "" {
+		return false
+	}
+	for _, seg := range strings.Split(repo, "/") {
+		if !validOCISegment(seg) {
+			return false
+		}
+	}
+	return true
+}
+
+func validOCISegment(seg string) bool {
+	if seg == "" || seg == "." || seg == ".." {
+		return false
+	}
+	for i := 0; i < len(seg); i++ {
+		c := seg[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// extractTokenScope extracts owner, repo, and requested actions from the first
+// valid repository: entry in OCI scope parameter(s).
+func extractTokenScope(query url.Values) (owner, repo, actions string, ok bool) {
 	if query == nil {
-		return "", "", false
+		return "", "", "", false
 	}
 	for _, scope := range query["scope"] {
 		for _, part := range strings.Fields(scope) {
-			if strings.HasPrefix(part, "repository:") {
-				rest := strings.TrimPrefix(part, "repository:")
-				rest = strings.TrimPrefix(rest, "//")
-				// If prefixed with registry host like ghcr.io/owner/repo, strip the host
-				if i := strings.Index(rest, "/"); i > 0 {
-					first := rest[:i]
-					if strings.Contains(first, ".") || strings.Contains(first, ":") {
-						rest = rest[i+1:]
-					}
-				}
-				// Strip action suffix :pull,push etc.
-				if i := strings.LastIndex(rest, ":"); i >= 0 {
-					rest = rest[:i]
-				}
-				rest = strings.Trim(rest, "/")
-				if o, r, found := strings.Cut(rest, "/"); found && o != "" && r != "" {
-					return o, r, true
-				}
+			if _, o, r, act, _, valid := parseRepositoryScope(part); valid {
+				return o, r, act, true
 			}
 		}
 	}
-	return "", "", false
+	return "", "", "", false
+}
+
+// extractRepoFromScope extracts owner and repo from OCI scope parameter(s).
+func extractRepoFromScope(query url.Values) (owner, repo string, ok bool) {
+	owner, repo, _, ok = extractTokenScope(query)
+	return owner, repo, ok
 }
 
 // extractRepoFromPath extracts owner and repo from an OCI request path.
@@ -550,7 +608,7 @@ func extractRepoFromPath(path string) (owner, repo string, ok bool) {
 		}
 	}
 	repoPath = strings.Trim(repoPath, "/")
-	if o, r, found := strings.Cut(repoPath, "/"); found && o != "" && r != "" {
+	if o, r, found := strings.Cut(repoPath, "/"); found && validOCIRepo(o, r) {
 		return o, r, true
 	}
 	return "", "", false
@@ -564,6 +622,49 @@ func extractDockerRepo(path string, query url.Values) (owner, repo string, ok bo
 		}
 	}
 	return extractRepoFromPath(path)
+}
+
+// isGHCRTokenPath reports whether upstreamPath is an OCI token issuance path
+// rather than a /v2/<owner>/<repo>/... resource that merely carries an
+// auth-looking query parameter or tag name.
+func (s *Server) isGHCRTokenPath(upstreamPath string) bool {
+	p := upstreamPath
+	if cfgURL, err := url.Parse(s.ghcrRegistry()); err == nil && cfgURL.Path != "" && cfgURL.Path != "/" {
+		p = strings.TrimPrefix(p, strings.TrimSuffix(cfgURL.Path, "/"))
+	}
+	switch strings.Trim(p, "/") {
+	case "token", "auth", "auth/token", "oauth/token", "oauth2/token", "oauth/v2/token", "v2/token", "v2/auth", "v1/token":
+		return true
+	}
+	return false
+}
+
+// allowedTokenActions narrows the action suffix a caller asked for to what
+// this server may mint with the deployment's credential: pull alone unless
+// AllowRegistryPush is on, and never delete or arbitrary tokens.
+func allowedTokenActions(actions string, allowPush bool) string {
+	if !allowPush {
+		return "pull"
+	}
+	var wantPull, wantPush bool
+	for _, a := range strings.Split(actions, ",") {
+		switch strings.TrimSpace(a) {
+		case "pull":
+			wantPull = true
+		case "push":
+			wantPush = true
+		case "*":
+			wantPull, wantPush = true, true
+		}
+	}
+	switch {
+	case wantPull && wantPush:
+		return "pull,push"
+	case wantPush:
+		return "push"
+	default:
+		return "pull"
+	}
 }
 
 // autoAuthDocker injects GitHub credentials into an unauthenticated OCI request
@@ -582,14 +683,61 @@ func (s *Server) autoAuthDocker(req *http.Request, origReq *http.Request, upstre
 		return
 	}
 
-	owner, repo, ok := extractDockerRepo(origReq.URL.Path, origReq.URL.Query())
+	if s.isGHCRTokenPath(u.Path) {
+		// A POST names its scope in a body this cannot inspect or rewrite,
+		// so it never receives the deployment's credential.
+		if req.Method != http.MethodGet && req.Method != http.MethodHead {
+			return
+		}
+		owner, repo, actions, ok := extractTokenScope(origReq.URL.Query())
+		if !ok {
+			owner, repo, actions, ok = extractTokenScope(u.Query())
+		}
+		if !ok {
+			return
+		}
+		_, baseRepo := ghcrRepoOf(owner, repo)
+		token, ok := s.credentials.PackageToken(owner, baseRepo)
+		if !ok {
+			token, ok = s.credentials.PackageToken(owner, repo)
+		}
+		if !ok || token == "" {
+			return
+		}
+		// The deployment's credential reads every package under owner, and
+		// every sandbox can reach this server: it is only spent for a
+		// repository the calling sandbox may already read (scope.go).
+		// Anything else goes upstream as the sandbox sent it, so a public
+		// image still pulls and a private one is GHCR's to refuse.
+		if !s.mayUseCredentials(origReq, owner, baseRepo) {
+			s.logf("package cache: not authenticating %s %s for %s with this deployment's GitHub credential: "+
+				"%s/%s is outside that sandbox's repository scope", origReq.Method, origReq.URL.Path,
+				origReq.RemoteAddr, owner, baseRepo)
+			return
+		}
+		// Rewrite scope unconditionally to the single repository just checked
+		// so neither a second scope parameter nor a smuggled action can ride
+		// along on the deployment's credential.
+		q := req.URL.Query()
+		q.Set("scope", "repository:"+owner+"/"+repo+":"+allowedTokenActions(actions, s.allowPush))
+		req.URL.RawQuery = q.Encode()
+		req.SetBasicAuth(PackageUsername, token)
+		return
+	}
+
+	// Non-token /v2/ paths never receive Basic auth, and only writes with
+	// AllowRegistryPush receive a minted Bearer token -- checked strictly
+	// against the repository in the request path rather than any query scope.
+	if !s.allowPush || !isDockerWriteMethod(req.Method) {
+		return
+	}
+	owner, repo, ok := extractRepoFromPath(u.Path)
 	if !ok {
-		owner, repo, ok = extractDockerRepo(u.Path, u.Query())
+		owner, repo, ok = extractRepoFromPath(origReq.URL.Path)
 	}
 	if !ok {
 		return
 	}
-
 	_, baseRepo := ghcrRepoOf(owner, repo)
 	token, ok := s.credentials.PackageToken(owner, baseRepo)
 	if !ok {
@@ -598,39 +746,10 @@ func (s *Server) autoAuthDocker(req *http.Request, origReq *http.Request, upstre
 	if !ok || token == "" {
 		return
 	}
-	// The deployment's credential reads every package under owner, and
-	// every sandbox can reach this server: it is only spent for a
-	// repository the calling sandbox may already read (scope.go).
-	// Anything else goes upstream as the sandbox sent it, so a public
-	// image still pulls and a private one is GHCR's to refuse.
 	if !s.mayUseCredentials(origReq, owner, baseRepo) {
 		s.logf("package cache: not authenticating %s %s for %s with this deployment's GitHub credential: "+
 			"%s/%s is outside that sandbox's repository scope", origReq.Method, origReq.URL.Path,
 			origReq.RemoteAddr, owner, baseRepo)
-		return
-	}
-
-	if isDockerAuthEndpoint(origReq.URL.Path, origReq.URL.Query()) || isDockerAuthEndpoint(u.Path, u.Query()) {
-		if !s.allowPush {
-			// The scope a token is minted for is this server's to
-			// decide, not the caller's: whatever it asked for, the
-			// daemon's credential is only offered for a pull of the
-			// repository it was selected for. A POST names its scope
-			// in a body this cannot rewrite, so it gets nothing.
-			if req.Method != http.MethodGet && req.Method != http.MethodHead {
-				return
-			}
-			q := req.URL.Query()
-			q.Set("scope", "repository:"+owner+"/"+repo+":pull")
-			req.URL.RawQuery = q.Encode()
-		}
-		req.SetBasicAuth(PackageUsername, token)
-		return
-	}
-
-	// Anything else that reaches here is a write; the daemon's
-	// credential does not authenticate one unless the deployment said so.
-	if !s.allowPush {
 		return
 	}
 	if s.ghcrAuth != nil {
@@ -799,15 +918,11 @@ func dockerPullScope(path string) string {
 func dockerPullOnlyScope(scope string) string {
 	var out []string
 	for _, part := range strings.Fields(scope) {
-		rest, ok := strings.CutPrefix(part, "repository:")
-		if !ok {
+		target, _, _, _, hasActions, ok := parseRepositoryScope(part)
+		if !ok || !hasActions {
 			continue
 		}
-		i := strings.LastIndex(rest, ":")
-		if i <= 0 {
-			continue
-		}
-		out = append(out, "repository:"+rest[:i]+":pull")
+		out = append(out, "repository:"+target+":pull")
 	}
 	return strings.Join(out, " ")
 }
@@ -886,16 +1001,23 @@ func (a *dockerAuth) fetchToken(req *http.Request, challenge map[string]string) 
 	}
 	if a.credentials != nil && strings.TrimSuffix(hostKey(a.host), ".") == "ghcr.io" && strings.TrimSuffix(hostKey(realm.Host), ".") == "ghcr.io" {
 		if owner, repo, ok := extractRepoFromScope(query); ok {
-			baseRepo := repo
-			if i := strings.Index(repo, "/"); i > 0 {
-				baseRepo = repo[:i]
+			_, baseRepo := ghcrRepoOf(owner, repo)
+			reqOwner, reqRepo, hasReqRepo := extractRepoFromPath(req.URL.Path)
+			if hasReqRepo {
+				_, reqRepo = ghcrRepoOf(reqOwner, reqRepo)
 			}
-			token, ok := a.credentials.PackageToken(owner, baseRepo)
-			if !ok {
-				token, ok = a.credentials.PackageToken(owner, repo)
-			}
-			if ok && token != "" {
-				tokenReq.SetBasicAuth(PackageUsername, token)
+			if !hasReqRepo || (strings.EqualFold(reqOwner, owner) && strings.EqualFold(reqRepo, baseRepo)) {
+				if hasReqRepo {
+					query.Set("scope", "repository:"+owner+"/"+repo+":pull")
+					tokenReq.URL.RawQuery = query.Encode()
+				}
+				token, ok := a.credentials.PackageToken(owner, baseRepo)
+				if !ok {
+					token, ok = a.credentials.PackageToken(owner, repo)
+				}
+				if ok && token != "" {
+					tokenReq.SetBasicAuth(PackageUsername, token)
+				}
 			}
 		}
 	}

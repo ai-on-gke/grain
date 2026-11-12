@@ -556,7 +556,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// (packageCacheRepoScope). A backend that registers nobody leaves the
 	// credential spent for nobody.
 	sandboxClients := &pkgcache.ClientNames{}
-	cfg.packageCacheScope = newPackageCacheRepoScope(sandboxClients, store, CiReadScopes)
+	cfg.packageCacheScope = newPackageCacheRepoScope(sandboxClients, store, CiReadScopes, CiWriteScopes, forbidden)
 	// Filled in below, once the package cache itself exists
 	// (startPackageCache) -- nil until then, which GranuleConfig's own
 	// DNS field treats exactly like "the cache is off". Declared this
