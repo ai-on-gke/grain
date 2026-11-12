@@ -227,7 +227,14 @@ func TestWorkTreeWalkthroughThreeLevelsFromAnIssue(t *testing.T) {
 		// another issue: its tree already has a GitHub origin, so the
 		// grandchild stays in #7's tree -- and is told so.
 		approve(store, ctx, cursor.ID, true)
-		frameworks.push(append([]antigravity.Step{proposeStep("Extract the cursor codec", "acme/app#99")},
+		// Filed for acknowledgement: nothing scripts its run, whose
+		// unscripted answer would otherwise close it as a report-only
+		// sub-task (model.ClosesOnAnswer) and count it done.
+		codecStep := toolCall("propose_task", map[string]any{
+			"title": "Extract the cursor codec", "body": "follow-up: Extract the cursor codec",
+			"origin": "acme/app#99", "nothing_needed_action": "ack",
+		})
+		frameworks.push(append([]antigravity.Step{codecStep},
 			pushScriptOwnFile(remote, string(model.BranchName(cursor.ID)), cursor.ID)...))
 		cycle(store, ctx, "dispatch the cursor task")
 		codec := childByTitle(store, ctx, cursor.ID, "Extract the cursor codec")

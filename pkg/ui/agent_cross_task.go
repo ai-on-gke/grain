@@ -25,7 +25,9 @@ import (
 
 // agentSteeringRoutes are the task routes that put words in another
 // task's prompt or send its run back to work: editing its description or
-// promptExtension, re-queuing it, or speaking in its conversation. An
+// promptExtension, setting its brief or handover (brief, compact),
+// rolling it over into a successor that carries its grants (rollover),
+// re-queuing it, or speaking in its conversation. An
 // agent holding api:tasks:write (or dispatch:write) on a repository may
 // call them on another task there only when that task's grants are
 // within the agent's own task's (agentCrossTaskRail) -- otherwise a
@@ -46,6 +48,9 @@ var agentSteeringRoutes = map[string]string{
 	"POST /api/tasks/{id}/comments": "comment on",
 	"POST /api/tasks/{id}/reply":    "reply to",
 	"PUT /api/tasks/{id}/goal":      "set the goal of",
+	"POST /api/tasks/{id}/brief":    "rebrief",
+	"POST /api/tasks/{id}/compact":  "compact",
+	"POST /api/tasks/{id}/rollover": "roll over",
 	agentMessagesRoute:              "message the agent of",
 	taskNotesRoute:                  "leave a note for",
 }

@@ -143,8 +143,10 @@ ARGUMENTS & FLAGS:
                                default branch). Unknown repos are filed against yours with a note.
   --branch <name>              Base branch to target (defaults to the repo's default/declared branch).
   --depends-on <id[,id...]>    Task IDs (including your current task or an earlier proposal's --id)
-                               that must close before this task can start. Standing chat sessions
-                               never complete and are dropped with a note.
+                               that must close before this task can start. A proposal that answers
+                               with a closing note and no pull request closes itself (see
+                               --nothing-needed-action). Standing chat sessions never complete and
+                               are dropped with a note.
   --supersedes <task-id>       (propose_task MCP tool only) Replace an existing task that has never
                                been dispatched and was filed in the same repository. Closes the old
                                task as superseded and moves its open dependents to this proposal;
@@ -186,6 +188,10 @@ ARGUMENTS & FLAGS:
   --template-field <k=v>       Template input field value (repeatable).
   --nothing-needed-action <close|ack>
                                Whether nothing_needed closes the task (default) or leaves it for ack.
+                               For a task your run files it also governs a closing note with no pull
+                               request: close (the default) makes it a report-only sub-task that
+                               closes when it answers, so tasks depending on it start and your next
+                               attempt reads its note; ack leaves its report for a person to close.
   --goal <json>                Goal spec JSON: {"kind":"base-green|pr-merged|tasks-closed|person-closes|pipeline-healthy|cl-submitted","spec":{...},"on_met":"close|rest","on_limit":"hold|notify"}.
 `
 
