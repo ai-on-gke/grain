@@ -1009,9 +1009,8 @@ func proposeTaskProperties(proposeRepos []string) map[string]any {
 		"keep_running": map[string]any{"type": "boolean"},
 		"no_port":      map[string]any{"type": "boolean"},
 		"found_in": map[string]any{
-			"type": "string",
-			"description": "The release a bug this fixes was found in, as a tag: vX.Y.Z or vX.Y.Z-rc.N. " +
-				"Optional; grain records it itself for [rc-blocker <rc>] titles and release/vX.Y.Z backports.",
+			"type":        "string",
+			"description": "Release the bug was found in: vX.Y.Z or vX.Y.Z-rc.N",
 		},
 		"fixes_base_branch": map[string]any{"type": "boolean"},
 		"origin":            map[string]any{"type": "string"},
