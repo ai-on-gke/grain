@@ -254,6 +254,19 @@ func TestAPISocketKeepsGrantedSearchAndRefusesASharedDirectory(t *testing.T) {
 	if fi, _ := os.Stat(filepath.Dir(path)); fi.Mode().Perm() != 0o700 {
 		t.Errorf("a 0755 socket directory with no ACL was left at %v, want 0700", fi.Mode())
 	}
+	// Nor may it leave the daemon's own account short of what it needs
+	// to create the socket: the 0700 this replaced put owner rwx back.
+	if err := os.Chmod(filepath.Dir(path), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	ln, err = ui.ListenAPISocket(path)
+	if err != nil {
+		t.Fatalf("restarting on a 0500 socket directory: %v", err)
+	}
+	ln.Close()
+	if fi, _ := os.Stat(filepath.Dir(path)); fi.Mode().Perm() != 0o700 {
+		t.Errorf("a 0500 socket directory was left at %v, want 0700", fi.Mode())
+	}
 
 	shared := filepath.Join(dir, "shared")
 	if err := os.Mkdir(shared, 0o755); err != nil {

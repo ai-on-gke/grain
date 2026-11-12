@@ -326,7 +326,9 @@ func restrictAPISocketDir(dir, sock string) error {
 		}
 		keep = 0o710
 	}
-	if want := perm & keep; want != perm {
+	// The owner's own rwx is put back as the 0700 this replaced did:
+	// without it the socket cannot be created or reached.
+	if want := perm&keep | 0o700; want != perm {
 		if err := os.Chmod(dir, want); err != nil {
 			return fmt.Errorf("restricting %s: %w", dir, err)
 		}
