@@ -984,6 +984,20 @@ const FRAMEWORKS: readonly PillOption[] = [
             />
           </div>
         }
+        @case ("foundIn") {
+          <label class="field">
+            <span>{{ f.label || "Found in release" }}</span>
+            <input
+              type="text"
+              data-testid="nt-found-in"
+              placeholder="v2.5.0-rc.2"
+              autocomplete="off"
+              spellcheck="false"
+              [value]="draft().foundIn"
+              (input)="set('foundIn', val($event))"
+            />
+          </label>
+        }
         @case ("promptExtension") {
           <label class="field">
             <span>{{ f.label || "Extra instructions for the agent" }}</span>
@@ -1724,6 +1738,7 @@ export class NewTaskSheetComponent {
         "autoMerge",
         "noPort",
         "fixesBaseBranch",
+        "foundIn",
         "model",
         "agentFramework",
         "agentBackendId",

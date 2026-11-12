@@ -2222,6 +2222,11 @@ type CreateTaskRequest struct {
 	// branch it lands on, and is not ported to the repository's other
 	// paired branches.
 	NoPort bool `json:"noPort,omitempty"`
+	// FoundIn is the release this task is filed against, as a tag --
+	// vX.Y.Z or vX.Y.Z-rc.N (model.LinkFoundIn): the new-task form's
+	// "Found in" and propose_task's found_in. Left empty, grain records
+	// what the task's own title and branches say (model.DerivedFoundIn).
+	FoundIn string `json:"foundIn,omitempty"`
 	// FixesBaseBranch marks this task as fixing its own base branch while
 	// that branch is red (model.FixesBaseBranch, grain/task-3451): the
 	// "This fixes a red <base>" checkbox. It is never made to wait on the
@@ -3167,6 +3172,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	foundIn, err := model.NormalizeFoundIn(req.FoundIn)
+	if err != nil {
+		return Task{}, validationErrorf("%v", err)
+	}
 	// Checked before the task is written and acted on after it, the way
 	// orchestrator.relayProposedTasks does the identical thing: the note
 	// for a supersede grain will not do belongs in the body a human
@@ -3641,6 +3650,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			task.Owner = resolvedOwner
 		}
 	}
+	model.SetFoundIn(&task, foundIn)
+	model.ApplyDerivedFoundIn(&task)
 	if req.DeclineAutoMerge && !req.AutoMerge {
 		model.DeclineAutoMerge(&task, model.PrincipalString(c.requestActor(ctx).Actor))
 	}

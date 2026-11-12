@@ -344,6 +344,7 @@ describe("NewTaskSheetComponent", () => {
     const noPort = q<HTMLInputElement>('[data-testid="nt-no-port"]')!;
     noPort.checked = true;
     noPort.dispatchEvent(new Event("change"));
+    type('[data-testid="nt-found-in"]', "v2.5.0-rc.2");
 
     q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
     await settle(f);
@@ -360,6 +361,7 @@ describe("NewTaskSheetComponent", () => {
       networkAccess: "none",
       agentBackendId: "agy-ambient",
       noPort: true,
+      foundIn: "v2.5.0-rc.2",
       attachments: [
         {
           filename: "repro.txt",
