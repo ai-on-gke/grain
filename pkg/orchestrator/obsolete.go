@@ -359,3 +359,148 @@ func stopOnExpiredHostCredentials(ctx context.Context, store *model.Store, task 
 		o.PendingQuestionCommentID = &commentID
 	})
 }
+
+// releaseStaleReviewDependencies is the fourth way a review outlives its
+// usefulness: a newer review of the same pull request is filed while an
+// older one has already been dispatched, so fileCoalesced makes the new
+// one depend on the old one rather than superseding it -- and if the old
+// one finished with a stacked pull request that cannot merge, nothing
+// ever ends it. Review 4713 (of head 08f6232f) sat in repair_needed for
+// seventeen hours with re-review 4738 queued behind it, and the change
+// both reviewed waited on both: a stacked pull request is never repaired
+// (repairNeededNote).
+//
+// So each cycle, every open review that depends on an older review of the
+// same pull request and kind (the shared reviewKindTag) has that older one
+// closed as superseded once it is no longer running and is not simply on
+// its way to landing: it ended without a clean stacked pull request (it
+// failed, was parked on a question, or its pull request is red, blocked or
+// otherwise waiting on a person), so its verdict is about a head the change
+// has moved past and the newer review is the one that decides. The
+// dependency is dropped with it. A running older review is left to finish,
+// and one whose stacked pull request is merging is left to merge.
+func releaseStaleReviewDependencies(ctx context.Context, store *model.Store, now time.Time) error {
+	ids, err := store.OpenTasksWithLink(ctx, model.LinkDependsOn)
+	if err != nil {
+		return fmt.Errorf("orchestrator: reading tasks with dependencies: %w", err)
+	}
+	var errs []error
+	for _, id := range ids {
+		review, err := store.GetTask(ctx, id)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if review == nil || !isReviewTask(*review) {
+			continue
+		}
+		kindTag := pathTriggerReviewKindTag(review.Tags)
+		if kindTag == "" {
+			continue
+		}
+		for _, l := range review.Links {
+			if l.Kind != model.LinkDependsOn {
+				continue
+			}
+			if err := supersedeStaleReview(ctx, store, *review, l.Target, kindTag, now); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// pathTriggerReviewKindTag is the reviewKindTag a path-trigger review
+// carries, or "".
+func pathTriggerReviewKindTag(tags []string) string {
+	for _, t := range tags {
+		if strings.HasPrefix(t, "path-trigger-review:") {
+			return t
+		}
+	}
+	return ""
+}
+
+// staleReview reports whether an older review in state is done reading
+// and is holding nothing that is about to land.
+func staleReview(state model.State, obs *model.Observation) bool {
+	switch state {
+	case model.StateFailed, model.StateAwaitingReply, model.StateAwaitingSubmit, model.StateDeferred:
+		return true
+	case model.StateCompleted:
+		// A completed review's stacked pull request is still on its way
+		// back into the branch it reviewed; it is stale only once the
+		// queue reads it as needing somebody.
+		if obs == nil {
+			return false
+		}
+		switch obs.MergeQueueState {
+		case mergeStateRepairNeeded, mergeStateFailed, mergeStateChecksUnfixable:
+			return true
+		}
+		return obs.MergeQueueBlockedAt != nil
+	}
+	return false
+}
+
+// supersedeStaleReview closes prevID as superseded by review, if it is an
+// older review of the same kind and pull request that staleReview calls
+// done, and drops review's dependency on it.
+func supersedeStaleReview(ctx context.Context, store *model.Store, review model.Task, prevID, kindTag string,
+	now time.Time) error {
+
+	prev, err := store.GetTask(ctx, prevID)
+	if err != nil || prev == nil || !isReviewTask(*prev) || !hasTag(*prev, kindTag) {
+		return err
+	}
+	state, err := store.State(ctx, prevID)
+	if err != nil {
+		return err
+	}
+	if state == model.StateClosed {
+		return nil
+	}
+	obs, err := store.GetObservation(ctx, prevID)
+	if err != nil {
+		return err
+	}
+	if !staleReview(state, obs) {
+		return nil
+	}
+	if err := store.UpdateTask(ctx, prevID, func(t *model.Task) error {
+		t.Links = append(withoutLinks(t.Links, model.LinkSupersededBy),
+			model.Link{Kind: model.LinkSupersededBy, Target: review.ID})
+		return nil
+	}); err != nil {
+		return fmt.Errorf("orchestrator: linking review %s to %s: %w", prevID, review.ID, err)
+	}
+	if err := closeTask(ctx, store, prevID, now, "superseded by review "+review.ID, func(o *model.Observation) {
+		o.ClosedAt = &now
+	}); err != nil {
+		return fmt.Errorf("orchestrator: closing review %s: %w", prevID, err)
+	}
+	if err := store.UpdateTask(ctx, review.ID, func(t *model.Task) error {
+		var kept []model.Link
+		for _, l := range t.Links {
+			if l.Kind == model.LinkDependsOn && l.Target == prevID {
+				continue
+			}
+			kept = append(kept, l)
+		}
+		t.Links = append(kept, model.Link{Kind: model.LinkSupersedes, Target: prevID})
+		return nil
+	}); err != nil {
+		return fmt.Errorf("orchestrator: releasing review %s from %s: %w", review.ID, prevID, err)
+	}
+	log.Printf("orchestrator: review %s (%s) superseded by %s, which no longer waits on it", prevID, state, review.ID)
+	head := reviewHead(prev.Tags)
+	of := ""
+	if head != "" {
+		of = " of `" + shortSHA(head) + "`"
+	}
+	return reviewComment(ctx, store, prevID, fmt.Sprintf(
+		"Closed as superseded by review %s, filed for the change's newer head. This review%s had "+
+			"finished without a stacked pull request that could land (it reads %s), and the newer review "+
+			"was waiting on it, which held the change they both review behind a verdict on a head it has "+
+			"moved past. Reopen it if that was a mistake.", review.ID, of, state), now)
+}

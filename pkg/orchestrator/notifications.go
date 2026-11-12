@@ -41,6 +41,9 @@ func reconcileNotifications(ctx context.Context, deps Deps, now time.Time) error
 	if err := reconcileMergeStalledClears(ctx, deps.Store); err != nil {
 		log.Printf("grain: pipeline.merge-stalled notifications: %v", err)
 	}
+	if err := reconcileMergeNeedsPersonClears(ctx, deps.Store); err != nil {
+		log.Printf("grain: %s notifications: %v", model.FamilyMergeNeedsPerson, err)
+	}
 	if err := reconcileStallNotifications(ctx, deps, now); err != nil {
 		log.Printf("grain: pipeline.task-stalled and pipeline.port-stale notifications: %v", err)
 	}
