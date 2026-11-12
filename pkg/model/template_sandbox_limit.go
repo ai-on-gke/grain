@@ -35,14 +35,6 @@ import (
 // approved straight through the store, so this is asked here instead --
 // refusing rather than clamping, as everything else that holds a shape to
 // that maximum does.
-// RefuseCompositionSandboxAboveMax is refuseCompositionSandboxAboveMax for
-// a filer outside this package that composes a template's task itself and
-// files it approved without passing through ui.Client
-// (orchestrator.reconcileReleaseNotes).
-func (s *Store) RefuseCompositionSandboxAboveMax(ctx context.Context, comp Composition) error {
-	return refuseCompositionSandboxAboveMax(ctx, s.db, comp)
-}
-
 func refuseCompositionSandboxAboveMax(ctx context.Context, q querier, comp Composition) error {
 	if comp.Sandbox.IsZero() {
 		return nil
@@ -62,4 +54,12 @@ func refuseCompositionSandboxAboveMax(ctx context.Context, q querier, comp Compo
 			comp.TemplateID, strings.Join(above, ", "))
 	}
 	return nil
+}
+
+// RefuseCompositionSandboxAboveMax is refuseCompositionSandboxAboveMax for
+// a filer outside this package that composes a template's task itself and
+// files it approved without passing through ui.Client
+// (orchestrator.syncRepoReleaseNotes).
+func (s *Store) RefuseCompositionSandboxAboveMax(ctx context.Context, comp Composition) error {
+	return refuseCompositionSandboxAboveMax(ctx, s.db, comp)
 }
