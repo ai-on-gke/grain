@@ -193,9 +193,16 @@ func RequestedDetail(reason string, r ResumeOn) string {
 // wait_for_task tool, or resuming from a park -- is told about it: its
 // title, where it stands, how it ended, and the note its run closed on.
 //
-// Deliberately no more than that. Any run may wait on any task in the
-// deployment, so what is handed back is what the task's own row already
-// shows anybody, never its transcript or its conversation.
+// Deliberately no more than that, and to a waiting task not always that
+// much. Any run may wait on any task in the deployment -- an ordering
+// across repositories is a fair thing to wait for -- but its title and
+// closing note are the task's own words about its repository, and a
+// security review's report on a private one is exactly what a run with no
+// access to that repository must not read. So the store hands a waiting
+// task a target through WaitTargetFor, which withholds both (Withheld)
+// when MayReadTaskOf says the waiter's runs cannot read the target's
+// repository. The plain WaitTargetOf / WaitTargetAt are for grain's own
+// decisions -- whether a wait is over -- which never reach a run.
 type WaitTarget struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
@@ -222,6 +229,10 @@ type WaitTarget struct {
 	// ClosingNote is the last thing the task's own runs said in its
 	// conversation, bounded to maxClosingNote.
 	ClosingNote string `json:"closingNote,omitempty"`
+	// Withheld is a target whose Title and ClosingNote were left out
+	// because the task waiting on it may not read its repository
+	// (WaitTargetFor).
+	Withheld bool `json:"withheld,omitempty"`
 }
 
 // The words WaitTarget.Outcome uses.
@@ -296,6 +307,77 @@ func (s *Store) WaitTargetAt(ctx context.Context, id string, now time.Time) (*Wa
 	if err != nil || task == nil {
 		return nil, err
 	}
+	return s.waitTargetOfTask(ctx, task, now)
+}
+
+// WaitTargetFor is WaitTargetAt as the task waiter may be told it: with
+// the target's title and closing note withheld when waiter's runs may
+// not read the target's repository (MayReadTaskOf). Everything a run is
+// told about a task it waits on or depends on goes through here --
+// wait_for_task (ui.Client.WaitOn), a park's resume and a dependent's
+// prompt (orchestrator.ResumedFrom, DependenciesOf) -- so none of them is
+// a way round the repository scope that keeps a run off another task's
+// record.
+func (s *Store) WaitTargetFor(ctx context.Context, waiter Task, id string, now time.Time) (*WaitTarget, error) {
+	task, err := s.GetTask(ctx, id)
+	if err != nil || task == nil {
+		return nil, err
+	}
+	target, err := s.waitTargetOfTask(ctx, task, now)
+	if err != nil {
+		return nil, err
+	}
+	if !MayReadTaskOf(waiter, *task) {
+		target.Title, target.ClosingNote, target.Withheld = "", "", true
+	}
+	return target, nil
+}
+
+// MayReadTaskOf reports whether reader's runs may read the repository
+// target is about: its own repository, or -- for a task with none -- every
+// repository its reads and writes name, since those are what such a task
+// works from. reader's runs may read its own repository and those its
+// reads and writes name, the same scope the git proxy clones by. A target
+// with no repository and no reads or writes is about none, and readable.
+func MayReadTaskOf(reader, target Task) bool {
+	var about []RepoRef
+	if target.Target != nil {
+		about = append(about, *target.Target)
+	} else {
+		about = append(about, target.Reads...)
+		for _, w := range target.Writes {
+			about = append(about, w.Repo)
+		}
+	}
+	for _, repo := range about {
+		if !taskMayReadRepo(reader, repo) {
+			return false
+		}
+	}
+	return true
+}
+
+// taskMayReadRepo reports whether task's runs may read repo: its own
+// repository, or one its reads or writes name.
+func taskMayReadRepo(task Task, repo RepoRef) bool {
+	if task.Target != nil && task.Target.Same(repo) {
+		return true
+	}
+	for _, r := range task.Reads {
+		if r.Same(repo) {
+			return true
+		}
+	}
+	for _, w := range task.Writes {
+		if w.Repo.Same(repo) {
+			return true
+		}
+	}
+	return false
+}
+
+// waitTargetOfTask is WaitTargetAt for a task already read.
+func (s *Store) waitTargetOfTask(ctx context.Context, task *Task, now time.Time) (*WaitTarget, error) {
 	state, err := s.State(ctx, task.ID)
 	if err != nil {
 		return nil, err
@@ -460,7 +542,11 @@ func closingNote(comments []Comment, taskID string) string {
 // stands, and its closing note quoted beneath.
 func (t WaitTarget) Describe() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Task %s %q: %s", t.ID, t.Title, t.State)
+	if t.Withheld {
+		fmt.Fprintf(&b, "Task %s: %s", t.ID, t.State)
+	} else {
+		fmt.Fprintf(&b, "Task %s %q: %s", t.ID, t.Title, t.State)
+	}
 	if t.Outcome != "" {
 		fmt.Fprintf(&b, ", outcome %s", t.Outcome)
 	}
@@ -475,6 +561,10 @@ func (t WaitTarget) Describe() string {
 		}
 	}
 	b.WriteString(".\n")
+	if t.Withheld {
+		b.WriteString("Its title and closing note are withheld: it belongs to a repository this " +
+			"task's reads and writes do not include.\n")
+	}
 	if t.ClosingNote != "" {
 		b.WriteString("Its closing note:\n")
 		for _, line := range strings.Split(t.ClosingNote, "\n") {
