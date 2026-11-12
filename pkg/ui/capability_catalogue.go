@@ -95,6 +95,10 @@ func (c *Client) markCatalogueRefusals(ctx context.Context, checks []GrantCheck,
 		if grant == "" {
 			grant = check.Grant
 		}
+		if msg, ok := taskRepoGrantRefusal(grant); ok {
+			checks[i].CatalogueRefusal = msg
+			continue
+		}
 		if ciOnlyCapability(grant) {
 			checks[i].CatalogueRefusal = model.CIOnlyRefusal(grant)
 			continue
