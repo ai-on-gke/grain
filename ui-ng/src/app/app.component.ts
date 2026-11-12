@@ -937,12 +937,13 @@ export class AppComponent implements OnInit, OnDestroy {
       tip: "Run a set of templates together (classic Processes page).",
     },
     {
-      kind: "href",
+      kind: "route",
       icon: "tasks",
       label: "New board",
       sub: "Create a saved task view",
-      href: "/boards",
-      tip: "A saved view of tasks (classic Boards page).",
+      route: "/tasks",
+      query: { newBoard: 1 },
+      tip: "Save a filtered view of tasks as a reusable board.",
     },
   ];
 

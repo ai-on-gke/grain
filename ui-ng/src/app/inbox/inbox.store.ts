@@ -58,6 +58,7 @@ export const SEEN_STORAGE_KEY = "grain.next.inbox.seen";
 // timer only catches what the stream cannot say: a dropped connection,
 // or a host-script call that ran past its deadline unanswered.
 export const POLL_MS = 60000;
+export const LIVE_TRANSCRIPT_POLL_MS = 1500;
 
 // DIFF_KINDS are the entries whose decision is about a change, so the
 // inspector shows its diff beside them; any other task entry shows one
@@ -267,6 +268,9 @@ export class InboxStore implements OnDestroy {
     const id = this.selected()?.taskId;
     return id ? (this.details()[id] ?? null) : null;
   });
+  readonly selectedTranscript = signal<string | null>(null);
+  private transcriptTimer: ReturnType<typeof setInterval> | null = null;
+  private transcriptKey = "";
   // selectedDiff is the selected entry's preview: undefined while it is
   // being read or when the entry is not about a change.
   readonly selectedDiff = computed<DiffPreview | null | undefined>(() => {
@@ -315,6 +319,7 @@ export class InboxStore implements OnDestroy {
       this.started = false;
       this.feed.stop(false);
     }
+    this.stopSelectedTranscript();
     if (this.debounce) {
       clearTimeout(this.debounce);
       this.debounce = null;
@@ -397,6 +402,7 @@ export class InboxStore implements OnDestroy {
       this.ensureQueueDetails(),
       this.ensureDiff(),
     ]);
+    this.syncSelectedTranscript();
   }
 
   // ensureDiff reads the selected change's diff preview, unless one read
@@ -528,15 +534,88 @@ export class InboxStore implements OnDestroy {
     }
   }
 
-  // ensureDetail reads the selected task's detail: the question it is
-  // parked on and any access request, which the list does not carry.
+  // ensureDetail reads the selected task's detail: conversation thread,
+  // attempts, the question it is parked on, and any access request.
   async ensureDetail(force = false): Promise<void> {
     const e = this.selected();
     if (!e?.taskId || e.gone) return;
-    if (e.kind !== "reply" && e.kind !== "access" && e.kind !== "stopped")
+    if (!force && this.details()[e.taskId]) {
+      this.syncSelectedTranscript();
       return;
-    if (!force && this.details()[e.taskId]) return;
+    }
     await this.readDetail(e.taskId);
+    this.syncSelectedTranscript();
+  }
+
+  private stopSelectedTranscript(): void {
+    if (this.transcriptTimer) {
+      clearInterval(this.transcriptTimer);
+      this.transcriptTimer = null;
+    }
+    this.transcriptKey = "";
+    this.selectedTranscript.set(null);
+  }
+
+  private syncSelectedTranscript(): void {
+    const e = this.selected();
+    const d = this.selectedDetail();
+    const taskId = e?.taskId;
+    const running =
+      !!taskId &&
+      !e?.gone &&
+      (e?.task?.state === "running" || d?.state === "running");
+    if (!running || !taskId) {
+      this.stopSelectedTranscript();
+      return;
+    }
+    const repo = e?.repo || d?.repo || undefined;
+    if (
+      !this.access.can("GET /api/tasks/{id}/attempts/{number}/transcript", repo)
+    ) {
+      this.stopSelectedTranscript();
+      return;
+    }
+    const liveAttempt = [...(d?.attempts ?? [])]
+      .sort((a, b) => b.number - a.number)
+      .find((a) => !a.finishedAt);
+    const attemptNo = liveAttempt?.number;
+    if (!attemptNo) {
+      this.stopSelectedTranscript();
+      return;
+    }
+    const key = `${taskId}:${attemptNo}`;
+    if (this.transcriptKey === key && this.transcriptTimer) return;
+    this.stopSelectedTranscript();
+    this.transcriptKey = key;
+    void this.pollSelectedTranscript(taskId, attemptNo, key);
+    this.zone.runOutsideAngular(() => {
+      this.transcriptTimer = setInterval(
+        () =>
+          this.zone.run(
+            () => void this.pollSelectedTranscript(taskId, attemptNo, key),
+          ),
+        LIVE_TRANSCRIPT_POLL_MS,
+      );
+    });
+  }
+
+  private async pollSelectedTranscript(
+    taskId: string,
+    attemptNo: number,
+    key: string,
+  ): Promise<void> {
+    if (typeof this.api.get !== "function") return;
+    try {
+      const r = await this.api.get<{ transcript?: string }>(
+        "GET /api/tasks/{id}/attempts/{number}/transcript",
+        { id: taskId, number: String(attemptNo) },
+      );
+      if (this.transcriptKey === key) {
+        this.selectedTranscript.set(r?.transcript ?? "");
+      }
+    } catch {
+      // Transient transcript errors leave existing partial output intact.
+    }
   }
 
   // select pins a row. Choosing a row holds the list's order, so nothing
@@ -817,6 +896,99 @@ export class InboxStore implements OnDestroy {
     } catch (err) {
       this.actionError.set(errorText(err));
       return false;
+    } finally {
+      this.busy.set(null);
+    }
+  }
+
+  // talkToTask posts a comment to a task-backed Inbox item and, when wake is
+  // true, wakes an agent run on that task/PR branch (clearing CompletedAt via
+  // run-now on awaiting_submit/completed items, falling back to retry on
+  // failed items without dispatch:write, or passing reopen:true on closed).
+  async talkToTask(
+    taskId: string,
+    body: string,
+    wake: boolean,
+    refuse: (t: TaskDetail | undefined) => string,
+  ): Promise<{ ok: boolean; woke: boolean }> {
+    this.busy.set(wake ? "wake" : "comment");
+    this.actionError.set(null);
+    try {
+      let fresh: TaskDetail;
+      try {
+        fresh = await this.api.task(taskId);
+      } catch (err) {
+        this.actionError.set(`Could not verify #${taskId}: ${errorText(err)}`);
+        return { ok: false, woke: false };
+      }
+      this.details.update((m) => ({ ...m, [taskId]: fresh }));
+      const why = refuse(fresh);
+      if (why) {
+        this.actionError.set(why);
+        return { ok: false, woke: false };
+      }
+      const repo = fresh.repo || undefined;
+      if (!this.access.can("POST /api/tasks/{id}/comments", repo)) {
+        this.actionError.set("No permission to comment on this task.");
+        return { ok: false, woke: false };
+      }
+
+      let woke = false;
+      if (wake && fresh.state === "closed") {
+        await this.api.post(
+          "POST /api/tasks/{id}/comments",
+          { id: taskId },
+          { body, reopen: true },
+        );
+        woke = true;
+      } else {
+        await this.api.post(
+          "POST /api/tasks/{id}/comments",
+          { id: taskId },
+          { body },
+        );
+        if (!wake) {
+          await this.readDetail(taskId);
+          await this.refresh();
+          return { ok: true, woke: false };
+        }
+        if (
+          fresh.state === "awaiting_reply" &&
+          !fresh.turnStopped &&
+          fresh.reason?.reason !== "awaiting_reply/stopped" &&
+          !fresh.pendingSecret &&
+          !fresh.pendingAccess &&
+          !fresh.pendingConfigChange
+        ) {
+          woke = true;
+        } else if (fresh.state === "running" || fresh.state === "queued") {
+          woke = true;
+        } else if (this.access.can("POST /api/tasks/{id}/run-now", repo)) {
+          await this.api.post("POST /api/tasks/{id}/run-now", { id: taskId });
+          woke = true;
+        } else if (
+          (fresh.state === "failed" ||
+            fresh.turnStopped ||
+            fresh.reason?.reason === "awaiting_reply/stopped") &&
+          this.access.can("POST /api/tasks/{id}/retry", repo)
+        ) {
+          await this.api.post("POST /api/tasks/{id}/retry", { id: taskId });
+          woke = true;
+        }
+      }
+
+      if (woke) {
+        this.answered.set(taskId, "woke agent");
+      }
+      await this.readDetail(taskId);
+      await this.refresh();
+      if (woke) {
+        this.applyUpdates();
+      }
+      return { ok: true, woke };
+    } catch (err) {
+      this.actionError.set(errorText(err));
+      return { ok: false, woke: false };
     } finally {
       this.busy.set(null);
     }

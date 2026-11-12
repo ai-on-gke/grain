@@ -427,6 +427,7 @@ describe("AppComponent shell", () => {
     };
 
     help.open("about");
+    f.detectChanges();
     expect(el(f).querySelector("#main")?.hasAttribute("inert")).toBe(true);
     comp.onDeferError("help");
     await f.whenStable();

@@ -1,0 +1,197 @@
+/* Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* Zero-dependency syntax-highlighted code cards & line-numbered word diffs. */
+
+.code-card {
+  margin: 8px 0;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container-low);
+  color: var(--md-sys-color-on-surface);
+  overflow: hidden;
+}
+
+:root[data-theme="dark"] .code-card {
+  background: var(--md-sys-color-surface-container-lowest);
+}
+
+.code-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+:root[data-theme="dark"] .code-card-head {
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.code-lang {
+  font-family: var(--grain-font-mono);
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface-variant);
+  text-transform: lowercase;
+}
+
+.code-copy-btn {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-xs);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font: 500 11px/16px var(--grain-font-body);
+  cursor: pointer;
+}
+
+:root[data-theme="dark"] .code-copy-btn {
+  background: var(--md-sys-color-surface-container);
+}
+
+.code-copy-btn:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.code-copy-btn.is-copied {
+  color: var(--md-sys-color-tertiary);
+  border-color: var(--md-sys-color-tertiary);
+}
+
+.msg-body .code-card pre,
+.code-card pre {
+  margin: 0;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  overflow-x: auto;
+  font-family: var(--grain-font-mono);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.code-card code.hljs {
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--md-sys-color-on-surface);
+}
+
+/* High-contrast syntax tokens (WCAG AA on both #f7f9fc and #13151a) */
+.tok-kw {
+  color: #0b57d0;
+  font-weight: 500;
+}
+.tok-str {
+  color: #146c2e;
+}
+.tok-cmt {
+  color: #5b6270;
+  font-style: italic;
+}
+.tok-num {
+  color: #8a4300;
+}
+.tok-typ {
+  color: #6d28d9;
+}
+.tok-fn {
+  color: #005a8f;
+}
+.tok-prop {
+  color: #7c2d12;
+}
+.tok-add {
+  display: inline-block;
+  width: 100%;
+  background: var(--grain-diff-add-bg);
+  color: var(--grain-diff-add-fg);
+}
+.tok-del {
+  display: inline-block;
+  width: 100%;
+  background: var(--grain-diff-del-bg);
+  color: var(--grain-diff-del-fg);
+}
+
+:root[data-theme="dark"] .tok-kw {
+  color: #a8c7fa;
+}
+:root[data-theme="dark"] .tok-str {
+  color: #81c995;
+}
+:root[data-theme="dark"] .tok-cmt {
+  color: #939aa8;
+}
+:root[data-theme="dark"] .tok-num {
+  color: #ffca7a;
+}
+:root[data-theme="dark"] .tok-typ {
+  color: #d0bcff;
+}
+:root[data-theme="dark"] .tok-fn {
+  color: #7fcfff;
+}
+:root[data-theme="dark"] .tok-prop {
+  color: #f6ad85;
+}
+
+/* Dual gutter line numbers & intra-line word diff marks */
+.diff-ln {
+  display: inline-block;
+  width: 34px;
+  padding: 0 6px 0 4px;
+  text-align: right;
+  color: var(--md-sys-color-on-surface-variant);
+  opacity: 0.78;
+  user-select: none;
+  flex-shrink: 0;
+  border-right: 1px solid var(--md-sys-color-outline-variant);
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-text {
+  padding-left: 4px;
+}
+
+mark.diff-word {
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+  background: rgba(11, 87, 208, 0.16);
+}
+
+.diff-line-add mark.diff-word {
+  background: rgba(20, 108, 46, 0.24);
+  font-weight: 600;
+}
+
+.diff-line-del mark.diff-word {
+  background: rgba(179, 38, 30, 0.22);
+  font-weight: 600;
+}
+
+:root[data-theme="dark"] .diff-line-add mark.diff-word {
+  background: rgba(129, 201, 149, 0.28);
+}
+
+:root[data-theme="dark"] .diff-line-del mark.diff-word {
+  background: rgba(242, 139, 130, 0.28);
+}

@@ -14,6 +14,11 @@
 
 import type { Comment, Task } from "../api/models";
 import {
+  annotateDiffHunk,
+  diffWordPair,
+  highlightCode,
+} from "../shared/code-highlight";
+import {
   apiGrantCount,
   authorOf,
   grantName,
@@ -22,6 +27,7 @@ import {
   lastLine,
   otherGrants,
   renderMarkdown,
+  safeHref,
   sessionStatus,
   toggleRows,
 } from "./session-view";
@@ -135,10 +141,23 @@ describe("messages", () => {
     expect(ok).toContain('href="https://grain.dev/x"');
     expect(ok).toContain('target="_blank"');
     expect(ok).toContain('rel="noopener noreferrer"');
-    // The Director links tasks on this server: kept, opened in place.
+    // The Director links tasks on this server: rewritten to /next/task/11 and opened in place.
     const local = renderMarkdown("[Task #11](/tasks/11)");
-    expect(local).toContain('href="/tasks/11"');
+    expect(local).toContain('href="/next/task/11"');
     expect(local).not.toContain("target=");
+    expect(safeHref("/task/42?tab=runs")).toBe("/next/task/42?tab=runs");
+    expect(safeHref("/director")).toBe("/next/sessions/director");
+    expect(safeHref("/sessions/abc")).toBe("/next/sessions/abc");
+    expect(safeHref("/workstreams/task:10")).toBe("/next/workstreams/task:10");
+    expect(safeHref("/inbox?ws=task:10")).toBe("/next/inbox?ws=task:10");
+    expect(safeHref("/metrics")).toBe("/next/telemetry");
+    expect(safeHref("/system")).toBe("/next/fleet");
+    expect(safeHref("/memory")).toBe("/next/context");
+    expect(safeHref("/api/tasks/11/attachments/a1")).toBe(
+      "/api/tasks/11/attachments/a1",
+    );
+    expect(safeHref("/next/tasks?tab=all")).toBe("/next/tasks?tab=all");
+    expect(safeHref("#section-2")).toBe("#section-2");
     expect(renderMarkdown("[x](//evil.example/a)")).not.toContain("href");
     const bad = renderMarkdown("[click](javascript:alert(1))");
     expect(bad).not.toContain("href");
@@ -146,6 +165,44 @@ describe("messages", () => {
     const img = renderMarkdown("![pixel](https://tracker.example/p.gif)");
     expect(img).not.toContain("<img");
     expect(img).toContain('href="https://tracker.example/p.gif"');
+  });
+
+  it("renders fenced code blocks as syntax-highlighted .code-card with Copy button", () => {
+    const md = renderMarkdown(
+      "```ts\nexport function greet(name: string): number {\n  return 42; // answer\n}\n```",
+    );
+    expect(md).toContain('class="code-card"');
+    expect(md).toContain('<span class="code-lang">ts</span>');
+    expect(md).toContain('data-copy-code="1"');
+    expect(md).toContain('class="tok-kw"');
+    expect(md).toContain('class="tok-fn"');
+    expect(md).toContain('class="tok-typ"');
+    expect(md).toContain('class="tok-num"');
+    expect(md).toContain('class="tok-cmt"');
+    expect(highlightCode("+added\n-removed", "diff")).toContain("tok-add");
+  });
+
+  it("annotates diff hunks with old/new gutter line numbers and intra-line word marks", () => {
+    const lines = annotateDiffHunk({
+      header: "@@ -14,3 +20,3 @@ func run()",
+      lines: [
+        { kind: "ctx", text: "const x = 1;" },
+        { kind: "del", text: "return retry(oldLimit);" },
+        { kind: "add", text: "return retry(newLimit);" },
+      ],
+    });
+    expect(lines[0]).toMatchObject({ oldNo: 14, newNo: 20 });
+    expect(lines[1]).toMatchObject({ oldNo: 15, newNo: null });
+    expect(lines[2]).toMatchObject({ oldNo: null, newNo: 21 });
+    expect(
+      lines[1].segments.some((s) => s.changed && s.text === "oldLimit"),
+    ).toBe(true);
+    expect(
+      lines[2].segments.some((s) => s.changed && s.text === "newLimit"),
+    ).toBe(true);
+    const pair = diffWordPair("const ratio = 0.42;", "const ratio = 0.30;");
+    expect(pair.del.find((s) => s.changed)?.text).toBe("42");
+    expect(pair.add.find((s) => s.changed)?.text).toBe("30");
   });
 
   it("recognises the stale-grants refusal", () => {

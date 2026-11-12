@@ -110,6 +110,7 @@ export interface Task {
   awaitingImportApproval?: boolean;
   grainBaseRepair?: boolean;
   fixesBaseBranch?: boolean;
+  repairOf?: string;
   reviewTask?: string;
   securityReviewTask?: string;
   autoApproveProposals?: boolean;
@@ -211,6 +212,7 @@ export interface TaskDetail extends Task {
   attempts?: Attempt[];
   pendingAccess?: AccessRequestView | null;
   pendingSecret?: { name: string; secret?: string; key?: string } | null;
+  pendingConfigChange?: unknown;
 }
 
 // One standing conversation (pkg/ui console_sessions.go
@@ -355,4 +357,43 @@ export interface WhoamiResponse {
 
 export interface LogoutResponse {
   redirect?: string;
+}
+
+export interface BaseBranchGate {
+  repo: string;
+  branch?: string;
+  judged: boolean;
+  reason: string;
+  lastRunAt?: string;
+  lastRunAgeMS?: number;
+  runInFlight?: boolean;
+  mergesWaiting?: boolean;
+  runID?: string;
+  runDetail?: string;
+  detail?: string;
+}
+
+export interface BaseBranchGatesResponse {
+  gates: BaseBranchGate[];
+  total?: number;
+  truncated?: boolean;
+  nextCursor?: string;
+}
+
+export interface Board {
+  id: string;
+  name: string;
+  folder?: string;
+  kind: string;
+  description?: string;
+  query?: string;
+  orderKey?: number;
+}
+
+export interface CreateBoardRequest {
+  name: string;
+  kind?: string;
+  folder?: string;
+  description?: string;
+  query?: string;
 }

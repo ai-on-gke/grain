@@ -191,8 +191,9 @@ describe("inbox classifier", () => {
       entries.filter((e) => matchesFilter(e, "unread", seen)),
     ).toHaveLength(3);
     expect(entries.filter((e) => matchesQuery(e, "bump"))).toHaveLength(1);
-    expect(entries.find((e) => e.kind === "host-script")?.summary).toBe(
-      "deploy.sh --prod",
-    );
+    const hs = entries.find((e) => e.kind === "host-script");
+    expect(hs?.summary).toBe("deploy.sh --prod");
+    expect(hs?.taskLink).toBe("/task/2");
+    expect(hs?.externalLink).toBeNull();
   });
 });

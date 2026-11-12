@@ -47,7 +47,9 @@ import { AccessService } from "../services/access.service";
 import { HelpService } from "../services/help.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { ThemeService } from "../services/theme.service";
+import { isHuman } from "../sessions/session-view";
 import { ActorChipComponent } from "../shared/actor-chip.component";
+import { MarkdownDirective, annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import {
   type FilterId,
@@ -127,6 +129,8 @@ const ONE_KEY = new Set(["approve"]);
     "../shared/work-surface.css",
     "./inbox-queue.css",
     "./inbox-inspector.css",
+    "../shared/conversation.css",
+    "../shared/code-highlight.css",
   ],
   template: `
     <section
@@ -673,8 +677,11 @@ const ONE_KEY = new Set(["approve"]);
                       This run asked for the credential
                       <code>{{ secret.name }}</code
                       >. Set it from the
-                      <a [href]="'/tasks/' + sel.taskId">task</a>; the value
-                      never comes back to the page.
+                      <a
+                        [routerLink]="['/task', sel.taskId]"
+                        [queryParams]="{ from: 'inbox' }"
+                        >task</a
+                      >; the value never comes back to the page.
                     </p>
                   }
                   <textarea
@@ -964,6 +971,137 @@ const ONE_KEY = new Set(["approve"]);
                 <h3 class="section-title">Why this needs a person</h3>
                 <p class="muted evidence-text">{{ sel.rationale }}</p>
               </div>
+
+              @if (sel.taskId) {
+                <div class="evidence-card" data-testid="inspector-conversation">
+                  <div class="inbox-conv-head">
+                    <h3 class="section-title">
+                      Conversation
+                      @if (inspectorComments().length) {
+                        <span class="muted tabular"
+                          >· {{ inspectorComments().length }}</span
+                        >
+                      }
+                    </h3>
+                    @if (sel.task?.state === "running") {
+                      <span class="status-pill setup">Live</span>
+                    }
+                  </div>
+
+                  @if (inspectorComments().length) {
+                    <div
+                      #convLog
+                      class="inbox-conv-log"
+                      role="log"
+                      aria-label="Task conversation"
+                    >
+                      @for (c of inspectorComments(); track c.id) {
+                        <article
+                          class="msg"
+                          [class.is-human]="human(c)"
+                          [class.is-handover]="c.handover"
+                          [attr.data-testid]="'inbox-msg-' + c.id"
+                        >
+                          <span class="msg-meta">
+                            <span class="msg-author"
+                              ><g-actor-chip
+                                [label]="actorLabel(c)"
+                                [kind]="c.authorKind"
+                                [behalf]="c.onBehalfOfLabel || c.onBehalfOf"
+                            /></span>
+                            @if (c.id === sel.task?.questionCommentId) {
+                              <span class="status-pill reply">Question</span>
+                            }
+                            @if (c.handover) {
+                              <span class="status-pill neutral"
+                                >Handover note</span
+                              >
+                            }
+                            <time class="mono" [attr.datetime]="c.createdAt">{{
+                              c.createdAt ? ago(c.createdAt) : ""
+                            }}</time>
+                          </span>
+                          <div class="msg-body" [gMarkdown]="c.body"></div>
+                        </article>
+                      }
+                    </div>
+                  } @else if (store.selectedDetail()) {
+                    <p class="muted evidence-text">No messages yet.</p>
+                  } @else {
+                    <p class="muted evidence-text">Reading conversation…</p>
+                  }
+
+                  @if (
+                    sel.task?.state === "running" && store.selectedTranscript();
+                    as liveOut
+                  ) {
+                    <pre
+                      class="inbox-live-transcript"
+                      data-testid="inbox-live-transcript"
+                      aria-label="Live run transcript"
+                      >{{ liveOut }}</pre>
+                  }
+
+                  @if (sel.kind !== "reply" && !sel.gone) {
+                    <div class="inbox-talk-composer">
+                      <textarea
+                        #talkBox
+                        class="reply-textarea"
+                        rows="2"
+                        aria-label="Message the agent on this task"
+                        [placeholder]="talkPlaceholder(sel)"
+                        data-testid="inbox-talk-input"
+                        [value]="talkDraft()"
+                        [disabled]="!can(commentsRoute, sel)"
+                        (input)="onTalkDraft(sel, $any($event.target).value)"
+                        (keydown.control.enter)="onTalkShortcut($event, sel)"
+                        (keydown.meta.enter)="onTalkShortcut($event, sel)"
+                      ></textarea>
+                      @if (talkBlock(sel); as why) {
+                        <p class="rbac-note" data-testid="talk-blocked">
+                          {{ why }}
+                        </p>
+                      }
+                      <div class="inbox-talk-actions">
+                        <span class="muted composer-hint"
+                          >e focuses · Ctrl+Enter wakes agent</span
+                        >
+                        <div class="inbox-talk-btns">
+                          <button
+                            type="button"
+                            class="btn-tonal"
+                            data-testid="inbox-send-comment"
+                            [disabled]="
+                              !talkDraft().trim() ||
+                              !!store.busy() ||
+                              !can(commentsRoute, sel) ||
+                              !!talkBlock(sel)
+                            "
+                            (click)="sendTalk(sel, false)"
+                          >
+                            Comment only
+                          </button>
+                          <button
+                            type="button"
+                            class="btn-primary"
+                            data-testid="inbox-send-wake"
+                            [disabled]="
+                              !talkDraft().trim() ||
+                              !!store.busy() ||
+                              !canWake(sel) ||
+                              !!talkBlock(sel)
+                            "
+                            (click)="sendTalk(sel, true)"
+                          >
+                            Send &amp; wake agent
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  }
+                </div>
+              }
+
               @if (store.selectedDiff(); as diff) {
                 <div
                   class="evidence-card diff-container"
@@ -1001,19 +1139,35 @@ const ONE_KEY = new Set(["approve"]);
                         >
                           <div class="diff-hunk-body">
                             <div class="diff-hunk-head">{{ h.header }}</div>
-                            @for (l of h.lines; track $index) {
+                            @for (l of diffLines(h); track $index) {
                               <div
                                 [class]="'diff-line diff-line-' + l.kind"
                                 data-testid="diff-line"
                               >
-                                <span class="diff-sign" aria-hidden="true">{{
+                                <span class="diff-ln" aria-hidden="true">{{
+                                  l.oldNo ?? ""
+                                }}</span
+                                ><span class="diff-ln" aria-hidden="true">{{
+                                  l.newNo ?? ""
+                                }}</span
+                                ><span class="diff-sign" aria-hidden="true">{{
                                   l.kind === "add"
                                     ? "+"
                                     : l.kind === "del"
                                       ? "−"
                                       : " "
                                 }}</span
-                                ><span class="diff-text">{{ l.text }}</span>
+                                ><span class="diff-text">
+                                  @for (seg of l.segments; track $index) {
+                                    @if (seg.changed) {
+                                      <mark class="diff-word">{{
+                                        seg.text
+                                      }}</mark>
+                                    } @else {
+                                      {{ seg.text }}
+                                    }
+                                  }
+                                </span>
                               </div>
                             }
                             @if (h.linesOmitted) {
@@ -1135,6 +1289,7 @@ const ONE_KEY = new Set(["approve"]);
     TipDirective,
     StatusIconComponent,
     ActorChipComponent,
+    MarkdownDirective,
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
@@ -1150,6 +1305,9 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   private readonly split = viewChild<ElementRef<HTMLElement>>("split");
   private readonly replyBox =
     viewChild<ElementRef<HTMLTextAreaElement>>("replyBox");
+  private readonly talkBox =
+    viewChild<ElementRef<HTMLTextAreaElement>>("talkBox");
+  private readonly convLog = viewChild<ElementRef<HTMLElement>>("convLog");
 
   readonly ws = input<string>();
   protected readonly wsStream = computed(() => {
@@ -1179,9 +1337,13 @@ export class InboxPageComponent implements OnInit, OnDestroy {
 
   protected readonly filters = FILTERS;
   protected readonly ago = ago;
+  protected readonly human = isHuman;
+  protected readonly diffLines = annotateDiffHunk;
   protected readonly diffCountText = diffCountText;
   protected readonly shownHunks = shownHunks;
   protected readonly commentsRoute = "POST /api/tasks/{id}/comments" as const;
+  protected readonly runNowRoute = "POST /api/tasks/{id}/run-now" as const;
+  protected readonly retryRoute = "POST /api/tasks/{id}/retry" as const;
   protected readonly grantRoute =
     "POST /api/tasks/{id}/access-request/grant" as const;
   protected readonly denyRoute =
@@ -1193,6 +1355,11 @@ export class InboxPageComponent implements OnInit, OnDestroy {
 
   protected readonly draft = signal("");
   protected readonly target = signal<ReplyTarget | null>(null);
+  protected readonly talkDraft = signal("");
+  protected readonly talkTarget = signal<{ taskId: string } | null>(null);
+  protected readonly inspectorComments = computed(
+    () => this.store.selectedDetail()?.comments ?? [],
+  );
   private readonly respondingPulse = signal(false);
   private respondTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -1203,12 +1370,13 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     if (!sel || sel.gone) return "idle";
     if (this.store.busy()) return "processing";
     if (this.respondingPulse()) return "responding";
-    if (this.draft().length > 0) return "receiving";
+    if (this.draft().length > 0 || this.talkDraft().length > 0)
+      return "receiving";
     return "anticipating";
   });
 
   protected readonly dockAuroraIntensity = computed(() => {
-    const len = this.draft().length;
+    const len = Math.max(this.draft().length, this.talkDraft().length);
     if (!len) return 0.45;
     return Number(Math.min(0.85, 0.35 + Math.min(len, 180) / 360).toFixed(2));
   });
@@ -1284,10 +1452,21 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       const sel = untracked(() => this.store.selected());
       this.draft.set("");
       this.target.set(null);
+      this.talkDraft.set("");
+      this.talkTarget.set(null);
       this.denying.set(false);
       this.unticked.set(new Set());
       this.allowBreaking.set(!!sel?.release?.breaking);
       this.shortSoakOk.set(!!sel?.release?.shortSoak);
+    });
+    effect(() => {
+      const count = this.inspectorComments().length;
+      const el = this.convLog()?.nativeElement;
+      if (count > 0 && el) {
+        queueMicrotask(() => {
+          el.scrollTop = el.scrollHeight;
+        });
+      }
     });
     effect(() => {
       const k = this.ws() || null;
@@ -1539,6 +1718,100 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       this.draft.set("");
       this.target.set(null);
       this.focusAfterAction();
+    }
+  }
+
+  protected actorLabel(c: {
+    authorKind?: string;
+    author?: string;
+    authorLabel?: string;
+  }): string {
+    if (c.authorKind === "automation" && c.author === "console-session") {
+      return "Grain";
+    }
+    return c.authorLabel || c.author || "Unknown";
+  }
+
+  protected talkPlaceholder(sel: InboxEntry): string {
+    if (
+      sel.kind === "submit" ||
+      sel.kind === "merge-blocked" ||
+      sel.kind === "review" ||
+      sel.kind === "base-repair"
+    ) {
+      return "Ask for changes on this pull request or leave a note…";
+    }
+    return "Send instructions to wake the agent, or leave a comment…";
+  }
+
+  protected onTalkDraft(sel: InboxEntry, value: string): void {
+    if (!this.talkTarget() && sel.taskId) {
+      if (this.store.selectedKey() === null) this.store.select(sel.key);
+      this.talkTarget.set({ taskId: sel.taskId });
+    }
+    this.talkDraft.set(value);
+  }
+
+  protected talkBlock(sel: InboxEntry): string {
+    const tgt = this.talkTarget();
+    const id = tgt?.taskId ?? sel.taskId;
+    if (!id) return "";
+    if (sel.gone || (tgt && tgt.taskId !== sel.taskId)) {
+      return `#${id} moved out of focus; your message is kept.`;
+    }
+    return "";
+  }
+
+  protected canWake(sel: InboxEntry): boolean {
+    if (!this.can(this.commentsRoute, sel)) return false;
+    const st = sel.task?.state;
+    if (st === "closed" || st === "running" || st === "queued") return true;
+    if (this.can(this.runNowRoute, sel)) return true;
+    if (
+      (st === "failed" || !!sel.task?.turnStopped) &&
+      this.can(this.retryRoute, sel)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  protected onTalkShortcut(ev: Event, sel: InboxEntry): void {
+    if ((ev as KeyboardEvent).isComposing) return;
+    ev.preventDefault();
+    if (this.canWake(sel)) {
+      void this.sendTalk(sel, true);
+    }
+  }
+
+  protected async sendTalk(sel: InboxEntry, wake: boolean): Promise<void> {
+    const tgt =
+      this.talkTarget() ?? (sel.taskId ? { taskId: sel.taskId } : null);
+    const text = this.talkDraft().trim();
+    if (!tgt || !text || this.talkBlock(sel)) return;
+    const expectedId = tgt.taskId;
+    const res = await this.store.talkToTask(expectedId, text, wake, (fresh) =>
+      !fresh ? `#${expectedId} could not be read.` : "",
+    );
+    if (res.ok) {
+      this.pulseResponding();
+      this.talkDraft.set("");
+      this.talkTarget.set(null);
+      if (res.woke) {
+        const onPr =
+          !!sel.task?.pullRequest ||
+          sel.kind === "submit" ||
+          sel.kind === "merge-blocked" ||
+          sel.kind === "review";
+        this.snackbar.show(
+          onPr
+            ? `Sent to #${expectedId} — agent waking on the pull request`
+            : `Sent to #${expectedId} — agent waking`,
+        );
+        this.focusAfterAction();
+      } else {
+        this.snackbar.show(`Comment added to #${expectedId}`);
+      }
     }
   }
 
@@ -1815,9 +2088,14 @@ export class InboxPageComponent implements OnInit, OnDestroy {
         }
       }
     } else if (letters && ev.key === "e") {
-      if (pinned && sel && !sel.gone) {
-        setTimeout(() => this.replyBox()?.nativeElement.focus());
+      if (sel && !sel.gone && sel.taskId) {
+        ev.preventDefault();
+        if (!pinned) this.store.select(sel.key);
+        setTimeout(() =>
+          (this.replyBox() ?? this.talkBox())?.nativeElement.focus(),
+        );
       }
+      return;
     } else if (letters && ev.key === "u") {
       // Only this page's own last Undo, never another page's snack.
       const snack = this.snackbar.current();

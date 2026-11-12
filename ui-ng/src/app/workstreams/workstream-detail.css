@@ -89,14 +89,20 @@ g-workstream-detail {
 .ws-dbody {
   display: grid;
   grid-template-columns:
-    minmax(240px, var(--ws-tree-w, 25%)) 8px minmax(0, 1fr)
-    minmax(320px, 360px);
+    clamp(236px, var(--ws-tree-w, 21%), 320px) 0px minmax(280px, 1fr) 0px
+    clamp(440px, var(--ws-insp-w, 42%), max(600px, var(--ws-insp-w, 42%)));
   min-height: 0;
   overflow: hidden;
 }
 
+.ws-dbody.is-dragging {
+  user-select: none;
+}
+
 .ws-dbody.is-collapsed {
-  grid-template-columns: 0 8px minmax(0, 1fr) minmax(320px, 360px);
+  grid-template-columns:
+    0 0px minmax(280px, 1fr) 0px
+    clamp(440px, var(--ws-insp-w, 42%), max(600px, var(--ws-insp-w, 42%)));
 }
 
 .ws-dbody.is-collapsed .ws-tpane {
@@ -105,18 +111,22 @@ g-workstream-detail {
 }
 
 .ws-dbody.mode-list {
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  grid-template-columns:
+    minmax(0, 1fr) 0px
+    clamp(440px, var(--ws-insp-w, 42%), max(640px, var(--ws-insp-w, 42%)));
 }
 
 .ws-dbody.mode-list .ws-gpane,
-.ws-dbody.mode-list .ws-resizer,
+.ws-dbody.mode-list .ws-tree-resizer,
 .ws-dbody.mode-graph .ws-tpane,
-.ws-dbody.mode-graph .ws-resizer {
+.ws-dbody.mode-graph .ws-tree-resizer {
   display: none;
 }
 
 .ws-dbody.mode-graph {
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  grid-template-columns:
+    minmax(280px, 1fr) 0px
+    clamp(440px, var(--ws-insp-w, 42%), max(640px, var(--ws-insp-w, 42%)));
 }
 
 .ws-tpane {
@@ -213,26 +223,19 @@ g-workstream-detail {
   border-left: 1px solid var(--md-sys-color-outline-variant);
 }
 
-.ws-resizer {
-  cursor: col-resize;
-  background: var(--md-sys-color-outline-variant);
-  opacity: 0.55;
-  transition: opacity 0.15s;
-}
-
-.ws-resizer:hover,
-.ws-resizer:focus-visible {
-  opacity: 1;
-  background: var(--md-sys-color-primary);
-}
-
 .ws-gpane {
   position: relative;
   overflow: auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--md-sys-color-surface-container-low);
+  background-color: var(--md-sys-color-surface-container-low);
+  background-image: radial-gradient(
+    circle,
+    var(--md-sys-color-outline-variant) 1px,
+    transparent 1px
+  );
+  background-size: 18px 18px;
 }
 
 .ws-graph-region {
@@ -389,13 +392,15 @@ g-workstream-detail {
   display: none;
 }
 
-@media (max-width: 1079.95px) {
+@media (max-width: 1279.95px) {
   .ws-dbody,
   .ws-dbody.mode-split {
-    grid-template-columns: minmax(0, 1fr) minmax(290px, 340px);
+    grid-template-columns:
+      minmax(0, 1fr) 0px
+      clamp(380px, var(--ws-insp-w, 46%), 55%);
   }
   .ws-dbody.mode-split .ws-gpane,
-  .ws-dbody.mode-split .ws-resizer {
+  .ws-dbody.mode-split .ws-tree-resizer {
     display: none;
   }
   .ws-dbody.mode-graph .ws-gpane {

@@ -1451,5 +1451,136 @@ describe("inbox page helpers", () => {
         dock.getAttribute("data-aurora-state"),
       );
     });
+
+    it("renders Conversation thread, syntax-highlighted code, intra-line word diffs, Comment only, and Send & wake agent on merge-waiting items", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "42",
+          title: "Add token refresh endpoint",
+          state: "awaiting_submit",
+          repo: "sidthe/grain",
+          pullRequest: { url: "https://github.com/sidthe/grain/pull/42" },
+        },
+        {
+          id: "46",
+          title: "Migrate session cookie",
+          state: "proposed",
+          repo: "sidthe/grain",
+        },
+      ];
+      api.details["42"] = {
+        id: "42",
+        title: "Add token refresh endpoint",
+        state: "awaiting_submit",
+        repo: "sidthe/grain",
+        pullRequest: { url: "https://github.com/sidthe/grain/pull/42" },
+        comments: [
+          {
+            id: 1,
+            author: "agent",
+            authorKind: "agent",
+            authorLabel: "Grain Agent",
+            body: "Implemented token refresh:\n```go\nfunc Refresh(tok string) error {\n  return nil\n}\n```",
+            createdAt: "2026-11-11T10:00:00Z",
+          },
+        ],
+      };
+      api.diffs["42"] = {
+        repo: "sidthe/grain",
+        base: "main",
+        head: "grain/task-42",
+        totalFiles: 1,
+        totalHunks: 1,
+        files: [
+          {
+            path: "pkg/auth/refresh.go",
+            status: "modified",
+            additions: 1,
+            deletions: 1,
+            hunks: [
+              {
+                header: "@@ -10,2 +10,2 @@",
+                lines: [
+                  { kind: "del", text: "ttl := 5 * time.Minute" },
+                  { kind: "add", text: "ttl := 15 * time.Minute" },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      const f = await render(api);
+      await new Promise((r) => setTimeout(r, 10));
+      await f.whenStable();
+
+      const conv = q(f, '[data-testid="inspector-conversation"]')!;
+      expect(conv).toBeTruthy();
+      expect(conv.querySelector(".code-card")).not.toBeNull();
+      expect(conv.querySelector(".code-copy-btn")?.textContent).toBe("Copy");
+      expect(conv.querySelector(".tok-kw")).not.toBeNull();
+
+      // Dual gutter line numbers + intra-line <mark class="diff-word">
+      const diffEl = q(f, '[data-testid="inspector-diff"]')!;
+      expect(diffEl.querySelectorAll(".diff-ln").length).toBeGreaterThanOrEqual(
+        4,
+      );
+      const wordMarks = [...diffEl.querySelectorAll("mark.diff-word")].map(
+        (m) => m.textContent,
+      );
+      expect(wordMarks).toContain("5");
+      expect(wordMarks).toContain("15");
+
+      // Shortcut `e` focuses inbox-talk-input on non-reply items
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "e", bubbles: true }),
+      );
+      await new Promise((r) => setTimeout(r, 5));
+      const talkBox = q<HTMLTextAreaElement>(
+        f,
+        '[data-testid="inbox-talk-input"]',
+      )!;
+      expect(document.activeElement).toBe(talkBox);
+
+      // Comment only posts comment without waking run-now
+      talkBox.value = "Looks close, checking CI logs first";
+      talkBox.dispatchEvent(new Event("input"));
+      await f.whenStable();
+      q<HTMLButtonElement>(f, '[data-testid="inbox-send-comment"]')!.click();
+      await new Promise((r) => setTimeout(r, 10));
+      await f.whenStable();
+      expect(api.posts).toEqual([
+        {
+          route: "POST /api/tasks/{id}/comments",
+          params: { id: "42" },
+          body: { body: "Looks close, checking CI logs first" },
+        },
+      ]);
+
+      // Send & wake agent posts comment AND triggers POST /api/tasks/{id}/run-now
+      api.posts = [];
+      talkBox.value = "Please add a unit test for expired tokens";
+      talkBox.dispatchEvent(new Event("input"));
+      await f.whenStable();
+      q<HTMLButtonElement>(f, '[data-testid="inbox-send-wake"]')!.click();
+      await new Promise((r) => setTimeout(r, 10));
+      await f.whenStable();
+      expect(api.posts).toEqual([
+        {
+          route: "POST /api/tasks/{id}/comments",
+          params: { id: "42" },
+          body: { body: "Please add a unit test for expired tokens" },
+        },
+        {
+          route: "POST /api/tasks/{id}/run-now",
+          params: { id: "42" },
+          body: undefined,
+        },
+      ]);
+      expect(TestBed.inject(SnackbarService).current()?.message).toContain(
+        "Sent to #42 — agent waking on the pull request",
+      );
+    });
   });
 });

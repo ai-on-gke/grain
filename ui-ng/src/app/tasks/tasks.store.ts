@@ -25,7 +25,15 @@ import {
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import { InboxStore } from "../inbox/inbox.store";
-import type { Task, TaskDetail } from "../api/models";
+import type {
+  BaseBranchGate,
+  BaseBranchGatesResponse,
+  Board,
+  CreateBoardRequest,
+  Task,
+  TaskDetail,
+} from "../api/models";
+import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { isListCiPlaceholder } from "../shared/gates";
 import { errorText } from "../sessions/session-view";
@@ -58,6 +66,7 @@ export class TasksStore implements OnDestroy {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly zone = inject(NgZone);
+  private readonly access = inject(AccessService);
   private readonly feed = inject(TaskFeedStore);
   // The shell's list feeds Next up and the Inbox badge; it is told to
   // read again after every action here so neither lags behind.
@@ -65,6 +74,8 @@ export class TasksStore implements OnDestroy {
 
   readonly live = this.feed.tasks;
   readonly details = signal<Record<string, TaskDetail>>({});
+  readonly baseBranchGates = signal<BaseBranchGate[]>([]);
+  readonly boards = signal<Board[]>([]);
   readonly closed = signal<Task[]>([]);
   readonly closedCursor = signal<string | null>(null);
   readonly closedLoaded = signal(false);
@@ -135,6 +146,7 @@ export class TasksStore implements OnDestroy {
       void this.refresh();
     } else if (this.feed.loaded()) {
       void this.ensureSubmitDetails(this.live());
+      void this.loadAux();
     }
     // TaskFeedStore owns task.* SSE refreshes and the 3s fast poll; here we
     // only wake submit-gate detail checks on non-task events (e.g. ci.*).
@@ -144,7 +156,10 @@ export class TasksStore implements OnDestroy {
       this.zone.runOutsideAngular(() => {
         this.eventTimer = setTimeout(() => {
           this.eventTimer = null;
-          this.zone.run(() => void this.ensureSubmitDetails(this.live()));
+          this.zone.run(() => {
+            void this.ensureSubmitDetails(this.live());
+            void this.loadBaseBranchGates();
+          });
         }, 250);
       });
     });
@@ -193,7 +208,93 @@ export class TasksStore implements OnDestroy {
       );
     }
     this.ownLoaded.set(true);
-    if (ok) await this.ensureSubmitDetails(this.live());
+    if (ok) {
+      await Promise.all([
+        this.ensureSubmitDetails(this.live()),
+        this.loadAux(),
+      ]);
+    }
+  }
+
+  async loadAux(): Promise<void> {
+    await Promise.all([this.loadBaseBranchGates(), this.loadBoards()]);
+  }
+
+  async loadBaseBranchGates(): Promise<void> {
+    if (
+      typeof this.api.get !== "function" ||
+      !this.access.can("GET /api/base-branch-gates")
+    ) {
+      this.baseBranchGates.set([]);
+      return;
+    }
+    try {
+      const r = await this.api.get<BaseBranchGatesResponse>(
+        "GET /api/base-branch-gates",
+        undefined,
+        "fields=full",
+      );
+      this.baseBranchGates.set(Array.isArray(r?.gates) ? r.gates : []);
+    } catch {
+      // Quietly keep previous reading on transient failure (matches server contract).
+    }
+  }
+
+  async loadBoards(): Promise<void> {
+    if (
+      typeof this.api.get !== "function" ||
+      !this.access.can("GET /api/boards")
+    ) {
+      this.boards.set([]);
+      return;
+    }
+    try {
+      const r = await this.api.get<
+        Board[] | { boards?: Board[]; items?: Board[] }
+      >("GET /api/boards");
+      const list = Array.isArray(r) ? r : (r?.items ?? r?.boards ?? []);
+      this.boards.set(Array.isArray(list) ? list : []);
+    } catch {
+      // Saved boards are optional; leave previous state if read fails.
+    }
+  }
+
+  async createBoard(req: CreateBoardRequest): Promise<Board | null> {
+    if (!this.access.can("POST /api/boards")) return null;
+    this.mark("board", true);
+    this.actionError.set(null);
+    try {
+      const created = await this.api.post<Board>(
+        "POST /api/boards",
+        undefined,
+        { kind: "list", ...req },
+      );
+      await this.loadBoards();
+      return created;
+    } catch (err) {
+      this.actionError.set(errorText(err));
+      return null;
+    } finally {
+      this.mark("board", false);
+    }
+  }
+
+  async deleteBoard(id: string): Promise<boolean> {
+    if (!this.access.can("DELETE /api/boards/{id}")) return false;
+    this.mark("board", true);
+    this.actionError.set(null);
+    try {
+      if (typeof this.api.delete === "function") {
+        await this.api.delete("DELETE /api/boards/{id}", { id });
+      }
+      await this.loadBoards();
+      return true;
+    } catch (err) {
+      this.actionError.set(errorText(err));
+      return false;
+    } finally {
+      this.mark("board", false);
+    }
   }
 
   private async ensureSubmitDetails(tasks: readonly Task[]): Promise<void> {
@@ -308,6 +409,12 @@ export class TasksStore implements OnDestroy {
   async reopen(ids: readonly string[]): Promise<number> {
     return this.fanOut("reopen", ids, (id) =>
       this.api.post("POST /api/tasks/{id}/reopen", { id }),
+    );
+  }
+
+  async retry(ids: readonly string[]): Promise<number> {
+    return this.fanOut("retry", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/retry", { id }),
     );
   }
 

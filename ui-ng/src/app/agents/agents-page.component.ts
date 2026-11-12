@@ -32,6 +32,10 @@ import { SnackbarService } from "../services/snackbar.service";
 import { ViewFilter } from "../services/view-filter.service";
 import { errorText } from "../sessions/session-view";
 import { ActorChipComponent } from "../shared/actor-chip.component";
+import {
+  PillSelectComponent,
+  type PillOption,
+} from "../shared/pill-select.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import {
@@ -66,6 +70,11 @@ const GROUPS: { id: GroupBy; label: string }[] = [
   { id: "host", label: "Host work" },
 ];
 
+const GROUP_OPTIONS: readonly PillOption[] = GROUPS.map((g) => ({
+  value: g.id,
+  label: g.label,
+}));
+
 const STATUS_TEXT: Record<AgentStatus, string> = {
   working: "Working",
   setup: "Setting up",
@@ -83,9 +92,10 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
     NgTemplateOutlet,
     StatusIconComponent,
     ActorChipComponent,
+    PillSelectComponent,
   ],
   encapsulation: ViewEncapsulation.None,
-  styleUrl: "./agents-page.component.css",
+  styleUrls: ["./agents-page.component.css", "../shared/pill-select.css"],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "[class.is-wall]": "wall()",
@@ -189,19 +199,15 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
               </button>
             }
           </div>
-          <label class="group-by">
-            <span>Group by</span>
-            <select
-              data-testid="agents-group"
-              (change)="groupBy.set($any($event.target).value)"
-            >
-              @for (g of groups; track g.id) {
-                <option [value]="g.id" [selected]="groupBy() === g.id">
-                  {{ g.label }}
-                </option>
-              }
-            </select>
-          </label>
+          <g-pill-select
+            testid="agents-group"
+            prefix="Group by"
+            ariaLabel="Group by"
+            align="left"
+            [options]="groupOptions"
+            [value]="groupBy()"
+            (valueChange)="setGroupBy($event)"
+          />
           <div class="segmented" role="group" aria-label="Layout">
             <button
               type="button"
@@ -532,9 +538,13 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   private unregisterF: (() => void) | null = null;
 
   protected readonly filters = FILTERS;
-  protected readonly groups = GROUPS;
+  protected readonly groupOptions = GROUP_OPTIONS;
   protected readonly filter = signal<FilterId>("all");
   protected readonly groupBy = signal<GroupBy>("none");
+
+  protected setGroupBy(v: string): void {
+    this.groupBy.set(v as GroupBy);
+  }
   protected readonly layout = signal<"cards" | "list">("cards");
   protected readonly wall = signal(false);
   protected readonly contactOpen = signal(false);

@@ -72,6 +72,37 @@ export const NODE_GLYPHS: Record<NodeGlyphKind, string> = {
   blocked: "M6 1.4a4.6 4.6 0 1 0 .01 0zM3.4 6h5.2",
 };
 
+export const WS_INSPECTOR_RATIO_KEY = "grain.ws.inspectorRatio";
+const DEFAULT_INSPECTOR_RATIO = 0.42;
+const MIN_INSPECTOR_RATIO = 0.3;
+const MAX_INSPECTOR_RATIO = 0.55;
+
+function clampInspRatio(r: number): number {
+  if (!Number.isFinite(r)) return DEFAULT_INSPECTOR_RATIO;
+  return Math.max(MIN_INSPECTOR_RATIO, Math.min(MAX_INSPECTOR_RATIO, r));
+}
+
+function loadInspRatio(): number {
+  try {
+    const raw = localStorage.getItem(WS_INSPECTOR_RATIO_KEY);
+    if (!raw) return DEFAULT_INSPECTOR_RATIO;
+    const parsed = Number.parseFloat(raw);
+    return Number.isFinite(parsed)
+      ? clampInspRatio(parsed)
+      : DEFAULT_INSPECTOR_RATIO;
+  } catch {
+    return DEFAULT_INSPECTOR_RATIO;
+  }
+}
+
+function saveInspRatio(r: number): void {
+  try {
+    localStorage.setItem(WS_INSPECTOR_RATIO_KEY, clampInspRatio(r).toFixed(4));
+  } catch {
+    // Ignore storage quota / privacy mode errors.
+  }
+}
+
 const MODES: { id: LayoutMode; label: string }[] = [
   { id: "split", label: "Split" },
   { id: "list", label: "List" },
@@ -326,10 +357,12 @@ const MODES: { id: LayoutMode; label: string }[] = [
         #dbody
         class="ws-dbody"
         [class.is-collapsed]="sp.collapsed()"
+        [class.is-dragging]="sp.dragging() || inspDragging()"
         [class.mode-split]="mode() === 'split'"
         [class.mode-list]="mode() === 'list'"
         [class.mode-graph]="mode() === 'graph'"
         [style.--ws-tree-w.%]="sp.ratioExact()"
+        [style.--ws-insp-w.%]="inspRatioExact()"
       >
         <div class="ws-tpane" id="ws-tree-pane">
           <div class="ws-tbar">
@@ -422,12 +455,13 @@ const MODES: { id: LayoutMode; label: string }[] = [
         </div>
 
         <div
-          class="ws-resizer"
+          class="ws-resizer ws-tree-resizer"
           role="separator"
           tabindex="0"
           aria-orientation="vertical"
           aria-controls="ws-tree-pane"
           aria-label="Resize stream tree pane"
+          data-testid="ws-tree-resizer"
           [attr.aria-valuemin]="sp.minPct()"
           [attr.aria-valuemax]="sp.maxPct()"
           [attr.aria-valuenow]="sp.ratioPct()"
@@ -441,7 +475,9 @@ const MODES: { id: LayoutMode; label: string }[] = [
           (lostpointercapture)="sp.onResizeEnd($event)"
           (dblclick)="sp.reset()"
           (keydown)="sp.onKey($event)"
-        ></div>
+        >
+          <span class="ws-resizer-pill" aria-hidden="true"></span>
+        </div>
 
         <div class="ws-gpane" data-testid="ws-graph-pane">
           @let g = graph();
@@ -532,6 +568,19 @@ const MODES: { id: LayoutMode; label: string }[] = [
                     $event.preventDefault(); onGraphNodeClick(pn)
                   "
                 >
+                  @if (pn.category === "run" && !pn.isPack) {
+                    @for (pulse of [0, 1, 2]; track pulse) {
+                      <rect
+                        class="ws-run-halo"
+                        [attr.x]="pn.x"
+                        [attr.y]="pn.y"
+                        [attr.width]="pn.w"
+                        [attr.height]="pn.h"
+                        rx="10"
+                        [style.animation-delay.s]="pulse * 0.8"
+                      />
+                    }
+                  }
                   <rect
                     [attr.x]="pn.x"
                     [attr.y]="pn.y"
@@ -562,8 +611,32 @@ const MODES: { id: LayoutMode; label: string }[] = [
           </div>
         </div>
 
+        <div
+          class="ws-resizer ws-insp-resizer"
+          role="separator"
+          tabindex="0"
+          aria-orientation="vertical"
+          aria-controls="ws-inspector"
+          aria-label="Resize task inspector"
+          data-testid="ws-inspector-resizer"
+          aria-valuemin="30"
+          aria-valuemax="55"
+          [attr.aria-valuenow]="inspRatioPct()"
+          [attr.aria-valuetext]="'Inspector ' + inspRatioPct() + ' percent'"
+          (pointerdown)="onInspResizeStart($event)"
+          (pointermove)="onInspResizeMove($event)"
+          (pointerup)="onInspResizeEnd($event)"
+          (pointercancel)="onInspResizeEnd($event)"
+          (lostpointercapture)="onInspResizeEnd($event)"
+          (dblclick)="resetInspRatio()"
+          (keydown)="onInspResizerKey($event)"
+        >
+          <span class="ws-resizer-pill" aria-hidden="true"></span>
+        </div>
+
         <aside
           #inspEl
+          id="ws-inspector"
           class="ws-insp"
           [class.is-open]="inspMobileOpen()"
           tabindex="-1"
@@ -733,9 +806,29 @@ export class WorkstreamDetailComponent implements OnDestroy {
   protected readonly sp = new SplitController({
     ratioKey: "grain.ws.treeRatio",
     collapsedKey: "grain.ws.treeCollapsed",
-    defaultRatio: 0.28,
+    defaultRatio: 0.21,
     element: () => this.dbodyEl()?.nativeElement,
   });
+
+  protected readonly inspRatio = signal(loadInspRatio());
+  protected readonly inspDragging = signal(false);
+  private inspDragFrom: number | null = null;
+  protected readonly inspRatioExact = computed(() =>
+    Number((this.inspRatio() * 100).toFixed(2)),
+  );
+  protected readonly inspRatioPct = computed(() =>
+    Math.round(this.inspRatio() * 100),
+  );
+
+  private readonly onInspDragEscape = (ev: KeyboardEvent): void => {
+    if (ev.key !== "Escape" || !this.inspDragging()) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (this.inspDragFrom !== null) this.inspRatio.set(this.inspDragFrom);
+    this.inspDragging.set(false);
+    this.inspDragFrom = null;
+    window.removeEventListener("keydown", this.onInspDragEscape, true);
+  };
 
   protected readonly modes = MODES;
   protected readonly short = repoShort;
@@ -758,6 +851,58 @@ export class WorkstreamDetailComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     this.sp.detach();
+    window.removeEventListener("keydown", this.onInspDragEscape, true);
+  }
+
+  protected onInspResizeStart(ev: PointerEvent): void {
+    if (ev.button !== 0) return;
+    this.inspDragFrom = this.inspRatio();
+    this.inspDragging.set(true);
+    window.addEventListener("keydown", this.onInspDragEscape, true);
+    (ev.currentTarget as HTMLElement).setPointerCapture?.(ev.pointerId);
+    ev.preventDefault();
+  }
+
+  protected onInspResizeMove(ev: PointerEvent): void {
+    if (!this.inspDragging()) return;
+    const el = this.dbodyEl()?.nativeElement;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const next = clampInspRatio((rect.right - ev.clientX) / rect.width);
+    this.inspRatio.set(next);
+  }
+
+  protected onInspResizeEnd(ev?: Event): void {
+    if (!this.inspDragging()) return;
+    window.removeEventListener("keydown", this.onInspDragEscape, true);
+    this.inspDragging.set(false);
+    this.inspDragFrom = null;
+    saveInspRatio(this.inspRatio());
+    (ev?.currentTarget as HTMLElement | undefined)?.releasePointerCapture?.(
+      (ev as PointerEvent).pointerId,
+    );
+  }
+
+  protected resetInspRatio(): void {
+    this.inspRatio.set(DEFAULT_INSPECTOR_RATIO);
+    saveInspRatio(DEFAULT_INSPECTOR_RATIO);
+  }
+
+  protected onInspResizerKey(ev: KeyboardEvent): void {
+    const step = ev.shiftKey ? 0.06 : 0.02;
+    let next: number | null = null;
+    // Moving divider left widens the right-hand inspector; moving right narrows it.
+    if (ev.key === "ArrowLeft") next = clampInspRatio(this.inspRatio() + step);
+    else if (ev.key === "ArrowRight")
+      next = clampInspRatio(this.inspRatio() - step);
+    else if (ev.key === "Home") next = MIN_INSPECTOR_RATIO;
+    else if (ev.key === "End") next = MAX_INSPECTOR_RATIO;
+    if (next === null) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    this.inspRatio.set(next);
+    saveInspRatio(next);
   }
 
   protected readonly activeNodeId = computed<string>(() => {

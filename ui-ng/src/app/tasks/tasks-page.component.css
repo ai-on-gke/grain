@@ -143,45 +143,14 @@ g-tasks-page {
 }
 
 .drag-handle:focus-visible,
-.prio-chip:focus-visible,
 .row-menu-btn:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: 2px;
 }
 
-.prio-wrap,
 .row-menu-wrap {
   position: relative;
   flex-shrink: 0;
-}
-
-.prio-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 28px;
-  padding: 0 8px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: var(--md-sys-shape-corner-small);
-  background: var(--md-sys-color-surface);
-  color: var(--md-sys-color-on-surface);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.prio-chip.static {
-  cursor: default;
-}
-
-.prio-chip.up {
-  border-color: var(--md-sys-color-primary);
-  color: var(--md-sys-color-primary);
-}
-
-.prio-chip.down {
-  color: var(--md-sys-color-on-surface-variant);
 }
 
 .pop-menu {
@@ -235,20 +204,8 @@ g-tasks-page {
   font-size: 13px;
 }
 
-.pickup-bar .btn-text,
-.batch-priority {
+.pickup-bar .btn-text {
   color: var(--md-sys-color-inverse-primary);
-}
-
-.batch-priority {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.batch-priority select {
-  font: inherit;
-  font-size: 12px;
 }
 
 .load-more {
@@ -261,7 +218,7 @@ g-tasks-page {
     padding: 6px 12px;
   }
   .task-row .status-pill {
-    max-width: 84px;
+    max-width: 124px;
     overflow: hidden;
     text-overflow: ellipsis;
   }

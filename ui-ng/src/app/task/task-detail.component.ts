@@ -36,21 +36,17 @@ import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
-import { authorOf, isHuman, renderMarkdown } from "../sessions/session-view";
+import { authorOf, isHuman } from "../sessions/session-view";
+import { MarkdownDirective } from "../shared/code-highlight";
 import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import { PriorityChipComponent } from "../shared/priority-chip.component";
 import { TipDirective } from "../shared/tip.directive";
 import { ciChip } from "../shared/chips";
 import { submitBlock } from "../shared/gates";
-import {
-  LEVELS,
-  ago,
-  levelOf,
-  priorityOf,
-  stateLabel,
-} from "../tasks/task-view";
+import { ago, levelOf, priorityOf, stateLabel } from "../tasks/task-view";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { TaskStore } from "./task.store";
 
@@ -95,13 +91,22 @@ export function duration(from?: string, to?: string): string {
 // tab in ?pane= so the list's ?tab= is left alone.
 @Component({
   selector: "g-task-detail",
-  imports: [RouterLink, TipDirective, NgTemplateOutlet, ConfirmDialogComponent],
+  imports: [
+    RouterLink,
+    TipDirective,
+    NgTemplateOutlet,
+    ConfirmDialogComponent,
+    MarkdownDirective,
+    PriorityChipComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
     "./task-detail.component.css",
     "../shared/conversation.css",
+    "../shared/code-highlight.css",
+    "../shared/pill-select.css",
   ],
   template: `
     <section
@@ -274,38 +279,14 @@ export function duration(from?: string, to?: string): string {
               </button>
             }
             @if (pane() && priorityEditable()) {
-              <span class="pane-priority">
-                <select
-                  data-testid="pane-priority"
-                  [attr.aria-label]="
-                    'Priority, ' + level(prio(t)).name + ' ' + prio(t)
-                  "
-                  (change)="pendingPriority.set(+$any($event.target).value)"
-                >
-                  @for (l of levels; track l.value) {
-                    <option [value]="l.value" [selected]="l.value === prio(t)">
-                      {{ l.name }} {{ l.value }}
-                    </option>
-                  }
-                  @if (!isLevel(prio(t))) {
-                    <option [value]="prio(t)" selected>
-                      {{ level(prio(t)).name }} {{ prio(t) }}
-                    </option>
-                  }
-                </select>
-                @if (
-                  pendingPriority() !== null && pendingPriority() !== prio(t)
-                ) {
-                  <button
-                    type="button"
-                    class="btn-text"
-                    data-testid="pane-priority-apply"
-                    (click)="applyPriority()"
-                  >
-                    Set priority
-                  </button>
-                }
-              </span>
+              <g-priority-chip
+                [priority]="prio(t)"
+                [editable]="true"
+                [disabled]="store.isBusy('priority', t.id)"
+                testid="pane-priority"
+                menuTestid="pane-priority-menu"
+                (priorityChange)="setDirectPriority($event)"
+              />
             }
             @if (
               (t.state === "proposed" || t.state === "queued") &&
@@ -511,7 +492,7 @@ export function duration(from?: string, to?: string): string {
                             ago(c.createdAt)
                           }}</time>
                         </span>
-                        <div class="msg-body" [innerHTML]="html(c.body)"></div>
+                        <div class="msg-body" [gMarkdown]="c.body"></div>
                       </article>
                     } @empty {
                       <p class="empty-state">No comments yet.</p>
@@ -801,49 +782,20 @@ export function duration(from?: string, to?: string): string {
             @if (t.description) {
               <div
                 class="msg-body description"
-                [innerHTML]="html(t.description)"
+                [gMarkdown]="t.description"
               ></div>
             }
             <dl class="facts">
               <dt>Priority</dt>
               <dd>
-                @if (priorityEditable()) {
-                  <select
-                    data-testid="task-priority"
-                    [attr.aria-label]="
-                      'Priority, ' + level(prio(t)).name + ' ' + prio(t)
-                    "
-                    (change)="pendingPriority.set(+$any($event.target).value)"
-                  >
-                    @for (l of levels; track l.value) {
-                      <option
-                        [value]="l.value"
-                        [selected]="l.value === prio(t)"
-                      >
-                        {{ l.name }} {{ l.value }}
-                      </option>
-                    }
-                    @if (!isLevel(prio(t))) {
-                      <option [value]="prio(t)" selected>
-                        {{ level(prio(t)).name }} {{ prio(t) }}
-                      </option>
-                    }
-                  </select>
-                  @if (
-                    pendingPriority() !== null && pendingPriority() !== prio(t)
-                  ) {
-                    <button
-                      type="button"
-                      class="btn-text"
-                      data-testid="task-priority-apply"
-                      (click)="applyPriority()"
-                    >
-                      Set
-                    </button>
-                  }
-                } @else {
-                  {{ level(prio(t)).name }} {{ prio(t) }}
-                }
+                <g-priority-chip
+                  [priority]="prio(t)"
+                  [editable]="priorityEditable()"
+                  [disabled]="store.isBusy('priority', t.id)"
+                  testid="task-priority"
+                  menuTestid="task-priority-menu"
+                  (priorityChange)="setDirectPriority($event)"
+                />
               </dd>
               <dt>Repository</dt>
               <dd>{{ t.repo || "None" }}</dd>
@@ -950,7 +902,6 @@ export class TaskDetailComponent implements OnDestroy {
   readonly expand = output<void>();
   readonly openTask = output<string>();
 
-  protected readonly levels = LEVELS;
   protected readonly label = stateLabel;
   protected readonly ago = ago;
   protected readonly dur = duration;
@@ -966,7 +917,6 @@ export class TaskDetailComponent implements OnDestroy {
     questionCommentId?: number;
     reply: boolean;
   } | null>(null);
-  protected readonly pendingPriority = signal<number | null>(null);
   private readonly heading = viewChild<ElementRef<HTMLElement>>("heading");
   private readonly closeYes =
     viewChild<ElementRef<HTMLButtonElement>>("closeYes");
@@ -1138,7 +1088,6 @@ export class TaskDetailComponent implements OnDestroy {
         this.confirmClose.set(false);
         this.confirming.set(null);
         this.replyTarget.set(null);
-        this.pendingPriority.set(null);
         this.store.open(id);
       });
     });
@@ -1183,21 +1132,6 @@ export class TaskDetailComponent implements OnDestroy {
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
     return this.access.can(route, this.t()?.repo || undefined);
-  }
-
-  protected isLevel(p: number): boolean {
-    return LEVELS.some((l) => l.value === p);
-  }
-
-  private readonly htmlCache = new Map<string, string>();
-  protected html(body: string): string {
-    let h = this.htmlCache.get(body);
-    if (h === undefined) {
-      h = renderMarkdown(body);
-      if (this.htmlCache.size >= 500) this.htmlCache.clear();
-      this.htmlCache.set(body, h);
-    }
-    return h;
   }
 
   protected val(ev: Event): string {
@@ -1458,22 +1392,18 @@ export class TaskDetailComponent implements OnDestroy {
     setTimeout(() => this.closeBtn()?.nativeElement.focus());
   }
 
-  // Priority is set with an explicit Set, never on change: arrowing
-  // through a select must not send a PATCH per step (WCAG 3.2.2).
-  protected async applyPriority(): Promise<void> {
+  protected async setDirectPriority(p: number): Promise<void> {
     const t = this.t();
     if (!t || t.id !== this.id()) return;
-    const p = this.pendingPriority();
     const id = t.id;
     const before = priorityOf(t);
-    if (p === null || !(p > 0) || p === before) return;
+    if (!(p > 0) || p === before) return;
     const ok = await this.store.act(
       "priority",
       (x) =>
         this.api.patch("PATCH /api/tasks/{id}", { id: x }, { priority: p }),
       id,
     );
-    this.pendingPriority.set(null);
     if (ok) {
       this.acted.emit();
       this.snackbar.show(`Priority of #${id} set to ${levelOf(p).name} ${p}`, {

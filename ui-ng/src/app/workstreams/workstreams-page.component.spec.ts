@@ -30,6 +30,7 @@ import {
   WS_VIEW_STORAGE_KEY,
   WorkstreamsPageComponent,
 } from "./workstreams-page.component";
+import { WS_INSPECTOR_RATIO_KEY } from "./workstream-detail.component";
 import { STARTED_STORAGE_KEY, WorkstreamsStore } from "./workstreams.store";
 
 function t(id: string, over: Partial<Task> = {}): Task {
@@ -107,6 +108,8 @@ describe("WorkstreamsPageComponent", () => {
   beforeEach(() => {
     localStorage.removeItem(WS_VIEW_STORAGE_KEY);
     localStorage.removeItem(STARTED_STORAGE_KEY);
+    localStorage.removeItem(WS_INSPECTOR_RATIO_KEY);
+    localStorage.removeItem("grain.ws.treeRatio");
     api = new FakeApi();
     Object.defineProperty(window, "matchMedia", {
       writable: true,
@@ -356,5 +359,69 @@ describe("WorkstreamsPageComponent", () => {
       origin: "task:300",
       repo: "__none__",
     });
+  });
+
+  it("uses <g-pill-select> with zero native <select> elements and supports 3-column inspector resizer + running halos", async () => {
+    api.open = [
+      t("500", {
+        title: "Observability rollout",
+        state: "completed",
+        repo: "sidthe/grain",
+      }),
+      t("501", {
+        title: "Add Prometheus exporter",
+        state: "running",
+        repo: "sidthe/grain",
+        origin: "task:500",
+        generatedFrom: "500",
+      }),
+    ];
+
+    const { fixture, router } = await mount("/workstreams");
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelectorAll("select")).toHaveLength(0);
+
+    // Filter by repository via <g-pill-select>
+    const navSpy = vi.spyOn(router, "navigate");
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="ws-repo-filter"]',
+    )!.click();
+    fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="ws-repo-filter-opt-sidthe/grain"]',
+    )!.click();
+    expect(navSpy).toHaveBeenCalledWith([], {
+      queryParams: { repo: "sidthe/grain" },
+      queryParamsHandling: "merge",
+      replaceUrl: true,
+    });
+
+    // Open workstream detail: verify 21% tree, 42% inspector default, running node halos, and widening up to 55%
+    await router.navigateByUrl("/workstreams/task:500?node=501");
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(el.querySelectorAll("select")).toHaveLength(0);
+    expect(el.querySelectorAll("rect.ws-run-halo").length).toBe(3);
+
+    const treeResizer = el.querySelector<HTMLElement>(
+      '[data-testid="ws-tree-resizer"]',
+    )!;
+    const inspResizer = el.querySelector<HTMLElement>(
+      '[data-testid="ws-inspector-resizer"]',
+    )!;
+    expect(treeResizer.getAttribute("aria-valuenow")).toBe("21");
+    expect(inspResizer.getAttribute("aria-valuenow")).toBe("42");
+
+    inspResizer.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "End", bubbles: true }),
+    );
+    fixture.detectChanges();
+    expect(inspResizer.getAttribute("aria-valuenow")).toBe("55");
+    expect(localStorage.getItem(WS_INSPECTOR_RATIO_KEY)).toBe("0.5500");
+
+    inspResizer.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    fixture.detectChanges();
+    expect(inspResizer.getAttribute("aria-valuenow")).toBe("42");
   });
 });

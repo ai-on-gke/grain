@@ -33,15 +33,14 @@ import type { Comment } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { ActorChipComponent } from "../shared/actor-chip.component";
+import { MarkdownDirective } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import {
   DIRECTOR_ID,
   apiGrantCount,
-  authorOf,
   isHuman,
   otherGrants,
-  renderMarkdown,
   sessionStatus,
   toggleRows,
 } from "./session-view";
@@ -64,9 +63,19 @@ export function clock(iso: string | undefined, now = new Date()): string {
 // phone the list and the conversation are separate screens.
 @Component({
   selector: "g-sessions-page",
-  imports: [RouterLink, TipDirective, StatusIconComponent, ActorChipComponent],
+  imports: [
+    RouterLink,
+    TipDirective,
+    StatusIconComponent,
+    ActorChipComponent,
+    MarkdownDirective,
+  ],
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["./sessions-page.component.css", "../shared/conversation.css"],
+  styleUrls: [
+    "./sessions-page.component.css",
+    "../shared/conversation.css",
+    "../shared/code-highlight.css",
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "(document:keydown.escape)": "onEscape($event)",
@@ -336,7 +345,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
                   <span class="msg-meta">
                     <span class="msg-author"
                       ><g-actor-chip
-                        [label]="author(c)"
+                        [label]="actorLabel(c)"
                         [kind]="c.authorKind"
                         [behalf]="c.onBehalfOfLabel || c.onBehalfOf"
                     /></span>
@@ -347,7 +356,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
                       time(c.createdAt)
                     }}</time>
                   </span>
-                  <div class="msg-body" [innerHTML]="html(c.body)"></div>
+                  <div class="msg-body" [gMarkdown]="c.body"></div>
                 </article>
               } @empty {
                 @if (store.detailError(); as err) {
@@ -653,20 +662,14 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   }
 
   protected statusOf = sessionStatus;
-  protected author = authorOf;
   protected human = isHuman;
   protected time = (iso?: string) => clock(iso);
 
-  private readonly htmlCache = new Map<string, string>();
-  protected html(body: string): string {
-    let h = this.htmlCache.get(body);
-    if (h === undefined) {
-      h = renderMarkdown(body);
-      // Bounded: a long-lived page must not keep every message it saw.
-      if (this.htmlCache.size >= 500) this.htmlCache.clear();
-      this.htmlCache.set(body, h);
+  protected actorLabel(c: Comment): string {
+    if (c.authorKind === "automation" && c.author === "console-session") {
+      return "Grain";
     }
-    return h;
+    return c.authorLabel || c.author || "Unknown";
   }
 
   protected holds(capId: string): boolean {

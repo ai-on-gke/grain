@@ -19,6 +19,7 @@ import type {
   ConsoleSession,
   Task,
 } from "../api/models";
+import { renderCodeCard } from "../shared/code-highlight";
 
 export const DIRECTOR_ID = "director";
 
@@ -190,11 +191,43 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-// safeHref keeps http(s) and mailto links, and paths on this server
-// (the Director links tasks as /tasks/11); everything else is dropped
-// (javascript:, data:, protocol-relative //host).
+function rewriteGrainPath(href: string): string {
+  if (href.startsWith("/api/") || href === "/api") return href;
+  if (href.startsWith("/next/") || href === "/next") return href;
+  const parts = /^([^?#]*)(.*)$/.exec(href);
+  if (!parts) return href;
+  const [, path, suffix] = parts;
+
+  const taskMatch = /^\/tasks?\/([^/]+)\/?$/.exec(path);
+  if (taskMatch) return `/next/task/${taskMatch[1]}${suffix}`;
+  if (/^\/tasks\/?$/.test(path)) return `/next/tasks${suffix}`;
+  if (/^\/director\/?$/.test(path)) return `/next/sessions/director${suffix}`;
+
+  const direct =
+    /^\/(sessions|workstreams|inbox|ci|processes|settings|telemetry|fleet|context|agents)(\/.*)?$/.exec(
+      path,
+    );
+  if (direct) return `/next/${direct[1]}${direct[2] ?? ""}${suffix}`;
+
+  const alias: Record<string, string> = {
+    metrics: "telemetry",
+    system: "fleet",
+    memory: "context",
+  };
+  const mapped = /^\/(metrics|system|memory)(\/.*)?$/.exec(path);
+  if (mapped) return `/next/${alias[mapped[1]]}${mapped[2] ?? ""}${suffix}`;
+
+  return href;
+}
+
+// safeHref keeps http(s), mailto, fragment #anchors, and paths on this server
+// (rewriting Classic root-relative Grain UI paths to /next/... while leaving
+// /api/... untouched); everything else is dropped (javascript:, data:, //host).
 export function safeHref(href: string): string | null {
-  if (href.startsWith("/") && !href.startsWith("//")) return href;
+  if (href.startsWith("#")) return href;
+  if (href.startsWith("/") && !href.startsWith("//")) {
+    return rewriteGrainPath(href);
+  }
   try {
     const u = new URL(href);
     return ["http:", "https:", "mailto:"].includes(u.protocol) ? u.href : null;
@@ -204,17 +237,21 @@ export function safeHref(href: string): string | null {
 }
 
 function isLocal(href: string): boolean {
-  return href.startsWith("/");
+  return href.startsWith("/") || href.startsWith("#");
 }
 
 // Raw HTML in a message is shown as text, so a message can only ever
-// produce Markdown's own elements; Angular sanitizes [innerHTML] as well.
+// produce Markdown's own elements; code blocks render inside syntax-colored
+// .code-card containers with a Copy button.
 const md = new Marked({
   gfm: true,
   breaks: true,
   renderer: {
     html({ text }) {
       return escapeHtml(text);
+    },
+    code({ text, lang }) {
+      return renderCodeCard(text, lang);
     },
     // Links open in a new tab and only to web or mail addresses; images
     // become links, so a message cannot load a remote image (a tracking

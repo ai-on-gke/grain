@@ -17,7 +17,7 @@ import { Router, provideRouter } from "@angular/router";
 import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
-import type { Task } from "../api/models";
+import type { BaseBranchGate, Board, Task } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { TasksPageComponent } from "./tasks-page.component";
@@ -53,6 +53,8 @@ class FakeApi {
     task("90", "awaiting_reply", 5, { interactive: true, title: "Director" }),
   ];
   closed: Task[] = [task("50", "closed")];
+  gates: BaseBranchGate[] = [];
+  boards: Board[] = [];
   calls: Call[] = [];
 
   // The pane's task detail (GET /api/tasks/{id}) and the list.
@@ -75,7 +77,16 @@ class FakeApi {
         : { body: structuredClone(this.live), changed: true },
     );
   queries: string[] = [];
-  get = (_route: string, _p?: unknown, query?: string) => {
+  get = (route: string, _p?: unknown, query?: string) => {
+    if (route === "GET /api/base-branch-gates") {
+      return Promise.resolve({ gates: this.gates });
+    }
+    if (route === "GET /api/boards") {
+      return Promise.resolve(this.boards);
+    }
+    if (route === "GET /api/tasks/{id}/tree") {
+      return Promise.resolve({ origin: "", done: 0, total: 0, nodes: [] });
+    }
     this.queries.push(query ?? "");
     return Promise.resolve({ tasks: this.closed, nextCursor: "", total: 1 });
   };
@@ -87,12 +98,29 @@ class FakeApi {
   localScriptApprovals = () => Promise.resolve([]);
   private rec(method: string, route: string, params?: unknown, body?: unknown) {
     this.calls.push({ method, route, params, body });
+    if (method === "POST" && route === "POST /api/boards") {
+      const b: Board = {
+        id: `b${this.boards.length + 1}`,
+        name: (body as { name: string }).name,
+        kind: "list",
+        query: (body as { query?: string }).query ?? "",
+      };
+      this.boards = [...this.boards, b];
+      return Promise.resolve(b);
+    }
+    if (method === "DELETE" && route === "DELETE /api/boards/{id}") {
+      const id = (params as { id: string }).id;
+      this.boards = this.boards.filter((x) => x.id !== id);
+      return Promise.resolve({});
+    }
     return Promise.resolve({});
   }
   post = (route: string, params?: unknown, body?: unknown) =>
     this.rec("POST", route, params, body);
   patch = (route: string, params?: unknown, body?: unknown) =>
     this.rec("PATCH", route, params, body);
+  delete = (route: string, params?: unknown) =>
+    this.rec("DELETE", route, params);
 }
 
 async function render(
@@ -446,12 +474,23 @@ describe("TasksPageComponent", () => {
       return f;
     }
 
-    it("selects a row into the pane instead of leaving the page, and keeps the tab in the URL", async () => {
+    it("auto-selects the first row into the persistent 30/70 pane and updates selection on click", async () => {
+      localStorage.removeItem("grain.tasks.splitRatio");
       const f = await render(new FakeApi());
       const nav = vi
         .spyOn(TestBed.inject(Router), "navigate")
         .mockResolvedValue(true);
-      expect(q(f, '[data-testid="tasks-pane"]')).toBeNull();
+      // Persistent Inbox-replica split: pane & resizer are always mounted on desktop,
+      // defaulting to 30/70 and auto-selecting rows()[0] (#1).
+      expect(q(f, '[data-testid="tasks-pane"]')).toBeTruthy();
+      expect(
+        q(f, '[data-testid="tasks-resizer"]')!.getAttribute("aria-valuenow"),
+      ).toBe("30");
+      expect(q(f, '[data-testid="row-1"]')!.classList).toContain("is-selected");
+      expect(q(f, "g-task-detail #task-title")!.textContent).toContain("#1");
+      // Zero native <select> elements anywhere on g-tasks-page (including embedded g-task-detail).
+      expect(all(f, "select")).toHaveLength(0);
+
       const link = q<HTMLAnchorElement>(f, '[data-testid="open-2"]')!;
       expect(link.getAttribute("href")).toBe("/task/2?from=tasks:backlog");
       link.click();
@@ -552,11 +591,9 @@ describe("TasksPageComponent", () => {
     it("changes priority from the pane", async () => {
       const api = new FakeApi();
       const f = await withPane(api, undefined, "2");
-      const sel = q<HTMLSelectElement>(f, '[data-testid="pane-priority"]')!;
-      sel.value = "8";
-      sel.dispatchEvent(new Event("change"));
+      q<HTMLButtonElement>(f, '[data-testid="pane-priority"]')!.click();
       await settle(f);
-      q<HTMLButtonElement>(f, '[data-testid="pane-priority-apply"]')!.click();
+      q<HTMLButtonElement>(f, '[data-testid="pane-priority-menu-8"]')!.click();
       await settle(f);
       expect(api.calls).toContainEqual({
         method: "PATCH",
@@ -854,9 +891,12 @@ describe("TasksPageComponent", () => {
       expect(partOf?.textContent).toContain("Part of Voice stream");
       expect(partOf?.getAttribute("href")).toContain("/workstreams/task:100");
 
-      const sel = q<HTMLSelectElement>(f, '[data-testid="tasks-group"]')!;
-      sel.value = "workstream";
-      sel.dispatchEvent(new Event("change"));
+      q<HTMLButtonElement>(f, '[data-testid="tasks-group"]')!.click();
+      await settle(f);
+      q<HTMLButtonElement>(
+        f,
+        '[data-testid="tasks-group-opt-workstream"]',
+      )!.click();
       expect(nav).toHaveBeenCalledWith([], {
         queryParams: { group: "workstream" },
         queryParamsHandling: "merge",
@@ -875,6 +915,132 @@ describe("TasksPageComponent", () => {
       );
       expect(repoHeaders.some((h) => h?.includes("acme/web"))).toBe(true);
       expect(repoHeaders.some((h) => h?.includes("acme/api"))).toBe(true);
+    });
+
+    it("renders right-pane empty state when tab has no rows, and supports split-controls + batch priority pill", async () => {
+      const api = new FakeApi();
+      api.live = [];
+      const f = await render(api, "backlog");
+      expect(q(f, '[data-testid="tasks-pane-empty"]')!.textContent).toContain(
+        "Nothing in this tab",
+      );
+      q<HTMLButtonElement>(f, '[data-testid="tasks-split-42"]')!.click();
+      await settle(f);
+      expect(
+        q(f, '[data-testid="tasks-resizer"]')!.getAttribute("aria-valuenow"),
+      ).toBe("42");
+      q<HTMLButtonElement>(f, '[data-testid="tasks-split-toggle"]')!.click();
+      await settle(f);
+      expect(q(f, ".tasks-split")!.classList).toContain("is-collapsed");
+      q<HTMLButtonElement>(f, '[data-testid="tasks-split-30"]')!.click();
+      await settle(f);
+      expect(q(f, ".tasks-split")!.classList).not.toContain("is-collapsed");
+
+      // Batch priority pill + Undo with zero <select> controls
+      api.live = [task("1", "queued", 5), task("2", "queued", 3)];
+      await TestBed.inject(TasksStore).refresh();
+      await settle(f);
+      q<HTMLInputElement>(
+        f,
+        '[data-testid="row-1"] input[type="checkbox"]',
+      )!.click();
+      await settle(f);
+      expect(all(f, "select")).toHaveLength(0);
+      q<HTMLButtonElement>(f, '[data-testid="batch-priority"]')!.click();
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="batch-priority-opt-9"]')!.click();
+      await settle(f);
+      expect(api.calls).toContainEqual({
+        method: "PATCH",
+        route: "PATCH /api/tasks/{id}",
+        params: { id: "1" },
+        body: { priority: 9 },
+      });
+    });
+
+    it("renders Repair badge, broken-base banner, inline Retry on failed tasks, Saved Boards CRUD, and Timeline view", async () => {
+      const api = new FakeApi();
+      api.gates = [
+        {
+          repo: "sidthe/grain",
+          branch: "main",
+          judged: false,
+          reason: "failing",
+          detail: "go test ./pkg/ui failed",
+        },
+      ];
+      api.live = [
+        task("77", "failed", 9, {
+          title: "Fix broken main build",
+          fixesBaseBranch: true,
+        }),
+        task("78", "running", 7, {
+          title: "Stream telemetry",
+          startedAt: "2026-11-11T10:00:00Z",
+        }),
+      ];
+      const f = await render(api, "all");
+      expect(q(f, '[data-testid="broken-base-banner"]')!.textContent).toContain(
+        "sidthe/grain",
+      );
+      expect(q(f, '[data-testid="repair-badge-77"]')!.textContent).toBe(
+        "Repair",
+      );
+      expect(q(f, '[data-testid="prio-77"]')!.classList).toContain(
+        "prio-urgent",
+      );
+
+      // Inline Retry on failed row
+      q<HTMLButtonElement>(f, '[data-testid="retry-77"]')!.click();
+      await settle(f);
+      expect(api.calls).toContainEqual({
+        method: "POST",
+        route: "POST /api/tasks/{id}/retry",
+        params: { id: "77" },
+        body: undefined,
+      });
+
+      // Saved Boards: save current view, apply, and delete
+      f.componentRef.setInput("newBoard", "1");
+      await settle(f);
+      const nameInput = q<HTMLInputElement>(
+        f,
+        '[data-testid="board-name-input"]',
+      )!;
+      expect(nameInput).toBeTruthy();
+      nameInput.value = "All Triage";
+      nameInput.dispatchEvent(new Event("input"));
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="board-save-submit"]')!.click();
+      await settle(f);
+      expect(
+        TestBed.inject(TasksStore)
+          .boards()
+          .map((b) => b.name),
+      ).toEqual(["All Triage"]);
+
+      const nav = vi
+        .spyOn(TestBed.inject(Router), "navigate")
+        .mockResolvedValue(true);
+      q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="board-apply-b1"]')!.click();
+      expect(nav).toHaveBeenCalledWith(["/tasks"], {
+        queryParams: { tab: "all", group: null, q: null, repo: null },
+      });
+
+      q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="board-delete-b1"]')!.click();
+      await settle(f);
+      expect(TestBed.inject(TasksStore).boards()).toEqual([]);
+
+      // Timeline view toggle keeps persistent right-hand inspector
+      q<HTMLButtonElement>(f, '[data-testid="tasks-view-timeline"]')!.click();
+      await settle(f);
+      expect(q(f, '[data-testid="tasks-timeline"]')).toBeTruthy();
+      expect(q(f, ".timeline-bar")).toBeTruthy();
+      expect(q(f, '[data-testid="tasks-pane"]')).toBeTruthy();
     });
   });
 });

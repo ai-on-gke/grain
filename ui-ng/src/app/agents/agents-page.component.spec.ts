@@ -191,9 +191,9 @@ describe("AgentsPageComponent", () => {
     const api = new FakeApi();
     api.live = [run("1", { repo: "o/b" }), run("2", { repo: "o/a" })];
     const f = await render(api);
-    const sel = q(f, '[data-testid="agents-group"]') as HTMLSelectElement;
-    sel.value = "repo";
-    sel.dispatchEvent(new Event("change"));
+    q<HTMLButtonElement>(f, '[data-testid="agents-group"]')!.click();
+    await f.whenStable();
+    q<HTMLButtonElement>(f, '[data-testid="agents-group-opt-repo"]')!.click();
     await f.whenStable();
     const heads = [...el(f).querySelectorAll(".band-header")].map(
       (h) => h.textContent!.trim().split(/\s+/)[0],

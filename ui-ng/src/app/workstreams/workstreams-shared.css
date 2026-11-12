@@ -240,3 +240,74 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Inbox-style hairline splitter handles & 3-pulse running DAG halo (M10A). */
+
+.ws-resizer {
+  position: relative;
+  z-index: 4;
+  width: 0;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.ws-resizer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -12px;
+  width: 24px;
+}
+
+.ws-resizer-pill {
+  position: absolute;
+  top: 50%;
+  left: -2px;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 36px;
+  border-radius: 999px;
+  background: var(--md-sys-color-outline-variant);
+  transition:
+    background 0.14s ease,
+    height 0.14s ease;
+}
+
+.ws-resizer:hover .ws-resizer-pill,
+.ws-resizer:focus-visible .ws-resizer-pill {
+  background: var(--md-sys-color-primary);
+  height: 44px;
+}
+
+.ws-resizer:focus-visible {
+  outline: none;
+}
+
+.ws-gnode rect.ws-run-halo {
+  fill: none;
+  stroke: var(--md-sys-color-primary);
+  stroke-width: 1.8;
+  transform-box: fill-box;
+  transform-origin: center;
+  pointer-events: none;
+  animation: ws-halo-pulse 2.4s cubic-bezier(0.2, 0, 0, 1) infinite;
+}
+
+@keyframes ws-halo-pulse {
+  0% {
+    opacity: 0.72;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.14, 1.32);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-gnode rect.ws-run-halo {
+    animation: none;
+    display: none;
+  }
+}

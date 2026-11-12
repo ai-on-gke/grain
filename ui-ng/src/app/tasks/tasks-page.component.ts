@@ -30,20 +30,30 @@ import {
   viewChild,
 } from "@angular/core";
 import { Router, RouterLink } from "@angular/router";
-import type { Task } from "../api/models";
+import type { Board, Task } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { ViewFilter } from "../services/view-filter.service";
+import { ActorChipComponent } from "../shared/actor-chip.component";
 import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
 import { ciChip, repoShort } from "../shared/chips";
 import { isMerged, withDetailGates } from "../shared/gates";
+import {
+  PillSelectComponent,
+  type PillOption,
+} from "../shared/pill-select.component";
+import {
+  PriorityChipComponent,
+  priorityTone,
+} from "../shared/priority-chip.component";
 import { scopeOf } from "../shared/scope";
-import { PHONE_QUERY, WIDE_RATIO } from "../shared/split";
+import { DEFAULT_RATIO, PHONE_QUERY } from "../shared/split";
 import { SplitController } from "../shared/split-controller";
+import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskDetailComponent } from "../task/task-detail.component";
 import {
@@ -84,6 +94,20 @@ const SORTS: { id: SortId; label: string }[] = [
   { id: "newest", label: "Newest" },
 ];
 
+export type TasksViewMode = "list" | "timeline";
+
+const GROUP_OPTIONS: readonly PillOption[] = [
+  { value: "none", label: "None" },
+  { value: "workstream", label: "Workstream" },
+  { value: "repo", label: "Repository" },
+];
+
+const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
+  value: String(l.value),
+  label: `${l.name} ${l.value}`,
+  toneClass: priorityTone(l.value),
+}));
+
 // TasksPageComponent is Tasks (spec D-6) with the Backlog (D-28): tabs
 // that follow Grain's lifecycle, Backlog first in the order Grain will
 // run it, Needs approval beside it, and every move, priority change,
@@ -98,10 +122,21 @@ const SORTS: { id: SortId; label: string }[] = [
     NgTemplateOutlet,
     ConfirmDialogComponent,
     TaskDetailComponent,
+    PillSelectComponent,
+    PriorityChipComponent,
+    StatusIconComponent,
+    ActorChipComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["../shared/work-surface.css", "./tasks-page.component.css"],
+  styleUrls: [
+    "../shared/work-surface.css",
+    "../inbox/inbox-queue.css",
+    "../inbox/inbox-inspector.css",
+    "./tasks-page.component.css",
+    "./tasks-timeline.css",
+    "../shared/pill-select.css",
+  ],
   host: {
     "(document:click)": "onDocClick($event)",
     "(document:keydown.escape)": "onEscape($event)",
@@ -118,27 +153,121 @@ const SORTS: { id: SortId; label: string }[] = [
       <div class="stage-header tasks-header">
         <div class="view-headline-row">
           <h1 class="view-headline" id="tasks-headline">Tasks</h1>
-          <span class="toolbar-spacer"></span>
-          <label class="group-by">
-            <span>Group by</span>
-            <select
-              data-testid="tasks-group"
-              (change)="setGroup($any($event.target).value)"
+          @if (repo(); as repoFilter) {
+            <button
+              type="button"
+              class="filter-chip"
+              data-testid="tasks-repo-chip"
+              aria-pressed="true"
+              (click)="clearRepoFilter()"
             >
-              <option value="none" [selected]="groupBy() === 'none'">
-                None
-              </option>
-              <option
-                value="workstream"
-                [selected]="groupBy() === 'workstream'"
+              {{ repoFilter }} ×
+            </button>
+          }
+          <span class="toolbar-spacer"></span>
+          <div class="tasks-header-controls">
+            @if (canReadBoards() || canWriteBoards()) {
+              <span class="boards-wrap">
+                <button
+                  type="button"
+                  class="pill-select-btn"
+                  data-testid="saved-boards-btn"
+                  [class.is-open]="openMenu() === 'boards'"
+                  [attr.aria-expanded]="openMenu() === 'boards'"
+                  aria-haspopup="menu"
+                  (click)="toggleMenu('boards', $event)"
+                >
+                  <span class="pill-select-prefix">Boards</span>
+                  <span class="pill-select-label">{{
+                    activeBoardName() || store.boards().length || "Saved"
+                  }}</span>
+                  <svg
+                    class="pill-select-chevron"
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path d="m7 10 5 5 5-5z" fill="currentColor" />
+                  </svg>
+                </button>
+                @if (openMenu() === "boards") {
+                  <div
+                    class="pop-menu boards-menu"
+                    role="menu"
+                    aria-label="Saved boards"
+                    data-testid="saved-boards-menu"
+                  >
+                    @for (b of store.boards(); track b.id) {
+                      <div class="boards-menu-row">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          class="board-apply-btn"
+                          [attr.data-testid]="'board-apply-' + b.id"
+                          (click)="applyBoard(b)"
+                        >
+                          {{ b.name }}
+                        </button>
+                        @if (canWriteBoards()) {
+                          <button
+                            type="button"
+                            class="board-del-btn"
+                            [attr.aria-label]="'Delete board ' + b.name"
+                            [attr.data-testid]="'board-delete-' + b.id"
+                            (click)="removeBoard(b, $event)"
+                          >
+                            ×
+                          </button>
+                        }
+                      </div>
+                    } @empty {
+                      <p class="muted list-hint">No saved boards yet.</p>
+                    }
+                    @if (canWriteBoards()) {
+                      <div class="boards-menu-sep" aria-hidden="true"></div>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        data-testid="board-save-open"
+                        (click)="openBoardSave()"
+                      >
+                        + Save current view…
+                      </button>
+                    }
+                  </div>
+                }
+              </span>
+            }
+
+            <g-pill-select
+              testid="tasks-group"
+              prefix="Group by"
+              ariaLabel="Group by"
+              [options]="groupOptions"
+              [value]="groupBy()"
+              (valueChange)="setGroup($any($event))"
+            />
+
+            <div class="segmented" role="group" aria-label="Task view">
+              <button
+                type="button"
+                data-testid="tasks-view-list"
+                [attr.aria-pressed]="viewMode() === 'list'"
+                (click)="setViewMode('list')"
               >
-                Workstream
-              </option>
-              <option value="repo" [selected]="groupBy() === 'repo'">
-                Repository
-              </option>
-            </select>
-          </label>
+                List
+              </button>
+              <button
+                type="button"
+                data-testid="tasks-view-timeline"
+                [attr.aria-pressed]="viewMode() === 'timeline'"
+                (click)="setViewMode('timeline')"
+              >
+                Timeline
+              </button>
+            </div>
+          </div>
         </div>
         <nav class="tab-strip" aria-label="Task views">
           @for (t of tabs; track t.id) {
@@ -174,6 +303,63 @@ const SORTS: { id: SortId; label: string }[] = [
         {{ announcement() }}
       </p>
 
+      @if (boardSaveOpen()) {
+        <form
+          class="board-save-bar"
+          data-testid="board-save-form"
+          (submit)="submitBoardSave($event)"
+        >
+          <span>Save current view as board:</span>
+          <input
+            #boardNameEl
+            type="text"
+            class="board-save-input"
+            aria-label="Board name"
+            placeholder="e.g. Grain PRs"
+            data-testid="board-name-input"
+            [value]="boardName()"
+            (input)="boardName.set($any($event.target).value)"
+          />
+          <button
+            type="submit"
+            class="btn-primary"
+            data-testid="board-save-submit"
+            [disabled]="!boardName().trim() || store.isBusy('board')"
+          >
+            Save board
+          </button>
+          <button
+            type="button"
+            class="btn-text"
+            data-testid="board-save-cancel"
+            (click)="boardSaveOpen.set(false)"
+          >
+            Cancel
+          </button>
+        </form>
+      }
+
+      @if (store.baseBranchGates().length) {
+        <div
+          class="banner banner-error broken-base-banner"
+          role="status"
+          data-testid="broken-base-banner"
+        >
+          <strong
+            >Base branch check failing ({{
+              store.baseBranchGates().length
+            }}):</strong
+          >
+          @for (g of store.baseBranchGates(); track g.repo + ":" + g.branch) {
+            <span>
+              <span class="mono">{{ g.repo }}</span
+              >{{ g.branch ? " (" + g.branch + ")" : "" }} —
+              {{ g.detail || g.runDetail || g.reason }}
+            </span>
+          }
+        </div>
+      }
+
       @if (store.loadError(); as err) {
         <p class="banner banner-error" role="alert">{{ err }}</p>
       }
@@ -193,340 +379,420 @@ const SORTS: { id: SortId; label: string }[] = [
       <div
         class="inbox-split tasks-split"
         #split
-        [class.has-pane]="!!selectedId()"
-        [class.is-collapsed]="sp.collapsed() && !!selectedId()"
+        [class.has-pane]="!phone()"
+        [class.is-collapsed]="sp.collapsed() && !phone()"
         [class.is-dragging]="sp.dragging()"
         [style.--queue-w.%]="sp.ratioExact()"
       >
         <div class="queue-pane tasks-list-pane" id="tasks-list">
           <div class="tasks-body">
-            @switch (current()) {
-              @case ("backlog") {
-                <div class="list-toolbar" data-testid="backlog-toolbar">
-                  <span class="toolbar-title" data-testid="ready-count"
-                    >Ready to run
-                    <span class="tabular">{{
-                      store.ready().length
-                    }}</span></span
-                  >
-                  @if (store.backlog().length - store.ready().length; as n) {
-                    <span
-                      class="muted"
-                      data-testid="blocked-count"
-                      gTip="Approved, but waiting for a task they depend on to finish. Not counted as ready."
-                      >· {{ n }} waiting on a dependency</span
-                    >
-                  }
-                  <div class="segmented" role="group" aria-label="Order">
-                    @for (s of sorts; track s.id) {
-                      <button
-                        type="button"
-                        [attr.aria-pressed]="sort() === s.id"
-                        [attr.data-testid]="'sort-' + s.id"
-                        (click)="setSort(s.id)"
-                      >
-                        {{ s.label }}
-                      </button>
-                    }
+            @if (viewMode() === "timeline") {
+              @if (store.loaded() && rows().length === 0) {
+                <p class="empty-state" data-testid="timeline-empty">
+                  Nothing in this tab to plot.
+                </p>
+              } @else {
+                <div class="tasks-timeline" data-testid="tasks-timeline">
+                  <div class="timeline-axis tabular">
+                    <span>{{ timelineSpan().startLabel }}</span>
+                    <span>Timeline · {{ rows().length }} tasks</span>
+                    <span>{{ timelineSpan().endLabel }}</span>
                   </div>
-                  <span class="toolbar-spacer"></span>
-                  @if (store.counts().deferred) {
-                    <a
-                      class="btn-text"
-                      [routerLink]="[]"
-                      [queryParams]="{ tab: 'deferred' }"
-                      >{{ store.counts().deferred }} deferred</a
-                    >
-                  }
-                  @if (store.counts().proposed) {
-                    <a
-                      class="gate-card"
-                      id="backlog-intake-card"
-                      data-testid="gate-card"
-                      [routerLink]="[]"
-                      [queryParams]="{ tab: 'proposed' }"
-                      >Needs approval {{ store.counts().proposed }} · outside
-                      run order · Review →</a
-                    >
-                  }
-                </div>
-                @if (sort() !== "run") {
-                  <p class="muted list-hint">
-                    Moving is off in this order.
-                    <button
-                      type="button"
-                      class="btn-text"
-                      (click)="setSort('run')"
-                    >
-                      Back to run order
-                    </button>
-                  </p>
-                }
-                @if (store.loaded() && rows().length === 0) {
-                  <p class="empty-state" data-testid="backlog-empty">
-                    Nothing is waiting for a worker.
-                    @if (store.counts().proposed) {
-                      Approve a proposal to put it here.
-                    }
-                  </p>
-                }
-                @if (groupBy() !== "none") {
-                  @if (backlogChecks()) {
-                    <ng-container [ngTemplateOutlet]="selectAll" />
-                  }
-                  @for (g of groupedRows(); track g.key) {
-                    <section
-                      class="band"
-                      [attr.aria-labelledby]="'tgrp-' + $index"
-                    >
-                      <h2 class="band-header" [id]="'tgrp-' + $index">
-                        {{ g.label }}
-                        <span class="tabular muted">{{ g.tasks.length }}</span>
-                      </h2>
-                      <ul class="task-rows">
-                        @for (t of g.tasks; track t.id) {
-                          <ng-container
-                            [ngTemplateOutlet]="backlogRow"
-                            [ngTemplateOutletContext]="{ $implicit: t }"
+                  <ul class="timeline-rows">
+                    @for (item of timelineItems(); track item.task.id) {
+                      @let t = item.task;
+                      <li
+                        class="task-row timeline-row"
+                        [class.is-selected]="effectiveSelectedId() === t.id"
+                        [attr.data-testid]="'row-' + t.id"
+                        [attr.data-task-id]="t.id"
+                      >
+                        <div class="timeline-row-top">
+                          <span [class]="'status-pill ' + toneOf(t)"
+                            ><g-status-icon
+                              [tone]="toneOf(t)"
+                              [kind]="t.state"
+                            />{{ label(t.state) }}</span
+                          >
+                          <a
+                            class="timeline-row-title"
+                            [href]="fullHref(t.id)"
+                            [attr.data-testid]="'open-' + t.id"
+                            (click)="onOpen($event, t.id)"
+                            ><span class="muted tabular">#{{ t.id }}</span>
+                            {{ t.title }}</a
+                          >
+                          @if (isRepair(t)) {
+                            <span
+                              class="status-pill error repair-badge"
+                              [attr.data-testid]="'repair-badge-' + t.id"
+                              >Repair</span
+                            >
+                          }
+                          <g-priority-chip
+                            [priority]="prio(t)"
+                            [editable]="false"
                           />
-                        }
-                      </ul>
-                    </section>
-                  }
-                } @else if (sort() === "run") {
-                  @if (backlogChecks()) {
-                    <ng-container [ngTemplateOutlet]="selectAll" />
-                  }
-                  @for (band of runBands(); track band.key) {
-                    <section
-                      class="band"
-                      [attr.aria-labelledby]="'band-' + band.key"
-                    >
-                      <h2 class="band-header" [id]="'band-' + band.key">
-                        {{ band.label }}
-                        <span class="tabular muted">{{
-                          band.tasks.length
-                        }}</span>
-                      </h2>
-                      <ul class="task-rows">
-                        @for (t of band.tasks; track t.id) {
-                          <ng-container
-                            [ngTemplateOutlet]="backlogRow"
-                            [ngTemplateOutletContext]="{ $implicit: t }"
-                          />
-                        }
-                      </ul>
-                    </section>
-                  }
-                  @if (rows().length) {
-                    <div
-                      class="drop-end"
-                      aria-hidden="true"
-                      [class.drop-before]="dropAt() === store.backlog().length"
-                      (dragover)="onDragOver($event, store.backlog().length)"
-                      (drop)="onDrop($event, store.backlog().length)"
-                    ></div>
-                  }
-                } @else {
-                  <ul class="task-rows">
-                    @for (t of rows(); track t.id) {
-                      <ng-container
-                        [ngTemplateOutlet]="backlogRow"
-                        [ngTemplateOutletContext]="{ $implicit: t }"
-                      />
+                        </div>
+                        <div class="timeline-track" aria-hidden="true">
+                          <span
+                            [class]="'timeline-bar tone-' + toneOf(t)"
+                            [style.left.%]="item.leftPct"
+                            [style.width.%]="item.widthPct"
+                          ></span>
+                        </div>
+                      </li>
                     }
                   </ul>
-                }
-              }
-
-              @case ("proposed") {
-                <div
-                  class="list-toolbar gate-toolbar"
-                  data-testid="approval-toolbar"
-                >
-                  <label class="check-row">
-                    <input
-                      type="checkbox"
-                      data-testid="select-all"
-                      [checked]="allChecked()"
-                      [indeterminate]="someChecked()"
-                      (change)="toggleAll()"
-                    />
-                    <span>Select all</span>
-                  </label>
-                  <span class="muted toolbar-rule"
-                    >Approving puts each task into the Backlog at its
-                    priority.</span
-                  >
-                  <span class="toolbar-spacer"></span>
-                  <a
-                    class="btn-text"
-                    [routerLink]="[]"
-                    [queryParams]="{ tab: 'backlog' }"
-                    >Back to Backlog ({{ store.backlog().length }})</a
-                  >
-                  @if (canApprove() && rows().length) {
-                    <button
-                      type="button"
-                      class="btn-primary"
-                      data-testid="approve-all"
-                      [disabled]="store.isBusy('approve')"
-                      (click)="confirmApprove(rows())"
-                    >
-                      Approve all {{ rows().length }}
-                    </button>
-                  }
                 </div>
-                @if (store.loaded() && rows().length === 0) {
-                  <p class="empty-state">
-                    No proposals are waiting for approval.
-                  </p>
-                }
-                <ul class="task-rows">
-                  @for (t of rows(); track t.id) {
-                    @let place = placementOf(t);
-                    <li
-                      class="task-row approval-row"
-                      [class.is-selected]="selectedId() === t.id"
-                      [attr.data-testid]="'row-' + t.id"
-                      [attr.data-task-id]="t.id"
-                    >
-                      <input
-                        type="checkbox"
-                        [attr.aria-label]="'Select #' + t.id"
-                        [checked]="checked().has(t.id)"
-                        (change)="toggle(t.id)"
-                      />
-                      <div class="row-main">
-                        <ng-container
-                          [ngTemplateOutlet]="titleLink"
-                          [ngTemplateOutletContext]="{ $implicit: t }"
-                        />
-                        <span class="row-sub muted">
-                          <ng-container
-                            [ngTemplateOutlet]="scopeLine"
-                            [ngTemplateOutletContext]="{ $implicit: t }"
-                          />
-                          @if (filer(t); as who) {
-                            · filed by {{ who }}
-                          }
-                          · If approved: position {{ place.position }} of
-                          {{ place.of }}, {{ place.band }}
-                        </span>
-                      </div>
-                      <ng-container
-                        [ngTemplateOutlet]="priorityChip"
-                        [ngTemplateOutletContext]="{
-                          $implicit: t,
-                          editable: true,
-                        }"
-                      />
-                      <span class="row-actions">
-                        @if (canApprove()) {
-                          <button
-                            type="button"
-                            class="btn-tonal"
-                            [attr.data-testid]="'approve-' + t.id"
-                            [disabled]="store.isBusy('approve')"
-                            (click)="approve([t.id])"
-                          >
-                            Approve
-                          </button>
-                        }
-                        <button
-                          type="button"
-                          class="btn-text"
-                          [disabled]="!canDefer()"
-                          [attr.data-testid]="'defer-' + t.id"
-                          (click)="defer([t.id])"
-                        >
-                          Defer
-                        </button>
-                      </span>
-                    </li>
-                  }
-                </ul>
               }
-
-              @default {
-                @if (rows().length) {
-                  <ng-container [ngTemplateOutlet]="selectAll" />
-                }
-                @if (current() === "closed") {
-                  <div class="list-toolbar" data-testid="closed-toolbar">
-                    <div
-                      class="segmented"
-                      role="group"
-                      aria-label="Closed tasks"
+            } @else {
+              @switch (current()) {
+                @case ("backlog") {
+                  <div class="list-toolbar" data-testid="backlog-toolbar">
+                    <span class="toolbar-title" data-testid="ready-count"
+                      >Ready to run
+                      <span class="tabular">{{
+                        store.ready().length
+                      }}</span></span
                     >
-                      @for (c of closedFilters; track c.id) {
+                    @if (store.backlog().length - store.ready().length; as n) {
+                      <span
+                        class="muted"
+                        data-testid="blocked-count"
+                        gTip="Approved, but waiting for a task they depend on to finish. Not counted as ready."
+                        >· {{ n }} waiting on a dependency</span
+                      >
+                    }
+                    <div class="segmented" role="group" aria-label="Order">
+                      @for (s of sorts; track s.id) {
                         <button
                           type="button"
-                          [attr.aria-pressed]="closedFilter() === c.id"
-                          [attr.data-testid]="'closed-' + c.id"
-                          (click)="closedFilter.set(c.id)"
+                          [attr.aria-pressed]="sort() === s.id"
+                          [attr.data-testid]="'sort-' + s.id"
+                          (click)="setSort(s.id)"
                         >
-                          {{ c.label }}
+                          {{ s.label }}
                         </button>
                       }
                     </div>
+                    <span class="toolbar-spacer"></span>
+                    @if (store.counts().deferred) {
+                      <a
+                        class="btn-text"
+                        [routerLink]="[]"
+                        [queryParams]="{ tab: 'deferred' }"
+                        >{{ store.counts().deferred }} deferred</a
+                      >
+                    }
+                    @if (store.counts().proposed) {
+                      <a
+                        class="gate-card"
+                        id="backlog-intake-card"
+                        data-testid="gate-card"
+                        [routerLink]="[]"
+                        [queryParams]="{ tab: 'proposed' }"
+                        >Needs approval {{ store.counts().proposed }} · outside
+                        run order · Review →</a
+                      >
+                    }
                   </div>
-                }
-                @if (current() === "merging") {
-                  <p class="muted list-hint" data-testid="merging-hint">
-                    Two kinds of work: changes waiting for a person to submit,
-                    and submitted changes the merge queue is landing.
-                  </p>
-                }
-                @if (current() === "closed" && !store.closedLoaded()) {
-                  <p class="empty-state">Loading closed tasks…</p>
-                } @else if (store.loaded() && rows().length === 0) {
-                  <p class="empty-state">Nothing here.</p>
-                }
-                @if (groupBy() !== "none") {
-                  @for (g of groupedRows(); track g.key) {
-                    <section
-                      class="band"
-                      [attr.aria-labelledby]="'tdefgrp-' + $index"
-                    >
-                      <h2 class="band-header" [id]="'tdefgrp-' + $index">
-                        {{ g.label }}
-                        <span class="tabular muted">{{ g.tasks.length }}</span>
-                      </h2>
-                      <ul class="task-rows">
-                        @for (t of g.tasks; track t.id) {
-                          <ng-container
-                            [ngTemplateOutlet]="defaultTaskRow"
-                            [ngTemplateOutletContext]="{ $implicit: t }"
-                          />
-                        }
-                      </ul>
-                    </section>
+                  @if (sort() !== "run") {
+                    <p class="muted list-hint">
+                      Moving is off in this order.
+                      <button
+                        type="button"
+                        class="btn-text"
+                        (click)="setSort('run')"
+                      >
+                        Back to run order
+                      </button>
+                    </p>
                   }
-                } @else {
+                  @if (store.loaded() && rows().length === 0) {
+                    <p class="empty-state" data-testid="backlog-empty">
+                      Nothing is waiting for a worker.
+                      @if (store.counts().proposed) {
+                        Approve a proposal to put it here.
+                      }
+                    </p>
+                  }
+                  @if (groupBy() !== "none") {
+                    @if (backlogChecks()) {
+                      <ng-container [ngTemplateOutlet]="selectAll" />
+                    }
+                    @for (g of groupedRows(); track g.key) {
+                      <section
+                        class="band"
+                        [attr.aria-labelledby]="'tgrp-' + $index"
+                      >
+                        <h2 class="band-header" [id]="'tgrp-' + $index">
+                          {{ g.label }}
+                          <span class="tabular muted">{{
+                            g.tasks.length
+                          }}</span>
+                        </h2>
+                        <ul class="task-rows">
+                          @for (t of g.tasks; track t.id) {
+                            <ng-container
+                              [ngTemplateOutlet]="backlogRow"
+                              [ngTemplateOutletContext]="{ $implicit: t }"
+                            />
+                          }
+                        </ul>
+                      </section>
+                    }
+                  } @else if (sort() === "run") {
+                    @if (backlogChecks()) {
+                      <ng-container [ngTemplateOutlet]="selectAll" />
+                    }
+                    @for (band of runBands(); track band.key) {
+                      <section
+                        class="band"
+                        [attr.aria-labelledby]="'band-' + band.key"
+                      >
+                        <h2 class="band-header" [id]="'band-' + band.key">
+                          {{ band.label }}
+                          <span class="tabular muted">{{
+                            band.tasks.length
+                          }}</span>
+                        </h2>
+                        <ul class="task-rows">
+                          @for (t of band.tasks; track t.id) {
+                            <ng-container
+                              [ngTemplateOutlet]="backlogRow"
+                              [ngTemplateOutletContext]="{ $implicit: t }"
+                            />
+                          }
+                        </ul>
+                      </section>
+                    }
+                    @if (rows().length) {
+                      <div
+                        class="drop-end"
+                        aria-hidden="true"
+                        [class.drop-before]="
+                          dropAt() === store.backlog().length
+                        "
+                        (dragover)="onDragOver($event, store.backlog().length)"
+                        (drop)="onDrop($event, store.backlog().length)"
+                      ></div>
+                    }
+                  } @else {
+                    <ul class="task-rows">
+                      @for (t of rows(); track t.id) {
+                        <ng-container
+                          [ngTemplateOutlet]="backlogRow"
+                          [ngTemplateOutletContext]="{ $implicit: t }"
+                        />
+                      }
+                    </ul>
+                  }
+                }
+
+                @case ("proposed") {
+                  <div
+                    class="list-toolbar gate-toolbar"
+                    data-testid="approval-toolbar"
+                  >
+                    <label class="check-row">
+                      <input
+                        type="checkbox"
+                        data-testid="select-all"
+                        [checked]="allChecked()"
+                        [indeterminate]="someChecked()"
+                        (change)="toggleAll()"
+                      />
+                      <span>Select all</span>
+                    </label>
+                    <span class="muted toolbar-rule"
+                      >Approving puts each task into the Backlog at its
+                      priority.</span
+                    >
+                    <span class="toolbar-spacer"></span>
+                    <a
+                      class="btn-text"
+                      [routerLink]="[]"
+                      [queryParams]="{ tab: 'backlog' }"
+                      >Back to Backlog ({{ store.backlog().length }})</a
+                    >
+                    @if (canApprove() && rows().length) {
+                      <button
+                        type="button"
+                        class="btn-primary"
+                        data-testid="approve-all"
+                        [disabled]="store.isBusy('approve')"
+                        (click)="confirmApprove(rows())"
+                      >
+                        Approve all {{ rows().length }}
+                      </button>
+                    }
+                  </div>
+                  @if (store.loaded() && rows().length === 0) {
+                    <p class="empty-state">
+                      No proposals are waiting for approval.
+                    </p>
+                  }
                   <ul class="task-rows">
                     @for (t of rows(); track t.id) {
-                      <ng-container
-                        [ngTemplateOutlet]="defaultTaskRow"
-                        [ngTemplateOutletContext]="{ $implicit: t }"
-                      />
+                      @let place = placementOf(t);
+                      <li
+                        class="task-row approval-row"
+                        [class.is-selected]="effectiveSelectedId() === t.id"
+                        [attr.data-testid]="'row-' + t.id"
+                        [attr.data-task-id]="t.id"
+                      >
+                        <input
+                          type="checkbox"
+                          [attr.aria-label]="'Select #' + t.id"
+                          [checked]="checked().has(t.id)"
+                          (change)="toggle(t.id)"
+                        />
+                        <span class="status-pill proposal"
+                          ><g-status-icon tone="proposal" kind="proposed" />{{
+                            label(t.state)
+                          }}</span
+                        >
+                        <div class="row-main">
+                          <ng-container
+                            [ngTemplateOutlet]="titleLink"
+                            [ngTemplateOutletContext]="{ $implicit: t }"
+                          />
+                          <span class="row-sub muted">
+                            <ng-container
+                              [ngTemplateOutlet]="scopeLine"
+                              [ngTemplateOutletContext]="{ $implicit: t }"
+                            />
+                            @if (filer(t); as who) {
+                              <span
+                                >· filed by
+                                <g-actor-chip
+                                  [label]="who"
+                                  [kind]="t.authorKind"
+                              /></span>
+                            }
+                            <span>
+                              · If approved: position {{ place.position }} of
+                              {{ place.of }}, {{ place.band }}
+                            </span>
+                          </span>
+                        </div>
+                        <ng-container
+                          [ngTemplateOutlet]="priorityChip"
+                          [ngTemplateOutletContext]="{
+                            $implicit: t,
+                            editable: true,
+                          }"
+                        />
+                        <span class="row-actions">
+                          @if (canApprove()) {
+                            <button
+                              type="button"
+                              class="btn-tonal"
+                              [attr.data-testid]="'approve-' + t.id"
+                              [disabled]="store.isBusy('approve')"
+                              (click)="approve([t.id])"
+                            >
+                              Approve
+                            </button>
+                          }
+                          <button
+                            type="button"
+                            class="btn-text"
+                            [disabled]="!canDefer()"
+                            [attr.data-testid]="'defer-' + t.id"
+                            (click)="defer([t.id])"
+                          >
+                            Defer
+                          </button>
+                        </span>
+                      </li>
                     }
                   </ul>
                 }
-                @if (current() === "closed" && store.closedCursor()) {
-                  <button
-                    type="button"
-                    class="btn-outlined load-more"
-                    (click)="store.loadClosed(true)"
-                  >
-                    Load more
-                  </button>
+
+                @default {
+                  @if (rows().length) {
+                    <ng-container [ngTemplateOutlet]="selectAll" />
+                  }
+                  @if (current() === "closed") {
+                    <div class="list-toolbar" data-testid="closed-toolbar">
+                      <div
+                        class="segmented"
+                        role="group"
+                        aria-label="Closed tasks"
+                      >
+                        @for (c of closedFilters; track c.id) {
+                          <button
+                            type="button"
+                            [attr.aria-pressed]="closedFilter() === c.id"
+                            [attr.data-testid]="'closed-' + c.id"
+                            (click)="closedFilter.set(c.id)"
+                          >
+                            {{ c.label }}
+                          </button>
+                        }
+                      </div>
+                    </div>
+                  }
+                  @if (current() === "merging") {
+                    <p class="muted list-hint" data-testid="merging-hint">
+                      Two kinds of work: changes waiting for a person to submit,
+                      and submitted changes the merge queue is landing.
+                    </p>
+                  }
+                  @if (current() === "closed" && !store.closedLoaded()) {
+                    <p class="empty-state">Loading closed tasks…</p>
+                  } @else if (store.loaded() && rows().length === 0) {
+                    <p class="empty-state">Nothing here.</p>
+                  }
+                  @if (groupBy() !== "none") {
+                    @for (g of groupedRows(); track g.key) {
+                      <section
+                        class="band"
+                        [attr.aria-labelledby]="'tdefgrp-' + $index"
+                      >
+                        <h2 class="band-header" [id]="'tdefgrp-' + $index">
+                          {{ g.label }}
+                          <span class="tabular muted">{{
+                            g.tasks.length
+                          }}</span>
+                        </h2>
+                        <ul class="task-rows">
+                          @for (t of g.tasks; track t.id) {
+                            <ng-container
+                              [ngTemplateOutlet]="defaultTaskRow"
+                              [ngTemplateOutletContext]="{ $implicit: t }"
+                            />
+                          }
+                        </ul>
+                      </section>
+                    }
+                  } @else {
+                    <ul class="task-rows">
+                      @for (t of rows(); track t.id) {
+                        <ng-container
+                          [ngTemplateOutlet]="defaultTaskRow"
+                          [ngTemplateOutletContext]="{ $implicit: t }"
+                        />
+                      }
+                    </ul>
+                  }
+                  @if (current() === "closed" && store.closedCursor()) {
+                    <button
+                      type="button"
+                      class="btn-outlined load-more"
+                      (click)="store.loadClosed(true)"
+                    >
+                      Load more
+                    </button>
+                  }
                 }
               }
             }
           </div>
         </div>
-        @if (!phone() && selectedId(); as id) {
+        @if (!phone()) {
           <div
             class="inbox-resizer"
             role="separator"
@@ -563,6 +829,49 @@ const SORTS: { id: SortId; label: string }[] = [
             aria-label="Selected task"
             data-testid="tasks-pane"
           >
+            <div class="tasks-pane-bar">
+              <span class="tasks-pane-bar-label tabular">
+                @if (effectiveSelectedId(); as activeId) {
+                  Inspecting #{{ activeId }}
+                } @else {
+                  Task inspector
+                }
+              </span>
+              <div class="split-controls" role="group" aria-label="List width">
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="tasks-split-toggle"
+                  [attr.aria-expanded]="!sp.collapsed()"
+                  aria-controls="tasks-list"
+                  (click)="sp.toggleCollapsed()"
+                >
+                  {{
+                    sp.collapsed()
+                      ? "Show list (" + rows().length + ")"
+                      : "Hide list"
+                  }}
+                </button>
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="tasks-split-30"
+                  [attr.aria-pressed]="!sp.collapsed() && sp.ratioPct() === 30"
+                  (click)="sp.setPreset(0.3)"
+                >
+                  30 / 70
+                </button>
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="tasks-split-42"
+                  [attr.aria-pressed]="!sp.collapsed() && sp.ratioPct() === 42"
+                  (click)="sp.setPreset(0.42)"
+                >
+                  42 / 58
+                </button>
+              </div>
+            </div>
             @if (pinnedAway(); as away) {
               <div
                 class="banner banner-info left-banner"
@@ -582,14 +891,20 @@ const SORTS: { id: SortId; label: string }[] = [
                 }
               </div>
             }
-            <g-task-detail
-              [id]="id"
-              [tab]="pane()"
-              [pane]="true"
-              (acted)="onActed()"
-              (closed)="closePane()"
-              (expand)="openFull(id)"
-            />
+            @if (effectiveSelectedId(); as id) {
+              <g-task-detail
+                [id]="id"
+                [tab]="pane()"
+                [pane]="true"
+                (acted)="onActed()"
+                (closed)="closePane()"
+                (expand)="openFull(id)"
+              />
+            } @else {
+              <div class="empty-state" data-testid="tasks-pane-empty">
+                <p>Nothing in this tab — switch tabs or create a task</p>
+              </div>
+            }
           </section>
         }
       </div>
@@ -659,18 +974,16 @@ const SORTS: { id: SortId; label: string }[] = [
             </button>
           }
           @if (priorityEditable()) {
-            <label class="batch-priority">
-              <span>Set priority</span>
-              <select
-                data-testid="batch-priority"
-                (change)="batchPriority($event)"
-              >
-                <option value="" selected>…</option>
-                @for (l of levels; track l.value) {
-                  <option [value]="l.value">{{ l.name }} {{ l.value }}</option>
-                }
-              </select>
-            </label>
+            <g-pill-select
+              testid="batch-priority"
+              placeholder="Set priority"
+              ariaLabel="Set priority"
+              [inverse]="true"
+              [openUp]="true"
+              [options]="batchPriorityOptions"
+              [value]="''"
+              (valueChange)="onBatchPriority($event)"
+            />
           }
           @if (
             (current() === "backlog" || current() === "proposed") && canDefer()
@@ -730,17 +1043,24 @@ const SORTS: { id: SortId; label: string }[] = [
       <a
         class="row-title"
         [href]="fullHref(t.id)"
-        [attr.aria-current]="selectedId() === t.id ? 'true' : null"
+        [attr.aria-current]="effectiveSelectedId() === t.id ? 'true' : null"
         [attr.data-testid]="'open-' + t.id"
         (click)="onOpen($event, t.id)"
-        ><span class="muted">#{{ t.id }}</span> {{ t.title }}</a
+        ><span class="muted tabular">#{{ t.id }}</span> {{ t.title }}</a
       >
+      @if (isRepair(t)) {
+        <span
+          class="status-pill error repair-badge"
+          [attr.data-testid]="'repair-badge-' + t.id"
+          >Repair</span
+        >
+      }
     </ng-template>
 
     <ng-template #defaultTaskRow let-t>
       <li
         class="task-row"
-        [class.is-selected]="selectedId() === t.id"
+        [class.is-selected]="effectiveSelectedId() === t.id"
         [attr.data-testid]="'row-' + t.id"
         [attr.data-task-id]="t.id"
       >
@@ -750,7 +1070,11 @@ const SORTS: { id: SortId; label: string }[] = [
           [checked]="checked().has(t.id)"
           (change)="toggle(t.id)"
         />
-        <span [class]="'status-pill ' + toneOf(t)">{{ label(t.state) }}</span>
+        <span [class]="'status-pill ' + toneOf(t)"
+          ><g-status-icon [tone]="toneOf(t)" [kind]="t.state" />{{
+            label(t.state)
+          }}</span
+        >
         <div class="row-main">
           <ng-container
             [ngTemplateOutlet]="titleLink"
@@ -784,6 +1108,17 @@ const SORTS: { id: SortId; label: string }[] = [
         <span class="row-age muted tabular">{{
           ago(t.updatedAt || t.createdAt)
         }}</span>
+        @if (t.state === "failed" && canRetry(t)) {
+          <button
+            type="button"
+            class="btn-tonal"
+            [attr.data-testid]="'retry-' + t.id"
+            [disabled]="store.isBusy('retry')"
+            (click)="retryTask(t.id, $event)"
+          >
+            Retry
+          </button>
+        }
         @if (t.state === "deferred" && canDefer()) {
           <button
             type="button"
@@ -802,7 +1137,9 @@ const SORTS: { id: SortId; label: string }[] = [
         short(t.repo) || "No repository"
       }}</span>
       @if (t.owner) {
-        <span class="row-owner"> · {{ t.owner }}</span>
+        <span class="row-owner"
+          >· <g-actor-chip [label]="t.owner" [kind]="t.authorKind"
+        /></span>
       }
       @if (partOf(t.id); as ps) {
         <a
@@ -835,7 +1172,7 @@ const SORTS: { id: SortId; label: string }[] = [
       @let pos = positionOf(t);
       <li
         class="task-row backlog-row"
-        [class.is-selected]="selectedId() === t.id"
+        [class.is-selected]="effectiveSelectedId() === t.id"
         [class.is-picked]="picked() === t.id"
         [class.drop-before]="dropAt() === pos"
         [attr.data-testid]="'row-' + t.id"
@@ -871,6 +1208,9 @@ const SORTS: { id: SortId; label: string }[] = [
           [checked]="checked().has(t.id)"
           (change)="toggle(t.id)"
         />
+        <span class="status-pill neutral"
+          ><g-status-icon tone="neutral" kind="queued" />Queued</span
+        >
         <div class="row-main">
           <ng-container
             [ngTemplateOutlet]="titleLink"
@@ -882,7 +1222,9 @@ const SORTS: { id: SortId; label: string }[] = [
               [ngTemplateOutletContext]="{ $implicit: t }"
             />
             @if (filer(t); as who) {
-              · filed by {{ who }}
+              <span
+                >· filed by <g-actor-chip [label]="who" [kind]="t.authorKind"
+              /></span>
             }
             @if (blocked(t)) {
               <span class="status-pill neutral waits"
@@ -960,48 +1302,14 @@ const SORTS: { id: SortId; label: string }[] = [
     </ng-template>
 
     <ng-template #priorityChip let-t let-editable="editable">
-      @let p = prio(t);
-      @let lvl = level(p);
-      <span class="prio-wrap">
-        @if (editable && canEdit()) {
-          <button
-            type="button"
-            [class]="'prio-chip ' + lvl.arrow"
-            [attr.aria-label]="'Priority ' + lvl.name + ' ' + p + ', change'"
-            [attr.aria-expanded]="openMenu() === 'prio:' + t.id"
-            [attr.aria-controls]="'prio-menu-' + t.id"
-            [attr.data-testid]="'prio-' + t.id"
-            (click)="toggleMenu('prio:' + t.id, $event)"
-          >
-            <span aria-hidden="true">{{ arrowGlyph(lvl.arrow) }}</span>
-            {{ lvl.name }} {{ p }}
-          </button>
-          @if (openMenu() === "prio:" + t.id) {
-            <ul
-              class="pop-menu"
-              [id]="'prio-menu-' + t.id"
-              [attr.data-testid]="'prio-menu-' + t.id"
-            >
-              @for (l of levels; track l.value) {
-                <li>
-                  <button
-                    type="button"
-                    [attr.aria-current]="l.value === p ? 'true' : null"
-                    (click)="setPriority([t.id], l.value)"
-                  >
-                    {{ arrowGlyph(l.arrow) }} {{ l.name }} {{ l.value }}
-                  </button>
-                </li>
-              }
-            </ul>
-          }
-        } @else {
-          <span [class]="'prio-chip static ' + lvl.arrow"
-            ><span aria-hidden="true">{{ arrowGlyph(lvl.arrow) }}</span>
-            {{ lvl.name }} {{ p }}</span
-          >
-        }
-      </span>
+      <g-priority-chip
+        [priority]="prio(t)"
+        [editable]="!!editable && canEdit()"
+        [disabled]="store.isBusy('priority')"
+        [testid]="'prio-' + t.id"
+        [menuTestid]="'prio-menu-' + t.id"
+        (priorityChange)="setPriority([t.id], $event)"
+      />
     </ng-template>
   `,
 })
@@ -1015,6 +1323,8 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   private readonly location = inject(LocationStrategy);
   private readonly keyboard = inject(KeyboardService);
   private readonly splitEl = viewChild<ElementRef<HTMLElement>>("split");
+  private readonly boardNameEl =
+    viewChild<ElementRef<HTMLInputElement>>("boardNameEl");
 
   // ?tab= (withComponentInputBinding); Backlog by default.
   readonly tab = input<string>();
@@ -1022,6 +1332,31 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   readonly task = input<string>();
   readonly pane = input<string>();
   readonly group = input<string>();
+  readonly repo = input<string>();
+  readonly q = input<string>();
+  readonly view = input<string>();
+  readonly newBoard = input<string>();
+
+  protected readonly groupOptions = GROUP_OPTIONS;
+  protected readonly batchPriorityOptions = BATCH_PRIORITY_OPTIONS;
+  protected readonly boardSaveOpen = signal(false);
+  protected readonly boardName = signal("");
+  private readonly localViewMode = signal<TasksViewMode>("list");
+
+  protected readonly viewMode = computed<TasksViewMode>(() => {
+    const v = this.view();
+    if (v === "timeline" || v === "list") return v;
+    return this.localViewMode();
+  });
+
+  protected setViewMode(mode: TasksViewMode): void {
+    this.localViewMode.set(mode);
+    void this.router.navigate([], {
+      queryParams: { view: mode === "list" ? null : mode },
+      queryParamsHandling: "merge",
+      replaceUrl: true,
+    });
+  }
 
   protected readonly groupBy = computed<TasksGroupBy>(() => {
     const g = this.group();
@@ -1035,6 +1370,13 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     });
   }
 
+  protected clearRepoFilter(): void {
+    void this.router.navigate([], {
+      queryParams: { repo: null },
+      queryParamsHandling: "merge",
+    });
+  }
+
   protected partOf(id: string) {
     return this.wsStore.taskToStream().get(id) ?? null;
   }
@@ -1042,7 +1384,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly sp = new SplitController({
     ratioKey: "grain.tasks.splitRatio",
     collapsedKey: "grain.tasks.collapsed",
-    defaultRatio: WIDE_RATIO,
+    defaultRatio: DEFAULT_RATIO,
     element: () => this.splitEl()?.nativeElement,
   });
   protected readonly closedFilters = CLOSED_FILTERS;
@@ -1051,8 +1393,12 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly phone = signal(this.isPhone());
   protected readonly short = repoShort;
   protected readonly blocked = isBlocked;
-  // The selection is the task id in the URL, never a position.
+  // Explicit URL selection (?task=); effectiveSelectedId auto-selects rows()[0]
+  // on desktop when ?task= is unset so Tasks behaves identically to Inbox.
   protected readonly selectedId = computed(() => this.task() || null);
+  protected readonly effectiveSelectedId = computed(
+    () => this.selectedId() ?? this.rows()[0]?.id ?? null,
+  );
   private lastIndex = 0;
 
   protected chip(t: Task) {
@@ -1062,11 +1408,9 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   protected readonly tabs = TABS;
   protected readonly sorts = SORTS;
-  protected readonly levels = LEVELS;
   protected readonly ago = ago;
   protected readonly label = stateLabel;
   protected readonly prio = priorityOf;
-  protected readonly level = levelOf;
   protected readonly jumps = jumpsQueue;
 
   protected readonly sort = signal<SortId>("run");
@@ -1084,9 +1428,11 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   });
 
   private readonly query = computed(() =>
-    this.filter.query().trim().toLowerCase(),
+    (this.q() || this.filter.query()).trim().toLowerCase(),
   );
   private matches(t: Task): boolean {
+    const r = (this.repo() || "").trim().toLowerCase();
+    if (r && (t.repo || "").toLowerCase() !== r) return false;
     const q = this.query();
     return (
       !q || `#${t.id} ${t.title} ${t.repo ?? ""}`.toLowerCase().includes(q)
@@ -1182,6 +1528,61 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly canClose = computed(() =>
     this.access.can("POST /api/tasks/{id}/close"),
   );
+  protected readonly canReadBoards = computed(() =>
+    this.access.can("GET /api/boards"),
+  );
+  protected readonly canWriteBoards = computed(() =>
+    this.access.can("POST /api/boards"),
+  );
+  protected readonly activeBoardName = computed(() => {
+    const cur = this.currentBoardQuery();
+    if (!cur) return "";
+    return this.store.boards().find((b) => (b.query || "") === cur)?.name ?? "";
+  });
+  protected readonly timelineSpan = computed(() => {
+    const list = this.rows();
+    const now = Date.now();
+    let minMs = now - 3600_000;
+    let maxMs = now;
+    for (const t of list) {
+      const s = Date.parse(t.startedAt || t.createdAt || "");
+      const e = Date.parse(t.endedAt || t.closedAt || t.updatedAt || "");
+      if (Number.isFinite(s) && s < minMs) minMs = s;
+      if (Number.isFinite(e) && e > maxMs) maxMs = e;
+    }
+    const span = Math.max(60_000, maxMs - minMs);
+    return {
+      minMs,
+      maxMs,
+      span,
+      startLabel: `${ago(new Date(minMs).toISOString())} ago`,
+      endLabel: "now",
+    };
+  });
+  protected readonly timelineItems = computed(() => {
+    const { minMs, maxMs, span } = this.timelineSpan();
+    return this.rows().map((t) => {
+      const sRaw = Date.parse(t.startedAt || t.createdAt || "");
+      const eRaw =
+        t.state === "running"
+          ? maxMs
+          : Date.parse(
+              t.endedAt || t.closedAt || t.updatedAt || t.createdAt || "",
+            );
+      const s = Number.isFinite(sRaw) ? Math.max(minMs, sRaw) : minMs;
+      const e = Number.isFinite(eRaw) ? Math.max(s, eRaw) : maxMs;
+      const leftPct = Math.min(94, Math.max(0, ((s - minMs) / span) * 100));
+      const widthPct = Math.max(
+        4,
+        Math.min(100 - leftPct, ((e - s) / span) * 100),
+      );
+      return {
+        task: t,
+        leftPct: Number(leftPct.toFixed(1)),
+        widthPct: Number(widthPct.toFixed(1)),
+      };
+    });
+  });
   protected readonly backlogChecks = computed(() => this.rows().length > 0);
   protected readonly confirmClose = signal(false);
   protected readonly priorityEditable = computed(
@@ -1195,8 +1596,21 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     // Where the selected task sits in this tab, so j/k and Next item
     // carry on from there after it leaves.
     effect(() => {
-      const i = this.rowIds().indexOf(this.selectedId() ?? "");
+      const i = this.rowIds().indexOf(this.effectiveSelectedId() ?? "");
       if (i >= 0) this.lastIndex = i;
+    });
+    // ?newBoard=1 from the shell's Create menu opens the Save Board bar.
+    effect(() => {
+      if (!this.newBoard()) return;
+      const allowed = this.canWriteBoards();
+      untracked(() => {
+        if (allowed) this.openBoardSave();
+        void this.router.navigate([], {
+          queryParams: { newBoard: null },
+          queryParamsHandling: "merge",
+          replaceUrl: true,
+        });
+      });
     });
     // A new tab starts with nothing selected and closed tasks read once.
     effect(() => {
@@ -1333,7 +1747,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected closePane(): void {
-    const prev = this.selectedId();
+    const prev = this.selectedId() ?? this.effectiveSelectedId();
     void this.router.navigate([], {
       queryParams: { task: null, pane: null },
       queryParamsHandling: "merge",
@@ -1364,7 +1778,8 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   step(delta: number): void {
     const ids = this.rowIds();
     if (ids.length === 0) return;
-    const cur = ids.indexOf(this.selectedId() ?? "");
+    const active = this.effectiveSelectedId();
+    const cur = ids.indexOf(active ?? "");
     let i: number;
     if (cur >= 0) i = cur + delta;
     else if (this.selectedId())
@@ -1388,7 +1803,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   // Enter opens the selected task full screen from the page itself (not
   // from a control, which keeps its own Enter).
   protected onEnter(ev: KeyboardEvent): void {
-    const id = this.selectedId();
+    const id = this.effectiveSelectedId();
     if (!id || ev.defaultPrevented || isTypingTarget(ev.target)) return;
     if (document.querySelector('[aria-modal="true"]')) return;
     const el = ev.target as HTMLElement | null;
@@ -1400,6 +1815,22 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       return;
     ev.preventDefault();
     this.openFull(id);
+  }
+
+  protected isRepair(t: Task): boolean {
+    return !!(t.fixesBaseBranch || t.grainBaseRepair || t.repairOf);
+  }
+
+  protected canRetry(t: Task): boolean {
+    return this.access.can("POST /api/tasks/{id}/retry", t.repo || undefined);
+  }
+
+  protected async retryTask(id: string, ev: Event): Promise<void> {
+    ev.stopPropagation();
+    const failed = await this.store.retry([id]);
+    if (failed === 0) {
+      this.snack(`Retrying #${id}`);
+    }
   }
 
   protected filer(t: Task): string {
@@ -1422,10 +1853,6 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       default:
         return "neutral";
     }
-  }
-
-  protected arrowGlyph(a: string): string {
-    return a === "up" ? "↑" : a === "down" ? "↓" : "→";
   }
 
   // While a task is picked up, the list shows it where it would land
@@ -1532,7 +1959,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     if (ev.defaultPrevented) return;
     if (document.querySelector('[aria-modal="true"]')) return;
     if ((ev.target as HTMLElement | null)?.closest?.(".confirm-inline")) return;
-    if (this.openMenu()) {
+    if (this.boardSaveOpen()) {
+      ev.preventDefault();
+      this.boardSaveOpen.set(false);
+    } else if (this.openMenu()) {
       ev.preventDefault();
       this.closeMenu(true);
     } else if (this.picked()) {
@@ -1544,6 +1974,65 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     } else if (this.selectedId() && !isTypingTarget(ev.target)) {
       ev.preventDefault();
       this.closePane();
+    }
+  }
+
+  // ---------- saved boards ----------
+
+  private currentBoardQuery(): string {
+    const p = new URLSearchParams();
+    if (this.current() !== "backlog") p.set("tab", this.current());
+    if (this.groupBy() !== "none") p.set("group", this.groupBy());
+    const q = (this.q() || this.filter.query()).trim();
+    if (q) p.set("q", q);
+    const repo = (this.repo() || "").trim();
+    if (repo) p.set("repo", repo);
+    return p.toString();
+  }
+
+  protected openBoardSave(): void {
+    this.openMenu.set(null);
+    this.boardName.set("");
+    this.boardSaveOpen.set(true);
+    setTimeout(() => this.boardNameEl()?.nativeElement.focus());
+  }
+
+  protected async submitBoardSave(ev: Event): Promise<void> {
+    ev.preventDefault();
+    const name = this.boardName().trim();
+    if (!name) return;
+    const b = await this.store.createBoard({
+      name,
+      kind: "list",
+      query: this.currentBoardQuery(),
+    });
+    if (b) {
+      this.boardSaveOpen.set(false);
+      this.boardName.set("");
+      this.snack(`Saved board "${b.name}"`);
+    }
+  }
+
+  protected applyBoard(b: Board): void {
+    this.closeMenu(false);
+    const p = new URLSearchParams(b.query || "");
+    const nextQ = p.get("q") || "";
+    this.filter.query.set(nextQ);
+    void this.router.navigate(["/tasks"], {
+      queryParams: {
+        tab: p.get("tab") || null,
+        group: p.get("group") || null,
+        q: nextQ || null,
+        repo: p.get("repo") || null,
+      },
+    });
+  }
+
+  protected async removeBoard(b: Board, ev: Event): Promise<void> {
+    ev.stopPropagation();
+    const ok = await this.store.deleteBoard(b.id);
+    if (ok) {
+      this.snack(`Deleted board "${b.name}"`);
     }
   }
 
@@ -1685,10 +2174,8 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected batchPriority(ev: Event): void {
-    const sel = ev.target as HTMLSelectElement;
-    const p = Number(sel.value);
-    sel.value = "";
+  protected onBatchPriority(val: string): void {
+    const p = Number(val);
     if (p > 0) void this.setPriority(this.selected(), p);
   }
 

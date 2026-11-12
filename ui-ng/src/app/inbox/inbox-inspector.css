@@ -57,14 +57,14 @@
 }
 
 .resolution-dock {
-  margin: 16px 20px 0;
-  padding: 16px;
+  margin: 12px 20px 0;
+  padding: 12px 16px;
   border-radius: var(--md-sys-shape-corner-large);
   border: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .resolution-dock .banner {
@@ -98,12 +98,12 @@
 }
 
 .inspector-body {
-  padding: 16px 20px 24px;
+  padding: 12px 20px 24px;
   overflow-y: auto;
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .evidence-card {
@@ -183,6 +183,66 @@
 .evidence-text {
   margin: 0;
   font-size: 13px;
+}
+
+.inbox-conv-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.inbox-conv-log {
+  padding: 2px 0;
+  max-height: 150px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inbox-conv-log .msg {
+  max-width: 88%;
+}
+
+.inbox-live-transcript {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  max-height: 180px;
+  overflow: auto;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  font-family: var(--grain-font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--md-sys-color-on-surface);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inbox-talk-composer {
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inbox-talk-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.inbox-talk-btns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 @media (max-width: 839px) {

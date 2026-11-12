@@ -34,6 +34,10 @@ import { AccessService } from "../services/access.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { ViewFilter } from "../services/view-filter.service";
 import { repoShort } from "../shared/chips";
+import {
+  PillSelectComponent,
+  type PillOption,
+} from "../shared/pill-select.component";
 import { TipDirective } from "../shared/tip.directive";
 import { WorkstreamDetailComponent } from "./workstream-detail.component";
 import { type LayoutMode, thumbLayout } from "./workstream-layout";
@@ -88,6 +92,14 @@ const STATE_GROUPS: { id: StreamState; label: string }[] = [
   { id: "done", label: "Done (last 14d)" },
 ];
 
+const SORT_OPTIONS: readonly PillOption[] = [
+  { value: "attn", label: "Attention first" },
+  { value: "last", label: "Last activity" },
+  { value: "prog", label: "Least done" },
+  { value: "size", label: "Most tasks" },
+  { value: "new", label: "Newest" },
+];
+
 function loadSavedView(): WsView {
   try {
     return localStorage.getItem(WS_VIEW_STORAGE_KEY) === "cards"
@@ -108,10 +120,14 @@ function saveView(v: WsView): void {
 
 @Component({
   selector: "g-workstreams-page",
-  imports: [TipDirective, WorkstreamDetailComponent],
+  imports: [TipDirective, WorkstreamDetailComponent, PillSelectComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["./workstreams-page.css", "./workstreams-shared.css"],
+  styleUrls: [
+    "./workstreams-page.css",
+    "./workstreams-shared.css",
+    "../shared/pill-select.css",
+  ],
   host: {
     "(document:keydown)": "onKey($event)",
   },
@@ -260,36 +276,26 @@ function saveView(v: WsView): void {
           }
 
           <span class="ws-vsep" aria-hidden="true"></span>
-          <select
-            class="ws-select"
-            aria-label="Repository"
-            data-testid="ws-repo-filter"
+          <g-pill-select
+            testid="ws-repo-filter"
+            ariaLabel="Repository"
+            align="left"
+            [options]="repoOptions()"
             [value]="repo() || ''"
-            (change)="patchQuery({ repo: val($event) || null })"
-          >
-            <option value="">All repositories</option>
-            @for (r of allRepos(); track r) {
-              <option [value]="r">{{ r }}</option>
-            }
-          </select>
+            (valueChange)="patchQuery({ repo: $event || null })"
+          />
 
-          <select
-            class="ws-select"
-            aria-label="Sort"
-            data-testid="ws-sort"
+          <g-pill-select
+            testid="ws-sort"
+            prefix="Sort"
+            ariaLabel="Sort"
+            align="left"
+            [options]="sortOptions"
             [value]="activeSort()"
-            (change)="
-              patchQuery({
-                sort: val($event) === 'attn' ? null : val($event),
-              })
+            (valueChange)="
+              patchQuery({ sort: $event === 'attn' ? null : $event })
             "
-          >
-            <option value="attn">Sort: attention first</option>
-            <option value="last">Sort: last activity</option>
-            <option value="prog">Sort: least done</option>
-            <option value="size">Sort: most tasks</option>
-            <option value="new">Sort: newest</option>
-          </select>
+          />
 
           <input
             #searchEl
@@ -693,6 +699,7 @@ export class WorkstreamsPageComponent implements OnInit, OnDestroy {
   protected readonly scopes = SCOPES;
   protected readonly states = STATES;
   protected readonly systemKinds = SYSTEM_KINDS;
+  protected readonly sortOptions = SORT_OPTIONS;
 
   protected readonly activeKey = computed(
     () => this.key() || this.ws() || null,
@@ -750,6 +757,11 @@ export class WorkstreamsPageComponent implements OnInit, OnDestroy {
     }
     return [...set].sort();
   });
+
+  protected readonly repoOptions = computed<PillOption[]>(() => [
+    { value: "", label: "All repositories" },
+    ...this.allRepos().map((r) => ({ value: r, label: r })),
+  ]);
 
   private readonly filterQuery = computed(() => ({
     scope: this.activeScope(),
