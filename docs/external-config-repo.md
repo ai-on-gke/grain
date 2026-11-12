@@ -46,10 +46,12 @@ can verify it, in one of these ways:
   collaborator on it count, as in branch protection -- anybody may approve
   a pull request on a public repository. Read from GitHub, so this
   needs a `https://github.com/...` remote and a credential for it -- or
-  a remote on the deployment's own forge host (`-github-host`, a GitHub
-  Enterprise host; plain `http://` only with `-github-insecure-http`),
-  whose pull requests are then read from that host with the
-  repository's own token. A remote on any other host is never asked;
+  a remote on the deployment's own `-github-host` (when its REST API is
+  served at the host root; plain `http://` on loopback only with
+  `-github-insecure-http`), whose pull requests are then read from that
+  host with the repository's own token. A remote on any other host (or a
+  GitHub Enterprise Server serving REST under `/api/v3`) is not read
+  through `-github-host` alone;
 - **merged by grain**: that pull request was merged by one of *grain's
   forge accounts* -- the accounts grain's merge queue merges as, which a
   person's Submit in grain releases;
