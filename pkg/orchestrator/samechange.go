@@ -151,6 +151,15 @@ func carriedPathTriggerGates(ctx context.Context, store *model.Store, client git
 	if _, bypass := baseRepairBypassActive(ctx, store, task, ""); bypass {
 		return "", nil, false
 	}
+	// A `template: none` gate files no review, so nothing on the task
+	// names it: the only trace of one is the hold it keeps until a person
+	// settles it. One with no hold to carry -- added by the base's rules,
+	// or settled at the earlier head -- holds the change afresh, and a
+	// hold no trigger asks for any more is released afresh.
+	held := hasPathTriggerHold(task)
+	if len(noneGates) > 0 && !held || len(noneGates) == 0 && len(kinds) == 0 && held {
+		return "", nil, false
+	}
 	prev := map[string]string{}
 	for id, triggers := range gatingTaskIDs(task) {
 		for _, trigger := range triggers {

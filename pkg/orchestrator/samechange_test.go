@@ -308,3 +308,28 @@ func TestAnEmptyCommitCarriesAHumanOnlySecurityReviewButNotTheSubmit(t *testing.
 		t.Fatalf("the Submit of the old head carried: automerge=%v links=%+v", got.AutoMerge, got.Links)
 	}
 }
+
+// A `template: none` gate files no review, so nothing on the task names it:
+// one the base's rules added since the passed gate must still hold the
+// change for a person rather than letting the carry wave it through.
+func TestAPersonOnlyGateTheBaseAddedIsNotCarriedPast(t *testing.T) {
+	t.Parallel()
+	ctx, store, _, f := passedGate(t)
+	branch := model.BranchName(f.task.ID)
+
+	owners := gateTrigger("owners", model.TriggerHumanOnFindings, "config")
+	owners.Template = model.TemplateNone
+	declareTriggers(t, ctx, store, branchSHA(t, f.sim, "main"),
+		map[string]string{"sensitive": "Check {{trigger}} on {{pr}}", "planner": "Plan"},
+		gateTrigger("every-pr", model.TriggerHumanOnFindings, "config"), owners)
+	pushEmptyCommit(t, f.sim, branch)
+	judgeHead(t, ctx, store, f.client, f.sim, f.task, baseTime.Add(time.Hour))
+
+	got := reloaded(t, ctx, store, f.task.ID)
+	if got.AutoMerge || linkOf(got, model.LinkPathTriggerHold) == "" {
+		t.Fatalf("a person-only gate the base added was carried past: automerge=%v links=%+v", got.AutoMerge, got.Links)
+	}
+	if notes := carriedNotes(t, ctx, store, f.task.ID); len(notes) != 0 {
+		t.Errorf("a head the base's rules gate afresh was noted as carried: %q", notes)
+	}
+}
