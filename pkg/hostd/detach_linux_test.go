@@ -1082,20 +1082,33 @@ func TestAnUnadoptableSurvivingDetachedRunIsReaped(t *testing.T) {
 // within DrainExitGrace is not known to have read it: hostd keeps the
 // process and its spool, so the next attach still gets the Exit.
 func TestAnExitNobodyHungUpOnKeepsItsSpoolForTheNextAttach(t *testing.T) {
-	ts := startServer(t, "", nil)
+	ts := startServer(t, "", func(s *Server) {
+		s.Poll = 20 * time.Millisecond
+		s.drainExitGrace = 200 * time.Millisecond
+	})
+	release := filepath.Join(ts.dir, "release")
 	started := make(chan Started, 1)
 	c := detachedClient(ts, started)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 0.3; echo kept; exit 5"},
-			Detach: true, Run: "run-1", Task: "42", Deadline: time.Now().Add(time.Minute)}, nil, nil, nil)
+		_, err := c.Run(ctx, Request{
+			Kind: KindCLI, Name: "sh",
+			Args:     []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.02; done; echo kept; exit 5`, "sh", ts.dir, filepath.Base(release)},
+			Detach:   true,
+			Run:      "run-1",
+			Task:     "42",
+			Deadline: time.Now().Add(time.Minute),
+		}, nil, nil, nil)
 		done <- err
 	}()
 	st := <-started
 	cancel()
 	if err := <-done; !errors.Is(err, ErrDetached) {
 		t.Fatalf("Run after the daemon stopped = %v, want ErrDetached", err)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	// A daemon reads the Exit and then holds the connection open.
 	conn, err := net.Dial("unix", ts.srv.Socket)
@@ -1115,20 +1128,84 @@ func TestAnExitNobodyHungUpOnKeepsItsSpoolForTheNextAttach(t *testing.T) {
 			break
 		}
 	}
-	deadline := time.Now().Add(DrainExitGrace + 10*time.Second)
-	for !strings.Contains(ts.logs.String(), "did not hang up") {
-		if time.Now().After(deadline) {
-			t.Fatalf("hostd never gave up waiting for the daemon to hang up; logs:\n%s", ts.logs.String())
+	// attach logs before its defer clears Attached, so wait for both.
+	var p Process
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		p = listed(t, ts, st.ID)
+		if strings.Contains(ts.logs.String(), "did not hang up") && p.Exited && !p.Attached {
+			break
 		}
-		time.Sleep(50 * time.Millisecond)
+		if time.Now().After(deadline) {
+			t.Fatalf("after the unacknowledged Exit: listing %+v, logs:\n%s", p, ts.logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	p := listed(t, ts, st.ID)
-	if _, err := os.Stat(p.Spool); err != nil || !p.Exited || p.Attached {
-		t.Fatalf("after the unacknowledged Exit: listing %+v, spool stat %v; want it kept, exited and not attached", p, err)
+	if _, err := os.Stat(p.Spool); err != nil {
+		t.Fatalf("after the unacknowledged Exit: spool stat %v; want it kept", err)
 	}
 	var out bytes.Buffer
 	exit, _, err := ts.client.Attach(context.Background(), st.ID, Cursor{}, &out, nil)
 	if err != nil || exit.Code != 5 || out.String() != "kept\n" {
 		t.Fatalf("the next attach = %+v, %v, stdout %q; want the kept Exit (code 5) and output", exit, err, out.String())
+	}
+}
+
+// A connection that breaks mid-frame (io.ErrUnexpectedEOF) during Exit grace
+// is an aborted client, not a clean hang-up, so hostd keeps the spool.
+func TestATruncatedFrameDuringExitGraceKeepsTheSpool(t *testing.T) {
+	ts := startServer(t, "", func(s *Server) {
+		s.Poll = 20 * time.Millisecond
+		s.drainExitGrace = 2 * time.Second
+	})
+	conn, err := net.Dial("unix", ts.srv.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Op: OpStart, Kind: KindCLI, Name: "sh",
+		Args:   []string{"-c", "echo trunc-ok; exit 8"},
+		Detach: true, Run: "run-trunc", Task: "43",
+	}
+	if err := writeJSON(conn, frameRequest, req); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	typ, payload, err := readFrame(conn)
+	if err != nil || typ != frameStarted {
+		conn.Close()
+		t.Fatalf("first frame = %q, %v; want frameStarted", typ, err)
+	}
+	var st Started
+	if err := json.Unmarshal(payload, &st); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	for {
+		typ, _, err := readFrame(conn)
+		if err != nil {
+			conn.Close()
+			t.Fatalf("reading before Exit: %v", err)
+		}
+		if typ == frameExit {
+			break
+		}
+	}
+	// Write a partial 2-byte frame header and close so control reads
+	// io.ErrUnexpectedEOF while attach is waiting in DrainExitGrace.
+	_, _ = conn.Write([]byte{frameSignal, 0})
+	conn.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for listed(t, ts, st.ID).Attached {
+		if time.Now().After(deadline) {
+			t.Fatal("attach never let go after truncated frame")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var out bytes.Buffer
+	exit, _, err := ts.client.Attach(context.Background(), st.ID, Cursor{}, &out, nil)
+	if err != nil || exit.Code != 8 || out.String() != "trunc-ok\n" {
+		t.Fatalf("Attach after truncated frame = %+v, %v, stdout %q; want kept Exit (code 8) and output", exit, err, out.String())
 	}
 }

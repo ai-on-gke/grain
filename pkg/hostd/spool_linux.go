@@ -523,20 +523,20 @@ func (s *Server) attach(ctx context.Context, conn net.Conn, p *proc, cur Cursor,
 			return
 		}
 		if ended {
-			// On a mux stream, a daemon that detached before the process
-			// ended half-closed its write side only, so writeJSON below
-			// would still succeed even though nobody is reading anymore.
-			select {
-			case <-gone:
-				return
-			default:
-			}
 			s.mu.Lock()
 			exit := *p.info.Exit
 			current := p.attachGen == gen
 			s.mu.Unlock()
 			if !current {
 				return
+			}
+			// On a mux stream, an older daemon that detached before the
+			// process ended half-closed its write side only, so writeJSON
+			// below would still succeed even though nobody is reading anymore.
+			select {
+			case <-gone:
+				return
+			default:
 			}
 			if err := writeJSON(conn, frameExit, exit); err != nil {
 				return
@@ -546,8 +546,10 @@ func (s *Server) attach(ctx context.Context, conn net.Conn, p *proc, cur Cursor,
 			// daemon hangs up once it has the Exit, so until then -- or
 			// DrainExitGrace, or Serve stopping -- the process stays
 			// attached, which holds a drained hostd's exit
-			// (waitExitsDelivered) back for it. Any end other than the
-			// stream closing cleanly on a live session keeps the spool.
+			// (waitExitsDelivered) back for it. Any end other than a clean
+			// stream EOF on a live session (not a truncated frame, a stream
+			// reset, or a dropped mux session wrapping transport io.EOF)
+			// keeps the spool.
 			graceDur := s.exitGrace()
 			grace := time.NewTimer(graceDur)
 			var hungUp bool
@@ -572,7 +574,7 @@ func (s *Server) attach(ctx context.Context, conn net.Conn, p *proc, cur Cursor,
 				default:
 				}
 			}
-			if readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+			if readErr != io.EOF {
 				return
 			}
 			// A daemon that lost this stream before reading the Exit may
