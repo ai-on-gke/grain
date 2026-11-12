@@ -480,6 +480,12 @@ var notSettings = []string{
 	// (model.CIStepAttachment): written while a step runs so a restart
 	// can reattach it, and deleted when its job is done.
 	"ci_step_attachment",
+	// Sticky per-tree QA rollout assignments, per-run check verdicts and
+	// individual QA findings (model.QAAssignment, model.QACheckRun,
+	// model.QAFinding): runtime telemetry and task execution history.
+	"task_qa_assignment",
+	"task_qa_check_run",
+	"task_qa_finding",
 }
 
 // The converse of TestSettingsTablesAllExist, and the one that catches a

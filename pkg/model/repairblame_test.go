@@ -43,6 +43,7 @@ func TestRepairKindNamesEachRepair(t *testing.T) {
 	}{
 		{base, "base-branch"},
 		{Task{Tags: []string{Stage1RepairTagPrefix + "acme/widgets"}}, "stage1"},
+		{Task{Tags: []string{GitHubBaseRepairTag(repo)}}, "github-base"},
 		{Task{Title: RCBlockerMarker("v1.2.0-rc.1") + " fix the flake"}, "rc-blocker"},
 		{Task{Title: "Add a widget"}, ""},
 	} {

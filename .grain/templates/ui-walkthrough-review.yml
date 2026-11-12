@@ -18,6 +18,16 @@ body: |
 
   ## 1. Inventory the current UI surfaces
 
+  - Start with the new UI at `/next/` ("Two UIs" in `PROMPT.md`: it is
+    the new experience and the classic `ui/` is being deprecated). Read
+    `ui-ng/src/app/app.routes.ts` for its routes and
+    `ui-ng/src/app/shell/nav.ts` for the rail's destinations, noting
+    which still fall back to a classic page (`route: null`). List the
+    page directories under `ui-ng/src/app/` and the tabs, dialogs and
+    drawers each offers, and use `git log --since="8 days ago" --stat --
+    ui-ng/src` the same way as for the classic UI below. Write new steps
+    against the `/next/` page; keep a classic step only while its page
+    has no `/next/` counterpart, and add none for new classic surfaces.
   - Read `ui/src/App.jsx`, `ui/src/paths.js` (the URL paths each view
     maps to) and `ui/src/components/Sidebar.jsx` for routes, sidebar
     destinations and top-level pages.

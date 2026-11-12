@@ -142,8 +142,14 @@ async function pickMuiSelect(page, section, selector, wantValue) {
   const current = await hidden.inputValue();
   if (current === wantValue) return;
   const combo = hidden.locator("xpath=..").locator('[role="combobox"]');
-  await combo.click();
+  // A menu left open by an earlier pick (seen once on the Template editor's
+  // gcp#gcp-key permission_set) puts its invisible backdrop over the combo,
+  // so a click to open it again never lands: pick from the open one instead.
+  if ((await combo.getAttribute("aria-expanded")) !== "true") {
+    await combo.click();
+  }
   await page.locator(`[role="option"][data-value="${wantValue}"]`).click();
+  await expect(combo).not.toHaveAttribute("aria-expanded", "true");
 }
 
 // fillField sets one schema field inside section (either a draft or a held
@@ -380,6 +386,15 @@ async function shoot(page, name) {
   );
   await page.screenshot({ path: file, fullPage: false });
   return file;
+}
+
+// logFailure prints a failing (not known-gap) cell's whole error and stack: the matrix
+// records only the first line, which for an expect() names the matcher but
+// not which of walkCell's several toHaveCount calls it was.
+function logFailure(surface, ref, variant, err) {
+  console.log(
+    `grant matrix: ${surface.id} ${ref} [${variant}] error:\n${err?.stack || err}`,
+  );
 }
 
 // walkCell walks every argVariants(method) set on one surface:
@@ -621,6 +636,7 @@ async function walkCell(
       }
     } catch (err) {
       const msg = String(err.message || err).split("\n")[0];
+      if (!gap) logFailure(surface, ref, variant, err);
       const shot = await shoot(page, `${surface.id}-${ref}-${variant}`);
       if (!isHeld) {
         await clearLeftovers().catch(() => {});
@@ -678,6 +694,7 @@ async function walkCell(
       const shot = await shoot(page, `${surface.id}-${ref}-remove`);
       const last = outcomes[outcomes.length - 1];
       const gap = knownGap(ref, last?.variant || "*", surface.id);
+      if (!gap) logFailure(surface, ref, "remove", err);
       outcomes.push({
         variant: "remove",
         outcome: gap ? "known" : "fail",

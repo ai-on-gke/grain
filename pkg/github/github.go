@@ -2531,7 +2531,20 @@ func (c *RESTClient) FindOpenPullRequestForBranch(owner, repo, branch string) (*
 	if strings.Contains(branch, ":") {
 		return c.FindOpenPullRequestForHead(owner, repo, branch)
 	}
-	return c.FindOpenPullRequestForHead(owner, repo, owner+":"+branch)
+	return c.FindOpenPullRequestForHead(owner, repo, BareOwner(owner)+":"+branch)
+}
+
+// BareOwner is owner without the "host/" a caller holding a
+// model.RepoRef puts in front of it for a repository off the default
+// host (RepoRef.StoredOwner): the transport routes the request by that
+// host and takes it back out of the path, but an owner that travels in a
+// query value -- the head=owner:branch filter -- is GitHub's to read and
+// must be the owner alone.
+func BareOwner(owner string) string {
+	if i := strings.LastIndexByte(owner, '/'); i >= 0 {
+		return owner[i+1:]
+	}
+	return owner
 }
 
 // FindOpenPullRequestForHead returns the open PR on owner/repo whose head
@@ -3156,7 +3169,7 @@ func (c *RESTClient) RerequestCheckSuite(owner, repo string, checkSuiteID int64)
 		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_suite_id"}`)}
 	}
 	resp, err := c.request(
-		"POST", fmt.Sprintf("/repos/%s/%s/check-suites/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkSuiteID),
+		"POST", fmt.Sprintf("/repos/%s/%s/check-suites/%d/rerequest", quoteKeepSlash(owner), url.PathEscape(repo), checkSuiteID),
 		c.headers(owner, repo, false), nil,
 	)
 	if err != nil {
@@ -3175,7 +3188,7 @@ func (c *RESTClient) RerequestCheckRun(owner, repo string, checkRunID int64) err
 		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_run_id"}`)}
 	}
 	resp, err := c.request(
-		"POST", fmt.Sprintf("/repos/%s/%s/check-runs/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkRunID),
+		"POST", fmt.Sprintf("/repos/%s/%s/check-runs/%d/rerequest", quoteKeepSlash(owner), url.PathEscape(repo), checkRunID),
 		c.headers(owner, repo, false), nil,
 	)
 	if err != nil {

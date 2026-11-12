@@ -243,6 +243,109 @@ interface SecretMetaRow {
             </div>
           </div>
         </div>
+
+        <div class="s-card" id="card-qa-rollout" data-testid="card-qa-rollout">
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Quality control &amp; PR rollout</h3>
+              <p class="s-card-desc">
+                Off by default. Assigns a configurable share of work-tree pull
+                requests to deterministic and semantic quality checks for live
+                single-instance A/B evaluation.
+              </p>
+            </div>
+          </div>
+
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name">Enable quality control engine</span>
+              <span class="s-hint"
+                >When off, tasks run with zero additional quality gates or stage
+                overhead.</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-qa-enabled"
+              [attr.aria-checked]="qaEnabled()"
+              [attr.title]="writeDeniedReason()"
+              [disabled]="!canWriteSettings()"
+              aria-label="Enable quality control engine"
+              (click)="toggleQAEnabled()"
+            ></button>
+          </div>
+
+          <div class="s-grid s-grid-qa">
+            <div class="s-field">
+              <span class="s-label">Quality flow package</span>
+              <g-pill-select
+                testid="pill-qa-flow"
+                ariaLabel="Quality flow package"
+                align="left"
+                [attr.title]="qaControlsDisabledReason()"
+                [options]="qaFlowOptions()"
+                [value]="qaFlowValue()"
+                [disabled]="!canEditQAControls()"
+                (valueChange)="setQAFlow($event)"
+              />
+            </div>
+
+            <div class="s-field">
+              <label class="s-label" for="t-qa-rollout">PR rollout (%)</label>
+              <input
+                id="t-qa-rollout"
+                class="s-input tabular"
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                data-testid="input-qa-rollout-pct"
+                [value]="qaRolloutInputValue()"
+                [attr.aria-invalid]="qaRolloutError() ? 'true' : null"
+                [attr.aria-describedby]="
+                  qaRolloutError() ? 't-qa-rollout-err' : null
+                "
+                [attr.title]="qaControlsDisabledReason()"
+                [disabled]="!canEditQAControls()"
+                (input)="onQARolloutInput($event)"
+                (blur)="onQARolloutBlur()"
+              />
+              @if (qaRolloutError(); as rolloutErr) {
+                <span
+                  id="t-qa-rollout-err"
+                  class="s-field-error"
+                  data-testid="error-qa-rollout-pct"
+                  >{{ rolloutErr }}</span
+                >
+              }
+            </div>
+          </div>
+
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name"
+                >Passive shadow scoring on control PRs</span
+              >
+              <span class="s-hint"
+                >Records non-blocking static check telemetry on control-arm pull
+                requests after final commit for unbiased A/B comparison.</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-qa-shadow-control"
+              [attr.aria-checked]="qaShadowOnControl()"
+              [attr.title]="qaControlsDisabledReason()"
+              [disabled]="!canEditQAControls()"
+              aria-label="Passive shadow scoring on control PRs"
+              (click)="toggleQAShadowOnControl()"
+            ></button>
+          </div>
+        </div>
       }
 
       @case ("agents") {
@@ -891,6 +994,10 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   protected readonly memoryBody = signal("");
   protected readonly memoryDocs = signal<string[]>([]);
+  private readonly qaRolloutRaw = signal<{
+    epoch: number;
+    text: string;
+  } | null>(null);
 
   ngOnInit(): void {
     this.loadForSection();
@@ -905,6 +1012,152 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       this.access.can("POST /api/settings") &&
       !this.state.sectionLocked(this.section())
     );
+  }
+
+  protected writeDeniedReason(): string | null {
+    if (this.state.sectionLocked(this.section())) {
+      return "Managed in the config repository";
+    }
+    if (!this.access.can("POST /api/settings")) {
+      return (
+        this.access.deniedReason("POST /api/settings") ||
+        "settings:write scope required"
+      );
+    }
+    return null;
+  }
+
+  protected qaControlsDisabledReason(): string | null {
+    const writeReason = this.writeDeniedReason();
+    if (writeReason) return writeReason;
+    if (!this.qaEnabled()) {
+      return "Enable quality control engine first";
+    }
+    return null;
+  }
+
+  protected qaEnabled(): boolean {
+    return Boolean(this.state.val("qaEnabled", false));
+  }
+
+  protected canEditQAControls(): boolean {
+    return this.canWriteSettings() && this.qaEnabled();
+  }
+
+  protected qaFlowValue(): string {
+    const current = this.state.val<unknown>("qaFlowId", "golden-v1-minimal");
+    return typeof current === "string" && current.trim() !== ""
+      ? current
+      : "golden-v1-minimal";
+  }
+
+  protected qaFlowOptions(): readonly PillOption[] {
+    const serverFlows = this.state.val<unknown>("qaFlowIds", []);
+    const defaults: readonly PillOption[] = [
+      {
+        value: "golden-v1-minimal",
+        label: "golden-v1-minimal (S3 deterministic + S4 probe)",
+      },
+      {
+        value: "deterministic-s3-only",
+        label: "deterministic-s3-only (local AST & vet only)",
+      },
+      {
+        value: "repo-custom",
+        label: "repo-custom (.grain/qa-flow.yml)",
+      },
+    ];
+    if (!Array.isArray(serverFlows) || serverFlows.length === 0) {
+      return defaults;
+    }
+    const labelByValue = new Map(defaults.map((opt) => [opt.value, opt.label]));
+    return serverFlows
+      .filter((item): item is string => typeof item === "string" && item !== "")
+      .map((value) => ({
+        value,
+        label: labelByValue.get(value) ?? value,
+      }));
+  }
+
+  protected qaRolloutPercent(): number {
+    const raw = this.state.val<unknown>("qaRolloutPct", 0);
+    const num = typeof raw === "number" ? raw : Number(raw);
+    return Number.isFinite(num) ? num : 0;
+  }
+
+  protected qaRolloutInputValue(): string {
+    const raw = this.qaRolloutRaw();
+    if (raw && raw.epoch === this.state.discardEpoch()) {
+      return raw.text;
+    }
+    return String(this.qaRolloutPercent());
+  }
+
+  protected qaRolloutError(): string | null {
+    return this.state.fieldErrors()["qaRolloutPct"] ?? null;
+  }
+
+  protected qaShadowOnControl(): boolean {
+    return Boolean(this.state.val("qaShadowOnControl", true));
+  }
+
+  protected toggleQAEnabled(): void {
+    const nextEnabled = !this.qaEnabled();
+    this.state.setField("qaEnabled", nextEnabled);
+    if (!nextEnabled) {
+      this.qaRolloutRaw.set(null);
+      this.state.setFieldError("qaRolloutPct", null);
+      if (!this.state.settings()["qaEnabled"]) {
+        // Clear unsaved dependent edits when flipping back off on a deployment where QA was off.
+        const s = this.state.settings();
+        this.state.setField("qaFlowId", s["qaFlowId"] ?? "golden-v1-minimal");
+        this.state.setField("qaRolloutPct", s["qaRolloutPct"] ?? 0);
+        this.state.setField(
+          "qaShadowOnControl",
+          s["qaShadowOnControl"] ?? true,
+        );
+      }
+    }
+  }
+
+  protected setQAFlow(flowId: string): void {
+    this.state.setField("qaFlowId", flowId);
+  }
+
+  protected onQARolloutInput(ev: Event): void {
+    const target = ev.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    const raw = target.value;
+    this.qaRolloutRaw.set({ epoch: this.state.discardEpoch(), text: raw });
+
+    const trimmed = raw.trim();
+    if (trimmed === "" || !/^\d+$/.test(trimmed)) {
+      this.state.setFieldError(
+        "qaRolloutPct",
+        "Enter a whole number from 0 to 100.",
+      );
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
+      this.state.setFieldError(
+        "qaRolloutPct",
+        "Rollout percentage must be between 0 and 100.",
+      );
+      return;
+    }
+    this.state.setFieldError("qaRolloutPct", null);
+    this.state.setField("qaRolloutPct", parsed);
+  }
+
+  protected onQARolloutBlur(): void {
+    if (!this.qaRolloutError()) {
+      this.qaRolloutRaw.set(null);
+    }
+  }
+
+  protected toggleQAShadowOnControl(): void {
+    this.state.setField("qaShadowOnControl", !this.qaShadowOnControl());
   }
 
   protected defaultCapsText(): string {

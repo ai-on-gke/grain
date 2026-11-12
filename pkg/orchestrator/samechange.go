@@ -76,19 +76,19 @@ func sameChange(client github.Client, task model.Task, ref model.PullRequestRef,
 	}
 	base := task.Base
 	if base == "" {
-		detail, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil || detail.BaseRef == "" {
 			return false
 		}
 		base = detail.BaseRef
 	}
-	before, err := differ.CompareDiff(ref.Repo.Owner, ref.Repo.Name, base, prev)
+	before, err := differ.CompareDiff(ref.Repo.StoredOwner(), ref.Repo.Name, base, prev)
 	if err != nil {
 		log.Printf("orchestrator: reading %s's change at %s to compare with %s: %v -- reviewing it as changed",
 			ref, shortSHA(prev), shortSHA(head), err)
 		return false
 	}
-	after, err := differ.CompareDiff(ref.Repo.Owner, ref.Repo.Name, base, head)
+	after, err := differ.CompareDiff(ref.Repo.StoredOwner(), ref.Repo.Name, base, head)
 	if err != nil {
 		log.Printf("orchestrator: reading %s's change at %s to compare with %s: %v -- reviewing it as changed",
 			ref, shortSHA(head), shortSHA(prev), err)

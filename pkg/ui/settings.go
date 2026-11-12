@@ -555,6 +555,14 @@ type Settings struct {
 	PromptExtension  string              `json:"promptExtension"`
 	Skills           *model.SkillsConfig `json:"skills,omitempty"`
 	RepairTemplateID string              `json:"repairTemplateID"`
+	// Quality control engine and single-instance PR rollout settings (model.Config.QA).
+	QAEnabled         bool     `json:"qaEnabled"`
+	QAFlowID          string   `json:"qaFlowId"`
+	QAFlowIDs         []string `json:"qaFlowIds"`
+	QARolloutPct      int      `json:"qaRolloutPct"`
+	QAShadowOnControl bool     `json:"qaShadowOnControl"`
+	QAEpoch           int      `json:"qaEpoch"`
+	QARegimeID        int      `json:"qaRegimeId"`
 	// TaskBranchTemplate controls names assigned to newly created tasks.
 	TaskBranchTemplate string `json:"taskBranchTemplate"`
 	// DeploymentID is model.Config's own: the id {deployment} expands to
@@ -1205,6 +1213,13 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		PromptExtension:                    cfg.PromptExtension,
 		Skills:                             cfg.Skills.Clone(),
 		RepairTemplateID:                   cfg.RepairTemplateID,
+		QAEnabled:                          cfg.QA.Enabled,
+		QAFlowID:                           cfg.QA.FlowIDOrDefault(),
+		QAFlowIDs:                          model.QAFlowIDs(),
+		QARolloutPct:                       cfg.QA.RolloutPct,
+		QAShadowOnControl:                  cfg.QA.ShadowOnControlEnabled(),
+		QAEpoch:                            cfg.QA.EpochOrDefault(),
+		QARegimeID:                         cfg.QA.RegimeIDOrDefault(),
 		TaskBranchTemplate:                 cfg.TaskBranchTemplate,
 		DeploymentID:                       cfg.DeploymentID,
 		Capabilities:                       c.capabilityStatuses(cfg, repoConfigs),
@@ -1465,6 +1480,13 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AgentKeyChecksEnabled:              c.Config.AgentKeyChecks != nil,
 			ApprovedByDefault:                  def.ApprovedByDefault,
 			AutoMergeByDefault:                 def.AutoMergeByDefault,
+			QAEnabled:                          def.QA.Enabled,
+			QAFlowID:                           def.QA.FlowIDOrDefault(),
+			QAFlowIDs:                          model.QAFlowIDs(),
+			QARolloutPct:                       def.QA.RolloutPct,
+			QAShadowOnControl:                  def.QA.ShadowOnControlEnabled(),
+			QAEpoch:                            def.QA.EpochOrDefault(),
+			QARegimeID:                         def.QA.RegimeIDOrDefault(),
 			PackageCacheEnabled:                def.PackageCacheEnabled,
 			PackageCacheSizeGB:                 def.PackageCacheSizeGB,
 			PackageCacheSizeGBDefault:          int(pkgcache.DefaultMaxBytes >> 30),
@@ -1642,6 +1664,11 @@ type UpdateSettingsRequest struct {
 	PromptExtension       *string               `json:"promptExtension"`
 	Skills                *model.SkillsConfig   `json:"skills"`
 	RepairTemplateID      *string               `json:"repairTemplateID"`
+	QAEnabled             *bool                 `json:"qaEnabled"`
+	QAFlowID              *string               `json:"qaFlowId"`
+	QARolloutPct          *int                  `json:"qaRolloutPct"`
+	QAShadowOnControl     *bool                 `json:"qaShadowOnControl"`
+	QAEpoch               *int                  `json:"qaEpoch"`
 	TaskBranchTemplate    *string               `json:"taskBranchTemplate"`
 	DeploymentID          *string               `json:"deploymentId"`
 	DefaultCapabilities   *[]string             `json:"defaultCapabilities"`
@@ -2406,6 +2433,35 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	}
 	if req.AutoMergeByDefault != nil {
 		cfg.AutoMergeByDefault = *req.AutoMergeByDefault
+	}
+	if req.QAEnabled != nil || req.QAFlowID != nil || req.QARolloutPct != nil || req.QAShadowOnControl != nil || req.QAEpoch != nil {
+		nextQA := cfg.QA.Clone()
+		if nextQA.ShadowOnControl == nil {
+			nextQA.ShadowOnControl = model.BoolPtr(cfg.QA.ShadowOnControlEnabled())
+		}
+		if req.QAEnabled != nil {
+			nextQA.Enabled = *req.QAEnabled
+		}
+		if req.QAFlowID != nil {
+			nextQA.FlowID = strings.TrimSpace(*req.QAFlowID)
+		}
+		if req.QARolloutPct != nil {
+			nextQA.RolloutPct = *req.QARolloutPct
+		}
+		if req.QAShadowOnControl != nil {
+			nextQA.ShadowOnControl = model.BoolPtr(*req.QAShadowOnControl)
+		}
+		if req.QAEpoch != nil {
+			if *req.QAEpoch < 1 {
+				return model.Config{}, validationErrorf("qaEpoch must be at least 1")
+			}
+			nextQA.Epoch = *req.QAEpoch
+		}
+		advanced, err := model.AdvanceQAConfig(before.QA, nextQA)
+		if err != nil {
+			return model.Config{}, validationErrorf("qa: %v", err)
+		}
+		cfg.QA = advanced
 	}
 	if req.UpgradeCheckMode != nil {
 		mode := strings.ToLower(strings.TrimSpace(*req.UpgradeCheckMode))
