@@ -672,7 +672,11 @@ import "strconv"
 // hosting and grants off the schedules that fire it, which until then
 // every firing wrote over what the schedule adds to its template
 // (migrateScheduleOwnSettings, grain/task-4607).
-const SchemaVersion = 144
+// 145 changes no table: it rewrites the owner column of `release`,
+// `release_candidate` and `qualification_run` to StoredOwner, for the
+// repositories a target repo places on another host (migrateReleaseOwners,
+// grain/task-4489).
+const SchemaVersion = 145
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
