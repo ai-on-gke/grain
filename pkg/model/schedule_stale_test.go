@@ -100,9 +100,12 @@ func TestStaleSchedulesSkipsADroppedWorkflowCronCoveredByAGrainCISchedule(t *tes
 				t.Fatal(err)
 			}
 			cronID := model.RepoDeclaredID(model.DeclaredSchedule, repo, "workflow.live-secrets-repo")
+			secondCronID := model.RepoDeclaredID(model.DeclaredSchedule, repo, "workflow.live-secrets-repo.2")
 			peerID := model.RepoDeclaredID(model.DeclaredSchedule, repo, "live-secrets-repo")
 			for _, s := range []model.Schedule{
 				{ID: cronID, Title: "live-secrets-repo cron", Target: repo, TemplateID: &tmpl,
+					Recurrence: daily, Enabled: true, CreatedAt: now.Add(-30 * 24 * time.Hour), NextRunAt: now.Add(time.Hour)},
+				{ID: secondCronID, Title: "live-secrets-repo second cron", Target: repo, TemplateID: &tmpl,
 					Recurrence: daily, Enabled: true, CreatedAt: now.Add(-30 * 24 * time.Hour), NextRunAt: now.Add(time.Hour)},
 				{ID: peerID, Title: "Live secrets repository", Target: repo, Base: base, TemplateID: &tmpl,
 					GrainCI: true, Recurrence: daily, Enabled: true, LastRunAt: &ran,
@@ -233,5 +236,83 @@ func TestStaleSchedulesKeepsADroppedWorkflowCronFlaggedWithoutACoveringSchedule(
 				t.Errorf("StaleSchedules[0].Reason is empty, want CI-mode drop explanation")
 			}
 		})
+	}
+}
+
+// Only the `.grain/workflows` cron itself is inert on purpose: a
+// `.grain/schedules/` file or settings-owned schedule that runs the same
+// workflow on the default branch (`base: ""`) and forgot `grain-ci: true` is
+// genuinely broken and must still be flagged even when another `grain-ci: true`
+// schedule exists.
+func TestStaleSchedulesFlagsNonCronWorkflowSchedulesMissingGrainCI(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	now := time.Date(2026, 11, 12, 13, 0, 0, 0, time.UTC)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: repo, CIMode: model.CIModeGitHub, Declarations: true}); err != nil {
+		t.Fatal(err)
+	}
+	daily := model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 5*60 + 53}
+	ran := now.Add(-7 * time.Hour)
+	tmpl := model.WorkflowReviewTemplateID("live-secrets-repo")
+
+	cronID := model.RepoDeclaredID(model.DeclaredSchedule, repo, "workflow.live-secrets-repo")
+	peerID := model.RepoDeclaredID(model.DeclaredSchedule, repo, "live-secrets-repo")
+	extraDeclID := model.RepoDeclaredID(model.DeclaredSchedule, repo, "live-secrets-extra")
+	createdLongAgo := now.Add(-30 * 24 * time.Hour)
+
+	if _, err := store.SyncRepoDeclarations(ctx, repo, "0123456789abcdef", model.RepoDeclarations{
+		Schedules: []model.DeclaredScheduleFile{
+			{
+				Path: ".grain/workflows/live-secrets-repo.yml",
+				Schedule: model.Schedule{
+					ID: cronID, Title: "live-secrets-repo cron", Target: repo, TemplateID: &tmpl,
+					Recurrence: daily, Enabled: true,
+				},
+			},
+			{
+				Path: ".grain/schedules/live-secrets-repo.yml",
+				Schedule: model.Schedule{
+					ID: peerID, Title: "Live secrets repository", Target: repo, Base: "main", TemplateID: &tmpl,
+					GrainCI: true, Recurrence: daily, Enabled: true,
+				},
+			},
+			{
+				Path: ".grain/schedules/live-secrets-extra.yml",
+				Schedule: model.Schedule{
+					ID: extraDeclID, Title: "Extra secrets check without grain-ci", Target: repo, TemplateID: &tmpl,
+					GrainCI: false, Recurrence: daily, Enabled: true,
+				},
+			},
+		},
+	}, createdLongAgo, time.UTC); err != nil {
+		t.Fatalf("SyncRepoDeclarations: %v", err)
+	}
+	if err := store.UpdateSchedule(ctx, peerID, func(sc *model.Schedule) error {
+		sc.LastRunAt = &ran
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateSchedule(%s): %v", peerID, err)
+	}
+	if err := store.PutSchedule(ctx, model.Schedule{
+		ID: "sched-42", Title: "Settings schedule without grain-ci", Target: repo, TemplateID: &tmpl,
+		GrainCI: false, Recurrence: daily, Enabled: true,
+		CreatedAt: now.Add(-20 * 24 * time.Hour), NextRunAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("PutSchedule(sched-42): %v", err)
+	}
+
+	stale, err := store.StaleSchedules(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, s := range stale {
+		ids = append(ids, s.ID)
+	}
+	want := extraDeclID + ",sched-42"
+	if got := strings.Join(ids, ","); got != want {
+		t.Fatalf("StaleSchedules IDs = %q, want %q (workflow cron skipped, non-cron schedules flagged)", got, want)
 	}
 }
