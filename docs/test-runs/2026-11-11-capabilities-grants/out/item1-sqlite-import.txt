@@ -1,0 +1,16 @@
+-- template_grant after import
+https://grain.dev/capabilities/api#ci-read
+https://grain.dev/capabilities/api#releases:read={"repo":"acme/widgets"}
+https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}
+https://grain.dev/capabilities/api#test-quarantine
+https://grain.dev/capabilities/repo#read={"repo":"acme/lib"}
+https://grain.dev/capabilities/repo#write={"repo":"acme/other"}
+release-gate-read
+-- schedule_grant after import
+https://grain.dev/capabilities/api#ci-read
+https://grain.dev/capabilities/api#releases:read={"repo":"acme/widgets"}
+https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}
+https://grain.dev/capabilities/api#test-quarantine
+https://grain.dev/capabilities/repo#read={"repo":"acme/lib"}
+https://grain.dev/capabilities/repo#write={"repo":"acme/other"}
+release-gate-read

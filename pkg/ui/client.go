@@ -5627,6 +5627,10 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 	// grants either side of a Reads or Writes edit, for the grant
 	// attach/detach events it notes once it lands (unified-grants Q5).
 	var repoBefore, repoAfter []string
+	// priorityBefore and priorityAfter are the task's priority either
+	// side of a Priority edit, carried onto its open gating reviews once
+	// it lands (model.CarryPriorityToReviews).
+	var priorityBefore, priorityAfter int
 	if err := c.mutate(model.WithOwnerChange(model.WithAutoMergeChange(ctx, c.requestActor(ctx).Actor, "edited"), c.requestActor(ctx)), id, func(task *model.Task) error {
 		if req.Reads != nil || req.Writes != nil {
 			repoBefore = model.TaskRepoAccessKeys(*task)
@@ -5697,10 +5701,19 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 			task.Base = *req.Base
 		}
 		if req.Priority != nil {
+			priorityBefore = task.Priority
 			if *req.Priority == 0 {
 				task.Priority = model.DefaultTaskPriority
 			} else {
 				task.Priority = *req.Priority
+			}
+			priorityAfter = task.Priority
+			// A review's priority set by hand is the person's call, and a
+			// later edit to the reviewed task's must not lower it
+			// (model.CarryPriorityToReviews).
+			if task.Origin.Reason == model.ReasonReview && priorityAfter != priorityBefore &&
+				!slices.Contains(task.Tags, model.ReviewPriorityHandSetTag) {
+				task.Tags = append(task.Tags, model.ReviewPriorityHandSetTag)
 			}
 		}
 		if forkPR != nil && !hasLinkTo(task.Links, forkPR.Link()) {
@@ -6068,6 +6081,11 @@ func (c *Client) UpdateTask(ctx context.Context, id string, req UpdateTaskReques
 		return nil
 	}); err != nil {
 		return Task{}, err
+	}
+	if priorityBefore != priorityAfter {
+		if _, err := c.Store.CarryPriorityToReviews(ctx, id, priorityBefore, priorityAfter); err != nil {
+			return Task{}, err
+		}
 	}
 	c.noteGrantChanges(ctx, id, repoBefore, repoAfter)
 	if titleChanged || descriptionChanged {

@@ -151,7 +151,7 @@ test("removing a scope set a task holds asks first, and Cancel keeps it", async 
       const dialog = page.getByRole("dialog");
       await expect(dialog).toContainText(`Remove scope set ${HELD}?`);
       await expect(dialog).toContainText(
-        `1 grant holds api:${HELD}, and will grant nothing once it is removed:`,
+        `1 grant holds https://grain.dev/capabilities/api#${HELD}, and will grant nothing once it is removed:`,
       );
       await expect(
         dialog.locator(`[data-holder="task:${taskID}"]`),

@@ -27,8 +27,9 @@
 // $GITHUB_TOKEN when it is set.
 //
 // Exit 0 with the record on stdout; 1, with the reason on stderr, for a
-// commit that is refused or one whose records could not be read; 2 for a
-// usage error.
+// commit that is refused; 3, with the forge's error on stderr, for one
+// whose records could not be read even after retrying, which decides
+// nothing about it; 2 for a usage error.
 package main
 
 import (
@@ -81,6 +82,10 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string, fo
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	rec, err := policy.CheckChain(ctx, forge, *commit, *since, *max)
+	if reviewedmerge.IsForgeError(err) {
+		fmt.Fprintf(stderr, "reviewed-merge: forge error, not a policy refusal: %v\n", err)
+		return 3
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "reviewed-merge: refused: %v\n", err)
 		if len(policy.Mergers) == 0 {

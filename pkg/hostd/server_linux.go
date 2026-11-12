@@ -290,7 +290,11 @@ func (s *Server) Serve(ctx context.Context) error {
 		}()
 	}
 	go s.sweepExited(ctx)
+	// The drain watcher logs through s.Logf, which may be a test's t.Logf:
+	// Serve waits for it below, so nothing it says outlives Serve.
+	drainWatched := make(chan struct{})
 	go func() {
+		defer close(drainWatched)
 		select {
 		case <-ctx.Done():
 		case <-s.drainCh:
@@ -324,6 +328,10 @@ func (s *Server) Serve(ctx context.Context) error {
 		}()
 	}
 	s.wg.Wait()
+	// The accept loop ends only once ctx is done, and waitDrained returns
+	// on a done ctx, so this wait is short.
+	cancel()
+	<-drainWatched
 	if s.handedOverNow() {
 		s.releaseHandoverWatchers()
 		if s.Reexec != nil {
@@ -472,13 +480,31 @@ func (s *Server) refuseStarts() bool {
 // which refuses new starts so the runs still going can finish, for up to
 // drain_cap again.
 func (s *Server) Cutover() {
+	if s.markCutover() {
+		s.beginCutover()
+	}
+}
+
+// markCutover records a cutover, so Hello reports it, without yet
+// starting the drain that may exit hostd at once; beginCutover starts it.
+// OpDrain marks before it answers and begins after, so a daemon told the
+// cutover began never sees a Hello that says otherwise. It reports
+// whether this call marked it.
+func (s *Server) markCutover() bool {
 	s.init()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.draining || s.cutover {
-		return
+		return false
 	}
 	s.cutover = true
+	return true
+}
+
+// beginCutover starts the drain markCutover recorded.
+func (s *Server) beginCutover() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.startDrainLocked()
 	s.logf("hostd: cutting over to a new build: still taking new starts, and exiting the moment no run is running; %d process(es) running now", s.runningLocked())
 }
@@ -495,14 +521,28 @@ func (s *Server) StartHandover() {
 		s.Cutover()
 		return
 	}
+	if s.markHandover() {
+		s.beginHandover()
+	}
+}
+
+// markHandover is markCutover for a handover.
+func (s *Server) markHandover() bool {
 	s.init()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.draining || s.handover {
-		return
+		return false
 	}
 	s.cutover = true
 	s.handover = true
+	return true
+}
+
+// beginHandover starts the drain markHandover recorded.
+func (s *Server) beginHandover() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.startDrainLocked()
 	s.logf("hostd: handing over to a new build: keeping live detached runs across re-exec; %d process(es) running now", s.runningLocked())
 }
@@ -800,13 +840,22 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		// But for a plain drain starts are refused before the answer, so a
 		// daemon that has been told the drain began never sees a start it
 		// makes next taken.
+		// A cutover or handover is marked before the answer too, so a
+		// Hello the daemon sends once it is told reports it, and its drain
+		// loop -- which may exit at once -- starts after.
 		switch {
 		case req.Idle && req.Handover && s.canHandover():
+			began := s.markHandover()
 			_ = writeFrame(conn, frameOK, nil)
-			s.StartHandover()
+			if began {
+				s.beginHandover()
+			}
 		case req.Idle:
+			began := s.markCutover()
 			_ = writeFrame(conn, frameOK, nil)
-			s.Cutover()
+			if began {
+				s.beginCutover()
+			}
 		default:
 			began := s.refuseStarts()
 			_ = writeFrame(conn, frameOK, nil)

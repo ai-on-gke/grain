@@ -1,0 +1,79 @@
+injected: 	dep	golang.org/x/crypto	v0.16.0	h1:mMMrFzRSCF0GvB7Ne27XVtVAaXLrPmgPC7/v0tkwHaY=
+today is 2026-11-11; the waiver expires 2026-12-11 (or 2026-11-10 when expired)
+=== allowlist: none
+    exit 2
+    | scan-images.sh: scanning grain (walk-grain:vuln)
+    | scan-images.sh: scanning sandbox (walk-sandbox:pack)
+    | scan-images.sh: scanning sandbox-rootfs (the guest disk in walk-sandbox:pack)
+    | image-vulns: BLOCKING grain HIGH CVE-2024-45337 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.31.0)
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2024-45337 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.31.0)
+    | image-vulns: 26 fixable CRITICAL/HIGH finding(s) are not allowlisted; fix them or add an entry to /tmp/scanwalk.ZToEvi/none.yaml (docs/image-vulnerability-scanning.md)
+    | **FAIL: 26 fixable CRITICAL/HIGH finding(s) are not allowlisted.**
+    | | image | blocking | allowlisted | unfixable C/H | critical | high | medium | low |
+    | ### Blocking: fixable CRITICAL/HIGH, not allowlisted (26)
+    | | grain | HIGH | CVE-2024-45337 | golang.org/x/crypto | v0.16.0 | 0.31.0 | usr/local/bin/app |
+    | | sandbox-rootfs | HIGH | CVE-2024-45337 | golang.org/x/crypto | v0.16.0 | 0.31.0 | usr/local/bin/app |
+    reports: grain.sarif grain.trivy.json grain.txt image-vulns.json sandbox-rootfs.sarif sandbox-rootfs.trivy.json sandbox-rootfs.txt sandbox.sarif sandbox.trivy.json sandbox.txt summary.md
+    waiver ids: CVE-2024-45337, CVE-2025-22869, CVE-2025-47913, CVE-2026-39828, CVE-2026-39829, CVE-2026-39830, CVE-2026-39831, CVE-2026-39832, CVE-2026-39835, CVE-2026-42508, CVE-2026-46595, CVE-2026-46597, CVE-2026-56854
+=== allowlist: waived
+    exit 0
+    | ./scripts/scan-images.sh --out /tmp/scanwalk.ZToEvi/out-waived  grain=walk-grain:vuln sandbox=walk-sandbox:pack
+    | scan-images.sh: scanning grain (walk-grain:vuln)
+    | scan-images.sh: scanning sandbox (walk-sandbox:pack)
+    | scan-images.sh: scanning sandbox-rootfs (the guest disk in walk-sandbox:pack)
+    | **PASS: no fixable CRITICAL or HIGH finding is outside the allowlist.**
+    | | image | blocking | allowlisted | unfixable C/H | critical | high | medium | low |
+    reports: grain.sarif grain.trivy.json grain.txt image-vulns.json sandbox-rootfs.sarif sandbox-rootfs.trivy.json sandbox-rootfs.txt sandbox.sarif sandbox.trivy.json sandbox.txt summary.md
+=== allowlist: expired
+    exit 2
+    | ./scripts/scan-images.sh --out /tmp/scanwalk.ZToEvi/out-expired  grain=walk-grain:vuln sandbox=walk-sandbox:pack
+    | scan-images.sh: scanning grain (walk-grain:vuln)
+    | scan-images.sh: scanning sandbox (walk-sandbox:pack)
+    | scan-images.sh: scanning sandbox-rootfs (the guest disk in walk-sandbox:pack)
+    | image-vulns: BLOCKING grain HIGH CVE-2024-45337 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.31.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING grain HIGH CVE-2025-22869 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.35.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING grain HIGH CVE-2025-47913 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.43.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING grain HIGH CVE-2026-39828 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING grain HIGH CVE-2026-39829 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING grain HIGH CVE-2026-39830 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING grain HIGH CVE-2026-39831 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING grain HIGH CVE-2026-39832 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING grain HIGH CVE-2026-39835 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING grain HIGH CVE-2026-42508 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING grain HIGH CVE-2026-46595 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING grain HIGH CVE-2026-46597 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING grain HIGH CVE-2026-56854 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.55.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2024-45337 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.31.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2025-22869 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.35.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2025-47913 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.43.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2026-39828 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2026-39829 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2026-39830 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2026-39831 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2026-39832 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2026-39835 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2026-42508 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2026-46595 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2026-46597 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.52.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: BLOCKING sandbox-rootfs HIGH CVE-2026-56854 golang.org/x/crypto in usr/local/bin/app (v0.16.0, fixed in 0.55.0); allowlist entry (owner walkthrough) expired 2026-11-10
+    | image-vulns: 26 fixable CRITICAL/HIGH finding(s) are not allowlisted; fix them or add an entry to /tmp/scanwalk.ZToEvi/expired.yaml (docs/image-vulnerability-scanning.md)
+    | **FAIL: 26 fixable CRITICAL/HIGH finding(s) are not allowlisted.**
+    | | image | blocking | allowlisted | unfixable C/H | critical | high | medium | low |
+    | ### Blocking: fixable CRITICAL/HIGH, not allowlisted (26)
+    | | grain | HIGH | CVE-2024-45337 | golang.org/x/crypto | v0.16.0 | 0.31.0 | usr/local/bin/app; allowlist entry (owner walkthrough) expired 2026-11-10 |
+    | | grain | HIGH | CVE-2025-22869 | golang.org/x/crypto | v0.16.0 | 0.35.0 | usr/local/bin/app; allowlist entry (owner walkthrough) expired 2026-11-10 |
+    | | grain | HIGH | CVE-2025-47913 | golang.org/x/crypto | v0.16.0 | 0.43.0 | usr/local/bin/app; allowlist entry (owner walkthrough) expired 2026-11-10 |
+    | | grain | HIGH | CVE-2026-39828 | golang.org/x/crypto | v0.16.0 | 0.52.0 | usr/local/bin/app; allowlist entry (owner walkthrough) expired 2026-11-10 |
+    | | grain | HIGH | CVE-2026-39829 | golang.org/x/crypto | v0.16.0 | 0.52.0 | usr/local/bin/app; allowlist entry (owner walkthrough) expired 2026-11-10 |
+    | | grain | HIGH | CVE-2026-39830 | golang.org/x/crypto | v0.16.0 | 0.52.0 | usr/local/bin/app; allowlist entry (owner walkthrough) expired 2026-11-10 |
+    reports: grain.sarif grain.trivy.json grain.txt image-vulns.json sandbox-rootfs.sarif sandbox-rootfs.trivy.json sandbox-rootfs.txt sandbox.sarif sandbox.trivy.json sandbox.txt summary.md
+=== allowlist: stale
+    exit 0
+    | ./scripts/scan-images.sh --out /tmp/scanwalk.ZToEvi/out-stale  grain=walk-grain:vuln sandbox=walk-sandbox:pack
+    | scan-images.sh: scanning grain (walk-grain:vuln)
+    | scan-images.sh: scanning sandbox (walk-sandbox:pack)
+    | scan-images.sh: scanning sandbox-rootfs (the guest disk in walk-sandbox:pack)
+    | **PASS: no fixable CRITICAL or HIGH finding is outside the allowlist.**
+    | | image | blocking | allowlisted | unfixable C/H | critical | high | medium | low |
+    | | grain | golang.org/x/net | CVE-2099-0001 | walkthrough | 2026-12-11 | nothing in these images matches this |
+    reports: grain.sarif grain.trivy.json grain.txt image-vulns.json sandbox-rootfs.sarif sandbox-rootfs.trivy.json sandbox-rootfs.txt sandbox.sarif sandbox.trivy.json sandbox.txt summary.md
