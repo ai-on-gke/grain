@@ -1254,7 +1254,7 @@ func TestExternalCIRetriggerRunsUncachedFailedJobs(t *testing.T) {
 	if len(reruns) != 1 || !slices.Equal(reruns[0].Jobs, []string{"go"}) || len(got) != 0 {
 		t.Errorf("retrigger gha:... asked for %+v (and started %+v), want a re-run of job go", reruns, got)
 	}
-	for _, s := range []string{"gha:acme:widgets:42 (Tests)", "attempt 2 of at most 4"} {
+	for _, s := range []string{"gha:acme:widgets:42 (Tests)", "attempt 2 of at most 4", `grain ci wait gha:acme:widgets:42"`} {
 		if !strings.Contains(out, s) {
 			t.Errorf("retrigger gha:... does not say %q:\n%s", s, out)
 		}
