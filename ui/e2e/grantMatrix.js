@@ -12,23 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The grant matrix (grain/task-4401): every capability method this build
-// offers, crossed with every surface that has an "Add grant…" for it, and
-// for each method every argument variant its schema admits. It is
-// generated here from GET /api/capability-methods rather than written out
-// by hand, so a method added to the build is in the matrix the day it
-// lands: grant-matrix-api.spec.js walks every cell through the API and
-// grant-matrix-ui.spec.js through the real form.
+// The grant matrix (grain/task-4401, grain/task-4428): every capability method
+// this build offers, crossed with every surface that has an "Add grant…" (or
+// access-request Grant) for it, and for each method every argument variant its
+// schema admits. It is generated here from GET /api/capability-methods rather
+// than written out by hand, so a method added to the build is in the matrix
+// the day it lands: grant-matrix-api.spec.js walks every cell through the API
+// (including the agent-token refusal check on x-grain-person-granted values)
+// and grant-matrix-ui.spec.js through the real forms.
 //
-// Nothing here knows a method by name. A cell's argument sets come from
-// the method's args schema (each oneOf/anyOf variant, enums, consts,
-// patterns, arrays, nested objects), whether it needs arguments from
-// requiresArgs, and which surfaces offer it from its policy verdicts.
+// Nothing here knows a method by name except KNOWN_GAPS / EXPECTED_REFUSALS.
+// A cell's argument sets come from the method's args schema (each oneOf/anyOf
+// variant, enums, consts, patterns, arrays, booleans, nested objects), whether
+// it needs arguments from requiresArgs, whether an argument value is reserved
+// to a person from x-grain-person-granted, and which surfaces offer it from
+// its policy verdicts.
 
-// SURFACES are the places a grant is added by hand. kind is the run kind
-// the capability policy judges a grant there as (model.CapabilityRun*):
-// a CI-only method is refused on every task surface and offered only on
-// repo-ci.
+// SURFACES are the places a grant is added by hand (plus access-card, where a
+// run's requested grant is approved). kind is the run kind the capability
+// policy judges a grant there as (model.CapabilityRun*): a CI-only method is
+// refused on every task and session surface and offered only on repo-ci.
 export const SURFACES = [
   { id: "new-task", kind: "task", label: "New task form" },
   { id: "task-pane", kind: "task", label: "Task pane" },
@@ -41,19 +44,18 @@ export const SURFACES = [
   { id: "access-card", kind: "task", label: "Access-request card Grant" },
 ];
 
-// KNOWN_GAPS are cells already filed, keyed by "<ref> <variant>" or
-// "<ref> *" for every variant of the method: the walkthroughs record
-// them as known rather than failing on them, and once the fix lands the
-// entry is deleted and the cell is held to the same bar as the rest.
-// Only the UI's: the API grants every one of them today.
+// KNOWN_GAPS are cells already filed, keyed by "<ref> <surface> <variant>",
+// "<ref> <variant>" or "<ref> *": the walkthroughs record them as known rather
+// than failing on them, and once the fix lands the entry is deleted and the
+// cell is held to the same bar as the rest.
 const KNOWN_GAPS = {
-  // A top-level oneOf draws no fields and says the arguments "match
-  // none" (grain/task-4400, in review).
-  "https://grain.dev/capabilities/repo#write *": "#4400",
-  // A task's own repository is given under "Repository access"
-  // (repoGrants.js), not as this method; the walk does not drive that
-  // path yet (follow-up filed from grain/task-4401).
+  // A task's own repository and write target are given under "Repository
+  // access" (repoGrants.js), not as repo#target or repo#write {repo, base};
+  // check passes them while capability writes refuse them (4401 follow-up).
+  // Note: repo#write oneOf[2] ({refs, force}) was #4400 and now passes.
   "https://grain.dev/capabilities/repo#target *": "4401 follow-up",
+  "https://grain.dev/capabilities/repo#write oneOf[1]": "4401 follow-up",
+  "https://grain.dev/capabilities/repo#write oneOf[1] full": "4401 follow-up",
   // Its one-value credential select did not take the pick within 5s on
   // the task pane (2026-11-11 run; follow-up filed from grain/task-4401).
   "https://grain.dev/capabilities/repo#credential *": "4401 follow-up",
@@ -61,7 +63,12 @@ const KNOWN_GAPS = {
   // task pane (2026-11-11 run; follow-up filed from grain/task-4401).
   "https://grain.dev/capabilities/api#ci:read *": "4401 follow-up",
   "https://grain.dev/capabilities/api#memory *": "4401 follow-up",
-  "https://grain.dev/capabilities/repo#read *": "4401 follow-up",
+  // On task/session surfaces without repos (settings-defaults, repo-defaults)
+  // repo#read is listed disabled as CI-only; on repo-ci it is grantable;
+  // kept only for task-pane if needed, let's check live!
+  // A scope set limited to some repositories: check passes a repo outside
+  // them, the write refuses it.
+  "https://grain.dev/capabilities/api#ops/triage full": "4401 follow-up",
 };
 
 // KNOWN_GAP_PREFIXES are KNOWN_GAPS for every method under a prefix.
@@ -72,8 +79,11 @@ const KNOWN_GAP_PREFIXES = [
   ["https://grain.dev/capabilities/api#grain/", "4401 follow-up"],
 ];
 
-export function knownGap(ref, variant) {
+export function knownGap(ref, variant, surfaceId = "") {
   return (
+    (surfaceId &&
+      (KNOWN_GAPS[`${ref} ${surfaceId} ${variant}`] ||
+        KNOWN_GAPS[`${ref} ${surfaceId} *`])) ||
     lookup(KNOWN_GAPS, ref, variant) ||
     KNOWN_GAP_PREFIXES.find(([prefix]) => ref.startsWith(prefix))?.[1] ||
     ""
@@ -106,21 +116,56 @@ export function knownAPIGap(ref, variant) {
   return lookup(KNOWN_API_GAPS, ref, variant) || "";
 }
 
+const API_PREFIX = "https://grain.dev/capabilities/api#";
+
 // EXPECTED_REFUSALS are refusals a method's policy verdict does not
 // carry, because they are grain's own rule for one spelling of it rather
-// than the policy's: the cell passes when the task surfaces refuse it
-// with this message, and fails if they grant it.
+// than the policy's: the cell passes when the surface refuses it with
+// this message, and fails if it grants it.
 const EXPECTED_REFUSALS = {
   // grain#ci follows the repository's CI Mode and is never attached by
   // hand (grainci.Refusal; grain/task-4361, grain/task-4364).
-  "https://grain.dev/capabilities/grain#ci *": /CI Mode/,
+  "https://grain.dev/capabilities/grain#ci *": /CI Mode|not supported for CI/,
   // repo#write {repo} is CI-only repository access; only {refs, force}
-  // is a task grant.
+  // is a task/session grant, while repo-ci admits {repo}.
   "https://grain.dev/capabilities/repo#write oneOf[0]": /CI capability/,
   "https://grain.dev/capabilities/repo#write oneOf[0] full": /CI capability/,
 };
 
-export function expectedRefusal(ref, variant) {
+// DIRECTOR_FORBIDDEN_SCOPES mirrors pkg/model/director_floor.go's Tier 3
+// floor on the standing director session.
+const DIRECTOR_FORBIDDEN_SCOPES = new Set([
+  "merge:force",
+  "settings:write",
+  "secrets:write",
+  "connections:write",
+  "repos:write",
+  "self-upgrade",
+  "grain/self-upgrade",
+  "operator",
+  "grain/operator",
+]);
+
+export function expectedRefusal(ref, variant, surface = null) {
+  if (surface?.kind === "ci") {
+    if (ref === "https://grain.dev/capabilities/grain#ci")
+      return /CI Mode|not supported for CI/;
+    // On repo-ci, agent API grants and repo#credential are not CI grants,
+    // whereas repo#write {repo} (oneOf[0]) IS a CI grant.
+    if (ref.startsWith(API_PREFIX)) return /not supported for CI/;
+    if (ref === "https://grain.dev/capabilities/repo#credential")
+      return /not supported for CI/;
+    if (
+      ref === "https://grain.dev/capabilities/repo#write" &&
+      (variant === "oneOf[0]" || variant === "oneOf[0] full")
+    ) {
+      return null;
+    }
+  }
+  if (surface?.id === "director" && ref.startsWith(API_PREFIX)) {
+    const scope = ref.slice(API_PREFIX.length);
+    if (DIRECTOR_FORBIDDEN_SCOPES.has(scope)) return /director/i;
+  }
   return lookup(EXPECTED_REFUSALS, ref, variant) || null;
 }
 
@@ -166,7 +211,7 @@ export function deref(root, s, depth = 0) {
 const SECRET_NAME =
   /(secret|token|passw(or)?d|passphrase|credential|private[_-]?key|api[_-]?key|access[_-]?key|bearer)/i;
 
-function isSecret(name, s) {
+export function isSecret(name, s) {
   if (s?.writeOnly === true || s?.format === "password") return true;
   if (Array.isArray(s?.enum) && s.enum.length > 0) return false;
   if (Array.isArray(s?.items?.enum) && s.items.enum.length > 0) return false;
@@ -196,7 +241,8 @@ function stringValue(s) {
 }
 
 // valueFor is a valid value for s. full fills optional properties of
-// nested objects too; required-only otherwise.
+// nested objects too, flips booleans away from their default, and adds an
+// extra item to extensible arrays so held-grant edits exercise every control.
 function valueFor(root, schema, full = false) {
   const s = deref(root, schema) || {};
   if ("const" in s) return s.const;
@@ -205,20 +251,36 @@ function valueFor(root, schema, full = false) {
   const type = Array.isArray(s.type) ? s.type[0] : s.type;
   switch (type) {
     case "boolean":
-      return s.default ?? true;
+      return full && typeof s.default === "boolean"
+        ? !s.default
+        : (s.default ?? true);
     case "integer":
     case "number":
       return s.default ?? s.minimum ?? 1;
     case "array": {
       const items = deref(root, s.items) || { type: "string" };
-      const n = Math.max(s.minItems ?? 1, 1);
-      if (Array.isArray(items.enum))
-        return items.enum.slice(0, Math.min(n, items.enum.length));
-      if (s.default !== undefined) return s.default;
-      const out = [];
-      for (let i = 0; i < n; i++) {
+      if (Array.isArray(items.enum)) {
+        const min = Math.max(s.minItems ?? 1, 1);
+        const want = full
+          ? Math.min(s.maxItems ?? Math.max(min, 2), items.enum.length)
+          : min;
+        return items.enum.slice(0, Math.min(want, items.enum.length));
+      }
+      if (s.default !== undefined && !full) return s.default;
+      const base = Array.isArray(s.default) ? [...s.default] : [];
+      const min = Math.max(s.minItems ?? 1, 1);
+      const want = full
+        ? Math.min(
+            s.maxItems ?? Math.max(base.length + 1, 2),
+            Math.max(base.length + 1, 2),
+          )
+        : Math.max(min, base.length);
+      const out = base.slice(0, want);
+      for (let i = out.length; i < want; i++) {
         const v = valueFor(root, items, full);
-        out.push(typeof v === "string" && i > 0 ? `${v}${i}` : v);
+        let item = typeof v === "string" && i > 0 ? `${v}${i}` : v;
+        if (typeof item === "string" && out.includes(item)) item = `${v}-${i}`;
+        out.push(item);
       }
       return out;
     }
@@ -293,6 +355,35 @@ function hasProperties(s) {
   return Object.keys(s.properties || {}).length > 0;
 }
 
+// PERSON_GRANTED_KEY mirrors protocol.PersonGrantedArgKey: values in a
+// property's "x-grain-person-granted" list make a grant with that value
+// person-only (protocol.NotePersonGrantedArgs).
+export const PERSON_GRANTED_KEY = "x-grain-person-granted";
+
+// isPersonGrantedArg reports whether args selects a value that method's
+// schema reserves to a person via x-grain-person-granted (including via the
+// property's default when args omits the property).
+export function isPersonGrantedArg(method, args) {
+  const root = method?.args;
+  if (!root) return false;
+  const s = deref(root, root);
+  for (const [name, sub] of Object.entries(s?.properties || {})) {
+    const d = deref(root, sub);
+    const reserved = d?.[PERSON_GRANTED_KEY];
+    if (!Array.isArray(reserved) || reserved.length === 0) continue;
+    const effective =
+      args && name in args
+        ? args[name]
+        : d.default !== undefined
+          ? d.default
+          : undefined;
+    if (reserved.some((r) => JSON.stringify(r) === JSON.stringify(effective))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // invalidArgs is an argument set the schema refuses, and the field the
 // refusal should name ("" for the arguments as a whole): a bad value for
 // the first field that can have one, else an argument the schema does not
@@ -341,6 +432,7 @@ export function grantMatrix(methods, surfaces = SURFACES) {
     for (const surface of surfaces) {
       const policy = policyFor(method, surface);
       for (const { variant, args } of variants) {
+        const refusal = expectedRefusal(method.ref, variant, surface);
         cells.push({
           ref: method.ref,
           surface: surface.id,
@@ -348,8 +440,8 @@ export function grantMatrix(methods, surfaces = SURFACES) {
           args,
           requiresArgs: method.requiresArgs,
           policy,
-          expect: policy ? "refused" : "grant",
-          knownGap: knownGap(method.ref, variant),
+          expect: policy || refusal ? "refused" : "grant",
+          knownGap: knownGap(method.ref, variant, surface.id),
         });
       }
     }

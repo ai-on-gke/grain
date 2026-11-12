@@ -2043,7 +2043,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 
 ### 5.2 `grain demo [flags]` {#CLI-44}
 
-Serves the task UI on localhost over a throwaway store of fake tasks. Every caller signs in with the demo's access code, kept in `-access-code-file` when given.
+Serves the task UI on localhost over a throwaway store of fake tasks (SQLite by default, or PostgreSQL under `-db-driver=postgres`, using `-db-dsn` when given or an embedded server in the throwaway directory). Every caller signs in with the demo's access code, kept in `-access-code-file` when given.
 
 <!-- BEGIN GENERATED FLAGS: grain demo -->
 | Flag | Type | Default | Env | Description |
@@ -2054,6 +2054,8 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-as` | string |  |  | principal to attribute the fake tasks to (defaults to the OS user) |
 | `-base-branch-ci` | bool |  |  | with -github-sim and -fake-ci, let POST /api/e2e/base-branch/{red,green} {"branch": ...} (loopback only) turn a branch red or green on a -fake-ci verdict, through grain's own base-branch reconciler and dispatch's linking step, dispatching nothing |
 | `-config-change` | bool |  |  | serve a real, throwaway grain/config exported from the demo's store, and seed two tasks parked on proposal branches of it (propose_config_change), so the config-change card's Approve & Apply merges into its main and Reject deletes the branch |
+| `-db-driver` | string | `"sqlite"` |  | database backend driver for the throwaway store ("sqlite" or "postgres") |
+| `-db-dsn` | string |  |  | PostgreSQL connection URL under -db-driver=postgres; empty starts an embedded server in the throwaway directory |
 | `-default-target-repo` | string | `"acme/widgets"` |  | owner/name the fake tasks target |
 | `-disable-self-upgrade` | bool |  |  | as on grain daemon: disable in-VM self-upgrade actions and hide in-VM upgrade controls in the UI |
 | `-external-config-branch` | string | `"main"` |  | with -external-config-repo, the branch of that repository configuration is read from |

@@ -401,8 +401,12 @@ jobs:
     if: needs.idle-gate.outputs.run == 'true' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',grant-matrix-ui,'))
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
     concurrency:
-      group: ${{ github.workflow }}-grant-matrix-ui-${{ github.ref }}
+      group: ${{ github.workflow }}-grant-matrix-ui-${{ matrix.db }}-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
@@ -450,24 +454,42 @@ jobs:
           sudo chown -R "$USER:$USER" /var/cache/playwright
           make frontend playwright-browsers
 
-      # Every capability method through the real Add grant… form
-      # (ui/e2e/grant-matrix-ui.spec.js, grain/task-4401); the API half
-      # of the same matrix runs in ui e2e on every pull request.
-      - name: Grant matrix
+      - name: Ensure PostgreSQL binaries for postgres pass
+        if: matrix.db == 'postgres'
+        run: |
+          sudo systemctl stop postgresql 2>/dev/null || true
+          sudo systemctl disable postgresql 2>/dev/null || true
+          if ! ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql >/dev/null
+          fi
+          ls /usr/lib/postgresql/*/bin/initdb
+
+      # Every capability method and argument variant across every surface
+      # (ui/e2e/grant-matrix-ui.spec.js, grain/task-4401, grain/task-4428),
+      # once against SQLite and once against PostgreSQL (where the API half
+      # runs against PostgreSQL too).
+      - name: Grant matrix (${{ matrix.db }})
         env:
+          GRAIN_E2E_DB_DRIVER: ${{ matrix.db }}
           GRANT_MATRIX_UI: "1"
-          GRANT_MATRIX_OUT: /tmp/grant-matrix-ui.json
-          GRANT_MATRIX_SHOTS: /tmp/grant-matrix-shots
-        run: cd ui && npx playwright test e2e/grant-matrix-ui.spec.js --project=chromium
+          GRANT_MATRIX_OUT: /tmp/grant-matrix-ui-${{ matrix.db }}.json
+          GRANT_MATRIX_SHOTS: /tmp/grant-matrix-shots-${{ matrix.db }}
+        run: |
+          cd ui
+          if [ "${{ matrix.db }}" = "postgres" ]; then
+            npx playwright test e2e/grant-matrix-api.spec.js --project=chromium
+          fi
+          npx playwright test e2e/grant-matrix-ui.spec.js --project=chromium --workers=4
 
       - name: Upload grant matrix results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: grant-matrix-ui
+          name: grant-matrix-ui-${{ matrix.db }}
           path: |
-            /tmp/grant-matrix-ui.json
-            /tmp/grant-matrix-shots
+            /tmp/grant-matrix-ui-${{ matrix.db }}.json
+            /tmp/grant-matrix-shots-${{ matrix.db }}
           if-no-files-found: ignore
 
   loadtest:
