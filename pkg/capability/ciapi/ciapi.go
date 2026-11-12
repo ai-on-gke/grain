@@ -562,6 +562,40 @@ func placements(listener, token string) []model.Placement {
 	}
 }
 
+// StepEnv is URLEnv and TokenEnv as a job's steps are to see them, read
+// back out of the placements Materialize returned among materialized, and
+// nil when none of them is this provider's.
+//
+// The files alone do not reach every step: a host sandbox writes a
+// placement under its run's own directory, where an absolute
+// /home/debian/.grain-api names nothing and HOME is that directory, not
+// the placement's parent. The CI executor exports these in every step
+// instead, whatever kind of sandbox the job runs in.
+func StepEnv(materialized []model.Materialized) map[string]string {
+	var env map[string]string
+	for _, m := range materialized {
+		for _, pl := range m.Materialization.Placements {
+			if pl.Side != model.SideSandbox {
+				continue
+			}
+			var name string
+			switch pl.Path {
+			case URLPath:
+				name = URLEnv
+			case TokenPath:
+				name = TokenEnv
+			default:
+				continue
+			}
+			if env == nil {
+				env = map[string]string{}
+			}
+			env[name] = strings.TrimSuffix(pl.Content, "\n")
+		}
+	}
+	return env
+}
+
 // Revoke drops the token the lease names.
 func (p *Provider) Revoke(ctx context.Context, cc model.CapabilityContext, lease model.Lease) error {
 	if p.endpoint != nil {

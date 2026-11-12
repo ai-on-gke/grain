@@ -903,8 +903,12 @@ Every caller that turns a template into a task goes through it:
 
 - `orchestrator.fireTaskSchedule` targets the binding over the
   schedule's own Target/Base, and resyncs the schedule's row to it,
-  alongside the Title/Body/AutoMerge/Reads/Grants display cache it
-  already kept there.
+  alongside the Title/Body/AutoMerge/Reads display cache it already
+  kept there. A template-backed schedule's admission, hosting and
+  grants are not part of that cache: they are what the schedule adds to
+  its template (a declared schedule's `admission:`, `hosting:` and
+  `grants:` beside `template:`), merged with the template's at every
+  firing, so the resync leaves them alone.
 - `ui.CreateSchedule`/`UpdateSchedule` apply the same rule at the point
   a schedule is created or attached to a template, so a schedule reads
   as what it will actually fire rather than only after its first firing.

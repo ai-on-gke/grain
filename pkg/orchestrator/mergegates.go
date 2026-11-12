@@ -183,7 +183,7 @@ func continueReviewAfterMerge(ctx context.Context, store *model.Store, client gi
 	}
 	if ref != nil && client != nil && ref.Number > 0 {
 		prNote := fmt.Sprintf("**grain post-merge review** (task %s)\n\n%s", reviewed.ID, taskNote)
-		if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, prNote); err != nil {
+		if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, prNote); err != nil {
 			log.Printf("orchestrator: noting post-merge continuation of review %s on %s: %v", reviewID, ref, err)
 		}
 	}
@@ -283,7 +283,7 @@ func filePostMergeReviewFollowUp(ctx context.Context, store *model.Store, client
 	}
 	if client != nil && ref.Number > 0 {
 		prNote := fmt.Sprintf("**grain post-merge review alert** (task %s)\n\n%s", reviewed.ID, alertNote)
-		if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, prNote); err != nil {
+		if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, prNote); err != nil {
 			log.Printf("orchestrator: noting post-merge follow-up task %s on %s: %v", followUp.ID, ref, err)
 		}
 	}

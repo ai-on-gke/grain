@@ -66,6 +66,7 @@ import { TimeZoneProvider } from "./TimeZoneContext.jsx";
 import { ViewerProvider } from "./ViewerContext.jsx";
 import {
   mergeFreshDetail,
+  fetchEarlier,
   prependEarlierPage,
   taskDetailPath,
   taskEarlierPath,
@@ -1778,7 +1779,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
         Array.isArray(current.attempts) &&
         current.attempts.length > 0;
       try {
-        const earlier = await api(path);
+        const earlier = await fetchEarlier(api, current, opts);
+        if (!earlier) return null;
         const merge = (prev) =>
           prev && String(prev.id) === String(targetId)
             ? prependEarlierPage(prev, earlier, {
@@ -2866,8 +2868,18 @@ function AppContent({ onReload = () => window.location.reload() }) {
             console.warn("grain: task still failing to load", err);
           }
         } else if (openTaskId !== null) {
-          const detail = await api(taskDetailPath(openTaskId), { poll: true });
-          if (detail !== UNCHANGED) {
+          // A read that an act()'s own re-read (loadTask) overtook is
+          // dropped, as the session pane's is: answered from before the
+          // mutation, it would put back what the mutation just changed --
+          // a grant just removed reappearing, or one just given vanishing,
+          // until the next tick (task 4828). Dropping a full answer also
+          // drops the ETag it advanced, so the next poll is answered again.
+          const seq = openSeq.current;
+          const path = taskDetailPath(openTaskId);
+          const detail = await api(path, { poll: true });
+          if (detail !== UNCHANGED && seq !== openSeq.current) {
+            forgetETag(path);
+          } else if (detail !== UNCHANGED) {
             setDetail((prev) =>
               prev && String(prev.id) === String(detail?.id)
                 ? keepIfSame(prev, mergeFreshDetail(prev, detail))

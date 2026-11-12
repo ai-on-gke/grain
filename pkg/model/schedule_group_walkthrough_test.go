@@ -209,12 +209,13 @@ func TestAGrainCIScheduleForTheWorkflowClearsItsDroppedCron(t *testing.T) {
 			t.Fatalf("PutSchedule(%s): %v", s.ID, err)
 		}
 	}
-	put(model.Schedule{ID: "workflow.live", Title: "live", TemplateID: &live})
-	put(model.Schedule{ID: "workflow.explicit", Title: "explicit", TemplateID: &explicit})
-	put(model.Schedule{ID: "workflow.other", Title: "other", TemplateID: &other})
+	cron := func(stem string) string { return model.RepoDeclaredID(model.DeclaredSchedule, repo, "workflow."+stem) }
+	put(model.Schedule{ID: cron("live"), Title: "live", TemplateID: &live})
+	put(model.Schedule{ID: cron("explicit"), Title: "explicit", TemplateID: &explicit})
+	put(model.Schedule{ID: cron("other"), Title: "other", TemplateID: &other})
 	defaultBranch := func(r model.RepoRef) string {
 		if r == repo {
-			return "main"
+			return "trunk"
 		}
 		return ""
 	}
@@ -226,22 +227,22 @@ func TestAGrainCIScheduleForTheWorkflowClearsItsDroppedCron(t *testing.T) {
 		}
 		var out []string
 		for _, s := range stale {
-			out = append(out, s.ID)
+			out = append(out, strings.TrimPrefix(s.ID, cron("")))
 		}
 		slices.Sort(out)
 		return strings.Join(out, ",")
 	}
-	if got := ids(); got != "workflow.explicit,workflow.live,workflow.other" {
+	if got := ids(); got != "explicit,live,other" {
 		t.Fatalf("before = %q, want all three dropped crons", got)
 	}
 	ran := now.Add(-time.Hour)
 	put(model.Schedule{ID: "live", Title: "live", TemplateID: &live, GrainCI: true, LastRunAt: &ran})
-	// Naming the repository's default branch explicitly (`base: main`, as
-	// .grain/schedules/live-secrets-repo.yml does) covers the cron too.
-	put(model.Schedule{ID: "explicit-main", Title: "explicit", TemplateID: &explicit, GrainCI: true, Base: "main", LastRunAt: &ran})
+	// Naming the repository's default branch explicitly (`base: trunk` on a
+	// repository whose default branch is trunk) covers the cron too.
+	put(model.Schedule{ID: "explicit-trunk", Title: "explicit", TemplateID: &explicit, GrainCI: true, Base: "trunk", LastRunAt: &ran})
 	put(model.Schedule{ID: "other-candidate", Title: "other", TemplateID: &other, GrainCI: true, Base: "candidate", LastRunAt: &ran})
-	if got := ids(); got != "workflow.other" {
-		t.Fatalf("after = %q, want only workflow.other (its grain-ci entry runs another branch)", got)
+	if got := ids(); got != "other" {
+		t.Fatalf("after = %q, want only other (its grain-ci entry runs another branch)", got)
 	}
 }
 

@@ -171,6 +171,11 @@ use one of these:
   A disk snapshot of the data disk taken while both are stopped works the
   same way.
 
+Take one of these before an upgrade if you may want to go back. A newer
+build migrates the store in place and keeps no copy, and an older build
+refuses a store at a newer schema. See [Downgrading to an earlier
+build](host-setup.md#downgrading-to-an-earlier-build).
+
 To restore a cold copy, stop the daemon, put the data directory back in
 place and re-run `setup.sh`. The installer finds the password and the cluster and keeps
 using them. To restore a dump (either a standalone `.dump` or

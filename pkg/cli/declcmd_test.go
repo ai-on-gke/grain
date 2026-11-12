@@ -96,7 +96,7 @@ func TestDeclarationsCheckPrintsAdmissionAndHosting(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write(".grain/templates/set.yml", "title: Set\nadmission: bypass\nhosting: console\n")
+	write(".grain/templates/set.yml", "title: Set\nadmission: bypass\nhosting: console\nsandbox: {cpus: 4, disk-gb: 100}\n")
 	write(".grain/templates/legacy.yml", "title: Legacy\ncapabilities:\n  - durable\n")
 	write(".grain/templates/plain.yml", "title: Plain\n")
 	write(".grain/schedules/nightly.yml", "template: plain\ndaily:\n  at: \"03:00\"\nadmission: durable\n")
@@ -116,7 +116,7 @@ func TestDeclarationsCheckPrintsAdmissionAndHosting(t *testing.T) {
 		return rest
 	}
 	for header, want := range map[string][]string{
-		"template set ":     {"admission:  bypass", "hosting:    console"},
+		"template set ":     {"admission:  bypass", "hosting:    console", "sandbox:    4 vCPU, 100 GiB disk"},
 		"template legacy ":  {"admission:  durable"},
 		"schedule nightly ": {"admission:  durable"},
 	} {
@@ -127,7 +127,8 @@ func TestDeclarationsCheckPrintsAdmissionAndHosting(t *testing.T) {
 			}
 		}
 	}
-	if got := section("template plain "); strings.Contains(got, "admission:") || strings.Contains(got, "hosting:") {
+	if got := section("template plain "); strings.Contains(got, "admission:") || strings.Contains(got, "hosting:") ||
+		strings.Contains(got, "sandbox:") {
 		t.Errorf("a template that sets neither still prints one:\n%s", got)
 	}
 }

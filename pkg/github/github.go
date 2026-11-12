@@ -2531,7 +2531,20 @@ func (c *RESTClient) FindOpenPullRequestForBranch(owner, repo, branch string) (*
 	if strings.Contains(branch, ":") {
 		return c.FindOpenPullRequestForHead(owner, repo, branch)
 	}
-	return c.FindOpenPullRequestForHead(owner, repo, owner+":"+branch)
+	return c.FindOpenPullRequestForHead(owner, repo, BareOwner(owner)+":"+branch)
+}
+
+// BareOwner is owner without the "host/" a caller holding a
+// model.RepoRef puts in front of it for a repository off the default
+// host (RepoRef.StoredOwner): the transport routes the request by that
+// host and takes it back out of the path, but an owner that travels in a
+// query value -- the head=owner:branch filter -- is GitHub's to read and
+// must be the owner alone.
+func BareOwner(owner string) string {
+	if i := strings.LastIndexByte(owner, '/'); i >= 0 {
+		return owner[i+1:]
+	}
+	return owner
 }
 
 // FindOpenPullRequestForHead returns the open PR on owner/repo whose head
@@ -3156,7 +3169,7 @@ func (c *RESTClient) RerequestCheckSuite(owner, repo string, checkSuiteID int64)
 		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_suite_id"}`)}
 	}
 	resp, err := c.request(
-		"POST", fmt.Sprintf("/repos/%s/%s/check-suites/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkSuiteID),
+		"POST", fmt.Sprintf("/repos/%s/%s/check-suites/%d/rerequest", quoteKeepSlash(owner), url.PathEscape(repo), checkSuiteID),
 		c.headers(owner, repo, false), nil,
 	)
 	if err != nil {
@@ -3175,7 +3188,7 @@ func (c *RESTClient) RerequestCheckRun(owner, repo string, checkRunID int64) err
 		return &Error{Status: 422, Body: []byte(`{"message":"invalid check_run_id"}`)}
 	}
 	resp, err := c.request(
-		"POST", fmt.Sprintf("/repos/%s/%s/check-runs/%d/rerequest", url.PathEscape(owner), url.PathEscape(repo), checkRunID),
+		"POST", fmt.Sprintf("/repos/%s/%s/check-runs/%d/rerequest", quoteKeepSlash(owner), url.PathEscape(repo), checkRunID),
 		c.headers(owner, repo, false), nil,
 	)
 	if err != nil {
@@ -4095,6 +4108,52 @@ func (c *RESTClient) RerunFailedJobs(owner, repo string, runID int64) error {
 	}
 	resp, err := c.request("POST", fmt.Sprintf("/repos/%s/%s/actions/runs/%d/rerun-failed-jobs", owner, repo, runID),
 		c.headers(owner, repo, true), []byte("{}"))
+	if err != nil {
+		return err
+	}
+	if resp.Status != http.StatusCreated && resp.Status != http.StatusOK && resp.Status != http.StatusNoContent {
+		return &Error{Status: resp.Status, Body: resp.Body, URL: resp.URL}
+	}
+	return nil
+}
+
+// ActionsRerunner is the optional Client capability behind grain ci
+// retrigger and run-job on a repository gated by GitHub Actions
+// (pkg/ui's RerunActions): a concluded run's failed jobs re-run, the
+// whole run re-run, or one job of it re-run, each as the run's next
+// attempt. Like WorkflowRunRerunner, the credential needs `actions:
+// write`.
+type ActionsRerunner interface {
+	WorkflowRunRerunner
+	// RerunWorkflowRun is POST .../actions/runs/{run_id}/rerun.
+	RerunWorkflowRun(owner, repo string, runID int64) error
+	// RerunWorkflowJob is POST .../actions/jobs/{job_id}/rerun: the job
+	// and the jobs that depend on it.
+	RerunWorkflowJob(owner, repo string, jobID int64) error
+}
+
+var _ ActionsRerunner = (*RESTClient)(nil)
+
+// RerunWorkflowRun asks GitHub to re-run every job of runID as the run's
+// next attempt.
+func (c *RESTClient) RerunWorkflowRun(owner, repo string, runID int64) error {
+	if runID <= 0 {
+		return fmt.Errorf("re-running a run of %s/%s: no run id", owner, repo)
+	}
+	return c.postRerun(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/runs/%d/rerun", owner, repo, runID))
+}
+
+// RerunWorkflowJob asks GitHub to re-run jobID (and the jobs that depend
+// on it) as its run's next attempt.
+func (c *RESTClient) RerunWorkflowJob(owner, repo string, jobID int64) error {
+	if jobID <= 0 {
+		return fmt.Errorf("re-running a job of %s/%s: no job id", owner, repo)
+	}
+	return c.postRerun(owner, repo, fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/rerun", owner, repo, jobID))
+}
+
+func (c *RESTClient) postRerun(owner, repo, path string) error {
+	resp, err := c.request("POST", path, c.headers(owner, repo, true), []byte("{}"))
 	if err != nil {
 		return err
 	}

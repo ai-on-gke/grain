@@ -135,7 +135,7 @@ func TestCIOnlyCapabilitiesAreRefusedEverywhereATaskCouldHoldOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range ciOnlyIDs {
-		i := slices.IndexFunc(settings.Capabilities, func(s ui.CapabilityStatus) bool { return s.ID == id })
+		i := slices.IndexFunc(settings.Capabilities, func(s ui.CapabilityStatus) bool { return s.ID == model.CanonicalLegacyGrant(id) })
 		if i < 0 {
 			t.Fatalf("Settings has no row for %q at all", id)
 		}

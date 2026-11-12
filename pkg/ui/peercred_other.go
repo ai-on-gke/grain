@@ -18,6 +18,7 @@ package ui
 
 import (
 	"errors"
+	"io/fs"
 	"net"
 )
 
@@ -26,3 +27,14 @@ import (
 func peerUID(net.Conn) (uint32, error) {
 	return 0, errors.New("peer credentials (SO_PEERCRED) are only read on Linux")
 }
+
+// ownedByThisAccount is true where ownership cannot be read: the API
+// socket is refused on these platforms anyway (peerUID).
+func ownedByThisAccount(fs.FileInfo) bool { return true }
+
+// hasAccessACL is false where ACLs are not read: the socket's directory
+// is kept at 0700.
+func hasAccessACL(string) bool { return false }
+
+// clearOwningGroupACL is never reached where hasAccessACL is false.
+func clearOwningGroupACL(string) error { return nil }

@@ -265,6 +265,9 @@ func taskBlock(t ui.Task) string {
 	if t.Base != "" {
 		fmt.Fprintf(&b, "base:       %s\n", t.Base)
 	}
+	if t.FoundIn != "" {
+		fmt.Fprintf(&b, "found in:   %s\n", t.FoundIn)
+	}
 	if len(t.Reads) > 0 {
 		fmt.Fprintf(&b, "reads:      %s\n", strings.Join(t.Reads, ", "))
 	}

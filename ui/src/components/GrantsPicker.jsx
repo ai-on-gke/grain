@@ -1336,6 +1336,18 @@ function ArgsSection({
     };
   }, []);
 
+  // Removing the section discards an edit not saved yet: left pending,
+  // the unmount above would save it, and that save -- replacing a grant
+  // that is gone -- would put the removed grant straight back.
+  const remove = onRemove
+    ? () => {
+        clearTimeout(timer.current);
+        timer.current = null;
+        pending.current = false;
+        return onRemove();
+      }
+    : undefined;
+
   const live = liveErrorsOf(schema, value);
   const errors = { ...live, ...server.fields };
   const status = saving
@@ -1427,7 +1439,7 @@ function ArgsSection({
         {onRemove && (
           <RemoveButton
             label={grant ? ariaLabel : `${method.method} draft`}
-            onClick={onRemove}
+            onClick={remove}
           />
         )}
       </Box>

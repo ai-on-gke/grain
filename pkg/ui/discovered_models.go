@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"log"
 	"slices"
 	"strings"
@@ -183,33 +184,43 @@ func (c *Client) AdvertiseDiscoveredModels(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	// Read again before writing: listing can take a while, and an edit
-	// saved meanwhile -- a list typed in by hand above all -- wins.
-	cfg, err = c.Store.GetConfig(ctx)
-	if err != nil || cfg == nil {
-		return 0, err
-	}
-	updated := *cfg
-	updated.AgentBackends = slices.Clone(cfg.AgentBackends)
+	// saved meanwhile -- a list typed in by hand above all -- wins. The
+	// read and the write are one transaction (Store.UpdateConfig): this
+	// writes the whole settings row, so a read-then-PutConfig here put
+	// back whatever the row said before any save that landed between
+	// the two -- a repo POST /api/repos had just added to the target
+	// list among them, which this pass, run at every daemon start, lost.
 	now := time.Now().UTC()
 	changed := 0
-	for i := range updated.AgentBackends {
-		b := &updated.AgentBackends[i]
-		r, ok := results[b.ID]
-		if !ok || !b.DiscoversModels() {
-			continue
+	err = c.Store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		changed = 0
+		for i := range cfg.AgentBackends {
+			b := &cfg.AgentBackends[i]
+			r, ok := results[b.ID]
+			if !ok || !b.DiscoversModels() {
+				continue
+			}
+			if applyDiscovery(b, r, now) {
+				changed++
+			}
 		}
-		if applyDiscovery(b, r, now) {
-			changed++
+		if changed == 0 {
+			return errDiscoveryUnchanged
 		}
-	}
-	if changed == 0 {
+		return nil
+	})
+	if errors.Is(err, errDiscoveryUnchanged) {
 		return 0, nil
 	}
-	if err := c.Store.PutConfig(ctx, updated); err != nil {
+	if err != nil {
 		return 0, err
 	}
 	return changed, nil
 }
+
+// errDiscoveryUnchanged is how AdvertiseDiscoveredModels' mutate leaves
+// the settings row unwritten when no connection's record changed.
+var errDiscoveryUnchanged = errors.New("no discovered model list changed")
 
 // carryDiscovered copies each connection's stored Discovered list onto
 // next, the backends a settings save is about to write: the list is
