@@ -3007,6 +3007,37 @@ html[data-phone="true"] .gantt-body {
     content: "Next run ";
   }
 }
+/* Under 700px the 232px sidebar rail is still beside the pane (data-phone
+   only takes over below 600px), so the pane itself is 368–468px wide --
+   as narrow as a phone. Keeping a 6.5rem kind column beside the name and
+   action leaves .process-name ~108px at 620px, clipping chips such as
+   "run until clean (max 3)" and "Declared by …". Move the kind chip up
+   onto the first line with the row's action, as data-phone does below,
+   so the name and its chips get the whole width past the drag handle. */
+@media (max-width: 700px) {
+  .process-row {
+    grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+    gap: 0.35rem 0.75rem;
+  }
+  .process-kind {
+    grid-column: 2 / 3;
+    grid-row: 1;
+    align-self: center;
+    justify-self: start;
+  }
+  .process-actions {
+    grid-column: 3 / 4;
+    grid-row: 1;
+    align-self: center;
+  }
+  .process-name,
+  .process-repo,
+  .process-last,
+  .process-next,
+  .process-enabled {
+    grid-column: 2 / -1;
+  }
+}
 
 /* The templates page's own list (bwsalmon/agents#545): one row of key
    details per template -- name, target repo, title -- TaskList's own
@@ -4697,6 +4728,7 @@ fieldset legend {
   grid-column: 2 / 3;
   grid-row: 1;
   align-self: center;
+  justify-self: start;
 }
 :root[data-phone="true"] .process-actions {
   grid-column: 3 / 4;

@@ -1,5 +1,9 @@
 # A new UI in Angular, built beside the current one
 
+> How the Angular UI looks, behaves, is tested and is reviewed is in
+> [`ui-design-book.design.md`](ui-design-book.design.md). This document
+> covers why it exists, how it is served, and how pages move over.
+
 > **Proposal, with its first slice built.** This document describes how
 > grain's web UI is rewritten in Angular one page at a time, alongside the
 > React UI in `ui/`, until the old one can be retired. The foundation

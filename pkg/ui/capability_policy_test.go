@@ -172,3 +172,43 @@ func TestCapabilityServerRenameMovesTheEntryWithItsConfig(t *testing.T) {
 		t.Error("a rename onto an existing entry was saved")
 	}
 }
+
+// A template-backed schedule's grants are what it adds to its template
+// (model.Schedule.Grants), so they are holders of their own: one the
+// template does not grant is listed under the schedule, while a copy of
+// one it does stays listed under the template alone.
+func TestCapabilityServerUsageListsATemplateBackedSchedulesOwnGrants(t *testing.T) {
+	_, hc, client, _ := configTestServer(t, &fakeProber{})
+	grantFixtures(t, client)
+	ctx := context.Background()
+	tplID := "tpl-1"
+	own := configCap + `#key={"account":"nightly"}`
+	if err := client.Store.PutSchedule(ctx, model.Schedule{
+		ID:         "sched-1",
+		Title:      "nightly",
+		Target:     model.RepoRef{Owner: "acme", Name: "widgets"},
+		TemplateID: &tplID,
+		Grants:     []model.Grant{{Capability: configCap + `#key={"account":"ci"}`}, {Capability: own}},
+		Recurrence: model.Recurrence{Kind: model.RecurrenceEveryNHours, EveryNHours: 24},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := hc.CapabilityServerUsage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, u := range all {
+		if u.ID != configCap {
+			continue
+		}
+		for _, h := range u.Holders {
+			if h.Kind == "schedule" {
+				got = append(got, h.ID+" "+h.Grant)
+			}
+		}
+	}
+	if want := "sched-1 " + own; strings.Join(got, ",") != want {
+		t.Errorf("schedule holders = %q, want only %q", got, want)
+	}
+}

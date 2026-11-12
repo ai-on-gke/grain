@@ -237,6 +237,7 @@ export const ROUTE_SCOPES = {
   "POST /api/console/{id}/input": "sessions:write",
   "POST /api/console/{id}/resize": "sessions:write",
   "POST /api/declarations/accept": "signed-in",
+  "POST /api/declarations/revoke": "signed-in",
   "POST /api/deployment/broadcast": "teams:broadcast",
   "POST /api/deployment/git-connections": "connections:write",
   "POST /api/deployment/git-connections/check": "connections:read",

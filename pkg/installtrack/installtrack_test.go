@@ -37,6 +37,30 @@ func TestDetectFallsBackToOSS(t *testing.T) {
 	}
 }
 
+// An edition that names its track as the build's own (SetBuildTrack) is
+// what a signal-less host running its binary settles on, saying why; a
+// host's own signals still say which install it is, and a build track
+// nobody registered is not one.
+func TestDetectFallsBackToTheBuildsOwnTrack(t *testing.T) {
+	t.Cleanup(installtrack.SetBuildTrack(installtracktest.Track))
+	if got := installtrack.BuildTrack(); got != installtracktest.Track {
+		t.Fatalf("BuildTrack() = %q", got)
+	}
+	got := (installtrack.Probe{Hostname: "devbox.example.com"}).Detect()
+	if got.Track != installtracktest.Track || !slices.Equal(got.Signals, []string{installtrack.BuildSignal(installtracktest.Track)}) {
+		t.Errorf("signal-less Detect() = %+v, want %s from the build", got, installtracktest.Track)
+	}
+	got = (installtrack.Probe{Hostname: "box" + installtracktest.HostSuffix}).Detect()
+	if got.Track != installtracktest.Track || !slices.Equal(got.Signals, []string{installtracktest.Signal}) {
+		t.Errorf("Detect() with the host's signal = %+v, want the host's signal alone", got)
+	}
+
+	installtrack.SetBuildTrack("unregistered")
+	if got := (installtrack.Probe{}).Detect(); got.Track != installtrack.TrackOSS || len(got.Signals) != 0 {
+		t.Errorf("Detect() on an unregistered build track = %+v, want oss", got)
+	}
+}
+
 func TestDetectReportsARegisteredTracksSignals(t *testing.T) {
 	got := (installtrack.Probe{Hostname: "Box" + installtracktest.HostSuffix + "."}).Detect()
 	if got.Track != installtracktest.Track || !slices.Equal(got.Signals, []string{installtracktest.Signal}) {
