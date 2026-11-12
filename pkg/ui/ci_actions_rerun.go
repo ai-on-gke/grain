@@ -251,21 +251,19 @@ func (c *Client) rerunActions(ctx context.Context, repo model.RepoRef, branch, h
 			message: fmt.Sprintf("no GitHub Actions run of %s at %s to re-run", repo, where)}
 	}
 
-	// The bound is per head: no run at it past MaxActionsRerunsPerHead
-	// re-runs, whoever asked for them.
-	for _, run := range runs {
-		if spent := max(run.RunAttempt, 1) - 1; spent >= MaxActionsRerunsPerHead {
-			return ActionsRerunResult{}, validationErrorf("run %s (%s) at %s has been re-run %d times already, the most grain re-runs any run at one commit "+
-				"(grain's own automatic re-runs of a runner fault count too). A failure that survives that many attempts is not a flake: "+
-				"fix it, or ask a person to re-run it by hand", ActionsRunID(repo.String(), run.ID), runWorkflow(run), shortHead(head), spent)
-		}
-	}
-
 	res := ActionsRerunResult{Repo: repo.String(), Branch: branch, Head: head, Bound: MaxActionsRerunsPerHead}
 	jobs := rerunJobNames(req.Jobs)
 	if len(jobs) > 0 {
 		return c.rerunActionsJobs(reader, rerunner, repo, runs, jobs, res)
 	}
+	// Every run to re-run is picked, and held to the bound, before any
+	// is re-run: a run at the head the request leaves alone does not
+	// refuse it, and one past the bound refuses it whole, not half-done.
+	type target struct {
+		run  github.WorkflowRun
+		mode string
+	}
+	var targets []target
 	for _, run := range runs {
 		id := ActionsRunID(repo.String(), run.ID)
 		if !strings.EqualFold(run.Status, "completed") {
@@ -280,21 +278,41 @@ func (c *Client) rerunActions(ctx context.Context, repo model.RepoRef, branch, h
 			res.Skipped = append(res.Skipped, fmt.Sprintf("%s (%s): concluded %s, nothing failed", id, runWorkflow(run), orUnknown(run.Conclusion)))
 			continue
 		}
+		targets = append(targets, target{run: run, mode: mode})
+	}
+	if len(targets) == 0 {
+		return res, validationErrorf("nothing to re-run at %s on %s: %s", shortHead(head), repo, strings.Join(res.Skipped, "; "))
+	}
+	for _, t := range targets {
+		if err := rerunBound(repo, t.run, head); err != nil {
+			return ActionsRerunResult{}, err
+		}
+	}
+	for _, t := range targets {
+		id := ActionsRunID(repo.String(), t.run.ID)
 		var err error
-		if mode == "all" {
-			err = rerunner.RerunWorkflowRun(owner, repo.Name, run.ID)
+		if t.mode == "all" {
+			err = rerunner.RerunWorkflowRun(owner, repo.Name, t.run.ID)
 		} else {
-			err = rerunner.RerunFailedJobs(owner, repo.Name, run.ID)
+			err = rerunner.RerunFailedJobs(owner, repo.Name, t.run.ID)
 		}
 		if err != nil {
 			return res, rerunRefusal(id, err)
 		}
-		res.Runs = append(res.Runs, ActionsRerunRun{ID: id, Workflow: runWorkflow(run), Mode: mode, Attempt: max(run.RunAttempt, 1) + 1})
-	}
-	if len(res.Runs) == 0 {
-		return res, validationErrorf("nothing to re-run at %s on %s: %s", shortHead(head), repo, strings.Join(res.Skipped, "; "))
+		res.Runs = append(res.Runs, ActionsRerunRun{ID: id, Workflow: runWorkflow(t.run), Mode: t.mode, Attempt: max(t.run.RunAttempt, 1) + 1})
 	}
 	return res, nil
+}
+
+// rerunBound is the per-head bound: run, at head, is not re-run once it
+// has been re-run MaxActionsRerunsPerHead times, whoever asked for them.
+func rerunBound(repo model.RepoRef, run github.WorkflowRun, head string) error {
+	if spent := max(run.RunAttempt, 1) - 1; spent >= MaxActionsRerunsPerHead {
+		return validationErrorf("run %s (%s) at %s has been re-run %d times already, the most grain re-runs any run at one commit "+
+			"(grain's own automatic re-runs of a runner fault count too). A failure that survives that many attempts is not a flake: "+
+			"fix it, or ask a person to re-run it by hand", ActionsRunID(repo.String(), run.ID), runWorkflow(run), shortHead(head), spent)
+	}
+	return nil
 }
 
 // rerunActionsJobs re-runs each job jobs names, wherever it is among
@@ -339,6 +357,11 @@ func (c *Client) rerunActionsJobs(reader github.ActionsReader, rerunner github.A
 		if !found[want] {
 			return res, validationErrorf("no job %q in the GitHub Actions runs at %s (their jobs: %s)",
 				want, shortHead(res.Head), strings.Join(names, ", "))
+		}
+	}
+	for _, p := range picks {
+		if err := rerunBound(repo, p.run, res.Head); err != nil {
+			return res, err
 		}
 	}
 	for _, p := range picks {

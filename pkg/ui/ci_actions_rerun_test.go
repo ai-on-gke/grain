@@ -33,7 +33,7 @@ import (
 // rerunSim is acme/widgets on GitHub Actions with two tasks' branches:
 // grain/mine has an older red commit and, at its head bbb222, a red
 // Tests run and a green Lint run; grain/theirs has a red run of its own.
-func rerunSim(t *testing.T, headAttempt int) (*githubsim.Sim, *ui.Server, *ui.Client) {
+func rerunSim(t *testing.T, headAttempt int, lintAttempt ...int) (*githubsim.Sim, *ui.Server, *ui.Client) {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
 	sim := githubsim.New("acme", "widgets", filepath.Join(t.TempDir(), "none.git"), "main")
@@ -45,7 +45,7 @@ func rerunSim(t *testing.T, headAttempt int) (*githubsim.Sim, *ui.Server, *ui.Cl
 		CreatedAt: now.Add(-2 * time.Minute), Jobs: []githubsim.WorkflowJob{
 			{Name: "go", Conclusion: "failure"}, {Name: "lint", Conclusion: "success"}}})
 	sim.AddWorkflowRun(githubsim.WorkflowRun{ID: 711, Name: "Lint", Path: ".github/workflows/lint.yml",
-		HeadBranch: "grain/mine", HeadSHA: "bbb222", Event: "pull_request", Conclusion: "success",
+		HeadBranch: "grain/mine", HeadSHA: "bbb222", Event: "pull_request", Conclusion: "success", RunAttempt: append(lintAttempt, 1)[0],
 		CreatedAt: now.Add(-2 * time.Minute), Jobs: []githubsim.WorkflowJob{{Name: "vet", Conclusion: "success"}}})
 	sim.AddWorkflowRun(githubsim.WorkflowRun{ID: 700, Name: "Tests", Path: ".github/workflows/tests.yml",
 		HeadBranch: "grain/mine", HeadSHA: "aaa333", Event: "pull_request", Conclusion: "failure",
@@ -174,5 +174,36 @@ func TestRetriggerOnGitHubActionsIsBoundedPerHead(t *testing.T) {
 		gitproxy.CIStartRequest{FailedOnly: true})
 	if err != nil || !strings.Contains(res.Text, "attempt 4 of at most 4") || !slices.Equal(sim.RerunFailedJobs, []int64{710}) {
 		t.Fatalf("the last re-run allowed: %v %q %v", err, res.Text, sim.RerunFailedJobs)
+	}
+}
+
+// The bound holds the runs a request re-runs, not every run at the head:
+// a green run re-run to the bound does not stop the red one beside it
+// being re-run, by its failed jobs or by a job of its own.
+func TestRetriggerOnGitHubActionsBoundsOnlyTheRunsItReRuns(t *testing.T) {
+	sim, _, client := rerunSim(t, 1, ui.MaxActionsRerunsPerHead+1)
+	actions := ui.SandboxCLIActions{Client: client}
+	ctx := context.Background()
+
+	if _, err := actions.RerunGitHubChecks(ctx, "mine", gitproxy.CIStartRequest{FailedOnly: true}); err != nil {
+		t.Fatalf("retrigger with only the green run past the bound: %v", err)
+	}
+	if !slices.Equal(sim.RerunFailedJobs, []int64{710}) {
+		t.Fatalf("re-ran failed jobs of %v, want 710 alone", sim.RerunFailedJobs)
+	}
+	if _, err := actions.RerunGitHubChecks(ctx, "mine", gitproxy.CIStartRequest{Jobs: []string{"go"}}); err != nil {
+		t.Fatalf("run-job go with only the green run past the bound: %v", err)
+	}
+	if _, err := actions.RerunGitHubChecks(ctx, "mine", gitproxy.CIStartRequest{Jobs: []string{"vet"}}); err == nil ||
+		!strings.Contains(err.Error(), "re-run 3 times already") {
+		t.Fatalf("run-job vet of the run past the bound: %v, want a refusal", err)
+	}
+	// --all takes in the run past the bound, so it is refused whole:
+	// nothing is re-run, not even the run still under it.
+	if _, err := actions.RerunGitHubChecks(ctx, "mine", gitproxy.CIStartRequest{}); err == nil {
+		t.Fatal("retrigger --all with a run past the bound was accepted")
+	}
+	if len(sim.RerunRuns) != 0 || !slices.Equal(sim.RerunJobs, []int64{710000}) {
+		t.Fatalf("re-ran runs %v and jobs %v, want no run and job 710000 alone", sim.RerunRuns, sim.RerunJobs)
 	}
 }

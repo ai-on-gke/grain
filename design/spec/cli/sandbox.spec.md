@@ -315,7 +315,7 @@ Usage: `grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <
 | `--workflow` | string |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestStage3SandboxCLICommands`; `pkg/gitproxy/cli_actions_test.go`: `TestCIRetriggerAndRunJobReRunGitHubActionsWhenRepoUsesGitHubCIMode`; `pkg/ui/ci_actions_rerun_test.go`: `TestRetriggerOnGitHubActionsReRunsTheRunsAtTheTasksOwnHead`, `TestRetriggerOnGitHubActionsRefusesAnotherTasksChecks`, `TestRetriggerOnGitHubActionsIsBoundedPerHead`.
+**Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestStage3SandboxCLICommands`; `pkg/gitproxy/cli_actions_test.go`: `TestCIRetriggerAndRunJobReRunGitHubActionsWhenRepoUsesGitHubCIMode`; `pkg/ui/ci_actions_rerun_test.go`: `TestRetriggerOnGitHubActionsReRunsTheRunsAtTheTasksOwnHead`, `TestRetriggerOnGitHubActionsRefusesAnotherTasksChecks`, `TestRetriggerOnGitHubActionsIsBoundedPerHead`, `TestRetriggerOnGitHubActionsBoundsOnlyTheRunsItReRuns`.
 
 ### 3.8 `grain pr …` {#CLI-94}
 
