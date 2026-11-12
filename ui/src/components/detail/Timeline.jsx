@@ -193,6 +193,9 @@ const AUTO_MERGE_STEPS = {
   // who raised it is the review task, who released it the person.
   human_review_requested: "Held for a person's review",
   human_review_released: "Human-review hold released",
+  // A person accepting one review's findings on one gate
+  // (model.LinkReviewFindingsAccepted), with their reason.
+  review_findings_accepted: "Review findings accepted",
 };
 
 // ADMISSION_LABELS names each admission value the way the task pane's

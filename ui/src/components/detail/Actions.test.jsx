@@ -749,6 +749,66 @@ describe("DetailOverlay actions", () => {
   // completed task with no pull request has nothing, and a closed one is
   // refused by ForceMerge (no cycle reads it). A running task with
   // neither a pull request nor a CI commit has not pushed anything yet.
+  it("offers Accept findings on a findings-blocked gate, posting that gate, its review and a reason", async () => {
+    const act = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "completed",
+          pullRequest: "acme/widgets#42",
+          autoMerge: false,
+          ci: { commit: "abc123def4567890" },
+          mergeGates: [
+            { id: "ci", label: "CI", state: "passed" },
+            {
+              id: "security-review",
+              label: "Security review",
+              state: "findings",
+              detail: "security review left findings",
+              reviewTask: "4710",
+            },
+            {
+              id: "review",
+              label: "Code review",
+              state: "running",
+              reviewTask: "4711",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={act}
+      />,
+    );
+
+    // Only the gate held on findings offers it.
+    expect(screen.queryByTestId("accept-findings-review")).toBeNull();
+    await user.click(screen.getByTestId("accept-findings-security-review"));
+    const confirm = screen.getByTestId("confirm-accept-findings");
+    expect(confirm).toBeDisabled();
+    await user.type(
+      screen.getByTestId("accept-findings-reason"),
+      "merge as-is; follow-up filed",
+    );
+    await user.click(confirm);
+
+    expect(act).toHaveBeenCalledWith(expect.any(Function), "12");
+    act.mock.calls[0][0]();
+    expect(api).toHaveBeenCalledWith("/api/tasks/12/accept-findings", {
+      method: "POST",
+      body: JSON.stringify({
+        gate: "security-review",
+        reviewTask: "4710",
+        reason: "merge as-is; follow-up filed",
+        head: "abc123def4567890",
+      }),
+    });
+  });
+
   it("shows no Force merge without anything to merge, or on a closed task", () => {
     const { rerender } = render(
       <DetailOverlay

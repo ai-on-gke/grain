@@ -34,9 +34,11 @@ import {
 } from "../../state.js";
 import { heldForRunNow, pausedUntil, pauseSubject } from "../../alerts.js";
 import { forceMergeOffered } from "../../taskWrites.js";
+import { canAccess } from "../../access.js";
 import TaskLink from "./TaskLink.jsx";
 import AccessGate from "../AccessGate.jsx";
 import GateOverrideDialog from "../GateOverrideDialog.jsx";
+import AcceptFindingsDialog from "../AcceptFindingsDialog.jsx";
 import MergeGatesList, {
   needsHumanApproval,
   overrideReviewButtonLabel,
@@ -149,6 +151,12 @@ export default function Actions({ t, config, act, onOpenTask }) {
   const runNowRestamps = staleRunNow && !isTaskPaused(t) && !frameworkPaused;
   const [closePullRequest, setClosePullRequest] = useState(false);
   const [overrideOpen, setOverrideOpen] = useState(false);
+  const [acceptGate, setAcceptGate] = useState(null);
+  // Accepting findings is a person's decision the server lets an
+  // unlimited role make (ui.Client.AcceptReviewFindings), as Submit.
+  const canAcceptFindings =
+    canAccess(config, "tasks:write", t.repo) &&
+    (!config?.access || Boolean(config.access.full));
   const pendingReviewGates = unsatisfiedReviewGates(t);
   // The wake date beside the Defer button, local to this overlay for
   // closePullRequest's own reason: it is a choice about this deferral,
@@ -445,7 +453,23 @@ export default function Actions({ t, config, act, onOpenTask }) {
           hold, each recorded with who pressed it. */}
       {(t.pullRequest ||
         (t.state === "running" && t.ci?.commit) ||
-        t.gateOverride) && <MergeGatesList t={t} onOpenTask={onOpenTask} />}
+        t.gateOverride) && (
+        <MergeGatesList
+          t={t}
+          onOpenTask={onOpenTask}
+          onAcceptFindings={
+            t.state !== "closed" && canAcceptFindings
+              ? setAcceptGate
+              : undefined
+          }
+        />
+      )}
+      <AcceptFindingsDialog
+        gate={acceptGate}
+        onClose={() => setAcceptGate(null)}
+        t={t}
+        onSubmit={(fn) => act(fn, t.id)}
+      />
       {t.humanReviewHold?.length > 0 && t.state !== "closed" && (
         <Alert
           severity="warning"
@@ -454,7 +478,7 @@ export default function Actions({ t, config, act, onOpenTask }) {
         >
           <strong>Held for a person&apos;s review.</strong>{" "}
           {t.humanReviewHold.every((r) => r.category === "security-findings")
-            ? "Security review left findings: this change will not merge until fixes pass a fresh security review, or an admin overrides the security-review gate."
+            ? "Security review left findings: this change will not merge until fixes pass a fresh security review, or you accept them as they are (Accept findings… on the security-review gate)."
             : "This change will not merge itself until somebody presses Submit or Release hold."}
           <ul style={{ margin: "4px 0 0", paddingLeft: "1.2em" }}>
             {t.humanReviewHold.map((r, i) => (
@@ -931,7 +955,7 @@ export default function Actions({ t, config, act, onOpenTask }) {
                 variant="outlined"
                 color="warning"
                 data-testid="override-review-gates"
-                title="Explicitly override unsatisfied review gates and merge now. Requires merge:force, confirming the pull request number, and a recorded reason."
+                title="Override every unsatisfied gate it names and merge now. Requires merge:force, confirming the pull request number, and a recorded reason. To merge over one review's findings as they are, use Accept findings… on that gate instead."
                 onClick={() => setOverrideOpen(true)}
               >
                 {overrideReviewButtonLabel(pendingReviewGates)}
@@ -940,7 +964,7 @@ export default function Actions({ t, config, act, onOpenTask }) {
               <Button
                 variant="outlined"
                 color="warning"
-                title="Merge this change now, overriding the merge queue's own decision. A reason is required and is recorded on the task and on the pull request, along with what was not green at the time. A branch that does not merge cleanly is still refused: no override can authorise a merge GitHub will not perform."
+                title="Merge this change now, overriding everything: the merge queue's own decision and the gates it waits on. A reason is required and is recorded on the task and on the pull request, along with what was not green at the time. A branch that does not merge cleanly is still refused: no override can authorise a merge GitHub will not perform."
                 onClick={forceMerge}
               >
                 Force merge
