@@ -35,6 +35,7 @@ var releaseManagerGrants = []string{
 	`https://grain.dev/capabilities/api#repos:read={"repo":"ai-on-gke/grain"}`,
 	`https://grain.dev/capabilities/api#task-admin={"repo":"ai-on-gke/grain"}`,
 	`https://grain.dev/capabilities/api#ci-read={"repo":"ai-on-gke/grain"}`,
+	"https://grain.dev/capabilities/api#templates:read",
 	"https://grain.dev/capabilities/api#self-debug",
 }
 
@@ -125,6 +126,15 @@ func TestTheReleaseManagerLandsApprovedWithItsGrants(t *testing.T) {
 	for _, scope := range []model.APIScope{"releases:write", "schedules:write", "repos:write", "dispatch:write"} {
 		if grants.Allows(scope, "ai-on-gke/grain") {
 			t.Errorf("%s holds %s; a release manager only reads releases, schedules and dispatch", releaseManagerTemplatePath, scope)
+		}
+	}
+	// What its body calls: comments, edits, retries and undefers
+	// (tasks:write), retry-merge, notify, the repository's declarations and,
+	// for the edition, GET /api/templates.
+	for _, scope := range []model.APIScope{"tasks:read", "tasks:write", "merge:write",
+		"notifications:write", "ci:read", "repos:read", "templates:read"} {
+		if !grants.Allows(scope, "ai-on-gke/grain") {
+			t.Errorf("%s does not hold %s, which its body uses", releaseManagerTemplatePath, scope)
 		}
 	}
 
