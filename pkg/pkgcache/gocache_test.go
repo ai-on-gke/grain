@@ -28,6 +28,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -458,5 +460,116 @@ func TestGoCacheProgStandaloneBinaryWithGoBuild(t *testing.T) {
 	)
 	if out, err := cmd3.CombinedOutput(); err != nil {
 		t.Fatalf("go build (VM 3) with unreachable GOCACHEPROG server failed instead of falling back: %v\n%s", err, out)
+	}
+}
+
+// readOnlyGoCacheServer is the daemon's arrangement: a job token set that
+// knows no sandbox, so every tokenless caller is "readonly". It counts the
+// lines the server logs.
+func readOnlyGoCacheServer(t *testing.T) (*Server, func() []string) {
+	t.Helper()
+	cache, err := NewCache(t.TempDir(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var lines []string
+	s := NewServer(Config{
+		Cache:             cache,
+		JobTokens:         NewJobTokenSet(false),
+		SplitGoCacheTrust: true,
+		Log: func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			lines = append(lines, fmt.Sprintf(format, args...))
+		},
+	})
+	return s, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), lines...)
+	}
+}
+
+func TestGoCacheReadOnlyPutBurstLogsBoundedLines(t *testing.T) {
+	s, logged := readOnlyGoCacheServer(t)
+	now := time.Date(2026, 11, 12, 23, 21, 0, 0, time.UTC)
+	s.readOnlyLog.now = func() time.Time { return now }
+
+	put := func(remote, path string, body []byte) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPut, path, bytes.NewReader(body))
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("readonly PUT %s = %d, want 403", path, rec.Code)
+		}
+		if got := rec.Body.String(); got != goCacheReadOnly+"\n" {
+			t.Fatalf("readonly PUT body = %q, want %q", got, goCacheReadOnly+"\n")
+		}
+	}
+
+	// One go test ./... worth of uploads from two sandboxes, each on many
+	// connections, all inside one minute.
+	act, _ := json.Marshal(GoCacheAction{OutputID: strings.Repeat("e", 64), Size: 1})
+	for i := 0; i < 5000; i++ {
+		for _, remote := range []string{"10.0.0.2", "10.0.0.3"} {
+			addr := fmt.Sprintf("%s:%d", remote, 40000+i%100)
+			put(addr, goCacheOutputPrefix+fmt.Sprintf("%064x", i), []byte("x"))
+			put(addr, goCacheActionPrefix+fmt.Sprintf("%016x", i), act)
+		}
+		now = now.Add(time.Millisecond)
+	}
+	if got := logged(); len(got) != 2 {
+		t.Fatalf("20000 refused PUTs from 2 sandboxes logged %d lines, want 2 (one per sandbox):\n%s", len(got), strings.Join(got, "\n"))
+	}
+
+	// Once the interval has passed, the next refusal reports the count.
+	now = now.Add(goCacheReadOnlyLogEvery)
+	put("10.0.0.2:40000", goCacheOutputPrefix+strings.Repeat("f", 64), []byte("x"))
+	got := logged()
+	if len(got) != 3 {
+		t.Fatalf("after %s logged %d lines, want 3:\n%s", goCacheReadOnlyLogEvery, len(got), strings.Join(got, "\n"))
+	}
+	if want := "refused 10000 more read-only Go build cache writes from 10.0.0.2"; !strings.Contains(got[2], want) {
+		t.Errorf("count line = %q, want it to contain %q", got[2], want)
+	}
+}
+
+func TestGoCacheProgStopsUploadingAfterReadOnlyRefusal(t *testing.T) {
+	s, logged := readOnlyGoCacheServer(t)
+	var puts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			puts.Add(1)
+		}
+		s.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+
+	const n = 500
+	resps := runProgSession(t, srv.URL, t.TempDir(), func(w io.Writer) {
+		enc := json.NewEncoder(w)
+		for i := 0; i < n; i++ {
+			body := []byte(fmt.Sprintf("compiled package %d", i))
+			actionID := sha256.Sum256([]byte(fmt.Sprintf("action %d", i)))
+			outputID := sha256.Sum256(body)
+			_ = enc.Encode(GoCacheProgRequest{ID: int64(i + 1), Command: GoCacheProgCmdPut, ActionID: actionID[:], OutputID: outputID[:], BodySize: int64(len(body))})
+			_ = enc.Encode(body)
+		}
+		_ = enc.Encode(GoCacheProgRequest{ID: n + 1, Command: GoCacheProgCmdClose})
+	})
+	for i := 1; i <= n; i++ {
+		if r := resps[int64(i)]; r.Err != "" || r.DiskPath == "" {
+			t.Fatalf("put %d = %+v, want a local DiskPath despite the refused upload", i, r)
+		}
+	}
+	// At most the uploads already in flight when the first 403 came back.
+	if got := puts.Load(); got > 16 {
+		t.Errorf("helper sent %d PUTs to a cache that refuses its writes, want it to stop after the first 403", got)
+	}
+	if got := logged(); len(got) != 1 {
+		t.Errorf("server logged %d lines, want 1:\n%s", len(got), strings.Join(got, "\n"))
 	}
 }

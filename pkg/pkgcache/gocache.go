@@ -38,6 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -217,6 +218,86 @@ func (s *Server) goCacheNamespace(r *http.Request, pathNS string) (ns, scope str
 const goCacheReadOnly = "grain's Go build cache only takes writes from authenticated CI jobs: " +
 	"this sandbox reads the trusted build cache and keeps what it compiles to itself."
 
+// goCacheReadOnlyLogEvery is how often refusals of one caller's read-only
+// writes, after the first, are reported as a count.
+const goCacheReadOnlyLogEvery = time.Minute
+
+// goCacheReadOnlyLogMax bounds how many callers readOnlyLog remembers;
+// past it the record starts over, which costs one more logged line per
+// caller rather than unbounded memory.
+const goCacheReadOnlyLogMax = 4096
+
+// readOnlyLog keeps the daemon's log readable while it refuses read-only
+// Go build cache writes. Every write a sandbox's build makes is refused
+// alike and on purpose, and one go test ./... makes thousands, so the
+// first refusal from each caller is logged in full and the rest are only
+// counted, reported at most once per goCacheReadOnlyLogEvery.
+type readOnlyLog struct {
+	mu      sync.Mutex
+	now     func() time.Time
+	callers map[string]*readOnlyCaller
+}
+
+type readOnlyCaller struct {
+	since      time.Time
+	suppressed int
+}
+
+// refuseGoCacheReadOnly refuses a read-only caller's PUT with the same
+// 403 and body refuse gives, logging it as readOnlyLog allows.
+func (s *Server) refuseGoCacheReadOnly(w http.ResponseWriter, r *http.Request) {
+	caller := remoteHost(r)
+	if line, ok := s.readOnlyLog.note(caller); ok {
+		if line == "" {
+			s.logf("package cache: refused %s %s: %s (further refused Go build cache writes from %s are counted, not logged)",
+				r.Method, requestTarget(r), goCacheReadOnly, caller)
+		} else {
+			s.logf("%s", line)
+		}
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	fmt.Fprintln(w, goCacheReadOnly)
+}
+
+// note records one refusal from caller. It says whether to log, and what:
+// "" for the caller's first refusal (logged in full by the caller), or a
+// count of those refused since the last line once goCacheReadOnlyLogEvery
+// has passed.
+func (l *readOnlyLog) note(caller string) (string, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	if l.now != nil {
+		now = l.now()
+	}
+	c, ok := l.callers[caller]
+	if !ok {
+		if l.callers == nil || len(l.callers) >= goCacheReadOnlyLogMax {
+			l.callers = map[string]*readOnlyCaller{}
+		}
+		l.callers[caller] = &readOnlyCaller{since: now}
+		return "", true
+	}
+	c.suppressed++
+	if now.Sub(c.since) < goCacheReadOnlyLogEvery {
+		return "", false
+	}
+	line := fmt.Sprintf("package cache: refused %d more read-only Go build cache writes from %s in the last %s",
+		c.suppressed, caller, now.Sub(c.since).Round(time.Second))
+	c.since, c.suppressed = now, 0
+	return line, true
+}
+
+// remoteHost is the address a request came from, without its port, so
+// one sandbox's many connections count as one caller.
+func remoteHost(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
 func (s *Server) openGoCacheAction(actionID, ns, scope string) (Object, bool) {
 	var keys []string
 	switch ns {
@@ -284,7 +365,7 @@ func (s *Server) serveGoCacheAction(w http.ResponseWriter, r *http.Request, rawI
 
 	case http.MethodPut:
 		if ns == "readonly" {
-			s.refuse(w, r, http.StatusForbidden, goCacheReadOnly)
+			s.refuseGoCacheReadOnly(w, r)
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
@@ -383,7 +464,7 @@ func (s *Server) serveGoCacheOutput(w http.ResponseWriter, r *http.Request, rawI
 		// caller that may write no action entry has nothing to store one
 		// for, and is not given the shared disk to fill.
 		if ns, _ := s.goCacheNamespace(r, ""); ns == "readonly" {
-			s.refuse(w, r, http.StatusForbidden, goCacheReadOnly)
+			s.refuseGoCacheReadOnly(w, r)
 			return
 		}
 		entry, err := s.cache.NewWriter(KindGoBuild, goCacheOutputKey(outputID))
@@ -544,6 +625,12 @@ func RunGoCacheProg(ctx context.Context, stdin io.Reader, stdout io.Writer, base
 		}
 		return hex.EncodeToString(h.Sum(nil)) == outputIDHex
 	}
+
+	// readOnly is set by the first upload the cache refuses with 403: a
+	// sandbox the cache does not know as a CI job may read the trusted
+	// build cache but not write it, and that does not change for the life
+	// of this process, so the rest of its uploads are not sent at all.
+	var readOnly atomic.Bool
 
 	var reqWg sync.WaitGroup
 	var uploadWg sync.WaitGroup
@@ -717,7 +804,7 @@ func RunGoCacheProg(ctx context.Context, stdin io.Reader, stdout io.Writer, base
 			Size:     int64(len(body)),
 		})
 
-		if baseURL == "" || err != nil {
+		if baseURL == "" || err != nil || readOnly.Load() {
 			return
 		}
 		uploadWg.Add(1)
@@ -725,6 +812,9 @@ func RunGoCacheProg(ctx context.Context, stdin io.Reader, stdout io.Writer, base
 			defer uploadWg.Done()
 			uploadSem <- struct{}{}
 			defer func() { <-uploadSem }()
+			if readOnly.Load() {
+				return
+			}
 
 			putOutReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, baseURL+goCacheOutputPrefix+outputIDHex, bytes.NewReader(body))
 			if reqErr != nil {
@@ -738,6 +828,10 @@ func RunGoCacheProg(ctx context.Context, stdin io.Reader, stdout io.Writer, base
 			}
 			_, _ = io.Copy(io.Discard, outResp.Body)
 			outResp.Body.Close()
+			if outResp.StatusCode == http.StatusForbidden {
+				readOnly.Store(true)
+				return
+			}
 			if outResp.StatusCode < 200 || outResp.StatusCode >= 300 {
 				return
 			}
@@ -754,6 +848,9 @@ func RunGoCacheProg(ctx context.Context, stdin io.Reader, stdout io.Writer, base
 			}
 			_, _ = io.Copy(io.Discard, actResp.Body)
 			actResp.Body.Close()
+			if actResp.StatusCode == http.StatusForbidden {
+				readOnly.Store(true)
+			}
 		}(actionIDHex, outputIDHex, body, encodedAct)
 	}
 
