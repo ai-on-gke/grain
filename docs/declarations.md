@@ -835,7 +835,10 @@ trigger's `trigger:<name>` findings) until one of three things happens:
   `human: required` trigger names and security holds all still apply. A
   later push is classified and reviewed as any push is, and findings a new
   review leaves need a new decision. Once nothing else holds the change, it
-  merges itself as it was going to.
+  merges itself as it was going to. The panel offers it only on a gate whose
+  findings a review left (the merge gate's `acceptable`). A gate held
+  because its review could not be filed has no review's findings to accept:
+  a re-review or Force merge settles that.
 - **Force merge.** This overrides *every* gate it names, under
   `merge:force`. It is for overriding everything, not for a decision about
   one review's findings.

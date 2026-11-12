@@ -229,3 +229,32 @@ func TestReviewFindingsAcceptancePersists(t *testing.T) {
 		})
 	}
 }
+
+// A gate offers acceptance only where accepting clears something: its
+// review's findings are acceptable, a record no review stands behind (a
+// review that could not be filed) is not.
+func TestMergeGatesMarkAcceptableFindings(t *testing.T) {
+	acceptable := func(task model.Task, id string) bool {
+		for _, g := range model.ComputeMergeGates(task, nil, nil) {
+			if g.ID == id {
+				return g.Acceptable
+			}
+		}
+		t.Fatalf("no %s gate on %+v", id, task.Links)
+		return false
+	}
+	task := findingsTask()
+	if !acceptable(task, model.GateSecurityReview) || !acceptable(task, model.GateReview) {
+		t.Errorf("review 4710's findings are not offered for acceptance: %+v", model.ComputeMergeGates(task, nil, nil))
+	}
+	failed := model.Task{ID: "62", Links: []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#62"},
+		{Kind: model.LinkSecurityReviewTask, Target: "63"}}}
+	model.AddReviewFindings(&failed, model.ReviewFindingsRecord{Gate: model.GateSecurityReview,
+		Summary: "filing security review failed: boom", At: acceptAt})
+	if gateState(t, failed, model.GateSecurityReview) != model.GateStateFindings {
+		t.Fatalf("a failed filing does not hold the security-review gate: %+v", failed.Links)
+	}
+	if acceptable(failed, model.GateSecurityReview) {
+		t.Error("a review that could not be filed is offered for acceptance")
+	}
+}

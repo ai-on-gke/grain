@@ -745,10 +745,6 @@ describe("DetailOverlay actions", () => {
     window.prompt.mockRestore();
   });
 
-  // Offered on a task with something to merge, and on no other: a
-  // completed task with no pull request has nothing, and a closed one is
-  // refused by ForceMerge (no cycle reads it). A running task with
-  // neither a pull request nor a CI commit has not pushed anything yet.
   it("offers Accept findings on a findings-blocked gate, posting that gate, its review and a reason", async () => {
     const act = vi.fn();
     const user = userEvent.setup();
@@ -768,11 +764,13 @@ describe("DetailOverlay actions", () => {
               state: "findings",
               detail: "security review left findings",
               reviewTask: "4710",
+              acceptable: true,
             },
             {
               id: "review",
               label: "Code review",
-              state: "running",
+              state: "findings",
+              detail: "filing gating review failed: boom",
               reviewTask: "4711",
             },
           ],
@@ -785,7 +783,7 @@ describe("DetailOverlay actions", () => {
       />,
     );
 
-    // Only the gate held on findings offers it.
+    // Only a gate held on a review's findings it can accept offers it.
     expect(screen.queryByTestId("accept-findings-review")).toBeNull();
     await user.click(screen.getByTestId("accept-findings-security-review"));
     const confirm = screen.getByTestId("confirm-accept-findings");
@@ -809,6 +807,10 @@ describe("DetailOverlay actions", () => {
     });
   });
 
+  // Offered on a task with something to merge, and on no other: a
+  // completed task with no pull request has nothing, and a closed one is
+  // refused by ForceMerge (no cycle reads it). A running task with
+  // neither a pull request nor a CI commit has not pushed anything yet.
   it("shows no Force merge without anything to merge, or on a closed task", () => {
     const { rerender } = render(
       <DetailOverlay

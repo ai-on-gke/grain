@@ -103,6 +103,17 @@ func ReviewFindingsAcceptances(t Task) []ReviewFindingsAcceptance {
 	return out
 }
 
+// ReviewFindingsAccepted reports whether a person has accepted
+// reviewTask's findings on gate of t.
+func ReviewFindingsAccepted(t Task, gate, reviewTask string) bool {
+	for _, a := range ReviewFindingsAcceptances(t) {
+		if a.Gate == gate && a.ReviewTask == reviewTask {
+			return true
+		}
+	}
+	return false
+}
+
 // findingsGateCovers reports whether a findings record on recGate belongs
 // to the merge gate gate as ComputeMergeGates shows it: the code-review
 // gate ("review") lists the findings of every gating trigger review

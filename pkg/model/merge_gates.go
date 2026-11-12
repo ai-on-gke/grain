@@ -73,6 +73,12 @@ type MergeGate struct {
 	ReviewTask  string         `json:"reviewTask,omitempty"`
 	ApprovedBy  string         `json:"approvedBy,omitempty"`
 	Overridable bool           `json:"overridable,omitempty"`
+	// Acceptable marks a findings gate whose findings are ReviewTask's to
+	// accept as they are (AcceptReviewFindings), which is when the task
+	// pane offers "Accept findings…". A findings record no review stands
+	// behind -- a review that could not be filed, fixes closed unmerged --
+	// is not, and leaves it false.
+	Acceptable bool `json:"acceptable,omitempty"`
 }
 
 // ReviewFindingsRecord records that a required review left findings, open
@@ -559,6 +565,11 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 		gates = append(gates, g)
 	}
 
+	for i := range gates {
+		if gates[i].State == GateStateFindings && gates[i].ReviewTask != "" {
+			_, gates[i].Acceptable = AcceptableReviewFindings(t, gates[i].ID, gates[i].ReviewTask)
+		}
+	}
 	return gates
 }
 
