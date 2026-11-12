@@ -218,16 +218,18 @@ export function duration(from?: string, to?: string): string {
                 >
                   ⤢
                 </button>
-                <button
-                  type="button"
-                  class="icon-btn"
-                  data-testid="pane-close"
-                  aria-label="Close the task pane"
-                  gTip="Close (Esc)"
-                  (click)="closed.emit()"
-                >
-                  ×
-                </button>
+                @if (closable()) {
+                  <button
+                    type="button"
+                    class="icon-btn"
+                    data-testid="pane-close"
+                    aria-label="Close the task pane"
+                    gTip="Close (Esc)"
+                    (click)="closed.emit()"
+                  >
+                    ×
+                  </button>
+                }
               </span>
             }
           </div>
@@ -1345,6 +1347,7 @@ export class TaskDetailComponent implements OnDestroy {
   // pane is the Tasks right-hand pane: narrower, Details as a tab, its
   // tab kept in ?pane=, links to other tasks select them in the pane.
   readonly pane = input(false);
+  readonly closable = input(true);
   readonly from = input<string>();
   readonly back = input<BackLink | null>(null);
   // acted fires after an action went through, so a list beside the pane

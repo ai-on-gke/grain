@@ -1531,6 +1531,13 @@ describe("inbox page helpers", () => {
       );
       expect(wordMarks).toContain("5");
       expect(wordMarks).toContain("15");
+      const diffTexts = [...diffEl.querySelectorAll(".diff-text")].map(
+        (el) => el.textContent,
+      );
+      expect(diffTexts).toEqual([
+        "ttl := 5 * time.Minute",
+        "ttl := 15 * time.Minute",
+      ]);
 
       // Shortcut `e` focuses inbox-talk-input on non-reply items
       document.body.dispatchEvent(
@@ -1581,6 +1588,155 @@ describe("inbox page helpers", () => {
       expect(TestBed.inject(SnackbarService).current()?.message).toContain(
         "Sent to #42 — agent waking on the pull request",
       );
+
+      // Partial wake failure: clears talkDraft to prevent duplicate comments and surfaces exact actionError
+      api.posts = [];
+      const origPost = api.post;
+      api.post = (route, params, body) => {
+        api.posts.push({ route, params, body });
+        if (route === "POST /api/tasks/{id}/run-now") {
+          return Promise.reject(new Error("sandbox busy"));
+        }
+        return Promise.resolve({});
+      };
+      talkBox.value = "Follow-up note before wake";
+      talkBox.dispatchEvent(new Event("input"));
+      await f.whenStable();
+      q<HTMLButtonElement>(f, '[data-testid="inbox-send-wake"]')!.click();
+      await new Promise((r) => setTimeout(r, 15));
+      await f.whenStable();
+      expect(talkBox.value).toBe("");
+      expect(q(f, '[data-testid="action-error"]')?.textContent).toContain(
+        "Comment posted to #42, saved in conversation, but could not wake the agent: sandbox busy",
+      );
+      api.post = origPost;
+
+      // Proposal (#46): Comment only stays enabled, Send & wake agent is disabled (no run-now bypass)
+      rowByRef(f, "#46").querySelector<HTMLButtonElement>(".row-main")!.click();
+      await f.whenStable();
+      const propWake = q<HTMLButtonElement>(
+        f,
+        '[data-testid="inbox-send-wake"]',
+      )!;
+      expect(propWake.disabled).toBe(true);
+      expect(propWake.title).toContain("Approve the proposal first");
+      expect(q(f, ".composer-hint")?.textContent).not.toContain(
+        "Ctrl+Enter wakes agent",
+      );
+      const propInput = q<HTMLTextAreaElement>(
+        f,
+        '[data-testid="inbox-talk-input"]',
+      )!;
+      propInput.value = "Scope to HTTP/2 only";
+      propInput.dispatchEvent(new Event("input"));
+      await f.whenStable();
+      expect(
+        q<HTMLButtonElement>(f, '[data-testid="inbox-send-comment"]')!.disabled,
+      ).toBe(false);
+      expect(propWake.disabled).toBe(true);
+    });
+
+    it("hides Comment only on awaiting_reply holds (access/secret/stopped) and skips redundant run-now when comment resumes", async () => {
+      const api = new FakeApi();
+      api.taskList = [
+        {
+          id: "81",
+          title: "Need deploy grant",
+          state: "awaiting_reply",
+          awaitingAccess: true,
+          repo: "sidthe/grain",
+        },
+      ];
+      api.details["81"] = {
+        id: "81",
+        title: "Need deploy grant",
+        state: "awaiting_reply",
+        repo: "sidthe/grain",
+        pendingAccess: {
+          summary: "Requesting write access",
+          items: [{ kind: "write", repo: "sidthe/grain" }],
+        },
+        comments: [],
+      };
+      api.post = (route, params, body) => {
+        api.posts.push({ route, params, body });
+        if (route === "POST /api/tasks/{id}/comments") {
+          return Promise.resolve({ id: "81", state: "queued" });
+        }
+        return Promise.resolve({});
+      };
+
+      const f = await render(api);
+      await new Promise((r) => setTimeout(r, 10));
+      await f.whenStable();
+
+      expect(q(f, '[data-testid="inbox-send-comment"]')).toBeNull();
+      const resumeBtn = q<HTMLButtonElement>(
+        f,
+        '[data-testid="inbox-send-wake"]',
+      )!;
+      expect(resumeBtn.textContent?.trim()).toBe("Reply & resume agent");
+
+      const talkBox = q<HTMLTextAreaElement>(
+        f,
+        '[data-testid="inbox-talk-input"]',
+      )!;
+      talkBox.value = "Use read-only mode instead";
+      talkBox.dispatchEvent(new Event("input"));
+      await f.whenStable();
+      resumeBtn.click();
+      await new Promise((r) => setTimeout(r, 15));
+      await f.whenStable();
+
+      expect(api.posts).toEqual([
+        {
+          route: "POST /api/tasks/{id}/comments",
+          params: { id: "81" },
+          body: { body: "Use read-only mode instead" },
+        },
+      ]);
+    });
+
+    it("shows live transcript on host-script entries with running task detail and clears polling on destroy", async () => {
+      const api = new FakeApi();
+      api.localScriptApprovals = () =>
+        Promise.resolve([
+          {
+            id: "lsa-1",
+            taskId: "91",
+            script: "deploy-check",
+            args: ["--dry-run"],
+          },
+        ]);
+      api.details["91"] = {
+        id: "91",
+        title: "Run deploy check",
+        state: "running",
+        repo: "sidthe/grain",
+        attempts: [{ number: 2, startedAt: "2026-11-11T10:00:00Z" }],
+        comments: [],
+      };
+      (api as { get: (route: string) => Promise<unknown> }).get = (
+        route: string,
+      ) => {
+        if (route === "GET /api/tasks/{id}/attempts/{number}/transcript") {
+          return Promise.resolve({ transcript: "step 1: checking cluster..." });
+        }
+        return Promise.resolve({});
+      };
+
+      const f = await render(api);
+      await new Promise((r) => setTimeout(r, 20));
+      await f.whenStable();
+
+      expect(q(f, '[data-testid="inbox-live-transcript"]')?.textContent).toBe(
+        "step 1: checking cluster...",
+      );
+
+      const store = TestBed.inject(InboxStore);
+      expect(store.selectedTranscript()).toBe("step 1: checking cluster...");
+      f.destroy();
+      expect(store.selectedTranscript()).toBeNull();
     });
   });
 });

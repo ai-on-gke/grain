@@ -921,6 +921,7 @@ describe("TasksPageComponent", () => {
       const api = new FakeApi();
       api.live = [];
       const f = await render(api, "backlog");
+      expect(q(f, '[data-testid="pane-close"]')).toBeNull();
       expect(q(f, '[data-testid="tasks-pane-empty"]')!.textContent).toContain(
         "Nothing in this tab",
       );
@@ -1035,12 +1036,30 @@ describe("TasksPageComponent", () => {
       await settle(f);
       expect(TestBed.inject(TasksStore).boards()).toEqual([]);
 
-      // Timeline view toggle keeps persistent right-hand inspector
+      // Opening one menu closes sibling <g-pill-select> / <g-priority-chip> / Saved Boards menus
+      expect(q(f, '[data-testid="saved-boards-menu"]')).not.toBeNull();
+      q<HTMLButtonElement>(f, '[data-testid="tasks-group"]')!.click();
+      await settle(f);
+      expect(q(f, '[data-testid="saved-boards-menu"]')).toBeNull();
+      expect(
+        q(f, '[data-testid="tasks-group-menu"] li')?.getAttribute("role"),
+      ).toBe("none");
+      q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+      await settle(f);
+      expect(q(f, '[data-testid="tasks-group-menu"]')).toBeNull();
+      expect(q(f, '[data-testid="saved-boards-menu"]')).not.toBeNull();
+      q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+      await settle(f);
+
+      // Timeline view toggle keeps persistent right-hand inspector and shows row age
       q<HTMLButtonElement>(f, '[data-testid="tasks-view-timeline"]')!.click();
       await settle(f);
       expect(q(f, '[data-testid="tasks-timeline"]')).toBeTruthy();
       expect(q(f, ".timeline-bar")).toBeTruthy();
+      expect(q(f, ".timeline-row-top .row-age")).toBeTruthy();
       expect(q(f, '[data-testid="tasks-pane"]')).toBeTruthy();
+      // Auto-selected pane hides × when ?task= is unset
+      expect(q(f, '[data-testid="pane-close"]')).toBeNull();
     });
   });
 });

@@ -20,6 +20,66 @@
     visibility: hidden;
     overflow: hidden;
   }
+  g-tasks-page .tasks-split.is-dragging {
+    cursor: col-resize;
+    user-select: none;
+  }
+  g-tasks-page .tasks-list-pane {
+    border-right: 1px solid var(--md-sys-color-outline-variant);
+  }
+  g-tasks-page .inbox-resizer {
+    display: block;
+    position: relative;
+    z-index: 4;
+    width: 0;
+    touch-action: none;
+  }
+  g-tasks-page .inbox-resizer::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -12px;
+    width: 24px;
+    cursor: col-resize;
+  }
+  g-tasks-page .inbox-resizer-pill {
+    position: absolute;
+    top: 50%;
+    left: -2px;
+    width: 4px;
+    height: 36px;
+    transform: translateY(-50%);
+    border-radius: 2px;
+    background: var(--md-sys-color-outline);
+    pointer-events: none;
+  }
+  g-tasks-page .inbox-resizer:hover .inbox-resizer-pill,
+  g-tasks-page .is-dragging .inbox-resizer-pill {
+    background: var(--md-sys-color-primary);
+    height: 56px;
+  }
+  g-tasks-page .inbox-resizer:focus-visible {
+    outline: none;
+  }
+  g-tasks-page .inbox-resizer:focus-visible .inbox-resizer-pill {
+    background: var(--md-sys-color-primary);
+    outline: 2px solid var(--md-sys-color-primary);
+    outline-offset: 3px;
+    height: 56px;
+  }
+  g-tasks-page .inbox-resizer-badge {
+    position: absolute;
+    top: 12px;
+    left: 8px;
+    padding: 2px 8px;
+    border-radius: var(--md-sys-shape-corner-full);
+    background: var(--md-sys-color-inverse-surface);
+    color: var(--md-sys-color-inverse-on-surface);
+    font-size: 12px;
+    white-space: nowrap;
+    pointer-events: none;
+  }
   g-tasks-page .tasks-detail-pane {
     position: static;
     inset: auto;
@@ -32,6 +92,10 @@
     display: inline-flex;
     gap: 2px;
     margin-left: auto;
+  }
+  g-tasks-page .split-controls .btn-text[aria-pressed="true"] {
+    background: var(--md-sys-color-secondary-container);
+    color: var(--md-sys-color-on-secondary-container);
   }
 }
 
@@ -221,8 +285,13 @@
 }
 
 .timeline-row-top .status-pill,
+.timeline-row-top .row-age,
 .timeline-row-top g-priority-chip {
   flex-shrink: 0;
+}
+
+.timeline-row-top .row-age {
+  font-size: 12px;
 }
 
 .timeline-row-title {

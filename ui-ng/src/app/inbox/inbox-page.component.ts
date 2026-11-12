@@ -983,7 +983,7 @@ const ONE_KEY = new Set(["approve"]);
                         >
                       }
                     </h3>
-                    @if (sel.task?.state === "running") {
+                    @if (isTaskRunning(sel)) {
                       <span class="status-pill setup">Live</span>
                     }
                   </div>
@@ -1032,7 +1032,7 @@ const ONE_KEY = new Set(["approve"]);
                   }
 
                   @if (
-                    sel.task?.state === "running" && store.selectedTranscript();
+                    isTaskRunning(sel) && store.selectedTranscript();
                     as liveOut
                   ) {
                     <pre
@@ -1063,28 +1063,41 @@ const ONE_KEY = new Set(["approve"]);
                         </p>
                       }
                       <div class="inbox-talk-actions">
-                        <span class="muted composer-hint"
-                          >e focuses · Ctrl+Enter wakes agent</span
-                        >
+                        <span class="muted composer-hint">
+                          @if (isAwaitingReplyHold(sel)) {
+                            Replying clears the hold and resumes the agent{{
+                              canWake(sel) ? " · Ctrl+Enter sends" : ""
+                            }}
+                          } @else {
+                            e focuses{{
+                              canWake(sel) ? " · Ctrl+Enter wakes agent" : ""
+                            }}
+                          }
+                        </span>
                         <div class="inbox-talk-btns">
-                          <button
-                            type="button"
-                            class="btn-tonal"
-                            data-testid="inbox-send-comment"
-                            [disabled]="
-                              !talkDraft().trim() ||
-                              !!store.busy() ||
-                              !can(commentsRoute, sel) ||
-                              !!talkBlock(sel)
-                            "
-                            (click)="sendTalk(sel, false)"
-                          >
-                            Comment only
-                          </button>
+                          @if (!isAwaitingReplyHold(sel)) {
+                            <button
+                              type="button"
+                              class="btn-tonal"
+                              data-testid="inbox-send-comment"
+                              [disabled]="
+                                !talkDraft().trim() ||
+                                !!store.busy() ||
+                                !can(commentsRoute, sel) ||
+                                !!talkBlock(sel)
+                              "
+                              (click)="sendTalk(sel, false)"
+                            >
+                              Comment only
+                            </button>
+                          }
                           <button
                             type="button"
                             class="btn-primary"
                             data-testid="inbox-send-wake"
+                            [title]="
+                              !canWake(sel) ? wakeDeniedReason(sel) : null
+                            "
                             [disabled]="
                               !talkDraft().trim() ||
                               !!store.busy() ||
@@ -1093,7 +1106,11 @@ const ONE_KEY = new Set(["approve"]);
                             "
                             (click)="sendTalk(sel, true)"
                           >
-                            Send &amp; wake agent
+                            {{
+                              isAwaitingReplyHold(sel)
+                                ? "Reply & resume agent"
+                                : "Send & wake agent"
+                            }}
                           </button>
                         </div>
                       </div>
@@ -1164,7 +1181,7 @@ const ONE_KEY = new Set(["approve"]);
                                         seg.text
                                       }}</mark>
                                     } @else {
-                                      {{ seg.text }}
+                                      <span>{{ seg.text }}</span>
                                     }
                                   }
                                 </span>
@@ -1508,6 +1525,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     if (this.respondTimer) clearTimeout(this.respondTimer);
+    this.store.clearLiveTranscript();
     this.store.wsTaskIds.set(null);
     this.wsStore.selectedKey.set(null);
     this.sp.detach();
@@ -1732,7 +1750,30 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     return c.authorLabel || c.author || "Unknown";
   }
 
+  protected isTaskRunning(sel: InboxEntry): boolean {
+    return (
+      sel.task?.state === "running" ||
+      this.store.selectedDetail()?.state === "running"
+    );
+  }
+
+  protected isAwaitingReplyHold(sel: InboxEntry): boolean {
+    const st = sel.task?.state ?? this.store.selectedDetail()?.state;
+    return (
+      st === "awaiting_reply" ||
+      sel.kind === "access" ||
+      sel.kind === "secret" ||
+      sel.kind === "stopped"
+    );
+  }
+
   protected talkPlaceholder(sel: InboxEntry): string {
+    if (this.isAwaitingReplyHold(sel)) {
+      return "Reply to clear the hold and resume the agent…";
+    }
+    if (sel.kind === "proposal") {
+      return "Leave a shaping note on this proposal…";
+    }
     if (
       sel.kind === "submit" ||
       sel.kind === "merge-blocked" ||
@@ -1764,16 +1805,46 @@ export class InboxPageComponent implements OnInit, OnDestroy {
 
   protected canWake(sel: InboxEntry): boolean {
     if (!this.can(this.commentsRoute, sel)) return false;
-    const st = sel.task?.state;
-    if (st === "closed" || st === "running" || st === "queued") return true;
+    const st = sel.task?.state ?? this.store.selectedDetail()?.state;
+    if (sel.kind === "proposal" || st === "proposed") return false;
+    if (st === "closed") {
+      return this.can("POST /api/tasks/{id}/reopen", sel);
+    }
+    if (st === "running" || st === "queued" || this.isAwaitingReplyHold(sel)) {
+      return true;
+    }
     if (this.can(this.runNowRoute, sel)) return true;
-    if (
-      (st === "failed" || !!sel.task?.turnStopped) &&
-      this.can(this.retryRoute, sel)
-    ) {
+    if (st === "failed" && this.can(this.retryRoute, sel)) {
       return true;
     }
     return false;
+  }
+
+  protected wakeDeniedReason(sel: InboxEntry): string {
+    const repo = sel.repo || undefined;
+    const commentWhy = this.access.deniedReason(this.commentsRoute, repo);
+    if (commentWhy) return commentWhy;
+    const st = sel.task?.state ?? this.store.selectedDetail()?.state;
+    if (sel.kind === "proposal" || st === "proposed") {
+      return "Approve the proposal first before waking an agent on it.";
+    }
+    if (st === "closed") {
+      return (
+        this.access.deniedReason("POST /api/tasks/{id}/reopen", repo) ||
+        "No permission to reopen this task."
+      );
+    }
+    if (st === "failed") {
+      return (
+        this.access.deniedReason(this.retryRoute, repo) ||
+        this.access.deniedReason(this.runNowRoute, repo) ||
+        "No permission to retry or wake this task."
+      );
+    }
+    return (
+      this.access.deniedReason(this.runNowRoute, repo) ||
+      "No permission to wake the agent on this task."
+    );
   }
 
   protected onTalkShortcut(ev: Event, sel: InboxEntry): void {
@@ -1793,10 +1864,12 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     const res = await this.store.talkToTask(expectedId, text, wake, (fresh) =>
       !fresh ? `#${expectedId} could not be read.` : "",
     );
-    if (res.ok) {
-      this.pulseResponding();
+    if (res.ok || res.commentPosted) {
       this.talkDraft.set("");
       this.talkTarget.set(null);
+    }
+    if (res.ok) {
+      this.pulseResponding();
       if (res.woke) {
         const onPr =
           !!sel.task?.pullRequest ||

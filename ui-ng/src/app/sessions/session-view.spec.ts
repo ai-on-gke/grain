@@ -17,6 +17,7 @@ import {
   annotateDiffHunk,
   diffWordPair,
   highlightCode,
+  sanitizeMarkdownHtml,
 } from "../shared/code-highlight";
 import {
   apiGrantCount,
@@ -128,12 +129,34 @@ describe("messages", () => {
     expect(lastLine([c({ body: "x".repeat(200) })])).toHaveLength(120);
   });
 
-  it("renders Markdown and shows raw HTML as text", () => {
+  it("renders Markdown and shows raw HTML as text, including Marked inRawBlock bypass payloads", () => {
     const html = renderMarkdown("**bold** <script>alert(1)</script>");
     expect(html).toContain("<strong>bold</strong>");
     expect(html).not.toContain("<script>");
     expect(html).toContain("&lt;script&gt;");
     expect(renderMarkdown("`a < b`")).toContain("<code>a &lt; b</code>");
+
+    const kbdImg = renderMarkdown("hello <kbd> <img/src=x onerror=alert(1)>");
+    expect(kbdImg).not.toContain("<img");
+    expect(kbdImg).toContain("&lt;img/src=x onerror=alert(1)&gt;");
+
+    const kbdSvg = renderMarkdown("hello <kbd> <svg/onload=alert(1)>");
+    expect(kbdSvg).not.toContain("<svg");
+    expect(kbdSvg).toContain("&lt;svg/onload=alert(1)&gt;");
+
+    const sanitized = sanitizeMarkdownHtml(
+      renderMarkdown("```ts\nconst x = 1;\n```") +
+        '<svg onload="alert(1)"></svg><script>evil()</script><input value="x"><a href="javascript:alert(1)" onclick="evil()">bad</a>',
+    );
+    expect(sanitized).not.toContain("<svg");
+    expect(sanitized).not.toContain("<script");
+    expect(sanitized).not.toContain("<input");
+    expect(sanitized).not.toContain("onclick");
+    expect(sanitized).not.toContain("javascript:");
+    expect(sanitized).toContain('<a href="#">bad</a>');
+    expect(sanitized).toContain('class="code-card"');
+    expect(sanitized).toContain('data-copy-code="1"');
+    expect(sanitized).toContain('class="tok-kw"');
   });
 
   it("opens links in a new tab, drops unsafe ones and never loads images", () => {
@@ -158,6 +181,9 @@ describe("messages", () => {
     );
     expect(safeHref("/next/tasks?tab=all")).toBe("/next/tasks?tab=all");
     expect(safeHref("#section-2")).toBe("#section-2");
+    expect(safeHref("/\\evil.com")).toBeNull();
+    expect(safeHref("/\t/evil.com")).toBeNull();
+    expect(renderMarkdown("[x](/\\evil.com)")).not.toContain("href");
     expect(renderMarkdown("[x](//evil.example/a)")).not.toContain("href");
     const bad = renderMarkdown("[click](javascript:alert(1))");
     expect(bad).not.toContain("href");

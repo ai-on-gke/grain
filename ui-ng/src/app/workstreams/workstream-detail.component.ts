@@ -28,6 +28,7 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
+import { Router } from "@angular/router";
 import { AccessService } from "../services/access.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
@@ -117,6 +118,7 @@ const MODES: { id: LayoutMode; label: string }[] = [
   styleUrls: ["./workstream-detail.css", "./workstreams-shared.css"],
   host: {
     "(document:keydown)": "onKey($event)",
+    "(window:resize)": "onWindowResize()",
   },
   template: `
     @let s = stream();
@@ -318,6 +320,18 @@ const MODES: { id: LayoutMode; label: string }[] = [
         >
           Show all deps
         </button>
+        @if (sp.collapsed()) {
+          <button
+            type="button"
+            class="btn-tonal"
+            data-testid="ws-show-tree"
+            aria-controls="ws-tree-pane"
+            [attr.aria-expanded]="!sp.collapsed()"
+            (click)="restoreTree()"
+          >
+            Show tree
+          </button>
+        }
         @if (expandAll()) {
           <button
             type="button"
@@ -762,8 +776,10 @@ const MODES: { id: LayoutMode; label: string }[] = [
             <g-task-detail
               [id]="tid"
               [pane]="true"
+              [closable]="false"
               [from]="'workstreams:' + s.key"
               (openTask)="onOpenTask($event)"
+              (expand)="openFullTask(tid)"
               (acted)="wsStore.refresh(true)"
             />
           }
@@ -781,6 +797,7 @@ export class WorkstreamDetailComponent implements OnDestroy {
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly keyboard = inject(KeyboardService);
+  private readonly router = inject(Router);
   private readonly host = inject(ElementRef) as ElementRef<HTMLElement>;
 
   readonly stream = input.required<Workstream>();
@@ -803,21 +820,52 @@ export class WorkstreamDetailComponent implements OnDestroy {
   protected readonly dbodyEl = viewChild<ElementRef<HTMLElement>>("dbody");
   private readonly inspEl = viewChild<ElementRef<HTMLElement>>("inspEl");
   private inspReturn: HTMLElement | null = null;
+  private dbodyResizeObs: ResizeObserver | null = null;
+  protected readonly dbodyStage = signal(0);
   protected readonly sp = new SplitController({
     ratioKey: "grain.ws.treeRatio",
     collapsedKey: "grain.ws.treeCollapsed",
     defaultRatio: 0.21,
+    bounds: (stage) => ({
+      min: Math.min(236, stage),
+      max: Math.max(Math.min(236, stage), Math.min(320, stage - 280)),
+    }),
     element: () => this.dbodyEl()?.nativeElement,
   });
 
   protected readonly inspRatio = signal(loadInspRatio());
   protected readonly inspDragging = signal(false);
   private inspDragFrom: number | null = null;
+
+  private clampInspForStage(r: number): number {
+    const base = clampInspRatio(r);
+    const stage =
+      this.dbodyStage() || this.dbodyEl()?.nativeElement?.clientWidth || 0;
+    if (stage <= 0) return base;
+    const isDesktopSplit =
+      this.mode() === "split" &&
+      (typeof window === "undefined" || window.innerWidth >= 1280);
+    const treePx =
+      isDesktopSplit && !this.sp.collapsed()
+        ? Math.min(320, Math.max(236, (this.sp.ratioExact() / 100) * stage))
+        : 0;
+    const maxInspPx = Math.max(360, stage - treePx - 280);
+    const minInspPx = Math.min(isDesktopSplit ? 380 : 440, maxInspPx);
+    const clampedPx = Math.max(
+      minInspPx,
+      Math.min(Math.min(stage * MAX_INSPECTOR_RATIO, maxInspPx), base * stage),
+    );
+    return clampedPx / stage;
+  }
+
+  protected readonly effectiveInspRatio = computed(() =>
+    this.clampInspForStage(this.inspRatio()),
+  );
   protected readonly inspRatioExact = computed(() =>
-    Number((this.inspRatio() * 100).toFixed(2)),
+    Number((this.effectiveInspRatio() * 100).toFixed(2)),
   );
   protected readonly inspRatioPct = computed(() =>
-    Math.round(this.inspRatio() * 100),
+    Math.round(this.effectiveInspRatio() * 100),
   );
 
   private readonly onInspDragEscape = (ev: KeyboardEvent): void => {
@@ -838,7 +886,15 @@ export class WorkstreamDetailComponent implements OnDestroy {
   protected readonly confirming = signal<ConfirmRequest | null>(null);
 
   constructor() {
-    afterNextRender(() => this.sp.attach());
+    afterNextRender(() => {
+      this.sp.attach();
+      this.measureDbody();
+      const el = this.dbodyEl()?.nativeElement;
+      if (el && typeof ResizeObserver === "function" && !this.dbodyResizeObs) {
+        this.dbodyResizeObs = new ResizeObserver(() => this.measureDbody());
+        this.dbodyResizeObs.observe(el);
+      }
+    });
     effect(() => {
       const s = this.stream();
       untracked(() => {
@@ -851,11 +907,39 @@ export class WorkstreamDetailComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     this.sp.detach();
+    this.dbodyResizeObs?.disconnect();
+    this.dbodyResizeObs = null;
     window.removeEventListener("keydown", this.onInspDragEscape, true);
+  }
+
+  protected onWindowResize(): void {
+    this.sp.measure();
+    this.measureDbody();
+  }
+
+  private measureDbody(): void {
+    const w = this.dbodyEl()?.nativeElement?.clientWidth ?? 0;
+    if (w > 0) this.dbodyStage.set(w);
+  }
+
+  protected restoreTree(): void {
+    if (this.mode() === "graph") {
+      this.setMode("split");
+    }
+    if (this.sp.collapsed()) {
+      this.sp.toggleCollapsed();
+    }
+  }
+
+  protected openFullTask(taskId: string): void {
+    void this.router.navigate(["/task", taskId], {
+      queryParams: { from: `workstreams:${this.stream().key}` },
+    });
   }
 
   protected onInspResizeStart(ev: PointerEvent): void {
     if (ev.button !== 0) return;
+    this.measureDbody();
     this.inspDragFrom = this.inspRatio();
     this.inspDragging.set(true);
     window.addEventListener("keydown", this.onInspDragEscape, true);
@@ -869,7 +953,8 @@ export class WorkstreamDetailComponent implements OnDestroy {
     if (!el) return;
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0) return;
-    const next = clampInspRatio((rect.right - ev.clientX) / rect.width);
+    this.dbodyStage.set(rect.width);
+    const next = this.clampInspForStage((rect.right - ev.clientX) / rect.width);
     this.inspRatio.set(next);
   }
 
@@ -878,7 +963,7 @@ export class WorkstreamDetailComponent implements OnDestroy {
     window.removeEventListener("keydown", this.onInspDragEscape, true);
     this.inspDragging.set(false);
     this.inspDragFrom = null;
-    saveInspRatio(this.inspRatio());
+    saveInspRatio(this.effectiveInspRatio());
     (ev?.currentTarget as HTMLElement | undefined)?.releasePointerCapture?.(
       (ev as PointerEvent).pointerId,
     );
@@ -890,14 +975,17 @@ export class WorkstreamDetailComponent implements OnDestroy {
   }
 
   protected onInspResizerKey(ev: KeyboardEvent): void {
+    this.measureDbody();
+    const cur = this.effectiveInspRatio();
     const step = ev.shiftKey ? 0.06 : 0.02;
     let next: number | null = null;
     // Moving divider left widens the right-hand inspector; moving right narrows it.
-    if (ev.key === "ArrowLeft") next = clampInspRatio(this.inspRatio() + step);
-    else if (ev.key === "ArrowRight")
-      next = clampInspRatio(this.inspRatio() - step);
-    else if (ev.key === "Home") next = MIN_INSPECTOR_RATIO;
-    else if (ev.key === "End") next = MAX_INSPECTOR_RATIO;
+    if (ev.key === "ArrowLeft") next = this.clampInspForStage(cur + step);
+    else if (ev.key === "ArrowRight") next = this.clampInspForStage(cur - step);
+    else if (ev.key === "Home")
+      next = this.clampInspForStage(MIN_INSPECTOR_RATIO);
+    else if (ev.key === "End")
+      next = this.clampInspForStage(MAX_INSPECTOR_RATIO);
     if (next === null) return;
     ev.preventDefault();
     ev.stopPropagation();

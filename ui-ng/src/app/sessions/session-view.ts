@@ -222,10 +222,14 @@ function rewriteGrainPath(href: string): string {
 
 // safeHref keeps http(s), mailto, fragment #anchors, and paths on this server
 // (rewriting Classic root-relative Grain UI paths to /next/... while leaving
-// /api/... untouched); everything else is dropped (javascript:, data:, //host).
+// /api/... untouched); everything else is dropped (javascript:, data:, //host,
+// /\host, and control/whitespace characters after /).
 export function safeHref(href: string): string | null {
+  for (let i = 0; i < href.length; i++) {
+    if (href.charCodeAt(i) <= 0x1f) return null;
+  }
   if (href.startsWith("#")) return href;
-  if (href.startsWith("/") && !href.startsWith("//")) {
+  if (href.startsWith("/") && !/^\/[\\/\s]/.test(href)) {
     return rewriteGrainPath(href);
   }
   try {
@@ -241,14 +245,20 @@ function isLocal(href: string): boolean {
 }
 
 // Raw HTML in a message is shown as text, so a message can only ever
-// produce Markdown's own elements; code blocks render inside syntax-colored
-// .code-card containers with a Copy button.
+// produce Markdown's own elements; leaf text is always escaped even when
+// Marked v15 sets inRawBlock (e.g. after <kbd>), and code blocks render
+// inside syntax-colored .code-card containers with a Copy button.
 const md = new Marked({
   gfm: true,
   breaks: true,
   renderer: {
     html({ text }) {
       return escapeHtml(text);
+    },
+    text(token) {
+      return "tokens" in token && token.tokens
+        ? this.parser.parseInline(token.tokens)
+        : escapeHtml(token.text);
     },
     code({ text, lang }) {
       return renderCodeCard(text, lang);

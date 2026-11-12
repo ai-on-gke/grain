@@ -51,7 +51,7 @@ import {
   priorityTone,
 } from "../shared/priority-chip.component";
 import { scopeOf } from "../shared/scope";
-import { DEFAULT_RATIO, PHONE_QUERY } from "../shared/split";
+import { DEFAULT_RATIO } from "../shared/split";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
@@ -95,6 +95,8 @@ const SORTS: { id: SortId; label: string }[] = [
 ];
 
 export type TasksViewMode = "list" | "timeline";
+
+export const TASKS_NARROW_QUERY = "(max-width: 720px)";
 
 const GROUP_OPTIONS: readonly PillOption[] = [
   { value: "none", label: "None" },
@@ -174,7 +176,9 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                   data-testid="saved-boards-btn"
                   [class.is-open]="openMenu() === 'boards'"
                   [attr.aria-expanded]="openMenu() === 'boards'"
-                  aria-haspopup="menu"
+                  [attr.aria-controls]="
+                    openMenu() === 'boards' ? 'saved-boards-popup' : null
+                  "
                   (click)="toggleMenu('boards', $event)"
                 >
                   <span class="pill-select-prefix">Boards</span>
@@ -193,8 +197,9 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                 </button>
                 @if (openMenu() === "boards") {
                   <div
+                    id="saved-boards-popup"
                     class="pop-menu boards-menu"
-                    role="menu"
+                    role="group"
                     aria-label="Saved boards"
                     data-testid="saved-boards-menu"
                   >
@@ -202,7 +207,6 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                       <div class="boards-menu-row">
                         <button
                           type="button"
-                          role="menuitem"
                           class="board-apply-btn"
                           [attr.data-testid]="'board-apply-' + b.id"
                           (click)="applyBoard(b)"
@@ -228,7 +232,6 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                       <div class="boards-menu-sep" aria-hidden="true"></div>
                       <button
                         type="button"
-                        role="menuitem"
                         data-testid="board-save-open"
                         (click)="openBoardSave()"
                       >
@@ -433,6 +436,9 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                             [priority]="prio(t)"
                             [editable]="false"
                           />
+                          <span class="row-age muted tabular">{{
+                            ago(t.updatedAt || t.createdAt)
+                          }}</span>
                         </div>
                         <div class="timeline-track" aria-hidden="true">
                           <span
@@ -825,7 +831,8 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
             }
           </div>
           <section
-            class="inspector-pane tasks-detail-pane is-sheet-open"
+            class="inspector-pane tasks-detail-pane"
+            [class.is-sheet-open]="!!selectedId()"
             aria-label="Selected task"
             data-testid="tasks-pane"
           >
@@ -896,6 +903,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                 [id]="id"
                 [tab]="pane()"
                 [pane]="true"
+                [closable]="!!selectedId()"
                 (acted)="onActed()"
                 (closed)="closePane()"
                 (expand)="openFull(id)"
@@ -978,6 +986,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
               testid="batch-priority"
               placeholder="Set priority"
               ariaLabel="Set priority"
+              align="left"
               [inverse]="true"
               [openUp]="true"
               [options]="batchPriorityOptions"
@@ -1670,7 +1679,9 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   // ---------- list | detail ----------
 
   private isPhone(): boolean {
-    return typeof matchMedia === "function" && matchMedia(PHONE_QUERY).matches;
+    return (
+      typeof matchMedia === "function" && matchMedia(TASKS_NARROW_QUERY).matches
+    );
   }
 
   protected onResize(): void {
@@ -1919,14 +1930,15 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   // Menus are disclosures: focus moves to the first item on open, and
   // back to the trigger on Escape or after a choice.
   protected toggleMenu(key: string, ev: Event): void {
-    ev.stopPropagation();
     const opening = this.openMenu() !== key;
     this.openMenu.set(opening ? key : null);
     this.menuTrigger = opening ? (ev.currentTarget as HTMLElement) : null;
     if (opening) {
       setTimeout(() =>
         (
-          document.querySelector(".pop-menu button") as HTMLElement | null
+          document.querySelector(
+            ".boards-menu button, [id^='menu-list-'] button",
+          ) as HTMLElement | null
         )?.focus(),
       );
     }
@@ -1950,9 +1962,12 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected onDocClick(ev: Event): void {
-    if (!(ev.target as HTMLElement | null)?.closest(".pop-menu")) {
-      this.openMenu.set(null);
-    }
+    if (!this.openMenu()) return;
+    const t = ev.target as HTMLElement | null;
+    if (t && this.menuTrigger?.contains(t)) return;
+    if (t?.closest(".boards-menu, [id^='menu-list-']")) return;
+    this.openMenu.set(null);
+    this.menuTrigger = null;
   }
 
   protected onEscape(ev: Event): void {

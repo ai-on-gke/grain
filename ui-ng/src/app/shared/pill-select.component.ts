@@ -34,6 +34,8 @@ export interface PillOption {
   toneClass?: string;
 }
 
+let nextPillSelectId = 0;
+
 @Component({
   selector: "g-pill-select",
   encapsulation: ViewEncapsulation.None,
@@ -56,8 +58,9 @@ export interface PillOption {
         [attr.data-testid]="testid() || null"
         [attr.aria-label]="resolvedAriaLabel()"
         [attr.aria-expanded]="open()"
+        [attr.aria-controls]="open() ? menuId() : null"
         aria-haspopup="listbox"
-        (click)="toggle($event)"
+        (click)="toggle()"
       >
         @if (prefix()) {
           <span class="pill-select-prefix">{{ prefix() }}</span>
@@ -77,6 +80,7 @@ export interface PillOption {
       @if (open()) {
         <ul
           #menuEl
+          [id]="menuId()"
           class="pop-menu pill-select-menu"
           [class.align-left]="align() === 'left'"
           [class.open-up]="openUp()"
@@ -86,7 +90,7 @@ export interface PillOption {
         >
           @for (opt of options(); track opt.value) {
             @let active = value() !== "" && opt.value === value();
-            <li>
+            <li role="none">
               <button
                 type="button"
                 role="option"
@@ -128,6 +132,7 @@ export interface PillOption {
 export class PillSelectComponent implements OnDestroy {
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
+  private readonly fallbackId = `pill-menu-auto-${++nextPillSelectId}`;
 
   readonly options = input.required<readonly PillOption[]>();
   readonly value = input<string>("");
@@ -143,6 +148,9 @@ export class PillSelectComponent implements OnDestroy {
   readonly valueChange = output<string>();
 
   protected readonly open = signal(false);
+  protected readonly menuId = computed(() =>
+    this.testid() ? `${this.testid()}-menu` : this.fallbackId,
+  );
 
   private readonly wrapEl = viewChild<ElementRef<HTMLElement>>("wrapEl");
   private readonly btnEl = viewChild<ElementRef<HTMLButtonElement>>("btnEl");
@@ -172,8 +180,7 @@ export class PillSelectComponent implements OnDestroy {
     this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
   }
 
-  protected toggle(ev: Event): void {
-    ev.stopPropagation();
+  protected toggle(): void {
     if (this.disabled()) return;
     if (this.open()) {
       this.close(false);
@@ -187,11 +194,12 @@ export class PillSelectComponent implements OnDestroy {
     this.zone.runOutsideAngular(() => {
       this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
     });
-    queueMicrotask(() => {
+    setTimeout(() => {
+      if (!this.open()) return;
       const items = this.optionButtons();
       const idx = this.options().findIndex((o) => o.value === this.value());
       (items[idx >= 0 ? idx : 0] ?? items[0])?.focus();
-    });
+    }, 0);
   }
 
   private close(restoreFocus: boolean): void {
@@ -232,15 +240,24 @@ export class PillSelectComponent implements OnDestroy {
       }
       return;
     }
+    if (ev.key === "Tab") {
+      this.close(false);
+      return;
+    }
     const items = this.optionButtons();
     if (!items.length) return;
     const cur = items.indexOf(this.doc.activeElement as HTMLButtonElement);
     let next = -1;
-    if (ev.key === "ArrowDown") next = (cur + 1) % items.length;
-    else if (ev.key === "ArrowUp")
-      next = (cur - 1 + items.length) % items.length;
-    else if (ev.key === "Home") next = 0;
-    else if (ev.key === "End") next = items.length - 1;
+    if (ev.key === "ArrowDown") {
+      next = cur < 0 ? 0 : (cur + 1) % items.length;
+    } else if (ev.key === "ArrowUp") {
+      next =
+        cur < 0 ? items.length - 1 : (cur - 1 + items.length) % items.length;
+    } else if (ev.key === "Home") {
+      next = 0;
+    } else if (ev.key === "End") {
+      next = items.length - 1;
+    }
     if (next >= 0) {
       ev.preventDefault();
       ev.stopPropagation();

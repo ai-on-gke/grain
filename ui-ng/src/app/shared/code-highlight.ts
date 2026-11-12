@@ -24,7 +24,7 @@ import {
 import { DomSanitizer, type SafeHtml } from "@angular/platform-browser";
 import { Router } from "@angular/router";
 import type { DiffPreviewHunk, DiffPreviewLine } from "../api/models";
-import { renderMarkdown } from "../sessions/session-view";
+import { renderMarkdown, safeHref } from "../sessions/session-view";
 
 const KEYWORDS = new Set([
   "async",
@@ -474,6 +474,138 @@ export function annotateDiffHunk(hunk: DiffPreviewHunk): AnnotatedDiffLine[] {
 
 // ---------- [gMarkdown] Directive (Safe HTML + Code Copy + Router Links) ----------
 
+const FORBIDDEN_MD_TAGS = new Set([
+  "script",
+  "iframe",
+  "object",
+  "embed",
+  "svg",
+  "math",
+  "style",
+  "link",
+  "meta",
+  "form",
+  "input",
+  "base",
+  "applet",
+  "template",
+  "textarea",
+  "select",
+]);
+
+const ALLOWED_MD_TAGS = new Set([
+  "div",
+  "span",
+  "p",
+  "br",
+  "hr",
+  "pre",
+  "code",
+  "a",
+  "button",
+  "strong",
+  "b",
+  "em",
+  "i",
+  "del",
+  "s",
+  "ul",
+  "ol",
+  "li",
+  "blockquote",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "table",
+  "thead",
+  "tbody",
+  "tr",
+  "th",
+  "td",
+  "sup",
+  "sub",
+  "img",
+]);
+
+const ALLOWED_MD_ATTRS = new Set([
+  "href",
+  "src",
+  "alt",
+  "title",
+  "target",
+  "rel",
+  "class",
+  "type",
+  "data-copy-code",
+  "align",
+  "colspan",
+  "rowspan",
+  "start",
+  "aria-hidden",
+  "aria-label",
+]);
+
+const SAFE_DATA_IMAGE_RE =
+  /^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\s]+$/i;
+
+export function sanitizeMarkdownHtml(
+  html: string,
+  win?: (Window & typeof globalThis) | null,
+): string {
+  const ParserCtor =
+    win?.DOMParser ?? (typeof DOMParser === "function" ? DOMParser : undefined);
+  if (!ParserCtor) return html;
+  const parsed = new ParserCtor().parseFromString(html, "text/html");
+  const body = parsed.body;
+  const elements = Array.from(body.querySelectorAll("*"));
+  for (const el of elements) {
+    if (!el.isConnected) continue;
+    const tag = el.tagName.toLowerCase();
+    if (FORBIDDEN_MD_TAGS.has(tag)) {
+      el.remove();
+      continue;
+    }
+    if (!ALLOWED_MD_TAGS.has(tag)) {
+      el.replaceWith(...Array.from(el.childNodes));
+      continue;
+    }
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith("on") || !ALLOWED_MD_ATTRS.has(name)) {
+        el.removeAttribute(attr.name);
+        continue;
+      }
+      if (name === "href") {
+        const safe = safeHref(attr.value.trim());
+        if (!safe) {
+          el.setAttribute("href", "#");
+        } else {
+          el.setAttribute("href", safe);
+        }
+      } else if (name === "src") {
+        const val = attr.value.trim();
+        const safeUrl = safeHref(val);
+        const ok =
+          SAFE_DATA_IMAGE_RE.test(val) ||
+          (!!safeUrl && !safeUrl.startsWith("mailto:"));
+        if (!ok) {
+          el.removeAttribute(attr.name);
+        }
+      }
+    }
+    if (tag === "img" && !el.hasAttribute("src")) {
+      el.remove();
+    }
+    if (tag === "button" && el.getAttribute("type") !== "button") {
+      el.setAttribute("type", "button");
+    }
+  }
+  return body.innerHTML;
+}
+
 @Directive({
   selector: "[gMarkdown]",
 })
@@ -492,14 +624,17 @@ export class MarkdownDirective {
       const src = this.gMarkdown() ?? "";
       let html = MarkdownDirective.cache.get(src);
       if (html === undefined) {
-        html = renderMarkdown(src);
+        html = sanitizeMarkdownHtml(
+          renderMarkdown(src),
+          this.doc.defaultView as (Window & typeof globalThis) | null,
+        );
         if (MarkdownDirective.cache.size >= 500) {
           MarkdownDirective.cache.clear();
         }
         MarkdownDirective.cache.set(src, html);
       }
-      // renderMarkdown escapes all raw HTML and validates every href via safeHref;
-      // setting innerHTML directly preserves .code-copy-btn buttons and data-copy-code.
+      // renderMarkdown escapes all raw HTML and sanitizeMarkdownHtml enforces
+      // a strict tag/attribute allowlist as defense-in-depth before innerHTML.
       void (this.sanitizer.bypassSecurityTrustHtml(html) as SafeHtml);
       this.el.nativeElement.innerHTML = html;
     });
@@ -515,15 +650,17 @@ export class MarkdownDirective {
       const code =
         copyBtn.closest(".code-card")?.querySelector("pre code")?.textContent ??
         "";
-      void this.copyText(code);
-      copyBtn.textContent = "Copied";
-      copyBtn.classList.add("is-copied");
-      setTimeout(() => {
-        if (copyBtn.isConnected) {
-          copyBtn.textContent = "Copy";
-          copyBtn.classList.remove("is-copied");
-        }
-      }, 1600);
+      void this.copyText(code).then((ok) => {
+        if (!ok || !copyBtn.isConnected) return;
+        copyBtn.textContent = "Copied";
+        copyBtn.classList.add("is-copied");
+        setTimeout(() => {
+          if (copyBtn.isConnected) {
+            copyBtn.textContent = "Copy";
+            copyBtn.classList.remove("is-copied");
+          }
+        }, 1600);
+      });
       return;
     }
 
@@ -544,11 +681,15 @@ export class MarkdownDirective {
     }
   }
 
-  private async copyText(text: string): Promise<void> {
+  private async copyText(text: string): Promise<boolean> {
+    const clipboard = this.doc.defaultView?.navigator?.clipboard;
+    if (typeof clipboard?.writeText !== "function") return false;
     try {
-      await this.doc.defaultView?.navigator?.clipboard?.writeText(text);
+      await clipboard.writeText(text);
+      return true;
     } catch {
       // Clipboard API unavailable in restricted/non-secure test contexts.
+      return false;
     }
   }
 }

@@ -274,14 +274,20 @@
     height 0.14s ease;
 }
 
-.ws-resizer:hover .ws-resizer-pill,
-.ws-resizer:focus-visible .ws-resizer-pill {
+.ws-resizer:hover .ws-resizer-pill {
   background: var(--md-sys-color-primary);
   height: 44px;
 }
 
 .ws-resizer:focus-visible {
   outline: none;
+}
+
+.ws-resizer:focus-visible .ws-resizer-pill {
+  background: var(--md-sys-color-primary);
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 3px;
+  height: 52px;
 }
 
 .ws-gnode rect.ws-run-halo {

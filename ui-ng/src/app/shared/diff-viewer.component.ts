@@ -72,7 +72,7 @@ import { type AnnotatedDiffLine, annotateDiffHunk } from "./code-highlight";
                         @if (seg.changed) {
                           <mark class="diff-word">{{ seg.text }}</mark>
                         } @else {
-                          {{ seg.text }}
+                          <span>{{ seg.text }}</span>
                         }
                       }
                     </span>

@@ -14,12 +14,13 @@
 
 import { computed, signal } from "@angular/core";
 import {
+  BIG_STEP_PX,
+  type Bounds,
   COLLAPSED_KEY,
   DEFAULT_RATIO,
   RATIO_KEY,
+  STEP_PX,
   bounds,
-  clampRatio,
-  keyStep,
   loadCollapsed,
   loadRatio,
   percent,
@@ -32,6 +33,8 @@ export interface SplitOptions {
   collapsedKey?: string;
   // The share the list starts at, and that double-click resets to.
   defaultRatio?: number;
+  // Optional pixel bounds override for specialized panes (e.g. Workstream tree [236, 320]).
+  bounds?: (stage: number) => Bounds;
   // The split element, once rendered.
   element: () => HTMLElement | undefined;
 }
@@ -44,6 +47,7 @@ export class SplitController {
   private readonly ratioKey: string;
   private readonly collapsedKey: string;
   readonly defaultRatio: number;
+  private readonly customBounds?: (stage: number) => Bounds;
   private readonly el: () => HTMLElement | undefined;
 
   readonly ratio: ReturnType<typeof signal<number>>;
@@ -54,28 +58,44 @@ export class SplitController {
   private dragWasCollapsed = false;
   private resizeObs: ResizeObserver | null = null;
 
+  private boundsFor(stage: number): Bounds {
+    return this.customBounds ? this.customBounds(stage) : bounds(stage);
+  }
+
+  private clamp(ratio: number, stage: number): number {
+    if (!Number.isFinite(ratio) || stage <= 0) return this.defaultRatio;
+    const { min, max } = this.boundsFor(stage);
+    const px = Math.min(max, Math.max(min, ratio * stage));
+    return px / stage;
+  }
+
   // The column gets the exact share; ARIA gets a whole percent.
   readonly ratioExact = computed(
     () =>
-      (this.stage() ? clampRatio(this.ratio(), this.stage()) : this.ratio()) *
+      (this.stage() ? this.clamp(this.ratio(), this.stage()) : this.ratio()) *
       100,
   );
   readonly ratioPct = computed(() =>
     percent(
-      this.stage() ? clampRatio(this.ratio(), this.stage()) : this.ratio(),
+      this.stage() ? this.clamp(this.ratio(), this.stage()) : this.ratio(),
     ),
   );
   readonly minPct = computed(() =>
-    this.stage() ? percent(bounds(this.stage()).min / this.stage()) : 15,
+    this.stage()
+      ? percent(this.boundsFor(this.stage()).min / this.stage())
+      : 15,
   );
   readonly maxPct = computed(() =>
-    this.stage() ? percent(bounds(this.stage()).max / this.stage()) : 80,
+    this.stage()
+      ? percent(this.boundsFor(this.stage()).max / this.stage())
+      : 80,
   );
 
   constructor(opts: SplitOptions) {
     this.ratioKey = opts.ratioKey ?? RATIO_KEY;
     this.collapsedKey = opts.collapsedKey ?? COLLAPSED_KEY;
     this.defaultRatio = opts.defaultRatio ?? DEFAULT_RATIO;
+    this.customBounds = opts.bounds;
     this.el = opts.element;
     this.ratio = signal(loadRatio(this.ratioKey, this.defaultRatio));
     this.collapsed = signal(loadCollapsed(this.collapsedKey));
@@ -124,7 +144,7 @@ export class SplitController {
     if (!el || !w) return;
     const x = ev.clientX - el.getBoundingClientRect().left;
     if (this.collapsed()) this.collapsed.set(false);
-    this.ratio.set(clampRatio(x / w, w));
+    this.ratio.set(this.clamp(x / w, w));
   }
 
   private readonly onDragEscape = (ev: KeyboardEvent): void => {
@@ -162,7 +182,7 @@ export class SplitController {
 
   setPreset(r: number): void {
     const w = this.measure();
-    this.ratio.set(w ? clampRatio(r, w) : r);
+    this.ratio.set(w ? this.clamp(r, w) : r);
     this.collapsed.set(false);
     saveRatio(this.ratio(), this.ratioKey);
     saveCollapsed(false, this.collapsedKey);
@@ -184,9 +204,17 @@ export class SplitController {
       this.onResizeCancel();
       return;
     }
-    const w = this.measure();
-    const next = keyStep(ev.key, ev.shiftKey, this.ratio(), w || 1);
-    if (next === null) return;
+    const w = this.measure() || 1;
+    const { min, max } = this.boundsFor(w);
+    const px = this.clamp(this.ratio(), w) * w;
+    const step = ev.shiftKey ? BIG_STEP_PX : STEP_PX;
+    let nextPx: number | null = null;
+    if (ev.key === "ArrowLeft") nextPx = px - step;
+    else if (ev.key === "ArrowRight") nextPx = px + step;
+    else if (ev.key === "Home") nextPx = min;
+    else if (ev.key === "End") nextPx = max;
+    if (nextPx === null) return;
+    const next = this.clamp(nextPx / w, w);
     ev.preventDefault();
     ev.stopPropagation();
     this.collapsed.set(false);

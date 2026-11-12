@@ -90,7 +90,7 @@ g-workstream-detail {
   display: grid;
   grid-template-columns:
     clamp(236px, var(--ws-tree-w, 21%), 320px) 0px minmax(280px, 1fr) 0px
-    clamp(440px, var(--ws-insp-w, 42%), max(600px, var(--ws-insp-w, 42%)));
+    clamp(380px, var(--ws-insp-w, 42%), min(55%, calc(100% - 600px)));
   min-height: 0;
   overflow: hidden;
 }
@@ -99,13 +99,13 @@ g-workstream-detail {
   user-select: none;
 }
 
-.ws-dbody.is-collapsed {
+.ws-dbody.mode-split.is-collapsed {
   grid-template-columns:
     0 0px minmax(280px, 1fr) 0px
-    clamp(440px, var(--ws-insp-w, 42%), max(600px, var(--ws-insp-w, 42%)));
+    clamp(440px, var(--ws-insp-w, 42%), min(55%, calc(100% - 280px)));
 }
 
-.ws-dbody.is-collapsed .ws-tpane {
+.ws-dbody.mode-split.is-collapsed .ws-tpane {
   visibility: hidden;
   overflow: hidden;
 }
@@ -113,7 +113,7 @@ g-workstream-detail {
 .ws-dbody.mode-list {
   grid-template-columns:
     minmax(0, 1fr) 0px
-    clamp(440px, var(--ws-insp-w, 42%), max(640px, var(--ws-insp-w, 42%)));
+    clamp(440px, var(--ws-insp-w, 42%), min(55%, calc(100% - 280px)));
 }
 
 .ws-dbody.mode-list .ws-gpane,
@@ -126,7 +126,7 @@ g-workstream-detail {
 .ws-dbody.mode-graph {
   grid-template-columns:
     minmax(280px, 1fr) 0px
-    clamp(440px, var(--ws-insp-w, 42%), max(640px, var(--ws-insp-w, 42%)));
+    clamp(440px, var(--ws-insp-w, 42%), min(55%, calc(100% - 280px)));
 }
 
 .ws-tpane {
@@ -394,13 +394,24 @@ g-workstream-detail {
 
 @media (max-width: 1279.95px) {
   .ws-dbody,
-  .ws-dbody.mode-split {
+  .ws-dbody.mode-split,
+  .ws-dbody.mode-split.is-collapsed,
+  .ws-dbody.mode-list,
+  .ws-dbody.mode-graph {
     grid-template-columns:
       minmax(0, 1fr) 0px
-      clamp(380px, var(--ws-insp-w, 46%), 55%);
+      clamp(360px, var(--ws-insp-w, 46%), 55%);
+  }
+  .ws-dbody.mode-split.is-collapsed .ws-tpane {
+    visibility: visible;
+    overflow: auto;
   }
   .ws-dbody.mode-split .ws-gpane,
-  .ws-dbody.mode-split .ws-tree-resizer {
+  .ws-dbody.mode-split .ws-tree-resizer,
+  .ws-dbody.mode-list .ws-gpane,
+  .ws-dbody.mode-list .ws-tree-resizer,
+  .ws-dbody.mode-graph .ws-tpane,
+  .ws-dbody.mode-graph .ws-tree-resizer {
     display: none;
   }
   .ws-dbody.mode-graph .ws-gpane {
@@ -422,12 +433,15 @@ g-workstream-detail {
   }
   .ws-dbody,
   .ws-dbody.mode-split,
+  .ws-dbody.mode-split.is-collapsed,
   .ws-dbody.mode-list,
   .ws-dbody.mode-graph {
     display: block;
   }
-  .ws-dbody .ws-tpane {
+  .ws-dbody .ws-tpane,
+  .ws-dbody.mode-split.is-collapsed .ws-tpane {
     display: block;
+    visibility: visible;
     border-right: 0;
     padding-bottom: 84px;
   }

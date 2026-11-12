@@ -538,13 +538,20 @@ export class InboxStore implements OnDestroy {
   // attempts, the question it is parked on, and any access request.
   async ensureDetail(force = false): Promise<void> {
     const e = this.selected();
-    if (!e?.taskId || e.gone) return;
+    if (!e?.taskId || e.gone) {
+      this.stopSelectedTranscript();
+      return;
+    }
     if (!force && this.details()[e.taskId]) {
       this.syncSelectedTranscript();
       return;
     }
     await this.readDetail(e.taskId);
     this.syncSelectedTranscript();
+  }
+
+  clearLiveTranscript(): void {
+    this.stopSelectedTranscript();
   }
 
   private stopSelectedTranscript(): void {
@@ -621,6 +628,7 @@ export class InboxStore implements OnDestroy {
   // select pins a row. Choosing a row holds the list's order, so nothing
   // moves under the person while they read or type.
   select(key: string): void {
+    this.stopSelectedTranscript();
     const entry = this.entries().find((e) => e.key === key) ?? null;
     if (entry && !entry.gone) this.picked = entry;
     this.selectedKey.set(key);
@@ -910,9 +918,10 @@ export class InboxStore implements OnDestroy {
     body: string,
     wake: boolean,
     refuse: (t: TaskDetail | undefined) => string,
-  ): Promise<{ ok: boolean; woke: boolean }> {
+  ): Promise<{ ok: boolean; woke: boolean; commentPosted?: boolean }> {
     this.busy.set(wake ? "wake" : "comment");
     this.actionError.set(null);
+    let commentPosted = false;
     try {
       let fresh: TaskDetail;
       try {
@@ -933,6 +942,46 @@ export class InboxStore implements OnDestroy {
         return { ok: false, woke: false };
       }
 
+      if (wake) {
+        if (fresh.state === "proposed") {
+          this.actionError.set(
+            "Approve the proposal first before waking an agent on it.",
+          );
+          return { ok: false, woke: false };
+        }
+        if (
+          fresh.state === "closed" &&
+          !this.access.can("POST /api/tasks/{id}/reopen", repo)
+        ) {
+          this.actionError.set(
+            this.access.deniedReason("POST /api/tasks/{id}/reopen", repo) ||
+              "No permission to reopen this task.",
+          );
+          return { ok: false, woke: false };
+        }
+        if (
+          fresh.state !== "closed" &&
+          fresh.state !== "running" &&
+          fresh.state !== "queued" &&
+          fresh.state !== "awaiting_reply"
+        ) {
+          const canRunNow = this.access.can(
+            "POST /api/tasks/{id}/run-now",
+            repo,
+          );
+          const canRetry =
+            fresh.state === "failed" &&
+            this.access.can("POST /api/tasks/{id}/retry", repo);
+          if (!canRunNow && !canRetry) {
+            this.actionError.set(
+              this.access.deniedReason("POST /api/tasks/{id}/run-now", repo) ||
+                "No permission to wake the agent on this task.",
+            );
+            return { ok: false, woke: false };
+          }
+        }
+      }
+
       let woke = false;
       if (wake && fresh.state === "closed") {
         await this.api.post(
@@ -940,34 +989,30 @@ export class InboxStore implements OnDestroy {
           { id: taskId },
           { body, reopen: true },
         );
+        commentPosted = true;
         woke = true;
       } else {
-        await this.api.post(
+        const commentResp = await this.api.post<Partial<Task> | undefined>(
           "POST /api/tasks/{id}/comments",
           { id: taskId },
           { body },
         );
+        commentPosted = true;
         if (!wake) {
           await this.readDetail(taskId);
           await this.refresh();
-          return { ok: true, woke: false };
+          return { ok: true, woke: false, commentPosted: true };
         }
-        if (
-          fresh.state === "awaiting_reply" &&
-          !fresh.turnStopped &&
-          fresh.reason?.reason !== "awaiting_reply/stopped" &&
-          !fresh.pendingSecret &&
-          !fresh.pendingAccess &&
-          !fresh.pendingConfigChange
-        ) {
-          woke = true;
-        } else if (fresh.state === "running" || fresh.state === "queued") {
+        const postState =
+          commentResp?.state ??
+          (fresh.state === "awaiting_reply" ? "queued" : fresh.state);
+        if (postState === "queued" || postState === "running") {
           woke = true;
         } else if (this.access.can("POST /api/tasks/{id}/run-now", repo)) {
           await this.api.post("POST /api/tasks/{id}/run-now", { id: taskId });
           woke = true;
         } else if (
-          (fresh.state === "failed" ||
+          (postState === "failed" ||
             fresh.turnStopped ||
             fresh.reason?.reason === "awaiting_reply/stopped") &&
           this.access.can("POST /api/tasks/{id}/retry", repo)
@@ -985,8 +1030,16 @@ export class InboxStore implements OnDestroy {
       if (woke) {
         this.applyUpdates();
       }
-      return { ok: true, woke };
+      return { ok: true, woke, commentPosted };
     } catch (err) {
+      if (commentPosted) {
+        await this.readDetail(taskId);
+        await this.refresh();
+        this.actionError.set(
+          `Comment posted to #${taskId}, saved in conversation, but could not wake the agent: ${errorText(err)}`,
+        );
+        return { ok: false, woke: false, commentPosted: true };
+      }
       this.actionError.set(errorText(err));
       return { ok: false, woke: false };
     } finally {

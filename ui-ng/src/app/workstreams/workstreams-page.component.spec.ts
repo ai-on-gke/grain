@@ -423,5 +423,19 @@ describe("WorkstreamsPageComponent", () => {
     inspResizer.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     fixture.detectChanges();
     expect(inspResizer.getAttribute("aria-valuenow")).toBe("42");
+
+    // Collapsing the tree via Enter exposes the "Show tree" button in .ws-dtoolbar
+    expect(el.querySelector('[data-testid="ws-show-tree"]')).toBeNull();
+    treeResizer.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    fixture.detectChanges();
+    const showTreeBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="ws-show-tree"]',
+    );
+    expect(showTreeBtn?.textContent?.trim()).toBe("Show tree");
+    showTreeBtn!.click();
+    fixture.detectChanges();
+    expect(el.querySelector('[data-testid="ws-show-tree"]')).toBeNull();
   });
 });
