@@ -888,7 +888,8 @@ while the hold stands. See [merging.design.md](../design/design/merging.design.m
 A review's *findings* are not a hold either of these releases. `POST
 /api/tasks/{id}/accept-findings` (`tasks:write`, body `{gate, reviewTask?,
 reason, head?}`) is a person accepting one review's findings on one gate as
-they are. It is refused for every agent and clears nothing else
+they are. It needs an unlimited role (grain/operator), is refused for every
+agent, and clears nothing else
 ([declarations.md](declarations.md#gating-reviews)).
 
 ## Paging a list

@@ -825,8 +825,9 @@ trigger's `trigger:<name>` findings) until one of three things happens:
 - **The owner accepts them as they are.** Use **Accept findings…** beside
   the gate on the task's merge-gates panel, or `grain accept-findings -gate
   <gate> [-review <task>] <id> <reason>` (`POST
-  /api/tasks/{id}/accept-findings`, `tasks:write`). A person may do this,
-  an agent never (403, as with Submit), and a reason is required. It clears
+  /api/tasks/{id}/accept-findings`, `tasks:write`). A person with an
+  unlimited role (grain/operator) may do this; a limited role and an agent
+  never may (403, as with Submit), and a reason is required. It clears
   that one review's findings and open questions on that one gate, at the
   pull request's current head. It records who accepted, the reason, the
   review task and the head on the task (`review-findings-accepted`), on its
