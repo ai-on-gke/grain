@@ -19,18 +19,28 @@ package daemon
 import (
 	"log"
 	"os"
+	"sync"
+	"time"
 )
 
 // A walkthrough builds grain with -tags grain_debugclock to step the
 // release-triggered upgrade's clock forward rather than wait it out. See
-// DebugClockOffsetFileEnv.
+// DebugClockOffsetFileEnv. The warning is logged on the first tick that
+// reads the clock, so it is the daemon that says it, not every grain
+// subprocess the daemon starts.
 func init() {
 	path := os.Getenv(DebugClockOffsetFileEnv)
-	log.Printf("daemon: WARNING: built with -tags %s, a test-only build: the release-triggered upgrade "+
-		"reads its clock shifted forward by the duration in %s=%q. Never run this build as a deployment.",
-		DebugClockBuildTag, DebugClockOffsetFileEnv, path)
-	if path == "" {
-		return
+	read := func() time.Duration { return 0 }
+	if path != "" {
+		read = debugClockFrom(path, log.Printf)
 	}
-	DebugClockOffset = debugClockFrom(path, log.Printf)
+	var warn sync.Once
+	DebugClockOffset = func() time.Duration {
+		warn.Do(func() {
+			log.Printf("daemon: WARNING: built with -tags %s, a test-only build: the release-triggered upgrade "+
+				"reads its clock shifted forward by the duration in %s=%q. Never run this build as a deployment.",
+				DebugClockBuildTag, DebugClockOffsetFileEnv, path)
+		})
+		return read()
+	}
 }
