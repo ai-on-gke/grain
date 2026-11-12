@@ -41,11 +41,14 @@ describe("inbox classifier", () => {
     expect(
       waitsOnUser(task({ state: "awaiting_reply", consoleSession: {} })),
     ).toBe(false);
+    // A running task is never offered Submit, even with an open pull
+    // request and no auto-merge (the classic UI lists it): its agent may
+    // still be pushing to the branch.
     expect(
       waitsOnUser(
         task({ state: "running", pullRequest: { url: "https://x/pr/1" } }),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       waitsOnUser(
         task({
@@ -80,7 +83,7 @@ describe("inbox classifier", () => {
     expect(proposal?.actions[0].route).toBe("POST /api/tasks/{id}/approve");
     expect(proposal?.actions[0].params).toEqual({ id: "9" });
     expect(proposal?.actions[2].confirm).toContain("Decline #9");
-    expect(proposal?.taskLink).toBe("/tasks/9");
+    expect(proposal?.taskLink).toBe("/task/9");
 
     const failed = classifyTask(task({ state: "failed" }));
     expect(failed?.actions.map((a) => a.id)).toEqual(["retry", "close"]);
@@ -188,8 +191,9 @@ describe("inbox classifier", () => {
       entries.filter((e) => matchesFilter(e, "unread", seen)),
     ).toHaveLength(3);
     expect(entries.filter((e) => matchesQuery(e, "bump"))).toHaveLength(1);
-    expect(entries.find((e) => e.kind === "host-script")?.summary).toBe(
-      "deploy.sh --prod",
-    );
+    const hs = entries.find((e) => e.kind === "host-script");
+    expect(hs?.summary).toBe("deploy.sh --prod");
+    expect(hs?.taskLink).toBe("/task/2");
+    expect(hs?.externalLink).toBeNull();
   });
 });
