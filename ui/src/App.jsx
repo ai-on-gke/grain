@@ -66,6 +66,7 @@ import { TimeZoneProvider } from "./TimeZoneContext.jsx";
 import { ViewerProvider } from "./ViewerContext.jsx";
 import {
   mergeFreshDetail,
+  fetchEarlier,
   prependEarlierPage,
   taskDetailPath,
   taskEarlierPath,
@@ -1778,7 +1779,8 @@ function AppContent({ onReload = () => window.location.reload() }) {
         Array.isArray(current.attempts) &&
         current.attempts.length > 0;
       try {
-        const earlier = await api(path);
+        const earlier = await fetchEarlier(api, current, opts);
+        if (!earlier) return null;
         const merge = (prev) =>
           prev && String(prev.id) === String(targetId)
             ? prependEarlierPage(prev, earlier, {
