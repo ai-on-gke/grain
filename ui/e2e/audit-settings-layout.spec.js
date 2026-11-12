@@ -19,6 +19,12 @@ import { expect, test } from "./fixtures.js";
 // audit beside them with their principals as stored, each table inside
 // its card -- on a wide screen and on a phone, with nothing pushing the
 // page sideways.
+// A distinct demoArgs gives this spec a demo server of its own rather than
+// the shared worker's: AuditSection reads ?limit=100, and when earlier specs
+// on the shared worker record 100+ configuration writes, the oldest seeded
+// audit rows scroll past that limit and disappear from the page.
+test.use({ demoArgs: ["-as", "audit-settings-layout"] });
+
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 
