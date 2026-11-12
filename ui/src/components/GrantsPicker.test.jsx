@@ -564,6 +564,42 @@ describe("GrantsPicker", () => {
     expect(onRemove).toHaveBeenCalledWith(held);
   });
 
+  it("removes a held grant with an edit not saved yet without writing the edit back", async () => {
+    serve({ current: [cloudKey] });
+    const held = grantOf(cloudKey, { account: "dev", ttl: 60 });
+    const onSubmit = vi.fn().mockResolvedValue();
+    const onRemove = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <GrantsPicker
+        grants={[held]}
+        config={config}
+        onApiChange={vi.fn()}
+        onSubmit={onSubmit}
+        onRemove={onRemove}
+      />,
+    );
+    const section = await waitFor(() => {
+      const el = document.querySelector(`[data-grant='${held}']`);
+      expect(el?.querySelector("input")).toBeTruthy();
+      return el;
+    });
+    await user.type(within(section).getByLabelText(/^account/), "x");
+    await user.click(within(section).getByRole("button", { name: /^Remove / }));
+    expect(onRemove).toHaveBeenCalledWith(held);
+    rerender(
+      <GrantsPicker
+        grants={[]}
+        config={config}
+        onApiChange={vi.fn()}
+        onSubmit={onSubmit}
+        onRemove={onRemove}
+      />,
+    );
+    await new Promise((r) => setTimeout(r, 700));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("draws a grant without arguments on one line, flagged when its server is gone", async () => {
     serve({ current: [hostScript] });
     render(

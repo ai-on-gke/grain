@@ -236,6 +236,20 @@ test.afterAll(() => {
   if (OUT) fs.writeFileSync(OUT, JSON.stringify({ results }, null, 2));
 });
 
+// closePopovers presses Escape only while a menu or listbox is open. An
+// Escape with nothing open is the surface's own: it closes the task pane
+// (or the New task form) the next cell needs, which is how one cell left
+// every later one timing out on an "Add grant…" that was no longer there.
+async function closePopovers(page) {
+  const open = page.locator(
+    ".MuiPopover-root, .MuiPopper-root, [role=listbox]",
+  );
+  for (let i = 0; i < 3; i++) {
+    if ((await open.count().catch(() => 0)) === 0) return;
+    await page.keyboard.press("Escape").catch(() => {});
+  }
+}
+
 async function runCell(page, request, method, surface, run) {
   const cell = { ref: method.ref, surface: surface.id };
   const gap = knownGap(method.ref, argVariants(method)[0].variant);
@@ -247,7 +261,7 @@ async function runCell(page, request, method, surface, run) {
   }
   if (cell.outcome === "fail") {
     cell.shot = await shoot(page, `${surface.id}-${method.ref}`);
-    await page.keyboard.press("Escape").catch(() => {});
+    await closePopovers(page);
     if (gap) {
       cell.outcome = "known";
       cell.knownGap = gap;
@@ -291,15 +305,19 @@ test("every method is given and removed through the task pane's Add grant…", a
         return grantsOf();
       }),
     );
-    if (cell.outcome === "fail") {
-      failures.push(`${method.ref}: ${cell.detail}`);
-      await page.goto(`/tasks/${task.id}`);
-    }
-    // Whatever the cell did, the next starts from a task holding nothing.
-    await request.patch(`/api/tasks/${task.id}`, {
+    if (cell.outcome === "fail") failures.push(`${method.ref}: ${cell.detail}`);
+    // Whatever the cell did, the next starts from a task holding nothing,
+    // on a freshly loaded task pane: a cell that did not pass may have
+    // left a menu, a draft or a closed pane behind, and reloading
+    // whatever page that left is not the same as opening the task again.
+    const reset = await request.patch(`/api/tasks/${task.id}`, {
       data: { capabilities: [] },
     });
-    if (cell.outcome !== "pass") await page.reload();
+    expect(reset.ok(), await reset.text()).toBe(true);
+    if (cell.outcome !== "pass") {
+      await page.goto(`/tasks/${task.id}`);
+      await expect(grantsOf()).toBeVisible();
+    }
   }
   expect(failures, failures.join("\n")).toEqual([]);
 });

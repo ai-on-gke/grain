@@ -1312,6 +1312,15 @@ function ArgsSection({
     clearTimeout(timer.current);
     timer.current = setTimeout(() => saveRef.current(), SAVE_DELAY_MS);
   };
+  // Removing the grant (or discarding the draft) drops an edit not saved
+  // yet rather than saving it: the unmount below would otherwise write the
+  // edit back and race the removal, re-granting what was just removed.
+  const remove = () => {
+    clearTimeout(timer.current);
+    timer.current = null;
+    pending.current = false;
+    return onRemove();
+  };
 
   // An edit made while a save was in flight is saved once it is done,
   // and once the grant it recorded is the one this section holds.
@@ -1427,7 +1436,7 @@ function ArgsSection({
         {onRemove && (
           <RemoveButton
             label={grant ? ariaLabel : `${method.method} draft`}
-            onClick={onRemove}
+            onClick={remove}
           />
         )}
       </Box>
