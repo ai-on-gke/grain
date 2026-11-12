@@ -30,7 +30,9 @@ const releaseManagerTemplatePath = ".grain/templates/release-manager.yml"
 // section 16), each limited to this repository but self-debug, whose
 // tasks:read is how it reads the edition's release tasks.
 var releaseManagerGrants = []string{
-	`https://grain.dev/capabilities/api#release-manager={"repo":"ai-on-gke/grain"}`,
+	`https://grain.dev/capabilities/api#releases:read={"repo":"ai-on-gke/grain"}`,
+	`https://grain.dev/capabilities/api#schedules:read={"repo":"ai-on-gke/grain"}`,
+	`https://grain.dev/capabilities/api#repos:read={"repo":"ai-on-gke/grain"}`,
 	`https://grain.dev/capabilities/api#task-admin={"repo":"ai-on-gke/grain"}`,
 	`https://grain.dev/capabilities/api#dispatch-control={"repo":"ai-on-gke/grain"}`,
 	`https://grain.dev/capabilities/api#ci-read={"repo":"ai-on-gke/grain"}`,
@@ -112,8 +114,17 @@ func TestTheReleaseManagerLandsApprovedWithItsGrants(t *testing.T) {
 			t.Errorf("%s does not declare %s (declares %q)", releaseManagerTemplatePath, want, declared)
 		}
 	}
-	if grants := model.APIGrantsOf(declared); grants.Allows("merge:force", "ai-on-gke/grain") {
+	grants := model.APIGrantsOf(declared)
+	if grants.Allows("merge:force", "ai-on-gke/grain") {
 		t.Errorf("%s may force-merge; a release manager never does", releaseManagerTemplatePath)
+	}
+	// It reads releases and schedules and never changes them: a firing
+	// lands approved, so with these it could loosen the qualification plan,
+	// promote a candidate or disable a schedule with no person involved.
+	for _, scope := range []model.APIScope{"releases:write", "schedules:write", "repos:write"} {
+		if grants.Allows(scope, "ai-on-gke/grain") {
+			t.Errorf("%s holds %s; a release manager only reads releases and schedules", releaseManagerTemplatePath, scope)
+		}
 	}
 
 	ctx := context.Background()

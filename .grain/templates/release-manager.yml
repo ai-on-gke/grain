@@ -32,15 +32,22 @@ fields:
 # (model.DeclaredFiringHold; TestTheReleaseManagerLandsApprovedWithItsGrants,
 # tests/deploy). No merge:force: a manager never force-merges.
 #
-# release-manager: tasks, merge:write, ci, schedules, releases, repos.
-# task-admin: the same task and merge scopes plus notifications:write.
+# Not the release-manager preset: its releases:write and schedules:write
+# would let a run nobody approved rewrite the qualification plan, approve
+# qualification, promote or delete candidates, and edit, run or delete
+# schedules (pkg/model/pipeline_steward_template.go keeps it from the
+# pipeline steward for the same reason). A manager only reads releases,
+# schedules and declarations.
+# task-admin: tasks, merge:write, ci and notifications:write.
 # dispatch-control: run-now and undefer (dispatch:write).
 # self-debug: tasks:read on every repository, which is how it reads the
 # edition's release tasks. The read of the edition's own repository is
 # granted to this template in grain's settings, not here: this repository
 # may not name the edition (TestCoreSaysNoGoogleTokens).
 capabilities:
-  - {capability: "https://grain.dev/capabilities/api#release-manager", with: {repo: ai-on-gke/grain}}
+  - {capability: "https://grain.dev/capabilities/api#releases:read", with: {repo: ai-on-gke/grain}}
+  - {capability: "https://grain.dev/capabilities/api#schedules:read", with: {repo: ai-on-gke/grain}}
+  - {capability: "https://grain.dev/capabilities/api#repos:read", with: {repo: ai-on-gke/grain}}
   - {capability: "https://grain.dev/capabilities/api#task-admin", with: {repo: ai-on-gke/grain}}
   - {capability: "https://grain.dev/capabilities/api#dispatch-control", with: {repo: ai-on-gke/grain}}
   - {capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}
