@@ -510,6 +510,45 @@ The train separates GitHub runner duties from private deployment duties so neith
 
 **Future: candidate invalidation.** Overnight agent testing (`ui-walkthrough`, `nightly-features-test-plan`, `nightly-security-review`, `nightly-ci-review`, the weekly reviews) does not gate releases. A later feature may let such a test invalidate a candidate or a release for a bug it found. It would hook in at Phase 1 of `scripts/release-from-trunk.sh` (an rc whose commit range a filed blocker names is dropped like a red one, `Discard-Reason: invalidated`), and for a released version at rollback (§11) or a patch (§7), driven by a machine-readable verdict the test files against a commit range.
 
+### 16. The release manager (one task per release)
+
+Each step above has an owner, but the gaps between them did not. v3.6.0 (2026-11-11/12) showed what falls through:
+
+- the train dropped rc.1 to rc.6 on the same govulncheck failure, with no fix owned;
+- Stage 1 repairs never filed, because the daemon silently refused the opt-in schedule (#4392);
+- `main`'s `tests.yml` had no green *finished* run for hours, so the train reported "no new LKG" over and over;
+- gating reviews sat at priority 5 (#4753);
+- owner-accepted findings needed a force-merge (#4752);
+- the edition's publish ran out of disk;
+- the edition needed grants only a person can give.
+
+So every release gets a **release manager**: one task, filed from `.grain/templates/release-manager.yml`, that owns that one version from its first rc to published images, core first and then the Google edition.
+
+**When it starts.** Two schedules start it, both of them existing trigger kinds with no daemon code:
+
+- `.grain/schedules/release-manager.yml` fires when `release-train-assets.yml` concludes on an rc tag. That workflow runs on every `vX.Y.Z-rc.N` and `-discarded` push, so this is minutes after the train cuts an rc (`github_workflow_run`, `branches: ["v*-rc.*"]`).
+- `.grain/schedules/release-manager-patch.yml` fires when `release.yml` concludes on a `release/vX.Y.Z` branch. This covers a patch that `scripts/release-patch.sh` cuts outside the train, since `release.yml` builds that branch before the tag exists.
+
+Both schedules are `overlap: skip`. While a schedule's manager is open, later firings are dropped, so further rcs of the same version add no second manager. A firing that does file a task, for a version that already has an open manager or is already released, gets a first check-in that ends in `nothing_needed`. The core release itself and the edition's sync (`sync-oss-release`, on core's `latest`) start nothing new. They are steps the manager already open for that version drives.
+
+A person may also file one by hand with **Use…** and a `version`. v3.6.0's manager, #4747, was filed that way before this existed. Its title, `Release manager for v3.6.0…`, is what the dedupe looks for.
+
+**Which version.** A firing's task is titled `Release manager for the newest rc`, because nobody fills the field. Grain's opening comment names the run's head branch: the rc tag or `release/vX.Y.Z` (`TestAWorkflowRunScheduleWithItsOwnTemplateNamesTheRunsTag`). On its first check-in the manager takes `vX.Y.Z` from there and posts `Release manager pin: vX.Y.Z` on its own task. A run may comment on its own task but not retitle it (`selfMutableTaskRoutes`, `pkg/ui/agent_api_gate.go`). Every later check-in reads the version from that pin, never from the newest tag. The dedupe check searches open tasks titled `Release manager for vX.Y.Z` (the hand-filed form) and the pins of other open `Release manager for` tasks.
+
+**What it does, hourly** (`resume_later`, `at: 1h`, `message: true`, so a reply wakes it early):
+
+- It reads the train's ticks, the version's rc tags and their `-discarded` reasons, the current rc's Stage 1 and Stage 2, `main`'s `tests.yml` and `nightly.yml`, and the open repairs, rc-blockers and `pipeline.*` notifications.
+- For a red check nobody owns, it files **one** focused fix (`fixes_base_branch: true` when `main` is red). It never duplicates a task already open: it comments on that task instead.
+- It unsticks tasks. It raises priority or uses run-now for a queued task, undefers a task with nothing left to wait for, retries an infrastructure fault, answers a question it can answer, and rewrites a task that is headed the wrong way. It also retries a stuck merge.
+- For anything only a person can do, it raises one `grain notify --subject release-manager:vX.Y.Z` notification. That covers a grant, a held task, a force-merge or accepted finding, `latest` or `promote.yml` for a patch, a `-pending` approval, and disk or capacity on a host.
+- Once core `vX.Y.Z` is out, it drives the edition's release task for that version. If none has appeared within an hour, it files one from the edition's own `sync-oss-release` template, which is held for a person because the manager holds no write there.
+
+**When it ends.** Once core `vX.Y.Z` is tagged and published and the edition's `vX.Y.Z` is released with images published, it closes with `nothing_needed`. The closing report gives both release commits and image digests, every rc and why it was dropped, the fixes it filed, and what a person had to do. Before closing, it files the manager for any newer version whose rc was dropped by its schedule while it was open.
+
+**What it may do.** It holds the `api#release-manager`, `api#task-admin`, `api#dispatch-control` and `api#ci-read` presets on `ai-on-gke/grain`, and `api#self-debug`, whose `tasks:read` reads the edition's tasks. The edition's repository read is granted to the template in grain's settings, because this repository may not name it (`TestCoreSaysNoGoogleTokens`). None of these is a scope only a person may grant, so a firing is filed approved with no hold (`model.DeclaredFiringHold`; `TestTheReleaseManagerLandsApprovedWithItsGrants`). The cross-task rail still applies: the manager cannot steer a task holding grants it lacks (the edition's release task does), and asks a person instead.
+
+**What it may not do.** It never force-merges (it holds no `merge:force`), bypasses or weakens a gate, quarantines a test to get a release through, pushes code or tags, or deletes a ref. It changes no file and opens no pull request. Fixes go in their own tasks, and releases are cut by the train and the edition's sync.
+
 ---
 
 ## Implementation gaps
