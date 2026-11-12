@@ -422,7 +422,7 @@ var (
 	verdictLine     = regexp.MustCompile(`^--- (PASS|FAIL|SKIP): (Test[^\s/]*) `)
 	subVerdictLine  = regexp.MustCompile(`^(\s+)--- (PASS|FAIL|SKIP): (Test\S*) `)
 	headerLine      = regexp.MustCompile(`^=== (?:RUN|NAME|CONT|PAUSE)\s+(Test\S*)$`)
-	pkgBoundaryLine = regexp.MustCompile(`^(?:PASS|FAIL|ok  \t|FAIL\t|\?   \t|=== PACKAGE |testing: warning:)`)
+	pkgBoundaryLine = regexp.MustCompile(`^(?:PASS$|FAIL$|ok\s+|FAIL\t|\?\s+|=== |testing: warning:)`)
 )
 
 // parseText reads `go test -v` output: unindented --- lines are top-level
@@ -545,11 +545,16 @@ func judgePath(p Path, run *pkgRun) Verdict {
 	return v
 }
 
-// judgeOthers settles a whole-run package's tests no path names, and the
-// package's own exit, as a path of their own.
-func judgeOthers(pkg string, named map[string]bool, run *pkgRun) Verdict {
+// judgeOthers settles a whole-run package's tests no path names, and any
+// non-zero exit from go test that no named path already explained, as a
+// path of their own.
+func judgeOthers(pkg string, named map[string]bool, run *pkgRun, explained bool) Verdict {
 	p := Path{Name: pkg + ": other tests", Title: "every other test in " + pkg, Mode: modeInProcess, Package: pkg}
 	v := Verdict{Path: p, Status: Pass}
+	if run == nil {
+		v.Status, v.Detail = Fail, "did not run (no result for its package)"
+		return v
+	}
 	var bad []string
 	count := 0
 	for _, t := range run.order {
@@ -567,7 +572,7 @@ func judgeOthers(pkg string, named map[string]bool, run *pkgRun) Verdict {
 			bad = append(bad, t+" failed: "+r.reason())
 		}
 	}
-	if len(bad) == 0 && run.exit != 0 {
+	if len(bad) == 0 && run.exit != 0 && !explained {
 		why := run.failed
 		if why == "" {
 			why = "no test to blame"
@@ -727,22 +732,15 @@ func RunInProcess(root string, m Manifest, timeout time.Duration, log io.Writer,
 	}
 	var verdicts []Verdict
 	named := map[string]map[string]bool{}
+	explained := map[string]bool{}
 	for _, p := range m.Paths {
 		if p.Mode != modeInProcess {
 			verdicts = append(verdicts, Verdict{Path: p, Status: Live, Detail: "run inside nightly's " + liveJob[p.Mode] + " job; its summary has the verdict"})
 			continue
 		}
 		v := judgePath(p, runs[p.Package])
-		if run := runs[p.Package]; run != nil && run.exit != 0 && v.Status != Fail && byPkg[p.Package] >= len(m.Packages) {
-			// A -run narrowed package exits non-zero only for a test of
-			// these paths or the package itself; blame every path in it
-			// that did not explain the exit.
-			v.Status = Fail
-			why := run.failed
-			if why == "" {
-				why = "no test to blame"
-			}
-			v.Detail = fmt.Sprintf("go test %s exited %d: %s", p.Package, run.exit, why)
+		if v.Status == Fail {
+			explained[p.Package] = true
 		}
 		verdicts = append(verdicts, v)
 		if named[p.Package] == nil {
@@ -752,8 +750,25 @@ func RunInProcess(root string, m Manifest, timeout time.Duration, log io.Writer,
 			named[p.Package][t] = true
 		}
 	}
+	for i := range verdicts {
+		p := verdicts[i].Path
+		if p.Mode != modeInProcess || plans[byPkg[p.Package]].whole {
+			continue
+		}
+		if run := runs[p.Package]; run != nil && run.exit != 0 && !explained[p.Package] {
+			// A -run narrowed package exited non-zero without any of its
+			// paths' tests failing (for example, TestMain or -race at exit);
+			// blame every path in it so the exit cannot pass silently.
+			verdicts[i].Status = Fail
+			why := run.failed
+			if why == "" {
+				why = "no test to blame"
+			}
+			verdicts[i].Detail = fmt.Sprintf("go test %s exited %d: %s", p.Package, run.exit, why)
+		}
+	}
 	for _, pkg := range m.Packages {
-		verdicts = append(verdicts, judgeOthers(pkg, named[pkg], runs[pkg]))
+		verdicts = append(verdicts, judgeOthers(pkg, named[pkg], runs[pkg], explained[pkg]))
 	}
 	return verdicts
 }
