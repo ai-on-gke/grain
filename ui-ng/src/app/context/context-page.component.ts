@@ -48,8 +48,10 @@ import {
   type FsListResponse,
   type FsScheme,
   MAX_MEMORY_DOCUMENT_LENGTH,
+  MAX_MEMORY_DOCUMENT_NAME_LENGTH,
   MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH,
   MAX_MEMORY_LENGTH,
+  MEMORY_DOC_SLUG_RE,
   type Memory,
   type MemoryDocument,
   buildMemoryScopes,
@@ -59,8 +61,11 @@ import {
   isStaleMemory,
   memoryAge,
   parseGrepOutput,
+  repoFromMemoryFsPath,
   scopeKey,
   scopeLabel,
+  utf8ByteLength,
+  validateDocumentSlug,
 } from "./context.models";
 
 const TABS: readonly { id: ContextTab; label: string }[] = [
@@ -68,6 +73,14 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
   { id: "documents", label: "Memory Documents (Packs)" },
   { id: "namespace", label: "Namespace Browser" },
 ];
+
+type ReachableReposPayload =
+  | {
+      configured?: boolean;
+      available?: boolean;
+      repos?: Array<string | { repo?: string; push?: boolean }>;
+    }
+  | Array<string | { repo?: string; push?: boolean }>;
 
 @Component({
   selector: "g-context-page",
@@ -80,7 +93,6 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
-    "../inbox/inbox-queue.css",
     "../shared/ops-surface.css",
     "./context-page.component.css",
   ],
@@ -114,7 +126,11 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
           </div>
 
           <div class="headline-actions">
-            <div class="split-controls" role="group" aria-label="Pane split">
+            <div
+              class="ctx-split-controls"
+              role="group"
+              aria-label="Pane split"
+            >
               <button
                 type="button"
                 class="btn-text"
@@ -155,7 +171,7 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
 
         <p class="view-subtitle">
           Standing memory carried in every dispatched prompt, on-demand memory
-          document packs (200-char index summary), and the live
+          document packs (200-byte index summary), and the live
           <code>/api/fs/memory/</code> namespace.
         </p>
 
@@ -165,6 +181,12 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
             type="button"
             class="filter-chip"
             data-testid="context-scope-deployment"
+            [disabled]="!canReadDeploymentScope()"
+            [gTip]="
+              canReadDeploymentScope()
+                ? 'Switch to deployment-wide memory'
+                : deniedReadReason('')
+            "
             [attr.aria-pressed]="selectedRepo() === ''"
             (click)="selectScope('')"
           >
@@ -173,13 +195,16 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
 
           <div class="pop-wrap">
             <button
+              #repoTrigger
               type="button"
               class="pop-trigger"
               [class.is-active]="selectedRepo() !== ''"
               data-testid="context-repo-trigger"
+              aria-haspopup="listbox"
               [attr.aria-expanded]="repoMenuOpen()"
               aria-controls="context-repo-menu"
               (click)="toggleRepoMenu($event)"
+              (keydown)="onRepoTriggerKeydown($event)"
             >
               <span>{{
                 selectedRepo()
@@ -197,17 +222,21 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
             </button>
             @if (repoMenuOpen()) {
               <ul
+                #repoListbox
                 class="pop-menu"
                 id="context-repo-menu"
                 role="listbox"
+                tabindex="-1"
                 aria-label="Repository scope"
                 data-testid="context-repo-menu"
+                (keydown)="onListboxKeydown($event)"
               >
-                <li>
+                <li role="none">
                   <button
                     type="button"
                     class="pop-item"
                     role="option"
+                    [disabled]="!canReadDeploymentScope()"
                     [attr.aria-selected]="selectedRepo() === ''"
                     (click)="selectScope('')"
                   >
@@ -218,7 +247,7 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                   </button>
                 </li>
                 @for (r of allKnownRepos(); track r) {
-                  <li>
+                  <li role="none">
                     <button
                       type="button"
                       class="pop-item"
@@ -291,9 +320,13 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
               type="button"
               role="tab"
               class="tab-link ctx-tab-btn"
+              [id]="'context-tab-btn-' + t.id"
               [attr.aria-selected]="tab() === t.id"
+              [attr.aria-controls]="'context-panel-' + t.id"
+              [attr.tabindex]="tab() === t.id ? 0 : -1"
               [attr.data-testid]="'context-tab-' + t.id"
               (click)="pickTab(t.id)"
+              (keydown)="onTabKeydown($event, t.id)"
             >
               <span>{{ t.label }}</span>
               @if (t.id === "instructions") {
@@ -315,16 +348,23 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
       }
 
       @if (!canReadMemory()) {
-        <p class="empty-state" data-testid="context-denied">
-          {{
-            access.deniedReason("GET /api/memory", selectedRepo() || undefined)
-          }}
+        <p
+          class="empty-state"
+          role="tabpanel"
+          [id]="'context-panel-' + tab()"
+          [attr.aria-labelledby]="'context-tab-btn-' + tab()"
+          data-testid="context-denied"
+        >
+          {{ deniedReadReason(selectedRepo()) }}
         </p>
       } @else {
-        <!-- Inbox-style 30 / 70 Resizable Split Workspace -->
+        <!-- Context-scoped 30 / 70 Resizable Split Workspace -->
         <div
-          class="inbox-split"
+          class="ctx-split"
           #splitEl
+          role="tabpanel"
+          [id]="'context-panel-' + tab()"
+          [attr.aria-labelledby]="'context-tab-btn-' + tab()"
           [class.is-collapsed]="sp.collapsed()"
           [class.is-dragging]="sp.dragging()"
           [style.--queue-w.%]="sp.ratioExact()"
@@ -332,7 +372,7 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
         >
           <!-- LEFT PANE (30%) -->
           <section
-            class="queue-pane"
+            class="ctx-list-pane"
             aria-label="Context index"
             data-testid="context-left-pane"
           >
@@ -346,74 +386,72 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                   }}</span>
                 </div>
               </div>
-              <ul class="queue-list">
+              <ul class="ctx-list">
                 @for (sc of filteredScopes(); track sc.key) {
                   <li
-                    class="queue-row"
+                    class="ctx-row"
                     [class.is-selected]="scopeKey(selectedRepo()) === sc.key"
                     [attr.data-testid]="
                       'scope-row-' + (sc.repo || 'deployment')
                     "
                   >
-                    <div class="queue-row-inner">
-                      <button
-                        type="button"
-                        class="row-main"
-                        (click)="selectScope(sc.repo)"
-                      >
-                        <span class="row-line1">
-                          <span
-                            [class]="
+                    <button
+                      type="button"
+                      class="ctx-row-btn"
+                      (click)="selectScope(sc.repo)"
+                    >
+                      <span class="ctx-row-line1">
+                        <span
+                          [class]="
+                            isStale(sc.updatedAt)
+                              ? 'status-pill blast'
+                              : sc.text
+                                ? 'status-pill healthy'
+                                : 'status-pill neutral'
+                          "
+                        >
+                          <g-status-icon
+                            [tone]="
                               isStale(sc.updatedAt)
-                                ? 'status-pill blast'
+                                ? 'blast'
                                 : sc.text
-                                  ? 'status-pill healthy'
-                                  : 'status-pill neutral'
+                                  ? 'healthy'
+                                  : 'neutral'
                             "
-                          >
-                            <g-status-icon
-                              [tone]="
-                                isStale(sc.updatedAt)
-                                  ? 'blast'
-                                  : sc.text
-                                    ? 'healthy'
-                                    : 'neutral'
-                              "
-                              [kind]="
-                                isStale(sc.updatedAt)
-                                  ? 'warning'
-                                  : sc.text
-                                    ? 'healthy'
-                                    : 'neutral'
-                              "
-                            />
-                            {{
+                            [kind]="
                               isStale(sc.updatedAt)
-                                ? "Stale"
+                                ? 'warning'
                                 : sc.text
-                                  ? "Active"
-                                  : "Empty"
-                            }}
-                          </span>
-                          <span class="row-title">{{ sc.label }}</span>
+                                  ? 'healthy'
+                                  : 'neutral'
+                            "
+                          />
+                          {{
+                            isStale(sc.updatedAt)
+                              ? "Stale"
+                              : sc.text
+                                ? "Active"
+                                : "Empty"
+                          }}
                         </span>
-                        <span class="row-line2 muted tabular">
-                          <span>{{ sc.text.length }} chars</span>
-                          <span>· {{ sc.documents.length }} packs</span>
-                          @if (ageOf(sc.updatedAt); as age) {
-                            <span>· {{ age }}</span>
-                          }
-                        </span>
-                        @if (sc.updatedBy) {
-                          <span class="row-line3">
-                            <g-actor-chip
-                              [label]="sc.updatedBy"
-                              [kind]="sc.updatedByKind || 'human'"
-                            />
-                          </span>
+                        <span class="row-title">{{ sc.label }}</span>
+                      </span>
+                      <span class="ctx-row-line2 muted tabular">
+                        <span>{{ utf8Len(sc.text) }} bytes</span>
+                        <span>· {{ sc.documents.length }} packs</span>
+                        @if (ageOf(sc.updatedAt); as age) {
+                          <span>· {{ age }}</span>
                         }
-                      </button>
-                    </div>
+                      </span>
+                      @if (sc.updatedBy) {
+                        <span class="ctx-row-line3">
+                          <g-actor-chip
+                            [label]="sc.updatedBy"
+                            [kind]="sc.updatedByKind || 'human'"
+                          />
+                        </span>
+                      }
+                    </button>
                   </li>
                 }
               </ul>
@@ -434,9 +472,9 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                       canWriteMemory()
                         ? 'Create a new memory document in ' +
                           scopeLabel(selectedRepo())
-                        : access.deniedReason(
+                        : deniedWriteReason(
                             'PUT /api/memory/documents',
-                            selectedRepo() || undefined
+                            selectedRepo()
                           )
                     "
                     (click)="startNewDocument()"
@@ -461,13 +499,13 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                   {{ scopeLabel(selectedRepo()) }}.
                 </p>
               } @else {
-                <ul class="queue-list" data-testid="docs-list">
+                <ul class="ctx-list" data-testid="docs-list">
                   @for (
                     d of filteredDocuments();
                     track (d.repo || "") + ":" + d.name
                   ) {
                     <li
-                      class="queue-row"
+                      class="ctx-row"
                       [class.is-selected]="
                         !creatingDoc() &&
                         selectedDocName() === d.name &&
@@ -475,35 +513,33 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                       "
                       [attr.data-testid]="'doc-row-' + d.name"
                     >
-                      <div class="queue-row-inner">
-                        <button
-                          type="button"
-                          class="row-main"
-                          (click)="openDocument(d)"
-                        >
-                          <span class="row-line1">
-                            <span class="status-pill neutral tabular">
-                              <g-status-icon tone="neutral" kind="progress" />
-                              {{ fmtDocSize(d.length) }}
-                            </span>
-                            <span class="row-title tabular">{{ d.name }}</span>
+                      <button
+                        type="button"
+                        class="ctx-row-btn"
+                        (click)="openDocument(d)"
+                      >
+                        <span class="ctx-row-line1">
+                          <span class="status-pill neutral tabular">
+                            <g-status-icon tone="neutral" kind="progress" />
+                            {{ fmtDocSize(d.length) }}
                           </span>
-                          <span class="row-summary" [title]="d.summary">
-                            {{ d.summary }}
-                          </span>
-                          <span class="row-line3 muted">
-                            @if (d.updatedBy) {
-                              <g-actor-chip
-                                [label]="d.updatedBy"
-                                [kind]="d.updatedByKind || 'human'"
-                              />
-                            }
-                            @if (ageOf(d.updatedAt); as age) {
-                              <span>{{ age }}</span>
-                            }
-                          </span>
-                        </button>
-                      </div>
+                          <span class="row-title tabular">{{ d.name }}</span>
+                        </span>
+                        <span class="ctx-row-summary" [title]="d.summary">
+                          {{ d.summary }}
+                        </span>
+                        <span class="ctx-row-line3 muted">
+                          @if (d.updatedBy) {
+                            <g-actor-chip
+                              [label]="d.updatedBy"
+                              [kind]="d.updatedByKind || 'human'"
+                            />
+                          }
+                          @if (ageOf(d.updatedAt); as age) {
+                            <span>{{ age }}</span>
+                          }
+                        </span>
+                      </button>
                     </li>
                   }
                 </ul>
@@ -568,11 +604,11 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                   }
                 </div>
 
-                <div style="display: flex; gap: 6px">
+                <div style="display: flex; gap: 6px; min-width: 0">
                   <input
                     type="search"
                     class="ops-input"
-                    style="flex: 1"
+                    style="flex: 1; min-width: 0"
                     placeholder="Grep pattern in subtree…"
                     aria-label="Grep namespace files"
                     data-testid="fs-grep-input"
@@ -605,7 +641,7 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                     Clear search
                   </button>
                 </div>
-                <ul class="queue-list" data-testid="fs-grep-results">
+                <ul class="ctx-list" data-testid="fs-grep-results">
                   @for (hit of fsGrepHits() ?? []; track $index) {
                     <li>
                       <button
@@ -638,7 +674,7 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                   No files in {{ fsScheme() }}://{{ fsDir() }}.
                 </p>
               } @else {
-                <ul class="queue-list" data-testid="fs-entries-list">
+                <ul class="ctx-list" data-testid="fs-entries-list">
                   @for (entry of fsEntries(); track entry.name) {
                     <li>
                       <button
@@ -670,7 +706,7 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
 
           <!-- RESIZABLE DIVIDER -->
           <div
-            class="inbox-resizer"
+            class="ctx-resizer"
             role="separator"
             tabindex="0"
             aria-orientation="vertical"
@@ -686,9 +722,9 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
             (dblclick)="sp.reset()"
             (keydown)="sp.onKey($event)"
           >
-            <span class="inbox-resizer-pill" aria-hidden="true"></span>
+            <span class="ctx-resizer-pill" aria-hidden="true"></span>
             @if (sp.dragging()) {
-              <span class="inbox-resizer-badge tabular" aria-hidden="true"
+              <span class="ctx-resizer-badge tabular" aria-hidden="true"
                 >{{ sp.ratioPct() }}%</span
               >
             }
@@ -754,11 +790,11 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
 
               <div class="tel-legend tabular">
                 <span
-                  [class.ctx-counter]="true"
-                  [class.is-over]="memoryDraft().length > maxMemoryLen"
+                  class="ctx-counter"
+                  [class.is-over]="memoryByteLen() > maxMemoryLen"
                   data-testid="memory-char-count"
                 >
-                  {{ memoryDraft().length }} / {{ maxMemoryLen }} chars
+                  {{ memoryByteLen() }} / {{ maxMemoryLen }} bytes
                 </span>
                 <span data-testid="memory-token-count"
                   >≈{{ estTokens(memoryDraft()) }} tokens</span
@@ -813,13 +849,21 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                     [disabled]="
                       !memoryDirty() ||
                       savingMemory() ||
-                      memoryDraft().length > maxMemoryLen
+                      memoryByteLen() > maxMemoryLen
                     "
                     (click)="saveMemory()"
                   >
                     {{ savingMemory() ? "Saving…" : "Save instructions" }}
                   </button>
                 </div>
+              } @else {
+                <p
+                  class="ctx-counter"
+                  style="margin: 0"
+                  data-testid="memory-write-denied"
+                >
+                  {{ deniedWriteReason("PUT /api/memory", selectedRepo()) }}
+                </p>
               }
             }
 
@@ -843,7 +887,7 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                       }}
                     </h2>
                     <p class="ops-card-sub">
-                      Every prompt carries the 200-character summary index line;
+                      Every prompt carries the 200-byte summary index line;
                       agents fetch full text on demand.
                     </p>
                   </div>
@@ -877,16 +921,42 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
 
                 @if (creatingDoc()) {
                   <label class="ctx-summary-box">
-                    <span class="ops-kpi-label">Document name (slug)</span>
+                    <div class="ctx-pane-head-row">
+                      <span class="ops-kpi-label">Document name (slug)</span>
+                      <span
+                        class="ctx-counter tabular"
+                        [class.is-over]="!!docNameValidationError()"
+                      >
+                        {{ newDocNameDraft().trim().length }} /
+                        {{ maxDocNameLen }} chars
+                      </span>
+                    </div>
                     <input
                       type="text"
                       class="ops-input tabular"
                       placeholder="e.g. database-migrations or auth-invariants"
                       aria-label="Memory document name"
+                      aria-describedby="doc-name-hint"
                       data-testid="doc-name-input"
                       [value]="newDocNameDraft()"
                       (input)="newDocNameDraft.set($any($event.target).value)"
                     />
+                    <span
+                      id="doc-name-hint"
+                      class="ctx-counter"
+                      data-testid="doc-name-hint"
+                    >
+                      Lowercase letters, digits, and single hyphens (max 64
+                      chars).
+                    </span>
+                    @if (docNameValidationError(); as nerr) {
+                      <span
+                        class="ctx-counter is-over"
+                        role="alert"
+                        data-testid="doc-name-error"
+                        >{{ nerr }}</span
+                      >
+                    }
                   </label>
                 }
 
@@ -900,8 +970,7 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                       [class.is-over]="summaryOverLimit()"
                       data-testid="doc-summary-counter"
                     >
-                      {{ docSummaryDraft().trim().length }} /
-                      {{ maxSummaryLen }} chars
+                      {{ summaryByteLen() }} / {{ maxSummaryLen }} bytes
                     </span>
                   </div>
                   <input
@@ -910,7 +979,7 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                     aria-label="Document prompt index summary"
                     data-testid="doc-summary-input"
                     [readonly]="!canWriteDoc()"
-                    placeholder="One crisp line explaining when an agent should open this document (max 200 chars)…"
+                    placeholder="One crisp line explaining when an agent should open this document (max 200 bytes)…"
                     [value]="docSummaryDraft()"
                     (input)="docSummaryDraft.set($any($event.target).value)"
                   />
@@ -927,9 +996,10 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                 <div class="tel-legend tabular">
                   <span
                     class="ctx-counter"
-                    [class.is-over]="docTextDraft().length > maxDocLen"
+                    [class.is-over]="docBodyByteLen() > maxDocLen"
+                    data-testid="doc-body-counter"
                   >
-                    {{ docTextDraft().length }} / {{ maxDocLen }} chars
+                    {{ docBodyByteLen() }} / {{ maxDocLen }} bytes
                   </span>
                   <span>≈{{ estTokens(docTextDraft()) }} tokens</span>
                 </div>
@@ -1018,7 +1088,7 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
                       {{ fsScheme() }}://{{ fsSelectedFile() }}
                     </h2>
                     <p class="ops-card-sub tabular">
-                      {{ fsFileContent().length }} bytes · ≈{{
+                      {{ utf8Len(fsFileContent()) }} bytes · ≈{{
                         estTokens(fsFileContent())
                       }}
                       tokens · Read-only namespace projection
@@ -1076,11 +1146,11 @@ const TABS: readonly { id: ContextTab; label: string }[] = [
           </section>
         </div>
       }
-
-      @if (confirmReq(); as req) {
-        <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
-      }
     </section>
+
+    @if (confirmReq(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+    }
   `,
 })
 export class ContextPageComponent implements OnInit, OnDestroy {
@@ -1096,14 +1166,21 @@ export class ContextPageComponent implements OnInit, OnDestroy {
   protected readonly maxMemoryLen = MAX_MEMORY_LENGTH;
   protected readonly maxDocLen = MAX_MEMORY_DOCUMENT_LENGTH;
   protected readonly maxSummaryLen = MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH;
+  protected readonly maxDocNameLen = MAX_MEMORY_DOCUMENT_NAME_LENGTH;
   protected readonly scopeLabel = scopeLabel;
   protected readonly scopeKey = scopeKey;
   protected readonly ageOf = memoryAge;
   protected readonly isStale = isStaleMemory;
   protected readonly fmtDocSize = documentSize;
   protected readonly estTokens = estimateTokens;
+  protected readonly utf8Len = utf8ByteLength;
 
   private readonly splitEl = viewChild<ElementRef<HTMLElement>>("splitEl");
+  private readonly repoTrigger =
+    viewChild<ElementRef<HTMLButtonElement>>("repoTrigger");
+  private readonly repoListbox =
+    viewChild<ElementRef<HTMLElement>>("repoListbox");
+
   protected readonly sp = new SplitController({
     ratioKey: "grain.context.splitRatio",
     collapsedKey: "grain.context.splitCollapsed",
@@ -1157,29 +1234,99 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     afterNextRender(() => this.sp.attach());
   }
 
-  protected readonly canReadMemory = computed(() =>
-    this.access.can("GET /api/memory", this.selectedRepo() || undefined),
+  protected readonly memoryReadLimits = computed<string[]>(() =>
+    this.access.isFullAccess()
+      ? []
+      : (this.access.repoLimits()["memory:read"] ?? []),
   );
-  protected readonly canWriteMemory = computed(() =>
-    this.access.can("PUT /api/memory", this.selectedRepo() || undefined),
+  protected readonly memoryWriteLimits = computed<string[]>(() =>
+    this.access.isFullAccess()
+      ? []
+      : (this.access.repoLimits()["memory:write"] ?? []),
   );
-  protected readonly canWriteDoc = computed(() =>
-    this.access.can(
-      "PUT /api/memory/documents",
-      (this.creatingDoc() ? this.selectedRepo() : this.selectedDocRepo()) ||
-        undefined,
-    ),
+  protected readonly isMemoryReadRepoLimited = computed(
+    () => this.memoryReadLimits().length > 0,
   );
-  protected readonly canReadConfigFs = computed(() =>
-    this.access.can("GET /api/fs/config/{path...}"),
+  protected readonly isMemoryWriteRepoLimited = computed(
+    () => this.memoryWriteLimits().length > 0,
   );
 
-  protected readonly scopes = computed(() =>
-    buildMemoryScopes(this.memories(), this.documents(), [
-      ...this.configRepos(),
-      ...this.extraRepos(),
-    ]),
+  protected readonly canReadDeploymentScope = computed(
+    () => this.access.can("GET /api/memory") && !this.isMemoryReadRepoLimited(),
   );
+
+  protected readonly canReadMemory = computed(() => {
+    const repo = this.selectedRepo();
+    if (!repo) return this.canReadDeploymentScope();
+    return this.access.can("GET /api/memory", repo);
+  });
+
+  protected readonly canWriteMemory = computed(() => {
+    const repo = this.selectedRepo();
+    if (!repo) {
+      return (
+        this.access.can("PUT /api/memory") && !this.isMemoryWriteRepoLimited()
+      );
+    }
+    return this.access.can("PUT /api/memory", repo);
+  });
+
+  protected readonly canWriteDoc = computed(() => {
+    const repo = this.creatingDoc()
+      ? this.selectedRepo()
+      : this.selectedDocRepo();
+    if (!repo) {
+      return (
+        this.access.can("PUT /api/memory/documents") &&
+        !this.isMemoryWriteRepoLimited()
+      );
+    }
+    return this.access.can("PUT /api/memory/documents", repo);
+  });
+
+  protected readonly canReadConfigFs = computed(
+    () =>
+      this.access.can("GET /api/fs/config/{path...}") &&
+      !(
+        !this.access.isFullAccess() &&
+        Boolean(this.access.repoLimits()["settings:read"]?.length)
+      ),
+  );
+
+  protected deniedReadReason(repo: string): string {
+    if (!repo && this.isMemoryReadRepoLimited()) {
+      return `Your role ${this.access.roleLabel() || "limited"} holds memory:read only on ${this.memoryReadLimits().join(", ")} and cannot read deployment-wide memory.`;
+    }
+    return this.access.deniedReason("GET /api/memory", repo || undefined);
+  }
+
+  protected deniedWriteReason(
+    route: "PUT /api/memory" | "PUT /api/memory/documents",
+    repo: string,
+  ): string {
+    if (!repo && this.isMemoryWriteRepoLimited()) {
+      return `Your role ${this.access.roleLabel() || "limited"} holds memory:write only on ${this.memoryWriteLimits().join(", ")} and cannot modify deployment-wide memory.`;
+    }
+    return this.access.deniedReason(route, repo || undefined);
+  }
+
+  protected readonly scopes = computed(() => {
+    const all = buildMemoryScopes(
+      this.memories(),
+      this.documents(),
+      [
+        ...this.configRepos(),
+        ...this.memoryReadLimits(),
+        ...this.memoryWriteLimits(),
+        ...this.extraRepos(),
+      ],
+      this.canReadDeploymentScope(),
+    );
+    if (!this.isMemoryReadRepoLimited()) return all;
+    return all.filter(
+      (s) => s.repo && this.access.can("GET /api/memory", s.repo),
+    );
+  });
 
   protected readonly allKnownRepos = computed<string[]>(() =>
     this.scopes()
@@ -1216,14 +1363,19 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     return cur.key in map ? map[cur.key] : cur.text;
   });
 
+  protected readonly memoryByteLen = computed<number>(() =>
+    utf8ByteLength(this.memoryDraft()),
+  );
+
   protected readonly memoryDirty = computed<boolean>(
     () => this.memoryDraft() !== this.currentScopeRow().text,
   );
 
   protected readonly memoryPreviewHtml = computed<string>(() => {
     const src = this.memoryDraft().trim();
-    if (!src)
+    if (!src) {
       return '<p class="muted">Nothing remembered in this scope yet.</p>';
+    }
     return renderMarkdown(src);
   });
 
@@ -1244,20 +1396,32 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     );
   });
 
+  protected readonly docNameValidationError = computed<string | null>(() => {
+    if (!this.creatingDoc()) return null;
+    return validateDocumentSlug(this.newDocNameDraft());
+  });
+
+  protected readonly summaryByteLen = computed<number>(() =>
+    utf8ByteLength(this.docSummaryDraft().trim()),
+  );
+
+  protected readonly docBodyByteLen = computed<number>(() =>
+    utf8ByteLength(this.docTextDraft()),
+  );
+
   protected readonly summaryOverLimit = computed<boolean>(
-    () =>
-      this.docSummaryDraft().trim().length > MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH,
+    () => this.summaryByteLen() > MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH,
   );
 
   protected readonly summaryValidationError = computed<string | null>(() => {
-    const s = this.docSummaryDraft().trim();
-    if (s.length > MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH) {
-      return `Summary exceeds ${MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH} characters (${s.length}/${MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH}). Keep it to a single index line.`;
+    const bytes = this.summaryByteLen();
+    if (bytes > MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH) {
+      return `Summary exceeds ${MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH} bytes (${bytes}/${MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH}). Keep it to a single index line.`;
     }
     if (
       (this.creatingDoc() || this.selectedDocName()) &&
       this.docTextDraft().trim().length > 0 &&
-      s.length === 0
+      bytes === 0
     ) {
       return "A summary is required so runs know when to read this document.";
     }
@@ -1287,8 +1451,18 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     const summary = this.docSummaryDraft().trim();
     const text = this.docTextDraft().trim();
     if (!name || !summary || !text) return false;
-    if (summary.length > MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH) return false;
-    if (text.length > MAX_MEMORY_DOCUMENT_LENGTH) return false;
+    if (
+      name.length > MAX_MEMORY_DOCUMENT_NAME_LENGTH ||
+      !MEMORY_DOC_SLUG_RE.test(name)
+    ) {
+      return false;
+    }
+    if (utf8ByteLength(summary) > MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH) {
+      return false;
+    }
+    if (utf8ByteLength(text) > MAX_MEMORY_DOCUMENT_LENGTH) {
+      return false;
+    }
     return this.docDirty();
   });
 
@@ -1327,12 +1501,29 @@ export class ContextPageComponent implements OnInit, OnDestroy {
       this.selectedRepo.set(r);
       this.extraRepos.set([r]);
     }
-    void this.loadBootstrapRepos();
-    void this.refreshAll();
+    this.ensurePermittedRepoSelected();
+    void this.bootstrap();
   }
 
   ngOnDestroy(): void {
     this.sp.detach();
+  }
+
+  private ensurePermittedRepoSelected(): void {
+    if (this.selectedRepo()) return;
+    const readLimited = this.memoryReadLimits();
+    const writeLimited = this.memoryWriteLimits();
+    const firstPermitted = readLimited[0] ?? writeLimited[0] ?? "";
+    if (firstPermitted && (readLimited.length > 0 || writeLimited.length > 0)) {
+      this.selectedRepo.set(firstPermitted);
+      this.syncUrl();
+    }
+  }
+
+  private async bootstrap(): Promise<void> {
+    await this.loadBootstrapRepos();
+    this.ensurePermittedRepoSelected();
+    await this.refreshAll();
   }
 
   private async loadBootstrapRepos(): Promise<void> {
@@ -1343,9 +1534,11 @@ export class ContextPageComponent implements OnInit, OnDestroy {
         if (cfg) {
           this.access.setConfig(cfg);
           const tr = Array.isArray(cfg["targetRepos"])
-            ? (cfg["targetRepos"] as string[])
+            ? (cfg["targetRepos"] as unknown[])
             : [];
-          for (const r of tr) if (r) found.add(r);
+          for (const r of tr) {
+            if (typeof r === "string" && r.trim()) found.add(r.trim());
+          }
         }
       } catch {
         // Non-fatal.
@@ -1353,11 +1546,16 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     }
     if (this.access.can("GET /api/deployment/reachable-repos")) {
       try {
-        const rr = await this.api.get<string[] | { repos?: string[] }>(
+        const rr = await this.api.get<ReachableReposPayload>(
           "GET /api/deployment/reachable-repos",
         );
         const list = Array.isArray(rr) ? rr : (rr?.repos ?? []);
-        for (const r of list) if (r) found.add(r);
+        for (const r of list) {
+          const name = typeof r === "string" ? r : r?.repo;
+          if (typeof name === "string" && name.trim()) {
+            found.add(name.trim());
+          }
+        }
       } catch {
         // Optional when repos:read is not held.
       }
@@ -1370,25 +1568,70 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     this.loading.set(true);
     this.loadError.set(null);
     try {
-      const [memRes, docRes] = await Promise.all([
-        this.api.get<Memory[] | { items?: Memory[]; memories?: Memory[] }>(
-          "GET /api/memory",
-        ),
-        this.api.get<
-          | MemoryDocument[]
-          | { items?: MemoryDocument[]; documents?: MemoryDocument[] }
-        >("GET /api/memory/documents"),
-      ]);
-      this.memories.set(
-        Array.isArray(memRes)
-          ? memRes
-          : (memRes?.items ?? memRes?.memories ?? []),
-      );
-      this.documents.set(
-        Array.isArray(docRes)
-          ? docRes
-          : (docRes?.items ?? docRes?.documents ?? []),
-      );
+      if (this.isMemoryReadRepoLimited()) {
+        const repos = [
+          ...new Set(
+            [...this.memoryReadLimits(), this.selectedRepo()].filter(
+              (r) => r && this.access.can("GET /api/memory", r),
+            ),
+          ),
+        ];
+        const [memLists, docLists] = await Promise.all([
+          Promise.all(
+            repos.map((r) =>
+              this.api.get<
+                Memory[] | { items?: Memory[]; memories?: Memory[] }
+              >(
+                "GET /api/memory",
+                undefined,
+                new URLSearchParams({ repo: r }).toString(),
+              ),
+            ),
+          ),
+          Promise.all(
+            repos.map((r) =>
+              this.api.get<
+                | MemoryDocument[]
+                | { items?: MemoryDocument[]; documents?: MemoryDocument[] }
+              >(
+                "GET /api/memory/documents",
+                undefined,
+                new URLSearchParams({ repo: r }).toString(),
+              ),
+            ),
+          ),
+        ]);
+        this.memories.set(
+          memLists.flatMap((res) =>
+            Array.isArray(res) ? res : (res?.items ?? res?.memories ?? []),
+          ),
+        );
+        this.documents.set(
+          docLists.flatMap((res) =>
+            Array.isArray(res) ? res : (res?.items ?? res?.documents ?? []),
+          ),
+        );
+      } else {
+        const [memRes, docRes] = await Promise.all([
+          this.api.get<Memory[] | { items?: Memory[]; memories?: Memory[] }>(
+            "GET /api/memory",
+          ),
+          this.api.get<
+            | MemoryDocument[]
+            | { items?: MemoryDocument[]; documents?: MemoryDocument[] }
+          >("GET /api/memory/documents"),
+        ]);
+        this.memories.set(
+          Array.isArray(memRes)
+            ? memRes
+            : (memRes?.items ?? memRes?.memories ?? []),
+        );
+        this.documents.set(
+          Array.isArray(docRes)
+            ? docRes
+            : (docRes?.items ?? docRes?.documents ?? []),
+        );
+      }
       if (this.tab() === "namespace") {
         await this.loadFsDir(this.fsDir());
       }
@@ -1407,6 +1650,22 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  protected onTabKeydown(ev: KeyboardEvent, current: ContextTab): void {
+    const idx = this.tabs.findIndex((t) => t.id === current);
+    if (idx < 0) return;
+    let nextIdx = -1;
+    if (ev.key === "ArrowRight") nextIdx = (idx + 1) % this.tabs.length;
+    else if (ev.key === "ArrowLeft") {
+      nextIdx = (idx - 1 + this.tabs.length) % this.tabs.length;
+    } else if (ev.key === "Home") nextIdx = 0;
+    else if (ev.key === "End") nextIdx = this.tabs.length - 1;
+    if (nextIdx < 0) return;
+    ev.preventDefault();
+    const nextTab = this.tabs[nextIdx].id;
+    this.pickTab(nextTab);
+    this.doc.getElementById(`context-tab-btn-${nextTab}`)?.focus();
+  }
+
   protected setEditorMode(m: string): void {
     if (m === "edit" || m === "split" || m === "preview") {
       this.editorMode.set(m);
@@ -1414,8 +1673,9 @@ export class ContextPageComponent implements OnInit, OnDestroy {
   }
 
   protected selectScope(repo: string): void {
-    this.repoMenuOpen.set(false);
     const clean = repo.trim();
+    if (!clean && !this.canReadDeploymentScope()) return;
+    this.repoMenuOpen.set(false);
     if (
       clean &&
       !this.allKnownRepos().some((r) => scopeKey(r) === scopeKey(clean))
@@ -1617,6 +1877,33 @@ export class ContextPageComponent implements OnInit, OnDestroy {
       : ("GET /api/fs/memory/{path...}" as const);
   }
 
+  private canReadFsPath(fsPath: string, isFile = false): boolean {
+    const route = this.fsRouteKey();
+    if (this.fsScheme() === "config") {
+      return this.canReadConfigFs();
+    }
+    const fsRepo = repoFromMemoryFsPath(fsPath);
+    if (fsRepo) {
+      return this.access.can(route, fsRepo);
+    }
+    if (isFile && fsPath && this.isMemoryReadRepoLimited()) {
+      return false;
+    }
+    return this.access.can(route);
+  }
+
+  private deniedFsPathReason(fsPath: string): string {
+    const route = this.fsRouteKey();
+    if (this.fsScheme() === "memory") {
+      const fsRepo = repoFromMemoryFsPath(fsPath);
+      if (fsRepo) return this.access.deniedReason(route, fsRepo);
+      if (this.isMemoryReadRepoLimited()) {
+        return this.deniedReadReason("");
+      }
+    }
+    return this.access.deniedReason(route);
+  }
+
   protected pickFsScheme(s: FsScheme): void {
     if (this.fsScheme() === s) return;
     if (s === "config" && !this.canReadConfigFs()) return;
@@ -1645,8 +1932,11 @@ export class ContextPageComponent implements OnInit, OnDestroy {
   }
 
   async loadFsDir(dir: string): Promise<void> {
+    if (!this.canReadFsPath(dir, false)) {
+      this.snackbar.show(this.deniedFsPathReason(dir));
+      return;
+    }
     const route = this.fsRouteKey();
-    if (!this.access.can(route)) return;
     this.fsDir.set(dir);
     try {
       const res = await this.api.get<FsListResponse | FsEntry[]>(
@@ -1677,8 +1967,11 @@ export class ContextPageComponent implements OnInit, OnDestroy {
   }
 
   async openFsFile(filePath: string): Promise<void> {
+    if (!this.canReadFsPath(filePath, true)) {
+      this.snackbar.show(this.deniedFsPathReason(filePath));
+      return;
+    }
     const route = this.fsRouteKey();
-    if (!this.access.can(route)) return;
     this.fsSelectedFile.set(filePath);
     try {
       const txt = await this.api.getText(route, { path: filePath });
@@ -1694,8 +1987,12 @@ export class ContextPageComponent implements OnInit, OnDestroy {
       this.fsGrepHits.set(null);
       return;
     }
+    const dir = this.fsDir();
+    if (!this.canReadFsPath(dir, false)) {
+      this.snackbar.show(this.deniedFsPathReason(dir));
+      return;
+    }
     const route = this.fsRouteKey();
-    if (!this.access.can(route)) return;
     const params = new URLSearchParams();
     params.set("grep", q);
     params.set("i", "1");
@@ -1703,10 +2000,10 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     try {
       const raw = await this.api.getText(
         route,
-        { path: this.fsDir() },
+        { path: dir },
         params.toString(),
       );
-      this.fsGrepHits.set(parseGrepOutput(raw, this.fsDir()));
+      this.fsGrepHits.set(parseGrepOutput(raw, dir));
     } catch (err) {
       this.snackbar.show(errorText(err));
     }
@@ -1731,6 +2028,50 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     this.repoMenuOpen.update((v) => !v);
   }
 
+  protected onRepoTriggerKeydown(ev: KeyboardEvent): void {
+    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
+    ev.preventDefault();
+    if (!this.repoMenuOpen()) {
+      this.repoMenuOpen.set(true);
+    }
+    const wantLast = ev.key === "ArrowUp";
+    setTimeout(() => {
+      const opts = this.enabledListboxOptions();
+      const target = wantLast ? opts[opts.length - 1] : opts[0];
+      target?.focus();
+    });
+  }
+
+  protected onListboxKeydown(ev: KeyboardEvent): void {
+    const opts = this.enabledListboxOptions();
+    if (opts.length === 0) return;
+    const cur = opts.indexOf(this.doc.activeElement as HTMLButtonElement);
+    let next = -1;
+    if (ev.key === "ArrowDown") {
+      next = cur < 0 ? 0 : (cur + 1) % opts.length;
+    } else if (ev.key === "ArrowUp") {
+      next = cur <= 0 ? opts.length - 1 : cur - 1;
+    } else if (ev.key === "Home") {
+      next = 0;
+    } else if (ev.key === "End") {
+      next = opts.length - 1;
+    }
+    if (next >= 0) {
+      ev.preventDefault();
+      opts[next]?.focus();
+    }
+  }
+
+  private enabledListboxOptions(): HTMLButtonElement[] {
+    const el = this.repoListbox()?.nativeElement;
+    if (!el) return [];
+    return Array.from(
+      el.querySelectorAll<HTMLButtonElement>(
+        'button[role="option"]:not(:disabled)',
+      ),
+    );
+  }
+
   protected onDocClick(ev: Event): void {
     const t = ev.target as HTMLElement | null;
     if (this.repoMenuOpen() && !t?.closest(".pop-wrap")) {
@@ -1742,6 +2083,7 @@ export class ContextPageComponent implements OnInit, OnDestroy {
     if (this.repoMenuOpen()) {
       ev.preventDefault();
       this.repoMenuOpen.set(false);
+      this.repoTrigger()?.nativeElement.focus();
     }
   }
 }

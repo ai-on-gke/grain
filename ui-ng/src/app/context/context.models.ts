@@ -19,9 +19,12 @@ export type FsScheme = "memory" | "config";
 export const MAX_MEMORY_LENGTH = 8 * 1024;
 export const MAX_MEMORY_DOCUMENT_LENGTH = 64 * 1024;
 export const MAX_MEMORY_DOCUMENT_SUMMARY_LENGTH = 200;
+export const MAX_MEMORY_DOCUMENT_NAME_LENGTH = 64;
+export const MEMORY_DOC_SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export const STALE_AFTER_DAYS = 60;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const UTF8_ENCODER = new TextEncoder();
 
 export interface Memory {
   repo?: string;
@@ -73,17 +76,63 @@ export interface FsGrepHit {
   text: string;
 }
 
+export function utf8ByteLength(text: string | undefined | null): number {
+  if (!text) return 0;
+  return UTF8_ENCODER.encode(text).length;
+}
+
+export function validateDocumentSlug(
+  raw: string | undefined | null,
+): string | null {
+  const name = typeof raw === "string" ? raw.trim() : "";
+  if (!name) return null;
+  if (name.length > MAX_MEMORY_DOCUMENT_NAME_LENGTH) {
+    return `Document name exceeds ${MAX_MEMORY_DOCUMENT_NAME_LENGTH} characters (${name.length}/${MAX_MEMORY_DOCUMENT_NAME_LENGTH}).`;
+  }
+  if (!MEMORY_DOC_SLUG_RE.test(name)) {
+    return "Use lowercase letters, digits, and single hyphens between words (e.g. database-migrations).";
+  }
+  return null;
+}
+
+// Mirrors pkg/ui/api_fs.go fsCallRepo for memory://repos/<owner>/<name>...
+export function repoFromMemoryFsPath(
+  fsPath: string | undefined | null,
+): string | undefined {
+  const segs = (fsPath || "")
+    .replace(/^\/+|\/+$/g, "")
+    .split("/")
+    .filter(Boolean);
+  if (segs.length >= 3 && segs[0] === "repos" && segs[1] && segs[2]) {
+    return `${segs[1]}/${segs[2].replace(/\.md$/i, "")}`;
+  }
+  return undefined;
+}
+
+function coerceRepoString(val: unknown): string {
+  if (typeof val === "string") return val.trim();
+  if (
+    val &&
+    typeof val === "object" &&
+    "repo" in val &&
+    typeof (val as { repo?: unknown }).repo === "string"
+  ) {
+    return (val as { repo: string }).repo.trim();
+  }
+  return "";
+}
+
 export function scopeKey(repo: string | undefined | null): string {
-  return (repo || "").trim().toLowerCase();
+  return (typeof repo === "string" ? repo : "").trim().toLowerCase();
 }
 
 export function scopeLabel(repo: string | undefined | null): string {
-  const clean = (repo || "").trim();
+  const clean = (typeof repo === "string" ? repo : "").trim();
   return clean ? clean : "This deployment";
 }
 
 export function estimateTokens(text: string | undefined | null): number {
-  const len = (text || "").length;
+  const len = utf8ByteLength(text);
   if (len === 0) return 0;
   return Math.max(1, Math.ceil(len / 4));
 }
@@ -128,11 +177,12 @@ export function documentSize(bytes: number | undefined | null): string {
 export function buildMemoryScopes(
   memories: readonly Memory[],
   documents: readonly MemoryDocument[],
-  extraRepos: readonly string[] = [],
+  extraRepos: readonly unknown[] = [],
+  includeDeployment = true,
 ): MemoryScopeRow[] {
   const rows = new Map<string, MemoryScopeRow>();
-  const ensure = (repoRaw: string): MemoryScopeRow => {
-    const clean = (repoRaw || "").trim();
+  const ensure = (repoRaw: unknown): MemoryScopeRow => {
+    const clean = coerceRepoString(repoRaw);
     const k = scopeKey(clean);
     let r = rows.get(k);
     if (!r) {
@@ -148,19 +198,26 @@ export function buildMemoryScopes(
     return r;
   };
 
-  ensure("");
+  if (includeDeployment) {
+    ensure("");
+  }
   for (const extra of extraRepos) {
-    if (extra.trim()) ensure(extra);
+    const repoName = coerceRepoString(extra);
+    if (repoName) ensure(repoName);
   }
   for (const m of memories) {
-    const r = ensure(m.repo || "");
+    const repoName = coerceRepoString(m?.repo);
+    if (!includeDeployment && !repoName) continue;
+    const r = ensure(repoName);
     r.text = m.text || "";
     r.updatedAt = m.updatedAt;
     r.updatedBy = m.updatedBy;
     r.updatedByKind = m.updatedByKind;
   }
   for (const d of documents) {
-    ensure(d.repo || "").documents.push(d);
+    const repoName = coerceRepoString(d?.repo);
+    if (!includeDeployment && !repoName) continue;
+    ensure(repoName).documents.push(d);
   }
 
   for (const r of rows.values()) {
@@ -177,7 +234,7 @@ export function parseGrepOutput(raw: string, basePath: string): FsGrepHit[] {
   const lines = (raw || "").split("\n").filter((l) => l.trim().length > 0);
   const hits: FsGrepHit[] = [];
   for (const row of lines) {
-    if (row.startsWith("[truncated:")) continue;
+    if (row.startsWith("[truncated")) continue;
     const m = /^([^:\n]+):(\d+):(.*)$/.exec(row);
     if (m) {
       const rel = m[1].trim();
@@ -209,7 +266,10 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-// Safe lightweight syntax highlighter for dark-well namespace previews.
+const SYNTAX_TOKEN_RE =
+  /("(?:\\.|[^"\\])*")|\b(true|false|null|func|type|struct|return|const|let|var|export|import)\b|\b(\d+(?:\.\d+)?)\b/g;
+
+// Safe single-pass syntax highlighter for dark-well namespace previews.
 export function highlightSyntaxHtml(text: string, filename = ""): string {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   return (text || "")
@@ -226,14 +286,27 @@ export function highlightSyntaxHtml(text: string, filename = ""): string {
       if (trimmed.startsWith("//")) {
         return `${num}<span class="ctx-tok-cmt">${escapeHtml(line)}</span>`;
       }
-      const escaped = escapeHtml(line)
-        .replace(/(&quot;[^&]*?&quot;)/g, '<span class="ctx-tok-str">$1</span>')
-        .replace(
-          /\b(true|false|null|func|type|struct|return|const|let|var|export|import)\b/g,
-          '<span class="ctx-tok-kw">$1</span>',
-        )
-        .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="ctx-tok-num">$1</span>');
-      return `${num}${escaped}`;
+      let out = "";
+      let last = 0;
+      SYNTAX_TOKEN_RE.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = SYNTAX_TOKEN_RE.exec(line)) !== null) {
+        if (m.index > last) {
+          out += escapeHtml(line.slice(last, m.index));
+        }
+        if (m[1] !== undefined) {
+          out += `<span class="ctx-tok-str">${escapeHtml(m[1])}</span>`;
+        } else if (m[2] !== undefined) {
+          out += `<span class="ctx-tok-kw">${escapeHtml(m[2])}</span>`;
+        } else if (m[3] !== undefined) {
+          out += `<span class="ctx-tok-num">${escapeHtml(m[3])}</span>`;
+        }
+        last = SYNTAX_TOKEN_RE.lastIndex;
+      }
+      if (last < line.length) {
+        out += escapeHtml(line.slice(last));
+      }
+      return `${num}${out}`;
     })
     .join("\n");
 }

@@ -25,7 +25,7 @@ export interface SandboxSnapshot {
   networkAccess?: string;
   ready: boolean;
   error?: string;
-  terminationReason: string;
+  terminationReason?: string;
   loadAverage?: string;
   memoryUsedMB?: number;
   memoryTotalMB?: number;
@@ -44,6 +44,7 @@ export interface DiskUsage {
   path: string;
   usedMB: number;
   totalMB: number;
+  availableMB?: number;
   floorMB?: number;
   reclaimMB?: number;
   error?: string;
@@ -57,6 +58,7 @@ export interface HostPressure {
   cpuUtilization: number;
   memoryUsedMB: number;
   memoryTotalMB: number;
+  memoryAvailableMB?: number;
   swapUsedMB: number;
   swapTotalMB: number;
   disks?: DiskUsage[];
@@ -72,14 +74,14 @@ export interface SandboxBudgetPool {
 }
 
 export interface SandboxBudgetReport {
-  known: boolean;
+  known?: boolean;
   mode?: string;
   hostCPUs?: number;
   hostMemoryMB?: number;
   budgetCPUs?: number;
   budgetMemoryMB?: number;
   committedCPUs: number;
-  committedMemoryMB: number;
+  committedMemoryMB?: number;
   committedCount: number;
   withinCap: boolean;
   summary?: string;
@@ -90,7 +92,7 @@ export interface DaemonHealth {
   startedAt: string;
   starts?: number;
   requestedStarts?: number;
-  restarting: boolean;
+  restarting?: boolean;
   startsScope?: string;
   windowMinutes?: number;
   error?: string;
@@ -100,8 +102,11 @@ export interface DaemonHealth {
 
 export interface DispatchCondition {
   name?: string;
-  reason?: string;
-  message?: string;
+  error?: string;
+  since?: string;
+  remedy?: string;
+  held?: boolean | string;
+  check?: boolean | string;
 }
 
 export interface PersistentSandboxEvent {
@@ -117,7 +122,7 @@ export interface PersistentSandboxStatus {
   command: string;
   state: string;
   enabled: boolean;
-  sandbox: string;
+  sandbox?: string;
   startedAt?: string;
   restarts: number;
   lastError?: string;
@@ -150,6 +155,7 @@ export interface PackageCacheStats {
 
 export interface SandboxHealthResponse {
   enabled: boolean;
+  checkedAt?: string;
   sandboxes?: SandboxSnapshot[];
   host?: HostPressure;
   budget?: SandboxBudgetReport;
@@ -173,9 +179,10 @@ export interface SandboxProbeRequest {
 }
 
 export interface SandboxProbeResult {
+  id?: string;
   sandbox: string;
   pod: string;
-  access: string;
+  access?: string;
   stdout: string;
   stderr: string;
   exitCode: number;
@@ -190,7 +197,7 @@ export interface HostdConnection {
 
 export interface HostdView {
   name: string;
-  owner: string;
+  owner?: string;
   labels?: Record<string, string>;
   created_by?: string;
   created_at?: string;
@@ -249,9 +256,9 @@ export interface AgentPauseEntry {
   model?: string;
   labels?: string[];
   escalated?: string;
-  team: string;
+  team?: string;
   framework?: string;
-  until: string;
+  until?: string;
   reason?: string;
   secondsRemaining: number;
   canLift: boolean;
@@ -266,7 +273,7 @@ export interface AgentPauseStatus {
 }
 
 export interface AgentPauseResponse {
-  enabled: boolean;
+  enabled?: boolean;
   pause?: AgentPauseStatus;
   lifted?: boolean;
 }
@@ -289,7 +296,7 @@ export interface ActionsCacheState {
   bytes: number;
   maxBytes: number;
   repos?: { repo: string; bytes: number }[];
-  usedByJobs: boolean;
+  usedByJobs?: boolean;
 }
 
 export interface ActionsCacheFlush {
@@ -311,6 +318,7 @@ export interface LogUnit {
 }
 
 export interface LogLinesResponse {
+  source?: string;
   lines: string[];
   unit?: LogUnit;
   units?: LogUnit[];
@@ -348,13 +356,23 @@ export function formatRelativeAge(
   return `${Math.floor(sec / 86400)}d`;
 }
 
+// Matches real pkg/dispatch RunID ("<taskId>-<attempt>" for kind === "agent")
+// and idle session sandboxes ("idle-<taskId>" for kind === "idle session"),
+// falling back to "task-<taskId>".
 export function extractTaskIdFromSandbox(sb: SandboxSnapshot): string | null {
-  const candidates = [sb.name, sb.sandbox];
-  for (const raw of candidates) {
+  const sbId = (sb.sandbox || "").trim();
+  if (!sb.kind || sb.kind === "agent") {
+    const mAgent = /^(\d+)-\d+$/.exec(sbId);
+    if (mAgent) return mAgent[1];
+  }
+  if (sb.kind === "idle session") {
+    const mIdle = /^idle-(\d+)$/.exec(sbId);
+    if (mIdle) return mIdle[1];
+  }
+  for (const raw of [sbId, (sb.name || "").trim()]) {
     if (!raw) continue;
-    const m = /(?:^|[-_/])task[-_]?(\d+)(?:$|[-_/])/i.exec(raw);
-    if (m) return m[1];
-    if (/^\d+$/.test(raw)) return raw;
+    const mTask = /(?:^|-)task-(\d+)(?:-|$)/i.exec(raw);
+    if (mTask) return mTask[1];
   }
   return null;
 }

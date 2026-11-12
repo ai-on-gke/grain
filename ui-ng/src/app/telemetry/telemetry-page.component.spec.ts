@@ -78,17 +78,34 @@ class FakeTelemetryApi {
   ];
 
   reportBody: MetricsReport = {
-    window: "7d",
-    generatedAt: "2026-11-12T00:00:00Z",
+    since: "2026-11-05T00:00:00Z",
+    until: "2026-11-12T00:00:00Z",
+    windowSeconds: 604800,
     scope: { repos: ["acme/api", "acme/web"] },
     throughput: {
       tasksFiled: 18,
       tasksCompleted: 14,
       tasksClosed: 2,
-      tasksAbandoned: 1,
+      runsStarted: 20,
+      runsFinished: 20,
+      filedPerDay: 2.57,
+      completedPerDay: 2.0,
+      runsFinishedPerDay: 2.86,
       buckets: [
-        { start: "2026-11-10T00:00:00Z", filed: 8, completed: 6 },
-        { start: "2026-11-11T00:00:00Z", filed: 10, completed: 8 },
+        {
+          since: "2026-11-10T00:00:00Z",
+          until: "2026-11-11T00:00:00Z",
+          filed: 8,
+          completed: 6,
+          runsFinished: 9,
+        },
+        {
+          since: "2026-11-11T00:00:00Z",
+          until: "2026-11-12T00:00:00Z",
+          filed: 10,
+          completed: 8,
+          runsFinished: 11,
+        },
       ],
     },
     latency: [
@@ -97,21 +114,29 @@ class FakeTelemetryApi {
         label: "Queue wait",
         description: "Filed to first worker pickup",
         n: 14,
+        minSeconds: 10,
         p50Seconds: 45,
         p90Seconds: 180,
+        p99Seconds: 240,
+        maxSeconds: 300,
+        meanSeconds: 70,
       },
       {
         stage: "agent_work",
         label: "Agent execution",
         description: "Active turn runtime",
         n: 14,
+        minSeconds: 120,
         p50Seconds: 420,
         p90Seconds: 960,
+        p99Seconds: 1200,
+        maxSeconds: 1500,
+        meanSeconds: 510,
       },
     ],
     runs: {
-      total: 20,
       live: 3,
+      meanConcurrent: 2.4,
       maxConcurrent: 6,
       utilization: 0.5,
       outcomes: { succeeded: 15, awaiting_reply: 3, failed: 2 },
@@ -120,48 +145,103 @@ class FakeTelemetryApi {
     },
     merges: {
       landed: 12,
+      landedPerHour: 0.07,
       landedPerDay: 1.71,
-      filedToLanded: { n: 12, p50Seconds: 1800, p90Seconds: 5400 },
-      completedToLanded: { n: 12, p50Seconds: 600, p90Seconds: 1500 },
+      filedToLanded: {
+        n: 12,
+        minSeconds: 600,
+        p50Seconds: 1800,
+        p90Seconds: 5400,
+        p99Seconds: 7200,
+        maxSeconds: 8000,
+        meanSeconds: 2400,
+      },
+      completedToLanded: {
+        n: 12,
+        minSeconds: 180,
+        p50Seconds: 600,
+        p90Seconds: 1500,
+        p99Seconds: 2100,
+        maxSeconds: 2400,
+        meanSeconds: 780,
+      },
       batches: {
         batches: 5,
+        changes: 12,
+        fresh: 5,
+        firstTry: 4,
+        firstTryRate: 0.8,
         passed: 4,
-        bisections: 1,
+        passRate: 0.8,
+        split: 1,
         culprits: 1,
         saved: 7,
-        firstTryRate: 0.8,
       },
-      baseHolds: { opened: 1, open: 0, heldSeconds: 120 },
+      baseHolds: { passes: 1, open: 0 },
       buckets: [
-        { start: "2026-11-10T00:00:00Z", landed: 5 },
-        { start: "2026-11-11T00:00:00Z", landed: 7 },
+        {
+          since: "2026-11-10T00:00:00Z",
+          until: "2026-11-11T00:00:00Z",
+          landed: 5,
+          perHour: 0.21,
+        },
+        {
+          since: "2026-11-11T00:00:00Z",
+          until: "2026-11-12T00:00:00Z",
+          landed: 7,
+          perHour: 0.29,
+        },
       ],
     },
     checks: {
+      waits: 20,
+      runs: 20,
       verdicts: { passed: 18, failed: 2 },
       greenRuns: 18,
     },
     ciQueueing: {
-      runs: 20,
+      jobs: 20,
+      waited: 5,
+      cached: 14,
+      queuedSeconds: 310,
+      busySeconds: 930,
       queuedShare: 0.25,
       cacheHitShare: 0.72,
       byCause: [
         {
           cause: "host_cpu",
           reason: "Waiting for vCPU slot",
-          runs: 5,
+          jobs: 5,
           share: 0.25,
           queuedSeconds: 310,
+          longestSeconds: 110,
         },
       ],
     },
     tools: {
+      runs: 20,
       calls: 1240,
       errored: 24,
       erroredShare: 0.019,
       byTool: [
-        { name: "bash", calls: 620, errors: 18, errorRate: 0.029 },
-        { name: "read_file", calls: 410, errors: 2, errorRate: 0.005 },
+        {
+          name: "bash",
+          runs: 20,
+          calls: 620,
+          errored: 18,
+          errorRate: 0.029,
+          timedOut: 0,
+          timeoutRate: 0,
+        },
+        {
+          name: "read_file",
+          runs: 19,
+          calls: 410,
+          errored: 2,
+          errorRate: 0.005,
+          timedOut: 0,
+          timeoutRate: 0,
+        },
       ],
     },
     agents: {
@@ -169,9 +249,20 @@ class FakeTelemetryApi {
         {
           templateId: "coder",
           wakes: 16,
+          calls: 380,
+          bytes: 98000,
           callsP50: 22,
           callsP95: 48,
-          report: { total: 14, uncited: 1, uncitedRate: 0.071 },
+          report: {
+            wakes: 16,
+            claims: 14,
+            uncited: 1,
+            unread: 0,
+            mismatched: 0,
+            uncitedRate: 0.071,
+            unreadRate: 0,
+            mismatchRate: 0,
+          },
         },
       ],
     },
@@ -210,7 +301,7 @@ class FakeTelemetryApi {
         cacheWriteTokens: 100_000,
         used: 1_150_000,
         limit: 5_000_000,
-        limitSource: "budget",
+        limitSource: "configured",
         burnPerHour: 72_000,
       },
     ],
@@ -218,36 +309,59 @@ class FakeTelemetryApi {
 
   clusterStatsBody: ClusterStats = {
     period: "last-week",
+    since: "2026-11-02T00:00:00Z",
+    until: "2026-11-09T00:00:00Z",
     tasksCompleted: 32,
+    tasksFiled: 36,
     pullRequestsMerged: 24,
+    pullRequestsMeasured: 24,
     linesAdded: 8420,
     linesDeleted: 2150,
+    runs: 45,
+    runsSucceeded: 38,
     agentHours: 18.4,
     repos: [
       {
         repo: "acme/api",
         tasksCompleted: 20,
+        tasksFiled: 22,
         pullRequestsMerged: 15,
+        pullRequestsMeasured: 15,
         linesAdded: 5000,
         linesDeleted: 1200,
+        runs: 28,
       },
     ],
     directions: [
       {
-        taskId: 88,
+        taskId: "88",
         title: "Auth v2 rollout",
         author: "Maya",
         repo: "acme/api",
         tasksCompleted: 9,
+        tasksFiled: 10,
+        tasksSpawned: 8,
         pullRequestsMerged: 7,
+        linesAdded: 2100,
+        linesDeleted: 400,
+        runs: 12,
+        runsSucceeded: 10,
+        agentHours: 6.2,
       },
       {
-        taskId: 89,
+        taskId: "89",
         title: "Zero-downtime deploy",
         author: "Zane",
         repo: "acme/web",
         tasksCompleted: 15,
+        tasksFiled: 16,
+        tasksSpawned: 12,
         pullRequestsMerged: 12,
+        linesAdded: 4200,
+        linesDeleted: 950,
+        runs: 20,
+        runsSucceeded: 18,
+        agentHours: 8.5,
       },
     ],
   };
@@ -360,7 +474,7 @@ describe("TelemetryPageComponent", () => {
     expect(root.querySelector('[data-testid="chart-tools"]')).not.toBeNull();
   });
 
-  it("switches 24h / 7d / 30d windows and filters by GM3 repository popover", async () => {
+  it("switches 24h / 7d / 30d windows and filters by WAI-ARIA GM3 repository popover", async () => {
     const { fixture, root, api } = await setup();
 
     root
@@ -383,13 +497,20 @@ describe("TelemetryPageComponent", () => {
       ),
     ).toBe(true);
 
-    // Open GM3 repo popover and pick acme/api.
+    // Open GM3 repo popover, verify role="none" on <li> wrappers, and pick acme/api.
     root
       .querySelector<HTMLButtonElement>(
         '[data-testid="telemetry-repo-trigger"]',
       )!
       .click();
     await settle(fixture);
+    const repoMenu = root.querySelector('[data-testid="telemetry-repo-menu"]')!;
+    expect(
+      Array.from(repoMenu.querySelectorAll("li")).every(
+        (li) => li.getAttribute("role") === "none",
+      ),
+    ).toBe(true);
+
     root
       .querySelector<HTMLButtonElement>(
         '[data-testid="telemetry-repo-opt-acme/api"]',
@@ -405,6 +526,45 @@ describe("TelemetryPageComponent", () => {
           c.query?.includes("repo=acme%2Fapi"),
       ),
     ).toBe(true);
+  });
+
+  it("auto-selects first permitted repository and blocks unscoped reads when deployment:read is repo-limited", async () => {
+    const api = new FakeTelemetryApi();
+    api.configBody = {
+      ...api.configBody,
+      access: {
+        role: "repo-viewer",
+        roles: ["repo-viewer"],
+        full: false,
+        scopes: ["deployment:read"],
+        repoLimits: { "deployment:read": ["acme/api"] },
+      },
+    };
+    const { fixture, root } = await setup(api);
+
+    expect(
+      root.querySelector('[data-testid="telemetry-repo-trigger"]')?.textContent,
+    ).toContain("Repo: acme/api");
+    expect(
+      api.calls.every(
+        (c) =>
+          c.route !== "GET /api/metrics" ||
+          Boolean(c.query?.includes("repo=acme%2Fapi")),
+      ),
+    ).toBe(true);
+    expect(api.calls.some((c) => c.route === "GET /api/usage")).toBe(false);
+
+    // "All repositories" option in listbox is disabled for repo-limited callers.
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="telemetry-repo-trigger"]',
+      )!
+      .click();
+    await settle(fixture);
+    const firstOpt = root.querySelector<HTMLButtonElement>(
+      '[data-testid="telemetry-repo-menu"] button[role="option"]',
+    )!;
+    expect(firstOpt.disabled).toBe(true);
   });
 
   it("renders token usage scopes and saves budget settings via PUT /api/usage/settings", async () => {
@@ -490,9 +650,9 @@ describe("TelemetryPageComponent", () => {
       root.querySelector('[data-testid="space-guardrail-pill"]')?.textContent,
     ).toContain("Alphabetical · Non-ranked");
 
-    const rows = [
-      ...root.querySelectorAll<HTMLElement>('[data-testid="space-actor-row"]'),
-    ];
+    const rows = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-testid="space-actor-row"]'),
+    );
     // Even though Zane has more merged PRs (12) than Maya (7) and Alice (0),
     // order must be strictly alphabetical: Alice, Maya, Zane.
     const names = rows.map(

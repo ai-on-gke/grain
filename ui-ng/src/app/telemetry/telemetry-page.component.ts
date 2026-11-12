@@ -12,14 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
   type OnInit,
   ViewEncapsulation,
   computed,
   inject,
   signal,
+  viewChild,
 } from "@angular/core";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
@@ -128,13 +131,16 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
 
           <div class="pop-wrap">
             <button
+              #repoTrigger
               type="button"
               class="pop-trigger"
               [class.is-active]="!!selectedRepo()"
               data-testid="telemetry-repo-trigger"
+              aria-haspopup="listbox"
               [attr.aria-expanded]="openMenu() === 'repo'"
               aria-controls="telemetry-repo-menu"
               (click)="toggleMenu('repo', $event)"
+              (keydown)="onMenuTriggerKeydown('repo', $event)"
             >
               <span>{{
                 selectedRepo() ? "Repo: " + selectedRepo() : "All repositories"
@@ -150,17 +156,21 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
             </button>
             @if (openMenu() === "repo") {
               <ul
+                #repoListbox
                 class="pop-menu"
                 id="telemetry-repo-menu"
                 role="listbox"
+                tabindex="-1"
                 aria-label="Filter by repository"
                 data-testid="telemetry-repo-menu"
+                (keydown)="onListboxKeydown('repo', $event)"
               >
-                <li>
+                <li role="none">
                   <button
                     type="button"
                     class="pop-item"
                     role="option"
+                    [disabled]="!canReadAllReposMetrics()"
                     [attr.aria-selected]="!selectedRepo()"
                     (click)="pickRepo('')"
                   >
@@ -171,7 +181,7 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                   </button>
                 </li>
                 @for (r of repoOptions(); track r) {
-                  <li>
+                  <li role="none">
                     <button
                       type="button"
                       class="pop-item"
@@ -193,13 +203,16 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
 
           <div class="pop-wrap">
             <button
+              #authorTrigger
               type="button"
               class="pop-trigger"
               [class.is-active]="!!selectedAuthor()"
               data-testid="telemetry-author-trigger"
+              aria-haspopup="listbox"
               [attr.aria-expanded]="openMenu() === 'author'"
               aria-controls="telemetry-author-menu"
               (click)="toggleMenu('author', $event)"
+              (keydown)="onMenuTriggerKeydown('author', $event)"
             >
               <span>{{
                 selectedAuthor()
@@ -217,13 +230,16 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
             </button>
             @if (openMenu() === "author") {
               <ul
+                #authorListbox
                 class="pop-menu"
                 id="telemetry-author-menu"
                 role="listbox"
+                tabindex="-1"
                 aria-label="Filter by contributor"
                 data-testid="telemetry-author-menu"
+                (keydown)="onListboxKeydown('author', $event)"
               >
-                <li>
+                <li role="none">
                   <button
                     type="button"
                     class="pop-item"
@@ -238,7 +254,7 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                   </button>
                 </li>
                 @for (a of authorOptions(); track a) {
-                  <li>
+                  <li role="none">
                     <button
                       type="button"
                       class="pop-item"
@@ -257,7 +273,9 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
             }
           </div>
 
-          @if (selectedRepo() || selectedAuthor()) {
+          @if (
+            (selectedRepo() && canReadAllReposMetrics()) || selectedAuthor()
+          ) {
             <button
               type="button"
               class="btn-text"
@@ -282,9 +300,7 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
 
       @if (!canReadMetrics()) {
         <p class="empty-state" data-testid="telemetry-denied">
-          {{
-            access.deniedReason("GET /api/metrics", selectedRepo() || undefined)
-          }}
+          {{ deniedMetricsReason(selectedRepo()) }}
         </p>
       } @else {
         <div class="ops-scroll">
@@ -1221,6 +1237,16 @@ export class TelemetryPageComponent implements OnInit {
   private readonly snackbar = inject(SnackbarService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly doc = inject(DOCUMENT);
+
+  private readonly repoTrigger =
+    viewChild<ElementRef<HTMLButtonElement>>("repoTrigger");
+  private readonly authorTrigger =
+    viewChild<ElementRef<HTMLButtonElement>>("authorTrigger");
+  private readonly repoListbox =
+    viewChild<ElementRef<HTMLElement>>("repoListbox");
+  private readonly authorListbox =
+    viewChild<ElementRef<HTMLElement>>("authorListbox");
 
   protected readonly Math = Math;
   protected readonly windows = WINDOWS;
@@ -1255,27 +1281,68 @@ export class TelemetryPageComponent implements OnInit {
 
   private metricsSeq = 0;
 
-  protected readonly canReadMetrics = computed(() =>
-    this.access.can("GET /api/metrics", this.selectedRepo() || undefined),
+  protected readonly deploymentReadLimits = computed<string[]>(() =>
+    this.access.isFullAccess()
+      ? []
+      : (this.access.repoLimits()["deployment:read"] ?? []),
   );
-  protected readonly canReadUsage = computed(() =>
-    this.access.can("GET /api/usage"),
+
+  protected readonly isMetricsRepoLimited = computed(
+    () => this.deploymentReadLimits().length > 0,
   );
-  protected readonly canWriteUsage = computed(() =>
-    this.access.can("PUT /api/usage/settings"),
+
+  protected readonly canReadAllReposMetrics = computed(
+    () => this.access.can("GET /api/metrics") && !this.isMetricsRepoLimited(),
   );
-  protected readonly canReadReleaseNotes = computed(() =>
-    this.access.can("GET /api/release-notes/stats"),
+
+  protected readonly canReadMetrics = computed(() => {
+    const repo = this.selectedRepo();
+    if (!repo) return this.canReadAllReposMetrics();
+    return this.access.can("GET /api/metrics", repo);
+  });
+
+  protected deniedMetricsReason(repo: string): string {
+    if (!repo && this.isMetricsRepoLimited()) {
+      return `Your role ${this.access.roleLabel() || "limited"} holds deployment:read only on ${this.deploymentReadLimits().join(", ")} and cannot read deployment-wide metrics.`;
+    }
+    return this.access.deniedReason("GET /api/metrics", repo || undefined);
+  }
+
+  protected readonly canReadUsage = computed(
+    () => this.access.can("GET /api/usage") && !this.isMetricsRepoLimited(),
+  );
+
+  protected readonly canWriteUsage = computed(
+    () =>
+      this.access.can("PUT /api/usage/settings") &&
+      !(
+        !this.access.isFullAccess() &&
+        Boolean(this.access.repoLimits()["settings:write"]?.length)
+      ),
+  );
+
+  protected readonly canReadReleaseNotes = computed(
+    () =>
+      this.access.can("GET /api/release-notes/stats") &&
+      !(
+        !this.access.isFullAccess() &&
+        Boolean(this.access.repoLimits()["release-notes:read"]?.length)
+      ),
   );
 
   protected readonly repoOptions = computed<string[]>(() => {
-    const set = new Set<string>(this.configRepos());
+    const set = new Set<string>([
+      ...this.configRepos(),
+      ...this.deploymentReadLimits(),
+    ]);
     for (const r of this.report()?.scope?.repos ?? []) if (r) set.add(r);
     for (const rw of this.clusterStats()?.repos ?? []) {
       if (rw.repo) set.add(rw.repo);
     }
     for (const t of this.feed.tasks()) if (t.repo) set.add(t.repo);
-    return [...set].sort((a, b) => a.localeCompare(b));
+    const list = [...set].sort((a, b) => a.localeCompare(b));
+    if (!this.isMetricsRepoLimited()) return list;
+    return list.filter((r) => this.access.can("GET /api/metrics", r));
   });
 
   protected readonly alphabeticalActors = computed(() => {
@@ -1407,8 +1474,23 @@ export class TelemetryPageComponent implements OnInit {
     const a = qp.get("author");
     if (a) this.selectedAuthor.set(a);
 
-    void this.loadBootstrapConfig();
-    void this.refreshAll();
+    this.ensurePermittedRepoSelected();
+    void this.bootstrap();
+  }
+
+  private ensurePermittedRepoSelected(): void {
+    if (this.selectedRepo()) return;
+    const first = this.deploymentReadLimits()[0];
+    if (first) {
+      this.selectedRepo.set(first);
+      this.syncUrl();
+    }
+  }
+
+  private async bootstrap(): Promise<void> {
+    await this.loadBootstrapConfig();
+    this.ensurePermittedRepoSelected();
+    await this.refreshAll();
   }
 
   private async loadBootstrapConfig(): Promise<void> {
@@ -1418,7 +1500,9 @@ export class TelemetryPageComponent implements OnInit {
       if (cfg) {
         this.access.setConfig(cfg);
         const repos = Array.isArray(cfg["targetRepos"])
-          ? (cfg["targetRepos"] as string[])
+          ? (cfg["targetRepos"] as unknown[])
+              .filter((r): r is string => typeof r === "string" && !!r.trim())
+              .map((r) => r.trim())
           : [];
         this.configRepos.set(repos);
         const backends = Array.isArray(cfg["agentBackends"])
@@ -1506,6 +1590,7 @@ export class TelemetryPageComponent implements OnInit {
   }
 
   protected pickRepo(repo: string): void {
+    if (!repo && !this.canReadAllReposMetrics()) return;
     this.openMenu.set(null);
     if (this.selectedRepo() === repo) return;
     this.selectedRepo.set(repo);
@@ -1522,7 +1607,11 @@ export class TelemetryPageComponent implements OnInit {
   }
 
   protected clearScope(): void {
-    this.selectedRepo.set("");
+    this.selectedRepo.set(
+      this.canReadAllReposMetrics()
+        ? ""
+        : (this.deploymentReadLimits()[0] ?? ""),
+    );
     this.selectedAuthor.set("");
     this.syncUrl();
     void this.loadMetrics();
@@ -1552,6 +1641,59 @@ export class TelemetryPageComponent implements OnInit {
     this.openMenu.set(this.openMenu() === which ? null : which);
   }
 
+  protected onMenuTriggerKeydown(
+    which: "repo" | "author",
+    ev: KeyboardEvent,
+  ): void {
+    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
+    ev.preventDefault();
+    if (this.openMenu() !== which) {
+      this.openMenu.set(which);
+    }
+    const wantLast = ev.key === "ArrowUp";
+    setTimeout(() => {
+      const opts = this.enabledMenuOptions(which);
+      const target = wantLast ? opts[opts.length - 1] : opts[0];
+      target?.focus();
+    });
+  }
+
+  protected onListboxKeydown(
+    which: "repo" | "author",
+    ev: KeyboardEvent,
+  ): void {
+    const opts = this.enabledMenuOptions(which);
+    if (opts.length === 0) return;
+    const cur = opts.indexOf(this.doc.activeElement as HTMLButtonElement);
+    let next = -1;
+    if (ev.key === "ArrowDown") {
+      next = cur < 0 ? 0 : (cur + 1) % opts.length;
+    } else if (ev.key === "ArrowUp") {
+      next = cur <= 0 ? opts.length - 1 : cur - 1;
+    } else if (ev.key === "Home") {
+      next = 0;
+    } else if (ev.key === "End") {
+      next = opts.length - 1;
+    }
+    if (next >= 0) {
+      ev.preventDefault();
+      opts[next]?.focus();
+    }
+  }
+
+  private enabledMenuOptions(which: "repo" | "author"): HTMLButtonElement[] {
+    const box =
+      which === "repo"
+        ? this.repoListbox()?.nativeElement
+        : this.authorListbox()?.nativeElement;
+    if (!box) return [];
+    return Array.from(
+      box.querySelectorAll<HTMLButtonElement>(
+        'button[role="option"]:not(:disabled)',
+      ),
+    );
+  }
+
   protected onDocClick(ev: Event): void {
     const t = ev.target as HTMLElement | null;
     if (this.openMenu() && !t?.closest(".pop-wrap")) {
@@ -1560,9 +1702,12 @@ export class TelemetryPageComponent implements OnInit {
   }
 
   protected onEscape(ev: Event): void {
-    if (this.openMenu()) {
+    const cur = this.openMenu();
+    if (cur) {
       ev.preventDefault();
       this.openMenu.set(null);
+      if (cur === "repo") this.repoTrigger()?.nativeElement.focus();
+      else this.authorTrigger()?.nativeElement.focus();
     }
   }
 

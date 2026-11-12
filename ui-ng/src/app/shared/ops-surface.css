@@ -119,6 +119,33 @@
   font-weight: 500;
 }
 
+.pop-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 599.95px) {
+  .pop-menu {
+    position: fixed;
+    top: 136px;
+    left: 16px;
+    right: 16px;
+    min-width: 0;
+    max-width: none;
+    max-height: calc(100dvh - 216px);
+  }
+}
+
+.banner-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+
 /* KPI Strip & Cards */
 .ops-kpi-grid {
   display: grid;

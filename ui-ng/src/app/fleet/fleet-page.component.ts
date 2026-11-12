@@ -97,7 +97,7 @@ const PERSISTENT_ACTIONS: readonly {
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
-    "(document:click)": "onDocClick($event)",
+    "(document:click)": "onDocClick()",
   },
   template: `
     <section
@@ -122,7 +122,7 @@ const PERSISTENT_ACTIONS: readonly {
               data-testid="fleet-backend-pill"
             >
               <g-status-icon tone="neutral" kind="progress" />
-              Backend: {{ activeBackend() }}
+              Backend: {{ effectiveSandboxBackend() }}
             </span>
             @if (pipelinePause()?.paused) {
               <span class="status-pill blast" data-testid="fleet-paused-pill">
@@ -137,6 +137,11 @@ const PERSISTENT_ACTIONS: readonly {
               class="btn-tonal"
               data-testid="fleet-top-toggle"
               [disabled]="!canReadSandboxes()"
+              [gTip]="
+                canReadSandboxes()
+                  ? 'Inspect live host process snapshot'
+                  : access.deniedReason('GET /api/host/top')
+              "
               (click)="toggleHostTop()"
             >
               {{ topOpen() ? "Hide host top" : "Host top" }}
@@ -168,14 +173,18 @@ const PERSISTENT_ACTIONS: readonly {
               type="button"
               role="tab"
               class="tab-link fleet-tab-btn"
+              [id]="'fleet-tab-btn-' + t.id"
               [attr.aria-selected]="tab() === t.id"
+              [attr.aria-controls]="'fleet-panel-' + t.id"
+              [attr.tabindex]="tab() === t.id ? 0 : -1"
               [attr.data-testid]="'fleet-tab-' + t.id"
               (click)="pickTab(t.id)"
+              (keydown)="onTabKeydown($event, t.id)"
             >
               <span>{{ t.label }}</span>
               @if (t.id === "sandboxes") {
                 <span class="tab-count tabular">{{
-                  (health()?.sandboxes?.length ?? 0) +
+                  (sandboxes()?.sandboxes?.length ?? 0) +
                     persistentSandboxes().length
                 }}</span>
               } @else if (t.id === "hostds") {
@@ -193,16 +202,26 @@ const PERSISTENT_ACTIONS: readonly {
       }
 
       <div class="ops-scroll">
-        <!-- Dispatch Blocked Alert -->
-        @for (blk of health()?.dispatchBlocked ?? []; track $index) {
+        <!-- Dispatch Blocked Alert (pkg/ui/dispatch_conditions.go) -->
+        @for (blk of sandboxes()?.dispatchBlocked ?? []; track $index) {
           <div
             class="banner banner-error"
             style="margin: 0"
             role="alert"
             data-testid="fleet-dispatch-blocked"
           >
-            <strong>Dispatch blocked:</strong>
-            {{ blk.message || blk.reason || blk.name }}
+            <strong
+              >Dispatch blocked{{
+                blk.name ? " (" + blk.name + ")" : ""
+              }}:</strong
+            >
+            {{ blk.error || blk.name }}
+            @if (blk.since) {
+              <span class="tabular"> · since {{ fmtAge(blk.since) }} ago</span>
+            }
+            @if (blk.remedy) {
+              <span> — Remedy: {{ blk.remedy }}</span>
+            }
           </div>
         }
 
@@ -214,32 +233,37 @@ const PERSISTENT_ACTIONS: readonly {
                 <span class="ops-kpi-label">Host CPU &amp; Load</span>
                 <span class="status-pill neutral tabular">
                   <g-status-icon tone="neutral" kind="progress" />
-                  {{ health()?.host?.cpus ?? "—" }} cores
+                  {{ sandboxes()?.host?.cpus ?? "—" }} cores
                 </span>
               </div>
               <div class="ops-kpi-value tabular">
-                {{ ((health()?.host?.cpuUtilization ?? 0) * 100).toFixed(0) }}%
+                {{
+                  ((sandboxes()?.host?.cpuUtilization ?? 0) * 100).toFixed(0)
+                }}%
               </div>
               <div class="meter-track">
                 <div
                   [class]="
-                    (health()?.host?.cpuUtilization ?? 0) >= 0.9
+                    (sandboxes()?.host?.cpuUtilization ?? 0) >= 0.9
                       ? 'meter-fill is-error'
-                      : (health()?.host?.cpuUtilization ?? 0) >= 0.75
+                      : (sandboxes()?.host?.cpuUtilization ?? 0) >= 0.75
                         ? 'meter-fill is-warn'
                         : 'meter-fill is-healthy'
                   "
                   [style.width.%]="
-                    Math.min(100, (health()?.host?.cpuUtilization ?? 0) * 100)
+                    Math.min(
+                      100,
+                      (sandboxes()?.host?.cpuUtilization ?? 0) * 100
+                    )
                   "
                 ></div>
               </div>
               <div class="fleet-meter-meta tabular">
                 <span
                   >Load 1/5/15m:
-                  {{ (health()?.host?.loadAverage1 ?? 0).toFixed(2) }} /
-                  {{ (health()?.host?.loadAverage5 ?? 0).toFixed(2) }} /
-                  {{ (health()?.host?.loadAverage15 ?? 0).toFixed(2) }}</span
+                  {{ (sandboxes()?.host?.loadAverage1 ?? 0).toFixed(2) }} /
+                  {{ (sandboxes()?.host?.loadAverage5 ?? 0).toFixed(2) }} /
+                  {{ (sandboxes()?.host?.loadAverage15 ?? 0).toFixed(2) }}</span
                 >
               </div>
             </article>
@@ -249,34 +273,36 @@ const PERSISTENT_ACTIONS: readonly {
                 <span class="ops-kpi-label">vCPU Allocation</span>
                 <span
                   [class]="
-                    health()?.budget?.withinCap === false
+                    sandboxes()?.budget?.withinCap === false
                       ? 'status-pill blast'
                       : 'status-pill healthy'
                   "
                 >
                   <g-status-icon
                     [tone]="
-                      health()?.budget?.withinCap === false
+                      sandboxes()?.budget?.withinCap === false
                         ? 'blast'
                         : 'healthy'
                     "
                     [kind]="
-                      health()?.budget?.withinCap === false
+                      sandboxes()?.budget?.withinCap === false
                         ? 'warning'
                         : 'healthy'
                     "
                   />
                   {{
-                    health()?.budget?.withinCap === false
+                    sandboxes()?.budget?.withinCap === false
                       ? "Over cap"
                       : "Within cap"
                   }}
                 </span>
               </div>
               <div class="ops-kpi-value tabular">
-                {{ health()?.budget?.committedCPUs ?? 0 }} /
+                {{ sandboxes()?.budget?.committedCPUs ?? 0 }} /
                 {{
-                  health()?.budget?.budgetCPUs ?? health()?.host?.cpus ?? "—"
+                  sandboxes()?.budget?.budgetCPUs ??
+                    sandboxes()?.host?.cpus ??
+                    "—"
                 }}
                 vCPU
               </div>
@@ -285,7 +311,7 @@ const PERSISTENT_ACTIONS: readonly {
               </div>
               <div class="fleet-meter-meta tabular">
                 <span
-                  >{{ health()?.budget?.committedCount ?? 0 }} committed
+                  >{{ sandboxes()?.budget?.committedCount ?? 0 }} committed
                   sandboxes</span
                 >
               </div>
@@ -296,11 +322,11 @@ const PERSISTENT_ACTIONS: readonly {
                 <span class="ops-kpi-label">Host Memory</span>
                 <span class="status-pill neutral tabular">
                   <g-status-icon tone="neutral" kind="progress" />
-                  {{ fmtMB(health()?.host?.memoryTotalMB) }}
+                  {{ fmtMB(sandboxes()?.host?.memoryTotalMB) }}
                 </span>
               </div>
               <div class="ops-kpi-value tabular">
-                {{ fmtMB(health()?.host?.memoryUsedMB) }}
+                {{ fmtMB(sandboxes()?.host?.memoryUsedMB) }}
               </div>
               <div class="meter-track">
                 <div
@@ -316,8 +342,8 @@ const PERSISTENT_ACTIONS: readonly {
               </div>
               <div class="fleet-meter-meta tabular">
                 <span
-                  >Swap: {{ fmtMB(health()?.host?.swapUsedMB) }} /
-                  {{ fmtMB(health()?.host?.swapTotalMB) }}</span
+                  >Swap: {{ fmtMB(sandboxes()?.host?.swapUsedMB) }} /
+                  {{ fmtMB(sandboxes()?.host?.swapTotalMB) }}</span
                 >
               </div>
             </article>
@@ -394,923 +420,1089 @@ const PERSISTENT_ACTIONS: readonly {
 
         <!-- TAB 1: SANDBOXES -->
         @if (tab() === "sandboxes") {
-          <article class="ops-card" data-testid="fleet-live-sandboxes">
-            <div class="ops-card-head">
-              <div>
-                <h2 class="ops-card-title">Live Task Sandboxes</h2>
-                <p class="ops-card-sub">
-                  Active isolated execution guests running in-flight tasks and
-                  standing services
-                </p>
-              </div>
-            </div>
-
-            @if (filteredSandboxes().length === 0) {
-              <p class="muted" style="margin: 0" data-testid="sandboxes-empty">
-                No active task sandboxes right now.
+          <div
+            id="fleet-panel-sandboxes"
+            role="tabpanel"
+            aria-labelledby="fleet-tab-btn-sandboxes"
+            style="display: flex; flex-direction: column; gap: 20px"
+          >
+            @if (!canReadSandboxes() && !canReadPersistent()) {
+              <p class="empty-state" data-testid="fleet-sandboxes-denied">
+                {{
+                  access.deniedReason("GET /api/sandboxes") ||
+                    deniedScopeFallback("deployment:read")
+                }}
               </p>
             } @else {
-              <div class="ops-table-wrap">
-                <table class="ops-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Sandbox</th>
-                      <th scope="col">Status</th>
-                      <th scope="col">Task</th>
-                      <th scope="col">Backend</th>
-                      <th scope="col">Shape &amp; Memory</th>
-                      <th scope="col">Load</th>
-                      <th scope="col">Age</th>
-                      <th scope="col">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    @for (sb of filteredSandboxes(); track sb.sandbox) {
-                      @let tid = taskIdOf(sb);
-                      <tr [attr.data-testid]="'sandbox-row-' + sb.sandbox">
-                        <td class="tabular">
-                          <strong>{{ sb.name || sb.sandbox }}</strong>
-                          @if (sb.networkAccess) {
-                            <span class="muted"> · {{ sb.networkAccess }}</span>
-                          }
-                        </td>
-                        <td>
-                          <span
-                            [class]="
-                              sb.ready && !sb.error
-                                ? 'status-pill healthy'
-                                : 'status-pill error'
-                            "
-                          >
-                            <g-status-icon
-                              [tone]="
-                                sb.ready && !sb.error ? 'healthy' : 'error'
+              <article class="ops-card" data-testid="fleet-live-sandboxes">
+                <div class="ops-card-head">
+                  <div>
+                    <h2 class="ops-card-title">Live Task Sandboxes</h2>
+                    <p class="ops-card-sub">
+                      Active isolated execution guests running in-flight tasks
+                      and standing services
+                    </p>
+                  </div>
+                </div>
+
+                @if (!canReadSandboxes()) {
+                  <p class="empty-state" data-testid="fleet-sandboxes-denied">
+                    {{
+                      access.deniedReason("GET /api/sandboxes") ||
+                        deniedScopeFallback("deployment:read")
+                    }}
+                  </p>
+                } @else if (filteredSandboxes().length === 0) {
+                  <p
+                    class="muted"
+                    style="margin: 0"
+                    data-testid="sandboxes-empty"
+                  >
+                    No active task sandboxes right now.
+                  </p>
+                } @else {
+                  <div class="ops-table-wrap">
+                    <table class="ops-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">Sandbox</th>
+                          <th scope="col">Status</th>
+                          <th scope="col">Task</th>
+                          <th scope="col">Backend</th>
+                          <th scope="col">Shape &amp; Memory</th>
+                          <th scope="col">Load</th>
+                          <th scope="col">Age</th>
+                          <th scope="col">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        @for (sb of filteredSandboxes(); track sb.sandbox) {
+                          @let tid = taskIdOf(sb);
+                          <tr [attr.data-testid]="'sandbox-row-' + sb.sandbox">
+                            <td class="tabular">
+                              <strong>{{ sb.name || sb.sandbox }}</strong>
+                              @if (sb.networkAccess) {
+                                <span class="muted">
+                                  · {{ sb.networkAccess }}</span
+                                >
+                              }
+                            </td>
+                            <td>
+                              <span
+                                [class]="
+                                  sb.ready && !sb.error
+                                    ? 'status-pill healthy'
+                                    : 'status-pill error'
+                                "
+                              >
+                                <g-status-icon
+                                  [tone]="
+                                    sb.ready && !sb.error ? 'healthy' : 'error'
+                                  "
+                                  [kind]="
+                                    sb.ready && !sb.error ? 'healthy' : 'error'
+                                  "
+                                />
+                                {{
+                                  sb.ready && !sb.error
+                                    ? "Ready"
+                                    : sb.error ||
+                                      sb.terminationReason ||
+                                      "Not ready"
+                                }}
+                              </span>
+                            </td>
+                            <td class="tabular">
+                              @if (tid) {
+                                <a [routerLink]="['/task', tid]">#{{ tid }}</a>
+                              } @else {
+                                <span class="muted">{{ sb.kind || "—" }}</span>
+                              }
+                            </td>
+                            <td class="tabular">{{ sb.backend }}</td>
+                            <td class="tabular">
+                              {{ sb.cpus ?? "—" }} vCPU ·
+                              {{ fmtMB(sb.memoryUsedMB ?? sb.memoryMB) }}
+                            </td>
+                            <td class="tabular">{{ sb.loadAverage || "—" }}</td>
+                            <td class="tabular">{{ fmtAge(sb.startedAt) }}</td>
+                            <td>
+                              @if (tid && canRecreateTaskSandbox()) {
+                                <button
+                                  type="button"
+                                  class="btn-text"
+                                  [attr.data-testid]="'sandbox-recreate-' + tid"
+                                  (click)="recreateTaskSandbox(tid)"
+                                >
+                                  Recreate
+                                </button>
+                              }
+                            </td>
+                          </tr>
+                        }
+                      </tbody>
+                    </table>
+                  </div>
+                }
+
+                <!-- Sandbox Exec Probe -->
+                <div
+                  class="fleet-item-card"
+                  data-testid="fleet-sandbox-probe"
+                  style="margin-top: 6px"
+                >
+                  <div class="fleet-item-head">
+                    <span class="fleet-item-title"
+                      >Sandbox Diagnostic Probe</span
+                    >
+                    <span class="muted" style="font-size: 12px"
+                      >Boots a throwaway sandbox, executes argv, and tears it
+                      down</span
+                    >
+                  </div>
+                  <div class="fleet-inline-bar">
+                    <input
+                      type="text"
+                      class="ops-input tabular"
+                      style="flex: 1 1 240px"
+                      aria-label="Probe command argv"
+                      data-testid="probe-cmd-input"
+                      [value]="probeCmd()"
+                      (input)="probeCmd.set($any($event.target).value)"
+                    />
+                    <button
+                      type="button"
+                      class="btn-tonal"
+                      data-testid="probe-run-btn"
+                      [disabled]="probing() || !canProbeSandboxes()"
+                      [gTip]="probeTip()"
+                      (click)="runSandboxProbe()"
+                    >
+                      {{ probing() ? "Probing…" : "Run probe" }}
+                    </button>
+                  </div>
+                  @if (probeResult(); as pr) {
+                    <pre
+                      class="dark-well"
+                      tabindex="0"
+                      data-testid="probe-output"
+                    >
+sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
+{{ pr.stdout }}{{ pr.stderr }}</pre>
+                  }
+                </div>
+              </article>
+
+              <!-- Persistent / Staging Sandboxes -->
+              <article
+                class="ops-card"
+                data-testid="fleet-persistent-sandboxes"
+              >
+                <div class="ops-card-head">
+                  <div>
+                    <h2 class="ops-card-title">
+                      Persistent &amp; Staging Sandboxes
+                    </h2>
+                    <p class="ops-card-sub">
+                      Long-lived repository checkouts and staging servers
+                      supervised outside worker slots
+                    </p>
+                  </div>
+                </div>
+
+                @if (!canReadPersistent()) {
+                  <p class="empty-state" data-testid="fleet-persistent-denied">
+                    {{
+                      access.deniedReason("GET /api/persistent-sandboxes") ||
+                        deniedScopeFallback("sandboxes:read")
+                    }}
+                  </p>
+                } @else if (persistentSandboxes().length === 0) {
+                  <p class="muted" style="margin: 0">
+                    No persistent or staging sandboxes configured on this
+                    deployment.
+                  </p>
+                } @else {
+                  <div class="fleet-card-list">
+                    @for (ps of persistentSandboxes(); track ps.name) {
+                      <div
+                        class="fleet-item-card"
+                        [attr.data-testid]="'persistent-card-' + ps.name"
+                      >
+                        <div class="fleet-item-head">
+                          <div class="fleet-item-title">
+                            <span class="tabular">{{ ps.name }}</span>
+                            <span
+                              [class]="
+                                ps.state === 'running'
+                                  ? 'status-pill healthy'
+                                  : ps.lastError
+                                    ? 'status-pill error'
+                                    : 'status-pill neutral'
                               "
-                              [kind]="
-                                sb.ready && !sb.error ? 'healthy' : 'error'
-                              "
-                            />
-                            {{
-                              sb.ready && !sb.error
-                                ? "Ready"
-                                : sb.error || sb.terminationReason
-                            }}
-                          </span>
-                        </td>
-                        <td class="tabular">
-                          @if (tid) {
-                            <a [routerLink]="['/task', tid]">#{{ tid }}</a>
-                          } @else {
-                            <span class="muted">{{ sb.kind || "—" }}</span>
-                          }
-                        </td>
-                        <td class="tabular">{{ sb.backend }}</td>
-                        <td class="tabular">
-                          {{ sb.cpus ?? "—" }} vCPU ·
-                          {{ fmtMB(sb.memoryUsedMB ?? sb.memoryMB) }}
-                        </td>
-                        <td class="tabular">{{ sb.loadAverage || "—" }}</td>
-                        <td class="tabular">{{ fmtAge(sb.startedAt) }}</td>
-                        <td>
-                          @if (tid && canRecreateTaskSandbox()) {
+                            >
+                              <g-status-icon
+                                [tone]="
+                                  ps.state === 'running'
+                                    ? 'healthy'
+                                    : ps.lastError
+                                      ? 'error'
+                                      : 'neutral'
+                                "
+                                [kind]="
+                                  ps.state === 'running'
+                                    ? 'running'
+                                    : ps.lastError
+                                      ? 'error'
+                                      : 'neutral'
+                                "
+                              />
+                              {{
+                                ps.state || (ps.enabled ? "idle" : "stopped")
+                              }}
+                            </span>
+                            <span class="muted tabular">{{ ps.repo }}</span>
+                            @if (ps.ref) {
+                              <span class="fleet-tag">{{ ps.ref }}</span>
+                            }
+                          </div>
+
+                          <div class="fleet-inline-bar">
+                            @for (act of persistentActions; track act.action) {
+                              <button
+                                type="button"
+                                class="btn-tonal"
+                                [attr.data-testid]="
+                                  'persistent-' + act.action + '-' + ps.name
+                                "
+                                [disabled]="
+                                  !canControlPersistent(ps) ||
+                                  busyPersistent() ===
+                                    ps.name + ':' + act.action
+                                "
+                                [gTip]="
+                                  canControlPersistent(ps)
+                                    ? act.label +
+                                      ' persistent sandbox ' +
+                                      ps.name
+                                    : access.deniedReason(
+                                        'POST /api/persistent-sandboxes/{name}/{action}',
+                                        ps.repo || undefined
+                                      )
+                                "
+                                (click)="controlPersistent(ps, act.action)"
+                              >
+                                {{ act.label }}
+                              </button>
+                            }
                             <button
                               type="button"
                               class="btn-text"
-                              [attr.data-testid]="'sandbox-recreate-' + tid"
-                              (click)="recreateTaskSandbox(tid)"
+                              [attr.data-testid]="
+                                'persistent-logs-btn-' + ps.name
+                              "
+                              [disabled]="!canReadPersistentLogs(ps)"
+                              [gTip]="
+                                canReadPersistentLogs(ps)
+                                  ? 'View logs for ' + ps.name
+                                  : access.deniedReason(
+                                      'GET /api/persistent-sandboxes/{name}/logs',
+                                      ps.repo || undefined
+                                    )
+                              "
+                              (click)="togglePersistentLogs(ps)"
                             >
-                              Recreate
+                              {{
+                                openPersistentLogName() === ps.name
+                                  ? "Hide logs"
+                                  : "Logs"
+                              }}
                             </button>
+                          </div>
+                        </div>
+
+                        <div class="fleet-item-meta tabular">
+                          <span>cmd: {{ ps.command }}</span>
+                          <span>restarts: {{ ps.restarts }}</span>
+                          @if (ps.uiSubpath) {
+                            <span>subpath: {{ ps.uiSubpath }}</span>
                           }
-                        </td>
-                      </tr>
-                    }
-                  </tbody>
-                </table>
-              </div>
-            }
+                          @if (ps.hostPort) {
+                            <span>port: :{{ ps.hostPort }}</span>
+                          }
+                          @if (ps.lastError) {
+                            <span style="color: var(--md-sys-color-error)">{{
+                              ps.lastError
+                            }}</span>
+                          }
+                        </div>
 
-            <!-- Sandbox Exec Probe -->
-            <div
-              class="fleet-item-card"
-              data-testid="fleet-sandbox-probe"
-              style="margin-top: 6px"
-            >
-              <div class="fleet-item-head">
-                <span class="fleet-item-title">Sandbox Diagnostic Probe</span>
-                <span class="muted" style="font-size: 12px"
-                  >Boots a throwaway sandbox, executes argv, and tears it
-                  down</span
-                >
-              </div>
-              <div class="fleet-inline-bar">
-                <input
-                  type="text"
-                  class="ops-input tabular"
-                  style="flex: 1 1 240px"
-                  aria-label="Probe command argv"
-                  data-testid="probe-cmd-input"
-                  [value]="probeCmd()"
-                  (input)="probeCmd.set($any($event.target).value)"
-                />
-                <button
-                  type="button"
-                  class="btn-tonal"
-                  data-testid="probe-run-btn"
-                  [disabled]="probing() || !canRestartOrProbe()"
-                  [gTip]="
-                    canRestartOrProbe()
-                      ? 'Run diagnostic probe (POST /api/sandbox-probe)'
-                      : access.deniedReason('POST /api/sandbox-probe')
-                  "
-                  (click)="runSandboxProbe()"
-                >
-                  {{ probing() ? "Probing…" : "Run probe" }}
-                </button>
-              </div>
-              @if (probeResult(); as pr) {
-                <pre class="dark-well" tabindex="0" data-testid="probe-output">
-sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
-{{ pr.stdout }}{{ pr.stderr }}</pre>
-              }
-            </div>
-          </article>
-
-          <!-- Persistent / Staging Sandboxes -->
-          <article class="ops-card" data-testid="fleet-persistent-sandboxes">
-            <div class="ops-card-head">
-              <div>
-                <h2 class="ops-card-title">
-                  Persistent &amp; Staging Sandboxes
-                </h2>
-                <p class="ops-card-sub">
-                  Long-lived repository checkouts and staging servers supervised
-                  outside worker slots
-                </p>
-              </div>
-            </div>
-
-            @if (persistentSandboxes().length === 0) {
-              <p class="muted" style="margin: 0">
-                No persistent or staging sandboxes configured on this
-                deployment.
-              </p>
-            } @else {
-              <div class="fleet-card-list">
-                @for (ps of persistentSandboxes(); track ps.name) {
-                  <div
-                    class="fleet-item-card"
-                    [attr.data-testid]="'persistent-card-' + ps.name"
-                  >
-                    <div class="fleet-item-head">
-                      <div class="fleet-item-title">
-                        <span class="tabular">{{ ps.name }}</span>
-                        <span
-                          [class]="
-                            ps.state === 'running'
-                              ? 'status-pill healthy'
-                              : ps.lastError
-                                ? 'status-pill error'
-                                : 'status-pill neutral'
-                          "
-                        >
-                          <g-status-icon
-                            [tone]="
-                              ps.state === 'running'
-                                ? 'healthy'
-                                : ps.lastError
-                                  ? 'error'
-                                  : 'neutral'
-                            "
-                            [kind]="
-                              ps.state === 'running'
-                                ? 'running'
-                                : ps.lastError
-                                  ? 'error'
-                                  : 'neutral'
-                            "
-                          />
-                          {{ ps.state || (ps.enabled ? "idle" : "stopped") }}
-                        </span>
-                        <span class="muted tabular">{{ ps.repo }}</span>
-                        @if (ps.ref) {
-                          <span class="fleet-tag">{{ ps.ref }}</span>
+                        @if (openPersistentLogName() === ps.name) {
+                          <pre
+                            class="dark-well"
+                            tabindex="0"
+                            [attr.data-testid]="'persistent-logs-' + ps.name"
+                            >{{
+                              persistentLogsText() || "(no output recorded)"
+                            }}</pre>
                         }
                       </div>
-
-                      <div class="fleet-inline-bar">
-                        @for (act of persistentActions; track act.action) {
-                          <button
-                            type="button"
-                            class="btn-tonal"
-                            [attr.data-testid]="
-                              'persistent-' + act.action + '-' + ps.name
-                            "
-                            [disabled]="
-                              !canRestartOrProbe() ||
-                              busyPersistent() === ps.name + ':' + act.action
-                            "
-                            [gTip]="
-                              canRestartOrProbe()
-                                ? act.label + ' persistent sandbox ' + ps.name
-                                : access.deniedReason(
-                                    'POST /api/persistent-sandboxes/{name}/{action}'
-                                  )
-                            "
-                            (click)="controlPersistent(ps.name, act.action)"
-                          >
-                            {{ act.label }}
-                          </button>
-                        }
-                        <button
-                          type="button"
-                          class="btn-text"
-                          [attr.data-testid]="'persistent-logs-btn-' + ps.name"
-                          (click)="togglePersistentLogs(ps.name)"
-                        >
-                          {{
-                            openPersistentLogName() === ps.name
-                              ? "Hide logs"
-                              : "Logs"
-                          }}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div class="fleet-item-meta tabular">
-                      <span>cmd: {{ ps.command }}</span>
-                      <span>restarts: {{ ps.restarts }}</span>
-                      @if (ps.uiSubpath) {
-                        <span>subpath: {{ ps.uiSubpath }}</span>
-                      }
-                      @if (ps.hostPort) {
-                        <span>port: :{{ ps.hostPort }}</span>
-                      }
-                      @if (ps.lastError) {
-                        <span style="color: var(--md-sys-color-error)">{{
-                          ps.lastError
-                        }}</span>
-                      }
-                    </div>
-
-                    @if (openPersistentLogName() === ps.name) {
-                      <pre
-                        class="dark-well"
-                        tabindex="0"
-                        [attr.data-testid]="'persistent-logs-' + ps.name"
-                        >{{
-                          persistentLogsText() || "(no output recorded)"
-                        }}</pre>
                     }
                   </div>
                 }
-              </div>
+              </article>
             }
-          </article>
+          </div>
         }
 
         <!-- TAB 2: HOST DAEMONS (hostds) -->
         @if (tab() === "hostds") {
-          <article class="ops-card" data-testid="fleet-hostds">
-            <div class="ops-card-head">
-              <div>
-                <h2 class="ops-card-title">Host Daemons (grain-agentd)</h2>
-                <p class="ops-card-sub">
-                  Co-located and remote token-landing hosts executing CLI turns
-                  and host capabilities
-                </p>
-              </div>
-              <div class="headline-actions">
-                @if (hasRevokedHostds() && canAdminHostds()) {
-                  <button
-                    type="button"
-                    class="btn-tonal"
-                    data-testid="hostds-delete-revoked"
-                    (click)="confirmDeleteRevokedHostds()"
-                  >
-                    Delete all revoked
-                  </button>
-                }
-                <a class="btn-tonal" routerLink="/settings/hostds">
-                  Enrollment &amp; settings
-                </a>
-              </div>
-            </div>
-
-            @if (issuedToken(); as issued) {
-              <div class="fleet-token-banner" data-testid="hostd-issued-token">
-                <div class="fleet-item-head">
-                  <strong
-                    >New token for {{ issued.hostd.name }} (shown once)</strong
-                  >
-                  <div class="fleet-inline-bar">
+          <div
+            id="fleet-panel-hostds"
+            role="tabpanel"
+            aria-labelledby="fleet-tab-btn-hostds"
+            style="display: flex; flex-direction: column; gap: 20px"
+          >
+            <article class="ops-card" data-testid="fleet-hostds">
+              <div class="ops-card-head">
+                <div>
+                  <h2 class="ops-card-title">Host Daemons (grain-agentd)</h2>
+                  <p class="ops-card-sub">
+                    Co-located and remote token-landing hosts executing CLI
+                    turns and host capabilities
+                  </p>
+                </div>
+                <div class="headline-actions">
+                  @if (hasRevokedHostds() && canAdminHostds()) {
                     <button
                       type="button"
                       class="btn-tonal"
-                      (click)="copyText(issued.token, 'Copied host token.')"
+                      data-testid="hostds-delete-revoked"
+                      (click)="confirmDeleteRevokedHostds()"
                     >
-                      Copy token
+                      Delete all revoked
                     </button>
-                    <button
-                      type="button"
-                      class="btn-text"
-                      (click)="issuedToken.set(null)"
-                    >
-                      Dismiss
-                    </button>
-                  </div>
+                  }
+                  <a class="btn-tonal" routerLink="/settings/hostds">
+                    Enrollment &amp; settings
+                  </a>
                 </div>
-                <code class="fleet-token-code">{{ issued.token }}</code>
               </div>
-            }
 
-            @if (!canReadHostds()) {
-              <p class="empty-state">
-                {{ access.deniedReason("GET /api/hostds") }}
-              </p>
-            } @else if (filteredHostds().length === 0) {
-              <p class="muted" style="margin: 0">
-                No host daemons registered on this deployment.
-              </p>
-            } @else {
-              <div class="fleet-card-list">
-                @for (h of filteredHostds(); track h.name) {
-                  @let isLocal = h.name === "local";
-                  <div
-                    class="fleet-item-card"
-                    [attr.data-testid]="'hostd-row-' + h.name"
-                  >
-                    <div class="fleet-item-head">
-                      <div class="fleet-item-title">
-                        <span class="tabular">{{ h.name }}</span>
-                        <span
-                          [class]="
-                            h.state === 'connected'
-                              ? 'status-pill healthy'
-                              : h.state === 'revoked'
-                                ? 'status-pill error'
-                                : 'status-pill quiet'
-                          "
-                        >
-                          <g-status-icon
-                            [tone]="
+              @if (issuedToken(); as issued) {
+                <div
+                  class="fleet-token-banner"
+                  data-testid="hostd-issued-token"
+                >
+                  <div class="fleet-item-head">
+                    <strong
+                      >New token for {{ issued.hostd.name }} (shown
+                      once)</strong
+                    >
+                    <div class="fleet-inline-bar">
+                      <button
+                        type="button"
+                        class="btn-tonal"
+                        (click)="copyText(issued.token, 'Copied host token.')"
+                      >
+                        Copy token
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-text"
+                        (click)="issuedToken.set(null)"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                  <code class="fleet-token-code">{{ issued.token }}</code>
+                </div>
+              }
+
+              @if (!canReadHostds()) {
+                <p class="empty-state" data-testid="fleet-hostds-denied">
+                  {{
+                    access.deniedReason("GET /api/hostds") ||
+                      deniedScopeFallback("capabilities:read")
+                  }}
+                </p>
+              } @else if (filteredHostds().length === 0) {
+                <p class="muted" style="margin: 0">
+                  No host daemons registered on this deployment.
+                </p>
+              } @else {
+                <div class="fleet-card-list">
+                  @for (h of filteredHostds(); track h.name) {
+                    @let isLocal = h.name === "local";
+                    <div
+                      class="fleet-item-card"
+                      [attr.data-testid]="'hostd-row-' + h.name"
+                    >
+                      <div class="fleet-item-head">
+                        <div class="fleet-item-title">
+                          <span class="tabular">{{ h.name }}</span>
+                          <span
+                            [class]="
                               h.state === 'connected'
-                                ? 'healthy'
+                                ? 'status-pill healthy'
                                 : h.state === 'revoked'
-                                  ? 'error'
-                                  : 'quiet'
+                                  ? 'status-pill error'
+                                  : 'status-pill quiet'
                             "
-                            [kind]="
-                              h.state === 'connected'
-                                ? 'healthy'
-                                : h.state === 'revoked'
-                                  ? 'error'
-                                  : 'warning'
-                            "
-                          />
-                          {{ h.state }}
-                        </span>
-                        @if (isLocal) {
-                          <span class="fleet-tag">co-located</span>
-                        }
-                        @if (h.owner) {
-                          <g-actor-chip [label]="h.owner" kind="human" />
+                          >
+                            <g-status-icon
+                              [tone]="
+                                h.state === 'connected'
+                                  ? 'healthy'
+                                  : h.state === 'revoked'
+                                    ? 'error'
+                                    : 'quiet'
+                              "
+                              [kind]="
+                                h.state === 'connected'
+                                  ? 'healthy'
+                                  : h.state === 'revoked'
+                                    ? 'error'
+                                    : 'warning'
+                              "
+                            />
+                            {{ h.state }}
+                          </span>
+                          @if (isLocal) {
+                            <span class="fleet-tag">co-located</span>
+                          }
+                          @if (h.owner) {
+                            <g-actor-chip [label]="h.owner" kind="human" />
+                          }
+                        </div>
+
+                        @if (!isLocal && !h.shared && canAdminHostds()) {
+                          <div class="fleet-inline-bar">
+                            @if (h.state !== "revoked") {
+                              <button
+                                type="button"
+                                class="btn-tonal"
+                                [attr.data-testid]="'hostd-rotate-' + h.name"
+                                (click)="rotateHostd(h.name)"
+                              >
+                                Rotate token
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-tonal"
+                                [attr.data-testid]="
+                                  'hostd-rename-open-' + h.name
+                                "
+                                (click)="startRenameHostd(h.name)"
+                              >
+                                Rename
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-text danger"
+                                [attr.data-testid]="'hostd-revoke-' + h.name"
+                                (click)="confirmRevokeHostd(h.name)"
+                              >
+                                Revoke
+                              </button>
+                            } @else {
+                              <button
+                                type="button"
+                                class="btn-text danger"
+                                [attr.data-testid]="'hostd-delete-' + h.name"
+                                (click)="confirmDeleteHostd(h.name)"
+                              >
+                                Delete
+                              </button>
+                            }
+                          </div>
                         }
                       </div>
 
-                      @if (!isLocal && !h.shared && canAdminHostds()) {
+                      @if (renamingHostd() === h.name) {
                         <div class="fleet-inline-bar">
-                          @if (h.state !== "revoked") {
-                            <button
-                              type="button"
-                              class="btn-tonal"
-                              [attr.data-testid]="'hostd-rotate-' + h.name"
-                              (click)="rotateHostd(h.name)"
-                            >
-                              Rotate token
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-tonal"
-                              [attr.data-testid]="'hostd-rename-open-' + h.name"
-                              (click)="startRenameHostd(h.name)"
-                            >
-                              Rename
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-text danger"
-                              [attr.data-testid]="'hostd-revoke-' + h.name"
-                              (click)="confirmRevokeHostd(h.name)"
-                            >
-                              Revoke
-                            </button>
-                          } @else {
-                            <button
-                              type="button"
-                              class="btn-text danger"
-                              [attr.data-testid]="'hostd-delete-' + h.name"
-                              (click)="confirmDeleteHostd(h.name)"
-                            >
-                              Delete
-                            </button>
+                          <input
+                            type="text"
+                            class="ops-input tabular"
+                            aria-label="New hostd name"
+                            [attr.data-testid]="'hostd-rename-input-' + h.name"
+                            [value]="renameDraft()"
+                            (input)="renameDraft.set($any($event.target).value)"
+                          />
+                          <button
+                            type="button"
+                            class="btn-primary"
+                            [attr.data-testid]="'hostd-rename-save-' + h.name"
+                            (click)="submitRenameHostd(h.name)"
+                          >
+                            Save name
+                          </button>
+                          <button
+                            type="button"
+                            class="btn-text"
+                            (click)="renamingHostd.set(null)"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      }
+
+                      <div class="fleet-item-meta tabular">
+                        @if (h.hostname) {
+                          <span>host: {{ h.hostname }}</span>
+                        }
+                        @if (h.os || h.arch) {
+                          <span>{{ h.os }}/{{ h.arch }}</span>
+                        }
+                        @if (h.version) {
+                          <span>{{ h.version }}</span>
+                        }
+                        @if (h.capacity) {
+                          <span>cap: {{ h.capacity }}</span>
+                        }
+                        @if (h.token_prefix) {
+                          <span>token: {{ h.token_prefix }}…</span>
+                        }
+                        @if (h.last_seen_at) {
+                          <span>seen {{ fmtAge(h.last_seen_at) }} ago</span>
+                        }
+                      </div>
+
+                      @if (
+                        (h.clis?.length ?? 0) > 0 || (h.logins?.length ?? 0) > 0
+                      ) {
+                        <div class="fleet-chip-list">
+                          @for (cli of h.clis ?? []; track cli) {
+                            <span class="fleet-tag">cli:{{ cli }}</span>
+                          }
+                          @for (login of h.logins ?? []; track login) {
+                            <span class="fleet-tag">login:{{ login }}</span>
                           }
                         </div>
                       }
                     </div>
-
-                    @if (renamingHostd() === h.name) {
-                      <div class="fleet-inline-bar">
-                        <input
-                          type="text"
-                          class="ops-input tabular"
-                          aria-label="New hostd name"
-                          [attr.data-testid]="'hostd-rename-input-' + h.name"
-                          [value]="renameDraft()"
-                          (input)="renameDraft.set($any($event.target).value)"
-                        />
-                        <button
-                          type="button"
-                          class="btn-primary"
-                          [attr.data-testid]="'hostd-rename-save-' + h.name"
-                          (click)="submitRenameHostd(h.name)"
-                        >
-                          Save name
-                        </button>
-                        <button
-                          type="button"
-                          class="btn-text"
-                          (click)="renamingHostd.set(null)"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    }
-
-                    <div class="fleet-item-meta tabular">
-                      @if (h.hostname) {
-                        <span>host: {{ h.hostname }}</span>
-                      }
-                      @if (h.os || h.arch) {
-                        <span>{{ h.os }}/{{ h.arch }}</span>
-                      }
-                      @if (h.version) {
-                        <span>{{ h.version }}</span>
-                      }
-                      @if (h.capacity) {
-                        <span>cap: {{ h.capacity }}</span>
-                      }
-                      @if (h.token_prefix) {
-                        <span>token: {{ h.token_prefix }}…</span>
-                      }
-                      @if (h.last_seen_at) {
-                        <span>seen {{ fmtAge(h.last_seen_at) }} ago</span>
-                      }
-                    </div>
-
-                    @if (
-                      (h.clis?.length ?? 0) > 0 || (h.logins?.length ?? 0) > 0
-                    ) {
-                      <div class="fleet-chip-list">
-                        @for (cli of h.clis ?? []; track cli) {
-                          <span class="fleet-tag">cli:{{ cli }}</span>
-                        }
-                        @for (login of h.logins ?? []; track login) {
-                          <span class="fleet-tag">login:{{ login }}</span>
-                        }
-                      </div>
-                    }
-                  </div>
-                }
-              </div>
-            }
-          </article>
+                  }
+                </div>
+              }
+            </article>
+          </div>
         }
 
         <!-- TAB 3: PAUSES, CACHES & DAEMON LIFECYCLE -->
         @if (tab() === "controls") {
-          <div class="ops-grid-2">
-            <!-- Pipeline Dispatch Gate -->
-            <article class="ops-card" data-testid="fleet-pipeline-card">
-              <div class="ops-card-head">
-                <div>
-                  <h2 class="ops-card-title">Pipeline Dispatch Gate</h2>
-                  <p class="ops-card-sub">
-                    Holds new task pickup while letting in-flight runs finish
-                  </p>
-                </div>
-                <span
-                  [class]="
-                    pipelinePause()?.paused
-                      ? 'status-pill blast'
-                      : 'status-pill healthy'
-                  "
-                  data-testid="pipeline-pause-state"
-                >
-                  <g-status-icon
-                    [tone]="pipelinePause()?.paused ? 'blast' : 'healthy'"
-                    [kind]="pipelinePause()?.paused ? 'warning' : 'healthy'"
-                  />
-                  {{ pipelinePause()?.paused ? "Paused" : "Dispatching" }}
-                </span>
-              </div>
-
-              @if (pipelinePause()?.paused) {
-                <div class="fleet-item-meta">
-                  <span>Reason: {{ pipelinePause()?.reason || "paused" }}</span>
-                  @if (pipelinePause()?.byLabel || pipelinePause()?.byId) {
-                    <g-actor-chip
-                      [label]="
-                        pipelinePause()?.byLabel ||
-                        pipelinePause()?.byId ||
-                        'Operator'
-                      "
-                      [kind]="pipelinePause()?.byKind || 'human'"
-                    />
-                  }
-                </div>
-                <div>
-                  <button
-                    type="button"
-                    class="btn-primary"
-                    data-testid="pipeline-resume-btn"
-                    [disabled]="!canWriteDispatch() || busyDispatch()"
-                    [gTip]="
-                      canWriteDispatch()
-                        ? 'Resume dispatching queued tasks'
-                        : access.deniedReason('DELETE /api/pipeline-pause')
-                    "
-                    (click)="resumePipeline()"
-                  >
-                    Resume pipeline
-                  </button>
-                </div>
-              } @else {
-                <div class="fleet-inline-bar">
-                  <input
-                    type="text"
-                    class="ops-input"
-                    style="flex: 1 1 200px"
-                    placeholder="Optional pause reason (e.g. maintenance window)"
-                    aria-label="Pipeline pause reason"
-                    data-testid="pipeline-pause-reason"
-                    [value]="pauseReasonDraft()"
-                    (input)="pauseReasonDraft.set($any($event.target).value)"
-                  />
-                  <button
-                    type="button"
-                    class="btn-tonal"
-                    data-testid="pipeline-pause-btn"
-                    [disabled]="!canWriteDispatch() || busyDispatch()"
-                    [gTip]="
-                      canWriteDispatch()
-                        ? 'Pause new task dispatch'
-                        : access.deniedReason('POST /api/pipeline-pause')
-                    "
-                    (click)="pausePipeline()"
-                  >
-                    Pause pipeline
-                  </button>
-                </div>
-              }
-            </article>
-
-            <!-- Usage-Limit Pauses -->
-            <article class="ops-card" data-testid="fleet-usage-pauses-card">
-              <div class="ops-card-head">
-                <div>
-                  <h2 class="ops-card-title">Model Usage-Limit Pauses</h2>
-                  <p class="ops-card-sub">
-                    Provider quota windows automatically holding affected
-                    connections
-                  </p>
-                </div>
-                @if (
-                  (agentPause()?.pauses?.length ?? 0) > 1 && canWriteDispatch()
-                ) {
-                  <button
-                    type="button"
-                    class="btn-tonal"
-                    data-testid="lift-all-pauses-btn"
-                    (click)="liftAgentPause()"
-                  >
-                    Lift all
-                  </button>
-                }
-              </div>
-
-              @if ((agentPause()?.pauses?.length ?? 0) === 0) {
-                <p class="muted" style="margin: 0">
-                  No model connections are currently paused on quota limits.
-                </p>
-              } @else {
-                <div class="fleet-card-list">
-                  @for (
-                    p of agentPause()?.pauses ?? [];
-                    track (p.connection || "") + ":" + (p.model || "")
-                  ) {
-                    <div class="fleet-item-card">
-                      <div class="fleet-item-head">
-                        <span class="tabular"
-                          ><strong>{{
-                            p.connectionName || p.connection || p.framework
-                          }}</strong>
-                          @if (p.model) {
-                            · {{ p.model }}
-                          }
-                        </span>
-                        @if (p.canLift && canWriteDispatch()) {
-                          <button
-                            type="button"
-                            class="btn-tonal"
-                            (click)="liftAgentPause(p)"
-                          >
-                            Lift pause
-                          </button>
-                        }
-                      </div>
-                      <div class="fleet-item-meta tabular">
-                        <span>{{
-                          p.reason || "provider rate/usage limit"
-                        }}</span>
-                        <span
-                          >Resets in
-                          {{ Math.ceil(p.secondsRemaining / 60) }}m</span
-                        >
-                      </div>
+          <div
+            id="fleet-panel-controls"
+            role="tabpanel"
+            aria-labelledby="fleet-tab-btn-controls"
+            style="display: flex; flex-direction: column; gap: 20px"
+          >
+            @if (
+              !canReadDispatch() &&
+              !canReadCaches() &&
+              !canReadSandboxes() &&
+              !canRestartDaemon()
+            ) {
+              <p class="empty-state" data-testid="fleet-controls-denied">
+                {{
+                  access.deniedReason("GET /api/pipeline-pause") ||
+                    deniedScopeFallback("dispatch:read")
+                }}
+              </p>
+            } @else {
+              <div class="ops-grid-2">
+                <!-- Pipeline Dispatch Gate -->
+                <article class="ops-card" data-testid="fleet-pipeline-card">
+                  <div class="ops-card-head">
+                    <div>
+                      <h2 class="ops-card-title">Pipeline Dispatch Gate</h2>
+                      <p class="ops-card-sub">
+                        Holds new task pickup while letting in-flight runs
+                        finish
+                      </p>
                     </div>
-                  }
-                </div>
-              }
-            </article>
-
-            <!-- Package & Actions Caches -->
-            <article class="ops-card" data-testid="fleet-caches-card">
-              <div class="ops-card-head">
-                <div>
-                  <h2 class="ops-card-title">Proxy &amp; Actions Caches</h2>
-                  <p class="ops-card-sub">
-                    On-controller package proxy and GitHub Actions build caches
-                  </p>
-                </div>
-              </div>
-
-              <div class="fleet-item-card">
-                <div class="fleet-item-head">
-                  <span class="fleet-item-title">Package Proxy Cache</span>
-                  <button
-                    type="button"
-                    class="btn-tonal"
-                    data-testid="flush-package-cache-btn"
-                    [disabled]="!canWriteCaches() || !packageCache()?.enabled"
-                    [gTip]="
-                      canWriteCaches()
-                        ? 'Flush cached packages'
-                        : access.deniedReason('POST /api/package-cache/flush')
-                    "
-                    (click)="confirmFlushPackageCache()"
-                  >
-                    Flush package cache
-                  </button>
-                </div>
-                @if (packageCache()?.enabled) {
-                  <div class="fleet-chip-list">
-                    @for (eco of packageCache()?.cache ?? []; track eco.kind) {
-                      <span class="fleet-tag"
-                        >{{ eco.kind }}: {{ eco.entries }} ({{
-                          fmtBytes(eco.bytes)
-                        }})</span
+                    @if (canReadDispatch()) {
+                      <span
+                        [class]="
+                          pipelinePause()?.paused
+                            ? 'status-pill blast'
+                            : 'status-pill healthy'
+                        "
+                        data-testid="pipeline-pause-state"
                       >
+                        <g-status-icon
+                          [tone]="pipelinePause()?.paused ? 'blast' : 'healthy'"
+                          [kind]="
+                            pipelinePause()?.paused ? 'warning' : 'healthy'
+                          "
+                        />
+                        {{ pipelinePause()?.paused ? "Paused" : "Dispatching" }}
+                      </span>
                     }
                   </div>
-                } @else {
-                  <span class="muted" style="font-size: 12px"
-                    >Package proxy cache not enabled on this host.</span
-                  >
-                }
-              </div>
 
-              <div class="fleet-item-card">
-                <div class="fleet-item-head">
-                  <span class="fleet-item-title">Actions Cache</span>
-                  <button
-                    type="button"
-                    class="btn-tonal"
-                    data-testid="flush-actions-cache-btn"
-                    [disabled]="!canWriteCaches() || !actionsCache()?.enabled"
-                    [gTip]="
-                      canWriteCaches()
-                        ? 'Flush GitHub Actions cache archives'
-                        : access.deniedReason('POST /api/actions-cache/flush')
-                    "
-                    (click)="confirmFlushActionsCache()"
-                  >
-                    Flush actions cache
-                  </button>
-                </div>
-                @if (actionsCache()?.enabled) {
-                  <div class="fleet-item-meta tabular">
-                    <span>{{ actionsCache()?.entries ?? 0 }} entries</span>
-                    <span
-                      >{{ fmtBytes(actionsCache()?.bytes) }} /
-                      {{ fmtBytes(actionsCache()?.maxBytes) }}</span
-                    >
+                  @if (!canReadDispatch()) {
+                    <p class="empty-state">
+                      {{
+                        access.deniedReason("GET /api/pipeline-pause") ||
+                          deniedScopeFallback("dispatch:read")
+                      }}
+                    </p>
+                  } @else if (pipelinePause()?.paused) {
+                    <div class="fleet-item-meta">
+                      <span
+                        >Reason: {{ pipelinePause()?.reason || "paused" }}</span
+                      >
+                      @if (pipelinePause()?.byLabel || pipelinePause()?.byId) {
+                        <g-actor-chip
+                          [label]="
+                            pipelinePause()?.byLabel ||
+                            pipelinePause()?.byId ||
+                            'Operator'
+                          "
+                          [kind]="pipelinePause()?.byKind || 'human'"
+                        />
+                      }
+                    </div>
+                    <div>
+                      <button
+                        type="button"
+                        class="btn-primary"
+                        data-testid="pipeline-resume-btn"
+                        [disabled]="!canWriteDispatch() || busyDispatch()"
+                        [gTip]="
+                          canWriteDispatch()
+                            ? 'Resume dispatching queued tasks'
+                            : access.deniedReason('DELETE /api/pipeline-pause')
+                        "
+                        (click)="resumePipeline()"
+                      >
+                        Resume pipeline
+                      </button>
+                    </div>
+                  } @else {
+                    <div class="fleet-inline-bar">
+                      <input
+                        type="text"
+                        class="ops-input"
+                        style="flex: 1 1 200px"
+                        placeholder="Optional pause reason (e.g. maintenance window)"
+                        aria-label="Pipeline pause reason"
+                        data-testid="pipeline-pause-reason"
+                        [value]="pauseReasonDraft()"
+                        (input)="
+                          pauseReasonDraft.set($any($event.target).value)
+                        "
+                      />
+                      <button
+                        type="button"
+                        class="btn-tonal"
+                        data-testid="pipeline-pause-btn"
+                        [disabled]="!canWriteDispatch() || busyDispatch()"
+                        [gTip]="
+                          canWriteDispatch()
+                            ? 'Pause new task dispatch'
+                            : access.deniedReason('POST /api/pipeline-pause')
+                        "
+                        (click)="pausePipeline()"
+                      >
+                        Pause pipeline
+                      </button>
+                    </div>
+                  }
+                </article>
+
+                <!-- Usage-Limit Pauses -->
+                <article class="ops-card" data-testid="fleet-usage-pauses-card">
+                  <div class="ops-card-head">
+                    <div>
+                      <h2 class="ops-card-title">Model Usage-Limit Pauses</h2>
+                      <p class="ops-card-sub">
+                        Provider quota windows automatically holding affected
+                        connections
+                      </p>
+                    </div>
+                    @if (
+                      (agentPause()?.pauses?.length ?? 0) > 1 &&
+                      canWriteDispatch()
+                    ) {
+                      <button
+                        type="button"
+                        class="btn-tonal"
+                        data-testid="lift-all-pauses-btn"
+                        (click)="liftAgentPause()"
+                      >
+                        Lift all
+                      </button>
+                    }
                   </div>
-                } @else {
-                  <span class="muted" style="font-size: 12px"
-                    >Actions cache not enabled on this host.</span
-                  >
-                }
-              </div>
-            </article>
 
-            <!-- Daemon Lifecycle & Restart -->
-            <article class="ops-card" data-testid="fleet-daemon-card">
-              <div class="ops-card-head">
-                <div>
-                  <h2 class="ops-card-title">Daemon Lifecycle</h2>
-                  <p class="ops-card-sub">
-                    Service uptime, start history, and controlled service
-                    restart
-                  </p>
-                </div>
-                @if (health()?.daemon?.restarting || watchRestarting()) {
-                  <span class="status-pill error">
-                    <g-status-icon tone="error" kind="error" />
-                    Restarting
-                  </span>
-                } @else {
-                  <span class="status-pill healthy">
-                    <g-status-icon tone="healthy" kind="healthy" />
-                    Up {{ fmtAge(health()?.daemon?.startedAt) }}
-                  </span>
-                }
-              </div>
+                  @if (!canReadDispatch()) {
+                    <p class="empty-state">
+                      {{
+                        access.deniedReason("GET /api/pause") ||
+                          deniedScopeFallback("dispatch:read")
+                      }}
+                    </p>
+                  } @else if ((agentPause()?.pauses?.length ?? 0) === 0) {
+                    <p class="muted" style="margin: 0">
+                      No model connections are currently paused on quota limits.
+                    </p>
+                  } @else {
+                    <div class="fleet-card-list">
+                      @for (
+                        p of agentPause()?.pauses ?? [];
+                        track (p.connection || "") + ":" + (p.model || "")
+                      ) {
+                        <div class="fleet-item-card">
+                          <div class="fleet-item-head">
+                            <span class="tabular"
+                              ><strong>{{
+                                p.connectionName || p.connection || p.framework
+                              }}</strong>
+                              @if (p.model) {
+                                · {{ p.model }}
+                              }
+                            </span>
+                            @if (p.canLift && canWriteDispatch()) {
+                              <button
+                                type="button"
+                                class="btn-tonal"
+                                (click)="liftAgentPause(p)"
+                              >
+                                Lift pause
+                              </button>
+                            }
+                          </div>
+                          <div class="fleet-item-meta tabular">
+                            <span>{{
+                              p.reason || "provider rate/usage limit"
+                            }}</span>
+                            <span
+                              >Resets in
+                              {{ Math.ceil(p.secondsRemaining / 60) }}m</span
+                            >
+                          </div>
+                        </div>
+                      }
+                    </div>
+                  }
+                </article>
 
-              <div class="fleet-item-meta tabular">
-                @if (health()?.daemon?.starts) {
-                  <span
-                    >Starts: {{ health()?.daemon?.starts }}
-                    {{ health()?.daemon?.startsScope || "" }}</span
-                  >
-                }
-                @if (health()?.daemon?.logCommand) {
-                  <span>{{ health()?.daemon?.logCommand }}</span>
-                }
-              </div>
+                <!-- Package & Actions Caches -->
+                <article class="ops-card" data-testid="fleet-caches-card">
+                  <div class="ops-card-head">
+                    <div>
+                      <h2 class="ops-card-title">Proxy &amp; Actions Caches</h2>
+                      <p class="ops-card-sub">
+                        On-controller package proxy and GitHub Actions build
+                        caches
+                      </p>
+                    </div>
+                  </div>
 
-              <div class="fleet-inline-bar">
-                <button
-                  type="button"
-                  class="btn-primary is-destructive"
-                  data-testid="daemon-restart-btn"
-                  [disabled]="!canRestartOrProbe()"
-                  [gTip]="
-                    canRestartOrProbe()
-                      ? 'Restart the grain daemon service (asks confirmation first)'
-                      : access.deniedReason('POST /api/host/restart')
-                  "
-                  (click)="confirmRestartDaemon()"
-                >
-                  Restart daemon
-                </button>
+                  @if (!canReadCaches()) {
+                    <p class="empty-state">
+                      {{
+                        access.deniedReason("GET /api/package-cache") ||
+                          deniedScopeFallback("caches:read")
+                      }}
+                    </p>
+                  } @else {
+                    <div class="fleet-item-card">
+                      <div class="fleet-item-head">
+                        <span class="fleet-item-title"
+                          >Package Proxy Cache</span
+                        >
+                        <button
+                          type="button"
+                          class="btn-tonal"
+                          data-testid="flush-package-cache-btn"
+                          [disabled]="
+                            !canWriteCaches() || !packageCache()?.enabled
+                          "
+                          [gTip]="
+                            canWriteCaches()
+                              ? 'Flush cached packages'
+                              : access.deniedReason(
+                                  'POST /api/package-cache/flush'
+                                )
+                          "
+                          (click)="confirmFlushPackageCache()"
+                        >
+                          Flush package cache
+                        </button>
+                      </div>
+                      @if (packageCache()?.enabled) {
+                        <div class="fleet-chip-list">
+                          @for (
+                            eco of packageCache()?.cache ?? [];
+                            track eco.kind
+                          ) {
+                            <span class="fleet-tag"
+                              >{{ eco.kind }}: {{ eco.entries }} ({{
+                                fmtBytes(eco.bytes)
+                              }})</span
+                            >
+                          }
+                        </div>
+                      } @else {
+                        <span class="muted" style="font-size: 12px"
+                          >Package proxy cache not enabled on this host.</span
+                        >
+                      }
+                    </div>
+
+                    <div class="fleet-item-card">
+                      <div class="fleet-item-head">
+                        <span class="fleet-item-title">Actions Cache</span>
+                        <button
+                          type="button"
+                          class="btn-tonal"
+                          data-testid="flush-actions-cache-btn"
+                          [disabled]="
+                            !canWriteCaches() || !actionsCache()?.enabled
+                          "
+                          [gTip]="
+                            canWriteCaches()
+                              ? 'Flush GitHub Actions cache archives'
+                              : access.deniedReason(
+                                  'POST /api/actions-cache/flush'
+                                )
+                          "
+                          (click)="confirmFlushActionsCache()"
+                        >
+                          Flush actions cache
+                        </button>
+                      </div>
+                      @if (actionsCache()?.enabled) {
+                        <div class="fleet-item-meta tabular">
+                          <span
+                            >{{ actionsCache()?.entries ?? 0 }} entries</span
+                          >
+                          <span
+                            >{{ fmtBytes(actionsCache()?.bytes) }} /
+                            {{ fmtBytes(actionsCache()?.maxBytes) }}</span
+                          >
+                        </div>
+                      } @else {
+                        <span class="muted" style="font-size: 12px"
+                          >Actions cache not enabled on this host.</span
+                        >
+                      }
+                    </div>
+                  }
+                </article>
+
+                <!-- Daemon Lifecycle & Restart -->
+                <article class="ops-card" data-testid="fleet-daemon-card">
+                  <div class="ops-card-head">
+                    <div>
+                      <h2 class="ops-card-title">Daemon Lifecycle</h2>
+                      <p class="ops-card-sub">
+                        Service uptime, start history, and controlled service
+                        restart
+                      </p>
+                    </div>
+                    @if (sandboxes()?.daemon?.restarting || watchRestarting()) {
+                      <span class="status-pill error">
+                        <g-status-icon tone="error" kind="error" />
+                        Restarting
+                      </span>
+                    } @else {
+                      <span class="status-pill healthy">
+                        <g-status-icon tone="healthy" kind="healthy" />
+                        Up {{ fmtAge(sandboxes()?.daemon?.startedAt) }}
+                      </span>
+                    }
+                  </div>
+
+                  <div class="fleet-item-meta tabular">
+                    @if (sandboxes()?.daemon?.starts) {
+                      <span
+                        >Starts: {{ sandboxes()?.daemon?.starts }}
+                        {{ sandboxes()?.daemon?.startsScope || "" }}</span
+                      >
+                    }
+                    @if (sandboxes()?.daemon?.logCommand) {
+                      <span>{{ sandboxes()?.daemon?.logCommand }}</span>
+                    }
+                  </div>
+
+                  <div class="fleet-inline-bar">
+                    <button
+                      type="button"
+                      class="btn-primary is-destructive"
+                      data-testid="daemon-restart-btn"
+                      [disabled]="!canRestartDaemon()"
+                      [gTip]="
+                        canRestartDaemon()
+                          ? 'Restart the grain daemon service (asks confirmation first)'
+                          : access.deniedReason('POST /api/host/restart')
+                      "
+                      (click)="confirmRestartDaemon()"
+                    >
+                      Restart daemon
+                    </button>
+                  </div>
+                </article>
               </div>
-            </article>
+            }
           </div>
         }
 
         <!-- TAB 4: DAEMON & UNIT LOGS -->
         @if (tab() === "logs") {
-          <article class="ops-card" data-testid="fleet-logs-card">
-            <div class="ops-card-head">
-              <div>
-                <h2 class="ops-card-title">Daemon &amp; Unit Logs</h2>
-                <p class="ops-card-sub">
-                  Redacted journal and subsystem tails (GET
-                  /api/logs/&#123;source&#125;)
-                </p>
-              </div>
-              <div class="headline-actions">
-                <span
-                  class="status-pill neutral tabular"
-                  data-testid="logs-line-count"
-                >
-                  <g-status-icon tone="neutral" kind="progress" />
-                  {{ filteredLogLines().length }} / {{ logLines().length }}
-                  lines
-                </span>
-                <button
-                  type="button"
-                  class="btn-tonal"
-                  data-testid="logs-refresh-btn"
-                  (click)="loadLogLines()"
-                >
-                  Refresh
-                </button>
-                <button
-                  type="button"
-                  class="btn-tonal"
-                  data-testid="logs-copy-btn"
-                  [disabled]="filteredLogLines().length === 0"
-                  (click)="
-                    copyText(
-                      filteredLogLines().join(
-                        '
-'
-                      ),
-                      'Copied log lines.'
-                    )
-                  "
-                >
-                  Copy
-                </button>
-              </div>
-            </div>
-
-            @if (!logSources()?.enabled) {
-              <p class="muted" style="margin: 0">
-                No log sources are configured on this deployment.
+          <div
+            id="fleet-panel-logs"
+            role="tabpanel"
+            aria-labelledby="fleet-tab-btn-logs"
+            style="display: flex; flex-direction: column; gap: 20px"
+          >
+            @if (!canReadLogs()) {
+              <p class="empty-state" data-testid="fleet-logs-denied">
+                {{
+                  access.deniedReason("GET /api/logs") ||
+                    deniedScopeFallback("deployment:read")
+                }}
               </p>
             } @else {
-              <div class="fleet-log-toolbar">
-                <div
-                  class="fleet-log-pills"
-                  role="group"
-                  aria-label="Log source"
-                >
-                  @for (src of logSources()?.sources ?? []; track src) {
-                    <button
-                      type="button"
-                      class="filter-chip"
-                      [attr.aria-pressed]="selectedLogSource() === src"
-                      [attr.data-testid]="'log-source-' + src"
-                      (click)="pickLogSource(src)"
-                    >
-                      {{ src }}
-                    </button>
-                  }
-                </div>
-
-                @if (logUnits().length > 1) {
-                  <div class="segmented" role="group" aria-label="Systemd unit">
-                    @for (u of logUnits(); track u.unit) {
-                      <button
-                        type="button"
-                        [attr.aria-pressed]="selectedLogUnit() === u.unit"
-                        (click)="pickLogUnit(u.unit)"
-                      >
-                        {{ u.unit }} ({{ u.scope }})
-                      </button>
-                    }
+              <article class="ops-card" data-testid="fleet-logs-card">
+                <div class="ops-card-head">
+                  <div>
+                    <h2 class="ops-card-title">Daemon &amp; Unit Logs</h2>
+                    <p class="ops-card-sub">
+                      Redacted journal and subsystem tails (GET
+                      /api/logs/&#123;source&#125;)
+                    </p>
                   </div>
-                }
-
-                <div class="segmented" role="group" aria-label="Tail lines">
-                  @for (cnt of [200, 500, 1000]; track cnt) {
+                  <div class="headline-actions">
+                    <span
+                      class="status-pill neutral tabular"
+                      data-testid="logs-line-count"
+                    >
+                      <g-status-icon tone="neutral" kind="progress" />
+                      {{ filteredLogLines().length }} /
+                      {{ logLines().length }} lines
+                    </span>
                     <button
                       type="button"
-                      [attr.aria-pressed]="logLineLimit() === cnt"
-                      (click)="pickLogLimit(cnt)"
+                      class="btn-tonal"
+                      data-testid="logs-refresh-btn"
+                      (click)="loadLogLines()"
                     >
-                      {{ cnt }}
+                      Refresh
                     </button>
-                  }
+                    <button
+                      type="button"
+                      class="btn-tonal"
+                      data-testid="logs-copy-btn"
+                      [disabled]="filteredLogLines().length === 0"
+                      (click)="
+                        copyText(
+                          filteredLogLines().join(
+                            '
+'
+                          ),
+                          'Copied log lines.'
+                        )
+                      "
+                    >
+                      Copy
+                    </button>
+                  </div>
                 </div>
 
-                <input
-                  type="search"
-                  class="ops-input"
-                  style="flex: 1 1 200px"
-                  placeholder="Filter log lines…"
-                  aria-label="Filter log lines"
-                  data-testid="logs-search-input"
-                  [value]="logQuery()"
-                  (input)="logQuery.set($any($event.target).value)"
-                />
-              </div>
+                @if (!logSources()?.enabled) {
+                  <p class="muted" style="margin: 0">
+                    No log sources are configured on this deployment.
+                  </p>
+                } @else {
+                  <div class="fleet-log-toolbar">
+                    <div
+                      class="fleet-log-pills"
+                      role="group"
+                      aria-label="Log source"
+                    >
+                      @for (src of logSources()?.sources ?? []; track src) {
+                        <button
+                          type="button"
+                          class="filter-chip"
+                          [attr.aria-pressed]="selectedLogSource() === src"
+                          [attr.data-testid]="'log-source-' + src"
+                          (click)="pickLogSource(src)"
+                        >
+                          {{ src }}
+                        </button>
+                      }
+                    </div>
 
-              <pre
-                class="dark-well"
-                tabindex="0"
-                aria-label="Daemon log output"
-                data-testid="logs-viewer"
-                >{{
-                  filteredLogLines().length > 0
-                    ? filteredLogLines().join(
-                        "
+                    @if (logUnits().length > 1) {
+                      <div
+                        class="segmented"
+                        role="group"
+                        aria-label="Systemd unit"
+                      >
+                        @for (u of logUnits(); track u.unit) {
+                          <button
+                            type="button"
+                            [attr.aria-pressed]="selectedLogUnit() === u.unit"
+                            (click)="pickLogUnit(u.unit)"
+                          >
+                            {{ u.unit }} ({{ u.scope }})
+                          </button>
+                        }
+                      </div>
+                    }
+
+                    <div class="segmented" role="group" aria-label="Tail lines">
+                      @for (cnt of [200, 500, 1000]; track cnt) {
+                        <button
+                          type="button"
+                          [attr.aria-pressed]="logLineLimit() === cnt"
+                          (click)="pickLogLimit(cnt)"
+                        >
+                          {{ cnt }}
+                        </button>
+                      }
+                    </div>
+
+                    <input
+                      type="search"
+                      class="ops-input"
+                      style="flex: 1 1 200px"
+                      placeholder="Filter log lines…"
+                      aria-label="Filter log lines"
+                      data-testid="logs-search-input"
+                      [value]="logQuery()"
+                      (input)="logQuery.set($any($event.target).value)"
+                    />
+                  </div>
+
+                  <pre
+                    class="dark-well"
+                    tabindex="0"
+                    aria-label="Daemon log output"
+                    data-testid="logs-viewer"
+                    >{{
+                      filteredLogLines().length > 0
+                        ? filteredLogLines().join(
+                            "
 "
-                      )
-                    : "(no matching log lines)"
-                }}</pre>
+                          )
+                        : "(no matching log lines)"
+                    }}</pre>
+                }
+              </article>
             }
-          </article>
+          </div>
         }
       </div>
-
-      @if (confirmReq(); as req) {
-        <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
-      }
     </section>
+
+    @if (confirmReq(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+    }
   `,
 })
 export class FleetPageComponent implements OnInit {
@@ -1336,8 +1528,8 @@ export class FleetPageComponent implements OnInit {
   protected readonly loadError = signal<string | null>(null);
   protected readonly confirmReq = signal<ConfirmRequest | null>(null);
 
-  protected readonly configBackend = signal<string>("");
-  protected readonly health = signal<SandboxHealthResponse | null>(null);
+  protected readonly hostSandboxes = signal(false);
+  protected readonly sandboxes = signal<SandboxHealthResponse | null>(null);
   protected readonly topOpen = signal(false);
   protected readonly hostTop = signal<HostTopResponse | null>(null);
 
@@ -1375,62 +1567,134 @@ export class FleetPageComponent implements OnInit {
   protected readonly logLines = signal<string[]>([]);
   protected readonly logQuery = signal<string>("");
 
-  protected readonly canReadSandboxes = computed(() =>
-    this.access.can("GET /api/sandboxes"),
+  private isScopeRepoLimited(scope: string): boolean {
+    return (
+      !this.access.isFullAccess() &&
+      Boolean(this.access.repoLimits()[scope]?.length)
+    );
+  }
+
+  protected deniedScopeFallback(scope: string): string {
+    return `Your role ${this.access.roleLabel() || "limited"} is repository-limited on ${scope} and cannot read deployment-wide fleet state.`;
+  }
+
+  protected readonly canReadSandboxes = computed(
+    () =>
+      this.access.can("GET /api/sandboxes") &&
+      !this.isScopeRepoLimited("deployment:read"),
   );
-  protected readonly canReadPersistent = computed(() =>
-    this.access.can("GET /api/persistent-sandboxes"),
+  protected readonly canReadPersistent = computed(
+    () =>
+      this.access.can("GET /api/persistent-sandboxes") &&
+      !this.isScopeRepoLimited("sandboxes:read"),
   );
-  protected readonly canRestartOrProbe = computed(() =>
-    this.access.can("POST /api/host/restart"),
+  protected readonly canRestartDaemon = computed(
+    () =>
+      this.access.can("POST /api/host/restart") &&
+      !this.isScopeRepoLimited("deployment:restart"),
   );
   protected readonly canRecreateTaskSandbox = computed(() =>
     this.access.can("POST /api/tasks/{id}/sandbox/recreate"),
   );
-  protected readonly canReadHostds = computed(() =>
-    this.access.can("GET /api/hostds"),
+  protected readonly canReadHostds = computed(
+    () =>
+      this.access.can("GET /api/hostds") &&
+      !this.isScopeRepoLimited("capabilities:read"),
   );
-  protected readonly canAdminHostds = computed(() =>
-    this.access.can("POST /api/hostds/{name}/revoke"),
+  protected readonly canAdminHostds = computed(
+    () =>
+      this.access.can("POST /api/hostds/{name}/revoke") &&
+      !this.isScopeRepoLimited("capabilities:admin"),
   );
-  protected readonly canReadDispatch = computed(() =>
-    this.access.can("GET /api/pipeline-pause"),
+  protected readonly canReadDispatch = computed(
+    () =>
+      this.access.can("GET /api/pipeline-pause") &&
+      !this.isScopeRepoLimited("dispatch:read"),
   );
-  protected readonly canWriteDispatch = computed(() =>
-    this.access.can("POST /api/pipeline-pause"),
+  protected readonly canWriteDispatch = computed(
+    () =>
+      this.access.can("POST /api/pipeline-pause") &&
+      !this.isScopeRepoLimited("dispatch:write"),
   );
-  protected readonly canReadCaches = computed(() =>
-    this.access.can("GET /api/package-cache"),
+  protected readonly canReadCaches = computed(
+    () =>
+      this.access.can("GET /api/package-cache") &&
+      !this.isScopeRepoLimited("caches:read"),
   );
-  protected readonly canWriteCaches = computed(() =>
-    this.access.can("POST /api/package-cache/flush"),
+  protected readonly canWriteCaches = computed(
+    () =>
+      this.access.can("POST /api/package-cache/flush") &&
+      !this.isScopeRepoLimited("caches:write"),
   );
-  protected readonly canReadLogs = computed(() =>
-    this.access.can("GET /api/logs"),
+  protected readonly canReadLogs = computed(
+    () =>
+      this.access.can("GET /api/logs") &&
+      !this.isScopeRepoLimited("deployment:read"),
   );
 
-  protected readonly activeBackend = computed<string>(() => {
-    const first = this.health()?.sandboxes?.[0]?.backend;
+  protected readonly effectiveSandboxBackend = computed<string>(() => {
+    if (this.hostSandboxes()) return "host";
+    const first = this.sandboxes()?.sandboxes?.[0]?.backend;
     if (first) return first;
-    if (this.configBackend()) return this.configBackend();
+    if (this.sandboxes()?.enabled === false) return "disabled";
     return "granule";
   });
 
+  protected readonly canProbeSandboxes = computed(
+    () =>
+      !this.hostSandboxes() &&
+      this.effectiveSandboxBackend() !== "host" &&
+      this.sandboxes()?.enabled !== false &&
+      !this.isScopeRepoLimited("deployment:restart") &&
+      this.access.can("POST /api/sandbox-probe"),
+  );
+
+  protected readonly probeTip = computed<string>(() => {
+    if (!this.access.can("POST /api/sandbox-probe")) {
+      return this.access.deniedReason("POST /api/sandbox-probe");
+    }
+    if (this.isScopeRepoLimited("deployment:restart")) {
+      return this.deniedScopeFallback("deployment:restart");
+    }
+    if (this.hostSandboxes() || this.effectiveSandboxBackend() === "host") {
+      return "Sandbox diagnostic probe is unavailable when running host sandboxes.";
+    }
+    if (this.sandboxes()?.enabled === false) {
+      return "Sandboxes are disabled on this deployment.";
+    }
+    return "Run diagnostic probe (POST /api/sandbox-probe)";
+  });
+
+  protected canControlPersistent(ps: PersistentSandboxStatus): boolean {
+    const repo = ps.repo || undefined;
+    if (!repo && this.isScopeRepoLimited("deployment:restart")) return false;
+    return this.access.can(
+      "POST /api/persistent-sandboxes/{name}/{action}",
+      repo,
+    );
+  }
+
+  protected canReadPersistentLogs(ps: PersistentSandboxStatus): boolean {
+    const repo = ps.repo || undefined;
+    if (!repo && this.isScopeRepoLimited("deployment:read")) return false;
+    return this.access.can("GET /api/persistent-sandboxes/{name}/logs", repo);
+  }
+
   protected readonly vcpuPct = computed<number>(() => {
-    const b = this.health()?.budget;
-    const cap = b?.budgetCPUs || this.health()?.host?.cpus || 0;
+    const b = this.sandboxes()?.budget;
+    const cap = b?.budgetCPUs || this.sandboxes()?.host?.cpus || 0;
     if (!cap) return 0;
     return Math.min(100, ((b?.committedCPUs ?? 0) / cap) * 100);
   });
 
   protected readonly memPct = computed<number>(() => {
-    const h = this.health()?.host;
+    const h = this.sandboxes()?.host;
     if (!h?.memoryTotalMB) return 0;
     return Math.min(100, (h.memoryUsedMB / h.memoryTotalMB) * 100);
   });
 
   protected readonly primaryDisk = computed(
-    () => this.health()?.host?.disks?.[0] ?? null,
+    () => this.sandboxes()?.host?.disks?.[0] ?? null,
   );
 
   protected readonly diskPct = computed<number>(() => {
@@ -1440,12 +1704,12 @@ export class FleetPageComponent implements OnInit {
   });
 
   protected readonly persistentSandboxes = computed<PersistentSandboxStatus[]>(
-    () => this.persistentList() ?? this.health()?.persistentSandboxes ?? [],
+    () => this.persistentList() ?? this.sandboxes()?.persistentSandboxes ?? [],
   );
 
   protected readonly filteredSandboxes = computed<SandboxSnapshot[]>(() => {
     const q = this.viewFilter.query().trim().toLowerCase();
-    const list = this.health()?.sandboxes ?? [];
+    const list = this.sandboxes()?.sandboxes ?? [];
     if (!q) return list;
     return list.filter(
       (s) =>
@@ -1488,8 +1752,12 @@ export class FleetPageComponent implements OnInit {
     ) {
       this.tab.set(t);
     }
-    void this.loadBootstrapConfig();
-    void this.refreshAll();
+    void this.bootstrap();
+  }
+
+  private async bootstrap(): Promise<void> {
+    await this.loadBootstrapConfig();
+    await this.refreshAll();
   }
 
   private async loadBootstrapConfig(): Promise<void> {
@@ -1498,14 +1766,7 @@ export class FleetPageComponent implements OnInit {
       const cfg = await this.api.config();
       if (cfg) {
         this.access.setConfig(cfg);
-        if (
-          typeof cfg["sandboxBackend"] === "string" &&
-          cfg["sandboxBackend"]
-        ) {
-          this.configBackend.set(cfg["sandboxBackend"]);
-        } else if (cfg["hostSandboxes"] === true) {
-          this.configBackend.set("host");
-        }
+        this.hostSandboxes.set(Boolean(cfg["hostSandboxes"]));
       }
     } catch {
       // Non-fatal.
@@ -1533,7 +1794,7 @@ export class FleetPageComponent implements OnInit {
     try {
       const res =
         await this.api.get<SandboxHealthResponse>("GET /api/sandboxes");
-      this.health.set(res);
+      this.sandboxes.set(res);
     } catch (err) {
       this.loadError.set(errorText(err));
     }
@@ -1554,7 +1815,7 @@ export class FleetPageComponent implements OnInit {
         : (res?.items ?? res?.sandboxes ?? []);
       this.persistentList.set(list);
     } catch {
-      // Falls back to health.persistentSandboxes.
+      // Falls back to sandboxes.persistentSandboxes.
     }
   }
 
@@ -1654,6 +1915,22 @@ export class FleetPageComponent implements OnInit {
     }
   }
 
+  protected onTabKeydown(ev: KeyboardEvent, current: FleetTab): void {
+    const idx = this.tabs.findIndex((t) => t.id === current);
+    if (idx < 0) return;
+    let nextIdx = -1;
+    if (ev.key === "ArrowRight") nextIdx = (idx + 1) % this.tabs.length;
+    else if (ev.key === "ArrowLeft") {
+      nextIdx = (idx - 1 + this.tabs.length) % this.tabs.length;
+    } else if (ev.key === "Home") nextIdx = 0;
+    else if (ev.key === "End") nextIdx = this.tabs.length - 1;
+    if (nextIdx < 0) return;
+    ev.preventDefault();
+    const nextTab = this.tabs[nextIdx].id;
+    this.pickTab(nextTab);
+    this.doc.getElementById(`fleet-tab-btn-${nextTab}`)?.focus();
+  }
+
   protected toggleHostTop(): void {
     const next = !this.topOpen();
     this.topOpen.set(next);
@@ -1661,7 +1938,7 @@ export class FleetPageComponent implements OnInit {
   }
 
   async loadHostTop(): Promise<void> {
-    if (!this.access.can("GET /api/host/top")) return;
+    if (!this.canReadSandboxes()) return;
     try {
       const res = await this.api.get<HostTopResponse>(
         "GET /api/host/top",
@@ -1688,7 +1965,7 @@ export class FleetPageComponent implements OnInit {
   }
 
   protected async runSandboxProbe(): Promise<void> {
-    if (!this.canRestartOrProbe() || this.probing()) return;
+    if (!this.canProbeSandboxes() || this.probing()) return;
     const argv = parseArgv(this.probeCmd());
     if (argv.length === 0) return;
     this.probing.set(true);
@@ -1707,19 +1984,19 @@ export class FleetPageComponent implements OnInit {
   }
 
   protected async controlPersistent(
-    name: string,
+    ps: PersistentSandboxStatus,
     action: PersistentAction,
   ): Promise<void> {
-    if (!this.canRestartOrProbe()) return;
-    const key = `${name}:${action}`;
+    if (!this.canControlPersistent(ps)) return;
+    const key = `${ps.name}:${action}`;
     this.busyPersistent.set(key);
     try {
       await this.api.post(
         "POST /api/persistent-sandboxes/{name}/{action}",
-        { name, action },
+        { name: ps.name, action },
         {},
       );
-      this.snackbar.show(`Persistent sandbox ${name}: ${action} requested.`);
+      this.snackbar.show(`Persistent sandbox ${ps.name}: ${action} requested.`);
       await this.loadPersistentSandboxes();
     } catch (err) {
       this.snackbar.show(errorText(err));
@@ -1728,20 +2005,23 @@ export class FleetPageComponent implements OnInit {
     }
   }
 
-  protected async togglePersistentLogs(name: string): Promise<void> {
-    if (this.openPersistentLogName() === name) {
+  protected async togglePersistentLogs(
+    ps: PersistentSandboxStatus,
+  ): Promise<void> {
+    if (!this.canReadPersistentLogs(ps)) return;
+    if (this.openPersistentLogName() === ps.name) {
       this.openPersistentLogName.set(null);
       return;
     }
-    this.openPersistentLogName.set(name);
+    this.openPersistentLogName.set(ps.name);
     this.persistentLogsText.set("Loading…");
     try {
-      const res = await this.api.get<{ logs?: string }>(
+      const txt = await this.api.getText(
         "GET /api/persistent-sandboxes/{name}/logs",
-        { name },
-        "lines=500",
+        { name: ps.name },
+        "format=text",
       );
-      this.persistentLogsText.set(res?.logs ?? "");
+      this.persistentLogsText.set(txt ?? "");
     } catch (err) {
       this.persistentLogsText.set(errorText(err));
     }

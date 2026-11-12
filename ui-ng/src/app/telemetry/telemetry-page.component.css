@@ -19,7 +19,7 @@ g-telemetry-page {
 }
 
 .tel-bar-filed {
-  fill: color-mix(in srgb, var(--md-sys-color-outline) 22%, transparent);
+  fill: color-mix(in srgb, var(--md-sys-color-outline) 60%, transparent);
 }
 
 .tel-bar-completed {
@@ -81,7 +81,7 @@ g-telemetry-page {
 }
 
 .tel-swatch.is-filed {
-  background: color-mix(in srgb, var(--md-sys-color-outline) 45%, transparent);
+  background: color-mix(in srgb, var(--md-sys-color-outline) 60%, transparent);
 }
 
 /* Horizontal stage & tool SVG bars */

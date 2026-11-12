@@ -20,17 +20,18 @@ import { GrainEvents } from "../api/grain-events.service";
 import type { GrainConfig } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { FleetPageComponent } from "./fleet-page.component";
-import type {
-  ActionsCacheState,
-  AgentPauseResponse,
-  HostTopResponse,
-  HostdView,
-  LogLinesResponse,
-  LogSourcesResponse,
-  PackageCacheState,
-  PersistentSandboxStatus,
-  PipelinePauseStatus,
-  SandboxHealthResponse,
+import {
+  type ActionsCacheState,
+  type AgentPauseResponse,
+  type HostTopResponse,
+  type HostdView,
+  type LogLinesResponse,
+  type LogSourcesResponse,
+  type PackageCacheState,
+  type PersistentSandboxStatus,
+  type PipelinePauseStatus,
+  type SandboxHealthResponse,
+  extractTaskIdFromSandbox,
 } from "./fleet.models";
 
 interface RecordedCall {
@@ -46,7 +47,7 @@ class FakeFleetApi {
 
   configBody: GrainConfig = {
     version: "v3.5.0-test",
-    sandboxBackend: "granule",
+    hostSandboxes: false,
     access: {
       role: "grain/operator",
       roles: ["grain/operator"],
@@ -56,13 +57,24 @@ class FakeFleetApi {
   };
 
   healthBody: SandboxHealthResponse = {
+    enabled: true,
     checkedAt: "2026-11-12T00:00:00Z",
     daemon: {
       startedAt: "2026-11-11T12:00:00Z",
       starts: 2,
+      restarting: false,
       startsScope: "last 24h",
       logCommand: "journalctl --user -u grain -f",
     },
+    dispatchBlocked: [
+      {
+        name: "git-proxy",
+        error: "listen tcp :7100: address already in use",
+        since: "2026-11-11T23:55:00Z",
+        remedy: "restart the daemon once :7100 is free",
+        held: "5m0s",
+      },
+    ],
     host: {
       cpus: 16,
       loadAverage1: 3.25,
@@ -86,6 +98,7 @@ class FakeFleetApi {
       ],
     },
     budget: {
+      known: true,
       budgetCPUs: 14,
       committedCPUs: 6,
       committedCount: 2,
@@ -93,9 +106,9 @@ class FakeFleetApi {
     },
     sandboxes: [
       {
-        sandbox: "task-42",
-        name: "task-42",
-        kind: "task",
+        sandbox: "42-1",
+        name: "42-1",
+        kind: "agent",
         backend: "granule",
         ready: true,
         cpus: 4,
@@ -104,6 +117,16 @@ class FakeFleetApi {
         loadAverage: "0.85",
         startedAt: "2026-11-11T23:45:00Z",
         networkAccess: "isolated",
+      },
+      {
+        sandbox: "idle-77",
+        name: "idle-77",
+        kind: "idle session",
+        backend: "granule",
+        ready: true,
+        cpus: 2,
+        memoryMB: 4096,
+        startedAt: "2026-11-11T23:50:00Z",
       },
     ],
   };
@@ -147,6 +170,7 @@ class FakeFleetApi {
 
   pipelinePauseState: PipelinePauseStatus = { paused: false };
   agentPauseBody: AgentPauseResponse = {
+    enabled: true,
     pause: {
       paused: true,
       pauses: [
@@ -195,6 +219,18 @@ class FakeFleetApi {
   config = () => Promise.resolve(this.configBody);
   getIfChanged = () => Promise.resolve({ body: [], changed: false });
 
+  getText = (
+    route: string,
+    params?: Record<string, string>,
+    query?: string,
+  ) => {
+    this.calls.push({ method: "GET_TEXT", route, params, query });
+    if (route === "GET /api/persistent-sandboxes/{name}/logs") {
+      return Promise.resolve(`[${params?.["name"]}] listening on :4173`);
+    }
+    return Promise.resolve("");
+  };
+
   get = (route: string, params?: Record<string, string>, query?: string) => {
     this.calls.push({ method: "GET", route, params, query });
     switch (route) {
@@ -202,10 +238,6 @@ class FakeFleetApi {
         return Promise.resolve(structuredClone(this.healthBody));
       case "GET /api/persistent-sandboxes":
         return Promise.resolve(structuredClone(this.persistentBody));
-      case "GET /api/persistent-sandboxes/{name}/logs":
-        return Promise.resolve({
-          logs: `[${params?.["name"]}] listening on :4173`,
-        });
       case "GET /api/host/top":
         return Promise.resolve(structuredClone(this.hostTopBody));
       case "GET /api/hostds":
@@ -338,13 +370,25 @@ describe("FleetPageComponent", () => {
     return { fixture, api, root: fixture.nativeElement as HTMLElement };
   }
 
-  it("renders host capacity meters, expandable Host top, live task sandboxes, probe, and persistent sandboxes", async () => {
+  it("renders DispatchCondition error/remedy, capacity meters, <taskId>-<attempt> & idle-<taskId> task links, probe, and persistent ?format=text logs", async () => {
     const { fixture, root, api } = await setup();
 
     expect(root.querySelectorAll("select").length).toBe(0);
     expect(
       root.querySelector('[data-testid="fleet-backend-pill"]')?.textContent,
     ).toContain("Backend: granule");
+
+    // DispatchCondition renders error + remedy + since.
+    const blockedBanner = root.querySelector(
+      '[data-testid="fleet-dispatch-blocked"]',
+    )!;
+    expect(blockedBanner.textContent).toContain(
+      "listen tcp :7100: address already in use",
+    );
+    expect(blockedBanner.textContent).toContain(
+      "Remedy: restart the daemon once :7100 is free",
+    );
+
     expect(
       root.querySelector('[data-testid="meter-cpu"]')?.textContent,
     ).toContain("42%");
@@ -352,9 +396,31 @@ describe("FleetPageComponent", () => {
       root.querySelector('[data-testid="meter-vcpu"]')?.textContent,
     ).toContain("6 / 14 vCPU");
 
-    // Live sandbox row links to /task/42 and supports recreate.
-    const sbRow = root.querySelector('[data-testid="sandbox-row-task-42"]')!;
+    // Live agent sandbox "42-1" links to singular /task/42; idle session "idle-77" links to /task/77.
+    const sbRow = root.querySelector('[data-testid="sandbox-row-42-1"]')!;
     expect(sbRow.querySelector("a")?.getAttribute("href")).toBe("/task/42");
+    const idleRow = root.querySelector('[data-testid="sandbox-row-idle-77"]')!;
+    expect(idleRow.querySelector("a")?.getAttribute("href")).toBe("/task/77");
+
+    expect(
+      extractTaskIdFromSandbox({
+        sandbox: "task-9",
+        name: "task-9",
+        kind: "task",
+        backend: "granule",
+        ready: true,
+      }),
+    ).toBe("9");
+    expect(
+      extractTaskIdFromSandbox({
+        sandbox: "10-2",
+        name: "10-2",
+        kind: "persistent",
+        backend: "granule",
+        ready: true,
+      }),
+    ).toBeNull();
+
     root
       .querySelector<HTMLButtonElement>('[data-testid="sandbox-recreate-42"]')!
       .click();
@@ -385,7 +451,7 @@ describe("FleetPageComponent", () => {
       root.querySelector('[data-testid="probe-output"]')?.textContent,
     ).toContain("Linux granule 6.8.0");
 
-    // Persistent sandbox restart + rebuild + logs viewer.
+    // Persistent sandbox restart + ?format=text logs viewer.
     root
       .querySelector<HTMLButtonElement>(
         '[data-testid="persistent-restart-staging-web"]',
@@ -410,19 +476,106 @@ describe("FleetPageComponent", () => {
       .click();
     await settle(fixture);
     expect(
+      api.calls.some(
+        (c) =>
+          c.method === "GET_TEXT" &&
+          c.route === "GET /api/persistent-sandboxes/{name}/logs" &&
+          c.query === "format=text",
+      ),
+    ).toBe(true);
+    expect(
       root.querySelector('[data-testid="persistent-logs-staging-web"]')
         ?.textContent,
     ).toContain("listening on :4173");
   });
 
-  it("manages hostds (rotate token, rename, and confirmed revoke)", async () => {
-    const { fixture, root, api } = await setup();
+  it("disables sandbox probe when hostSandboxes=true and gates persistent Logs + Fleet tabs on RBAC scopes", async () => {
+    const api = new FakeFleetApi();
+    api.configBody = {
+      version: "v3.5.0-test",
+      hostSandboxes: true,
+      access: {
+        role: "sandbox-viewer",
+        roles: ["sandbox-viewer"],
+        full: false,
+        scopes: ["sandboxes:read", "deployment:restart"],
+      },
+    };
+    const { fixture, root } = await setup(api);
+
+    expect(
+      root.querySelector('[data-testid="fleet-backend-pill"]')?.textContent,
+    ).toContain("Backend: host");
+    // Probe disabled when hostSandboxes is true even with deployment:restart.
+    expect(
+      root.querySelector<HTMLButtonElement>('[data-testid="probe-run-btn"]')!
+        .disabled,
+    ).toBe(true);
+    // Live sandboxes card shows access.deniedReason("GET /api/sandboxes").
+    expect(
+      root.querySelector('[data-testid="fleet-sandboxes-denied"]')?.textContent,
+    ).toContain("deployment:read");
+    // Persistent sandbox Logs button disabled because deployment:read is missing.
+    expect(
+      root.querySelector<HTMLButtonElement>(
+        '[data-testid="persistent-logs-btn-staging-web"]',
+      )!.disabled,
+    ).toBe(true);
+
+    // Controls tab shows deniedReason when dispatch:read & caches:read are missing, except restart is held;
+    // test missing all controls read scopes when deployment:restart is also absent:
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        role: "minimal",
+        roles: ["minimal"],
+        full: false,
+        scopes: [],
+      },
+    });
+    fixture.detectChanges();
+    await settle(fixture);
+    expect(
+      root.querySelector('[data-testid="fleet-sandboxes-denied"]')?.textContent,
+    ).toContain("deployment:read");
 
     root
-      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-hostds"]')!
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-controls"]')!
       .click();
     await settle(fixture);
+    expect(
+      root.querySelector('[data-testid="fleet-controls-denied"]')?.textContent,
+    ).toContain("dispatch:read");
 
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-logs"]')!
+      .click();
+    await settle(fixture);
+    expect(
+      root.querySelector('[data-testid="fleet-logs-denied"]')?.textContent,
+    ).toContain("deployment:read");
+  });
+
+  it("manages hostds, preserves routerLink='/settings/hostds', and mounts confirm dialog outside [attr.inert]", async () => {
+    const { fixture, root, api } = await setup();
+
+    const sbTab = root.querySelector<HTMLButtonElement>(
+      '[data-testid="fleet-tab-sandboxes"]',
+    )!;
+    expect(sbTab.getAttribute("aria-controls")).toBe("fleet-panel-sandboxes");
+    expect(root.querySelector('[role="tabpanel"]')?.id).toBe(
+      "fleet-panel-sandboxes",
+    );
+
+    // ArrowRight navigates from Sandboxes to Host Daemons tab.
+    sbTab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+    await settle(fixture);
+    expect(root.querySelector('[role="tabpanel"]')?.id).toBe(
+      "fleet-panel-hostds",
+    );
+
+    expect(
+      root.querySelector('a[href="/settings/hostds"]')?.textContent,
+    ).toContain("Enrollment & settings");
     expect(
       root.querySelector('[data-testid="hostd-row-local"]')?.textContent,
     ).toContain("co-located");
@@ -442,14 +595,17 @@ describe("FleetPageComponent", () => {
       root.querySelector('[data-testid="hostd-issued-token"]')?.textContent,
     ).toContain("ghd_secret_rotated_token");
 
-    // Revoke requires ConfirmDialogComponent acceptance.
+    // Revoke requires ConfirmDialogComponent acceptance OUTSIDE [attr.inert].
     root
       .querySelector<HTMLButtonElement>(
         '[data-testid="hostd-revoke-roman-cloudtop"]',
       )!
       .click();
     await settle(fixture);
-    expect(root.querySelector('[data-testid="confirm-dialog"]')).not.toBeNull();
+    const dialog = root.querySelector('[data-testid="confirm-dialog"]')!;
+    expect(dialog).not.toBeNull();
+    expect(dialog.closest("[inert]")).toBeNull();
+
     root
       .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
       .click();
