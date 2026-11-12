@@ -206,7 +206,13 @@ func (c *Client) RevokeDeclarationAcceptance(ctx context.Context, id string) (De
 	if acc.AcceptedAt == nil {
 		return DeclarationAcceptanceView{}, validationErrorf("nobody has accepted what %s asks for: there is nothing to revoke", id)
 	}
-	got, err := c.Store.RevokeDeclarationAcceptance(ctx, id)
+	// The store revokes only the set the scopes were checked against, so
+	// an acceptance widened between this read and that one is not
+	// withdrawn by a person whose role only held the narrower set's.
+	got, err := c.Store.RevokeDeclarationAcceptance(ctx, id, acc.Accepted)
+	if errors.Is(err, model.ErrAcceptanceMoved) {
+		return DeclarationAcceptanceView{}, validationErrorf("what %s has accepted changed while it was being revoked: reload and revoke what it has accepted now", id)
+	}
 	if err != nil {
 		return DeclarationAcceptanceView{}, err
 	}
