@@ -57,6 +57,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/ai-on-gke/grain/pkg/infrasig"
 )
 
 // ApiResponse is one HTTP response, decoupled from net/http so a Transport
@@ -1013,6 +1015,11 @@ type PullRequestDetail struct {
 	// Merged is true. GitHub also returns it nil for a PR closed without
 	// merging, which is the same nil this stays for that case.
 	MergedAt *time.Time
+	// MergedBy is GitHub's own merged_by login: who the forge records as
+	// having merged the PR, "" until it has. A merge grain made through a
+	// merge credential of its own (MergeTokenSource) reads `<app>[bot]`
+	// here, and that is the login the reviewed-merge gate trusts.
+	MergedBy string
 	// CreatedAt is GitHub's own field: when the PR was opened. Present
 	// for every PR regardless of state, unlike MergedAt.
 	CreatedAt time.Time
@@ -1331,6 +1338,17 @@ type JobLog struct {
 	// spending limit needs to be increased" is a thing no amount of
 	// reasoning from a conclusion and a job name arrives at.
 	RunFailureReason string
+	// RunID, RunAttempt and RunUpdatedAt are the workflow run this entry
+	// came from -- the run a job ran in, or the run standing in for its
+	// jobs -- as GitHub reported it: its id, which attempt of it is the
+	// latest (1 for a run nobody has re-run), and when it last changed.
+	// Zero when unknown. They are what a caller re-running the failed
+	// jobs of an infrastructure failure (OnlyInfraFailures) needs: which
+	// run to ask about, how many re-runs it has already had, and how long
+	// ago it concluded.
+	RunID        int64
+	RunAttempt   int
+	RunUpdatedAt time.Time
 }
 
 // IsRunFailure reports whether this entry stands for a whole workflow
@@ -1471,6 +1489,43 @@ func OnlyStartupFailures(logs []JobLog) bool {
 	}
 	for _, l := range logs {
 		if !l.NoJobStarted() {
+			return false
+		}
+	}
+	return true
+}
+
+// InfraSignature is the infrastructure signature this entry's log tail
+// ends on (infrasig.JobLog) -- a hosted runner whose resolver stopped
+// answering, a runner lost mid-step, a registry rate limit -- or "" for
+// an entry whose failure may be the tree's. A run standing in for jobs
+// it has no log from has nothing to read and answers "".
+func (l JobLog) InfraSignature() string {
+	if l.IsRunFailure() {
+		return ""
+	}
+	return infrasig.JobLog(l.Log)
+}
+
+// OnlyInfraFailures reports whether every failing job behind these
+// entries failed on the machine it ran on rather than on the tree, read
+// off the tail of each job's own log against pkg/infrasig's list, and
+// there is at least one. It is OnlyStartupFailures' question for a job
+// that did start: on 2026-11-11 every hosted runner's apt-get died on
+// "Temporary failure resolving" for three hours, and the merge queue
+// spent automatic repairs on pull requests no commit could have
+// cleared.
+//
+// One entry without a signature -- a real `--- FAIL`, or a run with no
+// log to read -- answers false: a mixed build has a part worth sending
+// an agent at. An empty slice answers false for the reason it does in
+// OnlyStartupFailures.
+func OnlyInfraFailures(logs []JobLog) bool {
+	if len(logs) == 0 {
+		return false
+	}
+	for _, l := range logs {
+		if l.InfraSignature() == "" {
 			return false
 		}
 	}
@@ -2693,7 +2748,10 @@ func (c *RESTClient) GetPullRequest(owner, repo string, number int) (PullRequest
 		MergeCommitSHA      string     `json:"merge_commit_sha"`
 		Merged              bool       `json:"merged"`
 		MergedAt            *time.Time `json:"merged_at"`
-		CreatedAt           time.Time  `json:"created_at"`
+		MergedBy            *struct {
+			Login string `json:"login"`
+		} `json:"merged_by"`
+		CreatedAt time.Time `json:"created_at"`
 		// The diff's size, which only this endpoint returns -- see
 		// PullRequestDetail.Additions.
 		Additions    int `json:"additions"`
@@ -2707,16 +2765,19 @@ func (c *RESTClient) GetPullRequest(owner, repo string, number int) (PullRequest
 	if state == "" {
 		state = "open"
 	}
-	var headRepo string
+	var headRepo, mergedBy string
 	if data.Head.Repo != nil {
 		headRepo = data.Head.Repo.FullName
+	}
+	if data.MergedBy != nil {
+		mergedBy = data.MergedBy.Login
 	}
 	return PullRequestDetail{
 		Number: data.Number, Title: data.Title, Body: data.Body, HTMLURL: data.HTMLURL,
 		HeadRef: data.Head.Ref, HeadSHA: data.Head.SHA, BaseRef: data.Base.Ref,
 		AuthorLogin: data.User.Login, HeadRepo: headRepo, MaintainerCanModify: data.MaintainerCanModify,
 		State: state, Mergeable: data.Mergeable, MergeableState: data.MergeableState,
-		Merged: data.Merged, MergedAt: data.MergedAt, CreatedAt: data.CreatedAt,
+		Merged: data.Merged, MergedAt: data.MergedAt, MergedBy: mergedBy, CreatedAt: data.CreatedAt,
 		MergeCommitSHA: data.MergeCommitSHA,
 		Additions:      data.Additions, Deletions: data.Deletions, ChangedFiles: data.ChangedFiles,
 	}, nil
@@ -3514,6 +3575,7 @@ func (c *RESTClient) FailedJobLogs(owner, repo, headSHA string) ([]JobLog, error
 			tail, truncated := tailOf(text, JobLogTailBytes)
 			logs = append(logs, JobLog{
 				Name: job.Name, URL: job.URL, Log: tail, Truncated: truncated,
+				RunID: run.ID, RunAttempt: run.Attempt, RunUpdatedAt: run.UpdatedAt,
 			})
 		}
 		// A failed run that yielded no log at all still has something to
@@ -3532,6 +3594,9 @@ func (c *RESTClient) FailedJobLogs(owner, repo, headSHA string) ([]JobLog, error
 				// `startup_failure` means is already in its conclusion.
 				RunJobsNeverStarted: len(jobs) > 0 && noJobRanAStep(jobs),
 				RunFailureReason:    c.jobsFailureReason(owner, repo, jobs),
+				RunID:               run.ID,
+				RunAttempt:          run.Attempt,
+				RunUpdatedAt:        run.UpdatedAt,
 			})
 		}
 	}
@@ -3691,6 +3756,8 @@ type runRef struct {
 	Status     string
 	Conclusion string
 	URL        string
+	Attempt    int
+	UpdatedAt  time.Time
 }
 
 // finished reports whether GitHub has concluded this run, which is the
@@ -3746,16 +3813,24 @@ func (c *RESTClient) commitRuns(owner, repo, headSHA string) ([]runRef, error) {
 				Status     string `json:"status"`
 				Conclusion string `json:"conclusion"`
 				HTMLURL    string `json:"html_url"`
+				RunAttempt int    `json:"run_attempt"`
+				// UpdatedAt is a pointer so a run GitHub (or a double)
+				// served without one decodes as unknown, not as year 1.
+				UpdatedAt *time.Time `json:"updated_at"`
 			} `json:"workflow_runs"`
 		}
 		if err := json.Unmarshal(resp.Body, &data); err != nil {
 			return nil, err
 		}
 		for _, run := range data.WorkflowRuns {
-			runs = append(runs, runRef{
+			ref := runRef{
 				ID: run.ID, Name: run.Name, Status: run.Status,
-				Conclusion: run.Conclusion, URL: run.HTMLURL,
-			})
+				Conclusion: run.Conclusion, URL: run.HTMLURL, Attempt: run.RunAttempt,
+			}
+			if run.UpdatedAt != nil {
+				ref.UpdatedAt = *run.UpdatedAt
+			}
+			runs = append(runs, ref)
 		}
 		path = nextPagePath(resp.Headers["Link"])
 	}
@@ -4611,8 +4686,15 @@ func (c *RESTClient) UpdateComment(owner, repo string, commentID int64, body str
 // allowed on this repository"), this falls back to "squash", and if squash
 // is also disallowed ("Squash commits are not allowed on this repository"),
 // once more to "rebase".
+//
+// A repository with a merge credential of its own (MergeTokenSource) is
+// merged under that credential's token and no other.
 func (c *RESTClient) MergePullRequestWithMessage(owner, repo string, number int, headSHA, title, message string) error {
 	if err := c.gitOnly(owner, repo); err != nil {
+		return err
+	}
+	c, err := c.forMerge(owner, repo)
+	if err != nil {
 		return err
 	}
 	payload := map[string]any{}

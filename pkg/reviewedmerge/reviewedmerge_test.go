@@ -21,7 +21,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type fakeForge struct {
@@ -230,5 +232,166 @@ func TestRESTRefusesAReviewListTooLongToRead(t *testing.T) {
 	defer srv.Close()
 	if _, err := (REST{BaseURL: srv.URL}).Reviews(context.Background(), "example/grain", 7); err == nil || !strings.Contains(err.Error(), "more than 1000 reviews") {
 		t.Fatalf("err = %v, want the list refused", err)
+	}
+}
+
+// shortRESTBackoff makes get's retries immediate for a test.
+func shortRESTBackoff(t *testing.T) {
+	t.Helper()
+	old := restBackoff
+	restBackoff = time.Millisecond
+	t.Cleanup(func() { restBackoff = old })
+}
+
+// TestRESTRidesOutATransientOutage: a 503 from the API refused release
+// run 43048355272 outright; a passing outage is now asked through.
+func TestRESTRidesOutATransientOutage(t *testing.T) {
+	shortRESTBackoff(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch calls.Add(1) {
+		case 1:
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		case 2:
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+		default:
+			fmt.Fprint(w, `{"parents":[{"sha":"p1"}]}`)
+		}
+	}))
+	defer srv.Close()
+	got, err := (REST{BaseURL: srv.URL}).FirstParent(context.Background(), "example/grain", "abc")
+	if err != nil || got != "p1" {
+		t.Fatalf("FirstParent = %q, %v; want p1 after the outage", got, err)
+	}
+	if n := calls.Load(); n != 3 {
+		t.Fatalf("calls = %d, want 3", n)
+	}
+}
+
+// TestRESTGivesUpOnALastingOutage: an outage that outlasts every attempt
+// still refuses, with the API's own answer.
+func TestRESTGivesUpOnALastingOutage(t *testing.T) {
+	shortRESTBackoff(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	if _, err := (REST{BaseURL: srv.URL}).FirstParent(context.Background(), "example/grain", "abc"); err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("err = %v, want the 503", err)
+	}
+	if n := calls.Load(); int(n) != restAttempts {
+		t.Fatalf("calls = %d, want %d", n, restAttempts)
+	}
+}
+
+// TestRESTDoesNotRetryAnAnswer: a 404 or 401 says the same thing every
+// time, so it is not asked again.
+func TestRESTDoesNotRetryAnAnswer(t *testing.T) {
+	shortRESTBackoff(t)
+	for _, status := range []int{http.StatusNotFound, http.StatusUnauthorized, http.StatusForbidden} {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			http.Error(w, http.StatusText(status), status)
+		}))
+		if _, err := (REST{BaseURL: srv.URL}).FirstParent(context.Background(), "example/grain", "abc"); err == nil {
+			t.Fatalf("%d: err = nil", status)
+		}
+		srv.Close()
+		if n := calls.Load(); n != 1 {
+			t.Fatalf("%d: calls = %d, want 1", status, n)
+		}
+	}
+}
+
+func TestSplitRepoTakesOwnerNameAndHostOwnerName(t *testing.T) {
+	for _, tc := range []struct{ repo, host, owner, name string }{
+		{"example/grain", "github.com", "example", "grain"},
+		{"git.example.test/experimental/grain", "git.example.test", "experimental", "grain"},
+		{"GIT.Example.test/experimental/grain", "git.example.test", "experimental", "grain"},
+	} {
+		host, owner, name, err := SplitRepo(tc.repo)
+		if err != nil || host != tc.host || owner != tc.owner || name != tc.name {
+			t.Errorf("SplitRepo(%q) = %q, %q, %q, %v", tc.repo, host, owner, name, err)
+		}
+	}
+	for _, bad := range []string{"", "grain", "/grain", "example/", "a/b/c/d", "/example/grain"} {
+		if _, _, _, err := SplitRepo(bad); err == nil {
+			t.Errorf("SplitRepo(%q) took it", bad)
+		}
+	}
+	if got := APIBaseURL("github.com"); got != "https://api.github.com" {
+		t.Errorf("APIBaseURL(github.com) = %q", got)
+	}
+	if got := APIBaseURL("git.example.test"); got != "https://git.example.test/api/v3" {
+		t.Errorf("APIBaseURL(git.example.test) = %q", got)
+	}
+}
+
+// roundTripFunc serves a request in process, as a host tool's
+// http.Client would, so a test sees the URL REST built.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func inProcessClient(urls *[]string, h http.Handler) *http.Client {
+	return &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		*urls = append(*urls, r.URL.String())
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Result(), nil
+	})}
+}
+
+// TestRESTAsksAnEnterpriseRepositorysOwnAPI: a host/owner/name
+// repository is read from https://<host>/api/v3 and recorded whole.
+func TestRESTAsksAnEnterpriseRepositorysOwnAPI(t *testing.T) {
+	const repo = "git.example.test/experimental/grain"
+	var urls []string
+	client := inProcessClient(&urls, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/repos/experimental/grain/commits/abc/pulls":
+			fmt.Fprint(w, `[{"number":7,"state":"closed","merged_at":"2026-11-10T00:00:00Z","merge_commit_sha":"abc","base":{"ref":"main"},"head":{"sha":"h7"},"user":{"login":"alice"}}]`)
+		case "/api/v3/repos/experimental/grain/pulls/7":
+			fmt.Fprint(w, `{"merged_by":{"login":"grain-bot"}}`)
+		case "/api/v3/repos/experimental/grain/git/commits/abc":
+			fmt.Fprint(w, `{"parents":[{"sha":"p1"},{"sha":"h7"}]}`)
+		case "/api/v3/repos/experimental/grain/compare/p1...abc":
+			fmt.Fprint(w, `{"status":"ahead","merge_base_commit":{"sha":"p1"}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	f := REST{Client: client}
+	p := Policy{Repo: repo, Branches: []string{"main"}, Mergers: []string{"grain-bot"}}
+	rec, err := p.CheckChain(context.Background(), f, "abc", "p1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Repo != repo {
+		t.Fatalf("record repo = %q, want %q", rec.Repo, repo)
+	}
+	cmp, err := f.Compare(context.Background(), repo, "p1", "abc")
+	if err != nil || cmp.Status != "ahead" || cmp.MergeBase != "p1" {
+		t.Fatalf("compare = %+v, %v", cmp, err)
+	}
+	for _, u := range urls {
+		if !strings.HasPrefix(u, "https://git.example.test/api/v3/repos/experimental/grain/") {
+			t.Errorf("asked %s, not the repository's own host's API", u)
+		}
+	}
+	if len(urls) != 4 {
+		t.Errorf("urls = %q", urls)
+	}
+
+	// owner/name stays on api.github.com.
+	urls = nil
+	if _, err := (REST{Client: client}).FirstParent(context.Background(), "example/grain", "abc"); err == nil {
+		t.Fatal("api.github.com path was served by the Enterprise handler")
+	}
+	if len(urls) != 1 || !strings.HasPrefix(urls[0], "https://api.github.com/repos/example/grain/") {
+		t.Fatalf("owner/name asked %q", urls)
 	}
 }

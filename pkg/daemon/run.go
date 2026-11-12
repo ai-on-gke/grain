@@ -40,6 +40,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
@@ -218,6 +219,15 @@ func Run(ctx context.Context, cfg Config) error {
 	if lost := writerLockLost.Load(); lost != nil {
 		_ = db.Close()
 		return *lost
+	}
+	// Every read-write transaction from here on first confirms the lease
+	// is still this process's, so the writes made between losing it and
+	// the keep-alive noticing are refused rather than committed beside
+	// the new writer's (postgres/write_fence.go).
+	if writerLock != nil {
+		if err := postgres.FenceWrites(db, writerLock); err != nil {
+			return err
+		}
 	}
 	// And the same on a PostgreSQL store itself, which a tool on another
 	// host can see where it cannot see the lock file (postgres.HoldDaemonLease).
@@ -1493,6 +1503,11 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// A trusted release runs only from a branch the repository has
 			// reviewed into, whoever asked for it (grain/task-949).
 			ciService.ReleaseRefRefusal = CiReleaseRefRefusal(store, githubClient)
+			// And the same branches are the only ones whose jobs write the
+			// shared Go build cache every sandbox reads.
+			if pkgCache != nil {
+				WithCIGoCacheWriters(ciService, pkgCache.GoCacheJobs, CiReleaseRefRefusal(store, githubClient))
+			}
 			// The attached capability servers a job's capability references
 			// are minted through, the same ones a task's are.
 			WithCICapabilityServers(ciService, func() orchestrator.CapabilityServers { return capabilityServerLookup(live) })
@@ -1666,6 +1681,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// Every agent sandbox found OOM-killed is a decrease signal
 			// for auto overcommit (orchestrator.applySandboxOOM).
 			NoteOOM: overcommitNoteOOM(cfg.Overcommit),
+			// resume_later's CI waits are woken regardless past this
+			// (-ci-wake-backstop, orchestrator.reconcileWake).
+			CIWakeBackstop: cfg.CIWakeBackstop,
 			// The mechanical first attempt at a port, through the git
 			// proxy started above (porter.go); nil files every port as
 			// an agent task.

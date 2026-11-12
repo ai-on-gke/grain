@@ -315,7 +315,7 @@ func (s *Server) resolveSrc(ctx context.Context, scope Scope, relPath string) (*
 	if !scope.PermitsSrcPath(relPath) {
 		trimmed := strings.TrimPrefix(strings.TrimSuffix(relPath, "/"), "/")
 		if trimmed == "playbooks" || strings.HasPrefix(trimmed, "playbooks/") {
-			return nil, RefuseCapability("src://"+relPath, "bootstrap-playbooks")
+			return nil, RefuseCapability("src://"+relPath, model.BootstrapPlaybooksGrant)
 		}
 		return nil, RefuseCapability("src://"+relPath, model.GrainSourceRef)
 	}

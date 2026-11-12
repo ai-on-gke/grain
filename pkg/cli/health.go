@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -92,6 +93,15 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 		fmt.Println()
 	}
+	// Reviewed-merge logins a person signs in to: the gate passes every
+	// merge they make by hand as grain's (task 4386).
+	if len(h.MergeLoginWarnings) > 0 {
+		fmt.Println("WARNING: reviewed-merge logins that belong to a user account:")
+		for _, w := range h.MergeLoginWarnings {
+			fmt.Printf("  %s %s: %s\n", w.Repo, w.Login, w.Message)
+		}
+		fmt.Println()
+	}
 	// Schedules that stopped running: a cron that comes due and is
 	// dropped every time looks exactly like one that is fine from
 	// everywhere else (the live model suites, two weeks dark).
@@ -110,6 +120,45 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 			if s.Reason != "" {
 				fmt.Printf("    why: %s\n", s.Reason)
 			}
+		}
+		fmt.Println()
+	}
+	// Declarations a repository merged that this daemon would not read:
+	// until grain/task-4392 they were in the journal and nowhere else.
+	if len(h.RefusedDeclarations) > 0 {
+		fmt.Println("FAILING: repository declarations not read in full:")
+		for _, d := range h.RefusedDeclarations {
+			inForce := "nothing has loaded yet"
+			if d.InForce != "" {
+				inForce = "in force: " + shortSHA(d.InForce)
+			}
+			what := "refused"
+			if d.HeldBack {
+				what = "files held back for a newer grain"
+			}
+			fmt.Printf("  %s (%s; %s):\n", d.Repo, what, inForce)
+			for _, line := range strings.Split(d.Error, "\n") {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+		fmt.Println()
+	}
+	// Tasks resume_later deferred on a CI verdict grain has not seen yet:
+	// the orchestrator's backstop wakes them in the end, but a wait this
+	// old usually means a verdict grain is failing to read.
+	if len(h.CIWaits) > 0 {
+		fmt.Printf("WARNING: tasks waiting on CI for more than %s (resume_later):\n", ui.CIWaitHealthAge)
+		for _, w := range h.CIWaits {
+			where := w.Branch
+			if w.Repo != "" {
+				where = w.Repo + ":" + w.Branch
+			}
+			note := ""
+			if w.Recovered {
+				note = " (recovered from its resume_later comment)"
+			}
+			fmt.Printf("  task %s on %s: CI %s (%s), deferred since %s%s\n", w.TaskID, where, w.CI, w.CIMode,
+				w.Since.UTC().Format(time.RFC3339), note)
 		}
 		fmt.Println()
 	}
@@ -139,7 +188,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 	}
 	if len(h.Counters) == 0 {
-		if !hasHubIssue && len(h.CapabilityServers) == 0 && len(h.TargetRepoHostWarnings) == 0 && len(h.StaleSchedules) == 0 {
+		if !hasHubIssue && len(h.CapabilityServers) == 0 && len(h.TargetRepoHostWarnings) == 0 && len(h.MergeLoginWarnings) == 0 && len(h.StaleSchedules) == 0 && len(h.RefusedDeclarations) == 0 {
 			fmt.Println("no counters: nothing on this daemon registers any")
 		}
 		return

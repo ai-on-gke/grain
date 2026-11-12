@@ -545,6 +545,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/package-cache/flush` | `caches:write` | `admin` | Flushes package cache. |
 | `POST /api/actions-cache/flush` | `caches:write` | `admin` | Flushes GitHub Actions cache. |
 | `POST /api/upgrade` | `deployment:upgrade` | `admin` | Starts or schedules Grain controller upgrade. |
+| `DELETE /api/upgrade/current` | `deployment:upgrade` | `admin` | Cancels an in-progress upgrade before cut-over. |
 | `DELETE /api/upgrade/scheduled` | `deployment:upgrade` | `admin` | Cancels scheduled upgrade. |
 | `POST /api/host/restart` | `deployment:restart` | `admin` | Restarts Grain controller process. |
 | `POST /api/persistent-sandboxes/{name}/{action}` | `deployment:restart` | `admin` | Starts/stops/restarts persistent sandbox. |

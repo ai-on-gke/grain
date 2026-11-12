@@ -91,11 +91,6 @@ func ValidAdmission(a Admission) bool {
 	}
 }
 
-// ValidOptionalAdmission reports whether a is unset ("") or a ValidAdmission.
-func ValidOptionalAdmission(a Admission) bool {
-	return a == "" || ValidAdmission(a)
-}
-
 // ParseAdmission parses a task's admission setting, treating "" as standard.
 func ParseAdmission(raw string) (Admission, error) {
 	s := Admission(strings.TrimSpace(raw))
@@ -171,27 +166,6 @@ func ExtractLegacyAdmissionStrings(caps []string) (kept []string, mapped Admissi
 			continue
 		}
 		kept = append(kept, raw)
-	}
-	return kept, mapped, aliases
-}
-
-// ExtractLegacyAdmissionGrants strips bare priority-dispatch and durable
-// grants from grants, returning the remaining grants, the highest Admission
-// named (or "" if neither appeared), and the distinct legacy names seen.
-func ExtractLegacyAdmissionGrants(grants []Grant) (kept []Grant, mapped Admission, aliases []string) {
-	if grants != nil {
-		kept = make([]Grant, 0, len(grants))
-	}
-	for _, g := range grants {
-		if adm, ok := LegacyAdmissionAlias(g.Capability); ok {
-			mapped = MaxAdmission(mapped, adm)
-			name := strings.TrimSpace(g.Capability)
-			if !slices.Contains(aliases, name) {
-				aliases = append(aliases, name)
-			}
-			continue
-		}
-		kept = append(kept, g)
 	}
 	return kept, mapped, aliases
 }

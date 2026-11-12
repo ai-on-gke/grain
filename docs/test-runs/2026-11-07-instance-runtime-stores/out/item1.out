@@ -1,0 +1,74 @@
+
+== 1a. seed a SQLite store through a live daemon
+{"id":"2","title":"seed task 1"}
+{"id":"3","title":"seed task 2"}
+{"id":"4","title":"seed task 3"}
+comment 200
+{"id":"sched-1","title":"Nightly CI review"}
+secret put 200
+{"name":"ws-walk","tokenShown":true}
+
+== 1b. grain upgrade-postgres while the SQLite daemon is attached (expect refusal)
+grain upgrade-postgres: a grain daemon is attached to this store: grain upgrade-postgres refuses to run while the daemon on /tmp/walk/i1-data (pid=35207 started=2026-11-08T03:23:31Z) is running, because a copy taken under a live daemon loses every write made after it. Stop it first with `sudo systemctl stop grain-daemon.service`, run this again, and start it with `sudo systemctl start grain-daemon.service` when it is done (docs/database.md)
+exit=1
+tables in walk_i1 after refusal: 0
+
+== 1c. stop the daemon and migrate offline
+Upgrading database from SQLite (/tmp/walk/i1-data/store) to PostgreSQL...
+Saved database config to /tmp/walk/i1-data/db-config.json
+Stored the database password in the secret store as "database-password", not in db-config.json
+Successfully upgraded database to PostgreSQL (135 tables migrated in 3.059399548s)
+exit=0
+db-config.json: {"driver":"postgres","dsn":"postgres://grain@127.0.0.1:4290/walk_i1?sslmode=disable","passwordSecret":"database-password"}
+password occurrences in db-config.json: 0
+
+== 1d. boot grain daemon on PostgreSQL (db-config.json selects it)
+{"title":"seed task 1","comments":["a comment written on sqlite"]}
+[{"name":"database-password","keys":["value"]},{"name":"walk-secret","keys":["token"]}]
+["local","ws-walk"]
+
+== 1e. change token: ETag of GET /api/tasks advances on API and on out-of-process commits
+etag twice with no write: "2d096129d3fa8c59def1e31fdc275c23" / "2d096129d3fa8c59def1e31fdc275c23" (equal=yes)
+{"id":"5","title":"written on postgres"}
+after POST /api/tasks: "2f572897f8454b2faa8ea90085dfd743" (changed=yes)
+after psql UPDATE from another process: "aeb43bd15ad3f1f12e4cf84844d125d3" (changed=yes)
+task 2 title via API: renamed out of process
+
+== 1f. serialized read-write transactions: 20 concurrent comment writers
+     20 200
+comments on task 3: 20
+serialization errors in log: 0
+
+== 1g. point the daemon back at the stale SQLite file (expect refusal)
+{
+  "lastTaskId": 5,
+  "lastRunAt": "0001-01-01T00:00:00Z",
+  "lastWriteAt": "2026-11-08T03:23:50.378292822Z",
+  "store": "PostgreSQL at postgres://grain:%2A%2A%2A%2A%2A%2A@127.0.0.1:4290/walk_i1?sslmode=disable"
+}
+stale daemon exited (pid gone=yes)
+2026/11/08 03:23:53 grain daemon: refusing to start: the store this daemon opens, SQLite at /tmp/walk/i1-data/store, is behind the writes a previous daemon on /tmp/walk/i1-data made (store-highwater.j
+son, last moved 2026-11-08T03:23:50Z by PostgreSQL at postgres://grain:%2A%2A%2A%2A%2A%2A@127.0.0.1:4290/walk_i1?sslmode=disable): its last task is #4, but task ids up to #5 were handed out (1 task(s)
+ missing). No other store was found under the data directory. Starting here would lose those writes and hand their task ids out again. To recover, point the daemon at the newer store (db-config.json o
+r GRAIN_DB_DRIVER/GRAIN_DB_DSN), or copy the newer store into this one with the daemon stopped (docs/database.md, "Moving a store"). If the newer store is gone for good, start once with GRAIN_ACCEPT_S
+TORE_BEHIND=1: task ids then continue from #6.
+
+== 1h. grain backup (pg_dump) into the GCS stub, offline
+backed up 76665 bytes to GCS as grain-backup-20261108T032354Z.zip (http://127.0.0.1:4293/download/storage/v1/b/walk-backups/o/grain-backup-20261108T032354Z.zip?alt=media)
+exit=0
+uploaded: grain-backup-20261108T032354Z.zip
+./config/config-repo.bundle
+./database/grain.dump
+./manifest.json
+{"formatVersion":1,"createdAt":"2026-11-08T03:23:54.590854947Z","database":"database/grain.dump","databaseDriver":"postgres","configRepository":"config/config-repo.bundle","configHead":"9f95563c9923abffe6305ea5d643f7f061c2882f"}
+
+== 1i. restore into a fresh database and compare row counts table by table
+pg_restore exit=0
+tables: 135 source, 135 restored; rows: 124 / 124
+row parity: identical
+SELECT string_agg(id||':'||title, ',' ORDER BY id) FROM task => src[1:Director,2:seed task 1,3:seed task 2,4:seed task 3,5:written on postgres] restore[1:Director,2:seed task 1,3:seed task 2,4:seed task 3,5:written on postgres]
+SELECT count(*)||' comments' FROM task_comment => src[22 comments] restore[22 comments]
+SELECT 'schema '||max(version) FROM grain_schema => src[schema 125] restore[schema 125]
+
+== 1j. a daemon on the restored database
+{"title":"seed task 1","comments":["a comment written on sqlite"]}

@@ -317,8 +317,15 @@ func (c *Client) ResumeLater(ctx context.Context, id string, when model.ResumeOn
 		if err := c.validateCIResume(ctx, *self, &when); err != nil {
 			return when, err
 		}
+		when.Head = c.ciResumeHead(ctx, *self)
 	}
 	if err := c.Store.SetDeferred(ctx, self.ID, &now, when.At, now); err != nil {
+		return when, err
+	}
+	// The condition is held on the run now, not only once its result is
+	// processed: a run that ends in an error after this call would
+	// otherwise leave the deferral above with nothing to wake it.
+	if err := c.Store.HoldResumeOn(ctx, self.ID, when, now); err != nil {
 		return when, err
 	}
 	if _, err := c.Store.AddComment(ctx, model.Comment{
@@ -363,6 +370,25 @@ func (c *HTTPClient) ResumeLater(ctx context.Context, id string, when model.Resu
 // a task with no repository branch, a repository with CI disabled, a run ID
 // for the wrong CI provider or that does not exist, an unpushed branch, or a
 // GitHub-gated repository with no Actions workflows or check runs configured.
+// ciResumeHead is the head of self's branch on a ci_mode: github
+// repository as a CI wait is taken (model.ResumeOn.Head), or "" where it
+// cannot be read: the wake treats the branch moving off it as a verdict.
+func (c *Client) ciResumeHead(ctx context.Context, self model.Task) string {
+	repo, branch, mode, err := c.Store.TaskCIMode(ctx, self)
+	if err != nil || mode != model.CIModeGitHub || repo == (model.RepoRef{}) || branch == "" {
+		return ""
+	}
+	reader := SandboxCLIActions{Client: c}.githubCheckReader()
+	if reader == nil {
+		return ""
+	}
+	head, err := reader.GetBranchHead(repo.Owner, repo.Name, branch)
+	if err != nil || head == nil {
+		return ""
+	}
+	return strings.TrimSpace(head.SHA)
+}
+
 func (c *Client) validateCIResume(ctx context.Context, self model.Task, when *model.ResumeOn) error {
 	target := strings.TrimSpace(when.CI)
 	if target != model.ResumeOnMyBranch && strings.ContainsAny(target, " \t\n") {

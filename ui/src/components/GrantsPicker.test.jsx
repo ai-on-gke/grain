@@ -256,7 +256,7 @@ describe("GrantsPicker", () => {
       "capability",
     );
     expect(
-      within(held).getByLabelText("api:tasks:admin (dangerous)"),
+      within(held).getByLabelText("api#tasks:admin (dangerous)"),
     ).toBeTruthy();
 
     // Picking ci:read writes the canonical .../api#ci:read reference, and the
@@ -291,7 +291,7 @@ describe("GrantsPicker", () => {
     );
     await user.keyboard("{Escape}");
 
-    const ciSection = screen.getByLabelText("api:ci:read");
+    const ciSection = screen.getByLabelText("api#ci:read");
     const repoInput = within(ciSection).getByLabelText(/^repo/);
     await user.type(repoInput, "acme/widgets");
     await user.tab();
@@ -308,16 +308,16 @@ describe("GrantsPicker", () => {
     // Canonical dangerous and no-longer-offered sections carry their alerts,
     // and removing a canonical grant calls onRemove.
     const goneItems = screen.getAllByLabelText(
-      "api:gone:read (no longer offered)",
+      "api#gone:read (no longer offered)",
     );
     expect(goneItems).toHaveLength(2);
     const canonicalDangerous = screen
-      .getAllByLabelText("api:tasks:admin (dangerous)")
+      .getAllByLabelText("api#tasks:admin (dangerous)")
       .find((el) => el.getAttribute("data-grant-kind") === "method");
     expect(canonicalDangerous).toBeTruthy();
     await user.click(
       within(canonicalDangerous).getByRole("button", {
-        name: "Remove api:tasks:admin (dangerous)",
+        name: "Remove api#tasks:admin (dangerous)",
       }),
     );
     expect(onRemove).toHaveBeenCalledWith(
@@ -326,14 +326,14 @@ describe("GrantsPicker", () => {
 
     // Unmigrated legacy api: grants still render and remove via onApiChange.
     const legacyLine = screen
-      .getAllByLabelText("api:tasks:admin (dangerous)")
+      .getAllByLabelText("api#tasks:admin (dangerous)")
       .find((el) => el.getAttribute("data-grant-kind") === "api");
     expect(legacyLine).toBeTruthy();
     expect(within(legacyLine).getByText("dangerous")).toBeTruthy();
     expect(within(legacyLine).getByText("Approve tasks")).toBeTruthy();
     await user.click(
       within(legacyLine).getByRole("button", {
-        name: "Remove api:tasks:admin (dangerous)",
+        name: "Remove api#tasks:admin (dangerous)",
       }),
     );
     expect(onApiChange).toHaveBeenLastCalledWith(["api:gone:read"]);
@@ -1014,11 +1014,11 @@ describe("GrantsPicker", () => {
     );
 
     expect(
-      screen.getByLabelText("api:tasks:admin (dangerous)"),
+      screen.getByLabelText("api#tasks:admin (dangerous)"),
     ).toBeInTheDocument();
     // Slice 3: a held api reference is its own section, its repository
     // limit the {repo} argument edited inline rather than an @repo suffix.
-    const ciSection = screen.getByLabelText("api:ci:read · repo: acme/widgets");
+    const ciSection = screen.getByLabelText("api#ci:read · repo: acme/widgets");
     expect(ciSection).toHaveAttribute("data-grant-kind", "method");
     expect(within(ciSection).getByLabelText(/^repo/)).toHaveValue(
       "acme/widgets",
@@ -1139,7 +1139,7 @@ describe("GrantsPicker", () => {
     expect(selfDebug.querySelector("input")).toBeNull();
     expect(
       within(selfDebug).getByText(
-        "Retired alias of api:self-debug + grain#source",
+        "Retired alias of api#self-debug + grain#source",
       ),
     ).toBeInTheDocument();
     expect(within(selfDebug).getByText("retired alias")).toBeInTheDocument();

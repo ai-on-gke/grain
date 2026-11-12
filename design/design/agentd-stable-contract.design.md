@@ -243,6 +243,7 @@ that predates the list is credited from its protocol version
 | `env_open` | contract v1 | `env: ["*"]` (any variable outside the frozen deny set), `~/`-relative `path`/`paths_under`/`cwd_under`, and ignored `x-*` annotation keys | installer and Settings snippets write closed `env:` lists and absolute paths |
 | `logins_map` | contract v1+ | top-level `logins:` map in the allowlist; `Hello.login_targets` and `stage symlink` accept any regular file it names (`Hello.codex_auth` deprecated) | falls back to `Hello.codex_auth` for codex's login |
 | `hook_policy` | contract v1+ | `agy-tool-hook` and `claude-stop-hook` accept `-policy` and evaluate a staged per-run hook policy file (`pkg/agent/hookpolicy`) | stages no policy file and omits `-policy`; hooks fall back to the roster and stop rule compiled into the host binary |
+| `handover` | contract v1+ | `Request.handover` on `drain` (`idle`) hands live detached CLI runs over across an in-place re-exec and adopts them in `loadSpools`; `Exit.draining` marks processes ended by hostd's own drain or stop | cuts over only when idle, and cannot distinguish drain-cap kills on `Exit` |
 
 `renew`, `logins` and `agents_only` shipped before the feature list existed;
 hosts on those builds are credited with neither, which is exactly the
@@ -519,6 +520,7 @@ feature features
 feature env_open
 feature logins_map
 feature hook_policy
+feature handover
 json Request.op hostd.Op [start]
 json Request.kind hostd.Kind [start]
 json Request.name string [start]
@@ -533,6 +535,7 @@ json Request.task string [detach]
 json Request.id string [detach]
 json Request.cursor hostd.Cursor [detach]
 json Request.idle bool [drain]
+json Request.handover bool [handover]
 json Request.inode uint64 [socket_owner]
 json Request.stage *hostd.StageOp [stage]
 json Request.renew *hostd.RenewProof [renew]
@@ -576,6 +579,7 @@ json Started.id string [detach]
 json Exit.code int [start]
 json Exit.signal string [start]
 json Exit.deadline bool [start]
+json Exit.draining bool [handover]
 json Exit.wait_delay bool [start]
 json Exit.error string [start]
 json Exit.finished_at time.Time [start]

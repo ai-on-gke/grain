@@ -146,6 +146,11 @@ func PipelineStewardGoal() *GoalDecl {
 // to (design/design/durable-tasks.design.md#DT-12).
 const PipelineStewardReportLines = 15
 
+// PipelineStewardUnverifiedHeading is the heading a steward report puts
+// claims under that it could not ground in the wake's own reads. The
+// report check (orchestrator's stewardReportCheck) counts nothing under it.
+const PipelineStewardUnverifiedHeading = "## Unverified"
+
 // pipelineStewardBody is what the run is told. It is written around the
 // four rules of design/design/durable-tasks.design.md#DT-12, against the ways a
 // standing job with write access went wrong on 768's first wake: it read
@@ -186,9 +191,13 @@ func pipelineStewardBody() string {
 		"`grain task list` or `grain ci list`; `grain merge-queue`, `grain ci log`, " +
 		"`grain health` and `grain log` are for what a change names.\n" +
 		"2. **Re-read before acting or naming.** Immediately before you act on a task, or " +
-		"name it in your report, run `grain task read <id>`. " +
-		"Never describe a task from memory or from your handover. Pass `expect` (state, " +
-		"title prefix, kind) on every mutating call, so a stale belief is refused.\n" +
+		"name it in your report, run `grain task read <id>` in this wake. Your handover, " +
+		"this conversation, earlier wakes' reports and the note that woke you are memory, " +
+		"not records: re-read the task, CI run or batch before you restate anything they " +
+		"say, and restate only what the record says now -- its id, state and kind as " +
+		"printed, never a number or id you recall. A summary of a summary is not a source. " +
+		"Pass `expect` (state, title prefix, kind) on every mutating call, so a stale " +
+		"belief is refused.\n" +
 		"3. **Disagreement means stop.** If the record contradicts your handover or what you " +
 		"believed, do not act on that object. Raise `grain notify` with subject " +
 		"`agent.<your task id>:record-disagrees`, both versions in the body, and carry on " +
@@ -220,12 +229,22 @@ func pipelineStewardBody() string {
 	b.WriteString("1. Run `grain handover write --file <f>`: first the cursor the pipeline changes last ended " +
 		"with, then every hold you placed and how to lift it, what you are waiting on, and " +
 		"what you escalated. Replace it whole each time.\n" +
-		"2. Finish with `comment_on_issue`: a report of at most ")
+		"2. Write your report to a file: at most ")
 	b.WriteString(strconv.Itoa(PipelineStewardReportLines))
-	b.WriteString(" lines, one claim per line, each ending with the id it was read from this " +
-		"wake -- `[task 832]`, `[ci run …]`, `[batch …]`. A claim with nothing to cite is not " +
-		"made. Or say in one line that nothing needed doing. Ending the run rests this task on " +
-		"its goal; it does not close it.\n\n")
+	b.WriteString(" lines, one claim per line, each ending with the id of the record you read " +
+		"*in this wake* that says it -- `[task 832]`, `[ci run …]`, `[batch …]`. Grain checks " +
+		"every report: a cited task you did not read in this wake, or a state or kind the " +
+		"record does not have, is counted against you. A claim you cannot ground in this " +
+		"wake's reads -- something only your handover or memory says -- goes under a separate `" +
+		PipelineStewardUnverifiedHeading + "` heading at the end, never among the claims. A claim " +
+		"with nothing to cite at all is not made.\n" +
+		"3. Run `grain report check --file <f>`. It is grain's own check, run on your draft. If it " +
+		"fails, your report fails: re-read each task it names (`grain task read <id>`), fix " +
+		"each line it quotes from the record or move it under `" + PipelineStewardUnverifiedHeading +
+		"`, and check once more. Retry once only: post what the second check passes, with " +
+		"anything still failing moved under `" + PipelineStewardUnverifiedHeading + "`.\n" +
+		"4. Finish with `comment_on_issue` carrying that report, or say in one line that nothing " +
+		"needed doing. Ending the run rests this task on its goal; it does not close it.\n\n")
 	b.WriteString("Never end on `ask_question`. A question parks this task, and while it is parked " +
 		"nothing wakes you, so the pipeline goes unwatched until somebody answers. Put anything " +
 		"a person has to decide in a `grain notify` notification instead.")

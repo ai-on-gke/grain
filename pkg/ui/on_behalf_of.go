@@ -143,7 +143,8 @@ func (c *Client) nameSessions(ctx context.Context, detail *TaskDetail, t model.T
 		detail.Task.ApprovedByLabel = sessionLabel(a.Actor, a.OnBehalfOf, title)
 	}
 	for i, cm := range comments {
-		if i < len(detail.Comments) && cm.Author.Actor.Source == model.SourceSession && detail.Comments[i].AuthorLabel != "" {
+		via := model.RelayedVia(cm.Author)
+		if i < len(detail.Comments) && (cm.Author.Actor.Source == model.SourceSession || (via != nil && via.Source == model.SourceSession)) && detail.Comments[i].AuthorLabel != "" {
 			detail.Comments[i].AuthorLabel = sessionLabel(cm.Author.Actor, cm.Author.OnBehalfOf, title)
 		}
 	}

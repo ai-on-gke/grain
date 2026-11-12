@@ -1025,6 +1025,20 @@ var Migrations = []Migration{
 			"ALTER TABLE `integration_event` ADD COLUMN `decision` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version:     141,
+		Description: "add schedule.skip_when, a condition such as held base-branch publishing that holds a schedule's firings (grain/task-4393)",
+		Statements: []string{
+			"ALTER TABLE `schedule` ADD COLUMN `skip_when` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 142,
+		Description: "host-qualify the owner column of qualification_config, qualification_item, " +
+			"qualification_item_depends_on and scheduled_workflow_run (StoredOwner) for rows a schedule " +
+			"or a target repo places off the default host (grain/task-4335)",
+		Up: migrateStoredOwners,
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

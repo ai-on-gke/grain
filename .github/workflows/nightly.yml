@@ -2015,6 +2015,9 @@ jobs:
       - image-vulns
       - cmd-grain-stress
       - upgrade-test
+      - kvm-sandboxes
+      - kvm-route-stress
+      - real-kubernetes
       - security-attacks
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -231,7 +231,7 @@ for (const [label, size] of [
       const bareLine = section.locator('.grant-line[data-grant="self-debug"]');
       await expect(bareLine).toBeVisible();
       await expect(bareLine).toContainText(
-        "Retired alias of api:self-debug + grain#source",
+        "Retired alias of api#self-debug + grain#source",
       );
       await expect(
         bareLine.getByText("retired alias", { exact: true }),
