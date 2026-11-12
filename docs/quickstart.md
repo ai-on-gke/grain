@@ -156,10 +156,10 @@ capabilities:
     - "https://grain.dev/capabilities/grain#ci={}"  # and the ones you named
     # The Director chat's own grants. Remove one and the Director is held for it.
     - "https://grain.dev/capabilities/api#self-debug"
-    - "https://grain.dev/capabilities/grain#source"
-    - "https://grain.dev/capabilities/grain#journal"
+    - "https://grain.dev/capabilities/grain#source={}"
+    - "https://grain.dev/capabilities/grain#journal={}"
     - "https://grain.dev/capabilities/api#deployment:read"
-    - "https://grain.dev/capabilities/grain#health"
+    - "https://grain.dev/capabilities/grain#health={}"
     - 'https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}'
     - "https://grain.dev/capabilities/api#task-admin"
     # ... and the Director's other read-only api grants, ending with
