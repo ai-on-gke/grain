@@ -35,3 +35,6 @@ func ownedByThisAccount(fs.FileInfo) bool { return true }
 // hasAccessACL is false where ACLs are not read: the socket's directory
 // is kept at 0700.
 func hasAccessACL(string) bool { return false }
+
+// clearOwningGroupACL is never reached where hasAccessACL is false.
+func clearOwningGroupACL(string) error { return nil }

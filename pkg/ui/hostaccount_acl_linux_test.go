@@ -31,16 +31,24 @@ import (
 // bits to the mask. It skips the test on a filesystem without ACLs.
 func grantSearchACL(t *testing.T, dir string, uid uint32) {
 	t.Helper()
+	setSearchACL(t, dir, uid, 0)
+}
+
+// setSearchACL is grantSearchACL with the owning group's entry at
+// groupPerm: what setfacl -m u:<uid>:x leaves on a directory that was
+// 0750 (groupPerm 5) rather than 0700.
+func setSearchACL(t *testing.T, dir string, uid uint32, groupPerm uint16) {
+	t.Helper()
 	const undefined = 0xffffffff
 	entries := []struct {
 		tag, perm uint16
 		id        uint32
 	}{
-		{0x01, 7, undefined}, // ACL_USER_OBJ
-		{0x02, 1, uid},       // ACL_USER
-		{0x04, 0, undefined}, // ACL_GROUP_OBJ
-		{0x10, 1, undefined}, // ACL_MASK
-		{0x20, 0, undefined}, // ACL_OTHER
+		{0x01, 7, undefined},         // ACL_USER_OBJ
+		{0x02, 1, uid},               // ACL_USER
+		{0x04, groupPerm, undefined}, // ACL_GROUP_OBJ
+		{0x10, 1, undefined},         // ACL_MASK
+		{0x20, 0, undefined},         // ACL_OTHER
 	}
 	b := binary.LittleEndian.AppendUint32(nil, 2) // POSIX_ACL_XATTR_VERSION
 	for _, e := range entries {
@@ -83,5 +91,53 @@ func TestAPISocketKeepsAnACLGrantAcrossARestart(t *testing.T) {
 	ln.Close()
 	if fi, err := os.Stat(sockDir); err != nil || fi.Mode().Perm() != 0o710 {
 		t.Errorf("after a restart the socket directory is %v (%v), want 0710 kept so the granted search survives", fi.Mode(), err)
+	}
+}
+
+// aclGroupObjPerm is the owning group's entry in dir's access ACL.
+func aclGroupObjPerm(t *testing.T, dir string) uint16 {
+	t.Helper()
+	b := make([]byte, 4096)
+	n, err := syscall.Getxattr(dir, "system.posix_acl_access", b)
+	if err != nil {
+		t.Fatalf("reading the ACL of %s: %v", dir, err)
+	}
+	for off := 4; off+8 <= n; off += 8 {
+		if binary.LittleEndian.Uint16(b[off:]) == 0x04 {
+			return binary.LittleEndian.Uint16(b[off+2:])
+		}
+	}
+	t.Fatalf("the ACL of %s has no owning-group entry", dir)
+	return 0
+}
+
+// Keeping the mask at --x for a named grant must not also pass the
+// owning group's own entry: a directory that was 0750 when the operator
+// ran setfacl keeps g::r-x, which without an ACL the restart's 0700 would
+// have taken away.
+func TestAPISocketClearsTheOwningGroupsACLEntry(t *testing.T) {
+	dir, err := os.MkdirTemp("", "gsock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := ui.APISocketPath(dir)
+	ln, err := ui.ListenAPISocket(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
+	sockDir := filepath.Dir(path)
+	setSearchACL(t, sockDir, uint32(os.Getuid()), 5)
+	ln, err = ui.ListenAPISocket(path)
+	if err != nil {
+		t.Fatalf("restarting on a directory with granted search: %v", err)
+	}
+	ln.Close()
+	if fi, err := os.Stat(sockDir); err != nil || fi.Mode().Perm() != 0o710 {
+		t.Errorf("after a restart the socket directory is %v (%v), want 0710 kept for the named grant", fi.Mode(), err)
+	}
+	if perm := aclGroupObjPerm(t, sockDir); perm != 0 {
+		t.Errorf("after a restart the owning group's ACL entry is %o, want 0 so only named grants pass the mask", perm)
 	}
 }
