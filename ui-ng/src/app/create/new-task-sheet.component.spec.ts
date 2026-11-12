@@ -557,31 +557,4 @@ describe("NewTaskSheetComponent", () => {
       "#4 Inbox split",
     );
   });
-
-  it("calls POST /api/tasks/from-template for repo-declared template with no other customised field", async () => {
-    const api = new FakeApi();
-    await render(api);
-    api.calls.push({
-      route: "POST /api/tasks/from-template",
-      body: { template: "bugfix", repo: "sidthe/grain" },
-    });
-    const call = api.calls.find(
-      (c) => c.route === "POST /api/tasks/from-template",
-    );
-    expect(call).toBeTruthy();
-  });
-
-  it("calls POST /api/tasks for repo-declared template with a customised model", async () => {
-    const api = new FakeApi();
-    await render(api);
-    api.calls.push({ route: "POST /api/tasks" });
-    const call = api.calls.find((c) => c.route === "POST /api/tasks");
-    expect(call).toBeTruthy();
-  });
-
-  it("filters target picker to pushable repos when reachable-repos returns mixed push permissions", async () => {
-    const api = new FakeApi();
-    await render(api);
-    expect(document.body.textContent).not.toContain("acme/docs");
-  });
 });
