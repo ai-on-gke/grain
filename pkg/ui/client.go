@@ -7864,15 +7864,14 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	}
 	now := c.now()
 	if task.Approval == nil {
-		if err := ciOnlyGrantApprovalRefusal(*task); err != nil {
-			return err
-		}
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}
 		if err := c.Store.Approve(ctx, id, c.requestActor(ctx), now); err != nil {
 			return err
 		}
+	} else if err := ciOnlyGrantRunRefusal(*task); err != nil {
+		return err
 	}
 	if task.DeferredAt != nil {
 		if err := c.Store.SetDeferred(ctx, id, nil, nil, now); err != nil {

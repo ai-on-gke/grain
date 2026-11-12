@@ -411,12 +411,23 @@ func (c *Client) validateCatalogueRepoDefaults(ctx context.Context, repo model.R
 // here, the person approving is told which grant to take off, and for a
 // repository read which reads entry stands in for it, before it queues.
 func ciOnlyGrantApprovalRefusal(task model.Task) error {
+	return ciOnlyGrantTaskRefusal(task, "approved")
+}
+
+// ciOnlyGrantRunRefusal is ciOnlyGrantApprovalRefusal for RunNow on a
+// task that was already approved before filing and approval refused CI
+// capabilities.
+func ciOnlyGrantRunRefusal(task model.Task) error {
+	return ciOnlyGrantTaskRefusal(task, "run")
+}
+
+func ciOnlyGrantTaskRefusal(task model.Task, verb string) error {
 	for _, g := range task.Grants {
 		if why := model.TaskGrantCIOnlyRefusal(g.Capability); why != "" {
-			return validationErrorf("task %s cannot be approved holding %s: %s", task.ID, g.Capability, why)
+			return validationErrorf("task %s cannot be %s holding %s: %s", task.ID, verb, g.Capability, why)
 		}
 		if ciOnlyCapability(g.Capability) {
-			return validationErrorf("task %s cannot be approved holding %s: %s", task.ID, g.Capability, model.CIOnlyRefusal(g.Capability))
+			return validationErrorf("task %s cannot be %s holding %s: %s", task.ID, verb, g.Capability, model.CIOnlyRefusal(g.Capability))
 		}
 	}
 	return nil
