@@ -48,7 +48,7 @@ class FakeShellApi {
     authenticated: true,
     source: "oidc",
     verified: true,
-    actor: { kind: "human", id: "rarcea@google.com", label: "Roman Arcea" },
+    actor: { kind: "human", id: "alice@example.com", label: "Roman Arcea" },
   };
   logoutRedirect = "/signed-out";
   logoutCalls = 0;

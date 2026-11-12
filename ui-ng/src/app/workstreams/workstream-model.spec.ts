@@ -35,9 +35,9 @@ function task(id: string, over: Partial<Task> = {}): Task {
     title: `Task ${id}`,
     state: "queued",
     repo: "sidthe/grain-scratch-repo",
-    author: "rarcea",
+    author: "alice",
     authorKind: "human",
-    owner: "rarcea",
+    owner: "alice",
     createdAt: "2026-11-10T10:00:00Z",
     updatedAt: "2026-11-11T12:00:00Z",
     ...over,
@@ -81,7 +81,7 @@ describe("workstream-model", () => {
       state: "completed",
       generatedFrom: "5",
       origin: "task:5",
-      creator: "rarcea",
+      creator: "alice",
     });
     const childA1 = task("51", {
       title: "Step A1",
@@ -94,7 +94,7 @@ describe("workstream-model", () => {
       state: "completed",
       generatedFrom: "5",
       origin: "task:5",
-      creator: "rarcea",
+      creator: "alice",
     });
     const childB1 = task("61", {
       title: "Step B1",
@@ -107,7 +107,7 @@ describe("workstream-model", () => {
       [director, branchA, childA1, branchB, childB1],
       {
         now: NOW,
-        viewer: "rarcea",
+        viewer: "alice",
       },
     );
 
@@ -304,7 +304,7 @@ describe("workstream-model", () => {
         staleRoot,
         staleChild,
       ],
-      { now: NOW, viewer: "rarcea" },
+      { now: NOW, viewer: "alice" },
     );
 
     const inPeople = filterWorkstreams(d.streams, {

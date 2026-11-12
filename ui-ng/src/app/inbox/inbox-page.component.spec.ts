@@ -1132,7 +1132,7 @@ describe("inbox page helpers", () => {
         comments: [
           {
             id: 43,
-            author: "rarcea",
+            author: "alice",
             authorLabel: "Roman",
             body: "Turn stopped by user",
           },
@@ -1314,7 +1314,7 @@ describe("inbox page helpers", () => {
 
     it("requires confirm tick for single non-viewer owner and prunes stale details on refresh", async () => {
       const api = new FakeApi();
-      api.cfg = { access: null, version: "v1.2.3", viewerOwner: "rarcea" };
+      api.cfg = { access: null, version: "v1.2.3", viewerOwner: "alice" };
       api.taskList = [
         {
           id: "9",

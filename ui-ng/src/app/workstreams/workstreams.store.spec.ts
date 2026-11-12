@@ -27,9 +27,9 @@ function mkTask(id: string, over: Partial<Task> = {}): Task {
     title: `Task ${id}`,
     state: "queued",
     repo: "sidthe/grain-scratch-repo",
-    author: "rarcea",
+    author: "alice",
     authorKind: "human",
-    owner: "rarcea",
+    owner: "alice",
     createdAt: "2026-11-11T10:00:00Z",
     updatedAt: "2026-11-11T11:00:00Z",
     ...over,
@@ -46,7 +46,7 @@ class FakeApi {
     [];
   failPostIds = new Set<string>();
 
-  config = () => Promise.resolve({ access: null, viewerOwner: "rarcea" });
+  config = () => Promise.resolve({ access: null, viewerOwner: "alice" });
   openNotifications = () => Promise.resolve([]);
   localScriptApprovals = () => Promise.resolve([]);
   tasks = () => Promise.resolve(this.open);
@@ -107,7 +107,7 @@ describe("WorkstreamsStore", () => {
     });
     TestBed.inject(AccessService).setConfig({
       access: null,
-      viewerOwner: "rarcea",
+      viewerOwner: "alice",
     });
     store = TestBed.inject(WorkstreamsStore);
   });
@@ -237,7 +237,7 @@ describe("WorkstreamsStore", () => {
     const approveScope = routeScope("POST /api/tasks/{id}/approve")!;
     const deferScope = routeScope("POST /api/tasks/{id}/defer")!;
     TestBed.inject(AccessService).setConfig({
-      viewerOwner: "rarcea",
+      viewerOwner: "alice",
       access: {
         full: false,
         role: "custom",

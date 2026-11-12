@@ -607,7 +607,7 @@ describe("TasksPageComponent", () => {
       const api = new FakeApi();
       api.live[1] = task("2", "queued", 5, {
         repo: "sidthe/grain-scratch-repo",
-        owner: "rarcea",
+        owner: "alice",
       });
       const f = await render(api);
       const row = q(f, '[data-testid="row-2"]')!;
@@ -617,7 +617,7 @@ describe("TasksPageComponent", () => {
       expect(row.querySelector(".row-repo")!.getAttribute("title")).toBe(
         "sidthe/grain-scratch-repo",
       );
-      expect(row.textContent).toContain("rarcea");
+      expect(row.textContent).toContain("alice");
     });
   });
 
@@ -823,7 +823,7 @@ describe("TasksPageComponent", () => {
 
     it("counts only current tab selected in inline close, keeps Escape inside .confirm-inline, and requires confirm tick for non-viewer owner", async () => {
       const api = new FakeApi();
-      api.cfg = { access: null, viewerOwner: "rarcea" };
+      api.cfg = { access: null, viewerOwner: "alice" };
       api.live = [
         task("1", "queued", 8, { repo: "acme/web", owner: "bob" }),
         task("10", "running", 8, { repo: "acme/web", owner: "bob" }),
@@ -857,7 +857,7 @@ describe("TasksPageComponent", () => {
 
       TestBed.inject(AccessService).setConfig({
         access: null,
-        viewerOwner: "rarcea",
+        viewerOwner: "alice",
       });
       f.componentRef.setInput("tab", "proposed");
       await settle(f);

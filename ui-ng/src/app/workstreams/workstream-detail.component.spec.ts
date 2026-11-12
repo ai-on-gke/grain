@@ -31,9 +31,9 @@ function t(id: string, over: Partial<Task> = {}): Task {
     title: `Task ${id}`,
     state: "queued",
     repo: "sidthe/grain-scratch-repo",
-    author: "rarcea",
+    author: "alice",
     authorKind: "human",
-    owner: "rarcea",
+    owner: "alice",
     createdAt: "2026-11-11T09:00:00Z",
     updatedAt: "2026-11-11T10:00:00Z",
     ...over,
@@ -44,7 +44,7 @@ class FakeApi {
   open: Task[] = [];
   calls: { route: string; params?: unknown; body?: unknown }[] = [];
 
-  config = () => Promise.resolve({ access: null, viewerOwner: "rarcea" });
+  config = () => Promise.resolve({ access: null, viewerOwner: "alice" });
   openNotifications = () => Promise.resolve([]);
   localScriptApprovals = () => Promise.resolve([]);
   tasks = () => Promise.resolve(this.open);
@@ -118,7 +118,7 @@ describe("WorkstreamDetailComponent", () => {
     });
     TestBed.inject(AccessService).setConfig({
       access: null,
-      viewerOwner: "rarcea",
+      viewerOwner: "alice",
     });
     const fixture: ComponentFixture<WorkstreamDetailComponent> =
       TestBed.createComponent(WorkstreamDetailComponent);
