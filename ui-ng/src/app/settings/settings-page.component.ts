@@ -26,7 +26,6 @@ import {
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
-import { CustomizeNavDialogComponent } from "../shell/customize-nav-dialog.component";
 import { SettingsCodeComponent } from "./settings-code.component";
 import { SettingsComputeComponent } from "./settings-compute.component";
 import { SettingsInstanceComponent } from "./settings-instance.component";
@@ -48,7 +47,6 @@ import { SettingsWorkComponent } from "./settings-work.component";
   selector: "g-settings-page",
   imports: [
     RouterLink,
-    CustomizeNavDialogComponent,
     SettingsComputeComponent,
     SettingsCodeComponent,
     SettingsWorkComponent,
@@ -300,10 +298,7 @@ import { SettingsWorkComponent } from "./settings-work.component";
                     <g-settings-security [section]="activeSection()" />
                   }
                   @case ("instance") {
-                    <g-settings-instance
-                      [section]="activeSection()"
-                      (customizeNav)="customizeNavOpen.set(true)"
-                    />
+                    <g-settings-instance [section]="activeSection()" />
                   }
                 }
               }
@@ -361,10 +356,6 @@ import { SettingsWorkComponent } from "./settings-work.component";
           }
         </div>
       </div>
-
-      @if (customizeNavOpen()) {
-        <g-customize-nav-dialog (closed)="customizeNavOpen.set(false)" />
-      }
     </section>
   `,
 })
@@ -379,19 +370,18 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   protected readonly filterQuery = signal("");
   protected readonly ready = signal(false);
-  protected readonly customizeNavOpen = signal(false);
   private readonly routeSection = signal<string | null>(null);
   private readonly routeFilePath = signal<string>("");
 
   private subs: Subscription[] = [];
 
   protected readonly hasExplicitSection = computed(() => {
-    const raw = this.section() ?? this.routeSection();
+    const raw = this.routeSection() ?? this.section();
     return Boolean(raw && resolveSettingsSection(raw));
   });
 
   protected readonly activeSection = computed<SettingsSectionId>(() => {
-    const raw = this.section() ?? this.routeSection();
+    const raw = this.routeSection() ?? this.section();
     return resolveSettingsSection(raw) ?? DEFAULT_SETTINGS_SECTION;
   });
 
@@ -424,8 +414,10 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
         this.routeFilePath.set(qm.get("path") ?? "");
       }),
     );
-    void this.state.loadCore().finally(() => {
-      this.ready.set(true);
+    void this.state.loadCore().then(() => {
+      if (this.state.config() !== null) {
+        this.ready.set(true);
+      }
     });
   }
 

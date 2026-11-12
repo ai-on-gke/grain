@@ -26,7 +26,7 @@ import {
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Subscription } from "rxjs";
 import type { RouteKey } from "../api/generated-routes";
-import { GrainApi } from "../api/grain-api.service";
+import { GrainApi, splitRepo } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { errText } from "../settings/settings-state.service";
@@ -47,6 +47,20 @@ const REPO_TABS: readonly { id: RepoTabId; label: string }[] = [
   { id: "releases", label: "Releases" },
 ];
 
+function isRepoTabId(val: string | null | undefined): val is RepoTabId {
+  const clean = (val ?? "").toLowerCase();
+  return REPO_TABS.some((t) => t.id === clean);
+}
+
+function normalizeWorkflowPath(raw: string): string {
+  const clean = raw.trim().replace(/^\/+/, "");
+  if (!clean) return "";
+  if (clean.includes("/")) return clean;
+  const withExt =
+    clean.endsWith(".yml") || clean.endsWith(".yaml") ? clean : `${clean}.yml`;
+  return `.grain/workflows/${withExt}`;
+}
+
 interface BranchRow {
   name: string;
   sha?: string;
@@ -54,18 +68,34 @@ interface BranchRow {
   protected?: boolean;
 }
 
+interface RepoWorkflowRow {
+  path: string;
+  text: string;
+  name?: string;
+}
+
 interface ReleaseRow {
   name: string;
-  branch?: string;
-  state?: string;
-  latestCandidate?: string;
+  latestBranch?: string;
+  prodBranch?: string;
+  status?: string;
+  pullRequestUrl?: string;
+  error?: string;
 }
 
 interface CandidateRow {
-  id: string;
+  id: number | string;
+  release?: string;
+  number?: number;
+  branch?: string;
+  status?: string;
   version?: string;
-  state?: string;
-  qualified?: boolean;
+  error?: string;
+}
+
+interface RepoReleaseSecretRow {
+  name: string;
+  present?: boolean;
 }
 
 interface PendingReleaseRow {
@@ -169,8 +199,7 @@ interface PendingReleaseRow {
                         Repository config &amp; Git connection
                       </h2>
                       <p class="s-card-desc">
-                        Default base branch, clone URL, and pinned Git
-                        credential.
+                        Clone URL override and pinned Git credential.
                       </p>
                     </div>
                     <button
@@ -189,31 +218,13 @@ interface PendingReleaseRow {
 
                   <div class="s-grid">
                     <div class="s-field">
-                      <label class="s-label" for="rc-base"
-                        >Default base branch</label
-                      >
-                      <input
-                        id="rc-base"
-                        class="s-input tabular"
-                        type="text"
-                        data-testid="input-repo-base-branch"
-                        [value]="baseBranch()"
-                        [disabled]="
-                          configRepoOnly() ||
-                          !can(
-                            'PUT /api/deployment/repos/{owner}/{name}/config'
-                          )
-                        "
-                        (input)="baseBranch.set($any($event.target).value)"
-                      />
-                    </div>
-                    <div class="s-field">
                       <label class="s-label" for="rc-clone">Clone URL</label>
                       <input
                         id="rc-clone"
                         class="s-input tabular"
                         type="text"
                         data-testid="input-repo-clone-url"
+                        placeholder="https://github.com/owner/repo.git"
                         [value]="cloneUrl()"
                         [disabled]="
                           configRepoOnly() ||
@@ -253,14 +264,17 @@ interface PendingReleaseRow {
                         Issue importer &amp; lifecycle refresh
                       </h2>
                       <p class="s-card-desc">
-                        Pull external tracker issues into Grain tasks or refresh
-                        repository lifecycle metadata.
+                        Configure GitHub issue import settings, trigger an
+                        immediate import pass, or refresh repository lifecycle
+                        state.
                       </p>
                     </div>
                     <div class="s-inline">
-                      <span class="status-pill neutral tabular">{{
-                        lifecycleStage()
-                      }}</span>
+                      <span
+                        class="status-pill neutral tabular"
+                        data-testid="repo-lifecycle-state"
+                        >{{ lifecycleState() }}</span
+                      >
                       <button
                         type="button"
                         class="btn-tonal s-btn-sm"
@@ -276,20 +290,75 @@ interface PendingReleaseRow {
                       </button>
                     </div>
                   </div>
-                  <div class="s-inline">
-                    <input
-                      class="s-input tabular"
-                      style="width: 180px"
-                      type="text"
-                      aria-label="Issue label filter"
-                      data-testid="input-import-label"
-                      placeholder="grain-ready"
-                      [value]="importLabel()"
-                      (input)="importLabel.set($any($event.target).value)"
-                    />
+
+                  <div class="s-toggle-row">
+                    <div class="s-toggle-copy">
+                      <span class="s-toggle-name">Enable issue importer</span>
+                      <span class="s-hint"
+                        >Periodically import open GitHub issues matching the
+                        configured label.</span
+                      >
+                    </div>
                     <button
                       type="button"
-                      class="btn-tonal"
+                      class="g-switch"
+                      role="switch"
+                      data-testid="switch-issue-import-enabled"
+                      [attr.aria-checked]="importEnabled()"
+                      [disabled]="!canWriteSettings()"
+                      aria-label="Enable issue importer"
+                      (click)="importEnabled.set(!importEnabled())"
+                    ></button>
+                  </div>
+
+                  <div class="s-grid">
+                    <div class="s-field">
+                      <label class="s-label" for="imp-label"
+                        >Issue label filter</label
+                      >
+                      <input
+                        id="imp-label"
+                        class="s-input tabular"
+                        type="text"
+                        data-testid="input-import-label"
+                        placeholder="grain-ready"
+                        [value]="importLabel()"
+                        [disabled]="!canWriteSettings()"
+                        (input)="importLabel.set($any($event.target).value)"
+                      />
+                    </div>
+                    <div class="s-field">
+                      <label class="s-label" for="imp-repo"
+                        >Source repository (empty = this repo)</label
+                      >
+                      <input
+                        id="imp-repo"
+                        class="s-input tabular"
+                        type="text"
+                        data-testid="input-import-repo"
+                        placeholder="upstream/repo (optional)"
+                        [value]="importSourceRepo()"
+                        [disabled]="!canWriteSettings()"
+                        (input)="
+                          importSourceRepo.set($any($event.target).value)
+                        "
+                      />
+                    </div>
+                  </div>
+
+                  <div class="s-inline">
+                    <button
+                      type="button"
+                      class="btn-primary s-btn-sm"
+                      data-testid="save-issue-import-btn"
+                      [disabled]="!canWriteSettings()"
+                      (click)="saveIssueImportSettings()"
+                    >
+                      Save issue import
+                    </button>
+                    <button
+                      type="button"
+                      class="btn-tonal s-btn-sm"
                       data-testid="import-issues-btn"
                       [disabled]="
                         !can('POST /api/repos/{owner}/{name}/import-issues')
@@ -370,9 +439,51 @@ interface PendingReleaseRow {
                   </div>
 
                   <div class="s-field">
-                    <label class="s-label" for="wf-yaml"
-                      >Inline workflow (.grain/workflows/ci.yml)</label
-                    >
+                    <div class="s-row">
+                      <label class="s-label" for="wf-yaml">
+                        Declared workflow ({{ selectedWorkflowPath() }})
+                      </label>
+                      <div class="s-inline">
+                        @if (workflowOptions().length > 0) {
+                          <g-pill-select
+                            testid="select-repo-workflow"
+                            ariaLabel="Select workflow file"
+                            align="left"
+                            [options]="workflowOptions()"
+                            [value]="selectedWorkflowPath()"
+                            (valueChange)="selectWorkflow($event)"
+                          />
+                        }
+                        <input
+                          class="s-input s-input-inline tabular"
+                          type="text"
+                          aria-label="New workflow file path"
+                          data-testid="input-new-workflow-path"
+                          placeholder=".grain/workflows/release.yml"
+                          [value]="newWorkflowPath()"
+                          [disabled]="
+                            configRepoOnly() ||
+                            !can('PUT /api/repos/{owner}/{name}/workflows')
+                          "
+                          (input)="
+                            newWorkflowPath.set($any($event.target).value)
+                          "
+                        />
+                        <button
+                          type="button"
+                          class="btn-tonal s-btn-sm"
+                          data-testid="add-repo-workflow-btn"
+                          [disabled]="
+                            !newWorkflowPath().trim() ||
+                            configRepoOnly() ||
+                            !can('PUT /api/repos/{owner}/{name}/workflows')
+                          "
+                          (click)="addWorkflowFile()"
+                        >
+                          Add file
+                        </button>
+                      </div>
+                    </div>
                     <textarea
                       id="wf-yaml"
                       class="s-textarea tabular"
@@ -383,12 +494,12 @@ interface PendingReleaseRow {
                         configRepoOnly() ||
                         !can('PUT /api/repos/{owner}/{name}/workflows')
                       "
-                      (input)="workflowYaml.set($any($event.target).value)"
+                      (input)="onEditWorkflowText($any($event.target).value)"
                     ></textarea>
                     <div class="s-inline">
                       <button
                         type="button"
-                        class="btn-tonal s-btn-sm"
+                        class="btn-primary s-btn-sm"
                         data-testid="save-repo-workflow-btn"
                         [disabled]="
                           configRepoOnly() ||
@@ -396,8 +507,22 @@ interface PendingReleaseRow {
                         "
                         (click)="saveWorkflows()"
                       >
-                        Save workflow
+                        Save workflows
                       </button>
+                      @if (workflows().length > 0) {
+                        <button
+                          type="button"
+                          class="btn-text s-btn-sm"
+                          data-testid="delete-repo-workflow-btn"
+                          [disabled]="
+                            configRepoOnly() ||
+                            !can('PUT /api/repos/{owner}/{name}/workflows')
+                          "
+                          (click)="deleteSelectedWorkflow()"
+                        >
+                          Remove selected file
+                        </button>
+                      }
                     </div>
                   </div>
                 </div>
@@ -535,8 +660,8 @@ interface PendingReleaseRow {
                     <button
                       type="button"
                       class="btn-primary s-btn-sm"
-                      data-testid="save-repo-agent-settings-btn"
-                      [disabled]="configRepoOnly()"
+                      data-testid="save-repo-agents-btn"
+                      [disabled]="!canSaveRepoAgents()"
                       (click)="saveAgentTabSettings()"
                     >
                       Save agent settings
@@ -622,6 +747,115 @@ interface PendingReleaseRow {
               }
 
               @case ("releases") {
+                <div class="s-card" data-testid="card-repo-release-settings">
+                  <div class="s-card-head">
+                    <div>
+                      <h2 class="s-card-title">
+                        Release workflow &amp; base-branch CI jobs
+                      </h2>
+                      <p class="s-card-desc">
+                        Controls release publishing, base-branch judging jobs,
+                        post-merge dispatch jobs, and release secrets.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      class="btn-primary s-btn-sm"
+                      data-testid="save-repo-release-btn"
+                      [disabled]="
+                        configRepoOnly() ||
+                        !can('PUT /api/repos/{owner}/{name}/release')
+                      "
+                      (click)="saveReleaseSettings()"
+                    >
+                      Save release settings
+                    </button>
+                  </div>
+
+                  <div class="s-toggle-row">
+                    <div class="s-toggle-copy">
+                      <span class="s-toggle-name">Enable release workflow</span>
+                      <span class="s-hint"
+                        >Run declared release workflows when base branches
+                        advance.</span
+                      >
+                    </div>
+                    <button
+                      type="button"
+                      class="g-switch"
+                      role="switch"
+                      data-testid="switch-repo-release-enabled"
+                      [attr.aria-checked]="releaseEnabled()"
+                      [disabled]="
+                        configRepoOnly() ||
+                        !can('PUT /api/repos/{owner}/{name}/release')
+                      "
+                      aria-label="Enable release workflow"
+                      (click)="releaseEnabled.set(!releaseEnabled())"
+                    ></button>
+                  </div>
+
+                  <div class="s-grid">
+                    <div class="s-field">
+                      <label class="s-label" for="rel-base-jobs"
+                        >Base-branch CI jobs (comma-separated)</label
+                      >
+                      <input
+                        id="rel-base-jobs"
+                        class="s-input tabular"
+                        type="text"
+                        data-testid="input-release-base-jobs"
+                        placeholder="empty = all push jobs"
+                        [value]="baseBranchJobsText()"
+                        [disabled]="
+                          configRepoOnly() ||
+                          !can('PUT /api/repos/{owner}/{name}/release')
+                        "
+                        (input)="
+                          baseBranchJobsText.set($any($event.target).value)
+                        "
+                      />
+                    </div>
+                    <div class="s-field">
+                      <label class="s-label" for="rel-post-jobs"
+                        >Post-merge dispatch jobs (comma-separated)</label
+                      >
+                      <input
+                        id="rel-post-jobs"
+                        class="s-input tabular"
+                        type="text"
+                        data-testid="input-release-post-merge-jobs"
+                        placeholder="guest-cache (optional)"
+                        [value]="postMergeJobsText()"
+                        [disabled]="
+                          configRepoOnly() ||
+                          !can('PUT /api/repos/{owner}/{name}/release')
+                        "
+                        (input)="
+                          postMergeJobsText.set($any($event.target).value)
+                        "
+                      />
+                    </div>
+                  </div>
+
+                  @if (releaseSecrets().length > 0) {
+                    <div class="s-inline" data-testid="repo-release-secrets">
+                      <span class="s-label">Release secrets:</span>
+                      @for (sec of releaseSecrets(); track sec.name) {
+                        <span
+                          [class]="
+                            'status-pill tabular ' +
+                            (sec.present !== false ? 'healthy' : 'warn')
+                          "
+                        >
+                          {{ sec.name }}:
+                          {{ sec.present !== false ? "present" : "missing" }}
+                        </span>
+                      }
+                    </div>
+                  }
+                </div>
+
                 @if (pendingReleases().length > 0) {
                   <div class="s-card" data-testid="card-pending-releases">
                     <h2 class="s-card-title">
@@ -717,7 +951,7 @@ interface PendingReleaseRow {
                         <thead>
                           <tr>
                             <th>Release</th>
-                            <th>State</th>
+                            <th>Status</th>
                             <th>Candidates &amp; promotion</th>
                           </tr>
                         </thead>
@@ -726,12 +960,31 @@ interface PendingReleaseRow {
                             <tr [attr.data-testid]="'release-row-' + rel.name">
                               <td class="tabular">{{ rel.name }}</td>
                               <td>
-                                <span class="status-pill neutral">{{
-                                  rel.state || "open"
-                                }}</span>
+                                <span
+                                  class="status-pill neutral"
+                                  [attr.data-testid]="
+                                    'release-status-' + rel.name
+                                  "
+                                  >{{ rel.status || "open" }}</span
+                                >
                               </td>
                               <td>
                                 <div class="s-inline">
+                                  <button
+                                    type="button"
+                                    class="btn-tonal s-btn-sm"
+                                    [attr.data-testid]="
+                                      'inspect-rc-' + rel.name
+                                    "
+                                    [attr.aria-pressed]="
+                                      selectedRelease() === rel.name
+                                    "
+                                    (click)="
+                                      selectReleaseForCandidates(rel.name)
+                                    "
+                                  >
+                                    Inspect RCs
+                                  </button>
                                   <button
                                     type="button"
                                     class="btn-tonal s-btn-sm"
@@ -793,21 +1046,49 @@ interface PendingReleaseRow {
                     </div>
                   }
 
+                  @if (releases().length > 1) {
+                    <div class="s-inline">
+                      <span class="s-label">Inspecting candidates for:</span>
+                      <g-pill-select
+                        testid="select-inspect-release"
+                        ariaLabel="Select release to inspect candidates"
+                        align="left"
+                        [options]="releaseOptions()"
+                        [value]="selectedRelease()"
+                        (valueChange)="selectReleaseForCandidates($event)"
+                      />
+                    </div>
+                  }
+
                   @if (candidates().length > 0) {
                     <div class="s-table-wrap">
                       <table class="s-table" aria-label="Release candidates">
                         <thead>
                           <tr>
                             <th>Candidate</th>
+                            <th>Branch</th>
                             <th>Status</th>
                             <th>Qualification</th>
                           </tr>
                         </thead>
                         <tbody>
                           @for (c of candidates(); track c.id) {
-                            <tr>
-                              <td class="tabular">{{ c.version || c.id }}</td>
-                              <td>{{ c.state || "staged" }}</td>
+                            <tr [attr.data-testid]="'candidate-row-' + c.id">
+                              <td class="tabular">
+                                {{
+                                  c.number !== undefined
+                                    ? "rc#" + c.number
+                                    : c.version || c.id
+                                }}
+                              </td>
+                              <td class="tabular">
+                                {{ c.branch || c.version || "—" }}
+                              </td>
+                              <td>
+                                <span class="status-pill neutral">{{
+                                  c.status || "active"
+                                }}</span>
+                              </td>
                               <td>
                                 <button
                                   type="button"
@@ -820,7 +1101,7 @@ interface PendingReleaseRow {
                                       'POST /api/repos/{owner}/{name}/candidates/{id}/qualification/approve'
                                     )
                                   "
-                                  (click)="approveQualification(c.id)"
+                                  (click)="approveQualification('' + c.id)"
                                 >
                                   Approve qualification
                                 </button>
@@ -834,8 +1115,7 @@ interface PendingReleaseRow {
 
                   <div class="s-inline">
                     <input
-                      class="s-input tabular"
-                      style="width: 220px"
+                      class="s-input s-input-inline tabular"
                       type="text"
                       aria-label="New release name"
                       data-testid="input-new-release-name"
@@ -875,6 +1155,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
 
+  readonly host = input<string | undefined>(undefined);
   readonly owner = input<string | undefined>(undefined);
   readonly name = input<string | undefined>(undefined);
   readonly tab = input<string | undefined>(undefined);
@@ -887,6 +1168,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     { value: "off", label: "Off" },
   ];
 
+  private readonly routeHost = signal("");
   private readonly routeOwner = signal("");
   private readonly routeName = signal("");
   private readonly routeTab = signal<string | null>(null);
@@ -899,12 +1181,18 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly cloneUrl = signal("");
   protected readonly gitCredential = signal("");
   protected readonly availableGitCreds = signal<string[]>([]);
-  protected readonly lifecycleStage = signal("active");
+  protected readonly lifecycleState = signal("active");
+  protected readonly importEnabled = signal(false);
   protected readonly importLabel = signal("");
+  protected readonly importSourceRepo = signal("");
+  protected readonly importApproved = signal(false);
 
   protected readonly ciMode = signal("grain");
   protected readonly watchDefaultBranch = signal(false);
+  protected readonly workflows = signal<RepoWorkflowRow[]>([]);
+  protected readonly selectedWorkflowPath = signal(".grain/workflows/ci.yml");
   protected readonly workflowYaml = signal("");
+  protected readonly newWorkflowPath = signal("");
 
   protected readonly mergeOnGreen = signal(false);
   protected readonly requireUpToDate = signal(false);
@@ -918,28 +1206,69 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly newBranchName = signal("");
   protected readonly newBranchFrom = signal("main");
 
+  protected readonly releaseEnabled = signal(false);
+  protected readonly baseBranchJobsText = signal("");
+  protected readonly postMergeJobsText = signal("");
+  protected readonly releaseSecrets = signal<RepoReleaseSecretRow[]>([]);
   protected readonly releases = signal<ReleaseRow[]>([]);
+  protected readonly selectedRelease = signal("");
   protected readonly candidates = signal<CandidateRow[]>([]);
   protected readonly pendingReleases = signal<PendingReleaseRow[]>([]);
   protected readonly newReleaseName = signal("");
 
   private subs: Subscription[] = [];
 
+  private readonly normalizedRouteParts = computed(() => {
+    const rawHost = this.routeHost() || this.host() || "";
+    const rawOwner = this.routeOwner() || this.owner() || "";
+    const rawName = this.routeName() || this.name() || "";
+    const rawTab = this.routeTab() ?? this.tab() ?? null;
+
+    // Handle plain-path collisions when a 3-segment URL matches either
+    // repos/:owner/:name/:tab or repos/:host/:owner/:name:
+    if (!rawHost && /[.:]/.test(rawOwner) && rawTab && !isRepoTabId(rawTab)) {
+      return {
+        host: rawOwner,
+        owner: rawName,
+        name: rawTab,
+        tab: null as string | null,
+      };
+    }
+    if (rawHost && !/[.:]/.test(rawHost) && !rawTab && isRepoTabId(rawName)) {
+      return {
+        host: "",
+        owner: rawHost,
+        name: rawOwner,
+        tab: rawName,
+      };
+    }
+    return {
+      host: rawHost,
+      owner: rawOwner,
+      name: rawName,
+      tab: rawTab,
+    };
+  });
+
+  protected readonly resolvedHost = computed(
+    () => this.normalizedRouteParts().host,
+  );
   protected readonly resolvedOwner = computed(
-    () => this.routeOwner() || this.owner() || "",
+    () => this.normalizedRouteParts().owner,
   );
   protected readonly resolvedName = computed(
-    () => this.routeName() || this.name() || "",
+    () => this.normalizedRouteParts().name,
   );
-  protected readonly repoSlug = computed(
-    () => `${this.resolvedOwner()}/${this.resolvedName()}`,
-  );
+  protected readonly repoSlug = computed(() => {
+    const h = this.resolvedHost();
+    const o = this.resolvedOwner();
+    const n = this.resolvedName();
+    return h ? `${h}/${o}/${n}` : `${o}/${n}`;
+  });
 
   protected readonly activeTab = computed<RepoTabId>(() => {
-    const raw = (this.routeTab() ?? this.tab() ?? "overview").toLowerCase();
-    return REPO_TABS.some((t) => t.id === raw)
-      ? (raw as RepoTabId)
-      : "overview";
+    const raw = (this.normalizedRouteParts().tab ?? "overview").toLowerCase();
+    return isRepoTabId(raw) ? raw : "overview";
   });
 
   protected gitConnOptions(): PillOption[] {
@@ -950,9 +1279,35 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     ];
   }
 
+  protected workflowOptions(): PillOption[] {
+    return this.workflows().map((w) => ({
+      value: w.path,
+      label: w.name ? `${w.path} (${w.name})` : w.path,
+    }));
+  }
+
+  protected releaseOptions(): PillOption[] {
+    return this.releases().map((r) => ({ value: r.name, label: r.name }));
+  }
+
+  protected canWriteSettings(): boolean {
+    if (this.configRepoOnly()) return false;
+    return this.can("PUT /api/repos/{owner}/{name}/settings");
+  }
+
+  protected canSaveRepoAgents(): boolean {
+    if (this.configRepoOnly()) return false;
+    return (
+      this.can("PUT /api/repos/{owner}/{name}/setup-command") ||
+      this.can("PUT /api/repos/{owner}/{name}/prompt-extension") ||
+      this.can("PUT /api/repos/{owner}/{name}/capabilities")
+    );
+  }
+
   ngOnInit(): void {
     this.subs.push(
       this.route.paramMap.subscribe((pm) => {
+        this.routeHost.set(pm.get("host") ?? "");
         this.routeOwner.set(pm.get("owner") ?? "");
         this.routeName.set(pm.get("name") ?? "");
         this.routeTab.set(pm.get("tab"));
@@ -974,18 +1329,20 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
 
   protected selectTab(tab: RepoTabId): void {
     this.routeTab.set(tab);
+    const h = this.resolvedHost();
     const o = this.resolvedOwner();
     const n = this.resolvedName();
+    const base = h ? ["/repos", h, o, n] : ["/repos", o, n];
     if (tab === "overview") {
-      void this.router.navigate(["/repos", o, n]);
+      void this.router.navigate(base);
     } else {
-      void this.router.navigate(["/repos", o, n, tab]);
+      void this.router.navigate([...base, tab]);
     }
     void this.loadTabData(tab);
   }
 
   private params(): { owner: string; name: string } {
-    return { owner: this.resolvedOwner(), name: this.resolvedName() };
+    return splitRepo(this.repoSlug());
   }
 
   private async initPage(): Promise<void> {
@@ -995,15 +1352,18 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.access.setConfig(cfg);
         const rec = cfg as Record<string, unknown>;
         this.configRepoOnly.set(
-          Boolean(rec["configRepoOnly"] || rec["externalConfigRepo"]),
+          Boolean(
+            rec["configRepoOnly"] ||
+            rec["externalConfigRepo"] ||
+            rec["settingsLocked"],
+          ),
         );
       }
       await this.loadCoreRepo();
       await this.loadTabData();
+      this.ready.set(true);
     } catch (err) {
       this.error.set(errText(err));
-    } finally {
-      this.ready.set(true);
     }
   }
 
@@ -1016,10 +1376,13 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           "GET /api/deployment/repos/{owner}/{name}/config",
           p,
         );
-        if (cfg?.["baseBranch"]) this.baseBranch.set(String(cfg["baseBranch"]));
-        if (cfg?.["cloneUrl"]) this.cloneUrl.set(String(cfg["cloneUrl"]));
-        if (cfg?.["gitCredential"]) {
-          this.gitCredential.set(String(cfg["gitCredential"]));
+        const eff =
+          (cfg?.["effective"] as Record<string, unknown> | undefined) ?? cfg;
+        if (eff?.["cloneUrl"] !== undefined) {
+          this.cloneUrl.set(String(eff["cloneUrl"] ?? ""));
+        }
+        if (eff?.["gitCredential"] !== undefined) {
+          this.gitCredential.set(String(eff["gitCredential"] ?? ""));
         }
       } catch {
         // Non-fatal
@@ -1046,11 +1409,25 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         if (st?.["watchDefaultBranch"] !== undefined) {
           this.watchDefaultBranch.set(Boolean(st["watchDefaultBranch"]));
         }
-        if (st?.["setupCommand"]) {
-          this.setupCommand.set(String(st["setupCommand"]));
+        if (st?.["setupCommand"] !== undefined) {
+          this.setupCommand.set(String(st["setupCommand"] ?? ""));
         }
-        if (st?.["promptExtension"]) {
-          this.promptExtension.set(String(st["promptExtension"]));
+        if (st?.["promptExtension"] !== undefined) {
+          this.promptExtension.set(String(st["promptExtension"] ?? ""));
+        }
+        const imp = st?.["issueImport"] as
+          | {
+              enabled?: boolean;
+              label?: string;
+              repo?: string;
+              approved?: boolean;
+            }
+          | undefined;
+        if (imp && typeof imp === "object") {
+          this.importEnabled.set(Boolean(imp.enabled));
+          this.importLabel.set(String(imp.label ?? ""));
+          this.importSourceRepo.set(String(imp.repo ?? ""));
+          this.importApproved.set(Boolean(imp.approved));
         }
       } catch {
         // Non-fatal
@@ -1084,20 +1461,36 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
             p,
           )
           .then((l) => {
-            if (l?.["stage"]) this.lifecycleStage.set(String(l["stage"]));
+            const st = l?.["state"] ?? l?.["stage"];
+            if (st) this.lifecycleState.set(String(st));
           })
           .catch(() => undefined);
       }
     } else if (t === "ci") {
       if (this.can("GET /api/repos/{owner}/{name}/workflows")) {
         void this.api
-          .get<{ workflows?: { path?: string; text?: string }[] }>(
+          .get<{ workflows?: RepoWorkflowRow[] } | RepoWorkflowRow[]>(
             "GET /api/repos/{owner}/{name}/workflows",
             p,
           )
           .then((w) => {
-            const first = w?.workflows?.[0];
-            if (first?.text) this.workflowYaml.set(first.text);
+            const list = (Array.isArray(w) ? w : (w?.workflows ?? [])).map(
+              (item) => ({
+                path: item.path,
+                text: item.text ?? "",
+                ...(item.name ? { name: item.name } : {}),
+              }),
+            );
+            this.workflows.set(list);
+            const cur = this.selectedWorkflowPath();
+            const active = list.find((x) => x.path === cur) ?? list[0] ?? null;
+            if (active) {
+              this.selectedWorkflowPath.set(active.path);
+              this.workflowYaml.set(active.text);
+            } else {
+              this.selectedWorkflowPath.set(".grain/workflows/ci.yml");
+              this.workflowYaml.set("");
+            }
           })
           .catch(() => undefined);
       }
@@ -1132,14 +1525,43 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  private applyReleaseSettings(relCfg: Record<string, unknown> | null): void {
+    if (!relCfg) return;
+    if (relCfg["enabled"] !== undefined) {
+      this.releaseEnabled.set(Boolean(relCfg["enabled"]));
+    }
+    if (Array.isArray(relCfg["baseBranchJobs"])) {
+      this.baseBranchJobsText.set(
+        (relCfg["baseBranchJobs"] as string[]).join(", "),
+      );
+    }
+    if (Array.isArray(relCfg["postMergeDispatchJobs"])) {
+      this.postMergeJobsText.set(
+        (relCfg["postMergeDispatchJobs"] as string[]).join(", "),
+      );
+    }
+    if (Array.isArray(relCfg["secrets"])) {
+      this.releaseSecrets.set(relCfg["secrets"] as RepoReleaseSecretRow[]);
+    }
+    if (Array.isArray(relCfg["baseBranches"]) && relCfg["baseBranches"][0]) {
+      this.baseBranch.set(String(relCfg["baseBranches"][0]));
+    }
+    if (Array.isArray(relCfg["pendingReleases"])) {
+      this.pendingReleases.set(
+        relCfg["pendingReleases"] as PendingReleaseRow[],
+      );
+    }
+  }
+
   private async loadReleasesTab(): Promise<void> {
     const p = this.params();
     if (this.can("GET /api/repos/{owner}/{name}/release")) {
       try {
-        const relCfg = await this.api.get<{
-          pendingReleases?: PendingReleaseRow[];
-        }>("GET /api/repos/{owner}/{name}/release", p);
-        this.pendingReleases.set(relCfg?.pendingReleases ?? []);
+        const relCfg = await this.api.get<Record<string, unknown>>(
+          "GET /api/repos/{owner}/{name}/release",
+          p,
+        );
+        this.applyReleaseSettings(relCfg);
       } catch {
         // Non-fatal
       }
@@ -1147,29 +1569,53 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     if (this.can("GET /api/repos/{owner}/{name}/releases")) {
       try {
         const list = await this.api.get<
-          ReleaseRow[] | { releases?: ReleaseRow[] }
+          ReleaseRow[] | { releases?: ReleaseRow[]; items?: ReleaseRow[] }
         >("GET /api/repos/{owner}/{name}/releases", p);
-        const rows = Array.isArray(list) ? list : (list?.releases ?? []);
+        const rows = Array.isArray(list)
+          ? list
+          : (list?.releases ?? list?.items ?? []);
         this.releases.set(rows);
-        if (
-          rows[0]?.name &&
-          this.can(
-            "GET /api/repos/{owner}/{name}/releases/{release}/candidates",
-          )
-        ) {
-          const cands = await this.api.get<
-            CandidateRow[] | { candidates?: CandidateRow[] }
-          >("GET /api/repos/{owner}/{name}/releases/{release}/candidates", {
-            ...p,
-            release: rows[0].name,
-          });
-          this.candidates.set(
-            Array.isArray(cands) ? cands : (cands?.candidates ?? []),
-          );
+        const current = this.selectedRelease();
+        const target =
+          rows.find((r) => r.name === current)?.name ?? rows[0]?.name ?? "";
+        this.selectedRelease.set(target);
+        if (target) {
+          await this.loadCandidatesFor(target);
+        } else {
+          this.candidates.set([]);
         }
       } catch {
         // Non-fatal
       }
+    }
+  }
+
+  protected async selectReleaseForCandidates(release: string): Promise<void> {
+    this.selectedRelease.set(release);
+    await this.loadCandidatesFor(release);
+  }
+
+  private async loadCandidatesFor(release: string): Promise<void> {
+    if (
+      !release ||
+      !this.can("GET /api/repos/{owner}/{name}/releases/{release}/candidates")
+    ) {
+      return;
+    }
+    try {
+      const cands = await this.api.get<
+        CandidateRow[] | { candidates?: CandidateRow[]; items?: CandidateRow[] }
+      >("GET /api/repos/{owner}/{name}/releases/{release}/candidates", {
+        ...this.params(),
+        release,
+      });
+      this.candidates.set(
+        Array.isArray(cands)
+          ? cands
+          : (cands?.candidates ?? cands?.items ?? []),
+      );
+    } catch {
+      // Non-fatal
     }
   }
 
@@ -1179,8 +1625,10 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         "PUT /api/deployment/repos/{owner}/{name}/config",
         this.params(),
         {
-          baseBranch: this.baseBranch().trim() || "main",
-          cloneUrl: this.cloneUrl().trim() || undefined,
+          cloneUrl: this.cloneUrl().trim(),
+          ...(this.gitCredential()
+            ? { gitCredential: this.gitCredential() }
+            : {}),
         },
       );
       this.snackbar.show("Repository configuration saved");
@@ -1205,13 +1653,32 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
 
   protected async refreshLifecycle(): Promise<void> {
     try {
-      const res = await this.api.post<{ stage?: string }>(
+      const res = await this.api.post<{ state?: string; stage?: string }>(
         "POST /api/repos/{owner}/{name}/lifecycle/refresh",
         this.params(),
         {},
       );
-      if (res?.stage) this.lifecycleStage.set(res.stage);
+      const st = res?.state ?? res?.stage;
+      if (st) this.lifecycleState.set(st);
       this.snackbar.show("Lifecycle refreshed");
+    } catch (err) {
+      this.error.set(errText(err));
+    }
+  }
+
+  protected async saveIssueImportSettings(): Promise<void> {
+    try {
+      await this.api.put(
+        "PUT /api/repos/{owner}/{name}/settings",
+        this.params(),
+        {
+          issueImportEnabled: this.importEnabled(),
+          issueImportLabel: this.importLabel().trim(),
+          issueImportRepo: this.importSourceRepo().trim(),
+          issueImportApproved: this.importApproved(),
+        },
+      );
+      this.snackbar.show("Issue importer settings saved");
     } catch (err) {
       this.error.set(errText(err));
     }
@@ -1222,7 +1689,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       await this.api.post(
         "POST /api/repos/{owner}/{name}/import-issues",
         this.params(),
-        { label: this.importLabel().trim() || undefined },
+        {},
       );
       this.snackbar.show("Issue import triggered");
     } catch (err) {
@@ -1271,19 +1738,122 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected async saveWorkflows(): Promise<void> {
+  protected selectWorkflow(path: string): void {
+    this.selectedWorkflowPath.set(path);
+    const found = this.workflows().find((w) => w.path === path);
+    this.workflowYaml.set(found?.text ?? "");
+  }
+
+  protected onEditWorkflowText(text: string): void {
+    this.workflowYaml.set(text);
+    const path = this.selectedWorkflowPath();
+    this.workflows.update((list) => {
+      const idx = list.findIndex((w) => w.path === path);
+      if (idx < 0) return list;
+      const copy = [...list];
+      copy[idx] = { ...copy[idx], text };
+      return copy;
+    });
+  }
+
+  protected addWorkflowFile(): void {
+    const path = normalizeWorkflowPath(this.newWorkflowPath());
+    if (!path) return;
+    this.newWorkflowPath.set("");
+    const existing = this.workflows().find((w) => w.path === path);
+    if (existing) {
+      this.selectedWorkflowPath.set(existing.path);
+      this.workflowYaml.set(existing.text);
+      return;
+    }
+    const stub = `name: ${
+      path
+        .split("/")
+        .pop()
+        ?.replace(/\.ya?ml$/, "") || "ci"
+    }\n`;
+    this.workflows.update((list) => [...list, { path, text: stub }]);
+    this.selectedWorkflowPath.set(path);
+    this.workflowYaml.set(stub);
+  }
+
+  protected async deleteSelectedWorkflow(): Promise<void> {
+    const target = this.selectedWorkflowPath();
+    const remaining = this.workflows().filter((w) => w.path !== target);
     try {
-      const text = this.workflowYaml();
       await this.api.put(
         "PUT /api/repos/{owner}/{name}/workflows",
         this.params(),
         {
-          workflows: text.trim()
-            ? [{ path: ".grain/workflows/ci.yml", text }]
-            : [],
+          workflows: remaining.map((w) => ({ path: w.path, text: w.text })),
         },
       );
-      this.snackbar.show("Workflow saved");
+      this.workflows.set(remaining);
+      const next = remaining[0] ?? null;
+      this.selectedWorkflowPath.set(next?.path ?? ".grain/workflows/ci.yml");
+      this.workflowYaml.set(next?.text ?? "");
+      this.snackbar.show(`Removed workflow ${target}`);
+    } catch (err) {
+      this.error.set(errText(err));
+    }
+  }
+
+  protected async saveWorkflows(): Promise<void> {
+    const path =
+      normalizeWorkflowPath(this.selectedWorkflowPath()) ||
+      ".grain/workflows/ci.yml";
+    const text = this.workflowYaml();
+    const current = this.workflows();
+    const idx = current.findIndex((w) => w.path === path);
+    let next: RepoWorkflowRow[];
+    if (text.trim()) {
+      if (idx >= 0) {
+        next = current.map((w, i) => (i === idx ? { ...w, path, text } : w));
+      } else {
+        next = [...current, { path, text }];
+      }
+    } else {
+      next = current.filter((w) => w.path !== path);
+    }
+    try {
+      const res = await this.api.put<{ workflows?: RepoWorkflowRow[] }>(
+        "PUT /api/repos/{owner}/{name}/workflows",
+        this.params(),
+        {
+          workflows: next.map((w) => ({ path: w.path, text: w.text })),
+        },
+      );
+      if (Array.isArray(res?.workflows)) {
+        this.workflows.set(res.workflows);
+      } else {
+        this.workflows.set(next);
+      }
+      this.snackbar.show("Workflows saved");
+    } catch (err) {
+      this.error.set(errText(err));
+    }
+  }
+
+  protected async saveReleaseSettings(): Promise<void> {
+    const parseJobs = (raw: string): string[] =>
+      raw
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    try {
+      const res = await this.api.put<Record<string, unknown>>(
+        "PUT /api/repos/{owner}/{name}/release",
+        this.params(),
+        {
+          enabled: this.releaseEnabled(),
+          baseBranchJobs: parseJobs(this.baseBranchJobsText()),
+          postMergeDispatchJobs: parseJobs(this.postMergeJobsText()),
+        },
+      );
+      if (res && typeof res === "object") {
+        this.applyReleaseSettings(res);
+      }
+      this.snackbar.show("Release settings saved");
     } catch (err) {
       this.error.set(errText(err));
     }

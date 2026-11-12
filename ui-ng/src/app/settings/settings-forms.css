@@ -84,6 +84,12 @@
   padding: 0 12px;
 }
 
+.s-input-inline {
+  flex: 1 1 200px;
+  max-width: 260px;
+  min-width: 0;
+}
+
 .s-textarea {
   min-height: 84px;
   padding: 8px 12px;

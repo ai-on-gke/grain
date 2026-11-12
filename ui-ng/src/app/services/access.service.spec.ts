@@ -21,6 +21,16 @@ describe("AccessService", () => {
     svc = TestBed.inject(AccessService);
   });
 
+  it("fails closed for operator-only (scope: null) routes until config is loaded", () => {
+    expect(svc.configLoaded()).toBe(false);
+    expect(svc.can("GET /api/hostds/enrollment-codes")).toBe(false);
+    expect(svc.can("POST /api/state-repo/remote")).toBe(false);
+
+    svc.setConfig({ access: null });
+    expect(svc.configLoaded()).toBe(true);
+    expect(svc.can("GET /api/hostds/enrollment-codes")).toBe(true);
+  });
+
   it("allows everything to an unlimited caller", () => {
     svc.setConfig({ access: null });
     expect(svc.can("POST /api/tasks/{id}/approve")).toBe(true);

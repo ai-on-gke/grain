@@ -32,11 +32,13 @@ import {
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
-interface AgentKeyStatus {
-  framework: string;
-  configured?: boolean;
-  set?: boolean;
-  secret?: string;
+interface AgentKeysResponse {
+  enabled?: boolean;
+  geminiApiKeySet?: boolean;
+  claudeOAuthTokenSet?: boolean;
+  openaiApiKeySet?: boolean;
+  codexAuthJSONSet?: boolean;
+  codexAuthRefreshError?: string;
 }
 
 interface KeyCheckResult {
@@ -45,40 +47,116 @@ interface KeyCheckResult {
   checkedAt?: string;
 }
 
+interface ModelSettingRow {
+  model: string;
+  effort?: string;
+}
+
 interface BackendEntry {
   id: string;
+  name?: string;
   framework: string;
-  provider?: string;
-  endpoint?: string;
-  project?: string;
-  location?: string;
-  credentialSet?: boolean;
+  models?: string[];
+  authMode?: string;
+  cliPath?: string;
+  concurrency?: number;
+  hostd?: string;
+  disabled?: boolean;
+}
+
+interface TokenBudgetRow {
+  connection: string;
+  model?: string;
+  tokens: number;
+  window: string;
+}
+
+interface UsageSettingsDto {
+  mode?: string;
+  minWorkers?: number;
+  retentionDays?: number;
+  budgets?: TokenBudgetRow[];
+}
+
+interface HostdInstallDto {
+  release?: string;
+  image?: string;
+  lines?: string[];
+  note?: string;
+  command?: string;
 }
 
 interface HostdRow {
   name: string;
   owner?: string;
-  status?: string;
-  revoked?: boolean;
-  labels?: string[];
+  state?: string;
+  revoked_at?: string | null;
+  revokedAt?: string | null;
+  labels?: Record<string, string> | null;
   capacity?: number;
 }
 
 interface EnrollmentCodeRow {
   name: string;
-  expiresAt?: string;
-  maxUses?: number;
+  prefix?: string;
+  code?: string;
+  expires_at?: string | null;
+  max_uses?: number;
   uses?: number;
-  revoked?: boolean;
+  revoked_at?: string | null;
 }
 
 interface PendingHostdRow {
   id: string;
   hostname?: string;
-  owner?: string;
+  suggested_name?: string;
+  enrolled_by?: string;
   os?: string;
   arch?: string;
-  requestedAt?: string;
+  pairing_code?: string;
+  default_labels?: Record<string, string> | null;
+  default_capacity?: number;
+  created_at?: string;
+  expires_at?: string;
+}
+
+export function parseHostdLabels(raw: string): {
+  labels: Record<string, string>;
+  error?: string;
+} {
+  const trimmed = raw.trim();
+  if (!trimmed) return { labels: {} };
+  const out: Record<string, string> = {};
+  for (const part of trimmed.split(/[\s,]+/).filter(Boolean)) {
+    const eq = part.indexOf("=");
+    if (eq <= 0 || eq === part.length - 1) {
+      return {
+        labels: {},
+        error: `Host label "${part}" must be key=value (no spaces or commas).`,
+      };
+    }
+    const k = part.slice(0, eq).trim();
+    const v = part.slice(eq + 1).trim();
+    if (!k || !v || v.includes("=")) {
+      return {
+        labels: {},
+        error: `Host label "${part}" must be key=value.`,
+      };
+    }
+    out[k] = v;
+  }
+  return { labels: out };
+}
+
+export function formatHostdLabels(
+  labels?: Record<string, string> | null,
+): string {
+  if (!labels || typeof labels !== "object" || Array.isArray(labels)) {
+    return "—";
+  }
+  const entries = Object.entries(labels);
+  if (entries.length === 0) return "—";
+  return entries.map(([k, v]) => `${k}=${v}`).join(", ");
 }
 
 @Component({
@@ -92,26 +170,16 @@ interface PendingHostdRow {
         <div class="s-card" data-testid="card-model-defaults">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">Default framework &amp; model</h3>
+              <h3 class="s-card-title">
+                Default model &amp; per-model reasoning effort
+              </h3>
               <p class="s-card-desc">
-                Selects the default agent runtime and model tiers when a task or
-                repository does not pin one.
+                Selects the deployment default model and per-model reasoning
+                effort preferences when a task does not pin one.
               </p>
             </div>
           </div>
           <div class="s-grid">
-            <div class="s-field">
-              <span class="s-label">Default agent framework</span>
-              <g-pill-select
-                testid="select-agent-framework"
-                ariaLabel="Default agent framework"
-                align="left"
-                [options]="frameworkOptions"
-                [value]="state.val('agentFramework', 'gemini')"
-                [disabled]="!canWriteSettings()"
-                (valueChange)="state.setField('agentFramework', $event)"
-              />
-            </div>
             <div class="s-field">
               <label class="s-label" for="f-default-model"
                 >Deployment default model</label
@@ -122,70 +190,80 @@ interface PendingHostdRow {
                 type="text"
                 data-testid="input-default-model"
                 placeholder="gemini-2.5-pro"
-                [value]="state.deployVal('defaultModel', '')"
-                [disabled]="!canWriteDeployment()"
-                (input)="
-                  state.setDeployField(
-                    'defaultModel',
-                    $any($event.target).value
-                  )
-                "
+                [value]="defaultModelVal()"
+                [disabled]="!canWriteSettings() && !canWriteDeployment()"
+                (input)="setDefaultModelVal($any($event.target).value)"
               />
             </div>
-            <div class="s-field">
-              <label class="s-label" for="f-gemini-model">Gemini model</label>
-              <input
-                id="f-gemini-model"
-                class="s-input"
-                type="text"
-                data-testid="input-gemini-model"
-                [value]="state.val('geminiModel', '')"
-                [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField('geminiModel', $any($event.target).value)
-                "
-              />
+          </div>
+
+          @if (modelSettingsRows().length > 0) {
+            <div class="s-table-wrap">
+              <table class="s-table" aria-label="Per-model reasoning settings">
+                <thead>
+                  <tr>
+                    <th>Model</th>
+                    <th>Reasoning effort</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (
+                    ms of modelSettingsRows();
+                    track ms.model;
+                    let idx = $index
+                  ) {
+                    <tr [attr.data-testid]="'model-setting-row-' + ms.model">
+                      <td class="tabular">{{ ms.model }}</td>
+                      <td class="tabular">{{ ms.effort || "default" }}</td>
+                      <td>
+                        <button
+                          type="button"
+                          class="btn-text s-btn-sm"
+                          [disabled]="!canWriteDeployment()"
+                          (click)="removeModelSetting(idx)"
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
             </div>
-            <div class="s-field">
-              <span class="s-label">Gemini reasoning effort</span>
-              <g-pill-select
-                testid="select-gemini-effort"
-                ariaLabel="Gemini reasoning effort"
-                align="left"
-                [options]="effortOptions"
-                [value]="state.val('geminiEffort', 'high')"
-                [disabled]="!canWriteSettings()"
-                (valueChange)="state.setField('geminiEffort', $event)"
-              />
-            </div>
-            <div class="s-field">
-              <label class="s-label" for="f-claude-model">Claude model</label>
-              <input
-                id="f-claude-model"
-                class="s-input"
-                type="text"
-                data-testid="input-claude-model"
-                [value]="state.val('claudeModel', '')"
-                [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField('claudeModel', $any($event.target).value)
-                "
-              />
-            </div>
-            <div class="s-field">
-              <label class="s-label" for="f-codex-model">Codex model</label>
-              <input
-                id="f-codex-model"
-                class="s-input"
-                type="text"
-                data-testid="input-codex-model"
-                [value]="state.val('codexModel', '')"
-                [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField('codexModel', $any($event.target).value)
-                "
-              />
-            </div>
+          }
+
+          <div class="s-inline">
+            <input
+              class="s-input s-input-inline tabular"
+              type="text"
+              aria-label="Model identifier"
+              data-testid="input-model-setting-model"
+              placeholder="gemini-2.5-pro"
+              [value]="newModelSettingName()"
+              [disabled]="!canWriteDeployment()"
+              (input)="newModelSettingName.set($any($event.target).value)"
+            />
+            <g-pill-select
+              testid="select-model-setting-effort"
+              ariaLabel="Reasoning effort"
+              align="left"
+              [options]="effortOptions"
+              [value]="newModelSettingEffort()"
+              [disabled]="!canWriteDeployment()"
+              (valueChange)="newModelSettingEffort.set($event)"
+            />
+            <button
+              type="button"
+              class="btn-tonal s-btn-sm"
+              data-testid="add-model-setting-btn"
+              [disabled]="
+                !newModelSettingName().trim() || !canWriteDeployment()
+              "
+              (click)="addModelSetting()"
+            >
+              Set model effort
+            </button>
           </div>
         </div>
 
@@ -204,6 +282,11 @@ interface PendingHostdRow {
               {{ access.deniedReason("GET /api/agent-keys") }}
             </div>
           } @else {
+            @if (!agentKeysEnabled()) {
+              <div class="s-banner readonly" data-testid="agent-keys-disabled">
+                Local secrets vault is not configured on this controller.
+              </div>
+            }
             <div class="s-table-wrap">
               <table class="s-table" aria-label="Framework API keys">
                 <thead>
@@ -224,6 +307,7 @@ interface PendingHostdRow {
                             'status-pill ' +
                             (isKeyConfigured(fw) ? 'healthy' : 'neutral')
                           "
+                          [attr.data-testid]="'agent-key-status-' + fw"
                         >
                           {{ isKeyConfigured(fw) ? "Configured" : "Not set" }}
                         </span>
@@ -242,8 +326,7 @@ interface PendingHostdRow {
                       <td>
                         <div class="s-inline">
                           <input
-                            class="s-input"
-                            style="width: 190px"
+                            class="s-input s-input-inline"
                             type="password"
                             autocomplete="off"
                             [attr.aria-label]="fw + ' API key'"
@@ -251,6 +334,7 @@ interface PendingHostdRow {
                             placeholder="Paste secret key…"
                             [value]="keyDrafts()[fw] || ''"
                             [disabled]="
+                              !agentKeysEnabled() ||
                               !access.can('PUT /api/agent-keys/{framework}')
                             "
                             (input)="setKeyDraft(fw, $any($event.target).value)"
@@ -260,6 +344,7 @@ interface PendingHostdRow {
                             class="btn-tonal s-btn-sm"
                             [attr.data-testid]="'save-agent-key-' + fw"
                             [disabled]="
+                              !agentKeysEnabled() ||
                               !(keyDrafts()[fw] || '').trim() ||
                               !access.can('PUT /api/agent-keys/{framework}') ||
                               busyKey() === fw
@@ -274,9 +359,11 @@ interface PendingHostdRow {
                               class="btn-text s-btn-sm"
                               [attr.data-testid]="'clear-agent-key-' + fw"
                               [disabled]="
+                                !agentKeysEnabled() ||
                                 !access.can(
                                   'DELETE /api/agent-keys/{framework}'
-                                ) || busyKey() === fw
+                                ) ||
+                                busyKey() === fw
                               "
                               (click)="clearAgentKey(fw)"
                             >
@@ -308,9 +395,24 @@ interface PendingHostdRow {
           }
 
           <div class="s-field">
-            <label class="s-label" for="f-codex-auth"
-              >Codex auth.json (OAuth session bundle)</label
-            >
+            <div class="s-inline">
+              <label class="s-label" for="f-codex-auth"
+                >Codex auth.json (OAuth session bundle)</label
+              >
+              <span
+                [class]="
+                  'status-pill ' + (codexAuthJsonSet() ? 'healthy' : 'neutral')
+                "
+                data-testid="codex-auth-status"
+              >
+                {{ codexAuthJsonSet() ? "Configured" : "Not set" }}
+              </span>
+              @if (codexAuthRefreshError()) {
+                <span class="status-pill error">{{
+                  codexAuthRefreshError()
+                }}</span>
+              }
+            </div>
             <textarea
               id="f-codex-auth"
               class="s-textarea tabular"
@@ -373,28 +475,34 @@ interface PendingHostdRow {
               <table class="s-table" aria-label="Model connections">
                 <thead>
                   <tr>
-                    <th>ID</th>
+                    <th>ID / Name</th>
                     <th>Framework</th>
-                    <th>Provider / Endpoint</th>
+                    <th>Placement &amp; Auth</th>
                     <th>Credential</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (b of backends(); track b.id) {
-                    <tr>
-                      <td class="tabular">{{ b.id }}</td>
+                    <tr [attr.data-testid]="'backend-row-' + b.id">
+                      <td class="tabular">
+                        {{ b.id }}{{ b.name ? " (" + b.name + ")" : "" }}
+                      </td>
                       <td>{{ b.framework }}</td>
                       <td class="tabular">
-                        {{ b.provider || "api"
-                        }}{{ b.endpoint ? " · " + b.endpoint : ""
-                        }}{{ b.project ? " · " + b.project : "" }}
+                        {{ b.authMode || "default"
+                        }}{{ b.hostd ? " · hostd:" + b.hostd : ""
+                        }}{{ b.concurrency ? " · max:" + b.concurrency : ""
+                        }}{{
+                          b.models?.length
+                            ? " · [" + b.models?.join(", ") + "]"
+                            : ""
+                        }}
                       </td>
                       <td>
                         <div class="s-inline">
                           <input
-                            class="s-input"
-                            style="width: 140px"
+                            class="s-input s-input-inline"
                             type="password"
                             [attr.aria-label]="'Credential for ' + b.id"
                             placeholder="Set secret…"
@@ -456,9 +564,21 @@ interface PendingHostdRow {
                 class="s-input tabular"
                 type="text"
                 data-testid="input-new-backend-id"
-                placeholder="vertex-us-central1"
+                placeholder="claude-team-1"
                 [value]="newBackendId()"
                 (input)="newBackendId.set($any($event.target).value)"
+              />
+            </div>
+            <div class="s-field">
+              <label class="s-label" for="nb-name">Display name</label>
+              <input
+                id="nb-name"
+                class="s-input"
+                type="text"
+                data-testid="input-new-backend-name"
+                placeholder="Team Claude"
+                [value]="newBackendName()"
+                (input)="newBackendName.set($any($event.target).value)"
               />
             </div>
             <div class="s-field">
@@ -473,28 +593,70 @@ interface PendingHostdRow {
               />
             </div>
             <div class="s-field">
-              <span class="s-label">Provider</span>
+              <span class="s-label">Auth mode</span>
               <g-pill-select
-                testid="select-new-backend-provider"
-                ariaLabel="Backend provider"
+                testid="select-new-backend-auth"
+                ariaLabel="Backend auth mode"
                 align="left"
-                [options]="providerOptions"
-                [value]="newBackendProvider()"
-                (valueChange)="newBackendProvider.set($event)"
+                [options]="authModeOptions"
+                [value]="newBackendAuthMode()"
+                (valueChange)="newBackendAuthMode.set($event)"
               />
             </div>
             <div class="s-field">
-              <label class="s-label" for="nb-endpoint"
-                >Endpoint / GCP project</label
+              <label class="s-label" for="nb-models"
+                >Pinned models (comma-separated)</label
               >
               <input
-                id="nb-endpoint"
-                class="s-input"
+                id="nb-models"
+                class="s-input tabular"
                 type="text"
-                data-testid="input-new-backend-endpoint"
-                placeholder="https://... or my-gcp-project"
-                [value]="newBackendEndpoint()"
-                (input)="newBackendEndpoint.set($any($event.target).value)"
+                data-testid="input-new-backend-models"
+                placeholder="empty = discover all"
+                [value]="newBackendModels()"
+                (input)="newBackendModels.set($any($event.target).value)"
+              />
+            </div>
+            <div class="s-field">
+              <label class="s-label" for="nb-hostd"
+                >Hostd name or label selector</label
+              >
+              <input
+                id="nb-hostd"
+                class="s-input tabular"
+                type="text"
+                data-testid="input-new-backend-hostd"
+                placeholder="workstation-01 or env=dev"
+                [value]="newBackendHostd()"
+                (input)="newBackendHostd.set($any($event.target).value)"
+              />
+            </div>
+            <div class="s-field">
+              <label class="s-label" for="nb-clipath">CLI path override</label>
+              <input
+                id="nb-clipath"
+                class="s-input tabular"
+                type="text"
+                data-testid="input-new-backend-clipath"
+                placeholder="/usr/local/bin/agy"
+                [value]="newBackendCliPath()"
+                (input)="newBackendCliPath.set($any($event.target).value)"
+              />
+            </div>
+            <div class="s-field">
+              <label class="s-label" for="nb-conc"
+                >Concurrency limit (0 = default)</label
+              >
+              <input
+                id="nb-conc"
+                class="s-input tabular"
+                type="number"
+                min="0"
+                data-testid="input-new-backend-concurrency"
+                [value]="newBackendConcurrency()"
+                (input)="
+                  newBackendConcurrency.set(Number($any($event.target).value))
+                "
               />
             </div>
           </div>
@@ -532,32 +694,159 @@ interface PendingHostdRow {
             <div>
               <h3 class="s-card-title">Token budget &amp; usage guardrails</h3>
               <p class="s-card-desc">
-                Daily token ceiling across running agents (PUT
-                /api/usage/settings).
+                Governor mode, worker floor, retention days, and per-connection
+                token budgets (PUT /api/usage/settings).
               </p>
             </div>
+            <button
+              type="button"
+              class="btn-primary s-btn-sm"
+              data-testid="save-token-budget"
+              [disabled]="!access.can('PUT /api/usage/settings')"
+              (click)="saveUsageSettings()"
+            >
+              Save usage settings
+            </button>
           </div>
+
+          <div class="s-grid">
+            <div class="s-field">
+              <span class="s-label">Budget enforcement mode</span>
+              <g-pill-select
+                testid="select-usage-mode"
+                ariaLabel="Budget enforcement mode"
+                align="left"
+                [options]="usageModeOptions"
+                [value]="usageMode()"
+                [disabled]="!access.can('PUT /api/usage/settings')"
+                (valueChange)="usageMode.set($event)"
+              />
+            </div>
+            <div class="s-field">
+              <label class="s-label" for="us-min-workers"
+                >Minimum workers floor</label
+              >
+              <input
+                id="us-min-workers"
+                class="s-input tabular"
+                type="number"
+                min="1"
+                data-testid="input-usage-min-workers"
+                [value]="usageMinWorkers()"
+                [disabled]="!access.can('PUT /api/usage/settings')"
+                (input)="usageMinWorkers.set(Number($any($event.target).value))"
+              />
+            </div>
+            <div class="s-field">
+              <label class="s-label" for="us-retention"
+                >Usage retention (days)</label
+              >
+              <input
+                id="us-retention"
+                class="s-input tabular"
+                type="number"
+                min="1"
+                data-testid="input-usage-retention-days"
+                [value]="usageRetentionDays()"
+                [disabled]="!access.can('PUT /api/usage/settings')"
+                (input)="
+                  usageRetentionDays.set(Number($any($event.target).value))
+                "
+              />
+            </div>
+          </div>
+
+          @if (usageBudgets().length > 0) {
+            <div class="s-table-wrap">
+              <table class="s-table" aria-label="Token budgets">
+                <thead>
+                  <tr>
+                    <th>Connection</th>
+                    <th>Model</th>
+                    <th>Tokens</th>
+                    <th>Window</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (b of usageBudgets(); track $index; let idx = $index) {
+                    <tr [attr.data-testid]="'usage-budget-row-' + idx">
+                      <td class="tabular">{{ b.connection }}</td>
+                      <td class="tabular">{{ b.model || "*" }}</td>
+                      <td class="tabular">{{ b.tokens }}</td>
+                      <td class="tabular">{{ b.window }}</td>
+                      <td>
+                        <button
+                          type="button"
+                          class="btn-text s-btn-sm"
+                          [disabled]="!access.can('PUT /api/usage/settings')"
+                          (click)="removeUsageBudget(idx)"
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          }
+
           <div class="s-inline">
             <input
-              class="s-input tabular"
-              style="width: 220px"
-              type="number"
-              min="0"
-              aria-label="Daily token budget"
-              data-testid="input-daily-token-budget"
-              placeholder="0 (unlimited)"
-              [value]="dailyTokenBudget()"
+              class="s-input s-input-inline tabular"
+              type="text"
+              aria-label="Budget connection ID"
+              data-testid="input-budget-connection"
+              placeholder="connection-id"
+              [value]="newBudgetConn()"
               [disabled]="!access.can('PUT /api/usage/settings')"
-              (input)="dailyTokenBudget.set($any($event.target).value)"
+              (input)="newBudgetConn.set($any($event.target).value)"
+            />
+            <input
+              class="s-input s-input-inline tabular"
+              type="text"
+              aria-label="Budget model (optional)"
+              data-testid="input-budget-model"
+              placeholder="model (optional)"
+              [value]="newBudgetModel()"
+              [disabled]="!access.can('PUT /api/usage/settings')"
+              (input)="newBudgetModel.set($any($event.target).value)"
+            />
+            <input
+              class="s-input s-input-inline tabular"
+              type="number"
+              min="1"
+              aria-label="Token limit"
+              data-testid="input-budget-tokens"
+              placeholder="1000000"
+              [value]="newBudgetTokens()"
+              [disabled]="!access.can('PUT /api/usage/settings')"
+              (input)="newBudgetTokens.set($any($event.target).value)"
+            />
+            <input
+              class="s-input s-input-inline tabular"
+              type="text"
+              aria-label="Budget window duration"
+              data-testid="input-budget-window"
+              placeholder="24h"
+              [value]="newBudgetWindow()"
+              [disabled]="!access.can('PUT /api/usage/settings')"
+              (input)="newBudgetWindow.set($any($event.target).value)"
             />
             <button
               type="button"
-              class="btn-tonal"
-              data-testid="save-token-budget"
-              [disabled]="!access.can('PUT /api/usage/settings')"
-              (click)="saveTokenBudget()"
+              class="btn-tonal s-btn-sm"
+              data-testid="add-usage-budget-btn"
+              [disabled]="
+                !newBudgetConn().trim() ||
+                !(Number(newBudgetTokens()) > 0) ||
+                !newBudgetWindow().trim() ||
+                !access.can('PUT /api/usage/settings')
+              "
+              (click)="addUsageBudget()"
             >
-              Update budget
+              Add budget
             </button>
             @if (usageSummary()) {
               <span class="s-hint tabular">{{ usageSummary() }}</span>
@@ -899,25 +1188,28 @@ interface PendingHostdRow {
                 </thead>
                 <tbody>
                   @for (h of hostds(); track h.name) {
-                    <tr>
+                    @let isRevoked =
+                      Boolean(h.revokedAt || h.revoked_at) ||
+                      h.state === "revoked";
+                    <tr [attr.data-testid]="'hostd-row-' + h.name">
                       <td class="tabular">{{ h.name }}</td>
                       <td>{{ h.owner || "—" }}</td>
                       <td>
                         <span
                           [class]="
                             'status-pill ' +
-                            (h.revoked
+                            (isRevoked
                               ? 'error'
-                              : h.status === 'connected'
+                              : h.state === 'connected'
                                 ? 'healthy'
                                 : 'neutral')
                           "
                         >
-                          {{ h.revoked ? "revoked" : h.status || "registered" }}
+                          {{ isRevoked ? "revoked" : h.state || "offline" }}
                         </span>
                       </td>
                       <td class="tabular">
-                        {{ (h.labels || []).join(", ") || "—" }}
+                        {{ formatLabels(h.labels) }}
                       </td>
                       <td>
                         <div class="s-inline">
@@ -926,7 +1218,8 @@ interface PendingHostdRow {
                             class="btn-tonal s-btn-sm"
                             [attr.data-testid]="'rotate-hostd-' + h.name"
                             [disabled]="
-                              !access.can('POST /api/hostds/{name}/rotate')
+                              !access.can('POST /api/hostds/{name}/rotate') ||
+                              isRevoked
                             "
                             (click)="rotateHostd(h.name)"
                           >
@@ -938,7 +1231,7 @@ interface PendingHostdRow {
                             [attr.data-testid]="'revoke-hostd-' + h.name"
                             [disabled]="
                               !access.can('POST /api/hostds/{name}/revoke') ||
-                              !!h.revoked
+                              isRevoked
                             "
                             (click)="revokeHostd(h.name)"
                           >
@@ -980,13 +1273,14 @@ interface PendingHostdRow {
             </div>
             <div class="s-field">
               <label class="s-label" for="hd-labels"
-                >Labels (comma-separated)</label
+                >Labels (key=value pairs)</label
               >
               <input
                 id="hd-labels"
                 class="s-input tabular"
                 type="text"
-                placeholder="linux,gpu"
+                data-testid="input-new-hostd-labels"
+                placeholder="os=linux,gpu=true"
                 [value]="newHostdLabels()"
                 [disabled]="!access.can('POST /api/hostds')"
                 (input)="newHostdLabels.set($any($event.target).value)"
@@ -1007,7 +1301,16 @@ interface PendingHostdRow {
             </button>
           </div>
           @if (mintedHostdToken(); as tok) {
-            <pre class="s-code" data-testid="minted-hostd-token">{{ tok }}</pre>
+            <div class="s-banner ok" data-testid="minted-hostd-token">
+              <pre class="s-code" style="flex: 1">{{ tok }}</pre>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                (click)="mintedHostdToken.set(null)"
+              >
+                Dismiss
+              </button>
+            </div>
           }
         </div>
 
@@ -1047,12 +1350,17 @@ interface PendingHostdRow {
                   </thead>
                   <tbody>
                     @for (c of enrollmentCodes(); track c.name) {
-                      <tr>
+                      @let codeRevoked = Boolean(c.revoked_at);
+                      <tr [attr.data-testid]="'enrollment-code-row-' + c.name">
                         <td class="tabular">{{ c.name }}</td>
                         <td class="tabular">
-                          {{ c.uses ?? 0 }} / {{ c.maxUses ?? "∞" }}
+                          {{ c.uses ?? 0 }} / {{ c.max_uses || "∞" }}
                         </td>
-                        <td class="tabular">{{ c.expiresAt || "never" }}</td>
+                        <td class="tabular">
+                          {{
+                            codeRevoked ? "revoked" : c.expires_at || "never"
+                          }}
+                        </td>
                         <td>
                           <div class="s-inline">
                             <button
@@ -1061,7 +1369,7 @@ interface PendingHostdRow {
                               [disabled]="
                                 !access.can(
                                   'POST /api/hostds/enrollment-codes/{name}/rotate'
-                                )
+                                ) || codeRevoked
                               "
                               (click)="rotateEnrollmentCode(c.name)"
                             >
@@ -1073,7 +1381,7 @@ interface PendingHostdRow {
                               [disabled]="
                                 !access.can(
                                   'POST /api/hostds/enrollment-codes/{name}/revoke'
-                                ) || !!c.revoked
+                                ) || codeRevoked
                               "
                               (click)="revokeEnrollmentCode(c.name)"
                             >
@@ -1089,8 +1397,7 @@ interface PendingHostdRow {
             }
             <div class="s-inline">
               <input
-                class="s-input tabular"
-                style="width: 220px"
+                class="s-input s-input-inline tabular"
                 type="text"
                 aria-label="Enrollment code name"
                 data-testid="input-enrollment-code-name"
@@ -1127,21 +1434,51 @@ interface PendingHostdRow {
                 <thead>
                   <tr>
                     <th>ID / Hostname</th>
-                    <th>Owner</th>
+                    <th>Pairing code</th>
+                    <th>Enrolled by</th>
                     <th>Platform</th>
                     <th>Approve / Reject</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (p of pendingHostds(); track p.id) {
-                    <tr>
-                      <td class="tabular">{{ p.hostname || p.id }}</td>
-                      <td>{{ p.owner || "—" }}</td>
+                    <tr [attr.data-testid]="'pending-hostd-row-' + p.id">
+                      <td class="tabular">
+                        {{ p.suggested_name || p.hostname || p.id }}
+                      </td>
+                      <td>
+                        <strong
+                          class="status-pill warn tabular"
+                          [attr.data-testid]="'pending-pairing-code-' + p.id"
+                        >
+                          {{ p.pairing_code || "—" }}
+                        </strong>
+                      </td>
+                      <td>{{ p.enrolled_by || "—" }}</td>
                       <td class="tabular">
                         {{ p.os || "?" }}/{{ p.arch || "?" }}
                       </td>
                       <td>
                         <div class="s-inline">
+                          <input
+                            class="s-input s-input-inline tabular"
+                            type="text"
+                            [attr.aria-label]="
+                              'Labels for ' + (p.hostname || p.id)
+                            "
+                            [attr.data-testid]="'pending-labels-' + p.id"
+                            placeholder="k=v (optional)"
+                            [value]="
+                              pendingLabelDrafts()[p.id] ||
+                              formatLabelsInput(p.default_labels)
+                            "
+                            (input)="
+                              setPendingLabelDraft(
+                                p.id,
+                                $any($event.target).value
+                              )
+                            "
+                          />
                           <button
                             type="button"
                             class="btn-primary s-btn-sm"
@@ -1191,23 +1528,30 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
 
   protected readonly Number = Number;
   protected readonly Boolean = Boolean;
-  protected readonly frameworks = ["gemini", "claude", "codex"] as const;
+  protected readonly formatLabels = formatHostdLabels;
+  protected readonly frameworks = ["antigravity", "claude", "codex"] as const;
 
   protected readonly frameworkOptions: readonly PillOption[] = [
-    { value: "gemini", label: "Gemini" },
+    { value: "antigravity", label: "Antigravity (Gemini)" },
     { value: "claude", label: "Claude" },
     { value: "codex", label: "Codex" },
   ];
   protected readonly effortOptions: readonly PillOption[] = [
+    { value: "", label: "Framework default" },
     { value: "low", label: "Low" },
     { value: "medium", label: "Medium" },
     { value: "high", label: "High" },
   ];
-  protected readonly providerOptions: readonly PillOption[] = [
-    { value: "api", label: "API key" },
+  protected readonly authModeOptions: readonly PillOption[] = [
+    { value: "", label: "Provider default" },
+    { value: "api_key", label: "API key / OAuth secret" },
+    { value: "ambient", label: "Host ambient login" },
     { value: "vertex", label: "Vertex AI" },
-    { value: "bedrock", label: "AWS Bedrock" },
-    { value: "openai-compatible", label: "OpenAI-compatible" },
+  ];
+  protected readonly usageModeOptions: readonly PillOption[] = [
+    { value: "advisory", label: "Advisory" },
+    { value: "auto", label: "Auto throttle" },
+    { value: "off", label: "Off" },
   ];
   protected readonly sandboxBackendOptions: readonly PillOption[] = [
     { value: "granule", label: "Granule microVM" },
@@ -1227,20 +1571,38 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     { value: "off", label: "Disabled (1x)" },
   ];
 
+  protected readonly agentKeysEnabled = signal(true);
   protected readonly agentKeys = signal<Record<string, boolean>>({});
+  protected readonly codexAuthJsonSet = signal(false);
+  protected readonly codexAuthRefreshError = signal("");
   protected readonly keyDrafts = signal<Record<string, string>>({});
   protected readonly keyChecks = signal<Record<string, KeyCheckResult>>({});
   protected readonly busyKey = signal<string | null>(null);
   protected readonly codexAuthDraft = signal("");
 
+  protected readonly newModelSettingName = signal("");
+  protected readonly newModelSettingEffort = signal("high");
+
   protected readonly backends = signal<BackendEntry[]>([]);
   protected readonly backendCredDrafts = signal<Record<string, string>>({});
   protected readonly newBackendId = signal("");
-  protected readonly newBackendFw = signal("gemini");
-  protected readonly newBackendProvider = signal("vertex");
-  protected readonly newBackendEndpoint = signal("");
+  protected readonly newBackendName = signal("");
+  protected readonly newBackendFw = signal("antigravity");
+  protected readonly newBackendAuthMode = signal("");
+  protected readonly newBackendModels = signal("");
+  protected readonly newBackendHostd = signal("");
+  protected readonly newBackendCliPath = signal("");
+  protected readonly newBackendConcurrency = signal(0);
   protected readonly discoveredModels = signal<string[]>([]);
-  protected readonly dailyTokenBudget = signal("");
+
+  protected readonly usageMode = signal("advisory");
+  protected readonly usageMinWorkers = signal(1);
+  protected readonly usageRetentionDays = signal(30);
+  protected readonly usageBudgets = signal<TokenBudgetRow[]>([]);
+  protected readonly newBudgetConn = signal("");
+  protected readonly newBudgetModel = signal("");
+  protected readonly newBudgetTokens = signal("");
+  protected readonly newBudgetWindow = signal("24h");
   protected readonly usageSummary = signal("");
 
   protected readonly persistentSandboxes = signal<
@@ -1255,6 +1617,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly enrollmentCodes = signal<EnrollmentCodeRow[]>([]);
   protected readonly newCodeName = signal("");
   protected readonly pendingHostds = signal<PendingHostdRow[]>([]);
+  protected readonly pendingLabelDrafts = signal<Record<string, string>>({});
 
   ngOnInit(): void {
     this.loadForSection();
@@ -1267,6 +1630,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected canWriteSettings(): boolean {
     return (
       this.access.can("POST /api/settings") &&
+      !this.state.configRepoOnly() &&
       !this.state.sectionLocked(this.section())
     );
   }
@@ -1274,8 +1638,59 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected canWriteDeployment(): boolean {
     return (
       this.access.can("PUT /api/deployment") &&
+      !this.state.configRepoOnly() &&
       !this.state.sectionLocked(this.section())
     );
+  }
+
+  protected defaultModelVal(): string {
+    return (
+      this.state.val<string>("defaultModel", "") ||
+      this.state.deployVal<string>("defaultModel", "")
+    );
+  }
+
+  protected setDefaultModelVal(v: string): void {
+    if (this.canWriteSettings()) {
+      this.state.setField("defaultModel", v);
+    } else if (this.canWriteDeployment()) {
+      this.state.setDeployField("defaultModel", v);
+    }
+  }
+
+  protected modelSettingsRows(): ModelSettingRow[] {
+    const v = this.state.deployVal<unknown>("modelSettings", []);
+    return Array.isArray(v) ? (v as ModelSettingRow[]) : [];
+  }
+
+  protected addModelSetting(): void {
+    const model = this.newModelSettingName().trim();
+    if (!model) return;
+    const effort = this.newModelSettingEffort().trim();
+    const cur = this.modelSettingsRows().filter((r) => r.model !== model);
+    const next: ModelSettingRow[] = [
+      ...cur,
+      { model, ...(effort ? { effort } : {}) },
+    ];
+    this.state.setDeployField("modelSettings", next);
+    this.newModelSettingName.set("");
+  }
+
+  protected removeModelSetting(idx: number): void {
+    const next = this.modelSettingsRows().filter((_, i) => i !== idx);
+    this.state.setDeployField("modelSettings", next);
+  }
+
+  private applyUsageSettings(s?: UsageSettingsDto | null): void {
+    if (!s) return;
+    this.usageMode.set(s.mode || "advisory");
+    this.usageMinWorkers.set(
+      s.minWorkers && s.minWorkers > 0 ? s.minWorkers : 1,
+    );
+    this.usageRetentionDays.set(
+      s.retentionDays && s.retentionDays > 0 ? s.retentionDays : 30,
+    );
+    this.usageBudgets.set(Array.isArray(s.budgets) ? [...s.budgets] : []);
   }
 
   private loadForSection(): void {
@@ -1290,11 +1705,12 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
           .get<Record<string, unknown>>("GET /api/usage")
           .then((u) => {
             if (!u) return;
-            const b = u["dailyTokenBudget"] ?? u["budget"];
-            if (b !== undefined) this.dailyTokenBudget.set(String(b));
-            const used = u["tokensToday"] ?? u["totalTokens"];
+            this.applyUsageSettings(
+              u["settings"] as UsageSettingsDto | undefined,
+            );
+            const used = u["billable"] ?? u["tokensToday"] ?? u["totalTokens"];
             if (used !== undefined) {
-              this.usageSummary.set(`Used today: ${used} tokens`);
+              this.usageSummary.set(`Reported billable: ${used} tokens`);
             }
           })
           .catch(() => undefined);
@@ -1319,55 +1735,35 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
 
   private syncBackendsFromState(): void {
     const raw =
-      this.state.deployment()["agentBackends"] ??
-      this.state.settings()["agentBackends"];
+      this.state.settings()["agentBackends"] ??
+      this.state.deployment()["agentBackends"];
+    console.log("BACKENDS RAW:", raw);
     if (Array.isArray(raw)) {
       this.backends.set(raw as BackendEntry[]);
-    } else if (raw && typeof raw === "object") {
-      this.backends.set(
-        Object.entries(raw as Record<string, Record<string, unknown>>).map(
-          ([id, cfg]) => ({
-            id,
-            framework: String(cfg?.["framework"] ?? "gemini"),
-            provider: cfg?.["provider"] ? String(cfg["provider"]) : undefined,
-            endpoint: cfg?.["endpoint"] ? String(cfg["endpoint"]) : undefined,
-            project: cfg?.["project"] ? String(cfg["project"]) : undefined,
-          }),
-        ),
-      );
     }
+  }
+
+  private applyAgentKeysResponse(
+    res: AgentKeysResponse | null | undefined,
+  ): void {
+    if (!res || typeof res !== "object") return;
+    if (res.enabled !== undefined) {
+      this.agentKeysEnabled.set(Boolean(res.enabled));
+    }
+    this.agentKeys.set({
+      antigravity: Boolean(res.geminiApiKeySet),
+      gemini: Boolean(res.geminiApiKeySet),
+      claude: Boolean(res.claudeOAuthTokenSet),
+      codex: Boolean(res.openaiApiKeySet),
+    });
+    this.codexAuthJsonSet.set(Boolean(res.codexAuthJSONSet));
+    this.codexAuthRefreshError.set(res.codexAuthRefreshError ?? "");
   }
 
   protected async loadAgentKeys(): Promise<void> {
     try {
-      const res = await this.api.get<
-        AgentKeyStatus[] | { keys?: AgentKeyStatus[] } | Record<string, unknown>
-      >("GET /api/agent-keys");
-      const map: Record<string, boolean> = {};
-      if (Array.isArray(res)) {
-        for (const k of res) {
-          map[k.framework] = Boolean(k.configured ?? k.set);
-        }
-      } else if (res && typeof res === "object") {
-        const list = (res as { keys?: AgentKeyStatus[] }).keys;
-        if (Array.isArray(list)) {
-          for (const k of list) {
-            map[k.framework] = Boolean(k.configured ?? k.set);
-          }
-        } else {
-          for (const fw of this.frameworks) {
-            const v = (res as Record<string, unknown>)[fw];
-            if (typeof v === "boolean") map[fw] = v;
-            else if (v && typeof v === "object") {
-              map[fw] = Boolean(
-                (v as Record<string, unknown>)["configured"] ??
-                (v as Record<string, unknown>)["set"],
-              );
-            }
-          }
-        }
-      }
-      this.agentKeys.set(map);
+      const res = await this.api.get<AgentKeysResponse>("GET /api/agent-keys");
+      this.applyAgentKeysResponse(res);
     } catch {
       // Non-fatal
     }
@@ -1386,16 +1782,20 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     if (!value) return;
     this.busyKey.set(fw);
     try {
-      await this.api.put(
+      const res = await this.api.put<AgentKeysResponse>(
         "PUT /api/agent-keys/{framework}",
         { framework: fw },
         { value },
       );
       this.setKeyDraft(fw, "");
-      this.agentKeys.update((p) => ({ ...p, [fw]: true }));
+      if (res && "geminiApiKeySet" in res) {
+        this.applyAgentKeysResponse(res);
+      } else {
+        this.agentKeys.update((p) => ({ ...p, [fw]: true }));
+      }
       this.snackbar.show(`Saved ${fw} API key`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     } finally {
       this.busyKey.set(null);
     }
@@ -1404,13 +1804,18 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected async clearAgentKey(fw: string): Promise<void> {
     this.busyKey.set(fw);
     try {
-      await this.api.delete("DELETE /api/agent-keys/{framework}", {
-        framework: fw,
-      });
-      this.agentKeys.update((p) => ({ ...p, [fw]: false }));
+      const res = await this.api.delete<AgentKeysResponse>(
+        "DELETE /api/agent-keys/{framework}",
+        { framework: fw },
+      );
+      if (res && "geminiApiKeySet" in res) {
+        this.applyAgentKeysResponse(res);
+      } else {
+        this.agentKeys.update((p) => ({ ...p, [fw]: false }));
+      }
       this.snackbar.show(`Cleared ${fw} API key`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     } finally {
       this.busyKey.set(null);
     }
@@ -1446,20 +1851,32 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     const value = this.codexAuthDraft().trim();
     if (!value) return;
     try {
-      await this.api.put("PUT /api/codex-auth", undefined, { value });
+      const res = await this.api.put<AgentKeysResponse>(
+        "PUT /api/codex-auth",
+        undefined,
+        { value },
+      );
       this.codexAuthDraft.set("");
+      if (res && "codexAuthJSONSet" in res) {
+        this.applyAgentKeysResponse(res);
+      }
       this.snackbar.show("Codex auth saved");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
   protected async clearCodexAuth(): Promise<void> {
     try {
-      await this.api.delete("DELETE /api/codex-auth");
+      const res = await this.api.delete<AgentKeysResponse>(
+        "DELETE /api/codex-auth",
+      );
+      if (res && "codexAuthJSONSet" in res) {
+        this.applyAgentKeysResponse(res);
+      }
       this.snackbar.show("Codex auth cleared");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1470,26 +1887,42 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected async saveBackend(): Promise<void> {
     const backendId = this.newBackendId().trim();
     if (!backendId) return;
+    const models = this.newBackendModels()
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const name = this.newBackendName().trim();
+    const authMode = this.newBackendAuthMode().trim();
+    const hostd = this.newBackendHostd().trim();
+    const cliPath = this.newBackendCliPath().trim();
+    const concurrency = Number(this.newBackendConcurrency()) || 0;
+    const payload: BackendEntry = {
+      id: backendId,
+      framework: this.newBackendFw(),
+      ...(name ? { name } : {}),
+      ...(models.length > 0 ? { models } : {}),
+      ...(authMode ? { authMode } : {}),
+      ...(cliPath ? { cliPath } : {}),
+      ...(concurrency > 0 ? { concurrency } : {}),
+      ...(hostd ? { hostd } : {}),
+    };
     try {
-      const endpoint = this.newBackendEndpoint().trim();
       await this.api.put(
         "PUT /api/deployment/agent-backends/{backendId}",
         { backendId },
-        {
-          framework: this.newBackendFw(),
-          provider: this.newBackendProvider(),
-          ...(this.newBackendProvider() === "vertex"
-            ? { project: endpoint }
-            : { endpoint }),
-        },
+        payload,
       );
       this.newBackendId.set("");
-      this.newBackendEndpoint.set("");
+      this.newBackendName.set("");
+      this.newBackendModels.set("");
+      this.newBackendHostd.set("");
+      this.newBackendCliPath.set("");
+      this.newBackendConcurrency.set(0);
       await this.state.loadCore();
       this.syncBackendsFromState();
       this.snackbar.show(`Saved model connection ${backendId}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1505,7 +1938,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       this.setBackendCredDraft(id, "");
       this.snackbar.show(`Updated credential for ${id}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1518,7 +1951,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       this.backends.update((list) => list.filter((b) => b.id !== backendId));
       this.snackbar.show(`Removed connection ${backendId}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1534,19 +1967,51 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
           .filter(Boolean),
       );
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
-  protected async saveTokenBudget(): Promise<void> {
+  protected addUsageBudget(): void {
+    const connection = this.newBudgetConn().trim();
+    const tokens = Math.floor(Number(this.newBudgetTokens()));
+    const window = this.newBudgetWindow().trim();
+    const model = this.newBudgetModel().trim();
+    if (!connection || !(tokens > 0) || !window) return;
+    this.usageBudgets.update((b) => [
+      ...b,
+      { connection, ...(model ? { model } : {}), tokens, window },
+    ]);
+    this.newBudgetConn.set("");
+    this.newBudgetModel.set("");
+    this.newBudgetTokens.set("");
+  }
+
+  protected removeUsageBudget(idx: number): void {
+    this.usageBudgets.update((b) => b.filter((_, i) => i !== idx));
+  }
+
+  protected async saveUsageSettings(): Promise<void> {
+    const payload: UsageSettingsDto = {
+      mode: this.usageMode() || "advisory",
+      minWorkers: Math.max(1, Math.floor(Number(this.usageMinWorkers()) || 1)),
+      retentionDays: Math.max(
+        1,
+        Math.floor(Number(this.usageRetentionDays()) || 30),
+      ),
+      budgets: this.usageBudgets(),
+    };
     try {
-      const n = Number(this.dailyTokenBudget() || "0");
-      await this.api.put("PUT /api/usage/settings", undefined, {
-        dailyTokenBudget: Number.isFinite(n) ? n : 0,
-      });
-      this.snackbar.show("Token budget updated");
+      const res = await this.api.put<{ settings?: UsageSettingsDto }>(
+        "PUT /api/usage/settings",
+        undefined,
+        payload,
+      );
+      if (res?.settings) {
+        this.applyUsageSettings(res.settings);
+      }
+      this.snackbar.show("Usage settings saved");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1581,7 +2046,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
         res?.detail || (res?.ok === false ? "Probe failed" : "Sandbox ready"),
       );
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1597,17 +2062,17 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       );
       this.snackbar.show(`Sandbox ${name}: ${action}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
   protected async loadHostds(): Promise<void> {
     if (this.access.can("GET /api/hostds")) {
       try {
-        const r = await this.api.get<HostdRow[] | { hostds?: HostdRow[] }>(
-          "GET /api/hostds",
-        );
-        this.hostds.set(Array.isArray(r) ? r : (r?.hostds ?? []));
+        const r = await this.api.get<
+          HostdRow[] | { hostds?: HostdRow[]; items?: HostdRow[] }
+        >("GET /api/hostds");
+        this.hostds.set(Array.isArray(r) ? r : (r?.hostds ?? r?.items ?? []));
       } catch {
         // Non-fatal
       }
@@ -1615,9 +2080,12 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     if (this.access.can("GET /api/hostds/enrollment-codes")) {
       try {
         const c = await this.api.get<
-          EnrollmentCodeRow[] | { codes?: EnrollmentCodeRow[] }
+          | EnrollmentCodeRow[]
+          | { codes?: EnrollmentCodeRow[]; items?: EnrollmentCodeRow[] }
         >("GET /api/hostds/enrollment-codes");
-        this.enrollmentCodes.set(Array.isArray(c) ? c : (c?.codes ?? []));
+        this.enrollmentCodes.set(
+          Array.isArray(c) ? c : (c?.codes ?? c?.items ?? []),
+        );
       } catch {
         // Non-fatal
       }
@@ -1625,54 +2093,84 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     if (this.access.can("GET /api/hostds/pending")) {
       try {
         const p = await this.api.get<
-          PendingHostdRow[] | { pending?: PendingHostdRow[] }
+          | PendingHostdRow[]
+          | { pending?: PendingHostdRow[]; items?: PendingHostdRow[] }
         >("GET /api/hostds/pending");
-        this.pendingHostds.set(Array.isArray(p) ? p : (p?.pending ?? []));
+        this.pendingHostds.set(
+          Array.isArray(p) ? p : (p?.pending ?? p?.items ?? []),
+        );
       } catch {
         // Non-fatal
       }
     }
   }
 
+  private formatIssuedHostdSecret(
+    label: string,
+    res?: { token?: string; install?: HostdInstallDto | string } | null,
+  ): string | null {
+    if (!res) return null;
+    const parts: string[] = [];
+    if (typeof res.token === "string" && res.token) {
+      parts.push(`${label} (shown once): ${res.token}`);
+    }
+    if (typeof res.install === "string" && res.install.trim()) {
+      parts.push(res.install.trim());
+    } else if (res.install && typeof res.install === "object") {
+      if (typeof res.install.command === "string" && res.install.command) {
+        parts.push(res.install.command);
+      } else if (Array.isArray(res.install.lines) && res.install.lines.length) {
+        parts.push(res.install.lines.join("\n"));
+      }
+      if (typeof res.install.note === "string" && res.install.note) {
+        parts.push(`# ${res.install.note}`);
+      }
+    }
+    return parts.length > 0 ? parts.join("\n\n") : null;
+  }
+
   protected async createHostd(): Promise<void> {
     const name = this.newHostdName().trim();
     if (!name) return;
-    const labels = this.newHostdLabels()
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const parsed = parseHostdLabels(this.newHostdLabels());
+    if (parsed.error) {
+      this.state.error.set(parsed.error);
+      return;
+    }
     try {
       const res = await this.api.post<{
         token?: string;
-        install?: string;
+        install?: HostdInstallDto | string;
         hostd?: HostdRow;
-      }>("POST /api/hostds", undefined, { name, labels });
+      }>("POST /api/hostds", undefined, {
+        name,
+        ...(Object.keys(parsed.labels).length > 0
+          ? { labels: parsed.labels }
+          : {}),
+      });
       this.newHostdName.set("");
       this.newHostdLabels.set("");
-      if (res?.install || res?.token) {
-        this.mintedHostdToken.set(res.install || `Token: ${res.token}`);
-      }
+      const msg = this.formatIssuedHostdSecret(`Hostd token (${name})`, res);
+      if (msg) this.mintedHostdToken.set(msg);
       await this.loadHostds();
       this.snackbar.show(`Registered hostd ${name}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
   protected async rotateHostd(name: string): Promise<void> {
     try {
-      const res = await this.api.post<{ token?: string }>(
-        "POST /api/hostds/{name}/rotate",
-        { name },
-        {},
-      );
-      if (res?.token) {
-        this.mintedHostdToken.set(`Rotated token (${name}): ${res.token}`);
-      }
+      const res = await this.api.post<{
+        token?: string;
+        install?: HostdInstallDto | string;
+      }>("POST /api/hostds/{name}/rotate", { name }, {});
+      const msg = this.formatIssuedHostdSecret(`Rotated token (${name})`, res);
+      if (msg) this.mintedHostdToken.set(msg);
       await this.loadHostds();
       this.snackbar.show(`Rotated ${name}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1682,7 +2180,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       await this.loadHostds();
       this.snackbar.show(`Revoked ${name}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1692,7 +2190,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       await this.loadHostds();
       this.snackbar.show(`Deleted ${name}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1702,7 +2200,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       await this.loadHostds();
       this.snackbar.show("Removed revoked hostds");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1710,35 +2208,42 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     const name = this.newCodeName().trim();
     if (!name) return;
     try {
-      const res = await this.api.post<{ code?: string; token?: string }>(
-        "POST /api/hostds/enrollment-codes",
-        undefined,
-        { name },
-      );
+      const res = await this.api.post<{
+        code?: string;
+        token?: string;
+        install?: HostdInstallDto | string;
+      }>("POST /api/hostds/enrollment-codes", undefined, { name });
       this.newCodeName.set("");
-      if (res?.code || res?.token) {
-        this.mintedHostdToken.set(
-          `Enrollment code (${name}): ${res.code ?? res.token}`,
-        );
-      }
+      const secret = res?.code ?? res?.token;
+      const msg = this.formatIssuedHostdSecret(`Enrollment code (${name})`, {
+        token: secret,
+        install: res?.install,
+      });
+      if (msg) this.mintedHostdToken.set(msg);
       await this.loadHostds();
       this.snackbar.show(`Created enrollment code ${name}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
   protected async rotateEnrollmentCode(name: string): Promise<void> {
     try {
-      await this.api.post(
-        "POST /api/hostds/enrollment-codes/{name}/rotate",
-        { name },
-        {},
+      const res = await this.api.post<{
+        code?: string;
+        token?: string;
+        install?: HostdInstallDto | string;
+      }>("POST /api/hostds/enrollment-codes/{name}/rotate", { name }, {});
+      const secret = res?.code ?? res?.token;
+      const msg = this.formatIssuedHostdSecret(
+        `Rotated enrollment code (${name})`,
+        { token: secret, install: res?.install },
       );
+      if (msg) this.mintedHostdToken.set(msg);
       await this.loadHostds();
       this.snackbar.show(`Rotated code ${name}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1752,21 +2257,47 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       await this.loadHostds();
       this.snackbar.show(`Revoked code ${name}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
+  protected formatLabelsInput(labels?: Record<string, string> | null): string {
+    const formatted = formatHostdLabels(labels);
+    return formatted === "—" ? "" : formatted;
+  }
+
+  protected setPendingLabelDraft(id: string, value: string): void {
+    this.pendingLabelDrafts.update((prev) => ({ ...prev, [id]: value }));
+  }
+
   protected async acceptPendingHostd(p: PendingHostdRow): Promise<void> {
+    const rawLabels =
+      this.pendingLabelDrafts()[p.id] ||
+      this.formatLabelsInput(p.default_labels);
+    const parsed = parseHostdLabels(rawLabels);
+    if (parsed.error) {
+      this.state.error.set(parsed.error);
+      return;
+    }
+    const hostName = p.suggested_name || p.hostname || p.id;
     try {
       await this.api.post(
         "POST /api/hostds/pending/{id}/accept",
         { id: p.id },
-        { name: p.hostname || p.id, labels: [], capacity: 2 },
+        {
+          name: hostName,
+          ...(Object.keys(parsed.labels).length > 0
+            ? { labels: parsed.labels }
+            : {}),
+          ...(p.default_capacity && p.default_capacity > 0
+            ? { capacity: p.default_capacity }
+            : {}),
+        },
       );
       await this.loadHostds();
-      this.snackbar.show(`Approved hostd ${p.hostname || p.id}`);
+      this.snackbar.show(`Approved hostd ${hostName}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1776,7 +2307,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       await this.loadHostds();
       this.snackbar.show("Rejected pending hostd");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 }

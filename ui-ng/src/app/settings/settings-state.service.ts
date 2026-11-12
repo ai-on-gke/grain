@@ -26,6 +26,35 @@ import {
   isConfigRepoSection,
 } from "./settings-sections";
 
+export interface ConfigFileChange {
+  path: string;
+  op: string;
+  patch: string;
+}
+
+export function extractRefusedChanges(err: unknown): ConfigFileChange[] {
+  if (!(err instanceof HttpErrorResponse)) return [];
+  const body = err.error;
+  if (!body || typeof body !== "object") return [];
+  const rec = body as Record<string, unknown>;
+  if (rec["code"] !== "config_managed_externally") return [];
+  const raw = Array.isArray(rec["change"])
+    ? rec["change"]
+    : Array.isArray(rec["changes"])
+      ? rec["changes"]
+      : [];
+  return raw
+    .filter(
+      (c): c is ConfigFileChange =>
+        Boolean(c) &&
+        typeof c === "object" &&
+        typeof (c as ConfigFileChange).path === "string" &&
+        typeof (c as ConfigFileChange).op === "string" &&
+        typeof (c as ConfigFileChange).patch === "string",
+    )
+    .map((c) => ({ path: c.path, op: c.op, patch: c.patch }));
+}
+
 export function errText(err: unknown): string {
   if (err instanceof HttpErrorResponse) {
     const body = err.error;
@@ -57,6 +86,15 @@ export class SettingsStateService {
   readonly saving = signal(false);
   readonly error = signal<string | null>(null);
   readonly planPreview = signal<SettingsPlanRow[] | null>(null);
+  readonly refusedChanges = signal<ConfigFileChange[]>([]);
+
+  recordError(err: unknown): void {
+    const changes = extractRefusedChanges(err);
+    if (changes.length > 0) {
+      this.refusedChanges.set(changes);
+    }
+    this.error.set(errText(err));
+  }
 
   readonly configRepoOnly = computed(() => {
     const s = this.settings();
@@ -238,7 +276,7 @@ export class SettingsStateService {
       this.planPreview.set(null);
       this.snackbar.show("Settings saved");
     } catch (err) {
-      this.error.set(errText(err));
+      this.recordError(err);
     } finally {
       this.saving.set(false);
     }

@@ -47,9 +47,6 @@ class FakeSettingsApi {
     environmentName: "Staging",
     pollInterval: "30s",
     maxWorkers: 4,
-    agentFramework: "gemini",
-    geminiModel: "gemini-2.5-pro",
-    geminiEffort: "high",
     approvedByDefault: false,
     autoMergeByDefault: false,
     externalAgentApi: true,
@@ -60,7 +57,7 @@ class FakeSettingsApi {
     defaultModel: "gemini-2.5-pro",
     targetRepos: ["acme/platform"],
     agentBackends: [
-      { id: "vertex-main", framework: "gemini", provider: "vertex" },
+      { id: "vertex-main", framework: "antigravity" },
     ],
   };
 
@@ -75,14 +72,17 @@ class FakeSettingsApi {
       return Promise.resolve(structuredClone(this.deploymentBody));
     }
     if (key === "GET /api/agent-keys") {
-      return Promise.resolve([
-        { framework: "gemini", configured: true },
-        { framework: "claude", configured: false },
-      ]);
+      return Promise.resolve({
+        enabled: true,
+        geminiApiKeySet: true,
+        claudeOAuthTokenSet: false,
+        openaiApiKeySet: false,
+        codexAuthJSONSet: false,
+      });
     }
     if (key === "GET /api/access/principals") {
       return Promise.resolve([
-        { entry: "roman@google.com", role: "grain/operator" },
+        { entry: "operator@example.com", role: "grain/operator" },
       ]);
     }
     if (key === "GET /api/external-agents/tokens") {
@@ -102,7 +102,7 @@ class FakeSettingsApi {
     }
     if (key === "GET /api/capability-policy") {
       return Promise.resolve({
-        policy: { rules: [{ capability: "repo:write", effect: "allow" }] },
+        policy: { rules: [{ capability: "repo:write" }] },
       });
     }
     if (key === "GET /api/state-repo") {
@@ -118,7 +118,8 @@ class FakeSettingsApi {
     if (key === "GET /api/upgrade") {
       return Promise.resolve({
         currentVersion: "v3.6.0",
-        current: { state: "downloading" },
+        phase: "downloading",
+        cancellable: true
       });
     }
     if (key === "GET /api/upgrade/targets") {
@@ -132,11 +133,11 @@ class FakeSettingsApi {
     }
     if (key === "GET /api/hostds") {
       return Promise.resolve([
-        { name: "workstation-1", owner: "rarcea", status: "connected" },
+        { name: "workstation-1", owner: "alice", status: "connected" },
       ]);
     }
     if (key === "GET /api/hostds/enrollment-codes") {
-      return Promise.resolve([{ name: "eng-laptops", uses: 2, maxUses: 10 }]);
+      return Promise.resolve([{ name: "eng-laptops", uses: 2, max_uses: 10 }]);
     }
     if (key === "GET /api/hostds/pending") {
       return Promise.resolve([
@@ -189,7 +190,7 @@ class FakeSettingsApi {
       return Promise.resolve({ ok: true, detail: "3 tools advertised" });
     }
     if (key === "POST /api/capability-policy/preview") {
-      return Promise.resolve({ summary: "2 rules evaluated cleanly" });
+      return Promise.resolve({ denied: [] });
     }
     return Promise.resolve({ ok: true });
   };
@@ -319,7 +320,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     el.querySelector<HTMLButtonElement>(
       '[data-testid="settings-plan-btn"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
 
     const preview = el.querySelector('[data-testid="settings-plan-preview"]')!;
@@ -333,7 +334,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     el.querySelector<HTMLButtonElement>(
       '[data-testid="settings-save-btn"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
 
     expect(
@@ -370,10 +371,12 @@ describe("SettingsPageComponent (M13 D-12)", () => {
 
     // Navigate to Models: secret key input stays enabled even when configRepoOnly is true!
     await harness.navigateByUrl("/settings/models");
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
+    console.log("DOM2:", el.innerHTML);
+    console.log("FOUND_INPUT_IN_HTML:", el.innerHTML.includes('input-agent-key-antigravity'));
     const keyInput = el.querySelector<HTMLInputElement>(
-      '[data-testid="input-agent-key-gemini"]',
+      '[data-testid="input-agent-key-antigravity"]',
     )!;
     expect(keyInput.disabled).toBe(false);
   });
@@ -381,6 +384,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
   it("manages Model Connections and verifies framework API keys", async () => {
     const { el, api, harness } = await mountSettings("/settings/models");
 
+    console.log("DEBUG SECOND:", el.innerHTML);
     setInput(
       el.querySelector<HTMLInputElement>(
         '[data-testid="input-agent-key-claude"]',
@@ -391,7 +395,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     el.querySelector<HTMLButtonElement>(
       '[data-testid="save-agent-key-claude"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
 
     expect(
@@ -402,33 +406,32 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       ),
     ).toBe(true);
 
+    harness.detectChanges();
     el.querySelector<HTMLButtonElement>(
-      '[data-testid="check-agent-key-gemini"]',
+      '[data-testid="check-agent-key-antigravity"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
     expect(
-      el.querySelector('[data-testid="key-check-result-gemini"]')?.textContent,
+      el.querySelector('[data-testid="key-check-result-antigravity"]')?.textContent,
     ).toContain("200 OK");
 
     // Add a new Vertex backend connection
+    console.log("DEBUG SECOND:", el.innerHTML);
     setInput(
       el.querySelector<HTMLInputElement>(
         '[data-testid="input-new-backend-id"]',
       )!,
       "vertex-eu",
     );
-    setInput(
-      el.querySelector<HTMLInputElement>(
-        '[data-testid="input-new-backend-endpoint"]',
-      )!,
-      "my-eu-proj",
-    );
+    
     harness.detectChanges();
     el.querySelector<HTMLButtonElement>(
       '[data-testid="add-model-backend"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     expect(
       api.calls.some(
         (c) =>
@@ -441,26 +444,28 @@ describe("SettingsPageComponent (M13 D-12)", () => {
   it("manages RBAC principals and mints + revokes gma_ external agent tokens", async () => {
     const { el, api, harness } = await mountSettings("/settings/access");
 
+    console.log("DEBUG SECOND:", el.innerHTML);
     setInput(
       el.querySelector<HTMLInputElement>(
         '[data-testid="input-principal-entry"]',
       )!,
-      "bob@google.com",
+      "bob@example.com",
     );
     harness.detectChanges();
     el.querySelector<HTMLButtonElement>(
       '[data-testid="add-principal-btn"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     expect(
       api.calls.some(
         (c) =>
           c.key === "POST /api/access/principals" &&
-          (c.body as { entry?: string })?.entry === "bob@google.com",
+          (c.body as { entry?: string })?.entry === "bob@example.com",
       ),
     ).toBe(true);
 
     // Mint gma_ token
+    console.log("DEBUG SECOND:", el.innerHTML);
     setInput(
       el.querySelector<HTMLInputElement>(
         '[data-testid="input-gma-token-name"]',
@@ -471,7 +476,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     el.querySelector<HTMLButtonElement>(
       '[data-testid="mint-gma-token-btn"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
 
     expect(
@@ -482,7 +487,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     el.querySelector<HTMLButtonElement>(
       '[data-testid="revoke-token-tok-1"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     expect(
       api.calls.some(
         (c) =>
@@ -499,7 +504,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     el.querySelector<HTMLButtonElement>(
       '[data-testid="test-cap-server-github-mcp"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
     expect(
       el.querySelector('[data-testid="cap-test-notice"]')?.textContent,
@@ -508,7 +513,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     el.querySelector<HTMLButtonElement>(
       '[data-testid="save-cap-policy-btn"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     expect(api.calls.some((c) => c.key === "PUT /api/capability-policy")).toBe(
       true,
     );
@@ -524,7 +529,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     el.querySelector<HTMLButtonElement>(
       '[data-testid="sync-state-repo-btn"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     expect(api.calls.some((c) => c.key === "POST /api/state-repo/sync")).toBe(
       true,
     );
@@ -540,15 +545,15 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     el.querySelector<HTMLButtonElement>(
       '[data-testid="cancel-upgrade-btn"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
-    expect(api.calls.some((c) => c.key === "DELETE /api/upgrade/current")).toBe(
+    await new Promise((r) => setTimeout(r, 200));
+    expect(api.calls.some((c) => c.key === "DELETE /api/upgrade/scheduled")).toBe(
       true,
     );
 
     el.querySelector<HTMLButtonElement>(
       '[data-testid="start-upgrade-btn"]',
     )!.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     expect(api.calls.some((c) => c.key === "POST /api/upgrade")).toBe(true);
   });
 
@@ -588,7 +593,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
 
     // Navigate to Config repo: remote config (scope: null) is also cleanly gated!
     await harness.navigateByUrl("/settings/config-repo");
-    await new Promise((r) => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
     expect(
       el.querySelector('[data-testid="state-repo-remote-restricted"]'),

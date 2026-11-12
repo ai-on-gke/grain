@@ -21,12 +21,12 @@ import {
   ViewEncapsulation,
   inject,
   input,
-  output,
   signal,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
+import { NavConfigService } from "../services/nav-config.service";
 import { SnackbarService } from "../services/snackbar.service";
 import {
   type ThemeMode,
@@ -35,24 +35,47 @@ import {
   writeStorage,
 } from "../services/theme.service";
 import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
+import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
 import type { SettingsSectionId } from "./settings-sections";
-import { SettingsStateService, errText } from "./settings-state.service";
+import { SettingsStateService } from "./settings-state.service";
 
 const TZ_STORAGE_KEY = "grain.timeZone";
 
 interface UpgradeTargetRow {
-  branch: string;
+  name?: string;
+  branch?: string;
+  kind?: string;
+  ref?: string;
   version?: string;
   commit?: string;
-  channel?: string;
+}
+
+interface ReleaseNotePreviewItem {
+  version?: string;
+  title?: string;
+  body?: string;
+  text?: string;
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 }
 
 @Component({
   selector: "g-settings-instance",
-  imports: [PillSelectComponent],
+  imports: [PillSelectComponent, ConfirmDialogComponent],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -131,19 +154,39 @@ interface UpgradeTargetRow {
         </div>
 
         <div class="s-card" data-testid="card-broadcast">
-          <h3 class="s-card-title">Operator broadcast banner</h3>
+          <h3 class="s-card-title">Broadcast message to active tasks</h3>
           <p class="s-card-desc">
-            Publish a live notice across connected Grain browsers (leave empty
-            to clear).
+            Posts an operator comment onto active (<code>running</code>,
+            <code>awaiting_reply</code>, <code>queued</code>, and
+            <code>awaiting_submit</code>) tasks — waking any tasks currently
+            awaiting a reply unless restricted to running tasks only.
           </p>
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name">Running tasks only</span>
+              <span class="s-hint"
+                >Deliver only to tasks currently running without un-parking
+                awaiting_reply or commenting on queued tasks.</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-broadcast-running-only"
+              [attr.aria-checked]="broadcastRunningOnly()"
+              [disabled]="!access.can('POST /api/deployment/broadcast')"
+              aria-label="Deliver broadcast to running tasks only"
+              (click)="broadcastRunningOnly.set(!broadcastRunningOnly())"
+            ></button>
+          </div>
           <div class="s-inline">
             <input
-              class="s-input"
-              style="flex: 1; min-width: 240px"
+              class="s-input s-input-inline"
               type="text"
-              aria-label="Broadcast banner message"
+              aria-label="Broadcast message to active tasks"
               data-testid="input-broadcast-message"
-              placeholder="Maintenance window at 18:00 UTC…"
+              placeholder="Freeze merges on main until 18:00 UTC…"
               [value]="broadcastMessage()"
               [disabled]="!access.can('POST /api/deployment/broadcast')"
               (input)="broadcastMessage.set($any($event.target).value)"
@@ -152,10 +195,13 @@ interface UpgradeTargetRow {
               type="button"
               class="btn-tonal"
               data-testid="send-broadcast-btn"
-              [disabled]="!access.can('POST /api/deployment/broadcast')"
-              (click)="sendBroadcast()"
+              [disabled]="
+                !broadcastMessage().trim() ||
+                !access.can('POST /api/deployment/broadcast')
+              "
+              (click)="requestBroadcastConfirm()"
             >
-              Publish banner
+              Broadcast to active tasks
             </button>
           </div>
         </div>
@@ -234,49 +280,45 @@ interface UpgradeTargetRow {
                 >Show, hide, or reorder destinations on the left rail.</span
               >
             </div>
-            <button
-              type="button"
-              class="btn-tonal"
-              data-testid="pref-customize-nav-btn"
-              (click)="customizeNav.emit()"
-            >
-              Customize navigation…
-            </button>
           </div>
         </div>
       }
 
       @case ("cli") {
         <div class="s-card" data-testid="card-cli">
-          <h3 class="s-card-title">Workstation grain CLI setup</h3>
+          <h3 class="s-card-title">
+            Workstation grain CLI &amp; agent CLI run locations
+          </h3>
           <p class="s-card-desc">
-            Install the CLI and authenticate against this Grain server ({{
-              serverOrigin()
-            }}).
+            Install the CLI against this Grain server ({{ serverOrigin() }}) and
+            choose where each agent CLI executes on dispatch.
           </p>
           <pre class="s-code" data-testid="cli-install-snippet">{{
             cliSnippet()
           }}</pre>
 
-          <div class="s-row">
-            <div class="s-toggle-copy">
-              <span class="s-toggle-name">Default CLI task execution</span>
-              <span class="s-hint"
-                >Where ad-hoc grain run commands execute by default.</span
-              >
+          @for (fw of cliFrameworks; track fw.id) {
+            <div class="s-toggle-row">
+              <div class="s-toggle-copy">
+                <span class="s-toggle-name">{{ fw.label }} CLI execution</span>
+                <span class="s-hint">{{ fw.hint }}</span>
+              </div>
+              <div class="s-inline">
+                <g-pill-select
+                  [testid]="'select-cli-run-' + fw.id"
+                  [ariaLabel]="fw.label + ' CLI execution location'"
+                  align="left"
+                  [options]="cliLocationOptions"
+                  [value]="cliRunLocations()[fw.id] || ''"
+                  [disabled]="
+                    !access.can('PUT /api/settings/cli-run') ||
+                    state.configRepoOnly()
+                  "
+                  (valueChange)="saveCliRunLocation(fw.id, $event)"
+                />
+              </div>
             </div>
-            <div class="s-inline">
-              <g-pill-select
-                testid="select-cli-run-location"
-                ariaLabel="Default CLI task execution"
-                align="left"
-                [options]="cliLocationOptions"
-                [value]="cliRunLocation()"
-                [disabled]="!access.can('PUT /api/settings/cli-run')"
-                (valueChange)="saveCliRunLocation($event)"
-              />
-            </div>
-          </div>
+          }
         </div>
       }
 
@@ -443,23 +485,6 @@ interface UpgradeTargetRow {
               />
             </div>
             <div class="s-field">
-              <label class="s-label" for="e-mergers">Max merge agents</label>
-              <input
-                id="e-mergers"
-                class="s-input tabular"
-                type="number"
-                min="0"
-                [value]="state.val('maxMergers', 2)"
-                [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField(
-                    'maxMergers',
-                    Number($any($event.target).value)
-                  )
-                "
-              />
-            </div>
-            <div class="s-field">
               <label class="s-label" for="e-mpr"
                 >Max merges per repo branch</label
               >
@@ -605,6 +630,24 @@ interface UpgradeTargetRow {
             </span>
           </div>
 
+          @if (scheduledUpgradeBranch()) {
+            <div class="s-banner warn" data-testid="scheduled-upgrade-banner">
+              <span
+                >Upgrade scheduled (waiting for running tasks):
+                {{ scheduledUpgradeBranch() }}</span
+              >
+              <button
+                type="button"
+                class="s-btn-danger s-btn-sm"
+                data-testid="cancel-scheduled-upgrade-btn"
+                [disabled]="!access.can('DELETE /api/upgrade/scheduled')"
+                (click)="cancelScheduledUpgrade()"
+              >
+                Cancel scheduled upgrade
+              </button>
+            </div>
+          }
+
           @if (activeUpgradeState()) {
             <div class="s-banner warn" data-testid="active-upgrade-banner">
               <span>Upgrade in progress: {{ activeUpgradeState() }}</span>
@@ -612,7 +655,10 @@ interface UpgradeTargetRow {
                 type="button"
                 class="s-btn-danger s-btn-sm"
                 data-testid="cancel-upgrade-btn"
-                [disabled]="!access.can('DELETE /api/upgrade/current')"
+                [disabled]="
+                  !upgradeCancellable() ||
+                  !access.can('DELETE /api/upgrade/scheduled')
+                "
                 (click)="cancelUpgrade()"
               >
                 Cancel upgrade
@@ -633,14 +679,14 @@ interface UpgradeTargetRow {
               />
             </div>
             <div class="s-field">
-              <span class="s-label">Auto-upgrade check mode</span>
+              <span class="s-label">Post-upgrade check mode</span>
               <g-pill-select
                 testid="select-upgrade-check-mode"
-                ariaLabel="Auto-upgrade check mode"
+                ariaLabel="Post-upgrade check mode"
                 align="left"
                 [options]="upgradeCheckOptions"
-                [value]="state.val('upgradeCheckMode', 'notify')"
-                [disabled]="!access.can('POST /api/settings')"
+                [value]="state.val('upgradeCheckMode', 'auto')"
+                [disabled]="!canWriteSettings()"
                 (valueChange)="state.setField('upgradeCheckMode', $event)"
               />
             </div>
@@ -694,6 +740,10 @@ interface UpgradeTargetRow {
         </div>
       }
     }
+
+    @if (confirmRequest(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+    }
   `,
 })
 export class SettingsInstanceComponent implements OnInit, OnChanges {
@@ -702,14 +752,16 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected readonly state = inject(SettingsStateService);
   protected readonly theme = inject(ThemeService);
   protected readonly keyboard = inject(KeyboardService);
+  private readonly navConfig = inject(NavConfigService);
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);
 
   readonly section = input.required<SettingsSectionId>();
-  readonly customizeNav = output<void>();
 
   protected readonly Number = Number;
   protected readonly Boolean = Boolean;
+
+  protected readonly confirmRequest = signal<ConfirmRequest | null>(null);
 
   protected readonly themeModes: readonly {
     value: ThemeMode;
@@ -728,10 +780,29 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     { value: "Europe/London", label: "Europe/London" },
   ];
 
+  protected readonly cliFrameworks = [
+    {
+      id: "claude",
+      label: "Claude",
+      hint: "Where Claude Code CLI sessions execute.",
+    },
+    {
+      id: "codex",
+      label: "Codex",
+      hint: "Where Codex CLI sessions execute.",
+    },
+    {
+      id: "antigravity",
+      label: "Antigravity",
+      hint: "Where Antigravity (agy) CLI sessions execute.",
+    },
+  ] as const;
+
   protected readonly cliLocationOptions: readonly PillOption[] = [
-    { value: "sandbox", label: "Controller sandbox" },
-    { value: "hostd", label: "Paired workstation hostd" },
-    { value: "local", label: "Caller machine" },
+    { value: "", label: "Deployment default" },
+    { value: "host", label: "Host (grain hostd)" },
+    { value: "container", label: "Daemon container" },
+    { value: "detached", label: "Detached hostd session" },
   ];
 
   protected readonly hubAuthOptions: readonly PillOption[] = [
@@ -741,13 +812,14 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected readonly upgradeCheckOptions: readonly PillOption[] = [
     { value: "off", label: "Off" },
-    { value: "notify", label: "Notify in UI" },
-    { value: "auto", label: "Automatic" },
+    { value: "approve", label: "File unapproved check" },
+    { value: "auto", label: "File & queue check" },
   ];
 
   protected readonly timeZone = signal(readStorage(TZ_STORAGE_KEY) || "local");
   protected readonly broadcastMessage = signal("");
-  protected readonly cliRunLocation = signal("sandbox");
+  protected readonly broadcastRunningOnly = signal(false);
+  protected readonly cliRunLocations = signal<Record<string, string>>({});
 
   protected readonly packageCacheSummary = signal("Shared package proxy cache");
   protected readonly actionsCacheSummary = signal(
@@ -758,8 +830,10 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected readonly currentVersion = signal("dev");
   protected readonly activeUpgradeState = signal("");
+  protected readonly upgradeCancellable = signal(false);
+  protected readonly scheduledUpgradeBranch = signal("");
   protected readonly upgradeTargets = signal<UpgradeTargetRow[]>([]);
-  protected readonly selectedUpgradeBranch = signal("stable");
+  protected readonly selectedUpgradeBranch = signal("latest");
   protected readonly afterTasksFinish = signal(true);
   protected readonly releaseNotesText = signal("");
   protected readonly dbBackendLabel = signal("");
@@ -768,14 +842,21 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     const t = this.upgradeTargets();
     if (t.length === 0) {
       return [
-        { value: "stable", label: "stable" },
+        { value: "latest", label: "latest" },
         { value: "main", label: "main" },
       ];
     }
-    return t.map((row) => ({
-      value: row.branch,
-      label: row.version ? `${row.branch} (${row.version})` : row.branch,
-    }));
+    return t
+      .map((row) => {
+        const val = row.name || row.branch || "";
+        if (!val) return null;
+        const extra = row.version || row.ref;
+        return {
+          value: val,
+          label: extra && extra !== val ? `${val} (${extra})` : val,
+        };
+      })
+      .filter((x): x is PillOption => x !== null);
   }
 
   ngOnInit(): void {
@@ -789,8 +870,13 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected canWriteSettings(): boolean {
     return (
       this.access.can("POST /api/settings") &&
+      !this.state.configRepoOnly() &&
       !this.state.sectionLocked(this.section())
     );
+  }
+
+  protected openCustomizeNav(ev: Event): void {
+    this.navConfig.openDialog(ev.currentTarget as HTMLElement | null);
   }
 
   protected setTimeZone(tz: string): void {
@@ -812,20 +898,39 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     if (sec === "cli") {
       if (this.access.can("GET /api/settings/cli-run")) {
         void this.api
-          .get<Record<string, unknown>>("GET /api/settings/cli-run")
+          .get<{
+            settings?: Record<string, { location?: string }>;
+          }>("GET /api/settings/cli-run")
           .then((r) => {
-            const def = (r?.["default"] as { location?: string })?.location;
-            if (def) this.cliRunLocation.set(def);
+            const map: Record<string, string> = {};
+            const raw = r?.settings ?? {};
+            for (const fw of this.cliFrameworks) {
+              map[fw.id] = String(raw[fw.id]?.location ?? "");
+            }
+            this.cliRunLocations.set(map);
           })
           .catch(() => undefined);
       }
     } else if (sec === "caches") {
       if (this.access.can("GET /api/package-cache")) {
         void this.api
-          .get<Record<string, unknown>>("GET /api/package-cache")
+          .get<{
+            available?: boolean;
+            cache?: { kind: string; entries?: number; bytes?: number }[];
+          }>("GET /api/package-cache")
           .then((p) => {
-            if (p?.["bytes"] !== undefined) {
-              this.packageCacheSummary.set(`Current size: ${p["bytes"]} bytes`);
+            if (Array.isArray(p?.cache)) {
+              let entries = 0;
+              let bytes = 0;
+              for (const item of p.cache) {
+                entries += Number(item.entries) || 0;
+                bytes += Number(item.bytes) || 0;
+              }
+              this.packageCacheSummary.set(
+                `${entries} cached packages · ${formatBytes(bytes)}`,
+              );
+            } else if (p?.available === false) {
+              this.packageCacheSummary.set("Proxy cache not enabled on daemon");
             }
           })
           .catch(() => undefined);
@@ -847,39 +952,95 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     }
   }
 
-  protected async sendBroadcast(): Promise<void> {
-    try {
-      await this.api.post("POST /api/deployment/broadcast", undefined, {
-        message: this.broadcastMessage().trim(),
-      });
-      this.snackbar.show(
-        this.broadcastMessage().trim()
-          ? "Broadcast banner published"
-          : "Broadcast banner cleared",
-      );
-    } catch (err) {
-      this.state.error.set(errText(err));
+  protected requestBroadcastConfirm(): void {
+    const msg = this.broadcastMessage().trim();
+    if (!msg) return;
+    const runningOnly = this.broadcastRunningOnly();
+    this.confirmRequest.set({
+      title: "Broadcast message to active tasks?",
+      message: runningOnly
+        ? `This posts a comment onto every currently running task: "${msg}"`
+        : `This posts a comment onto every active task (running, awaiting_reply, queued, awaiting_submit) and wakes tasks awaiting a reply: "${msg}"`,
+      accept: "Broadcast message",
+      destructive: false,
+      run: () => this.executeBroadcast(msg, runningOnly),
+    });
+  }
+
+  protected async onConfirmDone(accepted: boolean): Promise<void> {
+    const req = this.confirmRequest();
+    this.confirmRequest.set(null);
+    if (accepted && req) {
+      await req.run();
     }
   }
 
-  protected async saveCliRunLocation(location: string): Promise<void> {
-    this.cliRunLocation.set(location);
+  private async executeBroadcast(
+    message: string,
+    runningOnly: boolean,
+  ): Promise<void> {
+    try {
+      const res = await this.api.post<{ delivered_count?: number }>(
+        "POST /api/deployment/broadcast",
+        undefined,
+        {
+          message,
+          ...(runningOnly ? { running_only: true } : {}),
+        },
+      );
+      this.broadcastMessage.set("");
+      const n = res?.delivered_count;
+      this.snackbar.show(
+        typeof n === "number"
+          ? `Broadcast delivered to ${n} task(s)`
+          : "Broadcast delivered to active tasks",
+      );
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  protected async saveCliRunLocation(
+    framework: string,
+    location: string,
+  ): Promise<void> {
+    const nextMap = { ...this.cliRunLocations(), [framework]: location };
+    this.cliRunLocations.set(nextMap);
+    const settingsPayload: Record<string, { location: string }> = {};
+    for (const [fw, loc] of Object.entries(nextMap)) {
+      if (loc) {
+        settingsPayload[fw] = { location: loc };
+      }
+    }
     try {
       await this.api.put("PUT /api/settings/cli-run", undefined, {
-        settings: { default: { location } },
+        settings: settingsPayload,
       });
-      this.snackbar.show("Updated CLI execution target");
+      this.snackbar.show(`Updated ${framework} CLI run location`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
   protected async flushPackageCache(): Promise<void> {
     try {
-      await this.api.post("POST /api/package-cache/flush", undefined, {});
+      const res = await this.api.post<{
+        cache?: { kind: string; entries?: number; bytes?: number }[];
+      }>("POST /api/package-cache/flush", undefined, {});
+      if (Array.isArray(res?.cache)) {
+        let entries = 0;
+        let bytes = 0;
+        for (const item of res.cache) {
+          entries += Number(item.entries) || 0;
+          bytes += Number(item.bytes) || 0;
+        }
+        this.packageCacheSummary.set(
+          `${entries} cached packages · ${formatBytes(bytes)}`,
+        );
+      }
       this.snackbar.show("Proxy cache flushed");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -888,7 +1049,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       await this.api.post("POST /api/actions-cache/flush", undefined, {});
       this.snackbar.show("Actions cache flushed");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -932,7 +1093,51 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       if (r?.["state"]) this.registryStateLabel.set(String(r["state"]));
       this.snackbar.show("Heartbeat sent");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
+    }
+  }
+
+  private applyUpgradeStatus(
+    u: Record<string, unknown> | null | undefined,
+  ): void {
+    if (!u) return;
+    const running = u["running"] as
+      | { release?: string; ref?: string; commit?: string; image?: string }
+      | undefined;
+    const ver =
+      running?.release ||
+      running?.ref ||
+      running?.commit ||
+      (typeof u["currentVersion"] === "string" ? u["currentVersion"] : "") ||
+      (typeof u["version"] === "string" ? u["version"] : "");
+    if (ver) this.currentVersion.set(ver);
+
+    const scheduled = u["scheduled"] as
+      { branch?: string; requestedBy?: string } | undefined | null;
+    this.scheduledUpgradeBranch.set(
+      scheduled ? String(scheduled.branch || "latest") : "",
+    );
+
+    const phase = typeof u["phase"] === "string" ? u["phase"] : "";
+    const cancellable = Boolean(u["cancellable"]);
+    this.upgradeCancellable.set(cancellable);
+    const terminalPhases = new Set([
+      "",
+      "idle",
+      "none",
+      "done",
+      "succeeded",
+      "complete",
+      "completed",
+      "failed",
+      "error",
+      "cancelled",
+      "canceled",
+    ]);
+    if (cancellable || (phase && !terminalPhases.has(phase.toLowerCase()))) {
+      this.activeUpgradeState.set(phase || "running");
+    } else {
+      this.activeUpgradeState.set("");
     }
   }
 
@@ -943,13 +1148,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       try {
         const u =
           await this.api.get<Record<string, unknown>>("GET /api/upgrade");
-        if (u?.["currentVersion"] || u?.["version"]) {
-          this.currentVersion.set(String(u["currentVersion"] ?? u["version"]));
-        }
-        const active = u?.["current"] as { state?: string } | undefined;
-        this.activeUpgradeState.set(
-          active?.state ?? String(u?.["inProgress"] ? "running" : ""),
-        );
+        this.applyUpgradeStatus(u);
       } catch {
         // Non-fatal
       }
@@ -957,14 +1156,18 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     if (this.access.can("GET /api/upgrade/targets")) {
       try {
         const t = await this.api.get<
-          UpgradeTargetRow[] | { targets?: UpgradeTargetRow[] }
+          | UpgradeTargetRow[]
+          | { targets?: UpgradeTargetRow[]; default?: string }
         >("GET /api/upgrade/targets");
         const list = Array.isArray(t) ? t : (t?.targets ?? []);
+        const def =
+          (!Array.isArray(t) && typeof t?.default === "string" && t.default) ||
+          list[0]?.name ||
+          list[0]?.branch ||
+          "latest";
         this.upgradeTargets.set(list);
-        if (list[0]?.branch) {
-          this.selectedUpgradeBranch.set(list[0].branch);
-          void this.loadReleaseNotes(list[0].branch);
-        }
+        this.selectedUpgradeBranch.set(def);
+        void this.loadReleaseNotes(def);
       } catch {
         // Non-fatal
       }
@@ -987,19 +1190,44 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     void this.loadReleaseNotes(branch);
   }
 
+  private formatReleaseNotesPreview(raw: unknown): string {
+    if (typeof raw === "string") return raw;
+    if (!raw || typeof raw !== "object") return "";
+    const rec = raw as {
+      notes?: ReleaseNotePreviewItem[] | string;
+      message?: string;
+      markdown?: string;
+    };
+    const parts: string[] = [];
+    if (typeof rec.message === "string" && rec.message.trim()) {
+      parts.push(rec.message.trim());
+    }
+    if (typeof rec.notes === "string" && rec.notes.trim()) {
+      parts.push(rec.notes.trim());
+    } else if (Array.isArray(rec.notes)) {
+      for (const n of rec.notes) {
+        if (!n || typeof n !== "object") continue;
+        const head = [n.version, n.title].filter(Boolean).join(" — ");
+        const body = (n.body ?? n.text ?? "").trim();
+        if (head && body) parts.push(`## ${head}\n${body}`);
+        else if (head) parts.push(`## ${head}`);
+        else if (body) parts.push(body);
+      }
+    } else if (typeof rec.markdown === "string" && rec.markdown.trim()) {
+      parts.push(rec.markdown.trim());
+    }
+    return parts.join("\n\n");
+  }
+
   private async loadReleaseNotes(branch: string): Promise<void> {
     if (!this.access.can("GET /api/upgrade/release-notes")) return;
     try {
-      const r = await this.api.get<
-        string | { notes?: string; markdown?: string }
-      >(
+      const r = await this.api.get<unknown>(
         "GET /api/upgrade/release-notes",
         undefined,
         `branch=${encodeURIComponent(branch)}`,
       );
-      this.releaseNotesText.set(
-        typeof r === "string" ? r : (r?.notes ?? r?.markdown ?? ""),
-      );
+      this.releaseNotesText.set(this.formatReleaseNotesPreview(r));
     } catch {
       // Non-fatal
     }
@@ -1007,29 +1235,56 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected async startUpgrade(): Promise<void> {
     try {
-      await this.api.post("POST /api/upgrade", undefined, {
-        branch: this.selectedUpgradeBranch(),
-        afterTasksFinish: this.afterTasksFinish(),
-      });
-      this.activeUpgradeState.set("starting");
-      this.snackbar.show(`Started upgrade to ${this.selectedUpgradeBranch()}`);
+      const res = await this.api.post<Record<string, unknown>>(
+        "POST /api/upgrade",
+        undefined,
+        {
+          branch: this.selectedUpgradeBranch(),
+          afterTasksFinish: this.afterTasksFinish(),
+        },
+      );
+      if (res && typeof res === "object") {
+        this.applyUpgradeStatus(res);
+      }
+      if (this.afterTasksFinish() && !this.scheduledUpgradeBranch()) {
+        this.scheduledUpgradeBranch.set(this.selectedUpgradeBranch());
+      } else if (!this.afterTasksFinish() && !this.activeUpgradeState()) {
+        this.activeUpgradeState.set("starting");
+        this.upgradeCancellable.set(true);
+      }
+      this.snackbar.show(
+        this.afterTasksFinish()
+          ? `Scheduled upgrade to ${this.selectedUpgradeBranch()}`
+          : `Started upgrade to ${this.selectedUpgradeBranch()}`,
+      );
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
+    }
+  }
+
+  protected async cancelScheduledUpgrade(): Promise<void> {
+    try {
+      await this.api.delete("DELETE /api/upgrade/scheduled");
+      this.scheduledUpgradeBranch.set("");
+      this.snackbar.show("Cancelled scheduled upgrade");
+    } catch (err) {
+      this.state.recordError(err);
     }
   }
 
   protected async cancelUpgrade(): Promise<void> {
     try {
       await this.api.delete(
-        "DELETE /api/upgrade/current",
+        "DELETE /api/upgrade/scheduled",
         undefined,
         undefined,
         "reason=operator_cancelled",
       );
       this.activeUpgradeState.set("");
+      this.upgradeCancellable.set(false);
       this.snackbar.show("Cancelled active upgrade");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 }

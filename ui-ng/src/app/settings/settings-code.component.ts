@@ -44,9 +44,17 @@ interface GitConnectionRow {
   id?: string;
   credential?: string;
   host?: string;
+  scope?: string;
+  authType?: string;
   type?: string;
   author?: string;
   status?: string;
+}
+
+interface StateRepoEntryDto {
+  path?: string;
+  dir?: boolean;
+  size?: number;
 }
 
 @Component({
@@ -101,12 +109,11 @@ interface GitConnectionRow {
                 </thead>
                 <tbody>
                   @for (repo of repos(); track repo) {
-                    @let sp = split(repo);
                     @let fact = repoFacts()[repo];
                     <tr [attr.data-testid]="'repo-row-' + repo">
                       <td class="tabular">
                         <a
-                          [routerLink]="['/repos', sp.owner, sp.name]"
+                          [routerLink]="repoRoute(repo)"
                           [attr.data-testid]="'repo-link-' + repo"
                           >{{ repo }}</a
                         >
@@ -143,18 +150,13 @@ interface GitConnectionRow {
                           <a
                             class="btn-tonal s-btn-sm"
                             style="text-decoration: none"
-                            [routerLink]="['/repos', sp.owner, sp.name]"
+                            [routerLink]="repoRoute(repo)"
                             >Settings</a
                           >
                           <a
                             class="btn-tonal s-btn-sm"
                             style="text-decoration: none"
-                            [routerLink]="[
-                              '/repos',
-                              sp.owner,
-                              sp.name,
-                              'releases',
-                            ]"
+                            [routerLink]="repoRoute(repo, 'releases')"
                             >Releases</a
                           >
                           <button
@@ -366,10 +368,10 @@ interface GitConnectionRow {
                 <tbody>
                   @for (c of gitConnections(); track c.credential || c.id) {
                     @let cred = c.credential || c.id || "default";
-                    <tr>
+                    <tr [attr.data-testid]="'git-conn-row-' + cred">
                       <td class="tabular">{{ cred }}</td>
                       <td class="tabular">{{ c.host || "github.com" }}</td>
-                      <td>{{ c.type || "token" }}</td>
+                      <td>{{ c.authType || c.type || "pat" }}</td>
                       <td>
                         <button
                           type="button"
@@ -393,15 +395,14 @@ interface GitConnectionRow {
 
           <div class="s-grid">
             <div class="s-field">
-              <label class="s-label" for="gc-cred">Connection name</label>
-              <input
-                id="gc-cred"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-git-conn-name"
-                placeholder="github-main"
-                [value]="newGitCred()"
-                (input)="newGitCred.set($any($event.target).value)"
+              <span class="s-label">Credential source</span>
+              <g-pill-select
+                testid="select-git-conn-mode"
+                ariaLabel="Credential source"
+                align="left"
+                [options]="gitModeOptions"
+                [value]="gitConnMode()"
+                (valueChange)="gitConnMode.set($event)"
               />
             </div>
             <div class="s-field">
@@ -410,37 +411,111 @@ interface GitConnectionRow {
                 id="gc-host"
                 class="s-input tabular"
                 type="text"
+                data-testid="input-git-conn-host"
                 placeholder="github.com"
                 [value]="newGitHost()"
                 (input)="newGitHost.set($any($event.target).value)"
               />
             </div>
-            <div class="s-field">
-              <span class="s-label">Auth type</span>
-              <g-pill-select
-                testid="select-git-conn-type"
-                ariaLabel="Git auth type"
-                align="left"
-                [options]="gitTypeOptions"
-                [value]="newGitType()"
-                (valueChange)="newGitType.set($event)"
-              />
-            </div>
-            <div class="s-field">
-              <label class="s-label" for="gc-val"
-                >Token or SSH private key</label
-              >
-              <input
-                id="gc-val"
-                class="s-input"
-                type="password"
-                autocomplete="off"
-                data-testid="input-git-conn-secret"
-                placeholder="ghp_... or SSH key"
-                [value]="newGitSecret()"
-                (input)="newGitSecret.set($any($event.target).value)"
-              />
-            </div>
+
+            @if (gitConnMode() === "existing") {
+              <div class="s-field">
+                <label class="s-label" for="gc-cred"
+                  >Existing stored credential name</label
+                >
+                <input
+                  id="gc-cred"
+                  class="s-input tabular"
+                  type="text"
+                  data-testid="input-git-conn-name"
+                  placeholder="github-main"
+                  [value]="newGitCred()"
+                  (input)="newGitCred.set($any($event.target).value)"
+                />
+              </div>
+            } @else {
+              <div class="s-field">
+                <span class="s-label">Auth type</span>
+                <g-pill-select
+                  testid="select-git-conn-type"
+                  ariaLabel="Git auth type"
+                  align="left"
+                  [options]="gitTypeOptions"
+                  [value]="newGitType()"
+                  (valueChange)="newGitType.set($event)"
+                />
+              </div>
+
+              @if (newGitType() === "pat") {
+                <div class="s-field">
+                  <label class="s-label" for="gc-val"
+                    >Personal access token</label
+                  >
+                  <input
+                    id="gc-val"
+                    class="s-input"
+                    type="password"
+                    autocomplete="off"
+                    data-testid="input-git-conn-secret"
+                    placeholder="ghp_..."
+                    [value]="newGitSecret()"
+                    (input)="newGitSecret.set($any($event.target).value)"
+                  />
+                </div>
+              } @else if (newGitType() === "ssh") {
+                <div class="s-field">
+                  <label class="s-label" for="gc-ssh">SSH private key</label>
+                  <textarea
+                    id="gc-ssh"
+                    class="s-textarea tabular"
+                    rows="2"
+                    data-testid="input-git-conn-ssh-key"
+                    placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                    [value]="newGitSecret()"
+                    (input)="newGitSecret.set($any($event.target).value)"
+                  ></textarea>
+                </div>
+              } @else if (newGitType() === "app") {
+                <div class="s-field">
+                  <label class="s-label" for="gc-appid">GitHub App ID</label>
+                  <input
+                    id="gc-appid"
+                    class="s-input tabular"
+                    type="number"
+                    min="1"
+                    data-testid="input-git-app-id"
+                    [value]="newGitAppId()"
+                    (input)="newGitAppId.set($any($event.target).value)"
+                  />
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="gc-instid">Installation ID</label>
+                  <input
+                    id="gc-instid"
+                    class="s-input tabular"
+                    type="number"
+                    min="1"
+                    data-testid="input-git-app-install-id"
+                    [value]="newGitAppInstallId()"
+                    (input)="newGitAppInstallId.set($any($event.target).value)"
+                  />
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="gc-appkey"
+                    >App private key (PEM)</label
+                  >
+                  <textarea
+                    id="gc-appkey"
+                    class="s-textarea tabular"
+                    rows="2"
+                    data-testid="input-git-app-private-key"
+                    placeholder="-----BEGIN RSA PRIVATE KEY-----"
+                    [value]="newGitSecret()"
+                    (input)="newGitSecret.set($any($event.target).value)"
+                  ></textarea>
+                </div>
+              }
+            }
           </div>
           <div class="s-inline">
             <button
@@ -448,7 +523,7 @@ interface GitConnectionRow {
               class="btn-tonal"
               data-testid="save-git-conn-btn"
               [disabled]="
-                !newGitCred().trim() ||
+                !canSubmitGitConnection() ||
                 !access.can('POST /api/deployment/git-connections')
               "
               (click)="saveGitConnection()"
@@ -465,8 +540,7 @@ interface GitConnectionRow {
             >
             <div class="s-inline">
               <input
-                class="s-input tabular"
-                style="width: 180px"
+                class="s-input s-input-inline tabular"
                 type="text"
                 aria-label="GitHub token name"
                 placeholder="token-name"
@@ -474,8 +548,7 @@ interface GitConnectionRow {
                 (input)="ghTokenName.set($any($event.target).value)"
               />
               <input
-                class="s-input"
-                style="width: 220px"
+                class="s-input s-input-inline"
                 type="password"
                 autocomplete="off"
                 aria-label="GitHub token secret"
@@ -523,27 +596,13 @@ interface GitConnectionRow {
           </div>
           <div class="s-grid">
             <div class="s-field">
-              <label class="s-label" for="ci-max">Max concurrent CI jobs</label>
-              <input
-                id="ci-max"
-                class="s-input tabular"
-                type="number"
-                min="0"
-                data-testid="input-max-ci-jobs"
-                [value]="state.val('maxCIJobs', 4)"
-                [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField('maxCIJobs', Number($any($event.target).value))
-                "
-              />
-            </div>
-            <div class="s-field">
               <label class="s-label" for="ci-per-run">CI jobs per run</label>
               <input
                 id="ci-per-run"
                 class="s-input tabular"
                 type="number"
                 min="0"
+                data-testid="input-ci-jobs-per-run"
                 [value]="state.val('ciJobsPerRun', 4)"
                 [disabled]="!canWriteSettings()"
                 (input)="
@@ -660,16 +719,43 @@ interface GitConnectionRow {
             </div>
           </div>
 
+          @if (state.refusedChanges().length > 0) {
+            <div
+              class="s-banner warn"
+              data-testid="staged-config-changes-banner"
+            >
+              <span class="tabular">
+                {{ state.refusedChanges().length }} rehearsed config file
+                change(s) ready:
+                {{ refusedPathsSummary() }}
+              </span>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                (click)="state.refusedChanges.set([])"
+              >
+                Clear
+              </button>
+            </div>
+          } @else {
+            <span class="s-hint" data-testid="config-pr-empty-hint">
+              Config pull requests require rehearsed file patches from a
+              config-managed setting change.
+            </span>
+          }
+
           <div class="s-inline">
             <input
-              class="s-input"
-              style="width: 260px"
+              class="s-input s-input-inline"
               type="text"
               aria-label="Config PR title"
               data-testid="input-state-repo-pr-title"
               placeholder="Propose config PR title…"
               [value]="prTitle()"
-              [disabled]="!access.can('POST /api/state-repo/pull-requests')"
+              [disabled]="
+                state.refusedChanges().length === 0 ||
+                !access.can('POST /api/state-repo/pull-requests')
+              "
               (input)="prTitle.set($any($event.target).value)"
             />
             <button
@@ -677,7 +763,7 @@ interface GitConnectionRow {
               class="btn-tonal s-btn-sm"
               data-testid="create-state-repo-pr-btn"
               [disabled]="
-                !prTitle().trim() ||
+                state.refusedChanges().length === 0 ||
                 !access.can('POST /api/state-repo/pull-requests')
               "
               (click)="openConfigPr()"
@@ -731,6 +817,14 @@ interface GitConnectionRow {
                 (click)="saveStateRepoRemote()"
               >
                 Save remote
+              </button>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                data-testid="reset-state-repo-remote-btn"
+                (click)="useInternalConfigRepo()"
+              >
+                Use internal config repo
               </button>
             </div>
           }
@@ -841,13 +935,18 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
 
   protected readonly Number = Number;
   protected readonly Boolean = Boolean;
-  protected readonly split = splitRepo;
+
+  protected readonly gitModeOptions: readonly PillOption[] = [
+    { value: "inline", label: "Create inline credential" },
+    { value: "existing", label: "Link stored credential" },
+  ];
 
   protected readonly gitTypeOptions: readonly PillOption[] = [
-    { value: "github-token", label: "GitHub token" },
-    { value: "ssh", label: "SSH key" },
-    { value: "github-app", label: "GitHub App" },
-    { value: "ambient", label: "Host ambient" },
+    { value: "pat", label: "Personal access token (pat)" },
+    { value: "ssh", label: "SSH private key (ssh)" },
+    { value: "app", label: "GitHub App (app)" },
+    { value: "ambient", label: "Host ambient login (ambient)" },
+    { value: "none", label: "None / anonymous (none)" },
   ];
 
   protected readonly repos = signal<string[]>([]);
@@ -859,10 +958,13 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
 
   protected readonly gitConnections = signal<GitConnectionRow[]>([]);
   protected readonly gitCheckMessage = signal("");
+  protected readonly gitConnMode = signal("inline");
   protected readonly newGitCred = signal("");
   protected readonly newGitHost = signal("github.com");
-  protected readonly newGitType = signal("github-token");
+  protected readonly newGitType = signal("pat");
   protected readonly newGitSecret = signal("");
+  protected readonly newGitAppId = signal("");
+  protected readonly newGitAppInstallId = signal("");
   protected readonly githubTokens = signal<string[]>([]);
   protected readonly ghTokenName = signal("");
   protected readonly ghTokenValue = signal("");
@@ -882,6 +984,34 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
 
   protected configFileOptions(): PillOption[] {
     return this.configFiles().map((f) => ({ value: f, label: f }));
+  }
+
+  protected repoRoute(repo: string, tab?: string): string[] {
+    const parts = repo.trim().split("/").filter(Boolean);
+    return tab ? ["/repos", ...parts, tab] : ["/repos", ...parts];
+  }
+
+  protected refusedPathsSummary(): string {
+    return this.state
+      .refusedChanges()
+      .map((c) => c.path)
+      .join(", ");
+  }
+
+  protected canSubmitGitConnection(): boolean {
+    if (this.gitConnMode() === "existing") {
+      return Boolean(this.newGitCred().trim());
+    }
+    const t = this.newGitType();
+    if (t === "pat" || t === "ssh") {
+      return Boolean(this.newGitSecret().trim());
+    }
+    if (t === "app") {
+      return Boolean(
+        Number(this.newGitAppId()) > 0 && this.newGitSecret().trim(),
+      );
+    }
+    return t === "ambient" || t === "none";
   }
 
   ngOnInit(): void {
@@ -1100,21 +1230,51 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   }
 
   protected async saveGitConnection(): Promise<void> {
-    const credential = this.newGitCred().trim();
-    if (!credential) return;
+    if (!this.canSubmitGitConnection()) return;
+    const host = this.newGitHost().trim() || "github.com";
+    let payload: Record<string, unknown>;
+    if (this.gitConnMode() === "existing") {
+      payload = {
+        credential: this.newGitCred().trim(),
+        host,
+      };
+    } else {
+      const type = this.newGitType();
+      payload = {
+        credential: "",
+        host,
+        type,
+      };
+      if (type === "pat") {
+        payload["value"] = this.newGitSecret().trim();
+      } else if (type === "ssh") {
+        payload["ssh"] = { privateKey: this.newGitSecret() };
+      } else if (type === "app") {
+        const appId = Math.floor(Number(this.newGitAppId()) || 0);
+        const installationId = Math.floor(
+          Number(this.newGitAppInstallId()) || 0,
+        );
+        payload["app"] = {
+          appId,
+          ...(installationId > 0 ? { installationId } : {}),
+          privateKey: this.newGitSecret(),
+        };
+      }
+    }
     try {
-      await this.api.post("POST /api/deployment/git-connections", undefined, {
-        credential,
-        host: this.newGitHost().trim() || "github.com",
-        type: this.newGitType(),
-        value: this.newGitSecret().trim(),
-      });
+      await this.api.post(
+        "POST /api/deployment/git-connections",
+        undefined,
+        payload,
+      );
       this.newGitCred.set("");
       this.newGitSecret.set("");
+      this.newGitAppId.set("");
+      this.newGitAppInstallId.set("");
       await this.loadGitConnections();
-      this.snackbar.show(`Saved Git connection ${credential}`);
+      this.snackbar.show(`Saved Git connection on ${host}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1178,7 +1338,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
         const branch = String(sr?.["branch"] ?? "main");
         const commit = String(sr?.["head"] ?? sr?.["commit"] ?? "").slice(0, 8);
         const remote = String(sr?.["remote"] ?? "");
-        if (remote) this.remoteUrl.set(remote);
+        this.remoteUrl.set(remote);
         if (branch) this.remoteBranch.set(branch);
         this.stateRepoSummary.set(
           commit ? `${branch} @ ${commit}` : remote ? branch : "Local state",
@@ -1190,12 +1350,25 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     if (this.access.can("GET /api/state-repo/files")) {
       try {
         const res = await this.api.get<
-          (string | { path?: string })[] | { files?: string[] }
+          | (string | StateRepoEntryDto)[]
+          | { entries?: StateRepoEntryDto[]; files?: string[] }
         >("GET /api/state-repo/files");
-        const raw = Array.isArray(res) ? res : (res?.files ?? []);
-        const files = raw
-          .map((f) => (typeof f === "string" ? f : (f.path ?? "")))
-          .filter(Boolean);
+        let files: string[] = [];
+        if (Array.isArray(res)) {
+          files = res
+            .filter((e) => typeof e === "string" || !e.dir)
+            .map((e) => (typeof e === "string" ? e : (e.path ?? "")))
+            .filter(Boolean);
+        } else if (res && typeof res === "object") {
+          if (Array.isArray(res.entries)) {
+            files = res.entries
+              .filter((e) => !e.dir)
+              .map((e) => e.path ?? "")
+              .filter(Boolean);
+          } else if (Array.isArray(res.files)) {
+            files = res.files.filter(Boolean);
+          }
+        }
         this.configFiles.set(files);
         const init = this.initialFilePath() || files[0] || "";
         if (init) void this.openConfigFile(init);
@@ -1212,24 +1385,26 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       await this.loadStateRepo();
       this.snackbar.show("StateRepo synced");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     } finally {
       this.syncingStateRepo.set(false);
     }
   }
 
   protected async openConfigPr(): Promise<void> {
+    const changes = this.state.refusedChanges();
+    if (changes.length === 0) return;
     const title = this.prTitle().trim();
-    if (!title) return;
     try {
       await this.api.post("POST /api/state-repo/pull-requests", undefined, {
-        title,
-        changes: {},
+        ...(title ? { title } : {}),
+        changes,
       });
       this.prTitle.set("");
+      this.state.refusedChanges.set([]);
       this.snackbar.show("Config pull request opened");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1242,7 +1417,20 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       await this.loadStateRepo();
       this.snackbar.show("StateRepo remote updated");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
+    }
+  }
+
+  protected async useInternalConfigRepo(): Promise<void> {
+    try {
+      await this.api.post("POST /api/state-repo/remote", undefined, {
+        none: true,
+      });
+      this.remoteUrl.set("");
+      await this.loadStateRepo();
+      this.snackbar.show("Switched to internal config repository");
+    } catch (err) {
+      this.state.recordError(err);
     }
   }
 

@@ -156,6 +156,20 @@ export const routes: Routes = [
       ),
   },
   {
+    matcher: (s) =>
+      s.length === 4 && s[0].path === "repos" && /[.:]/.test(s[1].path)
+        ? {
+            consumed: s,
+            posParams: { host: s[1], owner: s[2], name: s[3] },
+          }
+        : null,
+    title: "Repository · grain",
+    loadComponent: () =>
+      import("./repos/repo-detail-page.component").then(
+        (m) => m.RepoDetailPageComponent,
+      ),
+  },
+  {
     path: "repos/:owner/:name",
     title: "Repository · grain",
     loadComponent: () =>
@@ -165,6 +179,22 @@ export const routes: Routes = [
   },
   {
     path: "repos/:owner/:name/:tab",
+    title: "Repository · grain",
+    loadComponent: () =>
+      import("./repos/repo-detail-page.component").then(
+        (m) => m.RepoDetailPageComponent,
+      ),
+  },
+  {
+    path: "repos/:host/:owner/:name",
+    title: "Repository · grain",
+    loadComponent: () =>
+      import("./repos/repo-detail-page.component").then(
+        (m) => m.RepoDetailPageComponent,
+      ),
+  },
+  {
+    path: "repos/:host/:owner/:name/:tab",
     title: "Repository · grain",
     loadComponent: () =>
       import("./repos/repo-detail-page.component").then(

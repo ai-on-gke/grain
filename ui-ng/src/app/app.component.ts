@@ -848,12 +848,12 @@ export class DeferErrorDirective implements OnInit {
         }
       }
 
-      @defer (when customizeNavOpen()) {
-        @if (customizeNavOpen()) {
+      @defer (when navConfig.dialogOpen()) {
+        @if (navConfig.dialogOpen()) {
           <g-customize-nav-dialog (closed)="onCustomizeNavClosed()" />
         }
       } @error {
-        @if (customizeNavOpen()) {
+        @if (navConfig.dialogOpen()) {
           <span gDeferError (recover)="onDeferError('customize')"></span>
         }
       }
@@ -961,13 +961,14 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly railMorePos = signal({ top: 0, left: 0 });
   protected readonly moreOpen = signal(false);
   protected readonly accountOpen = signal(false);
-  protected readonly customizeNavOpen = signal(false);
   protected readonly prefersReducedMotion = signal(false);
   protected readonly spriteFailed = signal(false);
 
   protected readonly modalOpen = computed(
     () =>
-      this.createTask.isOpen() || this.help.isOpen() || this.customizeNavOpen(),
+      this.createTask.isOpen() ||
+      this.help.isOpen() ||
+      this.navConfig.dialogOpen(),
   );
 
   protected readonly animateBrandMark = computed(
@@ -1010,7 +1011,6 @@ export class AppComponent implements OnInit, OnDestroy {
   private readonly avatarBtn =
     viewChild<ElementRef<HTMLButtonElement>>("avatarBtn");
 
-  private customizeOpener: HTMLElement | null = null;
   private unregister: (() => void)[] = [];
   private navSub: { unsubscribe(): void } | null = null;
   private motionMql: MediaQueryList | null = null;
@@ -1204,27 +1204,21 @@ export class AppComponent implements OnInit, OnDestroy {
 
   protected openCustomizeFromAccount(): void {
     this.accountOpen.set(false);
-    this.customizeOpener = this.avatarBtn()?.nativeElement ?? null;
-    this.customizeNavOpen.set(true);
+    this.navConfig.openDialog(this.avatarBtn()?.nativeElement ?? null);
   }
 
   protected openCustomizeNav(ev: Event): void {
-    this.customizeOpener = this.moreOpen()
+    const opener = this.moreOpen()
       ? (this.moreBtn()?.nativeElement ?? null)
       : this.railMoreOpen()
         ? (this.railMoreBtn()?.nativeElement ?? null)
         : (ev.currentTarget as HTMLElement | null);
     this.closeMenus();
-    this.customizeNavOpen.set(true);
+    this.navConfig.openDialog(opener);
   }
 
   protected onCustomizeNavClosed(): void {
-    this.customizeNavOpen.set(false);
-    const target = this.customizeOpener;
-    this.customizeOpener = null;
-    if (target && typeof target.focus === "function") {
-      setTimeout(() => target.focus());
-    }
+    this.navConfig.closeDialog();
   }
 
   protected closeMenus(): void {

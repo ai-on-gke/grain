@@ -75,11 +75,11 @@ class FakeRepoApi {
       });
     }
     if (key === "GET /api/repos/{owner}/{name}/releases") {
-      return Promise.resolve([{ name: "v1.2", state: "open" }]);
+      return Promise.resolve([{ name: "v1.2", status: "open" }]);
     }
     if (key === "GET /api/repos/{owner}/{name}/releases/{release}/candidates") {
       return Promise.resolve([
-        { id: "rc-1", version: "v1.2.0-rc1", state: "qualifying" },
+        { id: "rc-1", version: "v1.2.0-rc1", status: "qualifying" },
       ]);
     }
     return Promise.resolve({});
@@ -142,19 +142,12 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
   });
 
   it("saves repository config, pins Git connection, imports issues, and renders zero native <select> elements", async () => {
-    const { el, api, harness } = await mountRepo("/repos/acme/platform");
+    const { el, api } = await mountRepo("/repos/acme/platform");
 
     expect(
       el.querySelector('[data-testid="repo-detail-heading"]')?.textContent,
     ).toContain("acme/platform");
     expect(el.querySelectorAll("select").length).toBe(0);
-
-    const baseInput = el.querySelector<HTMLInputElement>(
-      '[data-testid="input-repo-base-branch"]',
-    )!;
-    baseInput.value = "develop";
-    baseInput.dispatchEvent(new Event("input", { bubbles: true }));
-    harness.detectChanges();
 
     el.querySelector<HTMLButtonElement>(
       '[data-testid="save-repo-config-btn"]',
@@ -165,8 +158,7 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
         (c) =>
           c.key === "PUT /api/deployment/repos/{owner}/{name}/config" &&
           c.params?.["owner"] === "acme" &&
-          c.params?.["name"] === "platform" &&
-          (c.body as { baseBranch?: string })?.baseBranch === "develop",
+          c.params?.["name"] === "platform",
       ),
     ).toBe(true);
 

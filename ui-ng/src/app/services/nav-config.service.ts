@@ -86,6 +86,22 @@ export class NavConfigService {
 
   readonly order = this._order.asReadonly();
   readonly hidden = this._hidden.asReadonly();
+  readonly dialogOpen = signal(false);
+  private opener: HTMLElement | null = null;
+
+  openDialog(opener?: HTMLElement | null): void {
+    this.opener = opener ?? null;
+    this.dialogOpen.set(true);
+  }
+
+  closeDialog(): void {
+    this.dialogOpen.set(false);
+    const target = this.opener;
+    this.opener = null;
+    if (target && typeof target.focus === "function") {
+      setTimeout(() => target.focus());
+    }
+  }
 
   readonly orderedDestinations = computed<Destination[]>(() =>
     this._order()

@@ -41,6 +41,7 @@ export function initialsFromIdentity(raw: string): string {
 @Injectable({ providedIn: "root" })
 export class AccessService {
   private readonly config = signal<GrainConfig | null>(null);
+  readonly configLoaded = signal(false);
   readonly whoami = signal<WhoamiResponse | null>(null);
 
   readonly roleLabel = computed(() => this.config()?.access?.role ?? "");
@@ -92,6 +93,7 @@ export class AccessService {
 
   setConfig(config: GrainConfig | null): void {
     this.config.set(config);
+    this.configLoaded.set(config !== null);
   }
 
   setWhoami(who: WhoamiResponse | null): void {
@@ -109,6 +111,7 @@ export class AccessService {
   }
 
   canScope(scope: string | null, repo?: string | string[]): boolean {
+    if (!this.configLoaded() && scope === null) return false;
     const access = this.config()?.access;
     if (!access || access.full) return true;
     if (scope === "signed-in") return true;

@@ -40,19 +40,46 @@ interface ConsoleSessionRow {
   state?: string;
 }
 
-interface CapabilityServerRow {
-  id: string;
-  enabled?: boolean;
-  transport?: string;
-  url?: string;
+interface CapabilityServerConfig {
   command?: string;
-  status?: string;
+  args?: string[];
+  serverUrl?: string;
+  disabled?: boolean;
+  run?: string;
+  builtin?: string;
 }
 
-interface PolicyRuleRow {
+interface CapabilityServerRow {
+  id: string;
+  config?: CapabilityServerConfig;
+  builtin?: unknown;
+  inProcess?: { name?: string; summary?: string } | null;
+  status?: { attached?: boolean; error?: string } | null;
+}
+
+export interface CapabilityPolicyRule {
   capability: string;
-  effect: string;
+  repos?: string[];
+  runKinds?: string[];
+  events?: string[];
+  allowUntrusted?: boolean;
+  deny?: boolean;
+}
+
+interface CapabilityPolicyDenial {
+  kind: string;
+  id: string;
+  name?: string;
   repo?: string;
+  grant: string;
+  reason: string;
+}
+
+interface MemoryRow {
+  repo?: string;
+  text: string;
+  updatedAt?: string;
+  updatedBy?: string;
 }
 
 interface ScopeSetRow {
@@ -326,8 +353,7 @@ interface SecretMetaRow {
           }
           <div class="s-inline">
             <input
-              class="s-input"
-              style="width: 220px"
+              class="s-input s-input-inline"
               type="text"
               aria-label="New console session title"
               data-testid="input-new-session-title"
@@ -381,38 +407,47 @@ interface SecretMetaRow {
                 </thead>
                 <tbody>
                   @for (srv of capServers(); track srv.id) {
+                    @let isDisabled = Boolean(srv.config?.disabled);
                     <tr [attr.data-testid]="'cap-server-row-' + srv.id">
                       <td class="tabular">{{ srv.id }}</td>
                       <td class="tabular">
-                        {{ srv.url || srv.command || srv.transport || "mcp" }}
+                        {{
+                          srv.config?.serverUrl ||
+                            srv.config?.command ||
+                            (srv.inProcess ? "in-process" : "mcp")
+                        }}
                       </td>
                       <td>
                         <span
                           [class]="
                             'status-pill ' +
-                            (srv.enabled !== false ? 'healthy' : 'neutral')
+                            (!isDisabled ? 'healthy' : 'neutral')
                           "
                         >
-                          {{ srv.enabled !== false ? "enabled" : "disabled" }}
+                          {{ !isDisabled ? "enabled" : "disabled" }}
                         </span>
                       </td>
                       <td>
                         <div class="s-inline">
-                          <button
-                            type="button"
-                            class="btn-tonal s-btn-sm"
-                            [attr.data-testid]="'toggle-cap-server-' + srv.id"
-                            [disabled]="
-                              !access.can(
-                                'POST /api/capability-servers/enable'
-                              ) || state.sectionLocked('capabilities')
-                            "
-                            (click)="
-                              toggleCapServer(srv.id, srv.enabled === false)
-                            "
-                          >
-                            {{ srv.enabled === false ? "Enable" : "Disable" }}
-                          </button>
+                          @if (!srv.inProcess) {
+                            <button
+                              type="button"
+                              class="btn-tonal s-btn-sm"
+                              [attr.data-testid]="'toggle-cap-server-' + srv.id"
+                              [disabled]="
+                                !(isDisabled
+                                  ? access.can(
+                                      'POST /api/capability-servers/enable'
+                                    )
+                                  : access.can(
+                                      'POST /api/capability-servers/disable'
+                                    )) || state.sectionLocked('capabilities')
+                              "
+                              (click)="toggleCapServer(srv.id, isDisabled)"
+                            >
+                              {{ isDisabled ? "Enable" : "Disable" }}
+                            </button>
+                          }
                           <button
                             type="button"
                             class="btn-tonal s-btn-sm"
@@ -424,18 +459,25 @@ interface SecretMetaRow {
                           >
                             Test
                           </button>
-                          <button
-                            type="button"
-                            class="btn-text s-btn-sm"
-                            [disabled]="
-                              !access.can(
-                                'POST /api/capability-servers/remove'
-                              ) || state.sectionLocked('capabilities')
-                            "
-                            (click)="removeCapServer(srv.id)"
-                          >
-                            Remove
-                          </button>
+                          @if (
+                            !srv.builtin &&
+                            !srv.config?.builtin &&
+                            !srv.inProcess
+                          ) {
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              [attr.data-testid]="'remove-cap-server-' + srv.id"
+                              [disabled]="
+                                !access.can(
+                                  'POST /api/capability-servers/remove'
+                                ) || state.sectionLocked('capabilities')
+                              "
+                              (click)="removeCapServer(srv.id)"
+                            >
+                              Remove
+                            </button>
+                          }
                         </div>
                       </td>
                     </tr>
@@ -500,8 +542,8 @@ interface SecretMetaRow {
             <div>
               <h3 class="s-card-title">Capability grant policy</h3>
               <p class="s-card-desc">
-                Ordered rules deciding whether agent capability requests are
-                allowed, held for Inbox approval, or denied.
+                Ordered rules admitting or denying capability references across
+                repositories and untrusted triggers.
               </p>
             </div>
             <div class="s-inline">
@@ -537,17 +579,33 @@ interface SecretMetaRow {
                     <th>Capability pattern</th>
                     <th>Effect</th>
                     <th>Repo filter</th>
+                    <th>Untrusted</th>
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (r of policyRules(); track $index; let idx = $index) {
-                    <tr>
+                    <tr [attr.data-testid]="'policy-rule-row-' + idx">
                       <td class="tabular">{{ r.capability }}</td>
                       <td>
-                        <span class="status-pill neutral">{{ r.effect }}</span>
+                        <span
+                          [class]="
+                            'status-pill ' + (r.deny ? 'error' : 'healthy')
+                          "
+                        >
+                          {{ r.deny ? "Deny" : "Admit" }}
+                        </span>
                       </td>
-                      <td class="tabular">{{ r.repo || "*" }}</td>
+                      <td class="tabular">
+                        {{ r.repos?.join(", ") || "*" }}
+                      </td>
+                      <td>
+                        {{
+                          !r.deny && r.allowUntrusted
+                            ? "Allowed"
+                            : "Trusted only"
+                        }}
+                      </td>
                       <td>
                         <button
                           type="button"
@@ -570,14 +628,22 @@ interface SecretMetaRow {
 
           <div class="s-inline">
             <input
-              class="s-input tabular"
-              style="width: 200px"
+              class="s-input s-input-inline tabular"
               type="text"
               aria-label="Capability pattern"
               data-testid="input-policy-capability"
-              placeholder="mcp:jira-mcp/*"
+              placeholder="gh-cli"
               [value]="newRuleCap()"
               (input)="newRuleCap.set($any($event.target).value)"
+            />
+            <input
+              class="s-input s-input-inline tabular"
+              type="text"
+              aria-label="Repositories filter (comma-separated)"
+              data-testid="input-policy-repos"
+              placeholder="acme/* (empty = *)"
+              [value]="newRuleRepos()"
+              (input)="newRuleRepos.set($any($event.target).value)"
             />
             <g-pill-select
               testid="select-policy-effect"
@@ -587,6 +653,20 @@ interface SecretMetaRow {
               [value]="newRuleEffect()"
               (valueChange)="newRuleEffect.set($event)"
             />
+            @if (newRuleEffect() !== "deny") {
+              <label class="s-inline" style="font-size: 12px" for="dummy">
+                <button
+                  type="button"
+                  class="g-switch"
+                  role="switch"
+                  data-testid="switch-policy-allow-untrusted"
+                  [attr.aria-checked]="newRuleAllowUntrusted()"
+                  aria-label="Allow untrusted triggers"
+                  (click)="newRuleAllowUntrusted.set(!newRuleAllowUntrusted())"
+                ></button>
+                <span>Allow untrusted</span>
+              </label>
+            }
             <button
               type="button"
               class="btn-tonal s-btn-sm"
@@ -612,8 +692,7 @@ interface SecretMetaRow {
           }
           <div class="s-inline">
             <input
-              class="s-input tabular"
-              style="width: 170px"
+              class="s-input s-input-inline tabular"
               type="text"
               aria-label="Scope set name"
               data-testid="input-scope-set-name"
@@ -622,8 +701,7 @@ interface SecretMetaRow {
               (input)="newScopeSetName.set($any($event.target).value)"
             />
             <input
-              class="s-input tabular"
-              style="width: 240px"
+              class="s-input s-input-inline tabular"
               type="text"
               aria-label="Scopes list"
               data-testid="input-scope-set-scopes"
@@ -652,40 +730,40 @@ interface SecretMetaRow {
             >
             <div class="s-inline">
               <input
-                class="s-input tabular"
-                style="width: 160px"
+                class="s-input s-input-inline tabular"
                 type="text"
                 aria-label="Secret name"
+                data-testid="input-secret-name"
                 placeholder="webhook-secret"
                 [value]="secretName()"
                 (input)="secretName.set($any($event.target).value)"
               />
               <input
-                class="s-input tabular"
-                style="width: 120px"
+                class="s-input s-input-inline tabular"
                 type="text"
                 aria-label="Secret key"
+                data-testid="input-secret-key"
                 placeholder="token"
                 [value]="secretKey()"
                 (input)="secretKey.set($any($event.target).value)"
               />
-              <input
-                class="s-input"
-                style="width: 190px"
-                type="password"
-                autocomplete="off"
+              <textarea
+                class="s-textarea s-input-inline tabular"
+                rows="1"
                 aria-label="Secret value"
-                placeholder="Secret value…"
+                data-testid="input-secret-value"
+                placeholder="Secret value or PEM…"
                 [value]="secretVal()"
                 (input)="secretVal.set($any($event.target).value)"
-              />
+              ></textarea>
               <button
                 type="button"
                 class="btn-tonal s-btn-sm"
+                data-testid="store-secret-btn"
                 [disabled]="
                   !secretName().trim() ||
                   !secretKey().trim() ||
-                  !secretVal().trim() ||
+                  secretVal().length === 0 ||
                   !access.can('PUT /api/secrets/{secret}/{key}')
                 "
                 (click)="putSecret()"
@@ -784,8 +862,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly Boolean = Boolean;
 
   protected readonly policyEffectOptions: readonly PillOption[] = [
-    { value: "allow", label: "Allow" },
-    { value: "ask", label: "Ask in Inbox" },
+    { value: "admit", label: "Admit" },
     { value: "deny", label: "Deny" },
   ];
 
@@ -797,9 +874,11 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly newServerUrl = signal("");
   protected readonly capTestNotice = signal("");
 
-  protected readonly policyRules = signal<PolicyRuleRow[]>([]);
+  protected readonly policyRules = signal<CapabilityPolicyRule[]>([]);
   protected readonly newRuleCap = signal("");
-  protected readonly newRuleEffect = signal("ask");
+  protected readonly newRuleRepos = signal("");
+  protected readonly newRuleEffect = signal("admit");
+  protected readonly newRuleAllowUntrusted = signal(false);
 
   protected readonly scopeSets = signal<ScopeSetRow[]>([]);
   protected readonly newScopeSetName = signal("");
@@ -918,8 +997,8 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     if (this.access.can("GET /api/capability-policy")) {
       try {
         const p = await this.api.get<{
-          policy?: { rules?: PolicyRuleRow[] };
-          rules?: PolicyRuleRow[];
+          policy?: { rules?: CapabilityPolicyRule[] };
+          rules?: CapabilityPolicyRule[];
         }>("GET /api/capability-policy");
         this.policyRules.set(p?.policy?.rules ?? p?.rules ?? []);
       } catch {
@@ -955,16 +1034,14 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     try {
       await this.api.put("PUT /api/capability-servers", undefined, {
         id,
-        config: url.startsWith("http")
-          ? { transport: "http", url }
-          : { transport: "stdio", command: url },
+        config: url.startsWith("http") ? { serverUrl: url } : { command: url },
       });
       this.newServerId.set("");
       this.newServerUrl.set("");
       await this.loadCapabilities();
       this.snackbar.show(`Saved server ${id}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -979,7 +1056,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       );
       await this.loadCapabilities();
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -994,7 +1071,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
         `${id}: ${res?.detail || (res?.ok === false ? "failed" : "reachable")}`,
       );
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1006,18 +1083,31 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       await this.loadCapabilities();
       this.snackbar.show(`Removed ${id}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
   protected addPolicyRule(): void {
     const capability = this.newRuleCap().trim();
     if (!capability) return;
-    this.policyRules.update((r) => [
-      ...r,
-      { capability, effect: this.newRuleEffect() },
-    ]);
+    const repos = this.newRuleRepos()
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const deny = this.newRuleEffect() === "deny";
+    const rule: CapabilityPolicyRule = {
+      capability,
+      ...(repos.length > 0 ? { repos } : {}),
+      ...(deny
+        ? { deny: true }
+        : this.newRuleAllowUntrusted()
+          ? { allowUntrusted: true }
+          : {}),
+    };
+    this.policyRules.update((r) => [...r, rule]);
     this.newRuleCap.set("");
+    this.newRuleRepos.set("");
+    this.newRuleAllowUntrusted.set(false);
   }
 
   protected removePolicyRule(idx: number): void {
@@ -1026,17 +1116,27 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   protected async previewCapPolicy(): Promise<void> {
     try {
-      const res = await this.api.post<{ summary?: string; matched?: number }>(
-        "POST /api/capability-policy/preview",
-        undefined,
-        { policy: { rules: this.policyRules() } },
-      );
-      this.capTestNotice.set(
-        res?.summary ??
-          `Policy preview valid (${this.policyRules().length} rules)`,
-      );
+      const res = await this.api.post<{
+        denied?: CapabilityPolicyDenial[];
+      }>("POST /api/capability-policy/preview", undefined, {
+        policy: { rules: this.policyRules() },
+      });
+      const denied = Array.isArray(res?.denied) ? res.denied : [];
+      if (denied.length === 0) {
+        this.capTestNotice.set(
+          `Policy preview: 0 existing grants newly denied (${this.policyRules().length} rules)`,
+        );
+      } else {
+        const items = denied
+          .slice(0, 5)
+          .map((d) => `${d.kind}:${d.name || d.id} (${d.reason || d.grant})`)
+          .join("; ");
+        this.capTestNotice.set(
+          `Policy preview: ${denied.length} grant(s) newly denied — ${items}`,
+        );
+      }
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1047,7 +1147,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       });
       this.snackbar.show("Capability policy saved");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1067,7 +1167,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       await this.loadCapabilities();
       this.snackbar.show(`Saved scope set ${name}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
@@ -1076,25 +1176,23 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       await this.api.put(
         "PUT /api/secrets/{secret}/{key}",
         { secret: this.secretName().trim(), key: this.secretKey().trim() },
-        { value: this.secretVal().trim() },
+        { value: this.secretVal() },
       );
       this.secretVal.set("");
       await this.loadCapabilities();
       this.snackbar.show("Secret stored");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 
   private async loadMemory(): Promise<void> {
     if (this.access.can("GET /api/memory")) {
       try {
-        const m = await this.api.get<
-          string | { content?: string; memory?: string }
-        >("GET /api/memory");
-        this.memoryBody.set(
-          typeof m === "string" ? m : (m?.content ?? m?.memory ?? ""),
-        );
+        const m = await this.api.get<MemoryRow[]>("GET /api/memory");
+        if (Array.isArray(m)) {
+          this.memoryBody.set(m.find((r) => !r.repo)?.text ?? "");
+        }
       } catch {
         // Non-fatal
       }
@@ -1119,11 +1217,11 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected async saveMemory(): Promise<void> {
     try {
       await this.api.put("PUT /api/memory", undefined, {
-        content: this.memoryBody(),
+        text: this.memoryBody(),
       });
       this.snackbar.show("Memory updated");
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.state.recordError(err);
     }
   }
 }
