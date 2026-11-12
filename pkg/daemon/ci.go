@@ -2707,8 +2707,7 @@ func ciJobStuck(store *model.Store, limits func() model.Limits, jobs *ciStuckJob
 // reason, and nil is allowed for either -- a test wiring an engine gets
 // grain's own defaults rather than having to know them.
 //
-// wire finishes the service -- its sandbox image, its release-ref rule, its
-// Go build-cache writers, its capability servers -- before any run left
+// wire finishes the service (CIServiceWiring) before any run left
 // unconcluded by the last daemon is adopted and resumed. Setting those on
 // the returned service instead races the goroutines resuming those runs,
 // which read the engine as they go.
@@ -2721,7 +2720,7 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 	packageCache func(context.Context) string,
 	packageCacheCA func(context.Context) []byte,
 	packageCacheDNS func(context.Context) string,
-	actionsCache func(actionscache.Scope) (string, func(), error), wire ...func(*ci.Service)) *ci.Service {
+	actionsCache func(actionscache.Scope) (string, func(), error), wire ...CIServiceWiring) *ci.Service {
 
 	var teamGitCredential func(context.Context, string, string, string) (string, error)
 	var teamGitCredentialOn func(context.Context, string, string, string, string) (string, error)
@@ -2931,13 +2930,48 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 		service.Engine.Attachments = attachments
 	}
 	for _, w := range wire {
-		w(service)
+		w.apply(service)
 	}
 	adopted, lost := AdoptCIRuns(ctx, service)
 	if cfg.runHostUpgrade != nil && (len(adopted) > 0 || len(lost) > 0) {
 		cfg.runHostUpgrade.setCIAdoption(adopted, lost)
 	}
 	return service
+}
+
+// CIServiceWiring is what the daemon hangs on its CI service beside what
+// BuildCIService's own arguments give it. A zero field leaves that part
+// as BuildCIService built it.
+type CIServiceWiring struct {
+	// SandboxImage answers the OCI image job sandboxes are created from.
+	SandboxImage func() string
+	// ReleaseRefRefusal says why a ref may not run a trusted release, and
+	// is also the rule for which refs' jobs write the Go build cache.
+	ReleaseRefRefusal func(ctx context.Context, repo, ref string) (string, error)
+	// GoCacheJobs is the package cache's Go build-cache writer registry
+	// (WithCIGoCacheWriters).
+	GoCacheJobs *pkgcache.JobTokenSet
+	// CapabilityServers and Ports/PortsURL are the attached capability
+	// servers and their relay (WithCICapabilityServers, WithCICapabilityPorts).
+	CapabilityServers func() orchestrator.CapabilityServers
+	Ports             *portforward.Relay
+	PortsURL          string
+}
+
+func (w CIServiceWiring) apply(service *ci.Service) {
+	if w.SandboxImage != nil {
+		service.SandboxImage = w.SandboxImage
+	}
+	if w.ReleaseRefRefusal != nil {
+		service.ReleaseRefRefusal = w.ReleaseRefRefusal
+		WithCIGoCacheWriters(service, w.GoCacheJobs, w.ReleaseRefRefusal)
+	}
+	if w.CapabilityServers != nil {
+		WithCICapabilityServers(service, w.CapabilityServers)
+	}
+	if w.Ports != nil {
+		WithCICapabilityPorts(service, w.Ports, w.PortsURL)
+	}
 }
 
 // AdoptCIRuns inspects unconcluded CI runs in service.Runs before ReapOrphans
