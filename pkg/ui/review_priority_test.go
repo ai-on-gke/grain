@@ -49,6 +49,21 @@ func TestUpdateTaskPriorityCarriesToGatingReview(t *testing.T) {
 	if err := store.PutTask(ctx, review); err != nil {
 		t.Fatalf("PutTask(review): %v", err)
 	}
+	// A follow-up the change proposed is linked the same way, and is not
+	// a review: its priority is its own.
+	followUp := model.Task{
+		ID:        "follow-up-of-" + gated.ID,
+		Intent:    model.IntentImplement,
+		Title:     "Follow-up",
+		Priority:  4,
+		Origin:    model.Origin{Attribution: reviewer, Reason: model.ReasonProposal},
+		Approval:  &reviewer,
+		Links:     []model.Link{{Kind: model.LinkProposedBy, Target: gated.ID}},
+		CreatedAt: &now,
+	}
+	if err := store.PutTask(ctx, followUp); err != nil {
+		t.Fatalf("PutTask(follow-up): %v", err)
+	}
 	reviewPriority := func() *model.Task {
 		t.Helper()
 		got, err := store.GetTask(ctx, review.ID)
@@ -67,6 +82,9 @@ func TestUpdateTaskPriorityCarriesToGatingReview(t *testing.T) {
 	setPriority(gated.ID, 9)
 	if got := reviewPriority().Priority; got != 9 {
 		t.Errorf("after raising the change to 9, review Priority = %d, want 9", got)
+	}
+	if got, err := store.GetTask(ctx, followUp.ID); err != nil || got == nil || got.Priority != 4 {
+		t.Errorf("after raising the change to 9, follow-up = %+v, %v; want its own Priority 4", got, err)
 	}
 	setPriority(gated.ID, 3)
 	if got := reviewPriority().Priority; got != model.ReviewPriorityFloor {
