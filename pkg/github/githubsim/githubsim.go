@@ -376,13 +376,6 @@ type WorkflowRun struct {
 	Jobs      []WorkflowJob
 }
 
-// Sim is a github.Transport backed by an in-memory set of issues and pull
-// requests, plus a real bare git repo for the one endpoint
-// (BranchExists/branch lookups) that would be dishonest as a canned
-// answer. Owner and Repo are the only repo Sim answers for -- a request
-// naming any other repo is an unhandled-request panic, the same as v1's
-// own mock, since a test wiring a second repo in in error should fail
-// loudly rather than silently return an empty answer.
 // PullReview is one review of a pull request, as GET .../pulls/N/reviews
 // lists it.
 type PullReview struct {
@@ -396,6 +389,13 @@ type PullReview struct {
 	Association string
 }
 
+// Sim is a github.Transport backed by an in-memory set of issues and pull
+// requests, plus a real bare git repo for the one endpoint
+// (BranchExists/branch lookups) that would be dishonest as a canned
+// answer. Owner and Repo are the only repo Sim answers for -- a request
+// naming any other repo is an unhandled-request panic, the same as v1's
+// own mock, since a test wiring a second repo in in error should fail
+// loudly rather than silently return an empty answer.
 type Sim struct {
 	Owner         string
 	Repo          string
