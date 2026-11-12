@@ -30,6 +30,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -404,6 +405,45 @@ func TestMergeGatesWalkthrough20261111ReviewsOpenNoPullRequests(t *testing.T) {
 	}
 	trigID := distinctGatingIDs(got)[0]
 	review := reloaded(t, ctx, store, trigID)
+
+	// Prompt and gitproxy scope while the two review runs are live (finding F6):
+	// a findings-only review is not told to git push, its sandbox may fetch
+	// acme/widgets (with TaskRepo kept for grain ci/pr reads) and its push is
+	// refused by the git proxy; grain's security review may push the change's
+	// own branch.
+	prompt := orchestrator.BuildPrompt(review, "work", "/home/debian", false, time.Hour, orchestrator.History{}, nil)
+	for _, bad := range []string{"Push your change to a new branch", "git push origin"} {
+		if strings.Contains(prompt, bad) {
+			t.Errorf("findings-only review prompt still contains %q:\n%s", bad, prompt)
+		}
+	}
+	if err := store.StartRun(ctx, model.Run{ID: sec.ID + "-1", TaskID: sec.ID, Sandbox: "sb-sec", Attempt: 1, StartedAt: baseTime.Add(time.Minute)}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: trigID + "-1", TaskID: trigID, Sandbox: "sb-trig", Attempt: 1, StartedAt: baseTime.Add(time.Minute)}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	authz := &gitproxy.ModelAuthorizer{Store: store}
+	if ok, err := authz.Authorize(ctx, "sb-sec", "acme", "widgets", "git-receive-pack"); err != nil || !ok {
+		t.Fatalf("security review push authorized = %v (%v), want true", ok, err)
+	}
+	if b, live, err := store.GitPushBranch(ctx, "sb-sec"); err != nil || !live || b != model.BranchName(task.ID) {
+		t.Fatalf("security review GitPushBranch = %q, %v (%v), want %q, true", b, live, err, model.BranchName(task.ID))
+	}
+	if ok, err := authz.Authorize(ctx, "sb-trig", "acme", "widgets", "info/refs"); err != nil || !ok {
+		t.Fatalf("findings-only review fetch authorized = %v (%v), want true", ok, err)
+	}
+	if ok, err := authz.Authorize(ctx, "sb-trig", "acme", "widgets", "git-receive-pack"); err != nil || ok {
+		t.Fatalf("findings-only review push authorized = %v (%v), want false (refused as read-only)", ok, err)
+	}
+	if b, live, err := store.GitPushBranch(ctx, "sb-trig"); err != nil || live || b != "" {
+		t.Fatalf("findings-only review GitPushBranch = %q, %v (%v), want empty, false", b, live, err)
+	}
+	if ns, live, err := store.SandboxNamespaceScope(ctx, "sb-trig"); err != nil || !live || ns.TaskRepo != "acme/widgets" {
+		t.Fatalf("findings-only review SandboxNamespaceScope = %+v, %v (%v), want TaskRepo=acme/widgets", ns, live, err)
+	}
+
+	// Even if a branch were pushed outside the proxy, finish.go opens no PR.
 	prsBefore := len(sim.PullRequests)
 	pushFileCommit(t, sim.BareRepo, model.BranchName(review.ID), model.BranchName(task.ID),
 		"config/secrets/prod.yml", "fixed anyway\n", "fix it anyway")
