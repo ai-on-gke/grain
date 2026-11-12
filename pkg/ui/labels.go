@@ -1216,7 +1216,7 @@ type StallNoter func(state model.State, since, now time.Time) string
 // orchestrator.MergeReason, in this package's types.
 type ReasonClassifier interface {
 	// TaskReason is the sub-case of state t is in, given its observation
-	// (nil for none), the blocking tasks it is still waiting on, the
+	// (nil for none), the blocking tasks it is still waiting on,
 	// which of those only a person can close (model.Store.BlockerHolds,
 	// nil for none), the grant wait dispatch recorded for it (nil for
 	// none), and, for an awaiting_reply task, which ask it is parked on
