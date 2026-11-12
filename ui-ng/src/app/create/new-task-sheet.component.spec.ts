@@ -557,4 +557,58 @@ describe("NewTaskSheetComponent", () => {
       "#4 Inbox split",
     );
   });
+
+  it("sends a repo-declared template with a customised model through POST /api/tasks", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+    await pickPill(f, "nt-template", "declared:template:sidthe:grain:bugfix");
+    await settle(f);
+    type('[data-testid="nt-tfield-area"]', "auth");
+    await pickPill(f, "nt-model", "fast");
+    await settle(f);
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    const create = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(create).toBeTruthy();
+    expect(create!.body).toMatchObject({ model: "fast" });
+    expect(
+      api.calls.some((c) => c.route === "POST /api/tasks/from-template"),
+    ).toBe(false);
+  });
+
+  it("offers only pushable reachable repos as targets and every reachable repo for reads", async () => {
+    const api = new FakeApi();
+    const baseGet = api.get;
+    api.get = ((route: string, params?: unknown, query?: string) => {
+      if (route === "GET /api/deployment/reachable-repos") {
+        api.calls.push({ route });
+        return Promise.resolve({
+          available: true,
+          repos: [
+            { repo: "acme/api", push: true },
+            { repo: "acme/docs", push: false },
+          ],
+        });
+      }
+      return baseGet(route, params, query);
+    }) as typeof api.get;
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    q<HTMLButtonElement>('[data-testid="nt-repo"]')!.click();
+    await settle(f);
+    expect(q('[data-testid="nt-repo-opt-acme/api"]')).toBeTruthy();
+    expect(q('[data-testid="nt-repo-opt-acme/docs"]')).toBeNull();
+    q<HTMLButtonElement>('[data-testid="nt-repo"]')!.click();
+    await settle(f);
+
+    q<HTMLButtonElement>('[data-testid="caps-options"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>('[data-testid="nt-reads"]')!.click();
+    await settle(f);
+    expect(q('[data-testid="nt-reads-opt-acme/docs"]')).toBeTruthy();
+  });
 });

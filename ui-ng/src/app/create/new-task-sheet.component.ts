@@ -1058,7 +1058,9 @@ export class NewTaskSheetComponent {
 
   protected readonly repos = computed(() => {
     const base = targetableRepos(this.config(), this.inbox.tasks());
-    const extra = this.reachableRepos();
+    // Target pickers offer only repos the deployment can push to
+    // (pkg/gitproxy/reach.go ReachableRepo.Push); reads use every reachable repo.
+    const extra = this.reachablePushRepos();
     const seen = new Set(base.map((r) => r.toLowerCase()));
     const merged = [...base];
     for (const r of extra) {
@@ -1652,15 +1654,45 @@ export class NewTaskSheetComponent {
         (d.repo === NO_REPO ? "" : d.repo || this.defaultTarget());
       const stem =
         tmpl && effectiveRepo ? fromTemplateStem(effectiveRepo, tmpl) : "";
+      // POST /api/tasks/from-template takes only {repo, template, fields,
+      // approved} (pkg/ui/tasks_from_template.go), so any other field that
+      // differs from a fresh draft for this repo must go to POST /api/tasks.
+      const fresh = emptyDraft(this.config(), this.inbox.tasks(), {
+        repo: d.repo,
+      });
+      const differs = (a: unknown, b: unknown) =>
+        JSON.stringify(a ?? null) !== JSON.stringify(b ?? null);
+      const OVERRIDE_KEYS: (keyof NewTaskDraft)[] = [
+        "base",
+        "newBranch",
+        "newBranchName",
+        "autoMerge",
+        "noPort",
+        "fixesBaseBranch",
+        "model",
+        "agentFramework",
+        "agentBackendId",
+        "networkAccess",
+        "nothingNeededAction",
+        "reviewTemplateId",
+        "reviewers",
+        "promptExtension",
+        "sandboxCpus",
+        "sandboxMemoryMb",
+        "sandboxDiskGb",
+        "atFront",
+        "origin",
+        "parentId",
+        "autoApproveProposals",
+        "customFields",
+      ];
       const hasExtraTaskOverrides =
         d.attachments.length > 0 ||
         d.dependsOn.length > 0 ||
         d.reads.length > 0 ||
         d.writes.length > 0 ||
         d.capabilities !== null ||
-        d.model ||
-        d.sandboxCpus > 0 ||
-        d.sandboxMemoryMb > 0;
+        OVERRIDE_KEYS.some((k) => differs(d[k], fresh[k]));
 
       const canOnlyPostFromTemplate =
         !this.access.can("POST /api/tasks", effectiveRepo) &&
