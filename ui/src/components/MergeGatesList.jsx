@@ -189,11 +189,14 @@ export function deriveMergeGates(t) {
   return gates;
 }
 
-// reviewGates returns all review gates (security-review and review) on t.
+// REVIEW_GATES are the review gates' ids (model.GateSecurityReview,
+// GateReview and GateTargetedReview), labelled "Security review", "Code
+// review" and "Targeted review".
+export const REVIEW_GATES = ["security-review", "review", "targeted-review"];
+
+// reviewGates returns all review gates on t.
 export function reviewGates(t) {
-  return deriveMergeGates(t).filter(
-    (g) => g.name === "security-review" || g.name === "review",
-  );
+  return deriveMergeGates(t).filter((g) => REVIEW_GATES.includes(g.name));
 }
 
 // unsatisfiedReviewGates returns review gates that have neither passed nor
@@ -251,12 +254,15 @@ export function submitButtonLabel(t) {
 // overrideReviewButtonLabel names the exact review gate(s) an explicit
 // force-merge override will bypass.
 export function overrideReviewButtonLabel(gates) {
-  const names = (gates || []).map((g) => g.name);
-  const sec = names.includes("security-review");
-  const code = names.includes("review");
-  if (sec && code) return "Merge without the reviews";
-  if (sec) return "Merge without the security review";
-  if (code) return "Merge without the code review";
+  const names = (gates || [])
+    .map((g) => g.name)
+    .filter((n) => REVIEW_GATES.includes(n));
+  if (names.length > 1) return "Merge without the reviews";
+  if (names[0] === "security-review")
+    return "Merge without the security review";
+  if (names[0] === "review") return "Merge without the code review";
+  if (names[0] === "targeted-review")
+    return "Merge without the targeted review";
   return "Force merge";
 }
 

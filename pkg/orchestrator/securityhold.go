@@ -1159,11 +1159,7 @@ func withoutLinks(links []model.Link, kinds ...model.LinkKind) []model.Link {
 }
 
 func securityReviewTitle(task model.Task) string {
-	title := strings.TrimSpace(task.Title)
-	if title == "" {
-		title = task.ID
-	}
-	return "Security review: " + title
+	return "Security review: " + reviewSubjectTitle(task)
 }
 
 // securityReviewBody is the template's instructions with the subject

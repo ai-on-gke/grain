@@ -563,14 +563,46 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 // in the title of the task or the body an agent is handed is worse than
 // the empty string a field with no default means.
 func reviewTaskTitle(tmpl model.Template, task model.Task) string {
-	if title := strings.TrimSpace(model.SubstituteFields(tmpl.Title, tmpl.FieldValues(nil))); title != "" {
+	values := tmpl.FieldValues(nil)
+	if _, ok := values["task_title"]; !ok {
+		// {{task_title}}, as a gating trigger's review fills it
+		// (buildPullRequestReview), unless the template declares a field
+		// of that name itself.
+		if values == nil {
+			values = map[string]string{}
+		}
+		values["task_title"] = reviewSubjectTitle(task)
+	}
+	if title := strings.TrimSpace(model.SubstituteFields(tmpl.Title, values)); title != "" {
 		return title
 	}
-	title := strings.TrimSpace(task.Title)
-	if title == "" {
-		title = task.ID
+	return "Review: " + reviewSubjectTitle(task)
+}
+
+// reviewSubjectTitle is how a review's title names the task under review:
+// its title, or its ID when it has none. Review templates read it as
+// {{task_title}}.
+func reviewSubjectTitle(task model.Task) string {
+	if title := strings.TrimSpace(task.Title); title != "" {
+		return title
 	}
-	return "Review: " + title
+	return task.ID
+}
+
+// targetedReviewTitle names the review sensitive path triggers file
+// without a template of their own (grain's security review brief, filed
+// for the trigger rather than the trust-boundary hold): "Targeted review
+// (<trigger>, ...): <task title>", every trigger it serves listed in
+// name order so one review for several reads the same whichever matched
+// first. The trust-boundary hold's own review keeps securityReviewTitle.
+func targetedReviewTitle(task model.Task, triggers []string) string {
+	names := slices.Clone(triggers)
+	slices.Sort(names)
+	names = slices.Compact(names)
+	if len(names) == 0 {
+		return "Targeted review: " + reviewSubjectTitle(task)
+	}
+	return "Targeted review (" + strings.Join(names, ", ") + "): " + reviewSubjectTitle(task)
 }
 
 // reviewTaskBody is the template's instructions with the subject of the

@@ -28,13 +28,15 @@ const (
 	GateCI             = "ci"
 	GateSecurityReview = "security-review"
 	GateReview         = "review"
+	GateTargetedReview = "targeted-review"
 	GateApproval       = "approval"
 )
 
 // KnownOverrideGates is the set of gate identifiers `--override-gates` and the
 // force-merge API accept. Prefix `trigger:` (e.g. `trigger:foo`) is also
 // accepted for a named gating path trigger, and `review` covers configured and
-// path-trigger code reviews.
+// path-trigger code reviews and, as it did before they had a gate of their
+// own, targeted reviews.
 //
 // GateApproval is not among them: a person's approval is given by Submit,
 // by someone the change's approvers name (approvals.go, IsApprover), and a
@@ -45,6 +47,7 @@ var KnownOverrideGates = []string{
 	GateCI,
 	GateSecurityReview,
 	GateReview,
+	GateTargetedReview,
 }
 
 // MergeGateState is the current status of one merge gate on a task or PR.
@@ -308,7 +311,7 @@ func GateOverriddenBy(gateID string, gates []string) bool {
 	if slices.Contains(gates, gateID) {
 		return true
 	}
-	if strings.HasPrefix(gateID, "trigger:") && slices.Contains(gates, GateReview) {
+	if (strings.HasPrefix(gateID, "trigger:") || gateID == GateTargetedReview) && slices.Contains(gates, GateReview) {
 		return true
 	}
 	return false
@@ -324,6 +327,7 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 	var secHold, secTask, reviewTask, pathTriggerHold, humanOnlyHold, brokenRulesHold string
 	var approvalMarker string
 	var triggerTasks []string
+	targetedTriggers := map[string]bool{}
 	hasMergePolicyWithdrawn := false
 	for _, l := range t.Links {
 		switch l.Kind {
@@ -337,6 +341,8 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 			pathTriggerHold = l.Target
 		case LinkPathTriggerTask:
 			triggerTasks = append(triggerTasks, l.Target)
+		case LinkTargetedReviewTrigger:
+			targetedTriggers[l.Target] = true
 		case LinkHumanOnlyHold:
 			humanOnlyHold = l.Target
 		case LinkBrokenRulesHold:
@@ -457,75 +463,69 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 		gates = append(gates, g)
 	}
 
-	// 3. Configured / trigger code review gate.
-	var codeFindings []ReviewFindingsRecord
+	// 3. Configured / trigger code review gate, and 4. the targeted review
+	// gate: the reviews sensitive triggers with no template of their own
+	// filed (LinkTargetedReviewTrigger), shown apart from the code review.
+	var codeFindings, targetedFindings []ReviewFindingsRecord
 	for _, rf := range ReviewFindings(t) {
-		if rf.Gate != GateSecurityReview {
+		switch {
+		case rf.Gate == GateSecurityReview:
+		case strings.HasPrefix(rf.Gate, "trigger:") && targetedTriggers[strings.TrimPrefix(rf.Gate, "trigger:")]:
+			targetedFindings = append(targetedFindings, rf)
+		default:
 			codeFindings = append(codeFindings, rf)
 		}
 	}
-	q, hasQuestions := ReviewQuestionsOf(t)
-	hasCodeQuestions := hasQuestions && (secTask == "" || q.ReviewTaskID != secTask)
-	triggerPending := false
-	var firstTriggerTask string
+	var codeTriggerTasks, targetedTasks []string
 	for _, raw := range triggerTasks {
-		_, tid, ok := strings.Cut(raw, "=")
+		trigger, tid, ok := strings.Cut(raw, "=")
 		if !ok || tid == "" {
 			continue
 		}
-		if firstTriggerTask == "" {
-			firstTriggerTask = tid
+		if targetedTriggers[trigger] {
+			targetedTasks = append(targetedTasks, tid)
+		} else {
+			codeTriggerTasks = append(codeTriggerTasks, tid)
 		}
+	}
+	q, hasQuestions := ReviewQuestionsOf(t)
+	hasTargetedQuestions := hasQuestions && slices.Contains(targetedTasks, q.ReviewTaskID) &&
+		(secTask == "" || q.ReviewTaskID != secTask)
+	hasCodeQuestions := hasQuestions && !hasTargetedQuestions && (secTask == "" || q.ReviewTaskID != secTask)
+	triggersPending := func(tids []string) bool {
 		if pathTriggerHold == "" {
-			continue
+			return false
 		}
-		if targetStates == nil {
-			triggerPending = true
-		} else if st, exists := targetStates[tid]; !exists || (st != StateClosed && st != StateCompleted) {
-			triggerPending = true
+		for _, tid := range tids {
+			if targetStates == nil {
+				return true
+			}
+			if st, exists := targetStates[tid]; !exists || (st != StateClosed && st != StateCompleted) {
+				return true
+			}
 		}
+		return false
+	}
+	var firstTriggerTask string
+	if len(codeTriggerTasks) > 0 {
+		firstTriggerTask = codeTriggerTasks[0]
 	}
 	codeReviewTask := firstGateText(reviewTask, firstTriggerTask)
-	codePending := triggerPending || isCodeReviewPending(t, reviewTask, targetStates)
-	if t.ReviewTemplateID != "" || reviewTask != "" || len(triggerTasks) > 0 || len(codeFindings) > 0 || hasCodeQuestions {
-		g := MergeGate{ID: GateReview, Label: "Code review", ReviewTask: codeReviewTask}
-		switch {
-		case hasOv && GateOverriddenBy(GateReview, ovGates):
-			g.State = GateStateOverridden
-			g.Detail = formatOverrideDetail(ov)
-		case len(codeFindings) > 0 || hasCodeQuestions:
-			g.State = GateStateFindings
-			if len(codeFindings) > 0 {
-				last := codeFindings[len(codeFindings)-1]
-				g.Detail = last.Summary
-				if last.ReviewTask != "" {
-					g.ReviewTask = last.ReviewTask
-				}
-			} else {
-				g.Detail = "open review questions (task #" + q.ReviewTaskID + ")"
-				g.ReviewTask = q.ReviewTaskID
-			}
-			g.Overridable = true
-		case codePending:
-			g.State = GateStateRunning
-			if g.ReviewTask != "" {
-				g.Detail = "running (task #" + g.ReviewTask + ")"
-			} else {
-				g.Detail = "queued"
-			}
-			g.Overridable = true
-		default:
-			g.State = GateStatePassed
-			if g.ReviewTask != "" {
-				g.Detail = "passed (task #" + g.ReviewTask + ")"
-			} else {
-				g.Detail = "passed"
-			}
+	codePending := triggersPending(codeTriggerTasks) || isCodeReviewPending(t, reviewTask, targetStates)
+	if t.ReviewTemplateID != "" || reviewTask != "" || len(codeTriggerTasks) > 0 || len(codeFindings) > 0 || hasCodeQuestions {
+		gates = append(gates, reviewMergeGate(GateReview, "Code review", codeReviewTask, codeFindings,
+			hasCodeQuestions, q.ReviewTaskID, codePending, hasOv, ov, ovGates))
+	}
+	if len(targetedTasks) > 0 || len(targetedFindings) > 0 || hasTargetedQuestions {
+		var targetedTask string
+		if len(targetedTasks) > 0 {
+			targetedTask = targetedTasks[0]
 		}
-		gates = append(gates, g)
+		gates = append(gates, reviewMergeGate(GateTargetedReview, "Targeted review", targetedTask, targetedFindings,
+			hasTargetedQuestions, q.ReviewTaskID, triggersPending(targetedTasks), hasOv, ov, ovGates))
 	}
 
-	// 4. Human approval (Submit) gate.
+	// 5. Human approval (Submit) gate.
 	pendingApprovals := PendingApprovals(t)
 	allApprovals := ApprovalRequirements(t)
 	approvalNeeded := AutoMergeDeclined(t) || humanOnlyHold != "" || brokenRulesHold != "" ||
@@ -565,6 +565,48 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 	}
 
 	return gates
+}
+
+// reviewMergeGate is a code or targeted review gate: overridden, held on
+// findings or open questions, running while pending, and otherwise passed.
+func reviewMergeGate(id, label, reviewTask string, findings []ReviewFindingsRecord, hasQuestions bool,
+	questionsTask string, pending, hasOv bool, ov GateOverrideRecord, ovGates []string) MergeGate {
+
+	g := MergeGate{ID: id, Label: label, ReviewTask: reviewTask}
+	switch {
+	case hasOv && GateOverriddenBy(id, ovGates):
+		g.State = GateStateOverridden
+		g.Detail = formatOverrideDetail(ov)
+	case len(findings) > 0 || hasQuestions:
+		g.State = GateStateFindings
+		if len(findings) > 0 {
+			last := findings[len(findings)-1]
+			g.Detail = last.Summary
+			if last.ReviewTask != "" {
+				g.ReviewTask = last.ReviewTask
+			}
+		} else {
+			g.Detail = "open review questions (task #" + questionsTask + ")"
+			g.ReviewTask = questionsTask
+		}
+		g.Overridable = true
+	case pending:
+		g.State = GateStateRunning
+		if g.ReviewTask != "" {
+			g.Detail = "running (task #" + g.ReviewTask + ")"
+		} else {
+			g.Detail = "queued"
+		}
+		g.Overridable = true
+	default:
+		g.State = GateStatePassed
+		if g.ReviewTask != "" {
+			g.Detail = "passed (task #" + g.ReviewTask + ")"
+		} else {
+			g.Detail = "passed"
+		}
+	}
+	return g
 }
 
 func isCodeReviewPending(t Task, reviewTaskID string, targetStates map[string]State) bool {
