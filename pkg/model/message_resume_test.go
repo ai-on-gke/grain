@@ -93,7 +93,8 @@ func TestAPostWhileTheRunEndsStillWakesAMessageHold(t *testing.T) {
 }
 
 // Only a post the task has not already been given counts, and only one
-// from somebody other than grain and the task's own agent.
+// from somebody other than grain and the task's own agent. Grain relaying
+// another agent's words (a team broadcast) is that agent's post.
 func TestDueMessageResumesSkipsOwnAndDeliveredPosts(t *testing.T) {
 	store, ctx := open(t)
 	finish := func(id string) {
@@ -129,11 +130,15 @@ func TestDueMessageResumesSkipsOwnAndDeliveredPosts(t *testing.T) {
 	finish("messaged")
 	post(t, store, "messaged", model.Attribution{Actor: other}, now.Add(3*time.Minute))
 
+	stoppedOnMessage(t, store, "broadcast")
+	finish("broadcast")
+	post(t, store, "broadcast", model.Attribution{Actor: grain, OnBehalfOf: &other}, now.Add(3*time.Minute))
+
 	due, err := store.DueMessageResumes(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(due, []string{"messaged"}) {
-		t.Fatalf("DueMessageResumes = %v, want only [messaged]", due)
+	if !slices.Equal(due, []string{"broadcast", "messaged"}) {
+		t.Fatalf("DueMessageResumes = %v, want only [broadcast messaged]", due)
 	}
 }
