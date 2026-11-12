@@ -19,6 +19,7 @@ import {
   expectedRefusal,
   grantString,
   invalidArgs,
+  isPersonGrantedArg,
   knownAPIGap,
   listCapabilityMethods,
   policyFor,
@@ -247,4 +248,239 @@ test("every method and argument variant is granted, round-trips and is removed t
       JSON.stringify({ methods: methods.length, results }, null, 2),
     );
   expect(failures, failures.join("\n")).toEqual([]);
+});
+
+test("person-only arguments (x-grain-person-granted) are refused when an agent token attempts them", async ({
+  request,
+  playwright,
+  baseURL,
+}) => {
+  const methods = await listCapabilityMethods(request);
+  const personOnly = [];
+  for (const method of methods) {
+    for (const { variant, args } of argVariants(method)) {
+      if (isPersonGrantedArg(method, args)) {
+        personOnly.push({ method, ref: method.ref, variant, args });
+      }
+    }
+  }
+  expect(
+    personOnly.some(
+      (c) =>
+        c.ref === "https://grain.dev/capabilities/gcp#gcp-key" &&
+        c.args?.permission_set === "org-deploy",
+    ),
+    `expected gcp#gcp-key {permission_set: "org-deploy"} in x-grain-person-granted cells, got ${JSON.stringify(personOnly.map((c) => [c.ref, c.variant]))}`,
+  ).toBe(true);
+
+  const settingsBefore = await (await request.get("/api/settings")).json();
+  let tokenID = "";
+  let extReq = null;
+  try {
+    expect(
+      (
+        await request.put("/api/settings", {
+          data: { externalAgentApi: true },
+        })
+      ).ok(),
+    ).toBe(true);
+
+    const issue = await request.post("/api/external-agents/tokens", {
+      data: {
+        name: `matrix-agent-${Date.now()}`,
+        scopes: ["tasks:write", "tasks:admin", "capabilities:admin"],
+      },
+    });
+    expect(issue.ok(), await issue.text()).toBe(true);
+    const issued = await issue.json();
+    tokenID = issued.id;
+
+    extReq = await playwright.request.newContext({
+      baseURL,
+      storageState: { cookies: [], origins: [] },
+      extraHTTPHeaders: {
+        Authorization: `Bearer ${issued.token}`,
+        "X-Grain-Acting-Reason": "grant matrix person-only check",
+      },
+    });
+
+    const personGrants = [];
+    for (const c of personOnly) {
+      const checked = await check(request, c.ref, c.args);
+      expect(checked.error || "").toBe("");
+      personGrants.push(checked.recorded);
+    }
+    const allowedGCP =
+      'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent"}';
+
+    // A person creates an acting task that ALREADY holds every person-only
+    // grant plus capabilities:admin and tasks:write, and a target task to
+    // attach grants to. Even holding the grant itself must not let an agent
+    // pass a person-only argument on.
+    const actingRes = await request.post("/api/tasks", {
+      data: {
+        title: `E2E matrix acting agent ${Date.now()}`,
+        noRepo: true,
+        capabilities: [
+          "api:tasks:write",
+          "api:tasks:admin",
+          "api:capabilities:admin",
+          allowedGCP,
+          ...personGrants,
+        ],
+      },
+    });
+    expect(actingRes.ok(), await actingRes.text()).toBe(true);
+    const acting = await actingRes.json();
+
+    const targetRes = await request.post("/api/tasks", {
+      data: {
+        title: `E2E matrix target ${Date.now()}`,
+        noRepo: true,
+        capabilities: [],
+      },
+    });
+    expect(targetRes.ok(), await targetRes.text()).toBe(true);
+    const target = await targetRes.json();
+
+    const actingHeaders = {
+      "X-Grain-Acting-Task": String(acting.id),
+      "X-Grain-Acting-Reason": "grant matrix person-only check",
+    };
+
+    // Positive control: the acting task CAN attach the non-person-granted
+    // gcp#gcp-key {permission_set: sandbox-agent} variant it holds.
+    const controlRes = await request.post(
+      `/api/tasks/${target.id}/capabilities`,
+      {
+        headers: actingHeaders,
+        data: attachBody(
+          "https://grain.dev/capabilities/gcp#gcp-key",
+          { permission_set: "sandbox-agent" },
+          true,
+        ),
+      },
+    );
+    expect(controlRes.ok(), await controlRes.text()).toBe(true);
+    await request.patch(`/api/tasks/${target.id}`, {
+      data: { capabilities: [] },
+    });
+
+    for (const { ref, variant, args } of personOnly) {
+      const spec = grantString(ref, args);
+
+      // 1. Acting-task agent token (X-Grain-Acting-Task) on attach, patch, create.
+      for (const [label, call] of [
+        [
+          "acting attach",
+          () =>
+            request.post(`/api/tasks/${target.id}/capabilities`, {
+              headers: actingHeaders,
+              data: attachBody(ref, args, true),
+            }),
+        ],
+        [
+          "acting patch",
+          () =>
+            request.patch(`/api/tasks/${target.id}`, {
+              headers: actingHeaders,
+              data: { capabilities: [spec] },
+            }),
+        ],
+        [
+          "acting create",
+          () =>
+            request.post("/api/tasks", {
+              headers: actingHeaders,
+              data: {
+                title: `Refused ${variant}`,
+                noRepo: true,
+                capabilities: [spec],
+              },
+            }),
+        ],
+      ]) {
+        const res = await call();
+        const body = await res.text();
+        expect(res.status(), `${ref} [${variant}] ${label}: ${body}`).toBe(403);
+        expect(body, `${ref} [${variant}] ${label}`).toMatch(
+          /only a person may grant/i,
+        );
+      }
+
+      // 2. External agent bearer token on attach, patch, create, and /mcp.
+      for (const [label, call] of [
+        [
+          "external attach",
+          () =>
+            extReq.post(`/api/tasks/${target.id}/capabilities`, {
+              data: attachBody(ref, args, true),
+            }),
+        ],
+        [
+          "external patch",
+          () =>
+            extReq.patch(`/api/tasks/${target.id}`, {
+              data: { capabilities: [spec] },
+            }),
+        ],
+        [
+          "external create",
+          () =>
+            extReq.post("/api/tasks", {
+              data: {
+                title: `Refused external ${variant}`,
+                noRepo: true,
+                capabilities: [spec],
+              },
+            }),
+        ],
+      ]) {
+        const res = await call();
+        const body = await res.text();
+        expect(res.status(), `${ref} [${variant}] ${label}: ${body}`).toBe(403);
+        expect(body, `${ref} [${variant}] ${label}`).toMatch(
+          /only a person may grant/i,
+        );
+      }
+
+      const mcpRes = await extReq.post("/mcp", {
+        data: {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "api_create_task",
+            arguments: {
+              body: {
+                title: `Refused mcp ${variant}`,
+                body: "x",
+                noRepo: true,
+                capabilities: [spec],
+              },
+            },
+          },
+        },
+      });
+      const mcpText = await mcpRes.text();
+      if (mcpRes.ok()) {
+        const rpc = JSON.parse(mcpText);
+        expect(
+          Boolean(rpc.error || rpc.result?.isError),
+          `${ref} [${variant}] mcp allowed: ${mcpText}`,
+        ).toBe(true);
+      }
+      expect(mcpText, `${ref} [${variant}] mcp`).toMatch(
+        /only a person may grant/i,
+      );
+
+      expect(await heldOf(request, target.id, ref)).toEqual([]);
+    }
+  } finally {
+    if (extReq) await extReq.dispose();
+    if (tokenID) await request.delete(`/api/external-agents/tokens/${tokenID}`);
+    await request.put("/api/settings", {
+      data: { externalAgentApi: Boolean(settingsBefore.externalAgentApi) },
+    });
+  }
 });
