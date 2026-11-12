@@ -290,6 +290,12 @@ func fileOrUpdateStage1Repair(ctx context.Context, store *model.Store, run Concl
 		CreatedAt:  &now,
 		OrderKey:   orderKey,
 	}
+	if rcTagPattern.MatchString(run.Ref) {
+		// Red on a release candidate: the repair is a defect that
+		// candidate shipped (model.LinkFoundIn). A red default branch is
+		// against no release yet.
+		model.SetFoundIn(&task, run.Ref)
+	}
 	if err := store.PutTask(ctx, task); err != nil {
 		return "", fmt.Errorf("orchestrator: filing the Stage 1 repair of %s: %w", repo, err)
 	}
