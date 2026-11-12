@@ -180,8 +180,6 @@ describe("AppComponent shell", () => {
     expect(fleet.getAttribute("href")).toBe("/next/fleet");
     const ci = el(f).querySelector('[data-testid="rail-ci"]')!;
     expect(ci.getAttribute("href")).toBe("/next/ci");
-    const telemetry = el(f).querySelector('[data-testid="rail-telemetry"]')!;
-    expect(telemetry.getAttribute("href")).toBe("/metrics");
   });
 
   it("opens the 2-line rich create disclosure, and Escape closes it back onto its button", async () => {

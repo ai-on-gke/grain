@@ -112,6 +112,7 @@ export const routes: Routes = [
   { path: "schedules", redirectTo: "processes/schedules", pathMatch: "full" },
   { path: "templates", redirectTo: "processes/templates", pathMatch: "full" },
   { path: "suites", redirectTo: "processes/suites", pathMatch: "full" },
+  {
     path: "telemetry",
     title: "Telemetry · grain",
     loadComponent: () =>

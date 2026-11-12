@@ -113,7 +113,12 @@ describe("GrainApi.getIfChanged", () => {
       .flush({ entries: 2, bytes: 1024 });
     expect(await flush).toEqual({ entries: 2, bytes: 1024 });
 
-    const lift = api.delete("DELETE /api/pause", undefined, "connection=c1");
+    const lift = api.delete(
+      "DELETE /api/pause",
+      undefined,
+      undefined,
+      "connection=c1",
+    );
     http.expectOne("/api/pause?connection=c1").flush({ enabled: true });
     expect(await lift).toEqual({ enabled: true });
   });
