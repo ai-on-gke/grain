@@ -32,6 +32,7 @@ const FINDINGS = {
       detail: "security review left findings",
       reviewTask: "4",
       overridable: true,
+      acceptable: true,
     },
     {
       id: "review",
@@ -40,6 +41,7 @@ const FINDINGS = {
       detail: "every-pr review left findings",
       reviewTask: "4",
       overridable: true,
+      acceptable: true,
     },
     { id: "approval", label: "Approval", state: "needed" },
   ],

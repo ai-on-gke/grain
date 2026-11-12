@@ -329,8 +329,10 @@ function gateToneColor(state) {
 }
 
 // onAcceptFindings, when given, offers "Accept findings…" beside each gate
-// held on a review's findings (AcceptFindingsDialog): the owner's decision
-// to merge over them as they are, without overriding anything else.
+// held on a review's findings the server marks acceptable (MergeGate's
+// `acceptable`; AcceptFindingsDialog): the owner's decision to merge over
+// them as they are, without overriding anything else. A gate held by a
+// review that could not be filed has no review's findings to accept.
 export default function MergeGatesList({
   t,
   onOpenTask,
@@ -465,7 +467,7 @@ export default function MergeGatesList({
               {formatGateStatus(g)}
             </Box>
             {(g.tasks?.length > 0 ||
-              (onAcceptFindings && g.state === "findings")) && (
+              (onAcceptFindings && g.state === "findings" && g.acceptable)) && (
               <Box
                 component="span"
                 sx={{
@@ -489,7 +491,7 @@ export default function MergeGatesList({
                     ))}
                   </span>
                 )}
-                {onAcceptFindings && g.state === "findings" && (
+                {onAcceptFindings && g.state === "findings" && g.acceptable && (
                   <Button
                     size="small"
                     variant="text"
