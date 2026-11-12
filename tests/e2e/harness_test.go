@@ -67,6 +67,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/testing/hostsrig"
 )
 
 var baseTime = time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
@@ -89,7 +90,7 @@ func TestMain(m *testing.M) {
 	// git_hosts_lifecycle_test.go runs this binary as the command-backed
 	// forge's tool.
 	if filepath.Base(os.Args[0]) == gitproxytest.Command {
-		os.Exit(fakeForgeCLI(os.Args[1:]))
+		os.Exit(hostsrig.FakeForgeCLI(os.Args[1:]))
 	}
 	// These tests' scripted agents call the MCP tools the control roster
 	// serves as `grain` commands instead; they drive the full roster
