@@ -274,7 +274,7 @@ g-telemetry-page {
 }
 
 .tel-legend-item.is-dim {
-  opacity: 0.45;
+  color: var(--md-sys-color-outline);
 }
 
 .tel-tip-when {

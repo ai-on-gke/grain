@@ -696,7 +696,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                           }"
                         />
                         <span class="row-actions">
-                          @if (canApprove()) {
+                          @if (canApproveTask(t)) {
                             <button
                               type="button"
                               class="btn-tonal"
@@ -710,7 +710,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                           <button
                             type="button"
                             class="btn-text"
-                            [disabled]="!canDefer()"
+                            [disabled]="!canDeferTask(t)"
                             [attr.data-testid]="'defer-' + t.id"
                             (click)="defer([t.id])"
                           >
@@ -976,7 +976,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
               Move to bottom
             </button>
           }
-          @if (current() === "proposed" && canApprove()) {
+          @if (current() === "proposed" && canApproveSelected()) {
             <button
               type="button"
               class="btn-text"
@@ -1000,7 +1000,8 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
             />
           }
           @if (
-            (current() === "backlog" || current() === "proposed") && canDefer()
+            (current() === "backlog" || current() === "proposed") &&
+            canDeferSelected()
           ) {
             <button type="button" class="btn-text" (click)="defer(selected())">
               Defer
@@ -1010,7 +1011,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
             <button type="button" class="btn-text" (click)="reopen(selected())">
               Reopen
             </button>
-          } @else if (canClose()) {
+          } @else if (canCloseSelected()) {
             @if (confirmClose()) {
               <span data-testid="close-confirm"
                 >Close {{ selected().length }}? Running work stops and open pull
@@ -1133,7 +1134,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
             Retry
           </button>
         }
-        @if (t.state === "deferred" && canDefer()) {
+        @if (t.state === "deferred" && canDeferTask(t)) {
           <button
             type="button"
             class="btn-text"
@@ -1318,7 +1319,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
     <ng-template #priorityChip let-t let-editable="editable">
       <g-priority-chip
         [priority]="prio(t)"
-        [editable]="!!editable && canEdit()"
+        [editable]="!!editable && canEditTask(t)"
         [disabled]="store.isBusy('priority')"
         [testid]="'prio-' + t.id"
         [menuTestid]="'prio-menu-' + t.id"
@@ -1542,6 +1543,40 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly canClose = computed(() =>
     this.access.can("POST /api/tasks/{id}/close"),
   );
+
+  protected canApproveTask(t: Task): boolean {
+    return this.access.can("POST /api/tasks/{id}/approve", t.repo || undefined);
+  }
+  protected canEditTask(t: Task): boolean {
+    return this.access.can("PATCH /api/tasks/{id}", t.repo || undefined);
+  }
+  protected canDeferTask(t: Task): boolean {
+    return this.access.can("POST /api/tasks/{id}/defer", t.repo || undefined);
+  }
+  protected canCloseTask(t: Task): boolean {
+    return this.access.can("POST /api/tasks/{id}/close", t.repo || undefined);
+  }
+  protected selectedRepos(): string[] {
+    return Array.from(
+      new Set(
+        this.selectedRows()
+          .map((r) => r.repo)
+          .filter((r): r is string => !!r),
+      ),
+    );
+  }
+  protected canApproveSelected(): boolean {
+    return this.access.can(
+      "POST /api/tasks/{id}/approve",
+      this.selectedRepos(),
+    );
+  }
+  protected canDeferSelected(): boolean {
+    return this.access.can("POST /api/tasks/{id}/defer", this.selectedRepos());
+  }
+  protected canCloseSelected(): boolean {
+    return this.access.can("POST /api/tasks/{id}/close", this.selectedRepos());
+  }
   protected readonly canReadBoards = computed(() =>
     this.access.can("GET /api/boards"),
   );

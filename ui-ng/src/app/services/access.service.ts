@@ -101,6 +101,7 @@ export class AccessService {
   }
 
   canGlobalScope(scope: string | null): boolean {
+    if (!this.configLoaded() && scope === null) return false;
     const access = this.config()?.access;
     if (!access || access.full) return true;
     if (scope === "signed-in") return true;

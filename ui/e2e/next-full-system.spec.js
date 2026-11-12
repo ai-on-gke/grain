@@ -102,7 +102,8 @@ for (const size of SIZES) {
             document.documentElement.scrollWidth -
             document.documentElement.clientWidth,
         );
-        if (sideways > 0) failures.push(`${r}: scrolls sideways by ${sideways}px`);
+        if (sideways > 0)
+          failures.push(`${r}: scrolls sideways by ${sideways}px`);
 
         const applied = await page.evaluate(
           () => document.documentElement.getAttribute("data-theme") || "",

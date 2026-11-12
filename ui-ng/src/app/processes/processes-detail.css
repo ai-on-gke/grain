@@ -76,8 +76,8 @@
   padding: 12px;
   border-radius: var(--md-sys-shape-corner-small);
   border: 1px solid #2e3340;
-  background: #13151a;
-  color: #e4e6eb;
+  background: var(--grain-well-bg, #13151a);
+  color: var(--grain-well-fg, #e4e6eb);
   font-family: var(--grain-font-mono);
   font-size: 12px;
   line-height: 18px;

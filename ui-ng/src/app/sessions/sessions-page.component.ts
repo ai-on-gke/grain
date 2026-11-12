@@ -791,7 +791,10 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     viewChild<ElementRef<HTMLTextAreaElement>>("composer");
 
   protected readonly canWrite = computed(() =>
-    this.access.can("POST /api/tasks/{id}/comments"),
+    this.access.can(
+      "POST /api/tasks/{id}/comments",
+      this.store.selectedDetail()?.repo || undefined,
+    ),
   );
   protected readonly canStop = computed(() =>
     this.access.can("POST /api/console-sessions/{id}/cancel"),

@@ -152,8 +152,8 @@
   margin: 0 12px 12px 24px;
   border-radius: var(--md-sys-shape-corner-small);
   border: 1px solid #2e3340;
-  background: #13151a;
-  color: #e4e6eb;
+  background: var(--grain-well-bg, #13151a);
+  color: var(--grain-well-fg, #e4e6eb);
   overflow: hidden;
 }
 
@@ -181,8 +181,8 @@
   padding: 0 10px;
   border-radius: var(--md-sys-shape-corner-full);
   border: 1px solid #383d4a;
-  background: #13151a;
-  color: #e4e6eb;
+  background: var(--grain-well-bg, #13151a);
+  color: var(--grain-well-fg, #e4e6eb);
   font-size: 12px;
   min-width: 160px;
 }
@@ -243,8 +243,8 @@
   margin-top: 10px;
   padding: 10px 12px;
   border-radius: var(--md-sys-shape-corner-small);
-  background: #13151a;
-  color: #e4e6eb;
+  background: var(--grain-well-bg, #13151a);
+  color: var(--grain-well-fg, #e4e6eb);
   font-family: var(--grain-font-mono);
   font-size: 12px;
   overflow-x: auto;

@@ -103,8 +103,8 @@ g-fleet-page {
 .fleet-token-code {
   padding: 8px 10px;
   border-radius: var(--md-sys-shape-corner-xs);
-  background: #13151a;
-  color: #e4e6eb;
+  background: var(--grain-well-bg, #13151a);
+  color: var(--grain-well-fg, #e4e6eb);
   font: 12px/18px var(--grain-font-mono);
   overflow-x: auto;
 }

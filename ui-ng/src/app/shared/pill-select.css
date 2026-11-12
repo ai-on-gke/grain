@@ -14,7 +14,7 @@ g-priority-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 32px;
+  min-height: 36px;
   padding: 0 10px 0 12px;
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: var(--md-sys-shape-corner-full);
@@ -178,8 +178,8 @@ g-priority-chip {
 }
 .prio-chip.prio-high,
 .prio-dot.prio-high {
-  background: var(--md-sys-color-warning-container, #fef0db);
-  color: var(--md-sys-color-on-warning-container, #6d3a00);
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
   border-color: transparent;
 }
 .prio-chip.prio-normal,

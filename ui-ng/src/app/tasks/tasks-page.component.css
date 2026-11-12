@@ -202,7 +202,8 @@ g-tasks-page {
   flex-shrink: 0;
 }
 
-.pop-menu {
+.row-menu-wrap .pop-menu,
+.boards-menu.pop-menu {
   position: absolute;
   z-index: 30;
   right: 0;
@@ -216,7 +217,8 @@ g-tasks-page {
   box-shadow: var(--md-sys-elevation-dialog);
 }
 
-.pop-menu button {
+.row-menu-wrap .pop-menu button,
+.boards-menu.pop-menu button {
   display: block;
   width: 100%;
   padding: 8px 14px;
@@ -229,12 +231,15 @@ g-tasks-page {
   cursor: pointer;
 }
 
-.pop-menu button:hover,
-.pop-menu button[aria-current="true"] {
+.row-menu-wrap .pop-menu button:hover,
+.row-menu-wrap .pop-menu button[aria-current="true"],
+.boards-menu.pop-menu button:hover,
+.boards-menu.pop-menu button[aria-current="true"] {
   background: var(--md-sys-color-surface-container-high);
 }
 
-.pop-menu button:focus-visible {
+.row-menu-wrap .pop-menu button:focus-visible,
+.boards-menu.pop-menu button:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: -2px;
 }

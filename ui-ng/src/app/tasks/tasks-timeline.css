@@ -329,7 +329,7 @@
 
 .timeline-bar.tone-proposal,
 .timeline-bar.tone-reply {
-  background: var(--md-sys-color-warning, #b06000);
+  background: var(--md-sys-color-warning);
 }
 
 .timeline-bar.tone-error {

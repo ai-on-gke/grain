@@ -25,6 +25,7 @@ import type {
 } from "../api/models";
 import { SessionsPageComponent } from "./sessions-page.component";
 import { SessionsStore } from "./sessions.store";
+import { AccessService } from "../services/access.service";
 
 type Call = { method: string; route: string; params?: unknown; body?: unknown };
 
@@ -683,5 +684,30 @@ describe("SessionsPageComponent", () => {
     await TestBed.inject(SessionsStore).refresh();
     await f.whenStable();
     expect(q(f, '[data-testid="new-session-dialog"]')).toBeTruthy();
+  });
+
+  it("hides the composer when the session task repo is outside repoLimits for tasks:write", async () => {
+    const api = new FakeApi();
+    api.details["1"] = { ...api.details["1"], repo: "acme/other" };
+    const f = await render(api);
+    const access = TestBed.inject(AccessService);
+    access.setConfig({
+      access: {
+        role: "dev",
+        roles: ["dev"],
+        full: false,
+        scopes: ["tasks:read", "tasks:write"],
+        repoLimits: { "tasks:write": ["acme/allowed"] },
+      },
+    });
+    f.detectChanges();
+    await f.whenStable();
+    expect(q(f, '[data-testid="composer"]')).toBeNull();
+
+    api.details["1"] = { ...api.details["1"], repo: "acme/allowed" };
+    await TestBed.inject(SessionsStore).refresh();
+    f.detectChanges();
+    await f.whenStable();
+    expect(q(f, '[data-testid="composer"]')).not.toBeNull();
   });
 });

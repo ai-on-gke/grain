@@ -59,6 +59,8 @@
   --md-sys-color-on-surface-variant: #444952;
   --md-sys-color-outline: #727885;
   --md-sys-color-outline-variant: #d8e0eb;
+  --grain-well-bg: #13151a;
+  --grain-well-fg: #e4e6eb;
   --md-sys-color-scrim: rgba(15, 20, 28, 0.42);
   --md-sys-color-inverse-surface: #282c35;
   --md-sys-color-inverse-on-surface: #f2f4f8;
@@ -2031,7 +2033,7 @@ button.more-sheet-item {
 }
 
 .segmented button {
-  min-height: 32px;
+  min-height: 36px;
   padding: 0 12px;
   white-space: nowrap;
   border: none;

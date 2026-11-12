@@ -308,7 +308,7 @@ import { TaskStore } from "./task.store";
           }
         } @else {
           @for (run of ciRuns(); track run.id) {
-            <div class="ci-run-row" [attr.data-testid]="'ci-run-' + run.id">
+            <div class="tc-run-row" [attr.data-testid]="'ci-run-' + run.id">
               <div class="ci-run-summary">
                 <span
                   [class]="

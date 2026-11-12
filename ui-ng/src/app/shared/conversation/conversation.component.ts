@@ -28,6 +28,7 @@ import {
 } from "../attachments";
 import type { Comment, AttachmentUpload } from "../../api/models";
 import { TipDirective } from "../tip.directive";
+import { DialogTrapDirective } from "../dialog-trap.directive";
 import { isTypingTarget } from "../../services/keyboard.service";
 
 export type ConversationMode = "inline" | "expanded" | "fullscreen";
@@ -59,6 +60,7 @@ export interface ComposerConfig {
     AttachmentListComponent,
     AttachmentPickerComponent,
     TipDirective,
+    DialogTrapDirective,
   ],
   styleUrls: ["./conversation.css", "../conversation.css"],
   host: {
@@ -284,7 +286,13 @@ export interface ComposerConfig {
       (close)="onDialogClose()"
     >
       @if (mode() === "fullscreen") {
-        <ng-container *ngTemplateOutlet="contentTemplate" />
+        <div
+          class="convo-modal-inner"
+          gDialogTrap
+          (gDialogClose)="setMode('inline')"
+        >
+          <ng-container *ngTemplateOutlet="contentTemplate" />
+        </div>
       }
     </dialog>
   `,

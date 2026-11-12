@@ -43,7 +43,7 @@
   gap: 8px;
 }
 
-.ci-run-row {
+.tc-run-row {
   border-top: 1px solid var(--md-sys-color-outline-variant);
   padding-top: 10px;
   display: flex;

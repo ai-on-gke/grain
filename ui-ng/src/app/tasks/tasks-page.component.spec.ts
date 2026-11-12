@@ -1062,4 +1062,27 @@ describe("TasksPageComponent", () => {
       expect(q(f, '[data-testid="pane-close"]')).toBeNull();
     });
   });
+
+  it("respects repoLimits per task row on priority edit and defer", async () => {
+    const api = new FakeApi();
+    api.live = [
+      task("301", "queued", 5, { repo: "acme/allowed", approved: true }),
+      task("302", "queued", 5, { repo: "acme/other", approved: true }),
+    ];
+    const f = await render(api);
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        role: "dev",
+        roles: ["dev"],
+        full: false,
+        scopes: ["tasks:read", "tasks:write"],
+        repoLimits: { "tasks:write": ["acme/allowed"] },
+      },
+    });
+    f.detectChanges();
+    await f.whenStable();
+    expect(q(f, 'button[data-testid="prio-301"]')).not.toBeNull();
+    expect(q(f, 'button[data-testid="prio-302"]')).toBeNull();
+    expect(q(f, '[data-testid="prio-302"].static')).not.toBeNull();
+  });
 });
