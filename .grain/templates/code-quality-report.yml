@@ -81,7 +81,8 @@ body: |
   1. **Change failure rate.** Take the pull requests merged in the
      window (tasks with a merged pull request). A merge counts as failed
      when a later fix names it. These fixes count:
-     - a revert (a `Revert "..."` commit, or a task filed by `grain git revert`);
+     - a revert (a task filed by `grain git revert`, linked `reverts` /
+       `reverted-by` to the task it reverts, or a `Revert "..."` commit);
      - a base-branch repair (tag `fixes-base-branch`);
      - a Stage 1 repair (the Stage 1 repair tag `Stage1RepairTag` in
        `src://core/pkg/orchestrator/stage1repair.go`, or a title like
@@ -165,8 +166,9 @@ body: |
   ## Finishing
 
   Propose no fixes from this run. If a metric cannot be computed from
-  what grain records, say so under "Method notes". Don't propose a task:
-  the record gaps already have follow-ups, filed from task 4820.
+  what grain records, say so under "Method notes" and don't propose a
+  task. Task 4820 filed the follow-ups for the known record gaps: which
+  merge a repair blames, and which version a bug was found in.
 
   End with `nothing_needed`, passing the complete report from
   /tmp/code-quality.md as `reason`. Never truncate it.
