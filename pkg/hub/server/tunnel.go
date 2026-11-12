@@ -182,11 +182,6 @@ func NewActiveTunnel(
 	return t
 }
 
-// Mux returns the underlying `*mux.Mux`.
-func (t *ActiveTunnel) Mux() *mux.Mux {
-	return t.mux
-}
-
 // Transport returns the per-tunnel `*http.Transport` (`DisableKeepAlives: true`).
 func (t *ActiveTunnel) Transport() http.RoundTripper {
 	return t.transport

@@ -211,11 +211,11 @@ func TestMigration142HostQualifiesQualificationAndWorkflowRunOwners(t *testing.T
 	verify("second run")
 }
 
-// Migration 144 moves a bare-owner repository's releases onto the host
+// Migration 145 moves a bare-owner repository's releases onto the host
 // the one target repo spelling it says, its candidates and qualification
 // runs with them, and leaves on the default host every repository
 // nothing settles.
-func TestMigration144HostQualifiesReleaseOwners(t *testing.T) {
+func TestMigration145HostQualifiesReleaseOwners(t *testing.T) {
 	t.Parallel()
 	store, db, ctx := openStore(t)
 	if err := store.PutConfig(ctx, testConfig()); err != nil {
@@ -232,7 +232,7 @@ func TestMigration144HostQualifiesReleaseOwners(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The rows a build before 144 wrote: bare owners throughout, one
+	// The rows a build before 145 wrote: bare owners throughout, one
 	// release, candidate and qualification run per repository.
 	for i, name := range []string{"widgets", "gadgets", "tools"} {
 		id := int64(i + 1)
@@ -255,7 +255,7 @@ func TestMigration144HostQualifiesReleaseOwners(t *testing.T) {
 
 	migrate := func() {
 		t.Helper()
-		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 143 WHERE `id` = 1"); err != nil {
+		if _, err := db.ExecContext(ctx, "UPDATE `grain_schema` SET `version` = 144 WHERE `id` = 1"); err != nil {
 			t.Fatal(err)
 		}
 		if err := model.New(db).Init(ctx); err != nil {

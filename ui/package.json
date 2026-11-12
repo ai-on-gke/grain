@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:next": "playwright test e2e/next-inbox.spec.js e2e/next-full-system.spec.js e2e/next-task-interactions.spec.js",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "brand": "npm run brand:assets && npm run brand:candidates && npm run brand:sheets",

@@ -1516,8 +1516,9 @@ sign_image() {
 # onto each image it signs, as the image's provenance of how its commit
 # was reviewed. Refuses (returns 1) a commit that is not, or one whose
 # records cannot be read: the forge is read with $GITHUB_TOKEN, which needs
-# pull-requests: read. REQUIRE_REVIEWED_MERGE=false skips the check, says
-# so, and publishes the images with no record.
+# pull-requests: read. REQUIRE_REVIEWED_MERGE=false (or 0 or no) skips the
+# check, says so with the value it was given, and publishes the images
+# with no record.
 #
 # This runs from the commit it checks, so a commit that also rewrote this
 # function gets past it. It stops an unreviewed commit being published by
@@ -1530,7 +1531,7 @@ check_reviewed_merge() {
   local since="" held out
   case "${REQUIRE_REVIEWED_MERGE:-true}" in
     0 | [Ff]alse | FALSE | [Nn]o | NO)
-      echo "release-images.sh: WARNING: REQUIRE_REVIEWED_MERGE=false, so $short is published without checking that it reached $GRAIN_CI_REF through a reviewed merge"
+      echo "release-images.sh: WARNING: REQUIRE_REVIEWED_MERGE=${REQUIRE_REVIEWED_MERGE}, so $short is published without checking that it reached $GRAIN_CI_REF through a reviewed merge"
       return 0
       ;;
   esac

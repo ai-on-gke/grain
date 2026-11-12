@@ -36,7 +36,7 @@ var qualificationOwnerTables = []string{
 // column of the qualification plan tables and scheduled_workflow_run,
 // which before it were written with a bare Owner even for a repository
 // off the default host (grain/task-4335). release, release_candidate
-// and qualification_run had the same fault and are migration 144's
+// and qualification_run had the same fault and are migration 145's
 // (migrateReleaseOwners); every other repo-keyed table already holds
 // StoredOwner, which ForgetRepo matches on.
 //
@@ -254,7 +254,7 @@ func storedOwnerRowExists(ctx context.Context, tx *sql.Tx, table, owner, name st
 	return n > 0, nil
 }
 
-// migrateReleaseOwners is migration 144: it host-qualifies the owner
+// migrateReleaseOwners is migration 145: it host-qualifies the owner
 // column of release, release_candidate and qualification_run, which
 // before it were written with a bare Owner even for a repository off the
 // default host (grain/task-4489) -- a candidate read back with no host at
@@ -297,7 +297,7 @@ func migrateReleaseOwners(ctx context.Context, tx *sql.Tx) error {
 		repo, ok, why := targets.resolve(owner, name)
 		if !ok {
 			if why != "" {
-				log.Printf("schema 144: left the releases of %s/%s on the default host: %s", owner, name, why)
+				log.Printf("schema 145: left the releases of %s/%s on the default host: %s", owner, name, why)
 			}
 			continue
 		}
@@ -308,7 +308,7 @@ func migrateReleaseOwners(ctx context.Context, tx *sql.Tx) error {
 			return fmt.Errorf("host-qualifying release owners: reading release: %w", err)
 		}
 		if n > 0 {
-			log.Printf("schema 144: left the releases of %s/%s on the default host: %s already has releases of its own", owner, name, repo)
+			log.Printf("schema 145: left the releases of %s/%s on the default host: %s already has releases of its own", owner, name, repo)
 			continue
 		}
 		if _, err := tx.ExecContext(ctx,

@@ -276,18 +276,29 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// hostd stopping -- systemd's stop or restart, SIGTERM, a drain's end
+	// -- kills what still runs for the host's reasons, not the run's: its
+	// exit says Draining, as loadSpools says of a run a crash left without
+	// one, so the daemon re-queues the run rather than failing it.
 	stopOnCancel := context.AfterFunc(ctx, func() {
 		if !s.handedOverNow() {
-			s.cancelRunning(killCanceled)
+			s.cancelRunning(killDraining)
 		}
 	})
 	defer stopOnCancel()
+	// Serve waits for this below: the replacement hostd a cutover or
+	// handover starts next makes its own socket at the same path, and a
+	// remove still to come after Serve returned unlinked that one.
+	socketClosed := make(chan struct{})
 	if ln != nil {
 		go func() {
+			defer close(socketClosed)
 			<-ctx.Done()
 			ln.Close()
 			_ = os.Remove(s.Socket)
 		}()
+	} else {
+		close(socketClosed)
 	}
 	go s.sweepExited(ctx)
 	// The drain watcher logs through s.Logf, which may be a test's t.Logf:
@@ -332,12 +343,14 @@ func (s *Server) Serve(ctx context.Context) error {
 	// on a done ctx, so this wait is short.
 	cancel()
 	<-drainWatched
+	<-socketClosed
 	if s.handedOverNow() {
 		s.releaseHandoverWatchers()
 		if s.Reexec != nil {
 			s.logf("hostd: execing new build in place (pid %d)", os.Getpid())
 			if err := s.Reexec(); err != nil {
 				s.logf("hostd: exec onto the new build failed (%v); stopping so systemd restarts it", err)
+				s.rewatchHandedOver()
 				s.cancelRunning(killDraining)
 				s.waitRunningDone()
 				return err
@@ -345,7 +358,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 		return nil
 	}
-	s.cancelRunning(killCanceled)
+	s.cancelRunning(killDraining)
 	s.waitRunningDone()
 	return nil
 }
@@ -416,6 +429,27 @@ func (s *Server) releaseHandoverWatchers() {
 	}
 	for _, p := range live {
 		<-p.watchDone
+	}
+}
+
+// rewatchHandedOver starts again the watchers releaseHandoverWatchers
+// let go of, for a handover that did not happen after all (Reexec
+// failed): the processes are this hostd's to reap again, so that a
+// cancel ends each with its exit recorded and waitRunningDone sees it
+// done, rather than leaving them unreaped and waiting out each one.
+func (s *Server) rewatchHandedOver() {
+	s.mu.Lock()
+	var live []*proc
+	for _, p := range s.procs {
+		if p.detached && !p.info.Exited && p.handover != nil {
+			p.handover = make(chan struct{})
+			p.watchDone = make(chan struct{})
+			live = append(live, p)
+		}
+	}
+	s.mu.Unlock()
+	for _, p := range live {
+		go s.watchDetached(p)
 	}
 }
 
@@ -1100,6 +1134,13 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 	s.mu.Lock()
 	killed := entry.killKind
 	s.mu.Unlock()
+	// runCtx is Serve's: hostd stopping can kill the process through it
+	// before stopOnCancel has said why, and that kill is the host's, not
+	// the run's (Serve's stopOnCancel).
+	if killed == killNone && ctx.Err() != nil && !errors.Is(runCtx.Err(), context.DeadlineExceeded) &&
+		cmd.ProcessState != nil && !cmd.ProcessState.Exited() {
+		killed = killDraining
+	}
 	exit := s.reap(cmd, err, runCtx, req, killed)
 	sendJSON(frameExit, exit)
 }

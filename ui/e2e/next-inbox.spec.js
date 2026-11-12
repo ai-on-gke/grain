@@ -123,7 +123,7 @@ test("signs in at /next/inbox, sees seeded and live items, approves one and answ
     await row(page, proposalTitle).locator(".row-main").click();
     await expect(page.getByTestId("inspector-open-task")).toHaveAttribute(
       "href",
-      `/tasks/${proposalId}`,
+      `/next/task/${proposalId}?from=inbox`,
     );
     await page.getByTestId("action-approve").click();
     await expect(row(page, proposalTitle)).toHaveCount(0);
@@ -134,9 +134,9 @@ test("signs in at /next/inbox, sees seeded and live items, approves one and answ
       "Both UIs share one session cookie.",
     );
     await page
-      .getByTestId("reply-input")
+      .getByTestId("task-composer")
       .fill("Keep both while pages move over.");
-    await page.getByTestId("send-reply").click();
+    await page.getByTestId("act-send").click();
     await expect(row(page, questionTitle)).toHaveCount(0);
   } finally {
     await closeQuietly(demoServer, accessCode, proposalId);
@@ -161,8 +161,10 @@ test("links the classic Inbox and the new one both ways, and honours the default
   await page.goto("/inbox");
   await expect(page).toHaveURL(/\/next\/inbox$/);
 
-  await page.getByTestId("classic-inbox-link").click();
-  await expect(page).toHaveURL(/\/inbox/);
+  await prefer.click();
+  await expect(prefer).toHaveAttribute("aria-pressed", "false");
+  await page.goto("/inbox");
+  await expect(page).toHaveURL(/\/inbox$/);
   await expect(
     page.getByRole("link", { name: "Try the new Inbox" }),
   ).toBeVisible();

@@ -650,14 +650,11 @@ func (m *Manager) Reap(ctx context.Context) ([]string, error) {
 	return deleted, errors.Join(errs...)
 }
 
-// reconcileSet makes the set's bindings what its configuration says: each
-// of its accounts holds exactly its roles, on its resource_scope or its
+// reconcileSetWithAll makes the set's bindings what its configuration says:
+// each of its accounts holds exactly its roles, on its resource_scope or its
 // project, and nothing on the other. Members that are not the set's own
-// accounts are never touched.
-func (m *Manager) reconcileSet(ctx context.Context, c Cloud, set *PermissionSet, accounts []string) error {
-	return m.reconcileSetWithAll(ctx, c, set, accounts, nil)
-}
-
+// accounts are never touched. all, when given, lets it clear bindings an
+// owned account left on a previous resource_scope.
 func (m *Manager) reconcileSetWithAll(ctx context.Context, c Cloud, set *PermissionSet, accounts []string, all []ServiceAccount) error {
 	if set.fixed() || len(accounts) == 0 {
 		return nil
@@ -716,13 +713,9 @@ func policyPermsForResource(resource string) (getPerm, setPerm, target, hint str
 	return "resourcemanager.projects.getIamPolicy", "resourcemanager.projects.setIamPolicy", "project " + proj, "grant custom grainGcpKeyAdmin on project " + proj
 }
 
-// reconcileResource makes members hold exactly roles on resource, retrying
-// a lost race a few times. It reports whether it changed anything through
-// the error alone.
-func reconcileResource(ctx context.Context, c Cloud, resource string, members, roles []string) error {
-	return reconcileResourceForAdmin(ctx, c, "", resource, members, roles)
-}
-
+// reconcileResourceForAdmin makes members hold exactly roles on resource,
+// retrying a lost race a few times. When admin is set, a denied policy read
+// or write is explained in terms of the permission that admin lacks.
 func reconcileResourceForAdmin(ctx context.Context, c Cloud, admin, resource string, members, roles []string) error {
 	getPerm, setPerm, target, hint := policyPermsForResource(resource)
 	for try := 0; ; try++ {

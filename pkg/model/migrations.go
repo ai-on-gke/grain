@@ -1048,6 +1048,12 @@ var Migrations = []Migration{
 	},
 	{
 		Version: 144,
+		Description: "take the copies of a template's admission, hosting and grants off the schedules that fire it, " +
+			"leaving what each schedule adds to its template (grain/task-4607)",
+		Up: migrateScheduleOwnSettings,
+	},
+	{
+		Version: 145,
 		Description: "host-qualify the owner column of release, release_candidate and qualification_run " +
 			"(StoredOwner) for repositories a target repo places off the default host (grain/task-4489)",
 		Up: migrateReleaseOwners,
