@@ -1372,6 +1372,16 @@ func decodeIntoRow(path, id string, f declFieldShape, node *yaml.Node, row map[s
 		if err != nil {
 			return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
 		}
+		// Column text written verbatim is held to the same ceiling as the
+		// mapping above, so the verbatim spelling is no way around it.
+		if text, ok := textOf(v); ok && strings.TrimSpace(text) != "" {
+			var sb model.SandboxShape
+			if json.Unmarshal([]byte(text), &sb) == nil {
+				if err := model.ValidateTemplateSandbox(sb); err != nil {
+					return fmt.Errorf("staterepo: %s, %s: %w", path, id, err)
+				}
+			}
+		}
 		row[f.columns[0]] = v
 		return nil
 	default:
