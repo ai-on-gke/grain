@@ -902,11 +902,7 @@ func runLongTermTestHarness(t *testing.T, cfg longTermConfig, isSustained bool) 
 			branch := model.BranchName(tk.ID)
 			if tk.Target != nil && generator.pushedBranch(tk.ID) {
 				bare := barePaths[tk.Target.Owner+"/"+tk.Target.Name]
-				// A task that never pushed its branch -- a proposed
-				// follow-up whose turn asked a question or proposed in
-				// its turn, closed as "the report-only task answered" --
-				// had nothing to merge. One that pushed must have landed.
-				if simContainsBranch(bare, branch) && !branchIsAncestor(t, bare, "main", branch) {
+				if !branchIsAncestor(t, bare, "main", branch) {
 					t.Errorf("task %s was closed/merged but main in %s does not contain %s", tk.ID, tk.Target, branch)
 				}
 			}
