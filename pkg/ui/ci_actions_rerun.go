@@ -168,6 +168,12 @@ func (c *Client) RerunTaskActions(ctx context.Context, taskID string, req Action
 				head = detail.HeadSHA
 			}
 		}
+		if head == "" {
+			// Without the pull request's head, the newest run on a branch
+			// of this name could be another fork's: refuse rather than
+			// guess.
+			return ActionsRerunResult{}, fmt.Errorf("the head of %s#%d could not be read from the forge, so its checks were not re-run: try again shortly", pr.Repo, pr.Number)
+		}
 	}
 	if want := strings.TrimSpace(req.Commit); want != "" && head != "" && !sameSHA(want, head) {
 		return ActionsRerunResult{}, forbiddenErrorf("%s is not the head of task %s's pull request (%s): "+
@@ -225,6 +231,13 @@ func (c *Client) rerunActions(ctx context.Context, repo model.RepoRef, branch, h
 		listed, err := reader.ListActionsRuns(owner, repo.Name, github.ActionsRunsQuery{Branch: branch, Limit: actionsRerunListLimit})
 		if err != nil {
 			return ActionsRerunResult{}, fmt.Errorf("listing %s's GitHub Actions runs on %s: %w", repo, branch, err)
+		}
+		if head == "" {
+			// No pull request pins the head: keep the runs of the branch
+			// in repo itself, not a fork's branch of the same name.
+			listed = slices.DeleteFunc(listed, func(run github.WorkflowRun) bool {
+				return run.HeadRepo != "" && !strings.EqualFold(run.HeadRepo, repo.StoredOwner()+"/"+repo.Name)
+			})
 		}
 		if head == "" && len(listed) > 0 {
 			// Newest first: the branch's newest commit with runs.

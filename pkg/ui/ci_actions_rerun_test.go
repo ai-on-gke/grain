@@ -33,10 +33,14 @@ import (
 // rerunSim is acme/widgets on GitHub Actions with two tasks' branches:
 // grain/mine has an older red commit and, at its head bbb222, a red
 // Tests run and a green Lint run; grain/theirs has a red run of its own.
-func rerunSim(t *testing.T, headAttempt int) (*githubsim.Sim, *ui.Server, *ui.Client) {
+// newer are seeded ahead of them all, as the newest runs.
+func rerunSim(t *testing.T, headAttempt int, newer ...githubsim.WorkflowRun) (*githubsim.Sim, *ui.Server, *ui.Client) {
 	t.Helper()
 	now := time.Now().UTC().Truncate(time.Second)
 	sim := githubsim.New("acme", "widgets", filepath.Join(t.TempDir(), "none.git"), "main")
+	for _, run := range newer {
+		sim.AddWorkflowRun(run)
+	}
 	sim.AddWorkflowRun(githubsim.WorkflowRun{ID: 720, Name: "Tests", Path: ".github/workflows/tests.yml",
 		HeadBranch: "grain/theirs", HeadSHA: "ccc111", Event: "pull_request", Conclusion: "failure",
 		CreatedAt: now.Add(-time.Minute), Jobs: []githubsim.WorkflowJob{{Name: "go", Conclusion: "failure"}}})
@@ -174,5 +178,22 @@ func TestRetriggerOnGitHubActionsIsBoundedPerHead(t *testing.T) {
 		gitproxy.CIStartRequest{FailedOnly: true})
 	if err != nil || !strings.Contains(res.Text, "attempt 4 of at most 4") || !slices.Equal(sim.RerunFailedJobs, []int64{710}) {
 		t.Fatalf("the last re-run allowed: %v %q %v", err, res.Text, sim.RerunFailedJobs)
+	}
+}
+
+// With no pull request to pin the head, the branch's newest run is its
+// own repository's: a fork's newer run on a branch of the same name is
+// left alone.
+func TestRetriggerOnGitHubActionsIgnoresAForksBranchOfTheSameName(t *testing.T) {
+	sim, _, client := rerunSim(t, 1, githubsim.WorkflowRun{ID: 730, Name: "Tests", Path: ".github/workflows/tests.yml",
+		HeadBranch: "grain/mine", HeadSHA: "ddd444", HeadRepo: "stranger/widgets", Event: "pull_request", Conclusion: "failure",
+		CreatedAt: time.Now().UTC(), Jobs: []githubsim.WorkflowJob{{Name: "go", Conclusion: "failure"}}})
+
+	if _, err := (ui.SandboxCLIActions{Client: client}).RerunGitHubChecks(context.Background(), "mine",
+		gitproxy.CIStartRequest{FailedOnly: true}); err != nil {
+		t.Fatalf("retrigger: %v", err)
+	}
+	if !slices.Equal(sim.RerunFailedJobs, []int64{710}) {
+		t.Fatalf("re-ran %v, want only 710 (the branch's own head), not the fork's 730", sim.RerunFailedJobs)
 	}
 }
