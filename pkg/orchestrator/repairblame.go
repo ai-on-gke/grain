@@ -81,6 +81,13 @@ func recordRepairBlame(ctx context.Context, store *model.Store, client github.Cl
 	return nil
 }
 
+// repairBlameTrailerReminder is what a repair's body tells its agent about
+// the trailers recordRepairBlame reads: without them only a base-branch
+// repair with a one-commit red range is attributed at all.
+const repairBlameTrailerReminder = "When you find the merge that broke it, name it on your fix's commit message " +
+	"with a `Fixes-commit: <sha>` trailer (the commit on the branch that broke it) or a `Blames: task <id>` " +
+	"trailer (the task that merged it), so grain records which change failed."
+
 // maxBlameCommitLookups is how many of a repair's Fixes-commit: trailers
 // are mapped to the merge that brought them: one forge read each.
 const maxBlameCommitLookups = 10
@@ -133,7 +140,11 @@ func repairCulprits(ctx context.Context, store *model.Store, client github.Clien
 		for _, sha := range shas {
 			id, err := taskMergedAs(ctx, store, client, ref.Repo, sha)
 			if err != nil {
-				return nil, "", err
+				// An agent-written sha the forge cannot answer for (a typo,
+				// a commit it does not know) loses that one trailer, not
+				// the culprits the others name.
+				log.Printf("orchestrator: %s names commit %s in a Fixes-commit: trailer: %v", task.ID, sha, err)
+				continue
 			}
 			if id == "" || id == task.ID || slices.Contains(culprits, id) {
 				continue

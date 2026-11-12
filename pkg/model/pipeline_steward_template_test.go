@@ -48,6 +48,9 @@ func TestPipelineStewardIsToldHowToTriageARedReleaseCandidate(t *testing.T) {
 		"**Triage `<floor>..<rc_sha>`.**",
 		"start the title with `" + model.RCBlockerMarker("<rc_tag>") + "` exactly",
 		"`at_front: true`",
+		// The trailer recordRepairBlame reads: an rc-blocker has no other
+		// evidence of the merge it repaired.
+		"`Blames: task <id>`",
 		"check run `" + model.ReleaseHoldCheckName + "` in progress",
 		"while triage is pending",
 		"name `<rc_tag>` in your closing report",

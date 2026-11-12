@@ -2187,6 +2187,7 @@ func baseBranchRepairBody(row model.BaseBranchCI, merged *model.Task) string {
 		"task is the source of truth for `%s`, and no other repair will fix them for you. Revert the "+
 		"merge above if that is the right answer, or repair the broken suites directly. Iterate and "+
 		"re-run CI until all required jobs in the suite pass.\n\n", row.Branch)
+	b.WriteString(repairBlameTrailerReminder + "\n\n")
 	b.WriteString(model.RedCIProcedureReminder + "\n\n")
 	b.WriteString(model.RepairNeedsAPersonReminder + "\n\n")
 	fmt.Fprintf(&b, "The merge queue is still merging green changes into `%s` -- a red base "+

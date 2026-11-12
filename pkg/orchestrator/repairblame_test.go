@@ -307,3 +307,35 @@ func TestRepairFixesCommitLookupsAreCapped(t *testing.T) {
 	}
 	wantBlame(t, store, "20", "10")
 }
+
+// errLookupClient fails the merged-pull-request lookup for one commit, the
+// way the forge answers a sha it does not know.
+type errLookupClient struct {
+	blameClient
+	bad string
+}
+
+func (c errLookupClient) MergedPullRequestForCommit(owner, name, sha string) (*github.PullRequest, error) {
+	if sha == c.bad {
+		return nil, fmt.Errorf("422 No commit found for SHA: %s", sha)
+	}
+	return c.blameClient.MergedPullRequestForCommit(owner, name, sha)
+}
+
+// A Fixes-commit: trailer the forge cannot answer for loses that trailer
+// alone: the culprits the repair's other trailers name are still blamed.
+func TestRepairTrailerTheForgeCannotLookUpKeepsTheOthers(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	repair := model.Task{ID: "20", Title: model.RCBlockerMarker("v1.4.0-rc.2") + " widget test fails"}
+	ref := putBlameFixture(t, store, repair)
+	client := errLookupClient{
+		blameClient: blameClient{prCommits: []github.Commit{{SHA: "f1", Message: "fix: it\n\nFixes-commit: deadbee\nBlames: task 10"}}},
+		bad:         "deadbee",
+	}
+	if err := recordRepairBlame(ctx, store, client, repair, ref, "main"); err != nil {
+		t.Fatal(err)
+	}
+	wantBlame(t, store, "20", "10")
+}
