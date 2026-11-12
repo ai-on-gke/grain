@@ -382,7 +382,7 @@ func (c *Client) ciResumeHead(ctx context.Context, self model.Task) string {
 	if reader == nil {
 		return ""
 	}
-	head, err := reader.GetBranchHead(repo.Owner, repo.Name, branch)
+	head, err := reader.GetBranchHead(repo.StoredOwner(), repo.Name, branch)
 	if err != nil || head == nil {
 		return ""
 	}
@@ -484,7 +484,7 @@ func (c *Client) validateCIResume(ctx context.Context, self model.Task, when *mo
 			return nil
 		}
 		if prReader != nil {
-			head, herr := prReader.GetBranchHead(repo.Owner, repo.Name, branch)
+			head, herr := prReader.GetBranchHead(repo.StoredOwner(), repo.Name, branch)
 			if herr != nil {
 				// Transient forge read error: do not refuse a potentially valid wait.
 				return nil
@@ -492,10 +492,10 @@ func (c *Client) validateCIResume(ctx context.Context, self model.Task, when *mo
 			if head == nil || strings.TrimSpace(head.SHA) == "" {
 				return validationErrorf("cannot wait on CI: branch %q does not exist on %s (push the branch first)", branch, repo)
 			}
-			if checks, cerr := prReader.ListCheckRuns(repo.Owner, repo.Name, head.SHA); cerr != nil || hasExternalCheckRuns(checks) {
+			if checks, cerr := prReader.ListCheckRuns(repo.StoredOwner(), repo.Name, head.SHA); cerr != nil || hasExternalCheckRuns(checks) {
 				return nil
 			}
-			if state, serr := prReader.ActionsState(repo.Owner, repo.Name, head.SHA); serr == nil && state.Runs > 0 {
+			if state, serr := prReader.ActionsState(repo.StoredOwner(), repo.Name, head.SHA); serr == nil && state.Runs > 0 {
 				return nil
 			}
 		}
@@ -520,7 +520,7 @@ func (c *Client) validateCIResume(ctx context.Context, self model.Task, when *mo
 			if base == "" {
 				base = "main"
 			}
-			if baseChecks, bcerr := prReader.ListCheckRuns(repo.Owner, repo.Name, base); bcerr == nil && hasExternalCheckRuns(baseChecks) {
+			if baseChecks, bcerr := prReader.ListCheckRuns(repo.StoredOwner(), repo.Name, base); bcerr == nil && hasExternalCheckRuns(baseChecks) {
 				return nil
 			}
 		}

@@ -109,6 +109,44 @@ func TestAGrainWriteMakesItsPullRequestDueAgain(t *testing.T) {
 	}
 }
 
+func TestAGrainWriteOnANonDefaultHostResetsOnlyThatHost(t *testing.T) {
+	saved := polls
+	t.Cleanup(func() { polls = saved })
+	low := false
+	polls = newTestSchedule(&low)
+	now := time.Date(2026, 10, 26, 4, 0, 0, 0, time.UTC)
+
+	ghePR := PollKey{Scope: "1", Subject: PullRequestSubject("ghe.example.com/acme", "widgets", 7), Aspect: "pull request"}
+	gheBranch := PollKey{Scope: "1", Subject: BranchSubject("ghe.example.com/acme", "widgets", "grain/x/task-1"), Aspect: "path triggers"}
+	defPR := PollKey{Scope: "1", Subject: PullRequestSubject("acme", "widgets", 7), Aspect: "pull request"}
+	idle := func() {
+		for _, k := range []PollKey{ghePR, gheBranch, defPR} {
+			for i := 0; i < 4; i++ {
+				polls.Observe(k, "same", now)
+			}
+		}
+	}
+	due := func(k PollKey) bool { return polls.Due(k, PollNormal, false, now.Add(time.Second)) }
+
+	idle()
+	noteWrite("POST", "/repos/ghe.example.com/acme/widgets/issues/7/comments")
+	if !due(ghePR) || due(defPR) {
+		t.Errorf("after GHE comment on #7: ghe due %v (want true), default-host due %v (want false)", due(ghePR), due(defPR))
+	}
+
+	idle()
+	noteWrite("PATCH", "/repos/ghe.example.com/acme/widgets/git/refs/heads/grain/x/task-1")
+	if !due(gheBranch) || due(ghePR) || due(defPR) {
+		t.Errorf("after GHE branch update: gheBranch %v ghePR %v defPR %v", due(gheBranch), due(ghePR), due(defPR))
+	}
+
+	idle()
+	noteWrite("PUT", "/repos/ghe.example.com/acme/widgets/pulls/7/merge")
+	if !due(ghePR) || !due(gheBranch) || due(defPR) {
+		t.Errorf("after GHE merge: ghePR %v gheBranch %v defPR %v", due(ghePR), due(gheBranch), due(defPR))
+	}
+}
+
 // Something active is read every cycle, exactly as before -- a pull
 // request with CI in flight sees no change in behaviour from any of this
 // while the budget is fine.
