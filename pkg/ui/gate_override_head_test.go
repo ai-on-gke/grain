@@ -172,3 +172,76 @@ func TestAListRowsCIGateMatchesTheTaskPage(t *testing.T) {
 		}
 	}
 }
+
+// c.Task (single-task summary reads), c.GetTask (the task page) and
+// c.ListTasks (Inbox and list rows) resolve linked review task states the same
+// way, and name every passed review task when the code-review gate stands for
+// more than one.
+func TestSingleTaskViewReviewGatesMatchTaskPageAndListRows(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	r1 := create(t, c, ctx)
+	r2 := create(t, c, ctx)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkFixes, Target: "acme/widgets#88"},
+			model.Link{Kind: model.LinkPathTriggerHold, Target: string(model.TriggerHumanRequired)},
+			model.Link{Kind: model.LinkPathTriggerTask, Target: "alpha=" + r1.ID},
+			model.Link{Kind: model.LinkPathTriggerTask, Target: "beta=" + r2.ID},
+		)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := time.Date(2026, 11, 11, 2, 0, 0, 0, time.UTC)
+	if err := store.Observe(ctx, model.Observation{TaskID: r1.ID, ClosedAt: &done}); err != nil {
+		t.Fatal(err)
+	}
+
+	reviewGate := func(gates []model.MergeGate) model.MergeGate {
+		for _, g := range gates {
+			if g.ID == model.GateReview {
+				return g
+			}
+		}
+		return model.MergeGate{}
+	}
+	assertAllViews := func(wantState model.MergeGateState, wantDetail string) {
+		t.Helper()
+		single, err := c.Task(ctx, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		detail, err := c.GetTask(ctx, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, err := c.ListTasks(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var listed model.MergeGate
+		for _, row := range list {
+			if row.ID == task.ID {
+				listed = reviewGate(row.MergeGates)
+			}
+		}
+		for label, g := range map[string]model.MergeGate{
+			"Task":      reviewGate(single.MergeGates),
+			"GetTask":   reviewGate(detail.MergeGates),
+			"ListTasks": listed,
+		} {
+			if g.State != wantState || g.Detail != wantDetail {
+				t.Fatalf("%s review gate = %q (%q), want %q (%q)", label, g.State, g.Detail, wantState, wantDetail)
+			}
+		}
+	}
+
+	assertAllViews(model.GateStateRunning, "running (task #"+r2.ID+")")
+
+	if err := store.Observe(ctx, model.Observation{TaskID: r2.ID, ClosedAt: &done}); err != nil {
+		t.Fatal(err)
+	}
+	assertAllViews(model.GateStatePassed, "passed (tasks #"+r1.ID+", #"+r2.ID+")")
+}

@@ -1266,6 +1266,9 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 	}
 	task := taskFrom(*t, state, targetStates, blockedAt, obs.RepairInFlight(), observationMergeQueueState(obs), activity, reviewName, span,
 		c.stallNote(state, model.StateTimesFrom(*t, obs, runs), c.now()), observationCI(obs))
+	if gateStates, err := c.mergeGateStates(ctx, *t); err == nil && model.TaskPullRequest(*t) != nil {
+		task.MergeGates = model.ComputeMergeGates(*t, obs, gateStates)
+	}
 	task.Goal = goal
 	if obs != nil {
 		task.RunNowAt = obs.RunNowAt

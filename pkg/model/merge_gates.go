@@ -416,7 +416,7 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 			ciGate.Detail = firstGateText(obs.CI.Detail, "waiting for checks")
 			ciGate.Overridable = true
 		}
-	case obs != nil && (obs.MergeQueueState == "repairing" || obs.MergeQueueState == "checks_unfixable" || obs.MergeQueueState == "merge_failed"):
+	case obs != nil && (obs.MergeQueueState == "repairing" || obs.MergeQueueState == "repair_needed" || obs.MergeQueueState == "repair_queued" || obs.MergeQueueState == "checks_unfixable" || obs.MergeQueueState == "merge_failed"):
 		ciGate.State = GateStateFailing
 		ciGate.Detail = firstGateText(obs.MergeQueueNote, "checks failing")
 		ciGate.Overridable = true
@@ -570,7 +570,9 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 			g.Overridable = true
 		default:
 			g.State = GateStatePassed
-			if g.ReviewTask != "" {
+			if len(codeTasks) > 1 {
+				g.Detail = "passed (tasks #" + strings.Join(codeTasks, ", #") + ")"
+			} else if g.ReviewTask != "" {
 				g.Detail = "passed (task #" + g.ReviewTask + ")"
 			} else {
 				g.Detail = "passed"
