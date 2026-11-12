@@ -155,6 +155,7 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/retry":                                    trusted,
 	"POST /api/tasks/{id}/human-review":                             trusted,
 	"POST /api/tasks/{id}/human-review/release":                     trusted,
+	"POST /api/tasks/{id}/accept-findings":                          trusted,
 	"POST /api/tasks/{id}/retry-merge":                              trusted,
 	"POST /api/tasks/{id}/force-merge":                              trusted,
 	"POST /api/tasks/{id}/run-now":                                  trusted,

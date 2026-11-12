@@ -415,8 +415,13 @@ Commands:
   reopen <id>                          reopen a closed task
   retry <id>                           clear a failed task's retry cap so it dispatches again
   retry-merge <id>                     put a pull request the merge queue gave up on back on the queue
+  accept-findings -gate g [-review r] [-head sha] <id> <reason...>
+                                       accept one review's findings on one gate (security-review, review
+                                       or trigger:<name>) as they are, so the change merges without
+                                       fixing them -- a person's decision, recorded with the reason;
+                                       clears nothing else (CI, other gates, approvals still apply)
   force-merge [-override-gates g] <id> <reason...>
-                                       merge this change anyway, overriding the queue's own decision --
+                                       merge this change anyway, overriding *every* gate it names and the queue's own decision --
                                        an operator's action (merge:force), recorded with the reason on
                                        the task and pull request, and refused if the branch does not
                                        merge cleanly; -override-gates must explicitly name any skipped
@@ -700,6 +705,8 @@ func dispatchCLI(ctx context.Context, c *ui.HTTPClient, out *printer, fs *flag.F
 		return cmdRetry(ctx, c, out, cmdArgs)
 	case "retry-merge":
 		return cmdRetryMerge(ctx, c, out, cmdArgs)
+	case "accept-findings":
+		return cmdAcceptFindings(ctx, c, out, cmdArgs)
 	case "force-merge":
 		return cmdForceMerge(ctx, c, out, cmdArgs)
 	case "run-now":

@@ -157,6 +157,45 @@ func cmdForceMerge(ctx context.Context, c *ui.HTTPClient, out *printer, args []s
 	return respond(ctx, c, out, id)
 }
 
+// cmdAcceptFindings is `grain accept-findings -gate <gate> <id> <reason>`:
+// the shell's half of the task pane's "Accept findings…", a person's
+// decision to merge over one review's findings on one gate as they are
+// (ui.Client.AcceptReviewFindings). It clears that review's findings on
+// that gate and nothing else; Force merge is for overriding everything.
+//
+// The reason is an argument for the same reason force-merge's is: it is
+// not optional. -review names the review when more than one has findings
+// on the gate; -head pins the head the findings were read at.
+func cmdAcceptFindings(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
+	fs := flag.NewFlagSet("grain accept-findings", flag.ContinueOnError)
+	gate := fs.String("gate", "", "the gate whose findings you accept: security-review, review, or trigger:<name>")
+	review := fs.String("review", "", "the review task whose findings you accept; needed only when several have findings on the gate")
+	head := fs.String("head", "", "the head commit you read the findings at; refused if the pull request has moved since")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := atMostArgs(fs, fs.Args(), 2); err != nil {
+		return err
+	}
+	id, err := taskID(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(*gate) == "" {
+		return fmt.Errorf("name the gate: grain accept-findings -gate security-review <id> \"why it merges as is\"")
+	}
+	reason := strings.TrimSpace(strings.Join(fs.Args()[1:], " "))
+	if reason == "" {
+		return fmt.Errorf("say why: grain accept-findings -gate %s <id> \"the finding is out of scope; follow-up filed\"", *gate)
+	}
+	if _, err := c.AcceptReviewFindings(ctx, id, ui.AcceptFindingsRequest{
+		Gate: *gate, ReviewTask: *review, Reason: reason, Head: *head,
+	}); err != nil {
+		return err
+	}
+	return respond(ctx, c, out, id)
+}
+
 // cmdRunNow is `grain run-now <id>`: the shell's half of the UI's "Run
 // now" button. It jumps the queue and ignores the state machine -- a
 // blocked, deferred, failed or already-finished task is started all the

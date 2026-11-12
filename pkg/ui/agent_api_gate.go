@@ -2387,6 +2387,9 @@ func (s *Server) filingEscalation(ctx context.Context, held []string, set APIGra
 		if pattern == "POST /api/tasks/{id}/human-review/release" {
 			return fmt.Errorf("%s cannot release human-review hold: releasing a human-review hold requires an unlimited role (grain/operator)", opts.role.label())
 		}
+		if pattern == "POST /api/tasks/{id}/accept-findings" {
+			return fmt.Errorf("%s cannot accept review findings: letting a change merge over a review's findings requires an unlimited role (grain/operator)", opts.role.label())
+		}
 		if pattern == "POST /api/tasks/{id}/force-merge" {
 			return fmt.Errorf("%s cannot force-merge work: forcing a merge requires an unlimited role (grain/operator)", opts.role.label())
 		}
@@ -3670,6 +3673,7 @@ var taskMutationResponseKinds = map[string]taskMutationRespKind{
 	"POST /api/tasks/{id}/notes":                   taskRespNone,
 	"POST /api/tasks/{id}/human-review":            taskRespNone,
 	"POST /api/tasks/{id}/human-review/release":    taskRespNone,
+	"POST /api/tasks/{id}/accept-findings":         taskRespNone,
 	"POST /api/tasks/{id}/agent-messages":          taskRespNone,
 	"POST /api/tasks/{id}/change-publish":          taskRespSingle,
 	"POST /api/tasks/{id}/change-mail":             taskRespSingle,

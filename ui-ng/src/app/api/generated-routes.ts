@@ -309,6 +309,7 @@ export const ROUTE_SCOPES = {
   "POST /api/tasks": "tasks:write",
   "POST /api/tasks/from-template": "tasks:from-template",
   "POST /api/tasks/reorder": "tasks:write",
+  "POST /api/tasks/{id}/accept-findings": "tasks:write",
   "POST /api/tasks/{id}/access-request/check": "capabilities:read",
   "POST /api/tasks/{id}/access-request/deny": "capabilities:admin",
   "POST /api/tasks/{id}/access-request/grant": "capabilities:admin",
