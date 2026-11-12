@@ -132,8 +132,8 @@ type TaskSummary struct {
 
 // reasonBlockedOnPerson is orchestrator's taskReasonBlockedOnPerson: a
 // queued task waiting on a task that failed, was never approved, is
-// asking something, was paused or deferred indefinitely, none of which
-// closes until a person acts on it.
+// asking something or awaiting Submit, was paused or deferred
+// indefinitely, none of which closes until a person acts on it.
 const reasonBlockedOnPerson = "queued/blocked_on_person"
 
 // blockedOnPerson is whether t is queued on a blocker only a person can
@@ -421,7 +421,7 @@ var listTasksInputSchema = map[string]any{
 		"stalled": map[string]any{
 			"type": "boolean",
 			"description": "true: only tasks that are stalled, in their own state or on the merge queue, " +
-				"or queued on a task only a person can close (failed, proposed, asking, paused, deferred indefinitely)",
+				"or queued on a task only a person can close (failed, proposed, asking, awaiting Submit, paused, deferred indefinitely)",
 		},
 		"kind": map[string]any{
 			"type":        "string",
