@@ -138,6 +138,9 @@ func TestAgentAPIRefusesSteeringAWiderSiblingTask(t *testing.T) {
 	if tc.CurrentBrief != "" {
 		t.Errorf("wider task's brief was set: %q", tc.CurrentBrief)
 	}
+	if tc.HandoverVersion != 0 || tc.CompactedAt != nil {
+		t.Errorf("wider task was compacted: handover version %d at %v", tc.HandoverVersion, tc.CompactedAt)
+	}
 	all, err := client.Store.ListTasks(context.Background())
 	if err != nil {
 		t.Fatal(err)
