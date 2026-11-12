@@ -126,6 +126,12 @@ func TestInstall(t *testing.T) {
 	if want := "ExecStart=" + p.Bin + " -server https://grain.example.com -token-file " + p.Token + " -allowlist " + p.Allowlist + " -state-dir " + p.StateDir + " -name ws-1"; !strings.Contains(string(unit), want) {
 		t.Errorf("unit lacks %q:\n%s", want, unit)
 	}
+	// A drain or cutover exits 0 for the new binary to take over, so the
+	// unit must restart on any exit (the 2026-11-11 §9 walkthrough found a
+	// drained host left offline under Restart=on-failure).
+	if !strings.Contains(string(unit), "\nRestart=always\n") || strings.Contains(string(unit), "Restart=on-failure") {
+		t.Errorf("unit does not restart a drained grain-agentd (want Restart=always):\n%s", unit)
+	}
 	// Started, and lingering enabled.
 	want := []string{
 		"systemctl --user daemon-reload",
@@ -262,6 +268,25 @@ func TestInstallJoinHandshake(t *testing.T) {
 	}
 	if !strings.Contains(string(unit), "-key-file "+p.Key) {
 		t.Fatalf("unit missing -key-file %s:\n%s", p.Key, unit)
+	}
+
+	// Re-running `grain-agentd install -server <url>` (without -join) to
+	// upgrade an older Restart=on-failure unit rewrites the unit with
+	// Restart=always while preserving -key-file for the existing key-bound
+	// credential.
+	oldUnit := strings.ReplaceAll(string(unit), "Restart=always", "Restart=on-failure")
+	writeFile(t, filepath.Join(p.UnitDir, UnitName), oldUnit, 0o644)
+	out.Reset()
+	errOut.Reset()
+	if code := install([]string{"-server", ts.URL}, &out, &errOut); code != 0 {
+		t.Fatalf("re-run install = %d: %s", code, errOut.String())
+	}
+	rewritten, err := os.ReadFile(filepath.Join(p.UnitDir, UnitName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rewritten), "\nRestart=always\n") || !strings.Contains(string(rewritten), "-key-file "+p.Key) {
+		t.Fatalf("rewritten unit dropped Restart=always or -key-file %s:\n%s", p.Key, rewritten)
 	}
 }
 

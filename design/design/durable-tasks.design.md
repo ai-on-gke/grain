@@ -494,6 +494,13 @@ A goal is set by the template (`Template.Goal`), by `propose_task`
   It rests until the goal check, a message, or a progress-limit
   notification moves it. The closing comment is posted as an ordinary
   comment.
+- **A report-only sub-task** (filed by another task's run, no goal)
+  that ends on a closing note alone closes rather than completing
+  (`model.ClosesOnAnswer`, docs/closing-a-task-from-a-run.md), so what
+  depends on it dispatches without a person's close. A parent that wants
+  a person to close its child gives it `nothing_needed_action: ack` or
+  this `person-closes` goal, which keeps `until: closed` meaning a
+  person's close.
 - **`nothing_needed`** on a goal task means "nothing to do *now*". The
   only things that close a goal task are the goal being met with
   `on_met: close`, or a person.
