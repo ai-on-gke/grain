@@ -457,6 +457,8 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 			p.info.Attached = false
 		}
 		s.mu.Unlock()
+		// A drain waits for an ended process's stream to let go.
+		s.signalChanged()
 	}()
 	if err := writeJSON(conn, frameStarted, Started{PID: info.PID, ID: info.ID}); err != nil {
 		if stdin != nil {
@@ -527,6 +529,15 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 			}
 			if err := writeJSON(conn, frameExit, exit); err != nil {
 				return
+			}
+			// Written is not yet read: a session closed now drops the
+			// frames the daemon's end has not read yet, Exit included. The
+			// daemon hangs up once it has the Exit, so until then -- or
+			// DrainExitGrace -- the process stays attached, which holds a
+			// drained hostd's exit (waitExitsDelivered) back for it.
+			select {
+			case <-gone:
+			case <-time.After(DrainExitGrace):
 			}
 			s.release(info.ID, "its exit was read")
 			return

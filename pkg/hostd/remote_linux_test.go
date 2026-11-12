@@ -369,3 +369,44 @@ func TestAHostdServesWithNoSocket(t *testing.T) {
 		t.Fatalf("Serve with neither a socket nor a server = %v", err)
 	}
 }
+
+// A drained hostd delivers the Exit of the last run to end to the
+// controller streaming it before it exits: the run ending is what lets
+// the drain finish, and closing the session at that moment cut the
+// stream off before the Exit, so the controller saw it drop and waited
+// for a host to come back to finish the run from its spool.
+func TestADrainedHostdDeliversTheLastRunsExitBeforeExiting(t *testing.T) {
+	ctl := startController(t, "s3cret")
+	ts := startRemoteServer(t, ctl, "s3cret", "")
+	started := make(chan Started, 1)
+	c := ctl.client()
+	c.Detach = func(context.Context) bool { return true }
+	c.OnStarted = func(s Started) { started <- s }
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	type result struct {
+		exit Exit
+		err  error
+	}
+	done := make(chan result, 1)
+	var out bytes.Buffer
+	go func() {
+		exit, err := c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Args: []string{"-c", "sleep 0.5; echo done; exit 4"},
+			Detach: true, Run: "run-1", Task: "7"}, nil, &out, nil)
+		done <- result{exit, err}
+	}()
+	<-started
+	if err := ts.client.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r := <-done
+	if r.err != nil || r.exit.Code != 4 || out.String() != "done\n" {
+		t.Fatalf("run across the drain = %+v, %v, stdout %q; want its Exit (code 4) and its output", r.exit, r.err, out.String())
+	}
+	select {
+	case err := <-ts.done:
+		ts.done <- err
+	case <-time.After(15 * time.Second):
+		t.Fatal("hostd did not exit once its run ended and its Exit was read")
+	}
+}

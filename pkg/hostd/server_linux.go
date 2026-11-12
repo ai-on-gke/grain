@@ -643,6 +643,7 @@ func (s *Server) waitDrained(ctx context.Context) {
 			if handedOver {
 				s.logf("hostd: handing %d live detached process(es) over to the new build", kept)
 			} else {
+				s.waitExitsDelivered(ctx)
 				s.logf("hostd: drained; exiting so the new build takes over")
 			}
 			return
@@ -681,6 +682,46 @@ func (s *Server) waitDrained(ctx context.Context) {
 			return
 		case <-s.changed:
 		case <-time.After(wait):
+		}
+	}
+}
+
+// DrainExitGrace bounds how long a drained hostd waits, before it exits,
+// for the daemons attached to detached processes that have just ended to
+// read their Exit frames.
+const DrainExitGrace = 5 * time.Second
+
+// waitExitsDelivered waits, for up to DrainExitGrace, until no detached
+// process that has ended still has a stream attached whose daemon has not
+// read its Exit (attach releases the process once the daemon hangs up
+// after the Exit, or lets go when its connection fails). Without it the last run to end races hostd's exit:
+// Serve closes the remote session and the sockets the moment nothing
+// runs, so the daemon streaming that run sees its stream drop rather than
+// the Exit, and waits for a host to come back before the run can finish
+// from the spool it kept.
+func (s *Server) waitExitsDelivered(ctx context.Context) {
+	timeout := time.NewTimer(DrainExitGrace)
+	defer timeout.Stop()
+	for {
+		s.mu.Lock()
+		pending := 0
+		for _, p := range s.procs {
+			if p.detached && p.info.Exited && p.info.Attached {
+				pending++
+			}
+		}
+		s.mu.Unlock()
+		if pending == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-timeout.C:
+			s.logf("hostd: drained, but %d attached stream(s) have not delivered their process's exit within %s; exiting anyway (the final spool is kept)", pending, DrainExitGrace)
+			return
+		case <-s.changed:
+		case <-time.After(s.poll()):
 		}
 	}
 }
