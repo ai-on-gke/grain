@@ -549,8 +549,16 @@ func (s *Server) attach(conn net.Conn, p *proc, cur Cursor, stdin io.WriteCloser
 			case <-acked:
 				s.release(info.ID, "the daemon acknowledged its exit")
 			case <-gone:
-				s.logf("hostd: the daemon went away from %s %q (id %s) before acknowledging its exit; its spool is kept for the next attach",
-					info.Kind, info.Name, info.ID)
+				// control closes acked before gone, and a daemon closes
+				// its end right after acknowledging: both may be ready
+				// by the time this runs, and select picks either.
+				select {
+				case <-acked:
+					s.release(info.ID, "the daemon acknowledged its exit")
+				default:
+					s.logf("hostd: the daemon went away from %s %q (id %s) before acknowledging its exit; its spool is kept for the next attach",
+						info.Kind, info.Name, info.ID)
+				}
 			case <-timer.C:
 				s.logf("hostd: the daemon did not acknowledge the exit of %s %q (id %s) within %s; its spool is kept for the next attach",
 					info.Kind, info.Name, info.ID, exitAckWait)
