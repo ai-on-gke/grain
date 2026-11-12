@@ -160,7 +160,10 @@ What that asks of a GKE cluster:
   ```
 
   A timeout is the fence working; a service-account list is not. Then
-  uncomment `-k8s-network-policy` in the Deployment's args.
+  uncomment `-k8s-network-policy` in the Deployment's args. The flag
+  only seeds a new deployment's stored settings: on one that already
+  has them, run `grain settings -k8s-network-policy=true` (or tick it
+  under Settings → Sandboxes) and restart the daemon instead.
 
 `-k8s-network-policy` is the operator saying layer 3 holds. Without it,
 both Kubernetes backends report their open-network sandboxes unfenced,

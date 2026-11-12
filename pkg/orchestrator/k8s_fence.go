@@ -48,7 +48,8 @@ import (
 const k8sUnfencedReason = "this deployment has not said its cluster enforces NetworkPolicy (-k8s-network-policy), " +
 	"so nothing grain can rely on keeps its open-network sandbox pods off the node's metadata server and the " +
 	"cluster's own Services, pods and nodes, capability servers' control planes included " +
-	"(apply deploy/kubernetes/networkpolicy.yaml's grain-sandbox-egress on a CNI that enforces it, then set the flag)"
+	"(apply deploy/kubernetes/networkpolicy.yaml's grain-sandbox-egress on a CNI that enforces it, then set the flag -- " +
+	"or, once this deployment has stored settings, `grain settings -k8s-network-policy=true` and a restart)"
 
 var (
 	_ unfencedOpenNetwork = (*K8sSandboxes)(nil)

@@ -436,7 +436,7 @@ With no setting flags it prints the stored configuration (`GET /api/settings`). 
 | `-k8s-granule-image` | string |  |  | packed guest image for Kubernetes Granule sandbox pods |
 | `-k8s-kubectl` | string |  |  | kubectl binary path for Kubernetes sandboxes (empty uses kubectl on PATH) |
 | `-k8s-namespace` | string |  |  | Kubernetes namespace sandbox pods are created in |
-| `-k8s-network-policy` | bool |  |  | whether cluster CNI enforces NetworkPolicy for network:none runs |
+| `-k8s-network-policy` | bool |  |  | whether cluster CNI enforces NetworkPolicy, which network:none runs and external capability grants need |
 | `-k8s-node-selector` | string |  |  | comma-separated key=value nodeSelector entries for Kubernetes sandbox pods |
 | `-k8s-priority-class-agent` | string |  |  | PriorityClass for agent runs' and persistent sandboxes' Kubernetes sandbox pods; empty sets none |
 | `-k8s-priority-class-ci` | string |  |  | PriorityClass for CI jobs' Kubernetes sandbox pods; empty sets none |

@@ -169,7 +169,7 @@ func cmdSettings(ctx context.Context, c *ui.HTTPClient, out *printer, args []str
 	k8sServiceAccount := fs.String("k8s-sandbox-service-account", "", "ServiceAccount for Kubernetes sandbox pods")
 	k8sNodeSelector := fs.String("k8s-node-selector", "", "comma-separated key=value nodeSelector entries for Kubernetes sandbox pods")
 	k8sPrivileged := fs.Bool("k8s-sandbox-privileged", false, "run Kubernetes sandbox containers privileged")
-	k8sNetworkPolicy := fs.Bool("k8s-network-policy", false, "whether cluster CNI enforces NetworkPolicy for network:none runs")
+	k8sNetworkPolicy := fs.Bool("k8s-network-policy", false, "whether cluster CNI enforces NetworkPolicy, which network:none runs and external capability grants need")
 	k8sDeployment := fs.String("k8s-deployment", "", "Kubernetes Deployment name for self-upgrade")
 	k8sContainer := fs.String("k8s-container", "", "container name in the Kubernetes Deployment for self-upgrade")
 	k8sPriorityInteractive := fs.String("k8s-priority-class-interactive", "",
