@@ -15,6 +15,7 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
 	"slices"
 	"strings"
@@ -55,6 +56,9 @@ import (
 // Grantable, which is the half a deployment configured perfectly can
 // still fail on.
 type CapabilityStatus struct {
+	// ID is the canonical grant the provider is granted as
+	// (model.CanonicalLegacyGrant of its bare name), never the retired
+	// bare name itself.
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -541,11 +545,11 @@ func (c *Client) capabilitiesWithReadiness(cfg *model.Config, repoConfigs []mode
 	rows := c.pickerCapabilities()
 	byID := make(map[string]CapabilityStatus, len(rows))
 	for _, s := range c.capabilityStatuses(deployment, repoConfigs) {
-		byID[s.ID] = s
+		byID[capabilityStatusKey(s.ID)] = s
 	}
 	out := make([]Capability, 0, len(rows))
 	for _, row := range rows {
-		if status, ok := byID[row.ID]; ok {
+		if status, ok := byID[capabilityStatusKey(row.ID)]; ok {
 			ready := status.Ready
 			row.Ready = &ready
 			row.Needs = append(append([]string{}, status.MissingConfig...), status.MissingSecrets...)
@@ -576,18 +580,13 @@ func (c *Client) ciCapabilitiesWithReadiness(cfg *model.Config, repoConfigs []mo
 	statuses := c.capabilityStatuses(deployment, repoConfigs)
 	byID := make(map[string]CapabilityStatus, len(statuses))
 	for _, s := range statuses {
-		byID[s.ID] = s
-		// A retired provider's status answers for the release server's
-		// method it became, which is what the CI picker offers.
-		if _, ok := model.CIGrantRuleFor(s.ID); ok {
-			byID[model.CanonicalLegacyGrant(s.ID)] = s
-		}
+		byID[capabilityStatusKey(s.ID)] = s
 	}
 
 	ciIDs := c.ciCapabilityIDs()
 	out := make([]Capability, 0, len(ciIDs))
 	for _, id := range ciIDs {
-		if status, ok := byID[id]; ok {
+		if status, ok := byID[capabilityStatusKey(id)]; ok {
 			ready := status.Ready
 			row := Capability{
 				ID:          id,
@@ -608,6 +607,19 @@ func (c *Client) ciCapabilitiesWithReadiness(cfg *model.Config, repoConfigs []mo
 	return out
 }
 
+// capabilityStatusKey is the key a picker row's id and a
+// CapabilityStatus.ID are compared under: a row may still name a
+// provider by its retired bare name (github-sandbox) or by the grant it
+// became, with or without empty {} arguments, and all of those are the
+// one status.
+func capabilityStatusKey(id string) string {
+	g := model.CanonicalGrant(model.CanonicalLegacyGrant(strings.TrimSpace(id)))
+	if bytes.Equal(g.With, []byte("{}")) {
+		g.With = nil
+	}
+	return g.Key()
+}
+
 // capabilityStatuses builds every CapabilityStatus for cfg -- the
 // deployment's current store-backed settings -- repoConfigs, every repo
 // that adds defaults of its own (Store.ListRepoConfigs), c.Config.Secrets,
@@ -621,10 +633,11 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 	for _, rc := range repoConfigs {
 		repo := rc.Repo.String()
 		for _, id := range rc.DefaultCapabilities {
-			if slices.Contains(reposByCapability[id], repo) {
+			key := capabilityStatusKey(id)
+			if slices.Contains(reposByCapability[key], repo) {
 				continue
 			}
-			reposByCapability[id] = append(reposByCapability[id], repo)
+			reposByCapability[key] = append(reposByCapability[key], repo)
 		}
 	}
 	var secretList []secrets.SecretInfo
@@ -654,29 +667,36 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 	for _, p := range capabilityProviderCatalog() {
 		catalog = append(catalog, p.Spec())
 	}
+	picker := c.pickerCapabilities()
 	buildDefaults := capability.DefaultOn()
 	out := make([]CapabilityStatus, 0, len(catalog))
 	for _, spec := range catalog {
 		canonical := model.CanonicalLegacyGrant(spec.Name)
+		key := capabilityStatusKey(spec.Name)
 		_, grantable := c.capabilityByID(spec.Name)
-		defaultRepos := slices.Clone(reposByCapability[spec.Name])
-		if canonical != spec.Name {
-			for _, r := range reposByCapability[canonical] {
-				if !slices.Contains(defaultRepos, r) {
-					defaultRepos = append(defaultRepos, r)
-				}
-			}
-			slices.Sort(defaultRepos)
+		if !grantable && !spec.CIOnly {
+			grantable = slices.ContainsFunc(picker, func(cap Capability) bool {
+				return capabilityStatusKey(cap.ID) == key
+			})
 		}
+		defaultRepos := slices.Clone(reposByCapability[key])
+		slices.Sort(defaultRepos)
 		status := CapabilityStatus{
-			ID:            spec.Name,
-			Name:          capabilityDisplayName(spec.Name),
-			Description:   spec.Description,
-			Grantable:     grantable,
-			CIOnly:        spec.CIOnly,
-			Default:       slices.Contains(cfg.DefaultCapabilities, spec.Name) || slices.Contains(cfg.DefaultCapabilities, canonical),
-			DefaultRepos:  defaultRepos,
-			BuildDefault:  slices.Contains(buildDefaults, spec.Name),
+			// Named as the grant the provider's bare name was retired
+			// onto (model.CanonicalLegacyGrant), which is what a task or
+			// a repository's CI capabilities are granted now.
+			ID:          canonical,
+			Name:        capabilityDisplayName(spec.Name),
+			Description: spec.Description,
+			Grantable:   grantable,
+			CIOnly:      spec.CIOnly,
+			Default: slices.ContainsFunc(cfg.DefaultCapabilities, func(id string) bool {
+				return capabilityStatusKey(id) == key
+			}),
+			DefaultRepos: defaultRepos,
+			BuildDefault: slices.ContainsFunc(buildDefaults, func(id string) bool {
+				return capabilityStatusKey(id) == key
+			}),
 			MissingConfig: missingConfigFor(spec.Name, cfg),
 		}
 		if haveRunning {

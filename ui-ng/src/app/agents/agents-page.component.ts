@@ -34,7 +34,7 @@ import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { ViewFilter } from "../services/view-filter.service";
-import { errorText } from "../sessions/session-view";
+import { errorText } from "../sessions/session-helpers";
 import { ActorChipComponent } from "../shared/actor-chip.component";
 import {
   PillSelectComponent,

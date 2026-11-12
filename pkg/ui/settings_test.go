@@ -448,15 +448,15 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	for _, status := range read.Capabilities {
 		byID[status.ID] = status
 	}
-	if got := byID["github-sandbox"]; !got.Default {
+	if got := byID[model.GitHubSandboxRepoGrant]; !got.Default {
 		t.Errorf("github-sandbox Default = false, want true: the deployment defaults it")
 	}
 	// Reported even though the deployment already defaults it: dropping
 	// the deployment-wide entry leaves acme/gadgets' own standing.
-	if got := byID["github-sandbox"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
+	if got := byID[model.GitHubSandboxRepoGrant].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
 		t.Errorf("github-sandbox DefaultRepos = %v, want [acme/gadgets]", got)
 	}
-	if got := byID["image-signing"].DefaultRepos; len(got) != 0 {
+	if got := byID[model.CanonicalLegacyGrant("image-signing")].DefaultRepos; len(got) != 0 {
 		t.Errorf("image-signing DefaultRepos = %v, want none", got)
 	}
 
@@ -464,7 +464,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &empty}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"github-sandbox"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{model.GitHubSandboxRepoRef}); err != nil {
 		t.Fatal(err)
 	}
 	read, err = c.GetSettings(ctx)
@@ -475,11 +475,11 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	for _, status := range read.Capabilities {
 		byID[status.ID] = status
 	}
-	if got := byID["github-sandbox"]; got.Default {
+	if got := byID[model.GitHubSandboxRepoGrant]; got.Default {
 		t.Errorf("github-sandbox Default = true, want false: no task outside those two repos is filed with it")
 	}
 	// Sorted by repo, the order Store.ListRepoConfigs returns.
-	if got := byID["github-sandbox"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
+	if got := byID[model.GitHubSandboxRepoGrant].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
 		t.Errorf("github-sandbox DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
 	}
 }

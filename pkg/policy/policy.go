@@ -536,13 +536,33 @@ func (p *Policy) checkApproval(task model.Task, requester Requester) error {
 	return nil
 }
 
-// retiredAs is the grant the retired bare capability name became
-// (model.CanonicalLegacyGrant), compared without regard to case like
-// every other pattern, and false for any other name.
+// retiredGrants is the canonical grant or grants a retired capability name
+// became (model.CanonicalLegacyGrants), compared without regard to case, and
+// nil for any other name.
+func retiredGrants(name string) []string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if lower == "" || model.IsCapabilityRef(lower) {
+		return nil
+	}
+	tos := model.CanonicalLegacyGrants(lower)
+	if len(tos) == 0 || (len(tos) == 1 && strings.TrimSpace(tos[0]) == lower) {
+		return nil
+	}
+	out := make([]string, len(tos))
+	for i, to := range tos {
+		out[i] = strings.TrimSpace(to)
+	}
+	return out
+}
+
+// retiredAs is the single grant a 1-to-1 retired capability name became,
+// compared without regard to case like every other pattern, and false for any
+// other name.
 func retiredAs(name string) (string, bool) {
-	name = strings.ToLower(strings.TrimSpace(name))
-	to := strings.TrimSpace(model.CanonicalLegacyGrant(name))
-	return to, to != name
+	if tos := retiredGrants(name); len(tos) == 1 {
+		return tos[0], true
+	}
+	return "", false
 }
 
 // capabilityRefAliasVariants returns capability along with its built-in
@@ -619,9 +639,22 @@ func deniesCapabilityRefVariant(pattern, capabilityRef string) bool {
 // deny it names must not stop applying when that happens. The retired
 // name denies the whole method it became, whatever the arguments.
 func deniesCapability(patterns []string, capability string) bool {
+	return deniesCapabilityExpanded(patterns, capability, true)
+}
+
+func deniesCapabilityExpanded(patterns []string, capability string, expand bool) bool {
 	capability = lowerCapabilityRefPrefix(capability)
 	if matchesCapability(patterns, capability) {
 		return true
+	}
+	// A retired name is every grant it became (1-to-1, 1-to-many such as
+	// self-debug or deployment-health, or a local-scripts runtime expansion),
+	// so a deny of any one in canonical or legacy spelling refuses it.
+	if expand {
+		if tos := retiredGrants(capability); len(tos) > 0 &&
+			slices.ContainsFunc(tos, func(to string) bool { return deniesCapabilityExpanded(patterns, to, false) }) {
+			return true
+		}
 	}
 	if set, ok := model.ParseGCPKeyServerGrant(capability); ok {
 		legacy := "gcp-key:" + set
@@ -643,9 +676,6 @@ func deniesCapability(patterns []string, capability string) bool {
 	}
 	unnamedGCPKey := model.GCPKeySetUnnamed(capability)
 	unnamedRepoCred := repoCredentialUnnamed(capability)
-	if to, ok := retiredAs(capability); ok {
-		capability = to
-	}
 	variants := capabilityRefAliasVariants(capability)
 	for _, pattern := range patterns {
 		trimmedPattern := strings.ToLower(strings.TrimSpace(pattern))
@@ -733,6 +763,10 @@ func repoCredentialUnnamed(capability string) bool {
 // became -- arguments and all, so an allow written for git-push-any-ref admits its repo#write
 // grant and no other repo#write.
 func allowsCapability(patterns []string, capability string) bool {
+	return allowsCapabilityExpanded(patterns, capability, true)
+}
+
+func allowsCapabilityExpanded(patterns []string, capability string, expand bool) bool {
 	if matchesCapability(patterns, capability) {
 		return true
 	}
@@ -754,27 +788,28 @@ func allowsCapability(patterns []string, capability string) bool {
 			return true
 		}
 	}
-	if to, ok := retiredAs(want); ok {
-		want = to
-		if matchesCapability(patterns, want) {
+	// A retired name is admitted when each grant it became is allowed, so a
+	// policy naming them canonically admits a task still granted the retired
+	// name, whether it became one grant or several.
+	if expand {
+		if tos := retiredGrants(want); len(tos) > 0 &&
+			!slices.ContainsFunc(tos, func(to string) bool { return !allowsCapabilityExpanded(patterns, to, false) }) {
 			return true
 		}
 	}
+	spellings := grantSpellings(capability)
 	for _, pattern := range patterns {
-		if to, ok := retiredAs(pattern); ok {
-			if to == want || (model.IsCapabilityRef(to) && model.IsCapabilityRef(want) && sameCapabilityRefGrant(to, want)) {
+		// A retired name in allow admits each exact grant it became, in
+		// either canonical .../api# or legacy api: spelling, while keeping
+		// inline JSON argument value case intact.
+		for _, to := range retiredGrants(pattern) {
+			to = lowerCapabilityRefPrefix(to)
+			if slices.ContainsFunc(spellings, func(s string) bool {
+				s = lowerCapabilityRefPrefix(s)
+				return s == to || (model.IsCapabilityRef(to) && model.IsCapabilityRef(s) && sameCapabilityRefGrant(to, s))
+			}) {
 				return true
 			}
-		}
-		// A name retired into several grants (self-debug became
-		// api#self-debug and grain#source; deployment-health
-		// api#deployment:read and grain#health) admits each of them,
-		// in either the canonical .../api# or legacy api: spelling.
-		if tos := model.CanonicalLegacyGrants(strings.ToLower(strings.TrimSpace(pattern))); len(tos) > 1 &&
-			slices.ContainsFunc(tos, func(to string) bool {
-				return strings.EqualFold(to, want) || strings.EqualFold(model.CanonicalGrantKey(to), model.CanonicalGrantKey(capability))
-			}) {
-			return true
 		}
 	}
 	return false
