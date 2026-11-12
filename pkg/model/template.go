@@ -181,6 +181,22 @@ type Template struct {
 	// this template (nil or 0 leaves the task on DefaultTaskPriority).
 	Priority *int `json:"priority,omitempty"`
 
+	// Sandbox is the sandbox shape every task filed from this template
+	// asks for (Task.SandboxCPUs, SandboxMemoryMB and SandboxDiskGB),
+	// one dimension at a time: a dimension left at zero takes the
+	// deployment's default, and a filing that states a dimension of its
+	// own keeps it (ui.Client.fromTemplate). It is here because how big
+	// a machine a job needs -- a publish that builds a 100 GB image, say
+	// -- is a property of the work rather than of one filing of it, and
+	// a schedule firing the template has no other way to say it.
+	//
+	// Validated when it is written (ValidateTemplateSandbox): each stated
+	// dimension is positive and at most the default ceiling a task's own
+	// shape is held to (DefaultMaxSandboxCPUs and its two siblings). A
+	// filing through the API is also held to the deployment's own
+	// sandboxShapeLimits, as a hand-sized task is.
+	Sandbox SandboxShape
+
 	CreatedAt time.Time
 }
 

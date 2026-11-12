@@ -48,6 +48,14 @@ import AccessGate from "./AccessGate.jsx";
 import AdmissionField from "./AdmissionField.jsx";
 import HostingField from "./HostingField.jsx";
 
+// SANDBOX_DIMENSIONS is the sandbox shape's three boxes: the form name,
+// the key on ui.Template.sandbox, and the label.
+const SANDBOX_DIMENSIONS = [
+  ["sandboxCpus", "cpus", "Sandbox vCPUs"],
+  ["sandboxMemoryMb", "memoryMb", "Sandbox memory (MiB)"],
+  ["sandboxDiskGb", "diskGb", "Sandbox disk (GiB)"],
+];
+
 // TemplateOverlay is a template's own sub page (bwsalmon/agents#545):
 // "+ New" on the Processes page (ProcessesList) opens this blank, and clicking
 // an existing row opens the same overlay pre-filled with that
@@ -245,6 +253,18 @@ function TemplateOverlay({
     }
     if (priorityText !== "") payload.priority = wholeNumber(priorityText);
     else if (!isNew) payload.priority = 0;
+    // The sandbox shape (ui.CreateTemplateRequest.Sandbox): each blank
+    // box is 0, the deployment's default. Sent whenever it says anything,
+    // and on an edit of a template that had one, so that clearing every
+    // box clears it (ui.UpdateTemplateRequest.Sandbox).
+    const sandbox = {};
+    for (const [name, key] of SANDBOX_DIMENSIONS) {
+      const n = wholeNumber(String(data.get(name) || "").trim());
+      if (n > 0) sandbox[key] = n;
+    }
+    if (Object.keys(sandbox).length > 0 || (!isNew && template?.sandbox)) {
+      payload.sandbox = sandbox;
+    }
     try {
       const saved = isNew
         ? await api("/api/templates", {
@@ -418,6 +438,31 @@ function TemplateOverlay({
             margin="normal"
             size="small"
           />
+          {/* The sandbox shape every task this template files asks for
+              (ui.Template.sandbox, grain/task-4591): a `.grain` template's
+              `sandbox: {cpus, memory-mb, disk-gb}`. Blank leaves that
+              dimension on the deployment's default. */}
+          <Box
+            sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}
+            data-testid="template-sandbox"
+          >
+            {SANDBOX_DIMENSIONS.map(([name, key, label]) => (
+              <TextField
+                key={name}
+                name={name}
+                label={label}
+                type="number"
+                defaultValue={template?.sandbox?.[key] ?? ""}
+                placeholder="default"
+                inputProps={{ min: 1, step: 1 }}
+                InputLabelProps={{ shrink: true }}
+                autoComplete="off"
+                margin="normal"
+                size="small"
+                sx={{ flex: "1 1 8rem" }}
+              />
+            ))}
+          </Box>
           <FormControlLabel
             control={
               <Checkbox name="autoMerge" defaultChecked={template?.autoMerge} />
