@@ -286,12 +286,19 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 	})
 	defer stopOnCancel()
+	// Serve waits for this below: the replacement hostd a cutover or
+	// handover starts next makes its own socket at the same path, and a
+	// remove still to come after Serve returned unlinked that one.
+	socketClosed := make(chan struct{})
 	if ln != nil {
 		go func() {
+			defer close(socketClosed)
 			<-ctx.Done()
 			ln.Close()
 			_ = os.Remove(s.Socket)
 		}()
+	} else {
+		close(socketClosed)
 	}
 	go s.sweepExited(ctx)
 	// The drain watcher logs through s.Logf, which may be a test's t.Logf:
@@ -336,6 +343,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	// on a done ctx, so this wait is short.
 	cancel()
 	<-drainWatched
+	<-socketClosed
 	if s.handedOverNow() {
 		s.releaseHandoverWatchers()
 		if s.Reexec != nil {
