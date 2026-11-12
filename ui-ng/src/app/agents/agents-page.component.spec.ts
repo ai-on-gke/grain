@@ -1,15 +1,3 @@
-import { Component, input } from "@angular/core";
-@Component({
-  selector: "g-task-detail",
-  template: '<div id="task-title">#{{id()}}</div>',
-  standalone: true,
-})
-class MockTaskDetail {
-  readonly id = input<string>();
-  readonly pane = input<boolean>();
-}
-
-import { TaskDetailComponent } from "../task/task-detail.component";
 // Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +11,19 @@ import { TaskDetailComponent } from "../task/task-detail.component";
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+import { Component, input } from "@angular/core";
+@Component({
+  selector: "g-task-detail",
+  template: '<div id="task-title">#{{id()}}</div>',
+  standalone: true,
+})
+class MockTaskDetailComponent {
+  readonly id = input<string>();
+  readonly pane = input<boolean>();
+}
+
+import { TaskDetailComponent } from "../task/task-detail.component";
 
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
 import { provideRouter, Router } from "@angular/router";
@@ -453,7 +454,7 @@ describe("AgentsPageComponent", () => {
 
     TestBed.overrideComponent(AgentsPageComponent, {
       remove: { imports: [TaskDetailComponent] },
-      add: { imports: [MockTaskDetail] },
+      add: { imports: [MockTaskDetailComponent] },
     });
 
     const f = TestBed.createComponent(AgentsPageComponent);
@@ -487,7 +488,7 @@ describe("AgentsPageComponent", () => {
 
     TestBed.overrideComponent(AgentsPageComponent, {
       remove: { imports: [TaskDetailComponent] },
-      add: { imports: [MockTaskDetail] },
+      add: { imports: [MockTaskDetailComponent] },
     });
 
     const f = TestBed.createComponent(AgentsPageComponent);
@@ -676,7 +677,10 @@ describe("AgentsPageComponent", () => {
     const f = await render(api);
 
     // Mock isPhone
-    vi.spyOn(f.componentInstance as any, "isPhone").mockReturnValue(true);
+    vi.spyOn(
+      f.componentInstance as unknown as { isPhone: () => boolean },
+      "isPhone",
+    ).mockReturnValue(true);
     f.detectChanges();
 
     const router = TestBed.inject(Router);
