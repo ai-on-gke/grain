@@ -15,6 +15,7 @@
 package ui
 
 import (
+	"bytes"
 	"slices"
 	"strings"
 
@@ -591,7 +592,11 @@ func (c *Client) ciCapabilitiesWithReadiness(cfg *model.Config, repoConfigs []mo
 // became, with or without empty {} arguments, and all of those are the
 // one status.
 func capabilityStatusKey(id string) string {
-	return model.CanonicalGrantKey(model.CanonicalLegacyGrant(strings.TrimSpace(id)))
+	g := model.CanonicalGrant(model.CanonicalLegacyGrant(strings.TrimSpace(id)))
+	if bytes.Equal(g.With, []byte("{}")) {
+		g.With = nil
+	}
+	return g.Key()
 }
 
 // capabilityStatuses builds every CapabilityStatus for cfg -- the
@@ -607,10 +612,11 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 	for _, rc := range repoConfigs {
 		repo := rc.Repo.String()
 		for _, id := range rc.DefaultCapabilities {
-			if slices.Contains(reposByCapability[id], repo) {
+			key := capabilityStatusKey(id)
+			if slices.Contains(reposByCapability[key], repo) {
 				continue
 			}
-			reposByCapability[id] = append(reposByCapability[id], repo)
+			reposByCapability[key] = append(reposByCapability[key], repo)
 		}
 	}
 	var secretList []secrets.SecretInfo
@@ -640,38 +646,36 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 	for _, p := range capabilityProviderCatalog() {
 		catalog = append(catalog, p.Spec())
 	}
+	picker := c.pickerCapabilities()
 	buildDefaults := capability.DefaultOn()
 	out := make([]CapabilityStatus, 0, len(catalog))
 	for _, spec := range catalog {
 		canonical := model.CanonicalLegacyGrant(spec.Name)
+		key := capabilityStatusKey(spec.Name)
 		_, grantable := c.capabilityByID(spec.Name)
 		if !grantable && !spec.CIOnly {
-			key := capabilityStatusKey(canonical)
-			grantable = slices.ContainsFunc(c.pickerCapabilities(), func(row Capability) bool {
-				return capabilityStatusKey(row.ID) == key
+			grantable = slices.ContainsFunc(picker, func(cap Capability) bool {
+				return capabilityStatusKey(cap.ID) == key
 			})
 		}
-		defaultRepos := slices.Clone(reposByCapability[spec.Name])
-		if canonical != spec.Name {
-			for _, r := range reposByCapability[canonical] {
-				if !slices.Contains(defaultRepos, r) {
-					defaultRepos = append(defaultRepos, r)
-				}
-			}
-			slices.Sort(defaultRepos)
-		}
+		defaultRepos := slices.Clone(reposByCapability[key])
+		slices.Sort(defaultRepos)
 		status := CapabilityStatus{
 			// Named as the grant the provider's bare name was retired
 			// onto (model.CanonicalLegacyGrant), which is what a task or
 			// a repository's CI capabilities are granted now.
-			ID:            canonical,
-			Name:          capabilityDisplayName(spec.Name),
-			Description:   spec.Description,
-			Grantable:     grantable,
-			CIOnly:        spec.CIOnly,
-			Default:       slices.Contains(cfg.DefaultCapabilities, spec.Name) || slices.Contains(cfg.DefaultCapabilities, canonical),
-			DefaultRepos:  defaultRepos,
-			BuildDefault:  slices.Contains(buildDefaults, spec.Name) || slices.Contains(buildDefaults, canonical),
+			ID:          canonical,
+			Name:        capabilityDisplayName(spec.Name),
+			Description: spec.Description,
+			Grantable:   grantable,
+			CIOnly:      spec.CIOnly,
+			Default: slices.ContainsFunc(cfg.DefaultCapabilities, func(id string) bool {
+				return capabilityStatusKey(id) == key
+			}),
+			DefaultRepos: defaultRepos,
+			BuildDefault: slices.ContainsFunc(buildDefaults, func(id string) bool {
+				return capabilityStatusKey(id) == key
+			}),
 			MissingConfig: missingConfigFor(spec.Name, cfg),
 		}
 		if haveRunning {
