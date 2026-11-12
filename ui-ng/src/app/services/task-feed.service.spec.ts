@@ -223,7 +223,7 @@ describe("TaskFeedStore unified open-task feed (F9)", () => {
     ]);
     expect(shapes.size).toBe(6);
 
-    expect(normalizeActorKind("human", "Roman Arcea")).toBe("human");
+    expect(normalizeActorKind("human", "Alice Example")).toBe("human");
     expect(normalizeActorKind("agent", "claude-opus")).toBe("agent");
     expect(normalizeActorKind("automation", "console-session")).toBe("grain");
     expect(normalizeActorKind(undefined, "grain")).toBe("grain");

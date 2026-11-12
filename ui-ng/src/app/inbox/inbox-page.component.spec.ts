@@ -1136,7 +1136,7 @@ describe("inbox page helpers", () => {
           {
             id: 43,
             author: "alice",
-            authorLabel: "Roman",
+            authorLabel: "Alice",
             body: "Turn stopped by user",
           },
         ],
@@ -1146,7 +1146,7 @@ describe("inbox page helpers", () => {
       await f.whenStable();
       expect(q(f, '[data-testid="inbox-group-reply"]')).toBeNull();
       expect(q(f, '[data-testid="inbox-group-paused"]')?.textContent).toContain(
-        "Stopped by Roman.",
+        "Stopped by Alice.",
       );
       expect(
         q(f, '[data-testid="next-inbox-headline"]')?.textContent,
@@ -1164,7 +1164,7 @@ describe("inbox page helpers", () => {
       (q(f, '[data-testid="action-resume"]') as HTMLButtonElement).click();
       await f.whenStable();
       expect(q(f, '[data-testid="confirm-dialog"]')?.textContent).toContain(
-        "Roman stopped it.",
+        "Alice stopped it.",
       );
       (q(f, '[data-testid="confirm-accept"]') as HTMLButtonElement).click();
       await new Promise((r) => setTimeout(r));

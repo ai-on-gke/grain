@@ -57,7 +57,7 @@ class FakeContextApi {
       repo: "",
       text: "# Global Rules\n\nAlways run **go test** before proposing.",
       updatedAt: "2026-11-11T10:00:00Z",
-      updatedBy: "Roman Arcea",
+      updatedBy: "Alice Example",
       updatedByKind: "human",
     },
     {
@@ -76,7 +76,7 @@ class FakeContextApi {
       summary: "Zero-downtime PostgreSQL migration rules and lock timeouts.",
       length: 148,
       updatedAt: "2026-11-11T20:00:00Z",
-      updatedBy: "Roman Arcea",
+      updatedBy: "Alice Example",
       updatedByKind: "human",
     },
     {
@@ -207,7 +207,7 @@ class FakeContextApi {
           repo,
           text,
           updatedAt: "2026-11-12T00:05:00Z",
-          updatedBy: "Roman Arcea",
+          updatedBy: "Alice Example",
           updatedByKind: "human",
         };
         if (idx >= 0) this.memories[idx] = entry;
@@ -236,7 +236,7 @@ class FakeContextApi {
         summary,
         length: new TextEncoder().encode(text).length,
         updatedAt: "2026-11-12T00:05:00Z",
-        updatedBy: "Roman Arcea",
+        updatedBy: "Alice Example",
         updatedByKind: "human",
       };
       if (idx >= 0) this.documents[idx] = entry;
