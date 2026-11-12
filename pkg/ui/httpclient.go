@@ -2367,6 +2367,16 @@ func (c *HTTPClient) DownloadCIArtifact(ctx context.Context, ref ci.ArtifactRef,
 	return io.Copy(w, resp.Body)
 }
 
+// RerunCIRun re-runs a GitHub Actions run (a gha: id) as its next
+// attempt: POST /api/ci/runs/{id}/rerun.
+func (c *HTTPClient) RerunCIRun(ctx context.Context, id string, req ActionsRerunRequest) (ActionsRerunResult, error) {
+	var res ActionsRerunResult
+	if err := c.do(ctx, http.MethodPost, "/api/ci/runs/"+url.PathEscape(id)+"/rerun", req, &res); err != nil {
+		return ActionsRerunResult{}, err
+	}
+	return res, nil
+}
+
 // CancelCIRun stops a run that is still going and returns it as it was
 // left -- DELETE /api/ci/runs/{id}.
 //

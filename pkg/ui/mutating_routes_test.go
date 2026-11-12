@@ -873,6 +873,10 @@ var neverAttributedRoutes = map[string]bool{
 	// A read that is a POST only because its input is a body of lines:
 	// it writes nothing (handleRedactSecrets).
 	"POST /api/secrets/redact": true,
+	// Re-running a GitHub Actions run writes nothing grain keeps: the new
+	// attempt is GitHub's own, and the daemon logs who asked for it
+	// (handleRerunCIRun).
+	"POST /api/ci/runs/{id}/rerun": true,
 	// Self-authenticating Ed25519 host handshake and silent credential
 	// renewal protocol endpoints; operator approval is attributed on
 	// POST /api/hostds/pending/{id}/accept and .../reject.
