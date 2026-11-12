@@ -290,7 +290,11 @@ func (s *Server) Serve(ctx context.Context) error {
 		}()
 	}
 	go s.sweepExited(ctx)
+	// The drain watcher logs through s.Logf, which may be a test's t.Logf:
+	// Serve waits for it below, so nothing it says outlives Serve.
+	drainWatched := make(chan struct{})
 	go func() {
+		defer close(drainWatched)
 		select {
 		case <-ctx.Done():
 		case <-s.drainCh:
@@ -324,6 +328,10 @@ func (s *Server) Serve(ctx context.Context) error {
 		}()
 	}
 	s.wg.Wait()
+	// The accept loop ends only once ctx is done, and waitDrained returns
+	// on a done ctx, so this wait is short.
+	cancel()
+	<-drainWatched
 	if s.handedOverNow() {
 		s.releaseHandoverWatchers()
 		if s.Reexec != nil {
