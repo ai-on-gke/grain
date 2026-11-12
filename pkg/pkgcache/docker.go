@@ -20,8 +20,8 @@ package pkgcache
 //
 // Manifests asked for by tag are forwarded every time and never stored.
 // Blobs, and manifests asked for by digest, are stored by digest (key
-// "blob:<digest>"), so identical layers across repositories and registries
-// are cached once. Because that key names no registry, a body is only
+// dockerBlobKeyPrefix + "<digest>"), so identical layers across
+// repositories and registries are cached once. Because that key names no registry, a body is only
 // stored once its bytes have been checked against the digest it is filed
 // under (see digestHash and Server.serve): otherwise one upstream or mirror
 // answering with the wrong bytes would poison that digest for every
@@ -192,7 +192,7 @@ func (s *Server) serveDocker(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if (section == "blobs" || section == "manifests") && dockerDigest(ref) {
-		obj := object{kind: KindDocker, url: upstream, client: client, cacheable: true, key: keyScope + "blob:" + ref, digest: ref, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
+		obj := object{kind: KindDocker, url: upstream, client: client, cacheable: true, key: keyScope + dockerBlobKeyPrefix + ref, digest: ref, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
 		s.serve(w, r, obj)
 		return
 	}
@@ -271,7 +271,7 @@ func (s *Server) serveDockerDirect(w http.ResponseWriter, r *http.Request, regis
 
 	_, section, ref, ok := splitDockerRef(trimmed)
 	if ok && (section == "blobs" || section == "manifests") && dockerDigest(ref) {
-		obj := object{kind: KindDocker, url: upstream, client: client, cacheable: true, key: keyScope + "blob:" + ref, digest: ref, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
+		obj := object{kind: KindDocker, url: upstream, client: client, cacheable: true, key: keyScope + dockerBlobKeyPrefix + ref, digest: ref, fallbackURL: fallbackURL, fallbackClient: fallbackClient}
 		s.serve(w, r, obj)
 		return
 	}
@@ -306,6 +306,15 @@ func (s *Server) scopedOCIClient(r *http.Request, client *http.Client, repoPath 
 	}
 	return client, "ghcr:" + strings.ToLower(owner+"/"+repo) + "#"
 }
+
+// dockerBlobKeyPrefix is the shared digest namespace blobs and
+// manifests-by-digest are filed under. It is "oci-blob:" rather than the
+// "blob:" they were once filed under: before Config.RepoScope, private
+// GHCR content fetched with the deployment's credential was stored there
+// too, and anybody who learned its digest could have read it back from
+// any registry's route. No request is answered out of those entries
+// again.
+const dockerBlobKeyPrefix = "oci-blob:"
 
 // isDockerAuthEndpoint reports whether a request path and query parameters correspond
 // to an OCI registry authentication or token issuance endpoint.
