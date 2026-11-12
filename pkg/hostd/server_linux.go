@@ -480,15 +480,17 @@ func (s *Server) refuseStarts() bool {
 // which refuses new starts so the runs still going can finish, for up to
 // drain_cap again.
 func (s *Server) Cutover() {
-	if s.beginCutover() {
-		s.startDrain()
+	if s.markCutover() {
+		s.beginCutover()
 	}
 }
 
-// beginCutover marks a cutover begun, so Hello reports it, without yet
-// starting the drain loop that may exit hostd; it reports whether this
-// call began it. OpDrain answers between the two.
-func (s *Server) beginCutover() bool {
+// markCutover records a cutover, so Hello reports it, without yet
+// starting the drain that may exit hostd at once; beginCutover starts it.
+// OpDrain marks before it answers and begins after, so a daemon told the
+// cutover began never sees a Hello that says otherwise. It reports
+// whether this call marked it.
+func (s *Server) markCutover() bool {
 	s.init()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -496,8 +498,15 @@ func (s *Server) beginCutover() bool {
 		return false
 	}
 	s.cutover = true
-	s.logf("hostd: cutting over to a new build: still taking new starts, and exiting the moment no run is running; %d process(es) running now", s.runningLocked())
 	return true
+}
+
+// beginCutover starts the drain markCutover recorded.
+func (s *Server) beginCutover() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startDrainLocked()
+	s.logf("hostd: cutting over to a new build: still taking new starts, and exiting the moment no run is running; %d process(es) running now", s.runningLocked())
 }
 
 // StartHandover hands live detached CLI runs over to the replacement
@@ -512,13 +521,13 @@ func (s *Server) StartHandover() {
 		s.Cutover()
 		return
 	}
-	if s.beginHandover() {
-		s.startDrain()
+	if s.markHandover() {
+		s.beginHandover()
 	}
 }
 
-// beginHandover is beginCutover for StartHandover.
-func (s *Server) beginHandover() bool {
+// markHandover is markCutover for a handover.
+func (s *Server) markHandover() bool {
 	s.init()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -527,8 +536,15 @@ func (s *Server) beginHandover() bool {
 	}
 	s.cutover = true
 	s.handover = true
-	s.logf("hostd: handing over to a new build: keeping live detached runs across re-exec; %d process(es) running now", s.runningLocked())
 	return true
+}
+
+// beginHandover starts the drain markHandover recorded.
+func (s *Server) beginHandover() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startDrainLocked()
+	s.logf("hostd: handing over to a new build: keeping live detached runs across re-exec; %d process(es) running now", s.runningLocked())
 }
 
 // CuttingOver reports whether Cutover or StartHandover has been called.
@@ -540,12 +556,6 @@ func (s *Server) CuttingOver() bool {
 
 func (s *Server) startDrainLocked() {
 	s.drainOnce.Do(func() { close(s.drainCh) })
-}
-
-func (s *Server) startDrain() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.startDrainLocked()
 }
 
 // Draining reports whether hostd refuses new starts: Drain was called, or
@@ -827,22 +837,33 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		// exits the process at once (and a handover re-execs it), and an
 		// answer written after it raced that exit -- a daemon then read
 		// EOF for a drain that had in fact happened (tests/agentdcompat).
-		// But the drain is marked before the answer -- for a plain drain
-		// starts are refused, for a cutover or handover Hello reports it --
-		// so a daemon that has been told the drain began never sees a start
-		// it makes next taken, nor a Hello that says nothing is under way.
-		var began bool
+		// But for a plain drain starts are refused before the answer, so a
+		// daemon that has been told the drain began never sees a start it
+		// makes next taken.
+		// A cutover or handover is marked before the answer too, so a
+		// Hello the daemon sends once it is told reports it, and its drain
+		// loop -- which may exit at once -- starts after.
 		switch {
 		case req.Idle && req.Handover && s.canHandover():
-			began = s.beginHandover()
+			began := s.markHandover()
+			_ = writeFrame(conn, frameOK, nil)
+			if began {
+				s.beginHandover()
+			}
 		case req.Idle:
-			began = s.beginCutover()
+			began := s.markCutover()
+			_ = writeFrame(conn, frameOK, nil)
+			if began {
+				s.beginCutover()
+			}
 		default:
-			began = s.refuseStarts()
-		}
-		_ = writeFrame(conn, frameOK, nil)
-		if began {
-			s.startDrain()
+			began := s.refuseStarts()
+			_ = writeFrame(conn, frameOK, nil)
+			if began {
+				s.mu.Lock()
+				s.startDrainLocked()
+				s.mu.Unlock()
+			}
 		}
 		return
 	case OpSocketOwner:
