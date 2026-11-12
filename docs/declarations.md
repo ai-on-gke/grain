@@ -390,7 +390,11 @@ sandbox:
   that dimension, and the template fills the rest.
 - A filing through the API or the form is also held to the deployment's
   own `sandboxShapeLimits` (Settings → Sandboxes), exactly as a task sized
-  by hand is. On a deployment whose sandboxes are host directories, which
+  by hand is: the deployment's maximum, and a limited role's own ceiling
+  for whoever files, writes or schedules it. An agent can't file from, or
+  write, a template larger than its own task's sandbox. A schedule, suite,
+  path trigger or qualification run firing a template above the
+  deployment's maximum files nothing, and the firing fails saying so. On a deployment whose sandboxes are host directories, which
   have no shape, the form and the API leave the template's shape off. A
   schedule firing there files the shape anyway, and the run fails at
   sandbox setup, so don't declare `sandbox:` for such a deployment.

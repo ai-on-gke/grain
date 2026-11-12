@@ -943,6 +943,9 @@ func composeSuitePass(ctx context.Context, q querier, suiteID string, items []Su
 			}
 			applyRepoCIGrants(&comp, ciDefaults)
 		}
+		if err := refuseCompositionSandboxAboveMax(ctx, q, comp); err != nil {
+			return nil, err
+		}
 		out = append(out, comp)
 	}
 	if !requireApproval {
