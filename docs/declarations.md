@@ -795,6 +795,25 @@ second one), and a review whose triggers all say `fixes: true`, which is
 stacked on the change's branch with a pull request of its own merged back
 into it before the change can land.
 
+**Priority.** A gating review runs at the priority of the change it gates,
+and never below 7 (`model.ReviewPriorityFloor`). That applies to grain's
+security review, every `.grain/triggers` review and each re-review after a
+push: a review of a priority-9 change is filed at 9, and a review of a
+priority-3 or default-priority change at 7. A review is short, and it is
+the last thing between a finished change and its merge, so 7 puts it ahead
+of ordinary work. It stays below the release gate (8) and the repairs and
+release train (9), so a review of an ordinary change never takes the slot
+they are waiting for. Reviews are also filed at the front of the backlog,
+so at equal priority they dispatch before work already queued. Base-branch
+repairs still sort ahead of them. When a person changes the gated task's
+priority, its open reviews follow, but never below 7. A review whose own
+priority a person has set is tagged `priority-set-by-hand`. A later raise
+of the gated task can still lift it, but a lowered priority is not carried
+over to it.
+The floor is grain's, not a person's: a review only it raised may still
+file follow-ups at no more than the default priority without a person's
+approval.
+
 **A head that moves without changing the change is not reviewed again**
 (grain/task-4808). The change is the pull request's diff against where its
 head forked from its base, `git diff $(git merge-base <base> <head>) <head>`.
