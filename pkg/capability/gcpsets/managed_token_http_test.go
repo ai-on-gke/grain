@@ -30,6 +30,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/gcpsets"
 	"github.com/ai-on-gke/grain/pkg/capability/gcpsets/gcpfake"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
 
 // signingAdminKey is a service-account key that can actually sign: the
@@ -231,5 +233,21 @@ func TestParseEndpointsRefusesAnythingButLoopbackStubsForEveryService(t *testing
 	}
 	if e, err := gcpsets.ParseEndpoints(with("iam", "http://localhost:1/iam")); err != nil || e["iam"] != "http://localhost:1/iam/" {
 		t.Errorf("localhost without a trailing slash = %v, %v", e, err)
+	}
+}
+
+// An ambient admin whose credentials come from the metadata server --
+// no credentials file -- is refused under test endpoints: the metadata
+// client is not the one the endpoints rewrite, so its token would be a
+// real one handed to the stub.
+func TestTestEndpointsRefuseMetadataServerCredentials(t *testing.T) {
+	ctx := context.Background()
+	metadata := gcpsets.ADC(func(context.Context, ...string) (*google.Credentials, error) {
+		return &google.Credentials{TokenSource: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "real-vm-token"})}, nil
+	})
+	conn := gcpsets.GoogleConnector{ADC: metadata, Endpoints: gcpfake.Endpoints("http://127.0.0.1:1")}
+	_, err := conn.Connect(ctx, gcpsets.Admin{Name: "vm", CredentialSource: gcpsets.SourceAmbient})
+	if err == nil || !strings.Contains(err.Error(), "metadata server") {
+		t.Fatalf("Connect = %v, want the metadata server refused", err)
 	}
 }
