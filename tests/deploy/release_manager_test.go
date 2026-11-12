@@ -125,7 +125,7 @@ func TestTheReleaseManagerLandsApprovedWithItsGrants(t *testing.T) {
 	// and which the sandbox channel its grain api calls use refuses anyway.
 	for _, scope := range []model.APIScope{"releases:write", "schedules:write", "repos:write", "dispatch:write"} {
 		if grants.Allows(scope, "ai-on-gke/grain") {
-			t.Errorf("%s holds %s; a release manager only reads releases, schedules and dispatch", releaseManagerTemplatePath, scope)
+			t.Errorf("%s holds %s; a release manager only reads releases and schedules, and never changes dispatch", releaseManagerTemplatePath, scope)
 		}
 	}
 	// What its body calls: comments, edits, retries and undefers
