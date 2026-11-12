@@ -178,9 +178,10 @@ var ErrHumanReviewRateLimited = errors.New("this review has already asked for hu
 var ErrAgentCannotReleaseHumanReview = errors.New("an agent cannot release a human-review hold: only a person's Submit or Release does")
 
 // ErrFindingsRequireRereviewOrOverride refuses releasing review findings via
-// Submit or ReleaseHumanReviewHold: findings require either a clean re-review
-// after fixes or an explicit merge:force gate override with a reason.
-var ErrFindingsRequireRereviewOrOverride = errors.New("review findings cannot be cleared by Submit or Release hold: fix the findings for a clean re-review, or override the review gate under merge:force with a reason")
+// Submit or ReleaseHumanReviewHold: findings require a clean re-review after
+// fixes, a person's acceptance of them (AcceptReviewFindings), or an
+// explicit merge:force gate override with a reason.
+var ErrFindingsRequireRereviewOrOverride = errors.New("review findings cannot be cleared by Submit or Release hold: fix the findings for a clean re-review, or accept them as they are with Accept findings (grain accept-findings) and a reason")
 
 // NormalizeHumanReviewReason trims r, bounds its reason and checks its
 // category, filling in what is missing.
@@ -364,8 +365,8 @@ func (s *Store) RaiseHumanReviewHold(ctx context.Context, taskID string, req Hum
 	}
 	if reason.Source == HumanReviewSecurityFindings {
 		body.WriteString("This change will not merge until the findings are addressed and a re-review passes, " +
-			"or an operator holding merge:force overrides the review gate with a reason. Pressing Submit records " +
-			"your approval only and does not clear review findings.")
+			"or a person accepts them as they are with Accept findings (`grain accept-findings`, a reason required). " +
+			"Pressing Submit records your approval only and does not clear review findings.")
 	} else {
 		body.WriteString("This change will not merge itself while the hold stands: a clean CI run, a later clean " +
 			"review or a new push do not release it. Press Submit to approve it (merges once all review and CI " +

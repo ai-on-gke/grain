@@ -77,8 +77,9 @@ type MergeGate struct {
 
 // ReviewFindingsRecord records that a required review left findings, open
 // questions, or unmerged fixes on a task's pull request, blocking that review
-// gate until a re-review passes after fixes or an operator overrides the gate
-// under merge:force.
+// gate until a re-review passes after fixes, a person accepts the review's
+// findings (AcceptReviewFindings), or an operator overrides the gate under
+// merge:force.
 type ReviewFindingsRecord struct {
 	Gate       string    `json:"gate"`
 	ReviewTask string    `json:"reviewTask,omitempty"`

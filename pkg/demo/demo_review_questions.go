@@ -73,7 +73,7 @@ func seedReviewQuestionsDemo(ctx context.Context, store *model.Store, cfg ui.Con
 			"Reply here (or on task %s) with your decision, and grain sends another run on this task "+
 			"to carry it out -- it fixes what you decided and a clean re-review clears the gate. "+
 			"Pressing Submit records your approval only and will not merge over open findings; "+
-			"merging without fixing them requires a force-merge override with a reason.",
+			"to merge without fixing them, accept them with Accept findings (a reason required) rather than Force merge.",
 			review.ID, repo, review.ID),
 		CreatedAt: now.Add(-5 * time.Minute),
 	})

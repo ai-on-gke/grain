@@ -885,6 +885,12 @@ auto-submit do not release it. `POST /api/tasks/{id}/human-review/release`
 agent is refused there, and on Submit or a `PATCH` turning auto-merge on
 while the hold stands. See [merging.design.md](../design/design/merging.design.md#gates).
 
+A review's *findings* are not a hold either of these releases. `POST
+/api/tasks/{id}/accept-findings` (`tasks:write`, body `{gate, reviewTask?,
+reason, head?}`) is a person accepting one review's findings on one gate as
+they are. It is refused for every agent and clears nothing else
+([declarations.md](declarations.md#gating-reviews)).
+
 ## Paging a list
 
 An MCP tool result carries about 10 KB before the client elides it, and

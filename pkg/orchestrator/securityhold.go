@@ -431,8 +431,9 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 	raiseFindingsReview(ctx, store, review, reviewedID, summary, now)
 	body := fmt.Sprintf(
 		"Review task %s left findings on this change, so its security-review gate did not pass. "+
-			"Address the findings so a re-review passes, or override the gate under merge:force with "+
-			"a reason; pressing Submit records your approval only and will not merge over open findings.",
+			"Address the findings so a re-review passes, or, if the change should merge as it is, "+
+			"accept them as they are with **Accept findings** on the merge-gates panel (`grain accept-findings`, a reason required), which clears this review's findings on this gate and nothing else. Pressing Submit records your approval only and will not merge over open findings; "+
+			"Force merge is for overriding every gate, not for this.",
 		review.ID)
 	_, ref, ok, err := reviewedPullRequest(ctx, store, review)
 	if err != nil || !ok {

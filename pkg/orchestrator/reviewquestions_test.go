@@ -158,7 +158,7 @@ func TestAReviewsFindingsHoldTheChangeAsQuestionsForItsOwner(t *testing.T) {
 		t.Errorf("the draft review was not recorded: %+v", got.Links)
 	}
 	bodies := strings.Join(commentBodies(t, ctx, store, reviewed.ID), "\n")
-	for _, want := range []string{"Review needs your decision", "1 open question", "I recommend not", "Reply here", "force-merge override"} {
+	for _, want := range []string{"Review needs your decision", "1 open question", "I recommend not", "Reply here", "Accept findings"} {
 		if !strings.Contains(bodies, want) {
 			t.Errorf("the task's conversation lacks %q:\n%s", want, bodies)
 		}

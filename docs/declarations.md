@@ -816,6 +816,38 @@ each kind is filed again for the new head:
   superseded by the new one, which keeps its incremental base; one already
   running is waited on.
 
+**Merging over findings: Accept findings.** A gating review's findings
+hold its gate (`security-review`, or `review`, which lists every gating
+trigger's `trigger:<name>` findings) until one of three things happens:
+
+- **A clean re-review.** Push fixes, and the review filed for the new head
+  passes.
+- **The owner accepts them as they are.** Use **Accept findings…** beside
+  the gate on the task's merge-gates panel, or `grain accept-findings -gate
+  <gate> [-review <task>] <id> <reason>` (`POST
+  /api/tasks/{id}/accept-findings`, `tasks:write`). A person may do this,
+  an agent never (403, as with Submit), and a reason is required. It clears
+  that one review's findings and open questions on that one gate, at the
+  pull request's current head. It records who accepted, the reason, the
+  review task and the head on the task (`review-findings-accepted`), on its
+  timeline, and as a comment on the task and the pull request. It clears
+  nothing else: CI, the other gates, other reviews' findings, approvers a
+  `human: required` trigger names and security holds all still apply. A
+  later push is classified and reviewed as any push is, and findings a new
+  review leaves need a new decision. Once nothing else holds the change, it
+  merges itself as it was going to.
+- **Force merge.** This overrides *every* gate it names, under
+  `merge:force`. It is for overriding everything, not for a decision about
+  one review's findings.
+
+Submit records the owner's approval only and never clears findings. Only
+an explicit acceptance counts as the owner's decision. Answering the
+review's questions with "merge as-is", or resolving its threads, does not
+count: a reply is free text that the next run reads and carries out, and
+threads can be resolved by the change's own agent, so neither one records
+who decided, at which head, or why. An agent that thinks a finding needs
+no fix asks the owner (`ask_question`) and leaves the decision to them.
+
 **One runnable task per key.** A key is (repository, branch, trigger,
 group) for a merge and (pull request, trigger, group) for a pull request
 -- (pull request, review kind) for a gating review.
