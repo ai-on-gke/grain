@@ -1,0 +1,81 @@
+file,line,title,bucket,first_pass,reason
+ui/e2e/phone.spec.js,917,on a tablet > keeps the rail beside the page,2,2,hand-check agrees with the first pass
+ui/e2e/tasks.spec.js,150,opens a task from the keyboard,2,2,hand-check agrees with the first pass
+ui/e2e/responsive-navigation-walkthrough.spec.js,503,"Responsive Navigation Matrix & Shell Behavior > Long names, Markdown, and tables: contain horizontal overflow within blocks",2,2,hand-check agrees with the first pass
+ui/e2e/tasks.spec.js,209,approves a proposed task from its detail view,2,2,hand-check agrees with the first pass
+ui/e2e/responsive-navigation-walkthrough.spec.js,1440,Creating a session with a title already in use opens the new one,1+2,2,duplicate-title session creation is server behaviour; the navigation is UI
+ui/e2e/page-header-rail-walkthrough.spec.js,232,the page header rail > centres Repos's count on its label behind more,3,2,classic rail count centring at 620px: classic layout
+ui/e2e/goal-section-layout.spec.js,38,"A task's goal is drawn, and edited, inside its column",3,2,goal section layout inside its column: classic layout
+ui/e2e/filter-select-search.spec.js,72,searches views and icons in Customize sidebar and saves the pin,2,2,hand-check agrees with the first pass
+ui/e2e/responsive-navigation-walkthrough.spec.js,1250,Live Interaction Surfaces & Sessions > Sending while grain is out of reach leaves a session's controls uncovered at 390x844,2,2,hand-check agrees with the first pass
+ui/e2e/auto-upgrade-settings-layout.spec.js,30,the automatic upgrade settings fit a phone screen,3,2,phone-fit pixel check of a classic card
+ui/e2e/ci-faults-github.spec.js,93,collapses the shared faults box and keeps it collapsed across a reload (desktop),2,2,hand-check agrees with the first pass
+ui/e2e/settings-panel-walkthrough.spec.js,490,"Memory editor tracks dirty notes and documents, and cleans up unfinished model and git drafts",2,2,hand-check agrees with the first pass
+ui/e2e/boards.spec.js,128,"reorders a board within its folder, and files one into it",1+2,2,reads /api/boards back for the persisted order and folder
+ui/e2e/paths.spec.js,300,"opens a template into its own URL, and back closes the pane rather than the page",2,2,hand-check agrees with the first pass
+ui/e2e/sessions-worktree-pinned-nav-walkthrough.spec.js,515,"Every scenario's declarations together > /processes and the repository page show the union of what -merge-rules, -sensitive-hold and -mechanical-port declare",1+2,2,"asserts the declarations status JSON, then the pages"
+ui/e2e/local-scripts-approval-walkthrough.spec.js,195,the rail's Inbox count includes local-script calls waiting for approval,2,2,hand-check agrees with the first pass
+ui/e2e/grant-matrix-ui.spec.js,922,one method of each argument shape and all its variants are walked through the Schedule editor,1+2,2,reads the stored grant back from /api/schedules
+ui/e2e/durable-task-context-layout.spec.js,50,"A durable task's brief, context and summarised comments are laid out in their columns",3,2,classic column layout check
+ui/e2e/deployment-credentials-role-gating.spec.js,89,"a role with capabilities:admin but not settings:write or secrets:write sees the card read-only, saying why",1+2,3,"role gating: server refuses the write, page shows read-only; ui-ng has Settings > Capabilities"
+ui/e2e/deployment-operations-failed-reads.spec.js,64,the CI run list says its read failed instead of spinning,2,3,"client error state on /ci, which ui-ng has"
+ui/e2e/repository_release_memory_walkthrough.spec.js,665,"Repository, Release, and Memory UI Operator Walkthrough > switching releases never shows the previous release's candidate",3,3,hand-check agrees with the first pass
+ui/e2e/usage-settings-layout.spec.js,29,Settings → Models token usage fits a phone screen,3,3,hand-check agrees with the first pass
+ui/e2e/ui-navigation-split-button-upgrade.spec.js,246,"UI Navigation, Sidebar Split-Button Intake & In-App Upgrade Dialog (§4) > 4. Merged task dissolution animations are removed from TaskBoard and TaskList",3,3,hand-check agrees with the first pass
+ui/e2e/repo-tabs-walkthrough.spec.js,81,"2. a link from when the tab rode in the hash opens that tab, at its path",3,3,hand-check agrees with the first pass
+ui/e2e/deployment-credentials-links.spec.js,116,the Deployment credentials card follows a capability server's own secret without a reload,2,3,"Settings > Capabilities card, which ui-ng has"
+ui/e2e/committed-context.spec.js,97,committed context card renders read-only repo placement cleanly (desktop),3,3,hand-check agrees with the first pass
+ui/e2e/narrow.spec.js,454,keeps a task's title in a narrow window,3,3,hand-check agrees with the first pass
+ui/e2e/sessions-list-delete.spec.js,68,"Deleting a session from the Sessions list > the row's bin sits at the row's right edge, centred, at desktop and phone widths",3,3,hand-check agrees with the first pass
+ui/e2e/merge-queue-lanes-walkthrough.spec.js,28,System names the merge limit per repository branch and keeps 1,1+2,3,reads /api/settings back; Settings > Engine exists in ui-ng
+ui/e2e/narrowing-grantspicker-polish.spec.js,58,a repo condition matches whatever case it is spelled in,3,3,hand-check agrees with the first pass
+ui/e2e/deployment_operations_walkthrough.spec.js,232,Deployment Settings and Operations Walkthrough > 4. GitHub and Sandbox Configuration with Restart Notices,2,3,Settings > Sandboxes exists in ui-ng
+ui/e2e/boards.spec.js,380,"opens a timeline board as the chart, narrowed to its own query",3,3,hand-check agrees with the first pass
+ui/e2e/repository-release-memory-1015-walkthrough.spec.js,86,at phone width > a long release name does not push the releases pane sideways,3,3,hand-check agrees with the first pass
+ui/e2e/repo-field-search.spec.js,91,lays the repo box and its list out at 390px,3,3,hand-check agrees with the first pass
+ui/e2e/inbox-stalled-group.spec.js,82,the rail's Inbox count includes the config repository's sync failure,2,3,inbox rail count logic on a stubbed config response; ui-ng has Inbox
+ui/e2e/deployment-operations-navigation.spec.js,85,opens General for an Admin link naming no tab,3,3,hand-check agrees with the first pass
+ui/e2e/saved-boards-walkthrough.spec.js,1308,Saved Boards and Visualizations Walkthrough > 4b. Back from a reloaded task returns to the board it was opened from,2,1+2,history/back navigation only: client behaviour
+ui/e2e/task_detail_workflows.spec.js,21,Task Detail Interactive Button Workflows > edits task title and description in place via UI buttons and persists across reload,1+2,1+2,hand-check agrees with the first pass
+ui/e2e/keep-running-badge.spec.js,43,a held keep_running proposal is marked in the inbox and on the board at 1440px dark,2,1+2,API expects are setup checks; the assertion is the badge
+ui/e2e/credential-reach-walkthrough.spec.js,130,"the deployment's GitHub credential reach (§4) > Test buttons, agreement, pickers and parking",1+2,1+2,hand-check agrees with the first pass
+ui/e2e/manual-mode-dispatch-control-walkthrough.spec.js,72,"Run now and Run selected now under a pause, and the rows that say so",1+2,1+2,hand-check agrees with the first pass
+ui/e2e/saved-boards-walkthrough.spec.js,1376,Saved Boards and Visualizations Walkthrough > 5c. A task opened by clicking a timeline bar or a card off its title hands focus back to that row's link,2,1+2,focus return: client behaviour
+ui/e2e/config-repo-only-settings.spec.js,366,General disables Lock settings in UI without a config repo on a phone screen,1+2,1+2,hand-check agrees with the first pass
+ui/e2e/closed-search-paging.spec.js,180,"one owner condition over closed work asks the server, not every page (1440px)",1+2,1+2,hand-check agrees with the first pass
+ui/e2e/page-header-rail-walkthrough.spec.js,201,the page header rail > centres every count on its label on Processes,3,1+2,font size/centring of classic counts
+ui/e2e/k8s-sandbox-settings-walkthrough.spec.js,89,"Kubernetes sandbox backends default availability, UI/CLI/grain_config round-trip, and daemon restart adoption",1+2,1+2,hand-check agrees with the first pass
+ui/e2e/settings-agents-branch-template.spec.js,22,"Settings → Agents branch name template > refuses a template git cannot push, and a good save clears the refusal",1+2,1+2,hand-check agrees with the first pass
+ui/e2e/candidate-keyboard-walkthrough.spec.js,216,"task, schedule and template forms say what is wrong with an unusable base branch",1+2,1+2,hand-check agrees with the first pass
+ui/e2e/release-approval-actions-sim.spec.js,39,"an Actions repo's pending patch release is approved from the Inbox through the sim, once",1+3,1+3,hand-check agrees with the first pass
+ui/e2e/cli-run-locations.spec.js,24,"a bare-machine daemon offers only host, and a run location saves and survives a reload",1+2,1+3,Settings > Models run locations exist in ui-ng; the 400 refusal is the server half
+ui/e2e/hostds-revoke-confirm.spec.js,20,"revoking a host asks first, and declining keeps it",2,1+3,"confirm dialog on Settings > Hosts, which ui-ng has; revoke itself is trivial server state"
+ui/e2e/repo-compare-hash-ref.spec.js,53,a compare of a branch with # in its name survives a reload (phone),3,1+3,URL encoding of a classic compare view; no server half
+ui/e2e/disable-self-upgrade.spec.js,24,Settings with -disable-self-upgrade > replaces in-VM upgrade controls and Updates settings with external management notice on desktop,1+2,1+3,Settings > Upgrade exists in ui-ng
+ui/e2e/repo-setting-refusal-clears.spec.js,22,"a repo setting's refusal goes once that setting saves, and only that one",1+3,1+3,hand-check agrees with the first pass
+ui/e2e/merge-rules-walkthrough.spec.js,122,Merge rules walkthrough > the Repos page names the merge-rules file and lists its warnings,1+3,1+3,hand-check agrees with the first pass
+ui/e2e/base-branch-existence.spec.js,169,POST /api/tasks refuses a missing base on acme/widgets and files a present one,1,1,hand-check agrees with the first pass
+ui/e2e/grant-matrix-api.spec.js,243,person-only arguments (x-grain-person-granted) are refused when an agent token attempts them,1,1,hand-check agrees with the first pass
+ui/e2e/local-scripts-approval-walkthrough.spec.js,176,a task without the capability cannot ask for a local-script approval,1,1,hand-check agrees with the first pass
+ui/e2e/new-task-number-boxes.spec.js,24,New task files a number box's exponent entry as the number it is,2,1,asserts the payload the form sent: form behaviour
+ui/e2e/release_name_validation_walkthrough.spec.js,64,Release names git cannot use as a branch > a direct POST gets the same answers,1,1,hand-check agrees with the first pass
+ui/e2e/responsive-navigation-walkthrough.spec.js,1025,"Live Interaction Surfaces & Sessions > Standing chat session (Director): messaging, markdown, disconnect recovery, and session switching",2,1+2,holdout: the API read is a setup check; the test is the Director chat flow
+ui/e2e/repository-release-memory-1013-walkthrough.spec.js,29,the repo page's two release switches follow each other without a reload,3,3,holdout: hand-check agrees with the second pass
+ui/e2e/inbox-notifications-walkthrough.spec.js,223,Inbox notifications when the site is blocked > says so rather than offering a button that cannot work,3,3,holdout: hand-check agrees with the second pass
+ui/e2e/health-counters-panel.spec.js,26,the health counters panel on Health fits a desktop,3,3,holdout: hand-check agrees with the second pass
+ui/e2e/merge-rules-walkthrough.spec.js,99,Merge rules walkthrough > a change the queue gave up on after stall_timeout offers Retry merge,1+3,1+3,holdout: hand-check agrees with the second pass
+ui/e2e/new-task-form-config.spec.js,66,the unconfigured form keeps Advanced options between Depends on and Queue immediately,3,2,holdout: field order in the classic form: classic layout
+ui/e2e/deployment_operations_walkthrough.spec.js,179,Deployment Settings and Operations Walkthrough > 3. Connections and Models Configuration and Fallback Discovery,2,2,holdout: hand-check agrees with the second pass
+ui/e2e/config-repo-only-settings.spec.js,120,Health's field link and a tall card's anchor both land on its heading and named field on a desktop screen,3,3,holdout: hand-check agrees with the second pass
+ui/e2e/new-task-form-config.spec.js,365,"390 px, dark: Advanced options full, then empty",3,2,holdout: pixel fit of the classic form at 390px
+ui/e2e/repository-release-memory-regressions-walkthrough.spec.js,62,saving a memory document empty asks before it deletes it,1+2,1+3,holdout: confirm before delete (UI) and the document survives (server); ui-ng has Settings > Memory
+ui/e2e/task_intake_inbox_lifecycle_walkthrough.spec.js,562,"Task Intake, Inbox, and Lifecycle Operator Walkthrough > keeps a rail state view across reload, Back and Forward",2,2,holdout: hand-check agrees with the second pass
+ui/e2e/tasks.spec.js,241,edits a whole selection through the bulk edit form,2,2,holdout: hand-check agrees with the second pass
+ui/e2e/config-repo-only-settings.spec.js,322,"a repository's settings are read-only, its default grants chips, its branches still addable",3,3,holdout: hand-check agrees with the second pass
+ui/e2e/short-phone-layout.spec.js,102,on a 390×640 touch phone > the drawer's foot is on screen with nothing drawn over it,3,2,holdout: classic drawer layout at a short phone height
+ui/e2e/inbox-notifications-walkthrough.spec.js,206,Inbox desktop notifications > a summary's click opens the inbox,3,3,holdout: hand-check agrees with the second pass
+ui/e2e/responsive-navigation-walkthrough.spec.js,1937,The create menu opens from the phone drawer and a pick closes it,2,2,holdout: hand-check agrees with the second pass
+ui/e2e/keyboard-open-rows.spec.js,81,"opens a task, board, template, suite, schedule and repo with Tab and Enter alone",2,2,holdout: hand-check agrees with the second pass
+ui/e2e/report-backlog-links.spec.js,67,a report board's backlog counts match the filtered lists they open,1+2,2,holdout: report counts must equal the lists they open: a server query invariant
+ui/e2e/responsive-navigation-walkthrough.spec.js,73,"Responsive Navigation Matrix & Shell Behavior > Desktop (1440x900): traverses all primary views, boards, overlays, and deep-links with zero overflow",2,2,holdout: hand-check agrees with the second pass
+ui/e2e/issue-import-layout.spec.js,81,The repository's issue import settings fit the Agents tab (desktop),3,3,holdout: hand-check agrees with the second pass

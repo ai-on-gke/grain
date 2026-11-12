@@ -971,7 +971,9 @@ exactly as before.
   a new version.
 - **Age** is measured, not stored: the runs started and the comments
   posted since the handover was written or confirmed
-  (`model.HandoverAge`). Past `HandoverStaleRuns` (10) runs or
+  (`model.HandoverAge`). Only comments from people and agents count:
+  grain's own notices (automation on nobody's behalf, such as the park
+  notice every parked run leaves) do not. Past `HandoverStaleRuns` (10) runs or
   `HandoverStaleComments` (30) comments it is **stale**. The durable
   task's prompt then asks for a replacement or confirmation, and
   `GET /api/tasks/{id}/context` returns `handover_stale`.

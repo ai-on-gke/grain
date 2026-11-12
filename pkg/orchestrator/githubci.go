@@ -304,6 +304,9 @@ func reconcileGitHubCITails(ctx context.Context, deps Deps, now time.Time) error
 	if err := reconcileStage1Repairs(ctx, deps, now); err != nil {
 		errs = append(errs, err)
 	}
+	if err := reconcileGitHubBaseRepairs(ctx, deps, now); err != nil {
+		errs = append(errs, err)
+	}
 	if err := reconcileReleaseLoopIdle(ctx, deps, now); err != nil {
 		errs = append(errs, err)
 	}
@@ -585,6 +588,11 @@ func pollConcludedGitHubWorkflowRuns(ctx context.Context, deps Deps, now time.Ti
 				}
 			}
 		}
+		if ok, err := gitHubActionsJudges(ctx, deps.Store, repo); err == nil && ok {
+			if def, err := gitHubBasePollDefaultBranch(deps, repo, now); err == nil && def != "" {
+				branches = appendUniquePollBranch(branches, def)
+			}
+		}
 		for _, branch := range branches {
 			if err := ctx.Err(); err != nil {
 				errs = append(errs, err)
@@ -722,6 +730,13 @@ func gitHubWorkflowRunPollTargets(ctx context.Context, store *model.Store) ([]gi
 			}
 		}
 	}
+	if configs, err := store.ListRepoConfigs(ctx); err == nil {
+		for _, c := range configs {
+			if c.CIMode == model.CIModeGitHub {
+				add(c.Repo)
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -752,8 +767,10 @@ func isGitHubBranchWorkflowEvent(event string) bool {
 
 // handleConcludedGitHubWorkflowRun deduplicates a concluded workflow run by
 // (repo, run_id, attempt), ensures its jobs and failure tails are recorded in
-// github_ci_job, fires any matching github_workflow_run schedules, and checks
-// release triage parity on the base branch.
+// github_ci_job, fires any matching github_workflow_run schedules, checks
+// release triage parity on the base branch, and files or updates the
+// repairs of a red Stage 1 (stage1repair.go) or a red default branch
+// (githubbaserepair.go).
 func handleConcludedGitHubWorkflowRun(ctx context.Context, deps Deps, run ConcludedGitHubWorkflowRun, now time.Time) error {
 	if deps.Store == nil || run.RunID == 0 || run.Conclusion == "" {
 		return nil
@@ -782,6 +799,9 @@ func handleConcludedGitHubWorkflowRun(ctx context.Context, deps Deps, run Conclu
 		errs = append(errs, err)
 	}
 	if err := handleStage1Verdict(ctx, deps, run, jobs, now); err != nil {
+		errs = append(errs, err)
+	}
+	if err := handleGitHubBaseVerdict(ctx, deps, run, jobs, now); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
