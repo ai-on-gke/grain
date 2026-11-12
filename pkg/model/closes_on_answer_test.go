@@ -46,6 +46,17 @@ func TestClosesOnAnswerOnlyForAgentFiledSubTasks(t *testing.T) {
 		{"filed for acknowledgement", func(t *model.Task) { t.NothingNeededAction = model.NothingNeededAck }, false},
 		{"review", func(t *model.Task) { t.Origin.Reason = model.ReasonReview }, false},
 		{"interactive", func(t *model.Task) { t.Interactive = true }, false},
+		{"console-hosted", func(t *model.Task) { t.Hosting = model.HostingConsole }, false},
+		{"keep running", func(t *model.Task) { t.KeepRunning = true }, false},
+		{"changelist linked", func(t *model.Task) {
+			t.Links = []model.Link{{Kind: model.LinkChangelist, Target: "cl/123"}}
+		}, false},
+		{"pull request linked", func(t *model.Task) {
+			t.Links = []model.Link{{Kind: model.LinkFixes, Target: "acme/widgets#7"}}
+		}, false},
+		{"depends on another task", func(t *model.Task) {
+			t.Links = []model.Link{{Kind: model.LinkDependsOn, Target: "40"}}
+		}, true},
 		{"console session proposal", func(t *model.Task) { t.Proposer.Attribution.Actor.Source = model.SourceSession }, false},
 		{"no proposing task", func(t *model.Task) { t.Proposer.TaskID = "" }, false},
 		{"person-filed", func(t *model.Task) {

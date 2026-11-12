@@ -60,11 +60,19 @@ const NothingNeededClosedNote = "Closed: the agent found nothing needed."
 // A task a person filed, or a console session's proposal (which is a
 // person's request relayed), keeps completing into awaiting_reply: its
 // report is for the person who asked for it.
+//
+// So does a task that is not a report, whatever filed it: one a person
+// sits with (Interactive, or hosted on a console), one that restarts when
+// its run exits (KeepRunning), and one whose work is a change -- a review,
+// or a task with a pull request or changelist linked (AwaitsAck). A
+// changelist task's run can end on a summary note with no branch pushed,
+// and closing it then would skip its review and Submit gate and unblock
+// its dependents before the change landed.
 func ClosesOnAnswer(t Task) bool {
 	if t.NothingNeededAction.Resolved() == NothingNeededAck {
 		return false
 	}
-	if t.Origin.Reason == ReasonReview || t.Interactive {
+	if t.Interactive || t.HasConsole() || t.KeepRunning || !AwaitsAck(t) {
 		return false
 	}
 	p := t.Proposer

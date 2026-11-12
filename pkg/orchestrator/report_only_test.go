@@ -146,7 +146,18 @@ func TestAReportOnlySubTaskClosesWhenItAnswersSoItsDependentDispatches(t *testin
 		t.Errorf("wait target = %+v, want the child's own note and a completed outcome", target)
 	}
 
-	finishChild(t, ctx, store, client, reportChild(t, ctx, store, rank.ID), toolResult(closingNoteCall("rank: a, b, c")))
+	// The dependent dispatched on that close is told what it was waiting
+	// for: the first child's id and its closing note, in its own prompt.
+	rank = reportChild(t, ctx, store, rank.ID)
+	deps := orchestrator.DependenciesOf(ctx, store, rank, nil)
+	prompt := orchestrator.BuildPrompt(rank, "", "", true, 0, orchestrator.History{Dependencies: deps}, nil)
+	for _, want := range []string{"Task " + survey.ID + " ", "> three packages have no tests"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("second child's prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+
+	finishChild(t, ctx, store, client, rank, toolResult(closingNoteCall("rank: a, b, c")))
 	if st := taskState(t, ctx, store, rank.ID); st != model.StateClosed {
 		t.Fatalf("second child state = %q, want closed", st)
 	}
@@ -228,5 +239,60 @@ func TestAPersonsTaskStillCompletesIntoAwaitingReply(t *testing.T) {
 
 	if st := taskState(t, ctx, store, task.ID); st != model.StateAwaitingReply {
 		t.Fatalf("state = %q, want awaiting_reply", st)
+	}
+}
+
+// A sub-task whose run uploaded a changelist has its change linked to the
+// stored task while the run is live, after the snapshot ProcessResult is
+// handed was taken. Its summary note does not close it: it is a change
+// waiting for review and Submit, and what depends on it keeps waiting.
+func TestASubTaskWithAChangelistLinkedMidRunIsNotClosedOnItsNote(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	_, survey, rank := reportOnlyChildren(t, ctx, store, client, nil)
+
+	if err := store.UpdateTask(ctx, survey.ID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkChangelist, Target: "cl/4242"})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	finishChild(t, ctx, store, client, survey, toolResult(closingNoteCall("uploaded cl/4242")))
+
+	if st := taskState(t, ctx, store, survey.ID); st == model.StateClosed {
+		t.Fatalf("first child state = %q, want it left for its changelist", st)
+	}
+	if ready := readyIDs(t, ctx, store); slices.Contains(ready, rank.ID) {
+		t.Fatalf("ready = %v, want %s still blocked on %s's changelist", ready, rank.ID, survey.ID)
+	}
+}
+
+// A park through wait_for_task holds its task with depends-on links too.
+// parkedResumeSection already tells the next attempt about those targets,
+// so DependenciesOf leaves them out and lists only the task's other
+// dependencies.
+func TestDependenciesOfLeavesOutAParksOwnTargets(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	parkedOn := filedTask(t, ctx, store, "b1", repo)
+	other := filedTask(t, ctx, store, "c1", repo)
+	task := filedTask(t, ctx, store, "a1", repo)
+	task.Links = append(task.Links,
+		model.Link{Kind: model.LinkDependsOn, Target: parkedOn.ID},
+		model.Link{Kind: model.LinkDependsOn, Target: other.ID})
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	task = reportChild(t, ctx, store, task.ID)
+
+	resumed := []model.WaitTarget{{ID: parkedOn.ID}}
+	deps := orchestrator.DependenciesOf(ctx, store, task, resumed)
+	if len(deps) != 1 || deps[0].ID != other.ID {
+		t.Fatalf("dependencies = %+v, want only %s", deps, other.ID)
+	}
+	if all := orchestrator.DependenciesOf(ctx, store, task, nil); len(all) != 2 {
+		t.Fatalf("dependencies with no park = %+v, want both", all)
 	}
 }

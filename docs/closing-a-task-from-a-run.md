@@ -211,9 +211,28 @@ branch pushed, no question, no park, no review findings), grain:
 - posts a pointer on the parent's thread, `[Task N](/tasks/N) … answered
   and closed itself`, so a person reading the parent sees it.
 
-Dependents dispatch on the close. A parent parked on the child
-(`wait_for_task`) resumes with the child's closing note quoted in its
-prompt (`WaitTarget.ClosingNote`, `parkedResumeSection`).
+Dependents dispatch on the close, and each one's prompt lists the tasks
+it depends on, with each one's id, outcome and closing note quoted
+(`History.Dependencies`, `dependenciesSection`). A dependent needs that
+section: a proposal names an earlier sibling by its local `id`, before
+the sibling has a task id, and an ordinary run cannot read another
+task's record. A parent parked on the child (`wait_for_task`) resumes
+with the child's closing note quoted too (`WaitTarget.ClosingNote`,
+`parkedResumeSection`); a park's own targets are left out of the
+dependencies section so none is described twice.
+
+The rule skips tasks that are not reports, whoever filed them:
+
+- tasks a person sits with (`interactive`, console hosting);
+- tasks that restart when their run exits (`keep_running`);
+- tasks whose work is a change (`model.AwaitsAck`): a review, or a task
+  with a pull request or changelist linked.
+
+A changelist task's run can upload its CL and end on a summary note with
+no branch pushed, and the link is attached while the run is live. So
+`ProcessResult` reads the task again before it closes one. Otherwise the
+close would skip the CL's review and Submit gate and unblock its
+dependents early.
 
 **Opting out.** The switch is the proposal's existing
 `nothing_needed_action`, which now covers both of a run's "I'm done, no

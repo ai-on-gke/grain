@@ -471,6 +471,9 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	if resumed := parkedResumeSection(history); resumed != "" {
 		prompt += "\n\n" + strings.TrimRight(resumed, "\n")
 	}
+	if deps := dependenciesSection(history); deps != "" {
+		prompt += "\n\n" + strings.TrimRight(deps, "\n")
+	}
 	if attempts := previousAttemptsSection(history, branch); attempts != "" {
 		prompt += "\n\n" + strings.TrimRight(attempts, "\n")
 	}
@@ -770,6 +773,9 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	prompt += sessionSandboxSection(task, history)
 	if resumed := parkedResumeSection(history); resumed != "" {
 		prompt += "\n\n" + strings.TrimRight(resumed, "\n")
+	}
+	if deps := dependenciesSection(history); deps != "" {
+		prompt += "\n\n" + strings.TrimRight(deps, "\n")
 	}
 	if attempts := previousAttemptsSection(history, branch); attempts != "" {
 		prompt += "\n\n" + strings.TrimRight(attempts, "\n")
@@ -2558,6 +2564,10 @@ type History struct {
 	// through wait_for_task, as they stand now -- set only when that
 	// attempt ended model.ParkedOutcome. See parkedResumeSection.
 	Resumed []model.WaitTarget
+	// Dependencies is the tasks this one depends on (model.LinkDependsOn)
+	// that are not already in Resumed, as they stand now, with each one's
+	// closing note. See dependenciesSection.
+	Dependencies []model.WaitTarget
 	// ResumedUntil is the time the previous attempt parked this task
 	// until through wait_for_task's resume_at -- zero unless that attempt
 	// ended model.ParkedOutcome that way. See parkedResumeSection.
@@ -2626,6 +2636,53 @@ func parkedResumeSection(h History) string {
 		b.WriteString(t.Describe())
 	}
 	return b.String()
+}
+
+// dependenciesSection tells a run what the tasks it depends on found:
+// each one's id, where it stands and its closing note. A task filed with
+// depends_on on a report-only sub-task (model.ClosesOnAnswer) is
+// dispatched when that sub-task closes on its answer, and the answer is
+// what it was waiting for; without this it would have neither the note
+// nor the sub-task's id (a proposal names an earlier one by its local id,
+// before any id exists), and an ordinary run cannot read another task's
+// record (grain/task-4384). A park's own targets are told by
+// parkedResumeSection instead, so none is said twice.
+func dependenciesSection(h History) string {
+	if len(h.Dependencies) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("This task depends on the task(s) below (depends_on). Here is where each stands and " +
+		"what it said when it finished; build on its findings rather than redoing them:\n")
+	for _, t := range h.Dependencies {
+		b.WriteString(t.Describe())
+	}
+	return b.String()
+}
+
+// DependenciesOf is the tasks task depends on (model.LinkDependsOn), as
+// they stand now, leaving out any already in resumed (a park's own
+// depends-on links, which parkedResumeSection describes). Advisory, like
+// ResumedFrom: a target grain cannot read is left out rather than
+// failing the dispatch.
+func DependenciesOf(ctx context.Context, store *model.Store, task model.Task, resumed []model.WaitTarget) []model.WaitTarget {
+	told := map[string]bool{}
+	for _, r := range resumed {
+		told[r.ID] = true
+	}
+	var out []model.WaitTarget
+	for _, l := range task.Links {
+		if l.Kind != model.LinkDependsOn || told[l.Target] {
+			continue
+		}
+		told[l.Target] = true
+		target, err := store.WaitTargetOf(ctx, l.Target)
+		if err != nil || target == nil {
+			continue
+		}
+		out = append(out, *target)
+	}
+	return out
 }
 
 // pairedBranchesSection tells a run in a repository that pairs branches
@@ -3370,6 +3427,7 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	}
 	history.BaseIncident = baseIncidentNote(ctx, store, task)
 	history.Resumed = ResumedFrom(ctx, store, previous)
+	history.Dependencies = DependenciesOf(ctx, store, task, history.Resumed)
 	loadTaskContext(ctx, store, task, &history)
 	history.AutoCompactBytes = cfg.autoCompactBytes()
 	history.ResumedUntil = ResumedUntil(previous)

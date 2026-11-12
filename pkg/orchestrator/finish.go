@@ -605,7 +605,17 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// (model.ClosesOnAnswer): its dependents are waiting on a close, and
 	// its note is its parent's to read.
 	if hasComment && findings == 0 && !pushedInPlace && model.ClosesOnAnswer(task) {
-		return finishAnswered(ctx, store, task, now)
+		// Read again rather than trusting the snapshot taken at dispatch:
+		// a changelist the run uploaded is linked to the stored task while
+		// the run is live (ui.Client's changelist link), and a task with a
+		// change linked is not a report to close (model.AwaitsAck).
+		fresh, err := store.GetTask(ctx, task.ID)
+		if err != nil {
+			return fmt.Errorf("orchestrator: re-reading %s before closing it on its answer: %w", task.ID, err)
+		}
+		if fresh != nil && model.ClosesOnAnswer(*fresh) {
+			return finishAnswered(ctx, store, *fresh, now)
+		}
 	}
 	if hasComment || findings > 0 || pushedInPlace {
 		return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
