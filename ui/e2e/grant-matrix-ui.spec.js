@@ -181,9 +181,11 @@ async function walkCell(page, request, grants, method, surface, onSaved) {
     return { outcome: "fail", variant, detail: "not offered in Add grant…" };
   }
   await item.first().click();
-  // An api preset or scope is a checkbox in the menu, which stays open
-  // for the next pick; left open it is a modal, and the form behind it is
-  // aria-hidden and out of reach.
+  // An api row is a checkbox (menuitemcheckbox): the menu stays open
+  // after a pick, for the next one, and left open it is a modal, the form
+  // behind it aria-hidden and out of reach. A method row closes it itself.
+  if (ref.startsWith(API_REF))
+    await expect(item.first()).toHaveAttribute("aria-checked", "true");
   await closePopovers(page);
   if (refusal) {
     await expect(grants.getByText(refusal).first()).toBeVisible();

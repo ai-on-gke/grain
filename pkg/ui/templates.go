@@ -94,11 +94,16 @@ type Template struct {
 	// holes its title and body leave as `{{name}}`, in the order a form
 	// should ask for them. Omitted for the ordinary template, which asks
 	// for nothing.
-	Fields    []TemplateField `json:"fields,omitempty"`
-	Repo      string          `json:"repo,omitempty"`
-	Base      string          `json:"base,omitempty"`
-	Priority  *int            `json:"priority,omitempty"`
-	AutoMerge bool            `json:"autoMerge"`
+	Fields   []TemplateField `json:"fields,omitempty"`
+	Repo     string          `json:"repo,omitempty"`
+	Base     string          `json:"base,omitempty"`
+	Priority *int            `json:"priority,omitempty"`
+	// Sandbox is the sandbox shape every task filed from this template
+	// asks for (model.Template.Sandbox, grain/task-4591): {cpus,
+	// memoryMb, diskGb}, each omitted when the template leaves it to the
+	// deployment's default, and the whole omitted when it states none.
+	Sandbox   *model.SandboxShape `json:"sandbox,omitempty"`
+	AutoMerge bool                `json:"autoMerge"`
 	// NetworkAccess is how much of the internet the sandbox of every
 	// task filed from this template may reach
 	// (model.Template.NetworkAccess, grain/task-269) -- "" for a
@@ -229,6 +234,10 @@ func templateFrom(t model.Template) Template {
 		p := *t.Priority
 		out.Priority = &p
 	}
+	if !t.Sandbox.IsZero() {
+		sb := t.Sandbox
+		out.Sandbox = &sb
+	}
 	out.ChangeTarget = t.ChangeTarget.Clone()
 	out.Reviewers = slices.Clone(t.Reviewers)
 	for _, r := range t.Reads {
@@ -340,7 +349,11 @@ type CreateTemplateRequest struct {
 	Repo      string   `json:"repo"`
 	Base      string   `json:"base"`
 	Priority  *int     `json:"priority,omitempty"`
-	AutoMerge bool     `json:"autoMerge"`
+	// Sandbox sets model.Template.Sandbox: each dimension positive and no
+	// larger than the default task ceiling (model.ValidateTemplateSandbox),
+	// a dimension left at zero taking the deployment's default.
+	Sandbox   *model.SandboxShape `json:"sandbox,omitempty"`
+	AutoMerge bool                `json:"autoMerge"`
 	// NetworkAccess fixes the network of every task this template files
 	// (model.Template.NetworkAccess): one of model.NetworkAccesses(), or
 	// "" for a template that fixes none and leaves each firing on the
@@ -412,6 +425,13 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 			p := *req.Priority
 			priority = &p
 		}
+	}
+	var sandbox model.SandboxShape
+	if req.Sandbox != nil {
+		if err := model.ValidateTemplateSandbox(*req.Sandbox); err != nil {
+			return Template{}, validationErrorf("%s", err)
+		}
+		sandbox = *req.Sandbox
 	}
 	if err := validateNetworkAccess(req.NetworkAccess); err != nil {
 		return Template{}, err
@@ -510,6 +530,7 @@ func (c *Client) CreateTemplate(ctx context.Context, req CreateTemplateRequest) 
 		Target:        target,
 		Base:          base,
 		Priority:      priority,
+		Sandbox:       sandbox,
 		AutoMerge:     req.AutoMerge,
 		Interactive:   req.Interactive,
 		KeepRunning:   req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake),
@@ -663,6 +684,23 @@ func (c *Client) fromTemplate(ctx context.Context, req CreateTaskRequest) (Creat
 		p := comp.Priority
 		req.Priority = &p
 	}
+	// The template's sandbox shape (model.Template.Sandbox) fills each
+	// dimension the request left at zero, one at a time: a filing that
+	// asks for more memory keeps the template's disk. Not on a backend
+	// that has no shape of its own (Config.SandboxShapeIgnored), where
+	// CreateTask would refuse the filing outright for a size nobody
+	// filing it stated (refuseIgnoredSandboxShape).
+	if !c.Config.SandboxShapeIgnored {
+		if req.SandboxCPUs == 0 {
+			req.SandboxCPUs = comp.Sandbox.CPUs
+		}
+		if req.SandboxMemoryMB == 0 {
+			req.SandboxMemoryMB = comp.Sandbox.MemoryMB
+		}
+		if req.SandboxDiskGB == 0 {
+			req.SandboxDiskGB = comp.Sandbox.DiskGB
+		}
+	}
 	if strings.TrimSpace(req.NetworkAccess) == "" {
 		req.NetworkAccess = string(comp.NetworkAccess)
 	}
@@ -807,7 +845,10 @@ type UpdateTemplateRequest struct {
 	Repo      *string   `json:"repo,omitempty"`
 	Base      *string   `json:"base,omitempty"`
 	Priority  *int      `json:"priority,omitempty"`
-	AutoMerge *bool     `json:"autoMerge,omitempty"`
+	// Sandbox replaces model.Template.Sandbox wholesale; {} clears it.
+	// Absent leaves it as it is.
+	Sandbox   *model.SandboxShape `json:"sandbox,omitempty"`
+	AutoMerge *bool               `json:"autoMerge,omitempty"`
 	// NetworkAccess edits what CreateTemplateRequest.NetworkAccess sets,
 	// with an empty string meaningful rather than ignored: it clears the
 	// template's own answer, so its firings go back to taking the
@@ -860,6 +901,11 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 	}
 	if req.Priority != nil && *req.Priority < 0 {
 		return Template{}, validationErrorf("priority must be a positive integer")
+	}
+	if req.Sandbox != nil {
+		if err := model.ValidateTemplateSandbox(*req.Sandbox); err != nil {
+			return Template{}, validationErrorf("%s", err)
+		}
 	}
 	if req.NetworkAccess != nil {
 		if err := validateNetworkAccess(*req.NetworkAccess); err != nil {
@@ -1046,6 +1092,9 @@ func (c *Client) UpdateTemplate(ctx context.Context, id string, req UpdateTempla
 				p := *req.Priority
 				t.Priority = &p
 			}
+		}
+		if req.Sandbox != nil {
+			t.Sandbox = *req.Sandbox
 		}
 		if req.AutoMerge != nil {
 			t.AutoMerge = *req.AutoMerge
