@@ -16,6 +16,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -81,22 +82,33 @@ func (s *Store) CarryPriorityToReviews(ctx context.Context, gatedID string, befo
 	}
 	var moved []string
 	for _, id := range ids {
-		changed := false
-		if err := s.UpdateTask(ctx, id, func(t *Task) error {
+		// LinkProposedBy also names every follow-up gatedID proposed, so
+		// a task that is not one of its reviews, or a review that stays
+		// where it is, aborts its write (errReviewPriorityUnchanged)
+		// rather than being written back as it was: putTask is not free
+		// of side effects (invalidateStaleGrantWait).
+		err := s.UpdateTask(ctx, id, func(t *Task) error {
 			if t.Origin.Reason != ReasonReview {
-				return nil
+				return errReviewPriorityUnchanged
 			}
 			p, ok := CarriedReviewPriority(t.Priority, before, after, slices.Contains(t.Tags, ReviewPriorityHandSetTag))
-			if ok {
-				t.Priority, changed = p, true
+			if !ok {
+				return errReviewPriorityUnchanged
 			}
+			t.Priority = p
 			return nil
-		}); err != nil {
+		})
+		if errors.Is(err, errReviewPriorityUnchanged) {
+			continue
+		}
+		if err != nil {
 			return moved, fmt.Errorf("carrying %s's priority to its review %s: %w", gatedID, id, err)
 		}
-		if changed {
-			moved = append(moved, id)
-		}
+		moved = append(moved, id)
 	}
 	return moved, nil
 }
+
+// errReviewPriorityUnchanged aborts CarryPriorityToReviews' write of a
+// task it leaves as it is.
+var errReviewPriorityUnchanged = errors.New("review priority unchanged")
