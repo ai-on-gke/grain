@@ -126,6 +126,9 @@ func handleGitHubBaseVerdict(ctx context.Context, deps Deps, run ConcludedGitHub
 	if !isGitHubBaseBranch(deps, run.Repo, run.Ref) {
 		return nil
 	}
+	if allowed, err := deps.Store.TargetRepos(ctx); err != nil || !model.RepoAllowed(allowed, run.Repo) {
+		return err
+	}
 	if ok, err := gitHubActionsJudges(ctx, deps.Store, run.Repo); err != nil || !ok {
 		return err
 	}
@@ -140,8 +143,12 @@ func handleGitHubBaseVerdict(ctx context.Context, deps Deps, run ConcludedGitHub
 		// no verdict about the tree, and nobody's repair.
 		return nil
 	}
-	_, err := fileOrUpdateGitHubBaseRepair(ctx, deps.Store, run, jobs, now)
-	return err
+	if _, err := fileOrUpdateGitHubBaseRepair(ctx, deps.Store, run, jobs, now); err != nil {
+		return err
+	}
+	return errors.Join(
+		noteRedGitHubBaseGoals(ctx, deps, run, jobs, now),
+		clearPipelineNotification(ctx, deps.Store, gitHubBaseNoVerdictSubject(run.Repo), model.PrincipalString(githubBaseRepairer)))
 }
 
 // meetGitHubBaseGoals meets every open nightly-green goal on run's
@@ -150,6 +157,54 @@ func handleGitHubBaseVerdict(ctx context.Context, deps Deps, run ConcludedGitHub
 // such a goal takes (nightlyGreenReading cannot tell one from a fork's
 // pull request opened from its own main).
 func meetGitHubBaseGoals(ctx context.Context, deps Deps, run ConcludedGitHubWorkflowRun, now time.Time) error {
+	branch := strings.TrimPrefix(run.Ref, "refs/heads/")
+	return applyGitHubBaseGoalReading(ctx, deps, run, func(g model.TaskGoal, concluded time.Time) (goalReading, bool) {
+		if !concluded.After(g.DeclaredAt) {
+			return goalReading{}, false
+		}
+		return goalReading{
+			met:      true,
+			measure:  "green",
+			evidence: fmt.Sprintf("`%s` run %d on `%s` (%s) is green", g.Spec.Workflow, run.RunID, branch, shortSHA(run.HeadSHA)),
+		}, true
+	}, now)
+}
+
+// noteRedGitHubBaseGoals records a verified red default-branch push on
+// every open nightly-green goal for run's workflow and repository, so real
+// default-branch failures move g.Measure (and clear g.MetAt if the branch
+// broke again during a running repair's pause grace) while fork runs cannot.
+func noteRedGitHubBaseGoals(ctx context.Context, deps Deps, run ConcludedGitHubWorkflowRun, jobs []model.GitHubCIJob,
+	now time.Time) error {
+
+	branch := strings.TrimPrefix(run.Ref, "refs/heads/")
+	var red []string
+	for _, j := range jobs {
+		if j.Failed() {
+			red = append(red, j.JobName)
+		}
+	}
+	sort.Strings(red)
+	measure := strings.Join(red, ",")
+	if measure == "" {
+		measure = "red"
+	}
+	what := fmt.Sprintf("`%s` run %d on `%s` (%s)", run.WorkflowName, run.RunID, branch, shortSHA(run.HeadSHA))
+	evidence := what + " failed"
+	if len(red) > 0 {
+		evidence = fmt.Sprintf("%s has %d job(s) not green: %s", what, len(red), strings.Join(red, ", "))
+	}
+	return applyGitHubBaseGoalReading(ctx, deps, run, func(g model.TaskGoal, concluded time.Time) (goalReading, bool) {
+		if concluded.Before(g.DeclaredAt) {
+			return goalReading{}, false
+		}
+		return goalReading{measure: measure, evidence: evidence}, true
+	}, now)
+}
+
+func applyGitHubBaseGoalReading(ctx context.Context, deps Deps, run ConcludedGitHubWorkflowRun,
+	read func(g model.TaskGoal, concluded time.Time) (goalReading, bool), now time.Time) error {
+
 	goals, err := deps.Store.OpenTaskGoals(ctx)
 	if err != nil {
 		return err
@@ -158,11 +213,14 @@ func meetGitHubBaseGoals(ctx context.Context, deps Deps, run ConcludedGitHubWork
 	if run.CompletedAt != nil {
 		concluded = *run.CompletedAt
 	}
-	branch := strings.TrimPrefix(run.Ref, "refs/heads/")
 	var errs []error
 	for _, g := range goals {
 		if g.Kind != model.GoalNightlyGreen || !strings.EqualFold(g.Spec.Repo, run.Repo.String()) ||
-			!strings.EqualFold(g.Spec.Workflow, run.WorkflowName) || !concluded.After(g.DeclaredAt) {
+			!strings.EqualFold(g.Spec.Workflow, run.WorkflowName) {
+			continue
+		}
+		reading, ok := read(g, concluded)
+		if !ok {
 			continue
 		}
 		task, err := deps.Store.GetTask(ctx, g.TaskID)
@@ -175,9 +233,7 @@ func meetGitHubBaseGoals(ctx context.Context, deps Deps, run ConcludedGitHubWork
 			errs = append(errs, err)
 			continue
 		}
-		errs = append(errs, actOnGoal(ctx, deps, *task, state, g, goalReading{met: true, measure: "green",
-			evidence: fmt.Sprintf("`%s` run %d on `%s` (%s) is green", g.Spec.Workflow, run.RunID, branch,
-				shortSHA(run.HeadSHA))}, now))
+		errs = append(errs, actOnGoal(ctx, deps, *task, state, g, reading, now))
 	}
 	return errors.Join(errs...)
 }
@@ -217,6 +273,10 @@ func reconcileGitHubBaseRepairs(ctx context.Context, deps Deps, now time.Time) e
 	if deps.Store == nil {
 		return nil
 	}
+	allowedList, err := deps.Store.TargetRepos(ctx)
+	if err != nil {
+		return err
+	}
 	configs, err := deps.Store.ListRepoConfigs(ctx)
 	if err != nil {
 		return err
@@ -246,13 +306,17 @@ func reconcileGitHubBaseRepairs(ctx context.Context, deps Deps, now time.Time) e
 	var errs []error
 	for _, k := range keys {
 		repo := repos[k]
-		errs = append(errs, reconcileGitHubBaseRepair(ctx, deps.Store, repo, now),
-			reconcileGitHubBaseNoVerdict(ctx, deps.Store, repo, now))
+		allowed := model.RepoAllowed(allowedList, repo)
+		errs = append(errs, reconcileGitHubBaseRepair(ctx, deps.Store, repo, allowed, now),
+			reconcileGitHubBaseNoVerdict(ctx, deps.Store, repo, allowed, now))
 	}
 	return errors.Join(errs...)
 }
 
-func reconcileGitHubBaseRepair(ctx context.Context, store *model.Store, repo model.RepoRef, now time.Time) error {
+func reconcileGitHubBaseRepair(ctx context.Context, store *model.Store, repo model.RepoRef, allowed bool, now time.Time) error {
+	if !allowed {
+		return clearPipelineNotification(ctx, store, gitHubBaseRepairSubject(repo), model.PrincipalString(githubBaseRepairer))
+	}
 	repair, err := openTaggedRepair(ctx, store, model.GitHubBaseRepairTag(repo))
 	if err != nil {
 		return err
@@ -321,9 +385,12 @@ func gitHubBaseVerdicts(ctx context.Context, store *model.Store, repo model.Repo
 	return
 }
 
-func reconcileGitHubBaseNoVerdict(ctx context.Context, store *model.Store, repo model.RepoRef, now time.Time) error {
+func reconcileGitHubBaseNoVerdict(ctx context.Context, store *model.Store, repo model.RepoRef, allowed bool, now time.Time) error {
 	clear := func() error {
 		return clearPipelineNotification(ctx, store, gitHubBaseNoVerdictSubject(repo), model.PrincipalString(githubBaseRepairer))
+	}
+	if !allowed {
+		return clear()
 	}
 	if ok, err := gitHubActionsJudges(ctx, store, repo); err != nil || !ok {
 		if err != nil {

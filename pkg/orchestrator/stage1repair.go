@@ -337,10 +337,35 @@ func fileOrUpdateRepair(ctx context.Context, store *model.Store, kind repairKind
 	return id, nil
 }
 
+func isGitHubBaseRepairGoal(g model.TaskGoal) bool {
+	return g.DeclaredBy == model.PrincipalString(githubBaseRepairer) || isGitHubGatingWorkflow(g.Spec.Workflow, "")
+}
+
 // nightlyGreenReading is a nightly-green goal's check: the newest Stage 1
 // run of the workflow recorded since the goal was declared, met when every
 // job of it passed.
 func nightlyGreenReading(ctx context.Context, store *model.Store, g model.TaskGoal) (goalReading, error) {
+	if isGitHubBaseRepairGoal(g) {
+		// A gating workflow runs on pull requests too, and a fork's pull
+		// request opened from its own main records job rows on "main" that
+		// github_ci_job cannot tell from the default branch's. Only a run
+		// handleGitHubBaseVerdict saw pushed to the default branch moves or
+		// meets this goal (meetGitHubBaseGoals / noteRedGitHubBaseGoals):
+		// unverified job rows never reset g.Measure's progress limit and never
+		// clear g.MetAt while a running repair finishes its pause grace.
+		if g.MetAt != nil {
+			return goalReading{met: true, measure: "green", evidence: g.Evidence}, nil
+		}
+		measure := g.Measure
+		if measure == "" {
+			measure = "awaiting-push"
+		}
+		evidence := g.Evidence
+		if evidence == "" {
+			evidence = fmt.Sprintf("awaiting a green `%s` push on %s's default branch", g.Spec.Workflow, g.Spec.Repo)
+		}
+		return goalReading{measure: measure, evidence: evidence}, nil
+	}
 	jobs, err := store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: g.Spec.Repo, Since: g.DeclaredAt, Limit: 500})
 	if err != nil {
 		return goalReading{}, err
@@ -384,17 +409,6 @@ func nightlyGreenReading(ctx context.Context, store *model.Store, g model.TaskGo
 	if len(red) > 0 {
 		return goalReading{measure: strings.Join(red, ","),
 			evidence: fmt.Sprintf("%s has %d job(s) not green: %s", what, len(red), strings.Join(red, ", "))}, nil
-	}
-	if g.DeclaredBy == model.PrincipalString(githubBaseRepairer) || isGitHubGatingWorkflow(g.Spec.Workflow, "") {
-		// A gating workflow runs on pull requests too, and a fork's pull
-		// request opened from its own main records job rows on "main" that
-		// nothing here tells from the default branch's. Only a run
-		// handleGitHubBaseVerdict saw pushed to the default branch meets
-		// this goal (meetGitHubBaseGoals). The goal names the workflow by
-		// its display name, which need not say "tests" when its file does,
-		// so a default-branch repair's goal is told by who declared it.
-		return goalReading{measure: "green-unverified",
-			evidence: what + " is green, but only a run grain saw pushed to the default branch closes this"}, nil
 	}
 	return goalReading{met: true, measure: "green", evidence: what + " is green"}, nil
 }

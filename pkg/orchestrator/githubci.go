@@ -588,6 +588,11 @@ func pollConcludedGitHubWorkflowRuns(ctx context.Context, deps Deps, now time.Ti
 				}
 			}
 		}
+		if ok, err := gitHubActionsJudges(ctx, deps.Store, repo); err == nil && ok {
+			if def, err := deps.Client.DefaultBranch(repo.StoredOwner(), repo.Name); err == nil && def != "" {
+				branches = appendUniquePollBranch(branches, def)
+			}
+		}
 		for _, branch := range branches {
 			if err := ctx.Err(); err != nil {
 				errs = append(errs, err)
@@ -722,6 +727,13 @@ func gitHubWorkflowRunPollTargets(ctx context.Context, store *model.Store) ([]gi
 		for _, row := range brel {
 			if t := add(row.Repo); t != nil {
 				t.branches = appendUniquePollBranch(t.branches, row.Branch)
+			}
+		}
+	}
+	if configs, err := store.ListRepoConfigs(ctx); err == nil {
+		for _, c := range configs {
+			if c.CIMode == model.CIModeGitHub {
+				add(c.Repo)
 			}
 		}
 	}

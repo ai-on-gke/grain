@@ -16,7 +16,9 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -451,5 +453,184 @@ func TestADefaultBranchRepairOfARenamedWorkflowIgnoresForkRuns(t *testing.T) {
 	}
 	if st, _ := store.State(ctx, ids[0]); st == model.StateClosed {
 		t.Fatalf("a fork's green pull request run closed repair %s of a workflow named Go", ids[0])
+	}
+}
+
+// A running default-branch repair whose goal is met by a green push stays met
+// across reconcileTaskGoals cycles -- even when a fork's pull request on main
+// fails during the pause grace -- cancels its run at the end of the grace, and
+// closes once the run exits; fork runs also never reset ResumesSinceProgress.
+func TestARunningDefaultBranchRepairClosesAfterPauseGraceEvenWithForkRuns(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	deps := onGitHubActions(t, ctx, store, repo)
+	deps.Config.TaskCancellers = NewTaskCancellers()
+	now := time.Date(2026, 11, 11, 18, 0, 0, 0, time.UTC)
+
+	red, redJobs := testsRun(t, ctx, store, repo, 50, "main", "failure", now, map[string]string{"go unit": "failure"})
+	if err := handleGitHubBaseVerdict(ctx, deps, red, redJobs, now); err != nil {
+		t.Fatal(err)
+	}
+	repairID := baseRepairs(t, ctx, store, repo)[0]
+
+	// Attempt 1 finishes without making progress; fork runs on "main" must not
+	// reset ResumesSinceProgress, while a real push failing a different job does.
+	run1At := now.Add(5 * time.Minute)
+	if err := store.StartRun(ctx, model.Run{ID: repairID + "-1", TaskID: repairID, Attempt: 1, StartedAt: run1At}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, repairID+"-1", run1At.Add(time.Minute), "failed", "no progress"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileTaskGoals(ctx, deps, run1At.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	g, err := store.TaskGoal(ctx, repairID)
+	if err != nil || g == nil || g.ResumesSinceProgress != 1 {
+		t.Fatalf("ResumesSinceProgress after fruitless run = %+v (%v), want 1", g, err)
+	}
+	forkRedAt := run1At.Add(3 * time.Minute)
+	forkRed, _ := testsRun(t, ctx, store, repo, 51, "main", "failure", forkRedAt, map[string]string{"lint": "failure"})
+	forkRed.Event, forkRed.HeadRepo = "pull_request", "mallory/widgets"
+	if err := reconcileTaskGoals(ctx, deps, forkRedAt); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ = store.TaskGoal(ctx, repairID); g.ResumesSinceProgress != 1 {
+		t.Fatalf("fork PR failure reset ResumesSinceProgress to %d, want 1", g.ResumesSinceProgress)
+	}
+	pushRedAt := run1At.Add(4 * time.Minute)
+	pushRed, pushRedJobs := testsRun(t, ctx, store, repo, 52, "main", "failure", pushRedAt, map[string]string{"lint": "failure"})
+	if err := handleGitHubBaseVerdict(ctx, deps, pushRed, pushRedJobs, pushRedAt); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ = store.TaskGoal(ctx, repairID); g.ResumesSinceProgress != 0 || g.Measure != "lint" {
+		t.Fatalf("real red push left goal %+v, want Measure=lint and ResumesSinceProgress=0", g)
+	}
+
+	// Attempt 2 is running when main goes green.
+	run2At := now.Add(15 * time.Minute)
+	if err := store.StartRun(ctx, model.Run{ID: repairID + "-2", TaskID: repairID, Attempt: 2, StartedAt: run2At}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	runCtx, cancel := context.WithCancelCause(ctx)
+	unregister := deps.Config.TaskCancellers.register(repairID, cancel)
+	defer unregister()
+
+	greenAt := now.Add(20 * time.Minute)
+	green, greenJobs := testsRun(t, ctx, store, repo, 53, "main", "success", greenAt, map[string]string{"go unit": "success", "lint": "success"})
+	if err := handleGitHubBaseVerdict(ctx, deps, green, greenJobs, greenAt); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ = store.TaskGoal(ctx, repairID); g.MetAt == nil {
+		t.Fatalf("green push while repair was running did not mark goal met: %+v", g)
+	}
+
+	// During PauseGracePeriod a fork's red PR on "main" lands and reconcileTaskGoals ticks:
+	// MetAt must stay set and the live run must not be cancelled yet.
+	midGrace := greenAt.Add(model.PauseGracePeriod / 2)
+	forkDuringGrace, _ := testsRun(t, ctx, store, repo, 54, "main", "failure", midGrace, map[string]string{"go unit": "failure"})
+	forkDuringGrace.Event, forkDuringGrace.HeadRepo = "pull_request", "mallory/widgets"
+	if err := reconcileTaskGoals(ctx, deps, midGrace); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ = store.TaskGoal(ctx, repairID); g.MetAt == nil {
+		t.Fatalf("reconcileTaskGoals during pause grace wiped MetAt: %+v", g)
+	}
+	if context.Cause(runCtx) != nil {
+		t.Fatalf("live run cancelled before PauseGracePeriod elapsed: %v", context.Cause(runCtx))
+	}
+
+	// Once PauseGracePeriod elapses, reconcileTaskGoals stops the live run, and
+	// once the run exits the repair closes.
+	afterGrace := greenAt.Add(model.PauseGracePeriod)
+	if err := reconcileTaskGoals(ctx, deps, afterGrace); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(context.Cause(runCtx), errGoalMet) {
+		t.Fatalf("live run cancel cause = %v, want %v", context.Cause(runCtx), errGoalMet)
+	}
+	unregister()
+	if err := store.FinishRun(ctx, repairID+"-2", afterGrace, model.InterruptedOutcome, "goal met"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileTaskGoals(ctx, deps, afterGrace.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := store.State(ctx, repairID); st != model.StateClosed {
+		t.Fatalf("repair %s state after live run exited = %s, want closed", repairID, st)
+	}
+}
+
+// A ci_mode: github repository is polled without a .grain/ declaration while
+// TargetRepos allows it; once excluded from TargetRepos, it is neither polled
+// nor given repairs or default-branch notifications.
+func TestADefaultBranchRepairRespectsTargetReposAndPollsGitHubRepos(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	other := model.RepoRef{Owner: "acme", Name: "gadgets"}
+	deps := onGitHubActions(t, ctx, store, repo)
+	now := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+
+	targets, err := gitHubWorkflowRunPollTargets(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(targets, func(p gitHubWorkflowRunPollTarget) bool { return p.repo.Same(repo) }) {
+		t.Fatalf("ci_mode: github repo %s missing from poll targets %+v", repo, targets)
+	}
+
+	// Raise both notifications while allowed, then exclude repo from TargetRepos.
+	red, redJobs := testsRun(t, ctx, store, repo, 80, "main", "failure", now, map[string]string{"go unit": "failure"})
+	if err := handleGitHubBaseVerdict(ctx, deps, red, redJobs, now); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 8 {
+		at := now.Add(time.Duration(i+1) * 50 * time.Minute)
+		testsRun(t, ctx, store, repo, int64(81+i), "main", "cancelled", at, map[string]string{"go unit": "cancelled"})
+	}
+	checkAt := now.Add(7 * time.Hour)
+	if err := reconcileGitHubBaseRepairs(ctx, deps, checkAt); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := store.OpenNotification(ctx, gitHubBaseRepairSubject(repo)); n == nil {
+		t.Fatal("expected base-red-unattended while repo is allowed")
+	}
+	if n, _ := store.OpenNotification(ctx, gitHubBaseNoVerdictSubject(repo)); n == nil {
+		t.Fatal("expected base-no-verdict while repo is allowed")
+	}
+
+	if err := store.SetTargetRepos(ctx, []string{other.String()}); err != nil {
+		t.Fatal(err)
+	}
+	targets, err = gitHubWorkflowRunPollTargets(ctx, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(targets, func(p gitHubWorkflowRunPollTarget) bool { return p.repo.Same(repo) }) {
+		t.Fatalf("off-TargetRepos repo %s still in poll targets %+v", repo, targets)
+	}
+	if err := reconcileGitHubBaseRepairs(ctx, deps, checkAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := store.OpenNotification(ctx, gitHubBaseRepairSubject(repo)); n != nil {
+		t.Errorf("base-red-unattended still open after leaving TargetRepos: %+v", n)
+	}
+	if n, _ := store.OpenNotification(ctx, gitHubBaseNoVerdictSubject(repo)); n != nil {
+		t.Errorf("base-no-verdict still open after leaving TargetRepos: %+v", n)
+	}
+
+	// A new off-TargetRepos repo on GitHub Actions never gets a repair filed.
+	excluded := model.RepoRef{Owner: "acme", Name: "offscope"}
+	onGitHubActions(t, ctx, store, excluded)
+	exRed, exJobs := testsRun(t, ctx, store, excluded, 99, "main", "failure", checkAt, map[string]string{"go unit": "failure"})
+	if err := handleGitHubBaseVerdict(ctx, deps, exRed, exJobs, checkAt); err != nil {
+		t.Fatal(err)
+	}
+	if ids := baseRepairs(t, ctx, store, excluded); len(ids) != 0 {
+		t.Fatalf("off-TargetRepos repo %s got repairs %v", excluded, ids)
 	}
 }
