@@ -338,7 +338,8 @@ x-notes: anything                   # proposed: x-* keys are ignored
 - **`env: ["*"]`** admits any variable the daemon sends except a deny set
   frozen in the contract: the identity variables, `LD_*`, and the
   interpreter and shell injection variables (`BASH_ENV`, `ENV`,
-  `NODE_OPTIONS`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`). A
+  `NODE_OPTIONS`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`),
+  which feature `env_deny_v2` widens (below). A
   host owner who wants a closed list keeps writing names. A path-like value
   must still sit under `paths_under`; `set_env` and `pass_env` still cannot
   be overridden. For an agents-only host this gives the daemon nothing it
@@ -360,13 +361,20 @@ x-notes: anything                   # proposed: x-* keys are ignored
   adds them (`envDenyV2`: `DYLD_*`, `GCONV_PATH`, `BASHOPTS`, `SHELLOPTS`,
   `PROMPT_COMMAND`, `PS4`, `ZDOTDIR`, `NODE_PATH`, `PYTHONHOME`,
   `PYTHONUSERBASE`, `PERL5LIB`, `PERLLIB`, `PERL5DB`, `RUBYLIB`,
-  `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, `_JAVA_OPTIONS`, `GIT_*`) on top
-  of the frozen v1 set, which stays as it is. Growing the set is the one
+  `PYTHONWARNINGS`, `CLASSPATH`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`,
+  `_JAVA_OPTIONS`, `GIT_*`, `XDG_CONFIG_HOME`) on top of the frozen v1
+  set, which stays as it is. `PYTHONWARNINGS` is there because the
+  interpreter imports a filter's dotted category at startup (with
+  `BROWSER`, a stdlib-only way to run a command), and `XDG_CONFIG_HOME`
+  because its `git/config` is git's global config, the same reach as
+  `GIT_CONFIG_*`. (Bash's exported functions, `BASH_FUNC_name%%`, need no
+  entry: no valid env name contains `%`.) Growing the set is the one
   change to `"*"` that needs no daemon change: the daemon sends none of
   these names to codex, claude or agy (their `HostdEnv`, held by
   `TestHostdEnvSendsNoDeniedNameButAgyHome`), and an exact name in `env`
   admits any of them on every host. The cost falls on a host owner who
-  hand-wrote `"*"` for a capability that needs one of them: after the
+  hand-wrote `"*"` for a capability that needs one of them -- grain's own
+  `git` server, placed on a host, reads `GIT_REPO_TOKEN` -- after the
   upgrade the start is refused naming the variable, and listing it by exact
   name fixes it. Generic command variables (`EDITOR`, `PAGER`,
   `SSH_ASKPASS`) and package-manager configuration (`npm_config_*`,
@@ -741,10 +749,13 @@ env_deny_v2 PERL5LIB
 env_deny_v2 PERLLIB
 env_deny_v2 PERL5DB
 env_deny_v2 RUBYLIB
+env_deny_v2 PYTHONWARNINGS
+env_deny_v2 CLASSPATH
 env_deny_v2 JAVA_TOOL_OPTIONS
 env_deny_v2 JDK_JAVA_OPTIONS
 env_deny_v2 _JAVA_OPTIONS
 env_deny_v2 GIT_*
+env_deny_v2 XDG_CONFIG_HOME
 max_frame 1048576
 max_stage_data 524288
 ```
