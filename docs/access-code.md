@@ -509,9 +509,10 @@ also records who presented it, as the principal `access-code:<name>`
 The daemon also serves its API on a unix socket,
 `<data-dir>/api/grain.sock`, in a directory only its own account may
 enter (mode `0700`). `-api-socket` names another path, in a directory
-of its own (a new one, or one only the daemon's account owns and may
-write: a shared directory such as `/tmp` is refused rather than
-restricted), and `none` turns it off. For each connection the daemon asks the kernel which account
+of its own (a new one, or one the daemon's account owns and that holds
+nothing but the socket: a shared directory such as `/tmp`, or one with
+other files in it such as `/run`, `$HOME` or the data directory, is
+refused rather than restricted), and `none` turns it off. For each connection the daemon asks the kernel which account
 connected (`SO_PEERCRED`) and maps that uid to a person:
 
 - `-host-accounts 1000=alice@example.com,1001=bob@example.com`

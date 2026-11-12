@@ -281,4 +281,24 @@ func TestAPISocketKeepsGrantedSearchAndRefusesASharedDirectory(t *testing.T) {
 	if fi, _ := os.Stat(shared); fi.Mode().Perm() != 0o777 || fi.Mode()&os.ModeSticky == 0 {
 		t.Errorf("the shared directory was changed to %v", fi.Mode())
 	}
+
+	// A directory of this account's own that holds anything besides the
+	// socket -- the data directory, $HOME, /run as root -- is refused and
+	// left as it was, not tightened to 0710 under whatever else uses it.
+	busy := filepath.Join(dir, "busy")
+	if err := os.Mkdir(busy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(busy, "grain.db"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ln, err := ui.ListenAPISocket(filepath.Join(busy, "grain.sock")); err == nil {
+		ln.Close()
+		t.Fatal("ListenAPISocket in a directory holding other files succeeded, want it refused")
+	} else if !strings.Contains(err.Error(), "holds other files") {
+		t.Errorf("refusal = %v, want it to say the directory holds other files", err)
+	}
+	if fi, _ := os.Stat(busy); fi.Mode().Perm() != 0o755 {
+		t.Errorf("the busy directory was changed to %v, want 0755 left alone", fi.Mode())
+	}
 }

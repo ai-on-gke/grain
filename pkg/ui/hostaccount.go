@@ -252,7 +252,7 @@ func ListenAPISocket(path string) (net.Listener, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	if err := restrictAPISocketDir(dir); err != nil {
+	if err := restrictAPISocketDir(dir, filepath.Base(path)); err != nil {
 		return nil, err
 	}
 	if fi, err := os.Lstat(path); err == nil {
@@ -286,9 +286,12 @@ func ListenAPISocket(path string) (net.Listener, error) {
 // Two things it must not do (docs/test-runs/2026-11-11-caller-identity.md,
 // F5): chmod 0700 over a directory an operator had granted another account
 // search on with setfacl, which zeroes the ACL mask and so revoked that
-// grant on every restart; and chmod a directory somebody else shares (an
-// -api-socket in /tmp or /run, say), which it now refuses instead.
-func restrictAPISocketDir(dir string) error {
+// grant on every restart; and chmod a directory anything else lives in --
+// one somebody else shares (an -api-socket in /tmp), or one that holds
+// other files (/run as root, $HOME or the data directory itself), whose
+// mode was never this daemon's to set. Both are refused instead: the
+// directory must hold nothing but the socket, sock.
+func restrictAPISocketDir(dir, sock string) error {
 	fi, err := os.Stat(dir)
 	if err != nil {
 		return err
@@ -297,6 +300,16 @@ func restrictAPISocketDir(dir string) error {
 	if fi.Mode()&os.ModeSticky != 0 || perm&0o002 != 0 || !ownedByThisAccount(fi) {
 		return fmt.Errorf("%s is shared with other accounts (mode %v): put the API socket in a directory of its own "+
 			"(-api-socket <dir>/grain.sock, with <dir> new or this account's alone)", dir, fi.Mode())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name() != sock {
+			return fmt.Errorf("%s holds other files (%s, ...): put the API socket in a directory of its own "+
+				"(-api-socket <dir>/grain.sock, with <dir> new or holding only the socket)", dir, e.Name())
+		}
 	}
 	// Group search is kept, so the ACL mask a setfacl -m u:<account>:x
 	// leaves stays --x; group read and write, and everything for others,
