@@ -491,7 +491,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"github-sandbox"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{model.GitHubSandboxRepoGrant}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -502,13 +502,18 @@ func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 	if read.Configured {
 		t.Fatalf("Configured = true, want false: no settings row was ever saved")
 	}
+	found := false
 	for _, status := range read.Capabilities {
-		if status.ID != "github-sandbox" {
+		if status.ID != model.GitHubSandboxRepoGrant {
 			continue
 		}
+		found = true
 		if !reflect.DeepEqual(status.DefaultRepos, []string{"acme/widgets"}) {
-			t.Fatalf("self-debug DefaultRepos = %v, want [acme/widgets]", status.DefaultRepos)
+			t.Fatalf("github-sandbox DefaultRepos = %v, want [acme/widgets]", status.DefaultRepos)
 		}
+	}
+	if !found {
+		t.Fatalf("Settings.Capabilities has no row for %s: %+v", model.GitHubSandboxRepoGrant, read.Capabilities)
 	}
 }
 
