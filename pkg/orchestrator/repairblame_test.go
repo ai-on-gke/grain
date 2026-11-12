@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -267,4 +268,42 @@ func TestOrdinaryMergeRecordsNoBlame(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantNoBlame(t, store, "20", "10")
+}
+
+// countingBlameClient counts MergedPullRequestForCommit calls.
+type countingBlameClient struct {
+	blameClient
+	lookups *int
+}
+
+func (c countingBlameClient) MergedPullRequestForCommit(owner, name, sha string) (*github.PullRequest, error) {
+	*c.lookups++
+	return c.blameClient.MergedPullRequestForCommit(owner, name, sha)
+}
+
+// Fixes-commit: trailers are agent-written and each costs a forge read
+// in the sync cycle, so a repair naming many has only the first few
+// looked up.
+func TestRepairFixesCommitLookupsAreCapped(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	repair := model.Task{ID: "20", Title: "Fix the red Stage 1 (Tests) at bbbb0000", Tags: []string{Stage1RepairTag(blameRepo)}}
+	ref := putBlameFixture(t, store, repair)
+	msg := "fix: it\n\nFixes-commit: bbbb000\n"
+	for i := 0; i < 3*maxBlameCommitLookups; i++ {
+		msg += fmt.Sprintf("Fixes-commit: %07x\n", 0xd000000+i)
+	}
+	lookups := 0
+	client := countingBlameClient{
+		blameClient: blameClient{prCommits: []github.Commit{{SHA: "f1", Message: msg}}, mergedBy: map[string]int{"bbbb000": 5}},
+		lookups:     &lookups,
+	}
+	if err := recordRepairBlame(ctx, store, client, repair, ref, "main"); err != nil {
+		t.Fatal(err)
+	}
+	if lookups != maxBlameCommitLookups {
+		t.Errorf("looked up %d commits, want %d", lookups, maxBlameCommitLookups)
+	}
+	wantBlame(t, store, "20", "10")
 }
