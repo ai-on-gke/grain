@@ -119,12 +119,20 @@ func accessRequestDemoHandler(app http.Handler, store *model.Store) http.Handler
 			return
 		}
 		var body struct {
-			Summary string                    `json:"summary"`
-			Reason  string                    `json:"reason"`
-			Items   []model.AccessRequestItem `json:"items"`
+			Summary string `json:"summary"`
+			Reason  string `json:"reason"`
+			Items   any    `json:"items"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Items) == 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "the body is {\"summary\": ..., \"reason\": ..., \"items\": [...]}", http.StatusBadRequest)
+			return
+		}
+		// The items are checked the way a run's request_access call is
+		// (model.ParseAccessRequestItems), so the card is only ever shown
+		// a request a real run could have parked on.
+		items, err := model.ParseAccessRequestItems(body.Items)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		ctx := r.Context()
@@ -156,8 +164,8 @@ func accessRequestDemoHandler(app http.Handler, store *model.Store) http.Handler
 			o.PendingQuestionCommentID = &commentID
 			o.PendingAccess = &model.PendingAccessRequest{
 				Summary:   summary,
-				Reason:    body.Reason,
-				Items:     body.Items,
+				Reason:    strings.TrimSpace(body.Reason),
+				Items:     items,
 				CreatedAt: now,
 			}
 		}); err != nil {

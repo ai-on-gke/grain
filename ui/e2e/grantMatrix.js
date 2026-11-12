@@ -63,9 +63,6 @@ const KNOWN_GAPS = {
   // task pane (2026-11-11 run; follow-up filed from grain/task-4401).
   "https://grain.dev/capabilities/api#ci:read *": "4401 follow-up",
   "https://grain.dev/capabilities/api#memory *": "4401 follow-up",
-  // On task/session surfaces without repos (settings-defaults, repo-defaults)
-  // repo#read is listed disabled as CI-only; on repo-ci it is grantable;
-  // kept only for task-pane if needed, let's check live!
   // A scope set limited to some repositories: check passes a repo outside
   // them, the write refuses it.
   "https://grain.dev/capabilities/api#ops/triage full": "4401 follow-up",
@@ -133,18 +130,24 @@ const EXPECTED_REFUSALS = {
 };
 
 // DIRECTOR_FORBIDDEN_SCOPES mirrors pkg/model/director_floor.go's Tier 3
-// floor on the standing director session.
+// floor on the standing director session (directorForbiddenAPIScopes),
+// plus the built-in grain/operator preset (model.DefaultAccessRole), which
+// reaches merge:force and so is refused too (director_floor_test.go). The
+// self-upgrade preset reaches only deployment:* and is not refused.
 const DIRECTOR_FORBIDDEN_SCOPES = new Set([
   "merge:force",
   "settings:write",
   "secrets:write",
   "connections:write",
   "repos:write",
-  "self-upgrade",
-  "grain/self-upgrade",
-  "operator",
   "grain/operator",
 ]);
+
+// DIRECTOR_FLOOR_REFUSAL is the floor's own wording
+// (model.DirectorFloorRefusal). It has to be this specific: /director/i
+// matches the Director session page's own heading, so a refusal check on
+// it passed whether or not anything was refused.
+const DIRECTOR_FLOOR_REFUSAL = /never grants a director session/;
 
 export function expectedRefusal(ref, variant, surface = null) {
   if (surface?.kind === "ci") {
@@ -164,7 +167,7 @@ export function expectedRefusal(ref, variant, surface = null) {
   }
   if (surface?.id === "director" && ref.startsWith(API_PREFIX)) {
     const scope = ref.slice(API_PREFIX.length);
-    if (DIRECTOR_FORBIDDEN_SCOPES.has(scope)) return /director/i;
+    if (DIRECTOR_FORBIDDEN_SCOPES.has(scope)) return DIRECTOR_FLOOR_REFUSAL;
   }
   return lookup(EXPECTED_REFUSALS, ref, variant) || null;
 }
