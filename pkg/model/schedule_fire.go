@@ -17,6 +17,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -727,6 +728,30 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 	return ScheduleFiring{TaskID: id}, nil
 }
 
+// withDeclaredScheduleGrants is the grants a template-backed schedule
+// keeps when its copy of tmplGrants is refreshed: the template's, then
+// each of the schedule's current grants a repository's schedule
+// declaration (.grain/schedules/<name>.yml) gave it that the template
+// does not already grant. Those are the schedule's own, not a copy of the
+// template's -- the declaration sync writes them, with the file as their
+// Via, and removes them when the file does -- so the refresh a firing
+// does must not drop them: it did, and every firing after the first was
+// filed without them (ComposeScheduleTask files the schedule's own grants
+// beside the template's).
+func withDeclaredScheduleGrants(tmplGrants, current []Grant) []Grant {
+	out := slices.Clone(tmplGrants)
+	for _, g := range current {
+		if !strings.HasPrefix(string(g.Via), ".grain/schedules/") {
+			continue
+		}
+		if slices.ContainsFunc(out, func(have Grant) bool { return have.Capability == g.Capability }) {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
 // syncTemplateCache copies tmpl's content over sc's display cache
 // (Schedule.TemplateID's own doc comment): what a firing does after it
 // files, and what ResyncTemplateSchedules does when the template itself
@@ -735,7 +760,7 @@ func (sc *Schedule) syncTemplateCache(tmpl Template) {
 	sc.Title, sc.Body = tmpl.FilledTitleBody()
 	sc.AutoMerge, sc.Reads, sc.Writes, sc.Grants, sc.CustomFields, sc.NetworkAccess, sc.NothingNeededAction, sc.KeepRunning, sc.Admission, sc.Hosting =
 		tmpl.AutoMerge, tmpl.Reads, tmpl.Writes,
-		tmpl.Grants, tmpl.CustomFields, tmpl.NetworkAccess, tmpl.NothingNeededAction, tmpl.KeepRunning, tmpl.Admission, tmpl.Hosting
+		withDeclaredScheduleGrants(tmpl.Grants, sc.Grants), tmpl.CustomFields, tmpl.NetworkAccess, tmpl.NothingNeededAction, tmpl.KeepRunning, tmpl.Admission, tmpl.Hosting
 	// Model is not part of that cache: it is the schedule's own
 	// choice, which beats the template's (Schedule.Model), and
 	// copying the template's over it would erase that choice.
@@ -781,6 +806,9 @@ func (s *Store) ResyncTemplateSchedules(ctx context.Context, tmpl Template) erro
 func (s *Store) putScheduleTask(ctx context.Context, comp Composition, tags []string,
 	now time.Time) (string, error) {
 
+	if err := refuseCompositionSandboxAboveMax(ctx, s.db, comp); err != nil {
+		return "", err
+	}
 	id, err := s.NewTaskID(ctx)
 	if err != nil {
 		return "", fmt.Errorf("allocating an id for %q: %w", comp.Title, err)

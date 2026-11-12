@@ -665,7 +665,10 @@ import "strconv"
 // the default host), which every other repo-keyed table already holds,
 // for rows their schedule or a target repo places on another host
 // (migrateStoredOwners, grain/task-4335).
-const SchemaVersion = 142
+// 143 adds `template`.`sandbox` (model.Template.Sandbox): the sandbox
+// shape every task filed from a template asks for, as JSON, empty for
+// none (grain/task-4591).
+const SchemaVersion = 143
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2235,6 +2238,7 @@ var Tables = []string{
   ` + "`admission`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`hosting`" + `            TEXT NOT NULL DEFAULT '',
   ` + "`skills`" + `             TEXT NOT NULL DEFAULT '',
+  ` + "`sandbox`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

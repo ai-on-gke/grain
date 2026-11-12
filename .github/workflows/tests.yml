@@ -141,7 +141,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-go-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -186,10 +186,7 @@ jobs:
 
       - name: Install sandbox guest dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bubblewrap expect zstd socat psmisc
+          ./scripts/ci-apt-install.sh bubblewrap expect zstd socat psmisc
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo git config --system user.name "grain-ci"
           sudo git config --system user.email "grain-ci@example.com"
@@ -212,7 +209,7 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/ui/... ./cmd/grain/... ./ui/e2e/...
+        run: ./scripts/run-go-tests.sh go test -race -timeout 35m ./pkg/ui/... ./cmd/grain/... ./ui/e2e/...
 
   go-e2e:
     name: go e2e
@@ -265,10 +262,7 @@ jobs:
 
       - name: Install sandbox guest dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bubblewrap expect zstd socat psmisc shellcheck
+          ./scripts/ci-apt-install.sh bubblewrap expect zstd socat psmisc shellcheck
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo sysctl -w kernel.yama.ptrace_scope=0 || true
           tmpsrc="$(mktemp -d)"
@@ -387,10 +381,7 @@ jobs:
 
       - name: Install sandbox guest dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bubblewrap expect zstd socat psmisc iproute2 iptables
+          ./scripts/ci-apt-install.sh bubblewrap expect zstd socat psmisc iproute2 iptables
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo git config --system user.name "grain-ci"
           sudo git config --system user.email "grain-ci@example.com"
@@ -531,10 +522,7 @@ jobs:
 
       - name: Install sandbox guest dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bubblewrap expect zstd socat psmisc iproute2 iptables
+          ./scripts/ci-apt-install.sh bubblewrap expect zstd socat psmisc iproute2 iptables
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo git config --system user.name "grain-ci"
           sudo git config --system user.email "grain-ci@example.com"
@@ -553,7 +541,7 @@ jobs:
             ./pkg/declschema/... ./pkg/demo/... ./pkg/designdoc/... ./pkg/dispatch/... \
             ./pkg/forge/... ./pkg/forkhead/... ./pkg/gcpsetup/... ./pkg/ghwebhook/... ./pkg/github/... ./pkg/gitproxy/... ./pkg/gitrefs/... \
             ./pkg/granule/... ./pkg/grit/... ./pkg/gritapi/... ./pkg/hostd/... ./pkg/hostinit/... ./pkg/hostscriptcli/... ./pkg/whererun/... ./pkg/workflows/... \
-            ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/installtrack/... ./pkg/jwks/... \
+            ./pkg/hosttop/... ./pkg/iapreconciler/... ./pkg/infrasig/... ./pkg/installtrack/... ./pkg/jwks/... \
             ./pkg/k8s/... ./pkg/kubectlgate/... ./pkg/lifecycle/... ./pkg/localexec/... ./pkg/mcp/... \
             ./pkg/mergelogins/... ./pkg/metrics/... ./pkg/modelproxy/... ./pkg/namespace/... ./pkg/nsclient/... ./pkg/objectstore/... ./pkg/pkgcache/... ./pkg/playbooks/... \
             ./pkg/policy/... ./pkg/portpick/... ./pkg/ports/... ./pkg/procgroup/... ./pkg/redact/... ./pkg/hub/... ./pkg/registryauth/... ./pkg/hubenv/... \
@@ -639,10 +627,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            iproute2 iptables dnsmasq-base e2fsprogs socat
+          ./scripts/ci-apt-install.sh iproute2 iptables dnsmasq-base e2fsprogs socat
 
       - name: Test
         working-directory: third_party/granule
@@ -744,9 +729,7 @@ jobs:
               printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
               sudo chmod +x /usr/sbin/policy-rc.d
             fi
-            sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-            sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql >/dev/null
+            ./scripts/ci-apt-install.sh postgresql >/dev/null
           fi
           ls /usr/lib/postgresql/*/bin/initdb
 
@@ -919,10 +902,11 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.ui-e2e == 'true'
     runs-on: ubuntu-latest
-    # The suite alone runs about 32 minutes now (887 tests, one worker per
+    # The suite alone runs about 41 minutes now (1150 tests, one worker per
     # two cores), and the frontend build and browser download come on top:
-    # at 35 a slow runner was cancelled mid-suite with no verdict at all.
-    timeout-minutes: 50
+    # at 35, and again at 50, a slow runner was cancelled mid-suite with no
+    # verdict at all.
+    timeout-minutes: 65
     concurrency:
       group: ${{ github.workflow }}-ui-e2e-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -989,8 +973,19 @@ jobs:
       - name: Build frontend
         run: make frontend
 
+      # --with-deps runs apt-get, which fails the whole job on one
+      # unreachable archive (see scripts/ci-apt-install.sh), so the
+      # download is retried with a growing pause.
       - name: Download the browsers the suite drives
-        run: make playwright-browsers
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if make playwright-browsers; then exit 0; fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "playwright-browsers: attempt $attempt of 5 failed; retrying in $((attempt * 20))s" >&2
+              sleep $((attempt * 20))
+            fi
+          done
+          exit 1
 
       - name: Test e2e
         run: |
@@ -1457,10 +1452,7 @@ jobs:
       - name: Configure /dev/kvm udev permissions
         run: |
           set -euo pipefail
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            iproute2 iptables nftables dnsmasq-base e2fsprogs socat openssh-client
+          ./scripts/ci-apt-install.sh iproute2 iptables nftables dnsmasq-base e2fsprogs socat openssh-client
           if [ ! -e /dev/kvm ]; then
             echo "/dev/kvm is not in this runner, so the suite below would skip rather than run. A green tick here would mean nothing." >&2
             exit 1

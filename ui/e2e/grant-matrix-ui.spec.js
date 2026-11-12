@@ -158,6 +158,14 @@ async function walkCell(page, request, grants, method, surface, onSaved) {
     return { outcome: "fail", variant, detail: "not offered in Add grant…" };
   }
   await item.first().click();
+  // An api row is a checkbox (menuitemcheckbox): the menu stays open
+  // after a pick, for the next one, and its backdrop covers the form
+  // until it is closed. A method row closes it itself.
+  if (ref.startsWith(API_REF)) {
+    await expect(item.first()).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("[data-open-popover]")).toHaveCount(0);
+  }
   if (refusal) {
     await expect(grants.getByText(refusal).first()).toBeVisible();
     await expect(heldLocator(grants, ref)).toHaveCount(0);
@@ -291,15 +299,16 @@ test("every method is given and removed through the task pane's Add grant…", a
         return grantsOf();
       }),
     );
-    if (cell.outcome === "fail") {
-      failures.push(`${method.ref}: ${cell.detail}`);
-      await page.goto(`/tasks/${task.id}`);
-    }
+    if (cell.outcome === "fail") failures.push(`${method.ref}: ${cell.detail}`);
     // Whatever the cell did, the next starts from a task holding nothing.
     await request.patch(`/api/tasks/${task.id}`, {
       data: { capabilities: [] },
     });
-    if (cell.outcome !== "pass") await page.reload();
+    // Back on the task by URL rather than by reload: a cell that ends
+    // without passing presses Escape once more than the menu needs, which
+    // closes the task pane, and a reload of "/" left every following cell
+    // with no "Add grant…" to click until one failed outright.
+    if (cell.outcome !== "pass") await page.goto(`/tasks/${task.id}`);
   }
   expect(failures, failures.join("\n")).toEqual([]);
 });

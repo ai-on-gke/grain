@@ -17,10 +17,12 @@ package reviewedmerge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -44,54 +46,90 @@ type REST struct {
 }
 
 // restAttempts is how many times get asks before it gives up on a
-// response it counts as transient (restTransient); restBackoff is the
-// wait before the second attempt, doubled before each one after it.
-// A single 503 from the API used to refuse a release outright
-// (run 43048355272), so the gate now rides out a brief outage the way
-// a person re-running the job would -- and still refuses, with the
-// last error, once the outage outlasts every attempt.
+// failure it counts as transient (transient); restBackoff is the wait
+// before the second attempt, doubled before each one after it. A single
+// 503 from the API used to refuse a release outright (run 43048355272),
+// so the gate now rides out a brief outage the way a person re-running
+// the job would -- and still fails, with the last error, once the outage
+// outlasts every attempt.
 var (
 	restAttempts = 5
 	restBackoff  = 2 * time.Second
 )
 
-// restTransient reports whether a response status is worth asking
-// again for: rate limiting and the gateway and server errors GitHub
-// returns while it is degraded. Anything else -- 401, 403, 404, 422 --
-// says the same thing on every attempt.
-func restTransient(status int) bool {
-	switch status {
-	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway,
-		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-		return true
-	}
-	return false
+// maxRetryAfter caps how long a 429's Retry-After is waited out.
+const maxRetryAfter = 60 * time.Second
+
+// StatusError is a forge answer other than 200 OK.
+type StatusError struct {
+	Path       string
+	Status     string
+	StatusCode int
+	Body       string
+	// RetryAfter is the answer's Retry-After, zero when it has none.
+	RetryAfter time.Duration
 }
 
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("GET %s: %s: %s", e.Path, e.Status, e.Body)
+}
+
+// transient is whether a failed read is worth trying again: a 5xx, a 429,
+// or the request never being answered at all (a connection refused or
+// reset, a timeout). Any other 4xx is the forge's answer, and asking again
+// gets the same one.
+func transient(err error) bool {
+	var se *StatusError
+	if errors.As(err, &se) {
+		return se.StatusCode >= 500 || se.StatusCode == http.StatusTooManyRequests
+	}
+	var ne *networkError
+	return errors.As(err, &ne)
+}
+
+// networkError is a request that got no complete answer.
+type networkError struct{ err error }
+
+func (e *networkError) Error() string { return e.err.Error() }
+func (e *networkError) Unwrap() error { return e.err }
+
+// get reads p into into, trying again with backoff while the failure is
+// transient. Only how the forge is read is retried: what it answers is
+// returned as it is.
 func (r REST) get(ctx context.Context, rp repoAPI, p string, into any) error {
-	wait := restBackoff
-	var err error
+	attempts, wait := restAttempts, restBackoff
 	for attempt := 1; ; attempt++ {
-		var retry bool
-		retry, err = r.getOnce(ctx, rp, p, into)
-		if err == nil || !retry || attempt >= restAttempts || ctx.Err() != nil {
-			break
+		err := r.getOnce(ctx, rp, p, into)
+		if err == nil || !transient(err) || ctx.Err() != nil {
+			return err
 		}
-		t := time.NewTimer(wait)
+		if attempt >= attempts {
+			return fmt.Errorf("after %s: %w", plural(attempts, "attempt"), err)
+		}
+		delay := wait
+		var se *StatusError
+		if errors.As(err, &se) && se.RetryAfter > delay {
+			delay = min(se.RetryAfter, maxRetryAfter)
+		}
+		t := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-			return fmt.Errorf("%w (giving up after %d attempts: %v)", err, attempt, ctx.Err())
+			return fmt.Errorf("after %s: %w", plural(attempt, "attempt"), err)
 		case <-t.C:
 		}
 		wait *= 2
 	}
-	return err
 }
 
-// getOnce makes one request; retry reports whether its error is one a
-// second attempt might not meet.
-func (r REST) getOnce(ctx context.Context, rp repoAPI, p string, into any) (retry bool, err error) {
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+func (r REST) getOnce(ctx context.Context, rp repoAPI, p string, into any) error {
 	base := strings.TrimRight(r.BaseURL, "/")
 	if base == "" {
 		base = APIBaseURL(rp.host)
@@ -99,7 +137,7 @@ func (r REST) getOnce(ctx context.Context, rp repoAPI, p string, into any) (retr
 	p = rp.path + p
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+p, nil)
 	if err != nil {
-		return false, err
+		return err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -112,19 +150,21 @@ func (r REST) getOnce(ctx context.Context, rp repoAPI, p string, into any) (retr
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		// A connection reset or a timeout talking to the API is as
-		// passing as a 503 from it.
-		return true, err
+		return &networkError{err}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
-		return true, err
+		return &networkError{err}
 	}
 	if resp.StatusCode != http.StatusOK {
-		return restTransient(resp.StatusCode), fmt.Errorf("GET %s: %s: %s", p, resp.Status, strings.TrimSpace(string(body)))
+		se := &StatusError{Path: p, Status: resp.Status, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(body))}
+		if secs, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && secs > 0 {
+			se.RetryAfter = time.Duration(secs) * time.Second
+		}
+		return se
 	}
-	return false, json.Unmarshal(body, into)
+	return json.Unmarshal(body, into)
 }
 
 // DefaultHost is the host an owner/name repository is on.
