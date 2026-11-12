@@ -1445,7 +1445,12 @@ printf '%s\n' "$lkg_out" | sed 's/^/  /'
 lkg="$(printf '%s\n' "$lkg_out" | sed -n 's/^LKG \([0-9a-f]\{40\}\)$/\1/p' | tail -n 1)"
 if [ -z "$lkg" ]; then
   [ "$lkg_status" -le 1 ] || die "the LKG selector failed (exit $lkg_status)"
-  say "phase 2: no new LKG commit on $cut_branch${floor:+ since ${floor:0:12}}; nothing to cut"
+  # A red default branch on GitHub Actions has one repair task grain keeps
+  # (pkg/orchestrator/githubbaserepair.go), which grain's runs listing
+  # names in its grain_note: say which, so a stalled train points at it.
+  repair="$(jq -r '.grain_note // empty' "$work/runs.json" 2>/dev/null |
+    grep -o 'repair task [0-9][0-9]* is open for the red [A-Za-z0-9._/-]*' | head -n 1 || true)"
+  say "phase 2: no new LKG commit on $cut_branch${floor:+ since ${floor:0:12}}; nothing to cut${repair:+ ($repair)}"
   exit 0
 fi
 
