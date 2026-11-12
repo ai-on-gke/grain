@@ -27,6 +27,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // attributedRoute is one write path's row in operator-attribution spec
@@ -57,6 +58,10 @@ type attributedRoute struct {
 	// recorded reads back who the write recorded. created is the
 	// response's task id, for a route that files one.
 	recorded func(t *testing.T, ctx context.Context, client *ui.Client, id, created string) model.Principal
+	// serial is a route whose client or setup swaps package-level state
+	// (figmaOAuthClient's endpoint), so its rows run one at a time
+	// rather than in parallel with the rest of the matrix.
+	serial bool
 }
 
 // sender issues one request the way a row of the matrix asks.
@@ -629,6 +634,7 @@ var attributedRoutes = map[string]attributedRoute{
 	// secret store and writes a config_audit row naming who connected it.
 	"POST /api/capability-servers/figma-oauth-exchange": {
 		client:      figmaOAuthClient,
+		serial:      true,
 		body:        `{"id":"https://grain.dev/capabilities/figma","account":"design","code":"c0de","redirectUri":"https://grain.example/settings/capabilities"}`,
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
@@ -738,6 +744,37 @@ var attributedRoutes = map[string]attributedRoute{
 			}
 			return p.By
 		},
+	},
+	"DELETE /api/upgrade/current": {
+		client: func(t *testing.T) *ui.Client {
+			t.Helper()
+			client, _, _ := testClient(t)
+			dir := t.TempDir()
+			up := upgrade.New(upgrade.Config{
+				GraceWindow: 30 * time.Second,
+				Image: &upgrade.ImageConfig{
+					Repository: "docker.io/grainai/grain",
+					RefFile:    dir + "/image.env",
+					PullCmd:    []string{"true"},
+				},
+				StatusFile: dir + "/upgrade-status.json",
+			})
+			t.Cleanup(func() { _, _ = up.Cancel("test-cleanup", "") })
+			client.Config.Upgrader = up
+			return client
+		},
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			up := client.Config.Upgrader.(*upgrade.Upgrader)
+			_, _ = up.Cancel("test-reset", "")
+			if err := up.Start("main"); err != nil {
+				t.Fatalf("starting upgrade for cancel test: %v", err)
+			}
+			return ""
+		},
+		body:        `{"reason":"started by mistake"}`,
+		agentGrants: []string{"api:deployment:upgrade"},
+		recorded:    lastConfigAudit,
 	},
 	"PUT /api/settings": {
 		setup: func(t *testing.T, client *ui.Client, _ sender) string {
@@ -1143,6 +1180,12 @@ func TestEveryMutatingRouteIsAttributed(t *testing.T) {
 		}
 		for _, way := range ways {
 			t.Run(pattern+"/"+way.name, func(t *testing.T) {
+				// Each row builds its own store and server, so the
+				// matrix's few hundred rows run in parallel: run one
+				// after another they took most of the go job's budget.
+				if !route.serial {
+					t.Parallel()
+				}
 				var client *ui.Client
 				if route.client != nil {
 					client = route.client(t)

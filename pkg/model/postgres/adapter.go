@@ -214,10 +214,13 @@ var autoIncrementTables = map[string]string{
 type adaptedConnector struct {
 	inner driver.Connector
 	cfg   Config
+	// fence is the pool's single-writer lease check (write_fence.go),
+	// shared with every driver and connection it hands out.
+	fence *writeFence
 }
 
 func newAdaptedConnector(inner driver.Connector, cfg Config) driver.Connector {
-	return &adaptedConnector{inner: inner, cfg: cfg}
+	return &adaptedConnector{inner: inner, cfg: cfg, fence: &writeFence{}}
 }
 
 func (c *adaptedConnector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -225,16 +228,17 @@ func (c *adaptedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &adaptedConn{inner: conn}, nil
+	return &adaptedConn{inner: conn, fence: c.fence}, nil
 }
 
 func (c *adaptedConnector) Driver() driver.Driver {
-	return &adaptedDriver{inner: c.inner.Driver(), cfg: c.cfg}
+	return &adaptedDriver{inner: c.inner.Driver(), cfg: c.cfg, fence: c.fence}
 }
 
 type adaptedDriver struct {
 	inner driver.Driver
 	cfg   Config
+	fence *writeFence
 }
 
 func (d *adaptedDriver) Open(name string) (driver.Conn, error) {
@@ -242,11 +246,12 @@ func (d *adaptedDriver) Open(name string) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &adaptedConn{inner: conn}, nil
+	return &adaptedConn{inner: conn, fence: d.fence}, nil
 }
 
 type adaptedConn struct {
 	inner driver.Conn
+	fence *writeFence
 }
 
 func (c *adaptedConn) Prepare(query string) (driver.Stmt, error) {
@@ -331,7 +336,9 @@ func (c *adaptedConn) takeWriterLock(ctx context.Context) error {
 	if _, err := execer.ExecContext(ctx, fmt.Sprintf("SELECT pg_advisory_xact_lock(%d, hashtext(current_schema()))", writerLockKey), nil); err != nil {
 		return fmt.Errorf("postgres: taking the writer lock: %w", err)
 	}
-	return nil
+	// Under the writer lock, so a new lease holder's first write queues
+	// behind any write this check lets through (write_fence.go).
+	return c.fence.check(ctx, c.inner)
 }
 
 func (c *adaptedConn) Ping(ctx context.Context) error {

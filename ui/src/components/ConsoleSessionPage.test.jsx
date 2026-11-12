@@ -367,7 +367,7 @@ describe("ConsoleSessionPage", () => {
     );
 
     await user.click(
-      within(grants).getByRole("button", { name: /^Remove api:tasks:read/ }),
+      within(grants).getByRole("button", { name: /^Remove api#tasks:read/ }),
     );
     await waitFor(() => expect(puts()).toContainEqual(["self-debug", held]));
   });
@@ -1193,5 +1193,41 @@ describe("ConsoleSessionPage", () => {
     });
     api.mockReset();
     api.mockImplementation(async () => ({}));
+  });
+
+  it("excludes autoReads repositories from Read a repository options", async () => {
+    render(
+      <ConsoleSessionPage
+        session={{
+          ...session(),
+          readsAll: true,
+          autoReads: ["acme/widgets", "acme/lib"],
+        }}
+        task={task()}
+        config={{
+          targetRepos: ["acme/widgets", "acme/lib", "acme/extra"],
+        }}
+        capabilities={capabilities}
+        act={vi.fn()}
+        onSaved={vi.fn()}
+        showError={vi.fn()}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Director capabilities/ }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Add grant…" }));
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: /Read a repository/ }),
+    );
+    await userEvent.click(
+      screen.getByRole("textbox", { name: "Repo to read" }),
+    );
+    const options = screen
+      .getAllByRole("menuitem")
+      .map((el) => el.textContent.trim());
+    expect(options).toContain("acme/extra");
+    expect(options).not.toContain("acme/widgets");
+    expect(options).not.toContain("acme/lib");
   });
 });

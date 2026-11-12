@@ -494,6 +494,13 @@ A goal is set by the template (`Template.Goal`), by `propose_task`
   It rests until the goal check, a message, or a progress-limit
   notification moves it. The closing comment is posted as an ordinary
   comment.
+- **A report-only sub-task** (filed by another task's run, no goal)
+  that ends on a closing note alone closes rather than completing
+  (`model.ClosesOnAnswer`, docs/closing-a-task-from-a-run.md), so what
+  depends on it dispatches without a person's close. A parent that wants
+  a person to close its child gives it `nothing_needed_action: ack` or
+  this `person-closes` goal, which keeps `until: closed` meaning a
+  person's close.
 - **`nothing_needed`** on a goal task means "nothing to do *now*". The
   only things that close a goal task are the goal being met with
   `on_met: close`, or a person.
@@ -864,12 +871,25 @@ deterministic checker, `stewardReportCheck`, runs when a steward wake
 posts its report and computes:
 
 - *uncited claims*: report lines with no `[… id]` citation;
-- *unread citations*: cited ids with no read of that id in the run's call
-  log before the report;
+- *unread citations*: cited ids with no read of that id anywhere in the
+  run's call log. That log is the run's MCP calls followed by the grain
+  CLI's reads through the sandbox proxy, so a CLI read is stored after
+  `comment_on_issue` even though it came first. The checker therefore does
+  not cut the log at the report. A listing or feed read (the
+  pipeline-changes feed, `grain task list`, the merge queue) counts every
+  id its output showed (`model.ReadOutputIDs`), whichever path it took;
 - *attribute mismatches*: for each cited task, whether the words in its
   line contradict the record's kind tags or state. For example, "port"
   for a task with no port tag, or "merged" for an open one. This uses a
-  small fixed vocabulary of states and kinds, not free-text judgement.
+  small fixed vocabulary of states and kinds, not free-text judgement. A
+  transition's source state ("queued→running") and a task's CI or job
+  failing are not claims about the task's state.
+
+Lines under an `## Unverified` heading are the steward saying it could not
+ground them in this wake's reads, and are not counted. Before it posts,
+the steward runs the same check on its draft with `grain report check`
+(`orchestrator.CheckStewardReportDraft`). If the draft fails, it re-reads
+what the check names, fixes or moves each line, and checks once more.
 
 The results are stored as `task_run_report_check(run_id, claims, uncited,
 unread, mismatched)` and shown in the `agents` metrics section. A wake

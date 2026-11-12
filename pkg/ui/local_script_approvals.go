@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"sort"
@@ -290,13 +291,16 @@ func (a *LocalScriptApprovals) Answer(task, id string, approve bool, by string, 
 	return *r, nil
 }
 
-// Expire settles a pending approval as expired: its call stopped waiting.
-func (a *LocalScriptApprovals) Expire(task, id string, now time.Time) {
+// Expire settles a pending approval as expired: its call stopped
+// waiting. It reports whether it settled one.
+func (a *LocalScriptApprovals) Expire(task, id string, now time.Time) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if r, ok := a.byID[id]; ok && r.TaskID == task && r.Status == LocalScriptPending {
 		a.settle(r, LocalScriptExpired, "", now)
+		return true
 	}
+	return false
 }
 
 // Wait blocks until approval id is answered, ctx ends, or max passes,
@@ -388,7 +392,7 @@ func (s *Server) handleRequestLocalScriptApproval(w http.ResponseWriter, r *http
 		return
 	}
 	if !localScriptsGranted(*task) {
-		writeClientError(w, validationErrorf("task %s holds no local-scripts capability", id))
+		writeClientError(w, validationErrorf("task %s holds no host-script grant (https://grain.dev/capabilities/host-script#host-script)", id))
 		return
 	}
 	if strings.TrimSpace(req.Tool) == "" || strings.TrimSpace(req.Script) == "" {
@@ -413,6 +417,7 @@ func (s *Server) handleRequestLocalScriptApproval(w http.ResponseWriter, r *http
 		StdinBytes: req.Stdin, StdinPreview: req.StdinPreview, StdinTruncated: req.StdinTruncated,
 		StdinSHA256: req.StdinSHA256, Deadline: req.Deadline,
 	}, now)
+	s.recordLocalScriptEvent(r.Context(), model.IntegrationEventLocalScriptPending, approval)
 	writeJSON(w, http.StatusOK, approval)
 }
 
@@ -535,7 +540,11 @@ func (s *Server) handleExpireLocalScriptApproval(w http.ResponseWriter, r *http.
 		return
 	}
 	reg := s.tasks.localScriptApprovals()
-	reg.Expire(id, r.PathValue("approval"), s.tasks.now())
+	if reg.Expire(id, r.PathValue("approval"), s.tasks.now()) {
+		if approval, ok := reg.Get(id, r.PathValue("approval")); ok {
+			s.recordLocalScriptEvent(r.Context(), model.IntegrationEventLocalScriptAnswered, approval)
+		}
+	}
 	approval, ok := reg.Get(id, r.PathValue("approval"))
 	if !ok {
 		writeClientError(w, &NotFoundError{ID: r.PathValue("approval")})
@@ -569,6 +578,7 @@ func (s *Server) handleAnswerLocalScriptApproval(w http.ResponseWriter, r *http.
 		writeClientError(w, err)
 		return
 	}
+	s.recordLocalScriptEvent(r.Context(), model.IntegrationEventLocalScriptAnswered, approval)
 	if err := s.tasks.AddCommentWithAuthor(r.Context(), id, localScriptAnswerComment(approval), nil, by); err != nil {
 		writeClientError(w, fmt.Errorf("the call was %s, but recording that on the task failed: %w", approval.Status, err))
 		return
@@ -626,4 +636,42 @@ func (s *Server) handleListLocalScriptApprovals(w http.ResponseWriter, r *http.R
 		out = append(out, a)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// recordLocalScriptEvent records a local_script.* event for a, so GET
+// /api/events readers who may read its task learn of it without polling.
+// The approvals live in memory; the event is only a notice of one, and a
+// failure to record it is logged rather than failing the call.
+func (s *Server) recordLocalScriptEvent(ctx context.Context, typ model.IntegrationEventType, a LocalScriptApproval) {
+	if s.tasks == nil || s.tasks.Store == nil {
+		return
+	}
+	ev := model.IntegrationEvent{
+		Type:       typ,
+		At:         s.tasks.now(),
+		TaskID:     a.TaskID,
+		ApprovalID: a.ID,
+		Script:     a.Script,
+		Summary:    localScriptSummary(a),
+	}
+	if typ == model.IntegrationEventLocalScriptAnswered {
+		ev.Decision = a.Status
+	}
+	if err := s.tasks.Store.RecordIntegrationEvent(ctx, ev); err != nil {
+		log.Printf("recording %s for task %s's %s: %v", typ, a.TaskID, a.ID, err)
+	}
+}
+
+// localScriptSummary is a's call on one line: the script and how many
+// arguments it was given -- never the arguments or stdin themselves,
+// which the approval (readable only to who may act on the task) holds.
+func localScriptSummary(a LocalScriptApproval) string {
+	switch n := len(a.Args); n {
+	case 0:
+		return a.Script
+	case 1:
+		return a.Script + " (1 argument)"
+	default:
+		return fmt.Sprintf("%s (%d arguments)", a.Script, n)
+	}
 }

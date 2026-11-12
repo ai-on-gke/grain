@@ -29,8 +29,10 @@ import (
 )
 
 // DefaultCIWakeStallBound is how long a task deferred on a resume_later CI
-// wake may sit with no CI activity on its branch before grain raises a stall
-// notification, wakes the pipeline steward, and undefers the task.
+// wake may wait, whatever CI is or is not doing on its branch, before
+// grain's backstop undefers it anyway with a note, raises a stall
+// notification and wakes the pipeline steward (Config.CIWakeBackstop
+// overrides it).
 const DefaultCIWakeStallBound = 6 * time.Hour
 
 var (
@@ -43,7 +45,7 @@ var (
 // the indefinite kind, which nothing here touches -- and every task held
 // by resume_later on a CI verdict (grain CI on ci_mode: grain, GitHub
 // Actions / check runs on ci_mode: github) whose verdict has arrived or
-// whose wait has stalled past DefaultCIWakeStallBound with no CI activity.
+// whose wait has outlasted the backstop (ciWakeBackstop).
 //
 // Undeferring is the whole of it: the task returns to whichever of
 // 'proposed' and 'queued' its own approval implies, exactly as Undefer's
@@ -79,15 +81,16 @@ func reconcileWake(ctx context.Context, deps Deps, now time.Time) error {
 
 	// A resume_later that waits on CI is a deferral too, released when its
 	// gating CI verdict arrives (GitHub Actions / check runs on ci_mode:
-	// github, grain CI on ci_mode: grain) or when the wait stalls past
-	// ciWakeStallBound with no CI activity on the branch.
+	// github, grain CI on ci_mode: grain) -- success, failure or
+	// cancelled alike -- when the branch moves to a new head or the run
+	// it named is gone, or when the wait outlasts the backstop.
 	held, err := deps.Store.HeldCIResumes(ctx)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("orchestrator: listing tasks waiting on CI: %w", err))
 		return errors.Join(errs...)
 	}
 	for _, h := range held {
-		verdictReady, latestActivity, evalErr := evaluateCIResume(ctx, deps, h, now)
+		verdictReady, _, evalErr := evaluateCIResume(ctx, deps, h, now)
 		if evalErr != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: checking CI wake for task %s: %w", h.TaskID, evalErr))
 			continue
@@ -101,7 +104,7 @@ func reconcileWake(ctx context.Context, deps Deps, now time.Time) error {
 			log.Printf("orchestrator: task %s has the CI verdict it waited for and is picked back up", h.TaskID)
 			continue
 		}
-		if ciWakeStalled(h, latestActivity, now) {
+		if ciWakeStalled(h, now, ciWakeBackstop(deps)) {
 			if err := escalateStalledCIWake(ctx, deps, h, now); err != nil {
 				errs = append(errs, fmt.Errorf("orchestrator: escalating stalled CI wake for task %s: %w", h.TaskID, err))
 			}
@@ -110,14 +113,24 @@ func reconcileWake(ctx context.Context, deps Deps, now time.Time) error {
 	return errors.Join(errs...)
 }
 
-func ciWakeStalled(h model.HeldCIResume, latestActivity *time.Time, now time.Time) bool {
-	if ciWakeStallBound <= 0 || now.Sub(h.Since) < ciWakeStallBound {
-		return false
+// ciWakeBackstop is how long a CI wait may hold its task before it is
+// woken regardless: Config.CIWakeBackstop, or DefaultCIWakeStallBound
+// when that is zero. Negative disables the backstop.
+func ciWakeBackstop(deps Deps) time.Duration {
+	if deps.Config.CIWakeBackstop != 0 {
+		return deps.Config.CIWakeBackstop
 	}
-	if latestActivity != nil && latestActivity.After(h.Since) && now.Sub(*latestActivity) < ciWakeStallBound {
-		return false
-	}
-	return true
+	return ciWakeStallBound
+}
+
+// ciWakeStalled reports whether h has waited past bound. It is a
+// backstop, not a judgement of whether CI is busy: a wait whose verdict
+// grain failed to see -- a check that never reports, a forge read that
+// keeps failing, a condition grain cannot evaluate -- must not hold its
+// task for days, which is what an "only with no CI activity" rule let it
+// do.
+func ciWakeStalled(h model.HeldCIResume, now time.Time, bound time.Duration) bool {
+	return bound > 0 && now.Sub(h.Since) >= bound
 }
 
 func escalateStalledCIWake(ctx context.Context, deps Deps, h model.HeldCIResume, now time.Time) error {
@@ -131,9 +144,11 @@ func escalateStalledCIWake(ctx context.Context, deps Deps, h model.HeldCIResume,
 		return err
 	}
 	commentBody := fmt.Sprintf(
-		"grain: this task waited on CI (`%s`) for %s with no CI activity on `%s`, "+
-			"so grain raised a stall notification and undeferred it.",
-		h.TargetCI, humanDuration(wait), branchDesc,
+		"grain: this task waited on CI (`%s`) on `%s` for %s, past the %s backstop on a "+
+			"resume_later CI wait, with no verdict grain could see -- so grain undeferred it "+
+			"anyway and raised a stall notification. Check CI's state on the branch before "+
+			"assuming it passed.",
+		h.TargetCI, branchDesc, humanDuration(wait), humanDuration(ciWakeBackstop(deps)),
 	)
 	if _, err := deps.Store.AddComment(ctx, model.Comment{
 		TaskID:    h.TaskID,
@@ -150,7 +165,7 @@ func escalateStalledCIWake(ctx context.Context, deps Deps, h model.HeldCIResume,
 		Title:    fmt.Sprintf("Task %s is stalled waiting on CI (%s, %s)", h.TaskID, h.TargetCI, age),
 		Body: fmt.Sprintf(
 			"[Task #%s](/tasks/%s) sat deferred on `resume_later` waiting for CI (`%s`) on `%s` "+
-				"for %s with no CI activity; grain undeferred the task and escalated it.",
+				"for %s with no verdict grain could see; its backstop undeferred the task and escalated it.",
 			h.TaskID, h.TaskID, h.TargetCI, branchDesc, age,
 		),
 		Repo:     h.Repo.String(),
@@ -165,9 +180,9 @@ func escalateStalledCIWake(ctx context.Context, deps Deps, h model.HeldCIResume,
 		return err
 	}
 	wakePipelineSteward(ctx, deps,
-		fmt.Sprintf("task %s stalled waiting on CI (%s) for %s with no CI activity on %s", h.TaskID, h.TargetCI, age, branchDesc),
+		fmt.Sprintf("task %s stalled waiting on CI (%s) for %s with no verdict seen on %s", h.TaskID, h.TargetCI, age, branchDesc),
 		now)
-	log.Printf("orchestrator: task %s stalled waiting on CI (%s) for %s with no CI activity; raised notification and undeferred",
+	log.Printf("orchestrator: task %s stalled waiting on CI (%s) for %s with no verdict seen; raised notification and undeferred",
 		h.TaskID, h.TargetCI, age)
 	return nil
 }
@@ -210,23 +225,36 @@ func evaluateCIResume(ctx context.Context, deps Deps, h model.HeldCIResume, now 
 		if err != nil || due {
 			return due, latestActivity, err
 		}
-		if deps.CI != nil {
-			if h.TargetCI != model.ResumeOnMyBranch {
+		if h.TargetCI != model.ResumeOnMyBranch {
+			if deps.CI != nil {
 				if r, ok := deps.CI.Get(h.TargetCI); ok {
 					noteActivity(r.StartedAt)
 					noteActivity(r.FinishedAt)
-					if r.Conclusion != "" {
-						return true, latestActivity, nil
-					}
+					return r.Conclusion != "", latestActivity, nil
 				}
-			} else {
-				page := deps.CI.Find(ci.RunFilter{Repo: h.Repo.String(), Ref: h.Branch}, 5)
-				for _, r := range page.Runs {
-					noteActivity(r.StartedAt)
-					noteActivity(r.FinishedAt)
-					if r.Conclusion != "" && r.FinishedAt != nil && r.FinishedAt.After(h.Since) {
-						return true, latestActivity, nil
-					}
+			}
+			// The runner no longer has the run, and the store has no
+			// verdict for it (DueCIResume above): either the store never
+			// had it, or it was in flight when the runner lost it -- a
+			// restart -- and nothing will ever conclude it. Either way
+			// there is no verdict left to wait for. With no runner to
+			// ask, only a run the store does not have at all is gone.
+			if deps.CI != nil {
+				return true, latestActivity, nil
+			}
+			exists, err := deps.Store.HasCIRun(ctx, h.TargetCI)
+			if err != nil {
+				return false, latestActivity, err
+			}
+			return !exists, latestActivity, nil
+		}
+		if deps.CI != nil {
+			page := deps.CI.Find(ci.RunFilter{Repo: h.Repo.String(), Ref: h.Branch}, 5)
+			for _, r := range page.Runs {
+				noteActivity(r.StartedAt)
+				noteActivity(r.FinishedAt)
+				if r.Conclusion != "" && r.FinishedAt != nil && r.FinishedAt.After(h.Since) {
+					return true, latestActivity, nil
 				}
 			}
 		}
@@ -244,6 +272,21 @@ func pollGitHubCIResume(
 	now time.Time,
 	noteActivity func(*time.Time),
 ) (settled bool, pending bool, err error) {
+	// The branch head, read once for both forms of the wait: a branch that
+	// has moved off the head the wait was taken at (model.ResumeOn.Head),
+	// or that is gone, is a verdict of its own -- whatever was being
+	// waited for is stale, and the task's next run is what should look.
+	var headSHA string
+	head, herr := deps.Client.GetBranchHead(h.Repo.StoredOwner(), h.Repo.Name, h.Branch)
+	if herr == nil && head != nil {
+		headSHA = strings.TrimSpace(head.SHA)
+	}
+	if h.Head != "" && herr == nil {
+		if headSHA == "" || !strings.EqualFold(headSHA, h.Head) {
+			return true, false, nil
+		}
+	}
+
 	if h.TargetCI != model.ResumeOnMyBranch {
 		_, runID, ok := model.ParseGitHubActionsRunID(h.TargetCI)
 		if !ok {
@@ -258,12 +301,19 @@ func pollGitHubCIResume(
 			return false, false, nil
 		}
 		wfRun, gerr := ar.GetActionsRun(h.Repo.StoredOwner(), h.Repo.Name, runID)
-		if gerr != nil || wfRun == nil {
+		if gerr != nil {
 			return false, false, gerr
+		}
+		if wfRun == nil {
+			// GitHub no longer has the run (deleted, or past retention):
+			// there is no verdict left to wait for.
+			return true, false, nil
 		}
 		noteActivity(wfRun.StartedAt)
 		noteActivity(wfRun.UpdatedAt)
-		if wfRun.Status == "completed" && wfRun.Conclusion != "" {
+		// "completed" with any conclusion -- success, failure, cancelled,
+		// timed_out, skipped -- is the verdict.
+		if strings.EqualFold(wfRun.Status, "completed") {
 			recordConcludedActionsRunJob(ctx, deps.Store, h.Repo, h.Branch, *wfRun, now)
 			return true, false, nil
 		}
@@ -273,11 +323,6 @@ func pollGitHubCIResume(
 	// h.TargetCI == "my-branch": inspect branch head check runs (via
 	// ListCheckRuns + recordPolledChecks) and GitHub Actions workflow runs
 	// (via ActionsReader, the same source as `grain ci list --provider github-actions`).
-	var headSHA string
-	if head, herr := deps.Client.GetBranchHead(h.Repo.StoredOwner(), h.Repo.Name, h.Branch); herr == nil && head != nil {
-		headSHA = strings.TrimSpace(head.SHA)
-	}
-
 	var (
 		extTotal     int
 		extPending   int

@@ -377,6 +377,11 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 				if conn.Credential != credName {
 					replacedCreds = append(replacedCreds, conn.Credential)
 				}
+				// Replacing what the scope is pushed with is not a choice
+				// of what it is merged with: the merge identity it had stays.
+				if normConn.MergeCredential == "" {
+					normConn.MergeCredential = existingNorm.MergeCredential
+				}
 				continue
 			}
 		}
@@ -612,6 +617,11 @@ func (c *Client) SetTeamRepoGitConnection(ctx context.Context, id, owner, repo s
 		norm, err := model.NormalizeTeamGitConnection(conn)
 		if err == nil && norm.Scope == scoped.Scope && model.SameGitHost(norm.Host, host, model.DefaultGitHost) {
 			dropped = append(dropped, norm)
+			// Picking what the repository is pushed with is not a choice
+			// of what it is merged with: the merge identity it had stays.
+			if credName != "" && updated[0].MergeCredential == "" {
+				updated[0].MergeCredential = norm.MergeCredential
+			}
 			continue
 		}
 		updated = append(updated, conn)

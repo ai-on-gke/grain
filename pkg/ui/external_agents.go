@@ -748,12 +748,9 @@ func (s *Server) handleRevokeAllExternalAgentTokens(w http.ResponseWriter, r *ht
 	writeJSON(w, http.StatusOK, RevokeAllExternalAgentTokensResponse{Revoked: n})
 }
 
-// ExternalAgentAPITools returns the MCP tools of every agent API route that tok's
-// resolved scopes reach and that does not depend on a calling task context.
-func ExternalAgentAPITools(s *Server, tok *model.ExternalAgentToken) ([]mcp.Tool, error) {
-	return externalAgentAPITools(s, tok, nil)
-}
-
+// externalAgentAPITools returns the MCP tools of every agent API route that
+// tok's resolved scopes (narrowed by role, when set) reach and that does not
+// depend on a calling task context.
 func externalAgentAPITools(s *Server, tok *model.ExternalAgentToken, role *accessRole) ([]mcp.Tool, error) {
 	if tok == nil {
 		return nil, nil

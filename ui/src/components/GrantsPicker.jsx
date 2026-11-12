@@ -454,7 +454,7 @@ export default function GrantsPicker({
   const shortAlias = (g) => {
     if (isApiGrant(g)) {
       const [, limit] = splitApiGrant(g);
-      return `api:${apiShortName(g)}${limit ? ` on ${limit}` : ""}`;
+      return `api#${apiShortName(g)}${limit ? ` on ${limit}` : ""}`;
     }
     if (isCapabilityRef(g)) {
       const { ref, with: w, raw } = parseGrant(g);
@@ -510,7 +510,7 @@ export default function GrantsPicker({
   const apiLine = (id) => {
     const [, limit] = splitApiGrant(id);
     const row = apiRowOf(id);
-    const label = `api:${apiShortName(id)}${limit ? ` on ${limit}` : ""}`;
+    const label = `api#${apiShortName(id)}${limit ? ` on ${limit}` : ""}`;
     return (
       <GrantLine
         key={id}
@@ -735,7 +735,7 @@ export default function GrantsPicker({
       const state = g ? methodState(g) : policyState(ref);
       const d = describeGrant(g || ref, { method, config });
       const sectionLabel = isApiRef
-        ? `api:${method.method}`
+        ? `api#${method.method}`
         : methodMenuLabel(ref, method.method);
       const sectionAriaLabel = isApiRef
         ? `${d.args ? `${sectionLabel} · ${d.args}` : sectionLabel}${state?.suffix || ""}`
@@ -1336,6 +1336,18 @@ function ArgsSection({
     };
   }, []);
 
+  // Removing the section discards an edit not saved yet: left pending,
+  // the unmount above would save it, and that save -- replacing a grant
+  // that is gone -- would put the removed grant straight back.
+  const remove = onRemove
+    ? () => {
+        clearTimeout(timer.current);
+        timer.current = null;
+        pending.current = false;
+        return onRemove();
+      }
+    : undefined;
+
   const live = liveErrorsOf(schema, value);
   const errors = { ...live, ...server.fields };
   const status = saving
@@ -1427,7 +1439,7 @@ function ArgsSection({
         {onRemove && (
           <RemoveButton
             label={grant ? ariaLabel : `${method.method} draft`}
-            onClick={onRemove}
+            onClick={remove}
           />
         )}
       </Box>

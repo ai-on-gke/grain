@@ -69,7 +69,9 @@ test("a scope set is created, edited and removed from the card", async ({
 
     await row.getByRole("button", { name: "Remove" }).click();
     const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText(`Nothing grants api:${NAME}.`);
+    await expect(dialog).toContainText(
+      `Nothing grants https://grain.dev/capabilities/api#${NAME}.`,
+    );
     await dialog.getByRole("button", { name: "Remove" }).click();
     await expect(row).toHaveCount(0);
 
@@ -149,7 +151,7 @@ test("removing a scope set a task holds asks first, and Cancel keeps it", async 
       const dialog = page.getByRole("dialog");
       await expect(dialog).toContainText(`Remove scope set ${HELD}?`);
       await expect(dialog).toContainText(
-        `1 grant holds api:${HELD}, and will grant nothing once it is removed:`,
+        `1 grant holds https://grain.dev/capabilities/api#${HELD}, and will grant nothing once it is removed:`,
       );
       await expect(
         dialog.locator(`[data-holder="task:${taskID}"]`),

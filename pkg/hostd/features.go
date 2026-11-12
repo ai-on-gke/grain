@@ -89,6 +89,10 @@ const (
 	// subcommands accept -policy <path> and evaluate a staged per-run
 	// hook policy file instead of a compiled-in tool roster or stop rule.
 	FeatureHookPolicy Feature = "hook_policy"
+	// FeatureHandover: OpDrain with Idle and Request.Handover hands live
+	// detached CLI processes over across hostd's own in-place re-exec, and
+	// Exit.Draining marks processes ended by hostd's own drain or stop.
+	FeatureHandover Feature = "handover"
 )
 
 // Features is every feature this build implements, in the order they
@@ -107,6 +111,7 @@ var Features = []Feature{
 	FeatureEnvOpen,
 	FeatureLoginsMap,
 	FeatureHookPolicy,
+	FeatureHandover,
 }
 
 // legacyFeatures is what a peer that predates Hello.Features is credited

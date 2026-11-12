@@ -15,8 +15,10 @@
 package pkgcache
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -125,8 +127,9 @@ type JobAccess struct {
 	ReadOnly bool
 	// Trusted marks a job belonging to a trustedCache: true run. Trusted
 	// jobs write and read the "trusted" Go build-cache action namespace;
-	// untrusted jobs write the "untrusted" namespace and read "trusted"
-	// then "untrusted".
+	// untrusted jobs write an "untrusted" namespace of their own token or
+	// pod IP and read "trusted" then that one, so no untrusted job is ever
+	// served another's compiled objects.
 	Trusted bool
 }
 
@@ -198,33 +201,52 @@ func (s *JobTokenSet) RevokeIP(ip net.IP) {
 // Lookup resolves the JobAccess for r by Grit-Job-Token, Proxy-Authorization,
 // Authorization (on /gocache/), or source IP.
 func (s *JobTokenSet) Lookup(r *http.Request) (JobAccess, bool) {
+	access, _, ok := s.lookupScope(r)
+	return access, ok
+}
+
+// lookupScope is Lookup that also names the credential r was identified
+// by: an opaque, fixed-length string distinct for every registered token
+// and pod IP. It is what keeps one untrusted job's Go build-cache writes
+// from being served to any other job (goCacheNamespace), so it is derived
+// from the credential itself rather than from JobAccess.Job, which two
+// runs of the same job share.
+func (s *JobTokenSet) lookupScope(r *http.Request) (JobAccess, string, bool) {
 	if s == nil {
-		return JobAccess{}, false
+		return JobAccess{}, "", false
 	}
 	if tok := extractJobToken(r); tok != "" {
 		s.mu.RLock()
 		for k, acc := range s.tokens {
 			if subtle.ConstantTimeCompare([]byte(k), []byte(tok)) == 1 {
 				s.mu.RUnlock()
-				return acc, true
+				return acc, jobScope("token:" + k), true
 			}
 		}
 		s.mu.RUnlock()
-		return JobAccess{}, false
+		return JobAccess{}, "", false
 	}
 	host := r.RemoteAddr
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
 	if ip := net.ParseIP(strings.TrimSpace(host)); ip != nil {
+		key := clientKey(ip)
 		s.mu.RLock()
-		acc, ok := s.ips[clientKey(ip)]
+		acc, ok := s.ips[key]
 		s.mu.RUnlock()
 		if ok {
-			return acc, true
+			return acc, jobScope("ip:" + key), true
 		}
 	}
-	return JobAccess{}, false
+	return JobAccess{}, "", false
+}
+
+// jobScope hashes a credential into the path segment its Go build-cache
+// namespace is stored under, so the token itself never reaches disk.
+func jobScope(credential string) string {
+	sum := sha256.Sum256([]byte(credential))
+	return hex.EncodeToString(sum[:16])
 }
 
 func extractJobToken(r *http.Request) string {

@@ -547,6 +547,15 @@ type Task struct {
 	// sentence for one asked without a summary; "" when the task is not
 	// parked on a question, or is parked on a stopped turn.
 	QuestionSummary string `json:"questionSummary,omitempty"`
+	// NoteSummary is QuestionSummary for an awaiting_reply task that asked
+	// nothing but answered in a comment: the one-line summary its run gave
+	// that closing note (comment_on_issue's `summary`, model.Store.NoteSummary),
+	// shown on the inbox row, the task list's status line and a
+	// notification's title in place of "answered in a comment". Never
+	// derived from the note's body; "" when the note has no summary, and
+	// whenever QuestionSummary, a stopped turn, an access request or an
+	// unanswered comment already says what the task is waiting on.
+	NoteSummary string `json:"noteSummary,omitempty"`
 	// QuestionCommentID is the id of the comment an awaiting_reply task is
 	// parked on (Observation.PendingQuestionCommentID) -- a question, a
 	// credential or access request, or a stopped turn -- so a row can link
@@ -561,6 +570,15 @@ type Task struct {
 	// says "unanswered question from X" rather than offering the owner a
 	// plain Reply for a question that was never theirs to answer.
 	UnansweredCommentFrom string `json:"unansweredCommentFrom,omitempty"`
+	// UncountedAgentReplyFrom names the agent -- a director or console
+	// session, or another task's run -- whose comment is the newest on an
+	// awaiting_reply task since its question, and which did not count as
+	// a reply (model.UncountedAgentComment): the task page says a person's
+	// reply is still needed rather than leave a relayed answer looking
+	// like one. UncountedAgentReplyID is that comment's id. Only GET
+	// /api/tasks/{id} sets them.
+	UncountedAgentReplyFrom string `json:"uncountedAgentReplyFrom,omitempty"`
+	UncountedAgentReplyID   int64  `json:"uncountedAgentReplyId,omitempty"`
 	// AwaitingAccess is an awaiting_reply task parked on an access
 	// request (request_access) rather than a question: what it wants is
 	// a grant, which its card offers, not a reply.
@@ -737,6 +755,10 @@ type Comment struct {
 	AuthorLabel     string `json:"authorLabel,omitempty"`
 	OnBehalfOfKind  string `json:"onBehalfOfKind,omitempty"`
 	OnBehalfOfLabel string `json:"onBehalfOfLabel,omitempty"`
+	// RelayedVia is the console session that relayed this person's answer
+	// for them (model.RelayedVia), "" for a comment the person posted
+	// themselves.
+	RelayedVia string `json:"relayedVia,omitempty"`
 	// Handover marks this comment as the task's handover: a run's standing
 	// summary of the older part of the conversation, written for the next
 	// run on the task rather than for a person (model.Comment.Handover).
@@ -1442,7 +1464,12 @@ func commentFrom(c model.Comment, attachments []Attachment) Comment {
 	if c.Author.Actor.Kind != model.PrincipalAutomation {
 		out.AuthorLabel = PrincipalLabel(c.Author.Actor, c.Author.OnBehalfOf)
 	}
-	if b := c.Author.OnBehalfOf; b != nil {
+	if via := model.RelayedVia(c.Author); via != nil {
+		// A person's answer a session relayed: AuthorLabel already reads
+		// "alice@x via session 7", and the session is no one the words
+		// were said on behalf of.
+		out.RelayedVia = via.ID
+	} else if b := c.Author.OnBehalfOf; b != nil {
 		out.OnBehalfOf = b.ID
 		out.OnBehalfOfKind = string(b.Kind)
 		out.OnBehalfOfLabel = PrincipalLabel(*b, nil)
@@ -2300,11 +2327,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// (*Client).defaultCapabilities filters before granting -- the
 		// form should tick what a task would really be filed with, and
 		// a stored id no row answers to is neither.
-		for _, id := range cfg.DefaultCapabilities {
-			if _, ok := s.tasks.capabilityByID(id); ok {
-				resp.DefaultCapabilities = append(resp.DefaultCapabilities, id)
-			}
-		}
+		resp.DefaultCapabilities = s.tasks.resolveDefaultCapabilities(cfg.DefaultCapabilities)
 	}
 	if actor.ID == "" {
 		resp.SingleTenantRefusal = singleTenantRefusal
@@ -2355,12 +2378,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			resp.RepoDefaultHostings[rc.Repo.String()] = string(rc.DefaultHosting)
 		}
-		var ids []string
-		for _, id := range rc.DefaultCapabilities {
-			if _, ok := s.tasks.capabilityByID(id); ok {
-				ids = append(ids, id)
-			}
-		}
+		ids := s.tasks.resolveDefaultCapabilities(rc.DefaultCapabilities)
 		if len(ids) == 0 {
 			continue
 		}
@@ -3050,15 +3068,28 @@ type addCommentRequest struct {
 	// the caller may reopen the task, as POST /api/tasks/{id}/reopen is.
 	// Ignored on a task that is not closed.
 	Reopen bool `json:"reopen,omitempty"`
+	// Relay asks for the comment to be written as the answer of the
+	// person a console session is acting for, "<person> via <session>",
+	// and to count as that person's reply: it lifts a pending question and
+	// sends an awaiting_reply task back to the queue
+	// (Client.AddRelayedComment). Only a director or console session
+	// acting for a verified person may ask, and only on a task that person
+	// could reply on themselves (Server.relayAttribution). A person's own
+	// comment is already theirs, and relay changes nothing about it.
+	Relay bool `json:"relay,omitempty"`
 }
 
 // commentResponse is POST /api/tasks/{id}/comments' answer: the task as
 // it stands after the comment and, for one left on a task that is still
-// closed, CommentDelivery and Notice saying it reached no agent.
+// closed, CommentDelivery and Notice saying it reached no agent -- or, for
+// an agent's that left a task waiting on a person, that it did not count
+// as their reply (CommentAwaitingPerson). Relayed is set when the comment
+// was written as a person's relayed answer.
 type commentResponse struct {
 	Task
 	CommentDelivery string `json:"commentDelivery,omitempty"`
 	Notice          string `json:"notice,omitempty"`
+	Relayed         bool   `json:"relayed,omitempty"`
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
@@ -3081,13 +3112,29 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	add := s.tasks.AddCommentWithAuthor
-	if req.Reopen {
-		add = s.tasks.AddCommentReopening
+	var person, session *model.Principal
+	if req.Relay {
+		var err error
+		if person, session, err = s.relayAttribution(r, id); err != nil {
+			log.Printf("grain api: refused relay onto task %s: %v", id, err)
+			writeClientError(w, err)
+			return
+		}
 	}
-	if err := add(r.Context(), id, req.Body, req.Attachments, req.Author); err != nil {
-		writeClientError(w, err)
-		return
+	if person != nil {
+		if err := s.tasks.AddRelayedComment(r.Context(), id, req.Body, req.Attachments, *person, *session); err != nil {
+			writeClientError(w, err)
+			return
+		}
+	} else {
+		add := s.tasks.AddCommentWithAuthor
+		if req.Reopen {
+			add = s.tasks.AddCommentReopening
+		}
+		if err := add(r.Context(), id, req.Body, req.Attachments, req.Author); err != nil {
+			writeClientError(w, err)
+			return
+		}
 	}
 	// Best effort: the comment is written, and a zone that failed to
 	// stick costs the next run only the time of day it is told.
@@ -3097,10 +3144,13 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	resp := commentResponse{Task: task}
+	resp := commentResponse{Task: task, Relayed: person != nil}
 	if task.State == model.StateClosed {
 		resp.CommentDelivery = CommentNotDelivered
 		resp.Notice = CommentNotDeliveredNotice
+	} else if person == nil && agentCommentNotCounted(r.Context(), task) {
+		resp.CommentDelivery = CommentAwaitingPerson
+		resp.Notice = CommentAwaitingPersonNotice(task.ID)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

@@ -19,6 +19,7 @@ import { configuredCapabilities } from "../state.js";
 import BulkEditOverlay from "./BulkEditOverlay.jsx";
 import SearchSelect from "./SearchSelect.jsx";
 import AccessGate from "./AccessGate.jsx";
+import { useAccess } from "../AccessContext.jsx";
 
 // BatchActionsBar is DetailOverlay's Actions and CapabilityToggles, but
 // aimed at every selected task at once instead of the one the overlay
@@ -64,10 +65,17 @@ export default function BatchActionsBar({
 }) {
   const [capabilityId, setCapabilityId] = useState("");
   const [editing, setEditing] = useState(false);
+  const { can } = useAccess(config);
   const count = selection.length;
   // The repositories the selection is in: a role limited to some
   // repositories offers a batch action only where it reaches them all.
   const repos = selection.map((t) => t.repo).filter(Boolean);
+  const unapproved = selection.filter(
+    (t) => t.state === "proposed" || (t.state === "deferred" && !t.approved),
+  );
+  const unapprovedRepos = unapproved.map((t) => t.repo).filter(Boolean);
+  const runNowNeedsTasksAdmin =
+    unapproved.length > 0 && can("dispatch:write", repos);
   const hidden = shownIds
     ? selection.filter((t) => !shownIds.has(t.id)).length
     : 0;
@@ -129,7 +137,10 @@ export default function BatchActionsBar({
               -- manual mode -- is told exactly what to start. Requests
               start oldest first as capacity allows; a running or closed
               task refuses and is counted. */}
-          <AccessGate scope="dispatch:write" repo={repos}>
+          <AccessGate
+            scope={runNowNeedsTasksAdmin ? "tasks:admin" : "dispatch:write"}
+            repo={runNowNeedsTasksAdmin ? unapprovedRepos : repos}
+          >
             <Button
               variant="outlined"
               size="small"

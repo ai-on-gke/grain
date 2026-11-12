@@ -157,6 +157,9 @@ func (s *Store) ComposeTriggerTask(ctx context.Context, templateID string, repo 
 		return Composition{}, nil, fmt.Errorf("template %s does not exist", templateID)
 	}
 	comp := ComposeTemplateTask(*tmpl, nil, repo, base, approved)
+	if err := refuseCompositionSandboxAboveMax(ctx, s.db, comp); err != nil {
+		return Composition{}, nil, err
+	}
 	declarations := customFieldDeclarations{q: s.db}
 	fields, err := declarations.apply(ctx, comp.CustomFields)
 	if err != nil {

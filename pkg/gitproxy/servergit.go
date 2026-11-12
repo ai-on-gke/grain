@@ -120,14 +120,10 @@ func (c *CredentialSet) ServerGitRemoteFor(ctx context.Context, credential Crede
 	return remote, nil
 }
 
-// serverGitHandler forwards git's smart-HTTP requests under prefix (and
+// serverGitHandlerWithErr forwards git's smart-HTTP requests under prefix (and
 // prefix.git) to forwarder with token, and refuses anything else: the
 // listener is on loopback, but it is a credentialed door, and the one
 // repository it was opened for is all it opens onto.
-func serverGitHandler(forwarder *RealForwarder, token *string, prefix string) http.Handler {
-	return serverGitHandlerWithErr(forwarder, token, prefix, nil)
-}
-
 func serverGitHandlerWithErr(forwarder *RealForwarder, token *string, prefix string, onErr func(error)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path

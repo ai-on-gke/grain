@@ -499,8 +499,11 @@ func TestADaemonParksATaskWhoseHostLostItsConnectionNamingTheHost(t *testing.T) 
 	if err := r.c.Approve(context.Background(), id); err != nil {
 		t.Fatalf("approving %s: %v", id, err)
 	}
+	// Parking is two writes: the comment, then the pending question on it
+	// that makes the task awaiting_reply (stopOnAccessRefused). Waiting on
+	// the comment alone reads the state between them on a loaded runner.
 	waitUntil(t, "the task to be parked on the refusal", 2*time.Minute, func() bool {
-		return anyContains(r.comments(t, id), r.ghe.host)
+		return anyContains(r.comments(t, id), r.ghe.host) && r.taskJSON(t, id)["state"] == "awaiting_reply"
 	})
 	if !anyContains(r.comments(t, id), "cloning it was refused") {
 		t.Errorf("the task's conversation says %q, want the clone's refusal", r.comments(t, id))

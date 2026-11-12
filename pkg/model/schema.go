@@ -657,7 +657,18 @@ import "strconv"
 // `auto_upgrade_release`.`succeeded_at` (model.AutoUpgradeRelease.SucceededAt):
 // the minimum interval between two completed automatic upgrades in release
 // mode, and when the last automatic upgrade succeeded (grain/task-4230).
-const SchemaVersion = 139
+// 141 adds `schedule`.`skip_when` (model.Schedule.SkipWhen): a condition
+// outside the schedule, such as its base branch's publishing being held,
+// that holds its firings (grain/task-4393).
+// 142 changes no table: it rewrites the owner column of the qualification
+// plan tables and `scheduled_workflow_run` to StoredOwner (host/owner off
+// the default host), which every other repo-keyed table already holds,
+// for rows their schedule or a target repo places on another host
+// (migrateStoredOwners, grain/task-4335).
+// 143 adds `template`.`sandbox` (model.Template.Sandbox): the sandbox
+// shape every task filed from a template asks for, as JSON, empty for
+// none (grain/task-4591).
+const SchemaVersion = 143
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -758,7 +769,14 @@ const integrationEventTable = `CREATE TABLE IF NOT EXISTS ` + "`integration_even
   ` + "`actor_source`" + `     TEXT     NOT NULL DEFAULT '',
   ` + "`behalf_kind`" + `      TEXT     NOT NULL DEFAULT '',
   ` + "`behalf_id`" + `        TEXT     NOT NULL DEFAULT '',
-  ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT ''
+  ` + "`behalf_source`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`notification_id`" + `  INTEGER  NOT NULL DEFAULT 0,
+  ` + "`subject`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`severity`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`summary`" + `          TEXT     NOT NULL DEFAULT '',
+  ` + "`approval_id`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`script`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`decision`" + `         TEXT     NOT NULL DEFAULT ''
 )`
 
 // secretEntriesTable is the `secret_entries` catalogue for
@@ -2059,6 +2077,9 @@ var Tables = []string{
 	// (grain/task-3878). DEFAULT 0 here and in migration 131, which is
 	// what every schedule did before it could say otherwise.
 	//
+	// skip_when is model.Schedule.SkipWhen (grain/task-4393): DEFAULT ''
+	// here and in migration 141, which holds nothing.
+	//
 	// every_n_minutes is model.Recurrence.EveryNMinutes, every_n_hours'
 	// counterpart for RecurrenceEveryNMinutes: NULL on every other kind,
 	// and last in the table because schema version 33 added it with
@@ -2095,6 +2116,7 @@ var Tables = []string{
   ` + "`hosting`" + `               TEXT     NOT NULL DEFAULT '',
   ` + "`grain_ci`" + `              INTEGER  NOT NULL DEFAULT 0,
   ` + "`overlap_group`" + `         TEXT     NOT NULL DEFAULT '',
+  ` + "`skip_when`" + `             TEXT     NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -2216,6 +2238,7 @@ var Tables = []string{
   ` + "`admission`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`hosting`" + `            TEXT NOT NULL DEFAULT '',
   ` + "`skills`" + `             TEXT NOT NULL DEFAULT '',
+  ` + "`sandbox`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 

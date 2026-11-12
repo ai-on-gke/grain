@@ -221,7 +221,7 @@ func TestGrantScoping(t *testing.T) {
 	} else {
 		// The refusal names the commands that need no grant and the
 		// grant that opens ci://, not "a human attaches grain#ci".
-		for _, want := range []string{"`grain ci wait`", "`grain pr open`", "api:ci-read@bwsalmon/grain"} {
+		for _, want := range []string{"`grain ci wait`", "`grain pr open`", "https://grain.dev/capabilities/api#ci-read with {repo: "} {
 			if !strings.Contains(rec.Body.String(), want) {
 				t.Errorf("no ci-read refusal %q does not name %q", rec.Body.String(), want)
 			}
@@ -889,7 +889,7 @@ func TestTaskReadsTasksInTheScopesRepositories(t *testing.T) {
 	}
 	for _, id := range []string{"103", "104", "999"} {
 		if rec := serveRequest(srv, scope, http.MethodGet, "/fs/task/"+id+"/record.md", nil); rec.Code != http.StatusForbidden ||
-			!strings.Contains(rec.Body.String(), `"api:tasks:read"`) {
+			!strings.Contains(rec.Body.String(), `"https://grain.dev/capabilities/api#tasks:read"`) {
 			t.Errorf("task://%s outside the scope's repositories: %d %q", id, rec.Code, rec.Body.String())
 		}
 	}
@@ -933,7 +933,7 @@ func TestTaskReadsSiblingsOnlyWithATasksReadGrant(t *testing.T) {
 		if strings.Contains(body, "Task 101") {
 			t.Errorf("task://101/%s refusal leaks the sibling: %q", f, body)
 		}
-		if !strings.Contains(body, `"api:tasks:read"`) || !strings.Contains(body, "api:tasks:read@") {
+		if !strings.Contains(body, `"https://grain.dev/capabilities/api#tasks:read"`) || !strings.Contains(body, "api#tasks:read {repo: ") {
 			t.Errorf("task://101/%s refusal does not name the grants: %q", f, body)
 		}
 	}
@@ -992,8 +992,8 @@ func TestPlaybooksServedFromTheEmbeddedCopy(t *testing.T) {
 				t.Errorf("bootstrap-playbooks reading outside playbooks/: %d, want 403", rec.Code)
 			}
 			rec = serveRequest(srv, Scope{}, http.MethodGet, "/fs/src/playbooks?list", nil)
-			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "bootstrap-playbooks") {
-				t.Errorf("no grant: %d %q, want 403 naming bootstrap-playbooks", rec.Code, rec.Body.String())
+			if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "https://grain.dev/capabilities/config-map#config-map") {
+				t.Errorf("no grant: %d %q, want 403 naming config-map#config-map {config_maps: [bootstrap]}", rec.Code, rec.Body.String())
 			}
 		})
 	}

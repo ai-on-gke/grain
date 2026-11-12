@@ -224,7 +224,7 @@ func processResult(ctx context.Context, store *model.Store, reach *gitproxy.Reac
 // already on the remote when it was dispatched, at preRunBranchSHA (""
 // when it was not, or when nobody read it at dispatch). That head is what
 // lets a nothing_needed run be told apart from one that pushed: see
-// branchUnmovedSince.
+// branchUnmovedSinceWithStore.
 func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.Reach, client github.Client,
 	appBot AppBotIdentityFunc, task model.Task, result *agent.Result, runID, preRunBranchSHA string, now time.Time) error {
 
@@ -246,7 +246,13 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	comment, hasComment := effectiveCommentOnIssue(result)
 	if hasComment {
 		attachments, dropped := mcp.ResponseAttachmentsTolerant(firstToolCallArgs(result, "comment_on_issue"), staged)
-		if _, err := relayCommentWithAttachments(ctx, store, task, withDroppedAttachments(comment, dropped), attachments, now); err != nil {
+		// The note's own one line, when the run gave one: what the inbox
+		// and the task row show of a task resting on it (ui.Task.NoteSummary).
+		// None is not derived -- a report's opening sentence is not a
+		// summary of what anybody has to do.
+		summary, _ := firstToolCallArg(result, "comment_on_issue", "summary")
+		summary = model.NormalizeQuestionSummary(summary)
+		if _, err := relayQuestion(ctx, store, task, withDroppedAttachments(comment, dropped), summary, attachments, now); err != nil {
 			return fmt.Errorf("orchestrator: posting comment for %s: %w", task.ID, err)
 		}
 		checkAndRecordStewardReportText(ctx, store, task, runID, comment, result, now)
@@ -594,6 +600,23 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// worse -- it would hold that change's own merge until
 	// defaultReviewTaskDeadline ran out and the queue announced that the
 	// review had never finished, which by then would be untrue.
+	//
+	// A report-only sub-task another task filed closes instead
+	// (model.ClosesOnAnswer): its dependents are waiting on a close, and
+	// its note is its parent's to read.
+	if hasComment && findings == 0 && !pushedInPlace && model.ClosesOnAnswer(task) {
+		// Read again rather than trusting the snapshot taken at dispatch:
+		// a changelist the run uploaded is linked to the stored task while
+		// the run is live (ui.Client's changelist link), and a task with a
+		// change linked is not a report to close (model.AwaitsAck).
+		fresh, err := store.GetTask(ctx, task.ID)
+		if err != nil {
+			return fmt.Errorf("orchestrator: re-reading %s before closing it on its answer: %w", task.ID, err)
+		}
+		if fresh != nil && model.ClosesOnAnswer(*fresh) {
+			return finishAnswered(ctx, store, *fresh, now)
+		}
+	}
 	if hasComment || findings > 0 || pushedInPlace {
 		return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
 			o.CompletedAt = &now
@@ -695,7 +718,7 @@ func nothingNeededReason(result *agent.Result) (string, bool) {
 // posted beside it, and the run keeps the outcome RunDispatch gave it.
 // "Pushed" means pushed by this run: a branch an earlier attempt left,
 // whose head has not moved since dispatch, does not outrank it
-// (branchUnmovedSince) unless a pull request is open off it, and is
+// (branchUnmovedSinceWithStore) unless a pull request is open off it, and is
 // noted on the task on the way here (retireStaleBranch).
 //
 // Only a run with nothing else to show is recorded as
@@ -735,8 +758,33 @@ func finishNothingNeeded(ctx context.Context, store *model.Store, task model.Tas
 	return nil
 }
 
-// branchUnmovedSince is whether task's branch is still at sha, the head
-// it had when the run was dispatched -- that is, whether the run pushed
+// finishAnswered closes a report-only sub-task (model.ClosesOnAnswer)
+// whose run ended on a closing note alone: no pull request, no question,
+// no park. The note is already in the task's conversation; the close is
+// what lets a task that depends on it dispatch (the task_blocked view
+// counts a blocker until it closes), and a pointer on the parent's own
+// thread is where a person reading the parent finds it.
+func finishAnswered(ctx context.Context, store *model.Store, task model.Task, now time.Time) error {
+	if err := closeTask(ctx, store, task.ID, now, "the report-only task answered", func(o *model.Observation) {
+		o.CompletedAt = &now
+		o.ClosedAt = &now
+		o.RetryRequestedAt = nil
+	}); err != nil {
+		return err
+	}
+	if err := noteOnTask(ctx, store, task.ID, model.AnsweredClosedNote, now); err != nil {
+		return err
+	}
+	parent := task.Proposer.TaskID
+	if p, err := store.GetTask(ctx, parent); err != nil || p == nil {
+		return err
+	}
+	return noteOnTask(ctx, store, parent, fmt.Sprintf("[Task %s](/tasks/%s) %q, which this task filed, "+
+		"answered and closed itself; its closing note is on that task.", task.ID, task.ID, task.Title), now)
+}
+
+// branchUnmovedSinceWithStore is whether task's branch is still at sha, the
+// head it had when the run was dispatched -- that is, whether the run pushed
 // nothing to it -- with no pull request open off it. An empty sha is a
 // branch nobody read at dispatch, or one that was not there yet, and says
 // nothing about who pushed it, so it is never unmoved: the caller then
@@ -745,10 +793,6 @@ func finishNothingNeeded(ctx context.Context, store *model.Store, task model.Tas
 // change somebody may be reviewing, and is never stale either: salvage
 // finds that pull request again and leaves the task waiting on it, as it
 // did before nothing_needed could outrank a branch at all.
-func branchUnmovedSince(client github.Client, task model.Task, sha string) (bool, error) {
-	return branchUnmovedSinceWithStore(context.Background(), nil, client, task, sha)
-}
-
 func branchUnmovedSinceWithStore(ctx context.Context, store *model.Store, client github.Client, task model.Task, sha string) (bool, error) {
 	if sha == "" || client == nil || task.Target == nil {
 		return false, nil
@@ -773,7 +817,7 @@ func branchUnmovedSinceWithStore(ctx context.Context, store *model.Store, client
 // told which branch was left behind. The branch itself is not deleted:
 // its commits are an earlier attempt's real work, and whether anybody
 // wants them is not grain's to decide. No pull request is open off it
-// (branchUnmovedSince), so there is none to close.
+// (branchUnmovedSinceWithStore), so there is none to close.
 func retireStaleBranch(ctx context.Context, store *model.Store, task model.Task, now time.Time) error {
 	note := fmt.Sprintf("This run found nothing needed and pushed nothing, so grain did not open a pull "+
 		"request off `%s`, the branch an earlier attempt of task %s left on %s. The branch is left "+
@@ -1867,6 +1911,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		body += model.OriginKeptNote(namedOrigin, target, &task)
 
 		var interactive bool
+		// The template's sandbox shape (model.Template.Sandbox), filled
+		// into each dimension the proposal leaves unstated below.
+		var tmplSandbox model.SandboxShape
 		if tmplID != "" {
 			tmpl, err := store.GetTemplate(ctx, tmplID)
 			if err != nil {
@@ -1896,6 +1943,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					priority = comp.Priority
 				}
 				interactive = comp.Interactive
+				tmplSandbox = comp.Sandbox
 				if !keepRunningSet {
 					keepRunning = comp.KeepRunning
 				}
@@ -2075,6 +2123,18 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		}
 		if v, ok := p["sandbox_disk_gb"]; ok {
 			diskGB, _ = argInt(v)
+		}
+		// A dimension the proposal states keeps its value and the
+		// template fills the rest, one at a time, as ui.Client.fromTemplate
+		// does for a filing through the API.
+		if cpus == 0 {
+			cpus = tmplSandbox.CPUs
+		}
+		if memoryMB == 0 {
+			memoryMB = tmplSandbox.MemoryMB
+		}
+		if diskGB == 0 {
+			diskGB = tmplSandbox.DiskGB
 		}
 		// A proposal chooses a model (model.Task.Model) and, separately, may
 		// pin a connection; the store's own migration and dispatch read a

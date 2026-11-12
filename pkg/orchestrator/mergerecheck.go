@@ -601,6 +601,10 @@ func mergeRecheckedMember(ctx context.Context, deps Deps, row model.MergeBatch,
 		}
 		return discardMergeRecheck(ctx, deps, row, m.TaskID, now)
 	}
+	pr := model.PullRequestRef{Repo: row.Repo, Number: m.Number}
+	if detail, err := deps.Client.GetPullRequest(row.Repo.StoredOwner(), row.Repo.Name, m.Number); err == nil {
+		recordMergedAs(ctx, deps.Store, deps.Client, m.TaskID, pr, detail, now)
+	}
 	observeRecheck(ctx, deps.Store, deps.Client, row.Repo, row.Branch, row.BaseCommit, m.HeadSHA,
 		m.Number, m.TaskID, recheckOutcome{rechecked: true}, now)
 	var errs []error

@@ -3260,3 +3260,39 @@ func TestListCheckRunsDecodesAppAndExternalID(t *testing.T) {
 		t.Fatalf("ListCheckRuns = %+v, want App=grain-bot and ExternalID decoded", runs)
 	}
 }
+
+// OnlyInfraFailures is OnlyStartupFailures' question for jobs that did
+// start: every failing job died on the runner (its resolver, a lost
+// runner), so no commit clears the build. One job that may be the tree's
+// makes the whole build the tree's.
+func TestOnlyInfraFailures(t *testing.T) {
+	dns := JobLog{Name: "go unit", Log: "##[group]Run sudo apt-get install -y expect\n##[endgroup]\n" +
+		"E: Failed to fetch https://security.ubuntu.com/x.deb  Temporary failure resolving 'security.ubuntu.com'\n" +
+		"E: Unable to fetch some archives, maybe run apt update or try with --fix-missing?\n" +
+		"##[error]Process completed with exit code 100.\n"}
+	lost := JobLog{Name: "real vm", Log: "##[error]The runner has received a shutdown signal.\n"}
+	test := JobLog{Name: "go", Log: "--- FAIL: TestX\nFAIL\n##[error]Process completed with exit code 1.\n"}
+	gone := JobLog{Name: "go e2e", Log: "E: Failed to fetch https://archive.example/x.deb  404  Not Found\n" +
+		"E: Unable to fetch some archives, maybe run apt update or try with --fix-missing?\n" +
+		"##[error]Process completed with exit code 100.\n"}
+	warnedThenFailed := JobLog{Name: "go", Log: "##[group]Run sudo apt-get install -y expect\n##[endgroup]\n" +
+		"W: Temporary failure resolving 'security.ubuntu.com'\nSetting up expect\n" +
+		"##[group]Run go test ./...\n##[endgroup]\n--- FAIL: TestX\n##[error]Process completed with exit code 1.\n"}
+	for _, tc := range []struct {
+		name string
+		logs []JobLog
+		want bool
+	}{
+		{"nothing read", nil, false},
+		{"one job on the runner's resolver", []JobLog{dns}, true},
+		{"a resolver failure and a lost runner", []JobLog{dns, lost}, true},
+		{"a resolver failure beside a real test failure", []JobLog{dns, test}, false},
+		{"a package really removed from the mirror", []JobLog{gone}, false},
+		{"a resolver warning in a step that passed", []JobLog{warnedThenFailed}, false},
+		{"a run with no log to read", []JobLog{{Name: "tests", RunConclusion: "failure", RunJobsFailed: 1}}, false},
+	} {
+		if got := OnlyInfraFailures(tc.logs); got != tc.want {
+			t.Errorf("OnlyInfraFailures(%s) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

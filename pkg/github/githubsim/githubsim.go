@@ -76,8 +76,11 @@ var (
 	// commitPullsRe: the pull requests a commit belongs to
 	// (github.RESTClient.MergedPullRequestForCommit), answered from
 	// MergedPullRequestForCommit.
-	commitPullsRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)/pulls$`)
-	commitRe       = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)$`)
+	commitPullsRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)/pulls$`)
+	commitRe      = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/commits/([^/]+)$`)
+	// gitCommitRe: the git database's view of one commit, with its
+	// parents in order (pkg/reviewedmerge's first-parent walk).
+	gitCommitRe    = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/git/commits/([0-9a-f]{7,40})$`)
 	issueCommentRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/issues/comments/(\d+)$`)
 	// repoRe: the target repo's own default branch, read once per
 	// dispatch so the PR base comes from the repo itself rather than a
@@ -140,6 +143,8 @@ var (
 	// and cancelRunRe POST .../actions/runs/{id}/cancel (Sim.Dispatches,
 	// Sim.CancelledRuns).
 	workflowDispatchRe = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/workflows/([^/]+)/dispatches$`)
+	actionsVariableRe  = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/variables/([^/]+)$`)
+	userRe             = regexp.MustCompile(`^/users/([^/]+)$`)
 	cancelRunRe        = regexp.MustCompile(`^/repos/([^/]+)/([^/]+)/actions/runs/(\d+)/cancel$`)
 	// And the fourth read hung off that walk, for a run whose jobs served
 	// no log: the check run behind one of them, which is where GitHub
@@ -209,6 +214,15 @@ type CommentReaction struct {
 	Review    bool
 }
 
+// SubmittedReview is one pull request review GET .../pulls/N/reviews
+// answers (Sim.SubmittedReviews).
+type SubmittedReview struct {
+	Login             string
+	State             string // APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED
+	CommitID          string // the head the review was of
+	AuthorAssociation string // OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE
+}
+
 // PullRequest is one pull request Sim recorded through CreatePullRequest.
 type PullRequest struct {
 	Number  int
@@ -270,6 +284,11 @@ type PullRequest struct {
 	// standing in for a merge done by hand (a squash merge, say), and
 	// omitted from the response when empty.
 	MergeCommitSHA string
+	// MergedBy is GitHub's merged_by login on the pull request detail,
+	// omitted when empty. land sets it from Sim.MergeAs when a merge goes
+	// through the API; a test standing in for a merge done on GitHub's
+	// own button (by its author, say) sets it directly.
+	MergedBy string
 	// Labels are the labels applied through POST .../issues/N/labels,
 	// which real GitHub serves for a pull request's number as well as an
 	// issue's (orchestrator.labelOrigin's `origin/#N`).
@@ -384,6 +403,15 @@ type Sim struct {
 	// the upstream Sim can resolve cross-repository pull request heads and
 	// route fork repository requests to the fork Sim.
 	Forks map[string]*Sim
+
+	// Variables are this repository's GitHub Actions variables, by name
+	// (GET .../actions/variables/{name}); any other is a 404, on any
+	// repository. Accounts are GitHub's account type by login (GET
+	// /users/{login}): a login not in it is "Bot" when it ends in "[bot]"
+	// and "User" otherwise. What `grain health`'s reviewed-merge login
+	// check reads (pkg/mergelogins).
+	Variables map[string]string
+	Accounts  map[string]string
 
 	// PullRequestBase is the number the first pull request opened on this
 	// sim gets, the next one base+1 and so on. Zero means 9000. A test
@@ -562,6 +590,20 @@ type Sim struct {
 	// Approvals is who has approved each pull request, keyed by number:
 	// what GET .../pulls/N/reviews answers, as APPROVED reviews.
 	Approvals map[int][]string
+	// SubmittedReviews are further reviews GET .../pulls/N/reviews answers after
+	// Approvals', keyed by number, for a test that wants a review of an
+	// earlier head, a change request or a reviewer with no standing
+	// (pkg/reviewedmerge reads commit_id and author_association). Each
+	// Approvals entry is answered as an APPROVED review of the pull
+	// request's current head by a COLLABORATOR.
+	SubmittedReviews map[int][]SubmittedReview
+	// MergeAs is the login a merge through PUT .../pulls/N/merge (or the
+	// merge queue) is recorded as having been made by (merged_by).
+	MergeAs string
+	// RecordMergeCommits has a merge through the API record the commit it
+	// made on the base as the pull request's merge_commit_sha and in
+	// MergedPullRequestForCommit, as GitHub does.
+	RecordMergeCommits bool
 	// RequestedReviewers is each pull request's outstanding review
 	// requests, keyed by number: a login, or "org/team" for a team (the
 	// code owners GitHub requests on its own).
@@ -1468,6 +1510,26 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		// again, not that it gave up quietly.
 		return jsonResponse(s.FailReads.Status, map[string]string{"message": s.FailReads.Message}), nil
 	}
+	if method == "GET" {
+		if m := actionsVariableRe.FindStringSubmatch(p); m != nil {
+			name, _ := url.PathUnescape(m[3])
+			if v, ok := s.Variables[name]; ok && m[1] == s.Owner && m[2] == s.Repo {
+				return jsonResponse(200, map[string]string{"name": name, "value": v}), nil
+			}
+			return jsonResponse(404, map[string]string{"message": "Not Found"}), nil
+		}
+		if m := userRe.FindStringSubmatch(p); m != nil {
+			login, _ := url.PathUnescape(m[1])
+			kind, ok := s.Accounts[login]
+			if !ok {
+				kind = "User"
+				if strings.HasSuffix(login, "[bot]") {
+					kind = "Bot"
+				}
+			}
+			return jsonResponse(200, map[string]string{"login": login, "type": kind}), nil
+		}
+	}
 	if method == "GET" && (p == "/installation/repositories" || p == "/user/repos") {
 		return s.reachableRepos(p, qs, headers), nil
 	}
@@ -1491,9 +1553,19 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		}
 		if m := pullReviewsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
+			number := mustAtoi(m[3])
+			head := ""
+			if pr, ok := s.pullRequest(number); ok {
+				head = s.prHeadSHA(pr)
+			}
 			var reviews []map[string]any
-			for _, login := range s.Approvals[mustAtoi(m[3])] {
-				reviews = append(reviews, map[string]any{"user": map[string]string{"login": login}, "state": "APPROVED"})
+			for _, login := range s.Approvals[number] {
+				reviews = append(reviews, map[string]any{"user": map[string]string{"login": login}, "state": "APPROVED",
+					"commit_id": head, "author_association": "COLLABORATOR"})
+			}
+			for _, r := range s.SubmittedReviews[number] {
+				reviews = append(reviews, map[string]any{"user": map[string]string{"login": r.Login}, "state": r.State,
+					"commit_id": r.CommitID, "author_association": r.AuthorAssociation})
 			}
 			return jsonResponse(200, append([]map[string]any{}, reviews...)), nil
 		}
@@ -1547,7 +1619,18 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 		if m := commitPullsRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
 			if n, ok := s.MergedPullRequestForCommit[m[3]]; ok {
-				return jsonResponse(200, []map[string]any{{"number": n, "merged_at": "2026-01-01T00:00:00Z"}}), nil
+				// GitHub lists the full pull request here; the fields a
+				// reader of a merge needs (merge_commit_sha, base, head,
+				// user) are the detail endpoint's own.
+				entry := map[string]any{"number": n, "merged_at": "2026-01-01T00:00:00Z"}
+				if pr, ok := s.pullRequest(n); ok {
+					entry = pullRequestDetailJSON(pr, s.prHeadSHA(pr))
+					delete(entry, "merged_by") // the list does not say who merged
+					if _, ok := entry["merged_at"]; !ok {
+						entry["merged_at"] = "2026-01-01T00:00:00Z"
+					}
+				}
+				return jsonResponse(200, []map[string]any{entry}), nil
 			}
 			return jsonResponse(200, []map[string]any{}), nil
 		}
@@ -1625,6 +1708,21 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 			}
 			return jsonResponse(200, checkRunsJSON(runs)), nil
 		}
+		if m := gitCommitRe.FindStringSubmatch(p); m != nil && s.BareRepo != "" {
+			s.mustOwn(m[1], m[2])
+			cmd := exec.Command("git", "--git-dir", s.BareRepo, "rev-list", "--parents", "-n", "1", "--end-of-options", m[3]+"^{commit}")
+			cmd.Env = os.Environ()
+			out, err := cmd.Output()
+			fields := strings.Fields(string(out))
+			if err != nil || len(fields) == 0 {
+				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
+			}
+			parents := make([]map[string]string, 0, len(fields)-1)
+			for _, parent := range fields[1:] {
+				parents = append(parents, map[string]string{"sha": parent})
+			}
+			return jsonResponse(200, map[string]any{"sha": fields[0], "parents": parents}), nil
+		}
 		if m := commitRe.FindStringSubmatch(p); m != nil {
 			if m[1] != s.Owner || m[2] != s.Repo {
 				return github.ApiResponse{Status: 404, Body: []byte(`{"message":"Not Found"}`)}, nil
@@ -1693,7 +1791,19 @@ func (s *Sim) Request(method, path string, headers map[string]string, body []byt
 				}
 			}
 			jobs := s.workflowJobsFor(key)
-			return jsonResponse(200, workflowRunsJSON(m[1], m[2], s.runIDFor(key), jobs)), nil
+			runID := s.runIDFor(key)
+			payload := workflowRunsJSON(m[1], m[2], runID, jobs)
+			// A run re-run through rerun-failed-jobs reads as its next
+			// attempt, as on GitHub, though its jobs stay what the test
+			// seeded: a re-run of a seeded infrastructure failure fails
+			// the same way again, which is what a test counting re-runs
+			// wants.
+			if runs, ok := payload["workflow_runs"].([]map[string]any); ok {
+				for _, run := range runs {
+					run["run_attempt"] = 1 + s.rerunsOf(int64(runID))
+				}
+			}
+			return jsonResponse(200, payload), nil
 		}
 		if m := actionsRunRe.FindStringSubmatch(p); m != nil {
 			s.mustOwn(m[1], m[2])
@@ -2695,6 +2805,24 @@ func (s *Sim) land(i int, message string) error {
 	s.PullRequests[i].State = "closed"
 	s.PullRequests[i].Merged = true
 	s.PullRequests[i].MergedAt = s.now()
+	if s.PullRequests[i].MergedBy == "" {
+		s.PullRequests[i].MergedBy = s.MergeAs
+	}
+	// GitHub records the commit the merge made on the base as
+	// merge_commit_sha, and lists the pull request for it. Opt-in
+	// (RecordMergeCommits), since a test written before it reads a
+	// commit landed here as belonging to no pull request.
+	if s.RecordMergeCommits && s.PullRequests[i].MergeCommitSHA == "" {
+		if sha := s.branchSHA(s.PullRequests[i].Base); sha != "" {
+			s.PullRequests[i].MergeCommitSHA = sha
+			if s.MergedPullRequestForCommit == nil {
+				s.MergedPullRequestForCommit = map[string]int{}
+			}
+			if _, ok := s.MergedPullRequestForCommit[sha]; !ok {
+				s.MergedPullRequestForCommit[sha] = s.PullRequests[i].Number
+			}
+		}
+	}
 	s.closeLinkedIssues(s.PullRequests[i])
 	return nil
 }
@@ -2826,6 +2954,9 @@ func pullRequestDetailJSON(pr PullRequest, headSHA string) map[string]any {
 	}
 	if pr.MergeCommitSHA != "" {
 		out["merge_commit_sha"] = pr.MergeCommitSHA
+	}
+	if pr.MergedBy != "" {
+		out["merged_by"] = map[string]string{"login": pr.MergedBy}
 	}
 	return out
 }
@@ -3110,6 +3241,18 @@ func (s *Sim) jobByID(id int) (WorkflowJob, bool) {
 		return WorkflowJob{}, false
 	}
 	return jobs[index], true
+}
+
+// rerunsOf is how many times rerun-failed-jobs was accepted for runID.
+// Called with s.mu held, like every handler.
+func (s *Sim) rerunsOf(runID int64) int {
+	n := 0
+	for _, id := range s.RerunFailedJobs {
+		if id == runID {
+			n++
+		}
+	}
+	return n
 }
 
 // jobConclusion is GitHub's own field, with Sim's default for a job a
