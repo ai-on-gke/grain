@@ -54,7 +54,15 @@ import {
   otherGrants,
   sessionStatus,
   toggleRows,
-} from "./session-view";
+} from "./session-helpers";
+import {
+  buildAgentModelOptions,
+  extractSessionArtifacts,
+} from "./session-artifacts";
+import {
+  type CanvasTab,
+  SessionCanvasComponent,
+} from "./session-canvas.component";
 import { SessionsStore } from "./sessions.store";
 
 // clock is a message's time: the time of day today, the date otherwise.
@@ -83,6 +91,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
     AttachmentPickerComponent,
     GrantsPickerComponent,
     PillSelectComponent,
+    SessionCanvasComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -134,7 +143,11 @@ export function clock(iso: string | undefined, now = new Date()): string {
         </p>
       }
 
-      <div class="sessions-split" [class.is-chat-open]="!!id()">
+      <div
+        class="sessions-split"
+        [class.is-chat-open]="!!id()"
+        [class.has-canvas]="canvasOpen() && !!store.selected()"
+      >
         <nav class="session-list" aria-label="Sessions">
           <ul>
             @for (r of store.rows(); track r.session.id) {
@@ -204,6 +217,29 @@ export function clock(iso: string | undefined, now = new Date()): string {
                   st.label
                 }}<span class="sr-only">: {{ st.tip }}</span></span
               >
+              @if (canEditCaps() && modelOptions().length > 1) {
+                <g-pill-select
+                  [options]="modelOptions()"
+                  [value]="row.session.model || ''"
+                  ariaLabel="Session model"
+                  align="left"
+                  testid="chat-head-model"
+                  [disabled]="store.isBusy('settings')"
+                  (valueChange)="saveModel($event)"
+                />
+              }
+              <button
+                type="button"
+                class="btn-outlined"
+                data-testid="session-canvas-toggle"
+                [attr.aria-pressed]="canvasOpen()"
+                gTip="Inspect specs, interactive HTML mocks, workstream plans, and Memory beside this session"
+                (click)="canvasOpen.set(!canvasOpen())"
+              >
+                Canvas{{
+                  artifactCount() > 0 ? " (" + artifactCount() + ")" : ""
+                }}
+              </button>
               @if (st.live && canStop()) {
                 <button
                   type="button"
@@ -555,6 +591,21 @@ export function clock(iso: string | undefined, now = new Date()): string {
                       [attachments]="c.attachments"
                     />
                   }
+                  @let msgArts = commentArtifacts(c.id);
+                  @if (msgArts.length > 0) {
+                    <div class="msg-artifacts">
+                      @for (a of msgArts; track a.id) {
+                        <button
+                          type="button"
+                          class="artifact-chip"
+                          [attr.data-testid]="'open-artifact-' + a.id"
+                          (click)="openInCanvas(a.tab, a.id)"
+                        >
+                          {{ a.label }}
+                        </button>
+                      }
+                    </div>
+                  }
                 </article>
               } @empty {
                 @if (store.detailError(); as err) {
@@ -563,6 +614,24 @@ export function clock(iso: string | undefined, now = new Date()): string {
                   <p class="empty-state">No messages yet. Say hello.</p>
                 } @else {
                   <p class="empty-state">Loading the conversation…</p>
+                }
+              }
+              @if (
+                row.session.id === director &&
+                  st.live &&
+                  store.directorTranscript();
+                as tr
+              ) {
+                @if (tr.trim()) {
+                  <article
+                    class="msg is-streaming"
+                    data-testid="session-live-transcript"
+                  >
+                    <span class="msg-meta">
+                      <span class="status-pill setup">Live turn</span>
+                    </span>
+                    <div class="msg-body" [gMarkdown]="tr"></div>
+                  </article>
                 }
               }
             </div>
@@ -619,6 +688,19 @@ export function clock(iso: string | undefined, now = new Date()): string {
             </p>
           }
         </section>
+
+        @defer (when canvasOpen()) {
+          @if (canvasOpen() && store.selected(); as row) {
+            <g-session-canvas
+              [sessionTaskId]="row.session.taskId"
+              [repo]="store.selectedDetail()?.repo"
+              [comments]="comments()"
+              [requestedTab]="canvasTab()"
+              [requestedArtifactId]="canvasArtifactId()"
+              (closed)="canvasOpen.set(false)"
+            />
+          }
+        }
       </div>
     </section>
 
@@ -777,6 +859,9 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly newMessage = signal("");
   protected readonly newAttachments = signal<AttachmentUpload[]>([]);
   protected readonly confirmDelete = signal(false);
+  protected readonly canvasOpen = signal(false);
+  protected readonly canvasTab = signal<CanvasTab | null>(null);
+  protected readonly canvasArtifactId = signal<string | null>(null);
 
   private readonly log = viewChild<ElementRef<HTMLElement>>("log");
   private readonly newTitle =
@@ -832,19 +917,54 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly apiGrants = computed(() =>
     apiGrantCount(this.store.selected()?.session),
   );
-  protected readonly modelOptions = computed<PillOption[]>(() => {
-    const models = this.store.models();
-    const cur = this.store.selected()?.session.model;
-    const all = cur && !models.includes(cur) ? [cur, ...models] : models;
-    const def = this.store.defaultModel();
-    return [
-      {
-        value: "",
-        label: def ? `Deployment default (${def})` : "Deployment default",
-      },
-      ...all.map((m) => ({ value: m, label: m })),
-    ];
+  protected readonly modelOptions = computed<PillOption[]>(() =>
+    buildAgentModelOptions(
+      this.store.agentModels(),
+      this.store.models(),
+      this.store.defaultModel(),
+      this.store.selected()?.session.model,
+    ),
+  );
+  protected readonly extractedArtifacts = computed(() =>
+    extractSessionArtifacts(this.comments()),
+  );
+  protected readonly artifactCount = computed(() => {
+    const a = this.extractedArtifacts();
+    return a.docs.length + a.htmlMocks.length + a.plans.length;
   });
+
+  protected commentArtifacts(
+    commentId: number,
+  ): { id: string; tab: CanvasTab; label: string }[] {
+    const a = this.extractedArtifacts();
+    const out: { id: string; tab: CanvasTab; label: string }[] = [];
+    for (const h of a.htmlMocks) {
+      if (h.commentId === commentId) {
+        out.push({ id: h.id, tab: "html", label: `Preview HTML: ${h.title}` });
+      }
+    }
+    for (const p of a.plans) {
+      if (p.commentId === commentId) {
+        out.push({
+          id: p.id,
+          tab: "plan",
+          label: `Workstream plan (${p.plan.tasks.length})`,
+        });
+      }
+    }
+    for (const d of a.docs) {
+      if (d.commentId === commentId) {
+        out.push({ id: d.id, tab: "docs", label: `Open spec: ${d.title}` });
+      }
+    }
+    return out;
+  }
+
+  protected openInCanvas(tab: CanvasTab, id: string): void {
+    this.canvasTab.set(tab);
+    this.canvasArtifactId.set(id);
+    this.canvasOpen.set(true);
+  }
   protected readonly networkOptions = computed<PillOption[]>(() => [
     { value: "", label: "Deployment default" },
     ...this.store.networkOptions().map((v) => ({
@@ -912,11 +1032,11 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
-    this.store.start();
+    this.store.retain("sessions-page");
   }
 
   ngOnDestroy(): void {
-    this.store.stop();
+    this.store.release("sessions-page");
   }
 
   protected statusOf = sessionStatus;

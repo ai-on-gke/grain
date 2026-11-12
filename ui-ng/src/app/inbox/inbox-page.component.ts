@@ -49,10 +49,11 @@ import type {
   AttachmentUpload,
 } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { DirectorContextService } from "../director/director-context.service";
 import { HelpService } from "../services/help.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { ThemeService } from "../services/theme.service";
-import { isHuman } from "../sessions/session-view";
+import { isHuman } from "../sessions/session-helpers";
 import { ActorChipComponent } from "../shared/actor-chip.component";
 import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
@@ -1192,6 +1193,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(InboxStore);
   protected readonly wsStore = inject(WorkstreamsStore);
   protected readonly access = inject(AccessService);
+  private readonly directorCtx = inject(DirectorContextService);
   protected readonly theme = inject(ThemeService);
   private readonly helpService = inject(HelpService);
   private readonly api = inject(GrainApi);
@@ -1391,6 +1393,22 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       if (k.startsWith("task:") && !s) ids.add(k.slice(5));
       this.store.wsTaskIds.set(ids);
     });
+    effect(() => {
+      const sel = this.store.selected();
+      untracked(() => {
+        if (!sel) {
+          this.directorCtx.clearSelection("inbox");
+          return;
+        }
+        this.directorCtx.setSelection({
+          kind: "inbox",
+          id: sel.taskId || sel.key,
+          title: sel.title,
+          repo: sel.repo,
+          state: sel.kind,
+        });
+      });
+    });
   }
 
   // The shell keeps the store running for the rail badge; opening the
@@ -1404,6 +1422,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     if (this.respondTimer) clearTimeout(this.respondTimer);
+    this.directorCtx.clearSelection("inbox");
     this.store.clearLiveTranscript();
     this.store.wsTaskIds.set(null);
     this.wsStore.selectedKey.set(null);

@@ -41,8 +41,10 @@ CI & PULL REQUEST (scoped to this task's repository and branch):
                                          (time blocked is credited back to this run's deadline)
   grain ci run-job <job> [--timeout 9m] [--resume <run-id>]
                                          Run a single named CI job against the current branch commit and wait
+                                         (on GitHub Actions: re-run that job of your pull request's head)
   grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <file>]
                                          Rerun failed (or named) jobs fresh and uncached
+                                         (on GitHub Actions: re-run your pull request's head, no commit pushed)
   grain pr status [--task <id> | --ref <branch> [--repo <r>]]
                                          Latest CI verdict on this task's branch (grain CI, or every GitHub Actions workflow), or another task's or branch's
   grain pr base-status                   Latest CI verdict on the base branch
@@ -271,10 +273,17 @@ var sandboxCommandHelp = map[string]string{
 		"  git push origin HEAD && grain ci wait\n  grain ci wait --jobs go,lint\n",
 	"ci run-job": "grain ci run-job <job> [--timeout 9m] [--resume <run-id>]\n\n" +
 		"Run one named CI job (and its dependencies) against this branch's commit and wait for it,\n" +
-		"with the same 9m slice, resume and wait credit as grain ci wait.\n",
+		"with the same 9m slice, resume and wait credit as grain ci wait. On a repository GitHub\n" +
+		"Actions gates, re-run that job of your pull request's head instead, with no commit pushed,\n" +
+		"then wait for it with grain ci wait.\n",
 	"ci retrigger": "grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <file>]\n\n" +
 		"Rerun this branch's failed jobs fresh and uncached (or the named ones, or --all of them).\n" +
-		"Then wait on it with grain ci wait --resume <run-id>.\n",
+		"Then wait on it with grain ci wait --resume <run-id>.\n\n" +
+		"On a repository GitHub Actions gates (ci_mode: github) it re-runs the GitHub Actions runs at\n" +
+		"your pull request's head instead -- their failed and cancelled jobs, the named jobs, or\n" +
+		"--all -- with no commit pushed, so the head, its approvals and reviews stay put. Each run at\n" +
+		"one commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault\n" +
+		"included. Then wait on it with grain ci wait.\n",
 	"pr open": "grain pr open\n\nOpen the pull request for this task's branch (or find the one already open) and\n" +
 		"report its checks. Its title and description come from the branch's commit messages.\n",
 	"pr reply": "grain pr reply <body|--file f> [--comment-id <id>]\n\n" +

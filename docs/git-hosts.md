@@ -296,7 +296,9 @@ One team, two fake GitHub instances and a plain git server:
 - legacy single-credential teams and host-less repos behave exactly as
   before.
 
-This is `tests/e2e/git_hosts_lifecycle_test.go` (grain/task-4345). One
+This is `tests/e2e/git_hosts_lifecycle_test.go` (grain/task-4345), backed by
+the importable `tests/e2e/hostsrig` package so editions can run the same
+scenarios against a real command-backed source and scratch repository. One
 deployment holds acme/widgets on four hosts side by side: the default
 host, a second GitHub-kind host on its own token and base URL, a plain
 git server (kind `git`, no forge API, added once more with a clone URL),

@@ -1072,7 +1072,9 @@ closed task.
   from [task N](/tasks/N)". It starts with a fresh `task_context`.
 - **The predecessor** closes with outcome `rolled_over` and the note
   "rolled over to #M". It keeps everything; nothing is copied or moved
-  except references.
+  except references. It is not reopened: Reopen and "Reopen and send"
+  are refused with a pointer to the successor, before any comment is
+  written, so the same durable work is never queued twice.
 - **References move** in one transaction: `depends_on` entries naming
   it, `wait_for_task` parks and `task_suspension.resume_on` targets,
   schedules whose standing task it is, notification subjects and

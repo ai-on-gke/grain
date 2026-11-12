@@ -65,3 +65,32 @@ func TestAccessCodeRotateNeedsAnExistingInstallation(t *testing.T) {
 		t.Errorf("rotate with no code file succeeded: %q", out.String())
 	}
 }
+
+// `grain access-code mode recovery|off|on` sets the mode and never prints
+// the code: the two-argument form fell through to "show", so the mode
+// file was never written and the code went to stdout instead
+// (docs/test-runs/2026-11-11-caller-identity.md, F3).
+func TestAccessCodeModeSetsTheModeWithoutPrintingTheCode(t *testing.T) {
+	t.Setenv(ui.LocalAPITokenFileEnv, "")
+	dir := t.TempDir()
+	path := ui.LocalAPITokenPath(dir)
+	const code = "ABCD-EFGH-IJKL-MNOP"
+	if err := os.WriteFile(path, []byte(code+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []ui.AccessCodeMode{ui.AccessCodeRecovery, ui.AccessCodeOff, ui.AccessCodeOn} {
+		var out, errOut bytes.Buffer
+		if err := runAccessCode([]string{"-data-dir", dir, "mode", string(mode)}, &out, &errOut); err != nil {
+			t.Fatalf("grain access-code mode %s: %v (%s)", mode, err, errOut.String())
+		}
+		if strings.Contains(out.String()+errOut.String(), code) {
+			t.Fatalf("grain access-code mode %s printed the code: %q", mode, out.String())
+		}
+		if got := strings.TrimSpace(out.String()); got != string(mode) {
+			t.Errorf("grain access-code mode %s printed %q, want the mode", mode, got)
+		}
+		if got := ui.ReadAccessCodeMode(path); got != mode {
+			t.Errorf("after grain access-code mode %s the mode file says %q", mode, got)
+		}
+	}
+}

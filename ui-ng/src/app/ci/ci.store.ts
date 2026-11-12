@@ -17,7 +17,7 @@ import type { Subscription } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import { AccessService } from "../services/access.service";
-import { errorText } from "../sessions/session-view";
+import { errorText } from "../sessions/session-helpers";
 import {
   type ActionsCacheFlush,
   type CICacheResponse,

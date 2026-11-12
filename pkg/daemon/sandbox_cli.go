@@ -59,6 +59,7 @@ var (
 	_ gitproxy.CLIActions             = sandboxCLIGate{}
 	_ gitproxy.CLITaskActions         = sandboxCLIGate{}
 	_ gitproxy.CLIGitHubCheckActions  = sandboxCLIGate{}
+	_ gitproxy.CLIGitHubRerunActions  = sandboxCLIGate{}
 	_ gitproxy.CLIReviewThreadActions = sandboxCLIGate{}
 )
 
@@ -190,6 +191,14 @@ func (g sandboxCLIGate) WaitForGitHubChecks(ctx context.Context, taskID string,
 		return mcp.GitHubCheckWaitResult{}, err
 	}
 	return a.WaitForGitHubChecks(ctx, taskID, timeout, poll, onPoll)
+}
+
+func (g sandboxCLIGate) RerunGitHubChecks(ctx context.Context, taskID string, req gitproxy.CIStartRequest) (gitproxy.CLIActionResult, error) {
+	a, err := g.actions()
+	if err != nil {
+		return gitproxy.CLIActionResult{}, err
+	}
+	return a.RerunGitHubChecks(ctx, taskID, req)
 }
 
 // CreditCLIWait is gitproxy.CLIWaitCreditor over the same registry

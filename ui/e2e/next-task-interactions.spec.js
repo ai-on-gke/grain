@@ -180,6 +180,10 @@ test("Inbox conversation: Expand, Full screen + Escape draft round trip, compose
     const row = page.getByTestId("queue-row").filter({ hasText: qTitle });
     await expect(row).toBeVisible();
     await row.locator(".row-main").click();
+    await expect(page.locator("g-conversation .convo-host")).toBeVisible();
+    await expect(
+      page.locator('g-conversation [data-testid="task-composer"]'),
+    ).toBeVisible();
 
     // Composer stays inside its host card without horizontal overflow.
     const box = await page.evaluate(() => {

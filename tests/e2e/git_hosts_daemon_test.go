@@ -44,7 +44,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -59,13 +58,14 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy/gitproxytest"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
+	"github.com/ai-on-gke/grain/tests/e2e/hostsrig"
 )
 
-// forgeUpstream is a hostUpstream with a forge API beside its git: a
+// forgeUpstream is a HostUpstream with a forge API beside its git: a
 // githubsim over the same bare repository, reached under /api/v3 (and
 // GraphQL at /api/graphql), as a GitHub Enterprise Server lays them out.
 type forgeUpstream struct {
-	*hostUpstream
+	*hostsrig.HostUpstream
 
 	// mu serialises the sim: the daemon's requests and the test's own
 	// reads and pokes of its fields.
@@ -77,13 +77,13 @@ type forgeUpstream struct {
 }
 
 func newForgeUpstream(t *testing.T, kind, host, secret string) *forgeUpstream {
-	return &forgeUpstream{hostUpstream: newHostUpstream(t, kind, host, secret)}
+	return &forgeUpstream{HostUpstream: hostsrig.NewHostUpstream(t, kind, host, secret)}
 }
 
 // start seeds the repository and puts the sim over it.
 func (f *forgeUpstream) start() {
-	f.newRepo()
-	f.sim = githubsim.New(gitHostsOwner, f.repo, f.bare(), "main")
+	f.NewRepo()
+	f.sim = githubsim.New(hostsrig.DefaultOwner, f.Repo, f.Bare(), "main")
 	f.sim.PullRequestBase = githubsim.UniquePullRequestBase()
 }
 
@@ -95,7 +95,7 @@ func (f *forgeUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/api/v3/"):
 		r.URL.Path, r.URL.RawPath = strings.TrimPrefix(path, "/api/v3"), ""
 	default:
-		f.hostUpstream.ServeHTTP(w, r)
+		f.HostUpstream.ServeHTTP(w, r)
 		return
 	}
 	f.mu.Lock()
@@ -140,15 +140,6 @@ func (f *forgeUpstream) pullRequestFor(branch string) (githubsim.PullRequest, bo
 		}
 	})
 	return pr, found
-}
-
-// headSHA is branch's tip on this host.
-func (u *hostUpstream) headSHA(branch string) string {
-	out, err := exec.Command("git", "--git-dir", u.bare(), "rev-parse", "refs/heads/"+branch).Output()
-	if err != nil {
-		u.t.Fatalf("reading %s on %s: %v", branch, u.label(), err)
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // recordingUpstream is the default host: git, and a record of every
@@ -210,7 +201,7 @@ echo '{"type":"result","result":"done"}'
 type daemonHostsRig struct {
 	def     *recordingUpstream
 	ghe     *forgeUpstream
-	plain   *hostUpstream
+	plain   *hostsrig.HostUpstream
 	depot   *forgeUpstream
 	agent   stubAgent
 	d       *liveDaemon
@@ -222,6 +213,7 @@ type daemonHostsRig struct {
 
 func newDaemonHostsRig(t *testing.T) *daemonHostsRig {
 	t.Helper()
+	gitproxytest.Install()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -235,23 +227,23 @@ func newDaemonHostsRig(t *testing.T) *daemonHostsRig {
 	r := &daemonHostsRig{
 		def:   &recordingUpstream{},
 		ghe:   newForgeUpstream(t, "the second GitHub host", "", "ghe-secret"),
-		plain: newHostUpstream(t, "the plain git server", "", "plain-secret"),
-		depot: newForgeUpstream(t, "the command-backed forge", depotHost, fakeForgeCLITokenFor(depotHost)),
+		plain: hostsrig.NewHostUpstream(t, "the plain git server", "", "plain-secret"),
+		depot: newForgeUpstream(t, "the command-backed forge", gitproxytest.Host, hostsrig.FakeForgeCLITokenFor(gitproxytest.Host)),
 	}
 	defDir := t.TempDir()
 	r.def.backend = gitHTTPBackend(defDir)
 	defURL := newTestServer(t, r.def)
 	gheURL := newTestServer(t, r.ghe)
 	plainURL := newTestServer(t, r.plain)
-	r.ghe.host, r.plain.host = mustHost(t, gheURL), mustHost(t, plainURL)
+	r.ghe.Host, r.plain.Host = mustHost(t, gheURL), mustHost(t, plainURL)
 	// Every host holds the same owner/name (gitHostsRepo), so a forge
 	// call that named the repository without its host would be resolved
 	// by storeRepoHosts to the default host -- which records it, and the
 	// tests below fail on it.
-	t.Setenv(fakeForgeCLIUpstreamEnv, newTestServer(t, r.depot))
+	t.Setenv(hostsrig.FakeForgeCLIUpstreamEnv, newTestServer(t, r.depot))
 	r.ghe.start()
 	r.depot.start()
-	r.plain.newRepo()
+	r.plain.NewRepo()
 
 	r.dataDir = t.TempDir()
 	sandboxDir := t.TempDir()
@@ -269,27 +261,27 @@ func newDaemonHostsRig(t *testing.T) *daemonHostsRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, token := range map[string]string{"team-default": "default-secret", "ghe": r.ghe.secret, "plain": r.plain.secret} {
+	for name, token := range map[string]string{"team-default": "default-secret", "ghe": r.ghe.Secret, "plain": r.plain.Secret} {
 		if err := creds.SetToken(name, token); err != nil {
 			t.Fatalf("writing %s's token: %v", name, err)
 		}
 	}
 	for name, h := range map[string]gitproxy.CredentialHost{
-		"ghe":   {Host: r.ghe.host, Kind: model.GitHostGitHub, BaseURL: gheURL},
-		"plain": {Host: r.plain.host, Kind: model.GitHostGit, BaseURL: plainURL},
+		"ghe":   {Host: r.ghe.Host, Kind: model.GitHostGitHub, BaseURL: gheURL},
+		"plain": {Host: r.plain.Host, Kind: model.GitHostGit, BaseURL: plainURL},
 	} {
 		if err := creds.SetHost(name, h); err != nil {
 			t.Fatalf("recording %s's host: %v", name, err)
 		}
 	}
-	if err := creds.SetAmbientOn("depot", gitproxy.CredentialHost{Host: depotHost, Kind: model.GitHostGitHub},
+	if err := creds.SetAmbientOn("depot", gitproxy.CredentialHost{Host: gitproxytest.Host, Kind: model.GitHostGitHub},
 		gitproxy.AmbientSourceAuto); err != nil {
 		t.Fatalf("recording the forge's ambient credential: %v", err)
 	}
 	seedConnections(t, r.cfg, []model.TeamGitConnection{
-		{Credential: "ghe", Host: r.ghe.host},
-		{Credential: "plain", Host: r.plain.host},
-		{Credential: "depot", Host: depotHost},
+		{Credential: "ghe", Host: r.ghe.Host},
+		{Credential: "plain", Host: r.plain.Host},
+		{Credential: "depot", Host: gitproxytest.Host},
 	}, []model.AgentBackend{{ID: "claude", Framework: model.AgentFrameworkClaude, Models: []string{"claude-sonnet-5"}}},
 		map[string]string{"claude": "sk-ant-oat01-stub"})
 	store, db, err := daemon.OpenStore("sqlite", "", r.dataDir)
@@ -306,7 +298,7 @@ func newDaemonHostsRig(t *testing.T) *daemonHostsRig {
 
 	r.d = startDaemon(t, r.cfg)
 	r.c = ui.NewHTTPClient(r.d.base)
-	for _, ref := range []model.RepoRef{r.ghe.ref(), r.plain.ref(), r.depot.ref()} {
+	for _, ref := range []model.RepoRef{r.ghe.Ref(), r.plain.Ref(), r.depot.Ref()} {
 		accessDo(t, http.MethodPost, r.d.base+"/api/repos", `{"repo":"`+ref.String()+`"}`)
 	}
 	return r
@@ -402,19 +394,19 @@ func TestADaemonFinishesARunOnEachHostThroughItsOwnForge(t *testing.T) {
 
 	prs := map[*forgeUpstream]string{}
 	for _, h := range []*forgeUpstream{r.ghe, r.depot} {
-		id := r.file(t, h.ref(), "change on "+h.label())
+		id := r.file(t, h.Ref(), "change on "+h.Label())
 		branch := r.branch(t, id)
 		var pr githubsim.PullRequest
-		waitUntil(t, "a pull request on "+h.label(), 2*time.Minute, func() bool {
+		waitUntil(t, "a pull request on "+h.Label(), 2*time.Minute, func() bool {
 			var ok bool
 			pr, ok = h.pullRequestFor(branch)
 			return ok
 		})
 		if pr.Base != "main" {
-			t.Errorf("the pull request on %s is into %q, want main", h.label(), pr.Base)
+			t.Errorf("the pull request on %s is into %q, want main", h.Label(), pr.Base)
 		}
 		// The task's pull request keeps its host, so the UI links it there.
-		want := fmt.Sprintf("%s#%d", h.ref(), pr.Number)
+		want := fmt.Sprintf("%s#%d", h.Ref(), pr.Number)
 		waitUntil(t, "task "+id+" to record its pull request", 30*time.Second, func() bool {
 			got, _ := r.taskJSON(t, id)["pullRequest"].(string)
 			return got == want
@@ -424,14 +416,14 @@ func TestADaemonFinishesARunOnEachHostThroughItsOwnForge(t *testing.T) {
 	// Each forge's API was only ever sent its own credential: the second
 	// GitHub host its token, and the command-backed forge only ever asked
 	// through forgecli for its own host.
-	for h, want := range map[*forgeUpstream]string{r.ghe: r.ghe.secret, r.depot: depotHost} {
+	for h, want := range map[*forgeUpstream]string{r.ghe: r.ghe.Secret, r.depot: gitproxytest.Host} {
 		seen := h.apiSeen()
 		if len(seen) == 0 {
-			t.Errorf("%s's forge API was never asked anything", h.label())
+			t.Errorf("%s's forge API was never asked anything", h.Label())
 		}
 		for _, got := range seen {
 			if got != want {
-				t.Errorf("%s's forge API was sent %q, want only %q", h.label(), got, want)
+				t.Errorf("%s's forge API was sent %q, want only %q", h.Label(), got, want)
 				break
 			}
 		}
@@ -440,12 +432,12 @@ func TestADaemonFinishesARunOnEachHostThroughItsOwnForge(t *testing.T) {
 	// The pull request's checks are read from the second GitHub host, at
 	// the head the agent pushed.
 	gheTask := prs[r.ghe]
-	head := r.ghe.headSHA(r.branch(t, gheTask))
-	waitUntil(t, "the checks on "+r.ghe.label()+"'s pull request to be read there", time.Minute, func() bool {
+	head := r.ghe.HeadSHA(r.branch(t, gheTask))
+	waitUntil(t, "the checks on "+r.ghe.Label()+"'s pull request to be read there", time.Minute, func() bool {
 		found := false
 		r.ghe.with(func(s *githubsim.Sim) {
 			for _, c := range s.Calls {
-				if c.Method == http.MethodGet && strings.HasPrefix(c.Path, "/repos/acme/"+r.ghe.repo+"/commits/"+head+"/check-runs") {
+				if c.Method == http.MethodGet && strings.HasPrefix(c.Path, "/repos/acme/"+r.ghe.Repo+"/commits/"+head+"/check-runs") {
 					found = true
 				}
 			}
@@ -454,14 +446,14 @@ func TestADaemonFinishesARunOnEachHostThroughItsOwnForge(t *testing.T) {
 	})
 
 	// The plain git server: pushed, no pull request, and the note saying so.
-	id := r.file(t, r.plain.ref(), "change on the plain git server")
+	id := r.file(t, r.plain.Ref(), "change on the plain git server")
 	plainBranch := r.branch(t, id)
-	note := "no pull request opened because " + r.plain.host + " is a plain git host"
+	note := "no pull request opened because " + r.plain.Host + " is a plain git host"
 	waitUntil(t, "the plain git server's task to say no pull request was opened", time.Minute, func() bool {
 		return anyContains(r.comments(t, id), note)
 	})
-	if got := r.plain.branchTip(plainBranch); !strings.HasPrefix(got, "agent change on") {
-		t.Errorf("%s on %s = %q, want the agent's commit", plainBranch, r.plain.label(), got)
+	if got := r.plain.BranchTip(plainBranch); !strings.HasPrefix(got, "agent change on") {
+		t.Errorf("%s on %s = %q, want the agent's commit", plainBranch, r.plain.Label(), got)
 	}
 	if got, _ := r.taskJSON(t, id)["pullRequest"].(string); got != "" {
 		t.Errorf("the task on the plain git server has pull request %q", got)
@@ -480,7 +472,7 @@ func TestADaemonParksATaskWhoseHostLostItsConnectionNamingTheHost(t *testing.T) 
 	// Filed while the connection is there, and approved once it is gone:
 	// filing itself is refused on a host with no connection.
 	created, err := r.c.CreateTask(context.Background(), ui.CreateTaskRequest{
-		Title: "lose the connection", Description: "work on " + r.ghe.ref().String(), Repo: r.ghe.ref().String(),
+		Title: "lose the connection", Description: "work on " + r.ghe.Ref().String(), Repo: r.ghe.Ref().String(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -489,7 +481,7 @@ func TestADaemonParksATaskWhoseHostLostItsConnectionNamingTheHost(t *testing.T) 
 	store := readStore(t, r.dataDir)
 	if err := store.UpdateConfig(context.Background(), func(c *model.Config) error {
 		c.GitConnections = slices.DeleteFunc(c.GitConnections, func(conn model.TeamGitConnection) bool {
-			return conn.Host == r.ghe.host
+			return conn.Host == r.ghe.Host
 		})
 		return nil
 	}); err != nil {
@@ -503,7 +495,7 @@ func TestADaemonParksATaskWhoseHostLostItsConnectionNamingTheHost(t *testing.T) 
 	// that makes the task awaiting_reply (stopOnAccessRefused). Waiting on
 	// the comment alone reads the state between them on a loaded runner.
 	waitUntil(t, "the task to be parked on the refusal", 2*time.Minute, func() bool {
-		return anyContains(r.comments(t, id), r.ghe.host) && r.taskJSON(t, id)["state"] == "awaiting_reply"
+		return anyContains(r.comments(t, id), r.ghe.Host) && r.taskJSON(t, id)["state"] == "awaiting_reply"
 	})
 	if !anyContains(r.comments(t, id), "cloning it was refused") {
 		t.Errorf("the task's conversation says %q, want the clone's refusal", r.comments(t, id))

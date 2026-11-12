@@ -418,20 +418,35 @@ func (a SandboxCLIActions) ListAPIRoutes(ctx context.Context, callerTaskID strin
 }
 
 func (a SandboxCLIActions) resolveCITask(ctx context.Context, taskID string) (*model.Task, error) {
-	if a.Client == nil || a.Client.Store == nil {
+	if a.Client == nil {
 		return nil, nil
 	}
-	task, err := a.Client.Store.GetTask(ctx, taskID)
+	task, err := a.Client.resolveCITask(ctx, taskID)
+	return task, cliActionError(err)
+}
+
+func (c *Client) resolveCITask(ctx context.Context, taskID string) (*model.Task, error) {
+	if c == nil || c.Store == nil {
+		return nil, nil
+	}
+	task, err := c.Store.GetTask(ctx, taskID)
 	if err != nil {
-		return nil, cliActionError(err)
+		return nil, err
 	}
 	if task == nil {
-		return nil, fmt.Errorf("%w: task %s not found", namespace.ErrNotFound, taskID)
+		return nil, &NotFoundError{ID: taskID, message: fmt.Sprintf("task %s not found", taskID)}
 	}
 	if ownerID, inPlace := task.CIOwner(); inPlace {
-		if owner, oerr := a.Client.Store.GetTask(ctx, ownerID); oerr == nil && owner != nil && owner.Target != nil {
-			task = owner
+		owner, oerr := c.Store.GetTask(ctx, ownerID)
+		if oerr != nil {
+			return nil, oerr
 		}
+		if task.Target == nil || owner == nil || owner.Target == nil || !owner.Target.Same(*task.Target) ||
+			owner.BranchName() != task.BranchName() {
+			return nil, validationErrorf("task %s reviews task %s in place, whose branch is not %s on %s",
+				taskID, ownerID, task.BranchName(), task.Target)
+		}
+		task = owner
 	}
 	return task, nil
 }

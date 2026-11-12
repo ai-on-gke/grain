@@ -32,6 +32,7 @@ import {
 import { Router, RouterLink } from "@angular/router";
 import type { Board, Task } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { DirectorContextService } from "../director/director-context.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { ViewFilter } from "../services/view-filter.service";
@@ -1332,6 +1333,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(TasksStore);
   private readonly wsStore = inject(WorkstreamsStore);
   private readonly access = inject(AccessService);
+  private readonly directorCtx = inject(DirectorContextService);
   private readonly snackbar = inject(SnackbarService);
   private readonly filter = inject(ViewFilter);
   private readonly router = inject(Router);
@@ -1648,6 +1650,23 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       const i = this.rowIds().indexOf(this.effectiveSelectedId() ?? "");
       if (i >= 0) this.lastIndex = i;
     });
+    effect(() => {
+      const id = this.effectiveSelectedId();
+      const t = id ? this.store.find(id) : undefined;
+      untracked(() => {
+        if (!id) {
+          this.directorCtx.clearSelection("task");
+          return;
+        }
+        this.directorCtx.setSelection({
+          kind: "task",
+          id,
+          title: t?.title,
+          repo: t?.repo,
+          state: t?.state,
+        });
+      });
+    });
     // ?newBoard=1 from the shell's Create menu opens the Save Board bar.
     effect(() => {
       if (!this.newBoard()) return;
@@ -1711,6 +1730,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.directorCtx.clearSelection("task");
     this.store.stop();
     this.sp.detach();
     for (const off of this.unregister) off();

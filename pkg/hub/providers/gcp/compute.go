@@ -69,24 +69,6 @@ func WithComputeBaseURL(baseURL string) ComputeOption {
 	}
 }
 
-// WithComputeHubID overrides the `grain-registry` label value enforced on VMs and disks.
-func WithComputeHubID(id string) ComputeOption {
-	return func(c *GCECompute) {
-		if v := strings.TrimSpace(id); v != "" {
-			c.hubID = v
-		}
-	}
-}
-
-// WithOperationPollInterval overrides the polling interval when waiting on GCE zone operations.
-func WithOperationPollInterval(d time.Duration) ComputeOption {
-	return func(c *GCECompute) {
-		if d > 0 {
-			c.pollInterval = d
-		}
-	}
-}
-
 // GCECompute implements `registry.Compute` against the Google Compute Engine v1 REST API,
 // enforcing project, zone, prefix (`vm_prefix`), and label (`grain-registry`, `grain-entry`,
 // `grain-generation`) scope checks on every operation.

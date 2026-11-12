@@ -572,16 +572,20 @@ No request it allows approves a release: that is
 `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve`, which
 only a person may call (design/design/release-from-trunk.design.md §4).
 
-The job finds the listener in `/home/debian/.grain-api/`:
+Every step of the job finds the listener's address and its token in its
+environment, as `GRAIN_API_URL` and `GRAIN_API_TOKEN`:
 
 ```sh
-. /home/debian/.grain-api/env   # GRAIN_API_URL, GRAIN_API_TOKEN
 curl -fsS -H "Authorization: Bearer $GRAIN_API_TOKEN" \
   "$GRAIN_API_URL/api/ci/runs?ref=main&limit=100"
 ```
 
-The address and the token are also in `url` and `token` in the same
-directory. The token stops working when the job's sandbox is released.
+A step that sets either variable itself keeps its own value. In a VM or
+container sandbox both are also in `/home/debian/.grain-api/` (`url`,
+`token`, and `env`, which exports them). A host sandbox (`-host-sandboxes`)
+writes those files under the job's own directory instead, where that path
+does not reach them, so read the environment. The token stops working when
+the job's sandbox is released.
 
 Like repository access, a job gets api grants by declaring them
 (`capabilities: ["https://grain.dev/capabilities/api#release-gate-read"]`,
