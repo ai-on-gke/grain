@@ -230,6 +230,7 @@ export const ROUTE_SCOPES = {
   "POST /api/capability-servers/test": "capabilities:admin",
   "POST /api/capability-servers/test-script": "capabilities:admin",
   "POST /api/ci/runs": "ci:write",
+  "POST /api/ci/runs/{id}/rerun": "ci:write",
   "POST /api/console-sessions": "sessions:write",
   "POST /api/console-sessions/{id}/cancel": "sessions:write",
   "POST /api/console-sessions/{id}/restart": "sessions:write",
