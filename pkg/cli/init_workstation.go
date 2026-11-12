@@ -217,9 +217,10 @@ func renderWorkstationPolicy(o workstationOptions) string {
 	// it is the run's own wait_for_checks against that repository's
 	// .grain/workflows. Denied, every such task was held at dispatch
 	// forever, and a standalone node could not test its own change. It
-	// is written as the grant itself, arguments and all, so it admits
-	// exactly what the retired bare name an older init wrote admits
-	// (pkg/policy's allowsCapability) and nothing wider.
+	// is written as the exact grant, grain#ci={}, which admits what the
+	// retired bare name older inits wrote did -- that grant, and a task
+	// still granted the bare name (pkg/policy's allowsCapability) --
+	// and no grain#ci with other arguments.
 	allow := []string{grainci.Grant}
 	for _, c := range o.Capabilities {
 		if !strings.EqualFold(c, grainci.LegacyName) && !grainci.IsGrant(c) {

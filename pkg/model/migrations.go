@@ -1046,6 +1046,12 @@ var Migrations = []Migration{
 			"ALTER TABLE `template` ADD COLUMN `sandbox` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version: 144,
+		Description: "take the copies of a template's admission, hosting and grants off the schedules that fire it, " +
+			"leaving what each schedule adds to its template (grain/task-4607)",
+		Up: migrateScheduleOwnSettings,
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

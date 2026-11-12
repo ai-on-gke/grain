@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/actionscache"
+	"github.com/ai-on-gke/grain/pkg/capability/ciapi"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/portforward"
 	"github.com/ai-on-gke/grain/pkg/ci"
@@ -863,7 +864,11 @@ type CiSandbox struct {
 	SandboxName       string
 	capabilityContext model.CapabilityContext
 	materialized      []model.Materialized
-	reservation       *ciGrantReservation
+	// stepEnv is what the job's capabilities export in every step --
+	// GRAIN_API_URL and GRAIN_API_TOKEN for an api grant (ciapi.StepEnv)
+	// -- under whatever the step sets itself.
+	stepEnv     map[string]string
+	reservation *ciGrantReservation
 	// counted closes this sandbox's entry in the lifetime figures: how
 	// long it lived, added to the CI total. orchestrator.SandboxMeter
 	// hands it back from Acquire and it is called from Release, once --
@@ -1040,6 +1045,7 @@ func (s *CiSandbox) prepareJob(ctx context.Context, repo model.RepoRef, ref stri
 		if err != nil {
 			return fmt.Errorf("materializing CI capabilities: %w", err)
 		}
+		s.stepEnv = ciapi.StepEnv(s.materialized)
 		s.grantRepoAccess(event, trustedSchedule, ids, withholdEventGated)
 		s.recordWithheldCapabilities(reg, event, trustedSchedule, withholdEventGated, ids, true)
 	}
@@ -1665,6 +1671,7 @@ func (s *CiSandbox) exec(ctx context.Context, cmd ci.Command, out func(string)) 
 		// (sandboxaccess.SandboxLostFault) and re-runs as infra.
 		return ci.CommandResult{ExitCode: 2, Output: fmt.Sprintf("%q is not a usable working directory\n", cmd.Dir)}, nil
 	}
+	cmd.Env = s.withStepEnv(cmd.Env)
 	var prefix string
 	if cmd.Attach == nil || cmd.Attach.ExecID == "" {
 		prefix = s.takeStepPrefix()
@@ -1725,6 +1732,22 @@ func (s *CiSandbox) exec(ctx context.Context, cmd ci.Command, out func(string)) 
 			s.SandboxName, mcp.SessionCutOffNotice)
 	}
 	return ci.CommandResult{Output: prefix + result.Text, ExitCode: code}, nil
+}
+
+// withStepEnv is env with s.stepEnv beneath it: a name the step sets
+// itself keeps the step's value.
+func (s *CiSandbox) withStepEnv(env map[string]string) map[string]string {
+	if len(s.stepEnv) == 0 {
+		return env
+	}
+	out := make(map[string]string, len(env)+len(s.stepEnv))
+	for name, value := range s.stepEnv {
+		out[name] = value
+	}
+	for name, value := range env {
+		out[name] = value
+	}
+	return out
 }
 
 // ciStepFollower adapts pkg/ci's chunk-at-a-time sink to the io.Writer a

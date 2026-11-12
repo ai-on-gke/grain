@@ -456,7 +456,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if got := byID[model.GitHubSandboxRepoGrant].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
 		t.Errorf("github-sandbox DefaultRepos = %v, want [acme/gadgets]", got)
 	}
-	if got := byID[model.ImageSigningRef+"={}"].DefaultRepos; len(got) != 0 {
+	if got := byID[model.CanonicalLegacyGrant("image-signing")].DefaultRepos; len(got) != 0 {
 		t.Errorf("image-signing DefaultRepos = %v, want none", got)
 	}
 
@@ -464,7 +464,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &empty}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"github-sandbox"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{model.GitHubSandboxRepoRef}); err != nil {
 		t.Fatal(err)
 	}
 	read, err = c.GetSettings(ctx)

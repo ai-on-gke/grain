@@ -227,7 +227,9 @@ func (s *Store) RequestCompaction(ctx context.Context, taskID, by string, at tim
 // CompactTask folds taskID's conversation up to throughID into handover:
 // it posts handover as the task's newest handover comment, moves the
 // cursor to throughID (never backwards), bumps the handover version and
-// clears any standing compaction request. throughID <= 0 means every
+// clears any standing compaction request -- or, when handover is the
+// task's newest handover already, confirms it instead of bumping the
+// version. throughID <= 0 means every
 // comment posted before this call.
 //
 // author is the comment's attribution: an agent's compaction is posted
@@ -248,7 +250,17 @@ func (s *Store) CompactTask(ctx context.Context, taskID, handover string, throug
 			throughID = last.ID
 		}
 	}
-	if _, err := s.AddComment(ctx, Comment{
+	// The same handover compacted again is a confirmation, as it is
+	// written again with write_handover: the cursor still moves, but
+	// there is no new version and no second copy of it on the task.
+	latest, err := s.LatestHandover(ctx, taskID)
+	if err != nil {
+		return TaskContext{}, err
+	}
+	bump := 1
+	if latest != nil && strings.TrimSpace(latest.Body) == handover {
+		bump = 0
+	} else if _, err := s.AddComment(ctx, Comment{
 		TaskID:    taskID,
 		Author:    author,
 		Body:      handover,
@@ -264,10 +276,10 @@ func (s *Store) CompactTask(ctx context.Context, taskID, handover string, throug
 		_, err := tx.ExecContext(ctx,
 			"UPDATE `task_context` SET "+
 				"`compacted_through` = CASE WHEN `compacted_through` > ? THEN `compacted_through` ELSE ? END, "+
-				"`compacted_at` = ?, `compacted_by` = ?, `handover_version` = `handover_version` + 1, "+
+				"`compacted_at` = ?, `compacted_by` = ?, `handover_version` = `handover_version` + ?, "+
 				"`handover_confirmed_at` = ?, `compact_requested_at` = NULL, `compact_requested_by` = '' "+
 				"WHERE `task_id` = ?",
-			throughID, throughID, at.UTC(), by, at.UTC(), taskID)
+			throughID, throughID, at.UTC(), by, bump, at.UTC(), taskID)
 		return err
 	}); err != nil {
 		return TaskContext{}, err

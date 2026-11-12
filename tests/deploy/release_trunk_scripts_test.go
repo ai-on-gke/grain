@@ -30,14 +30,15 @@ import (
 // patch-release script and the guard release.yml and promote.yml run
 // on a vX.Y.Z tag, and scripts/release-notes_test.sh drives the release
 // notes, the release body and the breaking-change gate against a
-// throwaway history. This is what runs them in CI.
+// throwaway history, and scripts/release-images_test.sh drives the
+// reviewed-merge gate's skip. This is what runs them in CI.
 func TestReleaseTrainShellSuites(t *testing.T) {
 	for _, tool := range []string{"git", "jq"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s not on PATH: %v", tool, err)
 		}
 	}
-	for _, suite := range []string{"candidate-gate_test.sh", "release-from-trunk_test.sh", "release-patch_test.sh", "release-notes_test.sh", "release-train-actions_test.sh", "release-train-task_test.sh", "release-assets_test.sh"} {
+	for _, suite := range []string{"candidate-gate_test.sh", "release-from-trunk_test.sh", "release-patch_test.sh", "release-notes_test.sh", "release-train-actions_test.sh", "release-train-task_test.sh", "release-assets_test.sh", "release-images_test.sh"} {
 		t.Run(suite, func(t *testing.T) {
 			cmd := exec.Command("bash", filepath.Join(repoRoot(t), "scripts", suite))
 			out, err := cmd.CombinedOutput()

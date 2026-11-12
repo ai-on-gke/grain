@@ -120,7 +120,7 @@ approvers: [me@example.com, lead@example.com]
 # regardless of arguments; one with =<json> matches only those arguments.
 capabilities:
   # When set, every capability a task may be granted.
-  allow: ["https://grain.dev/capabilities/api#self-debug", gcp-key:team-*]
+  allow: [api:self-debug, gcp-key:team-*]
   # Refused whatever allow says.
   deny: [gcp-key:team-secret, repo-write:*]
 
@@ -156,6 +156,11 @@ A policy file is not rewritten by the schema migrations that retire a
 capability. A retired name in it still binds what the name became: an
 `allow` or `deny` naming `self-debug` admits or refuses both
 `api:self-debug` and `https://grain.dev/capabilities/grain#source={}`.
+The other way round holds too: a task still granted a retired name is
+judged as the grants it became. A task granted `self-debug` is admitted
+by an `allow` naming both `https://grain.dev/capabilities/api#self-debug`
+and `https://grain.dev/capabilities/grain#source={}` (not by one naming
+only one of them), and refused by a `deny` naming either.
 
 ### The Director and grain/config
 
@@ -168,29 +173,14 @@ all of these holds it, and the Director never runs:
   writes.
 - Every grant the Director is given in `capabilities.allow`:
   `https://grain.dev/capabilities/api#self-debug`,
-  `https://grain.dev/capabilities/grain#source`,
-  `https://grain.dev/capabilities/grain#journal`,
-  `…/api#deployment:read`, `https://grain.dev/capabilities/grain#health`,
+  `https://grain.dev/capabilities/grain#source={}`,
+  `https://grain.dev/capabilities/grain#journal={}`,
+  `https://grain.dev/capabilities/api#deployment:read`,
+  `https://grain.dev/capabilities/grain#health={}`,
   `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`,
-  `…/api#task-admin`, `…/api#capabilities:read`, `…/api#capabilities:detach`,
-  `…/api#settings:read`, `…/api#repos:read`, `…/api#releases:read`,
-  `…/api#schedules:read`, `…/api#templates:read`, `…/api#suites:read`,
-  `…/api#dispatch:read` and `…/api#ci-read`, plus any your build adds.
-  `grain init workstation` writes each as a reference without `=`, which
-  admits the method whatever its arguments, so a repo-scoped
-  `…/api#ci-read` `{"repo": ...}` (what grain grants every task on a
-  repository grain CI does not gate) is admitted too. It writes grain#ci
-  as `https://grain.dev/capabilities/grain#ci={}`, the exact grant.
-  A policy an older init wrote may name some of these by their retired
-  spellings (`grain-ci`, `self-debug`, `api:deployment:read`,
-  `api:ci-read`). `grain-ci` admits exactly what `grain#ci={}` admits.
-  `self-debug` and `api:<scope>` admit only the unscoped grants, the same
-  as their references written with `={}` (`self-debug` is one entry per
-  grant it became: `…/api#self-debug={}` and `…/grain#source={}`). So
-  such a policy holds a task with a repo-scoped `…/api#ci-read`; add
-  `https://grain.dev/capabilities/api#ci-read` to admit it. It may also list `durable`,
-  which is no longer a grant (it became the `admission` task setting):
-  that entry admits nothing a task is granted now.
+  its read-only api grants (`https://grain.dev/capabilities/api#task-admin`,
+  `...#settings:read` and the like) and
+  `https://grain.dev/capabilities/api#ci-read`, plus any your build adds.
   A held task's log line names the one that refused it.
 - The Director's network in `network`. It asks for `none`, which a
   granule sandbox honours. A host or container sandbox cannot withhold a

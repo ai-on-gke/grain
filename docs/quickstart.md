@@ -156,23 +156,15 @@ capabilities:
     - "https://grain.dev/capabilities/grain#ci={}"  # and the ones you named
     # The Director chat's own grants. Remove one and the Director is held for it.
     - "https://grain.dev/capabilities/api#self-debug"
-    - "https://grain.dev/capabilities/grain#source"
-    - "https://grain.dev/capabilities/grain#journal"
+    - "https://grain.dev/capabilities/grain#source={}"
+    - "https://grain.dev/capabilities/grain#journal={}"
     - "https://grain.dev/capabilities/api#deployment:read"
-    - "https://grain.dev/capabilities/grain#health"
-    - "https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}"
+    - "https://grain.dev/capabilities/grain#health={}"
+    - 'https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}'
     - "https://grain.dev/capabilities/api#task-admin"
-    - "https://grain.dev/capabilities/api#capabilities:read"
-    - "https://grain.dev/capabilities/api#capabilities:detach"
-    - "https://grain.dev/capabilities/api#settings:read"
-    - "https://grain.dev/capabilities/api#repos:read"
-    - "https://grain.dev/capabilities/api#releases:read"
-    - "https://grain.dev/capabilities/api#schedules:read"
-    - "https://grain.dev/capabilities/api#templates:read"
-    - "https://grain.dev/capabilities/api#suites:read"
-    - "https://grain.dev/capabilities/api#dispatch:read"
+    # ... and the Director's other read-only api grants, ending with
     - "https://grain.dev/capabilities/api#ci-read"
-network: ["open", "none"]
+network: ["open"]
 allow_external_on_host_sandboxes: false
 ```
 
@@ -182,26 +174,21 @@ from anybody else that does not carry your approval.
 
 Init lists some things you did not name:
 
-- `https://grain.dev/capabilities/grain#ci={}` (formerly `grain-ci`, which
-  an older init wrote and which local policy still reads as this grant).
-  Grain grants it to every task on a repository whose CI mode is grain,
-  and it carries no credential. It is the run's own `wait_for_checks`
-  against the repository's `.grain/workflows`.
+- `https://grain.dev/capabilities/grain#ci={}`: grain CI. Grain grants
+  it to every task on a repository whose CI mode is grain, and it carries
+  no credential. It is the run's own `wait_for_checks` against the
+  repository's `.grain/workflows`. A policy written by an older init
+  names it `grain-ci`, its retired bare name, which local policy still
+  reads as this grant.
 - `grain/config`: this deployment's own state repository, which the
   Director reads.
 - The Director chat's own grants, named exactly so you can see each one
   and remove it. They are names, not patterns, but any task may be granted
-  them, not only the Director. A policy an older init wrote names some of
-  them by their retired spellings (`self-debug`, `api:deployment:read`,
-  `api:ci-read`), and a re-run keeps that file. Each retired entry admits
-  what its references admit, except a repo-scoped grant: `api:ci-read`
-  refuses the `…/api#ci-read` `{"repo": ...}` grain gives every task on a
-  repository grain CI does not gate, and `…/api#ci-read` admits it.
-- `none` beside `open` in `network`: `none` is less reach than `open`, and
-  is what the Director asks for on a sandbox that can isolate (granule). A
-  host or container sandbox cannot withhold a network, so grain files the
-  Director `open` there. With `-network none` on a container sandbox the
-  Director is held until you add `open` to `network:`, and init says so.
+  them, not only the Director.
+
+The Director asks for an open network. With `-network none` it is held
+until you add `open` to `network:` or close the Director's own network,
+and init says so.
 
 Edit the file, then `systemctl --user restart grain`.
 
