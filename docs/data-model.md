@@ -2395,6 +2395,7 @@ class LinkKind(Enum):
     MERGE_WITH = "merge-with"    # symmetric. Blocks the *merge*, not the run.
     ADDRESSES = "addresses"      # -> a ReviewThreadRef
     PROPOSED_BY = "proposed-by"  # provenance only. Never blocks.
+    FOUND_IN = "found-in"        # -> a release tag. Provenance only.
 
 @dataclass(frozen=True)
 class TaskLink:
@@ -2421,6 +2422,21 @@ replacement is filed"). `FIXES` is `OpenPullRequest.fix_issue` read from the oth
 direction. `PROPOSED_BY` is the English sentence `_file_proposed_tasks`
 writes today, made queryable — it never blocks anything, it just answers
 "where did this task come from" without parsing prose.
+
+`FOUND_IN` (`model.LinkFoundIn`) names the release a bug-fix task is
+filed against, `vX.Y.Z` or `vX.Y.Z-rc.N`, so escaped defects can be
+counted per release without guessing a version out of a title. A person
+states it with the New task form's "Found in release" (`foundIn` on
+`POST /api/tasks`) and an agent with `found_in` on `propose_task`; a
+bare `2.5.0` is read as `v2.5.0`, and anything else that is not a
+release tag is refused by the API and the tool, and dropped with a note
+on the body when a relayed proposal carries it. With none stated, grain
+derives it (`model.DerivedFoundIn`): the candidate in an `[rc-blocker
+<rc>]` title, or the version of a `release/vX.Y.Z` base or write in the
+task's own repository. The Stage 1 repair of a red `vX.Y.Z-rc.N`
+records that candidate, and a port onto `release/vX.Y.Z` records
+`vX.Y.Z` whatever its source said. `grain task read` and the task JSON
+(`foundIn`) show it.
 
 One rule the model adds because its absence is currently a silent trap:
 **links form a DAG.** `/depends 12` on an issue that #12 already depends
