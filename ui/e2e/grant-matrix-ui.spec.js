@@ -158,6 +158,14 @@ async function walkCell(page, request, grants, method, surface, onSaved) {
     return { outcome: "fail", variant, detail: "not offered in Add grant…" };
   }
   await item.first().click();
+  // An api row is a checkbox (menuitemcheckbox): the menu stays open
+  // after a pick, for the next one, and its backdrop covers the form
+  // until it is closed. A method row closes it itself.
+  if (ref.startsWith(API_REF)) {
+    await expect(item.first()).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("[data-open-popover]")).toHaveCount(0);
+  }
   if (refusal) {
     await expect(grants.getByText(refusal).first()).toBeVisible();
     await expect(heldLocator(grants, ref)).toHaveCount(0);
