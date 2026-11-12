@@ -156,10 +156,10 @@ class FakeFleetApi {
       clis: ["claude", "gemini"],
     },
     {
-      name: "roman-cloudtop",
-      owner: "rarcea@google.com",
+      name: "workstation-1",
+      owner: "alice@example.com",
       state: "connected",
-      hostname: "rarcea.c.googlers.com",
+      hostname: "workstation.example.com",
       os: "linux",
       arch: "amd64",
       token_prefix: "ghd_99ab",
@@ -298,7 +298,7 @@ class FakeFleetApi {
       this.pipelinePauseState = {
         paused: true,
         reason,
-        byLabel: "Roman Arcea",
+        byLabel: "Alice Example",
         byKind: "human",
       };
       return Promise.resolve({
@@ -580,14 +580,14 @@ describe("FleetPageComponent", () => {
       root.querySelector('[data-testid="hostd-row-local"]')?.textContent,
     ).toContain("co-located");
     expect(
-      root.querySelector('[data-testid="hostd-row-roman-cloudtop"]')
+      root.querySelector('[data-testid="hostd-row-workstation-1"]')
         ?.textContent,
-    ).toContain("rarcea@google.com");
+    ).toContain("alice@example.com");
 
     // Rotate token shows one-time token banner.
     root
       .querySelector<HTMLButtonElement>(
-        '[data-testid="hostd-rotate-roman-cloudtop"]',
+        '[data-testid="hostd-rotate-workstation-1"]',
       )!
       .click();
     await settle(fixture);
@@ -598,7 +598,7 @@ describe("FleetPageComponent", () => {
     // Revoke requires ConfirmDialogComponent acceptance OUTSIDE [attr.inert].
     root
       .querySelector<HTMLButtonElement>(
-        '[data-testid="hostd-revoke-roman-cloudtop"]',
+        '[data-testid="hostd-revoke-workstation-1"]',
       )!
       .click();
     await settle(fixture);
@@ -615,7 +615,7 @@ describe("FleetPageComponent", () => {
         (c) =>
           c.method === "POST" &&
           c.route === "POST /api/hostds/{name}/revoke" &&
-          (c.params as { name: string }).name === "roman-cloudtop",
+          (c.params as { name: string }).name === "workstation-1",
       ),
     ).toBe(true);
   });
