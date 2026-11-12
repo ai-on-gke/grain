@@ -404,3 +404,52 @@ func TestADefaultBranchRepairIgnoresPullRequestAndForkRuns(t *testing.T) {
 		t.Fatalf("a green push to main left repair %s %s, want closed", ids[0], st)
 	}
 }
+
+// tests.yml gates by its file whatever its name: a repair of one named
+// "Go" is not closed by a fork's green pull request rows on "main" either,
+// though the goal names only "Go".
+func TestADefaultBranchRepairOfARenamedWorkflowIgnoresForkRuns(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	deps := onGitHubActions(t, ctx, store, repo)
+	now := time.Date(2026, 11, 11, 18, 0, 0, 0, time.UTC)
+
+	named := func(id int64, conclusion string, at time.Time, jobs map[string]string) (ConcludedGitHubWorkflowRun, []model.GitHubCIJob) {
+		run, rows := testsRun(t, ctx, store, repo, id, "main", conclusion, at, jobs)
+		run.WorkflowName = "Go"
+		for i := range rows {
+			rows[i].Workflow = "Go"
+			if err := store.PutGitHubCIJob(ctx, rows[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return run, rows
+	}
+	red, redJobs := named(30, "failure", now, map[string]string{"go unit": "failure"})
+	if err := handleGitHubBaseVerdict(ctx, deps, red, redJobs, now); err != nil {
+		t.Fatal(err)
+	}
+	ids := baseRepairs(t, ctx, store, repo)
+	if len(ids) != 1 {
+		t.Fatalf("a red tests.yml named Go on main filed %v, want one repair", ids)
+	}
+	g, err := store.TaskGoal(ctx, ids[0])
+	if err != nil || g == nil || g.Spec.Workflow != "Go" {
+		t.Fatalf("repair %s goal = %+v (%v), want nightly-green on Go", ids[0], g, err)
+	}
+
+	later := now.Add(time.Hour)
+	forkGreen, forkGreenJobs := named(31, "success", later, map[string]string{"go unit": "success"})
+	forkGreen.Event, forkGreen.HeadRepo = "pull_request", "mallory/widgets"
+	if err := handleGitHubBaseVerdict(ctx, deps, forkGreen, forkGreenJobs, later); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileTaskGoal(ctx, deps, *g, later); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := store.State(ctx, ids[0]); st == model.StateClosed {
+		t.Fatalf("a fork's green pull request run closed repair %s of a workflow named Go", ids[0])
+	}
+}
