@@ -52,7 +52,9 @@ func TestTheKubernetesGranuleManifestShipsNoNamespace(t *testing.T) {
 		"ClusterRole", "ClusterRoleBinding", "PriorityClass", "PriorityClass", "PriorityClass", "PriorityClass", "PersistentVolumeClaim",
 		// grain-access before the Deployment, so the grain pod starts with
 		// GRAIN_ACCESS_SERVICE_HOST (the acceptor's ClusterIP).
-		"Service", "Deployment", "Service"}
+		"Service", "Deployment", "Service",
+		// grain-sandbox-egress, as grain.yaml ships it.
+		"NetworkPolicy"}
 	var got []string
 	for _, obj := range objects {
 		got = append(got, obj.Kind)
