@@ -1040,7 +1040,14 @@ var Migrations = []Migration{
 		Up: migrateStoredOwners,
 	},
 	{
-		Version: 143,
+		Version:     143,
+		Description: "add template.sandbox, the sandbox shape every task filed from a template asks for (grain/task-4591)",
+		Statements: []string{
+			"ALTER TABLE `template` ADD COLUMN `sandbox` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 144,
 		Description: "take the copies of a template's admission, hosting and grants off the schedules that fire it, " +
 			"leaving what each schedule adds to its template (grain/task-4607)",
 		Up: migrateScheduleOwnSettings,

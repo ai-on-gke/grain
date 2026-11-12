@@ -20,7 +20,7 @@ import (
 	"fmt"
 )
 
-// migrateScheduleOwnSettings is migration 143: it takes the copies of a
+// migrateScheduleOwnSettings is migration 144: it takes the copies of a
 // template's admission, hosting and grants off every schedule that fires
 // that template, leaving the schedule's own raise and grants where they
 // were.
@@ -50,7 +50,7 @@ import (
 // to tell a copy against, and it cannot fire until somebody points it at
 // another template.
 //
-// Only the columns schema 143 has are read, so this runs as written from
+// Only the columns schema 144 has are read, so this runs as written from
 // any earlier store. Idempotent: a second pass finds nothing left that
 // says no more than its template.
 func migrateScheduleOwnSettings(ctx context.Context, tx *sql.Tx) error {

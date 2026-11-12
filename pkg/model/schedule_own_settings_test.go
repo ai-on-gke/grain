@@ -157,12 +157,12 @@ func TestATemplateEditReachesItsSchedulesWithoutTheirOwnSettings(t *testing.T) {
 	}
 }
 
-// Migration 143 takes the copies earlier builds left on template-backed
+// Migration 144 takes the copies earlier builds left on template-backed
 // schedules off them, and leaves what each schedule adds to its template:
 // a raise above the template's, a grant the template does not give, and a
 // grant a repository's schedule declaration gave even where the template
 // gives it too. An inline schedule is not touched.
-func TestMigration143ClearsTemplateCopiesOffSchedules(t *testing.T) {
+func TestMigration144ClearsTemplateCopiesOffSchedules(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
@@ -211,7 +211,7 @@ func TestMigration143ClearsTemplateCopiesOffSchedules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if err := model.ApplyDataMigrations(ctx, tx, 142); err != nil {
+	if err := model.ApplyDataMigrations(ctx, tx, 143); err != nil {
 		tx.Rollback()
 		t.Fatalf("migrating: %v", err)
 	}

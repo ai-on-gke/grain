@@ -812,6 +812,9 @@ func (s *Store) ResyncTemplateSchedules(ctx context.Context, tmpl Template) erro
 func (s *Store) putScheduleTask(ctx context.Context, comp Composition, tags []string,
 	now time.Time) (string, error) {
 
+	if err := refuseCompositionSandboxAboveMax(ctx, s.db, comp); err != nil {
+		return "", err
+	}
 	id, err := s.NewTaskID(ctx)
 	if err != nil {
 		return "", fmt.Errorf("allocating an id for %q: %w", comp.Title, err)

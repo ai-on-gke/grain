@@ -1911,6 +1911,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		body += model.OriginKeptNote(namedOrigin, target, &task)
 
 		var interactive bool
+		// The template's sandbox shape (model.Template.Sandbox), filled
+		// into each dimension the proposal leaves unstated below.
+		var tmplSandbox model.SandboxShape
 		if tmplID != "" {
 			tmpl, err := store.GetTemplate(ctx, tmplID)
 			if err != nil {
@@ -1940,6 +1943,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					priority = comp.Priority
 				}
 				interactive = comp.Interactive
+				tmplSandbox = comp.Sandbox
 				if !keepRunningSet {
 					keepRunning = comp.KeepRunning
 				}
@@ -2119,6 +2123,18 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		}
 		if v, ok := p["sandbox_disk_gb"]; ok {
 			diskGB, _ = argInt(v)
+		}
+		// A dimension the proposal states keeps its value and the
+		// template fills the rest, one at a time, as ui.Client.fromTemplate
+		// does for a filing through the API.
+		if cpus == 0 {
+			cpus = tmplSandbox.CPUs
+		}
+		if memoryMB == 0 {
+			memoryMB = tmplSandbox.MemoryMB
+		}
+		if diskGB == 0 {
+			diskGB = tmplSandbox.DiskGB
 		}
 		// A proposal chooses a model (model.Task.Model) and, separately, may
 		// pin a connection; the store's own migration and dispatch read a

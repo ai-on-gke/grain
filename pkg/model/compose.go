@@ -282,6 +282,10 @@ type Composition struct {
 	Skills *SkillsConfig
 	// Priority is the resolved numeric priority for the task (DefaultTaskPriority = 5).
 	Priority int
+	// Sandbox is the sandbox shape the task asks for (Task.SandboxCPUs
+	// and its two siblings). Only a template says so (Template.Sandbox):
+	// an inline schedule's firing takes the deployment's default.
+	Sandbox SandboxShape
 
 	// TemplateID and TemplateName name the template this task's content
 	// came from, both empty for a schedule firing its own inline
@@ -343,6 +347,9 @@ func (c Composition) Task(id string, actor Principal, reason OriginReason, now t
 		Admission:            NormalizeAdmission(c.Admission),
 		Hosting:              NormalizeHosting(c.Hosting),
 		Skills:               c.Skills.Clone(),
+		SandboxCPUs:          c.Sandbox.CPUs,
+		SandboxMemoryMB:      c.Sandbox.MemoryMB,
+		SandboxDiskGB:        c.Sandbox.DiskGB,
 		CreatedAt:            &now,
 	}
 	if c.Model != "" {
@@ -466,6 +473,7 @@ func composeTemplate(tmpl Template, values map[string]string, target RepoRef, ba
 		Hosting:              tmpl.Hosting,
 		Skills:               tmpl.Skills.Clone(),
 		Priority:             priority,
+		Sandbox:              tmpl.Sandbox,
 		TemplateID:           tmpl.ID,
 		TemplateName:         tmpl.Name,
 		Sources: CompositionSources{
@@ -536,7 +544,7 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 		// A template-backed schedule's grants are its own, beside the
 		// template's (Schedule.Grants), but one of grain's own schedules
 		// still carries a copy of its template's (orchestrator.applySystemContent), as
-		// a row stored before schema 143 did. So only a capability the
+		// a row stored before schema 144 did. So only a capability the
 		// template does not already grant is the schedule's own to
 		// credit: crediting the copy would have the preview say a
 		// template's capabilities come "from the schedule".
@@ -936,6 +944,9 @@ func composeSuitePass(ctx context.Context, q querier, suiteID string, items []Su
 				return nil, err
 			}
 			applyRepoCIGrants(&comp, ciDefaults)
+		}
+		if err := refuseCompositionSandboxAboveMax(ctx, q, comp); err != nil {
+			return nil, err
 		}
 		out = append(out, comp)
 	}

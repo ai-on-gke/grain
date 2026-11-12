@@ -665,11 +665,14 @@ import "strconv"
 // the default host), which every other repo-keyed table already holds,
 // for rows their schedule or a target repo places on another host
 // (migrateStoredOwners, grain/task-4335).
-// 143 changes no table: it clears the copies of a template's admission,
+// 143 adds `template`.`sandbox` (model.Template.Sandbox): the sandbox
+// shape every task filed from a template asks for, as JSON, empty for
+// none (grain/task-4591).
+// 144 changes no table: it clears the copies of a template's admission,
 // hosting and grants off the schedules that fire it, which until then
 // every firing wrote over what the schedule adds to its template
 // (migrateScheduleOwnSettings, grain/task-4607).
-const SchemaVersion = 143
+const SchemaVersion = 144
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -2239,6 +2242,7 @@ var Tables = []string{
   ` + "`admission`" + `          TEXT NOT NULL DEFAULT '',
   ` + "`hosting`" + `            TEXT NOT NULL DEFAULT '',
   ` + "`skills`" + `             TEXT NOT NULL DEFAULT '',
+  ` + "`sandbox`" + `            TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
