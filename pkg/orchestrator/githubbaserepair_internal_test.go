@@ -634,3 +634,29 @@ func TestADefaultBranchRepairRespectsTargetReposAndPollsGitHubRepos(t *testing.T
 		t.Fatalf("off-TargetRepos repo %s got repairs %v", excluded, ids)
 	}
 }
+
+// Polling a ci_mode: github repository's default branch reads that branch
+// from the forge once an hour, not on every poll: GitHub never answers it
+// 304, so an unchanged poll would otherwise cost a request.
+func TestPollingReadsTheDefaultBranchOnceAnHour(t *testing.T) {
+	t.Parallel()
+	store := openInternalStore(t)
+	client := &branchClient{}
+	deps := Deps{Store: store, Client: client}
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	now := time.Date(2026, 11, 12, 16, 0, 0, 0, time.UTC)
+	for _, at := range []time.Time{now, now.Add(time.Minute), now.Add(59 * time.Minute)} {
+		if got, err := gitHubBasePollDefaultBranch(deps, repo, at); err != nil || got != "main" {
+			t.Fatalf("default branch %q (%v), want main", got, err)
+		}
+	}
+	if client.repoCalls != 1 {
+		t.Fatalf("three polls within the hour read the default branch %d times, want 1", client.repoCalls)
+	}
+	if _, err := gitHubBasePollDefaultBranch(deps, repo, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if client.repoCalls != 2 {
+		t.Fatalf("a poll an hour later read the default branch %d times in all, want 2", client.repoCalls)
+	}
+}
