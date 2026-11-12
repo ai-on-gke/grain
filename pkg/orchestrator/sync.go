@@ -2072,6 +2072,15 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		if err := filePorts(ctx, store, client, gate.Porter, task, ref, detail, now); err != nil {
 			log.Printf("orchestrator: %v", err)
 		}
+		// A repair's merge says which merge it repaired, when its own
+		// evidence names one (repairblame.go). Logged for filePorts'
+		// reason: a blame left unrecorded is a repair a report counts as
+		// unattributed, not a reason to hold this task open.
+		if !stacked {
+			if err := recordRepairBlame(ctx, store, client, task, ref, detail.BaseRef); err != nil {
+				log.Printf("%v", err)
+			}
+		}
 	}
 	if isReviewTask(task) && health == model.PrMerged {
 		if err := clearReviewFindingsOnCleanReview(ctx, store, task); err != nil {

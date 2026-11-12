@@ -302,9 +302,13 @@ type TaskRecord struct {
 	FailedAttempts      int
 	LastFailureAt       *time.Time
 	LastFailureReason   string
-	Attempts            []TaskAttempt
-	Transitions         []TaskTransition
-	Comments            []TaskComment
+	// Blames and BlamedBy are ui.Task's: the merged tasks this repair
+	// blamed, and the repairs that blamed this task's merge.
+	Blames      []string
+	BlamedBy    []string
+	Attempts    []TaskAttempt
+	Transitions []TaskTransition
+	Comments    []TaskComment
 	// Activity is what this task's live run is saying it is doing, for
 	// the reason the merge queue's own state is on the summary above: it
 	// is a question asked of a task that looks stuck, and until now the
@@ -899,6 +903,14 @@ func renderTaskRecord(t TaskRecord, now time.Time) string {
 			b.WriteString(sinceWords(t.PullRequestClosedAt, now, " -- closed without merging "))
 		}
 		b.WriteByte('\n')
+	}
+	if len(t.Blames) > 0 {
+		fmt.Fprintf(&b, "Blames: task %s (the %s this repair repaired)\n",
+			strings.Join(t.Blames, ", task "), plural(len(t.Blames), "merge", "merges"))
+	}
+	if len(t.BlamedBy) > 0 {
+		fmt.Fprintf(&b, "Blamed by: task %s (the %s of this task's merge)\n",
+			strings.Join(t.BlamedBy, ", task "), plural(len(t.BlamedBy), "repair", "repairs"))
 	}
 	writeMergeQueue(&b, t.MergeQueue, t.State, now)
 	writeActivity(&b, t.Activity, now)

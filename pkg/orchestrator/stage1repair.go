@@ -68,7 +68,7 @@ var rcTagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$`)
 
 // Stage1RepairTag is the tag every Stage 1 repair of repo carries.
 func Stage1RepairTag(repo model.RepoRef) string {
-	return "stage1-repair:" + strings.ToLower(repo.String())
+	return model.Stage1RepairTagPrefix + strings.ToLower(repo.String())
 }
 
 // stage1Subject is repo's pipeline.nightly-red-unattended subject.
