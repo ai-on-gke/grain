@@ -17,6 +17,7 @@ package policy
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -159,6 +160,90 @@ func TestRetiredSelfDebugInAPolicyBindsWhatItBecame(t *testing.T) {
 		task.Grants = []model.Grant{{Capability: g}}
 		if err := deny.Check(task, ""); err == nil || !strings.Contains(err.Error(), "forbids capability") {
 			t.Errorf("deny: [self-debug] = %v for %s, want it refused", err, g)
+		}
+	}
+}
+
+// The other direction: a policy naming what a retired name became, in
+// canonical spelling, binds a task still granted the retired name. A
+// grant named self-debug is both api#self-debug and grain#source, so it
+// is admitted when both are and refused when either is.
+func TestCanonicalPolicyBindsARetiredGrantThatBecameSeveral(t *testing.T) {
+	task := model.Task{Target: &model.RepoRef{Owner: "acme", Name: "widgets"}}
+	check := func(rules, grant string) error {
+		t.Helper()
+		task.Grants = []model.Grant{{Capability: grant}}
+		return mustParse(t, "repos: [acme/widgets]\ncapabilities:\n"+rules+"\n").Check(task, "")
+	}
+	both := "  allow: [" + strconvQuote(model.APIRef("self-debug")+"={}") + ", " + strconvQuote(model.GrainSourceGrant) + "]"
+	for _, g := range []string{"self-debug", "Self-Debug"} {
+		if err := check(both, g); err != nil {
+			t.Errorf("allowing both grants self-debug became refused %s: %v", g, err)
+		}
+	}
+	half := "  allow: [" + strconvQuote(model.APIRef("self-debug")+"={}") + "]"
+	if err := check(half, "self-debug"); err == nil {
+		t.Error("allowing only api#self-debug admitted self-debug, which is grain#source too")
+	}
+	for _, d := range []string{model.APIRef("self-debug"), model.GrainSourceRef, "api:self-debug"} {
+		if err := check("  deny: ["+strconvQuote(d)+"]", "self-debug"); err == nil || !strings.Contains(err.Error(), "forbids capability") {
+			t.Errorf("deny: [%s] = %v for self-debug, want it refused", d, err)
+		}
+	}
+	if err := check("  deny: ["+strconvQuote(model.GrainHealthGrant)+"]", "self-debug"); err != nil {
+		t.Errorf("deny: [grain#health] refused self-debug, which never became it: %v", err)
+	}
+	if err := check("  deny: ["+strconvQuote(model.GrainHealthGrant)+"]", "deployment-health"); err == nil {
+		t.Error("deny: [grain#health] admitted deployment-health, which became it")
+	}
+}
+
+// The starter policy `grain init workstation` writes moved off the
+// retired names it used to write (grain-ci, self-debug,
+// api:deployment:read, api:ci-read) onto the grants they became
+// (model.DirectorPolicyCapabilities). Each replacement admits every grant
+// the retired name did, in every spelling a task may hold it in. The only
+// thing it admits beyond that is the same grant narrowed to one
+// repository: grain files tasks api#ci-read={"repo":...} itself, so a
+// policy that refused it would hold them. grain-ci is written as
+// grain#ci={}, which is exactly what grain-ci admitted.
+func TestStarterPolicyCanonicalNamesAdmitWhatTheRetiredNamesDid(t *testing.T) {
+	repoScoped := func(ref string) string { return ref + `={"repo":"acme/widgets"}` }
+	grants := []string{
+		"grain-ci", "GRAIN-CI", model.GrainCIGrant, model.GrainCIRef, repoScoped(model.GrainCIRef),
+		"self-debug", "api:self-debug", "api:self-debug@acme/widgets",
+		model.APIRef("self-debug"), model.APIRef("self-debug") + "={}", repoScoped(model.APIRef("self-debug")),
+		model.GrainSourceGrant, model.GrainSourceRef, model.GrainHealthGrant, model.GrainJournalGrant,
+		"deployment-health", "api:deployment:read", "api:deployment:read@acme/widgets", "api:deployment:write",
+		model.APIRef("deployment:read"), repoScoped(model.APIRef("deployment:read")),
+		"api:ci-read", "api:ci-read@acme/widgets", model.APIRef("ci-read"), repoScoped(model.APIRef("ci-read")),
+		"api:tasks:admin", "gcp-key", model.ConfigMapRef + "={}",
+	}
+	narrowed := []string{
+		"api:self-debug@acme/widgets", repoScoped(model.APIRef("self-debug")),
+		"api:deployment:read@acme/widgets", repoScoped(model.APIRef("deployment:read")),
+		"api:ci-read@acme/widgets", repoScoped(model.APIRef("ci-read")),
+	}
+	for _, tc := range []struct {
+		retired   string
+		canonical []string
+	}{
+		{"grain-ci", []string{model.GrainCIGrant}},
+		{"self-debug", []string{model.APIRef("self-debug"), model.GrainSourceRef}},
+		{"api:deployment:read", []string{model.APIRef("deployment:read")}},
+		{"api:ci-read", []string{model.APIRef("ci-read")}},
+	} {
+		retired := &Policy{Capabilities: CapabilityRules{Allow: []string{tc.retired}}}
+		canonical := &Policy{Capabilities: CapabilityRules{Allow: tc.canonical}}
+		for _, g := range grants {
+			task := model.Task{Grants: []model.Grant{{Capability: g}}}
+			was, is := retired.checkCapabilities(task) == nil, canonical.checkCapabilities(task) == nil
+			switch {
+			case was && !is:
+				t.Errorf("allow: [%s] admits %s, and allow: %v does not", tc.retired, g, tc.canonical)
+			case is && !was && !slices.Contains(narrowed, g):
+				t.Errorf("allow: %v admits %s, which allow: [%s] did not", tc.canonical, g, tc.retired)
+			}
 		}
 	}
 }

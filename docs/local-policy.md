@@ -156,6 +156,11 @@ A policy file is not rewritten by the schema migrations that retire a
 capability. A retired name in it still binds what the name became: an
 `allow` or `deny` naming `self-debug` admits or refuses both
 `api:self-debug` and `https://grain.dev/capabilities/grain#source={}`.
+The other way round holds too: a task still granted a retired name is
+judged as the grants it became. A task granted `self-debug` is admitted
+by an `allow` naming both `https://grain.dev/capabilities/api#self-debug`
+and `https://grain.dev/capabilities/grain#source={}` (not by one naming
+only one of them), and refused by a `deny` naming either.
 
 ### The Director and grain/config
 
@@ -166,11 +171,16 @@ all of these holds it, and the Director never runs:
 - `grain/config` in `repos`. It is the deployment's own state repository,
   which the Director reads, and which any chat proposing a config change
   writes.
-- Every grant the Director is given in `capabilities.allow`: `durable`,
-  `api:self-debug`, `https://grain.dev/capabilities/grain#source={}`,
+- Every grant the Director is given in `capabilities.allow`:
+  `https://grain.dev/capabilities/api#self-debug`,
+  `https://grain.dev/capabilities/grain#source`,
   `https://grain.dev/capabilities/grain#journal`,
-  `api:deployment:read`, `https://grain.dev/capabilities/grain#health`,
-  `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}` and `api:ci-read`, plus any your build adds.
+  `https://grain.dev/capabilities/api#deployment:read`,
+  `https://grain.dev/capabilities/grain#health`,
+  `https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}`,
+  its read-only api grants (`https://grain.dev/capabilities/api#task-admin`,
+  `...#settings:read` and the like) and
+  `https://grain.dev/capabilities/api#ci-read`, plus any your build adds.
   A held task's log line names the one that refused it.
 - The Director's network in `network`. It asks for `none`, which a
   granule sandbox honours. A host or container sandbox cannot withhold a

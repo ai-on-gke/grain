@@ -147,7 +147,14 @@ func TestCapabilitiesListsEveryKnownCapabilityOnAFreshStore(t *testing.T) {
 		ids = append(ids, s.ID)
 	}
 	sort.Strings(ids)
-	want := []string{"github-sandbox", "image-signing", "package-publish", "registry-push"}
+	// Each named as the grant its bare provider name was retired onto,
+	// never the retired name itself.
+	want := []string{
+		model.GitHubSandboxRepoGrant,
+		model.CanonicalLegacyGrant("image-signing"),
+		model.CanonicalLegacyGrant("package-publish"),
+		model.CanonicalLegacyGrant("registry-push"),
+	}
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("capability ids = %v, want %v", ids, want)
 	}
@@ -161,7 +168,7 @@ func TestCapabilitiesSelfDebugAndSelfRepairAreAlwaysReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"registry-push", "package-publish"} {
-		status := capabilityStatus(t, got.Capabilities, id)
+		status := capabilityStatus(t, got.Capabilities, model.CanonicalLegacyGrant(id))
 		if !status.Ready {
 			t.Fatalf("%s: Ready = false, want true (status: %+v)", id, status)
 		}
@@ -204,7 +211,7 @@ func TestCapabilitiesGithubSandboxFlagsMissingSecretsWhenColocatedWithAStore(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := capabilityStatus(t, got.Capabilities, "github-sandbox")
+	status := capabilityStatus(t, got.Capabilities, model.GitHubSandboxRepoGrant)
 	if status.Ready {
 		t.Fatalf("github-sandbox: Ready = true with no secrets set, want false")
 	}
@@ -226,7 +233,7 @@ func TestCapabilitiesGithubSandboxFlagsMissingSecretsWhenColocatedWithAStore(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	status = capabilityStatus(t, got.Capabilities, "github-sandbox")
+	status = capabilityStatus(t, got.Capabilities, model.GitHubSandboxRepoGrant)
 	if !status.Ready {
 		t.Fatalf("github-sandbox: Ready = false once both secrets are set (status: %+v)", status)
 	}
@@ -242,7 +249,7 @@ func TestCapabilitiesReportNothingMissingWithNoSecretsStoreColocated(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := capabilityStatus(t, got.Capabilities, "github-sandbox")
+	status := capabilityStatus(t, got.Capabilities, model.GitHubSandboxRepoGrant)
 	if len(status.MissingSecrets) != 0 {
 		t.Fatalf("github-sandbox: MissingSecrets = %v, want none reported with no store to check", status.MissingSecrets)
 	}
@@ -273,7 +280,7 @@ func TestCapabilitiesReportWhereEachRequiredSecretIsWritten(t *testing.T) {
 
 	// The "<secret>/<key>" form is split exactly as written: one set,
 	// one not, both offered.
-	status := capabilityStatus(t, got.Capabilities, "github-sandbox")
+	status := capabilityStatus(t, got.Capabilities, model.GitHubSandboxRepoGrant)
 	want := []ui.CapabilitySecret{
 		{Name: githubsandbox.DefaultAppIDCredential, Secret: "github-app", Key: "app-id", Set: true},
 		{Name: githubsandbox.DefaultPrivateKeyCredential, Secret: "github-app", Key: "private-key", Set: false},
@@ -311,7 +318,7 @@ func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 		"github-sandbox": true,
 		"registry-push":  false,
 	} {
-		if status := capabilityStatus(t, got.Capabilities, id); status.Grantable != want {
+		if status := capabilityStatus(t, got.Capabilities, model.CanonicalLegacyGrant(id)); status.Grantable != want {
 			t.Errorf("%s: Grantable = %t, want %t (status: %+v)", id, status.Grantable, want, status)
 		}
 	}
@@ -329,7 +336,7 @@ func TestCapabilityStatusKeepsGrantableAndReadyIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := capabilityStatus(t, got.Capabilities, "github-sandbox")
+	status := capabilityStatus(t, got.Capabilities, model.GitHubSandboxRepoGrant)
 	if !status.Ready {
 		t.Fatalf("github-sandbox: Ready = false, want true -- no secret store is configured (status: %+v)", status)
 	}

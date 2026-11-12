@@ -545,6 +545,18 @@ func retiredAs(name string) (string, bool) {
 	return to, to != name
 }
 
+// retiredAsSeveral is the grants a retired bare name that became more
+// than one became (model.CanonicalLegacyGrants: self-debug,
+// deployment-health), compared without regard to case, and nil for any
+// other name.
+func retiredAsSeveral(name string) []string {
+	tos := model.CanonicalLegacyGrants(strings.ToLower(strings.TrimSpace(name)))
+	if len(tos) < 2 {
+		return nil
+	}
+	return tos
+}
+
 // capabilityRefAliasVariants returns capability along with its built-in
 // config-map/skill server-ID alias counterpart when applicable.
 func capabilityRefAliasVariants(capability string) []string {
@@ -621,6 +633,13 @@ func deniesCapabilityRefVariant(pattern, capabilityRef string) bool {
 func deniesCapability(patterns []string, capability string) bool {
 	capability = lowerCapabilityRefPrefix(capability)
 	if matchesCapability(patterns, capability) {
+		return true
+	}
+	// A retired name that became several grants (self-debug became
+	// api#self-debug and grain#source) is each of them, so a deny of any
+	// one, in its canonical spelling, refuses it.
+	if tos := retiredAsSeveral(capability); len(tos) > 0 &&
+		slices.ContainsFunc(tos, func(to string) bool { return deniesCapability(patterns, to) }) {
 		return true
 	}
 	if set, ok := model.ParseGCPKeyServerGrant(capability); ok {
@@ -760,6 +779,14 @@ func allowsCapability(patterns []string, capability string) bool {
 			return true
 		}
 	}
+	// A retired name that became several grants is admitted when each of
+	// them is, so a policy naming them canonically admits a task still
+	// granted the retired name, exactly as one naming the retired name
+	// does.
+	if tos := retiredAsSeveral(want); len(tos) > 0 &&
+		!slices.ContainsFunc(tos, func(to string) bool { return !allowsCapability(patterns, to) }) {
+		return true
+	}
 	for _, pattern := range patterns {
 		if to, ok := retiredAs(pattern); ok {
 			if to == want || (model.IsCapabilityRef(to) && model.IsCapabilityRef(want) && sameCapabilityRefGrant(to, want)) {
@@ -772,7 +799,8 @@ func allowsCapability(patterns []string, capability string) bool {
 		// in either the canonical .../api# or legacy api: spelling.
 		if tos := model.CanonicalLegacyGrants(strings.ToLower(strings.TrimSpace(pattern))); len(tos) > 1 &&
 			slices.ContainsFunc(tos, func(to string) bool {
-				return strings.EqualFold(to, want) || strings.EqualFold(model.CanonicalGrantKey(to), model.CanonicalGrantKey(capability))
+				return strings.EqualFold(to, want) || strings.EqualFold(model.CanonicalGrantKey(to), model.CanonicalGrantKey(capability)) ||
+					(model.IsCapabilityRef(to) && model.IsCapabilityRef(want) && sameCapabilityRefGrant(to, want))
 			}) {
 			return true
 		}

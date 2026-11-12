@@ -153,15 +153,17 @@ approvers: ["me@example.com", "me"]
 allow_unapproved_external: false
 capabilities:
   allow:
-    - "grain-ci"  # and the ones you named
+    - "https://grain.dev/capabilities/grain#ci={}"  # and the ones you named
     # The Director chat's own grants. Remove one and the Director is held for it.
-    - "durable"
-    - "self-debug"
+    - "https://grain.dev/capabilities/api#self-debug"
+    - "https://grain.dev/capabilities/grain#source"
     - "https://grain.dev/capabilities/grain#journal"
-    - "api:deployment:read"
+    - "https://grain.dev/capabilities/api#deployment:read"
     - "https://grain.dev/capabilities/grain#health"
     - 'https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}'
-    - "api:ci-read"
+    - "https://grain.dev/capabilities/api#task-admin"
+    # ... and the Director's other read-only api grants, ending with
+    - "https://grain.dev/capabilities/api#ci-read"
 network: ["open"]
 allow_external_on_host_sandboxes: false
 ```
@@ -172,11 +174,12 @@ from anybody else that does not carry your approval.
 
 Init lists some things you did not name:
 
-- `grain-ci`: the retired bare name (schema migration 96) of
-  `https://grain.dev/capabilities/grain#ci`, which local policy reads as
-  that grant. Grain grants it to every task on a repository whose CI mode
-  is grain, and it carries no credential. It is the run's own
-  `wait_for_checks` against the repository's `.grain/workflows`.
+- `https://grain.dev/capabilities/grain#ci={}`: grain CI. Grain grants
+  it to every task on a repository whose CI mode is grain, and it carries
+  no credential. It is the run's own `wait_for_checks` against the
+  repository's `.grain/workflows`. A policy written by an older init
+  names it `grain-ci`, its retired bare name, which local policy still
+  reads as this grant.
 - `grain/config`: this deployment's own state repository, which the
   Director reads.
 - The Director chat's own grants, named exactly so you can see each one
