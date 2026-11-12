@@ -17,6 +17,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -57,5 +58,21 @@ func TestPrintsTheRecordOrRefuses(t *testing.T) {
 
 	if code := run([]string{"-repo", "example/grain"}, &out, &errs, func(string) string { return "" }, f); code != 2 {
 		t.Fatalf("exit %d with no commit, want 2", code)
+	}
+}
+
+type downForge struct{ forge }
+
+func (downForge) PullsForCommit(context.Context, string, string) ([]reviewedmerge.Pull, error) {
+	return nil, errors.New("after 4 attempts: GET /repos/example/grain/commits/abc/pulls: 503 Service Unavailable")
+}
+
+func TestAForgeErrorIsNotReportedAsARefusal(t *testing.T) {
+	var out, errs bytes.Buffer
+	if code := run([]string{"-repo", "example/grain", "-commit", "abc", "-mergers", "grain[bot]"}, &out, &errs, func(string) string { return "" }, downForge{}); code != 3 {
+		t.Fatalf("exit %d, want 3: %s", code, errs.String())
+	}
+	if s := errs.String(); strings.Contains(s, "refused") || !strings.Contains(s, "forge error") || !strings.Contains(s, "could not read the pull requests for abc: after 4 attempts") {
+		t.Fatalf("stderr %q", s)
 	}
 }
