@@ -971,7 +971,9 @@ exactly as before.
   a new version.
 - **Age** is measured, not stored: the runs started and the comments
   posted since the handover was written or confirmed
-  (`model.HandoverAge`). Past `HandoverStaleRuns` (10) runs or
+  (`model.HandoverAge`). Only comments from people and agents count:
+  grain's own notices (automation on nobody's behalf, such as the park
+  notice every parked run leaves) do not. Past `HandoverStaleRuns` (10) runs or
   `HandoverStaleComments` (30) comments it is **stale**. The durable
   task's prompt then asks for a replacement or confirmation, and
   `GET /api/tasks/{id}/context` returns `handover_stale`.
@@ -1034,7 +1036,7 @@ nothing load the whole of it at once. Where that stands:
 | `model.Store.Comments` in dispatch | Reads `CommentsAfter(cursor)` plus `LatestHandover` (`dispatchComments`): O(since compaction) | Done (grain/task-4194) |
 | `GET /api/tasks/{id}` / `TaskDetail` | Whole by default. `?comments_limit=`, `?comments_before=` (a comment ID), `?attempts_limit=` and `?attempts_before=` (an attempt number) build the page directly from the store (`Store.CommentsBefore`, `Store.RunsBefore`), with bounded reads for transitions, the pending question comment, session names and the failure streak, and cache the head page by change token | Done (grain/task-4194, grain/task-4219) |
 | `GET /api/tasks/{id}/messages?after=` and its delivered mark | Read every comment, then filtered past the cursor | Done: `CommentsAfter` (grain/task-4194) |
-| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link, and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
+| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link (500 at a time, every page through the target merged and drawn once), and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
 | `grain task read`, `read_grain_task(view: full)` | Whole record | `view: summary` default (DT-13), `conversation, after:` paging |
 | SSE updates | Per-event deltas | No change needed |
 | State-repo export | Every comment and run, every export | Unchanged in size: the export is the backup. Rollover bounds it |

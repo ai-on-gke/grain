@@ -43,8 +43,9 @@ import (
 //     culprit task outright; a `Fixes-commit: <sha>` trailer names the
 //     commit on the base branch, and the culprit is the task whose pull
 //     request merged it. This is how an agent that bisected the red range
-//     reports what it found, and it is the only evidence a Stage 1 or
-//     rc-blocker repair has. Where any trailer is present, it is the
+//     reports what it found, and it is the only evidence a Stage 1, a
+//     GitHub default-branch (model.GitHubBaseRepairTag) or an rc-blocker
+//     repair has. Where any trailer is present, it is the
 //     whole answer: a commit it names that no task merged (a push
 //     straight to the branch) blames nobody rather than falling back to
 //     a guess the repair has just contradicted.

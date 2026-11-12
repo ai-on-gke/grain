@@ -27,6 +27,11 @@ import (
 // carries (orchestrator.Stage1RepairTag): "stage1-repair:<owner/name>".
 const Stage1RepairTagPrefix = "stage1-repair:"
 
+// githubBaseRepairTagPrefix is GitHubBaseRepairTag's fixed part: a repair
+// of a red default branch on GitHub Actions, which records no red range
+// and so is blamed from its trailers alone.
+const githubBaseRepairTagPrefix = "github-base-repair:"
+
 // RepairKind names which of grain's repairs a task is -- the work filed
 // because a branch or a release went red rather than because somebody
 // asked for a change -- or "" for a task that is none of them. It is
@@ -38,6 +43,8 @@ func RepairKind(task Task) string {
 		return "base-branch"
 	case slices.ContainsFunc(task.Tags, func(t string) bool { return strings.HasPrefix(t, Stage1RepairTagPrefix) }):
 		return "stage1"
+	case slices.ContainsFunc(task.Tags, func(t string) bool { return strings.HasPrefix(t, githubBaseRepairTagPrefix) }):
+		return "github-base"
 	case strings.Contains(task.Title, "[rc-blocker "):
 		return "rc-blocker"
 	}

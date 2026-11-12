@@ -46,6 +46,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/policy"
+	"github.com/ai-on-gke/grain/pkg/qa"
 	"github.com/ai-on-gke/grain/pkg/sandboxaddr"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -1849,6 +1850,7 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// release-triggered automatic upgrade follows.
 			LatestRelease:      latestRelease(upgrader),
 			UpgradeDrainWindow: cfg.UpgradeDrainWindow,
+			QAProfiler:         qa.NewProfiler(qa.DefaultPerfLogPath(cfg.DataDir)),
 		},
 		MintSandboxGrant:   tokens.EnsureGrant,
 		MintSandboxToken:   tokens.EnsureToken,

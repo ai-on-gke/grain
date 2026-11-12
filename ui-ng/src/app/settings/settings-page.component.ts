@@ -190,6 +190,12 @@ import { SettingsWorkComponent } from "./settings-work.component";
                     data-testid="section-readonly-pill"
                     >Managed in config repo</span
                   >
+                } @else if (ready() && !access.can("POST /api/settings")) {
+                  <span
+                    class="status-pill neutral"
+                    data-testid="section-role-readonly-pill"
+                    >Read-only</span
+                  >
                 }
               </header>
 
@@ -213,6 +219,18 @@ import { SettingsWorkComponent } from "./settings-work.component";
                     data-testid="open-in-config-repo-link"
                     >View in Config repo</a
                   >
+                </div>
+              } @else if (ready() && !access.can("POST /api/settings")) {
+                <div
+                  class="s-banner readonly"
+                  data-testid="settings-role-readonly"
+                >
+                  <span>
+                    {{
+                      access.deniedReason("POST /api/settings") ||
+                        "Read-only: settings:write scope is required to modify deployment settings."
+                    }}
+                  </span>
                 </div>
               }
 
@@ -334,7 +352,11 @@ import { SettingsWorkComponent } from "./settings-work.component";
                     type="button"
                     class="btn-tonal"
                     data-testid="settings-plan-btn"
-                    [disabled]="state.planning() || state.saving()"
+                    [disabled]="
+                      state.planning() ||
+                      state.saving() ||
+                      state.hasFieldErrors()
+                    "
                     (click)="state.previewPlan()"
                   >
                     {{
@@ -346,7 +368,9 @@ import { SettingsWorkComponent } from "./settings-work.component";
                   type="button"
                   class="btn-primary"
                   data-testid="settings-save-btn"
-                  [disabled]="state.saving() || !canSave()"
+                  [disabled]="
+                    state.saving() || !canSave() || state.hasFieldErrors()
+                  "
                   (click)="state.saveChanges()"
                 >
                   {{ state.saving() ? "Saving…" : "Save changes" }}

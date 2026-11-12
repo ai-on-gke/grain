@@ -81,7 +81,7 @@ func readMergeRequirements(client github.Client, ref model.PullRequestRef, base 
 	if !ok {
 		return github.MergeRequirements{}, false
 	}
-	req, err := reader.MergeRequirements(ref.Repo.Owner, ref.Repo.Name, ref.Number, base)
+	req, err := reader.MergeRequirements(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, base)
 	if err != nil {
 		// Half an answer is still worth having: the reads are
 		// independent, and a credential that may not read rulesets can
@@ -140,7 +140,7 @@ func githubCheckRuns(client github.Client, ref model.PullRequestRef, sha string,
 	if len(have) > 0 || sha == "" {
 		return have
 	}
-	runs, err := client.ListCheckRuns(ref.Repo.Owner, ref.Repo.Name, sha)
+	runs, err := client.ListCheckRuns(ref.Repo.StoredOwner(), ref.Repo.Name, sha)
 	if err != nil {
 		return nil
 	}

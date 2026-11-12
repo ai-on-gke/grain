@@ -190,7 +190,7 @@ g-settings-page {
   gap: 16px;
 }
 
-.settings-mobile-back {
+a.settings-mobile-back {
   display: none;
 }
 
@@ -250,7 +250,7 @@ g-settings-page {
   .settings-shell.is-mobile-list .settings-stage {
     display: none;
   }
-  .settings-mobile-back {
+  a.settings-mobile-back {
     display: inline-flex;
     align-self: flex-start;
   }
