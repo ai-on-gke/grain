@@ -193,8 +193,10 @@ var kubeHealthCheckShape = k8s.PodShape{CPUs: 1, MemoryMB: 512, DiskGB: 10}
 // reconcile tick, and these share that namespace. Labelled as sandboxes
 // they were deleted mid-upgrade: a check pod killed while it ran ("the
 // check pod is Failed"), an ask pod gone between finishing and having
-// its logs read (pods "grain-upgrade-ask" not found).
-const kubeUpgradeComponent = "upgrade"
+// its logs read (pods "grain-upgrade-ask" not found). deploy/kubernetes'
+// grain-sandbox-egress selects this value too, so they keep the egress
+// fence they had as sandboxes.
+const kubeUpgradeComponent = k8s.UpgradeComponent
 
 // stepRollout is the Kubernetes path's own last step, in place of the
 // image path's "record image": the Deployment is repointed and the

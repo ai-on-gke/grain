@@ -905,12 +905,19 @@ metadata:
 spec:
   # Every sandbox pod grain creates (k8s.ManagedByLabel, k8s.SandboxLabel)
   # -- the kubernetes and kubernetes-granule backends alike -- except
-  # those grain-sandbox-network-none already holds to less.
+  # those grain-sandbox-network-none already holds to less, and every
+  # throwaway pod a self-upgrade runs a candidate image in
+  # (k8s.UpgradeComponent), which is labelled apart from sandboxes only
+  # so the sandbox sweep leaves it alone, not to leave it unfenced.
   podSelector:
     matchLabels:
       app.kubernetes.io/managed-by: grain
-      app.kubernetes.io/component: sandbox
     matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - sandbox
+          - upgrade
       - key: grain.dev/network
         operator: NotIn
         values:

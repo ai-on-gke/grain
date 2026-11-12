@@ -93,6 +93,14 @@ const (
 	SandboxValue = "sandbox"
 )
 
+// UpgradeComponent is the SandboxLabel value (PodOptions.Component) of
+// the throwaway pods a self-upgrade runs a candidate image in. It keeps
+// them out of the sandbox sweep and nothing else: deploy/kubernetes'
+// grain-sandbox-egress selects it beside SandboxValue, so those pods
+// stay as fenced off the metadata server and the cluster as they were
+// when they were labelled sandboxes.
+const UpgradeComponent = "upgrade"
+
 // InstanceLabel marks a pod with the grain deployment that created it
 // (Client.Instance): the deployment's effective id, the same
 // {deployment} its task branches are named by
