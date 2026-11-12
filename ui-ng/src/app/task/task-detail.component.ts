@@ -136,7 +136,7 @@ export function duration(from?: string, to?: string): string {
     "./task-detail.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
-    ],
+  ],
   host: {
     "(document:click)": "onDocClick($event)",
   },
@@ -1013,7 +1013,8 @@ export function duration(from?: string, to?: string): string {
 
                 @case ("changes") {
                   <h2 class="sr-only">Changes and CI</h2>
-                  <g-task-changes-tab (forceMerge)="forceMergeReq.set($event)"
+                  <g-task-changes-tab
+                    (forceMerge)="forceMergeReq.set($event)"
                     [task]="t"
                     [prUrl]="prUrl()"
                     [prLabel]="prLabel()"

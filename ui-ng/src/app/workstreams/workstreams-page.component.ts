@@ -123,10 +123,7 @@ function saveView(v: WsView): void {
   imports: [TipDirective, WorkstreamDetailComponent, PillSelectComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  styleUrls: [
-    "./workstreams-page.css",
-    "./workstreams-shared.css",
-    ],
+  styleUrls: ["./workstreams-page.css", "./workstreams-shared.css"],
   host: {
     "(document:keydown)": "onKey($event)",
   },

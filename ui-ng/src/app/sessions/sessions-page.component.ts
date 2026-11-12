@@ -89,7 +89,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
     "./sessions-page.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
-    ],
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "(document:keydown.escape)": "onEscape($event)",

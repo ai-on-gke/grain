@@ -95,7 +95,7 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
     PillSelectComponent,
   ],
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["./agents-page.component.css", ],
+  styleUrls: ["./agents-page.component.css"],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "[class.is-wall]": "wall()",

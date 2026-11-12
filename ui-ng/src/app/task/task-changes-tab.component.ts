@@ -459,9 +459,9 @@ import { TaskStore } from "./task.store";
     </div>
 
     <!-- Force Merge Gate-Override Confirmation Dialog -->
-    `,
+  `,
 })
-export class TaskChangesTabComponent implements OnDestroy {
+export class TaskChangesTabComponent {
   protected readonly store = inject(TaskStore);
   private readonly api = inject(GrainApi);
   private readonly access = inject(AccessService);
@@ -525,7 +525,6 @@ export class TaskChangesTabComponent implements OnDestroy {
 
   protected readonly overrideGateIds = signal<ReadonlySet<string>>(new Set());
 
-  
   protected readonly submitOff = computed(() => submitBlock(this.task()));
 
   protected readonly hasChangelist = computed(
@@ -601,8 +600,6 @@ export class TaskChangesTabComponent implements OnDestroy {
     });
   }
 
-  ngOnDestroy(): void {
-      }
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
     return this.access.can(route, this.task().repo || undefined);

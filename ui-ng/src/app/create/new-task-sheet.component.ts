@@ -108,7 +108,7 @@ const FRAMEWORKS: readonly PillOption[] = [
     GrantsPickerComponent,
   ],
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["./new-task-sheet.component.css", ],
+  styleUrls: ["./new-task-sheet.component.css"],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "(document:keydown.escape)": "onEscape($event)",

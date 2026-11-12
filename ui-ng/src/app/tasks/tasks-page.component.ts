@@ -137,7 +137,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
     "../inbox/inbox-inspector.css",
     "./tasks-page.component.css",
     "./tasks-timeline.css",
-    ],
+  ],
   host: {
     "(document:click)": "onDocClick($event)",
     "(document:keydown.escape)": "onEscape($event)",

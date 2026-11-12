@@ -566,12 +566,15 @@ export class TaskGatesBarComponent {
   }
 
   protected formatAccessItem(it: AccessRequestItem): string {
-    if (it.kind === "read") return `read ${it.repo ?? ""}`;
-    if (it.kind === "write") {
-      return `write ${it.repo ?? ""}${it.base ? " (" + it.base + ")" : ""}`;
-    }
-    if (it.kind === "network") return `network: ${it.access ?? ""}`;
-    return it.grant || it.capability || it.kind;
+    const main = (() => {
+      if (it.kind === "read") return `read ${it.repo ?? ""}`;
+      if (it.kind === "write") {
+        return `write ${it.repo ?? ""}${it.base ? " (" + it.base + ")" : ""}`;
+      }
+      if (it.kind === "network") return `network: ${it.access ?? ""}`;
+      return it.grant || it.capability || it.kind;
+    })();
+    return it.substituteGrant ? `${main} (needs ${it.substituteGrant})` : main;
   }
 
   protected toggleAccessItem(idx: number): void {

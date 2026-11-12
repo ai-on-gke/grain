@@ -30,7 +30,11 @@ export interface ForceMergeRequest {
   task: TaskDetail;
   unsatisfiedGates: MergeGate[];
   head: string | undefined;
-  run: (reason: string, overrideGateIds: string[], head: string | undefined) => Promise<boolean>;
+  run: (
+    reason: string,
+    overrideGateIds: string[],
+    head: string | undefined,
+  ) => Promise<boolean>;
 }
 
 @Component({
@@ -124,7 +128,7 @@ export class ForceMergeDialogComponent {
 
   protected readonly forceReason = signal("");
   protected readonly overrideGateIds = signal<Set<string>>(new Set());
-  
+
   protected readonly missingRequiredGateOverrides = computed(() => {
     const needed = this.request().unsatisfiedGates;
     const overrides = this.overrideGateIds();
@@ -132,8 +136,9 @@ export class ForceMergeDialogComponent {
   });
 
   private readonly dialog = viewChild<ElementRef<HTMLElement>>("dialog");
-  private readonly reasonInput = viewChild<ElementRef<HTMLTextAreaElement>>("reasonInput");
-  
+  private readonly reasonInput =
+    viewChild<ElementRef<HTMLTextAreaElement>>("reasonInput");
+
   private readonly returnFocus =
     typeof document !== "undefined"
       ? (document.activeElement as HTMLElement | null)
@@ -151,10 +156,11 @@ export class ForceMergeDialogComponent {
       const el = this.reasonInput()?.nativeElement;
       if (el) el.focus();
       else {
-          const focusables = this.dialog()?.nativeElement.querySelectorAll<HTMLElement>(
+        const focusables =
+          this.dialog()?.nativeElement.querySelectorAll<HTMLElement>(
             'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
           );
-          if (focusables && focusables.length > 0) focusables[0].focus();
+        if (focusables && focusables.length > 0) focusables[0].focus();
       }
     });
   }
@@ -192,16 +198,22 @@ export class ForceMergeDialogComponent {
 
   protected close(ok: boolean): void {
     if (ok) {
-        this.request().run(this.forceReason().trim(), [...this.overrideGateIds()], this.request().head).then((success) => {
-            if (success) {
-                this.cleanup(true);
-            }
+      this.request()
+        .run(
+          this.forceReason().trim(),
+          [...this.overrideGateIds()],
+          this.request().head,
+        )
+        .then((success) => {
+          if (success) {
+            this.cleanup(true);
+          }
         });
     } else {
-        this.cleanup(false);
+      this.cleanup(false);
     }
   }
-  
+
   private cleanup(ok: boolean): void {
     const back = this.returnFocus;
     this.done.emit(ok);
