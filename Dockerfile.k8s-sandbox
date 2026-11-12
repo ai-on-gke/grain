@@ -32,9 +32,9 @@
 ARG BASE_IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 # The Go image the sandbox's own grain is built with: the main Dockerfile's
 # GO_VERSION and GO_IMAGE_DIGEST -- bump all three together.
-ARG GO_VERSION=1.26.10
+ARG GO_VERSION=1.26.11
 ARG GO_IMAGE=golang
-ARG GO_IMAGE_DIGEST=sha256:632dff7351799a5a9954a48dc06670ade72ee44e8c351cdc0e5a57af2fea21af
+ARG GO_IMAGE_DIGEST=sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0
 
 # The sandbox's own grain (cmd/grain-sandbox): `grain host-script` and the
 # sandbox CLI (pkg/sandboxcli) -- `grain ls`, `read`, `ci wait`, `pr open`

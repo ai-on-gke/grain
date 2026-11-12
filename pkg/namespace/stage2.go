@@ -55,7 +55,7 @@ func RefuseCapability(subject, capability string) error {
 func RefuseCIRead(subject, repo string) error {
 	ciRead := "https://grain.dev/capabilities/api#ci-read scoped to the repository"
 	if repo = strings.TrimSpace(repo); repo != "" {
-		ciRead = fmt.Sprintf("https://grain.dev/capabilities/api#ci-read with {repo: %q} (api:ci-read@%s)", repo, repo)
+		ciRead = fmt.Sprintf("https://grain.dev/capabilities/api#ci-read with {repo: %q}", repo)
 	}
 	return fmt.Errorf(
 		"%w: %s: this run may not read CI runs and logs. `grain ci wait` and `grain pr open` work without a grant: "+
@@ -351,9 +351,9 @@ func (s Scope) mayReadRepoTasks() bool {
 // task's repository.
 func refuseTaskRead(relPath string) error {
 	return fmt.Errorf(
-		"%w: task://%s: another task's record needs an %q grant (the api:self-debug preset holds one) or an %q grant naming its repository, and this run holds neither. "+
+		"%w: task://%s: another task's record needs an %q grant (the https://grain.dev/capabilities/api#self-debug preset holds one) or an %q grant naming its repository, and this run holds neither. "+
 			"Nothing you can do from inside this run will add one -- a human attaches it to the task.",
-		ErrForbidden, relPath, "api:tasks:read", "api:tasks:read@<owner/repo>")
+		ErrForbidden, relPath, model.APIRef("tasks:read"), model.APIRef("tasks:read")+" {repo: <owner/repo>}")
 }
 
 // PermitsConfig reports whether this scope may read config://<relPath>.
@@ -420,7 +420,7 @@ func (s *Server) resolveTask(ctx context.Context, scope Scope, relPath string) (
 		if !scope.MayReadAllTasks {
 			own := scope.ownTaskID()
 			if own == "" {
-				return nil, RefuseCapability("task://", "api:tasks:read")
+				return nil, RefuseCapability("task://", model.APIRef("tasks:read"))
 			}
 			return &ResolvedNode{
 				Scheme:  "task",
@@ -839,7 +839,7 @@ func (s *Server) resolveVirtualConfig(ctx context.Context, scope Scope, relPath 
 func (s *Server) resolveMemory(ctx context.Context, scope Scope, relPath string) (*ResolvedNode, error) {
 	relPath = strings.TrimPrefix(strings.TrimSuffix(relPath, "/"), "/")
 	if !scope.PermitsMemory(relPath) {
-		return nil, RefuseCapability("memory://"+relPath, "memory")
+		return nil, RefuseCapability("memory://"+relPath, model.APIRef("memory"))
 	}
 
 	if s != nil && strings.TrimSpace(s.MemoryDir) != "" {
@@ -1266,7 +1266,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 
 	case "metrics", "metrics.txt":
 		if !scope.MayReadMetrics {
-			return nil, RefuseCapability("deploy://"+relPath, "api:deployment:read")
+			return nil, RefuseCapability("deploy://"+relPath, model.APIRef("deployment:read"))
 		}
 		if s == nil || s.Deploy == nil {
 			return nil, fmt.Errorf("%w: deploy://metrics is not configured on this daemon", ErrNotFound)
@@ -1299,7 +1299,7 @@ func (s *Server) resolveDeploy(ctx context.Context, scope Scope, relPath string)
 
 	case "pipeline-changes", "pipeline-changes.md":
 		if !scope.MayReadPipeline {
-			return nil, RefuseCapability("deploy://"+relPath, "api:deployment:read")
+			return nil, RefuseCapability("deploy://"+relPath, model.APIRef("deployment:read"))
 		}
 		if s == nil || s.Deploy == nil {
 			return nil, fmt.Errorf("%w: deploy://pipeline-changes is not configured on this daemon", ErrNotFound)

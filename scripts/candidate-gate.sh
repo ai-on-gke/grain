@@ -147,7 +147,10 @@ installer-variants=installer trixie and hostmode
 vulns=govulncheck
 image-vulns=release image vulnerabilities
 cmd-grain-stress=pkg/cli stress under load
-upgrade-test=upgrade from previous versions}"
+upgrade-test=upgrade from previous versions
+kvm-sandboxes=real KVM sandboxes
+kvm-route-stress=twenty two-VM boots
+real-kubernetes=real kubernetes}"
 # Jobs that carry no verdict of their own: nightly.yml's roll-up of the
 # jobs above, which on a retry judges only the job retried.
 CHECK_QUALIFICATION_IGNORE="${CHECK_QUALIFICATION_IGNORE-stage-1=stage 1 qualification verdict}"
@@ -511,8 +514,8 @@ check_qualification() {
         rerun "$stage" "$job" infra
         ;;
       skipped)
-        # Only a required job has to run: one whose `if:` keeps it off
-        # hosted runners (kvm-sandboxes) carries no verdict.
+        # Only a required job has to run: one that is not
+        # (gcp-smoke's, say, were it in nightly.yml) carries no verdict.
         if jq -e --arg j "$job" 'any(.[]; .id == $j)' <<< "$names" >/dev/null; then
           fail "$job" "never ran (skipped), and qualification requires success"
         fi

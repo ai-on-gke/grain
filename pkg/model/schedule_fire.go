@@ -17,6 +17,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -675,6 +676,18 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 		}
 		return *held, nil
 	}
+	// A condition the schedule declared (Schedule.SkipWhen), after both:
+	// a previous firing still going is the more useful thing to name.
+	base := comp.Base
+	if base == "" {
+		base = sched.Base
+	}
+	if held, err := s.publishingHeldFiring(ctx, sched, groupRepo, base, now, advance); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
 
 	// What a repository's declaration asked for, recorded as of this
 	// firing, is what Settings -> Capabilities offers a person to
@@ -715,6 +728,30 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 	return ScheduleFiring{TaskID: id}, nil
 }
 
+// withDeclaredScheduleGrants is the grants a template-backed schedule
+// keeps when its copy of tmplGrants is refreshed: the template's, then
+// each of the schedule's current grants a repository's schedule
+// declaration (.grain/schedules/<name>.yml) gave it that the template
+// does not already grant. Those are the schedule's own, not a copy of the
+// template's -- the declaration sync writes them, with the file as their
+// Via, and removes them when the file does -- so the refresh a firing
+// does must not drop them: it did, and every firing after the first was
+// filed without them (ComposeScheduleTask files the schedule's own grants
+// beside the template's).
+func withDeclaredScheduleGrants(tmplGrants, current []Grant) []Grant {
+	out := slices.Clone(tmplGrants)
+	for _, g := range current {
+		if !strings.HasPrefix(string(g.Via), ".grain/schedules/") {
+			continue
+		}
+		if slices.ContainsFunc(out, func(have Grant) bool { return have.Capability == g.Capability }) {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
 // syncTemplateCache copies tmpl's content over sc's display cache
 // (Schedule.TemplateID's own doc comment): what a firing does after it
 // files, and what ResyncTemplateSchedules does when the template itself
@@ -723,7 +760,7 @@ func (sc *Schedule) syncTemplateCache(tmpl Template) {
 	sc.Title, sc.Body = tmpl.FilledTitleBody()
 	sc.AutoMerge, sc.Reads, sc.Writes, sc.Grants, sc.CustomFields, sc.NetworkAccess, sc.NothingNeededAction, sc.KeepRunning, sc.Admission, sc.Hosting =
 		tmpl.AutoMerge, tmpl.Reads, tmpl.Writes,
-		tmpl.Grants, tmpl.CustomFields, tmpl.NetworkAccess, tmpl.NothingNeededAction, tmpl.KeepRunning, tmpl.Admission, tmpl.Hosting
+		withDeclaredScheduleGrants(tmpl.Grants, sc.Grants), tmpl.CustomFields, tmpl.NetworkAccess, tmpl.NothingNeededAction, tmpl.KeepRunning, tmpl.Admission, tmpl.Hosting
 	// Model is not part of that cache: it is the schedule's own
 	// choice, which beats the template's (Schedule.Model), and
 	// copying the template's over it would erase that choice.
@@ -881,6 +918,12 @@ func (s *Store) fireWorkflowSchedule(ctx context.Context, sched Schedule, stem s
 		abandoned = hold.Review
 	}
 	if held, err := s.overlapGroupHold(ctx, sched, sched.Target, now); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
+	if held, err := s.publishingHeldFiring(ctx, sched, sched.Target, sched.Base, now, advance); err != nil || held != nil {
 		if err != nil {
 			return ScheduleFiring{}, err
 		}
@@ -1251,6 +1294,12 @@ func (s *Store) fireSuiteSchedule(ctx context.Context, sched Schedule, now time.
 		}
 	}
 	if held, err := s.overlapGroupHold(ctx, sched, sched.Target, now); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
+	if held, err := s.publishingHeldFiring(ctx, sched, sched.Target, sched.Base, now, advance); err != nil || held != nil {
 		if err != nil {
 			return ScheduleFiring{}, err
 		}

@@ -39,6 +39,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/gcpsets/gcpfake"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
+	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -788,50 +789,149 @@ func TestAgentCLIHostContainment(t *testing.T) {
 	}
 }
 
-// knownGapGoCacheUnauthenticatedWrite is true while daemon's package cache
-// constructs pkgcache.NewServer with JobTokens == nil and SplitGoCacheTrust ==
-// false (pkg/daemon/packagecache.go), allowing any NetworkOpen sandbox to PUT
-// unauthenticated action->output entries into /gocache/action/ and
+// knownGapGoCacheUnauthenticatedWrite was true while daemon's package cache
+// constructed pkgcache.NewServer with JobTokens == nil and SplitGoCacheTrust
+// == false (pkg/daemon/packagecache.go), allowing any NetworkOpen sandbox to
+// PUT unauthenticated action->output entries into /gocache/action/ and
 // /gocache/trusted/action/ that other task and CI sandboxes execute via
-// GOCACHEPROG. Filed as a follow-up task from task 3984.
-const knownGapGoCacheUnauthenticatedWrite = true
+// GOCACHEPROG. Closed by task 4000.
+const knownGapGoCacheUnauthenticatedWrite = false
 
-func TestPackageCacheGoCacheRejectsUnauthenticatedWrites(t *testing.T) {
-	cache, err := pkgcache.NewCache(t.TempDir(), 64<<20)
+// startDaemonPackageCache starts the package cache exactly as the daemon
+// does, so what these tests reach is the daemon's own wiring rather than a
+// copy of its pkgcache.Config.
+func startDaemonPackageCache(t *testing.T) *daemon.PackageCache {
+	t.Helper()
+	cfg := daemon.Config{DataDir: t.TempDir(), SandboxDir: t.TempDir(), PackageCacheGB: 1}
+	pc, stop, err := daemon.StartPackageCache(cfg, daemon.NewDirect(""), nil)
+	if err != nil {
+		t.Fatalf("StartPackageCache: %v", err)
+	}
+	t.Cleanup(func() { _ = stop(context.Background()) })
+	if pc.Url == "" || pc.GoCacheJobs == nil {
+		t.Fatalf("daemon package cache came up with url %q and Go cache jobs %v", pc.Url, pc.GoCacheJobs)
+	}
+	return pc
+}
+
+// goCacheDo makes one request to the package cache's Go build cache, as
+// the GOCACHEPROG helper does, presenting token when it is not "" -- as
+// basic auth, which is what a token in GOCACHEPROG's URL becomes.
+func goCacheDo(t *testing.T, base, method, path, token string, body []byte) int {
+	t.Helper()
+	req, err := http.NewRequest(method, strings.TrimSuffix(base, "/")+path, bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
+	if token != "" {
+		req.SetBasicAuth("job", token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return resp.StatusCode
+}
 
-	// Matches pkg/daemon/packagecache.go's startPackageCacheFrom wiring.
-	srv := pkgcache.NewServer(pkgcache.Config{Cache: cache})
-
-	payload := []byte("trojaned compiled archive")
+func goCacheEntry(t *testing.T, payload []byte, action string) (outputID, actionID string, actBody []byte) {
+	t.Helper()
 	outSum := sha256.Sum256(payload)
-	outputID := hex.EncodeToString(outSum[:])
-	actSum := sha256.Sum256([]byte("target-go-compile-action"))
-	actionID := hex.EncodeToString(actSum[:])
-
-	putOut := httptest.NewRequest(http.MethodPut, "/gocache/output/"+outputID, bytes.NewReader(payload))
-	recOut := httptest.NewRecorder()
-	srv.ServeHTTP(recOut, putOut)
-
-	actBody, _ := json.Marshal(pkgcache.GoCacheAction{
-		OutputID: outputID,
+	actSum := sha256.Sum256([]byte(action))
+	actBody, err := json.Marshal(pkgcache.GoCacheAction{
+		OutputID: hex.EncodeToString(outSum[:]),
 		Size:     int64(len(payload)),
 		Time:     time.Now().UTC(),
 	})
-	putTrusted := httptest.NewRequest(http.MethodPut, "/gocache/trusted/action/"+actionID, bytes.NewReader(actBody))
-	recTrusted := httptest.NewRecorder()
-	srv.ServeHTTP(recTrusted, putTrusted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(outSum[:]), hex.EncodeToString(actSum[:]), actBody
+}
 
-	unauthAccepted := recOut.Code == http.StatusOK && recTrusted.Code == http.StatusOK
+func TestPackageCacheGoCacheRejectsUnauthenticatedWrites(t *testing.T) {
+	pc := startDaemonPackageCache(t)
+
+	payload := []byte("trojaned compiled archive")
+	outputID, actionID, actBody := goCacheEntry(t, payload, "target-go-compile-action")
+
+	recOut := goCacheDo(t, pc.Url, http.MethodPut, "/gocache/output/"+outputID, "", payload)
+	accepted := map[string]int{}
+	for _, path := range []string{"/gocache/trusted/action/", "/gocache/action/", "/gocache/untrusted/action/"} {
+		if code := goCacheDo(t, pc.Url, http.MethodPut, path+actionID, "", actBody); code == http.StatusOK {
+			accepted[path] = code
+		}
+	}
+
+	unauthAccepted := recOut == http.StatusOK || len(accepted) > 0
 	switch {
 	case knownGapGoCacheUnauthenticatedWrite && !unauthAccepted:
-		t.Fatal("pkgcache now rejects unauthenticated /gocache/trusted/ writes: set knownGapGoCacheUnauthenticatedWrite = false")
+		t.Fatal("pkgcache now rejects unauthenticated /gocache/ writes: set knownGapGoCacheUnauthenticatedWrite = false")
 	case knownGapGoCacheUnauthenticatedWrite:
 		t.Skip("known gap: default daemon pkgcache Config accepts unauthenticated PUT to /gocache/trusted/action/; see knownGapGoCacheUnauthenticatedWrite")
 	case unauthAccepted:
-		t.Fatalf("unauthenticated sandbox PUT to /gocache/trusted/action/ succeeded (%d)", recTrusted.Code)
+		t.Fatalf("unauthenticated sandbox PUTs succeeded: output %d, actions %v", recOut, accepted)
+	}
+
+	// Whatever was refused must not be served either.
+	for _, path := range []string{"/gocache/action/", "/gocache/trusted/action/"} {
+		if code := goCacheDo(t, pc.Url, http.MethodGet, path+actionID, "", nil); code != http.StatusNotFound {
+			t.Errorf("GET %s after a refused write = %d, want 404", path, code)
+		}
+	}
+}
+
+// TestPackageCacheGoCacheWritesDoNotCrossTasks is the attack itself: Task A
+// stores an action entry for an ActionID another build will ask for, and
+// neither Task B, a sandbox with no token, nor a trusted CI job may be
+// served it. Only a trusted CI job's entries reach everyone.
+func TestPackageCacheGoCacheWritesDoNotCrossTasks(t *testing.T) {
+	pc := startDaemonPackageCache(t)
+	pc.GoCacheJobs.Register("task-a-token", pkgcache.JobAccess{Job: "task A"})
+	pc.GoCacheJobs.Register("task-b-token", pkgcache.JobAccess{Job: "task B"})
+	pc.GoCacheJobs.Register("ci-trusted-token", pkgcache.JobAccess{Job: "ci main", Trusted: true})
+
+	payload := []byte("task A's trojaned archive")
+	outputID, actionID, actBody := goCacheEntry(t, payload, "shared-stdlib-compile-action")
+
+	// Task A, even claiming trust by path and header, is kept to its own scope.
+	if code := goCacheDo(t, pc.Url, http.MethodPut, "/gocache/output/"+outputID, "task-a-token", payload); code != http.StatusOK {
+		t.Fatalf("task A output PUT = %d, want 200", code)
+	}
+	for _, path := range []string{"/gocache/action/", "/gocache/trusted/action/"} {
+		if code := goCacheDo(t, pc.Url, http.MethodPut, path+actionID, "task-a-token", actBody); code != http.StatusOK {
+			t.Fatalf("task A PUT %s = %d, want 200 into its own scope", path, code)
+		}
+	}
+	if code := goCacheDo(t, pc.Url, http.MethodGet, "/gocache/action/"+actionID, "task-a-token", nil); code != http.StatusOK {
+		t.Errorf("task A reading its own entry = %d, want 200", code)
+	}
+	for who, token := range map[string]string{
+		"task B":           "task-b-token",
+		"a tokenless task": "",
+		"trusted CI":       "ci-trusted-token",
+	} {
+		for _, path := range []string{"/gocache/action/", "/gocache/trusted/action/", "/gocache/untrusted/action/"} {
+			if code := goCacheDo(t, pc.Url, http.MethodGet, path+actionID, token, nil); code != http.StatusNotFound {
+				t.Errorf("%s GET %s of task A's entry = %d, want 404", who, path, code)
+			}
+		}
+	}
+
+	// A trusted CI job's entry is what every sandbox reads.
+	clean := []byte("trusted CI's compiled archive")
+	cleanOut, cleanAction, cleanBody := goCacheEntry(t, clean, "trusted-compile-action")
+	if code := goCacheDo(t, pc.Url, http.MethodPut, "/gocache/output/"+cleanOut, "ci-trusted-token", clean); code != http.StatusOK {
+		t.Fatalf("trusted CI output PUT = %d", code)
+	}
+	if code := goCacheDo(t, pc.Url, http.MethodPut, "/gocache/action/"+cleanAction, "ci-trusted-token", cleanBody); code != http.StatusOK {
+		t.Fatalf("trusted CI action PUT = %d", code)
+	}
+	for _, token := range []string{"", "task-a-token", "task-b-token", "ci-trusted-token"} {
+		if code := goCacheDo(t, pc.Url, http.MethodGet, "/gocache/action/"+cleanAction, token, nil); code != http.StatusOK {
+			t.Errorf("GET trusted entry with token %q = %d, want 200", token, code)
+		}
 	}
 }
 

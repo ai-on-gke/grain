@@ -484,3 +484,34 @@ func SandboxCommands(baseURL string) ([]SandboxCommand, error) {
 		},
 	}, nil
 }
+
+// GoCacheJobUser is the user name in the GOCACHEPROG URL a registered CI
+// job is given (GoCacheWriterCommand). The name is only a label: the
+// server identifies the job by the password, which is its JobTokenSet
+// token (parseAuthHeaderToken).
+const GoCacheJobUser = "job"
+
+// GoCacheWriterCommand returns the command that repoints one sandbox's
+// GOCACHEPROG at baseURL ("http://host:port") carrying token, a credential
+// registered in the cache's JobTokenSet, as basic auth
+// ("http://job:<token>@host:port"). Go's HTTP client sends a URL's user
+// information as an Authorization header, which the cache reads on
+// /gocache/, so the helper's writes are attributed to that job.
+//
+// It is a separate command from SandboxCommands on purpose: every sandbox
+// gets those, and a task sandbox must keep presenting no token at all, so
+// the token is only ever written by a caller that registered one.
+func GoCacheWriterCommand(baseURL, token string) (SandboxCommand, error) {
+	addr, err := cacheHost(baseURL)
+	if err != nil {
+		return SandboxCommand{}, err
+	}
+	if strings.TrimSpace(token) == "" {
+		return SandboxCommand{}, fmt.Errorf("pkgcache: a Go build-cache writer needs a job token")
+	}
+	u := url.URL{Scheme: "http", User: url.UserPassword(GoCacheJobUser, token), Host: addr}
+	return SandboxCommand{
+		What: "Go build cache writer",
+		Argv: []string{"go", "env", "-w", "GOCACHEPROG=" + GoCacheProgPath + " " + u.String()},
+	}, nil
+}

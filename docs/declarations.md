@@ -70,6 +70,12 @@ triggers match, posting findings rather than pushing fixes unless asked to,
 and re-reading only what a new push changed. See "Gating reviews" under
 `.grain/triggers/<name>.yml`.
 
+To review every pull request with findings only, declare a gating
+trigger on `paths: ["**"]` naming a review template rather than a
+default review. Do not declare both, or every task is reviewed twice.
+This repository's `.grain/triggers/every-pr.yml` and
+`.grain/templates/pr-review.yml` are a worked example.
+
 ### `.grain/settings.yml`
 
 A repository can declare five of its own settings, in `.grain/settings.yml`
@@ -334,8 +340,11 @@ fields:                            # optional; the inputs it asks for when filed
     default: staging               #   optional; what an unattended firing uses
     required: false                #   optional; only asked of whoever fills the form
 capabilities:                      # optional; capabilities and repository access
-  - repo-read:acme/upstream        #   the filed task may fetch acme/upstream
-  - repo-write:acme/downstream     #   ...and push its own branch to acme/downstream
+  - {capability: "https://grain.dev/capabilities/repo#read", with: {repo: acme/upstream}}
+                                   #   the filed task may fetch acme/upstream
+  - {capability: "https://grain.dev/capabilities/repo#write", with: {repo: acme/downstream}}
+                                   #   ...and push its own branch to acme/downstream
+                                   #   (formerly repo-read:<repo> / repo-write:<repo>)
   - 'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent"}'
                                    #   capabilities bounded by the filing team
                                    #   (formerly gcp-key, retired in schema migration 97)
@@ -353,13 +362,14 @@ section says about `capabilities:` holds for `grants:` as well.
 #### Capabilities and repository access: `capabilities:` on a template or schedule
 
 `.grain/templates/<name>.yml` and `.grain/schedules/<name>.yml` may declare
-any capability the team is allowed to hold, as well as `repo-read:<owner>/<repo>`
-and `repo-write:<owner>/<repo>` on templates.
+any capability the team is allowed to hold, as well as repository access
+(`https://grain.dev/capabilities/repo#read` / `#write` `{repo: <owner>/<repo>}`,
+formerly `repo-read:<owner>/<repo>` / `repo-write:<owner>/<repo>`) on templates.
 
 **Team boundary.** A declared capability cannot grant what the filing team is not
 authorized to have. The team the task runs under is the bound: each capability's
 own `CapabilitySpec.AuthorizedTeams`, plus team-scoped capabilities (such as a
-team-scoped `self-debug` and `api:pipeline-control`). A named GCP key,
+team-scoped `…/api#self-debug` and `…/api#pipeline-control`). A named GCP key,
 `…/gcp#gcp-key` `{permission_set: <name>}` (formerly `gcp-key:<name>`, retired in
 schema migration 97), is the deployment's since single-tenant reset stage 4e, and is dropped only when the
 deployment has no key of that name ([GCP keys](team-gcp-keys.md)).
@@ -371,9 +381,10 @@ requesting unauthorized capabilities:
   naming the stripped capabilities and the filing team.
 
 **Repository access.** For repository access on templates,
-`repo-read:<owner>/<repo>` and `repo-write:<owner>/<repo>` are allowed:
-- Each `repo-read:` becomes one of the template's `reads` and each
-  `repo-write:` one of its `writes` (default branch). Every task filed from
+`repo#read` and `repo#write` `{repo: <owner>/<repo>}` are allowed (and their
+retired spellings `repo-read:<owner>/<repo>` / `repo-write:<owner>/<repo>`):
+- Each `repo#read` becomes one of the template's `reads` and each
+  `repo#write` one of its `writes` (default branch). Every task filed from
   the template carries them, so the git proxy lets that task's sandbox fetch
   the repositories it reads, and push its own task branch to the ones it writes.
 - The proxy clones and pushes a task's work with the filing team's own credential
@@ -550,6 +561,8 @@ overlap: skip                      # optional; "skip" (default) or "allow"; "ski
                                    # `overlap-group: sync-oss-release` beside `overlap: skip` says the same
 review: on-failure                 # optional, workflow: only; "on-failure" (default) or "always"
 grain-ci: true                     # optional, workflow: only; run on grain CI even when ci_mode is github
+skip-when: publishing-held         # optional; hold firings while this base branch's publishing is held
+                                   # by a release triage task (see "Holding while publishing is held")
 model: gemini-3.1-pro              # optional; beats the template's own; refused with suite:
 admission: bypass                  # optional; raises the template's own, never lowers it; refused with suite:
 hosting: console                   # optional; raises the template's own to console; refused with suite:
@@ -647,6 +660,36 @@ overlap group "sync-oss-release" is still open (running)`.
 A settings-owned schedule row carries the same `overlap-group:` key
 (`settings/schedules.yml`, `overlapGroup` on `POST`/`PATCH
 /api/schedules`).
+
+#### Holding while publishing is held: `skip-when:`
+
+grain/task-4393. `skip-when: publishing-held` holds a schedule's firings
+while publishing from the base branch it fires into is held: deployment
+health's `baseBranchPublishing` finding for that repository and branch
+is `gated`, with a release triage task open on it ("Further releases on
+this branch are held pending resolution of triage task N"). It is for
+work that can do nothing useful until publishing works again -- the
+release train cuts only from a commit whose release published, and on
+2026-11-10 it woke 45 times in a day to find that out.
+
+```yaml
+skip-when: publishing-held
+```
+
+A held firing is recorded like an overlap skip, as `skipped at <time>:
+publishing held by task N (...)`, and the schedules page says the same
+while it lasts. It is held, not dropped: the cadence stays where it was,
+and the first cycle after the triage task closes fires it once, standing
+in for the occurrences that came round meanwhile. Run now is never held.
+A `github_workflow_run` trigger's firing has no occurrence to hold, so it
+is dropped and recorded. `publishing-held` is the only condition; any
+other value is refused. Settings rows carry the same key
+(`settings/schedules.yml`).
+
+A daemon older than this key refuses a schedule file that says it, and a
+repository with a refused declaration keeps its last good commit's
+declarations, so declare it only once every daemon that reads the
+repository understands it.
 
 ### `.grain/triggers/<name>.yml`
 
@@ -1462,6 +1505,54 @@ What that transaction does:
   is recorded against it (`repo_declaration_sync.last_error`, shown on the
   repository's own settings). Silently switching off a deployment's
   standing work over a syntax error would be much the worse failure.
+- A refusal is never only in the journal. It is the repository's
+  `refusedDeclarations` entry in `grain health` (and `deploy://health`,
+  which is the same response), the `last_error` on its row of
+  `deploy://state/tables/repo_declaration_sync` where the deployment
+  exports its full state, the error beside the repository in Settings →
+  Repos, and one Inbox notice (`declarations.refused:<owner>/<repo>:…`)
+  for each new error text. All of them name the files, lines and
+  messages and the commit whose declarations are still in force. The same
+  error read again on the next poll raises nothing new; a different error
+  clears the old notice and raises a new one; a clean read clears it. A
+  repository that cannot be *reached* is recorded the same way but raises
+  no notice, since there is no file to fix.
+
+### Declarations newer than the daemon
+
+`main` and the daemon reading it are not the same version. `grain
+declarations check` in CI validates a pull request against the code on
+its branch, so a declaration that needs a newer grain merges cleanly and
+then meets a deployment still running an older build. (That is what
+happened when `overlap:` became a mapping: a daemon that only decoded
+`overlap: skip` refused the whole repository's `.grain` with it, and the
+new schedules never loaded.)
+
+The policy is **forward-compatible parsing, one file at a time**:
+
+- A template, suite or schedule file that is well-formed YAML but that
+  this build cannot decode -- a key it does not know, or a known key in a
+  shape it has no case for -- is *held back*. Everything else in the
+  repository loads as usual.
+- A held-back file that the deployment already has a version of keeps
+  that version, exactly as it was, and its provenance row keeps the
+  commit it was read at. A held-back file that is new in this commit is
+  not loaded at all.
+- A held-back file's name still resolves for the files that name it, so a
+  suite naming a held-back template runs the version already in force. If
+  something names a held-back file that has *no* earlier version, the
+  whole set is refused instead, as any name that resolves to nothing is.
+- Everything else is still a refusal of the whole set: a file that is not
+  YAML, a key a repository may never set, a value out of range, a name
+  that resolves to nothing, a trigger, settings or merge-rules file of any
+  kind. Those are mistakes in the file whatever version reads it.
+- The held-back files are reported the way a refusal is (above), under
+  `declarations held back by this grain build:`, and they load the first
+  time the deployment upgrades to a build that reads them.
+
+`grain declarations check` is not forward-compatible: in CI a file that
+the code on the branch cannot decode is an error, as it always was. Only
+the daemon, which may be older than the tree it reads, holds files back.
 
 ## Editing one
 

@@ -792,6 +792,10 @@ var NeverAutoMergePaths = []string{
 	"tables/qualification_config.json",
 	"tables/qualification_item.json",
 	"tables/qualification_item_depends_on.json",
+	// Token budgets and the usage mode (model.UsageSettings): how many
+	// runs dispatch at once under a provider's budget, and whether the
+	// automatic cap holds them at all -- spend, applied on the next tick.
+	"tables/usage_setting.json",
 	// Extracted scripts, CI workflows, and schema version.
 	"scripts/**",
 	"workflows/**",

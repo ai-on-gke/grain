@@ -977,7 +977,7 @@ func (s *Store) AddCommentWithAttachments(ctx context.Context, c Comment, attach
 				attachmentIDs[i] = attID
 			}
 		}
-		if c.Author.Actor.Kind == PrincipalAgent || (c.Author.OnBehalfOf != nil && c.Author.OnBehalfOf.Kind == PrincipalAgent) {
+		if c.Author.Actor.Kind == PrincipalAgent || (c.Author.OnBehalfOf != nil && c.Author.OnBehalfOf.Kind == PrincipalAgent && RelayedVia(c.Author) == nil) {
 			stamp := c.CreatedAt
 			if stamp.IsZero() {
 				stamp = time.Now()
@@ -1775,11 +1775,65 @@ func (s *Store) PendingQuestions(ctx context.Context) (map[string]PendingQuestio
 	return out, err
 }
 
+// noteSummaryWhere picks, out of `task_comment` `c`, the newest comment on
+// its task that is not a handover -- the note a task that answered in a
+// comment is resting on -- where that comment carries a summary.
+const noteSummaryWhere = "`c`.`handover` = 0 AND `c`.`summary` <> '' AND `c`.`id` = (" +
+	"SELECT MAX(`c2`.`id`) FROM `task_comment` `c2` WHERE `c2`.`task_id` = `c`.`task_id` AND `c2`.`handover` = 0)"
+
+// NoteSummaries is, for every open task, the one-line summary its newest
+// comment was given (comment_on_issue's `summary`), keyed by task: one
+// query for a whole list, as PendingQuestions is. A task whose newest
+// comment has no summary is absent rather than given one derived from the
+// comment's opening, which is what a report starts with, not what anybody
+// has to do.
+func (s *Store) NoteSummaries(ctx context.Context) (map[string]string, error) {
+	out := map[string]string{}
+	err := each(ctx, s.db,
+		"SELECT `c`.`task_id`, `c`.`summary` FROM `task_comment` `c` JOIN `task_observation` `o` "+
+			"ON `o`.`task_id` = `c`.`task_id` WHERE `o`.`closed_at` IS NULL AND "+noteSummaryWhere, nil,
+		func(rows *sql.Rows) error {
+			var id, summary string
+			if err := rows.Scan(&id, &summary); err != nil {
+				return err
+			}
+			out[id] = summary
+			return nil
+		})
+	return out, err
+}
+
+// NoteSummary is NoteSummaries for one task: "" when its newest comment
+// has no summary, or it has no comments.
+func (s *Store) NoteSummary(ctx context.Context, taskID string) (string, error) {
+	var summary string
+	err := s.db.QueryRowContext(ctx,
+		"SELECT `c`.`summary` FROM `task_comment` `c` WHERE `c`.`task_id` = ? AND "+noteSummaryWhere,
+		taskID).Scan(&summary)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return summary, err
+}
+
 // CommentByPerson reports whether a comment is a person's: a human's
 // own, or one a service relayed on a human's behalf. What agents and
 // grain itself say on a task is never something a run is owed for.
 func CommentByPerson(c Comment) bool {
 	return PersonOf(c.Author) != nil
+}
+
+// RelayedVia is the console session that relayed a person's answer for
+// them (Attribution's (human, via agent) shape, POST
+// /api/tasks/{id}/comments with relay: true), or nil for any other
+// attribution. The Actor of such a comment is the person, so PersonOf
+// counts it as theirs.
+func RelayedVia(a Attribution) *Principal {
+	if a.Actor.Kind != PrincipalHuman || a.OnBehalfOf == nil || a.OnBehalfOf.Kind != PrincipalAgent {
+		return nil
+	}
+	p := *a.OnBehalfOf
+	return &p
 }
 
 // PersonOf is the person a comment's attribution speaks for -- its
@@ -1815,6 +1869,40 @@ func UndeliveredPersonComment(comments []Comment, obs *Observation) *Comment {
 			return nil
 		}
 		if CommentByPerson(c) {
+			return &comments[i]
+		}
+	}
+	return nil
+}
+
+// UncountedAgentComment is the newest comment another task's agent left
+// on taskID past the question it is parked on (or past what its runs
+// have been shown), with no person's comment after it -- an answer a
+// director or console session relayed as its own words, which never
+// answers a question (Client.reopenAcknowledgeable answers only a
+// person). nil when there is none. The caller asks it only of an
+// awaiting_reply task.
+func UncountedAgentComment(comments []Comment, obs *Observation, taskID string) *Comment {
+	if obs == nil {
+		return nil
+	}
+	var after int64 = -1
+	if obs.DeliveredCommentID != nil {
+		after = *obs.DeliveredCommentID
+	}
+	if obs.PendingQuestionCommentID != nil && *obs.PendingQuestionCommentID > after {
+		after = *obs.PendingQuestionCommentID
+	}
+	if after < 0 {
+		return nil
+	}
+	own := NormalizeTaskID(taskID)
+	for i := len(comments) - 1; i >= 0; i-- {
+		c := comments[i]
+		if c.ID <= after || CommentByPerson(c) {
+			return nil
+		}
+		if c.Author.Actor.Kind == PrincipalAgent && NormalizeTaskID(c.Author.Actor.ID) != own {
 			return &comments[i]
 		}
 	}
@@ -5931,6 +6019,28 @@ func (s *Store) GitConnectionOn(ctx context.Context, host, owner, repo string) (
 	return "", missing
 }
 
+// GitMergeCredentialOn is the credential grain merges owner/repo's pull
+// requests with: the MergeCredential of the deployment's git connection
+// that covers it (MatchTeamGitConnection, the same match GitConnectionOn
+// makes), or "" when that connection names none and merges go out under
+// the push credential as they always have. A repository's own
+// RepoConfig.GitCredential override changes what it is pushed with, not
+// what it is merged with.
+func (s *Store) GitMergeCredentialOn(ctx context.Context, host, owner, repo string) (string, error) {
+	settings, err := s.GetConfig(ctx)
+	if err != nil {
+		return "", fmt.Errorf("reading the deployment's git connections: %w", err)
+	}
+	if settings == nil {
+		return "", nil
+	}
+	conn, ok := MatchTeamGitConnection(settings.EffectiveGitConnections(), host, s.GitDefaultHost, owner, repo)
+	if !ok {
+		return "", nil
+	}
+	return conn.MergeCredential, nil
+}
+
 // pinnedTarget is what a run's own target columns say
 // (task_run.target_owner/target_name): Valid false for a run with
 // nothing pinned onto it, which is every run recorded before those
@@ -6627,18 +6737,18 @@ func newScheduleID(ctx context.Context, tx *sql.Tx) (string, error) {
 
 const scheduleColumns = "`id`,`title`,`body`,`target_owner`,`target_name`,`base`," +
 	"`auto_merge`,`auto_approve_proposals`,`template_id`,`suite_id`,`recurrence_kind`,`every_n_hours`,`time_of_day_minutes`,`weekday`,`day_of_month`," +
-	"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`,`overlap_group`"
+	"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`,`overlap_group`,`skip_when`"
 
 func scanSchedule(scan func(...any) error) (Schedule, error) {
 	var t Schedule
 	var base, templateID, suiteID sql.NullString
-	var kind, overlap, networkAccess, nothingNeeded, timeZone, workflowReview, admission, hosting, overlapGroup string
+	var kind, overlap, networkAccess, nothingNeeded, timeZone, workflowReview, admission, hosting, overlapGroup, skipWhen string
 	var everyNHours, everyNMinutes, timeOfDay, weekday, dayOfMonth sql.NullInt64
 	var lastRun sql.NullTime
 	if err := scan(&t.ID, &t.Title, &t.Body, &t.Target.Owner, &t.Target.Name, &base,
 		&t.AutoMerge, &t.AutoApproveProposals, &templateID, &suiteID, &kind, &everyNHours, &timeOfDay, &weekday, &dayOfMonth,
 		&overlap, &networkAccess, &nothingNeeded, &t.Model, &t.Enabled, &t.NextRunAt, &lastRun, &t.CreatedAt, &timeZone,
-		&workflowReview, &everyNMinutes, &t.KeepRunning, &admission, &hosting, &t.GrainCI, &overlapGroup); err != nil {
+		&workflowReview, &everyNMinutes, &t.KeepRunning, &admission, &hosting, &t.GrainCI, &overlapGroup, &skipWhen); err != nil {
 		return Schedule{}, err
 	}
 	t.Admission = Admission(strings.TrimSpace(admission))
@@ -6646,6 +6756,7 @@ func scanSchedule(scan func(...any) error) (Schedule, error) {
 	t.Target = RepoFromStored(t.Target.Owner, t.Target.Name)
 	t.Overlap = OverlapPolicy(overlap)
 	t.OverlapGroup = strings.TrimSpace(overlapGroup)
+	t.SkipWhen = ScheduleSkipWhen(strings.TrimSpace(skipWhen))
 	t.NetworkAccess = NetworkAccess(networkAccess)
 	t.NothingNeededAction = NothingNeededAction(nothingNeeded)
 	t.WorkflowReview = WorkflowReviewPolicy(workflowReview)
@@ -6711,12 +6822,12 @@ func putSchedule(ctx context.Context, tx *sql.Tx, t Schedule) error {
 	_, err := tx.ExecContext(ctx, `REPLACE INTO `+"`schedule`"+` (
   `+"`id`,`title`,`body`,`target_owner`,`target_name`,`base`,"+
 		"`auto_merge`,`auto_approve_proposals`,`template_id`,`suite_id`,`recurrence_kind`,`every_n_hours`,`time_of_day_minutes`,`weekday`,`day_of_month`,"+
-		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`,`overlap_group`"+`
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"`overlap`,`network_access`,`nothing_needed_action`,`agent_model`,`enabled`,`next_run_at`,`last_run_at`,`created_at`,`time_zone`,`workflow_review`,`every_n_minutes`,`keep_running`,`admission`,`hosting`,`grain_ci`,`overlap_group`,`skip_when`"+`
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Title, t.Body, t.Target.StoredOwner(), t.Target.Name, nullable(t.Base),
 		t.AutoMerge, t.AutoApproveProposals, stringOf(t.TemplateID), stringOf(t.SuiteID), r.StoredKind(), everyNHours, timeOfDay, weekday, dayOfMonth,
 		string(overlap), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Enabled, t.NextRunAt.UTC(), timeOf(t.LastRunAt), t.CreatedAt.UTC(), timeZone,
-		string(t.WorkflowReview), everyNMinutes, t.KeepRunning, string(t.Admission), string(t.Hosting), t.GrainCI, strings.TrimSpace(t.OverlapGroup))
+		string(t.WorkflowReview), everyNMinutes, t.KeepRunning, string(t.Admission), string(t.Hosting), t.GrainCI, strings.TrimSpace(t.OverlapGroup), string(t.SkipWhen))
 	if err != nil {
 		return fmt.Errorf("writing schedule %s: %w", t.ID, err)
 	}

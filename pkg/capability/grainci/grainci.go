@@ -117,7 +117,7 @@ func Refusal(mode model.CIMode, repo string) string {
 			"(grain ci list/show/log, grain pr status, ci://) grant %s with {repo: %q} instead (%s)",
 			head, repo, ciModeLabel(mode), model.APIRef(substituteMethod), repo, SubstituteGrant(repo))
 	}
-	return fmt.Sprintf("%s. To read a repository's CI without grain CI gating it, grant %s scoped to that repository (api:ci-read@<owner/name>); "+
+	return fmt.Sprintf("%s. To read a repository's CI without grain CI gating it, grant %s with {repo: <owner/name>} naming that repository; "+
 		"to have grain CI gate a repository, set its CI Mode instead", head, model.APIRef(substituteMethod))
 }
 

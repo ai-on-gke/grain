@@ -296,6 +296,11 @@ type Request struct {
 	// starts are still taken, and hostd exits the moment nothing runs. A
 	// hostd that predates it drains.
 	Idle bool `json:"idle,omitempty"`
+	// Handover, on OpDrain with Idle, says the binary replacing this hostd
+	// adopts live detached spools (FeatureHandover): a local hostd with a
+	// Reexec continuation hands running detached CLI processes over across
+	// its own restart rather than waiting for them to end or draining.
+	Handover bool `json:"handover,omitempty"`
 	// Inode is the socket inode OpSocketOwner asks about.
 	Inode uint64 `json:"inode,omitempty"`
 	// Stage is OpStage's operation.
@@ -366,6 +371,10 @@ type Exit struct {
 	Signal string `json:"signal,omitempty"`
 	// Deadline says hostd killed it for running past its deadline.
 	Deadline bool `json:"deadline,omitempty"`
+	// Draining says hostd ended it for its own upgrade or restart (a drain
+	// reaching drain_cap, or a previous hostd stopping without handing it
+	// over), rather than the task or its CLI failing.
+	Draining bool `json:"draining,omitempty"`
 	// WaitDelay says the process exited but something it started still
 	// held its output open, and hostd stopped waiting for that (the same
 	// bound agent.LocalHost puts on a local CLI).

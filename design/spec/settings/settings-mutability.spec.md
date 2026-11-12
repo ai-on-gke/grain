@@ -172,6 +172,7 @@ Columns:
 | Model connections `agentBackends` (framework, models, CLI path, …) | Yes — Models; `PUT /api/settings`, `PUT`/`DELETE /api/deployment/agent-backends/{id}` | Yes — `tables/grain_config.json` (`agent_backends`) | Unlocked (Bootstrap; G / B) / editable | Yes | `connections:write`. Edits lift a connection's usage-limit pause and re-run model discovery. |
 | Default model `defaultModel`, pinned connection `agentBackendId`, per-model `modelSettings` | Yes — Models → defaults; `PUT /api/deployment`, `PUT /api/settings` | Yes — `tables/grain_config.json` | Unlocked (Bootstrap; G) / editable | Yes | |
 | `judgementModel` | No | Yes — `tables/grain_config.json` | Unlocked (Bootstrap) / — | — | No route sets it; config repo is the only writer. |
+| Token usage settings (mode, `minWorkers`, `retentionDays`, budgets) | Yes — Models → Token usage and budgets; `grain usage`, `PUT /api/usage/settings` | Yes — `tables/usage_setting.json` | Unlocked (Bootstrap) / editable | Yes | `settings:write`. A config change to the file is held for a human Submit (`NeverAutoMergePaths`); `grain state check` validates it. |
 | CLI run locations `cliRun` | Yes — Models → CLI run locations; `PUT /api/settings/cli-run` | Yes — `tables/grain_config.json` | Unlocked (Bootstrap; B) / editable | Yes | |
 | Model connection credential / agent key / Codex auth | Write-only — Models; `PUT`/`DELETE /api/agent-backends/{id}/credential`, `/api/agent-keys/{framework}`, `/api/codex-auth`, `/api/agent-backends/{id}/codex-auth` | No — secret material (`<data-dir>/secrets`) | Unlocked (Secret; —) / editable | No | `secrets:write`. Stays editable in external mode, where the connection's own fields are drawn read-only (§4, D-9, fixed). |
 | Key / connection checks | Action — `POST /api/agent-keys/{framework}/check`, `GET /api/agent-models` | No — action | Unlocked (Action) | No | |
@@ -226,7 +227,7 @@ Settings → Executors and its executor tokens were removed with remote executor
 
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Upgrade now / scheduled | Action — `POST /api/upgrade`, `DELETE /api/upgrade/scheduled` | No — action | Unlocked (Action) | No | `deployment:upgrade`. Never read-only (`NOT_CONFIG`). |
+| Upgrade now / cancel / rollback / scheduled | Action — `POST /api/upgrade`, `DELETE /api/upgrade/current`, `DELETE /api/upgrade/scheduled` | No — action | Unlocked (Action) | No | `deployment:upgrade`. Never read-only (`NOT_CONFIG`). |
 | `upgradeCheckMode`, `upgradeCheckPausesPipeline`, `autoUpgradeOn`, `autoUpgradeChannel`, `autoUpgradeTime`, `autoUpgradeMinIntervalHours` | Yes — General → Updates; `PUT /api/settings` | Yes — `tables/grain_config.json` | Locked (G) / read-only | Yes | |
 | Power (restart, reboot, shutdown) | Action — System → Power; `POST /api/host/{restart,reboot,shutdown}` | No — action | Unlocked (Action) | No | |
 

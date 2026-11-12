@@ -55,6 +55,10 @@ type PackageCache struct {
 	// on port 443 cannot fetch a package at all -- either is far worse
 	// than a sandbox with no interception (see sandboxDNS).
 	DnsServing bool
+	// GoCacheJobs is who may write the Go build cache's action entries:
+	// a CI job registered here as Trusted writes what every sandbox
+	// reads, and nobody unregistered writes at all (startPackageCacheFrom).
+	GoCacheJobs *pkgcache.JobTokenSet
 }
 
 // packageCacheDNSAddrs is where the DNS server binds, and the address
@@ -341,19 +345,31 @@ func startPackageCacheFrom(cfg Config, fabric Fabric, upstreams packageCacheUpst
 			credentials = creds
 		}
 	}
+	// Every sandbox reaches the Go build cache through GOCACHEPROG, and
+	// cmd/go runs whatever OutputID an action entry names as if it had
+	// compiled it itself. So only a CI job registered in jobTokens as
+	// trusted writes the action entries everyone reads; a task sandbox,
+	// which presents no token, reads them and writes nothing, and an
+	// untrusted job's writes are served back to that job alone
+	// (pkgcache's goCacheNamespace). Identification is not required:
+	// nothing else this service answers -- apt, pip, npm, registry pulls,
+	// the transparent half -- carries a token.
+	jobTokens := pkgcache.NewJobTokenSet(false)
 	handler := pkgcache.NewServer(pkgcache.Config{
-		Cache:          cache,
-		Credentials:    credentials,
-		RepoScope:      cfg.packageCacheScope,
-		Restricted:     restricted,
-		AptUpstream:    upstreams.AptUpstream,
-		PyPIIndex:      upstreams.PyPIIndex,
-		NPMRegistry:    upstreams.NPMRegistry,
-		GoProxy:        upstreams.GoProxy,
-		DockerRegistry: upstreams.DockerRegistry,
-		GHCRRegistry:   upstreams.GHCRRegistry,
-		GCRRegistry:    upstreams.GCRRegistry,
-		Log:            func(format string, args ...any) { log.Printf("grain daemon: "+format, args...) },
+		Cache:             cache,
+		Credentials:       credentials,
+		RepoScope:         cfg.packageCacheScope,
+		Restricted:        restricted,
+		JobTokens:         jobTokens,
+		SplitGoCacheTrust: true,
+		AptUpstream:       upstreams.AptUpstream,
+		PyPIIndex:         upstreams.PyPIIndex,
+		NPMRegistry:       upstreams.NPMRegistry,
+		GoProxy:           upstreams.GoProxy,
+		DockerRegistry:    upstreams.DockerRegistry,
+		GHCRRegistry:      upstreams.GHCRRegistry,
+		GCRRegistry:       upstreams.GCRRegistry,
+		Log:               func(format string, args ...any) { log.Printf("grain daemon: "+format, args...) },
 	})
 	if mirrors := DescribePackageCacheUpstreams(upstreams); mirrors != "" {
 		log.Printf("grain daemon: package cache: fetching %s rather than from the public archives. What a "+
@@ -470,13 +486,14 @@ func startPackageCacheFrom(cfg Config, fabric Fabric, upstreams packageCacheUpst
 	}
 
 	return &PackageCache{credentials: credentials,
-		cache:      cache,
-		dir:        cache.Dir(),
-		Ca:         ca,
-		dnsServer:  dnsServer,
-		Url:        url,
-		DnsIP:      dnsIP,
-		DnsServing: dnsServing,
+		cache:       cache,
+		dir:         cache.Dir(),
+		Ca:          ca,
+		dnsServer:   dnsServer,
+		Url:         url,
+		DnsIP:       dnsIP,
+		DnsServing:  dnsServing,
+		GoCacheJobs: jobTokens,
 	}, shutdown, nil
 }
 

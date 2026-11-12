@@ -267,7 +267,7 @@ test("saves a grant removed from a session during a live run", async ({
   request,
 }) => {
   const removed = "https://grain.dev/capabilities/api#capabilities:detach";
-  const removedLabel = "api:capabilities:detach";
+  const removedLabel = "api#capabilities:detach";
   const before = (
     await (await request.get("/api/console-sessions")).json()
   ).sessions.find((s) => s.id === "director");

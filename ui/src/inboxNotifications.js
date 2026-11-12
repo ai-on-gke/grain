@@ -110,12 +110,15 @@ export function inboxEntries(tasks, gates) {
     const reason = taskReason(t);
     // A question is announced by its own one-line summary
     // (Task.QuestionSummary) -- what is being asked, not merely that
-    // something was -- with which task asked it underneath.
-    if (reason.id === "reply" && t.questionSummary) {
+    // something was -- with which task asked it underneath. A closing
+    // note with a summary of its own (Task.NoteSummary) is announced by
+    // that line the same way.
+    const line = t.questionSummary || t.noteSummary;
+    if (reason.id === "reply" && line) {
       return {
         key: `task:${t.id}:${reason.id}`,
         taskId: t.id,
-        title: t.questionSummary,
+        title: line,
         body: `${t.id} ${reason.text}${t.title ? `: ${t.title}` : ""}`,
       };
     }

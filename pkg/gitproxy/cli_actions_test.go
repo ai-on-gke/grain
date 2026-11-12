@@ -610,8 +610,8 @@ func TestPerAttemptTokenBindingAndStage3CLIActions(t *testing.T) {
 		Grants: []string{"api:tests:write@other/repo"},
 	}
 	if rec := send(h, http.MethodPost, tok2, "/cli/quarantine", `{"test_name":"pkg/foo.TestBar","reason":"flake"}`); rec.Code != http.StatusForbidden ||
-		!strings.Contains(rec.Body.String(), "api:test-quarantine") {
-		t.Errorf("quarantine without grant on repo: got %d %s, want 403 naming api:test-quarantine", rec.Code, rec.Body)
+		!strings.Contains(rec.Body.String(), "api#test-quarantine") {
+		t.Errorf("quarantine without grant on repo: got %d %s, want 403 naming api#test-quarantine", rec.Code, rec.Body)
 	}
 	scopes.scopes["sb-1"] = model.NamespaceScope{
 		TaskID: "7", RunID: "run-2", Attempt: 2,
