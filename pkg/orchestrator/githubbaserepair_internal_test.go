@@ -331,3 +331,30 @@ func TestADefaultBranchWithNoFinishedVerdictRaisesANotice(t *testing.T) {
 		t.Fatalf("%s still open after a finished run", subject)
 	}
 }
+
+// A pull request's run whose head branch is main, or a fork's, is not the
+// default branch: it neither files a repair nor closes one.
+func TestADefaultBranchRepairIgnoresPullRequestAndForkRuns(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	deps := onGitHubActions(t, ctx, store, repo)
+	now := time.Date(2026, 11, 11, 18, 0, 0, 0, time.UTC)
+
+	pr, prJobs := testsRun(t, ctx, store, repo, 20, "main", "failure", now, map[string]string{"go unit": "failure"})
+	pr.Event = "pull_request"
+	fork, forkJobs := testsRun(t, ctx, store, repo, 21, "main", "failure", now, map[string]string{"go unit": "failure"})
+	fork.HeadRepo = "mallory/widgets"
+	for _, r := range []struct {
+		run  ConcludedGitHubWorkflowRun
+		jobs []model.GitHubCIJob
+	}{{pr, prJobs}, {fork, forkJobs}} {
+		if err := handleGitHubBaseVerdict(ctx, deps, r.run, r.jobs, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ids := baseRepairs(t, ctx, store, repo); len(ids) != 0 {
+		t.Fatalf("a pull request's or a fork's red run filed repairs %v", ids)
+	}
+}

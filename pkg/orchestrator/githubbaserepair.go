@@ -114,6 +114,13 @@ func handleGitHubBaseVerdict(ctx context.Context, deps Deps, run ConcludedGitHub
 	if deps.Store == nil || !isGitHubGatingWorkflow(run.WorkflowName, run.WorkflowPath) {
 		return nil
 	}
+	// A fork's run, or a pull request's whose head branch is called main,
+	// is not the default branch: its log tails would be an outsider's words
+	// in an approved priority-9 directive. handleConcludedGitHubWorkflowRun
+	// drops both already; this handler does not lean on that.
+	if isGitHubWorkflowRunForeignHead(run.Repo, run.HeadRepo) || !isGitHubBranchWorkflowEvent(run.Event) {
+		return nil
+	}
 	if !isGitHubBaseBranch(deps, run.Repo, run.Ref) {
 		return nil
 	}
