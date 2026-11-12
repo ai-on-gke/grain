@@ -849,7 +849,10 @@ keep it from being a way in.
    same port succeeds.
 3. **Dial-out only.** Nothing dials a sandbox pod. Two NetworkPolicies
    apply:
-   - **`grain-sandbox-egress`** selects every sandbox pod except
+   - **`grain-sandbox-egress`** selects every sandbox pod, and every
+     throwaway pod a self-upgrade runs its candidate image in
+     (`app.kubernetes.io/component: upgrade`, labelled apart only so the
+     sandbox sweep leaves it alone), except
      `grain.dev/network: none` ones, which only
      `grain-sandbox-network-none` selects (policies are additive, so
      selecting them here would hand them the internet rule). Its egress
