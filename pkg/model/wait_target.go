@@ -338,8 +338,16 @@ func (s *Store) WaitTargetFor(ctx context.Context, waiter Task, id string, now t
 // repository its reads and writes name, since those are what such a task
 // works from. reader's runs may read its own repository and those its
 // reads and writes name, the same scope the git proxy clones by. A target
-// with no repository and no reads or writes is about none, and readable.
+// with a ChangeTarget (a non-git workspace, such as a changelist one) is
+// about that codebase too, which no reads or writes can name: only a
+// reader working on a ChangeTarget of the same kind may read it. A target
+// with no repository, no ChangeTarget and no reads or writes is about
+// none, and readable.
 func MayReadTaskOf(reader, target Task) bool {
+	if target.ChangeTarget != nil &&
+		(reader.ChangeTarget == nil || reader.ChangeTarget.Kind != target.ChangeTarget.Kind) {
+		return false
+	}
 	var about []RepoRef
 	if target.Target != nil {
 		about = append(about, *target.Target)
@@ -562,8 +570,8 @@ func (t WaitTarget) Describe() string {
 	}
 	b.WriteString(".\n")
 	if t.Withheld {
-		b.WriteString("Its title and closing note are withheld: it belongs to a repository this " +
-			"task's reads and writes do not include.\n")
+		b.WriteString("Its title and closing note are withheld: it belongs to a repository or " +
+			"workspace this task's own work, reads and writes do not include.\n")
 	}
 	if t.ClosingNote != "" {
 		b.WriteString("Its closing note:\n")
