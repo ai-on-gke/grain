@@ -197,3 +197,20 @@ func TestBaseBranchRepairPromptHolisticInstructions(t *testing.T) {
 		}
 	}
 }
+
+// A red range of more than one merge is attributed only by the repair's
+// own trailers (repairblame.go), so the repair is told to write them.
+func TestBaseBranchRepairIsToldToNameTheMergeItRepairs(t *testing.T) {
+	t.Parallel()
+	row := model.BaseBranchCI{
+		Repo:   model.RepoRef{Owner: "acme", Name: "widgets"},
+		Branch: "main",
+		Commit: "0123456789abcdef0123456789abcdef01234567",
+	}
+	body := baseBranchRepairBody(row, nil)
+	for _, want := range []string{"Fixes-commit: <sha>", "Blames: task <id>"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the repair prompt does not name the %q trailer:\n%s", want, body)
+		}
+	}
+}
