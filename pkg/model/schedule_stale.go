@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -50,10 +51,20 @@ type StaleSchedule struct {
 // StaleSchedules lists every enabled schedule whose last firing that ran
 // anything -- or, for one that never has, its creation -- is more than
 // twice its cadence before now, oldest first.
-func (s *Store) StaleSchedules(ctx context.Context, now time.Time) ([]StaleSchedule, error) {
+//
+// defaultBranch, when given, resolves a repository's default branch so a
+// covering schedule that explicitly names `base: main` clears a dropped
+// workflow cron whose Base is empty ("the default branch"). It is called at
+// most once per repository, and only when a dropped cron and a covering
+// entry for the same workflow spell their base differently.
+func (s *Store) StaleSchedules(ctx context.Context, now time.Time, defaultBranch ...func(RepoRef) string) ([]StaleSchedule, error) {
 	scheds, err := s.ListSchedules(ctx)
 	if err != nil {
 		return nil, err
+	}
+	var defFn func(RepoRef) string
+	if len(defaultBranch) > 0 {
+		defFn = defaultBranch[0]
 	}
 	modes := map[RepoRef]CIMode{}
 	modeOf := func(repo RepoRef) CIMode {
@@ -72,15 +83,53 @@ func (s *Store) StaleSchedules(ctx context.Context, now time.Time) ([]StaleSched
 	// workflow's own cron, still dropped at every firing, is not a
 	// schedule that stopped running -- the workflow is running, from the
 	// other schedule, which is judged on its own.
+	type workflowStem struct {
+		repo RepoRef
+		stem string
+	}
 	type workflowKey struct {
 		repo       RepoRef
 		stem, base string
 	}
 	covered := map[workflowKey]bool{}
+	coveredOnBranch := map[workflowStem]bool{}
 	for _, sched := range scheds {
 		if stem, ok := workflowReviewSchedule(sched); ok && sched.Enabled && sched.WorkflowRunsUnder(modeOf(sched.Target)) {
-			covered[workflowKey{sched.Target, stem, sched.Base}] = true
+			base := strings.TrimSpace(sched.Base)
+			covered[workflowKey{sched.Target, stem, base}] = true
+			if base != "" {
+				coveredOnBranch[workflowStem{sched.Target, stem}] = true
+			}
 		}
+	}
+	defaults := map[RepoRef]string{}
+	defaultOf := func(repo RepoRef) string {
+		if defFn == nil || repo == (RepoRef{}) {
+			return ""
+		}
+		def, seen := defaults[repo]
+		if !seen {
+			def = strings.TrimSpace(defFn(repo))
+			defaults[repo] = def
+		}
+		return def
+	}
+	isCovered := func(repo RepoRef, stem, base string) bool {
+		base = strings.TrimSpace(base)
+		if covered[workflowKey{repo, stem, base}] {
+			return true
+		}
+		if base == "" && coveredOnBranch[workflowStem{repo, stem}] {
+			if def := defaultOf(repo); def != "" && covered[workflowKey{repo, stem, def}] {
+				return true
+			}
+		}
+		if base != "" && covered[workflowKey{repo, stem, ""}] {
+			if def := defaultOf(repo); def != "" && base == def {
+				return true
+			}
+		}
+		return false
 	}
 	var out []StaleSchedule
 	for _, sched := range scheds {
@@ -103,7 +152,7 @@ func (s *Store) StaleSchedules(ctx context.Context, now time.Time) ([]StaleSched
 			stale.Workflow = stem
 			mode := modeOf(sched.Target)
 			if mode != "" && !sched.WorkflowRunsUnder(mode) {
-				if covered[workflowKey{sched.Target, stem, sched.Base}] {
+				if isCovered(sched.Target, stem, sched.Base) {
 					continue
 				}
 				stale.Reason = fmt.Sprintf("%s, so .grain/workflows/%s.yml's cron is dropped at every firing: "+
@@ -111,7 +160,7 @@ func (s *Store) StaleSchedules(ctx context.Context, now time.Time) ([]StaleSched
 					WorkflowGrainCIOffReason(mode), stem)
 			}
 		}
-		if stale.Reason == "" && sched.OverlapGroup != "" {
+		if stale.Reason == "" && strings.TrimSpace(sched.OverlapGroup) != "" {
 			// Held by another schedule in its overlap group: still not
 			// running, but the holder is the thing to look at.
 			if sup, err := s.SuppressedFiring(ctx, sched, now, sched.Location()); err == nil && sup != nil && sup.HeldByScheduleID != "" {

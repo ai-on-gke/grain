@@ -761,8 +761,8 @@ func suiteRunGroupTags(ctx context.Context, tx *sql.Tx, runID int64) ([]string, 
 func (s *Store) ScheduleOfSuiteRunTask(ctx context.Context, id string) (string, error) {
 	var sched sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		"SELECT `r`.`schedule_id` FROM `suite_run_task` AS `rt` "+
-			"JOIN `suite_run` AS `r` ON `r`.`id` = `rt`.`run_id` WHERE `rt`.`task_id` = ?", id).Scan(&sched)
+		"SELECT `r`.`schedule_id` FROM `suite_run` AS `r` "+
+			"JOIN `suite_run_task` AS `rt` ON `rt`.`run_id` = `r`.`id` WHERE `rt`.`task_id` = ?", id).Scan(&sched)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -770,4 +770,30 @@ func (s *Store) ScheduleOfSuiteRunTask(ctx context.Context, id string) (string, 
 		return "", fmt.Errorf("reading the suite run of %s: %w", id, err)
 	}
 	return sched.String, nil
+}
+
+// activeSuiteRunWithGroupTag reports whether an active suite run started
+// by a schedule other than excludeScheduleID has filed tasks carrying
+// groupTag, returning that run's ScheduleID. It covers the window between
+// passes after the schedule that started the run was renamed or withdrawn:
+// the finished pass's tasks are closed and SyncSuites has not yet filed
+// the next pass (or marked the run complete), while the run itself is
+// still active.
+func (s *Store) activeSuiteRunWithGroupTag(ctx context.Context, groupTag, excludeScheduleID string) (string, bool, error) {
+	var sched sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		"SELECT `r`.`schedule_id` FROM `suite_run` AS `r` "+
+			"WHERE `r`.`status` = ? AND (`r`.`schedule_id` IS NULL OR `r`.`schedule_id` <> ?) "+
+			"AND EXISTS (SELECT 1 FROM `suite_run_task` AS `rt` "+
+			"JOIN `task_tag` AS `g` ON `g`.`task_id` = `rt`.`task_id` "+
+			"WHERE `rt`.`run_id` = `r`.`id` AND `g`.`tag` = ?) "+
+			"ORDER BY `r`.`id` LIMIT 1",
+		string(SuiteRunActive), excludeScheduleID, groupTag).Scan(&sched)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("checking active suite runs in overlap group: %w", err)
+	}
+	return sched.String, true, nil
 }

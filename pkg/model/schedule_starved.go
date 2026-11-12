@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -83,6 +84,9 @@ func (f StarvedScheduleFiring) blocker() string {
 	if f.HeldBy == "" {
 		return "its previous firing"
 	}
+	if f.Group == "" {
+		return fmt.Sprintf("schedule %s's firing", f.HeldBy)
+	}
 	return fmt.Sprintf("schedule %s's firing in overlap group %q", f.HeldBy, f.Group)
 }
 
@@ -138,7 +142,7 @@ func (s *Store) EscalateStarvedScheduleBlocker(ctx context.Context, sched Schedu
 	}
 	out := StarvedScheduleFiring{TaskID: k.TaskID, HeldFor: now.Sub(k.Occurrence), Occurrences: occurrences}
 	if k.HeldByScheduleID != "" && k.HeldByScheduleID != sched.ID {
-		out.HeldBy, out.Group = k.HeldByScheduleID, sched.OverlapGroup
+		out.HeldBy, out.Group = k.HeldByScheduleID, strings.TrimSpace(sched.OverlapGroup)
 	}
 	if err := s.UpdateTask(ctx, k.TaskID, func(t *Task) error {
 		out.From, out.To = t.Priority, t.Priority

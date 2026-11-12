@@ -94,8 +94,18 @@ func TestAWithdrawnSuiteSchedulesRunStillHoldsItsGroup(t *testing.T) {
 		t.Errorf("skip = %+v, want it to name the withdrawn schedule sweep and its run's task %s", held.Skip, task.ID)
 	}
 
-	// A later pass of the run carries the tag too, with the schedule gone.
+	// Between passes -- after pass 1's task closes and before SyncSuites
+	// calls FireNextPass (schedule reconciliation runs ahead of suites in
+	// RunCycle) -- the active suite run still holds the group.
 	closeGroupedTask(t, store, ctx, task.ID, groupStart.Add(2*time.Minute))
+	between := fireGrouped(t, store, ctx, "tick", groupStart.Add(2*time.Minute+30*time.Second))
+	if !between.Skipped || between.TaskID != "" || between.Skip == nil ||
+		between.Skip.Reason != model.SuppressedBySuiteRun || between.Skip.HeldByScheduleID != "sweep" {
+		t.Fatalf("firing between passes of withdrawn suite run = %+v (skip %+v), want held by sweep's active suite run",
+			between, between.Skip)
+	}
+
+	// A later pass of the run carries the tag too, with the schedule gone.
 	run, _ = store.GetSuiteRun(ctx, fired.SuiteRunID)
 	next, err := store.FireNextPass(ctx, *run, groupStart.Add(3*time.Minute))
 	if err != nil {
@@ -113,6 +123,15 @@ func TestAWithdrawnSuiteSchedulesRunStillHoldsItsGroup(t *testing.T) {
 	}
 	if again := fireGrouped(t, store, ctx, "tick", groupStart.Add(4*time.Minute)); !again.Skipped {
 		t.Errorf("firing during the second pass = %+v, want it held", again)
+	}
+
+	// Once the final pass closes and the suite run finishes, the group is free.
+	closeGroupedTask(t, store, ctx, second, groupStart.Add(5*time.Minute))
+	if err := store.CompleteSuiteRun(ctx, fired.SuiteRunID, model.SuiteRunSucceeded, "", groupStart.Add(5*time.Minute)); err != nil {
+		t.Fatalf("completing the suite run: %v", err)
+	}
+	if released := fireGrouped(t, store, ctx, "tick", groupStart.Add(6*time.Minute)); released.Skipped || released.TaskID == "" {
+		t.Errorf("firing after the withdrawn suite run completed = %+v, want a task filed", released)
 	}
 
 	// An ungrouped suite schedule's tasks carry no group tag.
@@ -183,6 +202,7 @@ func TestAGrainCIScheduleForTheWorkflowClearsItsDroppedCron(t *testing.T) {
 	}
 	daily := model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 2*60 + 11}
 	live := model.WorkflowReviewTemplateID("live")
+	explicit := model.WorkflowReviewTemplateID("explicit")
 	other := model.WorkflowReviewTemplateID("other")
 	put := func(s model.Schedule) {
 		t.Helper()
@@ -193,10 +213,17 @@ func TestAGrainCIScheduleForTheWorkflowClearsItsDroppedCron(t *testing.T) {
 		}
 	}
 	put(model.Schedule{ID: "workflow.live", Title: "live", TemplateID: &live})
+	put(model.Schedule{ID: "workflow.explicit", Title: "explicit", TemplateID: &explicit})
 	put(model.Schedule{ID: "workflow.other", Title: "other", TemplateID: &other})
+	defaultBranch := func(r model.RepoRef) string {
+		if r == repo {
+			return "main"
+		}
+		return ""
+	}
 	ids := func() string {
 		t.Helper()
-		stale, err := store.StaleSchedules(ctx, now)
+		stale, err := store.StaleSchedules(ctx, now, defaultBranch)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -207,11 +234,14 @@ func TestAGrainCIScheduleForTheWorkflowClearsItsDroppedCron(t *testing.T) {
 		slices.Sort(out)
 		return strings.Join(out, ",")
 	}
-	if got := ids(); got != "workflow.live,workflow.other" {
-		t.Fatalf("before = %q, want both dropped crons", got)
+	if got := ids(); got != "workflow.explicit,workflow.live,workflow.other" {
+		t.Fatalf("before = %q, want all three dropped crons", got)
 	}
 	ran := now.Add(-time.Hour)
 	put(model.Schedule{ID: "live", Title: "live", TemplateID: &live, GrainCI: true, LastRunAt: &ran})
+	// Naming the repository's default branch explicitly (`base: main`, as
+	// .grain/schedules/live-secrets-repo.yml does) covers the cron too.
+	put(model.Schedule{ID: "explicit-main", Title: "explicit", TemplateID: &explicit, GrainCI: true, Base: "main", LastRunAt: &ran})
 	put(model.Schedule{ID: "other-candidate", Title: "other", TemplateID: &other, GrainCI: true, Base: "candidate", LastRunAt: &ran})
 	if got := ids(); got != "workflow.other" {
 		t.Fatalf("after = %q, want only workflow.other (its grain-ci entry runs another branch)", got)
