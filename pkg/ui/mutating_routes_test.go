@@ -835,6 +835,26 @@ var attributedRoutes = map[string]attributedRoute{
 			return model.Principal{Kind: model.PrincipalHuman, ID: acc.AcceptedBy}
 		},
 	},
+	// Revoking is a person's alone too; the revocation clears who
+	// accepted, so who revoked is read from the config audit log.
+	"POST /api/declarations/revoke": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			ctx := context.Background()
+			gcp := `gcp#gcp-key={"permission_set":"publisher"}`
+			if _, _, err := client.Store.NoteCIJobDeclaration(ctx, model.RepoRef{Owner: "acme", Name: "widgets"},
+				"publish", "abc123", []string{gcp}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Store.AcceptDeclaration(ctx, "ci:acme/widgets:publish", "alice@example.com",
+				[]string{"capabilities:admin"}, []string{gcp}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			return ""
+		},
+		body:     `{"id":"ci:acme/widgets:publish"}`,
+		recorded: lastConfigAudit,
+	},
 }
 
 // neverAttributedRoutes are non-GET routes that write nothing a person

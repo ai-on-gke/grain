@@ -668,7 +668,11 @@ import "strconv"
 // 143 adds `template`.`sandbox` (model.Template.Sandbox): the sandbox
 // shape every task filed from a template asks for, as JSON, empty for
 // none (grain/task-4591).
-const SchemaVersion = 143
+// 144 changes no table: it clears the copies of a template's admission,
+// hosting and grants off the schedules that fire it, which until then
+// every firing wrote over what the schedule adds to its template
+// (migrateScheduleOwnSettings, grain/task-4607).
+const SchemaVersion = 144
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or

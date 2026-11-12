@@ -881,6 +881,12 @@ func deliverReplyAndWakeTask(ctx context.Context, store *model.Store, task model
 	}); err != nil {
 		return err
 	}
+	// A person posting is what a resume_later(when: {message: true}) waits
+	// for, wherever they posted it. Such a task reads deferred, not
+	// awaiting_reply, so nothing below would release it.
+	if _, err := store.WakeOnMessage(ctx, task.ID, now); err != nil {
+		return err
+	}
 
 	// If held on LinkReviewQuestions, adding the human comment above is
 	// exactly what reconcileReviewQuestions (next in this cycle) settles.

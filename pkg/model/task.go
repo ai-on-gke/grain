@@ -1443,6 +1443,11 @@ const (
 	// what the next push's review starts its incremental diff from
 	// (orchestrator's pathtriggerreview.go).
 	LinkPathTriggerReviewed LinkKind = "path-trigger-reviewed"
+	// LinkReviewsCarried records the last head this task's gating reviews
+	// were carried to without being filed again, because the head moved
+	// without changing the change (-> the sha; orchestrator's
+	// samechange.go). It is what says so on the task once per head.
+	LinkReviewsCarried LinkKind = "reviews-carried"
 	// LinkReviewCommentsOnly marks a review that posts its findings and
 	// fixes nothing (-> the reviewed task's ID): its run never opens a
 	// pull request, whatever it pushed. Grain files every review that
