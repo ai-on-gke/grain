@@ -227,7 +227,18 @@ which case it is dropped without qualifying):
 
 A first product failure of any Stage 1 job or Stage 2 item gets one retry on
 the same rc (`flake`); cancelled, timed-out or capacity-starved runs are
-re-run without counting as failures (`infra`). `check-qualification` returns:
+re-run without counting as failures (`infra`). A Stage 1 retry is a
+`nightly.yml` dispatch whose `inputs.jobs` names each job by its job key,
+never its display name: `check-qualification` maps every job it sees through
+`CHECK_QUALIFICATION_JOBS` (required) or `CHECK_QUALIFICATION_OPTIONAL`
+(judged only when it ran, such as `grant-matrix-ui`), and
+`scripts/release-train-actions.sh` refuses, loudly and with a failing exit, to
+dispatch a name that is not a job key in the rc's `nightly.yml`. A retry run in
+which a job awaiting its re-run ended `skipped` ran nothing, so that attempt
+counts as `infra` (grain's own Stage 1 judge in
+`pkg/orchestrator/releasestage1.go` agrees) and three in a row stall the rc
+rather than leave it pending on its first failure. `check-qualification`
+returns:
 
 - **`PENDING` / `INFRA`**: the run stops here (`qualification=pending|infra`,
   `qualification_rerun=...`), because only one rc qualifies at a time.
