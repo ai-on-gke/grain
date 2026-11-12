@@ -1125,7 +1125,7 @@ It is refused on the caller's own task.
 An agent may edit, re-queue or speak in another task only when that
 task is within its own task's envelope. `PATCH /api/tasks/{id}`,
 `retry`, `reopen`, `undefer`, `resume`, `comments`, `reply`,
-`PUT /api/tasks/{id}/goal`, `agent-messages`, `notes`, and the
+`PUT` and `DELETE /api/tasks/{id}/goal`, `agent-messages`, `notes`, and the
 context routes `brief`, `compact` and `rollover` (a brief or handover
 becomes the target's next prompt, and a rollover files a successor
 carrying its grants) are refused
