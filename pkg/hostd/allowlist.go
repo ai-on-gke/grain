@@ -620,6 +620,17 @@ var envDenyV2 = []string{
 	// and XDG_CONFIG_HOME, whose git/config is git's global config.
 	"GIT_*",
 	"XDG_CONFIG_HOME",
+	// OpenSSL reads its config at library init in any child linking it
+	// (curl, git over https, python's ssl), and a config can load an
+	// engine or provider shared object: GCONV_PATH's reach. Lua runs
+	// LUA_INIT at startup and searches LUA_PATH/LUA_CPATH (each also with
+	// a _5_x version suffix) for modules.
+	"OPENSSL_CONF",
+	"OPENSSL_ENGINES",
+	"OPENSSL_MODULES",
+	"LUA_INIT*",
+	"LUA_PATH*",
+	"LUA_CPATH*",
 }
 
 // envDenyMatches reports whether name is one of patterns, where a

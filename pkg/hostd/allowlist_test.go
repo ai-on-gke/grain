@@ -717,7 +717,7 @@ clis:
   patterned:
     path: /opt/cli
     paths_under: [ROOT]
-    env: [GIT_*, JAVA_*, DYLD_*, NODE_*, PYTHON*, PERL*, RUBY*, P*, CLASS*, XDG_*]
+    env: [GIT_*, JAVA_*, DYLD_*, NODE_*, PYTHON*, PERL*, RUBY*, P*, CLASS*, XDG_*, OPENSSL_*, LUA_*]
   exact:
     path: /opt/cli
     paths_under: [ROOT]
@@ -761,6 +761,14 @@ capabilities:
 		"ZDOTDIR=" + stage,
 		"CLASSPATH=" + stage + "/lib.jar",
 		"XDG_CONFIG_HOME=" + stage,
+		"OPENSSL_CONF=" + stage + "/lib.jar",
+		"OPENSSL_ENGINES=" + stage,
+		"OPENSSL_MODULES=" + stage,
+		"LUA_PATH=" + stage + "/?.lua",
+		"LUA_CPATH_5_4=" + stage + "/?.so",
+		// Not path-like: Lua runs it as a chunk at startup.
+		"LUA_INIT=os.execute('touch /tmp/pwned')",
+		"LUA_INIT_5_4=os.execute('touch /tmp/pwned')",
 	}
 	for _, kv := range denied {
 		for _, req := range []Request{
@@ -777,6 +785,7 @@ capabilities:
 	// Names beside the deny set are still open: GITHUB_* is not GIT_*.
 	if _, err := a.Check(&Request{Kind: KindCLI, Name: "open", Env: []string{
 		"GITHUB_TOKEN=x", "GITLAB_HOST=x", "JAVA_HOME=" + stage, "NODE_ENV=production", "PYTHONUNBUFFERED=1", "PS1=$ ", "XDG_CACHE_HOME=" + stage,
+		"SSL_CERT_FILE=" + stage + "/lib.jar", "LUAROCKS_CONFIG=" + stage + "/lib.jar",
 	}}, host); err != nil {
 		t.Fatalf("open check of names outside the deny set failed: %v", err)
 	}

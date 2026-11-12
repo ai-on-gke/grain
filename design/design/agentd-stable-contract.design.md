@@ -362,12 +362,16 @@ x-notes: anything                   # proposed: x-* keys are ignored
   `PROMPT_COMMAND`, `PS4`, `ZDOTDIR`, `NODE_PATH`, `PYTHONHOME`,
   `PYTHONUSERBASE`, `PERL5LIB`, `PERLLIB`, `PERL5DB`, `RUBYLIB`,
   `PYTHONWARNINGS`, `CLASSPATH`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`,
-  `_JAVA_OPTIONS`, `GIT_*`, `XDG_CONFIG_HOME`) on top of the frozen v1
-  set, which stays as it is. `PYTHONWARNINGS` is there because the
+  `_JAVA_OPTIONS`, `GIT_*`, `XDG_CONFIG_HOME`, `OPENSSL_CONF`,
+  `OPENSSL_ENGINES`, `OPENSSL_MODULES`, `LUA_INIT*`, `LUA_PATH*`,
+  `LUA_CPATH*`) on top of the frozen v1 set, which stays as it is. `PYTHONWARNINGS` is there because the
   interpreter imports a filter's dotted category at startup (with
   `BROWSER`, a stdlib-only way to run a command), and `XDG_CONFIG_HOME`
   because its `git/config` is git's global config, the same reach as
-  `GIT_CONFIG_*`. (Bash's exported functions, `BASH_FUNC_name%%`, need no
+  `GIT_CONFIG_*`. `OPENSSL_CONF` is read at library init by any child
+  linking OpenSSL (curl, git over https, python's `ssl`), and a config can
+  load an engine or provider shared object -- `GCONV_PATH`'s reach -- and
+  Lua runs `LUA_INIT` at startup. (Bash's exported functions, `BASH_FUNC_name%%`, need no
   entry: no valid env name contains `%`.) Growing the set is the one
   change to `"*"` that needs no daemon change: the daemon sends none of
   these names to codex, claude or agy (their `HostdEnv`, held by
@@ -756,6 +760,12 @@ env_deny_v2 JDK_JAVA_OPTIONS
 env_deny_v2 _JAVA_OPTIONS
 env_deny_v2 GIT_*
 env_deny_v2 XDG_CONFIG_HOME
+env_deny_v2 OPENSSL_CONF
+env_deny_v2 OPENSSL_ENGINES
+env_deny_v2 OPENSSL_MODULES
+env_deny_v2 LUA_INIT*
+env_deny_v2 LUA_PATH*
+env_deny_v2 LUA_CPATH*
 max_frame 1048576
 max_stage_data 524288
 ```
