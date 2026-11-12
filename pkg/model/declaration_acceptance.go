@@ -429,6 +429,32 @@ func (s *Store) AcceptDeclaration(ctx context.Context, id, by string, scopes []s
 	return out, err
 }
 
+// RevokeDeclarationAcceptance clears id's accepted set, leaving what it
+// asked for: its next firing is held again, as though nobody had ever
+// accepted it, and work already filed approved on the acceptance's
+// strength is held at dispatch (PersonStandsBehind). Revoking a
+// declaration nobody has accepted changes nothing.
+func (s *Store) RevokeDeclarationAcceptance(ctx context.Context, id string) (DeclarationAcceptance, error) {
+	var out DeclarationAcceptance
+	err := s.write(ctx, "revoke the acceptance of "+id, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE `declaration_acceptance` SET `accepted` = '', `accepted_by` = '', `accepted_scopes` = '', "+
+				"`accepted_commit` = '', `accepted_at` = NULL WHERE `id` = ?", id); err != nil {
+			return fmt.Errorf("revoking the acceptance of %s: %w", id, err)
+		}
+		got, err := getDeclarationAcceptance(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if got == nil {
+			return fmt.Errorf("declaration %s has asked for nothing to revoke", id)
+		}
+		out = *got
+		return nil
+	})
+	return out, err
+}
+
 // PersonStandsBehind reports whether a person stands behind task's
 // approval for grants, the grants the capability catalogue says only a
 // person may give (CapabilityCatalogue.ValidateGrants' RequiresPerson):

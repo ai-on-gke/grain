@@ -17,6 +17,8 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"slices"
 	"strings"
@@ -56,6 +58,11 @@ type DeclarationAcceptanceView struct {
 type AcceptDeclarationRequest struct {
 	ID   string   `json:"id"`
 	Seen []string `json:"seen"`
+}
+
+// RevokeDeclarationRequest is POST /api/declarations/revoke's body.
+type RevokeDeclarationRequest struct {
+	ID string `json:"id"`
 }
 
 func declarationAcceptanceView(a model.DeclarationAcceptance) DeclarationAcceptanceView {
@@ -178,6 +185,45 @@ func (c *Client) AcceptDeclaration(ctx context.Context, id string, seen []string
 	return declarationAcceptanceView(got), nil
 }
 
+// RevokeDeclarationAcceptance clears what a person accepted for id, so
+// its next firing is held again until a person accepts once more.
+// Revoking takes what accepting does: a person acting directly, holding
+// every scope the accepted set needs -- withdrawing a standing grant is
+// a person's decision about that grant, not a repository's or an
+// agent's. The revocation is recorded in the config audit log.
+func (c *Client) RevokeDeclarationAcceptance(ctx context.Context, id string) (DeclarationAcceptanceView, error) {
+	id = strings.TrimSpace(id)
+	acc, err := c.Store.GetDeclarationAcceptance(ctx, id)
+	if err != nil {
+		return DeclarationAcceptanceView{}, err
+	}
+	if acc == nil {
+		return DeclarationAcceptanceView{}, &NotFoundError{ID: id}
+	}
+	if err := c.declarationAcceptanceRefusal(ctx, declarationNeedsScopes(acc.Accepted)); err != nil {
+		return DeclarationAcceptanceView{}, err
+	}
+	if acc.AcceptedAt == nil {
+		return DeclarationAcceptanceView{}, validationErrorf("nobody has accepted what %s asks for: there is nothing to revoke", id)
+	}
+	got, err := c.Store.RevokeDeclarationAcceptance(ctx, id)
+	if err != nil {
+		return DeclarationAcceptanceView{}, err
+	}
+	by := c.requestActor(ctx)
+	if _, err := c.Store.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+		At:         c.now(),
+		By:         by.Actor,
+		OnBehalfOf: by.OnBehalfOf,
+		Surface:    "declaration:" + id,
+		Summary: fmt.Sprintf("revoked the acceptance of %s (%s, accepted by %s)",
+			id, strings.Join(acc.Accepted, ", "), acc.AcceptedBy),
+	}); err != nil {
+		log.Printf("grain declarations: recording the revocation of %s in config audit: %v", id, err)
+	}
+	return declarationAcceptanceView(got), nil
+}
+
 func (s *Server) handleListDeclarationAcceptances(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.tasks.DeclarationAcceptances(r.Context())
 	if err != nil {
@@ -193,6 +239,19 @@ func (s *Server) handleAcceptDeclaration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	got, err := s.tasks.AcceptDeclaration(r.Context(), req.ID, req.Seen)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, got)
+}
+
+func (s *Server) handleRevokeDeclarationAcceptance(w http.ResponseWriter, r *http.Request) {
+	var req RevokeDeclarationRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	got, err := s.tasks.RevokeDeclarationAcceptance(r.Context(), req.ID)
 	if err != nil {
 		writeClientError(w, err)
 		return
