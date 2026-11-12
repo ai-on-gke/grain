@@ -7729,7 +7729,7 @@ func (c *Client) pullRequestHead(ref string) string {
 		// GitHub has none of them: CI's last commit is the answer there.
 		return ""
 	}
-	detail, err := c.Config.GitHubPullRequests.GetPullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number)
+	detail, err := c.Config.GitHubPullRequests.GetPullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number)
 	if err != nil {
 		return ""
 	}

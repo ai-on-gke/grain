@@ -138,7 +138,7 @@ func reconcilePathTriggers(ctx context.Context, deps Deps, now time.Time) error 
 			// minutes late costs nothing, and the merge queue's own reads
 			// are what the budget is kept for.
 			poll := github.PollKey{Scope: storeScope(deps.Store),
-				Subject: github.BranchSubject(repo.Owner, repo.Name, branch), Aspect: "path triggers"}
+				Subject: github.BranchSubject(repo.StoredOwner(), repo.Name, branch), Aspect: "path triggers"}
 			if !github.Polls().Due(poll, github.PollBackground, false, now) {
 				continue
 			}
@@ -174,7 +174,7 @@ var pathTriggerDefaults sync.Map
 // with a trigger was a call a tick for an answer that does not move.
 func pathTriggerDefaultBranch(deps Deps, repo model.RepoRef, now time.Time) (string, error) {
 	poll := github.PollKey{Scope: storeScope(deps.Store),
-		Subject: github.BranchSubject(repo.Owner, repo.Name, ""), Aspect: "default branch"}
+		Subject: github.BranchSubject(repo.StoredOwner(), repo.Name, ""), Aspect: "default branch"}
 	cacheKey := poll.Scope + ":" + strings.ToLower(repo.String())
 	if cached, ok := pathTriggerDefaults.Load(cacheKey); ok &&
 		!github.Polls().Due(poll, github.PollBackground, false, now) {

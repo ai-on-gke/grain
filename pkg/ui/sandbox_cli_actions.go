@@ -492,7 +492,7 @@ func (a SandboxCLIActions) WaitForGitHubChecks(ctx context.Context, taskID strin
 		return mcp.GitHubCheckWaitResult{}, errors.New("this deployment has no GitHub client wired to read check runs")
 	}
 	scope := mcp.PullRequestScope{
-		Owner:  task.Target.Owner,
+		Owner:  task.Target.StoredOwner(),
 		Repo:   task.Target.Name,
 		Branch: task.BranchName(),
 		Base:   task.Base,
@@ -500,7 +500,7 @@ func (a SandboxCLIActions) WaitForGitHubChecks(ctx context.Context, taskID strin
 	if a.Client != nil && a.Client.Store != nil {
 		if rc, err := a.Client.Store.GetRepoConfig(ctx, *task.Target); err == nil && rc != nil {
 			if prRepo, cross, err := rc.PullRequestRepo(*task.Target); err == nil && cross {
-				scope.UpstreamOwner = prRepo.Owner
+				scope.UpstreamOwner = prRepo.StoredOwner()
 				scope.UpstreamRepo = prRepo.Name
 			}
 		}
