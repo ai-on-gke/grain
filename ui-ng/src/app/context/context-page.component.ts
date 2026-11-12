@@ -37,6 +37,7 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import { configuredInstanceRepos } from "../shared/instance-repos";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
@@ -1528,23 +1529,31 @@ export class ContextPageComponent implements OnInit, OnDestroy {
 
   private async loadBootstrapRepos(): Promise<void> {
     const found = new Set<string>();
+    let restricted = false;
     if (this.access.can("GET /api/config")) {
       try {
         const cfg = await this.api.config();
         if (cfg) {
           this.access.setConfig(cfg);
-          const tr = Array.isArray(cfg["targetRepos"])
-            ? (cfg["targetRepos"] as unknown[])
-            : [];
-          for (const r of tr) {
-            if (typeof r === "string" && r.trim()) found.add(r.trim());
+          const summary = configuredInstanceRepos(cfg);
+          restricted = summary.hasTargetAllowlist;
+          for (const r of summary.repos) {
+            found.add(r);
           }
         }
       } catch {
         // Non-fatal.
       }
     }
-    if (this.access.can("GET /api/deployment/reachable-repos")) {
+    // Only fall back to GitHub-wide reachable-repos discovery when this
+    // deployment has no configured repositories attached yet; otherwise a
+    // user's GitHub token floods the scope rail with hundreds/thousands of
+    // unrelated repositories.
+    if (
+      !restricted &&
+      found.size === 0 &&
+      this.access.can("GET /api/deployment/reachable-repos")
+    ) {
       try {
         const rr = await this.api.get<ReachableReposPayload>(
           "GET /api/deployment/reachable-repos",
