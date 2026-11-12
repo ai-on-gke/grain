@@ -454,9 +454,9 @@ func TestMinIntervalZeroTurnsItOffAndFailedOrUnchangedDoNotResetIt(t *testing.T)
 }
 
 // A minimum interval too large for a time.Duration
-// (autoUpgradeMinIntervalHours = math.MaxInt, which the settings API and
-// grain sync accept as "at least 0") saturates rather than wrapping
-// negative: after one completed automatic upgrade no further release is
+// (autoUpgradeMinIntervalHours = math.MaxInt, which the settings API now
+// refuses but a hand-edited row or grain state check's ">= 0" still lets
+// through) saturates rather than wrapping negative: after one completed automatic upgrade no further release is
 // scheduled, however long it stands (docs/test-runs/2026-11-11-upgrades.md).
 func TestMinIntervalHugeValueDoesNotWrap(t *testing.T) {
 	t.Parallel()
