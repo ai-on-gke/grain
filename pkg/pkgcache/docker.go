@@ -611,18 +611,27 @@ func (s *Server) autoAuthDocker(req *http.Request, origReq *http.Request, upstre
 	}
 
 	if isDockerAuthEndpoint(origReq.URL.Path, origReq.URL.Query()) || isDockerAuthEndpoint(u.Path, u.Query()) {
+		// A POST names its scope in a body this neither rewrites nor
+		// checks, so it gets nothing.
+		if req.Method != http.MethodGet && req.Method != http.MethodHead {
+			return
+		}
 		if !s.allowPush {
 			// The scope a token is minted for is this server's to
 			// decide, not the caller's: whatever it asked for, the
 			// daemon's credential is only offered for a pull of the
-			// repository it was selected for. A POST names its scope
-			// in a body this cannot rewrite, so it gets nothing.
-			if req.Method != http.MethodGet && req.Method != http.MethodHead {
-				return
-			}
+			// repository it was selected for.
 			q := req.URL.Query()
 			q.Set("scope", "repository:"+owner+"/"+repo+":pull")
 			req.URL.RawQuery = q.Encode()
+		} else if !s.tokenScopesWithin(origReq, req.URL.Query()) {
+			// The caller's scopes go upstream as they are, and GHCR
+			// mints one token for all of them: owner/repo above is only
+			// the first, so every other one must be in scope too.
+			s.logf("package cache: not authenticating %s %s for %s with this deployment's GitHub credential: "+
+				"it asks for a scope outside that sandbox's repository scope", origReq.Method, origReq.URL.Path,
+				origReq.RemoteAddr)
+			return
 		}
 		req.SetBasicAuth(PackageUsername, token)
 		return

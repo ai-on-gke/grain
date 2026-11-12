@@ -34,6 +34,7 @@ package pkgcache
 import (
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 )
@@ -133,6 +134,27 @@ func (s *Server) mayUseCredentials(r *http.Request, owner, repo string) bool {
 		return false
 	}
 	return s.repoScope.MayReadRepo(r, owner, repo)
+}
+
+// tokenScopesWithin reports whether every scope a token request names is
+// a repository scope the sandbox r came from may spend the deployment's
+// credential on. A request naming several gets one token covering all of
+// them, so one out-of-scope repository -- or a scope that names no
+// repository at all -- is enough to refuse it.
+func (s *Server) tokenScopesWithin(r *http.Request, query url.Values) bool {
+	for _, scope := range query["scope"] {
+		for _, part := range strings.Fields(scope) {
+			owner, repo, ok := extractRepoFromScope(url.Values{"scope": {part}})
+			if !ok {
+				return false
+			}
+			owner, repo = ghcrRepoOf(owner, repo)
+			if !s.mayUseCredentials(r, owner, repo) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // ghcrRepoOf is the GitHub repository a GHCR image path belongs to: the

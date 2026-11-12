@@ -168,6 +168,63 @@ func TestGHCRTokenIsMintedWithDeploymentCredentialOnlyForSandboxInScope(t *testi
 	}
 }
 
+// With AllowRegistryPush the caller's own scopes go upstream, and GHCR
+// mints one token for all of them -- so a sandbox granted one repository
+// must not get the deployment credential spent on a request that names
+// another beside it, however the second is spelled.
+func TestGHCRTokenWithPushChecksEveryRequestedScope(t *testing.T) {
+	f := newFakePrivateGHCR(t, deploymentBasic)
+	s, _ := newTestServer(t, Config{
+		Client:       f.client(),
+		GHCRRegistry: "http://ghcr.io",
+		Credentials: staticCreds{
+			"acme/public":          "ghp_deployment_pat",
+			"acme/private-service": "ghp_deployment_pat",
+		},
+		RepoScope: scopeByAddr(map[string][]string{
+			scopedSandboxAddr:   {"acme/public", "acme/private-service"},
+			unscopedSandboxAddr: {"acme/public"},
+		}),
+		AllowRegistryPush: true,
+	})
+
+	for _, target := range []string{
+		"/token?service=ghcr.io&scope=repository:acme/public:pull+repository:acme/private-service:pull",
+		"/token?service=ghcr.io&scope=repository:acme/public:pull&scope=repository:acme/private-service:pull,push",
+		"/token?service=ghcr.io&scope=repository:acme/public:pull+registry:catalog:*",
+	} {
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, ghcrRequest(http.MethodGet, target, unscopedSandboxAddr))
+		if got := f.lastTokenAuth(); got != "" || strings.Contains(rec.Body.String(), "private-pull-jwt") {
+			t.Errorf("sandbox granted only acme/public, %s: token request carried %q (body %q), want no credential", target, got, rec.Body.String())
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, ghcrRequest(http.MethodGet,
+		"/token?service=ghcr.io&scope=repository:acme/public:pull&scope=repository:acme/private-service:pull,push", scopedSandboxAddr))
+	if got := f.lastTokenAuth(); got != deploymentBasic {
+		t.Fatalf("sandbox granted both repositories: token request carried %q, want the deployment credential", got)
+	}
+
+	// A POST names its scope in a body nothing here checks.
+	f.mu.Lock()
+	before := len(f.tokenAuth)
+	f.mu.Unlock()
+	req := httptest.NewRequest(http.MethodPost, "/token?scope=repository:acme/public:pull",
+		strings.NewReader("service=ghcr.io&scope=repository:acme/private-service:pull"))
+	req.Host = "ghcr.io"
+	req.RemoteAddr = unscopedSandboxAddr + ":40000"
+	s.ServeHTTP(httptest.NewRecorder(), req)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, got := range f.tokenAuth[before:] {
+		if got != "" {
+			t.Fatalf("POST token request carried %q, want no credential", got)
+		}
+	}
+}
+
 func TestGHCRTokenNeverUsesDeploymentCredentialWithoutRepoScope(t *testing.T) {
 	f := newFakePrivateGHCR(t, deploymentBasic)
 	s := newScopedGHCRServer(t, f, nil)
