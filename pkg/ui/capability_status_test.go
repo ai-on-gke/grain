@@ -289,31 +289,26 @@ func TestCapabilitiesReportWhereEachRequiredSecretIsWritten(t *testing.T) {
 }
 
 // Grantable is the half of "is this capability usable" that Ready says
-// nothing about: whether the picker listing this Client was built with
-// (Config.Capabilities) offers the capability at all, since grantsFor
-// and SetCapability both reject an id it has no row for. A deployment
-// can have a capability fully configured -- Ready, nothing missing --
-// and still have no way to attach it to a task, which is what a
-// provider registered by pkg/daemon's CapabilityProviders but
-// absent from OfferedCapabilities looks like from here.
-//
-// The picker listing is set explicitly rather than taken from
-// OfferedCapabilities so this covers the reporting, not whatever that
-// list happens to hold today.
+// nothing about: whether (*Client).grantsFor and SetCapability accept
+// the row's canonical grant (or a picker row for its provider), so a
+// task can actually ask for it. On a deployment built from
+// OfferedCapabilities (empty since in-process providers retired onto
+// capability-server methods), github#sandbox-repo={} is grantable by
+// reference while CI-only release methods are not.
 func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
-	c.Config.Capabilities = []ui.Capability{
-		{ID: "github-sandbox", Name: "GitHub sandbox"},
-	}
+	c.Config.Capabilities = ui.OfferedCapabilities()
 
 	got, err := c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for id, want := range map[string]bool{
-		"github-sandbox": true,
-		"registry-push":  false,
+		model.GitHubSandboxRepoGrant:    true,
+		model.RegistryPushRef + "={}":   false,
+		model.PackagePublishRef + "={}": false,
+		model.ImageSigningRef + "={}":   false,
 	} {
 		if status := capabilityStatus(t, got.Capabilities, id); status.Grantable != want {
 			t.Errorf("%s: Grantable = %t, want %t (status: %+v)", id, status.Grantable, want, status)
@@ -321,7 +316,7 @@ func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 	}
 }
 
-// A capability nothing can grant is still reported ready when this
+// A capability no task can hold is still reported ready when this
 // deployment has everything it needs -- the two are independent, and
 // collapsing them would hide whichever gap the other one covers for.
 func TestCapabilityStatusKeepsGrantableAndReadyIndependent(t *testing.T) {
@@ -333,11 +328,11 @@ func TestCapabilityStatusKeepsGrantableAndReadyIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := capabilityStatus(t, got.Capabilities, "github-sandbox")
+	status := capabilityStatus(t, got.Capabilities, model.RegistryPushRef+"={}")
 	if !status.Ready {
-		t.Fatalf("github-sandbox: Ready = false, want true -- no secret store is configured (status: %+v)", status)
+		t.Fatalf("registry-push: Ready = false, want true -- no secret store is configured (status: %+v)", status)
 	}
 	if status.Grantable {
-		t.Fatalf("github-sandbox: Grantable = true with an empty picker listing (status: %+v)", status)
+		t.Fatalf("registry-push: Grantable = true for a CI-only capability (status: %+v)", status)
 	}
 }
