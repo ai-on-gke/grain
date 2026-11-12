@@ -95,6 +95,10 @@ func Binary(t testing.TB) string {
 			"-ldflags", "-X github.com/ai-on-gke/grain/pkg/version.Release=v1.2.0",
 			"-o", binPath, "./cmd/grain")
 		cmd.Dir = root
+		// The test's own environment, on purpose: the toolchain's GOPATH,
+		// GOCACHE and GOFLAGS are what make this build the one `go test`
+		// is running.
+		cmd.Env = os.Environ()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			buildErr = fmt.Errorf("go build ./cmd/grain: %v\n%s", err, out)
 		}
