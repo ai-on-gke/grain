@@ -1098,7 +1098,9 @@ func TestCIRetriggerAndRunJobReRunGitHubActionsWhenRepoUsesGitHubCIMode(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	actions := &fakeCLIActions{runs: map[string]ci.Run{}, githubChecks: true}
+	actions := &fakeCLIActions{runs: map[string]ci.Run{}, githubChecks: true,
+		githubWaitResult: mcp.GitHubCheckWaitResult{Status: "passed", Verdict: mcp.WaitVerdictPassed,
+			Commit: "abcdef0123456789", Conclusion: "success", Report: "Every check against abcdef012345 finished and none of them failed."}}
 	proxy := &gitproxy.GitProxy{
 		Tokens:    tokens,
 		Namespace: &namespace.Server{CIStore: ci.NewRunStore(10)},
@@ -1124,6 +1126,15 @@ func TestCIRetriggerAndRunJobReRunGitHubActionsWhenRepoUsesGitHubCIMode(t *testi
 	}
 	if resp.Status != "running" || resp.ResumeRunID != model.ResumeOnMyBranch || !strings.Contains(resp.Report, "Re-ran") {
 		t.Fatalf("run-job answer = %+v, want a running wait to resume on my-branch with the re-run's report", resp)
+	}
+	// --resume keeps waiting on the re-run already asked for: it reads the
+	// pull request's checks and spends no further attempt.
+	rec = send(h, http.MethodPost, "tok-gh", "/cli/ci/run-job", `{"job":"go","resume_run_id":"my-branch"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /cli/ci/run-job --resume: %d %s", rec.Code, rec.Body)
+	}
+	if actions.githubWaits != 1 {
+		t.Fatalf("run-job --resume waited on the GitHub checks %d times, want 1", actions.githubWaits)
 	}
 	if len(actions.started) != 0 {
 		t.Fatalf("StartTaskCI called %d times on a ci_mode: github repo, want 0", len(actions.started))

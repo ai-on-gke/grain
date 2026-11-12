@@ -39,6 +39,7 @@ package ui
 // at attempt 1.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -264,21 +265,15 @@ func (c *Client) rerunActions(ctx context.Context, repo model.RepoRef, branch, h
 			message: fmt.Sprintf("no GitHub Actions run of %s at %s to re-run", repo, where)}
 	}
 
-	// The bound is per head: no run at it past MaxActionsRerunsPerHead
-	// re-runs, whoever asked for them.
-	for _, run := range runs {
-		if spent := max(run.RunAttempt, 1) - 1; spent >= MaxActionsRerunsPerHead {
-			return ActionsRerunResult{}, validationErrorf("run %s (%s) at %s has been re-run %d times already, the most grain re-runs any run at one commit "+
-				"(grain's own automatic re-runs of a runner fault count too). A failure that survives that many attempts is not a flake: "+
-				"fix it, or ask a person to re-run it by hand", ActionsRunID(repo.String(), run.ID), runWorkflow(run), shortHead(head), spent)
-		}
-	}
-
+	// The bound is per run at a head: no run past MaxActionsRerunsPerHead
+	// re-runs, whoever asked for them. A run that has spent its budget is
+	// left alone without holding back the other runs at the head.
 	res := ActionsRerunResult{Repo: repo.String(), Branch: branch, Head: head, Bound: MaxActionsRerunsPerHead}
 	jobs := rerunJobNames(req.Jobs)
 	if len(jobs) > 0 {
 		return c.rerunActionsJobs(reader, rerunner, repo, runs, jobs, res)
 	}
+	var spentErr error
 	for _, run := range runs {
 		id := ActionsRunID(repo.String(), run.ID)
 		if !strings.EqualFold(run.Status, "completed") {
@@ -293,6 +288,11 @@ func (c *Client) rerunActions(ctx context.Context, repo model.RepoRef, branch, h
 			res.Skipped = append(res.Skipped, fmt.Sprintf("%s (%s): concluded %s, nothing failed", id, runWorkflow(run), orUnknown(run.Conclusion)))
 			continue
 		}
+		if err := rerunBudgetSpent(repo, run, head); err != nil {
+			spentErr = cmp.Or(spentErr, err)
+			res.Skipped = append(res.Skipped, fmt.Sprintf("%s (%s): re-run %d times already", id, runWorkflow(run), MaxActionsRerunsPerHead))
+			continue
+		}
 		var err error
 		if mode == "all" {
 			err = rerunner.RerunWorkflowRun(owner, repo.Name, run.ID)
@@ -303,6 +303,9 @@ func (c *Client) rerunActions(ctx context.Context, repo model.RepoRef, branch, h
 			return res, rerunRefusal(id, err)
 		}
 		res.Runs = append(res.Runs, ActionsRerunRun{ID: id, Workflow: runWorkflow(run), Mode: mode, Attempt: max(run.RunAttempt, 1) + 1})
+	}
+	if len(res.Runs) == 0 && spentErr != nil {
+		return res, spentErr
 	}
 	if len(res.Runs) == 0 {
 		return res, validationErrorf("nothing to re-run at %s on %s: %s", shortHead(head), repo, strings.Join(res.Skipped, "; "))
@@ -355,6 +358,11 @@ func (c *Client) rerunActionsJobs(reader github.ActionsReader, rerunner github.A
 		}
 	}
 	for _, p := range picks {
+		if err := rerunBudgetSpent(repo, p.run, res.Head); err != nil {
+			return res, err
+		}
+	}
+	for _, p := range picks {
 		id := ActionsRunID(repo.String(), p.run.ID)
 		run := ActionsRerunRun{ID: id, Workflow: runWorkflow(p.run), Mode: "jobs", Attempt: max(p.run.RunAttempt, 1) + 1}
 		for _, job := range p.jobs {
@@ -366,6 +374,18 @@ func (c *Client) rerunActionsJobs(reader github.ActionsReader, rerunner github.A
 		res.Runs = append(res.Runs, run)
 	}
 	return res, nil
+}
+
+// rerunBudgetSpent is the refusal to re-run run once more, when it has
+// been re-run MaxActionsRerunsPerHead times already, or nil.
+func rerunBudgetSpent(repo model.RepoRef, run github.WorkflowRun, head string) error {
+	spent := max(run.RunAttempt, 1) - 1
+	if spent < MaxActionsRerunsPerHead {
+		return nil
+	}
+	return validationErrorf("run %s (%s) at %s has been re-run %d times already, the most grain re-runs any run at one commit "+
+		"(grain's own automatic re-runs of a runner fault count too). A failure that survives that many attempts is not a flake: "+
+		"fix it, or ask a person to re-run it by hand", ActionsRunID(repo.String(), run.ID), runWorkflow(run), shortHead(head), spent)
 }
 
 // rerunRefusal is GitHub's refusal to re-run id, said so a caller can

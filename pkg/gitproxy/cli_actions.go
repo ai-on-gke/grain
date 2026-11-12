@@ -1214,6 +1214,27 @@ func (p *GitProxy) serveGitHubRunJob(w http.ResponseWriter, r *http.Request, sco
 		http.Error(w, "a job name is required: grain ci run-job <job>", http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSpace(req.ResumeRunID) != "" {
+		// --resume keeps waiting on the re-run already asked for: re-running
+		// the job again would spend another of the head's attempts.
+		checks, ok := p.CLIActions.(CLIGitHubCheckActions)
+		if !ok {
+			cliError(w, fmt.Errorf("%w: this proxy cannot read GitHub checks", namespace.ErrBadRequest))
+			return
+		}
+		start := time.Now()
+		end := start.Add(DefaultCLIWaitSlice)
+		if req.TimeoutSeconds > 0 {
+			end = start.Add(min(DefaultCLIWaitSlice, time.Duration(req.TimeoutSeconds)*time.Second))
+		}
+		if deadline, ok := r.Context().Deadline(); ok {
+			if d := deadline.Add(-cliWaitDeadlineMargin); d.Before(end) {
+				end = d
+			}
+		}
+		p.serveGitHubCIWait(w, r.Context(), scope, start, end, checks)
+		return
+	}
 	res, err := rerun.RerunGitHubChecks(r.Context(), scope.TaskIDStr, CIStartRequest{Jobs: []string{job}, Recheck: true})
 	if err != nil {
 		cliError(w, err)
