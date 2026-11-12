@@ -8135,6 +8135,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 		}
 	}
 	var obs *model.Observation
+	var closedAt *time.Time
 	changed := false
 	if err := c.Store.ObserveField(ctx, id, now, func(o *model.Observation) {
 		changed = (o.ClosedAt == nil) == closed
@@ -8152,6 +8153,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 			obs = o
 			return
 		}
+		closedAt = o.ClosedAt
 		o.ClosedAt = nil
 		o.RunNowAt = nil
 	}); err != nil {
@@ -8159,7 +8161,7 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 	}
 	if !closed {
 		if changed {
-			detail := c.queueUndeliveredOnReopen(ctx, id, now)
+			detail := c.queueUndeliveredOnReopen(ctx, id, closedAt, now)
 			c.recordTaskEvent(ctx, model.TaskEvent{TaskID: id, Kind: model.TaskEventReopened, At: now,
 				By: by, OnBehalfOf: who.OnBehalfOf, Reason: eventReason, Detail: detail})
 		}
@@ -8216,7 +8218,13 @@ func (c *Client) setClosed(ctx context.Context, id string, closed bool, opts Clo
 // what agents and grain say never sends a task anywhere. Best-effort
 // like the event itself: the reopen is written, and failing it now
 // would say it was not.
-func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, now time.Time) string {
+//
+// A task with no delivered mark (DeliveredCommentID nil: its only runs
+// failed yet still left an answer, or ran before the column existed)
+// falls back to timing, as that field's other readers do: a person's
+// comment posted at or after closedAt, the close this reopen undoes, was
+// left while the task was closed and no run has seen it.
+func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, closedAt *time.Time, now time.Time) string {
 	task, err := c.Store.GetTask(ctx, id)
 	if err != nil || task == nil || !model.AwaitsAck(*task) {
 		return ""
@@ -8232,6 +8240,9 @@ func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, now ti
 		return ""
 	}
 	pending := model.UndeliveredPersonComment(comments, obs)
+	if pending == nil && closedAt != nil && (obs == nil || obs.DeliveredCommentID == nil) {
+		pending = personCommentSince(comments, obs, *closedAt)
+	}
 	if pending == nil {
 		return ""
 	}
@@ -8248,6 +8259,24 @@ func (c *Client) queueUndeliveredOnReopen(ctx context.Context, id string, now ti
 		return detail + "; queued"
 	}
 	return detail
+}
+
+// personCommentSince is the newest person's comment created at or after
+// since and past any question the task is parked on, or nil.
+func personCommentSince(comments []model.Comment, obs *model.Observation, since time.Time) *model.Comment {
+	for i := len(comments) - 1; i >= 0; i-- {
+		cm := comments[i]
+		if cm.CreatedAt.Before(since) {
+			return nil
+		}
+		if obs != nil && obs.PendingQuestionCommentID != nil && cm.ID <= *obs.PendingQuestionCommentID {
+			return nil
+		}
+		if model.CommentByPerson(cm) {
+			return &comments[i]
+		}
+	}
+	return nil
 }
 
 // recordTaskEvent writes a close or reopen's event, and only logs a
