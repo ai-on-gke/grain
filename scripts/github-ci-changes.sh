@@ -170,8 +170,11 @@ classify_file() {
 
   # ui-ng e2e drives the Angular UI over `grain demo`, so it follows what
   # that reads: the UI itself, the e2e harness it shares, the server that
-  # serves it and the demo that seeds it.
-  if [[ "$file" == ui-ng/* || "$file" == ui-shared/* || "$file" == pkg/ui/* || "$file" == pkg/demo/* || "$file" == ".github/workflows/tests.yml" ]]; then
+  # serves it and the demo that seeds it -- and on the job's own plumbing:
+  # the Makefile targets it runs, the npm cache it warms, and ui/'s
+  # Playwright pin, which `make playwright-browsers` installs the browser
+  # from.
+  if [[ "$file" == ui-ng/* || "$file" == ui-shared/* || "$file" == pkg/ui/* || "$file" == pkg/demo/* || "$file" == "Makefile" || "$file" == "scripts/warm-npm-cache.sh" || "$file" == "ui/package.json" || "$file" == "ui/package-lock.json" || "$file" == ".github/workflows/tests.yml" ]]; then
     job_ui_ng_e2e=true
   fi
 
