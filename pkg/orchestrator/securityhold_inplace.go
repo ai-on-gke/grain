@@ -121,7 +121,7 @@ func recordReviewerHead(ctx context.Context, store *model.Store, client github.C
 	if reviewed == nil {
 		return false, nil
 	}
-	head, err := client.GetBranchHead(review.Target.Owner, review.Target.Name, review.BranchName())
+	head, err := client.GetBranchHead(review.Target.StoredOwner(), review.Target.Name, review.BranchName())
 	if err != nil || head == nil || head.SHA == "" {
 		log.Printf("orchestrator: review %s: reading the head it left on %s: %v -- recording none, "+
 			"so that head is classified again before it merges", review.ID, review.BranchName(), err)
@@ -186,7 +186,7 @@ func reviewerFixesTouchBoundary(ctx context.Context, store *model.Store, client 
 	if !ok || heldAt == "" || client == nil || task.Target == nil {
 		return true, true
 	}
-	cmp, err := client.CompareRefs(task.Target.Owner, task.Target.Name, heldAt, reviewerHead)
+	cmp, err := client.CompareRefs(task.Target.StoredOwner(), task.Target.Name, heldAt, reviewerHead)
 	if err != nil {
 		log.Printf("orchestrator: comparing %s's held head with its reviewer's: %v", task.ID, err)
 		return false, false

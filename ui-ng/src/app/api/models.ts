@@ -179,6 +179,8 @@ export interface Task {
   nothingNeededAction?: string;
   promptExtension?: string;
   noPort?: boolean;
+  // The release this task is filed against (vX.Y.Z or vX.Y.Z-rc.N).
+  foundIn?: string;
   keepRunning?: boolean;
   hosting?: string;
   paused?: TaskPaused | null;
@@ -741,4 +743,40 @@ export interface CreateBoardRequest {
   folder?: string;
   description?: string;
   query?: string;
+}
+
+export interface AttemptTranscriptResponse {
+  transcript: string;
+}
+
+export interface AgentModel {
+  id: string;
+  label?: string;
+  effort?: string;
+  family?: string;
+  supportedEfforts?: string[];
+  defaultEffort?: string;
+}
+
+export interface AgentModelsResponse {
+  available: boolean;
+  framework?: string;
+  error?: string;
+  models: AgentModel[];
+  efforts?: string[];
+}
+
+export interface MemoryDocument {
+  repo?: string;
+  name: string;
+  summary: string;
+  text?: string;
+  length: number;
+  updatedAt?: string;
+  updatedBy?: string;
+  updatedByKind?: string;
+}
+
+export interface MemoryDocumentsResponse {
+  documents: MemoryDocument[];
 }

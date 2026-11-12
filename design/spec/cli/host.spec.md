@@ -21,7 +21,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume`, `inbox`, `wait`, `logs` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|role|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `qa …`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|role|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
 | Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `db check`, `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
@@ -848,6 +848,39 @@ _No flags._
 
 **Pinned by:** *untested*.
 
+### 4.9a `grain qa` {#CLI-112}
+
+Inspects or updates the deployment-wide quality control engine and single-instance pull-request rollout configuration (`GET /api/settings` and `POST /api/settings`, matching `Settings -> Tasks`).
+
+- `qa` or `qa status` reads `GET /api/settings` and prints whether quality control is off or enabled alongside the active flow package, rollout percentage, passive control-arm shadow scoring flag, experiment epoch, and regime ID.
+- `qa enable [-flow id] [-rollout pct] [-shadow-control=bool] [-epoch n]` enables quality control via `POST /api/settings`. Only flags explicitly passed are overwritten; when enabling an unconfigured deployment (`0%` rollout) without `-rollout`, the rollout defaults to `30%`.
+- `qa disable` sets `qaEnabled` to `false` via `POST /api/settings`, leaving the stored flow, rollout percentage, shadow-control flag, and epoch intact.
+
+**Scope:** `settings:read` (`status`), `settings:write` (`enable`, `disable`).
+
+<!-- BEGIN GENERATED FLAGS: grain qa -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa status -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa enable -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-epoch` | int |  |  | experiment epoch (>=1) to re-randomize sticky work-tree assignments |
+| `-flow` | string |  |  | quality flow package (golden-v1-minimal, deterministic-s3-only, repo-custom) |
+| `-rollout` | int | `30` |  | percentage of work-tree PRs assigned to treatment (0..100); defaults to 30 when unconfigured |
+| `-shadow-control` | bool | `true` |  | run passive shadow checks on control-arm PRs |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa disable -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/qa_test.go`: `TestQACommandStatusEnableDisableAndFlagPreservation`.
+
 ### 4.10 `grain release approve|reject|rollback vX.Y.Z` {#CLI-39}
 
 `approve` and `reject` call `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `rollback` calls `POST /api/releases/{version}/rollback` (`RollbackRelease`), passing `-to` (`vA.B.C`) and `-reason` when given; `-bad` is an alias for the positional `vX.Y.Z`. `-repo` defaults to grain's own source repository (`ai-on-gke/grain`). On a repository that publishes from GitHub Actions (`ci_mode: github`) the answer is a signed dispatch of `.github/workflows/promote-release.yml`, and the command prints the dispatch instead of a grain CI run.
@@ -1010,7 +1043,7 @@ This is grain's own CI, from the operator's side.
 - `faults [-repo r] [-source s]` calls `GET /api/ci/faults`.
 - `artifact` (`artifacts`) downloads from `/api/ci/runs/{id}/artifacts/{job}/{name}`.
 - `wait (<run-id> | -pr <url|owner/name#n> | -ref <branch> -repo <owner/name>) [-jobs j1,j2]` ([external-cli #XC-26](../external-cli/external-cli.spec.md#XC-26)) polls `GET /api/ci/runs/{id}` until the run, or every job `-jobs` names, has a verdict. `-pr` and `-ref` attach to the newest run on that branch still in flight, else the newest; `-pr` finds the branch from the grain task tracking the pull request (`GET /api/tasks`). It waits the global `-timeout` (default `30m`) as a whole and accrues no wait credit. It prints the sandbox's wait answer (`gitproxy.CLIWaitResponse`, as [`grain ci wait` in a sandbox](sandbox.spec.md#CLI-91) reads it) plus `repo`, `ref` and `failing` (each failing job's step, failing tests and any shared fault from `GET /api/ci/faults`). It exits `0` green, `1` on `failure`/`cancelled`/`timed_out`, and `5` when `-timeout` runs out while the run is still going.
-- `retrigger <run-id> [-jobs j1,j2]` (`ci:write`) reruns the run's failed jobs (or the named ones) once, uncached: `POST /api/ci/runs` with the run's repository, branch, commit and push/pull_request event, and `recheck`. GitHub Actions runs are refused. The sandbox's form is [#CLI-92](sandbox.spec.md#CLI-92).
+- `retrigger <run-id> [-jobs j1,j2]` (`ci:write`) reruns the run's failed jobs (or the named ones) once, uncached: `POST /api/ci/runs` with the run's repository, branch, commit and push/pull_request event, and `recheck`. A GitHub Actions run (`gha:<owner>:<name>:<run>`) is re-run on GitHub instead, as its next attempt: `POST /api/ci/runs/{id}/rerun` (`ci:write` on its repository) -- its failed and cancelled jobs, or the `-jobs` named -- bound to 3 re-runs per run at one commit. The sandbox's form is [#CLI-92](sandbox.spec.md#CLI-92).
 - `test-history <test-name> [-repo r] [-limit N] [-provider grain|github-actions]` reads up to `-limit` (at most 100) of the newest runs, each in full, and prints `ci.QueryTestHistory`'s report, the [sandbox's `grain ci test-history`](sandbox.spec.md#CLI-89) rendering (`-json`: the report). For a `-repo` whose CI mode is `github` (`GET /api/repos/{owner}/{name}/capabilities`) and no `-provider`, it reads that repository's GitHub Actions runs alone -- each read in full carries the failing log tails grain recorded of its jobs -- and notes how many grain CI runs it left out; the report names each provider's runs and their window, and says that Actions runs count failures only.
 
 <!-- BEGIN GENERATED FLAGS: grain ci -->
@@ -2043,7 +2076,7 @@ This runs `pkg/orchestrator`'s cycle on a timer and serves the UI and JSON API (
 
 ### 5.2 `grain demo [flags]` {#CLI-44}
 
-Serves the task UI on localhost over a throwaway store of fake tasks. Every caller signs in with the demo's access code, kept in `-access-code-file` when given.
+Serves the task UI on localhost over a throwaway store of fake tasks (SQLite by default, or PostgreSQL under `-db-driver=postgres`, using `-db-dsn` when given or an embedded server in the throwaway directory). Every caller signs in with the demo's access code, kept in `-access-code-file` when given.
 
 <!-- BEGIN GENERATED FLAGS: grain demo -->
 | Flag | Type | Default | Env | Description |
@@ -2054,6 +2087,8 @@ Serves the task UI on localhost over a throwaway store of fake tasks. Every call
 | `-as` | string |  |  | principal to attribute the fake tasks to (defaults to the OS user) |
 | `-base-branch-ci` | bool |  |  | with -github-sim and -fake-ci, let POST /api/e2e/base-branch/{red,green} {"branch": ...} (loopback only) turn a branch red or green on a -fake-ci verdict, through grain's own base-branch reconciler and dispatch's linking step, dispatching nothing |
 | `-config-change` | bool |  |  | serve a real, throwaway grain/config exported from the demo's store, and seed two tasks parked on proposal branches of it (propose_config_change), so the config-change card's Approve & Apply merges into its main and Reject deletes the branch |
+| `-db-driver` | string | `"sqlite"` |  | database backend driver for the throwaway store ("sqlite" or "postgres") |
+| `-db-dsn` | string |  |  | PostgreSQL connection URL under -db-driver=postgres; empty starts an embedded server in the throwaway directory |
 | `-default-target-repo` | string | `"acme/widgets"` |  | owner/name the fake tasks target |
 | `-disable-self-upgrade` | bool |  |  | as on grain daemon: disable in-VM self-upgrade actions and hide in-VM upgrade controls in the UI |
 | `-external-config-branch` | string | `"main"` |  | with -external-config-repo, the branch of that repository configuration is read from |

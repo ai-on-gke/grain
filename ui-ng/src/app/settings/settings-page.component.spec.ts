@@ -601,4 +601,165 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       el.querySelector('[data-testid="state-repo-remote-restricted"]'),
     ).not.toBeNull();
   });
+
+  it("ships quality control off by default and stages & saves PR rollout settings on /settings/tasks", async () => {
+    const api = new FakeSettingsApi();
+    api.settingsBody = {
+      ...api.settingsBody,
+      qaEnabled: false,
+      qaFlowId: "golden-v1-minimal",
+      qaFlowIds: ["golden-v1-minimal", "deterministic-s3-only", "repo-custom"],
+      qaRolloutPct: 0,
+      qaShadowOnControl: true,
+      qaEpoch: 1,
+      qaRegimeId: 1,
+    };
+
+    const { el, harness } = await mountSettings("/settings/tasks", api);
+
+    const card = el.querySelector('[data-testid="card-qa-rollout"]');
+    expect(card).not.toBeNull();
+
+    const enableSwitch = el.querySelector<HTMLButtonElement>(
+      '[data-testid="switch-qa-enabled"]',
+    )!;
+    const flowBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="pill-qa-flow"]',
+    )!;
+    const rolloutInput = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-qa-rollout-pct"]',
+    )!;
+    const shadowSwitch = el.querySelector<HTMLButtonElement>(
+      '[data-testid="switch-qa-shadow-control"]',
+    )!;
+
+    // Default shipped state: OFF, and dependent rollout controls disabled until switched on.
+    expect(enableSwitch.getAttribute("aria-checked")).toBe("false");
+    expect(flowBtn.disabled).toBe(true);
+    expect(rolloutInput.disabled).toBe(true);
+    expect(shadowSwitch.disabled).toBe(true);
+
+    // Enable engine -> dependent controls unlock immediately and dirty save bar appears.
+    enableSwitch.click();
+    harness.detectChanges();
+
+    expect(enableSwitch.getAttribute("aria-checked")).toBe("true");
+    expect(flowBtn.disabled).toBe(false);
+    expect(rolloutInput.disabled).toBe(false);
+    expect(shadowSwitch.disabled).toBe(false);
+
+    // Choose flow via native <g-pill-select> and set 33% PR rollout (step=1 allows any integer 0..100).
+    flowBtn.click();
+    harness.detectChanges();
+    const menuOptions = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        "#pill-qa-flow-menu button[role='option'], #pill-qa-flow-menu button",
+      ),
+    );
+    const s3OnlyOpt = menuOptions.find((b) =>
+      b.textContent?.includes("deterministic-s3-only"),
+    );
+    expect(s3OnlyOpt).toBeDefined();
+    s3OnlyOpt!.click();
+    harness.detectChanges();
+
+    // Toggling off before saving clears untouched dependent drafts cleanly.
+    rolloutInput.value = "33";
+    rolloutInput.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    enableSwitch.click();
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="settings-save-bar"]')).toBeNull();
+
+    // Re-enable, test invalid input blocking Save, Discard reset, Plan preview (regime bump), and Save.
+    enableSwitch.click();
+    harness.detectChanges();
+    rolloutInput.value = "150";
+    rolloutInput.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="error-qa-rollout-pct"]')?.textContent,
+    ).toContain("0 and 100");
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-testid="settings-save-btn"]')
+        ?.disabled,
+    ).toBe(true);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-discard-btn"]',
+    )!.click();
+    harness.detectChanges();
+    expect(rolloutInput.value).toBe("0");
+    expect(el.querySelector('[data-testid="error-qa-rollout-pct"]')).toBeNull();
+
+    // Stage valid 33% + deterministic-s3-only + shadow=false, preview plan, and save.
+    enableSwitch.click();
+    harness.detectChanges();
+    flowBtn.click();
+    harness.detectChanges();
+    Array.from(
+      document.querySelectorAll<HTMLButtonElement>("#pill-qa-flow-menu button"),
+    )
+      .find((b) => b.textContent?.includes("deterministic-s3-only"))!
+      .click();
+    harness.detectChanges();
+    rolloutInput.value = "33";
+    rolloutInput.dispatchEvent(new Event("input", { bubbles: true }));
+    shadowSwitch.click();
+    harness.detectChanges();
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-plan-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 50));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="settings-plan-preview"]')?.textContent,
+    ).toContain("Quality control PR rollout (%)");
+
+    const saveBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="settings-save-btn"]',
+    );
+    expect(saveBtn).not.toBeNull();
+    saveBtn!.click();
+    await new Promise((r) => setTimeout(r, 150));
+    harness.detectChanges();
+
+    const savedCall = api.calls.find((c) => c.key === "POST /api/settings");
+    expect(savedCall).toBeDefined();
+    expect(savedCall?.body).toEqual({
+      qaEnabled: true,
+      qaFlowId: "deterministic-s3-only",
+      qaRolloutPct: 33,
+      qaShadowOnControl: false,
+    });
+  });
+
+  it("explains read-only settings for viewer roles without settings:write", async () => {
+    const api = new FakeSettingsApi();
+    api.configBody.access = {
+      role: "grain/viewer",
+      roles: ["grain/viewer"],
+      full: false,
+      scopes: ["settings:read", "tasks:read"],
+    };
+    api.settingsBody = {
+      ...api.settingsBody,
+      qaEnabled: true,
+      qaRolloutPct: 50,
+    };
+
+    const { el } = await mountSettings("/settings/tasks", api);
+    expect(
+      el.querySelector('[data-testid="settings-role-readonly"]')?.textContent,
+    ).toMatch(/settings:write|grain\/viewer/i);
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-testid="switch-qa-enabled"]')
+        ?.disabled,
+    ).toBe(true);
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-testid="pill-qa-flow"]')
+        ?.disabled,
+    ).toBe(true);
+  });
 });

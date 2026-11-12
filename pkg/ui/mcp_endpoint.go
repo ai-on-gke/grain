@@ -1661,6 +1661,7 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 		AuthorLabel:         detail.AuthorLabel,
 		Provenance:          detail.Provenance,
 		Base:                detail.Base,
+		FoundIn:             t.FoundIn,
 		Capabilities:        detail.Capabilities,
 		PullRequest:         detail.PullRequest,
 		PullRequestMergedAt: detail.PrMergedAt,

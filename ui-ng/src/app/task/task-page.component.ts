@@ -15,11 +15,15 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  type OnDestroy,
   computed,
+  effect,
   inject,
   input,
+  untracked,
 } from "@angular/core";
 import { Router } from "@angular/router";
+import { DirectorContextService } from "../director/director-context.service";
 import { isTypingTarget } from "../services/keyboard.service";
 import { PHONE_QUERY } from "../shared/split";
 import { TABS, isTabId } from "../tasks/task-view";
@@ -76,8 +80,9 @@ export function backFrom(
     <g-task-detail [id]="id()" [tab]="tab()" [from]="from()" [back]="back()" />
   `,
 })
-export class TaskPageComponent {
+export class TaskPageComponent implements OnDestroy {
   private readonly router = inject(Router);
+  private readonly directorCtx = inject(DirectorContextService);
 
   readonly id = input.required<string>();
   readonly tab = input<string>();
@@ -85,6 +90,17 @@ export class TaskPageComponent {
   readonly from = input<string>();
 
   protected readonly back = computed(() => backFrom(this.from(), this.id()));
+
+  constructor() {
+    effect(() => {
+      const id = this.id();
+      untracked(() => this.directorCtx.setSelection({ kind: "task", id }));
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.directorCtx.clearSelection("task");
+  }
 
   protected onEscape(ev: KeyboardEvent): void {
     // Menus, dialogs and fields keep their own Escape.

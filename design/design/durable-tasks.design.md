@@ -971,7 +971,9 @@ exactly as before.
   a new version.
 - **Age** is measured, not stored: the runs started and the comments
   posted since the handover was written or confirmed
-  (`model.HandoverAge`). Past `HandoverStaleRuns` (10) runs or
+  (`model.HandoverAge`). Only comments from people and agents count:
+  grain's own notices (automation on nobody's behalf, such as the park
+  notice every parked run leaves) do not. Past `HandoverStaleRuns` (10) runs or
   `HandoverStaleComments` (30) comments it is **stale**. The durable
   task's prompt then asks for a replacement or confirmation, and
   `GET /api/tasks/{id}/context` returns `handover_stale`.
@@ -1034,7 +1036,7 @@ nothing load the whole of it at once. Where that stands:
 | `model.Store.Comments` in dispatch | Reads `CommentsAfter(cursor)` plus `LatestHandover` (`dispatchComments`): O(since compaction) | Done (grain/task-4194) |
 | `GET /api/tasks/{id}` / `TaskDetail` | Whole by default. `?comments_limit=`, `?comments_before=` (a comment ID), `?attempts_limit=` and `?attempts_before=` (an attempt number) build the page directly from the store (`Store.CommentsBefore`, `Store.RunsBefore`), with bounded reads for transitions, the pending question comment, session names and the failure streak, and cache the head page by change token | Done (grain/task-4194, grain/task-4219) |
 | `GET /api/tasks/{id}/messages?after=` and its delivered mark | Read every comment, then filtered past the cursor | Done: `CommentsAfter` (grain/task-4194) |
-| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link, and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
+| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link (500 at a time, every page through the target merged and drawn once), and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
 | `grain task read`, `read_grain_task(view: full)` | Whole record | `view: summary` default (DT-13), `conversation, after:` paging |
 | SSE updates | Per-event deltas | No change needed |
 | State-repo export | Every comment and run, every export | Unchanged in size: the export is the backup. Rollover bounds it |
@@ -1072,7 +1074,9 @@ closed task.
   from [task N](/tasks/N)". It starts with a fresh `task_context`.
 - **The predecessor** closes with outcome `rolled_over` and the note
   "rolled over to #M". It keeps everything; nothing is copied or moved
-  except references.
+  except references. It is not reopened: Reopen and "Reopen and send"
+  are refused with a pointer to the successor, before any comment is
+  written, so the same durable work is never queued twice.
 - **References move** in one transaction: `depends_on` entries naming
   it, `wait_for_task` parks and `task_suspension.resume_on` targets,
   schedules whose standing task it is, notification subjects and
@@ -1170,7 +1174,7 @@ local, and pruned after 30 days.
 | `notify_operator(...)` | all (critical needs task-admin) | Raises or bumps a notification and does not park. |
 | `message_task(task, body)` | task-admin, or parent/child | A note to another task's agent. Never parks it. |
 | `read_pipeline_changes(after)` | self-debug | The delta feed. |
-| `write_handover` | all | Also requested at a `context` suspension and, on a durable task, at any park or suspension that did not write or confirm it. Writing the same handover again confirms it. |
+| `grain handover write` (was `write_handover`) | all | Also requested at a `context` suspension and, on a durable task, at any park or suspension that did not write or confirm it. Writing the same handover again confirms it. |
 | `compact_context(handover)` | all | Writes a fresh handover and moves the compaction cursor to the last comment before the run started (DT-15). |
 | `update_brief(brief, reason)` | all | Replaces the current brief that stands in for the description in prompts (DT-15). |
 

@@ -441,14 +441,14 @@ func commentThreadSection(comments []model.Comment) string {
 func handoverRequest(revising bool) string {
 	if revising {
 		return "[grain] Before you finish, consider replacing that handover with a fresh one " +
-			"(write_handover), folding into it whatever has been settled since it was " +
+			"(`grain handover write --file <path>`), folding into it whatever has been settled since it was " +
 			"written -- grain carries only the most recent handover, so a new one replaces " +
 			"that one rather than adding to it, and anything you leave out of yours is gone " +
 			"from every later prompt on this task. If nothing has been settled since, leave " +
 			"it alone: it stays in place until a run replaces it. Either way this is not a " +
 			"closing note and does not complete the task.\n"
 	}
-	return "[grain] Before you finish, write this task's handover (write_handover): a standing " +
+	return "[grain] Before you finish, write this task's handover (`grain handover write --file <path>`): a standing " +
 		"summary of what the part of this conversation you cannot see settled -- the " +
 		"decisions, the invariants, the names, what was already ruled out -- written for the " +
 		"next run on this task rather than for a person. grain carries the most recent " +

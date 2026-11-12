@@ -17,7 +17,9 @@ package model
 import (
 	"context"
 	"fmt"
+	"path"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -50,6 +52,13 @@ type StaleSchedule struct {
 // StaleSchedules lists every enabled schedule whose last firing that ran
 // anything -- or, for one that never has, its creation -- is more than
 // twice its cadence before now, oldest first.
+//
+// A `.grain/workflows` cron dropped by the repository's CI mode is skipped
+// when another enabled schedule on the same target runs the same workflow
+// stem on the default branch and is allowed to run under that mode (for
+// example a `.grain/schedules/` entry with `grain-ci: true`): the workflow
+// keeps its `on: schedule` trigger only because `workflow:` schedules
+// require one, so the dropped cron is inert on purpose.
 func (s *Store) StaleSchedules(ctx context.Context, now time.Time) ([]StaleSchedule, error) {
 	scheds, err := s.ListSchedules(ctx)
 	if err != nil {
@@ -76,13 +85,16 @@ func (s *Store) StaleSchedules(ctx context.Context, now time.Time) ([]StaleSched
 		if stem, ok := workflowReviewSchedule(sched); ok {
 			stale.Workflow = stem
 			mode, seen := modes[sched.Target]
-			if !seen && sched.Target != (RepoRef{}) {
+			if !seen && sched.Target != (RepoRef{}) && !IsConfigRepo(sched.Target) {
 				if cfg, err := s.GetRepoConfig(ctx, sched.Target); err == nil && cfg != nil {
 					mode = cfg.CIMode
 				}
 				modes[sched.Target] = mode
 			}
 			if mode != "" && !sched.WorkflowRunsUnder(mode) {
+				if s.isWorkflowCronSchedule(ctx, sched, stem) && workflowRunByPeer(scheds, sched, stem, mode) {
+					continue
+				}
 				stale.Reason = fmt.Sprintf("%s, so .grain/workflows/%s.yml's cron is dropped at every firing: "+
 					"port it to .github/workflows/ or declare a .grain/schedules/ entry with grain-ci: true",
 					WorkflowGrainCIOffReason(mode), stem)
@@ -90,8 +102,62 @@ func (s *Store) StaleSchedules(ctx context.Context, now time.Time) ([]StaleSched
 		}
 		out = append(out, stale)
 	}
-	sort.Slice(out, func(i, j int) bool { return staleSince(out[i]).Before(staleSince(out[j])) })
+	sort.Slice(out, func(i, j int) bool {
+		if a, b := staleSince(out[i]), staleSince(out[j]); !a.Equal(b) {
+			return a.Before(b)
+		}
+		return out[i].ID < out[j].ID
+	})
 	return out, nil
+}
+
+// isWorkflowCronSchedule reports whether sched is a schedule translated from
+// .grain/workflows/<stem>.yml's own `on: schedule` trigger
+// (repodecl.scheduledWorkflows), rather than a .grain/schedules/ or settings
+// schedule that runs the same workflow without `grain-ci: true`.
+func (s *Store) isWorkflowCronSchedule(ctx context.Context, sched Schedule, stem string) bool {
+	if strings.TrimSpace(sched.Base) != "" || sched.Target == (RepoRef{}) {
+		return false
+	}
+	if decl, err := s.GetRepoDeclaration(ctx, sched.ID); err == nil && decl != nil {
+		return path.Dir(decl.Path) == DeclarationDir+"/workflows"
+	}
+	prefix := RepoDeclaredID(DeclaredSchedule, sched.Target, "workflow."+stem)
+	if sched.ID == prefix {
+		return true
+	}
+	rest, ok := strings.CutPrefix(sched.ID, prefix+".")
+	if !ok || rest == "" {
+		return false
+	}
+	for i := 0; i < len(rest); i++ {
+		if rest[i] < '0' || rest[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// workflowRunByPeer reports whether another enabled schedule on sched.Target
+// runs stem on the default branch and may run under mode.
+func workflowRunByPeer(scheds []Schedule, sched Schedule, stem string, mode CIMode) bool {
+	for _, peer := range scheds {
+		if peer.ID == sched.ID || !peer.Enabled || !peer.Target.Same(sched.Target) {
+			continue
+		}
+		if !onDefaultBranch(peer.Base) || !peer.WorkflowRunsUnder(mode) {
+			continue
+		}
+		if peerStem, ok := workflowReviewSchedule(peer); ok && peerStem == stem {
+			return true
+		}
+	}
+	return false
+}
+
+func onDefaultBranch(base string) bool {
+	base = strings.TrimSpace(base)
+	return base == "" || base == "main"
 }
 
 func staleSince(s StaleSchedule) time.Time {

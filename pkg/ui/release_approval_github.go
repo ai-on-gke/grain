@@ -136,7 +136,7 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 	now := c.now().UTC()
 	releaseDispatchMu.Lock()
 	defer releaseDispatchMu.Unlock()
-	commit, err := github.TagCommit(tags, repo.Owner, repo.Name, version+"-pending")
+	commit, err := github.TagCommit(tags, repo.StoredOwner(), repo.Name, version+"-pending")
 	if err != nil {
 		return ReleaseDispatch{}, fmt.Errorf("reading %s's %s-pending tag: %w", repo, version, github.Readable(err))
 	}
@@ -176,7 +176,7 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 		inputs["short_soak_ok"] = fmt.Sprint(answers.ShortSoakOK)
 		inputs["allow_breaking"] = fmt.Sprint(answers.AllowBreaking)
 	}
-	if err := dispatcher.DispatchWorkflow(repo.Owner, repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
+	if err := dispatcher.DispatchWorkflow(repo.StoredOwner(), repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
 		return ReleaseDispatch{}, fmt.Errorf("dispatching %s's %s: %w", repo, GitHubPromoteReleaseWorkflow, github.Readable(err))
 	}
 	if c.Store != nil {
@@ -217,7 +217,7 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 				"watch that run rather than starting another", version, d.By, d.Workflow, d.At.Format(time.RFC3339))
 		}
 	}
-	commit, err := github.TagCommit(tags, repo.Owner, repo.Name, version)
+	commit, err := github.TagCommit(tags, repo.StoredOwner(), repo.Name, version)
 	if err != nil {
 		return ReleaseDispatch{}, fmt.Errorf("reading %s's %s tag: %w", repo, version, github.Readable(err))
 	}
@@ -249,7 +249,7 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 	if opts.Reason != "" {
 		inputs["reason"] = opts.Reason
 	}
-	if err := dispatcher.DispatchWorkflow(repo.Owner, repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
+	if err := dispatcher.DispatchWorkflow(repo.StoredOwner(), repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
 		return ReleaseDispatch{}, fmt.Errorf("dispatching %s's %s: %w", repo, GitHubPromoteReleaseWorkflow, github.Readable(err))
 	}
 	releaseDispatches[key] = d

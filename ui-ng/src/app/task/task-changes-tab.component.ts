@@ -39,7 +39,7 @@ import type {
 } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
-import { errorText } from "../sessions/session-view";
+import { errorText } from "../sessions/session-helpers";
 import { parseUnifiedDiff } from "../shared/diff-parse";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
 import { APPROVAL_GATE, submitBlock } from "../shared/gates";

@@ -214,6 +214,16 @@ inspector and Task Detail. Sessions shares its message styles.
   Send share one row. A "New messages ↓" pill appears when something arrives
   while you are scrolled up.
 
+### Settings
+
+Settings uses a 280px grouped section drawer beside flat `.s-card` forms capped
+at 1180px. Single-choice pickers use `<g-pill-select>`, booleans use `.g-switch`
+(`role="switch"`), and edits stage into `.settings-save-bar` (`Discard` /
+`Save changes` with a `POST /api/settings/plan` diff preview). Opt-in workflow
+controls (such as quality control PR rollout in `Settings -> Tasks`) live inside
+their section's `.s-card` with dependent fields disabled while off — never as
+persistent topbar or bottombar status badges.
+
 ### Breakpoints
 
 `< 600px` phone, `600–839px` compact, `840–1279px` medium, `≥ 1280px`
@@ -237,6 +247,9 @@ it rather than copy it.
 | Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
+| Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
+| Director shaper | `director/director-shaper.component.ts` | in-sheet task shaping with `grain-draft` diff & Apply |
+| Session canvas | `sessions/session-canvas.component.ts` | coplanar right-hand Docs, sandboxed HTML Mocks, `grain-plan` DAG, Memory editor |
 
 Rules:
 
@@ -252,7 +265,7 @@ Rules:
 
 ## 5. Interaction
 
-- **Keyboard first.** `c` new task, `/` filter, `?` help, `1`–`9`
+- **Keyboard first.** `c` new task, `d` / `Alt+D` Director drawer, `/` filter, `?` help, `1`–`9`
   destinations, `j`/`k` step, `x` select, `Shift+F` full-screen conversation.
   Every shortcut is listed in Help. Shortcuts never fire while typing
   (`isTypingTarget`).

@@ -59,6 +59,7 @@ var (
 	_ gitproxy.CLIActions             = sandboxCLIGate{}
 	_ gitproxy.CLITaskActions         = sandboxCLIGate{}
 	_ gitproxy.CLIGitHubCheckActions  = sandboxCLIGate{}
+	_ gitproxy.CLIGitHubRerunActions  = sandboxCLIGate{}
 	_ gitproxy.CLIReviewThreadActions = sandboxCLIGate{}
 )
 
@@ -192,6 +193,14 @@ func (g sandboxCLIGate) WaitForGitHubChecks(ctx context.Context, taskID string,
 	return a.WaitForGitHubChecks(ctx, taskID, timeout, poll, onPoll)
 }
 
+func (g sandboxCLIGate) RerunGitHubChecks(ctx context.Context, taskID string, req gitproxy.CIStartRequest) (gitproxy.CLIActionResult, error) {
+	a, err := g.actions()
+	if err != nil {
+		return gitproxy.CLIActionResult{}, err
+	}
+	return a.RerunGitHubChecks(ctx, taskID, req)
+}
+
 // CreditCLIWait is gitproxy.CLIWaitCreditor over the same registry
 // CreditWaitForTask credits, reported as its own source so that a run's
 // CLI waits add to its MCP waits rather than competing with them
@@ -248,11 +257,11 @@ func (o *PullRequestOpener) reviewScope(ctx context.Context, taskID string) (mcp
 	if task == nil || task.Target == nil {
 		return mcp.PullRequestScope{}, fmt.Errorf("task %s has no repository of its own", taskID)
 	}
-	scope := mcp.PullRequestScope{Owner: task.Target.Owner, Repo: task.Target.Name, Branch: task.BranchName()}
+	scope := mcp.PullRequestScope{Owner: task.Target.StoredOwner(), Repo: task.Target.Name, Branch: task.BranchName()}
 	if o.Store != nil {
 		if rc, err := o.Store.GetRepoConfig(ctx, *task.Target); err == nil && rc != nil {
 			if prRepo, cross, err := rc.PullRequestRepo(*task.Target); err == nil && cross {
-				scope.UpstreamOwner = prRepo.Owner
+				scope.UpstreamOwner = prRepo.StoredOwner()
 				scope.UpstreamRepo = prRepo.Name
 			}
 		}

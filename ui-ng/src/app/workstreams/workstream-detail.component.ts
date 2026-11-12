@@ -30,6 +30,7 @@ import {
 } from "@angular/core";
 import { Router } from "@angular/router";
 import { AccessService } from "../services/access.service";
+import { DirectorContextService } from "../director/director-context.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
 import {
@@ -795,6 +796,7 @@ const MODES: { id: LayoutMode; label: string }[] = [
 export class WorkstreamDetailComponent implements OnDestroy {
   protected readonly wsStore = inject(WorkstreamsStore);
   private readonly access = inject(AccessService);
+  private readonly directorCtx = inject(DirectorContextService);
   private readonly snackbar = inject(SnackbarService);
   private readonly keyboard = inject(KeyboardService);
   private readonly router = inject(Router);
@@ -901,11 +903,18 @@ export class WorkstreamDetailComponent implements OnDestroy {
         if (!s.root.virtual) {
           void this.wsStore.ensureRootDetail(s.rootId);
         }
+        this.directorCtx.setSelection({
+          kind: "workstream",
+          id: s.key,
+          title: s.title,
+          summary: `${s.counts.done}/${s.counts.total} done`,
+        });
       });
     });
   }
 
   ngOnDestroy(): void {
+    this.directorCtx.clearSelection("workstream");
     this.sp.detach();
     this.dbodyResizeObs?.disconnect();
     this.dbodyResizeObs = null;

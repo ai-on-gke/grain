@@ -43,6 +43,9 @@ import { CreateTaskService } from "./create/create-task.service";
 import type { NewTaskDraft } from "./create/new-task-form";
 import { NewTaskSheetComponent } from "./create/new-task-sheet.component";
 import type { InboxStore } from "./inbox/inbox.store";
+import type { SessionsStore } from "./sessions/sessions.store";
+import { DirectorContextService } from "./director/director-context.service";
+import { DirectorDrawerComponent } from "./director/director-drawer.component";
 import { AccessService } from "./services/access.service";
 import { HelpService } from "./services/help.service";
 import { KeyboardService } from "./services/keyboard.service";
@@ -68,9 +71,9 @@ const ICONS: Record<string, string> = {
     "M3 4h6v5H3zm12 0h6v5h-6zm0 11h6v5h-6zM9 5.5h6v2H9zM5 9h2v9.5H5zM7 16.5h8v2H7z",
   tasks:
     "M3 5h2v2H3zm4 0h14v2H7zM3 11h2v2H3zm4 0h14v2H7zm-4 6h2v2H3zm4 0h14v2H7z",
-  // An agent, not a person: a small robot head (antenna, face, eyes, ears).
+  // An agent, not a person: visor-head robot outline (robot_2).
   agents:
-    "M12 1a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM11 3.5h2V6h-2zM7 6h10a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3zm0 2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1zm2.5 3a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm5 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM9 15.5h6V17H9zM1 11h2v4H1zm20 0h2v4h-2z",
+    "M4,21V16q0-0.83 0.59-1.41T6,14H18q0.82,0 1.41,0.59T20,16v5H4Zm5-8q-2.07,0-3.54-1.46T4,8T5.46,4.46T9,3h6q2.07,0 3.54,1.46Q20,5.93 20,8t-1.46,3.54T15,13H9ZM6,19H18V16H6v3Zm3-8h6q1.25,0 2.13-0.88T18,8T17.13,5.88T15,5H9Q7.75,5 6.88,5.88T6,8t0.88,2.13T9,11ZM9.71,8.71Q10,8.42 10,8q0-0.43-0.29-0.71T9,7Q8.58,7 8.29,7.29T8,8Q8,8.42 8.29,8.71Q8.58,9 9,9Q9.43,9 9.71,8.71Zm6,0Q16,8.42 16,8q0-0.43-0.29-0.71T15,7T14.29,7.29T14,8q0,0.42 0.29,0.71T15,9t0.71-0.29Z",
   sessions:
     "M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm0 14H5.17L4 17.17V4h16v12z",
   ci: "M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
@@ -94,6 +97,8 @@ const ICONS: Record<string, string> = {
     "M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z",
   help: "M11 18h2v-2h-2v2zm1-16C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14a4 4 0 0 0-4 4h2a2 2 0 1 1 4 0c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5a4 4 0 0 0-4-4z",
   tune: "M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z",
+  director:
+    "M12 2l2.1 5.9L20 10l-5.9 2.1L12 18l-2.1-5.9L4 10l5.9-2.1L12 2zm6.5 13l1.1 2.9 2.9 1.1-2.9 1.1L18.5 23l-1.1-2.9L14.5 19l2.9-1.1L18.5 15z",
 };
 
 type CreateItem =
@@ -148,11 +153,13 @@ export class DeferErrorDirective implements OnInit {
     HelpDialogComponent,
     AccountPopoverComponent,
     CustomizeNavDialogComponent,
+    DirectorDrawerComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "(document:click)": "onDocumentClick($event)",
     "(document:keydown.escape)": "onEscape($event)",
+    "(document:keydown)": "onGlobalKey($event)",
   },
   template: `
     <div class="app-shell">
@@ -485,6 +492,33 @@ export class DeferErrorDirective implements OnInit {
               {{ feed.runningCount() === 1 ? "agent" : "agents" }} running</span
             >
           </a>
+          <button
+            #directorBtn
+            type="button"
+            class="director-pill"
+            aria-label="Director"
+            [class.is-open]="directorCtx.isOpen()"
+            [class.is-live]="directorLive()"
+            data-testid="director-trigger"
+            [attr.aria-expanded]="directorCtx.isOpen()"
+            aria-keyshortcuts="d Alt+D"
+            gTip="Open Director drawer anywhere (d or Alt+D)."
+            (click)="toggleDirector($event)"
+          >
+            <svg
+              class="director-pill-icon"
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path [attr.d]="icons['director']" fill="currentColor" />
+            </svg>
+            <span class="director-pill-label">Director</span>
+            @if (directorLive()) {
+              <span class="live-dot" aria-hidden="true"></span>
+            }
+          </button>
           <label class="search-box">
             <span class="search-icon" aria-hidden="true">
               <svg width="18" height="18" viewBox="0 0 24 24">
@@ -561,9 +595,24 @@ export class DeferErrorDirective implements OnInit {
         </div>
       </header>
 
-      <main class="main-stage" id="main" [attr.inert]="modalOpen() ? '' : null">
-        <router-outlet />
-      </main>
+      <div class="shell-workspace">
+        <main
+          class="main-stage"
+          id="main"
+          [attr.inert]="modalOpen() ? '' : null"
+        >
+          <router-outlet />
+        </main>
+        @defer (when directorCtx.isOpen()) {
+          @if (directorCtx.isOpen()) {
+            <g-director-drawer />
+          }
+        } @error {
+          @if (directorCtx.isOpen()) {
+            <span gDeferError (recover)="onDeferError('director')"></span>
+          }
+        }
+      </div>
 
       <footer class="bottom-bar" [attr.inert]="modalOpen() ? '' : null">
         <span class="bottom-left">
@@ -871,8 +920,10 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly navConfig = inject(NavConfigService);
   protected readonly help = inject(HelpService);
   protected readonly keyboard = inject(KeyboardService);
+  protected readonly directorCtx = inject(DirectorContextService);
   private readonly snackbar = inject(SnackbarService);
   private readonly inboxRef = signal<InboxStore | null>(null);
+  private readonly sessionsRef = signal<SessionsStore | null>(null);
   private destroyed = false;
   private readonly api = inject(GrainApi);
   private readonly router = inject(Router);
@@ -965,6 +1016,10 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly prefersReducedMotion = signal(false);
   protected readonly spriteFailed = signal(false);
 
+  protected readonly directorLive = computed(
+    () => this.sessionsRef()?.directorLiveStatus().live ?? false,
+  );
+
   protected readonly modalOpen = computed(
     () =>
       this.createTask.isOpen() ||
@@ -1011,6 +1066,8 @@ export class AppComponent implements OnInit, OnDestroy {
     viewChild<ElementRef<HTMLInputElement>>("searchInput");
   private readonly avatarBtn =
     viewChild<ElementRef<HTMLButtonElement>>("avatarBtn");
+  private readonly directorBtn =
+    viewChild<ElementRef<HTMLButtonElement>>("directorBtn");
 
   private unregister: (() => void)[] = [];
   private navSub: { unsubscribe(): void } | null = null;
@@ -1072,6 +1129,9 @@ export class AppComponent implements OnInit, OnDestroy {
     });
     r(",", "Open Settings", () => this.open(SETTINGS));
     r("t", "Switch light and dark", () => this.theme.toggle());
+    r("d", "Toggle Director drawer", () =>
+      this.directorCtx.toggle(this.directorBtn()?.nativeElement),
+    );
 
     // Keep number keys 1..9 synchronized with the user's visible rail order.
     effect(
@@ -1102,6 +1162,15 @@ export class AppComponent implements OnInit, OnDestroy {
       });
     });
 
+    void import("./sessions/sessions.store").then(({ SessionsStore }) => {
+      if (this.destroyed) return;
+      runInInjectionContext(this.injector, () => {
+        const s = inject(SessionsStore);
+        this.sessionsRef.set(s);
+      });
+    });
+
+    this.directorCtx.setRoute(this.router.url);
     this.navSub = this.router.events.subscribe((e) => {
       if (e instanceof NavigationStart) {
         this.closeMenus();
@@ -1109,6 +1178,7 @@ export class AppComponent implements OnInit, OnDestroy {
       }
       if (e instanceof NavigationEnd) {
         const url = e.urlAfterRedirects;
+        this.directorCtx.setRoute(url);
         this.onSessions.set(
           url.startsWith("/sessions") || url.startsWith("/task/"),
         );
@@ -1179,9 +1249,32 @@ export class AppComponent implements OnInit, OnDestroy {
     }
   }
 
+  protected toggleDirector(ev: Event): void {
+    const opener = ev.currentTarget as HTMLElement | null;
+    this.closeMenus();
+    this.directorCtx.toggle(opener ?? this.directorBtn()?.nativeElement);
+  }
+
+  protected onGlobalKey(ev: KeyboardEvent): void {
+    const key = ev.key.toLowerCase();
+    const isAltD = ev.altKey && !ev.ctrlKey && !ev.metaKey && key === "d";
+    const isCtrlShiftD = ev.ctrlKey && ev.shiftKey && !ev.altKey && key === "d";
+    if (!isAltD && !isCtrlShiftD) return;
+    ev.preventDefault();
+    this.closeMenus();
+    this.directorCtx.toggle(this.directorBtn()?.nativeElement);
+  }
+
   protected onDeferError(
-    which: "create" | "help" | "account" | "customize",
+    which: "create" | "help" | "account" | "customize" | "director",
   ): void {
+    if (which === "director") {
+      this.directorCtx.close(false);
+      this.snackbar.show(
+        "The Director drawer could not load. Reload the page and try again.",
+      );
+      return;
+    }
     if (which === "create") {
       this.createTask.close();
       this.snackbar.show(
@@ -1302,6 +1395,10 @@ export class AppComponent implements OnInit, OnDestroy {
     if (this.createOpen()) this.closeCreate(ev, true);
     else if (this.railMoreOpen()) this.closeRailMore(ev, true);
     else if (this.moreOpen()) this.closeMore(ev, true);
+    else if (this.directorCtx.isOpen()) {
+      ev.preventDefault();
+      this.directorCtx.close(true);
+    }
   }
 
   protected closeCreate(ev: Event, refocus: boolean): void {

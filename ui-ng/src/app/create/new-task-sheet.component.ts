@@ -40,13 +40,16 @@ import type {
 import { InboxStore } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
-import { DIRECTOR_ID, errorText } from "../sessions/session-view";
+import { DIRECTOR_ID, errorText } from "../sessions/session-helpers";
+import { DirectorShaperComponent } from "../director/director-shaper.component";
+import type { TaskShapeFields } from "../director/director-draft";
 import {
   AttachmentPickerComponent,
   filesFromTransfer,
   readFilesAsUploads,
 } from "../shared/attachments";
 import { GrantsPickerComponent } from "../shared/grants-picker.component";
+import { hasExplicitTargetAllowlist } from "../shared/instance-repos";
 import {
   type PillOption,
   PillSelectComponent,
@@ -106,6 +109,7 @@ const FRAMEWORKS: readonly PillOption[] = [
     PillSelectComponent,
     AttachmentPickerComponent,
     GrantsPickerComponent,
+    DirectorShaperComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: ["./new-task-sheet.component.css"],
@@ -122,363 +126,394 @@ const FRAMEWORKS: readonly PillOption[] = [
       <div
         #sheet
         class="side-sheet"
+        [class.has-shaper]="shapingOpen()"
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-task-title"
         data-testid="new-task-sheet"
       >
-        <form
-          class="sheet-form"
-          (submit)="submit($event)"
-          (dragover)="$event.preventDefault()"
-          (drop)="onSheetDrop($event)"
-          (paste)="onSheetPaste($event)"
-          novalidate
-        >
-          <div class="sheet-head">
-            <div class="sheet-head-row">
-              <span class="status-pill neutral">{{
-                draft().workstream
-                  ? "Workstream"
-                  : selectedTemplate()
-                    ? "From template"
-                    : draft().approved
-                      ? "Starts on create"
-                      : "Proposal"
-              }}</span>
-              <button
-                type="button"
-                class="icon-btn"
-                [attr.aria-label]="
+        <div class="sheet-split">
+          <form
+            class="sheet-form"
+            (submit)="submit($event)"
+            (dragover)="$event.preventDefault()"
+            (drop)="onSheetDrop($event)"
+            (paste)="onSheetPaste($event)"
+            novalidate
+          >
+            <div class="sheet-head">
+              <div class="sheet-head-row">
+                <span class="status-pill neutral">{{
                   draft().workstream
-                    ? 'Close Start a workstream'
-                    : 'Close New task'
-                "
-                data-testid="new-task-close"
-                (click)="close()"
-              >
-                ×
-              </button>
-            </div>
-            <h2 id="new-task-title" class="sheet-title">
-              {{ draft().workstream ? "Start a workstream" : "New task" }}
-            </h2>
-          </div>
-
-          <div class="sheet-body">
-            @if (draft().workstream) {
-              <p class="banner banner-info" data-testid="ws-start-banner">
-                State the goal and what done looks like. Its first run plans the
-                work and proposes tasks into one stream.
-              </p>
-            } @else if (draft().origin) {
-              <p class="banner banner-info" data-testid="ws-origin-banner">
-                Filing into workstream
-                <strong>{{ originLabel() }}</strong
-                >.
-              </p>
-            }
-            @if (!canFile()) {
-              <p class="banner" data-testid="new-task-denied">
-                {{ deniedReason() }}
-              </p>
-            }
-            @if (error(); as err) {
-              <p
-                id="new-task-error"
-                class="banner banner-error"
-                role="alert"
-                data-testid="new-task-error"
-              >
-                {{ err.message }}
-              </p>
-            }
-
-            <!-- Optional Template Launcher & Live Composition Preview -->
-            @if (!draft().workstream && templates().length > 0) {
-              <div class="nt-template-box" data-testid="nt-template-section">
-                <div class="field">
-                  <span>Start from template</span>
-                  <g-pill-select
-                    [options]="templateOptions()"
-                    [value]="selectedTemplateId()"
-                    ariaLabel="Start from template"
-                    align="left"
-                    testid="nt-template"
-                    (valueChange)="pickTemplate($event)"
-                  />
-                </div>
-
-                @if (selectedTemplate(); as tmpl) {
-                  @for (tf of tmpl.fields ?? []; track tf.name) {
-                    @if (tf.options?.length) {
-                      <div class="field">
-                        <span
-                          >{{ tf.label || tf.name
-                          }}{{ tf.required ? " *" : "" }}</span
-                        >
-                        <g-pill-select
-                          [options]="templateFieldOptions(tf.options!)"
-                          [value]="templateValues()[tf.name] || ''"
-                          [ariaLabel]="tf.label || tf.name"
-                          align="left"
-                          [testid]="'nt-tfield-' + tf.name"
-                          (valueChange)="setTemplateField(tf.name, $event)"
-                        />
-                      </div>
-                    } @else {
-                      <label class="field">
-                        <span
-                          >{{ tf.label || tf.name
-                          }}{{ tf.required ? " *" : "" }}</span
-                        >
-                        <input
-                          type="text"
-                          [attr.data-testid]="'nt-tfield-' + tf.name"
-                          [value]="templateValues()[tf.name] || ''"
-                          (input)="setTemplateField(tf.name, val($event))"
-                        />
-                      </label>
-                    }
-                  }
-
-                  @if (composition(); as comp) {
-                    @if (comp.tasks[0]; as ct) {
-                      <div
-                        class="nt-preview-card"
-                        data-testid="nt-composition-preview"
-                      >
-                        <strong>Preview: {{ ct.title }}</strong>
-                        @for (cf of ct.fields.slice(0, 5); track cf.name) {
-                          @if (cf.values?.length) {
-                            <span class="muted">
-                              {{ cf.name }}: {{ cf.values!.join(", ") }}
-                              <em>({{ cf.source }})</em>
-                            </span>
-                          }
-                        }
-                      </div>
-                    }
-                  }
-                }
-              </div>
-            }
-
-            <!-- Shown Core Fields -->
-            @for (id of shown(); track id) {
-              @if (
-                !selectedTemplate() || (id !== "title" && id !== "description")
-              ) {
-                <ng-container
-                  [ngTemplateOutlet]="fieldTpl"
-                  [ngTemplateOutletContext]="{ $implicit: id }"
-                />
-              }
-            }
-
-            <!-- Collapsible Capabilities & Repo Context Section -->
-            @if (capsFields().length) {
-              <button
-                type="button"
-                class="btn-text more-toggle"
-                data-testid="caps-options"
-                [attr.aria-expanded]="capsOpen()"
-                (click)="capsOpen.set(!capsOpen())"
-              >
-                {{
-                  capsOpen()
-                    ? "Hide capabilities & context"
-                    : "Capabilities & repo context" + capsSummarySuffix()
-                }}
-              </button>
-              @if (capsOpen()) {
-                <div class="nt-section-card" data-testid="nt-caps-section">
-                  @for (id of capsFields(); track id) {
-                    <ng-container
-                      [ngTemplateOutlet]="fieldTpl"
-                      [ngTemplateOutletContext]="{ $implicit: id }"
-                    />
-                  }
-                </div>
-              }
-            }
-
-            <!-- Collapsible Advanced & Execution Options ("More options") -->
-            @if (more().length) {
-              <button
-                type="button"
-                class="btn-text more-toggle"
-                data-testid="more-options"
-                [attr.aria-expanded]="moreOpen()"
-                aria-controls="more-fields"
-                (click)="moreOpen.set(!moreOpen())"
-              >
-                {{ moreOpen() ? "Fewer options" : "More options" }}
-              </button>
-              @if (moreOpen()) {
-                <div id="more-fields" class="more-fields nt-section-card">
-                  @for (id of more(); track id) {
-                    <ng-container
-                      [ngTemplateOutlet]="fieldTpl"
-                      [ngTemplateOutletContext]="{ $implicit: id }"
-                    />
-                  }
-                  <!-- Reviewers & Auto-approve proposals -->
-                  <div class="field">
-                    <span>Reviewers (optional)</span>
-                    @if (draft().reviewers.length) {
-                      <ul class="chip-list" aria-label="Reviewers">
-                        @for (rv of draft().reviewers; track rv) {
-                          <li class="dep-chip">
-                            {{ rv }}
-                            <button
-                              type="button"
-                              class="chip-remove"
-                              [attr.aria-label]="'Remove reviewer ' + rv"
-                              (click)="removeReviewer(rv)"
-                            >
-                              ×
-                            </button>
-                          </li>
-                        }
-                      </ul>
-                    }
-                    <div class="nt-inline-row">
-                      <input
-                        type="text"
-                        style="flex: 1"
-                        data-testid="nt-reviewers-input"
-                        placeholder="GitHub or LDAP username"
-                        [value]="reviewerDraft()"
-                        (input)="reviewerDraft.set(val($event))"
-                      />
-                      <button
-                        type="button"
-                        class="btn-tonal"
-                        data-testid="nt-reviewers-add"
-                        [disabled]="!reviewerDraft().trim()"
-                        (click)="addReviewer()"
-                      >
-                        Add
-                      </button>
-                    </div>
-                  </div>
-
-                  @if (!draft().workstream) {
-                    <label class="check-row">
-                      <input
-                        type="checkbox"
-                        data-testid="nt-auto-approve-proposals"
-                        [checked]="!!draft().autoApproveProposals"
-                        (change)="set('autoApproveProposals', checked($event))"
-                      />
-                      <span>Auto-approve child proposals from this task</span>
-                    </label>
-                  }
-                </div>
-              }
-            }
-          </div>
-
-          <div class="sheet-foot">
-            <div class="sheet-switches">
-              @if (fields().approved.visibility !== "hidden") {
-                <div class="switch-row">
-                  <button
-                    type="button"
-                    role="switch"
-                    class="g-switch"
-                    data-testid="approved-switch"
-                    aria-labelledby="sw-approved"
-                    [attr.aria-checked]="draft().approved"
-                    (click)="set('approved', !draft().approved)"
-                  >
-                    <span class="sr-only">{{
-                      fields().approved.label || "Approve and start now"
-                    }}</span>
-                  </button>
-                  <span id="sw-approved">{{
-                    fields().approved.label || "Approve and start now"
-                  }}</span>
-                </div>
-              }
-              @if (fields().atFront.visibility !== "hidden") {
-                <div class="switch-row">
-                  <button
-                    type="button"
-                    role="switch"
-                    class="g-switch"
-                    data-testid="front-switch"
-                    aria-labelledby="sw-front"
-                    [attr.aria-checked]="draft().atFront"
-                    (click)="set('atFront', !draft().atFront)"
-                  >
-                    <span class="sr-only">{{
-                      fields().atFront.label || "Put at front of queue"
-                    }}</span>
-                  </button>
-                  <span id="sw-front">{{
-                    fields().atFront.label || "Put at front of queue"
-                  }}</span>
-                </div>
-              }
-              @if (draft().workstream) {
-                <div class="switch-row">
-                  <button
-                    type="button"
-                    role="switch"
-                    class="g-switch"
-                    data-testid="auto-approve-switch"
-                    aria-labelledby="sw-auto-approve"
-                    [attr.aria-checked]="!!draft().autoApproveProposals"
-                    (click)="
-                      set('autoApproveProposals', !draft().autoApproveProposals)
-                    "
-                  >
-                    <span class="sr-only"
-                      >Auto-approve this stream's proposals</span
-                    >
-                  </button>
-                  <span id="sw-auto-approve"
-                    >Auto-approve this stream's proposals</span
-                  >
-                </div>
-              }
-            </div>
-            <div class="sheet-actions">
-              <button type="button" class="btn-text" (click)="close()">
-                Cancel
-              </button>
-              @if (canAskDirector()) {
+                    ? "Workstream"
+                    : selectedTemplate()
+                      ? "From template"
+                      : draft().approved
+                        ? "Starts on create"
+                        : "Proposal"
+                }}</span>
                 <button
                   type="button"
-                  class="btn-outlined"
-                  data-testid="ask-director"
-                  [disabled]="busy()"
-                  (click)="askDirector()"
+                  class="icon-btn"
+                  [attr.aria-label]="
+                    draft().workstream
+                      ? 'Close Start a workstream'
+                      : 'Close New task'
+                  "
+                  data-testid="new-task-close"
+                  (click)="close()"
                 >
-                  Ask the Director
+                  ×
                 </button>
-              }
-              <button
-                type="submit"
-                class="btn-primary"
-                data-testid="new-task-submit"
-                [disabled]="busy() || !canFile()"
-              >
-                {{
-                  draft().workstream
-                    ? draft().approved
-                      ? "Start workstream"
-                      : "Save stream proposal"
-                    : draft().approved
-                      ? "Create and start"
-                      : "Save as proposal"
-                }}
-              </button>
+              </div>
+              <h2 id="new-task-title" class="sheet-title">
+                {{ draft().workstream ? "Start a workstream" : "New task" }}
+              </h2>
             </div>
-          </div>
-        </form>
+
+            <div class="sheet-body">
+              @if (draft().workstream) {
+                <p class="banner banner-info" data-testid="ws-start-banner">
+                  State the goal and what done looks like. Its first run plans
+                  the work and proposes tasks into one stream.
+                </p>
+              } @else if (draft().origin) {
+                <p class="banner banner-info" data-testid="ws-origin-banner">
+                  Filing into workstream
+                  <strong>{{ originLabel() }}</strong
+                  >.
+                </p>
+              }
+              @if (!canFile()) {
+                <p class="banner" data-testid="new-task-denied">
+                  {{ deniedReason() }}
+                </p>
+              }
+              @if (error(); as err) {
+                <p
+                  id="new-task-error"
+                  class="banner banner-error"
+                  role="alert"
+                  data-testid="new-task-error"
+                >
+                  {{ err.message }}
+                </p>
+              }
+
+              <!-- Optional Template Launcher & Live Composition Preview -->
+              @if (!draft().workstream && templates().length > 0) {
+                <div class="nt-template-box" data-testid="nt-template-section">
+                  <div class="field">
+                    <span>Start from template</span>
+                    <g-pill-select
+                      [options]="templateOptions()"
+                      [value]="selectedTemplateId()"
+                      ariaLabel="Start from template"
+                      align="left"
+                      testid="nt-template"
+                      (valueChange)="pickTemplate($event)"
+                    />
+                  </div>
+
+                  @if (selectedTemplate(); as tmpl) {
+                    @for (tf of tmpl.fields ?? []; track tf.name) {
+                      @if (tf.options?.length) {
+                        <div class="field">
+                          <span
+                            >{{ tf.label || tf.name
+                            }}{{ tf.required ? " *" : "" }}</span
+                          >
+                          <g-pill-select
+                            [options]="templateFieldOptions(tf.options!)"
+                            [value]="templateValues()[tf.name] || ''"
+                            [ariaLabel]="tf.label || tf.name"
+                            align="left"
+                            [testid]="'nt-tfield-' + tf.name"
+                            (valueChange)="setTemplateField(tf.name, $event)"
+                          />
+                        </div>
+                      } @else {
+                        <label class="field">
+                          <span
+                            >{{ tf.label || tf.name
+                            }}{{ tf.required ? " *" : "" }}</span
+                          >
+                          <input
+                            type="text"
+                            [attr.data-testid]="'nt-tfield-' + tf.name"
+                            [value]="templateValues()[tf.name] || ''"
+                            (input)="setTemplateField(tf.name, val($event))"
+                          />
+                        </label>
+                      }
+                    }
+
+                    @if (composition(); as comp) {
+                      @if (comp.tasks[0]; as ct) {
+                        <div
+                          class="nt-preview-card"
+                          data-testid="nt-composition-preview"
+                        >
+                          <strong>Preview: {{ ct.title }}</strong>
+                          @for (cf of ct.fields.slice(0, 5); track cf.name) {
+                            @if (cf.values?.length) {
+                              <span class="muted">
+                                {{ cf.name }}: {{ cf.values!.join(", ") }}
+                                <em>({{ cf.source }})</em>
+                              </span>
+                            }
+                          }
+                        </div>
+                      }
+                    }
+                  }
+                </div>
+              }
+
+              <!-- Shown Core Fields -->
+              @for (id of shown(); track id) {
+                @if (
+                  !selectedTemplate() ||
+                  (id !== "title" && id !== "description")
+                ) {
+                  <ng-container
+                    [ngTemplateOutlet]="fieldTpl"
+                    [ngTemplateOutletContext]="{ $implicit: id }"
+                  />
+                }
+              }
+
+              <!-- Collapsible Capabilities & Repo Context Section -->
+              @if (capsFields().length) {
+                <button
+                  type="button"
+                  class="btn-text more-toggle"
+                  data-testid="caps-options"
+                  [attr.aria-expanded]="capsOpen()"
+                  (click)="capsOpen.set(!capsOpen())"
+                >
+                  {{
+                    capsOpen()
+                      ? "Hide capabilities & context"
+                      : "Capabilities & repo context" + capsSummarySuffix()
+                  }}
+                </button>
+                @if (capsOpen()) {
+                  <div class="nt-section-card" data-testid="nt-caps-section">
+                    @for (id of capsFields(); track id) {
+                      <ng-container
+                        [ngTemplateOutlet]="fieldTpl"
+                        [ngTemplateOutletContext]="{ $implicit: id }"
+                      />
+                    }
+                  </div>
+                }
+              }
+
+              <!-- Collapsible Advanced & Execution Options ("More options") -->
+              @if (more().length) {
+                <button
+                  type="button"
+                  class="btn-text more-toggle"
+                  data-testid="more-options"
+                  [attr.aria-expanded]="moreOpen()"
+                  aria-controls="more-fields"
+                  (click)="moreOpen.set(!moreOpen())"
+                >
+                  {{ moreOpen() ? "Fewer options" : "More options" }}
+                </button>
+                @if (moreOpen()) {
+                  <div id="more-fields" class="more-fields nt-section-card">
+                    @for (id of more(); track id) {
+                      <ng-container
+                        [ngTemplateOutlet]="fieldTpl"
+                        [ngTemplateOutletContext]="{ $implicit: id }"
+                      />
+                    }
+                    <!-- Reviewers & Auto-approve proposals -->
+                    <div class="field">
+                      <span>Reviewers (optional)</span>
+                      @if (draft().reviewers.length) {
+                        <ul class="chip-list" aria-label="Reviewers">
+                          @for (rv of draft().reviewers; track rv) {
+                            <li class="dep-chip">
+                              {{ rv }}
+                              <button
+                                type="button"
+                                class="chip-remove"
+                                [attr.aria-label]="'Remove reviewer ' + rv"
+                                (click)="removeReviewer(rv)"
+                              >
+                                ×
+                              </button>
+                            </li>
+                          }
+                        </ul>
+                      }
+                      <div class="nt-inline-row">
+                        <input
+                          type="text"
+                          style="flex: 1"
+                          data-testid="nt-reviewers-input"
+                          placeholder="GitHub or LDAP username"
+                          [value]="reviewerDraft()"
+                          (input)="reviewerDraft.set(val($event))"
+                        />
+                        <button
+                          type="button"
+                          class="btn-tonal"
+                          data-testid="nt-reviewers-add"
+                          [disabled]="!reviewerDraft().trim()"
+                          (click)="addReviewer()"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+
+                    @if (!draft().workstream) {
+                      <label class="check-row">
+                        <input
+                          type="checkbox"
+                          data-testid="nt-auto-approve-proposals"
+                          [checked]="!!draft().autoApproveProposals"
+                          (change)="
+                            set('autoApproveProposals', checked($event))
+                          "
+                        />
+                        <span>Auto-approve child proposals from this task</span>
+                      </label>
+                    }
+                  </div>
+                }
+              }
+            </div>
+
+            <div class="sheet-foot">
+              <div class="sheet-switches">
+                @if (fields().approved.visibility !== "hidden") {
+                  <div class="switch-row">
+                    <button
+                      type="button"
+                      role="switch"
+                      class="g-switch"
+                      data-testid="approved-switch"
+                      aria-labelledby="sw-approved"
+                      [attr.aria-checked]="draft().approved"
+                      (click)="set('approved', !draft().approved)"
+                    >
+                      <span class="sr-only">{{
+                        fields().approved.label || "Approve and start now"
+                      }}</span>
+                    </button>
+                    <span id="sw-approved">{{
+                      fields().approved.label || "Approve and start now"
+                    }}</span>
+                  </div>
+                }
+                @if (fields().atFront.visibility !== "hidden") {
+                  <div class="switch-row">
+                    <button
+                      type="button"
+                      role="switch"
+                      class="g-switch"
+                      data-testid="front-switch"
+                      aria-labelledby="sw-front"
+                      [attr.aria-checked]="draft().atFront"
+                      (click)="set('atFront', !draft().atFront)"
+                    >
+                      <span class="sr-only">{{
+                        fields().atFront.label || "Put at front of queue"
+                      }}</span>
+                    </button>
+                    <span id="sw-front">{{
+                      fields().atFront.label || "Put at front of queue"
+                    }}</span>
+                  </div>
+                }
+                @if (draft().workstream) {
+                  <div class="switch-row">
+                    <button
+                      type="button"
+                      role="switch"
+                      class="g-switch"
+                      data-testid="auto-approve-switch"
+                      aria-labelledby="sw-auto-approve"
+                      [attr.aria-checked]="!!draft().autoApproveProposals"
+                      (click)="
+                        set(
+                          'autoApproveProposals',
+                          !draft().autoApproveProposals
+                        )
+                      "
+                    >
+                      <span class="sr-only"
+                        >Auto-approve this stream's proposals</span
+                      >
+                    </button>
+                    <span id="sw-auto-approve"
+                      >Auto-approve this stream's proposals</span
+                    >
+                  </div>
+                }
+              </div>
+              <div class="sheet-actions">
+                <button type="button" class="btn-text" (click)="close()">
+                  Cancel
+                </button>
+                @if (canAskDirector()) {
+                  <button
+                    type="button"
+                    class="btn-outlined"
+                    data-testid="shape-director-btn"
+                    [attr.aria-pressed]="shapingOpen()"
+                    (click)="shapingOpen.set(!shapingOpen())"
+                  >
+                    {{
+                      shapingOpen() ? "Hide Director" : "Shape with Director"
+                    }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-outlined"
+                    data-testid="ask-director"
+                    [disabled]="busy()"
+                    (click)="askDirector()"
+                  >
+                    Ask the Director
+                  </button>
+                }
+                <button
+                  type="submit"
+                  class="btn-primary"
+                  data-testid="new-task-submit"
+                  [disabled]="busy() || !canFile()"
+                >
+                  {{
+                    draft().workstream
+                      ? draft().approved
+                        ? "Start workstream"
+                        : "Save stream proposal"
+                      : draft().approved
+                        ? "Create and start"
+                        : "Save as proposal"
+                  }}
+                </button>
+              </div>
+            </div>
+          </form>
+          @defer (when shapingOpen()) {
+            @if (shapingOpen()) {
+              <g-director-shaper
+                mode="create"
+                [current]="shapeFields()"
+                (applyDraft)="applyShapedDraft($event)"
+                (applyAndSubmit)="applyAndSubmitShapedDraft($event)"
+                (closed)="shapingOpen.set(false)"
+              />
+            }
+          }
+        </div>
       </div>
     }
 
@@ -949,6 +984,20 @@ const FRAMEWORKS: readonly PillOption[] = [
             />
           </div>
         }
+        @case ("foundIn") {
+          <label class="field">
+            <span>{{ f.label || "Found in release" }}</span>
+            <input
+              type="text"
+              data-testid="nt-found-in"
+              placeholder="v2.5.0-rc.2"
+              autocomplete="off"
+              spellcheck="false"
+              [value]="draft().foundIn"
+              (input)="set('foundIn', val($event))"
+            />
+          </label>
+        }
         @case ("promptExtension") {
           <label class="field">
             <span>{{ f.label || "Extra instructions for the agent" }}</span>
@@ -997,7 +1046,21 @@ export class NewTaskSheetComponent {
   protected readonly writeBaseDraft = signal("");
   protected readonly reviewerDraft = signal("");
   protected readonly busy = signal(false);
+  protected readonly shapingOpen = signal(false);
   protected readonly error = signal<Problem | null>(null);
+
+  protected readonly shapeFields = computed<TaskShapeFields>(() => {
+    const d = this.draft();
+    return {
+      title: d.title,
+      description: d.description,
+      repo: d.repo === NO_REPO ? "" : d.repo,
+      base: d.base,
+      priority: 5,
+      model: d.model,
+      dependsOn: d.dependsOn,
+    };
+  });
 
   private readonly edited = new Set<keyof NewTaskDraft>();
   private generation = 0;
@@ -1057,9 +1120,15 @@ export class NewTaskSheetComponent {
   });
 
   protected readonly repos = computed(() => {
-    const base = targetableRepos(this.config(), this.inbox.tasks());
-    // Target pickers offer only repos the deployment can push to
-    // (pkg/gitproxy/reach.go ReachableRepo.Push); reads use every reachable repo.
+    const cfg = this.config();
+    const base = targetableRepos(cfg, this.inbox.tasks());
+    // Match classic NewTaskOverlay.jsx: when the deployment has an explicit
+    // targetRepos allowlist, filing against any off-list repo is refused by
+    // the server, so never merge GitHub-wide reachablePushRepos into target
+    // or write pickers. Only offer reachablePushRepos when no allowlist is set.
+    if (hasExplicitTargetAllowlist(cfg)) {
+      return base;
+    }
     const extra = this.reachablePushRepos();
     const seen = new Set(base.map((r) => r.toLowerCase()));
     const merged = [...base];
@@ -1669,6 +1738,7 @@ export class NewTaskSheetComponent {
         "autoMerge",
         "noPort",
         "fixesBaseBranch",
+        "foundIn",
         "model",
         "agentFramework",
         "agentBackendId",
@@ -1837,6 +1907,32 @@ export class NewTaskSheetComponent {
     } finally {
       this.busy.set(false);
     }
+  }
+
+  protected applyShapedDraft(patch: Partial<TaskShapeFields>): void {
+    this.draft.update((d) => ({
+      ...d,
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+      ...(patch.description !== undefined
+        ? { description: patch.description }
+        : {}),
+      ...(patch.repo !== undefined ? { repo: patch.repo || NO_REPO } : {}),
+      ...(patch.base !== undefined ? { base: patch.base } : {}),
+      ...(patch.model !== undefined ? { model: patch.model } : {}),
+      ...(patch.dependsOn !== undefined ? { dependsOn: patch.dependsOn } : {}),
+    }));
+    if (patch.title !== undefined) this.edited.add("title");
+    if (patch.description !== undefined) this.edited.add("description");
+    if (patch.repo !== undefined) this.edited.add("repo");
+    if (patch.base !== undefined) this.edited.add("base");
+    if (patch.model !== undefined) this.edited.add("model");
+    if (patch.dependsOn !== undefined) this.edited.add("dependsOn");
+    this.snackbar.show("Applied Director suggestions to form");
+  }
+
+  protected applyAndSubmitShapedDraft(patch: Partial<TaskShapeFields>): void {
+    this.applyShapedDraft(patch);
+    void this.file();
   }
 
   protected close(): void {
