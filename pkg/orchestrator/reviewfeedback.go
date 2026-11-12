@@ -557,10 +557,19 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 		model.ClearAutoMergeAwaitsPerson(t)
 		t.Links = withoutLinks(t.Links, model.LinkReviewQuestions)
 		t.Links = append(t.Links, model.Link{Kind: model.LinkReviewQuestions, Target: questions.Target()})
+		gate := reviewGateOf(*t, review.ID, review.Tags...)
+		head := ""
+		if gate == model.GateSecurityReview {
+			// The head the security review read, which a head moved on
+			// without changing the change carries these to
+			// (securityReviewUnchanged).
+			head = classifiedHead(*t)
+		}
 		model.AddReviewFindings(t, model.ReviewFindingsRecord{
-			Gate:       reviewGateOf(*t, review.ID, review.Tags...),
+			Gate:       gate,
 			ReviewTask: review.ID,
 			Summary:    summary,
+			HeadSHA:    head,
 			At:         now,
 		})
 		if draftID != 0 {

@@ -971,7 +971,9 @@ exactly as before.
   a new version.
 - **Age** is measured, not stored: the runs started and the comments
   posted since the handover was written or confirmed
-  (`model.HandoverAge`). Past `HandoverStaleRuns` (10) runs or
+  (`model.HandoverAge`). Only comments from people and agents count:
+  grain's own notices (automation on nobody's behalf, such as the park
+  notice every parked run leaves) do not. Past `HandoverStaleRuns` (10) runs or
   `HandoverStaleComments` (30) comments it is **stale**. The durable
   task's prompt then asks for a replacement or confirmation, and
   `GET /api/tasks/{id}/context` returns `handover_stale`.
@@ -1072,7 +1074,9 @@ closed task.
   from [task N](/tasks/N)". It starts with a fresh `task_context`.
 - **The predecessor** closes with outcome `rolled_over` and the note
   "rolled over to #M". It keeps everything; nothing is copied or moved
-  except references.
+  except references. It is not reopened: Reopen and "Reopen and send"
+  are refused with a pointer to the successor, before any comment is
+  written, so the same durable work is never queued twice.
 - **References move** in one transaction: `depends_on` entries naming
   it, `wait_for_task` parks and `task_suspension.resume_on` targets,
   schedules whose standing task it is, notification subjects and

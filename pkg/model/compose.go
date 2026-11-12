@@ -541,9 +541,11 @@ func ComposeScheduleTask(sched Schedule, tmpl *Template) Composition {
 				comp.Sources.Hosting = LayerSchedule
 			}
 		}
-		// A template-backed schedule stores a copy of its template's
-		// grants (ui.scheduleContentFromTemplate), so only a capability
-		// the template does not already grant is the schedule's own to
+		// A template-backed schedule's grants are its own, beside the
+		// template's (Schedule.Grants), but one of grain's own schedules
+		// still carries a copy of its template's (orchestrator.applySystemContent), as
+		// a row stored before schema 144 did. So only a capability the
+		// template does not already grant is the schedule's own to
 		// credit: crediting the copy would have the preview say a
 		// template's capabilities come "from the schedule".
 		if len(sched.Grants) > 0 {

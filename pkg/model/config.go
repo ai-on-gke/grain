@@ -1135,6 +1135,16 @@ func (c Config) AutoUpgradeMode() string {
 // deployment has not chosen another (Config.AutoUpgradeMinIntervalHours).
 const DefaultAutoUpgradeMinIntervalHours = 6
 
+// MaxAutoUpgradeMinIntervalHours is the largest
+// Config.AutoUpgradeMinIntervalHours the settings API accepts: the most
+// whole hours a time.Duration holds (about 292 years), which is also well
+// inside the integers a browser's JSON numbers carry exactly. A larger
+// count could only be read back rounded -- 9223372036854775807 reaches the
+// Settings page as 9223372036854776000, which the page then cannot save
+// back -- and means nothing AutoUpgradeMinInterval does not already mean
+// at this one.
+const MaxAutoUpgradeMinIntervalHours = int(math.MaxInt64 / int64(time.Hour))
+
 // AutoUpgradeMinInterval returns the minimum interval between two completed
 // automatic upgrades in AutoUpgradeOnRelease mode, or 0 when turned off (or
 // negative in a hand-edited row). An hour count too large for a

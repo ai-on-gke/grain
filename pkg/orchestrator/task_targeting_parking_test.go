@@ -88,7 +88,7 @@ func TestResumeLaterReasonIsQuotedInTheConversationAndTheNextPrompt(t *testing.T
 		t.Fatal(err)
 	}
 	prompt := orchestrator.BuildPrompt(linked, "work", "", true, 0,
-		orchestrator.History{Attempt: 2, Attempts: runs, Resumed: orchestrator.ResumedFrom(ctx, store, runs)}, nil)
+		orchestrator.History{Attempt: 2, Attempts: runs, Resumed: orchestrator.ResumedFrom(ctx, store, linked, runs)}, nil)
 	for _, want := range []string{reason, "resumes from a park", "Task " + dep.ID} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("next run's prompt lacks %q:\n%s", want, prompt)

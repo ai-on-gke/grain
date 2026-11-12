@@ -250,6 +250,18 @@ const (
 	// (orchestrator's stage1repair.go). It clears when the repair runs or
 	// Stage 1 is green again.
 	FamilyNightlyRedUnattended = "pipeline.nightly-red-unattended"
+	// FamilyBaseRedUnattended is a red default branch on GitHub Actions
+	// (a gating workflow such as tests.yml concluded failure on it) whose
+	// repair task nobody is working on, on the same patience as
+	// FamilyNightlyRedUnattended, "<repo>" (orchestrator's
+	// githubbaserepair.go). It clears when the repair runs or closes.
+	FamilyBaseRedUnattended = "pipeline.base-red-unattended"
+	// FamilyBaseNoVerdict is a default branch on GitHub Actions whose
+	// gating workflows have run but reached no verdict -- every run
+	// cancelled by the next push -- for orchestrator.GitHubBaseNoVerdictAfter, which
+	// stalls a release train that cuts only from a green commit, "<repo>"
+	// (orchestrator's githubbaserepair.go). It clears on the next verdict.
+	FamilyBaseNoVerdict = "pipeline.base-no-verdict"
 	// FamilyReleaseLoopIdle is a repository running the continuous release
 	// loop (design/playbook/releases.playbook.md §15) that has had no
 	// release candidate in qualification past ReleaseLoopIdleAfter while

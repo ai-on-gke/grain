@@ -1097,12 +1097,12 @@ func DirectorNetworkAccess(networkIsolates bool) NetworkAccess {
 
 // DirectorPolicyCapabilities is every capability the shipped Director is
 // granted (DefaultConsoleSessions, by way of ConsoleSessionGrants), as
-// local policy's capabilities.allow names it: a capability reference
-// carrying narrowing arguments keeps its canonical =<json> arguments so
-// a starter policy admits only that grant (for example the built-in
-// bootstrap config map, without opening operator config maps or
-// secrets), while one with empty arguments is named by its reference
-// alone. It is read from the running binary, so a capability a
+// local policy's capabilities.allow names it: an api reference with empty
+// arguments is named by its reference alone so repository-scoped grants
+// of the same scope are admitted too, while every other capability
+// reference keeps its canonical =<json> arguments (={} included) so a
+// starter policy admits only that exact grant and does not open arbitrary
+// method arguments. It is read from the running binary, so a capability a
 // linked-in package registers for the Director is among them.
 func DirectorPolicyCapabilities() []string {
 	var out []string
@@ -1113,12 +1113,12 @@ func DirectorPolicyCapabilities() []string {
 		for _, g := range ConsoleSessionGrants(s) {
 			c := g.Capability
 			if IsCapabilityRef(c) {
-				if spec, err := CapabilityGrantSpec(c); err == nil && len(spec.With) > 0 {
-					if enc, err := EncodeCapabilityGrant(spec); err == nil {
+				if spec, err := CapabilityGrantSpec(c); err == nil {
+					if IsAPIGrantRef(spec.Capability) && len(spec.With) == 0 {
+						c = CapabilityGrantRef(c)
+					} else if enc, err := EncodeCapabilityGrant(spec); err == nil {
 						c = enc
 					}
-				} else {
-					c = CapabilityGrantRef(c)
 				}
 			}
 			if !slices.Contains(out, c) {
