@@ -1,0 +1,12 @@
+      2 grain ci list
+      2 grain ci log
+      1 grain ci retrigger
+      1 grain ci run-job
+      1 grain ci test-history
+      5 grain ci wait
+      3 grain pr base-status
+      2 grain pr open
+      1 grain pr reply
+      1 grain pr resolve
+      1 grain pr review-comment
+      3 grain pr status
