@@ -883,6 +883,14 @@ func runLongTermTestHarness(t *testing.T, cfg longTermConfig, isSustained bool) 
 			branch := model.BranchName(tk.ID)
 			if tk.Target != nil {
 				bare := barePaths[tk.Target.Owner+"/"+tk.Target.Name]
+				if model.ClosesOnAnswer(tk) && !branchExistsInBare(t, bare, branch) {
+					// A report-only sub-task: a proposal whose run ended
+					// on its note alone, with nothing pushed, closes on
+					// that answer (model.ClosesOnAnswer) and has nothing
+					// to merge. Whether a proposal plays out that way is
+					// up to the plan the generator draws for it.
+					break
+				}
 				if !branchIsAncestor(t, bare, "main", branch) {
 					t.Errorf("task %s was closed/merged but main in %s does not contain %s", tk.ID, tk.Target, branch)
 				}
