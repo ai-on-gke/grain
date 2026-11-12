@@ -469,14 +469,15 @@ func TestMergeGatesWalkthrough20261111ReviewsOpenNoPullRequests(t *testing.T) {
 func TestMergeGatesWalkthrough20261111AnOverrideNotNamingCIWaitsForChecks(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		checks []github.CheckRun
-		gates  []string
-		merge  bool
+		checks     []github.CheckRun
+		gates      []string
+		merge      bool
+		wantCIGate model.MergeGateState
 	}{
 		"review only, checks running": {checks: []github.CheckRun{{Name: "tests", Status: "in_progress"}},
-			gates: []string{"review"}},
+			gates: []string{"review"}, wantCIGate: model.GateStateRunning},
 		"review only, checks failing": {checks: []github.CheckRun{{Name: "tests", Status: "completed", Conclusion: strPtr("failure")}},
-			gates: []string{"review"}},
+			gates: []string{"review"}, wantCIGate: model.GateStateFailing},
 		"review and ci, checks failing": {checks: []github.CheckRun{{Name: "tests", Status: "completed", Conclusion: strPtr("failure")}},
 			gates: []string{"review", "ci"}, merge: true},
 	} {
@@ -503,6 +504,12 @@ func TestMergeGatesWalkthrough20261111AnOverrideNotNamingCIWaitsForChecks(t *tes
 			if tc.merge {
 				return
 			}
+			// While waiting on CI, the CI gate must keep showing running or
+			// failing (never "passed" from a waiting_queue projection) and stay
+			// overridable.
+			if ci := gateOf(t, ctx, store, task.ID, model.GateCI); ci.State != tc.wantCIGate || !ci.Overridable {
+				t.Fatalf("CI gate while partial override waits for checks = %+v, want state=%q overridable=true", ci, tc.wantCIGate)
+			}
 			// The checks pass: the override still stands for this head, and
 			// the change merges on it.
 			sim.CheckRuns[branch] = greenCheck
@@ -513,5 +520,37 @@ func TestMergeGatesWalkthrough20261111AnOverrideNotNamingCIWaitsForChecks(t *tes
 				t.Fatalf("override of %v did not merge once the checks passed", tc.gates)
 			}
 		})
+	}
+}
+
+func TestNonSecurityReviewFindingsStayOffSecurityGateUnderBrokenRulesHold(t *testing.T) {
+	t.Parallel()
+	ctx, store, _, client, task := finishGated(t,
+		[]model.PathTrigger{gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")},
+		"config/secrets/prod.yml")
+	got := reloaded(t, ctx, store, task.ID)
+	trigID := distinctGatingIDs(got)[0]
+	head := prHeadOf(t, client, got)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkBrokenRulesHold, Target: head})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	review := reloaded(t, ctx, store, trigID)
+	if err := orchestrator.ProcessResult(ctx, store, client, review,
+		toolResult(reviewFinding("plaintext token", "config/secrets/prod.yml", 1)),
+		trigID+"-1", baseTime.Add(5*time.Minute)); err != nil {
+		t.Fatalf("ProcessResult(trigger review): %v", err)
+	}
+	after := reloaded(t, ctx, store, task.ID)
+	if linkOf(after, model.LinkBrokenRulesHold) != "" {
+		t.Fatalf("broken-rules hold marker still present after review findings: %+v", after.Links)
+	}
+	if sec := gateOf(t, ctx, store, task.ID, model.GateSecurityReview); sec.ID != "" {
+		t.Fatalf("non-security review findings created a security-review gate under broken-rules hold: %+v", sec)
+	}
+	if rev := gateOf(t, ctx, store, task.ID, model.GateReview); rev.State != model.GateStateFindings {
+		t.Fatalf("review gate = %+v, want findings", rev)
 	}
 }

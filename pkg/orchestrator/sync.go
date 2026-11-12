@@ -1789,8 +1789,16 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			return err
 		}
 		if !decision.ok {
+			waitState := mergeStateWaitingQueue
+			if forced != nil && forced.keepsCI && health != model.PrClean {
+				if health == model.PrFailing {
+					waitState = mergeStateRepairNeeded
+				} else {
+					waitState = mergeStateWaitingCI
+				}
+			}
 			if err := setMergeQueueState(ctx, store, e.obs, task.ID,
-				queueStatus{state: mergeStateWaitingQueue, note: decision.why}, now); err != nil {
+				queueStatus{state: waitState, note: decision.why}, now); err != nil {
 				return err
 			}
 			// Nothing behind it merges past it either: what is holding
