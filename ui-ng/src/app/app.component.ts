@@ -505,7 +505,13 @@ export class DeferErrorDirective implements OnInit {
             gTip="Open Director drawer anywhere (d or Alt+D)."
             (click)="toggleDirector($event)"
           >
-            <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
+            <svg
+              class="director-pill-icon"
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
               <path [attr.d]="icons['director']" fill="currentColor" />
             </svg>
             <span class="director-pill-label">Director</span>

@@ -981,6 +981,15 @@ body {
   background: var(--md-sys-color-surface-container-high);
 }
 
+.director-pill-icon {
+  color: var(--md-sys-color-primary);
+  flex: none;
+}
+
+.director-pill.is-open .director-pill-icon {
+  color: var(--md-sys-color-on-primary-container);
+}
+
 .director-pill.is-open {
   border-color: var(--md-sys-color-primary);
   background: var(--md-sys-color-primary-container);
