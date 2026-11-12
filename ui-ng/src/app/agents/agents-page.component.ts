@@ -125,7 +125,8 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
       <div
         class="inbox-split agents-split"
         #split
-        [class.has-pane]="!isPhone()"
+        [class.has-pane]="!isPhone() && !idle()"
+        [class.is-idle]="idle()"
         [class.is-collapsed]="sp.collapsed() && !isPhone()"
         [class.is-dragging]="sp.dragging()"
         [style.--queue-w.%]="sp.ratioExact()"
@@ -267,12 +268,29 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
               !store.loadError() &&
               store.agents().length === 0
             ) {
-              <p class="empty-state" data-testid="agents-empty">
-                No agent is running right now.
-                <a routerLink="/tasks" [queryParams]="{ tab: 'backlog' }"
-                  >See what is next in the Backlog</a
-                >
-              </p>
+              <div class="agents-idle" data-testid="agents-empty">
+                <span class="agents-idle-ring" aria-hidden="true"
+                  ><span class="agents-idle-dot"></span
+                ></span>
+                <h2 class="agents-idle-title">
+                  No agent is running right now.
+                </h2>
+                <p class="agents-idle-text">
+                  When a task starts, its agent shows up here with what it is
+                  doing, its model, elapsed time and CPU, live.
+                </p>
+                <div class="agents-idle-actions">
+                  <a
+                    class="btn-tonal"
+                    routerLink="/tasks"
+                    [queryParams]="{ tab: 'backlog' }"
+                    >See what is next in the Backlog</a
+                  >
+                  <a class="btn-text" routerLink="/inbox"
+                    >Check what waits on you</a
+                  >
+                </div>
+              </div>
             } @else if (
               store.loaded() && store.agents().length && shown().length === 0
             ) {
@@ -367,7 +385,7 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
             }
           </div>
         </div>
-        @if (!isPhone()) {
+        @if (!isPhone() && !idle()) {
           <div
             class="inbox-resizer"
             role="separator"
@@ -792,6 +810,15 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
 
   protected readonly canContact = computed(() =>
     this.access.can("POST /api/deployment/broadcast"),
+  );
+
+  /** Loaded, readable, and nothing running: one calm full-width state. */
+  protected readonly idle = computed(
+    () =>
+      this.store.loaded() &&
+      !this.store.loadError() &&
+      this.store.agents().length === 0 &&
+      !this.selectedId(),
   );
 
   protected readonly counts = computed(() => {

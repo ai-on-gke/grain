@@ -15,12 +15,15 @@
   outline-offset: -2px;
 }
 
+/* Messages read like a document, not a chat app: they take the full width
+   of the thread. Agent messages are flat; a person's message sits on a quiet
+   tinted surface so turns are easy to tell apart without shouting. */
 .msg {
-  max-width: 72ch;
+  max-width: 100%;
   padding: 10px 14px;
   border-radius: var(--md-sys-shape-corner-medium);
-  background: var(--md-sys-color-surface);
-  border: 1px solid var(--md-sys-color-outline-variant);
+  background: transparent;
+  border: 1px solid transparent;
   font-size: 14px;
   line-height: 20px;
   color: var(--md-sys-color-on-surface);
@@ -28,16 +31,9 @@
 }
 
 .msg.is-human {
-  align-self: flex-end;
-  background: var(
-    --md-sys-color-primary-container,
-    var(--md-sys-color-secondary-container)
-  );
-  color: var(
-    --md-sys-color-on-primary-container,
-    var(--md-sys-color-on-secondary-container)
-  );
-  border-color: transparent;
+  background: var(--md-sys-color-surface-container);
+  border-color: var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface);
 }
 
 .msg.is-handover {
@@ -55,8 +51,7 @@
 }
 
 .msg.is-human .msg-meta {
-  color: inherit;
-  opacity: 0.85;
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .msg-author {
@@ -95,20 +90,34 @@
   font-size: 14px;
 }
 
+/* Field on its own row; attach, hint and Send share the row below it. */
 .chat-composer {
   display: flex;
-  flex-direction: column;
+  flex-flow: row wrap;
+  align-items: center;
   gap: 8px;
   padding: 12px 20px 16px;
   border-top: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface);
 }
 
+.chat-composer > textarea {
+  flex: 1 0 100%;
+  width: 100%;
+  min-width: 0;
+}
+
 .composer-actions {
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
+}
+
+.composer-actions .composer-hint {
+  flex: 1;
+  font-size: 12px;
 }
 
 .composer-hint {

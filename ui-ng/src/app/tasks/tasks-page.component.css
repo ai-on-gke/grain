@@ -38,28 +38,77 @@ g-tasks-page {
   font-size: 12px;
 }
 
-.gate-card {
+/* The Backlog's approval intake: one amber line on the toolbar, constant
+   height, gone at zero. Not .gate-card -- Task Detail's gates bar owns that
+   name globally. */
+.intake-card {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   min-height: 32px;
-  padding: 0 12px;
-  border-radius: var(--md-sys-shape-corner-small);
-  background: var(
-    --md-sys-color-warning-container,
-    var(--md-sys-color-tertiary-container)
-  );
-  color: var(
-    --md-sys-color-on-warning-container,
-    var(--md-sys-color-on-tertiary-container)
-  );
+  padding: 0 12px 0 10px;
+  border: 1px solid
+    color-mix(in srgb, var(--md-sys-color-warning) 35%, transparent);
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
   font-size: 12px;
   font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
   text-decoration: none;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
-.gate-card:focus-visible {
+.list-toolbar .intake-card {
+  order: 10;
+  flex: 1 0 100%;
+  box-sizing: border-box;
+  max-width: 100%;
+  border-radius: var(--md-sys-shape-corner-medium);
+}
+
+.intake-card:hover {
+  background: color-mix(
+    in srgb,
+    var(--md-sys-color-warning-container) 85%,
+    var(--md-sys-color-warning)
+  );
+  box-shadow: 0 1px 3px rgb(0 0 0 / 12%);
+}
+
+.intake-card:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: 2px;
+}
+
+.intake-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--md-sys-color-warning);
+  flex-shrink: 0;
+}
+
+.intake-card strong {
+  font-weight: 600;
+}
+
+.intake-sub {
+  opacity: 0.85;
+}
+
+.intake-cta {
+  margin-left: 4px;
+  font-weight: 600;
+}
+
+@media (max-width: 1279.95px) {
+  .intake-sub {
+    display: none;
+  }
 }
 
 .list-hint {

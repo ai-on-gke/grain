@@ -2033,6 +2033,7 @@ button.more-sheet-item {
 .segmented button {
   min-height: 32px;
   padding: 0 12px;
+  white-space: nowrap;
   border: none;
   border-left: 1px solid var(--md-sys-color-outline);
   background: transparent;

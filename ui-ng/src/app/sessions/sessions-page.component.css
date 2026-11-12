@@ -77,7 +77,9 @@
   flex-direction: column;
   min-height: 0;
   min-width: 0;
-  background: var(--md-sys-color-surface-container-low);
+  /* The agent's words sit on the page itself; only a person's turns are
+     tinted, so the two read apart at a glance. */
+  background: var(--md-sys-color-surface);
 }
 
 .chat-head {
@@ -110,7 +112,7 @@
   font-size: 12px;
   line-height: 16px;
   color: var(--md-sys-color-on-surface-variant);
-  background: var(--md-sys-color-surface-container);
+  background: var(--md-sys-color-surface);
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
 }
 
@@ -228,7 +230,7 @@
   align-items: center;
   gap: 8px;
   padding: 6px 20px;
-  background: var(--md-sys-color-surface-container);
+  background: var(--md-sys-color-surface);
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
   font-size: 12px;
   line-height: 16px;

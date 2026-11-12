@@ -492,13 +492,19 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                     }
                     @if (store.counts().proposed) {
                       <a
-                        class="gate-card"
+                        class="intake-card"
                         id="backlog-intake-card"
                         data-testid="gate-card"
                         [routerLink]="[]"
                         [queryParams]="{ tab: 'proposed' }"
-                        >Needs approval {{ store.counts().proposed }} · outside
-                        run order · Review →</a
+                        ><span class="intake-dot" aria-hidden="true"></span
+                        ><strong
+                          >Needs approval
+                          <span class="tabular">{{
+                            store.counts().proposed
+                          }}</span></strong
+                        ><span class="intake-sub">· outside run order</span
+                        ><span class="intake-cta">Review →</span></a
                       >
                     }
                   </div>

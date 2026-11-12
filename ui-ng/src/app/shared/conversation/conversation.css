@@ -20,10 +20,33 @@
   );
 }
 
-/* Inline: a readable pane, not a peephole. */
+/* Inline: the conversation takes whatever height its pane has left below
+   the cards above it (240px floor), so long threads read at full size
+   without pressing Expand. */
+:has(> .g-conversation) {
+  display: flex;
+  flex-direction: column;
+}
+
+.g-conversation,
+.convo-host {
+  flex: 0 0 auto;
+}
+
+/* Expanded fills the pane exactly: thread grows, composer stays on screen. */
+.g-conversation.is-expanded,
+.convo-host.is-expanded {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* Collapsed (inline): a fixed, moderate window onto the end of the
+   thread, so the cards around it stay on screen and the composer is close.
+   Expand or full screen is for reading at length. */
 .convo-host .convo-thread {
-  min-height: 240px;
-  max-height: min(42vh, 480px);
+  height: clamp(160px, 28dvh, 400px);
+  min-height: 0;
+  max-height: none;
 }
 
 /* Expanded: the sibling cards step aside and the conversation fills the
@@ -45,7 +68,9 @@
 
 /* Never shorter than inline; grows to fill taller panes. */
 .convo-host.is-expanded .convo-thread {
-  min-height: max(240px, min(56vh, 640px));
+  height: auto;
+  flex: 1 1 0;
+  min-height: 240px;
   max-height: none;
 }
 
@@ -90,21 +115,31 @@
   scroll-behavior: smooth;
 }
 
-/* Messages use the width they are given: the Sessions chat keeps its
-   72ch bubbles, a task conversation reads closer to a document. */
-.g-conversation .msg {
-  max-width: min(100%, 120ch);
-}
-
-.convo-host.is-expanded .msg,
-.convo-modal .msg {
-  max-width: 100%;
-}
-
 .g-conversation .msg-body table {
   display: block;
   max-width: 100%;
   overflow-x: auto;
+}
+
+/* An empty thread is a short, quiet line, not a blank box. */
+.convo-host .convo-thread.is-empty,
+.convo-host.is-expanded .convo-thread.is-empty {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: 72px;
+  justify-content: center;
+}
+
+.g-conversation:has(.convo-thread.is-empty),
+.convo-host:has(.convo-thread.is-empty) {
+  flex: 0 0 auto;
+}
+
+.convo-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface-variant);
+  text-align: center;
 }
 
 .convo-older {

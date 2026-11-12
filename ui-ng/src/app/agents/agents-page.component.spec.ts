@@ -551,6 +551,14 @@ describe("AgentsPageComponent", () => {
 
   it("renders a split layout with resizer and detail pane", async () => {
     const api = new FakeApi();
+    api.live = [
+      {
+        id: "7",
+        title: "Task 7",
+        state: "running",
+        activityAt: new Date().toISOString(),
+      } as unknown as Task,
+    ];
     const f = await render(api);
     const split = f.nativeElement.querySelector(".inbox-split");
     expect(split).toBeTruthy();
@@ -635,6 +643,22 @@ describe("AgentsPageComponent", () => {
       [],
       expect.objectContaining({ queryParams: { task: "456" } }),
     );
+  });
+
+  it("with nothing running and nothing pinned, drops the split for one full-width idle state", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    const empty = f.nativeElement.querySelector('[data-testid="agents-empty"]');
+    expect(empty?.textContent).toContain("No agent is running right now.");
+    expect(f.nativeElement.querySelector(".inbox-resizer")).toBeNull();
+    expect(f.nativeElement.querySelector(".tasks-detail-pane")).toBeNull();
+    expect(
+      f.nativeElement
+        .querySelector(".inbox-split")
+        ?.classList.contains("is-idle"),
+    ).toBe(true);
+    const backlog = empty.querySelector('a[href*="tasks"]');
+    expect(backlog?.getAttribute("href")).toContain("tab=backlog");
   });
 
   it("shows pinned banner when the selected task leaves the Live set", async () => {

@@ -65,6 +65,15 @@ g-agents-page {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  margin-top: 0;
+}
+
+/* One control height across the toolbar: chips, Group by and the layout
+   switch sit on one baseline. */
+.agents-controls .filter-chip,
+.agents-controls .segmented button,
+.agents-controls g-pill-select button {
+  min-height: 36px;
 }
 
 .agents-body {
@@ -363,4 +372,64 @@ body.agents-wall .agent-title {
     width: calc(100% - 24px);
     margin: 12px;
   }
+}
+
+/* Nothing running: no split, no empty inspector; one centred state. */
+.agents-split.is-idle {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.agents-split.is-idle .queue-pane {
+  width: 100%;
+  max-width: none;
+  border-right: 0;
+}
+
+.agents-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 560px;
+  margin: 72px auto 24px;
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.agents-idle-ring {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--md-sys-color-surface-container);
+  box-shadow: inset 0 0 0 1px var(--md-sys-color-outline-variant);
+}
+
+.agents-idle-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--md-sys-color-outline);
+}
+
+.agents-idle-title {
+  margin: 4px 0 0;
+  font: 500 18px/24px var(--grain-font-display);
+  color: var(--md-sys-color-on-surface);
+}
+
+.agents-idle-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.agents-idle-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
 }

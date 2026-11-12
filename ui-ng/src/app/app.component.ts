@@ -68,8 +68,9 @@ const ICONS: Record<string, string> = {
     "M3 4h6v5H3zm12 0h6v5h-6zm0 11h6v5h-6zM9 5.5h6v2H9zM5 9h2v9.5H5zM7 16.5h8v2H7z",
   tasks:
     "M3 5h2v2H3zm4 0h14v2H7zM3 11h2v2H3zm4 0h14v2H7zm-4 6h2v2H3zm4 0h14v2H7z",
+  // An agent, not a person: a small robot head (antenna, face, eyes, ears).
   agents:
-    "M12 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 8c4.42 0 8 1.79 8 4v4H4v-4c0-2.21 3.58-4 8-4zm0 2c-3.31 0-6 1.12-6 2v2h12v-2c0-.88-2.69-2-6-2zM19 3h2v2h-2zm0 4h2v2h-2zM3 3h2v2H3zm0 4h2v2H3z",
+    "M12 1a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM11 3.5h2V6h-2zM7 6h10a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3zm0 2a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9a1 1 0 0 0-1-1zm2.5 3a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm5 0a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zM9 15.5h6V17H9zM1 11h2v4H1zm20 0h2v4h-2z",
   sessions:
     "M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm0 14H5.17L4 17.17V4h16v12z",
   ci: "M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",

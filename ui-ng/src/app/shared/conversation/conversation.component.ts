@@ -118,6 +118,7 @@ export interface ComposerConfig {
 
       <div
         class="convo-thread chat-log task-log"
+        [class.is-empty]="!comments().length && !transcript() && !olderCount()"
         role="log"
         aria-label="Conversation thread"
         tabindex="0"
@@ -173,6 +174,14 @@ export interface ComposerConfig {
               />
             }
           </article>
+        }
+        @if (!comments().length && !transcript() && !olderCount()) {
+          <p class="convo-empty" data-testid="convo-empty">
+            No messages yet.
+            @if (!config()?.hidden) {
+              Anything you write below goes on this task.
+            }
+          </p>
         }
         @if (transcript()) {
           <pre
@@ -350,6 +359,11 @@ export class ConversationComponent implements OnDestroy {
       const task = this.taskId();
       this.transcript();
       this.mode();
+      this.watchThread();
+      const el = this.thread()?.nativeElement;
+      if (el && this.resize) {
+        for (const child of Array.from(el.children)) this.resize.observe(child);
+      }
       const switched = task !== this.lastTask;
       const grew = n > this.lastCount;
       if (switched || this.following) {
@@ -364,10 +378,30 @@ export class ConversationComponent implements OnDestroy {
     });
   }
 
+  private resize?: ResizeObserver;
+  private resizeTarget: Element | null = null;
+
+  // Markdown renders after the first paint and images load later still, so
+  // the thread keeps growing after we scrolled it. While the reader follows
+  // the end, keep it pinned there whenever its content changes size.
+  private watchThread() {
+    const el = this.thread()?.nativeElement;
+    if (!el || el === this.resizeTarget) return;
+    if (typeof ResizeObserver === "undefined") return;
+    this.resize?.disconnect();
+    this.resize = new ResizeObserver(() => {
+      if (this.following) this.scrollToEnd();
+    });
+    this.resize.observe(el);
+    for (const child of Array.from(el.children)) this.resize.observe(child);
+    this.resizeTarget = el;
+  }
+
   // The full-screen view is a native <dialog> opened with showModal(): the
   // browser lifts it into the top layer and makes the rest of the document
   // inert, so it stays where Angular rendered it (no manual DOM moves).
   ngOnDestroy() {
+    this.resize?.disconnect();
     const el = this.modal()?.nativeElement;
     if (el?.open) el.close();
   }
@@ -412,7 +446,13 @@ export class ConversationComponent implements OnDestroy {
 
   private scrollToEnd() {
     const el = this.thread()?.nativeElement;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    // Jumps are instant: a smooth scroll started before late content lands
+    // stops short of the real end.
+    const prev = el.style.scrollBehavior;
+    el.style.scrollBehavior = "auto";
+    el.scrollTop = el.scrollHeight;
+    el.style.scrollBehavior = prev;
   }
 
   protected actorLabel(c: Comment): string {

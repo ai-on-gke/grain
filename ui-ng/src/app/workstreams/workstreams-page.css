@@ -8,7 +8,6 @@ g-workstreams-page {
   height: 100%;
   overflow: auto;
   padding: 16px 24px 56px;
-  max-width: 1560px;
 }
 
 .ws-vh {
@@ -134,6 +133,7 @@ g-workstreams-page {
   gap: 12px 14px;
   align-items: center;
   width: 100%;
+  box-sizing: border-box;
   padding: 10px 16px;
   border: 0;
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
