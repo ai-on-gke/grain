@@ -182,9 +182,25 @@ func TestARevokedDeclaredScheduleIsHeldAgain(t *testing.T) {
 		t.Fatalf("a firing within the accepted set was held: %q", approved.Body)
 	}
 
-	got, err := store.RevokeDeclarationAcceptance(ctx, id)
+	accepted, err := store.GetDeclarationAcceptance(ctx, id)
+	if err != nil || accepted == nil {
+		t.Fatalf("the accepted record: %+v, %v", accepted, err)
+	}
+	// A revocation checked against a set other than the one accepted --
+	// one accepted wider since it was read -- is refused and withdraws
+	// nothing.
+	if _, err := store.RevokeDeclarationAcceptance(ctx, id, nil); !errors.Is(err, model.ErrAcceptanceMoved) {
+		t.Fatalf("revoking a set other than the accepted one: err = %v, want ErrAcceptanceMoved", err)
+	}
+	if still, _ := store.GetDeclarationAcceptance(ctx, id); still == nil || still.AcceptedAt == nil {
+		t.Fatalf("a refused revocation cleared the acceptance: %+v", still)
+	}
+	got, err := store.RevokeDeclarationAcceptance(ctx, id, accepted.Accepted)
 	if err != nil {
 		t.Fatalf("revoking: %v", err)
+	}
+	if _, err := store.RevokeDeclarationAcceptance(ctx, id, accepted.Accepted); !errors.Is(err, model.ErrAcceptanceMoved) {
+		t.Fatalf("revoking twice: err = %v, want ErrAcceptanceMoved", err)
 	}
 	if got.AcceptedAt != nil || got.AcceptedBy != "" || len(got.Accepted) != 0 || !got.Awaiting() ||
 		!slices.Equal(got.Requested, acc.Requested) {
