@@ -819,8 +819,10 @@ func (s *Server) accessHistoryEntries(ctx context.Context) ([]model.ConfigAuditE
 }
 
 // handleAccessHistory is GET /api/access/history: the config_audit rows of
-// surface "access", so Settings -> Access shows who changed which role,
-// when and why to a caller holding access:read without settings:read.
+// surfaces "access" and "access-code" (accessHistoryEntries), so Settings
+// -> Access shows who changed which role, when and why, and what the
+// access code was used for, to a caller holding access:read without
+// settings:read.
 func (s *Server) handleAccessHistory(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	list, err := parseListQuery(r, listPageLarge)

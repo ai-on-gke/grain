@@ -550,8 +550,9 @@ The directory's `0700` means that by default only the daemon's account
 installs runs as. To let another account in, grant it search on the
 directory (`setfacl -m u:alice:x <data-dir>/api`) and name its uid in
 `-host-accounts`. The socket itself is mode `0666`, so the directory is
-the gate, and a restart keeps the group search bit that holds the ACL's
-mask, so the grant survives it. Being able to connect admits nobody on
+the gate, and on a directory that carries an ACL a restart keeps the
+group search bit that holds the ACL's mask, so the grant survives it
+(without an ACL the directory goes back to `0700`). Being able to connect admits nobody on
 its own.
 
 ### Elsewhere: `grain login` through IAP or an identity proxy
