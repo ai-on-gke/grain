@@ -313,6 +313,7 @@ type Server struct {
 
 	ln        net.Listener
 	http      *http.Server
+	cancel    context.CancelFunc
 	cleanups  []func()
 	closeOnce sync.Once
 }
@@ -332,6 +333,9 @@ func (s *Server) Close() {
 		} else if s.ln != nil {
 			_ = s.ln.Close()
 		}
+		// The loops first, so none is still reading the store when it is
+		// closed and its directory removed below.
+		s.cancel()
 		for i := len(s.cleanups) - 1; i >= 0; i-- {
 			s.cleanups[i]()
 		}
@@ -344,7 +348,7 @@ func Start(opts Options) (_ *Server, err error) {
 	// bg is the demo's own lifetime: every loop and helper process it
 	// starts ends with it, when Close cancels it.
 	bg, cancel := context.WithCancel(context.Background())
-	s := &Server{cleanups: []func(){cancel}}
+	s := &Server{cancel: cancel}
 	defer func() {
 		if err != nil {
 			s.Close()
