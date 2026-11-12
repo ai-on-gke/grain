@@ -2041,7 +2041,7 @@ export default function NewTaskOverlay({
             <TextField
               name="sandboxCpus"
               label="vCPUs"
-              helperText="blank/0 uses the deployment default"
+              helperText={shapeHelper(pickedTemplate?.sandbox?.cpus)}
               type="number"
               inputProps={{ min: 0, step: 1 }}
               autoComplete="off"
@@ -2056,7 +2056,7 @@ export default function NewTaskOverlay({
             <TextField
               name="sandboxMemoryMb"
               label="Memory (MiB)"
-              helperText="blank/0 uses the deployment default"
+              helperText={shapeHelper(pickedTemplate?.sandbox?.memoryMb)}
               type="number"
               inputProps={{ min: 0, step: 1 }}
               autoComplete="off"
@@ -2071,7 +2071,7 @@ export default function NewTaskOverlay({
             <TextField
               name="sandboxDiskGb"
               label="Disk (GiB)"
-              helperText="blank/0 uses the deployment default"
+              helperText={shapeHelper(pickedTemplate?.sandbox?.diskGb)}
               type="number"
               inputProps={{ min: 0, step: 1 }}
               autoComplete="off"
@@ -2395,6 +2395,16 @@ function asDependencies(v, tasks) {
     id,
     title: (tasks || []).find((t) => t.id === id)?.title || "",
   }));
+}
+
+// shapeHelper is the hint under one sandbox shape box: what a blank box
+// files with -- the picked template's own value for that dimension
+// (Template.sandbox, which the server fills in where the form sends 0),
+// or the deployment's default when the template states none.
+function shapeHelper(templateValue) {
+  return templateValue
+    ? `blank/0 uses the template's ${templateValue}`
+    : "blank/0 uses the deployment default";
 }
 
 // sandboxShapeDefault is the shape fields' starting values: the

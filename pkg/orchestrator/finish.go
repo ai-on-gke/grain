@@ -600,6 +600,23 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// worse -- it would hold that change's own merge until
 	// defaultReviewTaskDeadline ran out and the queue announced that the
 	// review had never finished, which by then would be untrue.
+	//
+	// A report-only sub-task another task filed closes instead
+	// (model.ClosesOnAnswer): its dependents are waiting on a close, and
+	// its note is its parent's to read.
+	if hasComment && findings == 0 && !pushedInPlace && model.ClosesOnAnswer(task) {
+		// Read again rather than trusting the snapshot taken at dispatch:
+		// a changelist the run uploaded is linked to the stored task while
+		// the run is live (ui.Client's changelist link), and a task with a
+		// change linked is not a report to close (model.AwaitsAck).
+		fresh, err := store.GetTask(ctx, task.ID)
+		if err != nil {
+			return fmt.Errorf("orchestrator: re-reading %s before closing it on its answer: %w", task.ID, err)
+		}
+		if fresh != nil && model.ClosesOnAnswer(*fresh) {
+			return finishAnswered(ctx, store, *fresh, now)
+		}
+	}
 	if hasComment || findings > 0 || pushedInPlace {
 		return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
 			o.CompletedAt = &now
@@ -739,6 +756,31 @@ func finishNothingNeeded(ctx context.Context, store *model.Store, task model.Tas
 		return fmt.Errorf("orchestrator: noting %s's close: %w", task.ID, err)
 	}
 	return nil
+}
+
+// finishAnswered closes a report-only sub-task (model.ClosesOnAnswer)
+// whose run ended on a closing note alone: no pull request, no question,
+// no park. The note is already in the task's conversation; the close is
+// what lets a task that depends on it dispatch (the task_blocked view
+// counts a blocker until it closes), and a pointer on the parent's own
+// thread is where a person reading the parent finds it.
+func finishAnswered(ctx context.Context, store *model.Store, task model.Task, now time.Time) error {
+	if err := closeTask(ctx, store, task.ID, now, "the report-only task answered", func(o *model.Observation) {
+		o.CompletedAt = &now
+		o.ClosedAt = &now
+		o.RetryRequestedAt = nil
+	}); err != nil {
+		return err
+	}
+	if err := noteOnTask(ctx, store, task.ID, model.AnsweredClosedNote, now); err != nil {
+		return err
+	}
+	parent := task.Proposer.TaskID
+	if p, err := store.GetTask(ctx, parent); err != nil || p == nil {
+		return err
+	}
+	return noteOnTask(ctx, store, parent, fmt.Sprintf("[Task %s](/tasks/%s) %q, which this task filed, "+
+		"answered and closed itself; its closing note is on that task.", task.ID, task.ID, task.Title), now)
 }
 
 // branchUnmovedSinceWithStore is whether task's branch is still at sha, the
@@ -1869,6 +1911,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		body += model.OriginKeptNote(namedOrigin, target, &task)
 
 		var interactive bool
+		// The template's sandbox shape (model.Template.Sandbox), filled
+		// into each dimension the proposal leaves unstated below.
+		var tmplSandbox model.SandboxShape
 		if tmplID != "" {
 			tmpl, err := store.GetTemplate(ctx, tmplID)
 			if err != nil {
@@ -1898,6 +1943,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					priority = comp.Priority
 				}
 				interactive = comp.Interactive
+				tmplSandbox = comp.Sandbox
 				if !keepRunningSet {
 					keepRunning = comp.KeepRunning
 				}
@@ -2077,6 +2123,18 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		}
 		if v, ok := p["sandbox_disk_gb"]; ok {
 			diskGB, _ = argInt(v)
+		}
+		// A dimension the proposal states keeps its value and the
+		// template fills the rest, one at a time, as ui.Client.fromTemplate
+		// does for a filing through the API.
+		if cpus == 0 {
+			cpus = tmplSandbox.CPUs
+		}
+		if memoryMB == 0 {
+			memoryMB = tmplSandbox.MemoryMB
+		}
+		if diskGB == 0 {
+			diskGB = tmplSandbox.DiskGB
 		}
 		// A proposal chooses a model (model.Task.Model) and, separately, may
 		// pin a connection; the store's own migration and dispatch read a
