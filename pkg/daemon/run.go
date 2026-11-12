@@ -739,6 +739,9 @@ func Run(ctx context.Context, cfg Config) error {
 			DiskOvercommit:       cfg.DiskOvercommit,
 			DefaultNetworkAccess: cfg.networkAccess,
 			Access:               access,
+			// Whether grain-sandbox-egress is enforced, so external
+			// capability grants are only admitted where it is.
+			NetworkPolicyEnforced: cfg.K8sNetworkPolicy,
 		})
 		accessLive = granuleSandboxes.Live
 		sandboxes = granuleSandboxes

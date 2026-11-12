@@ -4,7 +4,9 @@
 # namespace, identity and permissions, the priorities sandbox pods run
 # at, storage, the key upgrades are
 # verified against, the deployment itself, a Service in front of its UI,
-# and a Service in front of what its sandboxes reach. `kubectl apply -f grain.yaml` after editing the CHANGEME values called
+# and a Service in front of what its sandboxes reach, and the egress
+# policy that keeps open-network sandbox pods off the metadata server and
+# the cluster (grain-sandbox-egress, a copy of networkpolicy.yaml's). `kubectl apply -f grain.yaml` after editing the CHANGEME values called
 # out below stands a deployment up; see
 # deploy/kubernetes/README.md for what those values are and what has to
 # exist before this will run.
@@ -603,10 +605,14 @@ spec:
             # it, and the two have to agree.
             - -sandbox-port-base=9728
             - -k8s-sandbox-service=grain-sandbox
-            # Uncomment once deploy/kubernetes/networkpolicy.yaml is
-            # installed *and* this cluster's CNI enforces NetworkPolicy.
+            # Uncomment once this cluster's CNI enforces NetworkPolicy
+            # (GKE Dataplane V2 or Calico network policy enforcement) and
+            # you have checked grain-sandbox-egress, at the end of this
+            # file, holds an open sandbox pod off 169.254.169.254 --
+            # plus deploy/kubernetes/networkpolicy.yaml for network:none.
             # Without it a task asking for no network access is refused
-            # rather than quietly given a networked pod.
+            # rather than quietly given a networked pod, and so is any
+            # attempt holding an external capability grant.
             # - -k8s-network-policy
             # Run hosts (design/design/non-disruptive-upgrade.design.md, Stage 2): each
             # claude run in a pod of its own, which a rollout of this
@@ -869,3 +875,106 @@ spec:
     - name: gemini-proxy
       port: 9746
       targetPort: 9746
+---
+# grain-sandbox-egress: the fence around every sandbox pod whose task
+# left the network open, bundled here so that applying this file alone
+# never leaves one able to reach the node's metadata server (and on GKE
+# the node service account behind it), the cluster's own Services and
+# API server, or any peer pod or node. It is a verbatim copy of the
+# policy of the same name in networkpolicy.yaml, which explains every
+# rule; pkg/orchestrator/k8s_networkpolicy_test.go fails if the two
+# drift apart, so edit both or neither. Applying both files is fine --
+# it is the same object.
+#
+# A NetworkPolicy is only a fence on a cluster whose CNI enforces it
+# (GKE Dataplane V2 or Calico network policy enforcement, Cilium,
+# Antrea...). A cluster that does not stores this and ignores it, and
+# grain cannot tell the difference from inside a pod -- which is why it
+# refuses external capability grants until -k8s-network-policy says the
+# cluster enforces it. Pair it with GKE Workload Identity (or metadata
+# concealment) so the node's own credentials are not one request away
+# even where policy is not enforced; deploy/kubernetes/README.md has the
+# checklist.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grain-sandbox-egress
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  # Every sandbox pod grain creates (k8s.ManagedByLabel, k8s.SandboxLabel)
+  # -- the kubernetes and kubernetes-granule backends alike -- except
+  # those grain-sandbox-network-none already holds to less.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: grain
+      app.kubernetes.io/component: sandbox
+    matchExpressions:
+      - key: grain.dev/network
+        operator: NotIn
+        values:
+          - none
+  # Egress only. Nothing dials a sandbox (see the policy above), so there
+  # is no ingress to fence, and leaving ingress out keeps this policy from
+  # changing anything about how the daemon reaches its pods.
+  policyTypes:
+    - Egress
+  egress:
+    # grain's own pod: the git proxy, the model proxies and the package
+    # cache's listeners, by the same peer rule and for the same reasons
+    # as the policy above. Its address is in the pod CIDR, which the
+    # ipBlock below excludes, so it needs a rule of its own.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grain
+    # Cluster DNS, which an open sandbox resolves the internet through
+    # (dnsPolicy ClusterFirst). kube-dns is the label CoreDNS keeps on
+    # every distribution that ships it; 169.254.20.10 is NodeLocal
+    # DNSCache's address, which the link-local except below would
+    # otherwise take away. Port 53 only: the resolver is the one thing
+    # on either address a sandbox has any use for.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+        - ipBlock:
+            cidr: 169.254.20.10/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The internet, and nothing private. Each except is a range a
+    # sandbox has no business reaching:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # RFC 1918: pod, Service and node CIDRs, a private control
+              # plane, VPC peers.
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              # Link-local: the metadata server (169.254.169.254, GKE's
+              # metadata proxy at 169.254.169.252) and anything else a
+              # node serves on-link.
+              - 169.254.0.0/16
+              # RFC 6598 shared space, which GKE and EKS both hand out
+              # as pod ranges.
+              - 100.64.0.0/10
+              # Loopback and "this network", which no route should reach
+              # but a CNI is not obliged to say so.
+              - 127.0.0.0/8
+              - 0.0.0.0/8
+        - ipBlock:
+            cidr: ::/0
+            except:
+              # Unique-local (dual-stack pod and Service ranges) and
+              # link-local, GKE's IPv6 metadata server (fd20:ce::254)
+              # included.
+              - fc00::/7
+              - fe80::/10
+              - ::1/128
