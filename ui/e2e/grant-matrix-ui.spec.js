@@ -142,8 +142,14 @@ async function pickMuiSelect(page, section, selector, wantValue) {
   const current = await hidden.inputValue();
   if (current === wantValue) return;
   const combo = hidden.locator("xpath=..").locator('[role="combobox"]');
-  await combo.click();
+  // A menu left open by an earlier pick (seen once on the Template editor's
+  // gcp#gcp-key permission_set) puts its invisible backdrop over the combo,
+  // so a click to open it again never lands: pick from the open one instead.
+  if ((await combo.getAttribute("aria-expanded")) !== "true") {
+    await combo.click();
+  }
   await page.locator(`[role="option"][data-value="${wantValue}"]`).click();
+  await expect(combo).not.toHaveAttribute("aria-expanded", "true");
 }
 
 // fillField sets one schema field inside section (either a draft or a held
