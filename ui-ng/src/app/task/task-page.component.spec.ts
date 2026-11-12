@@ -1118,7 +1118,7 @@ describe("duration", () => {
       TestBed.resetTestingModule();
       const api2 = new FakeApi();
       const f2 = await render(api2);
-      const box = q<HTMLTextAreaElement>(f2, '[data-testid="act-send"]')!;
+      const box = q<HTMLTextAreaElement>(f2, '[data-testid="task-composer"]')!;
       box.value = "Do both";
       box.dispatchEvent(new Event("input"));
       await settle(f2);

@@ -230,6 +230,7 @@ describe("InboxPageComponent", () => {
       "#4",
     );
     const input = q(f, '[data-testid="task-composer"]') as HTMLTextAreaElement;
+    console.log("DOM:", f.nativeElement.innerHTML);
     input.value = "Keep both";
     input.dispatchEvent(new Event("input"));
     await f.whenStable();

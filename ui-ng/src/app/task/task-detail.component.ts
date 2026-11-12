@@ -38,7 +38,7 @@ import { stopperOf } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { isHuman } from "../sessions/session-view";
-import { ActorChipComponent } from "../shared/actor-chip.component";
+
 import { ConversationComponent } from "../shared/conversation/conversation.component";
 
 import {
@@ -702,6 +702,14 @@ export function duration(from?: string, to?: string): string {
                     [olderCount]="t.olderComments ?? 0"
                     [loadingOlder]="store.isBusy('older-comments', t.id)"
                     (loadEarlier)="store.loadOlderComments()"
+                    [draft]="store.draft()"
+                    (draftChange)="store.draft.set($event)"
+                    [stagedAttachments]="store.stagedAttachments()"
+                    (stagedAttachmentsChange)="store.stagedAttachments.set($event)"
+                    [draft]="store.draft()"
+                    (draftChange)="store.draft.set($event)"
+                    [stagedAttachments]="store.stagedAttachments()"
+                    (stagedAttachmentsChange)="store.stagedAttachments.set($event)"
                     [config]="{
                       placeholder:
                         t.state === 'awaiting_reply'

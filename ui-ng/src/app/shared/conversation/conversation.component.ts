@@ -1,4 +1,4 @@
-import {
+import { effect, untracked,
   ChangeDetectionStrategy,
   Component,
   ElementRef,
@@ -31,6 +31,8 @@ export interface ComposerConfig {
   submitLabel?: string;
   secondaryLabel?: string;
   disabled?: boolean;
+  submitDisabled?: boolean;
+  submitTitle?: string;
   deniedReason?: string;
   hidden?: boolean;
   locked?: boolean;
@@ -157,6 +159,11 @@ export interface ComposerConfig {
         }
       </div>
 
+      @if (config()?.deniedReason) {
+        <div data-testid="reply-blocked" class="error-text" style="padding: 12px; color: var(--error-color, #d32f2f); border-top: 1px solid var(--border-color, #e0e0e0);">
+          {{ config()?.deniedReason }}
+        </div>
+      }
       @if (!config()?.hidden) {
         <form
           class="chat-composer convo-composer"
@@ -167,6 +174,7 @@ export interface ComposerConfig {
           <textarea
             #composer
             class="reply-textarea"
+            style="box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; max-height: 40vh;"
             data-testid="task-composer"
             [attr.aria-label]="config()?.placeholder || 'Comment on this task'"
             [placeholder]="config()?.placeholder || 'Comment on this task'"
@@ -184,6 +192,7 @@ export interface ComposerConfig {
             (stagedChange)="stagedAttachments.set($event)"
           />
           <div class="action-bar" style="margin-top: 8px;">
+            <span class="muted composer-hint" style="flex: 1; font-size: 12px; margin-right: auto;">Enter sends &middot; Shift+Enter adds a line &middot; paste or drop files</span>
             @if (config()?.secondaryLabel) {
               <button
                 type="button"
@@ -202,8 +211,9 @@ export interface ComposerConfig {
               type="submit"
               class="btn-primary"
               data-testid="act-send"
+              [title]="config()?.deniedReason || config()?.submitTitle || ''"
               [disabled]="
-                config()?.disabled ||
+                config()?.disabled || config()?.submitDisabled ||
                 (!draft().trim() && !stagedAttachments().length)
               "
             >
@@ -247,8 +257,8 @@ export class ConversationComponent implements OnDestroy {
   }>();
   readonly loadEarlier = output<void>();
 
-  protected readonly draft = signal("");
-  protected readonly stagedAttachments = signal<AttachmentUpload[]>([]);
+  readonly draft = model("");
+  readonly stagedAttachments = model<AttachmentUpload[]>([]);
 
   private readonly modal = viewChild<ElementRef<HTMLDialogElement>>("modal");
   private readonly composer =
@@ -257,6 +267,10 @@ export class ConversationComponent implements OnDestroy {
   protected readonly human = isHuman;
 
   constructor() {
+    effect(() => {
+      this.taskId();
+      untracked(() => { this.stagedAttachments.set([]); });
+    });
     afterNextRender(() => {
       if (this.modal()) {
         document.body.appendChild(this.modal()!.nativeElement);
@@ -354,7 +368,6 @@ export class ConversationComponent implements OnDestroy {
     const a = this.stagedAttachments();
     if (!b.trim() && !a.length) return;
     this.send.emit({ body: b, attachments: a, action });
-    this.draft.set("");
-    this.stagedAttachments.set([]);
+    
   }
 }

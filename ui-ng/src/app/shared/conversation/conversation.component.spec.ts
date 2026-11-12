@@ -33,7 +33,7 @@ describe('ConversationComponent', () => {
     fixture.componentRef.setInput('mode', 'expanded');
     fixture.detectChanges();
     const host = fixture.debugElement.query(By.css('.convo-host'));
-    expect(host.nativeElement.classList.contains('is-expanded')).toBeTrue();
+    expect(host.nativeElement.classList.contains('is-expanded')).toBe(true);
   });
 
   it('Full screen opens a modal outside [inert], Escape closes it, focus returns, draft survives the round trip', () => {
