@@ -385,6 +385,15 @@ func nightlyGreenReading(ctx context.Context, store *model.Store, g model.TaskGo
 		return goalReading{measure: strings.Join(red, ","),
 			evidence: fmt.Sprintf("%s has %d job(s) not green: %s", what, len(red), strings.Join(red, ", "))}, nil
 	}
+	if isGitHubGatingWorkflow(g.Spec.Workflow, "") {
+		// A gating workflow runs on pull requests too, and a fork's pull
+		// request opened from its own main records job rows on "main" that
+		// nothing here tells from the default branch's. Only a run
+		// handleGitHubBaseVerdict saw pushed to the default branch meets
+		// this goal (meetGitHubBaseGoals).
+		return goalReading{measure: "green-unverified",
+			evidence: what + " is green, but only a run grain saw pushed to the default branch closes this"}, nil
+	}
 	return goalReading{met: true, measure: "green", evidence: what + " is green"}, nil
 }
 

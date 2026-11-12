@@ -41,8 +41,9 @@ import (
 // of a ci_mode: github repository, grain files one repair task at
 // GitHubBaseRepairPriority with the failing jobs, their log tails, the
 // run's link and its commit, and a nightly-green goal (on_met close) on
-// that workflow: the next fully green run on the default branch closes
-// it. While it is open every further red run is appended to it as a
+// that workflow: the next fully green run pushed to the default branch
+// closes it (meetGitHubBaseGoals; the goal's own reading of job rows
+// cannot tell those from a fork's pull request opened from its main). While it is open every further red run is appended to it as a
 // comment, never filed twice, and its priority kept.
 // reconcileGitHubBaseRepairs raises pipeline.base-red-unattended when
 // nobody is working on it, and pipeline.base-no-verdict when the gating
@@ -129,7 +130,8 @@ func handleGitHubBaseVerdict(ctx context.Context, deps Deps, run ConcludedGitHub
 	}
 	if stage1JobsGreen(run.Conclusion, jobs) {
 		return errors.Join(
-			checkNightlyGreenGoals(ctx, deps, run.Repo, run.WorkflowName, gitHubBaseRepairSubject(run.Repo), githubBaseRepairer, now),
+			meetGitHubBaseGoals(ctx, deps, run, now),
+			clearPipelineNotification(ctx, deps.Store, gitHubBaseRepairSubject(run.Repo), model.PrincipalString(githubBaseRepairer)),
 			clearPipelineNotification(ctx, deps.Store, gitHubBaseNoVerdictSubject(run.Repo), model.PrincipalString(githubBaseRepairer)))
 	}
 	if !model.GitHubCIFailed(run.Conclusion) {
@@ -139,6 +141,44 @@ func handleGitHubBaseVerdict(ctx context.Context, deps Deps, run ConcludedGitHub
 	}
 	_, err := fileOrUpdateGitHubBaseRepair(ctx, deps.Store, run, jobs, now)
 	return err
+}
+
+// meetGitHubBaseGoals meets every open nightly-green goal on run's
+// workflow and repository that was declared before run concluded: run is
+// a fully green push to the default branch, which is the only verdict
+// such a goal takes (nightlyGreenReading cannot tell one from a fork's
+// pull request opened from its own main).
+func meetGitHubBaseGoals(ctx context.Context, deps Deps, run ConcludedGitHubWorkflowRun, now time.Time) error {
+	goals, err := deps.Store.OpenTaskGoals(ctx)
+	if err != nil {
+		return err
+	}
+	concluded := now
+	if run.CompletedAt != nil {
+		concluded = *run.CompletedAt
+	}
+	branch := strings.TrimPrefix(run.Ref, "refs/heads/")
+	var errs []error
+	for _, g := range goals {
+		if g.Kind != model.GoalNightlyGreen || !strings.EqualFold(g.Spec.Repo, run.Repo.String()) ||
+			!strings.EqualFold(g.Spec.Workflow, run.WorkflowName) || !concluded.After(g.DeclaredAt) {
+			continue
+		}
+		task, err := deps.Store.GetTask(ctx, g.TaskID)
+		if err != nil || task == nil {
+			errs = append(errs, err)
+			continue
+		}
+		state, err := deps.Store.State(ctx, g.TaskID)
+		if err != nil || state == model.StateClosed || state == "" {
+			errs = append(errs, err)
+			continue
+		}
+		errs = append(errs, actOnGoal(ctx, deps, *task, state, g, goalReading{met: true, measure: "green",
+			evidence: fmt.Sprintf("`%s` run %d on `%s` (%s) is green", g.Spec.Workflow, run.RunID, branch,
+				shortSHA(run.HeadSHA))}, now))
+	}
+	return errors.Join(errs...)
 }
 
 // fileOrUpdateGitHubBaseRepair files run's repository a default-branch
