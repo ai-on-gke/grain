@@ -2706,6 +2706,12 @@ func ciJobStuck(store *model.Store, limits func() model.Limits, jobs *ciStuckJob
 // on the data disk (liveConfig.ciStorageBounds). Funcs for the same
 // reason, and nil is allowed for either -- a test wiring an engine gets
 // grain's own defaults rather than having to know them.
+//
+// wire finishes the service -- its sandbox image, its release-ref rule, its
+// Go build-cache writers, its capability servers -- before any run left
+// unconcluded by the last daemon is adopted and resumed. Setting those on
+// the returned service instead races the goroutines resuming those runs,
+// which read the engine as they go.
 func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits, retention func() ci.StoredRunRetention,
 	bounds func() ci.StorageBounds, store *model.Store,
 	sandboxes orchestrator.Sandboxes,
@@ -2715,7 +2721,7 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 	packageCache func(context.Context) string,
 	packageCacheCA func(context.Context) []byte,
 	packageCacheDNS func(context.Context) string,
-	actionsCache func(actionscache.Scope) (string, func(), error)) *ci.Service {
+	actionsCache func(actionscache.Scope) (string, func(), error), wire ...func(*ci.Service)) *ci.Service {
 
 	var teamGitCredential func(context.Context, string, string, string) (string, error)
 	var teamGitCredentialOn func(context.Context, string, string, string, string) (string, error)
@@ -2923,6 +2929,9 @@ func BuildCIService(ctx context.Context, cfg Config, limits func() model.Limits,
 	// restart can reattach the step (design/design/grain-on-gke.design.md#GKE-4).
 	if attachments, ok := service.Runs.(ci.StepAttachments); ok {
 		service.Engine.Attachments = attachments
+	}
+	for _, w := range wire {
+		w(service)
 	}
 	adopted, lost := AdoptCIRuns(ctx, service)
 	if cfg.runHostUpgrade != nil && (len(adopted) > 0 || len(lost) > 0) {
