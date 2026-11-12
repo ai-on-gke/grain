@@ -57,7 +57,7 @@ func mergePolicyFor(ctx context.Context, store *model.Store, client github.Clien
 		(!e.explicitDisablesGrainCI || !policyHasRepoGrainMode(p)) {
 		return &p
 	}
-	files, err := client.ListPullRequestFiles(e.ref.Repo.Owner, e.ref.Repo.Name, e.ref.Number)
+	files, err := client.ListPullRequestFiles(e.ref.Repo.StoredOwner(), e.ref.Repo.Name, e.ref.Number)
 	known := err == nil && len(files) < github.PullRequestFilesCap
 	if err != nil {
 		log.Printf("orchestrator: reading which files %s touches to apply its merge rules: %v -- "+
