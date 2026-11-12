@@ -51,7 +51,14 @@ export function routePath(key: RouteKey, params: RouteParams = {}): string {
     }
     const v = params[name];
     if (v === undefined) throw new Error(`${key}: missing {${name}}`);
-    return encodeURIComponent(String(v));
+    const s = String(v);
+    return rest
+      ? s
+          .split("/")
+          .filter(Boolean)
+          .map((seg) => encodeURIComponent(seg))
+          .join("/")
+      : encodeURIComponent(s);
   });
 }
 
@@ -170,16 +177,18 @@ export class GrainApi {
     key: RouteKey,
     params?: RouteParams,
     body?: unknown,
+    query?: string,
   ): Promise<T> {
-    return this.send<T>("patch", key, params, body);
+    return this.send<T>("patch", key, params, body, query);
   }
 
   put<T = unknown>(
     key: RouteKey,
     params?: RouteParams,
     body?: unknown,
+    query?: string,
   ): Promise<T> {
-    return this.send<T>("put", key, params, body);
+    return this.send<T>("put", key, params, body, query);
   }
 
   post<T = unknown>(

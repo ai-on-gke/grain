@@ -122,4 +122,31 @@ describe("GrainApi.getIfChanged", () => {
     http.expectOne("/api/pause?connection=c1").flush({ enabled: true });
     expect(await lift).toEqual({ enabled: true });
   });
+
+  it("encodes {path...} wildcard segments, reads text, and appends query params to delete", async () => {
+    expect(
+      routePath("GET /api/fs/config/{path...}", {
+        path: "tables/grain_config.json",
+      }),
+    ).toBe("/api/fs/config/tables/grain_config.json");
+
+    const txtP = api.getText("GET /api/fs/config/{path...}", {
+      path: "memory/deployment.md",
+    });
+    http
+      .expectOne("/api/fs/config/memory/deployment.md")
+      .flush("# Deployment memory");
+    expect(await txtP).toBe("# Deployment memory");
+
+    const delP = api.delete(
+      "DELETE /api/upgrade/current",
+      undefined,
+      undefined,
+      "reason=cancelled",
+    );
+    const delReq = http.expectOne("/api/upgrade/current?reason=cancelled");
+    expect(delReq.request.method).toBe("DELETE");
+    delReq.flush({ ok: true });
+    await delP;
+  });
 });

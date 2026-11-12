@@ -166,12 +166,6 @@ const ONE_KEY = new Set(["approve"]);
             >
               Default to new UI
             </button>
-            <a
-              class="btn-tonal"
-              href="/inbox?classic=1"
-              data-testid="classic-inbox-link"
-              >Classic Inbox</a
-            >
           </div>
         </div>
         <p class="view-subtitle">

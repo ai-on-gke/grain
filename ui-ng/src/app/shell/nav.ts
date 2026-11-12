@@ -24,8 +24,8 @@ export interface Destination {
   // The path inside this app (under /next/), or null while the page
   // still lives in the classic UI.
   route: string | null;
-  // The classic UI's path for the same destination.
-  classic: string;
+  // The classic UI's path when a destination has not moved over yet.
+  classic?: string;
   // One sentence on what the page is for, shown as its tooltip.
   tip: string;
   // Shown in the phone bottom bar (at most three besides More).
@@ -122,16 +122,14 @@ export const SETTINGS: Destination = {
   id: "settings",
   label: "Settings",
   icon: "settings",
-  route: null,
-  classic: "/settings",
+  route: "/settings",
   tip: "Models, access, repositories and this deployment's configuration.",
 };
 
-// The classic UI's create path, used as a fallback if the New task sheet fails to load.
 export const CLASSIC_NEW_TASK = "/new";
 
 // hrefFor is where a destination's link points: its route under /next/,
-// or the classic page.
+// or the classic page while unmigrated.
 export function hrefFor(d: Destination): string {
-  return d.route ? `/next${d.route}` : d.classic;
+  return d.route ? `/next${d.route}` : (d.classic ?? "/next/inbox");
 }

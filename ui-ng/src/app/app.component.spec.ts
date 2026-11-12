@@ -92,6 +92,7 @@ async function render(
         { path: "telemetry", children: [] },
         { path: "context", children: [] },
         { path: "fleet", children: [] },
+        { path: "settings", children: [] },
       ]),
       { provide: APP_BASE_HREF, useValue: "/next/" },
       { provide: GrainApi, useValue: api },
@@ -166,7 +167,7 @@ describe("AppComponent shell", () => {
     ).not.toBeNull();
   });
 
-  it("routes built pages inside the app and links the rest to the classic UI", async () => {
+  it("routes built pages (including Settings) inside the app and omits Classic UI escape links", async () => {
     const { fixture: f } = await render();
     const inbox = el(f).querySelector('[data-testid="rail-inbox"]')!;
     expect(inbox.getAttribute("href")).toBe("/next/inbox");
@@ -178,6 +179,12 @@ describe("AppComponent shell", () => {
     expect(context.getAttribute("href")).toBe("/next/context");
     const fleet = el(f).querySelector('[data-testid="rail-fleet"]')!;
     expect(fleet.getAttribute("href")).toBe("/next/fleet");
+    const settingsLink = el(f).querySelector('[data-testid="rail-settings"]')!;
+    expect(settingsLink.getAttribute("href")).toBe("/next/settings");
+    expect(el(f).querySelector(".next-chip")).toBeNull();
+    expect(el(f).querySelector(".bottom-bar")?.textContent).not.toContain(
+      "Classic UI",
+    );
     const ci = el(f).querySelector('[data-testid="rail-ci"]')!;
     expect(ci.getAttribute("href")).toBe("/next/ci");
   });
@@ -570,9 +577,9 @@ describe("AppComponent shell", () => {
     press("1");
     expect(open).toHaveBeenCalledWith(DESTINATIONS[0]);
     expect(nav).toHaveBeenCalledWith("/inbox");
-    open.mockImplementation(() => undefined);
     press(",");
     expect(open).toHaveBeenLastCalledWith(SETTINGS);
+    expect(nav).toHaveBeenLastCalledWith("/settings");
   });
 
   it("hides the phone FAB on Sessions, where the composer sits", async () => {

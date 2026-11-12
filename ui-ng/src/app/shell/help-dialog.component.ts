@@ -150,6 +150,25 @@ const VIEW_GUIDES: Record<string, ViewGuide> = {
       "Pause or resume pipeline dispatch, clear quota pauses, flush package/Actions caches, or tail redacted daemon logs.",
     ],
   },
+  settings: {
+    title: "Settings",
+    summary:
+      "Deployment configuration across Models & Compute, Repositories & Code, Work & Agents, Access & Security, and Instance & Preferences.",
+    steps: [
+      "Filter all 20 sections from the left Material 3 drawer or jump directly via comma (,).",
+      "Preview normalized server changes before saving via Plan / Preview changes.",
+      "When managed in StateRepo, config-locked sections display a direct link to their committed file in Config repo while secrets stay editable.",
+    ],
+  },
+  repos: {
+    title: "Repository settings",
+    summary:
+      "Per-repository Git connections, CI mode and workflows, merge gates, branches, issue import, and release qualification.",
+    steps: [
+      "Switch tabs across Overview, CI & Workflows, Merge Queue, Agents & Grants, Branches, and Releases.",
+      "Cut release candidates, approve qualification checks, promote candidates, and approve or reject pending trunk releases.",
+    ],
+  },
   default: {
     title: "Grain",
     summary:

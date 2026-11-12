@@ -56,12 +56,7 @@ import { TipDirective } from "./shared/tip.directive";
 import { AccountPopoverComponent } from "./shell/account-popover.component";
 import { CustomizeNavDialogComponent } from "./shell/customize-nav-dialog.component";
 import { HelpDialogComponent } from "./shell/help-dialog.component";
-import {
-  CLASSIC_NEW_TASK,
-  type Destination,
-  SETTINGS,
-  hrefFor,
-} from "./shell/nav";
+import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
 import { NextUpComponent } from "./shell/next-up.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
 
@@ -469,11 +464,6 @@ export class DeferErrorDirective implements OnInit {
             aria-label="Grain home: Inbox"
             >Grain</a
           >
-          <span
-            class="next-chip"
-            gTip="The new UI, built beside the classic one."
-            >Next</span
-          >
         </div>
         <div class="top-actions">
           <g-next-up />
@@ -607,7 +597,6 @@ export class DeferErrorDirective implements OnInit {
           >
             Shortcuts {{ keyboard.enabled() ? "on" : "off" }}
           </button>
-          <a class="btn-text bottom-link" href="/">Classic UI</a>
         </span>
       </footer>
 
@@ -961,7 +950,6 @@ export class AppComponent implements OnInit, OnDestroy {
   ];
 
   protected readonly createTask = inject(CreateTaskService);
-  protected readonly classicNewTask = CLASSIC_NEW_TASK;
   protected readonly onSessions = signal(false);
   protected readonly version = computed(() => this.inboxRef()?.version() ?? "");
   protected readonly inboxCount = computed(
@@ -1195,10 +1183,9 @@ export class AppComponent implements OnInit, OnDestroy {
   ): void {
     if (which === "create") {
       this.createTask.close();
-      this.snackbar.show("The New task form could not load.", {
-        label: "Classic form",
-        run: () => this.doc.defaultView?.location.assign(this.classicNewTask),
-      });
+      this.snackbar.show(
+        "The New task form could not load. Reload the page and try again.",
+      );
     } else if (which === "help") {
       this.help.close();
       this.snackbar.show("Help could not load. Reload the page and try again.");
@@ -1249,7 +1236,7 @@ export class AppComponent implements OnInit, OnDestroy {
 
   open(d: Destination): void {
     if (d.route) void this.router.navigateByUrl(d.route);
-    else this.doc.defaultView?.location.assign(d.classic);
+    else if (d.classic) this.doc.defaultView?.location.assign(d.classic);
   }
 
   protected toggleCreate(ev: Event): void {

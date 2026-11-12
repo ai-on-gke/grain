@@ -138,5 +138,38 @@ export const routes: Routes = [
       ),
   },
   { path: "memory", redirectTo: "context" },
+  { path: "config", redirectTo: "settings/config-repo", pathMatch: "full" },
+  {
+    path: "settings",
+    title: "Settings · grain",
+    loadComponent: () =>
+      import("./settings/settings-page.component").then(
+        (m) => m.SettingsPageComponent,
+      ),
+  },
+  {
+    path: "settings/:section",
+    title: "Settings · grain",
+    loadComponent: () =>
+      import("./settings/settings-page.component").then(
+        (m) => m.SettingsPageComponent,
+      ),
+  },
+  {
+    path: "repos/:owner/:name",
+    title: "Repository · grain",
+    loadComponent: () =>
+      import("./repos/repo-detail-page.component").then(
+        (m) => m.RepoDetailPageComponent,
+      ),
+  },
+  {
+    path: "repos/:owner/:name/:tab",
+    title: "Repository · grain",
+    loadComponent: () =>
+      import("./repos/repo-detail-page.component").then(
+        (m) => m.RepoDetailPageComponent,
+      ),
+  },
   { path: "**", redirectTo: "inbox" },
 ];
