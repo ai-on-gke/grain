@@ -994,3 +994,20 @@ func TestPullRequestToolsWithUpstreamRepoScope(t *testing.T) {
 		}
 	}
 }
+
+func TestPullRequestScopePRHeadStripsHostPrefixFromStoredOwner(t *testing.T) {
+	t.Parallel()
+	scope := PullRequestScope{
+		Owner:         "ghe.example.com/sackheads",
+		Repo:          "kube-agents",
+		Branch:        "grain/task-8-fork",
+		UpstreamOwner: "ghe.example.com/gke-labs",
+		UpstreamRepo:  "kube-agents",
+	}
+	if got := scope.prOwner(); got != "ghe.example.com/gke-labs" {
+		t.Fatalf("prOwner() = %q, want %q", got, "ghe.example.com/gke-labs")
+	}
+	if got := scope.prHead(); got != "sackheads:grain/task-8-fork" {
+		t.Fatalf("prHead() = %q, want %q", got, "sackheads:grain/task-8-fork")
+	}
+}

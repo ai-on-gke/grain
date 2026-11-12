@@ -227,7 +227,18 @@ which case it is dropped without qualifying):
 
 A first product failure of any Stage 1 job or Stage 2 item gets one retry on
 the same rc (`flake`); cancelled, timed-out or capacity-starved runs are
-re-run without counting as failures (`infra`). `check-qualification` returns:
+re-run without counting as failures (`infra`). A Stage 1 retry is a
+`nightly.yml` dispatch whose `inputs.jobs` names each job by its job key,
+never its display name: `check-qualification` maps every job it sees through
+`CHECK_QUALIFICATION_JOBS` (required) or `CHECK_QUALIFICATION_OPTIONAL`
+(judged only when it ran, such as `grant-matrix-ui`), and
+`scripts/release-train-actions.sh` refuses, loudly and with a failing exit, to
+dispatch a name that is not a job key in the rc's `nightly.yml`. A retry run in
+which a job awaiting its re-run ended `skipped` ran nothing, so that attempt
+counts as `infra` (grain's own Stage 1 judge in
+`pkg/orchestrator/releasestage1.go` agrees) and three in a row stall the rc
+rather than leave it pending on its first failure. `check-qualification`
+returns:
 
 - **`PENDING` / `INFRA`**: the run stops here (`qualification=pending|infra`,
   `qualification_rerun=...`), because only one rc qualifies at a time.
@@ -673,6 +684,13 @@ schedules are gone.
   minutes, `overlap: skip`, one tick of `.grain/templates/release-train.yml`
   (`scripts/release-train-task.sh`): judge the rc, release or drop it, or cut
   the next. A tick with nothing to do closes as `nothing_needed`.
+- **Release manager** (`.grain/templates/release-manager.yml`): one task
+  per version, which checks in every hour from the first rc to published
+  core and Google edition images. It is started by
+  `.grain/schedules/release-manager.yml` when `release-train-assets.yml`
+  concludes on an rc tag, and by `.grain/schedules/release-manager-patch.yml`
+  when `release.yml` concludes on a `release/vX.Y.Z` branch (a patch,
+  section 9). See section 12 and the playbook's section 16.
 - **Release watchdog** (`.grain/templates/release-watchdog.yml`, every 6
   hours): see section 12.
 - **Release process review** (`.grain/templates/release-process-review.yml`,
@@ -696,6 +714,18 @@ after any change to the installers or the git-host code.
 A continuous train is healthy when rcs qualify quickly, flakes stay rare and
 no release has to be taken back. Two schedules watch for that and report; red
 rcs themselves are the pipeline steward's (`docs/pipeline-steward.md`).
+
+- **Release manager** (one per version, hourly) is the one of these that
+  acts, not only reports. It owns its release until both core and the
+  edition are published. It files one fix for each red check nobody owns,
+  and unsticks stuck tasks: it reprioritises, undefers, retries, answers
+  and rewrites them. It notifies a person (`release-manager:vX.Y.Z`) for
+  what only a person can do, and drives or files the edition's release
+  task. Its first check-in pins the version (a `Release manager pin:
+  vX.Y.Z` comment) and ends in `nothing_needed` if another manager already
+  has that version or the version is already out. v3.6.0's was filed by
+  hand (#4747). It never force-merges, bypasses a gate, pushes or deletes
+  a ref. Its full brief is `design/playbook/releases.playbook.md` section 16.
 
 - **Release watchdog** (every 6 hours) reports the newest release, the rc in
   qualification, which stage it is in and how long it has been there, and

@@ -114,7 +114,7 @@ func judgePullRequestTriggers(ctx context.Context, store *model.Store, client gi
 	if err != nil || current == nil {
 		return err
 	}
-	detail, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s to judge it against its triggers: %w", ref, err)
 	}
@@ -124,11 +124,11 @@ func judgePullRequestTriggers(ctx context.Context, store *model.Store, client gi
 	if headSHA != "" && linkTarget(*current, model.LinkPathTriggersRead) == headSHA {
 		return nil
 	}
-	def, err := client.DefaultBranch(ref.Repo.Owner, ref.Repo.Name)
+	def, err := client.DefaultBranch(ref.Repo.StoredOwner(), ref.Repo.Name)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's default branch to judge %s: %w", ref.Repo, ref, err)
 	}
-	files, err := client.ListPullRequestFiles(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	files, err := client.ListPullRequestFiles(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	known := err == nil && len(files) < github.PullRequestFilesCap
 	if err != nil {
 		log.Printf("orchestrator: reading which files %s touches for its triggers: %v -- "+
@@ -141,6 +141,14 @@ func judgePullRequestTriggers(ctx context.Context, store *model.Store, client gi
 	// The gating triggers that matched, by the review template they name.
 	byKind := map[string][]reviewMatch{}
 	var kinds []string
+	// The ungated firings, filed once it is known this head is not one
+	// whose change its last judged head already proposed (samechange.go).
+	type ungatedFiring struct {
+		rule  model.RepoPathTrigger
+		group string
+		paths []string
+	}
+	var ungated []ungatedFiring
 	for _, rule := range rules {
 		if !rule.Trigger.WatchesBranch(detail.BaseRef, def) {
 			continue
@@ -177,12 +185,21 @@ func judgePullRequestTriggers(ctx context.Context, store *model.Store, client gi
 			continue
 		}
 		for _, group := range sortedKeys(groups) {
-			if _, err := filePullRequestTrigger(ctx, store, *current, ref, headSHA, rule, group, groups[group], now); err != nil {
-				errs = append(errs, err)
-			}
+			ungated = append(ungated, ungatedFiring{rule: rule, group: group, paths: groups[group]})
 		}
 	}
 	sort.Strings(kinds)
+	if from, carried, ok := carriedPathTriggerGates(ctx, store, client, *current, ref, headSHA, known,
+		kinds, byKind, gates, securityReviewID, coveredBySecurityReview); ok {
+		// The head moved without changing the change: every gating
+		// review's result stands, and nothing is filed again.
+		return carryPathTriggerGate(ctx, store, *current, ref, from, headSHA, carried, now)
+	}
+	for _, f := range ungated {
+		if _, err := filePullRequestTrigger(ctx, store, *current, ref, headSHA, f.rule, f.group, f.paths, now); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	for _, kind := range kinds {
 		matches := byKind[kind]
 		firings := func(taskID, template string) {
@@ -543,7 +560,7 @@ func pathTriggerNote(ctx context.Context, store *model.Store, client github.Clie
 		return nil
 	}
 	prBody := fmt.Sprintf("**grain path-trigger hold** (task %s)\n\n%s", taskID, body)
-	if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, prBody); err != nil {
+	if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, prBody); err != nil {
 		log.Printf("orchestrator: noting %s's path-trigger hold on %s: %v -- it is on the task only", taskID, ref, err)
 	}
 	return nil

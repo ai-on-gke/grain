@@ -261,7 +261,7 @@ func flagValue(t *testing.T, flags map[string]string, name string) string {
 // writing down: it is the header's own claim ("namespace, identity and
 // permissions, the priorities sandbox pods run at, storage, the key upgrades are verified against, the
 // deployment itself, a Service in front of its UI, and a Service in
-// front of what its sandboxes reach"), and a document deleted by a bad merge is otherwise a
+// front of what its sandboxes reach, and the egress policy"), and a document deleted by a bad merge is otherwise a
 // deployment that is missing exactly one of them.
 func TestTheKubernetesManifestShipsTheObjectsItsHeaderClaims(t *testing.T) {
 	objects, _ := manifestDocs(t)
@@ -283,6 +283,9 @@ func TestTheKubernetesManifestShipsTheObjectsItsHeaderClaims(t *testing.T) {
 		"Deployment",
 		"Service",
 		"Service",
+		// grain-sandbox-egress, networkpolicy.yaml's open-network fence,
+		// so applying this file alone fences every open sandbox pod.
+		"NetworkPolicy",
 	}
 	var got []string
 	for _, obj := range objects {

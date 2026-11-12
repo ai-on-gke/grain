@@ -1,0 +1,12 @@
+old daemon schema: 
+before: {"id":"2","admission":"durable","state":"deferred","comments":26,"attempts":1}
+after:  {"id":"2","admission":"durable","state":"deferred","comments":26,"attempts":1}
+context: {"current_brief":null,"handover_version":null,"compacted_through":null,"original_description":"UPGRADE-ORIGINAL: keep acme/widgets green.","age":{"exists":false,"at":"0001-01-01T00:00:00Z","runs":0,"comments":0},"stale":false}
+task 2
+current brief: none (prompts carry the original description)
+handover: none
+page: 200
+== grain state sync + check
+committed 83bdb919099a9207395bf8434c40e75476ca1fd3
+ok: grain can load this
+TASK=2
