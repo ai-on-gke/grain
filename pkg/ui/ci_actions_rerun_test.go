@@ -198,6 +198,26 @@ func TestRetriggerOnGitHubActionsIgnoresAForksBranchOfTheSameName(t *testing.T) 
 	}
 }
 
+// run-job of a job that has finished in a run that has not is refused as
+// "wait for the run", with nothing posted: GitHub answers that re-run
+// with a 403, which would otherwise read as a credential short of
+// actions: write.
+func TestRunJobOnGitHubActionsWaitsForTheWholeRun(t *testing.T) {
+	sim, _, client := rerunSim(t, 1, githubsim.WorkflowRun{ID: 750, Name: "E2E",
+		Path: ".github/workflows/e2e.yml", HeadBranch: "grain/mine", HeadSHA: "bbb222", Event: "pull_request",
+		Status: "in_progress", CreatedAt: time.Now().UTC(), Jobs: []githubsim.WorkflowJob{
+			{Name: "e2e", Conclusion: "failure"}, {Name: "slow", Status: "in_progress"}}})
+
+	_, err := (ui.SandboxCLIActions{Client: client}).RerunGitHubChecks(context.Background(), "mine",
+		gitproxy.CIStartRequest{Jobs: []string{"e2e"}})
+	if err == nil || !strings.Contains(err.Error(), "its run is still in_progress") || strings.Contains(err.Error(), "actions: write") {
+		t.Fatalf("run-job e2e of a run still going: %v, want a refusal to wait for the run", err)
+	}
+	if len(sim.RerunJobs) != 0 {
+		t.Fatalf("re-ran jobs %v of a run still going", sim.RerunJobs)
+	}
+}
+
 // The bound is each run's own: a run at the head that has spent its
 // re-runs is skipped, and the other red runs at that head are still
 // re-run.

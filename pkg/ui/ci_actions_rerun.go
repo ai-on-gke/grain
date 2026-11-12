@@ -342,6 +342,13 @@ func (c *Client) rerunActionsJobs(reader github.ActionsReader, rerunner github.A
 					return res, validationErrorf("job %q of %s is still %s: wait for it (grain ci wait) before re-running it",
 						job.Name, ActionsRunID(repo.String(), run.ID), orUnknown(job.Status))
 				}
+				if !strings.EqualFold(run.Status, "completed") {
+					// GitHub re-runs a job only once its whole run has
+					// concluded, and answers 403 before then -- which
+					// would read as a credential short of actions: write.
+					return res, validationErrorf("job %q of %s has finished, but its run is still %s: wait for the run "+
+						"(grain ci wait) before re-running the job", job.Name, ActionsRunID(repo.String(), run.ID), orUnknown(run.Status))
+				}
 				found[want] = true
 				if p == nil {
 					p = &pick{run: run}
