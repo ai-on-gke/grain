@@ -1992,9 +1992,9 @@ jobs:
   # cannot qualify an RC. A scheduled run idle-gate turned off skips this
   # job too, so the no-op run concludes green and grain files no Stage 1
   # repair for it. A dispatch naming `jobs` (a flake retry) is
-  # judged on the jobs it named. The KVM and real-kubernetes jobs are not
-  # required yet and are left out, and with them security-attacks' live
-  # paths, which they run; security-attacks itself is required.
+  # judged on the jobs it named. The KVM and real-kubernetes jobs are
+  # required too, and with them security-attacks' live paths, which they
+  # run and judge.
   stage-1:
     name: stage 1 qualification verdict
     if: always() && needs.idle-gate.outputs.run == 'true'
