@@ -145,6 +145,36 @@ check "the flake retry and infra re-run go out as one dispatch" 0 \
   "POST $api/actions/workflows/nightly.yml/dispatches {\"ref\":\"v3.2.0-rc.1\",\"inputs\":{\"jobs\":\"go-long,vulns\"}}" \
   "is the deployment's to re-run"
 
+runs "v3.2.0-rc.1:completed:11"
+run "qualification=infra" "qualifying_rc=v3.2.0-rc.1" \
+  "qualification_rerun=nightly:grant-matrix-ui:infra"
+check "optional nightly job grant-matrix-ui dispatches by its job id" 0 \
+  "POST $api/actions/workflows/nightly.yml/dispatches {\"ref\":\"v3.2.0-rc.1\",\"inputs\":{\"jobs\":\"grant-matrix-ui\"}}"
+
+# A job known only by display name is not a key in nightly.yml: refuse
+# loudly rather than dispatch a run in which every job is skipped.
+runs "v3.2.0-rc.1:completed:11"
+run "qualification=pending" "qualifying_rc=v3.2.0-rc.1" \
+  "qualification_rerun=nightly:grant matrix through the UI:flake"
+check "a rerun naming a display name instead of a nightly.yml job key is refused" 1 \
+  "WARNING: v3.2.0-rc.1: 'grant matrix through the UI' is not a dispatchable job key in nightly.yml" \
+  "::error::release-train: v3.2.0-rc.1 asked to re-run 'grant matrix through the UI', which is not a job key in nightly.yml"
+lacks "a refused display-name rerun dispatches nothing" "POST "
+
+runs "v3.2.0-rc.1:completed:11"
+run "qualification=pending" "qualifying_rc=v3.2.0-rc.1" \
+  "qualification_rerun=nightly:ui e2e, repeated:flake"
+check "a display name containing a comma is parsed whole and refused" 1 \
+  "WARNING: v3.2.0-rc.1: 'ui e2e, repeated' is not a dispatchable job key in nightly.yml"
+lacks "a comma display-name rerun dispatches nothing" "POST "
+
+runs "v3.2.0-rc.1:completed:11"
+run "qualification=pending" "qualifying_rc=v3.2.0-rc.1" \
+  "qualification_rerun=nightly:go-long:flake,nightly:grant matrix through the UI:flake"
+check "a valid job still dispatches while an unmapped display name fails loudly" 1 \
+  "WARNING: v3.2.0-rc.1: 'grant matrix through the UI' is not a dispatchable job key in nightly.yml" \
+  "POST $api/actions/workflows/nightly.yml/dispatches {\"ref\":\"v3.2.0-rc.1\",\"inputs\":{\"jobs\":\"go-long\"}}"
+
 runs "v3.2.0-rc.1:in_progress:21"
 run "qualifying_rc=v3.2.0-rc.1" "qualification_rerun=nightly:go-long:flake"
 check "a re-run waits while Stage 1 still runs on the rc" 0 "re-running go-long waits for it"
