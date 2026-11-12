@@ -1,0 +1,15 @@
+# Commits accepted onto main or release/v* although the forge has no
+# review record for them, because they were reviewed out of band.
+# scripts/release-images.sh passes this file to cmd/reviewed-merge
+# (-accepted; pkg/reviewedmerge Policy.Accepted, ParseAccepted), whose
+# reviewed-merge gate otherwise refuses to publish a release whose
+# first-parent chain carries a self-merged pull request.
+#
+# One commit per line: the full 40-character sha, then who accepted it
+# and why. An entry only counts once the commit that added it has passed
+# the gate itself, so add entries through a pull request grain merges or
+# a collaborator approves -- never on the self-merged commit's own branch.
+# .grain/triggers/release-promotion.yml holds every change here for a
+# person.
+5335ada3c167d292e0f360c1d1bb26cc4ccb4b28 PR #1347 (ui-ng M0-M14), self-merged by sidthe; the new UI was reviewed out of band, accepted by bwsalmon on task 5010, 2026-11-12
+27e5693c8bea9463502c76894d09fd87660e1b90 PR #1354 (ui-ng M16-M17), self-merged by sidthe; the new UI was reviewed out of band, accepted by bwsalmon on task 5010, 2026-11-12
