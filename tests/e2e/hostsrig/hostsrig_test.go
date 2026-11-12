@@ -16,6 +16,7 @@ package hostsrig_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,6 +26,48 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy/gitproxytest"
 	"github.com/ai-on-gke/grain/tests/e2e/hostsrig"
 )
+
+func TestRealHostDoesNotRegisterFakeSource(t *testing.T) {
+	if os.Getenv("GRAIN_HOSTRIG_ISOLATION_CHILD") == "1" {
+		_ = hostsrig.New(t, hostsrig.Config{
+			Source: gitproxy.AmbientCommandSource{
+				Name:      "extforgecli",
+				Command:   "extforgecli",
+				Hosts:     []string{"*.ext.forge.test"},
+				OnlyHosts: true,
+			},
+			Host: "real.ext.forge.test",
+		})
+		for _, src := range gitproxy.RegisteredAmbientSources() {
+			if src.Name == gitproxytest.Source {
+				t.Fatalf("New with real Host registered fake ambient source %q", src.Name)
+			}
+		}
+		return
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(self, "-test.run=^TestRealHostDoesNotRegisterFakeSource$")
+	cmd.Env = append(os.Environ(), "GRAIN_HOSTRIG_ISOLATION_CHILD=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("isolation child failed: %v\n%s", err, out)
+	}
+}
+
+func TestNewRepoDisablesDetachedMaintenance(t *testing.T) {
+	u := hostsrig.NewHostUpstream(t, "test host", "", "secret")
+	u.NewRepo()
+	for _, key := range []string{"maintenance.autoDetach", "gc.autoDetach"} {
+		cmd := exec.Command("git", "-C", u.Bare(), "config", "--get", key)
+		cmd.Env = os.Environ()
+		out, err := cmd.CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) != "false" {
+			t.Errorf("%s on %s = %q (%v), want \"false\"", key, u.Bare(), strings.TrimSpace(string(out)), err)
+		}
+	}
+}
 
 func TestDefaultFakeLifecycle(t *testing.T) {
 	hostsrig.Lifecycle(t, hostsrig.Config{})
@@ -116,6 +159,7 @@ func TestCallerSuppliedCommandHost(t *testing.T) {
 		hostsrig.LapsedLogin(t, noSummaryCfg)
 	})
 	t.Run("LapsedLoginRedirect", func(t *testing.T) {
+		gitproxytest.Install()
 		extUpstream.Fail(hostsrig.HostLoginPage)
 		defer extUpstream.Fail(hostsrig.HostServes)
 		redirectCfg := cfg

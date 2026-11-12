@@ -14,7 +14,7 @@
 
 package e2e
 
-// git_hosts_lifecycle_test.go runs pkg/testing/hostsrig's scenarios (docs/git-hosts.md
+// git_hosts_lifecycle_test.go runs tests/e2e/hostsrig's scenarios (docs/git-hosts.md
 // section 8) against gitproxytest's in-process command-backed forge fake:
 //
 //   - a second GitHub-kind host (GitHub Enterprise style) on its own

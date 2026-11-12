@@ -213,6 +213,7 @@ type daemonHostsRig struct {
 
 func newDaemonHostsRig(t *testing.T) *daemonHostsRig {
 	t.Helper()
+	gitproxytest.Install()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
