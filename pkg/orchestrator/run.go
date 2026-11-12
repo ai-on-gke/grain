@@ -722,6 +722,10 @@ const suspendedCLINote = "\n\nYour tools may have changed since this session las
 func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	history History, setup *SetupResult, newComments []model.Comment, extraSections ...string) string {
 	branch := task.BranchName()
+	// The current brief stands in for the description here as in
+	// BuildPrompt: a durable task resumes its session on most runs, so
+	// leaving it out would brief those runs on the original description.
+	task, _ = applyTaskContext(task, history)
 	prompt := suspensionNoteSection(history)
 	if line := model.ChangeTargetSuspendedPromptLine(task); line != "" {
 		prompt += fmt.Sprintf("Task: %s (task %s). %s", task.Title, task.ID, line)
@@ -780,8 +784,18 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	if attempts := previousAttemptsSection(history, branch); attempts != "" {
 		prompt += "\n\n" + strings.TrimRight(attempts, "\n")
 	}
+	// The compaction note says the handover is below, so it goes in only
+	// with the comments that carry it; a session that already read both
+	// needs neither again.
+	if summarised := summarisedSection(history); summarised != "" &&
+		slices.ContainsFunc(newComments, func(c model.Comment) bool { return c.Handover }) {
+		prompt += "\n\n" + strings.TrimRight(summarised, "\n")
+	}
 	if thread := commentThreadSection(newComments); thread != "" {
 		prompt += "\n\n" + strings.TrimRight(thread, "\n")
+	}
+	if upkeep := contextUpkeepSection(task, history, len(prompt)); upkeep != "" {
+		prompt += "\n\n" + strings.TrimRight(upkeep, "\n")
 	}
 	if history.BaseIncident != "" {
 		prompt += "\n\n" + strings.TrimRight(history.BaseIncident, "\n")

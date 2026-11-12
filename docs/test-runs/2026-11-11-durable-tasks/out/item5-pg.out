@@ -1,0 +1,30 @@
+before: P=3 D=4 W=5
+{"state":"deferred","pullRequest":"acme/widgets#9000","goal":"person-closes"}
+{"id":"4","state":"proposed","blocked":true}
+5-1|{"tasks":["3"]}
+== grain rollover 3
+task 3 rolled over to task 6
+now waiting on task 6 instead: 4, 5
+successor: 6
+{"state":"closed","reason":{"reason":"closed/closed","class":"awaiting a person","control":"Reopen"},"rolledOverTo":"6","pullRequest":null,"goal":null}
+{"state":"deferred","admission":"durable","rolledOverFrom":"3","pullRequest":"acme/widgets#9000","goal":"person-closes"}
+PRED-BRIEF: keep the PR moving.
+
+## Handover
+
+PRED-HANDOVER: PR open, waiting on review.
+
+Rolled over from [task 3](/tasks/3).
+W: {"state":"queued","blocked":true}
+{"id":"4","blocked":true}
+5-1|{"tasks":["6"]}
+task_goal rows for P=0 S=1
+task_notification_subscription rows for P=0 S=1
+== successor's first prompt
+prompt-6-1.txt brief=1 handover=1 original=0
+== refusals
+again -> grain: cannot roll over task 3: it was already rolled over, to task 6
+non-durable -> grain: cannot roll over task 7: it is not a durable task; only a durable task rolls over to a successor
+== the reconciler, past the age limit, with a run in flight
+mid-run: {"state":"running","rolledOverTo":null}
+after the run: {"state":"closed","rolledOverTo":"8"}

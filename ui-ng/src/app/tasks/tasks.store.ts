@@ -36,7 +36,7 @@ import type {
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { isListCiPlaceholder } from "../shared/gates";
-import { errorText } from "../sessions/session-view";
+import { errorText } from "../sessions/session-helpers";
 import {
   type MovePlan,
   type TabId,

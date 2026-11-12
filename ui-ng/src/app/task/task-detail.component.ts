@@ -43,7 +43,7 @@ import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
-import { isHuman } from "../sessions/session-view";
+import { isHuman } from "../sessions/session-helpers";
 
 import { ConversationComponent } from "../shared/conversation/conversation.component";
 

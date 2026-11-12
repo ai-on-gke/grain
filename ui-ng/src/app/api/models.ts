@@ -742,3 +742,39 @@ export interface CreateBoardRequest {
   description?: string;
   query?: string;
 }
+
+export interface AttemptTranscriptResponse {
+  transcript: string;
+}
+
+export interface AgentModel {
+  id: string;
+  label?: string;
+  effort?: string;
+  family?: string;
+  supportedEfforts?: string[];
+  defaultEffort?: string;
+}
+
+export interface AgentModelsResponse {
+  available: boolean;
+  framework?: string;
+  error?: string;
+  models: AgentModel[];
+  efforts?: string[];
+}
+
+export interface MemoryDocument {
+  repo?: string;
+  name: string;
+  summary: string;
+  text?: string;
+  length: number;
+  updatedAt?: string;
+  updatedBy?: string;
+  updatedByKind?: string;
+}
+
+export interface MemoryDocumentsResponse {
+  documents: MemoryDocument[];
+}
