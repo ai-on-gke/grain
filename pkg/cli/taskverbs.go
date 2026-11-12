@@ -113,6 +113,13 @@ func cmdRetryMerge(ctx context.Context, c *ui.HTTPClient, out *printer, args []s
 	return respond(ctx, c, out, id)
 }
 
+// mergeCommands are the merge verbs, as dispatchCLI runs them: a map
+// rather than one switch case each keeps main.go to its size limit
+// (size_test.go), as operatorCommands does.
+var mergeCommands = map[string]func(context.Context, *ui.HTTPClient, *printer, []string) error{
+	"retry-merge": cmdRetryMerge, "accept-findings": cmdAcceptFindings, "force-merge": cmdForceMerge,
+}
+
 // cmdForceMerge is `grain force-merge <id> <reason>`: the shell's half
 // of the UI's "Force merge" button, and the one sanctioned exception to
 // the merge predicate -- grain lands the change itself, on an operator's
