@@ -254,7 +254,7 @@ The operator asked (2026-11-10) that the user-attack checks run every night and 
 
   Every other test in a `tests/security` package is run too, and judged as the path `<package>: other tests`.
 - **Complete.** `cmd/security-attacks check` runs first. It also runs on every pull request, as `cmd/security-attacks`'s unit test `TestTheManifestCoversEveryTestPackageUnderTestsSecurity`. It fails if a `tests/security` test package is missing from the manifest's `packages`, or if a path names a test that no longer exists. A new suite has to be added to the manifest before it merges.
-- **Live paths.** Some paths need a real sandbox (`mode: live-vm`, `live-k8s`). They run inside `kvm-sandboxes` and `real-kubernetes`, on the VM and cluster those jobs already set up. `cmd/security-attacks judge` reports them in those jobs' summaries, and a log the suite never wrote fails them. They gate once those jobs become required (the table above), not before.
+- **Live paths.** Some paths need a real sandbox (`mode: live-vm`, `live-k8s`). They run inside `kvm-sandboxes` and `real-kubernetes`, on the VM and cluster those jobs already set up. `cmd/security-attacks judge` reports them in those jobs' summaries, and a log the suite never wrote fails them. Both jobs are required in Stage 1 (the table above), so a failed live path fails its job and gates the rc too.
 - **Triage.** On failure, the job's last step prints the failed paths' names. grain hands the end of that log to the `nightly-ci-review` triage task and the Stage 1 repair task, so both see the names.
 
 #### The image vulnerability gate (`image-vulns`)

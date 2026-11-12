@@ -320,3 +320,107 @@ PASS
 		}
 	}
 }
+
+// Go marks a parent test PASS even when its subtests skip; a multi-line
+// t.Skip indents continuation lines eight spaces; and code under test can
+// print unindented lines between t.Log and t.Skip. None of those may turn an
+// unexcused skip into a pass or a known gap.
+func TestSkippedSubtestsMultiLineSkipsAndUnindentedLogsFailClosed(t *testing.T) {
+	verbose := `=== RUN   TestSubUnexcused
+=== RUN   TestSubUnexcused/gap
+    x_test.go:4: known gap: sub gap
+=== RUN   TestSubUnexcused/bad
+    x_test.go:7: initdb missing
+--- PASS: TestSubUnexcused (0.00s)
+    --- SKIP: TestSubUnexcused/gap (0.00s)
+    --- SKIP: TestSubUnexcused/bad (0.00s)
+=== RUN   TestSubGap
+=== RUN   TestSubGap/ok
+=== RUN   TestSubGap/gap
+    x_test.go:12: known gap: sub only
+--- PASS: TestSubGap (0.00s)
+    --- PASS: TestSubGap/ok (0.00s)
+    --- SKIP: TestSubGap/gap (0.00s)
+=== RUN   TestSubInfra
+=== RUN   TestSubInfra/gap
+    x_test.go:16: known gap: sub gap
+=== RUN   TestSubInfra/infra
+    x_test.go:19: infrastructure: no /dev/kvm
+--- PASS: TestSubInfra (0.00s)
+    --- SKIP: TestSubInfra/gap (0.00s)
+    --- SKIP: TestSubInfra/infra (0.00s)
+=== RUN   TestMultiLineSkip
+    x_test.go:24: initdb missing:
+        foo.go:12: known gap: continuation line
+--- SKIP: TestMultiLineSkip (0.00s)
+=== RUN   TestUnindentedNoise
+    x_test.go:29: known gap: logged earlier
+2026/11/12 01:55:00 starting helper daemon on 127.0.0.1:0
+    x_test.go:32: /dev/kvm not present
+--- SKIP: TestUnindentedNoise (0.00s)
+PASS
+ok  	example.com/sec	0.010s
+`
+	jsonStream := `{"Action":"run","Test":"TestSubUnexcused"}
+{"Action":"run","Test":"TestSubUnexcused/gap"}
+{"Action":"output","Test":"TestSubUnexcused/gap","Output":"    x_test.go:4: known gap: sub gap\n"}
+{"Action":"skip","Test":"TestSubUnexcused/gap"}
+{"Action":"run","Test":"TestSubUnexcused/bad"}
+{"Action":"output","Test":"TestSubUnexcused/bad","Output":"    x_test.go:7: initdb missing\n"}
+{"Action":"skip","Test":"TestSubUnexcused/bad"}
+{"Action":"pass","Test":"TestSubUnexcused"}
+{"Action":"run","Test":"TestSubGap"}
+{"Action":"run","Test":"TestSubGap/ok"}
+{"Action":"pass","Test":"TestSubGap/ok"}
+{"Action":"run","Test":"TestSubGap/gap"}
+{"Action":"output","Test":"TestSubGap/gap","Output":"    x_test.go:12: known gap: sub only\n"}
+{"Action":"skip","Test":"TestSubGap/gap"}
+{"Action":"pass","Test":"TestSubGap"}
+{"Action":"run","Test":"TestSubInfra"}
+{"Action":"run","Test":"TestSubInfra/gap"}
+{"Action":"output","Test":"TestSubInfra/gap","Output":"    x_test.go:16: known gap: sub gap\n"}
+{"Action":"skip","Test":"TestSubInfra/gap"}
+{"Action":"run","Test":"TestSubInfra/infra"}
+{"Action":"output","Test":"TestSubInfra/infra","Output":"    x_test.go:19: infrastructure: no /dev/kvm\n"}
+{"Action":"skip","Test":"TestSubInfra/infra"}
+{"Action":"pass","Test":"TestSubInfra"}
+{"Action":"run","Test":"TestMultiLineSkip"}
+{"Action":"output","Test":"TestMultiLineSkip","Output":"    x_test.go:24: initdb missing:\n"}
+{"Action":"output","Test":"TestMultiLineSkip","Output":"        foo.go:12: known gap: continuation line\n"}
+{"Action":"skip","Test":"TestMultiLineSkip"}
+{"Action":"run","Test":"TestUnindentedNoise"}
+{"Action":"output","Test":"TestUnindentedNoise","Output":"    x_test.go:29: known gap: logged earlier\n"}
+{"Action":"output","Test":"TestUnindentedNoise","Output":"2026/11/12 01:55:00 starting helper daemon on 127.0.0.1:0\n"}
+{"Action":"output","Test":"TestUnindentedNoise","Output":"    x_test.go:32: /dev/kvm not present\n"}
+{"Action":"skip","Test":"TestUnindentedNoise"}
+`
+	for mode, run := range map[string]*pkgRun{
+		"-v":    parseText(strings.NewReader(verbose)),
+		"-json": parseJSON(strings.NewReader(jsonStream), io.Discard),
+	} {
+		for _, tc := range []struct {
+			test   string
+			status Status
+			reason string
+		}{
+			{"TestSubUnexcused", Skip, "bad: initdb missing"},
+			{"TestSubGap", KnownGap, "gap: known gap: sub only"},
+			{"TestSubInfra", Infra, "infra: infrastructure: no /dev/kvm"},
+			{"TestMultiLineSkip", Skip, "initdb missing:"},
+			{"TestUnindentedNoise", Skip, "/dev/kvm not present"},
+		} {
+			got := run.tests[tc.test]
+			if got == nil || got.status != tc.status || got.reason() != tc.reason {
+				t.Errorf("%s %s = %+v (reason %q), want status %s reason %q", mode, tc.test, got, func() string {
+					if got == nil {
+						return ""
+					}
+					return got.reason()
+				}(), tc.status, tc.reason)
+			}
+		}
+		if v := judgePath(Path{Name: "p", Tests: []string{"TestSubUnexcused"}}, run); v.Status != Fail {
+			t.Errorf("%s judgePath(TestSubUnexcused) = %+v, want Fail", mode, v)
+		}
+	}
+}
