@@ -25,7 +25,7 @@ import type {
   WorkTree,
 } from "../api/models";
 import { InboxStore } from "../inbox/inbox.store";
-import { errorText } from "../sessions/session-view";
+import { errorText } from "../sessions/session-helpers";
 
 export type { TreeNode, WorkTree };
 

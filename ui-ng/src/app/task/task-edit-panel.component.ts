@@ -39,6 +39,8 @@ import {
   PillSelectComponent,
 } from "../shared/pill-select.component";
 import { PriorityChipComponent } from "../shared/priority-chip.component";
+import { DirectorShaperComponent } from "../director/director-shaper.component";
+import type { TaskShapeFields } from "../director/director-draft";
 import { priorityOf } from "../tasks/task-view";
 import { TaskStore } from "./task.store";
 
@@ -82,357 +84,393 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
 
 @Component({
   selector: "g-task-edit-panel",
-  imports: [PillSelectComponent, PriorityChipComponent],
+  imports: [
+    PillSelectComponent,
+    PriorityChipComponent,
+    DirectorShaperComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./task-edit-panel.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <section
       class="task-edit-drawer"
+      [class.has-shaper]="shapingOpen()"
       data-testid="task-edit-panel"
       aria-labelledby="task-edit-h"
     >
-      <div class="edit-drawer-head">
-        <h2 id="task-edit-h" class="section-title">
-          Edit task #{{ task().id }}
-        </h2>
-        <button
-          type="button"
-          class="btn-text"
-          data-testid="edit-close-btn"
-          (click)="closed.emit()"
-        >
-          Close
-        </button>
-      </div>
+      <div class="edit-main-col">
+        <div class="edit-drawer-head">
+          <h2 id="task-edit-h" class="section-title">
+            Edit task #{{ task().id }}
+          </h2>
+          <div class="edit-head-actions">
+            @if (can("PATCH /api/tasks/{id}")) {
+              <button
+                type="button"
+                class="btn-outlined"
+                data-testid="edit-shape-director"
+                [attr.aria-pressed]="shapingOpen()"
+                (click)="shapingOpen.set(!shapingOpen())"
+              >
+                {{ shapingOpen() ? "Hide Director" : "Shape with Director" }}
+              </button>
+            }
+            <button
+              type="button"
+              class="btn-text"
+              data-testid="edit-close-btn"
+              (click)="closed.emit()"
+            >
+              Close
+            </button>
+          </div>
+        </div>
 
-      @if (can("PATCH /api/tasks/{id}")) {
-        <form (submit)="saveTask($event)">
-          <div style="display: flex; flex-direction: column; gap: 12px">
-            <label class="edit-field">
-              <span>Title</span>
-              <input
-                type="text"
-                data-testid="edit-title"
-                [value]="title()"
-                (input)="title.set($any($event.target).value)"
-              />
-            </label>
-
-            <label class="edit-field">
-              <span>Description</span>
-              <textarea
-                rows="4"
-                data-testid="edit-description"
-                [value]="description()"
-                (input)="description.set($any($event.target).value)"
-              ></textarea>
-            </label>
-
-            <div class="edit-grid">
-              <div class="edit-field">
-                <span>Repository</span>
-                <g-pill-select
-                  [options]="repoOptions()"
-                  [value]="repo()"
-                  ariaLabel="Repository"
-                  align="left"
-                  testid="edit-repo"
-                  (valueChange)="repo.set($event)"
-                />
-              </div>
-
+        @if (can("PATCH /api/tasks/{id}")) {
+          <form (submit)="saveTask($event)">
+            <div style="display: flex; flex-direction: column; gap: 12px">
               <label class="edit-field">
-                <span>Base branch</span>
+                <span>Title</span>
                 <input
                   type="text"
-                  data-testid="edit-base"
-                  placeholder="Default branch"
-                  [value]="base()"
-                  (input)="base.set($any($event.target).value)"
+                  data-testid="edit-title"
+                  [value]="title()"
+                  (input)="title.set($any($event.target).value)"
                 />
               </label>
 
-              <div class="edit-field">
-                <span>Priority</span>
-                <g-priority-chip
-                  [priority]="priority()"
-                  [editable]="true"
-                  testid="edit-priority"
-                  menuTestid="edit-priority-menu"
-                  (priorityChange)="priority.set($event)"
-                />
+              <label class="edit-field">
+                <span>Description</span>
+                <textarea
+                  rows="4"
+                  data-testid="edit-description"
+                  [value]="description()"
+                  (input)="description.set($any($event.target).value)"
+                ></textarea>
+              </label>
+
+              <div class="edit-grid">
+                <div class="edit-field">
+                  <span>Repository</span>
+                  <g-pill-select
+                    [options]="repoOptions()"
+                    [value]="repo()"
+                    ariaLabel="Repository"
+                    align="left"
+                    testid="edit-repo"
+                    (valueChange)="repo.set($event)"
+                  />
+                </div>
+
+                <label class="edit-field">
+                  <span>Base branch</span>
+                  <input
+                    type="text"
+                    data-testid="edit-base"
+                    placeholder="Default branch"
+                    [value]="base()"
+                    (input)="base.set($any($event.target).value)"
+                  />
+                </label>
+
+                <div class="edit-field">
+                  <span>Priority</span>
+                  <g-priority-chip
+                    [priority]="priority()"
+                    [editable]="true"
+                    testid="edit-priority"
+                    menuTestid="edit-priority-menu"
+                    (priorityChange)="priority.set($event)"
+                  />
+                </div>
+
+                <div class="edit-field">
+                  <span>Model</span>
+                  <g-pill-select
+                    [options]="modelOptions()"
+                    [value]="model()"
+                    ariaLabel="Model"
+                    align="left"
+                    testid="edit-model"
+                    (valueChange)="model.set($event)"
+                  />
+                </div>
+
+                <div class="edit-field">
+                  <span>Agent framework</span>
+                  <g-pill-select
+                    [options]="frameworkOptions"
+                    [value]="agentFramework()"
+                    ariaLabel="Agent framework"
+                    align="left"
+                    testid="edit-framework"
+                    (valueChange)="agentFramework.set($event)"
+                  />
+                </div>
+
+                <div class="edit-field">
+                  <span>Connection (backend)</span>
+                  <g-pill-select
+                    [options]="backendOptions()"
+                    [value]="agentBackendId()"
+                    ariaLabel="Connection backend"
+                    align="left"
+                    testid="edit-backend"
+                    (valueChange)="agentBackendId.set($event)"
+                  />
+                </div>
+
+                <div class="edit-field">
+                  <span>Network access</span>
+                  <g-pill-select
+                    [options]="networkOptions"
+                    [value]="networkAccess()"
+                    ariaLabel="Network access"
+                    align="left"
+                    testid="edit-network"
+                    (valueChange)="networkAccess.set($event)"
+                  />
+                </div>
+
+                <div class="edit-field">
+                  <span>If nothing needed</span>
+                  <g-pill-select
+                    [options]="nothingOptions"
+                    [value]="nothingNeededAction()"
+                    ariaLabel="Nothing needed action"
+                    align="left"
+                    testid="edit-nothing"
+                    (valueChange)="nothingNeededAction.set($event)"
+                  />
+                </div>
               </div>
 
-              <div class="edit-field">
-                <span>Model</span>
-                <g-pill-select
-                  [options]="modelOptions()"
-                  [value]="model()"
-                  ariaLabel="Model"
-                  align="left"
-                  testid="edit-model"
-                  (valueChange)="model.set($event)"
-                />
+              <div class="edit-toggles">
+                <label class="check-row">
+                  <input
+                    type="checkbox"
+                    data-testid="edit-auto-merge"
+                    [checked]="autoMerge()"
+                    (change)="autoMerge.set($any($event.target).checked)"
+                  />
+                  <span>Auto-merge once CI &amp; review pass</span>
+                </label>
+                <label class="check-row">
+                  <input
+                    type="checkbox"
+                    data-testid="edit-auto-approve"
+                    [checked]="autoApproveProposals()"
+                    (change)="
+                      autoApproveProposals.set($any($event.target).checked)
+                    "
+                  />
+                  <span>Auto-approve child proposals</span>
+                </label>
               </div>
 
-              <div class="edit-field">
-                <span>Agent framework</span>
-                <g-pill-select
-                  [options]="frameworkOptions"
-                  [value]="agentFramework()"
-                  ariaLabel="Agent framework"
-                  align="left"
-                  testid="edit-framework"
-                  (valueChange)="agentFramework.set($event)"
-                />
-              </div>
-
-              <div class="edit-field">
-                <span>Connection (backend)</span>
-                <g-pill-select
-                  [options]="backendOptions()"
-                  [value]="agentBackendId()"
-                  ariaLabel="Connection backend"
-                  align="left"
-                  testid="edit-backend"
-                  (valueChange)="agentBackendId.set($event)"
-                />
-              </div>
-
-              <div class="edit-field">
-                <span>Network access</span>
-                <g-pill-select
-                  [options]="networkOptions"
-                  [value]="networkAccess()"
-                  ariaLabel="Network access"
-                  align="left"
-                  testid="edit-network"
-                  (valueChange)="networkAccess.set($event)"
-                />
-              </div>
-
-              <div class="edit-field">
-                <span>If nothing needed</span>
-                <g-pill-select
-                  [options]="nothingOptions"
-                  [value]="nothingNeededAction()"
-                  ariaLabel="Nothing needed action"
-                  align="left"
-                  testid="edit-nothing"
-                  (valueChange)="nothingNeededAction.set($event)"
-                />
+              <div class="edit-actions">
+                <button
+                  type="submit"
+                  class="btn-primary"
+                  data-testid="edit-save-btn"
+                  [disabled]="
+                    !title().trim() || store.isBusy('edit', task().id)
+                  "
+                >
+                  Save changes
+                </button>
               </div>
             </div>
+          </form>
+        }
 
-            <div class="edit-toggles">
-              <label class="check-row">
-                <input
-                  type="checkbox"
-                  data-testid="edit-auto-merge"
-                  [checked]="autoMerge()"
-                  (change)="autoMerge.set($any($event.target).checked)"
+        <!-- Prompt Brief Override (POST /api/tasks/{id}/brief) -->
+        @if (can("POST /api/tasks/{id}/brief")) {
+          <div class="edit-subcard" data-testid="edit-brief-section">
+            <h3 class="section-subtitle" style="margin: 0">
+              Standing prompt brief
+            </h3>
+            <p class="muted" style="margin: 0; font-size: 12px">
+              Replaces the original description in future agent prompts while
+              preserving history. Leave brief empty to revert.
+            </p>
+            <label class="edit-field">
+              <span>Current brief</span>
+              <textarea
+                rows="3"
+                data-testid="edit-brief-text"
+                placeholder="Updated prompt brief for subsequent runs"
+                [value]="briefText()"
+                (input)="briefText.set($any($event.target).value)"
+              ></textarea>
+            </label>
+            <label class="edit-field">
+              <span>Why the brief changed (required)</span>
+              <input
+                type="text"
+                data-testid="edit-brief-reason"
+                placeholder="e.g. Narrowed scope to backend handlers"
+                [value]="briefReason()"
+                (input)="briefReason.set($any($event.target).value)"
+              />
+            </label>
+            <div class="edit-actions">
+              <button
+                type="button"
+                class="btn-tonal"
+                data-testid="edit-brief-save"
+                [disabled]="
+                  !briefReason().trim() || store.isBusy('brief', task().id)
+                "
+                (click)="saveBrief()"
+              >
+                Update brief
+              </button>
+            </div>
+          </div>
+        }
+
+        <!-- Durable Task Goal Editor (PUT / DELETE /api/tasks/{id}/goal) -->
+        @if (can("PUT /api/tasks/{id}/goal") && task().state !== "closed") {
+          <div class="edit-subcard" data-testid="edit-goal-section">
+            <h3 class="section-subtitle" style="margin: 0">Task goal</h3>
+            <div class="edit-grid">
+              <div class="edit-field">
+                <span>Goal kind</span>
+                <g-pill-select
+                  [options]="goalKinds"
+                  [value]="goalKind()"
+                  ariaLabel="Goal kind"
+                  align="left"
+                  testid="edit-goal-kind"
+                  (valueChange)="goalKind.set($event)"
                 />
-                <span>Auto-merge once CI &amp; review pass</span>
-              </label>
-              <label class="check-row">
-                <input
-                  type="checkbox"
-                  data-testid="edit-auto-approve"
-                  [checked]="autoApproveProposals()"
-                  (change)="
-                    autoApproveProposals.set($any($event.target).checked)
-                  "
+              </div>
+
+              @if (
+                goalKind() === "base-green" ||
+                goalKind() === "nightly-green" ||
+                goalKind() === "pr-merged"
+              ) {
+                <label class="edit-field">
+                  <span>Goal repository</span>
+                  <input
+                    type="text"
+                    data-testid="edit-goal-repo"
+                    placeholder="owner/name"
+                    [value]="goalRepo()"
+                    (input)="goalRepo.set($any($event.target).value)"
+                  />
+                </label>
+              }
+
+              @if (goalKind() === "base-green") {
+                <label class="edit-field">
+                  <span>Branch</span>
+                  <input
+                    type="text"
+                    data-testid="edit-goal-branch"
+                    placeholder="main"
+                    [value]="goalBranch()"
+                    (input)="goalBranch.set($any($event.target).value)"
+                  />
+                </label>
+              }
+
+              @if (goalKind() === "nightly-green") {
+                <label class="edit-field">
+                  <span>Workflow</span>
+                  <input
+                    type="text"
+                    data-testid="edit-goal-workflow"
+                    placeholder="nightly.yml"
+                    [value]="goalWorkflow()"
+                    (input)="goalWorkflow.set($any($event.target).value)"
+                  />
+                </label>
+              }
+
+              @if (
+                goalKind() === "pr-merged" ||
+                goalKind() === "tasks-closed" ||
+                goalKind() === "cl-submitted"
+              ) {
+                <label class="edit-field">
+                  <span>Target task ID(s)</span>
+                  <input
+                    type="text"
+                    data-testid="edit-goal-tasks"
+                    placeholder="e.g. 42 or 42, 43"
+                    [value]="goalTasks()"
+                    (input)="goalTasks.set($any($event.target).value)"
+                  />
+                </label>
+              }
+
+              <div class="edit-field">
+                <span>On met</span>
+                <g-pill-select
+                  [options]="goalOnMetOpts"
+                  [value]="goalOnMet()"
+                  ariaLabel="On goal met"
+                  align="left"
+                  testid="edit-goal-on-met"
+                  (valueChange)="goalOnMet.set($event)"
                 />
-                <span>Auto-approve child proposals</span>
-              </label>
+              </div>
+
+              <div class="edit-field">
+                <span>At limit</span>
+                <g-pill-select
+                  [options]="goalOnLimitOpts"
+                  [value]="goalOnLimit()"
+                  ariaLabel="On goal limit"
+                  align="left"
+                  testid="edit-goal-on-limit"
+                  (valueChange)="goalOnLimit.set($event)"
+                />
+              </div>
             </div>
 
             <div class="edit-actions">
-              <button
-                type="submit"
-                class="btn-primary"
-                data-testid="edit-save-btn"
-                [disabled]="!title().trim() || store.isBusy('edit', task().id)"
-              >
-                Save changes
-              </button>
-            </div>
-          </div>
-        </form>
-      }
-
-      <!-- Prompt Brief Override (POST /api/tasks/{id}/brief) -->
-      @if (can("POST /api/tasks/{id}/brief")) {
-        <div class="edit-subcard" data-testid="edit-brief-section">
-          <h3 class="section-subtitle" style="margin: 0">
-            Standing prompt brief
-          </h3>
-          <p class="muted" style="margin: 0; font-size: 12px">
-            Replaces the original description in future agent prompts while
-            preserving history. Leave brief empty to revert.
-          </p>
-          <label class="edit-field">
-            <span>Current brief</span>
-            <textarea
-              rows="3"
-              data-testid="edit-brief-text"
-              placeholder="Updated prompt brief for subsequent runs"
-              [value]="briefText()"
-              (input)="briefText.set($any($event.target).value)"
-            ></textarea>
-          </label>
-          <label class="edit-field">
-            <span>Why the brief changed (required)</span>
-            <input
-              type="text"
-              data-testid="edit-brief-reason"
-              placeholder="e.g. Narrowed scope to backend handlers"
-              [value]="briefReason()"
-              (input)="briefReason.set($any($event.target).value)"
-            />
-          </label>
-          <div class="edit-actions">
-            <button
-              type="button"
-              class="btn-tonal"
-              data-testid="edit-brief-save"
-              [disabled]="
-                !briefReason().trim() || store.isBusy('brief', task().id)
-              "
-              (click)="saveBrief()"
-            >
-              Update brief
-            </button>
-          </div>
-        </div>
-      }
-
-      <!-- Durable Task Goal Editor (PUT / DELETE /api/tasks/{id}/goal) -->
-      @if (can("PUT /api/tasks/{id}/goal") && task().state !== "closed") {
-        <div class="edit-subcard" data-testid="edit-goal-section">
-          <h3 class="section-subtitle" style="margin: 0">Task goal</h3>
-          <div class="edit-grid">
-            <div class="edit-field">
-              <span>Goal kind</span>
-              <g-pill-select
-                [options]="goalKinds"
-                [value]="goalKind()"
-                ariaLabel="Goal kind"
-                align="left"
-                testid="edit-goal-kind"
-                (valueChange)="goalKind.set($event)"
-              />
-            </div>
-
-            @if (
-              goalKind() === "base-green" ||
-              goalKind() === "nightly-green" ||
-              goalKind() === "pr-merged"
-            ) {
-              <label class="edit-field">
-                <span>Goal repository</span>
-                <input
-                  type="text"
-                  data-testid="edit-goal-repo"
-                  placeholder="owner/name"
-                  [value]="goalRepo()"
-                  (input)="goalRepo.set($any($event.target).value)"
-                />
-              </label>
-            }
-
-            @if (goalKind() === "base-green") {
-              <label class="edit-field">
-                <span>Branch</span>
-                <input
-                  type="text"
-                  data-testid="edit-goal-branch"
-                  placeholder="main"
-                  [value]="goalBranch()"
-                  (input)="goalBranch.set($any($event.target).value)"
-                />
-              </label>
-            }
-
-            @if (goalKind() === "nightly-green") {
-              <label class="edit-field">
-                <span>Workflow</span>
-                <input
-                  type="text"
-                  data-testid="edit-goal-workflow"
-                  placeholder="nightly.yml"
-                  [value]="goalWorkflow()"
-                  (input)="goalWorkflow.set($any($event.target).value)"
-                />
-              </label>
-            }
-
-            @if (
-              goalKind() === "pr-merged" ||
-              goalKind() === "tasks-closed" ||
-              goalKind() === "cl-submitted"
-            ) {
-              <label class="edit-field">
-                <span>Target task ID(s)</span>
-                <input
-                  type="text"
-                  data-testid="edit-goal-tasks"
-                  placeholder="e.g. 42 or 42, 43"
-                  [value]="goalTasks()"
-                  (input)="goalTasks.set($any($event.target).value)"
-                />
-              </label>
-            }
-
-            <div class="edit-field">
-              <span>On met</span>
-              <g-pill-select
-                [options]="goalOnMetOpts"
-                [value]="goalOnMet()"
-                ariaLabel="On goal met"
-                align="left"
-                testid="edit-goal-on-met"
-                (valueChange)="goalOnMet.set($event)"
-              />
-            </div>
-
-            <div class="edit-field">
-              <span>At limit</span>
-              <g-pill-select
-                [options]="goalOnLimitOpts"
-                [value]="goalOnLimit()"
-                ariaLabel="On goal limit"
-                align="left"
-                testid="edit-goal-on-limit"
-                (valueChange)="goalOnLimit.set($event)"
-              />
-            </div>
-          </div>
-
-          <div class="edit-actions">
-            @if (task().goal && can("DELETE /api/tasks/{id}/goal")) {
+              @if (task().goal && can("DELETE /api/tasks/{id}/goal")) {
+                <button
+                  type="button"
+                  class="btn-text danger"
+                  data-testid="edit-goal-clear"
+                  [disabled]="store.isBusy('goal-clear', task().id)"
+                  (click)="clearGoal()"
+                >
+                  Clear goal
+                </button>
+              }
               <button
                 type="button"
-                class="btn-text danger"
-                data-testid="edit-goal-clear"
-                [disabled]="store.isBusy('goal-clear', task().id)"
-                (click)="clearGoal()"
+                class="btn-tonal"
+                data-testid="edit-goal-save"
+                [disabled]="store.isBusy('goal-save', task().id)"
+                (click)="saveGoal()"
               >
-                Clear goal
+                Set goal
               </button>
-            }
-            <button
-              type="button"
-              class="btn-tonal"
-              data-testid="edit-goal-save"
-              [disabled]="store.isBusy('goal-save', task().id)"
-              (click)="saveGoal()"
-            >
-              Set goal
-            </button>
+            </div>
           </div>
-        </div>
+        }
+      </div>
+      @defer (when shapingOpen()) {
+        @if (shapingOpen()) {
+          <g-director-shaper
+            mode="edit"
+            [current]="shapeFields()"
+            [shapeTaskId]="task().id"
+            [taskState]="task().state"
+            [failureSummary]="task().closedReason || task().stall"
+            (applyDraft)="applyShapedDraft($event)"
+            (applyAndSubmit)="applyAndSaveShapedDraft($event)"
+            (closed)="shapingOpen.set(false)"
+          />
+        }
       }
     </section>
   `,
@@ -455,6 +493,7 @@ export class TaskEditPanelComponent {
   protected readonly goalOnLimitOpts = GOAL_ON_LIMIT;
 
   protected readonly cfg = signal<GrainConfig | null>(null);
+  protected readonly shapingOpen = signal(false);
   protected readonly title = signal("");
   protected readonly description = signal("");
   protected readonly repo = signal("");
@@ -513,6 +552,16 @@ export class TaskEditPanelComponent {
       })),
     ];
   });
+
+  protected readonly shapeFields = computed<TaskShapeFields>(() => ({
+    title: this.title(),
+    description: this.description(),
+    repo: this.repo(),
+    base: this.base(),
+    priority: this.priority(),
+    model: this.model(),
+    dependsOn: this.task().dependsOn ?? [],
+  }));
 
   constructor() {
     effect(() => {
@@ -578,6 +627,24 @@ export class TaskEditPanelComponent {
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
     return this.access.can(route, this.task().repo || undefined);
+  }
+
+  protected applyShapedDraft(patch: Partial<TaskShapeFields>): void {
+    if (patch.title !== undefined) this.title.set(patch.title);
+    if (patch.description !== undefined)
+      this.description.set(patch.description);
+    if (patch.repo !== undefined) this.repo.set(patch.repo);
+    if (patch.base !== undefined) this.base.set(patch.base);
+    if (patch.priority !== undefined) this.priority.set(patch.priority);
+    if (patch.model !== undefined) this.model.set(patch.model);
+    this.snackbar.show(`Applied Director suggestions to #${this.task().id}`);
+  }
+
+  protected async applyAndSaveShapedDraft(
+    patch: Partial<TaskShapeFields>,
+  ): Promise<void> {
+    this.applyShapedDraft(patch);
+    await this.saveTask(new Event("submit"));
   }
 
   protected async saveTask(ev: Event): Promise<void> {

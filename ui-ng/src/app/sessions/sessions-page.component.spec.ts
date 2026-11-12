@@ -105,6 +105,25 @@ class FakeApi {
   get = (route: string) => {
     const e = this.record("GET", route);
     if (e) return e;
+    if (route === "GET /api/agent-models") {
+      return Promise.resolve({
+        available: true,
+        models: [
+          {
+            id: "gemini-3.1-pro-high",
+            label: "Gemini 3.1 Pro",
+            effort: "high",
+            family: "gemini-3.1-pro",
+          },
+        ],
+      });
+    }
+    if (route === "GET /api/tasks/{id}/tree") {
+      return Promise.resolve({ nodes: [] });
+    }
+    if (route === "GET /api/memory/documents") {
+      return Promise.resolve({ documents: [] });
+    }
     if (route === "GET /api/api-scope-sets") {
       return Promise.resolve({
         sets: [{ name: "tasks-read", description: "Read tasks" }],
@@ -709,5 +728,80 @@ describe("SessionsPageComponent", () => {
     f.detectChanges();
     await f.whenStable();
     expect(q(f, '[data-testid="composer"]')).not.toBeNull();
+  });
+
+  it("exposes inline header model picker and toggles the coplanar Workspace Canvas", async () => {
+    const api = new FakeApi();
+    api.details["1"] = {
+      ...api.details["1"],
+      comments: [
+        ...api.details["1"].comments!,
+        {
+          id: 99,
+          author: "grain",
+          authorKind: "automation",
+          body: "```html\n<title>Canvas Mock</title><div>Hi</div>\n```",
+        },
+      ],
+    };
+    const f = await render(api);
+    expect(q(f, '[data-testid="chat-head-model"]')).not.toBeNull();
+    expect(text(f, '[data-testid="session-canvas-toggle"]')).toContain(
+      "Canvas (1)",
+    );
+
+    (
+      q(f, '[data-testid="open-artifact-html-99-1"]') as HTMLButtonElement
+    ).click();
+    await f.whenStable();
+    f.detectChanges();
+    expect(q(f, '[data-testid="session-canvas"]')).not.toBeNull();
+    expect(q(f, '[data-testid="canvas-html-iframe"]')).not.toBeNull();
+  });
+
+  it("rolls back created tasks when launchWorkstreamPlan fails mid-plan and keeps SessionsStore retained across drawer watch toggles", async () => {
+    let createdSeq = 0;
+    const api = new FakeApi();
+    const basePost = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if (route === "POST /api/tasks") {
+        api.calls.push({ method: "POST", route, params, body });
+        createdSeq += 1;
+        if (createdSeq === 3) {
+          return Promise.reject(new Error("boom on child #2"));
+        }
+        return Promise.resolve({
+          id: `t-${createdSeq}`,
+          title: "created",
+          state: "proposed",
+        });
+      }
+      return basePost(route, params, body);
+    };
+
+    const f = await render(api);
+    const store = TestBed.inject(SessionsStore);
+
+    // Toggling Director watch while SessionsPage is mounted must NOT drop the page retainer.
+    store.setDirectorWatch("drawer", true);
+    store.setDirectorWatch("drawer", false);
+    const readsBefore = api.reads.length;
+    await new Promise((r) => setTimeout(r, 2600));
+    expect(api.reads.length).toBeGreaterThan(readsBefore);
+
+    const origin = await store.launchWorkstreamPlan({
+      title: "Broken plan",
+      tasks: [
+        { key: "a", title: "First child" },
+        { key: "b", title: "Second child", dependsOn: ["a"] },
+      ],
+    });
+    expect(origin).toBeNull();
+    expect(store.actionError()).toContain("boom on child #2");
+    const closedIds = api.calls
+      .filter((c) => c.route === "POST /api/tasks/{id}/close")
+      .map((c) => (c.params as { id: string }).id);
+    expect(closedIds).toEqual(["t-2", "t-1"]);
+    f.destroy();
   });
 });
