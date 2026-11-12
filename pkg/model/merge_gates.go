@@ -566,8 +566,22 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 	}
 
 	for i := range gates {
-		if gates[i].State == GateStateFindings && gates[i].ReviewTask != "" {
-			_, gates[i].Acceptable = AcceptableReviewFindings(t, gates[i].ID, gates[i].ReviewTask)
+		g := &gates[i]
+		if g.State != GateStateFindings {
+			continue
+		}
+		if g.ReviewTask != "" {
+			_, g.Acceptable = AcceptableReviewFindings(t, g.ID, g.ReviewTask)
+		}
+		if !g.Acceptable {
+			// The gate names a review with nothing of its own standing
+			// -- the security gate names the latest security review,
+			// which may be re-running, or accepted, over an earlier
+			// review's findings -- so offer the latest review whose
+			// findings do stand on it instead.
+			if id := lastAcceptableReview(t, g.ID); id != "" {
+				g.ReviewTask, g.Acceptable = id, true
+			}
 		}
 	}
 	return gates
