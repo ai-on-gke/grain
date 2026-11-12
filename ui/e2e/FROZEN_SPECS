@@ -58,6 +58,7 @@ closed-search-paging.spec.js
 closed-task-comment-box.spec.js
 closed_task_sorting_walkthrough.spec.js
 cluster_setup_task_lifecycle_walkthrough.spec.js
+comment-deep-link-long-thread.spec.js
 comment-deep-link.spec.js
 committed-context.spec.js
 config-change-card.spec.js
