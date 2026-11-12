@@ -382,6 +382,15 @@ async function shoot(page, name) {
   return file;
 }
 
+// logFailure prints a failing (not known-gap) cell's whole error and stack: the matrix
+// records only the first line, which for an expect() names the matcher but
+// not which of walkCell's several toHaveCount calls it was.
+function logFailure(surface, ref, variant, err) {
+  console.log(
+    `grant matrix: ${surface.id} ${ref} [${variant}] error:\n${err?.stack || err}`,
+  );
+}
+
 // walkCell walks every argVariants(method) set on one surface:
 //   - picks the method from "Add grant…" to reach a held grant on its first
 //     grantable variant (while checking any refused variants, such as
@@ -621,6 +630,7 @@ async function walkCell(
       }
     } catch (err) {
       const msg = String(err.message || err).split("\n")[0];
+      if (!gap) logFailure(surface, ref, variant, err);
       const shot = await shoot(page, `${surface.id}-${ref}-${variant}`);
       if (!isHeld) {
         await clearLeftovers().catch(() => {});
@@ -678,6 +688,7 @@ async function walkCell(
       const shot = await shoot(page, `${surface.id}-${ref}-remove`);
       const last = outcomes[outcomes.length - 1];
       const gap = knownGap(ref, last?.variant || "*", surface.id);
+      if (!gap) logFailure(surface, ref, "remove", err);
       outcomes.push({
         variant: "remove",
         outcome: gap ? "known" : "fail",
