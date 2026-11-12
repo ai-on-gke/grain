@@ -1,0 +1,4 @@
+name: Sensitive path review
+title: "Sensitive review {{pr}}"
+body: |
+  Check {{trigger}} paths on {{pr}}.
