@@ -438,6 +438,14 @@ check "check-qualification: a job known only by display name warns on rerun" 2 \
   "WARNING unmapped UI walk: not a dispatchable job key in nightly.yml" \
   "RERUN nightly unmapped UI walk flake"
 
+# idle-gate is optional and runs on every dispatch, so its retry is a
+# dispatch naming it, with no unknown-key warning.
+qualify "$(jobs_file q-idle-gate-infra "${j[@]}" "$(gh_job "idle-gate" cancelled 100 1 "$recent")")" \
+  "$(checks_file q-checks-idle-gate-infra success)"
+check "check-qualification: a cancelled idle-gate re-runs by its job id" 3 \
+  "RERUN nightly idle-gate infra"
+lacks "check-qualification: idle-gate is a dispatchable job key" "WARNING"
+
 qualify "$(jobs_file q-skipped-retry1 "${j[@]}" "$(gh_job "grant matrix through the UI" failure 100 1 "$recent")" \
   "${j_retry[@]}" "$(gh_job "grant matrix through the UI" skipped 101 1 $((recent + 600)))")" \
   "$(checks_file q-checks-skipped-retry1 success)"

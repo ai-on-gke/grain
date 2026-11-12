@@ -151,6 +151,15 @@ run "qualification=infra" "qualifying_rc=v3.2.0-rc.1" \
 check "optional nightly job grant-matrix-ui dispatches by its job id" 0 \
   "POST $api/actions/workflows/nightly.yml/dispatches {\"ref\":\"v3.2.0-rc.1\",\"inputs\":{\"jobs\":\"grant-matrix-ui\"}}"
 
+# idle-gate runs on every dispatch, so a dispatch naming it is its retry
+# (candidate-gate.sh judges it as an optional job), not a refusal.
+runs "v3.2.0-rc.1:completed:11"
+run "qualification=infra" "qualifying_rc=v3.2.0-rc.1" \
+  "qualification_rerun=nightly:idle-gate:infra"
+check "a cancelled idle-gate re-runs by its job id" 0 \
+  "POST $api/actions/workflows/nightly.yml/dispatches {\"ref\":\"v3.2.0-rc.1\",\"inputs\":{\"jobs\":\"idle-gate\"}}"
+lacks "an idle-gate re-run is not refused" "::error::"
+
 # A job known only by display name is not a key in nightly.yml: refuse
 # loudly rather than dispatch a run in which every job is skipped.
 runs "v3.2.0-rc.1:completed:11"
