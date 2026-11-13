@@ -27,7 +27,7 @@
 //	POST /_fail?n=N&status=502   the next N API requests answer status
 //	GET  /_calls                 every API request, in order (method path status)
 //
-//	sudo go run ghesim.go -addr 127.0.0.1:443 -ctl 127.0.0.1:4481 \
+//	sudo go run ghesim.go -addr 127.0.0.1:443 -ctl 127.0.0.1:4297 \
 //	  -cert ghe.pem -key ghe.key -dir /tmp/s9-ghe -shas /tmp/s9-ghe/shas.json
 package main
 
@@ -111,7 +111,7 @@ func (r *repo) pull(branch, author, merger string, approvers ...string) string {
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:443", "HTTPS address ghe.example.com resolves to")
-	ctl := flag.String("ctl", "127.0.0.1:4481", "plain-HTTP control address")
+	ctl := flag.String("ctl", "127.0.0.1:4297", "plain-HTTP control address")
 	cert := flag.String("cert", "", "TLS certificate for ghe.example.com")
 	key := flag.String("key", "", "TLS key")
 	dir := flag.String("dir", "/tmp/s9-ghe", "work directory")
