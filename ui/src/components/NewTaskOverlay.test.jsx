@@ -337,6 +337,49 @@ describe("NewTaskOverlay", () => {
     expect(createButton).toBeDisabled();
   });
 
+  // Found in the 2026-11-11 intake walkthrough (grain/task-4298 O1): a
+  // greyed-out Create task said nothing about what it was waiting for.
+  // It names the first missing thing on the wrapper its tooltip hangs
+  // on, as AccessGate does for a refused role.
+  it("says why Create task is greyed out, one missing thing at a time", async () => {
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={{ targetRepos: ["acme/widgets"] }}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+    const createButton = screen.getByRole("button", { name: "Create task" });
+    // The reason is the wrapper's title while the tooltip is shut, and
+    // the tooltip it describes itself by while it is open.
+    const why = () => {
+      const wrapper = createButton.closest("[data-create-blocked]");
+      if (!wrapper) return null;
+      const tip = wrapper.getAttribute("aria-describedby");
+      return tip
+        ? document.getElementById(tip).textContent
+        : wrapper.getAttribute("title");
+    };
+
+    expect(why()).toBe("Give the task a title, or pick a template.");
+    await user.type(screen.getByLabelText(/Title/), "Fix");
+    expect(why()).toBe("Pick a repo under Repos, or choose No repo.");
+    // A phone has no hover: a tap on the greyed-out button shows it.
+    await user.click(createButton.closest("[data-create-blocked]"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Pick a repo under Repos, or choose No repo.",
+    );
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
+    await user.click(screen.getByLabelText("Create a new branch"));
+    expect(createButton).toBeDisabled();
+    expect(why()).toBe("Name the new branch, or untick Create a new branch.");
+    await user.type(screen.getByTestId("new-branch-name"), "feature/x");
+    expect(createButton).toBeEnabled();
+    expect(why()).toBeNull();
+  });
+
   it("reads and includes a picked file as an attachment", async () => {
     const upload = {
       filename: "screenshot.png",
