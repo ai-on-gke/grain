@@ -164,18 +164,36 @@
   display: inline-flex;
 }
 
-.boards-menu {
+/* Every rule for the menu's rows carries .boards-menu.pop-menu: the
+   generic ".boards-menu.pop-menu button" rule in tasks-page.component.css
+   (width: 100%) outranked a plain ".boards-menu-row .board-del-btn", so
+   the × stretched across the whole row and squeezed each board's name
+   to an ellipsis 28px wide (2026-11-13 saved boards walkthrough). */
+.boards-menu.pop-menu {
   min-width: 230px;
+  /* As wide as its longest board name and folder, within the screen. */
+  width: max-content;
+  max-width: min(360px, calc(100vw - 32px));
   padding: 6px;
 }
 
-.boards-menu-row {
+/* At phone width the Boards button sits near the left edge, so a menu
+   hung from its right edge opened partly off the screen (2026-11-13
+   saved boards walkthrough): hang it from the left edge instead. */
+@media (max-width: 600px) {
+  .boards-menu.pop-menu {
+    right: auto;
+    left: 0;
+  }
+}
+
+.boards-menu.pop-menu .boards-menu-row {
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
-.boards-menu-row .board-apply-btn {
+.boards-menu.pop-menu .boards-menu-row .board-apply-btn {
   flex: 1;
   min-width: 0;
   border-radius: 6px;
@@ -185,7 +203,14 @@
   white-space: nowrap;
 }
 
-.boards-menu-row .board-del-btn {
+/* A board's folder, after its name: what tells two same-named boards
+   apart by eye (their buttons' accessible names say it too). */
+.boards-menu.pop-menu .boards-menu-row .board-folder {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.boards-menu.pop-menu .boards-menu-row .board-del-btn {
   width: 28px;
   height: 28px;
   padding: 0;
@@ -197,7 +222,7 @@
   color: var(--md-sys-color-on-surface-variant);
 }
 
-.boards-menu-row .board-del-btn:hover {
+.boards-menu.pop-menu .boards-menu-row .board-del-btn:hover {
   color: var(--md-sys-color-error);
   background: var(--md-sys-color-error-container);
 }
