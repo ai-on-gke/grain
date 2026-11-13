@@ -101,6 +101,9 @@ func SyncReviews(ctx context.Context, store *model.Store, now time.Time) error {
 	if err := closeObsoleteReviews(ctx, store, now); err != nil {
 		errs = append(errs, err)
 	}
+	if err := releaseStaleReviewDependencies(ctx, store, now); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
