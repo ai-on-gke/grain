@@ -548,9 +548,14 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       '[data-testid="cancel-upgrade-btn"]',
     )!.click();
     await new Promise((r) => setTimeout(r, 200));
+    // The upgrade in progress, not a scheduled one (2026-11-13 upgrade
+    // cancel walkthrough, F2).
+    expect(api.calls.some((c) => c.key === "DELETE /api/upgrade/current")).toBe(
+      true,
+    );
     expect(
       api.calls.some((c) => c.key === "DELETE /api/upgrade/scheduled"),
-    ).toBe(true);
+    ).toBe(false);
 
     el.querySelector<HTMLButtonElement>(
       '[data-testid="start-upgrade-btn"]',

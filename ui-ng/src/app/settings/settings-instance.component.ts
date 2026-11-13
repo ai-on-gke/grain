@@ -657,7 +657,7 @@ function formatBytes(bytes: number): string {
                 data-testid="cancel-upgrade-btn"
                 [disabled]="
                   !upgradeCancellable() ||
-                  !access.can('DELETE /api/upgrade/scheduled')
+                  !access.can('DELETE /api/upgrade/current')
                 "
                 (click)="cancelUpgrade()"
               >
@@ -1274,8 +1274,13 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected async cancelUpgrade(): Promise<void> {
     try {
+      // The upgrade in progress is DELETE /api/upgrade/current; the
+      // scheduled route only forgets one still waiting for tasks to finish,
+      // so calling it here left the running upgrade going while this card
+      // said it had been cancelled (docs/test-runs/2026-11-13-upgrade-cancel.md
+      // F2).
       await this.api.delete(
-        "DELETE /api/upgrade/scheduled",
+        "DELETE /api/upgrade/current",
         undefined,
         undefined,
         "reason=operator_cancelled",
