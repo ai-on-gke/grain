@@ -1859,6 +1859,14 @@ type configResponse struct {
 	// the shape. false where there is no backend to speak for, the same
 	// silence Config.SandboxShapeIgnored documents.
 	SandboxShapeIgnored bool `json:"sandboxShapeIgnored,omitempty"`
+	// SandboxShapeCeiling is the most this caller may ask for as a task's
+	// own sandbox shape: the deployment's maximum
+	// (model.SandboxShapeLimits.ResolvedMax) for an unlimited caller, and
+	// a limited role's own ceiling beneath it (RoleCeiling) otherwise --
+	// the bound refuseSandboxShapeAboveMax and roleSandboxShapeRefusal
+	// hold a filing to, so the new-task form can show it beside the
+	// fields. Nil for a caller nobody has vouched for.
+	SandboxShapeCeiling *model.SandboxShape `json:"sandboxShapeCeiling,omitempty"`
 	// ChangeTargets is every non-git change target kind this binary has
 	// registered (model.ChangeTargetKinds), as an edition linked in
 	// registers them -- so the new-task form offers a non-git choice only
@@ -2434,6 +2442,17 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.HostSandboxes = s.tasks.runningSandboxBackend() == string(model.SandboxBackendHost)
 	resp.SandboxShapeIgnored = s.tasks.Config.SandboxShapeIgnored
+	if authenticated || singleTenantTrusted(r) {
+		var limits model.SandboxShapeLimits
+		if cfg != nil {
+			limits = cfg.SandboxShapeLimits
+		}
+		ceiling := limits.ResolvedMax()
+		if a := accessRoleFromContext(r.Context()); a != nil && !a.Full {
+			ceiling = limits.RoleCeiling(a.Roles)
+		}
+		resp.SandboxShapeCeiling = &ceiling
+	}
 	resp.ChangeTargets = model.ChangeTargetKinds()
 	if status, ok, err := s.tasks.AgentPause(r.Context()); err != nil {
 		log.Printf("ui: reading the usage-limit pauses for /api/config: %v", err)

@@ -18,11 +18,13 @@ import {
   OnChanges,
   OnInit,
   ViewEncapsulation,
+  computed,
   inject,
   input,
   signal,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
+import type { SandboxShape, SandboxShapeLimits } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import {
@@ -31,6 +33,23 @@ import {
 } from "../shared/pill-select.component";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
+
+// A shape field's number: blank, negative or not a number is 0, which
+// model.SandboxShape reads as "not stated".
+function shapeNumber(raw: string): number {
+  const n = Math.floor(Number(raw));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+// shape without its unstated dimensions, so a cleared field leaves no
+// `"cpus": 0` behind in the saved settings.
+function compactShape(shape: SandboxShape | undefined): SandboxShape {
+  const out: SandboxShape = {};
+  if (shape?.cpus) out.cpus = shape.cpus;
+  if (shape?.memoryMb) out.memoryMb = shape.memoryMb;
+  if (shape?.diskGb) out.diskGb = shape.diskGb;
+  return out;
+}
 
 interface AgentKeysResponse {
   enabled?: boolean;
@@ -997,6 +1016,140 @@ export function formatHostdLabels(
           </div>
         </div>
 
+        <div class="s-card" data-testid="card-sandbox-shape-limits">
+          <div>
+            <h3 class="s-card-title">Per-task sandbox ceilings</h3>
+            <p class="s-card-desc">
+              The most a task may ask for as its own sandbox shape. The maximum
+              binds everyone, grain/operator included; a role ceiling holds a
+              limited role lower. A request above either is refused, never
+              shrunk.
+            </p>
+          </div>
+          @if (state.config()?.sandboxShapeIgnored) {
+            <span class="s-hint" data-testid="shape-limits-ignored"
+              >This deployment's sandboxes have no shape of their own, so no
+              task can ask for one until the backend changes.</span
+            >
+          }
+          <div class="s-toggle-copy">
+            <span class="s-toggle-name">Deployment maximum</span>
+            <span class="s-hint"
+              >Blank is grain's default. In effect now:
+              <span data-testid="shape-max-effective">{{
+                shapeMaxEffective()
+              }}</span
+              >.</span
+            >
+          </div>
+          <div class="s-grid">
+            @for (dim of shapeDims; track dim.key) {
+              <div class="s-field">
+                <label class="s-label" [for]="'shape-max-' + dim.key">{{
+                  dim.label
+                }}</label>
+                <input
+                  [id]="'shape-max-' + dim.key"
+                  class="s-input tabular"
+                  type="number"
+                  min="0"
+                  [attr.data-testid]="'input-shape-max-' + dim.key"
+                  [placeholder]="dim.fallback"
+                  [value]="shapeLimits().max?.[dim.key] || ''"
+                  [disabled]="!canWriteSettings()"
+                  (input)="setShapeMax(dim.key, $any($event.target).value)"
+                />
+              </div>
+            }
+          </div>
+          <div class="s-toggle-copy">
+            <span class="s-toggle-name">Role ceilings</span>
+            <span class="s-hint"
+              >A blank dimension, or a role with no ceiling here, is held to the
+              maximum.</span
+            >
+          </div>
+          @for (role of shapeRoleNames(); track role) {
+            <div class="s-shape-role" [attr.data-testid]="'shape-role-' + role">
+              <div class="s-row">
+                <code class="s-code">{{ role }}</code>
+                @if (canWriteSettings()) {
+                  <button
+                    type="button"
+                    class="btn-text s-btn-sm"
+                    [attr.data-testid]="'remove-shape-role-' + role"
+                    [attr.aria-label]="'Remove the ceiling for ' + role"
+                    (click)="removeShapeRole(role)"
+                  >
+                    Remove
+                  </button>
+                }
+              </div>
+              <div class="s-grid">
+                @for (dim of shapeDims; track dim.key) {
+                  <div class="s-field">
+                    <label
+                      class="s-label"
+                      [for]="'shape-role-' + role + '-' + dim.key"
+                      >{{ dim.label }}</label
+                    >
+                    <input
+                      [id]="'shape-role-' + role + '-' + dim.key"
+                      class="s-input tabular"
+                      type="number"
+                      min="0"
+                      [attr.data-testid]="
+                        'input-shape-role-' + role + '-' + dim.key
+                      "
+                      [placeholder]="'Max (' + shapeMaxOf(dim.key) + ')'"
+                      [value]="shapeLimits().roles?.[role]?.[dim.key] || ''"
+                      [disabled]="!canWriteSettings()"
+                      (input)="
+                        setShapeRole(role, dim.key, $any($event.target).value)
+                      "
+                    />
+                  </div>
+                }
+              </div>
+            </div>
+          } @empty {
+            <span class="s-hint" data-testid="shape-roles-empty"
+              >No role ceilings: every role is held to the maximum.</span
+            >
+          }
+          @if (canWriteSettings()) {
+            <div class="s-inline">
+              <input
+                class="s-input s-input-inline"
+                type="text"
+                list="shape-role-choices"
+                placeholder="grain/contributor"
+                aria-label="Role to add a ceiling for"
+                autocomplete="off"
+                spellcheck="false"
+                data-testid="input-shape-role-new"
+                [value]="newShapeRole()"
+                (input)="newShapeRole.set($any($event.target).value)"
+                (keydown.enter)="addShapeRole(); $event.preventDefault()"
+              />
+              <datalist id="shape-role-choices">
+                @for (r of shapeRoleChoices(); track r) {
+                  <option [value]="r"></option>
+                }
+              </datalist>
+              <button
+                type="button"
+                class="btn-outlined s-btn-sm"
+                data-testid="add-shape-role"
+                [disabled]="!newShapeRole().trim()"
+                (click)="addShapeRole()"
+              >
+                Add role ceiling
+              </button>
+            </div>
+          }
+        </div>
+
         <div class="s-card" data-testid="card-sandbox-overcommit">
           <h3 class="s-card-title">Overcommit &amp; Kubernetes pod settings</h3>
           <div class="s-grid">
@@ -1627,6 +1780,99 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     this.loadForSection();
   }
 
+  // Settings → Sandboxes' per-task ceilings (model.SandboxShapeLimits):
+  // the whole object is one settings field, replaced on save, so every
+  // edit writes it back entire.
+  protected readonly shapeDims: readonly {
+    key: keyof SandboxShape;
+    label: string;
+    fallback: string;
+  }[] = [
+    // model.DefaultMaxSandboxCPUs, DefaultMaxSandboxMemoryMB, DefaultMaxSandboxDiskGB.
+    { key: "cpus", label: "vCPUs", fallback: "32" },
+    { key: "memoryMb", label: "Memory (MiB)", fallback: "131072" },
+    { key: "diskGb", label: "Disk (GiB)", fallback: "1024" },
+  ];
+  protected readonly newShapeRole = signal("");
+  protected readonly accessRoleNames = signal<string[]>([]);
+
+  protected readonly shapeLimits = computed<SandboxShapeLimits>(
+    () =>
+      this.state.val<SandboxShapeLimits | null>("sandboxShapeLimits", null) ??
+      {},
+  );
+  protected readonly shapeRoleNames = computed(() =>
+    Object.keys(this.shapeLimits().roles ?? {}).sort(),
+  );
+  protected readonly shapeRoleChoices = computed(() => {
+    const taken = new Set(this.shapeRoleNames());
+    return this.accessRoleNames().filter(
+      (r) => !taken.has(r) && r !== "grain/operator",
+    );
+  });
+
+  protected shapeMaxOf(key: keyof SandboxShape): string {
+    const stored = this.shapeLimits().max?.[key];
+    if (stored) return String(stored);
+    return this.shapeDims.find((d) => d.key === key)?.fallback ?? "";
+  }
+
+  protected readonly shapeMaxEffective = computed(() => {
+    this.shapeLimits();
+    return `${this.shapeMaxOf("cpus")} vCPU · ${this.shapeMaxOf("memoryMb")} MiB · ${this.shapeMaxOf("diskGb")} GiB disk`;
+  });
+
+  private writeShapeLimits(next: SandboxShapeLimits): void {
+    const out: SandboxShapeLimits = { max: compactShape(next.max) };
+    const roles = next.roles ?? {};
+    if (Object.keys(roles).length > 0) {
+      out.roles = {};
+      for (const [name, shape] of Object.entries(roles)) {
+        out.roles[name] = compactShape(shape);
+      }
+    }
+    this.state.setField("sandboxShapeLimits", out);
+  }
+
+  protected setShapeMax(key: keyof SandboxShape, raw: string): void {
+    const cur = this.shapeLimits();
+    this.writeShapeLimits({
+      ...cur,
+      max: { ...cur.max, [key]: shapeNumber(raw) },
+    });
+  }
+
+  protected setShapeRole(
+    role: string,
+    key: keyof SandboxShape,
+    raw: string,
+  ): void {
+    const cur = this.shapeLimits();
+    const roles = { ...(cur.roles ?? {}) };
+    roles[role] = { ...roles[role], [key]: shapeNumber(raw) };
+    this.writeShapeLimits({ ...cur, roles });
+  }
+
+  protected addShapeRole(): void {
+    const role = this.newShapeRole().trim();
+    if (!role) return;
+    const cur = this.shapeLimits();
+    if (!cur.roles?.[role]) {
+      this.writeShapeLimits({
+        ...cur,
+        roles: { ...(cur.roles ?? {}), [role]: {} },
+      });
+    }
+    this.newShapeRole.set("");
+  }
+
+  protected removeShapeRole(role: string): void {
+    const cur = this.shapeLimits();
+    const roles = { ...(cur.roles ?? {}) };
+    delete roles[role];
+    this.writeShapeLimits({ ...cur, roles });
+  }
+
   protected canWriteSettings(): boolean {
     return (
       this.access.can("POST /api/settings") &&
@@ -1716,6 +1962,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
           .catch(() => undefined);
       }
     } else if (sec === "sandboxes") {
+      if (this.access.can("GET /api/access/principals")) {
+        void this.api
+          .get<{ roles?: { name: string }[] }>("GET /api/access/principals")
+          .then((p) =>
+            this.accessRoleNames.set(
+              (p?.roles ?? []).map((r) => r.name).filter(Boolean),
+            ),
+          )
+          .catch(() => undefined);
+      }
       if (this.access.can("GET /api/persistent-sandboxes")) {
         void this.api
           .get<

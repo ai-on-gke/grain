@@ -15,6 +15,7 @@
 import type {
   AttachmentUpload,
   GrainConfig,
+  SandboxShape,
   Task,
   Template,
 } from "../api/models";
@@ -493,8 +494,49 @@ export function buildPayload(
 }
 
 export interface Problem {
-  field: "title" | "newBranchName" | "templateField";
+  field: "title" | "newBranchName" | "templateField" | "sandboxShape";
   message: string;
+}
+
+// "4 vCPU · 16384 MiB · 100 GiB disk", naming only the dimensions s
+// states (model.SandboxShape.Describe).
+export function describeSandboxShape(
+  s: SandboxShape | null | undefined,
+): string {
+  const parts: string[] = [];
+  if (s?.cpus) parts.push(`${s.cpus} vCPU`);
+  if (s?.memoryMb) parts.push(`${s.memoryMb} MiB`);
+  if (s?.diskGb) parts.push(`${s.diskGb} GiB disk`);
+  return parts.join(" · ");
+}
+
+// Each dimension the draft asks for above ceiling, as "CPUs 64 (up to
+// 32)" -- the client's reading of model.SandboxShape.Above, so the form
+// can warn before the server refuses. A dimension either side leaves at
+// zero is never above.
+export function sandboxShapeAbove(
+  d: Pick<NewTaskDraft, "sandboxCpus" | "sandboxMemoryMb" | "sandboxDiskGb">,
+  ceiling: SandboxShape | null | undefined,
+): string[] {
+  if (!ceiling) return [];
+  const out: string[] = [];
+  const check = (name: string, v: number, limit?: number) => {
+    if (v > 0 && limit && v > limit) out.push(`${name} ${v} (up to ${limit})`);
+  };
+  check("CPUs", d.sandboxCpus, ceiling.cpus);
+  check("memory", d.sandboxMemoryMb, ceiling.memoryMb);
+  check("disk", d.sandboxDiskGb, ceiling.diskGb);
+  return out;
+}
+
+// Whether a refusal from POST /api/tasks is about the sandbox shape: the
+// deployment maximum's 400 (refuseSandboxShapeAboveMax), a role
+// ceiling's 403 (roleSandboxShapeRefusal), or a backend with no shape
+// to apply (pkg/ui/client.go).
+export function isSandboxShapeRefusal(message: string): boolean {
+  return /sandbox shape|sandboxCpus|sandboxMemoryMb|sandboxDiskGb/i.test(
+    message,
+  );
 }
 
 export function validate(

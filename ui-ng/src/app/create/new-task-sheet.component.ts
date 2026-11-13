@@ -63,12 +63,15 @@ import {
   type Problem,
   buildPayload,
   defaultCapabilitiesForRepo,
+  describeSandboxShape,
   directorMessage,
   emptyDraft,
   fromTemplateStem,
   hasHistory,
+  isSandboxShapeRefusal,
   lastBaseForRepo,
   resolveFields,
+  sandboxShapeAbove,
   targetableRepos,
   validate,
 } from "./new-task-form";
@@ -190,14 +193,16 @@ const FRAMEWORKS: readonly PillOption[] = [
                 </p>
               }
               @if (error(); as err) {
-                <p
-                  id="new-task-error"
-                  class="banner banner-error"
-                  role="alert"
-                  data-testid="new-task-error"
-                >
-                  {{ err.message }}
-                </p>
+                @if (err.field !== "sandboxShape") {
+                  <p
+                    id="new-task-error"
+                    class="banner banner-error"
+                    role="alert"
+                    data-testid="new-task-error"
+                  >
+                    {{ err.message }}
+                  </p>
+                }
               }
 
               <!-- Optional Template Launcher & Live Composition Preview -->
@@ -904,9 +909,24 @@ const FRAMEWORKS: readonly PillOption[] = [
           }
         }
         @case ("sandboxShape") {
-          @if (!shapeIgnored()) {
-            <div class="field" data-testid="nt-sandbox-shape">
+          @if (shapeIgnored()) {
+            <div class="field" data-testid="nt-shape-ignored">
               <span>{{ f.label || "Sandbox shape & resources" }}</span>
+              <p class="nt-shape-note">
+                This deployment's sandboxes have no shape of their own, so a
+                task cannot ask for its own vCPUs, memory or disk here.
+              </p>
+            </div>
+          } @else {
+            <div
+              class="field"
+              data-testid="nt-sandbox-shape"
+              role="group"
+              aria-labelledby="nt-shape-label"
+            >
+              <span id="nt-shape-label">{{
+                f.label || "Sandbox shape & resources"
+              }}</span>
               <div class="nt-inline-row" role="group" aria-label="Sandbox tier">
                 @for (tier of sandboxTiers; track tier.id) {
                   <button
@@ -922,39 +942,72 @@ const FRAMEWORKS: readonly PillOption[] = [
               </div>
               <div class="nt-shape-grid">
                 <label class="field">
-                  <span>CPUs</span>
+                  <span>vCPUs</span>
                   <input
+                    #shapeCpus
                     type="number"
                     min="0"
                     data-testid="nt-sandbox-cpus"
                     placeholder="Default"
+                    [attr.max]="shapeCeiling()?.cpus || null"
+                    [attr.aria-invalid]="shapeInvalid() ? 'true' : null"
+                    aria-describedby="nt-shape-ceiling"
                     [value]="draft().sandboxCpus || ''"
                     (input)="setNum('sandboxCpus', val($event))"
                   />
                 </label>
                 <label class="field">
-                  <span>Memory (MB)</span>
+                  <span>Memory (MiB)</span>
                   <input
                     type="number"
                     min="0"
                     data-testid="nt-sandbox-mem"
                     placeholder="Default"
+                    [attr.max]="shapeCeiling()?.memoryMb || null"
+                    [attr.aria-invalid]="shapeInvalid() ? 'true' : null"
+                    aria-describedby="nt-shape-ceiling"
                     [value]="draft().sandboxMemoryMb || ''"
                     (input)="setNum('sandboxMemoryMb', val($event))"
                   />
                 </label>
                 <label class="field">
-                  <span>Disk (GB)</span>
+                  <span>Disk (GiB)</span>
                   <input
                     type="number"
                     min="0"
                     data-testid="nt-sandbox-disk"
                     placeholder="Default"
+                    [attr.max]="shapeCeiling()?.diskGb || null"
+                    [attr.aria-invalid]="shapeInvalid() ? 'true' : null"
+                    aria-describedby="nt-shape-ceiling"
                     [value]="draft().sandboxDiskGb || ''"
                     (input)="setNum('sandboxDiskGb', val($event))"
                   />
                 </label>
               </div>
+              @if (shapeCeilingText(); as ceiling) {
+                <p
+                  id="nt-shape-ceiling"
+                  class="nt-shape-note"
+                  data-testid="nt-shape-ceiling"
+                >
+                  {{ ceiling }}
+                </p>
+              }
+              @if (error()?.field === "sandboxShape") {
+                <p
+                  class="nt-shape-error"
+                  role="alert"
+                  data-testid="nt-shape-error"
+                >
+                  {{ error()?.message }}
+                </p>
+              } @else if (shapeAbove().length) {
+                <p class="nt-shape-error" data-testid="nt-shape-above">
+                  Above your ceiling: {{ shapeAbove().join(", ") }}. This task
+                  will be refused as it stands.
+                </p>
+              }
             </div>
           }
         }
@@ -1070,6 +1123,8 @@ export class NewTaskSheetComponent {
     viewChild<ElementRef<HTMLInputElement>>("titleInput");
   private readonly branchInput =
     viewChild<ElementRef<HTMLInputElement>>("branchInput");
+  private readonly shapeCpusInput =
+    viewChild<ElementRef<HTMLInputElement>>("shapeCpus");
 
   private readonly knownTasks = computed(() => {
     const byId = new Map<string, Task>();
@@ -1217,7 +1272,7 @@ export class NewTaskSheetComponent {
   });
   protected readonly more = computed(() => {
     const hidden = !this.access.can("POST /api/tasks", this.repoForAccess())
-      ? new Set(["model", "sandboxCpus"])
+      ? new Set(["model", "sandboxShape"])
       : new Set();
     return this.byVisibility("more").filter(
       (id) =>
@@ -1242,7 +1297,31 @@ export class NewTaskSheetComponent {
     () => (this.config()?.["defaultModel"] as string | undefined) ?? "",
   );
   protected readonly shapeIgnored = computed(
-    () => !!this.config()?.["sandboxShapeIgnored"],
+    () => !!this.config()?.sandboxShapeIgnored,
+  );
+  protected readonly shapeCeiling = computed(
+    () => this.config()?.sandboxShapeCeiling ?? null,
+  );
+  // What the signed-in caller may ask for, and whose bound it is: the
+  // deployment maximum for an unlimited role, the role's own ceiling
+  // otherwise (GET /api/config's sandboxShapeCeiling).
+  protected readonly shapeCeilingText = computed(() => {
+    const shape = describeSandboxShape(this.shapeCeiling());
+    if (!shape) return "";
+    if (this.access.isFullAccess()) {
+      return `Up to ${shape}: this deployment's maximum.`;
+    }
+    const role = this.access.roleLabel();
+    return `Up to ${shape}: the ceiling for your ${
+      this.access.roles().length > 1 ? "roles" : "role"
+    }${role ? " " + role : ""}.`;
+  });
+  protected readonly shapeAbove = computed(() =>
+    sandboxShapeAbove(this.draft(), this.shapeCeiling()),
+  );
+  protected readonly shapeInvalid = computed(
+    () =>
+      this.shapeAbove().length > 0 || this.error()?.field === "sandboxShape",
   );
   protected readonly dependable = computed(() => {
     const picked = new Set(this.draft().dependsOn);
@@ -1552,12 +1631,14 @@ export class NewTaskSheetComponent {
   ): void {
     const n = Math.max(0, Math.floor(Number(raw) || 0));
     this.set(k, n);
+    if (this.error()?.field === "sandboxShape") this.error.set(null);
   }
 
   protected applySandboxTier(cpus: number, mem: number, disk: number): void {
     this.set("sandboxCpus", cpus);
     this.set("sandboxMemoryMb", mem);
     this.set("sandboxDiskGb", disk);
+    if (this.error()?.field === "sandboxShape") this.error.set(null);
   }
 
   protected val(ev: Event): string {
@@ -1807,10 +1888,20 @@ export class NewTaskSheetComponent {
       this.svc.close();
       this.announce(created, d.approved, !!d.workstream);
     } catch (err) {
-      this.error.set({
-        field: "title",
-        message: `The task was not filed: ${errorText(err)}`,
-      });
+      const message = `The task was not filed: ${errorText(err)}`;
+      if (isSandboxShapeRefusal(message) && !this.shapeIgnored()) {
+        // Said beside the fields it is about, opening "More options" if
+        // that is where they are, rather than at the top of the sheet.
+        this.error.set({ field: "sandboxShape", message });
+        this.moreOpen.set(true);
+        setTimeout(() => {
+          const input = this.shapeCpusInput()?.nativeElement;
+          input?.scrollIntoView?.({ block: "center" });
+          input?.focus();
+        });
+      } else {
+        this.error.set({ field: "title", message });
+      }
     } finally {
       this.busy.set(false);
     }

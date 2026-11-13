@@ -61,7 +61,26 @@ export interface GrainConfig {
   models?: string[];
   defaultModel?: string;
   customFields?: CustomFieldDeclaration[];
+  // True when this deployment's sandbox backend has no shape of its own
+  // to apply, so a per-task size is refused (pkg/ui ConfigResponse).
+  sandboxShapeIgnored?: boolean;
+  // The most this caller may ask for as a task's own sandbox shape: the
+  // deployment maximum, or a limited role's ceiling beneath it.
+  sandboxShapeCeiling?: SandboxShape | null;
   [key: string]: unknown;
+}
+
+// model.SandboxShape: a zero (or absent) dimension is "not stated".
+export interface SandboxShape {
+  cpus?: number;
+  memoryMb?: number;
+  diskGb?: number;
+}
+
+// model.SandboxShapeLimits, as GET/PUT /api/settings carry it.
+export interface SandboxShapeLimits {
+  max?: SandboxShape;
+  roles?: Record<string, SandboxShape>;
 }
 
 export interface PullRequestRef {

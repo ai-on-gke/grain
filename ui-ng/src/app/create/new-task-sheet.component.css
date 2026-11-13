@@ -263,3 +263,21 @@
     flex-wrap: wrap;
   }
 }
+
+.nt-shape-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.nt-shape-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--md-sys-color-error);
+}
+
+.nt-shape-grid input[aria-invalid="true"] {
+  border-color: var(--md-sys-color-error);
+}
