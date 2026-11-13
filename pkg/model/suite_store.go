@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -536,6 +537,11 @@ func fireSuitePass(ctx context.Context, tx *sql.Tx, runID int64, suiteID string,
 			return err
 		}
 		task := composed[i].Task(id, SuitePrincipal, ReasonSuite, now)
+		for _, tag := range opts.Tags {
+			if tag != "" && !slices.Contains(task.Tags, tag) {
+				task.Tags = append(task.Tags, tag)
+			}
+		}
 		task.OrderKey = orderKey
 		orderKey += orderKeySpacing
 		if err := putTask(ctx, tx, task); err != nil {
@@ -580,6 +586,10 @@ type SuiteRunOptions struct {
 	Tag      string
 	Fields   map[string]string
 	Priority int
+	// Tags go on every task the run files. Unlike the rest they outlive
+	// the first pass: FireNextPass copies the schedule-group tags the
+	// run's earlier tasks carry onto each later pass (suiteRunGroupTags).
+	Tags []string
 }
 
 // CreateSuiteRunWith is CreateSuiteRun with opts applied to the first
@@ -617,8 +627,13 @@ func (s *Store) SuiteRunsTagged(ctx context.Context, tag string) ([]SuiteRun, er
 // doc comment on the two things that buys). Its own method rather than
 // a fifth positional argument on CreateSuiteRun, since every existing
 // caller starts a run by hand and has no schedule to name.
-func (s *Store) CreateScheduledSuiteRun(ctx context.Context, suite Suite, target RepoRef, base, scheduleID string, now time.Time) (SuiteRun, error) {
-	return s.createSuiteRun(ctx, suite, target, base, SuiteRunOptions{Tag: scheduleID}, now)
+//
+// tags, when given, go on every task the run files, in every pass of it
+// (SuiteRunOptions.Tags): fireSuiteSchedule passes its overlap group's
+// tag (ScheduleOverlapGroupTag), so the run keeps holding the group after
+// the schedule that started it is renamed or withdrawn while it runs.
+func (s *Store) CreateScheduledSuiteRun(ctx context.Context, suite Suite, target RepoRef, base, scheduleID string, now time.Time, tags ...string) (SuiteRun, error) {
+	return s.createSuiteRun(ctx, suite, target, base, SuiteRunOptions{Tag: scheduleID, Tags: tags}, now)
 }
 
 func (s *Store) createSuiteRun(ctx context.Context, suite Suite, target RepoRef, base string, opts SuiteRunOptions, now time.Time) (SuiteRun, error) {
@@ -684,8 +699,12 @@ func (s *Store) FireNextPass(ctx context.Context, run SuiteRun, now time.Time) (
 	}
 	next := run.CurrentPass() + 1
 	err = s.write(ctx, fmt.Sprintf("fire pass %d of suite run %d", next, run.ID), func(tx *sql.Tx) error {
+		tags, err := suiteRunGroupTags(ctx, tx, run.ID)
+		if err != nil {
+			return err
+		}
 		return fireSuitePass(ctx, tx, run.ID, run.SuiteID, run.Items, templates, run.Target, run.Base,
-			run.RequireApproval, run.AutoMerge, run.AutoApproveProposals, SuiteRunOptions{}, next, orderKey, now)
+			run.RequireApproval, run.AutoMerge, run.AutoApproveProposals, SuiteRunOptions{Tags: tags}, next, orderKey, now)
 	})
 	if err != nil {
 		return SuiteRun{}, err
@@ -709,4 +728,82 @@ func (s *Store) CompleteSuiteRun(ctx context.Context, id int64, status SuiteRunS
 			string(status), nullable(lastError), now.UTC(), id)
 		return err
 	})
+}
+
+// suiteRunGroupTags is the overlap-group tags (ScheduleOverlapGroupTag)
+// the tasks run has already filed carry -- what its first pass was
+// started with (CreateScheduledSuiteRun), so a later pass holds the
+// group as the first one did even once the schedule is gone.
+func suiteRunGroupTags(ctx context.Context, tx *sql.Tx, runID int64) ([]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		"SELECT DISTINCT `g`.`tag` FROM `task_tag` AS `g` "+
+			"JOIN `suite_run_task` AS `rt` ON `rt`.`task_id` = `g`.`task_id` "+
+			"WHERE `rt`.`run_id` = ? AND `g`.`tag` LIKE ? ORDER BY `g`.`tag`",
+		runID, scheduleGroupTagPrefix+"%")
+	if err != nil {
+		return nil, fmt.Errorf("reading the overlap-group tags of suite run %d: %w", runID, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, err
+		}
+		out = append(out, tag)
+	}
+	return out, rows.Err()
+}
+
+// ScheduleOfSuiteRunTask is the schedule that started the suite run task
+// id was filed by (SuiteRun.ScheduleID), or "" when it was not filed by
+// a scheduled suite run.
+func (s *Store) ScheduleOfSuiteRunTask(ctx context.Context, id string) (string, error) {
+	var sched sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		"SELECT `r`.`schedule_id` FROM `suite_run_task` AS `rt` "+
+			"JOIN `suite_run` AS `r` ON `r`.`id` = `rt`.`run_id` WHERE `rt`.`task_id` = ?", id).Scan(&sched)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading the suite run of %s: %w", id, err)
+	}
+	return sched.String, nil
+}
+
+// ActiveSuiteRunSchedulesWithGroupTag lists the schedule_id (empty when
+// started without one) of every active suite run whose tasks carry
+// groupTag (ScheduleOverlapGroupTag), oldest run first.
+//
+// In orchestrator.RunCycle, reconcileSchedule runs ahead of
+// reconcileSuites, so between one pass's tasks closing and FireNextPass
+// filing the next -- or while a finished pass waits on RequireApproval --
+// an active run whose schedule was renamed, withdrawn, or moved out of
+// the group has no open tasks yet still holds the group.
+func (s *Store) ActiveSuiteRunSchedulesWithGroupTag(ctx context.Context, groupTag string) ([]string, error) {
+	if groupTag == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT `r`.`schedule_id` FROM `suite_run` AS `r` "+
+			"WHERE `r`.`status` = ? AND EXISTS ("+
+			"SELECT 1 FROM `suite_run_task` AS `rt` "+
+			"JOIN `task_tag` AS `g` ON `g`.`task_id` = `rt`.`task_id` "+
+			"WHERE `rt`.`run_id` = `r`.`id` AND `g`.`tag` = ?) "+
+			"ORDER BY `r`.`id`",
+		string(SuiteRunActive), groupTag)
+	if err != nil {
+		return nil, fmt.Errorf("reading active suite runs with tag %q: %w", groupTag, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var sched sql.NullString
+		if err := rows.Scan(&sched); err != nil {
+			return nil, err
+		}
+		out = append(out, sched.String)
+	}
+	return out, rows.Err()
 }

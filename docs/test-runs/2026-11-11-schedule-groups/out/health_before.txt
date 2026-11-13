@@ -1,0 +1,10 @@
+WARNING: target repositories missing their git host:
+  acme/widgets: this entry resolves to 127.0.0.1:4260; did you mean github.com/acme/widgets?
+  acme/other: this entry resolves to 127.0.0.1:4260; did you mean github.com/acme/other?
+
+FAILING: schedules with no run in more than twice their cadence:
+  repo:schedule:acme:widgets:c-workflow (workflow check) on acme/widgets: every 10m0s, last ran never
+    why: held: the task schedule "a-task" (repo:schedule:acme:widgets:a-task) filed is still open, and both are in overlap group "train"
+  repo:schedule:acme:widgets:workflow.live (workflow live) on acme/widgets: every 24h0m0s, last ran never
+    why: this repository uses github CI mode, so .grain/workflows/live.yml's cron is dropped at every firing: port it to .github/workflows/ or declare a .grain/schedules/ entry with grain-ci: true
+
