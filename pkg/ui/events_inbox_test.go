@@ -253,3 +253,56 @@ func TestEventsCarryLocalScriptApprovals(t *testing.T) {
 		t.Fatalf("an event carried a call's argument: %s", rec.Body.String())
 	}
 }
+
+// TestEventsCarryAnExpiryASweepFoundFirst is the 2026-11-13 live-events
+// walkthrough's F1: a host-script approval whose deadline passed was
+// settled as expired by the sweep any registry read runs (here a task-page
+// read, as the Inbox makes), and the caller's /expire then found nothing
+// pending, so local_script.answered was never recorded and every reader
+// kept the call as waiting. Each expiry is now recorded once, whichever
+// path settles it.
+func TestEventsCarryAnExpiryASweepFoundFirst(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := localScriptsClient(t)
+	task := create(t, client, ctx)
+	grantLocalScripts(t, store, ctx, task.ID)
+	handler := ui.NewServerWithClient(client)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	run := serverAccessClient(handler, srv.URL)
+
+	head, err := store.LatestIntegrationEventID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := run.RequestLocalScriptApproval(ctx, task.ID, approvalRequest{
+		ID: "1", Tool: "local_deploy", Script: "deploy", Deadline: time.Now().Add(300 * time.Millisecond),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	// A task-page read sweeps the registry, settling the call as expired.
+	if rec := doWithHeaders(t, handler, http.MethodGet, "/api/tasks/"+task.ID, "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("reading the task: %d %s", rec.Code, rec.Body.String())
+	}
+	// The caller gives up afterwards, as its own deadline ends.
+	if rec := doWithHeaders(t, handler, http.MethodPost,
+		"/api/tasks/"+task.ID+"/local-script-approvals/"+approval.ID+"/expire", "", nil); rec.Code != http.StatusOK {
+		t.Fatalf("expiring: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec := doWithHeaders(t, handler, http.MethodGet,
+		"/api/events?since="+itoa(head)+"&types=local_script.pending,local_script.answered", "", nil)
+	var got []string
+	for _, ev := range apiEventsOf(t, rec.Code, rec.Body.String()) {
+		got = append(got, string(ev.Type)+" "+ev.ApprovalID+" "+ev.Decision)
+	}
+	want := []string{
+		"local_script.pending " + approval.ID + " ",
+		"local_script.answered " + approval.ID + " expired",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("local-script events:\n%s\nwant (each once):\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
