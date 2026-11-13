@@ -493,6 +493,16 @@ func repairQueuedNote(e queueEntry) string {
 
 func repairNeededNote(e queueEntry) string {
 	cause := healthReason(e.health, e.detail, e.checks, e.grain)
+	// A pull request stacked on another task's branch -- a review's, or a
+	// fix's -- is never sent for a repair (syncEntry's repair arm is for
+	// queue members only), so saying one is coming, or that it is waiting
+	// its turn, left review 4713 reading "repair needed" for seventeen
+	// hours with nothing ever going to file it. Say what does unblock it.
+	if isReviewTask(e.task) || e.task.Origin.Reason == model.ReasonFix {
+		return cause + ", and the merge queue does not repair a pull request stacked on another " +
+			"task's branch: push a fix to it by hand, or close this task so the change it is " +
+			"stacked on stops waiting for it (a newer review of that change supersedes it)"
+	}
 	// The half of it nobody here can fix, where there is one. A repair is
 	// still coming -- this entry owns some of its red -- but a row that
 	// said only "needs repairing" would let a person read the repair as
