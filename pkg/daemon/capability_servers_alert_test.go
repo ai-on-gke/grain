@@ -90,3 +90,37 @@ func TestAWaitingCapabilityServerIsRaisedAsWaiting(t *testing.T) {
 		t.Errorf("after attaching, open notification = %+v (err %v), want none", n, err)
 	}
 }
+
+// A server whose runtime could not start -- its data-plane port occupied --
+// is raised with why it could not start rather than blaming its saved
+// configuration or sending the operator to Settings, and clears once it
+// attaches.
+func TestAStartFailureCapabilityServerIsRaisedWithoutBlamingSettings(t *testing.T) {
+	ctx := context.Background()
+	store, closeStore := openTestStore(t, t.TempDir())
+	defer closeStore()
+	const id = "https://grain.dev/capabilities/git"
+	onDrop, onAttach := capabilityServerAlerts(ctx, store)
+	subject := model.NotificationSubject(model.FamilyCapabilityServerDown, id)
+
+	onDrop(servers.Status{
+		ID:         id,
+		State:      servers.Failed,
+		StartError: "could not start: port 4254 in use",
+		Error:      "capability server https://grain.dev/capabilities/git: configure: server reported an error: git: listen tcp 127.0.0.1:4254: bind: address already in use",
+	})
+	n, err := store.OpenNotification(ctx, subject)
+	if err != nil || n == nil {
+		t.Fatalf("no open notification for %s (err %v)", subject, err)
+	}
+	if !strings.Contains(n.Title, "could not start: port 4254 in use") ||
+		!strings.Contains(n.Body, "every minute") ||
+		strings.Contains(n.Title, "refused its configuration") ||
+		strings.Contains(n.Body, "Fix it in Settings") {
+		t.Errorf("notification = %q / %q, want start failure named and retried without blaming Settings", n.Title, n.Body)
+	}
+	onAttach(id)
+	if n, err := store.OpenNotification(ctx, subject); err != nil || n != nil {
+		t.Errorf("after attaching, open notification = %+v (err %v), want none", n, err)
+	}
+}

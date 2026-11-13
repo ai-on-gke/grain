@@ -44,8 +44,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -127,6 +130,11 @@ type Status struct {
 	// yet: a configuration somebody saved that the server will not run
 	// under, which is worth raising rather than waiting quietly.
 	ConfigRefused bool `json:"configRefused,omitempty"`
+	// StartError is why a server in Failed could not start --
+	// "could not start: port 4254 in use", or "could not start" -- when
+	// its process exited at start or its configure failed starting a
+	// listener or runtime resource rather than refusing its config.
+	StartError string `json:"startError,omitempty"`
 	// Waiting is what a needs-config server's configure said it is
 	// waiting on outside grain (protocol.WaitingError) -- a credential
 	// renewed on the host, say -- in its own short words, read after
@@ -247,6 +255,8 @@ type entry struct {
 	// configRefused is the server's configure having refused cfg.Config
 	// (Status.ConfigRefused).
 	configRefused bool
+	// startErr is why the server could not start (Status.StartError).
+	startErr string
 	// wasAttached marks an entry that was attached under this or an
 	// earlier configuration, so its falling to failed or needs-config is
 	// a drop (Options.OnDrop) and not a server that never came up.
@@ -424,7 +434,7 @@ func (r *Registry) Statuses() []Status {
 }
 
 func (e *entry) status(id string) Status {
-	s := Status{ID: id, State: e.state, Error: e.err, Transport: "http", Builtin: e.cfg.Builtin, ConfigRefused: e.configRefused, Waiting: e.waiting}
+	s := Status{ID: id, State: e.state, Error: e.err, Transport: "http", Builtin: e.cfg.Builtin, ConfigRefused: e.configRefused, StartError: e.startErr, Waiting: e.waiting}
 	s.Aliases = append([]string(nil), e.cfg.Aliases...)
 	if e.state == NeedsConfig && !e.hostRetry {
 		s.Error, s.Reason = "", e.err
@@ -550,7 +560,7 @@ func (r *Registry) Sync(ctx context.Context, servers map[string]protocol.ServerC
 		switch {
 		case cfg.Disabled:
 			if state != Disabled {
-				r.set(id, func(e *entry) { e.state, e.err, e.configRefused, e.waiting = Disabled, "", false, "" })
+				r.set(id, func(e *entry) { e.state, e.err, e.configRefused, e.startErr, e.waiting = Disabled, "", false, "", "" })
 				if r.opts.OnClear != nil {
 					r.opts.OnClear(id)
 				}
@@ -632,14 +642,20 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 		if isConfigure && errors.As(err, &we) {
 			waiting = we.Waiting
 		}
+		startFailed := (isConfigure && protocol.IsStartError(err)) || (exited && !cfg.OnHost())
+		startErr := ""
+		if startFailed {
+			startErr = startErrorLabel(msg)
+		}
 		state := Failed
-		if cfg.Builtin != "" && (isConfigure || (len(cfg.Config) == 0 && !(exited && !cfg.OnHost()))) {
+		if cfg.Builtin != "" && !startFailed && (isConfigure || len(cfg.Config) == 0) {
 			// A built-in refused before anybody configured it, or for its
 			// configuration, is waiting to be configured, not broken. One
-			// in the daemon's own environment that exited before it
-			// answered is broken, configured or not: every built-in comes
-			// up unconfigured, so a fault here is one no configuring
-			// fixes, and needs-config would keep it out of `grain health`.
+			// whose runtime failed to start -- exiting before initialize,
+			// or failing to bind its data-plane listener in configure -- is
+			// broken, configured or not: its saved config is fine, a fault
+			// here is one no configuring fixes, and failed retries it and
+			// keeps it in `grain health` without calling the config refused.
 			state = NeedsConfig
 		}
 		var prevState State
@@ -654,11 +670,12 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 			if state == NeedsConfig {
 				e.waiting = waiting
 			}
-			// A server waiting on something outside grain has not refused
-			// its config, but is out of use all the same: it is raised
-			// so somebody renews what it waits for.
-			e.configRefused = isConfigure && len(cfg.Config) > 0 && e.waiting == ""
-			dropped = (e.wasAttached || e.configRefused || e.waiting != "") && (prevState != state || prevErr != msg)
+			e.startErr = startErr
+			// A server waiting on something outside grain, or one whose
+			// runtime failed to start, has not refused its config, but is
+			// out of use all the same: it is raised for what actually failed.
+			e.configRefused = isConfigure && !startFailed && len(cfg.Config) > 0 && e.waiting == ""
+			dropped = (e.wasAttached || e.configRefused || e.waiting != "" || e.startErr != "") && (prevState != state || prevErr != msg)
 			st = e.status(id)
 		})
 		if state == NeedsConfig {
@@ -668,6 +685,10 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 				} else {
 					r.opts.Logf("capability server %s: not configured: %s", id, msg)
 				}
+			}
+		} else if startErr != "" {
+			if prevState != state || prevErr != msg {
+				r.opts.Logf("capability server %s: %s, retrying every %s: %s", id, startErr, r.opts.RetryInterval, msg)
 			}
 		} else {
 			r.opts.Logf("capability server %s: attach refused: %s", id, msg)
@@ -687,7 +708,7 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 		var st Status
 		r.set(id, func(e *entry) {
 			prevState = e.state
-			e.state, e.err, e.tried, e.schema, e.hostRetry, e.configRefused, e.waiting = NeedsConfig, reason, now, schema, false, false, ""
+			e.state, e.err, e.tried, e.schema, e.hostRetry, e.configRefused, e.startErr, e.waiting = NeedsConfig, reason, now, schema, false, false, "", ""
 			dropped = e.wasAttached && prevState != NeedsConfig
 			st = e.status(id)
 		})
@@ -703,7 +724,7 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 	kept := r.set(id, func(e *entry) {
 		e.state, e.err, e.tried, e.server, e.methods, e.details = Attached, "", now, server, methods, details
 		e.schema, e.tools = server.ConfigSchema, tools
-		e.configRefused, e.wasAttached, e.waiting = false, true, ""
+		e.configRefused, e.startErr, e.wasAttached, e.waiting = false, "", true, ""
 		e.attached, e.refreshed = now, now
 	})
 	if !kept {
@@ -732,6 +753,31 @@ func WaitingLabel(st Status) string {
 	return waitingLabel(st.Waiting)
 }
 
+var portInUsePattern = regexp.MustCompile(`(?:^|[\s"'(])(\[[^\]]+\]:\d+|:\d+|[^\s"'):]+:\d+):\s*(?:bind:\s*)?address already in use`)
+
+func portInUse(msg string) int {
+	m := portInUsePattern.FindStringSubmatch(strings.ToLower(msg))
+	if m == nil {
+		return 0
+	}
+	_, portStr, err := net.SplitHostPort(m[1])
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return 0
+	}
+	return port
+}
+
+func startErrorLabel(msg string) string {
+	if port := portInUse(msg); port > 0 {
+		return fmt.Sprintf("could not start: port %d in use", port)
+	}
+	return "could not start"
+}
+
 // refresh re-issues tools/list. A server that no longer answers is
 // detached and marked failed, so the next retry attaches it afresh --
 // a stdio server that exited is respawned that way.
@@ -756,7 +802,7 @@ func (r *Registry) refresh(ctx context.Context, id string, server *protocol.Serv
 	r.opts.Logf("capability server %s: refresh failed, detaching: %s", id, msg)
 	var st Status
 	r.set(id, func(e *entry) {
-		e.state, e.err, e.tried, e.server = Failed, msg, now, nil
+		e.state, e.err, e.tried, e.server, e.startErr = Failed, msg, now, nil, ""
 		st = e.status(id)
 	})
 	_ = server.Close()
@@ -1003,7 +1049,7 @@ func (r *Registry) Probe(ctx context.Context, id string, cfg protocol.ServerConf
 		var ce *protocol.ConfigureError
 		if errors.As(err, &ce) {
 			res.ConfigSchema = protocol.OperatorSchema(ce.Schema)
-			res.ConfigRefused = true
+			res.ConfigRefused = !protocol.IsStartError(err)
 		}
 		return res
 	}

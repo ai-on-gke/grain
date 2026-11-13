@@ -1211,6 +1211,10 @@ type CapabilityServerDown struct {
 	// ConfigRefused is the server refusing its saved config
 	// (servers.Status.ConfigRefused).
 	ConfigRefused bool `json:"configRefused,omitempty"`
+	// StartError is why the server could not start
+	// (servers.Status.StartError), when the failure is a runtime start
+	// error rather than a refused config.
+	StartError string `json:"startError,omitempty"`
 	// Waiting is what the server is waiting on outside grain
 	// (servers.Status.Waiting); it attaches by itself once that is done.
 	Waiting string `json:"waiting,omitempty"`
@@ -1234,7 +1238,7 @@ func (c *Client) capabilityServersDown() []CapabilityServerDown {
 		if reason == "" {
 			reason = st.Reason
 		}
-		out = append(out, CapabilityServerDown{ID: st.ID, State: st.State, ConfigRefused: st.ConfigRefused, Waiting: st.Waiting, Reason: reason})
+		out = append(out, CapabilityServerDown{ID: st.ID, State: st.State, ConfigRefused: st.ConfigRefused, StartError: st.StartError, Waiting: st.Waiting, Reason: reason})
 	}
 	return out
 }

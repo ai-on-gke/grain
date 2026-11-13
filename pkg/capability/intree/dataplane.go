@@ -29,14 +29,14 @@ import (
 func (s *Server) listen(addr string, h http.Handler) (*net.TCPAddr, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
-		return nil, fmt.Errorf("listen address %q: %v", addr, err)
+		return nil, protocol.StartFailure(fmt.Errorf("listen address %q: %v", addr, err))
 	}
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		return nil, fmt.Errorf("listen address %q is not a loopback IP address", addr)
+		return nil, protocol.StartFailure(fmt.Errorf("listen address %q is not a loopback IP address", addr))
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return nil, err
+		return nil, protocol.StartFailure(err)
 	}
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second}
 	go srv.Serve(ln)

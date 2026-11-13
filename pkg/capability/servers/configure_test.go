@@ -18,11 +18,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
@@ -478,4 +481,182 @@ func TestAWaitingConfigureRefusalIsRetriedUntilItAttaches(t *testing.T) {
 	if st := r2.Statuses()[0]; st.State != NeedsConfig || st.Waiting != "" || h2.calls() != 1 {
 		t.Errorf("plain refusal: status %+v after %d configures, want needs-config tried once", st, h2.calls())
 	}
+}
+
+// A configured built-in whose data-plane port is occupied fails in
+// configure at runtime, not because its saved configuration is wrong
+// (2026-11-13 hosts-env-drain F3): the registry marks it failed (not
+// needs-config with ConfigRefused), logs why it could not start rather
+// than "not configured", and retries on RetryInterval so freeing the port
+// attaches it without restarting the daemon.
+func TestAConfigureStartFailureMarksABuiltinFailedAndRetriesOncePortIsFree(t *testing.T) {
+	const gitID = "https://grain.dev/capabilities/git"
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := held.Addr().(*net.TCPAddr).Port
+	listenAddr := held.Addr().String()
+	t.Cleanup(func() { _ = held.Close() })
+
+	gitBuilder, ok := intree.Lookup("git")
+	if !ok {
+		t.Fatal("missing built-in git capability")
+	}
+
+	var built []*intree.Server
+	t.Cleanup(func() {
+		for _, s := range built {
+			_ = s.Close(context.Background())
+		}
+	})
+	attach := func(ctx context.Context, id string, cfg protocol.ServerConfig, secrets protocol.SecretLookup, opts protocol.DialOptions) (*protocol.Server, error) {
+		srv, err := gitBuilder.Build(ctx, []string{"-listen", listenAddr}, func(string) string { return "" }, nil)
+		if err != nil {
+			return nil, err
+		}
+		built = append(built, srv)
+		srv.CapabilityServer.Token = strings.Repeat("t", protocol.MinHTTPTokenBytes)
+		ts := httptest.NewServer(srv.CapabilityServer)
+		httpCfg := protocol.ServerConfig{
+			ServerURL: ts.URL,
+			Headers:   map[string]string{"Authorization": "Bearer " + srv.CapabilityServer.Token},
+			Config:    cfg.Config,
+		}
+		ps, err := protocol.Attach(ctx, id, httpCfg, secrets, opts)
+		if err != nil {
+			ts.Close()
+			_ = srv.Close(ctx)
+			return nil, err
+		}
+		t.Cleanup(ts.Close)
+		return ps, nil
+	}
+
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	var drops []Status
+	var attaches []string
+	var logs strings.Builder
+	r := New(Options{
+		Attach:        attach,
+		Secrets:       func(name string) (string, bool) { return secretValue, name == "walk-git/token" },
+		Now:           func() time.Time { return now },
+		RetryInterval: time.Minute,
+		OnDrop:        func(st Status) { drops = append(drops, st) },
+		OnAttach:      func(id string) { attaches = append(attaches, id) },
+		Logf:          func(f string, a ...any) { fmt.Fprintf(&logs, f+"\n", a...) },
+	})
+	t.Cleanup(r.Close)
+
+	ctx := context.Background()
+	servers := map[string]protocol.ServerConfig{
+		gitID: {
+			Command: "grain",
+			Args:    []string{"capability", "git"},
+			Builtin: "git",
+			Config: map[string]any{
+				"upstream": "http://127.0.0.1:9",
+				"repos":    []any{"acme/widgets"},
+				"token":    "$secret:walk-git/token",
+			},
+		},
+	}
+
+	r.Sync(ctx, servers)
+	st := r.Statuses()[0]
+	wantLabel := fmt.Sprintf("could not start: port %d in use", port)
+	if st.State != Failed || st.ConfigRefused || st.StartError != wantLabel || st.ConfigSchema == nil {
+		t.Fatalf("status with port held = %+v, want Failed, !ConfigRefused, StartError=%q, ConfigSchema kept", st, wantLabel)
+	}
+	if st.Reason != "" || !strings.Contains(st.Error, "address already in use") || strings.Contains(st.Error, secretValue) {
+		t.Errorf("status error/reason = %q / %q, want bind error in Error, empty Reason, no secret", st.Error, st.Reason)
+	}
+	if _, err := r.Lookup(gitID); err == nil || strings.Contains(err.Error(), "needs configuring") {
+		t.Errorf("Lookup(git) = %v, want not-attached error rather than needs configuring", err)
+	}
+	if len(drops) != 1 || drops[0].ConfigRefused || drops[0].StartError != wantLabel {
+		t.Errorf("drops = %+v, want 1 start-failure drop without ConfigRefused", drops)
+	}
+	if !strings.Contains(logs.String(), wantLabel+", retrying every 1m0s") || strings.Contains(logs.String(), "not configured") {
+		t.Errorf("logs = %q, want %q and never 'not configured'", logs.String(), wantLabel)
+	}
+
+	// Probe on a start failure keeps the schema without marking ConfigRefused.
+	probeRes := r.Probe(ctx, gitID, servers[gitID], nil)
+	if probeRes.OK || probeRes.ConfigRefused || probeRes.ConfigSchema == nil {
+		t.Errorf("Probe with port held = %+v, want !OK, !ConfigRefused, ConfigSchema kept", probeRes)
+	}
+
+	// Free the port: after RetryInterval the next Sync attaches with no restart.
+	_ = held.Close()
+	now = now.Add(time.Minute)
+	r.Sync(ctx, servers)
+	st = r.Statuses()[0]
+	if st.State != Attached || st.StartError != "" || st.ConfigRefused || st.Error != "" {
+		t.Fatalf("status once port is free = %+v, want Attached with StartError cleared", st)
+	}
+	if len(attaches) != 1 || attaches[0] != gitID {
+		t.Errorf("attaches = %v, want [%s]", attaches, gitID)
+	}
+
+	// A built-in with no SecretRefs whose configure returns a non-port
+	// runtime StartFailure is also Failed ("could not start") and retried.
+	const hsID = "https://grain.dev/capabilities/host-script"
+	failStart := true
+	hsAttach := func(ctx context.Context, id string, cfg protocol.ServerConfig, secrets protocol.SecretLookup, _ protocol.DialOptions) (*protocol.Server, error) {
+		return protocol.AttachCaller(ctx, id, cfg, secrets, &startFailCaller{
+			fakeCaller: fakeCaller{methods: []string{"host-script"}},
+			fail:       failStart,
+		})
+	}
+	r2 := New(Options{Attach: hsAttach, Now: func() time.Time { return now }, RetryInterval: time.Minute})
+	t.Cleanup(r2.Close)
+	hsCfg := map[string]protocol.ServerConfig{
+		hsID: {Command: "grain", Builtin: "host-script", Config: map[string]any{"scripts": []any{}}},
+	}
+	r2.Sync(ctx, hsCfg)
+	if st := r2.Statuses()[0]; st.State != Failed || st.ConfigRefused || st.StartError != "could not start" {
+		t.Fatalf("non-port start failure status = %+v, want Failed with StartError='could not start'", st)
+	}
+	failStart = false
+	now = now.Add(time.Minute)
+	r2.Sync(ctx, hsCfg)
+	if st := r2.Statuses()[0]; st.State != Attached || st.StartError != "" {
+		t.Fatalf("after runtime recovery status = %+v, want Attached", st)
+	}
+
+	for msg, want := range map[string]string{
+		"git: listen tcp 127.0.0.1:4254: bind: address already in use": "could not start: port 4254 in use",
+		"git: listen tcp6 [::1]:4254: bind: address already in use":    "could not start: port 4254 in use",
+		"listen tcp :9733: address already in use":                     "could not start: port 9733 in use",
+		"git: listen tcp 127.0.0.1:80: bind: permission denied":        "could not start",
+		"host-script: data directory: mkdir /ro/hs: read-only":         "could not start",
+	} {
+		if got := startErrorLabel(msg); got != want {
+			t.Errorf("startErrorLabel(%q) = %q, want %q", msg, got, want)
+		}
+	}
+}
+
+type startFailCaller struct {
+	fakeCaller
+	fail bool
+}
+
+func (c *startFailCaller) ListTools(ctx context.Context) ([]protocol.Tool, error) {
+	tools, err := c.fakeCaller.ListTools(ctx)
+	return append(tools, protocol.Tool{Name: protocol.ConfigureTool, InputSchema: map[string]any{
+		"type": "object", "required": []any{"config"},
+		"properties": map[string]any{"config": map[string]any{"type": "object", "properties": map[string]any{}}},
+	}}), err
+}
+
+func (c *startFailCaller) CallTool(_ context.Context, name string, _ map[string]any) ([]byte, error) {
+	if name != protocol.ConfigureTool {
+		return nil, errors.New("not used")
+	}
+	if c.fail {
+		return nil, protocol.StartFailure(errors.New("mkdir /readonly/hs: read-only file system"))
+	}
+	return []byte(`{"status":"ok"}`), nil
 }

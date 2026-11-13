@@ -184,6 +184,9 @@ func printCapabilityServers(out *printer, list []ui.CapabilityServer) {
 		state := "unknown"
 		if s.Status != nil {
 			state = string(s.Status.State)
+			if s.Status.StartError != "" {
+				state += " (" + s.Status.StartError + ")"
+			}
 		} else if s.Config.Disabled {
 			state = "disabled"
 		}

@@ -120,8 +120,14 @@ func TestAnUnconfiguredGitHoldsNoPort(t *testing.T) {
 		t.Errorf("an unconfigured git listens on %s, want no listener", s.addr)
 	}
 	_, err = attachConfigured(t, s, map[string]any{"repos": []any{"o/r"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
-	if err == nil || !strings.Contains(err.Error(), "address already in use") {
-		t.Errorf("configuring it on a held port: %v, want the bind error", err)
+	if err == nil || !strings.Contains(err.Error(), "address already in use") || !protocol.IsStartError(err) {
+		t.Errorf("configuring it on a held port: %v (IsStartError=%v), want the bind error marked as a start failure", err, protocol.IsStartError(err))
+	}
+	// A validation error on the same server is still a configuration
+	// refusal, not a start failure.
+	_, badErr := attachConfigured(t, s, map[string]any{"repos": []any{"not a repo"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
+	if badErr == nil || protocol.IsStartError(badErr) {
+		t.Errorf("configuring it with a bad repo: %v (IsStartError=%v), want a configuration refusal", badErr, protocol.IsStartError(badErr))
 	}
 }
 
