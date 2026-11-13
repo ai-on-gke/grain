@@ -1065,6 +1065,15 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `qa` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version: 147,
+		Description: "add github_ci_job.failed_tests, the failing tests a job's log tail names, kept after the tail " +
+			"is compacted away (grain/task-5274)",
+		Statements: []string{
+			"ALTER TABLE `github_ci_job` ADD COLUMN `failed_tests` TEXT NOT NULL DEFAULT ''",
+		},
+		Up: backfillGitHubCIFailedTests,
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

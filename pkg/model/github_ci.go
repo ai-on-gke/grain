@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -82,6 +83,14 @@ type GitHubCIJob struct {
 	// be) read.
 	FailureTail string `json:"failureTail,omitempty"`
 	TailSource  string `json:"tailSource,omitempty"`
+	// FailedTests are the tests FailureTail names as failing (`--- FAIL:`
+	// lines, Playwright's ✘ lines), parsed once when the tail arrives
+	// (FailedTestNames). They outlive the tail: a pruning compacts a
+	// failed job down to these names and its verdict
+	// (GitHubCIPrune.Compact), so a test's failures can be counted over
+	// weeks of a repository's jobs rather than over the logs grain still
+	// holds.
+	FailedTests []string `json:"failedTests,omitempty"`
 	// TailFetched records that grain has already asked GitHub for this
 	// job's log, whatever it answered, so a log past its retention window
 	// is asked for once rather than every cycle.
@@ -183,7 +192,7 @@ func mergeGitHubCIJob(prev *GitHubCIJob, j GitHubCIJob) GitHubCIJob {
 		j.RecordedAt = j.UpdatedAt
 	}
 	if prev == nil {
-		return j
+		return withFailedTests(j)
 	}
 	out := *prev
 	out.UpdatedAt = j.UpdatedAt
@@ -209,6 +218,7 @@ func mergeGitHubCIJob(prev *GitHubCIJob, j GitHubCIJob) GitHubCIJob {
 			// A re-run of the same job: what the last attempt failed with
 			// is no longer what this row says happened.
 			out.FailingStep, out.FailureTail, out.TailSource, out.TailFetched = "", "", "", false
+			out.FailedTests = nil
 		}
 		out.RunAttempt = j.RunAttempt
 		str(&out.Conclusion, j.Conclusion)
@@ -222,9 +232,65 @@ func mergeGitHubCIJob(prev *GitHubCIJob, j GitHubCIJob) GitHubCIJob {
 	}
 	if j.FailureTail != "" {
 		out.FailureTail, out.TailSource = j.FailureTail, j.TailSource
+		out.FailedTests = nil
+	}
+	if len(j.FailedTests) > 0 {
+		out.FailedTests = j.FailedTests
 	}
 	if j.TailFetched {
 		out.TailFetched = true
+	}
+	return withFailedTests(out)
+}
+
+// withFailedTests is j with FailedTests parsed out of its failure tail,
+// where it has a tail and no names yet.
+func withFailedTests(j GitHubCIJob) GitHubCIJob {
+	if len(j.FailedTests) == 0 && j.FailureTail != "" {
+		j.FailedTests = FailedTestNames(j.FailureTail)
+	}
+	return j
+}
+
+var (
+	// failedGoTestLine is a `go test -v` failure: "--- FAIL: TestX/sub (0.1s)".
+	failedGoTestLine = regexp.MustCompile(`^\s*--- FAIL:\s+([^\s()]+)`)
+	// failedPlaywrightLine is the list reporter's failed test:
+	// "  ✘  3 [chromium] › e2e/a.spec.js:12:3 › Suite › does it (1.2s)",
+	// the worker number and project optional.
+	failedPlaywrightLine = regexp.MustCompile(`^\s*✘\s+(?:\d+\s+)?(?:\[[^\]]+\]\s+›\s+)?(\S+?\.(?:spec|test)\.[cm]?[jt]sx?)(?::\d+(?::\d+)?)?\s+›\s+(.+?)(?:\s+\(retry #\d+\))?(?:\s+\(\d[^)]*\))?\s*$`)
+	ansiEscape           = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+)
+
+// FailedTestNames is the tests a job's log tail names as failing, in the
+// order they first appear and each once: a Go test by its full name
+// ("TestX/sub"), a Playwright test as its spec file and title path
+// ("e2e/a.spec.js › Suite › does it") -- without the line and column,
+// which move with every edit to the file, and without the duration or
+// "(retry #N)". A retried Playwright test prints ✘ once per attempt and
+// is named once.
+func FailedTestNames(tail string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(ansiEscape.ReplaceAllString(tail, ""), "\n") {
+		line = strings.TrimRight(line, "\r")
+		// An Actions log line starts with its timestamp.
+		if len(line) > 29 && line[4] == '-' && line[10] == 'T' {
+			if i := strings.IndexByte(line, ' '); i > 0 && i < 40 {
+				line = line[i+1:]
+			}
+		}
+		name := ""
+		if m := failedGoTestLine.FindStringSubmatch(line); m != nil {
+			name = m[1]
+		} else if m := failedPlaywrightLine.FindStringSubmatch(line); m != nil {
+			name = m[1] + " › " + strings.TrimSpace(m[2])
+		}
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
 	}
 	return out
 }
@@ -288,7 +354,7 @@ func clampGitHubCIText(s string) string {
 
 const gitHubCIJobColumns = "`repo`,`check_run_id`,`source`,`app`,`ref`,`commit_sha`,`workflow`,`run_id`," +
 	"`run_attempt`,`job_name`,`conclusion`,`started_at`,`completed_at`,`failing_step`,`run_url`," +
-	"`job_url`,`output`,`failure_tail`,`tail_source`,`tail_fetched`,`via`,`recorded_at`,`updated_at`"
+	"`job_url`,`output`,`failure_tail`,`tail_source`,`tail_fetched`,`via`,`recorded_at`,`updated_at`,`failed_tests`"
 
 func putGitHubCIJob(ctx context.Context, tx *sql.Tx, j GitHubCIJob) error {
 	var started, completed any
@@ -299,22 +365,26 @@ func putGitHubCIJob(ctx context.Context, tx *sql.Tx, j GitHubCIJob) error {
 		completed = j.CompletedAt.UTC()
 	}
 	_, err := tx.ExecContext(ctx,
-		"REPLACE INTO `github_ci_job` ("+gitHubCIJobColumns+") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `github_ci_job` ("+gitHubCIJobColumns+") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		j.Repo, j.CheckRunID, j.Source, j.App, j.Ref, j.Commit, j.Workflow, j.RunID,
 		j.RunAttempt, j.JobName, j.Conclusion, started, completed, j.FailingStep, j.RunURL,
 		j.JobURL, j.Output, j.FailureTail, j.TailSource, j.TailFetched, j.Via,
-		j.RecordedAt.UTC(), j.UpdatedAt.UTC())
+		j.RecordedAt.UTC(), j.UpdatedAt.UTC(), strings.Join(j.FailedTests, "\n"))
 	return err
 }
 
 func scanGitHubCIJob(scan func(...any) error) (GitHubCIJob, error) {
 	var j GitHubCIJob
 	var started, completed sql.NullTime
+	var tests string
 	if err := scan(&j.Repo, &j.CheckRunID, &j.Source, &j.App, &j.Ref, &j.Commit, &j.Workflow, &j.RunID,
 		&j.RunAttempt, &j.JobName, &j.Conclusion, &started, &completed, &j.FailingStep, &j.RunURL,
 		&j.JobURL, &j.Output, &j.FailureTail, &j.TailSource, &j.TailFetched, &j.Via,
-		&j.RecordedAt, &j.UpdatedAt); err != nil {
+		&j.RecordedAt, &j.UpdatedAt, &tests); err != nil {
 		return GitHubCIJob{}, err
+	}
+	if tests != "" {
+		j.FailedTests = strings.Split(tests, "\n")
 	}
 	j.StartedAt = nullableTime(started)
 	j.CompletedAt = nullableTime(completed)
@@ -347,6 +417,11 @@ type GitHubCIFilter struct {
 	// Since keeps jobs that completed at or after it (by recorded time
 	// for a row with no completion time).
 	Since time.Time
+	// Until keeps jobs that started before it (by completion, then
+	// recorded, time for a row with no start): the other end of Since's
+	// window, measured the way ci.RunFilter.Until measures a run, so a
+	// run's jobs are all in a window or all out of it.
+	Until time.Time
 	// FailedOnly keeps the conclusions GitHubCIFailed counts.
 	FailedOnly bool
 	// NeedsTail keeps failed Actions jobs whose log nobody has asked for
@@ -354,8 +429,17 @@ type GitHubCIFilter struct {
 	NeedsTail bool
 	// Refs, when set, keeps jobs of runs on one of these refs (a branch
 	// name, as recorded).
-	Refs  []string
-	Limit int
+	Refs []string
+	// RefContains keeps jobs whose ref contains it, without regard to
+	// case: ci.RunFilter.Ref's substring match, asked of the store so
+	// that a listing of one branch is not the newest Limit jobs of every
+	// branch narrowed afterwards.
+	RefContains string
+	// FailedTest keeps failed jobs that named a test containing it among
+	// their FailedTests, without regard to case. A containment rather
+	// than the caller's own match, which it applies to what comes back.
+	FailedTest string
+	Limit      int
 }
 
 // ListGitHubCIJobs returns recorded GitHub CI jobs, most recently
@@ -375,13 +459,25 @@ func (s *Store) ListGitHubCIJobs(ctx context.Context, f GitHubCIFilter) ([]GitHu
 		where = append(where, "COALESCE(`completed_at`, `recorded_at`) >= ?")
 		args = append(args, f.Since.UTC())
 	}
+	if !f.Until.IsZero() {
+		where = append(where, "COALESCE(`started_at`, `completed_at`, `recorded_at`) < ?")
+		args = append(args, f.Until.UTC())
+	}
+	if f.RefContains != "" {
+		where = append(where, "LOWER(`ref`) LIKE ? ESCAPE '\\'")
+		args = append(args, "%"+likeEscape(strings.ToLower(f.RefContains))+"%")
+	}
+	if f.FailedTest != "" {
+		where = append(where, "LOWER(`failed_tests`) LIKE ? ESCAPE '\\'")
+		args = append(args, "%"+likeEscape(strings.ToLower(f.FailedTest))+"%")
+	}
 	if len(f.Refs) > 0 {
 		where = append(where, "`ref` IN ("+strings.TrimSuffix(strings.Repeat("?,", len(f.Refs)), ",")+")")
 		for _, r := range f.Refs {
 			args = append(args, r)
 		}
 	}
-	if f.FailedOnly || f.NeedsTail {
+	if f.FailedOnly || f.NeedsTail || f.FailedTest != "" {
 		where = append(where, "`conclusion` IN ('failure','timed_out','startup_failure')")
 	}
 	if f.NeedsTail {
@@ -417,25 +513,119 @@ func (s *Store) ListGitHubCIJobs(ctx context.Context, f GitHubCIFilter) ([]GitHu
 func (s *Store) SetGitHubCIFailureTail(ctx context.Context, repo string, checkRunID int64, tail, source string, now time.Time) error {
 	return s.write(ctx, fmt.Sprintf("record the failure tail of GitHub CI job %s/%d", repo, checkRunID), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
-			"UPDATE `github_ci_job` SET `failure_tail` = ?, `tail_source` = ?, `tail_fetched` = 1, `updated_at` = ? "+
-				"WHERE `repo` = ? AND `check_run_id` = ?",
-			clampGitHubCIText(tail), source, now.UTC(), repo, checkRunID)
+			"UPDATE `github_ci_job` SET `failure_tail` = ?, `tail_source` = ?, `tail_fetched` = 1, `updated_at` = ?, "+
+				"`failed_tests` = ? WHERE `repo` = ? AND `check_run_id` = ?",
+			clampGitHubCIText(tail), source, now.UTC(), strings.Join(FailedTestNames(tail), "\n"), repo, checkRunID)
 		return err
 	})
 }
 
-// PruneGitHubCIJobs forgets jobs recorded before cutoff and reports how
-// many it removed. GitHub keeps its own history; grain keeps what its
-// metrics and correlation windows read.
-func (s *Store) PruneGitHubCIJobs(ctx context.Context, cutoff time.Time) (int64, error) {
+// GitHubCIPrune is how long the recorded jobs live. Two ages, because
+// the record is asked two questions that cost different amounts to keep
+// answering:
+//
+//   - "what did the default branch and Stage 1 say, and which tests
+//     failed" -- over the weeks a time-to-repair or flake baseline is
+//     measured against. A verdict and a few test names per job, which
+//     is cheap, so it is kept until Before.
+//   - everything else: a task branch's passing jobs, and the bounded
+//     log tail and check output beside a failure. The bulk of the table,
+//     and read only while somebody is still looking at a recent failure,
+//     so it goes at Compact.
+type GitHubCIPrune struct {
+	// Before forgets every job recorded before it.
+	Before time.Time
+	// Compact, later than Before, forgets the jobs recorded before it
+	// that neither failed nor ran on a kept ref, and strips the rest down
+	// to their verdict and FailedTests (the failure tail and check output
+	// go). Zero compacts nothing and forgets only by Before.
+	Compact time.Time
+	// KeepRefs are the refs whose every job lives until Before: the
+	// repositories' default branches. A release candidate tag
+	// (v1.2.3-rc.4, what Stage 1 runs on) is kept whether it is named
+	// here or not.
+	KeepRefs []string
+}
+
+// PruneGitHubCIJobs applies p to the recorded jobs and reports how many
+// it removed. GitHub keeps its own history; grain keeps what its
+// metrics, correlation windows and verdict history read.
+func (s *Store) PruneGitHubCIJobs(ctx context.Context, p GitHubCIPrune) (int64, error) {
 	var n int64
 	err := s.write(ctx, "prune GitHub CI jobs", func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, "DELETE FROM `github_ci_job` WHERE `recorded_at` < ?", cutoff.UTC())
+		res, err := tx.ExecContext(ctx, "DELETE FROM `github_ci_job` WHERE `recorded_at` < ?", p.Before.UTC())
 		if err != nil {
 			return err
 		}
 		n, _ = res.RowsAffected()
-		return nil
+		if p.Compact.IsZero() || !p.Compact.After(p.Before) {
+			return nil
+		}
+		kept := []string{"`conclusion` IN ('failure','timed_out','startup_failure')",
+			"`ref` LIKE 'v%-rc.%'", "`ref` LIKE 'refs/tags/v%-rc.%'"}
+		args := []any{p.Compact.UTC()}
+		var refs []string
+		for _, ref := range p.KeepRefs {
+			if ref = strings.TrimSpace(ref); ref != "" {
+				refs = append(refs, ref, "refs/heads/"+ref)
+			}
+		}
+		if len(refs) > 0 {
+			kept = append(kept, "`ref` IN ("+strings.TrimSuffix(strings.Repeat("?,", len(refs)), ",")+")")
+			for _, ref := range refs {
+				args = append(args, ref)
+			}
+		}
+		res, err = tx.ExecContext(ctx, "DELETE FROM `github_ci_job` WHERE `recorded_at` < ? AND NOT ("+
+			strings.Join(kept, " OR ")+")", args...)
+		if err != nil {
+			return err
+		}
+		dropped, _ := res.RowsAffected()
+		n += dropped
+		_, err = tx.ExecContext(ctx, "UPDATE `github_ci_job` SET `failure_tail` = '', `output` = '' "+
+			"WHERE `recorded_at` < ? AND (`failure_tail` <> '' OR `output` <> '')", p.Compact.UTC())
+		return err
 	})
 	return n, err
+}
+
+// likeEscape is s with LIKE's wildcards (and the escape character
+// itself) escaped, for a pattern that asks `ESCAPE '\'`.
+func likeEscape(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// backfillGitHubCIFailedTests is schema 147's rewrite: every recorded job
+// with a failure tail and no failed tests gets the names its tail holds,
+// so the jobs failed before the column existed count too once their tails
+// are compacted away. Idempotent: a job that has its names is passed over.
+func backfillGitHubCIFailedTests(ctx context.Context, tx *sql.Tx) error {
+	type key struct {
+		repo string
+		id   int64
+	}
+	found := map[key]string{}
+	err := each(ctx, tx, "SELECT `repo`,`check_run_id`,`failure_tail` FROM `github_ci_job` "+
+		"WHERE `failure_tail` <> '' AND `failed_tests` = ''", nil, func(rows *sql.Rows) error {
+		var k key
+		var tail string
+		if err := rows.Scan(&k.repo, &k.id, &tail); err != nil {
+			return err
+		}
+		if names := FailedTestNames(tail); len(names) > 0 {
+			found[k] = strings.Join(names, "\n")
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("backfilling failed tests of GitHub CI jobs: %w", err)
+	}
+	for k, names := range found {
+		if _, err := tx.ExecContext(ctx, "UPDATE `github_ci_job` SET `failed_tests` = ? WHERE `repo` = ? AND `check_run_id` = ?",
+			names, k.repo, k.id); err != nil {
+			return fmt.Errorf("backfilling failed tests of GitHub CI job %s/%d: %w", k.repo, k.id, err)
+		}
+	}
+	return nil
 }
