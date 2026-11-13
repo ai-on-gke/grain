@@ -171,6 +171,19 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 		fmt.Println()
 	}
+	// Base branches that have stopped publishing, and whether a release
+	// triage task holds further releases (and every schedule declaring
+	// `skip-when: publishing-held` into that branch) on them. The
+	// response has carried this since grain/task-4393, but this printer
+	// never did, so `grain health` said nothing while a schedule was held
+	// (docs/test-runs/2026-11-13-schedules-templates.md, F1).
+	if len(h.BaseBranchPublishing) > 0 {
+		fmt.Println("WARNING: base branches publishing nothing:")
+		for _, p := range h.BaseBranchPublishing {
+			fmt.Printf("  %s\n", basePublishingLine(p))
+		}
+		fmt.Println()
+	}
 	// Tasks resume_later deferred on a CI verdict grain has not seen yet:
 	// the orchestrator's backstop wakes them in the end, but a wait this
 	// old usually means a verdict grain is failing to read.
@@ -216,7 +229,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 	}
 	if len(h.Counters) == 0 {
-		if !hasHubIssue && len(h.CapabilityServers) == 0 && len(h.TargetRepoHostWarnings) == 0 && len(h.MergeLoginWarnings) == 0 && len(h.StaleSchedules) == 0 && len(h.RefusedDeclarations) == 0 {
+		if !hasHubIssue && len(h.CapabilityServers) == 0 && len(h.TargetRepoHostWarnings) == 0 && len(h.MergeLoginWarnings) == 0 && len(h.StaleSchedules) == 0 && len(h.RefusedDeclarations) == 0 && len(h.BaseBranchPublishing) == 0 {
 			fmt.Println("no counters: nothing on this daemon registers any")
 		}
 		return
@@ -239,4 +252,30 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 	}
 	_ = w.Flush()
+}
+
+// basePublishingLine is one base branch's publishing finding as `grain
+// health` prints it: what has not published since when, and -- when a
+// release triage task gates it -- that its releases and every schedule
+// declaring `skip-when: publishing-held` into it are held until that task
+// closes (model.Store.publishingHold reads the same finding).
+func basePublishingLine(p ui.BaseBranchPublishing) string {
+	branch := p.Branch
+	if branch == "" {
+		branch = "(default branch)"
+	}
+	line := fmt.Sprintf("%s %s: %d release(s) published nothing", p.Repo, branch, p.Failures)
+	if p.FailingSince != nil {
+		line += " since " + p.FailingSince.UTC().Format(time.RFC3339)
+	}
+	switch {
+	case p.Gated && p.TriageTaskID != "":
+		line += fmt.Sprintf("; held by release triage task %s -- further releases, and schedules with "+
+			"skip-when: publishing-held into this branch, wait until it closes", p.TriageTaskID)
+	case p.RunInFlight && p.RunID != "":
+		line += "; run " + p.RunID + " is in flight and clears this if it publishes"
+	case p.RunID != "":
+		line += "; latest run " + p.RunID
+	}
+	return line
 }

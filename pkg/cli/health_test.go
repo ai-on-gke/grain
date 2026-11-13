@@ -229,6 +229,37 @@ func TestGrainHealthNamesRefusedDeclarations(t *testing.T) {
 	}
 }
 
+// A base branch whose publishing a release triage task holds -- which
+// also holds every schedule declaring `skip-when: publishing-held` into
+// it -- is named, with the task, as a WARNING that leaves the exit at 0
+// (docs/test-runs/2026-11-13-schedules-templates.md, F1: the response
+// carried it and the text said nothing).
+func TestGrainHealthNamesHeldBaseBranchPublishing(t *testing.T) {
+	since := time.Date(2026, 11, 13, 0, 3, 0, 0, time.UTC)
+	h := ui.SandboxHealthResponse{BaseBranchPublishing: []ui.BaseBranchPublishing{
+		{Repo: "acme/widgets", Branch: "main", Failures: 3, FailingSince: &since,
+			RunID: "run-3", TriageTaskID: "4", Gated: true},
+		{Repo: "acme/other", Branch: "main", Failures: 3, FailingSince: &since, RunID: "run-9", RunInFlight: true},
+	}}
+	out := captureStdout(t, func() { (&printer{}).health(h) })
+	for _, want := range []string{
+		"WARNING: base branches publishing nothing:",
+		"acme/widgets main: 3 release(s) published nothing since 2026-11-13T00:03:00Z; held by release triage task 4",
+		"schedules with skip-when: publishing-held into this branch, wait until it closes",
+		"acme/other main: 3 release(s) published nothing since 2026-11-13T00:03:00Z; run run-9 is in flight",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain health output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "no counters") {
+		t.Errorf("grain health says there is nothing to report with publishing held:\n%s", out)
+	}
+	if failing := healthFailing(h); len(failing) != 0 {
+		t.Errorf("healthFailing = %v, want none: a publishing finding is a WARNING", failing)
+	}
+}
+
 // `grain health` exits 1 whenever it prints a FAILING section, text or
 // -json, so a monitoring script can tell a failing deployment by status
 // (docs/test-runs/2026-11-11-schedule-groups.md, F4); a WARNING alone

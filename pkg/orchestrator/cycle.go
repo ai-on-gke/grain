@@ -2607,6 +2607,9 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		GrainSource: hasGrainSource(*task),
 		Class:       sandboxClassFor(*task),
 	}
+	// A size the task carries only because its template says `sandbox:`
+	// is not asked of a backend that has none to give (template_shape.go).
+	shape, _ = templateShapeDropped(ctx, deps.Store, deps.Sandboxes, *task, shape)
 	// The operator's ambient credentials (-host-sandbox-env) go to a run
 	// only on the backend that has them, and only for a task whose whole
 	// tree of work is this machine's own: anybody else's task never acts

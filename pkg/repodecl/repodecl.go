@@ -126,8 +126,13 @@ func load(tree fs.FS, repo model.RepoRef, forward bool) (model.RepoDeclarations,
 		if !forward || !errors.As(err, &schema) {
 			return false
 		}
+		// The decoder's message already opens with the file's path, and
+		// everything that shows a RefusedDeclaration puts Path in front
+		// of Message itself: kept, it read ".grain/templates/big.yml:
+		// .grain/templates/big.yml: line 5: ..." on the sync's error and
+		// in `grain health` (docs/test-runs/2026-11-13-schedules-templates.md, F3).
 		declared.Refused = append(declared.Refused, model.RefusedDeclaration{
-			Kind: kind, Path: f.path, Stem: f.stem, Message: err.Error(),
+			Kind: kind, Path: f.path, Stem: f.stem, Message: strings.TrimPrefix(err.Error(), f.path+": "),
 		})
 		return true
 	}
