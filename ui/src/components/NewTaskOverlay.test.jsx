@@ -352,13 +352,25 @@ describe("NewTaskOverlay", () => {
       />,
     );
     const createButton = screen.getByRole("button", { name: "Create task" });
-    const why = () =>
-      createButton.closest("[data-create-blocked]")?.getAttribute("title") ??
-      null;
+    // The reason is the wrapper's title while the tooltip is shut, and
+    // the tooltip it describes itself by while it is open.
+    const why = () => {
+      const wrapper = createButton.closest("[data-create-blocked]");
+      if (!wrapper) return null;
+      const tip = wrapper.getAttribute("aria-describedby");
+      return tip
+        ? document.getElementById(tip).textContent
+        : wrapper.getAttribute("title");
+    };
 
     expect(why()).toBe("Give the task a title, or pick a template.");
     await user.type(screen.getByLabelText(/Title/), "Fix");
     expect(why()).toBe("Pick a repo under Repos, or choose No repo.");
+    // A phone has no hover: a tap on the greyed-out button shows it.
+    await user.click(createButton.closest("[data-create-blocked]"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Pick a repo under Repos, or choose No repo.",
+    );
     await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
     await user.click(screen.getByLabelText("Create a new branch"));
     expect(createButton).toBeDisabled();

@@ -247,6 +247,10 @@ export default function NewTaskOverlay({
   const [title, setTitle] = useState(
     () => draft?.title ?? prefill?.title ?? "",
   );
+  // Create task's "what is missing" tooltip (below), open while hovered
+  // or focused and for a few seconds after a tap.
+  const [blockedTipHovered, setBlockedTipHovered] = useState(false);
+  const [blockedTipTapped, setBlockedTipTapped] = useState(false);
   const [description, setDescription] = useState(
     () => draft?.description ?? prefill?.description ?? "",
   );
@@ -2315,6 +2319,12 @@ export default function NewTaskOverlay({
   const blockedWhy = accessReason("tasks:write", accessRepo)
     ? ""
     : submitBlocker;
+  // The tapped tooltip goes away by itself, as a long-pressed one does.
+  useEffect(() => {
+    if (!blockedTipTapped) return undefined;
+    const timer = setTimeout(() => setBlockedTipTapped(false), 3000);
+    return () => clearTimeout(timer);
+  }, [blockedTipTapped]);
   const submitButton = (
     <Button
       type="submit"
@@ -2355,11 +2365,21 @@ export default function NewTaskOverlay({
             does. The wrapper is drawn whether or not anything is
             missing, so typing the last missing field does not remount
             the button. A refused role says so through AccessGate
-            instead, rather than through two tooltips at once. */}
-          <Tooltip title={blockedWhy} describeChild>
+            instead, rather than through two tooltips at once. A tap
+            shows it too, for a while: on a phone there is no hover, and
+            the mouse events a tap sends close a hover tooltip as soon
+            as it opens. */}
+          <Tooltip
+            title={blockedWhy}
+            describeChild
+            open={blockedTipHovered || blockedTipTapped}
+            onOpen={() => setBlockedTipHovered(true)}
+            onClose={() => setBlockedTipHovered(false)}
+          >
             <span
               data-create-blocked={blockedWhy ? "" : undefined}
               tabIndex={blockedWhy ? 0 : undefined}
+              onClick={() => blockedWhy && setBlockedTipTapped(true)}
               style={{ display: "inline-flex", flexDirection: "column" }}
             >
               <AccessGate scope="tasks:write" repo={accessRepo} config={config}>
