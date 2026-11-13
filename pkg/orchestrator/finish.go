@@ -2009,7 +2009,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// dropped here, as a non-string entry always was, since the
 		// live propose_task call already refused it.
 		capabilities, _ := model.CapabilityEntries(p["capabilities"])
-		var ciReads []model.RepoRef
+		var ciReads, ciTargetReads []model.RepoRef
 		for _, cap := range capabilities {
 			cap = strings.TrimSpace(cap)
 			if aliasAdm, isLegacyAdm := model.LegacyAdmissionAlias(cap); isLegacyAdm {
@@ -2046,11 +2046,20 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				// dispatch of which would then refuse it (task 4532). A
 				// repository read is the one with a task equivalent, and
 				// is filed as that reads entry -- for UngrantedReads below
-				// to judge like any other -- rather than dropped.
+				// to judge like any other -- rather than dropped, unless
+				// it names the proposal's own target repository (which it
+				// already reads without a reads entry).
 				if why := model.TaskGrantCIOnlyRefusal(expanded); why != "" {
 					if repo, ok := model.RepoReadTarget(expanded); ok {
-						ciReads = append(ciReads, repo)
-						body += ciReadGrantAsReadsNote(cap, repo)
+						if target != nil && repo.Same(*target) {
+							if !slices.ContainsFunc(ciTargetReads, repo.Same) {
+								ciTargetReads = append(ciTargetReads, repo)
+								body += ciReadGrantTargetRepoNote(cap, repo)
+							}
+						} else if !slices.ContainsFunc(ciReads, repo.Same) {
+							ciReads = append(ciReads, repo)
+							body += ciReadGrantAsReadsNote(cap, repo)
+						}
 					} else {
 						body += ciOnlyGrantRefusedNote(cap, why)
 					}
@@ -4527,6 +4536,15 @@ func ciReadGrantAsReadsNote(grant string, repo model.RepoRef) string {
 	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for `%s`, a CI capability that no task "+
 		"run is handed, so it was filed with `reads: [%q]` instead -- a task's own read access to %s.",
 		grant, repo.String(), repo)
+}
+
+// ciReadGrantTargetRepoNote is the line added to a proposal whose CI read
+// grant named its own target repository, which it reads without a grant
+// or a reads entry.
+func ciReadGrantTargetRepoNote(grant string, repo model.RepoRef) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for `%s`, a CI capability that no task "+
+		"run is handed, so it was filed without that grant: it already targets %s and reads it without one.",
+		grant, repo)
 }
 
 // ciOnlyGrantRefusedNote is the line added to a proposal whose grant was

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -761,15 +762,19 @@ func CIOnlyRefusal(capability string) string {
 
 // TaskGrantCIOnlyRefusal is grain's own refusal of grant as a task
 // grant -- repository access (repo-read:<repo>, repo-write:<repo> or
-// their references) or a method whose server declared a CI-only rule
-// (CIGrantRule) -- or "" when grain's own rules admit it to a task. It
-// is the check admission makes (CapabilityPolicy.Permits with the run
-// kind a task's) without any policy rule, so a filer that cannot reach
-// ui.Client's pickers (orchestrator.relayProposedTasks) refuses a task
-// the very grant every dispatch of it would. An in-process provider's
-// CapabilitySpec.CIOnly is not judged here: that needs a registry, and
-// ResolveGrants asks it.
+// their references), the bare release-gate-read CI alias, or a method
+// whose server declared a CI-only rule (CIGrantRule) -- or "" when
+// grain's own rules admit it to a task. It is the check admission makes
+// (CapabilityPolicy.Permits with the run kind a task's) without any
+// policy rule, plus ReleaseGateReadCapability (which resolves only in a
+// CI job's registry), so a filer that cannot reach ui.Client's pickers
+// (orchestrator.relayProposedTasks) refuses a task the very grant every
+// dispatch of it would. An in-process provider's CapabilitySpec.CIOnly
+// is not judged here: that needs a registry, and ResolveGrants asks it.
 func TaskGrantCIOnlyRefusal(grant string) string {
+	if strings.TrimSpace(grant) == ReleaseGateReadCapability {
+		return CIOnlyRefusal(ReleaseGateReadCapability)
+	}
 	if err := (CapabilityPolicy{}).Permits(grant, CapabilitySubject{Kind: CapabilityRunTask}); err != nil {
 		return err.Error()
 	}

@@ -54,6 +54,12 @@ func TestRelayedProposalIsNotFiledHoldingACIOnlyCapability(t *testing.T) {
 			"title": "Read ref", "body": "b",
 			"capabilities": []any{map[string]any{"capability": model.RepoReadRef, "with": map[string]any{"repo": "acme/lib"}}},
 		}},
+		{Name: "propose_task", Arguments: map[string]any{
+			"title": "Read own target", "body": "b", "capabilities": []any{"repo-read:acme/widgets"},
+		}},
+		{Name: "propose_task", Arguments: map[string]any{
+			"title": "Release gate", "body": "b", "capabilities": []any{model.ReleaseGateReadCapability},
+		}},
 	}}
 	if err := relayProposedTasks(ctx, store, nil, nil, parent, result, now); err != nil {
 		t.Fatalf("relayProposedTasks: %v", err)
@@ -66,7 +72,7 @@ func TestRelayedProposalIsNotFiledHoldingACIOnlyCapability(t *testing.T) {
 	for _, tk := range tasks {
 		byTitle[tk.Title] = tk
 	}
-	for _, title := range []string{"Pin core", "Push core", "Read ref"} {
+	for _, title := range []string{"Pin core", "Push core", "Read ref", "Read own target", "Release gate"} {
 		tk, ok := byTitle[title]
 		if !ok {
 			t.Fatalf("%q was not filed; tasks = %v", title, byTitle)
@@ -91,6 +97,20 @@ func TestRelayedProposalIsNotFiledHoldingACIOnlyCapability(t *testing.T) {
 		if tk.Approval != nil {
 			t.Errorf("%q approved without a person though its proposer cannot read acme/lib", title)
 		}
+	}
+	own := byTitle["Read own target"]
+	if len(own.Reads) != 0 {
+		t.Errorf("Read own target Reads = %v, want none for its own target repository", own.Reads)
+	}
+	if strings.Contains(own.Body, `reads: ["acme/widgets"]`) || !strings.Contains(own.Body, "already targets acme/widgets") {
+		t.Errorf("Read own target body misstates how its own-repo CI read was handled:\n%s", own.Body)
+	}
+	gate := byTitle["Release gate"]
+	if slices.ContainsFunc(gate.Grants, func(g model.Grant) bool { return g.Capability == model.ReleaseGateReadCapability }) {
+		t.Errorf("Release gate Grants = %v, want %s dropped as CI-only", gate.Grants, model.ReleaseGateReadCapability)
+	}
+	if !strings.Contains(gate.Body, "is a CI capability, not a task grant") {
+		t.Errorf("Release gate body does not explain the dropped CI grant:\n%s", gate.Body)
 	}
 	push := byTitle["Push core"]
 	if len(push.Writes) != 0 {

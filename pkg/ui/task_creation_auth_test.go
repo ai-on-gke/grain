@@ -17,6 +17,7 @@ package ui_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -121,5 +122,19 @@ func TestApproveRefusesATaskHoldingACIOnlyCapability(t *testing.T) {
 	}
 	if got.Approval != nil {
 		t.Errorf("task approved holding a CI capability: %+v", got.Approval)
+	}
+
+	// And a task already approved before approval refused CI capabilities
+	// (task 4532) is refused by RunNow as well, rather than re-queued for
+	// dispatch to fail again.
+	if err := store.Approve(ctx, held.ID, model.Attribution{
+		Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"},
+	}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RunNow(ctx, held.ID); err == nil ||
+		!strings.Contains(err.Error(), "cannot be run holding repo-read:acme/lib") ||
+		!strings.Contains(err.Error(), `reads: ["acme/lib"]`) {
+		t.Fatalf("RunNow on already-approved task with repo-read:acme/lib: err = %v, want a CI-capability run refusal naming reads", err)
 	}
 }
