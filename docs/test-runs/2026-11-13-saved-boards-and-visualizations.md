@@ -424,3 +424,7 @@ were:
 - `npx playwright test e2e/saved-boards-walkthrough.spec.js -g "6f|6g"
   --project=chromium`: both passed on the fixed build. `6g` failed on the
   unfixed frontend, as expected.
+- `npx playwright test e2e/saved-boards-walkthrough.spec.js
+  e2e/boards.spec.js e2e/board.spec.js e2e/role-gated-actions.spec.js
+  e2e/boards_workflows.spec.js e2e/board-return-focus.spec.js
+  --project=chromium` on the fixed build: **76 passed**.
