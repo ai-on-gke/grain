@@ -1,0 +1,15 @@
+== A verified alice, her session 8 -> exit=0 Relayed the answer onto task #7 as the person's reply (task is now queued). rc=0 
+   target 7 state: awaiting_reply (re-ran and asked again: the default action)
+{"author":"alice@example.com","authorSource":"registry","authorLabel":"alice@example.com via alice relay","relayedVia":"8"}
+== B ordinary task run 9 -> exit=0 rc=1 grain: {"error":"task 9 holds no api grant for scope tasks:write, which POST /api/tasks/{id}/comments needs: ask a person to grant api:tasks:write or a preset that includes it (docs/agent-api.md)"} 
+== C external agent token -> {"error":"an external agent credential cannot relay a person's answer: relay is for a console session acting for the person who asked it to"}
+ HTTP 403
+== D session 8, unverified access-code turn -> exit=0 rc=1 grain: {"error":"session 8 is acting for no signed-in person right now, so it has nobody's answer to relay: ask the person to reply on the task themselves"} 
+   bob posting to the session: {"error":"bob@example.com (role grain/viewer) holds no scope tasks:write, which POST /api/tasks/{id}/comments needs: ask an access-code admin to assign a role that includes it (docs/access-code.md)"}
+
+== E session 8, bob's turn -> exit=0 rc=1 grain: {"error":"session 8 is acting for no signed-in person right now, so it has nobody's answer to relay: ask the person to reply on the task themselves"} 
+   carol posting to the session: {"error":"carol@example.com (role walk/other-repo) holds tasks:write only on acme/other, and POST /api/tasks/{id}/comments does not name one of them"}
+
+== F session 8, carol's turn (role on acme/other only) -> exit=0 rc=1 grain: {"error":"session 8 is acting for no signed-in person right now, so it has nobody's answer to relay: ask the person to reply on the task themselves"} 
+== G session 8 onto itself -> exit=0 rc=1 grain: {"error":"a session cannot relay an answer onto its own conversation: the person is already talking to it"} 
+target 7 final state: awaiting_reply; relayed comments: 1
