@@ -230,3 +230,196 @@ intercepted; no `page.route` was used.
   no CI capabilities, issue-import counts, work ownership, compare or
   Advanced tab. This is a parity gap for the Angular migration, not a bug
   in what is there.
+
+---
+
+# 2026-11-13 (afternoon) — `/next/` repository, merge queue and release walkthrough (task 5386)
+
+The morning run above (task 4728) walked mostly the classic UI. This run
+walked the Angular UI at `/next/` first, as "Two UIs" in `PROMPT.md` asks,
+and used the classic UI only for steps `/next/` has no page for yet.
+
+## Environment
+- **Repository**: `ai-on-gke/grain`, branch
+  `grain/098073e4/task-5386-walk-through-repository-merge`.
+- **Commit tested**: `e69d34223` (`main` at the start of the run; build
+  stamp `v0.0.0-20261113135704-e69d34223665`). The fixes below were
+  re-walked on this branch's build (`7669fe80c`).
+- **Build**: `make frontend` (Vite `ui/` and Angular `ui-ng/` bundles,
+  embedded), then `go build -tags grain_e2e ./cmd/grain`. After each
+  `ui-ng/` edit: `npm run build` in `ui-ng/` and the same `go build`.
+- **Browser**: Playwright headless Chromium
+  (`PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright`), `timezoneId: UTC`,
+  driven by throwaway node scripts outside the repository through visible
+  controls (rail links, rows, tabs, switches, pill menus, text boxes,
+  dialog buttons, Escape). Viewports 1280×900 and 390×844, light and dark.
+- **Gemini**: there is no `/home/debian/.gemini-api-key` in this sandbox,
+  so nothing was Gemini-backed and `LOOK=1` was unavailable. The file
+  reader shows PNGs as bytes, so layout was checked with DOM geometry
+  (bounding boxes, `scrollWidth`, focus) as well as the
+  `ui/e2e/screenshot.mjs` contact sheets attached to the task.
+- **Servers** (each a real `grain demo -open=false -access-code-file …`
+  over its own throwaway embedded SQLite store, signed in through
+  `POST /api/auth/access-code` as `alice@example.com`):
+
+| Demo | Port | Build | Flags | Used for |
+| --- | --- | --- | --- | --- |
+| A | 4801 | base | `-github-sim -reconcile=1s -fake-ci -base-branch-ci -merge-queue-states -qualification` | the `/next/` walkthrough and the bug reproductions |
+| B | 4802 | fix | same as A | re-walking every step on the fixed build |
+| C | 4804 | fix | `-github-sim` | checking what the e2e spec's demo seeds |
+
+## Stubs
+None. Grain's own API, the React UI and the Angular UI were never mocked
+and no `page.route` was used. The in-process GitHub simulation
+(`-github-sim`) stood in for GitHub (branches, releases, RC cut and
+promote, and the issue listing — including the 404 for a source
+repository that does not exist). Direct API calls were used only to read
+persisted state back.
+
+## Which UI each step ran against
+
+| Step | UI | Note |
+| --- | --- | --- |
+| Settings → Repositories (rail → Settings → Repositories) | `/next/` | row: `acme/widgets main github Settings Releases Remove` |
+| Repo tabs, URL, reload, Back/Forward, phone tab strip | `/next/` | tabs ride `/next/repos/<o>/<n>/<tab>`, not `/settings/<tab>` |
+| View tasks in repo | `/next/` | `/next/tasks?repo=acme/widgets` |
+| CI mode, Watch default branch, workflows | `/next/` | |
+| Merge queue switches, bypass confirm | `/next/` | |
+| Agents: setup, prompt extension, default capabilities | `/next/` | |
+| Issue import (enable, label, source, Import issues now) | `/next/` | no queue-at-once switch or interval on `/next/` |
+| Branches: Create branch | `/next/` | |
+| Releases: create, delete, Cut RC, Promote, Merge back | `/next/` | |
+| Remove repository | `/next/` (Settings → Repositories) | |
+| Repos list (`/repos`): counts, search, reorder, Add repo | classic only | no `/next/repos` list; `/next/repos` falls to the inbox |
+| Compare branches | classic only | no `/next/` compare page |
+| Advanced tab (declarations, trigger files, Ports) | classic only | no `/next/` Advanced tab |
+| Work ownership, unknown release URL fallback | classic only | not on `/next/` Releases |
+| Overview gate warnings, overlap re-check panel, CI capabilities | classic only | not on `/next/` |
+| Filing a task from the repo page | classic only | `/next/` repo page has no new-task button |
+
+## Steps and outcomes (`/next/`, demo A unless marked)
+- **Settings → Repositories**: reached from the rail. A row's `Settings`
+  opens `/next/repos/acme/widgets`. The CI MODE column shows the raw value
+  (`github`).
+- **Tabs**: each tab button sets `/next/repos/acme/widgets/<tab>`
+  (`ci`, `merge-queue`, `agents`, `branches`, `releases`; Overview drops
+  the segment). A reload on Releases keeps it selected
+  (`aria-current=page`). Back from Releases goes to Overview and Forward
+  returns. An unknown tab (`/nosuch`) opens Overview.
+- **Phone tab strip**: a deep link to Releases at 390 px left the
+  selected tab at x 589 (w 90), off screen: **bug 6**.
+- **View tasks in acme/widgets**: opens `/next/tasks?repo=acme/widgets`
+  with the repo chip and 20 tasks. Back returns to the repo page.
+- **CI mode**: Grain → No CI → GitHub each saved (`ciMode` read back as
+  `grain`, `none`, `github`).
+- **Watch default branch**: off → on survived a reload, then reset.
+- **Workflows**: invalid YAML is refused (`400 PUT …/workflows`, banner
+  `yaml: line 1: did not find expected ',' or ']'`). On base, saving a
+  valid workflow did not clear that banner: **bug 4**.
+- **Merge on green / Require branch up to date**: each off → on survived
+  a reload, then reset.
+- **Agents**: setup command `make deps-5386` saved and survived a reload.
+- **Unsaved edits**: an unsaved workflow edit or setup command, then
+  `← Repositories`, left the page at once and dropped the edit: **bug 5**.
+- **Issue import**: with the importer off, `Import issues now` returns
+  400 (`issue import is not switched on for acme/widgets…`). With it on
+  and source `acme/nosuch-5386`, the server answers `open: 0` and
+  `error: … GitHub answered 404`. On base the page showed no outcome at
+  all (a snackbar `Issue import triggered`, or nothing on a 400):
+  **bug 3**.
+- **Branches**: on base, a requested branch rendered as `walk-5386 —`
+  under a `HEAD` column the rows never carry (the API answers
+  `{name, from, status, createdAt}`), and an empty list rendered nothing:
+  **bug 7**.
+- **Releases**:
+  - `bad name` is refused (400). On base the reason went to the page
+    banner with no `aria-invalid` on the box: **bug 8**.
+  - `2.0-base` was created and survived a reload.
+  - On base, `Delete` removed `2.0-base` on one click, `Promote RC` moved
+    `1.0.rc.1` to `promoting` on one click, and `Merge back` asked
+    nothing: **bug 2**.
+- **Remove repository** (Settings → Repositories): on base one click
+  removed `acme/widgets` from the target list with no question: **bug 1**.
+  (Demo A's repository was gone after that; demo B was used from here.)
+
+### Re-walk on the fixed build (demo B)
+- **Remove** asks `Remove acme/widgets, the only repo this deployment
+  allows? An empty allowlist is what means unrestricted…`. Focus starts on
+  Cancel; Escape closes it and the row stays.
+- **Delete release** asks `Remove release 2.0-fix? This drops the release
+  and its candidates from grain.`. Escape keeps the row; accepting removes
+  it.
+- **Promote** asks `Promote 1.0.rc.1 to 1.0? This moves acme/widgets's 1.0
+  branch to 1.0.rc.1.`; Cancel leaves `1.0.rc.1 active`.
+- **Merge back** asks `Merge 1.0 into acme/widgets's default branch? This
+  opens a pull request on GitHub from 1.0.`
+- **Bad release name**: the reason shows under the box
+  (`aria-invalid=true`), there is no banner, and it clears on the next
+  keystroke.
+- **Import issues now**:
+  - Bad source: `Could not read the open issues on acme/nosuch-5386: …
+    GitHub answered 404: Not Found`.
+  - Own repo: `Read 0 open issues on acme/widgets: imported 0, 0 already
+    imported.`
+- **Workflow banner** clears once a valid workflow saves.
+- **Branches** shows `walk-fix main pending`. With none it says `No
+  branches have been created here through grain yet.`
+- **Leave guard**: an unsaved setup edit, then `← Repositories`, asks `You
+  have unsaved changes here. Leave and discard them?`. Cancel keeps the
+  edit and the URL; Leave goes.
+- **Phone**: the Releases tab sits at x 284 w 90 of 390, `scrollWidth`
+  390.
+- **Geometry at 390 px, light and dark**: Remove dialog x 16 w 358;
+  Promote dialog x 16 w 358; release-name error x 37 w 316. At 1280 px:
+  dialogs x 355 w 570. No horizontal overflow anywhere.
+
+### Classic-only steps (demo B)
+- `/repos` renders with `Add repo` visible. The repository list says
+  `No repositories discovered — add or check a Git connection…` next to
+  `This deployment allows only acme/widgets`.
+- `/repos/acme/widgets/settings/advanced` and `/settings/releases` render
+  (work ownership `standing work on this deployment: on`).
+- Compare `main...1.0.rc.1` reads `There are no changes between these
+  branches.`. `main...nosuch-5386` gives the documented 404 explanation.
+- `/repos/acme/widgets/releases/nosuch-5386` falls back to `1.0` with the
+  in-place explanation.
+- The rest of the classic coverage is the morning run's, above.
+
+### Console and network audit
+- **Uncaught page errors**: 0, on both builds.
+- **4xx responses**: all deliberate negative cases. 400 for the invalid
+  workflow, `bad name` and the import pass with the importer off; 404 for
+  the unknown compare ref.
+
+## Bugs found and fixed (`ui-ng/` only; the classic pages already behave)
+
+| # | Bug | Fix |
+| --- | --- | --- |
+| 1 | Settings → Repositories `Remove` removed a repo on one click | asks, with the classic wording and the `POST /api/repos/plan` dry run (`settings-code.component.ts`) |
+| 2 | Releases `Delete`, `Promote RC`, `Merge back` acted on one click | each asks, naming the branches (`repo-detail-page.component.ts`) |
+| 3 | `Import issues now` said only "triggered" | reports read/imported/skipped, or that it read nothing (`importOutcomeText`) |
+| 4 | A refused setting's banner stayed after that setting saved | `refuse`/`saved`, keyed by action |
+| 5 | Leaving with unsaved workflow/import/setup/prompt/caps edits dropped them | `canDeactivate` guard on the repo routes plus `beforeunload` |
+| 6 | Phone deep link left the selected tab off screen | `afterRenderEffect` scrolls it into the strip |
+| 7 | Branches table showed an empty `HEAD` column and no empty state | `From`/`Status` columns and an empty line |
+| 8 | Refused release name went to the banner | inline on its box, clearing on edit or create |
+
+**Coverage**:
+- Vitest (`ui-ng/src/app/repos/repo-detail-page.component.spec.ts`): the
+  new cases fail on the old component (5 failed).
+- Playwright (`ui-ng/e2e/next-repo-release-guards.spec.js`, over `grain
+  demo -github-sim`): 4 tests.
+- Also passing: `next-repo-ci-mode-bypass.spec.js` and
+  `next-full-system.spec.js`.
+
+## Observations (not changed)
+- **`/next/` still lacks** a repos list, compare, the Advanced tab, work
+  ownership, the Overview gate warnings and overlap re-check panel, CI
+  capabilities, the issue-import queue-at-once switch and interval, a
+  new-task button on the repo page, and an upstream repository field.
+  These are migration gaps, not bugs in what is there.
+- **`/next/` Cut RC is never greyed out** with a reason while an RC is
+  active, as classic is.
+- **Settings → Repositories shows the raw CI mode** (`github`).
+- **Settings → Git `Remove` on a git connection** also acts on one click.
+  That is outside this area and was left alone.
