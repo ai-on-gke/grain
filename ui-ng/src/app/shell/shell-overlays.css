@@ -232,7 +232,7 @@
 /* Account popover */
 .account-popover {
   position: fixed;
-  top: calc(var(--grain-topbar-height) - 4px);
+  top: calc(var(--grain-banner-height, 0px) + var(--grain-topbar-height) - 4px);
   right: 16px;
   z-index: 85;
   width: min(340px, calc(100vw - 24px));

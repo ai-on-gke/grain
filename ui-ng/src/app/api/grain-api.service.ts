@@ -18,7 +18,8 @@ import {
   HttpHeaders,
 } from "@angular/common/http";
 import { Injectable, inject } from "@angular/core";
-import { firstValueFrom } from "rxjs";
+import { Observable, firstValueFrom } from "rxjs";
+import { ReachTimeoutError } from "../services/connection.service";
 import { ROUTE_SCOPES, type RouteKey } from "./generated-routes";
 import type {
   DiffPreview,
@@ -72,6 +73,52 @@ export function splitRepo(repo: string): { owner: string; name: string } {
 
 const JSON_HEADERS = new HttpHeaders({ "Content-Type": "application/json" });
 
+// ReadOptions bounds one read: past timeoutMs the request is cancelled and
+// the call throws a ReachTimeoutError, which ConnectionService counts as
+// the deployment being unreachable. Only for polled reads whose answer is
+// expected promptly -- never a mutation, whose outcome a cancel would
+// leave unknown.
+export interface ReadOptions {
+  timeoutMs?: number;
+}
+
+function bounded<T>(
+  obs: Observable<T>,
+  url: string,
+  opts?: ReadOptions,
+): Observable<T> {
+  const ms = opts?.timeoutMs;
+  if (!ms) return obs;
+  // By hand rather than rxjs's timeout(), which pulls a scheduler into the
+  // initial bundle for this one use. Unsubscribing the inner read is what
+  // cancels the request.
+  return new Observable<T>((sub) => {
+    const sentAt = Date.now();
+    const timer = setTimeout(
+      () => sub.error(new ReachTimeoutError(ms, sentAt, url)),
+      ms,
+    );
+    const inner = obs.subscribe({
+      next: (v) => {
+        clearTimeout(timer);
+        sub.next(v);
+      },
+      error: (e) => {
+        clearTimeout(timer);
+        sub.error(e);
+      },
+      complete: () => {
+        clearTimeout(timer);
+        sub.complete();
+      },
+    });
+    return () => {
+      clearTimeout(timer);
+      inner.unsubscribe();
+    };
+  });
+}
+
 // Fresh is one conditional read: the body (the cached copy when the
 // server answered 304 Not Modified) and whether it changed since the
 // last read of the same URL.
@@ -92,9 +139,16 @@ export class GrainApi {
   // number of readers can poll the same URL safely.
   private readonly etags = new Map<string, { etag: string; body: unknown }>();
 
-  get<T>(key: RouteKey, params?: RouteParams, query?: string): Promise<T> {
+  get<T>(
+    key: RouteKey,
+    params?: RouteParams,
+    query?: string,
+    opts?: ReadOptions,
+  ): Promise<T> {
     const url = routePath(key, params) + (query ? `?${query}` : "");
-    return firstValueFrom(this.http.get<T>(url, { headers: JSON_HEADERS }));
+    return firstValueFrom(
+      bounded(this.http.get<T>(url, { headers: JSON_HEADERS }), url, opts),
+    );
   }
 
   getText(
@@ -113,6 +167,7 @@ export class GrainApi {
     key: RouteKey,
     params?: RouteParams,
     query?: string,
+    opts?: ReadOptions,
   ): Promise<Fresh<T>> {
     const url = routePath(key, params) + (query ? `?${query}` : "");
     const cached = this.etags.get(url);
@@ -120,7 +175,11 @@ export class GrainApi {
     if (cached) headers = headers.set("If-None-Match", cached.etag);
     try {
       const res = await firstValueFrom(
-        this.http.get<T>(url, { headers, observe: "response" }),
+        bounded(
+          this.http.get<T>(url, { headers, observe: "response" }),
+          url,
+          opts,
+        ),
       );
       const body = res.body as T;
       const etag = res.headers.get("ETag");
@@ -203,8 +262,8 @@ export class GrainApi {
     return this.send<T>("delete", key, params, body, query);
   }
 
-  config(): Promise<GrainConfig> {
-    return this.get<GrainConfig>("GET /api/config");
+  config(opts?: ReadOptions): Promise<GrainConfig> {
+    return this.get<GrainConfig>("GET /api/config", undefined, undefined, opts);
   }
 
   tasks(): Promise<Task[]> {

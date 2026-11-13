@@ -24,6 +24,7 @@ import {
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task } from "../api/models";
+import { ConnectionService, REACH_TIMEOUT_MS } from "./connection.service";
 
 export const FAST_POLL_MS = 3000;
 export const IDLE_POLL_MS = 15000;
@@ -55,6 +56,7 @@ export class TaskFeedStore implements OnDestroy {
   private readonly events = inject(GrainEvents);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
+  private readonly connection = inject(ConnectionService);
 
   readonly tasks = signal<Task[]>([]);
   readonly loaded = signal(false);
@@ -242,7 +244,15 @@ export class TaskFeedStore implements OnDestroy {
       let body: Task[];
       let changed: boolean;
       if (typeof this.api.getIfChanged === "function") {
-        const r = await this.api.getIfChanged<Task[]>("GET /api/tasks");
+        // Bounded, so a deployment that accepts the connection and never
+        // answers raises the disconnected banner rather than holding
+        // this poll (and one of the browser's connections) forever.
+        const r = await this.api.getIfChanged<Task[]>(
+          "GET /api/tasks",
+          undefined,
+          undefined,
+          { timeoutMs: REACH_TIMEOUT_MS },
+        );
         body = Array.isArray(r?.body) ? r.body : [];
         changed = !!r?.changed;
       } else {
@@ -262,8 +272,10 @@ export class TaskFeedStore implements OnDestroy {
       this.lastError.set(null);
       this.loadError.set(null);
       this.loaded.set(true);
+      this.connection.note("feed");
       return true;
     } catch (err) {
+      this.connection.note("feed", err);
       this.lastError.set(err);
       this.loadError.set(extractError(err));
       this.now.set(Date.now());

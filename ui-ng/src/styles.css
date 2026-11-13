@@ -185,6 +185,73 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* The shell frame stacks the disconnected banner (when it is up) above
+   the whole app shell, rail included, so the banner pushes the shell
+   down rather than covering the rail or the top bar. */
+.shell-frame {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.shell-frame > .app-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  width: 100%;
+}
+
+.disconnected-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  font: 500 13px/18px var(--grain-font-body);
+  text-align: center;
+  z-index: 95;
+}
+
+.disconnected-banner.is-up {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--md-sys-color-warning);
+}
+
+/* Holds the alerts bell's place in the top bar until it loads. */
+.alerts-placeholder {
+  display: inline-block;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+}
+
+.disconnected-banner-icon {
+  flex: none;
+}
+
+/* The banner's copy inside the topmost open modal, first in it and stuck
+   to its top, so a person working in a dialog still sees it. */
+.disconnected-mirror {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: none;
+  margin: 0 0 8px;
+  padding: 6px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  border: 1px solid var(--md-sys-color-warning);
+  font: 500 12px/16px var(--grain-font-body);
+  text-align: center;
+}
+
 .app-shell {
   display: grid;
   grid-template-rows: var(--grain-topbar-height) 1fr var(
