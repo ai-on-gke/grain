@@ -1329,7 +1329,7 @@ func (c *Client) staleSchedules(ctx context.Context) []model.StaleSchedule {
 	if c == nil || c.Store == nil {
 		return nil
 	}
-	stale, err := c.Store.StaleSchedules(ctx, time.Now())
+	stale, err := c.Store.StaleSchedules(ctx, time.Now(), c.proposalDefaultBranches())
 	if err != nil {
 		return nil
 	}

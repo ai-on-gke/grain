@@ -492,8 +492,6 @@ func validSortedCredentialNames(names []string) []string {
 func repoCredentialArgs(configured []string) (map[string]any, []string) {
 	prop := map[string]any{
 		"type":        "string",
-		"pattern":     githubtoken.NamePattern,
-		"not":         map[string]any{"const": "anonymous"},
 		"description": "Named GitHub credential under secrets/github (<name>.token, <name>.app.json, or <name>.ssh.json) to authenticate this task's git operations with.",
 	}
 	var valid []string
@@ -504,6 +502,9 @@ func repoCredentialArgs(configured []string) (map[string]any, []string) {
 			enum[i] = n
 		}
 		prop["enum"] = enum
+	} else {
+		prop["pattern"] = githubtoken.NamePattern
+		prop["not"] = map[string]any{"const": "anonymous"}
 	}
 	return map[string]any{
 		"type":                 "object",
