@@ -126,6 +126,9 @@ type Server struct {
 	// the replacement Server in the same process.
 	AllowHandover bool
 
+	// drainExitGrace overrides DrainExitGrace in tests when positive.
+	drainExitGrace time.Duration
+
 	uid uint32
 	wg  sync.WaitGroup
 
@@ -276,21 +279,36 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// hostd stopping -- systemd's stop or restart, SIGTERM, a drain's end
+	// -- kills what still runs for the host's reasons, not the run's: its
+	// exit says Draining, as loadSpools says of a run a crash left without
+	// one, so the daemon re-queues the run rather than failing it.
 	stopOnCancel := context.AfterFunc(ctx, func() {
 		if !s.handedOverNow() {
-			s.cancelRunning(killCanceled)
+			s.cancelRunning(killDraining)
 		}
 	})
 	defer stopOnCancel()
+	// Serve waits for this below: the replacement hostd a cutover or
+	// handover starts next makes its own socket at the same path, and a
+	// remove still to come after Serve returned unlinked that one.
+	socketClosed := make(chan struct{})
 	if ln != nil {
 		go func() {
+			defer close(socketClosed)
 			<-ctx.Done()
 			ln.Close()
 			_ = os.Remove(s.Socket)
 		}()
+	} else {
+		close(socketClosed)
 	}
 	go s.sweepExited(ctx)
+	// The drain watcher logs through s.Logf, which may be a test's t.Logf:
+	// Serve waits for it below, so nothing it says outlives Serve.
+	drainWatched := make(chan struct{})
 	go func() {
+		defer close(drainWatched)
 		select {
 		case <-ctx.Done():
 		case <-s.drainCh:
@@ -324,12 +342,18 @@ func (s *Server) Serve(ctx context.Context) error {
 		}()
 	}
 	s.wg.Wait()
+	// The accept loop ends only once ctx is done, and waitDrained returns
+	// on a done ctx, so this wait is short.
+	cancel()
+	<-drainWatched
+	<-socketClosed
 	if s.handedOverNow() {
 		s.releaseHandoverWatchers()
 		if s.Reexec != nil {
 			s.logf("hostd: execing new build in place (pid %d)", os.Getpid())
 			if err := s.Reexec(); err != nil {
 				s.logf("hostd: exec onto the new build failed (%v); stopping so systemd restarts it", err)
+				s.rewatchHandedOver()
 				s.cancelRunning(killDraining)
 				s.waitRunningDone()
 				return err
@@ -337,7 +361,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 		return nil
 	}
-	s.cancelRunning(killCanceled)
+	s.cancelRunning(killDraining)
 	s.waitRunningDone()
 	return nil
 }
@@ -411,6 +435,27 @@ func (s *Server) releaseHandoverWatchers() {
 	}
 }
 
+// rewatchHandedOver starts again the watchers releaseHandoverWatchers
+// let go of, for a handover that did not happen after all (Reexec
+// failed): the processes are this hostd's to reap again, so that a
+// cancel ends each with its exit recorded and waitRunningDone sees it
+// done, rather than leaving them unreaped and waiting out each one.
+func (s *Server) rewatchHandedOver() {
+	s.mu.Lock()
+	var live []*proc
+	for _, p := range s.procs {
+		if p.detached && !p.info.Exited && p.handover != nil {
+			p.handover = make(chan struct{})
+			p.watchDone = make(chan struct{})
+			live = append(live, p)
+		}
+	}
+	s.mu.Unlock()
+	for _, p := range live {
+		go s.watchDetached(p)
+	}
+}
+
 func (s *Server) poll() time.Duration {
 	if s.Poll > 0 {
 		return s.Poll
@@ -472,13 +517,31 @@ func (s *Server) refuseStarts() bool {
 // which refuses new starts so the runs still going can finish, for up to
 // drain_cap again.
 func (s *Server) Cutover() {
+	if s.markCutover() {
+		s.beginCutover()
+	}
+}
+
+// markCutover records a cutover, so Hello reports it, without yet
+// starting the drain that may exit hostd at once; beginCutover starts it.
+// OpDrain marks before it answers and begins after, so a daemon told the
+// cutover began never sees a Hello that says otherwise. It reports
+// whether this call marked it.
+func (s *Server) markCutover() bool {
 	s.init()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.draining || s.cutover {
-		return
+		return false
 	}
 	s.cutover = true
+	return true
+}
+
+// beginCutover starts the drain markCutover recorded.
+func (s *Server) beginCutover() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.startDrainLocked()
 	s.logf("hostd: cutting over to a new build: still taking new starts, and exiting the moment no run is running; %d process(es) running now", s.runningLocked())
 }
@@ -495,14 +558,28 @@ func (s *Server) StartHandover() {
 		s.Cutover()
 		return
 	}
+	if s.markHandover() {
+		s.beginHandover()
+	}
+}
+
+// markHandover is markCutover for a handover.
+func (s *Server) markHandover() bool {
 	s.init()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.draining || s.handover {
-		return
+		return false
 	}
 	s.cutover = true
 	s.handover = true
+	return true
+}
+
+// beginHandover starts the drain markHandover recorded.
+func (s *Server) beginHandover() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.startDrainLocked()
 	s.logf("hostd: handing over to a new build: keeping live detached runs across re-exec; %d process(es) running now", s.runningLocked())
 }
@@ -601,8 +678,10 @@ func (s *Server) waitDrained(ctx context.Context) {
 				p.cancel(killCanceled)
 			}
 			if handedOver {
+				s.waitExitsDelivered(ctx, true)
 				s.logf("hostd: handing %d live detached process(es) over to the new build", kept)
 			} else {
+				s.waitExitsDelivered(ctx, false)
 				s.logf("hostd: drained; exiting so the new build takes over")
 			}
 			return
@@ -641,6 +720,63 @@ func (s *Server) waitDrained(ctx context.Context) {
 			return
 		case <-s.changed:
 		case <-time.After(wait):
+		}
+	}
+}
+
+// DrainExitGrace bounds how long attach waits, after writing a detached
+// process's Exit frame, for the daemon to hang up having read it; one
+// that has not by then leaves the process and its spool kept.
+const DrainExitGrace = 5 * time.Second
+
+func (s *Server) exitGrace() time.Duration {
+	if s.drainExitGrace > 0 {
+		return s.drainExitGrace
+	}
+	return DrainExitGrace
+}
+
+// waitExitsDelivered waits until no ended process still has a stream attached
+// whose daemon has not read its Exit (attach releases a detached process once
+// the daemon cleanly hangs up after the Exit, lets go keeping the spool when
+// its session or stream breaks, and keeps the spool when DrainExitGrace passes
+// first; run waits the same way for a protocol-1 start, which has no spool).
+// On a handover (nonDetachedOnly) only protocol-1 exits are waited for:
+// detached spools survive on disk for the replacement hostd. It waits twice
+// DrainExitGrace at most, so attach's own grace -- which starts after any
+// final output is pumped -- ordinarily runs out first. Without it
+// the last run to end races hostd's exit:
+// Serve closes the remote session and the sockets the moment nothing
+// runs, so the daemon streaming that run sees its stream drop rather than
+// the Exit, and waits for a host to come back before the run can finish
+// from the spool it kept (or loses a protocol-1 start outright).
+func (s *Server) waitExitsDelivered(ctx context.Context, nonDetachedOnly bool) {
+	wait := 2 * s.exitGrace()
+	timeout := time.NewTimer(wait)
+	defer timeout.Stop()
+	for {
+		s.mu.Lock()
+		pending := 0
+		for _, p := range s.procs {
+			if nonDetachedOnly && p.detached {
+				continue
+			}
+			if p.info.Exited && p.info.Attached {
+				pending++
+			}
+		}
+		s.mu.Unlock()
+		if pending == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-timeout.C:
+			s.logf("hostd: drained, but %d attached stream(s) have not delivered their process's exit within %s; exiting anyway (the final spool is kept)", pending, wait)
+			return
+		case <-s.changed:
+		case <-time.After(s.poll()):
 		}
 	}
 }
@@ -781,12 +917,12 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		_ = writeJSON(conn, frameProcesses, s.Processes())
 		return
 	case OpAttach:
-		p := s.lookup(req.ID)
-		if p == nil || !p.detached {
+		p, gen := s.claimAttach(req.ID)
+		if p == nil {
 			s.refuse(conn, fmt.Sprintf("no detached process %q", req.ID))
 			return
 		}
-		s.attach(conn, p, req.Cursor, nil)
+		s.attach(ctx, conn, p, gen, req.Cursor, nil)
 		return
 	case OpCancel:
 		s.release(req.ID, "cancelled by the daemon")
@@ -800,13 +936,22 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		// But for a plain drain starts are refused before the answer, so a
 		// daemon that has been told the drain began never sees a start it
 		// makes next taken.
+		// A cutover or handover is marked before the answer too, so a
+		// Hello the daemon sends once it is told reports it, and its drain
+		// loop -- which may exit at once -- starts after.
 		switch {
 		case req.Idle && req.Handover && s.canHandover():
+			began := s.markHandover()
 			_ = writeFrame(conn, frameOK, nil)
-			s.StartHandover()
+			if began {
+				s.beginHandover()
+			}
 		case req.Idle:
+			began := s.markCutover()
 			_ = writeFrame(conn, frameOK, nil)
-			s.Cutover()
+			if began {
+				s.beginCutover()
+			}
 		default:
 			began := s.refuseStarts()
 			_ = writeFrame(conn, frameOK, nil)
@@ -988,7 +1133,9 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 
 	// The daemon's side: stdin, signals, and its going away.
 	done := make(chan struct{})
+	gone := make(chan struct{})
 	go func() {
+		defer close(gone)
 		stdinOpen := true
 		closeStdin := func() {
 			if stdinOpen {
@@ -1041,6 +1188,11 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 					s.logf("hostd: refused signal %q for pid %d", m.Signal, pid)
 					continue
 				}
+				select {
+				case <-done:
+					continue
+				default:
+				}
 				_ = syscall.Kill(-pid, sig)
 			}
 		}
@@ -1051,8 +1203,38 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 	s.mu.Lock()
 	killed := entry.killKind
 	s.mu.Unlock()
+	// runCtx is Serve's: hostd stopping can kill the process through it
+	// before stopOnCancel has said why, and that kill is the host's, not
+	// the run's (Serve's stopOnCancel).
+	if killed == killNone && ctx.Err() != nil && !errors.Is(runCtx.Err(), context.DeadlineExceeded) &&
+		cmd.ProcessState != nil && !cmd.ProcessState.Exited() {
+		killed = killDraining
+	}
 	exit := s.reap(cmd, err, runCtx, req, killed)
-	sendJSON(frameExit, exit)
+	exitBytes, _ := json.Marshal(exit)
+	if req.Kind != KindCapability {
+		s.mu.Lock()
+		entry.info.Exited = true
+		entry.info.Exit = &exit
+		entry.info.Attached = true
+		s.mu.Unlock()
+		s.signalChanged()
+		defer func() {
+			s.mu.Lock()
+			entry.info.Attached = false
+			s.mu.Unlock()
+			s.signalChanged()
+		}()
+	}
+	if err := send(frameExit, exitBytes); err == nil && req.Kind != KindCapability {
+		grace := time.NewTimer(s.exitGrace())
+		select {
+		case <-gone:
+		case <-ctx.Done():
+		case <-grace.C:
+		}
+		grace.Stop()
+	}
 }
 
 // reap turns cmd's Wait into an Exit, and kills whatever the process left

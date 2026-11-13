@@ -53,9 +53,12 @@ import (
 // something the existing suite asserts rather than something this commit
 // message claims.
 
-// forgeRef is model.PullRequestRef in pkg/forge's spelling.
+// forgeRef is model.PullRequestRef in pkg/forge's spelling. Its Owner is
+// the repository's StoredOwner -- "host/owner" off the default host -- so
+// the forge calls pkg/forge makes with it reach the pull request's own
+// host even when the same owner/name is on another host too.
 func forgeRef(ref model.PullRequestRef) forge.Ref {
-	return forge.Ref{Owner: ref.Repo.Owner, Repo: ref.Repo.Name, Number: ref.Number}
+	return forge.Ref{Owner: ref.Repo.StoredOwner(), Repo: ref.Repo.Name, Number: ref.Number}
 }
 
 // grainCIVerdict is pkg/forge's, aliased rather than converted: it is
@@ -1871,7 +1874,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// reads conflicted, and only one still clean on the same head goes
 		// on to merge.
 		if member && !forcing && walk.mergedThisCycle(lane) {
-			fresh, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+			fresh, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 			if err != nil {
 				return fmt.Errorf("orchestrator: re-reading %s after this cycle's merge into %s: %w", ref, detail.BaseRef, err)
 			}
@@ -1979,7 +1982,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// than assume, since GitHub applies it asynchronously the same way
 		// it computes Mergeable asynchronously (detail.Mergeable's own doc
 		// comment).
-		detail, err = client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		detail, err = client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil {
 			return fmt.Errorf("orchestrator: re-reading %s after merge: %w", ref, err)
 		}
@@ -2271,7 +2274,7 @@ func recordPostMergeCI(ctx context.Context, store *model.Store, client github.Cl
 			task.ID, branch, ref.Repo, branch)
 		return nil
 	}
-	head, err := client.GetBranchHead(ref.Repo.Owner, ref.Repo.Name, branch)
+	head, err := client.GetBranchHead(ref.Repo.StoredOwner(), ref.Repo.Name, branch)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's post-merge head on %s: %w", branch, ref.Repo, err)
 	}
@@ -2841,7 +2844,7 @@ func bringHeadUpToDate(ctx context.Context, store *model.Store, client github.Cl
 		return false, err
 	}
 
-	result, err := client.MergeBranch(ref.Repo.Owner, ref.Repo.Name,
+	result, err := client.MergeBranch(ref.Repo.StoredOwner(), ref.Repo.Name,
 		detail.HeadRef, detail.BaseRef, refreshCommitMessage(detail))
 	switch {
 	case err == nil:
@@ -3028,7 +3031,7 @@ func refreshStaleHead(ctx context.Context, store *model.Store, client github.Cli
 		return refreshUnreachable, nil
 	}
 
-	result, err := client.MergeBranch(ref.Repo.Owner, ref.Repo.Name,
+	result, err := client.MergeBranch(ref.Repo.StoredOwner(), ref.Repo.Name,
 		detail.HeadRef, detail.BaseRef, refreshCommitMessage(detail))
 	switch {
 	case err == nil:
@@ -3318,7 +3321,7 @@ func grainCINote(grain grainCIVerdict) string {
 // a build with no log are both "no log here" to every decision, and
 // neither one is a fact anything may go on to explain (readBuildEvidence).
 func failingJobLogs(client github.Client, ref model.PullRequestRef, headSHA string) (logs []github.JobLog, read bool) {
-	logs, err := client.FailedJobLogs(ref.Repo.Owner, ref.Repo.Name, headSHA)
+	logs, err := client.FailedJobLogs(ref.Repo.StoredOwner(), ref.Repo.Name, headSHA)
 	if err != nil {
 		log.Printf("orchestrator: reading the failing job logs for %s: %v -- "+
 			"filing the fix task with the check names alone", ref, err)
@@ -3403,7 +3406,7 @@ func readBuildEvidence(client github.Client, ref model.PullRequestRef, headSHA s
 	if !read || !actionsStateWorthReading(logs) {
 		return ev
 	}
-	state, err := client.ActionsState(ref.Repo.Owner, ref.Repo.Name, headSHA)
+	state, err := client.ActionsState(ref.Repo.StoredOwner(), ref.Repo.Name, headSHA)
 	if err != nil {
 		log.Printf("orchestrator: reading what Actions has against %s at %s: %v -- "+
 			"filing the fix task without saying why there is no log", ref, shortSHA(headSHA), err)
@@ -3459,7 +3462,7 @@ const workflowDir = ".github/workflows/"
 // a person: it costs a request per startup failure to recover the
 // automatic repair in the one case it would have worked.
 func touchedWorkflowFiles(client github.Client, ref model.PullRequestRef) (workflows []string, read bool) {
-	files, err := client.ListPullRequestFiles(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	files, err := client.ListPullRequestFiles(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		log.Printf("orchestrator: reading which files %s touches: %v -- "+
 			"escalating its startup failure rather than guessing a workflow edit "+
@@ -3837,7 +3840,7 @@ func baseTipOf(client github.Client, ref model.PullRequestRef, base string) stri
 	if client == nil || base == "" {
 		return ""
 	}
-	head, err := client.GetBranchHead(ref.Repo.Owner, ref.Repo.Name, base)
+	head, err := client.GetBranchHead(ref.Repo.StoredOwner(), ref.Repo.Name, base)
 	if err != nil {
 		log.Printf("orchestrator: reading %s's head on %s: %v", base, ref.Repo, err)
 		return ""

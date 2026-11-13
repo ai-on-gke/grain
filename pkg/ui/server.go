@@ -527,6 +527,7 @@ func (s *Server) routes() {
 	s.route("GET /api/local-script-approvals", s.handleListLocalScriptApprovals)
 	s.route("GET /api/declarations", s.handleListDeclarationAcceptances)
 	s.route("POST /api/declarations/accept", s.handleAcceptDeclaration)
+	s.route("POST /api/declarations/revoke", s.handleRevokeDeclarationAcceptance)
 	// What grain has learned about working here (model.Memory): read by
 	// anyone, written only by a run whose task holds the memory
 	// capability -- the nightly memory agent through update_memory -- or
@@ -807,6 +808,7 @@ func (s *Server) routes() {
 	s.route("GET /api/ci/faults", s.handleListCIFaults)
 	s.route("GET /api/ci/runs/{id}", s.handleGetCIRun)
 	s.route("DELETE /api/ci/runs/{id}", s.handleCancelCIRun)
+	s.route("POST /api/ci/runs/{id}/rerun", s.handleRerunCIRun)
 	s.route("GET /api/ci/runs/{id}/log", s.handleGetCIRunLog)
 	s.route("GET /api/ci/runs/{id}/artifacts", s.handleListCIRunArtifacts)
 	s.route("GET /api/ci/runs/{id}/artifacts/{job}/{name}", s.handleGetCIArtifact)

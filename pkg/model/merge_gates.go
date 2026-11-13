@@ -168,7 +168,13 @@ func AddReviewFindings(t *Task, r ReviewFindingsRecord) {
 		if !ok {
 			return true
 		}
-		return existing.Gate == r.Gate && (r.ReviewTask == "" || existing.ReviewTask == r.ReviewTask || existing.ReviewTask == "")
+		replaced := existing.Gate == r.Gate && (r.ReviewTask == "" || existing.ReviewTask == r.ReviewTask || existing.ReviewTask == "")
+		if replaced && r.HeadSHA == "" && r.ReviewTask != "" && existing.ReviewTask == r.ReviewTask {
+			// The same review's findings said again keep the head they
+			// were left at.
+			r.HeadSHA = existing.HeadSHA
+		}
+		return replaced
 	})
 	t.AutoMerge = false
 	t.Links = append(t.Links, r.Link())

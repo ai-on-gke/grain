@@ -224,7 +224,7 @@ func (g repoNameGate) RepoFullName(host, owner, name string) (string, error) {
 	if off := ref.OffDefaultHost(); off != "" && !model.SameGitHost(off, defHost, model.DefaultGitHost) {
 		return "", fmt.Errorf("this GitHub client only reaches %s, not %s", defHost, off)
 	}
-	return client.RepoFullName(ref.Owner, ref.Name)
+	return client.RepoFullName(ref.StoredOwner(), ref.Name)
 }
 
 // repoComparisonGate supplies the task UI's internal pull-request view. The
@@ -319,7 +319,7 @@ func (g repoRevGate) ResolveRepoRev(ctx context.Context, repo model.RepoRef, rev
 	if client == nil {
 		return "", false, nil
 	}
-	sha, err := client.ResolveCommitSHA(repo.Owner, repo.Name, rev)
+	sha, err := client.ResolveCommitSHA(repo.StoredOwner(), repo.Name, rev)
 	return sha, true, err
 }
 
@@ -335,7 +335,7 @@ func (c GitHubRepoComparer) Compare(_ context.Context, repo model.RepoRef, base,
 	client := c.Client
 	if base == "" {
 		var err error
-		base, err = client.DefaultBranch(repo.Owner, repo.Name)
+		base, err = client.DefaultBranch(repo.StoredOwner(), repo.Name)
 		if err != nil {
 			return ui.BranchComparison{}, fmt.Errorf("reading %s's default branch: %w", repo, err)
 		}
@@ -343,7 +343,7 @@ func (c GitHubRepoComparer) Compare(_ context.Context, repo model.RepoRef, base,
 	// The merge base first, and the diff from *that* commit rather than
 	// from base itself -- see forkPointBeforeMerge for why a merged branch
 	// otherwise compares to nothing at all.
-	comparison, err := client.CompareRefs(repo.Owner, repo.Name, base, head)
+	comparison, err := client.CompareRefs(repo.StoredOwner(), repo.Name, base, head)
 	if err != nil {
 		return ui.BranchComparison{}, fmt.Errorf("comparing %s and %s in %s: %w", base, head, repo, err)
 	}
@@ -358,7 +358,7 @@ func (c GitHubRepoComparer) Compare(_ context.Context, repo model.RepoRef, base,
 	if mergeBase != "" {
 		from = mergeBase
 	}
-	diff, err := client.CompareDiff(repo.Owner, repo.Name, from, head)
+	diff, err := client.CompareDiff(repo.StoredOwner(), repo.Name, from, head)
 	if err != nil {
 		return ui.BranchComparison{}, fmt.Errorf("comparing %s and %s in %s: %w", from, head, repo, err)
 	}
@@ -399,7 +399,7 @@ func forkPointBeforeMerge(client *github.RESTClient, repo model.RepoRef, base, h
 	}
 	// head...base: the commits base carries that head does not, oldest
 	// first, which is where the merge that brought head in must be.
-	landed, err := client.CompareRefs(repo.Owner, repo.Name, head, base)
+	landed, err := client.CompareRefs(repo.StoredOwner(), repo.Name, head, base)
 	if err != nil {
 		return ""
 	}
@@ -411,7 +411,7 @@ func forkPointBeforeMerge(client *github.RESTClient, repo model.RepoRef, base, h
 			if parent == headSHA {
 				continue
 			}
-			forked, err := client.CompareRefs(repo.Owner, repo.Name, parent, head)
+			forked, err := client.CompareRefs(repo.StoredOwner(), repo.Name, parent, head)
 			if err != nil {
 				return ""
 			}

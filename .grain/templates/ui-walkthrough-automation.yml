@@ -101,6 +101,19 @@ body: |
     it. A repository-declared template carries no capabilities of its
     own, so what the sandbox holds is whatever this deployment already
     gives tasks in this repository.
+  - Walk the new UI at `/next/` first: it is the new experience, and the
+    classic UI at `/` is being deprecated ("Two UIs" in `PROMPT.md`).
+    `ui-ng/src/app/shell/nav.ts` (the rail) and
+    `ui-ng/src/app/app.routes.ts` (every route) say which pages have
+    moved over -- a page in neither, such as Boards, is classic-only;
+    walk each step on its `/next/` page where one exists, and on the
+    classic page only where it does not yet. Note in the report
+    which UI each step ran against, and which steps have no `/next/`
+    page yet. Fix a classic page only where it is broken for users
+    today, and fix the same page in `ui-ng/` too. New regression
+    coverage goes in a `ui/e2e/next-*.spec.js` spec (listed in
+    `ui/package.json`'s `test:e2e:next`), not a classic one; keep the
+    classic specs passing and don't delete them.
   - Explore beyond the scripted cases in `ui/e2e`. Check browser console
     errors, failed network requests, loading/empty/error states,
     keyboard reachability, and destructive-action confirmations relevant

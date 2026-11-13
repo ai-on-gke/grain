@@ -254,15 +254,6 @@ type QuotasConfig struct {
 	Overrides            []QuotaOverride `yaml:"overrides"`
 }
 
-// LoadConfig reads, parses, applies defaults to, and validates a YAML registry config file.
-func LoadConfig(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading hub config %s: %w", path, err)
-	}
-	return ParseConfig(data)
-}
-
 // applyHubID settles compute.hub_id and its pre-rename spelling
 // compute.registry_id into RegistryID, the one the gce provider and the
 // reconciler read: hub_id wins when both are set, and registry_id alone

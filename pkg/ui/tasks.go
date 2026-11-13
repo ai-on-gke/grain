@@ -185,6 +185,10 @@ type Task struct {
 	// NoPort is model.Task.NoPort: this task's change is not ported to
 	// its repository's other paired branches.
 	NoPort bool `json:"noPort,omitempty"`
+	// FoundIn is the release this task is filed against
+	// (model.LinkFoundIn), vX.Y.Z or vX.Y.Z-rc.N; "" when none is
+	// recorded.
+	FoundIn string `json:"foundIn,omitempty"`
 	// FixesBaseBranch is model.FixesBaseBranch: this task is a repair of
 	// its base branch -- grain's own, or one a person marked -- and is
 	// never made to wait on that branch's repair. GrainBaseRepair says
@@ -1388,6 +1392,9 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		}
 		if l.Kind == model.LinkPortOf {
 			out.PortOf = l.Target
+		}
+		if l.Kind == model.LinkFoundIn {
+			out.FoundIn = l.Target
 		}
 		if l.Kind == model.LinkPortedBy {
 			out.PortedBy = append(out.PortedBy, l.Target)

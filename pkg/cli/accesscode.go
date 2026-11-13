@@ -81,7 +81,11 @@ func runAccessCode(args []string, stdout, stderr io.Writer) error {
 		fs.Usage()
 		return errors.New("too many arguments")
 	}
-	if fs.NArg() == 1 {
+	if fs.NArg() >= 1 {
+		// "mode recovery" is two arguments: it is still the mode action,
+		// never "show", which would print the code to somebody who asked
+		// to lock it down (docs/test-runs/2026-11-11-caller-identity.md,
+		// F3).
 		action = fs.Arg(0)
 	}
 	path := ui.LocalAPITokenFile()

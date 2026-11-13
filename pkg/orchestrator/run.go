@@ -486,6 +486,9 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 	if resumed := parkedResumeSection(history); resumed != "" {
 		prompt += "\n\n" + strings.TrimRight(resumed, "\n")
 	}
+	if deps := dependenciesSection(history); deps != "" {
+		prompt += "\n\n" + strings.TrimRight(deps, "\n")
+	}
 	if attempts := previousAttemptsSection(history, branch); attempts != "" {
 		prompt += "\n\n" + strings.TrimRight(attempts, "\n")
 	}
@@ -734,6 +737,10 @@ const suspendedCLINote = "\n\nYour tools may have changed since this session las
 func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	history History, setup *SetupResult, newComments []model.Comment, extraSections ...string) string {
 	branch := task.BranchName()
+	// The current brief stands in for the description here as in
+	// BuildPrompt: a durable task resumes its session on most runs, so
+	// leaving it out would brief those runs on the original description.
+	task, _ = applyTaskContext(task, history)
 	prompt := suspensionNoteSection(history)
 	if line := model.ChangeTargetSuspendedPromptLine(task); line != "" {
 		prompt += fmt.Sprintf("Task: %s (task %s). %s", task.Title, task.ID, line)
@@ -786,11 +793,24 @@ func BuildSuspendedPrompt(task model.Task, checkoutDir, sandboxRoot string,
 	if resumed := parkedResumeSection(history); resumed != "" {
 		prompt += "\n\n" + strings.TrimRight(resumed, "\n")
 	}
+	if deps := dependenciesSection(history); deps != "" {
+		prompt += "\n\n" + strings.TrimRight(deps, "\n")
+	}
 	if attempts := previousAttemptsSection(history, branch); attempts != "" {
 		prompt += "\n\n" + strings.TrimRight(attempts, "\n")
 	}
+	// The compaction note says the handover is below, so it goes in only
+	// with the comments that carry it; a session that already read both
+	// needs neither again.
+	if summarised := summarisedSection(history); summarised != "" &&
+		slices.ContainsFunc(newComments, func(c model.Comment) bool { return c.Handover }) {
+		prompt += "\n\n" + strings.TrimRight(summarised, "\n")
+	}
 	if thread := commentThreadSection(newComments); thread != "" {
 		prompt += "\n\n" + strings.TrimRight(thread, "\n")
+	}
+	if upkeep := contextUpkeepSection(task, history, len(prompt)); upkeep != "" {
+		prompt += "\n\n" + strings.TrimRight(upkeep, "\n")
 	}
 	if history.BaseIncident != "" {
 		prompt += "\n\n" + strings.TrimRight(history.BaseIncident, "\n")
@@ -1129,13 +1149,19 @@ func nothingNeededSection(task model.Task) string {
 	if task.NothingNeededAction.Resolved() == model.NothingNeededAck {
 		what = "leaves this task for a human to acknowledge"
 	}
-	return "\n\nIf the task turns out to need nothing, call `nothing_needed` with your " +
+	s := "\n\nIf the task turns out to need nothing, call `nothing_needed` with your " +
 		"reason: " + mcp.NothingNeededDescription + ". It ends your run the way " +
 		"comment_on_issue does, posts the reason as the closing comment and " + what +
 		". A finding, an answer or a recommendation somebody should read is still a " +
 		"comment_on_issue note, and anything you pushed or asked in the same run still " +
 		"wins: the pull request is opened, or the question is asked, with the reason " +
 		"posted beside it."
+	if model.ClosesOnAnswer(task) {
+		s += " Task " + task.Proposer.TaskID + " filed this task as a report-only sub-task, so a " +
+			"comment_on_issue closing note with no pull request closes it too: that task, and any " +
+			"task depending on this one, reads your note, so put the whole answer in it."
+	}
+	return s
 }
 
 // questionSummarySection is what every run is told about the one-line
@@ -1692,11 +1718,22 @@ func runCIAccessOf(task model.Task) runCIAccess {
 	return runCIAccess{read: read}
 }
 
+// githubRerunHint is what a run on a repository GitHub Actions gates is
+// told about re-running its checks: grain ci retrigger and run-job, in
+// place of the empty commits that moved a pull request's head and threw
+// away its approvals (ui.MaxActionsRerunsPerHead is the bound it names).
+const githubRerunHint = "`grain ci retrigger` re-runs the failed jobs of the GitHub Actions runs at your pull request's head " +
+	"(`--all` every job; `grain ci run-job <job>` one job) without a commit, so the head, its approvals and " +
+	"its reviews stay put -- use it for a flake or a runner fault, never an empty commit. Each run at one " +
+	"commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault included."
+
 // grainCLICIBullet is the CI & pull request bullet of grainCLISection,
 // naming only the commands this run can use (task 4364). Every command
 // it lists for a GitHub-CI run answers for GitHub Actions runs
-// (gha:<owner>:<name>:<run>); run-job and retrigger drive grain CI alone
-// and are not offered there. A run that cannot
+// (gha:<owner>:<name>:<run>); there, run-job and retrigger re-run the
+// Actions runs at the head of the run's own pull request, with no commit
+// pushed and at most ui.MaxActionsRerunsPerHead times per head, which is
+// what agents used to push empty commits for. A run that cannot
 // read its CI is told the one grant that would let it, once -- never
 // grain#ci, which no repository GitHub Actions gates can grant and which
 // is what agents told only "forbidden" kept asking a person for.
@@ -1718,12 +1755,12 @@ func grainCLICIBullet(repo string, access runCIAccess) string {
 			"`grain pr base-status`, `grain pr open`, `grain pr reply`, `grain pr resolve`, " +
 			"`grain pr review-comment`. Another task's CI in a repository you may read: " +
 			"`grain ci list --task <id>`, `grain pr status --task <id>` (or `--ref <branch>`), " +
-			"`grain ci log <run-id>`. `grain ci run-job` and `grain ci retrigger` drive grain CI only " +
-			"and cannot rerun GitHub's checks: push a commit for that.\n"
+			"`grain ci log <run-id>`. " + githubRerunHint + "\n"
 	}
 	return "- **CI & pull request** (this task's branch; " + gated + "): `grain ci wait` " + wait + ", " +
 		"which reports each failing job's log tail, `grain pr open` (your pull request, its checks and " +
-		"review threads), `grain pr reply`, `grain pr resolve`, `grain pr review-comment`. This run does " +
+		"review threads), `grain pr reply`, `grain pr resolve`, `grain pr review-comment`. " +
+		githubRerunHint + " This run does " +
 		"not hold read access to the CI of " + repo + ": to read CI logs, `request_access` for " +
 		"`https://grain.dev/capabilities/api#ci-read` on " + repo + "; never `grain#ci`, which a " +
 		"repository GitHub Actions gates cannot grant.\n"
@@ -2567,6 +2604,10 @@ type History struct {
 	// through wait_for_task, as they stand now -- set only when that
 	// attempt ended model.ParkedOutcome. See parkedResumeSection.
 	Resumed []model.WaitTarget
+	// Dependencies is the tasks this one depends on (model.LinkDependsOn)
+	// that are not already in Resumed, as they stand now, with each one's
+	// closing note. See dependenciesSection.
+	Dependencies []model.WaitTarget
 	// ResumedUntil is the time the previous attempt parked this task
 	// until through wait_for_task's resume_at -- zero unless that attempt
 	// ended model.ParkedOutcome that way. See parkedResumeSection.
@@ -2635,6 +2676,55 @@ func parkedResumeSection(h History) string {
 		b.WriteString(t.Describe())
 	}
 	return b.String()
+}
+
+// dependenciesSection tells a run what the tasks it depends on found:
+// each one's id, where it stands and its closing note. A task filed with
+// depends_on on a report-only sub-task (model.ClosesOnAnswer) is
+// dispatched when that sub-task closes on its answer, and the answer is
+// what it was waiting for; without this it would have neither the note
+// nor the sub-task's id (a proposal names an earlier one by its local id,
+// before any id exists), and an ordinary run cannot read another task's
+// record (grain/task-4384). A park's own targets are told by
+// parkedResumeSection instead, so none is said twice.
+func dependenciesSection(h History) string {
+	if len(h.Dependencies) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("This task depends on the task(s) below (depends_on). Here is where each stands and " +
+		"what it said when it finished; build on its findings rather than redoing them:\n")
+	for _, t := range h.Dependencies {
+		b.WriteString(t.Describe())
+	}
+	return b.String()
+}
+
+// DependenciesOf is the tasks task depends on (model.LinkDependsOn), as
+// they stand now and as task may be told them (model.Store.WaitTargetFor:
+// a dependency in a repository task cannot read keeps its closing note to
+// itself), leaving out any already in resumed (a park's own depends-on
+// links, which parkedResumeSection describes). Advisory, like
+// ResumedFrom: a target grain cannot read is left out rather than
+// failing the dispatch.
+func DependenciesOf(ctx context.Context, store *model.Store, task model.Task, resumed []model.WaitTarget) []model.WaitTarget {
+	told := map[string]bool{}
+	for _, r := range resumed {
+		told[r.ID] = true
+	}
+	var out []model.WaitTarget
+	for _, l := range task.Links {
+		if l.Kind != model.LinkDependsOn || told[l.Target] {
+			continue
+		}
+		told[l.Target] = true
+		target, err := store.WaitTargetFor(ctx, task, l.Target, time.Now())
+		if err != nil || target == nil {
+			continue
+		}
+		out = append(out, *target)
+	}
+	return out
 }
 
 // pairedBranchesSection tells a run in a repository that pairs branches
@@ -3254,6 +3344,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	if err != nil {
 		return unprepared(err)
 	}
+	if _, err := resolveTaskQAAssignment(ctx, store, cfg, task, d.RunID, cfg.now()); err != nil {
+		return unprepared(err)
+	}
 
 	// Before the agent's first turn: a run whose sandbox never got its repo
 	// has nothing to do. Capability placements are applied just below before
@@ -3378,7 +3471,8 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		CommittedContext: prepared.Context,
 	}
 	history.BaseIncident = baseIncidentNote(ctx, store, task)
-	history.Resumed = ResumedFrom(ctx, store, previous)
+	history.Resumed = ResumedFrom(ctx, store, task, previous)
+	history.Dependencies = DependenciesOf(ctx, store, task, history.Resumed)
 	loadTaskContext(ctx, store, task, &history)
 	history.AutoCompactBytes = cfg.autoCompactBytes()
 	history.ResumedUntil = ResumedUntil(previous)
@@ -5545,10 +5639,11 @@ func ResumedUntil(previous []model.Run) time.Time {
 	return until
 }
 
-// ResumedFrom is the tasks the last of previous parked on, as they stand
-// now, or nil when it did not end parked. Advisory, like BaseIncident: a
+// ResumedFrom is the tasks the last of task's previous runs parked on, as
+// they stand now and as task may be told them (model.Store.WaitTargetFor),
+// or nil when it did not end parked. Advisory, like BaseIncident: a
 // target grain cannot read is left out rather than failing the dispatch.
-func ResumedFrom(ctx context.Context, store *model.Store, previous []model.Run) []model.WaitTarget {
+func ResumedFrom(ctx context.Context, store *model.Store, task model.Task, previous []model.Run) []model.WaitTarget {
 	if len(previous) == 0 {
 		return nil
 	}
@@ -5558,7 +5653,7 @@ func ResumedFrom(ctx context.Context, store *model.Store, previous []model.Run) 
 	}
 	var out []model.WaitTarget
 	for _, id := range model.ParkedTargets(last.Detail) {
-		target, err := store.WaitTargetOf(ctx, id)
+		target, err := store.WaitTargetFor(ctx, task, id, time.Now())
 		if err != nil || target == nil {
 			continue
 		}

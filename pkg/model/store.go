@@ -6475,7 +6475,7 @@ const configColumns = "`poll_interval_ms`,`max_workers`,`max_mergers`,`max_merge
 	"`k8s_privileged`,`k8s_network_policy`,`k8s_deployment`,`k8s_container`," +
 	"`mcp_servers`,`capability_policy`,`cli_run`,`sandbox_overcommit`,`base_ci_red_streak`," +
 	"`k8s_priority_class_interactive`,`k8s_priority_class_agent`,`k8s_priority_class_ci`,`sandbox_disk_overcommit`," +
-	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`,`session_sandbox_idle_ttl_ms`,`settings_locked`,`new_task_form`,`auto_upgrade_on`,`owner_trust`,`auto_grant_context_reads`,`registry`,`default_admission`,`default_hosting`,`skills`,`ci_api_repos`,`hub_environment_name`,`sandbox_shape_limits`,`auto_upgrade_min_interval_hours`"
+	"`auto_upgrade_channel`,`auto_upgrade_time`,`judgement_model`,`external_agent_api`,`sandbox_image_mirror`,`session_sandbox_idle_ttl_ms`,`settings_locked`,`new_task_form`,`auto_upgrade_on`,`owner_trust`,`auto_grant_context_reads`,`registry`,`default_admission`,`default_hosting`,`skills`,`ci_api_repos`,`hub_environment_name`,`sandbox_shape_limits`,`auto_upgrade_min_interval_hours`,`qa`"
 
 func scanConfig(scan func(...any) error) (Config, error) {
 	var c Config
@@ -6507,6 +6507,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 	var autoGrantContextReads string
 	var ciAPIRepos string
 	var sandboxShapeLimits string
+	var qa string
 	var hub string
 	var cliRun string
 	var sandboxOvercommit string
@@ -6543,7 +6544,7 @@ func scanConfig(scan func(...any) error) (Config, error) {
 		&c.K8sPrivileged, &c.K8sNetworkPolicy, &c.K8sDeployment, &c.K8sContainer,
 		&mcpServers, &capabilityPolicy, &cliRun, &sandboxOvercommit, &c.BaseCIRedStreak,
 		&c.K8sPriorityClassInteractive, &c.K8sPriorityClassAgent, &c.K8sPriorityClassCI, &c.SandboxDiskOvercommit,
-		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror, &sessionIdleTTLMS, &c.SettingsLocked, &newTaskForm, &c.AutoUpgradeOn, &ownerTrust, &autoGrantContextReads, &hub, &defaultAdmission, &defaultHosting, &skills, &ciAPIRepos, &c.HubEnvironmentName, &sandboxShapeLimits, &c.AutoUpgradeMinIntervalHours); err != nil {
+		&c.AutoUpgradeChannel, &c.AutoUpgradeTime, &c.JudgementModel, &c.ExternalAgentAPI, &c.SandboxImageMirror, &sessionIdleTTLMS, &c.SettingsLocked, &newTaskForm, &c.AutoUpgradeOn, &ownerTrust, &autoGrantContextReads, &hub, &defaultAdmission, &defaultHosting, &skills, &ciAPIRepos, &c.HubEnvironmentName, &sandboxShapeLimits, &c.AutoUpgradeMinIntervalHours, &qa); err != nil {
 		return Config{}, err
 	}
 	backends, err := DecodeAgentBackends(agentBackends)
@@ -6600,6 +6601,9 @@ func scanConfig(scan func(...any) error) (Config, error) {
 	c.TargetRepos = splitCSV(targetRepos)
 	c.CIAPIRepos = splitCSV(ciAPIRepos)
 	if c.SandboxShapeLimits, err = DecodeSandboxShapeLimits(sandboxShapeLimits); err != nil {
+		return Config{}, err
+	}
+	if c.QA, err = DecodeQAConfig(qa); err != nil {
 		return Config{}, err
 	}
 	c.K8sNodeSelector = splitCSV(k8sNodeSelector)
@@ -6692,7 +6696,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		return err
 	}
 	_, err = tx.ExecContext(ctx,
-		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `grain_config` (`id`, "+configColumns+") VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		c.PollInterval.Milliseconds(), c.MaxWorkers, c.MaxMergers, c.MaxMergesPerRepo, c.MergeBatchSize,
 		c.MergeGatherWindow.Milliseconds(), c.MaxCIJobs, c.MaxAgentTurns,
 		c.GitHubHost, c.GitHubInsecureHTTP, c.GCPProject, c.GCPServiceAccountEmail,
@@ -6729,7 +6733,7 @@ func putConfigTx(ctx context.Context, tx *sql.Tx, c Config) error {
 		strings.TrimSpace(c.AutoUpgradeChannel), strings.TrimSpace(c.AutoUpgradeTime),
 		strings.TrimSpace(c.JudgementModel), c.ExternalAgentAPI, strings.TrimSpace(c.SandboxImageMirror),
 		c.SessionSandboxIdleTTL.Milliseconds(), c.SettingsLocked, newTaskForm, strings.TrimSpace(c.AutoUpgradeOn), ownerTrust, autoGrantContextReads, hub, string(c.DefaultAdmission), string(c.DefaultHosting), EncodeSkillsConfig(c.Skills),
-		joinCSV(c.CIAPIRepos), strings.TrimSpace(c.HubEnvironmentName), sandboxShapeLimits, c.AutoUpgradeMinIntervalHours)
+		joinCSV(c.CIAPIRepos), strings.TrimSpace(c.HubEnvironmentName), sandboxShapeLimits, c.AutoUpgradeMinIntervalHours, EncodeQAConfig(c.QA))
 	return err
 }
 
@@ -7557,19 +7561,20 @@ func newTemplateID(ctx context.Context, tx *sql.Tx) (string, error) {
 }
 
 const templateColumns = "`id`,`name`,`title`,`body`," +
-	"`target_owner`,`target_name`,`base`,`auto_merge`,`created_at`,`network_access`,`nothing_needed_action`,`agent_model`,`interactive`,`goal`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`,`keep_running`,`admission`,`hosting`,`skills`"
+	"`target_owner`,`target_name`,`base`,`auto_merge`,`created_at`,`network_access`,`nothing_needed_action`,`agent_model`,`interactive`,`goal`,`change_target_kind`,`change_target_spec`,`reviewers`,`priority`,`keep_running`,`admission`,`hosting`,`skills`,`sandbox`"
 
 func scanTemplate(scan func(...any) error) (Template, error) {
 	var t Template
 	var target RepoRef
 	var base sql.NullString
-	var networkAccess, nothingNeeded, goal, ctKind, ctSpec, reviewers, admission, hosting, skills string
+	var networkAccess, nothingNeeded, goal, ctKind, ctSpec, reviewers, admission, hosting, skills, sandbox string
 	var priority int
 	if err := scan(&t.ID, &t.Name, &t.Title, &t.Body,
 		&target.Owner, &target.Name, &base, &t.AutoMerge, &t.CreatedAt, &networkAccess, &nothingNeeded, &t.Model, &t.Interactive,
-		&goal, &ctKind, &ctSpec, &reviewers, &priority, &t.KeepRunning, &admission, &hosting, &skills); err != nil {
+		&goal, &ctKind, &ctSpec, &reviewers, &priority, &t.KeepRunning, &admission, &hosting, &skills, &sandbox); err != nil {
 		return Template{}, err
 	}
+	t.Sandbox = DecodeSandboxShape(sandbox)
 	t.Admission = Admission(strings.TrimSpace(admission))
 	t.Hosting = Hosting(strings.TrimSpace(hosting))
 	t.Skills = DecodeSkillsConfig(skills)
@@ -7612,10 +7617,11 @@ func putTemplate(ctx context.Context, tx *sql.Tx, t Template) error {
 	}
 	_, err := tx.ExecContext(ctx, `REPLACE INTO `+"`template`"+` (
   `+templateColumns+`
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.Name, t.Title, t.Body,
 		targetOwner, targetName, t.Base, t.AutoMerge, t.CreatedAt.UTC(), string(t.NetworkAccess), string(t.NothingNeededAction), t.Model, t.Interactive,
-		t.Goal.JSON(), changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority, t.KeepRunning, string(t.Admission), string(t.Hosting), EncodeSkillsConfig(t.Skills))
+		t.Goal.JSON(), changeTargetKind(t.ChangeTarget), t.ChangeTarget.SpecString(), joinCSV(NormalizeReviewers(t.Reviewers)), priority, t.KeepRunning, string(t.Admission), string(t.Hosting), EncodeSkillsConfig(t.Skills),
+		EncodeSandboxShape(t.Sandbox))
 	if err != nil {
 		return fmt.Errorf("writing template %s: %w", t.ID, err)
 	}
