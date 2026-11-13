@@ -1618,7 +1618,9 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
       title: `Walk 18 ${stamp}`,
       repo: "acme/widgets",
       base: `walk18-${stamp}`,
-      capabilities: ["gcp-key"],
+      capabilities: [
+        'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}',
+      ],
     });
     const suite = await seedOne(page, "/api/suites", {
       name: `walk18-suite-${stamp}`,
