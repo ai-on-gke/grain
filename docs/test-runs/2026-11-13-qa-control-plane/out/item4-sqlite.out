@@ -1,0 +1,7 @@
+=== [Item 4 / store=sqlite] ===
+  [4.1a] Fresh OFF state matches between `grain qa status` and `/next/settings/tasks`
+  [4.1b] CLI enable (repo-custom, 42%, shadow=false) reflected accurately in UI card
+  [4.2] Out-of-range rollout values ('', '101', '-5', '12.5') refused inline without stomp; forced invalid POST=400
+  [4.1c] UI save (deterministic-s3-only, 68%, shadow=true) matches `grain qa status`
+  [4.3] Real grain/viewer session renders read-only banner, disables QA controls, and forced POST/plan return 403
+  [4.4] Two concurrent tabs saved independent QA and Tasks fields without stomping each other

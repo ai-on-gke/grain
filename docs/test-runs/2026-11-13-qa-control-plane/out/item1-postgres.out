@@ -1,0 +1,24 @@
+ pg_terminate_backend 
+----------------------
+(0 rows)
+
+=== [baseline-24d0eba1 / store=postgres] ===
+  rows before:     task=1,task_run=0,task_comment=1,task_link=0,task_observation=1
+  rows after:      task=6,task_run=5,task_comment=6,task_link=0,task_observation=6
+  pg tuples pre:   3 ins / 0 upd / 0 del
+  pg tuples post:  23 ins / 93 upd / 0 del
+  cycles.commits:  {"n":21,"min":1,"p50":3,"p90":5,"p99":15,"max":15,"mean":3.2857142857142856,"total":69}
+ pg_terminate_backend 
+----------------------
+(0 rows)
+
+=== [head / store=postgres] ===
+  rows before:     task=1,task_run=0,task_comment=1,task_link=0,task_observation=1
+  rows after:      task=6,task_run=5,task_comment=6,task_link=0,task_observation=6
+  pg tuples pre:   3 ins / 0 upd / 0 del
+  pg tuples post:  23 ins / 93 upd / 0 del
+  cycles.commits:  {"n":22,"min":1,"p50":4,"p90":6,"p99":14,"max":14,"mean":3.9545454545454546,"total":87}
+  grain_config.qa: ''
+  task_qa_* rows:  assignment=0 check_run=0 finding=0
+  perf JSONL:      absent (verified)
+  /api/settings:   {"qaEnabled":false,"qaFlowId":"golden-v1-minimal","qaRolloutPct":0,"qaShadowOnControl":true,"qaEpoch":1,"qaRegimeId":1}

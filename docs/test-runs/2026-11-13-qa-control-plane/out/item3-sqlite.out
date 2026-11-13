@@ -1,0 +1,8 @@
+=== [Item 3 / store=sqlite] ===
+  initial QA status: {"enabled":true,"flowId":"golden-v1-minimal","availableFlows":["golden-v1-minimal","deterministic-s3-only","repo-custom"],"rolloutPct":30,"shadowOnControl":true,"epoch":1,"regimeId":1}
+  filed 50 tasks across 20 root origins; approving all...
+  perf JSONL S0 arm-assign samples: 50 across 50 tasks
+  epoch=1 distinct root_origin rows: total=20 treatment=7 control=13
+  per-task vs root-origin arm mismatches across 50 tasks: 0
+  retry stickiness (task 52, opposite rollout=100%): runs=2 distinct_arms=[control ] (initial=control)
+  epoch=2 rows=10, origins that flipped arm between epoch 1 and epoch 2: 6 / 10
