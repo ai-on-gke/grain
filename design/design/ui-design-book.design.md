@@ -224,6 +224,15 @@ controls (such as quality control PR rollout in `Settings -> Tasks`) live inside
 their section's `.s-card` with dependent fields disabled while off — never as
 persistent topbar or bottombar status badges.
 
+A settings picker offers the server's own vocabulary (for example
+`sandboxBackendOptions` and `networkAccesses` from `GET /api/settings`), never a
+hand-written list: a choice the daemon cannot use stays listed as a `disabled`
+`PillOption` with the server's reason as its `hint`. A number whose stored `0`
+means grain's default shows blank with the server's `<key>Default` as its
+placeholder, and a cleared box saves that default again. A card a link points
+at carries an `id` (`#capability-policy`, `#other-secrets`), and the page
+scrolls to the URL's fragment once the section has rendered.
+
 ### Breakpoints
 
 `< 600px` phone, `600–839px` compact, `840–1279px` medium, `≥ 1280px`
