@@ -69,3 +69,32 @@ test("a dialog keeps its 520px width on a desktop", async ({ page }) => {
   expect(Math.round(box.width)).toBe(520);
   expect(Math.round(box.x + box.width / 2)).toBe(720);
 });
+
+// The phone's More sheet had the same fault on its height: its
+// calc(100dvh - 72px) cap left out its 24px of padding, so the sheet
+// grew 4-8px past the top of the screen. It stops 16px under it now, and
+// its last entry scrolls into reach above the compact bar.
+for (const [width, height] of [
+  [320, 568],
+  [390, 844],
+  [844, 390],
+]) {
+  test(
+    `the More sheet stays under the top of a ${width}x${height} screen`,
+    { tag: ["@phone"] },
+    async ({ page }) => {
+      await page.setViewportSize({ width, height });
+      await page.goto("/next/inbox");
+      await page.getByTestId("compact-more").click();
+      const sheet = page.getByTestId("more-sheet");
+      await expect(sheet).toBeVisible();
+      const box = await sheet.boundingBox();
+      expect(box.y, "the sheet's top is on screen").toBeGreaterThanOrEqual(0);
+      const last = sheet.getByRole("button", { name: "Customize navigation" });
+      await last.scrollIntoViewIfNeeded();
+      const lb = await last.boundingBox();
+      expect(lb.y).toBeGreaterThanOrEqual(0);
+      expect(lb.y + lb.height).toBeLessThanOrEqual(box.y + box.height);
+    },
+  );
+}

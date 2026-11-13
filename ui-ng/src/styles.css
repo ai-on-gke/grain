@@ -1740,6 +1740,10 @@ g-sessions-page {
     left: 0;
     right: 0;
     bottom: 56px;
+    /* border-box, as .g-dialog: the max-height is the sheet's whole box,
+       so it stops 16px under the top of the screen rather than its
+       padding pushing it 4-8px above it. */
+    box-sizing: border-box;
     max-height: calc(100dvh - 72px);
     overflow-y: auto;
     z-index: 50;
