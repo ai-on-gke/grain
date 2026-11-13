@@ -20,6 +20,8 @@ import { GrainEvents } from "../api/grain-events.service";
 import type { BaseBranchGate, Board, Task } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { TaskFeedStore } from "../services/task-feed.service";
+import { ViewFilter } from "../services/view-filter.service";
 import { TasksPageComponent } from "./tasks-page.component";
 import { TasksStore } from "./tasks.store";
 
@@ -1084,5 +1086,64 @@ describe("TasksPageComponent", () => {
     expect(q(f, 'button[data-testid="prio-301"]')).not.toBeNull();
     expect(q(f, 'button[data-testid="prio-302"]')).toBeNull();
     expect(q(f, '[data-testid="prio-302"].static')).not.toBeNull();
+  });
+
+  it("fills the Filter this view box from ?q= and lets typing replace it", async () => {
+    const api = new FakeApi();
+    api.live = [
+      task("1", "queued", 5, { title: "Alpha retry" }),
+      task("2", "queued", 5, { title: "Beta charge" }),
+    ];
+    const f = await render(api, "backlog");
+    f.componentRef.setInput("q", "retry");
+    await settle(f);
+    const filter = TestBed.inject(ViewFilter);
+    // The box says what the list is narrowed by.
+    expect(filter.query()).toBe("retry");
+    expect(q(f, '[data-testid="row-1"]')).not.toBeNull();
+    expect(q(f, '[data-testid="row-2"]')).toBeNull();
+    // Typing in the box narrows the list even though ?q= said otherwise,
+    // and the URL follows so a reload keeps it.
+    filter.query.set("charge");
+    await settle(f);
+    expect(q(f, '[data-testid="row-1"]')).toBeNull();
+    expect(q(f, '[data-testid="row-2"]')).not.toBeNull();
+    expect(TestBed.inject(Router).url).toContain("q=charge");
+    filter.query.set("");
+    await settle(f);
+    expect(q(f, '[data-testid="row-1"]')).not.toBeNull();
+    expect(q(f, '[data-testid="row-2"]')).not.toBeNull();
+    expect(TestBed.inject(Router).url).not.toContain("q=");
+  });
+
+  it("says the task list could not be read when the feed failed before the page opened", async () => {
+    const api = new FakeApi();
+    const listFails = async (route: string, params?: { id?: string }) => {
+      if (route === "GET /api/tasks") {
+        throw { status: 500, error: { error: "store unavailable" } };
+      }
+      return new FakeApi().getIfChanged(route, params);
+    };
+    api.getIfChanged = listFails as FakeApi["getIfChanged"];
+    TestBed.configureTestingModule({
+      imports: [TasksPageComponent],
+      providers: [
+        provideRouter([{ path: "**", children: [] }]),
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    // Another consumer (the rail) read the feed first, and it failed.
+    const feed = TestBed.inject(TaskFeedStore);
+    expect(await feed.refresh()).toBe(false);
+    const f = TestBed.createComponent(TasksPageComponent);
+    f.componentRef.setInput("tab", "backlog");
+    f.autoDetectChanges();
+    await settle(f);
+    await settle(f);
+    const alert = all(f, '[role="alert"]').map((e) => e.textContent ?? "");
+    expect(alert.some((t) => t.includes("could not be read"))).toBe(true);
+    // Never "Nothing in this tab" for a list it could not read.
+    expect(q(f, '[data-testid="tasks-pane-empty"]')).toBeNull();
   });
 });
