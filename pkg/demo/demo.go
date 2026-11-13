@@ -314,6 +314,7 @@ type Server struct {
 	ln        net.Listener
 	http      *http.Server
 	cancel    context.CancelFunc
+	loops     sync.WaitGroup
 	cleanups  []func()
 	closeOnce sync.Once
 }
@@ -333,13 +334,24 @@ func (s *Server) Close() {
 		} else if s.ln != nil {
 			_ = s.ln.Close()
 		}
-		// The loops first, so none is still reading the store when it is
-		// closed and its directory removed below.
+		// The loops first, waited for, so none is still reading the store
+		// when it is closed and its directory removed below.
 		s.cancel()
+		s.loops.Wait()
 		for i := len(s.cleanups) - 1; i >= 0; i-- {
 			s.cleanups[i]()
 		}
 	})
+}
+
+// loop runs f, one of the demo's background loops, on a goroutine Close
+// waits for after cancelling the context f was handed.
+func (s *Server) loop(f func()) {
+	s.loops.Add(1)
+	go func() {
+		defer s.loops.Done()
+		f()
+	}()
 }
 
 // Start builds what Run serves -- the store, its seed and every opt-in
@@ -754,7 +766,7 @@ func Start(opts Options) (_ *Server, err error) {
 		}
 		// What startUIServer runs beside a deployment's UI: the retry for
 		// a connection saved while its provider could not be asked.
-		go client.RunModelDiscovery(bg, interval)
+		s.loop(func() { client.RunModelDiscovery(bg, interval) })
 	}
 	if opts.Reconcile > 0 {
 		// Releases only against the simulated GitHub: it is the one
@@ -764,35 +776,35 @@ func Start(opts Options) (_ *Server, err error) {
 		if opts.GitHubSim {
 			releases, _ = cfg.GitHubBranches.(github.Client)
 		}
-		go runDemoReconcile(bg, store, releases, opts.Reconcile)
+		s.loop(func() { runDemoReconcile(bg, store, releases, opts.Reconcile) })
 	}
 	if scheduledWorkflows != nil {
 		interval := opts.Reconcile
 		if interval <= 0 {
 			interval = 2 * time.Second
 		}
-		go runDemoScheduledWorkflows(bg, *scheduledWorkflows, interval)
+		s.loop(func() { runDemoScheduledWorkflows(bg, *scheduledWorkflows, interval) })
 	}
 	if opts.Schedules {
 		interval := opts.Reconcile
 		if interval <= 0 {
 			interval = 2 * time.Second
 		}
-		go runDemoSchedules(bg, store, interval)
+		s.loop(func() { runDemoSchedules(bg, store, interval) })
 	}
 	if opts.Notifications {
 		interval := opts.Reconcile
 		if interval <= 0 {
 			interval = 2 * time.Second
 		}
-		go runDemoNotifications(bg, store, interval)
+		s.loop(func() { runDemoNotifications(bg, store, interval) })
 	}
 	if opts.ReviewQuestions {
 		interval := opts.Reconcile
 		if interval <= 0 {
 			interval = 2 * time.Second
 		}
-		go runDemoReviewQuestions(bg, store, interval)
+		s.loop(func() { runDemoReviewQuestions(bg, store, interval) })
 	}
 	uiSrv := ui.NewServerWithClient(client)
 	var srv http.Handler = uiSrv

@@ -15,7 +15,7 @@
 // Package demotest starts the seeded demo `grain demo` serves, in-process,
 // for Go tests that assert on what the server does: the Go half of the
 // classic Playwright suite (ui/e2e), whose tests each ran against a `grain
-// demo` of their worker's (ui/e2e/fixtures.js). See
+// demo` of their worker's (ui-shared/e2e/demo.js). See
 // docs/test-plans/classic-ui-e2e-migration/README.md, "Harness -> Bucket 1".
 //
 // Start runs demo.Start -- the same store, seed, fake CI, GitHub sim and
@@ -28,7 +28,7 @@
 //	res.WantStatus(t, 201)
 //
 // GRAIN_E2E_DB_DRIVER=postgres (and GRAIN_E2E_DB_DSN) put the store on
-// PostgreSQL exactly as they do for the classic suite. CLI runs the real
+// PostgreSQL exactly as they do for the Playwright suites. CLI runs the real
 // `grain` binary against the server; a package that uses it calls Main
 // from its TestMain.
 package demotest
@@ -182,7 +182,7 @@ func (s *Server) start(args []string) {
 	s.API.Token = d.AccessCode
 	s.API.RetryPolicy = &ui.RetryPolicy{} // one attempt: a test sees the refusal, not a retry
 
-	// The check fixtures.js makes before any test runs: a server that is
+	// The check ui-shared/e2e/demo.js makes before any test runs: a server that is
 	// listening and cannot answer fails here, once.
 	s.Do(t, http.MethodGet, "/api/config", nil).WantStatus(t, http.StatusOK)
 	s.Seed = s.readSeed()
