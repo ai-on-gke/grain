@@ -205,6 +205,15 @@ func (s *Server) authenticateRunCredential(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusUnauthorized, errors.New("invalid run credential"))
 		return r, false
 	}
+	// It stands in for the access code, so it is taken only where the
+	// code is (accessCodeAccepted): behind a required verifier, over
+	// unforwarded loopback only, which is where a run's mcpserver and its
+	// in-process grain-controller proxy reach the daemon from. Anywhere
+	// else a leaked credential would be a way past the verifier.
+	if cfg, _ := IAPConfigFromContext(r.Context()); !accessCodeAccepted(r, cfg) {
+		writeError(w, http.StatusUnauthorized, fmt.Errorf("a run credential is taken over unforwarded loopback only on a daemon requiring %s", requiredVerifier(cfg)))
+		return r, false
+	}
 	if s.tasks == nil || s.tasks.Store == nil {
 		writeError(w, http.StatusUnauthorized, errors.New("this server has no store to check a run credential's run against"))
 		return r, false

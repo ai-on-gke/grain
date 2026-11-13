@@ -206,3 +206,27 @@ func TestARunCredentialNamingNoTaskIsRefusedTheDeploymentsControls(t *testing.T)
 		t.Errorf("POST /api/mcp reading settings with a run credential: %d %s, want a refusal naming settings:read", rec.Code, rec.Body)
 	}
 }
+
+// A run credential stands in for the access code, so it is taken where
+// the code is and nowhere else: behind -ui-require-iap (or another
+// required verifier) only over loopback with no forwarding headers --
+// where a run's mcpserver reaches the daemon from -- never over the
+// network listener a leaked credential could otherwise be replayed at.
+func TestARunCredentialIsTakenOnlyWhereTheAccessCodeIs(t *testing.T) {
+	srv, client := runCredentialServer(t)
+	client.Config.RequireIAP = true
+	auth := "Bearer " + mintRunCredential(t, "2", "r-2")
+
+	if rec := serveFrom(srv, networkAddr, http.MethodGet, "/api/tasks/2", "", map[string]string{"Authorization": auth}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("run credential over the network behind -ui-require-iap: %d %s, want 401", rec.Code, rec.Body)
+	}
+	if rec := serveFrom(srv, "127.0.0.1:5555", http.MethodGet, "/api/tasks/2", "", map[string]string{"Authorization": auth, "X-Forwarded-For": "198.51.100.9"}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("run credential over loopback with X-Forwarded-For behind -ui-require-iap: %d %s, want 401", rec.Code, rec.Body)
+	}
+	if rec := serveFrom(srv, "127.0.0.1:5555", http.MethodGet, "/api/tasks/2", "", map[string]string{"Authorization": auth}); rec.Code != http.StatusOK {
+		t.Errorf("run credential over loopback behind -ui-require-iap: %d %s, want 200", rec.Code, rec.Body)
+	}
+	if rec := serveFrom(srv, "127.0.0.1:5555", http.MethodGet, "/api/tasks", "", map[string]string{"Authorization": auth, ui.ActingTaskHeader: "2"}); rec.Code != http.StatusOK {
+		t.Errorf("run credential acting for its task over loopback behind -ui-require-iap: %d %s, want 200", rec.Code, rec.Body)
+	}
+}

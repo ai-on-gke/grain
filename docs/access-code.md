@@ -502,7 +502,10 @@ file in a fresh 0700 directory, adds that directory to the paths
   ends every live run's credential.
 - The daemon accepts a credential only while its run is live. Once the
   run has finished (`task_run.finished_at`), the credential is answered
-  `401`. It is never accepted over the hub tunnel.
+  `401`. It is never accepted over the hub tunnel, and on a daemon
+  requiring a verifier (`-ui-require-iap`, `-ui-require-verifier`) it is
+  taken where the code is: over unforwarded loopback only, which is where
+  a run's mcpserver reaches the daemon from.
 - It says which task the request acts for. On a request carrying it,
   `X-Grain-Acting-Task` must name the credential's own task and
   `X-Grain-Acting-Run` its own run, or the request is refused `403`.
