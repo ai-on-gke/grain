@@ -119,8 +119,8 @@ body: |
     which UI each step ran against, and which steps have no `/next/`
     page yet. Fix a classic page only where it is broken for users
     today, and fix the same page in `ui-ng/` too. New regression
-    coverage goes in a `ui/e2e/next-*.spec.js` spec (listed in
-    `ui/package.json`'s `test:e2e:next`), not a classic one; keep the
+    coverage goes in a `ui-ng/e2e/` spec (run with
+    `make test-e2e-ng`), not a classic one; keep the
     classic specs passing and don't delete them.
   - Explore beyond the scripted cases in `ui/e2e`. Check browser console
     errors, failed network requests, loading/empty/error states,

@@ -1703,7 +1703,21 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		forced.keepsCI = forcedMergeKeepsCI(task, forced.headSHA)
 	}
 	forcing := forced != nil && !settled && health != model.PrConflicted
+	// A red that is wholly a shared fault grain attributed to this head,
+	// and that has since gone green on the base, is re-run rather than
+	// repaired or left for a person -- blocked or not, since a block is
+	// exactly where such a change used to wait for somebody to press
+	// Retry merge (sharedfaultrerun.go).
+	sharedRerun := false
+	if !forcing && !stacked && !settled && !working && !repairing && health == model.PrFailing {
+		if sharedRerun, err = rerunSharedFaultRed(ctx, store, client, e, now); err != nil {
+			return err
+		}
+	}
 	switch {
+	case sharedRerun:
+		// CI is running again on the same head; the next cycle judges it.
+
 	case !forcing && !blocked && review.overdue:
 		// The review has been stuck past its deadline: step around this change
 		// so later tasks in the repo can move, while keeping the required
@@ -3976,6 +3990,14 @@ func blockMergeQueueAgainst(ctx context.Context, store *model.Store, taskID, com
 	if err := queueComment(ctx, store, taskID, comment, now); err != nil {
 		return err
 	}
+	// The comment reaches whoever is watching this task; the notification
+	// reaches the Inbox, approved or not (mergeneedsperson.go).
+	defer func() {
+		if err := raiseMergeNeedsPerson(ctx, store, taskID, reason,
+			mergeLane.noteWithWayOut(mergeStateFailed, reason), now); err != nil {
+			log.Printf("orchestrator: raising %s for %s: %v", model.FamilyMergeNeedsPerson, taskID, err)
+		}
+	}()
 	return observeField(ctx, store, taskID, now, func(o *model.Observation) {
 		o.MergeQueueBlockedAt = &now
 		// A fresh block is measured against the base its red verdict was
