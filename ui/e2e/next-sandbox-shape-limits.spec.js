@@ -18,7 +18,17 @@
 // ceiling beside its vCPU, memory and disk fields, says the server's
 // refusal there, and explains the fields away on a backend with no shape.
 
+import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.js";
+
+async function noSeriousAxe(page, selector) {
+  const result = await new AxeBuilder({ page }).include(selector).analyze();
+  expect(
+    result.violations.filter((v) =>
+      ["serious", "critical"].includes(v.impact ?? ""),
+    ),
+  ).toEqual([]);
+}
 
 async function putSettings(demoServer, accessCode, body) {
   const res = await fetch(`${demoServer}/api/settings`, {
@@ -114,6 +124,12 @@ test("Settings → Sandboxes round-trips the per-task maximum and role ceilings"
       page.getByTestId("input-shape-role-grain/contributor-memoryMb"),
     ).toHaveValue("16384");
 
+    await noSeriousAxe(page, "#card-sandbox-shape-limits");
+    await page.evaluate(() => localStorage.setItem("grain.themeMode", "dark"));
+    await page.reload();
+    await expect(page.getByTestId("card-sandbox-shape-limits")).toBeVisible();
+    await noSeriousAxe(page, "#card-sandbox-shape-limits");
+
     // On a phone the card's fields stack inside it, nothing sideways.
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(250);
@@ -207,6 +223,7 @@ test("New task form shows the caller's sandbox ceiling and says the server's ref
       // Said beside the fields, not in the banner at the top.
       await expect(page.getByTestId("new-task-error")).toHaveCount(0);
       await expect(cpus).toBeFocused();
+      await noSeriousAxe(page, '[data-testid="nt-sandbox-shape"]');
 
       // Bringing the shape back under the ceiling clears the refusal.
       await cpus.fill("2");

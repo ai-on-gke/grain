@@ -1016,7 +1016,11 @@ export function formatHostdLabels(
           </div>
         </div>
 
-        <div class="s-card" data-testid="card-sandbox-shape-limits">
+        <div
+          class="s-card"
+          id="card-sandbox-shape-limits"
+          data-testid="card-sandbox-shape-limits"
+        >
           <div>
             <h3 class="s-card-title">Per-task sandbox ceilings</h3>
             <p class="s-card-desc">
