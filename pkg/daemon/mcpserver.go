@@ -1500,7 +1500,7 @@ func warnUnknownGrants(grants GrantNames) {
 			continue
 		}
 		if model.IsBootstrapPlaybooksGrant(name) {
-			continue // the bootstrap map, or its retired bare alias: src://playbooks and `grain playbooks` read it
+			continue // the bootstrap map: src://playbooks and `grain playbooks` read it
 		}
 		if !slices.Contains(served, name) {
 			fmt.Fprintf(os.Stderr,
@@ -2549,8 +2549,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	}
 	// The task readers, read_pipeline_changes and read_grain_metrics are
 	// what self-debug opened over the daemon's REST API, and are its
-	// api:self-debug preset's now (tasks:read and deployment:read; the
-	// retired bare self-debug still reads as that preset). A run is told
+	// api:self-debug preset's now (tasks:read and deployment:read). A run is told
 	// the preset by the orchestrator's runGrants, beside grain#source.
 	if selfDebugAPI := model.APIGrantsOf(grants); selfDebugAPI.Allows("tasks:read", "") && selfDebugAPI.Allows("deployment:read", "") {
 		var reader mcp.TaskReader
