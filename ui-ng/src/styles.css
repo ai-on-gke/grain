@@ -1467,6 +1467,14 @@ a.compact-nav-btn {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-decoration: none;
+}
+
+/* It opens Settings → Upgrade, the build stamp's link in the classic UI. */
+.bottom-version:hover,
+.bottom-version:focus-visible {
+  color: var(--md-sys-color-primary);
+  text-decoration: underline;
 }
 
 .headline-actions {
