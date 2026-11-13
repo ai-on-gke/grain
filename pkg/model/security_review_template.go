@@ -107,9 +107,8 @@ func securityReviewBody() string {
 	b.WriteString(securityReviewBullets)
 	b.WriteString("**Correctness, second.** Your primary job is the trust boundary above; do not " +
 		"turn this into a style pass. Even so, a correctness bug you notice while reading is " +
-		"still a finding: fix it, or record it with `add_review_comment` (or on the every-PR " +
-		"review's thread) when the owner must decide, rather than dropping it as \"not a " +
-		"security issue\".\n\n")
+		"still a finding: fix it, or record it with `add_review_comment` when the owner " +
+		"must decide, rather than dropping it as \"not a security issue\".\n\n")
 	b.WriteString("**Fix what you find; ask only what you cannot settle.** You are working on the " +
 		"reviewed change's own branch, not a branch of your own: a fix you commit and push lands " +
 		"in the change's own pull request, and there is no second pull request to open. For " +

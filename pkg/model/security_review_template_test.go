@@ -77,12 +77,16 @@ func TestSecurityReviewTemplateKeepsCorrectnessBugsAsFindings(t *testing.T) {
 		"**Correctness, second.**",
 		"still a finding",
 		"add_review_comment",
-		"every-PR review's thread",
 		"\"not a security issue\"",
 	} {
 		if !strings.Contains(tmpl.Body, want) {
 			t.Errorf("security review template body missing %q:\n%s", want, tmpl.Body)
 		}
+	}
+	// A thread reply holds nothing, and most repositories have no every-PR
+	// review at all: add_review_comment is the only record that holds.
+	if strings.Contains(tmpl.Body, "every-PR review's thread") {
+		t.Errorf("security review template points correctness findings at a thread that holds nothing:\n%s", tmpl.Body)
 	}
 }
 

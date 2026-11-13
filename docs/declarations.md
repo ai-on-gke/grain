@@ -880,8 +880,7 @@ stacked on the change's branch with a pull request of its own merged back
 into it before the change can land. Grain's security review checks the
 trust boundary first, and treats any correctness bug noticed while reading
 as a finding too -- fixing it on the branch, or recording it with
-`add_review_comment` (or on the every-PR review's thread) when the owner
-must decide, rather than dropping it as "not a security issue".
+`add_review_comment` when the owner must decide, rather than dropping it as "not a security issue".
 
 **Priority.** A gating review runs at the priority of the change it gates,
 and never below 7 (`model.ReviewPriorityFloor`). That applies to grain's
