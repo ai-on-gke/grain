@@ -56,7 +56,7 @@ func TestNoReleaseBuildPassesTheDebugClockTag(t *testing.T) {
 		}
 		roots = append(roots, m...)
 	}
-	for _, dir := range []string{"scripts", "deploy", filepath.Join(".github", "workflows"), filepath.Join(".grain", "templates")} {
+	for _, dir := range []string{"scripts", "deploy", filepath.Join(".github", "workflows"), ".grain"} {
 		roots = append(roots, filepath.Join(root, dir))
 	}
 	scanned := 0
