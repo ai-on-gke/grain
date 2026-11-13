@@ -523,11 +523,19 @@ file in a fresh 0700 directory, adds that directory to the paths
   as grain's own on the strength of the credential, as they were on the
   code's, but only while the run is live, and never to the deployment's
   controls: a run credential naming no task is refused `403` on routes
-  under `access:*`, `secrets:*`, `connections:*`, `capabilities:admin`,
-  `settings:write`, `deployment:{reboot,restart,upgrade,src}`,
-  `merge:force` and `caches:write`. On `POST /api/mcp` and `/mcp` it
-  always acts for its own task. This caps what a leaked credential is
-  worth.
+  under every dangerous scope and the other operator writes:
+  `tasks:admin`, `access:*`, `secrets:*`, `connections:*`,
+  `capabilities:{admin,detach}`, `settings:write`, `repos:write`,
+  `templates:write`, `schedules:write`, `suites:write`,
+  `releases:write`, `boards:write`, `sessions:write`, `dispatch:write`,
+  `teams:broadcast`, `tests:write`, `deployment:{reboot,restart,upgrade,src}`,
+  `merge:force` and `caches:write`. The one exception is
+  `POST /api/tasks/{id}/sandbox/recreate` for the credential's own task,
+  which `recreate_sandbox` calls. What stays open is what the mcpserver
+  calls as itself: `tasks:write`, `merge:write` and `ci:write` for its
+  own task, plus the notification, memory and release-notes writes.
+  On `POST /api/mcp` and `/mcp` it always acts for its own task. This
+  caps what a leaked credential is worth.
 
 ## Who the code is recorded as
 

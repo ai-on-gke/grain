@@ -188,6 +188,12 @@ func TestARunCredentialNamingNoTaskIsRefusedTheDeploymentsControls(t *testing.T)
 		{http.MethodGet, "/api/secrets", ""},
 		{http.MethodPut, "/api/settings", `{}`},
 		{http.MethodGet, "/api/access/principals", ""},
+		{http.MethodPost, "/api/tasks/2/approve", ""},
+		{http.MethodPost, "/api/tasks/3/sandbox/recreate", ""},
+		{http.MethodPost, "/api/templates", `{}`},
+		{http.MethodPost, "/api/schedules", `{}`},
+		{http.MethodPost, "/api/pipeline-pause", `{}`},
+		{http.MethodPost, "/api/deployment/broadcast", `{}`},
 	} {
 		rec := serveFrom(srv, networkAddr, c.method, c.path, c.body, map[string]string{"Authorization": auth, "Content-Type": "application/json"})
 		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "run credential") {
@@ -197,6 +203,12 @@ func TestARunCredentialNamingNoTaskIsRefusedTheDeploymentsControls(t *testing.T)
 	// What the run's plumbing does still works.
 	if rec := serveFrom(srv, networkAddr, http.MethodGet, "/api/tasks/2", "", map[string]string{"Authorization": auth}); rec.Code != http.StatusOK {
 		t.Errorf("GET /api/tasks/2 with the run credential: %d %s", rec.Code, rec.Body)
+	}
+	// recreate_sandbox on the run's own task is the one tasks:admin route
+	// its mcpserver calls as itself; whatever the handler then answers,
+	// the cap does not refuse it.
+	if rec := serveFrom(srv, networkAddr, http.MethodPost, "/api/tasks/2/sandbox/recreate", "", map[string]string{"Authorization": auth}); strings.Contains(rec.Body.String(), "cannot call") {
+		t.Errorf("POST /api/tasks/2/sandbox/recreate with task 2's run credential: %d %s, want it past the cap", rec.Code, rec.Body)
 	}
 	// And POST /api/mcp is always its own task's agent: task 2 holds
 	// api:tasks:read, so it lists tasks but cannot read settings.

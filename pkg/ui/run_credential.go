@@ -277,36 +277,82 @@ func (s *Server) actingTaskCredentialError(r *http.Request) error {
 // reaches without naming its task: the deployment's own controls, which
 // no call a run's `grain mcpserver` makes for itself needs. A request
 // naming its task is held to that task's grants by agentAPIGate instead.
-// It caps what a leaked credential is worth (task 4048's review): it can
-// do what the run's own plumbing does, not read secrets, change who has
-// access, rewrite settings or capabilities, or restart the deployment.
+// It caps what a leaked credential is worth (the reviews of tasks 4048
+// and 5342): it can do what the run's own plumbing does, not read
+// secrets, change who has access, approve work, rewrite repositories,
+// templates, schedules, suites, releases or capabilities, drive other
+// sessions or dispatch, or restart the deployment.
+//
+// Every dangerous scope of the vocabulary is here
+// (TestRunCredentialOperatorScopesCoverEveryDangerousScope). What is
+// left out is what the mcpserver calls as itself, for its own task:
+// tasks:write and merge:write (comments, waits, its pull request),
+// ci:write (grain ci on its own branch), and the low-stakes
+// notifications, memory and release-notes writes its built-in tools
+// make. tasks:admin is here but for runCredentialOwnTaskRoutes.
 var runCredentialOperatorScopes = map[APIScope]bool{
-	"access:read":        true,
-	"access:write":       true,
-	"secrets:read":       true,
-	"secrets:write":      true,
-	"connections:read":   true,
-	"connections:write":  true,
-	"capabilities:admin": true,
-	"settings:write":     true,
-	"deployment:reboot":  true,
-	"deployment:restart": true,
-	"deployment:upgrade": true,
-	"deployment:src":     true,
-	"merge:force":        true,
-	"caches:write":       true,
+	"tasks:admin":         true,
+	"access:read":         true,
+	"access:write":        true,
+	"secrets:read":        true,
+	"secrets:write":       true,
+	"connections:read":    true,
+	"connections:write":   true,
+	"capabilities:admin":  true,
+	"capabilities:detach": true,
+	"settings:write":      true,
+	"repos:write":         true,
+	"templates:write":     true,
+	"schedules:write":     true,
+	"suites:write":        true,
+	"releases:write":      true,
+	"boards:write":        true,
+	"sessions:write":      true,
+	"dispatch:write":      true,
+	"teams:broadcast":     true,
+	"tests:write":         true,
+	"deployment:reboot":   true,
+	"deployment:restart":  true,
+	"deployment:upgrade":  true,
+	"deployment:src":      true,
+	"merge:force":         true,
+	"caches:write":        true,
+}
+
+// runCredentialOwnTaskRoutes are the routes under
+// runCredentialOperatorScopes a run's mcpserver does call as itself, and
+// only for its own task: recreate_sandbox rebuilding the run's own
+// sandbox. A run credential naming no task reaches one only when the
+// path's {id} is the credential's own task.
+var runCredentialOwnTaskRoutes = map[string]bool{
+	"POST /api/tasks/{id}/sandbox/recreate": true,
 }
 
 // runCredentialScopeError refuses a request a run credential admitted,
 // naming no acting task, on a route under one of
 // runCredentialOperatorScopes; nil for any other request.
 func runCredentialScopeError(r *http.Request, pattern string, scope APIScope) error {
-	if _, ok := runCredentialFromContext(r.Context()); !ok {
+	cred, ok := runCredentialFromContext(r.Context())
+	if !ok {
 		return nil
 	}
 	if strings.TrimSpace(r.Header.Get(ActingTaskHeader)) != "" || !runCredentialOperatorScopes[scope] {
 		return nil
 	}
+	if runCredentialOwnTaskRoutes[pattern] && taskIDInPath(r.URL.Path) == cred.TaskID {
+		return nil
+	}
 	return fmt.Errorf("a run credential cannot call %s (scope %s) as the deployment: "+
 		"name your task in %s to be held to its grants (docs/access-code.md)", pattern, scope, ActingTaskHeader)
+}
+
+// taskIDInPath is the task id of a /api/tasks/<id>/... path, "" for any
+// other path.
+func taskIDInPath(path string) string {
+	rest, ok := strings.CutPrefix(path, "/api/tasks/")
+	if !ok {
+		return ""
+	}
+	id, _, _ := strings.Cut(rest, "/")
+	return id
 }
