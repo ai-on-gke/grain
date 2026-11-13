@@ -1,0 +1,25 @@
+== postgres: create the store with dev (unstamped)
+schema before: 139
+== postgres: open it with v0.0.0-20261113032736-51844bb2c12b (unversioned) · 51844bb · 2026-11-13 03:27Z
+schema after: 146
+qualification_config: gadgets=acme tools=acme widgets=ghe.example.com/acme 
+qualification_item: gadgets=acme tools=acme widgets=ghe.example.com/acme 
+qualification_item_depends_on: gadgets=acme tools=acme widgets=ghe.example.com/acme 
+scheduled_workflow_run: gadgets=acme tools=acme widgets=ghe.example.com/acme 
+qualification_run: gadgets=acme tools=acme widgets=ghe.example.com/acme 
+release: gadgets=acme tools=acme widgets=ghe.example.com/acme 
+release_candidate: gadgets=acme tools=acme widgets=ghe.example.com/acme 
+migration log lines:
+2026/11/13 04:03:13 schema 142: left the qualification plan stored for acme/gadgets on the default host: target repos name it on more than one host (acme/gadgets, ghe.example.com/acme/gadgets)
+2026/11/13 04:03:13 schema 142: left schedule sched-gone-gadgets's workflow firing for acme/gadgets on the default host: target repos name it on more than one host (acme/gadgets, ghe.example.com/acme/gadgets)
+2026/11/13 04:03:13 schema 145: left the releases of acme/gadgets on the default host: target repos name it on more than one host (acme/gadgets, ghe.example.com/acme/gadgets)
+2026/11/13 04:03:15 grain: migrated the store in place from schema 139 to 146
+2026/11/13 04:03:16 grain: the config repository's dump was rewritten at schema 146 from the database it was imported into; the prior dump is the preceding commit in /tmp/mig-pg/data/state-repo
+forge reads the HEAD daemon made for the migrated repositories:
+      1 Get "http://127.0.0.1:9/repos/acme/gadgets
+      1 Get "http://127.0.0.1:9/repos/acme/gadgets/git/matching-refs/tags/v
+      1 Get "http://127.0.0.1:9/repos/acme/tools
+      1 Get "http://127.0.0.1:9/repos/acme/tools/git/matching-refs/tags/v
+      1 Get "https://ghe.example.com/api/v3/repos/acme/gadgets/git/matching-refs/tags/v
+      1 Get "https://ghe.example.com/api/v3/repos/acme/widgets
+      1 Get "https://ghe.example.com/api/v3/repos/acme/widgets/git/matching-refs/tags/v

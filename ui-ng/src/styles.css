@@ -338,6 +338,7 @@ body {
   display: flex;
   align-items: center;
   width: 280px;
+  margin: 0;
 }
 
 .search-input {
@@ -1467,6 +1468,14 @@ a.compact-nav-btn {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-decoration: none;
+}
+
+/* It opens Settings → Upgrade, the build stamp's link in the classic UI. */
+.bottom-version:hover,
+.bottom-version:focus-visible {
+  color: var(--md-sys-color-primary);
+  text-decoration: underline;
 }
 
 .headline-actions {
@@ -1585,13 +1594,28 @@ g-sessions-page {
   margin-top: 2px;
 }
 
-.rail-fab:hover,
-.phone-fab:hover {
+.rail-fab:hover:not(:disabled),
+.phone-fab:hover:not(:disabled) {
   background: color-mix(
     in srgb,
     var(--md-sys-color-primary) 90%,
     var(--md-sys-color-on-primary)
   );
+}
+
+.rail-fab:disabled,
+.phone-fab:disabled {
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-outline);
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.create-menu-item:disabled {
+  color: var(--md-sys-color-outline);
+  cursor: not-allowed;
+  background: transparent;
 }
 
 .rail-fab:active,

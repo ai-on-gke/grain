@@ -884,17 +884,29 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                                   bytesOf(ghaLog.bytes)
                                 }})</span
                               >
-                              <input
-                                type="search"
-                                class="ci-log-search"
-                                placeholder="Search log…"
-                                aria-label="Search log lines"
-                                data-testid="ci-log-search"
-                                [value]="logSearch()"
-                                (input)="
-                                  logSearch.set($any($event.target).value)
-                                "
-                              />
+                              <form
+                                role="search"
+                                autocomplete="off"
+                                style="display: contents"
+                                (submit)="$event.preventDefault()"
+                              >
+                                <input
+                                  type="search"
+                                  name="grain-ci-log-search"
+                                  autocomplete="off"
+                                  spellcheck="false"
+                                  data-lpignore="true"
+                                  data-1p-ignore="true"
+                                  class="ci-log-search"
+                                  placeholder="Search log…"
+                                  aria-label="Search log lines"
+                                  data-testid="ci-log-search"
+                                  [value]="logSearch()"
+                                  (input)="
+                                    logSearch.set($any($event.target).value)
+                                  "
+                                />
+                              </form>
                               <button
                                 type="button"
                                 class="btn-text"
@@ -980,17 +992,29 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                             >
                               <div class="ci-log-bar">
                                 <span class="tabular">{{ step.name }}</span>
-                                <input
-                                  type="search"
-                                  class="ci-log-search"
-                                  placeholder="Search log…"
-                                  aria-label="Search log lines"
-                                  data-testid="ci-log-search"
-                                  [value]="logSearch()"
-                                  (input)="
-                                    logSearch.set($any($event.target).value)
-                                  "
-                                />
+                                <form
+                                  role="search"
+                                  autocomplete="off"
+                                  style="display: contents"
+                                  (submit)="$event.preventDefault()"
+                                >
+                                  <input
+                                    type="search"
+                                    name="grain-ci-step-log-search"
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                    data-lpignore="true"
+                                    data-1p-ignore="true"
+                                    class="ci-log-search"
+                                    placeholder="Search log…"
+                                    aria-label="Search log lines"
+                                    data-testid="ci-log-search"
+                                    [value]="logSearch()"
+                                    (input)="
+                                      logSearch.set($any($event.target).value)
+                                    "
+                                  />
+                                </form>
                                 @if (isActive(run)) {
                                   <button
                                     type="button"
@@ -1420,7 +1444,11 @@ export class CIPageComponent implements OnInit, OnDestroy {
   protected readonly sharedFaults = computed(() => this.store.combinedFaults());
 
   protected readonly availableRepos = computed(() => {
-    const set = new Set<string>(this.store.targetRepos());
+    const configured = this.store.targetRepos();
+    if (this.store.hasTargetAllowlist() && configured.length > 0) {
+      return [...configured].sort();
+    }
+    const set = new Set<string>(configured);
     for (const r of this.store.runs()) {
       if (r.repo) set.add(r.repo);
     }
@@ -1842,6 +1870,7 @@ export class CIPageComponent implements OnInit, OnDestroy {
         recheck: this.draftRecheck() || undefined,
       });
       this.runDialogOpen.set(false);
+      if (created?.id) this.openRun(created.id);
       this.snackbar.show(`Started CI run ${created?.id ?? ""}`.trim());
     } catch (err) {
       this.store.actionError.set(errorText(err));
@@ -1873,6 +1902,9 @@ export class CIPageComponent implements OnInit, OnDestroy {
               recheckFailed: failedOnly || undefined,
             },
       );
+      // Follow to the run it started: on /ci/runs/<id> the route's id
+      // would otherwise pull the inspector back to the run just retried.
+      if (created?.id) this.openRun(created.id);
       this.snackbar.show(
         failedOnly
           ? `Re-running failed jobs (${created?.id ?? "started"})`

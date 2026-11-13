@@ -1034,9 +1034,29 @@ describe("TasksPageComponent", () => {
       await settle(f);
       q<HTMLButtonElement>(f, '[data-testid="board-delete-b1"]')!.click();
       await settle(f);
+      // Deleting a shared board asks first; Cancel deletes nothing.
+      expect(q(f, '[data-testid="saved-boards-menu"]')).toBeNull();
+      expect(q(f, '[data-testid="confirm-dialog"]')?.textContent).toContain(
+        "Delete board All Triage?",
+      );
+      q<HTMLButtonElement>(f, '[data-testid="confirm-cancel"]')!.click();
+      await settle(f);
+      expect(
+        TestBed.inject(TasksStore)
+          .boards()
+          .map((b) => b.name),
+      ).toEqual(["All Triage"]);
+      q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="board-delete-b1"]')!.click();
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="confirm-accept"]')!.click();
+      await settle(f);
       expect(TestBed.inject(TasksStore).boards()).toEqual([]);
 
       // Opening one menu closes sibling <g-pill-select> / <g-priority-chip> / Saved Boards menus
+      q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+      await settle(f);
       expect(q(f, '[data-testid="saved-boards-menu"]')).not.toBeNull();
       q<HTMLButtonElement>(f, '[data-testid="tasks-group"]')!.click();
       await settle(f);

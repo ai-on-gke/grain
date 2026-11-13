@@ -286,6 +286,19 @@ test("Capabilities shows each server's state, tests only connectable servers, an
     await expect(notice).toContainText("failed —");
     await expect(notice).toContainText("connection refused");
     await expect(notice).toHaveClass(/warn/);
+
+    // Remove asks first; Cancel keeps the server.
+    const row = page.getByTestId("cap-server-row-" + id);
+    await page.getByTestId("remove-cap-server-" + id).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("Remove capability server?");
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(row).toHaveCount(1);
+    await page.getByTestId("remove-cap-server-" + id).click();
+    await dialog.getByRole("button", { name: "Remove" }).click();
+    await expect(row).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByTestId("cap-server-row-" + id)).toHaveCount(0);
   } finally {
     await request.post("/api/capability-servers/remove", { data: { id } });
   }

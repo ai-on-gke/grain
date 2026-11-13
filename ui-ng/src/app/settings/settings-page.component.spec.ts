@@ -151,6 +151,14 @@ class FakeSettingsApi {
         },
       ]);
     }
+    if (key === "GET /api/deployment/reachable-repos") {
+      return Promise.resolve({
+        repos: [{ repo: "acme/alpha", push: true }],
+        errors: ["enterprise host returned HTML"],
+        hostMismatches: ["ghe.internal mismatch"],
+        reason: "1 repository reachable",
+      });
+    }
     return Promise.resolve({});
   };
 
@@ -370,15 +378,18 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         ?.hasAttribute("disabled"),
     ).toBe(true);
 
-    // Navigate to Models: secret key input stays enabled even when configRepoOnly is true!
+    // Navigate to Models: zero password inputs mount on initial load, and the
+    // secret key toggle/input stays enabled even when configRepoOnly is true.
     await harness.navigateByUrl("/settings/models");
     await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
-    console.log("DOM2:", el.innerHTML);
-    console.log(
-      "FOUND_INPUT_IN_HTML:",
-      el.innerHTML.includes("input-agent-key-antigravity"),
-    );
+    expect(el.querySelectorAll('input[type="password"]').length).toBe(0);
+    const toggleBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="toggle-agent-key-antigravity"]',
+    )!;
+    expect(toggleBtn.disabled).toBe(false);
+    toggleBtn.click();
+    harness.detectChanges();
     const keyInput = el.querySelector<HTMLInputElement>(
       '[data-testid="input-agent-key-antigravity"]',
     )!;
@@ -388,7 +399,12 @@ describe("SettingsPageComponent (M13 D-12)", () => {
   it("manages Model Connections and verifies framework API keys", async () => {
     const { el, api, harness } = await mountSettings("/settings/models");
 
-    console.log("DEBUG SECOND:", el.innerHTML);
+    expect(el.querySelectorAll('input[type="password"]').length).toBe(0);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="toggle-agent-key-claude"]',
+    )!.click();
+    harness.detectChanges();
+
     setInput(
       el.querySelector<HTMLInputElement>(
         '[data-testid="input-agent-key-claude"]',
@@ -409,6 +425,9 @@ describe("SettingsPageComponent (M13 D-12)", () => {
           c.params?.["framework"] === "claude",
       ),
     ).toBe(true);
+    expect(
+      el.querySelector('[data-testid="input-agent-key-claude"]'),
+    ).toBeNull();
 
     harness.detectChanges();
     el.querySelector<HTMLButtonElement>(
@@ -424,7 +443,6 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     ).toContain("200 OK");
 
     // Add a new Vertex backend connection
-    console.log("DEBUG SECOND:", el.innerHTML);
     setInput(
       el.querySelector<HTMLInputElement>(
         '[data-testid="input-new-backend-id"]',
@@ -555,8 +573,26 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       api.calls.some((c) => c.key === "DELETE /api/upgrade/scheduled"),
     ).toBe(true);
 
+    // Start upgrade asks first (2026-11-13 deployment-operations
+    // walkthrough, task 5390): Cancel sends nothing, the accept starts it.
+    const startUpgrade = () =>
+      el
+        .querySelector<HTMLButtonElement>('[data-testid="start-upgrade-btn"]')!
+        .click();
+    startUpgrade();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Upgrade grain to");
     el.querySelector<HTMLButtonElement>(
-      '[data-testid="start-upgrade-btn"]',
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(api.calls.some((c) => c.key === "POST /api/upgrade")).toBe(false);
+    startUpgrade();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
     )!.click();
     await new Promise((r) => setTimeout(r, 200));
     expect(api.calls.some((c) => c.key === "POST /api/upgrade")).toBe(true);
@@ -827,6 +863,165 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     expect(
       el.querySelector<HTMLButtonElement>('[data-testid="pill-qa-flow"]')
         ?.disabled,
+    ).toBe(true);
+  });
+
+  it("renders reachable repos errors/mismatches and confirms adding an unreachable repository via g-confirm-dialog", async () => {
+    const { el, harness, api } = await mountSettings("/settings/repositories");
+
+    const input = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-add-repo"]',
+    )!;
+    expect(input).toBeTruthy();
+    input.dispatchEvent(new Event("focus"));
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.fixture.detectChanges();
+
+    expect(
+      Array.from(el.querySelectorAll("#reachable-repos-list option")).map(
+        (o) => (o as HTMLOptionElement).value,
+      ),
+    ).toContain("acme/alpha");
+    expect(el.textContent).toContain("enterprise host returned HTML");
+    expect(el.textContent).toContain("ghe.internal mismatch");
+
+    setInput(input, "acme/unreachable-repo");
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="add-repo-btn"]',
+    )!.click();
+    harness.fixture.detectChanges();
+
+    const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+    expect(dialog?.textContent).toContain("acme/unreachable-repo");
+    expect(api.calls.some((c) => c.key === "POST /api/repos")).toBe(false);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "POST /api/repos" &&
+          (c.body as { repo?: string })?.repo === "acme/unreachable-repo",
+      ),
+    ).toBe(true);
+  });
+
+  it("clears connection credentials, confirms connection removal, and passes Git connection scope", async () => {
+    const api = new FakeSettingsApi();
+    (api.deploymentBody as Record<string, unknown>)["agentBackends"] = [
+      { id: "claude-team", framework: "claude", name: "Claude Team" },
+      {
+        id: "agy-ambient",
+        framework: "antigravity",
+        name: "Ambient",
+        authMode: "ambient",
+      },
+    ];
+    const { el, harness } = await mountSettings("/settings/models", api);
+
+    // Search filter is owned by a <form role="search" autocomplete="off"> so
+    // browser password managers never pair it with secret inputs.
+    const filterInput = el.querySelector<HTMLInputElement>(
+      '[data-testid="settings-filter-input"]',
+    )!;
+    expect(filterInput.getAttribute("autocomplete")).toBe("off");
+    expect(filterInput.closest("form")?.getAttribute("role")).toBe("search");
+    expect(filterInput.closest("form")?.getAttribute("autocomplete")).toBe(
+      "off",
+    );
+
+    // Ambient connections do not offer stored secret management, and non-ambient
+    // connections keep their password field collapsed until Credential is opened.
+    expect(
+      el.querySelector('[data-testid="toggle-cred-agy-ambient"]'),
+    ).toBeNull();
+    expect(
+      el.querySelector('[data-testid="clear-cred-claude-team"]'),
+    ).toBeNull();
+
+    const toggleCred = el.querySelector<HTMLButtonElement>(
+      '[data-testid="toggle-cred-claude-team"]',
+    )!;
+    expect(toggleCred).toBeTruthy();
+    toggleCred.click();
+    harness.fixture.detectChanges();
+
+    const credInput = el.querySelector<HTMLInputElement>(
+      'input[aria-label="Credential for claude-team"]',
+    )!;
+    expect(credInput.getAttribute("autocomplete")).toBe("new-password");
+    expect(credInput.closest("form")?.getAttribute("autocomplete")).toBe("off");
+
+    const clearBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="clear-cred-claude-team"]',
+    )!;
+    expect(clearBtn).toBeTruthy();
+    clearBtn.click();
+    await harness.fixture.whenStable();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "DELETE /api/agent-backends/{id}/credential" &&
+          c.params?.["id"] === "claude-team",
+      ),
+    ).toBe(true);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="remove-backend-claude-team"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("claude-team");
+    expect(
+      api.calls.some(
+        (c) => c.key === "DELETE /api/deployment/agent-backends/{backendId}",
+      ),
+    ).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "DELETE /api/deployment/agent-backends/{backendId}" &&
+          c.params?.["backendId"] === "claude-team",
+      ),
+    ).toBe(true);
+
+    await harness.navigateByUrl("/settings/git");
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-git-conn-scope"]',
+      )!,
+      "acme/widgets",
+    );
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-git-conn-secret"]',
+      )!,
+      "ghp_test_token_123",
+    );
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-git-conn-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "POST /api/deployment/git-connections" &&
+          (c.body as { scope?: string })?.scope === "acme/widgets",
+      ),
     ).toBe(true);
   });
 });

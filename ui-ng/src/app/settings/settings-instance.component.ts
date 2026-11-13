@@ -105,7 +105,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="g-dep-id">Deployment ID</label>
               <input
                 id="g-dep-id"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 [value]="state.val('deploymentId', '')"
                 [disabled]="!canWriteSettings()"
@@ -411,7 +411,7 @@ function formatBytes(bytes: number): string {
               >
               <input
                 id="c-pkg-gb"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 [value]="state.defaultedNumber('packageCacheSizeGb')"
@@ -431,7 +431,7 @@ function formatBytes(bytes: number): string {
               >
               <input
                 id="c-act-gb"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 [value]="state.defaultedNumber('actionsCacheSizeGb')"
@@ -459,7 +459,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="e-poll">Poll interval</label>
               <input
                 id="e-poll"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="text"
                 data-testid="input-poll-interval"
                 [placeholder]="state.defaultHint('pollInterval', '10s')"
@@ -474,7 +474,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="e-workers">Max worker agents</label>
               <input
                 id="e-workers"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="1"
                 data-testid="input-max-workers"
@@ -500,7 +500,7 @@ function formatBytes(bytes: number): string {
               >
               <input
                 id="e-mpr"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="1"
                 [value]="state.defaultedNumber('maxMergesPerRepo')"
@@ -561,7 +561,7 @@ function formatBytes(bytes: number): string {
             </div>
             <div class="s-inline">
               <span
-                class="status-pill neutral tabular"
+                class="status-pill neutral s-mono"
                 data-testid="registry-status-pill"
               >
                 {{ registryStateLabel() }}
@@ -583,7 +583,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="reg-url">Hub URL</label>
               <input
                 id="reg-url"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 data-testid="input-hub-url"
                 placeholder="https://hub.grain.internal"
@@ -596,7 +596,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="reg-entry">Entry name</label>
               <input
                 id="reg-entry"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 data-testid="input-hub-entry"
                 placeholder="dco-core"
@@ -643,7 +643,7 @@ function formatBytes(bytes: number): string {
               </p>
             </div>
             <span
-              class="status-pill healthy tabular"
+              class="status-pill healthy s-mono"
               data-testid="current-daemon-version"
             >
               {{ currentVersion() }}
@@ -777,12 +777,12 @@ function formatBytes(bytes: number): string {
                 [disabled]="
                   !selectedUpgradeBranch() || !access.can('POST /api/upgrade')
                 "
-                (click)="startUpgrade()"
+                (click)="confirmStartUpgrade()"
               >
                 Start upgrade
               </button>
               @if (dbBackendLabel()) {
-                <span class="s-hint tabular"
+                <span class="s-hint s-num"
                   >Database: {{ dbBackendLabel() }}</span
                 >
               }
@@ -794,7 +794,7 @@ function formatBytes(bytes: number): string {
               }}</pre>
             }
           } @else if (dbBackendLabel()) {
-            <span class="s-hint tabular" data-testid="upgrade-database"
+            <span class="s-hint s-num" data-testid="upgrade-database"
               >Database: {{ dbBackendLabel() }}</span
             >
           }
@@ -1314,6 +1314,23 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     } catch {
       // Non-fatal
     }
+  }
+
+  // Starting an upgrade restarts grain onto another build, so it asks
+  // first, as the classic Upgrade pane's confirm() does.
+  protected confirmStartUpgrade(): void {
+    const branch = this.selectedUpgradeBranch();
+    if (!branch) return;
+    const drain = this.afterTasksFinish();
+    this.confirmRequest.set({
+      title: `Upgrade grain to ${branch}?`,
+      message: drain
+        ? `Grain waits for running tasks to finish, then restarts onto ${branch}.`
+        : `Grain restarts onto ${branch} now, interrupting agent runs in flight.`,
+      accept: drain ? "Schedule upgrade" : "Upgrade now",
+      destructive: !drain,
+      run: () => this.startUpgrade(),
+    });
   }
 
   protected async startUpgrade(): Promise<void> {

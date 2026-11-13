@@ -333,6 +333,9 @@ func listReachable(api github.Transport, token string, app bool) ([]ReachableRep
 			err = json.Unmarshal(resp.Body, &list)
 		}
 		if err != nil {
+			if strings.HasPrefix(strings.TrimSpace(string(resp.Body)), "<") {
+				return nil, false, fmt.Errorf("host does not appear to be a GitHub API (answered with HTML)")
+			}
 			return nil, false, fmt.Errorf("reading GitHub's answer: %w", err)
 		}
 		for _, repo := range list {

@@ -252,6 +252,7 @@ var routeDocs = map[string]string{
 	"POST /api/deployment/git-connections/check":                           "Check a git connection works, without saving it. To check an unsaved connection, leave credential empty and give what the editor would: type (pat with value, app with app, or ambient with nothing else) and host. To check a saved connection instead, name it in credential and give no value: credential is only ever a saved credential's name, never a type.",
 	"PUT /api/deployment/agent-backends/{backendId}":                       "Create or replace one of the deployment's model connections.",
 	"DELETE /api/deployment/agent-backends/{backendId}":                    "Delete one of the deployment's model connections.",
+	"POST /api/deployment/agent-backends/{backendId}/discover":             "Ask a model connection's provider which models it serves now, and keep the answer as the connection's discovered list.",
 	"PUT /api/deployment/repos/{owner}/{name}/config":                      "Set a repository's deployment-level configuration: only the fields given are changed.",
 	"PUT /api/deployment/repos/{owner}/{name}/git-connection":              "Set which git connection a repository is reached through.",
 	"POST /api/deployment/broadcast":                                       "Post a comment to every active task (running_only: only those with a run in flight).",

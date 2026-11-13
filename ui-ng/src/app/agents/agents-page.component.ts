@@ -81,6 +81,12 @@ const GROUP_OPTIONS: readonly PillOption[] = GROUPS.map((g) => ({
   label: g.label,
 }));
 
+// cores prints a CPU count the way the strip and cards show it: one
+// decimal below ten, whole numbers above.
+function cores(n: number): string {
+  return n < 10 ? n.toFixed(1) : String(Math.round(n));
+}
+
 const STATUS_TEXT: Record<AgentStatus, string> = {
   working: "Working",
   setup: "Setting up",
@@ -338,7 +344,15 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
                       @for (a of g.agents; track a.task.id) {
                         <tr
                           [class.is-quiet]="a.status === 'quiet'"
+                          [class.is-selected]="a.task.id === selectedId()"
+                          [attr.aria-current]="
+                            a.task.id === selectedId() ? 'true' : null
+                          "
+                          tabindex="0"
                           [attr.data-testid]="'agent-row-' + a.task.id"
+                          (click)="pick($event, a.task.id)"
+                          (keydown.enter)="pickKey($event, a.task.id)"
+                          (keydown.space)="pickKey($event, a.task.id)"
                         >
                           <td>
                             <a [routerLink]="['/task', a.task.id]"
@@ -375,7 +389,13 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
                           <td>{{ a.attempt?.model || "—" }}</td>
                           <td class="tabular">{{ elapsed(a) }}</td>
                           <td class="tabular">{{ tokensOf(a) }}</td>
-                          <td class="tabular">{{ cpuText(a) }}</td>
+                          <td
+                            class="tabular"
+                            [class.cpu-none]="!a.cpu"
+                            [attr.title]="cpuTip(a)"
+                          >
+                            {{ cpuText(a) }}
+                          </td>
                         </tr>
                       }
                     </tbody>
@@ -501,8 +521,10 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
       <article
         class="agent-card"
         [class.is-selected]="a.task.id === selectedId()"
-        (click)="selectTask(a.task.id)"
-        (keydown.enter)="selectTask(a.task.id)"
+        [attr.aria-current]="a.task.id === selectedId() ? 'true' : null"
+        (click)="pick($event, a.task.id)"
+        (keydown.enter)="pickKey($event, a.task.id)"
+        (keydown.space)="pickKey($event, a.task.id)"
         tabindex="0"
         [class.is-quiet]="a.status === 'quiet'"
         [class.is-fresh]="isFresh(a)"
@@ -596,18 +618,18 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
                   [style.width.%]="min100(c.share * 100)"
                 ></span>
               </span>
-              <span class="tabular" aria-hidden="true"
-                >{{ pct(c.share) }}%</span
-              >
+              <span class="tabular" aria-hidden="true">{{ cpuText(a) }}</span>
               @if (c.bound) {
                 <span class="status-pill error cpu-bound" aria-hidden="true"
                   ><g-status-icon tone="error" kind="error" />CPU-bound</span
                 >
               }
             } @else {
-              <span class="tabular" aria-hidden="true">—</span>
+              <span class="cpu-none" aria-hidden="true">not sampled</span>
             }
-            <span class="sr-only">CPU {{ cpuText(a) }}. {{ cpuTip(a) }}</span>
+            <span class="sr-only"
+              >CPU: {{ a.cpu ? cpuText(a) + ". " : "" }}{{ cpuTip(a) }}</span
+            >
           </span>
           <svg
             class="spark"
@@ -736,6 +758,25 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     });
   }
 
+  // pick selects a card or row from a click, but leaves a click on a link
+  // or button inside it to that control (the title opens the full page).
+  protected pick(ev: MouseEvent, id: string): void {
+    const t = ev.target as Element | null;
+    const cur = ev.currentTarget as Element | null;
+    const control = t?.closest("a, button");
+    if (control && control !== cur && cur?.contains(control)) return;
+    this.selectTask(id);
+  }
+
+  // pickKey is Enter or Space on the focused card or row itself. It
+  // consumes the key so the page's Enter shortcut (open the selected task
+  // full screen) does not also act on the previously selected one.
+  protected pickKey(ev: Event, id: string): void {
+    if (ev.target !== ev.currentTarget) return;
+    ev.preventDefault();
+    this.selectTask(id);
+  }
+
   protected step(dir: number): void {
     const all = this.store.agents();
     if (!all.length) return;
@@ -842,10 +883,14 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     const withCpu = this.store.agents().filter((a) => a.cpu);
     if (!withCpu.length) return "";
     const used = withCpu.reduce((n, a) => n + a.cpu!.load, 0);
-    const total = withCpu.reduce((n, a) => n + a.cpu!.cpus, 0);
+    // Host runs share one host: count its vCPUs once, not once per run.
+    const probed = withCpu.filter((a) => a.cpu!.source === "probe");
+    const hostRun = withCpu.find((a) => a.cpu!.source === "process");
+    const total =
+      probed.reduce((n, a) => n + a.cpu!.cpus, 0) + (hostRun?.cpu!.cpus ?? 0);
     const bound = withCpu.filter((a) => a.cpu!.bound).length;
     return (
-      `CPU ${Math.round(used)} of ${total} vCPU` +
+      `CPU ${cores(used)} of ${total} vCPU` +
       (bound ? ` · ${bound} CPU-bound` : "")
     );
   });
@@ -930,18 +975,27 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     return Math.min(100, Math.max(0, v));
   }
 
+  // A host run's share of the whole host is a small number that says
+  // little; how many cores it keeps busy is the reading people use.
   protected cpuText(a: Agent): string {
-    if (a.cpu) return `${this.pct(a.cpu.share)}%`;
-    return "—";
+    if (!a.cpu) return "not sampled";
+    if (a.cpu.source === "process") return `${cores(a.cpu.load)} vCPU`;
+    return `${this.pct(a.cpu.share)}%`;
   }
 
   protected cpuTip(a: Agent): string {
-    if (!a.cpu)
-      return "No CPU reading for this run's sandbox on this deployment.";
-    const mem = a.cpu.memoryUsedMB
-      ? `, ${a.cpu.memoryUsedMB.toLocaleString()} MB memory`
+    const c = a.cpu;
+    if (!c) return a.cpuNote;
+    const mem = c.memoryUsedMB
+      ? `, ${c.memoryUsedMB.toLocaleString()} MB memory`
       : "";
-    return `Load ${a.cpu.load.toFixed(2)} on ${a.cpu.cpus} vCPU${mem}`;
+    if (c.source === "process") {
+      const over = c.windowMs
+        ? ` over the last ${Math.max(1, Math.round(c.windowMs / 1000))} s`
+        : "";
+      return `This run's own processes kept ${c.load.toFixed(2)} vCPU busy${over}: ${this.pct(c.share)}% of this host's ${c.cpus} vCPU${mem}`;
+    }
+    return `Load ${c.load.toFixed(2)} on ${c.cpus} vCPU${mem}`;
   }
 
   protected sparkOf(a: Agent): number[] {
@@ -1023,7 +1077,8 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     if (
       target.tagName === "INPUT" ||
       target.tagName === "TEXTAREA" ||
-      target.isContentEditable
+      target.isContentEditable ||
+      (ev.key === "Enter" && target.closest?.("a, button"))
     ) {
       return;
     }

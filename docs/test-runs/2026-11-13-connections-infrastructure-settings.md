@@ -11,7 +11,7 @@ in a real Chromium against a real `grain demo` server.
 
 | | |
 |---|---|
-| Commit tested | `e69d34223` (`main`, merge of #1478), then this branch's fixes on top |
+| Commit tested | `e69d34223` (`main`, merge of #1478), then this branch's fixes on top; re-run after merging `main` at `6b560ee97` (#1489 reworked the settings layout, so the Git, CI and Sandboxes fixes were re-applied onto it) |
 | Server | `go build ./cmd/grain` (Go 1.26.10) → `grain demo -addr 127.0.0.1:0 -open=false -access-code-file …` over the demo's own throwaway SQLite store; from the Capabilities step on also `-secrets-store` |
 | Frontend | `make frontend` (classic `ui/` and Angular `ui-ng/` built into `pkg/ui/static*`, embedded in the binary) |
 | Browser | Playwright Chromium headless (`/var/cache/playwright/chromium-1234`), 1400×1000 for the walk, 1440×900 and 390×844 for layout checks |
@@ -230,7 +230,8 @@ audience, Platform, Purpose, Listed in hub directory, the
   out-of-range probes).
 - Destructive actions: host revoke/delete, delete revoked, code revoke,
   pending reject and (now) Git Remove all ask first. Capability server
-  Remove does not ask.
+  Remove did not ask; it now opens "Remove capability server?" (Cancel
+  keeps the server, Remove deletes it and it stays gone after reload).
 - Keyboard: the backend picker opens with ArrowDown on the focused
   button and lists the disabled options in order (`aria-disabled="true"`);
   choosing one (a forced click in the walk; `choose()` returns early for
@@ -261,6 +262,25 @@ error, `#capability-policy` and `/settings/secrets` deep links; no
 - `npx vitest run` in `ui-ng/`: 376 passed. `eslint src` and
   `prettier --check .`: clean.
 - Classic `ui/` was not changed.
+
+## Merge with `main` (second run)
+
+`main` gained #1489 (settings layout, Git connection scope, form
+autofill isolation) while this branch waited, and the branch conflicted
+in `settings-code.component.ts` and `settings-compute.component.ts`.
+Both files were taken from `main` and this branch's fixes re-applied on
+top: Git host kind / known hosts / string App IDs / Remove confirmation /
+check error banner (alongside `main`'s new Scope field and unreachable-repo
+report), the CI default placeholders, the Sandboxes vocabulary and
+default placeholders, and the host wording. The regression spec, vitest
+(414 tests, all pass) and the full ui-ng Playwright suite (63 tests,
+all pass) were run again on the merged tree.
+
+The path-trigger review (task 5522) reported findings on the first
+version, but this run could not read them: the task holds no
+`api:tasks:read` grant and the pull request carries no review threads.
+They are not addressed by name here; the re-review on this push should
+say whether they still apply.
 
 ## Follow-ups proposed
 

@@ -2173,6 +2173,10 @@ func (s *Server) handleAddTargetRepo(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
+	if req.CloneURL != "" && (!strings.HasPrefix(req.CloneURL, "http://") && !strings.HasPrefix(req.CloneURL, "https://") && !strings.HasPrefix(req.CloneURL, "git://") && !strings.HasPrefix(req.CloneURL, "ssh://") && !strings.Contains(req.CloneURL, "@")) {
+		writeError(w, http.StatusBadRequest, errors.New("invalid cloneUrl format"))
+		return
+	}
 	if req.Team != "" {
 		teamID = req.Team
 	}

@@ -16,12 +16,14 @@ import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   type OnInit,
   ViewEncapsulation,
   computed,
   inject,
   signal,
 } from "@angular/core";
+import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
@@ -65,7 +67,7 @@ import {
 
 const TABS: readonly { id: FleetTab; label: string }[] = [
   { id: "sandboxes", label: "Sandboxes" },
-  { id: "hostds", label: "Host Daemons (hostds)" },
+  { id: "hostds", label: "Hosts" },
   { id: "controls", label: "Pauses & Controls" },
   { id: "logs", label: "Daemon Logs" },
 ];
@@ -771,7 +773,7 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
             <article class="ops-card" data-testid="fleet-hostds">
               <div class="ops-card-head">
                 <div>
-                  <h2 class="ops-card-title">Host Daemons (grain-agentd)</h2>
+                  <h2 class="ops-card-title">Hosts</h2>
                   <p class="ops-card-sub">
                     Co-located and remote token-landing hosts executing CLI
                     turns and host capabilities
@@ -1343,7 +1345,7 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                       [gTip]="
                         canRestartDaemon()
                           ? 'Restart the grain daemon service (asks confirmation first)'
-                          : access.deniedReason('POST /api/host/restart')
+                          : restartDeniedReason()
                       "
                       (click)="confirmRestartDaemon()"
                     >
@@ -1472,16 +1474,28 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                       }
                     </div>
 
-                    <input
-                      type="search"
-                      class="ops-input"
-                      style="flex: 1 1 200px"
-                      placeholder="Filter log lines…"
-                      aria-label="Filter log lines"
-                      data-testid="logs-search-input"
-                      [value]="logQuery()"
-                      (input)="logQuery.set($any($event.target).value)"
-                    />
+                    <form
+                      role="search"
+                      autocomplete="off"
+                      style="display: contents"
+                      (submit)="$event.preventDefault()"
+                    >
+                      <input
+                        type="search"
+                        name="grain-logs-filter"
+                        autocomplete="off"
+                        spellcheck="false"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
+                        class="ops-input"
+                        style="flex: 1 1 200px"
+                        placeholder="Filter log lines…"
+                        aria-label="Filter log lines"
+                        data-testid="logs-search-input"
+                        [value]="logQuery()"
+                        (input)="logQuery.set($any($event.target).value)"
+                      />
+                    </form>
                   </div>
 
                   <pre
@@ -1519,6 +1533,7 @@ export class FleetPageComponent implements OnInit {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly doc = inject(DOCUMENT);
+  private readonly destroyRef = inject(DestroyRef);
 
   protected readonly Math = Math;
   protected readonly tabs = TABS;
@@ -1593,10 +1608,21 @@ export class FleetPageComponent implements OnInit {
       this.access.can("GET /api/persistent-sandboxes") &&
       !this.isScopeRepoLimited("sandboxes:read"),
   );
+  // Whether this deployment can restart grain at all (/api/config's
+  // restartEnabled): a daemon started without a restart command answers
+  // POST /api/host/restart with 404, so the button says so up front
+  // rather than letting the request be made and refused.
+  protected readonly restartEnabled = signal(true);
   protected readonly canRestartDaemon = computed(
     () =>
+      this.restartEnabled() &&
       this.access.can("POST /api/host/restart") &&
       !this.isScopeRepoLimited("deployment:restart"),
+  );
+  protected readonly restartDeniedReason = computed(() =>
+    this.restartEnabled()
+      ? this.access.deniedReason("POST /api/host/restart")
+      : "Restarting grain is not enabled for this deployment.",
   );
   protected readonly canRecreateTaskSandbox = computed(() =>
     this.access.can("POST /api/tasks/{id}/sandbox/recreate"),
@@ -1748,15 +1774,25 @@ export class FleetPageComponent implements OnInit {
   });
 
   ngOnInit(): void {
-    const t = this.route.snapshot.queryParamMap.get("tab");
-    if (
-      t === "sandboxes" ||
-      t === "hostds" ||
-      t === "controls" ||
-      t === "logs"
-    ) {
-      this.tab.set(t);
-    }
+    // The tab follows ?tab= for as long as the page is open, not just on
+    // the first render: each tab is a history entry (pickTab), so Back and
+    // Forward move between tabs and have to be able to switch them.
+    this.route.queryParamMap
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe((params) => {
+        const t = params.get("tab");
+        const next: FleetTab =
+          t === "hostds" || t === "controls" || t === "logs" ? t : "sandboxes";
+        if (next === this.tab()) return;
+        this.tab.set(next);
+        if (
+          next === "logs" &&
+          this.selectedLogSource() &&
+          !this.logLines().length
+        ) {
+          void this.loadLogLines();
+        }
+      });
     void this.bootstrap();
   }
 
@@ -1772,6 +1808,7 @@ export class FleetPageComponent implements OnInit {
       if (cfg) {
         this.access.setConfig(cfg);
         this.hostSandboxes.set(Boolean(cfg["hostSandboxes"]));
+        this.restartEnabled.set(cfg["restartEnabled"] !== false);
       }
     } catch {
       // Non-fatal.
@@ -1913,7 +1950,6 @@ export class FleetPageComponent implements OnInit {
       relativeTo: this.route,
       queryParams: { tab: t === "sandboxes" ? null : t },
       queryParamsHandling: "merge",
-      replaceUrl: true,
     });
     if (t === "logs" && this.selectedLogSource() && !this.logLines().length) {
       void this.loadLogLines();
@@ -2231,8 +2267,15 @@ export class FleetPageComponent implements OnInit {
         this.watchRestarting.set(true);
         try {
           await this.api.post("POST /api/host/restart", undefined, {});
-        } catch {
-          // A dropped connection is expected while the daemon restarts.
+        } catch (err) {
+          // A dropped connection (status 0) is expected while the daemon
+          // restarts; an answer is the daemon refusing, and nothing is
+          // restarting.
+          if ((err as { status?: number })?.status !== 0) {
+            this.watchRestarting.set(false);
+            this.snackbar.show(`Restart failed: ${errorText(err)}`);
+            return;
+          }
         }
         this.snackbar.show(
           "Restart requested. Waiting for grain to come back…",
