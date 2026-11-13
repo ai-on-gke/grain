@@ -381,7 +381,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// (model.SuspendRequested, recorded as parked), which no failure
 	// streak counts and which the next attempt's prompt reads to say what
 	// it waited on (parkedResumeSection).
-	if susp, ok, err := requestedSuspension(ctx, store, task.ID, result); err != nil {
+	if susp, ok, err := requestedSuspension(ctx, store, task, result); err != nil {
 		return err
 	} else if ok {
 		susp.RunID, susp.CreatedAt = runID, now
@@ -435,7 +435,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if !staleBranch && !inPlace {
 		pushedCommit := true
 		if preRunBranchSHA != "" && client != nil && task.Target != nil {
-			if head, herr := client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName()); herr == nil && head != nil {
+			if head, herr := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName()); herr == nil && head != nil {
 				pushedCommit = head.SHA != preRunBranchSHA
 			}
 		}
@@ -600,6 +600,23 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// worse -- it would hold that change's own merge until
 	// defaultReviewTaskDeadline ran out and the queue announced that the
 	// review had never finished, which by then would be untrue.
+	//
+	// A report-only sub-task another task filed closes instead
+	// (model.ClosesOnAnswer): its dependents are waiting on a close, and
+	// its note is its parent's to read.
+	if hasComment && findings == 0 && !pushedInPlace && model.ClosesOnAnswer(task) {
+		// Read again rather than trusting the snapshot taken at dispatch:
+		// a changelist the run uploaded is linked to the stored task while
+		// the run is live (ui.Client's changelist link), and a task with a
+		// change linked is not a report to close (model.AwaitsAck).
+		fresh, err := store.GetTask(ctx, task.ID)
+		if err != nil {
+			return fmt.Errorf("orchestrator: re-reading %s before closing it on its answer: %w", task.ID, err)
+		}
+		if fresh != nil && model.ClosesOnAnswer(*fresh) {
+			return finishAnswered(ctx, store, *fresh, now)
+		}
+	}
 	if hasComment || findings > 0 || pushedInPlace {
 		return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
 			o.CompletedAt = &now
@@ -741,6 +758,31 @@ func finishNothingNeeded(ctx context.Context, store *model.Store, task model.Tas
 	return nil
 }
 
+// finishAnswered closes a report-only sub-task (model.ClosesOnAnswer)
+// whose run ended on a closing note alone: no pull request, no question,
+// no park. The note is already in the task's conversation; the close is
+// what lets a task that depends on it dispatch (the task_blocked view
+// counts a blocker until it closes), and a pointer on the parent's own
+// thread is where a person reading the parent finds it.
+func finishAnswered(ctx context.Context, store *model.Store, task model.Task, now time.Time) error {
+	if err := closeTask(ctx, store, task.ID, now, "the report-only task answered", func(o *model.Observation) {
+		o.CompletedAt = &now
+		o.ClosedAt = &now
+		o.RetryRequestedAt = nil
+	}); err != nil {
+		return err
+	}
+	if err := noteOnTask(ctx, store, task.ID, model.AnsweredClosedNote, now); err != nil {
+		return err
+	}
+	parent := task.Proposer.TaskID
+	if p, err := store.GetTask(ctx, parent); err != nil || p == nil {
+		return err
+	}
+	return noteOnTask(ctx, store, parent, fmt.Sprintf("[Task %s](/tasks/%s) %q, which this task filed, "+
+		"answered and closed itself; its closing note is on that task.", task.ID, task.ID, task.Title), now)
+}
+
 // branchUnmovedSinceWithStore is whether task's branch is still at sha, the
 // head it had when the run was dispatched -- that is, whether the run pushed
 // nothing to it -- with no pull request open off it. An empty sha is a
@@ -755,7 +797,7 @@ func branchUnmovedSinceWithStore(ctx context.Context, store *model.Store, client
 	if sha == "" || client == nil || task.Target == nil {
 		return false, nil
 	}
-	head, err := client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName())
+	head, err := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName())
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: reading %s's branch head: %w", task.ID, err)
 	}
@@ -763,7 +805,7 @@ func branchUnmovedSinceWithStore(ctx context.Context, store *model.Store, client
 		return false, nil
 	}
 	prRepo, headRef, _ := taskPullRequestTarget(ctx, store, task)
-	pr, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef)
+	pr, err := client.FindOpenPullRequestForBranch(prRepo.StoredOwner(), prRepo.Name, headRef)
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: looking for a pull request open off %s's branch: %w", task.ID, err)
 	}
@@ -1014,7 +1056,7 @@ func targetBranchExists(client github.Client, target model.RepoRef, branch strin
 			return exists, err
 		}
 	}
-	return branchExistsSettled(client, target.Owner, target.Name, branch)
+	return branchExistsSettled(client, target.StoredOwner(), target.Name, branch)
 }
 
 // branchExistsSettled re-checks a "no such branch" answer before acting
@@ -1869,6 +1911,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		body += model.OriginKeptNote(namedOrigin, target, &task)
 
 		var interactive bool
+		// The template's sandbox shape (model.Template.Sandbox), filled
+		// into each dimension the proposal leaves unstated below.
+		var tmplSandbox model.SandboxShape
 		if tmplID != "" {
 			tmpl, err := store.GetTemplate(ctx, tmplID)
 			if err != nil {
@@ -1898,6 +1943,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					priority = comp.Priority
 				}
 				interactive = comp.Interactive
+				tmplSandbox = comp.Sandbox
 				if !keepRunningSet {
 					keepRunning = comp.KeepRunning
 				}
@@ -2095,6 +2141,18 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if v, ok := p["sandbox_disk_gb"]; ok {
 			diskGB, _ = argInt(v)
 		}
+		// A dimension the proposal states keeps its value and the
+		// template fills the rest, one at a time, as ui.Client.fromTemplate
+		// does for a filing through the API.
+		if cpus == 0 {
+			cpus = tmplSandbox.CPUs
+		}
+		if memoryMB == 0 {
+			memoryMB = tmplSandbox.MemoryMB
+		}
+		if diskGB == 0 {
+			diskGB = tmplSandbox.DiskGB
+		}
 		// A proposal chooses a model (model.Task.Model) and, separately, may
 		// pin a connection; the store's own migration and dispatch read a
 		// pin naming no connection as the model choice it used to be.
@@ -2148,6 +2206,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			return fmt.Errorf("orchestrator: resolving review template for proposed task %q: %w", title, err)
 		}
 		body += reviewTemplateNote
+		// The release this proposal is filed against (model.LinkFoundIn).
+		// A value that is no release version is dropped with a note
+		// rather than refusing the proposal, the way network_access is.
+		statedFoundIn, _ := p["found_in"].(string)
+		foundIn, foundInErr := model.NormalizeFoundIn(statedFoundIn)
+		if foundInErr != nil {
+			body += fmt.Sprintf("\n\n_grain could not record the release this proposal is found in (%q): want a tag such as v2.5.0 or v2.5.0-rc.2._", strings.TrimSpace(statedFoundIn))
+		}
 		proposal := model.Task{
 			ID:     id,
 			Intent: model.IntentImplement,
@@ -2192,6 +2258,8 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			CreatedAt:        &now,
 			OrderKey:         orderKey,
 		}
+		model.SetFoundIn(&proposal, foundIn)
+		model.ApplyDerivedFoundIn(&proposal)
 		// The proposing task's root requester's work, as ui.CreateTask
 		// records the identical call filed live.
 		model.InheritRequester(&proposal, task)
@@ -3296,7 +3364,7 @@ func proposalDefaultBranches(client github.Client) func(model.RepoRef) string {
 		if def, ok := known[key]; ok {
 			return def
 		}
-		def, err := client.DefaultBranch(repo.Owner, repo.Name)
+		def, err := client.DefaultBranch(repo.StoredOwner(), repo.Name)
 		if err != nil {
 			log.Printf("orchestrator: reading %s's default branch to judge a proposal's base: %v "+
 				"-- comparing bases as written", repo, err)
@@ -3710,7 +3778,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 
 	branch := task.BranchName()
 	prRepo, headRef, crossRepo := taskPullRequestTarget(ctx, store, task)
-	if existing, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef); err != nil {
+	if existing, err := client.FindOpenPullRequestForBranch(prRepo.StoredOwner(), prRepo.Name, headRef); err != nil {
 		return github.PullRequest{}, landedWork{}, err
 	} else if existing != nil {
 		refreshPullRequest(ctx, store, client, task, existing.Number)
@@ -3743,7 +3811,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 
 	if !crossRepo && task.Target != nil {
 		if behind, err := branchIsBehind(client, *task.Target, base, branch); err == nil && behind {
-			_, mergeErr := client.MergeBranch(task.Target.Owner, task.Target.Name, branch, base, fmt.Sprintf("Merge %s into %s", base, branch))
+			_, mergeErr := client.MergeBranch(task.Target.StoredOwner(), task.Target.Name, branch, base, fmt.Sprintf("Merge %s into %s", base, branch))
 			if mergeErr != nil {
 				if github.IsMergeConflict(mergeErr) {
 					files := github.ConflictFiles(mergeErr)
@@ -3795,7 +3863,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 	if landed.partial() {
 		body = landed.partialSentence() + "\n\n" + body
 	}
-	pr, err := client.CreatePullRequest(prRepo.Owner, prRepo.Name, headRef, base, title, body)
+	pr, err := client.CreatePullRequest(prRepo.StoredOwner(), prRepo.Name, headRef, base, title, body)
 	if err != nil && github.IsNoCommitsBetween(err) {
 		// The same condition, learnt from GitHub instead of from the
 		// compare: the read above failed, or the branch moved between the
@@ -3869,7 +3937,7 @@ func conflictError(err error) (*mergeConflictError, bool) {
 // branchIsBehind reports whether head is behind base on repo -- that is,
 // whether base carries commits that head does not yet contain.
 func branchIsBehind(client github.Client, repo model.RepoRef, base, head string) (bool, error) {
-	comp, err := client.CompareRefs(repo.Owner, repo.Name, base, head)
+	comp, err := client.CompareRefs(repo.StoredOwner(), repo.Name, base, head)
 	if err != nil {
 		if notFound(err) {
 			return false, nil
@@ -3923,7 +3991,7 @@ func branchIsBehind(client github.Client, repo model.RepoRef, base, head string)
 func pullRequestBase(ctx context.Context, store *model.Store, client github.Client, task model.Task) (base, retargetedFrom string, err error) {
 	prRepo, _, _ := taskPullRequestTarget(ctx, store, task)
 	if task.Base != "" {
-		exists, err := client.BranchExists(prRepo.Owner, prRepo.Name, task.Base)
+		exists, err := client.BranchExists(prRepo.StoredOwner(), prRepo.Name, task.Base)
 		if err != nil {
 			return "", "", fmt.Errorf("orchestrator: checking %s's base branch %q: %w", task.ID, task.Base, err)
 		}
@@ -3932,13 +4000,13 @@ func pullRequestBase(ctx context.Context, store *model.Store, client github.Clie
 		}
 		if store != nil {
 			if targetBase, _, merged, err := store.MergedUpstreamTaskBase(ctx, *task.Target, task.Base); err == nil && merged && targetBase != "" && targetBase != task.Base && targetBase != task.BranchName() {
-				if targetExists, err := client.BranchExists(prRepo.Owner, prRepo.Name, targetBase); err == nil && targetExists {
+				if targetExists, err := client.BranchExists(prRepo.StoredOwner(), prRepo.Name, targetBase); err == nil && targetExists {
 					return targetBase, task.Base, nil
 				}
 			}
 		}
 	}
-	def, err := client.DefaultBranch(prRepo.Owner, prRepo.Name)
+	def, err := client.DefaultBranch(prRepo.StoredOwner(), prRepo.Name)
 	if err != nil {
 		return "", "", err
 	}
@@ -3967,23 +4035,23 @@ func seedEmptyRepoBase(ctx context.Context, store *model.Store, client github.Cl
 	if targetBase == "" || targetBase == branch {
 		targetBase = "main"
 	}
-	head, err := client.GetBranchHead(task.Target.Owner, task.Target.Name, branch)
+	head, err := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, branch)
 	if err != nil {
 		return github.PullRequest{}, landedWork{}, fmt.Errorf("reading %s's tip on %s: %w", branch, task.Target, err)
 	}
 	if head == nil || head.SHA == "" {
 		return github.PullRequest{}, landedWork{}, fmt.Errorf("branch %q on %s has no head commit", branch, task.Target)
 	}
-	exists, err := client.BranchExists(task.Target.Owner, task.Target.Name, targetBase)
+	exists, err := client.BranchExists(task.Target.StoredOwner(), task.Target.Name, targetBase)
 	if err != nil {
 		return github.PullRequest{}, landedWork{}, fmt.Errorf("checking %q on %s: %w", targetBase, task.Target, err)
 	}
 	if !exists {
-		if err := client.CreateBranch(task.Target.Owner, task.Target.Name, targetBase, head.SHA); err != nil {
+		if err := client.CreateBranch(task.Target.StoredOwner(), task.Target.Name, targetBase, head.SHA); err != nil {
 			return github.PullRequest{}, landedWork{}, fmt.Errorf("initializing %q on empty repository %s: %w", targetBase, task.Target, err)
 		}
 	}
-	if err := client.SetDefaultBranch(task.Target.Owner, task.Target.Name, targetBase); err != nil {
+	if err := client.SetDefaultBranch(task.Target.StoredOwner(), task.Target.Name, targetBase); err != nil {
 		return github.PullRequest{}, landedWork{}, fmt.Errorf("setting default branch of %s to %q: %w", task.Target, targetBase, err)
 	}
 	if store != nil {
@@ -4096,11 +4164,11 @@ func retargetTaskBase(ctx context.Context, store *model.Store, client github.Cli
 	}
 	if prBaseRef == "" && client != nil {
 		if pr := model.TaskPullRequest(task); pr != nil && (pr.Repo.Same(*task.Target) || pr.Repo.Same(prRepo)) {
-			if detail, err := client.GetPullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number); err == nil {
+			if detail, err := client.GetPullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number); err == nil {
 				prBaseRef = detail.BaseRef
 			}
-		} else if existing, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef); err == nil && existing != nil {
-			if detail, err := client.GetPullRequest(prRepo.Owner, prRepo.Name, existing.Number); err == nil {
+		} else if existing, err := client.FindOpenPullRequestForBranch(prRepo.StoredOwner(), prRepo.Name, headRef); err == nil && existing != nil {
+			if detail, err := client.GetPullRequest(prRepo.StoredOwner(), prRepo.Name, existing.Number); err == nil {
 				prBaseRef = detail.BaseRef
 			}
 		}
@@ -4110,12 +4178,12 @@ func retargetTaskBase(ctx context.Context, store *model.Store, client github.Cli
 		if prBaseRef != "" && prBaseRef != oldBase {
 			newBase = prBaseRef
 		} else if newBase == "" && client != nil {
-			if def, err := client.DefaultBranch(prRepo.Owner, prRepo.Name); err == nil && def != "" && def != task.BranchName() {
+			if def, err := client.DefaultBranch(prRepo.StoredOwner(), prRepo.Name); err == nil && def != "" && def != task.BranchName() {
 				newBase = def
 			}
 		}
 	} else if prBaseRef != "" && prBaseRef != oldBase && client != nil {
-		if exists, err := client.BranchExists(prRepo.Owner, prRepo.Name, oldBase); err == nil && !exists {
+		if exists, err := client.BranchExists(prRepo.StoredOwner(), prRepo.Name, oldBase); err == nil && !exists {
 			merged = true
 			newBase = prBaseRef
 		}
@@ -4248,8 +4316,13 @@ func emptyBranchDetail(empty *noCommitsError) string {
 // call replaces what an earlier one asked for. Its detail keeps the
 // words a park always had (model.ParkedDetail, ParkedUntilDetail), which
 // the next prompt reads back, for the two forms that are parks.
-func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
+//
+// task is the task as the run was dispatched with it, before any park it
+// made: parkLinks checks the run's word on which links its parks wrote
+// against the links that were already there.
+func requestedSuspension(ctx context.Context, store *model.Store, task model.Task,
 	result *agent.Result) (model.Suspension, bool, error) {
+	taskID := task.ID
 	susp := model.Suspension{Kind: model.SuspendRequested}
 	targets, err := parkedOn(ctx, store, taskID, result)
 	if err != nil {
@@ -4261,7 +4334,8 @@ func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
 		if reason = strings.TrimSpace(reason); reason != "" {
 			susp.Detail += ": " + reason
 		}
-		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged || parkedUntilMerged(result)}.JSON()
+		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged || parkedUntilMerged(result),
+			Links: parkLinks(result, targets, task.Links)}.JSON()
 		return susp, true, nil
 	}
 	if until, ok := parkedUntil(result); ok {
@@ -4350,6 +4424,50 @@ func parkedUntilMerged(result *agent.Result) bool {
 		merged = mcp.WaitForTaskUntilMerged(c.Arguments)
 	}
 	return merged
+}
+
+// parkLinks is the targets, of those a run parked on, whose depends-on
+// links its parks wrote rather than found already declared
+// (model.ResumeOn.Links), as each park's result says the daemon took it
+// (mcp.ResumeLaterTaken). A run may park more than once, and only the
+// first park on a target writes its link, so these are gathered over
+// every park the run made.
+//
+// The tool results are the run's own transcript, so they are not taken
+// on their word: the resumption deletes every link named here, and a
+// result that named one the task already had before the run (before)
+// would strip a declared dependency. Those are dropped, whatever the
+// result says.
+func parkLinks(result *agent.Result, targets []string, before []model.Link) []string {
+	if result == nil {
+		return nil
+	}
+	var links []string
+	for _, c := range result.ToolCalls {
+		if c.IsError || (c.Name != "resume_later" && c.Name != "wait_for_task") {
+			continue
+		}
+		taken, ok := mcp.ResumeLaterTaken(c.Text)
+		if !ok {
+			continue
+		}
+		for _, id := range taken.Links {
+			if slices.Contains(targets, id) && !slices.Contains(links, id) && !dependsOnBefore(before, id) {
+				links = append(links, id)
+			}
+		}
+	}
+	return links
+}
+
+// dependsOnBefore reports whether links has a depends-on link to id.
+func dependsOnBefore(links []model.Link, id string) bool {
+	for _, l := range links {
+		if l.Kind == model.LinkDependsOn && l.Target == id {
+			return true
+		}
+	}
+	return false
 }
 
 // parkedOn is the tasks a run parked its task on through wait_for_task,
@@ -4524,18 +4642,18 @@ func resolveContextCommitSHA(reach *gitproxy.Reach, client github.Client, repo m
 		ResolveCommitSHA(owner, repo, ref string) (string, error)
 	}
 	if r, ok := client.(shaResolver); ok {
-		if sha, err := r.ResolveCommitSHA(repo.Owner, repo.Name, ref); err == nil && model.IsFullCommitSHA(sha) {
+		if sha, err := r.ResolveCommitSHA(repo.StoredOwner(), repo.Name, ref); err == nil && model.IsFullCommitSHA(sha) {
 			return strings.ToLower(sha), nil
 		}
 	}
 	if client != nil {
 		lookup := ref
 		if lookup == "HEAD" {
-			if def, err := client.DefaultBranch(repo.Owner, repo.Name); err == nil && def != "" {
+			if def, err := client.DefaultBranch(repo.StoredOwner(), repo.Name); err == nil && def != "" {
 				lookup = def
 			}
 		}
-		if head, err := client.GetBranchHead(repo.Owner, repo.Name, lookup); err == nil && head != nil && model.IsFullCommitSHA(head.SHA) {
+		if head, err := client.GetBranchHead(repo.StoredOwner(), repo.Name, lookup); err == nil && head != nil && model.IsFullCommitSHA(head.SHA) {
 			return strings.ToLower(head.SHA), nil
 		}
 	}

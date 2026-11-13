@@ -101,13 +101,13 @@ func carryClearance(ctx context.Context, store *model.Store, client github.Clien
 	}
 	base := current.Base
 	if base == "" {
-		detail, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil || detail.BaseRef == "" {
 			return carriedClearance{}, false
 		}
 		base = detail.BaseRef
 	}
-	diff, err := differ.CompareDiff(ref.Repo.Owner, ref.Repo.Name, base, headSHA)
+	diff, err := differ.CompareDiff(ref.Repo.StoredOwner(), ref.Repo.Name, base, headSHA)
 	if err != nil {
 		log.Printf("orchestrator: reading %s's diff at %s to compare with what was cleared: %v", ref, shortSHA(headSHA), err)
 		return carriedClearance{}, false
@@ -128,7 +128,7 @@ func carryClearance(ctx context.Context, store *model.Store, client github.Clien
 	if !hasRecorded || recordedVersion != version || recordedSHA == "" || recordedSHA == headSHA || hasBrokenRulesHold(current) {
 		return carriedClearance{}, false
 	}
-	before, err := differ.CompareDiff(ref.Repo.Owner, ref.Repo.Name, base, recordedSHA)
+	before, err := differ.CompareDiff(ref.Repo.StoredOwner(), ref.Repo.Name, base, recordedSHA)
 	if err != nil {
 		log.Printf("orchestrator: reading %s's diff at its cleared head %s: %v", ref, shortSHA(recordedSHA), err)
 		return carriedClearance{}, false
@@ -193,14 +193,14 @@ func inheritedClearance(ctx context.Context, store *model.Store, client github.C
 	}
 	// The pull request's own diff is of its last head, so it is only the
 	// cleared diff if that head is the cleared one.
-	detail, err := client.GetPullRequest(sourcePR.Repo.Owner, sourcePR.Repo.Name, sourcePR.Number)
+	detail, err := client.GetPullRequest(sourcePR.Repo.StoredOwner(), sourcePR.Repo.Name, sourcePR.Number)
 	if err != nil || detail.HeadSHA != sourceSHA {
 		if err != nil {
 			log.Printf("orchestrator: reading %s, the source of port %s: %v", sourcePR, current.ID, err)
 		}
 		return carriedClearance{}, false
 	}
-	diff, err := differ.PullRequestDiff(sourcePR.Repo.Owner, sourcePR.Repo.Name, sourcePR.Number)
+	diff, err := differ.PullRequestDiff(sourcePR.Repo.StoredOwner(), sourcePR.Repo.Name, sourcePR.Number)
 	if err != nil {
 		log.Printf("orchestrator: reading %s's diff, the source of port %s: %v", sourcePR, current.ID, err)
 		return carriedClearance{}, false
@@ -282,16 +282,16 @@ func reviewFixClearance(ctx context.Context, store *model.Store, client github.C
 	}
 	pushed, landed, ok := reviewOutcome(*review, obs)
 	if pushed && !landed && !ok && obs != nil && obs.CompletedAt != nil {
-		if detail, err := client.GetPullRequest(reviewPR.Repo.Owner, reviewPR.Repo.Name, reviewPR.Number); err == nil && detail.Merged {
+		if detail, err := client.GetPullRequest(reviewPR.Repo.StoredOwner(), reviewPR.Repo.Name, reviewPR.Number); err == nil && detail.Merged {
 			landed, ok = true, true
 		}
 	}
 	if !pushed || !landed || !ok {
 		return false
 	}
-	reviewDiff, err := differ.PullRequestDiff(reviewPR.Repo.Owner, reviewPR.Repo.Name, reviewPR.Number)
+	reviewDiff, err := differ.PullRequestDiff(reviewPR.Repo.StoredOwner(), reviewPR.Repo.Name, reviewPR.Number)
 	if err != nil || strings.TrimSpace(reviewDiff) == "" {
-		reviewDiff, err = differ.CompareDiff(ref.Repo.Owner, ref.Repo.Name, recordedSHA, review.BranchName())
+		reviewDiff, err = differ.CompareDiff(ref.Repo.StoredOwner(), ref.Repo.Name, recordedSHA, review.BranchName())
 		if err != nil {
 			return false
 		}
@@ -300,7 +300,7 @@ func reviewFixClearance(ctx context.Context, store *model.Store, client github.C
 	if !ok || len(reviewPatches) == 0 {
 		return false
 	}
-	deltaDiff, err := differ.CompareDiff(ref.Repo.Owner, ref.Repo.Name, recordedSHA, headSHA)
+	deltaDiff, err := differ.CompareDiff(ref.Repo.StoredOwner(), ref.Repo.Name, recordedSHA, headSHA)
 	if err != nil {
 		return false
 	}
@@ -549,7 +549,7 @@ func keepClearance(ctx context.Context, store *model.Store, client github.Client
 	}
 	if client != nil {
 		prBody := fmt.Sprintf("**grain security review** (task %s)\n\n%s", current.ID, body)
-		if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, prBody); err != nil {
+		if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, prBody); err != nil {
 			log.Printf("orchestrator: noting %s's inherited clearance on %s: %v -- it is on the task only", current.ID, ref, err)
 		}
 	}

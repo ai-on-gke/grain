@@ -182,6 +182,10 @@ const (
 	// shapeSkills is a JSON-encoded model.SkillsConfig column, written as
 	// a mapping {enabled, folders} when canonical and verbatim otherwise.
 	shapeSkills
+	// shapeSandbox is a JSON-encoded model.SandboxShape column, written as
+	// the mapping {cpus, memory-mb, disk-gb} a declaration writes when it
+	// reads back as itself, and verbatim otherwise.
+	shapeSandbox
 )
 
 // declFieldShape is one field of a document.
@@ -276,6 +280,9 @@ func shapeOf(f declschema.Field, key string) (shape, error) {
 		}
 		if key == "skills" {
 			return shapeSkills, nil
+		}
+		if key == "sandbox" {
+			return shapeSandbox, nil
 		}
 		return shapeScalar, nil
 	case len(f.Columns) == 2 && f.Columns[0] == "target_owner":
@@ -809,7 +816,7 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 // column. Only a one-column field can be missing that way: the cadence,
 // target and change target are older than any schema this build migrates.
 func hasColumn(f declFieldShape, row map[string]any) bool {
-	if f.shape != shapeBool && f.shape != shapeScalar && f.shape != shapeSkills {
+	if f.shape != shapeBool && f.shape != shapeScalar && f.shape != shapeSkills && f.shape != shapeSandbox {
 		return true
 	}
 	_, ok := row[f.columns[0]]
@@ -893,6 +900,26 @@ func columnNode(f declFieldShape, row map[string]any) (string, *yaml.Node, error
 			return f.key, out, nil
 		}
 		return f.key, valueNode(v), nil
+	case shapeSandbox:
+		v := row[f.columns[0]]
+		text, ok := textOf(v)
+		if !ok || text == "" {
+			return f.key, valueNode(v), nil
+		}
+		sb := model.DecodeSandboxShape(text)
+		if sb.IsZero() || model.EncodeSandboxShape(sb) != text {
+			return f.key, valueNode(v), nil
+		}
+		out := &yaml.Node{Kind: yaml.MappingNode, Style: yaml.FlowStyle}
+		for _, d := range []struct {
+			name string
+			v    int
+		}{{"cpus", sb.CPUs}, {"memory-mb", sb.MemoryMB}, {"disk-gb", sb.DiskGB}} {
+			if d.v > 0 {
+				out.Content = append(out.Content, key(d.name), &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(d.v)})
+			}
+		}
+		return f.key, out, nil
 	default:
 		return f.key, valueNode(row[f.columns[0]]), nil
 	}
@@ -1321,6 +1348,49 @@ func decodeIntoRow(path, id string, f declFieldShape, node *yaml.Node, row map[s
 		v, err := nodeValue(node)
 		if err != nil {
 			return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
+		}
+		row[f.columns[0]] = v
+		return nil
+	case shapeSandbox:
+		if node.Kind == yaml.MappingNode && !isBase64Mapping(node) {
+			// A key the mapping does not know (`disk_gb`, `memoryMb`) is
+			// refused by name rather than dropped, which would import the
+			// template at the deployment's default without a word.
+			for i := 0; i+1 < len(node.Content); i += 2 {
+				switch k := node.Content[i].Value; k {
+				case "cpus", "memory-mb", "disk-gb":
+				default:
+					return fmt.Errorf("staterepo: %s, %s: %s: unknown key %q (want cpus, memory-mb or disk-gb)", path, id, f.key, k)
+				}
+			}
+			var raw struct {
+				CPUs     int `yaml:"cpus"`
+				MemoryMB int `yaml:"memory-mb"`
+				DiskGB   int `yaml:"disk-gb"`
+			}
+			if err := node.Decode(&raw); err != nil {
+				return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
+			}
+			sb := model.SandboxShape{CPUs: raw.CPUs, MemoryMB: raw.MemoryMB, DiskGB: raw.DiskGB}
+			if err := model.ValidateTemplateSandbox(sb); err != nil {
+				return fmt.Errorf("staterepo: %s, %s: %w", path, id, err)
+			}
+			row[f.columns[0]] = model.EncodeSandboxShape(sb)
+			return nil
+		}
+		v, err := nodeValue(node)
+		if err != nil {
+			return fmt.Errorf("staterepo: %s, %s: %s: %w", path, id, f.key, err)
+		}
+		// Column text written verbatim is held to the same ceiling as the
+		// mapping above, so the verbatim spelling is no way around it.
+		if text, ok := textOf(v); ok && strings.TrimSpace(text) != "" {
+			var sb model.SandboxShape
+			if json.Unmarshal([]byte(text), &sb) == nil {
+				if err := model.ValidateTemplateSandbox(sb); err != nil {
+					return fmt.Errorf("staterepo: %s, %s: %w", path, id, err)
+				}
+			}
 		}
 		row[f.columns[0]] = v
 		return nil

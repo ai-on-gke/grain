@@ -12,10 +12,14 @@ prompt-extension: |
 
   ## UI changes
 
-  A change touching `ui/` (components, CSS, layout) is not done until the page has been rendered and looked at. Unit tests and DOM assertions passing is not the same as the page looking right.
-  - Render every affected page in a real browser over `grain demo`, at desktop and phone widths, in light and dark: `make ui-screenshots PAGES=/,/inbox OUT=screenshots/after` (`ui/e2e/screenshot.mjs`; `docs/ui-screenshots.md`). For a fix, take `OUT=screenshots/before` on the base first.
+  grain has two UIs: `ui-ng/` (Angular, served at `/next/`) is the new experience, and the classic `ui/` (React, served at `/`) is being deprecated. Build new UI features in `ui-ng/` only, and change `ui/` only when a feature can't work without it or a page there is broken for users today (then fix the same page in `ui-ng/` too). See "Two UIs" in `PROMPT.md` for the full rule and where things live.
+
+  A change touching `ui/` or `ui-ng/` (components, CSS, layout) is not done until the page has been rendered and looked at. Unit tests and DOM assertions passing is not the same as the page looking right.
+  - For `ui-ng/` (the Angular UI under `/next/`), read `design/design/ui-design-book.design.md` first. It holds the brand, tokens, layout rules, components, testing steps and the review mandate. Follow it, and update it in the same change when you set a new rule.
+  - A `ui-ng/` change also needs `ui-ng/e2e/next-full-system.spec.js` to pass (`make test-e2e-ng`), plus a scenario spec for any interaction you changed. It then gets three independent reviews (Design, Functional, Adversarial) as the book's "review mandate" section describes. Fix every P0/P1 finding before asking for merge.
+  - Render every affected page in a real browser over `grain demo`, at desktop and phone widths, in light and dark: `make ui-screenshots PAGES=/next/inbox,/next/tasks OUT=screenshots/after` (`ui/e2e/screenshot.mjs`; `docs/ui-screenshots.md`). Shoot the `/next/` pages first; add classic paths (`/`, `/inbox`) only when the change touches `ui/`. For a fix, take `OUT=screenshots/before` on the base first.
   - Look at the screenshots, not just their file names. Check alignment, overflow, spacing, and anything floating or wrapping unexpectedly. If your file reader shows a PNG as bytes, add `LOOK=1` to have Gemini describe them, then check what it reports yourself.
-  - Where a layout rule matters, such as a badge centred on its label or an action in the right-hand slot, assert it with bounding boxes in a Playwright spec under `ui/e2e/`.
+  - Where a layout rule matters, such as a badge centred on its label or an action in the right-hand slot, assert it with bounding boxes in a Playwright spec under `ui-ng/e2e/` for `/next/` (`make test-e2e-ng`). Keep the classic specs passing, but don't add classic coverage for new things.
   - Attach `contact-sheet.png` (the after one, and the before one for a fix) to your `comment_on_issue` closing note. grain puts a closing note's images in your pull request's description, so that is how they reach the reviewer. In the commit message, name the pages and widths you shot and what you checked. A UI change without screenshots is not done.
   - If a page cannot be rendered in your sandbox, stop and say so in the closing note. Do not claim the change works.
 

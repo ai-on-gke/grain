@@ -903,8 +903,12 @@ Every caller that turns a template into a task goes through it:
 
 - `orchestrator.fireTaskSchedule` targets the binding over the
   schedule's own Target/Base, and resyncs the schedule's row to it,
-  alongside the Title/Body/AutoMerge/Reads/Grants display cache it
-  already kept there.
+  alongside the Title/Body/AutoMerge/Reads display cache it already
+  kept there. A template-backed schedule's admission, hosting and
+  grants are not part of that cache: they are what the schedule adds to
+  its template (a declared schedule's `admission:`, `hosting:` and
+  `grants:` beside `template:`), merged with the template's at every
+  firing, so the resync leaves them alone.
 - `ui.CreateSchedule`/`UpdateSchedule` apply the same rule at the point
   a schedule is created or attached to a template, so a schedule reads
   as what it will actually fire rather than only after its first firing.
@@ -1504,14 +1508,17 @@ in the same repository and group:
 - **Tag.** A task filed by a grouped schedule set to skip carries
   `ScheduleOverlapGroupTag(repo, group)` --
   `schedule-group:<owner>/<name>:<group>` -- beside its own firing tag,
-  and so does the review a grouped workflow schedule files.
+  and so do the review a grouped workflow schedule files and every task
+  in every pass of a grouped suite schedule's run.
 - **Check.** `Store.OverlapGroupInFlight(sched, repo, now)` walks the
   other schedules in `(repo, group)` (`SchedulesInOverlapGroup`, ordered by
   id) and asks each the question its own overlap check asks: an unfinished
   suite run, an unsettled `ScheduledWorkflowRun` or a review inside its
   hold, or an open task it filed (a standing job's task only while it is
-  running). It then sweeps open tasks carrying the group tag, so a task
-  whose schedule was renamed or withdrawn still holds the group.
+  running). It then sweeps open tasks carrying the group tag (reading a
+  suite task's schedule from `SuiteRun.ScheduleID`) and active suite runs
+  whose tasks carry it, so a task or multi-pass suite run whose schedule
+  was renamed or withdrawn still holds the group across passes.
   `fireTaskSchedule`, `fireSuiteSchedule`, `fireWorkflowSchedule` and the
   `github_workflow_run` trigger ask it after their own check -- the
   schedule's own previous firing is the more useful thing to name when
@@ -1777,13 +1784,14 @@ skipped, so no release candidate was cut that day, and nothing said why.
     task it ties with, so the queue's FIFO order dispatches it first at
     that priority. Dependency links still never raise a blocker
     (task-priorities spec, TP-13). This rule applies only to a schedule's
-    own firing.
-  - A comment from the schedule tells the task why. It is written only
-    when the priority rises.
+    own firing or another schedule's task holding its overlap group.
+  - A comment from the schedule tells the task why, naming the holding
+    schedule and group when held through an overlap group. It is written
+    only when the priority rises.
   - A warning notification `pipeline.schedule-starved:<schedule id>`
-    (`model.FamilyScheduleStarved`) names the schedule, the task and how
-    long it has been held. It is raised once while open, and cleared when
-    the task closes.
+    (`model.FamilyScheduleStarved`) names the schedule, the task (and
+    holding schedule, when in an overlap group) and how long it has been
+    held. It is raised once while open, and cleared when the task closes.
 - **Not done: admission.** A raised priority still waits for a free
   worker. `admission: bypass` would also start the task past a full
   worker pool. It is not applied automatically, because only a person may

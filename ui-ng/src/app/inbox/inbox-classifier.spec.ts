@@ -41,11 +41,14 @@ describe("inbox classifier", () => {
     expect(
       waitsOnUser(task({ state: "awaiting_reply", consoleSession: {} })),
     ).toBe(false);
+    // A running task is never offered Submit, even with an open pull
+    // request and no auto-merge (the classic UI lists it): its agent may
+    // still be pushing to the branch.
     expect(
       waitsOnUser(
         task({ state: "running", pullRequest: { url: "https://x/pr/1" } }),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       waitsOnUser(
         task({
@@ -80,7 +83,7 @@ describe("inbox classifier", () => {
     expect(proposal?.actions[0].route).toBe("POST /api/tasks/{id}/approve");
     expect(proposal?.actions[0].params).toEqual({ id: "9" });
     expect(proposal?.actions[2].confirm).toContain("Decline #9");
-    expect(proposal?.taskLink).toBe("/tasks/9");
+    expect(proposal?.taskLink).toBe("/task/9");
 
     const failed = classifyTask(task({ state: "failed" }));
     expect(failed?.actions.map((a) => a.id)).toEqual(["retry", "close"]);
@@ -104,6 +107,53 @@ describe("inbox classifier", () => {
     expect(base?.groupId).toBe("base-repair");
 
     expect(classifyTask(task({ state: "running" }))).toBeNull();
+  });
+
+  it("keeps an approved awaiting_submit change the merge queue gave up on in the Inbox", () => {
+    // Task 4525: approved, not auto-merge, its repairs spent and the
+    // queue blocked -- no Submit item lists it, so this one has to.
+    const blocked = classifyTask(
+      task({
+        id: "4525",
+        state: "awaiting_submit",
+        humanApprovedBy: "someone@example.com",
+        mergeQueueBlockedAt: "2026-11-12T04:00:00Z",
+        pullRequest: { url: "https://x/pr/1270" },
+      }),
+    );
+    expect(blocked?.groupId).toBe("merge-blocked");
+    expect(blocked?.actions.map((a) => a.id)).toEqual(["retry-merge"]);
+
+    // Approved and not blocked, but a gate other than approval is red.
+    const gated = classifyTask(
+      task({
+        id: "4526",
+        state: "awaiting_submit",
+        humanApprovedBy: "someone@example.com",
+        pullRequest: { url: "https://x/pr/1271" },
+        mergeGates: [
+          { id: "approval", label: "Approval", state: "passed" },
+          { id: "code-review", label: "Code review", state: "needed" },
+        ],
+      } as Partial<Task>),
+    );
+    expect(gated?.groupId).toBe("merge-blocked");
+    expect(gated?.summary).toContain("Code review");
+
+    // Approved with every gate passed: nothing for a person to do.
+    expect(
+      classifyTask(
+        task({
+          state: "awaiting_submit",
+          humanApprovedBy: "someone@example.com",
+          pullRequest: { url: "https://x/pr/1272" },
+          mergeGates: [
+            { id: "approval", label: "Approval", state: "passed" },
+            { id: "ci", label: "CI", state: "passed" },
+          ],
+        } as Partial<Task>),
+      ),
+    ).toBeNull();
   });
 
   it("reads a pending release, its soak, breaking changes and a failed dispatch", () => {
@@ -188,8 +238,9 @@ describe("inbox classifier", () => {
       entries.filter((e) => matchesFilter(e, "unread", seen)),
     ).toHaveLength(3);
     expect(entries.filter((e) => matchesQuery(e, "bump"))).toHaveLength(1);
-    expect(entries.find((e) => e.kind === "host-script")?.summary).toBe(
-      "deploy.sh --prod",
-    );
+    const hs = entries.find((e) => e.kind === "host-script");
+    expect(hs?.summary).toBe("deploy.sh --prod");
+    expect(hs?.taskLink).toBe("/task/2");
+    expect(hs?.externalLink).toBeNull();
   });
 });

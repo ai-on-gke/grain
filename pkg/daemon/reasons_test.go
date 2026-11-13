@@ -28,7 +28,7 @@ func TestReasonClassifierNamesTheLocalPolicyFile(t *testing.T) {
 	const file = "/home/someone/grain_policy.yml"
 	wait := &model.GrantWait{TaskID: "3", Capability: model.PolicyWaitCapability,
 		Resource: "local policy does not allow repository grain/config on this machine"}
-	got := ReasonClassifier{PolicyFile: file}.TaskReason(model.Task{ID: "3"}, model.StateQueued, nil, nil, wait, model.ReplyFacts{})
+	got := ReasonClassifier{PolicyFile: file}.TaskReason(model.Task{ID: "3"}, model.StateQueued, nil, nil, nil, wait, model.ReplyFacts{})
 	if got.Reason != "queued/held_by_local_policy" || got.Control != "" {
 		t.Errorf("TaskReason = %+v, want queued/held_by_local_policy with no control", got)
 	}

@@ -223,23 +223,23 @@ func reconcileCI(ctx context.Context, deps Deps, now time.Time) error {
 			running := !run.Conclusion.Done()
 			if running {
 				if repo, err := model.ParseRepo(run.Repo); err == nil {
-					if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, repo); err == nil && disabled &&
-						!scheduledRunKeepsGrainCI(ctx, deps.Store, repo, run, mode) {
-						if rules, rerr := deps.Store.MergeRulesOf(ctx, repo); rerr == nil && (rules == nil || !rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain()) {
-							reason := cancelReasonForCIMode(mode)
-							deps.CI.Cancel(run.ID, reason, ci.CancelBySystem)
-							if run.RequestedBy != "" {
-								_ = observeField(ctx, deps.Store, run.RequestedBy, now, func(o *model.Observation) {
-									if o.CI == nil || o.CI.RunID != run.ID || o.CI.Done() {
-										return
-									}
-									o.CI.Conclusion = string(ci.ConclusionCancelled)
-									o.CI.FinishedAt = &now
-									o.CI.Detail = "cancelled: " + reason
-									o.CI.CancelledBy = string(ci.CancelBySystem)
-								})
+					if disabled, mode, err := repoExplicitlyDisablesGrainCI(ctx, deps.Store, repo); err == nil && disabled {
+						if reason := scheduledOrRepoCancelReason(ctx, deps.Store, repo, run, mode); reason != "" {
+							if rules, rerr := deps.Store.MergeRulesOf(ctx, repo); rerr == nil && (rules == nil || !rules.Effective(nil, false, model.CIModeGitHub).Mode.Grain()) {
+								deps.CI.Cancel(run.ID, reason, ci.CancelBySystem)
+								if run.RequestedBy != "" {
+									_ = observeField(ctx, deps.Store, run.RequestedBy, now, func(o *model.Observation) {
+										if o.CI == nil || o.CI.RunID != run.ID || o.CI.Done() {
+											return
+										}
+										o.CI.Conclusion = string(ci.ConclusionCancelled)
+										o.CI.FinishedAt = &now
+										o.CI.Detail = "cancelled: " + reason
+										o.CI.CancelledBy = string(ci.CancelBySystem)
+									})
+								}
+								continue
 							}
-							continue
 						}
 					}
 				}
@@ -373,7 +373,7 @@ func reconcileTaskCI(ctx context.Context, deps Deps, task model.Task, now time.T
 		return nil
 	}
 	branch := task.BranchName()
-	head, err := deps.Client.GetBranchHead(task.Target.Owner, task.Target.Name, branch)
+	head, err := deps.Client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, branch)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's head on %s: %w", branch, task.Target, err)
 	}
@@ -457,28 +457,34 @@ func reconcileTaskCI(ctx context.Context, deps Deps, task model.Task, now time.T
 	}
 }
 
-// scheduledRunKeepsGrainCI reports whether run is a scheduled workflow's
-// own `schedule` run on repo (scheduledWorkflowRequester, or an infra
-// re-run of one) whose schedule runs on grain CI under mode
-// (model.Schedule.GrainCI) -- a run the sweep of a ci_mode: github
-// repository must leave alone, since the schedule's own reconciler
-// started it there on purpose.
-func scheduledRunKeepsGrainCI(ctx context.Context, store *model.Store, repo model.RepoRef, run ci.Run, mode model.CIMode) bool {
-	if run.Event != ci.EventSchedule || store == nil {
-		return false
-	}
-	id, ok := strings.CutPrefix(run.RequestedBy, scheduledWorkflowStarter+":")
-	if !ok {
-		return false
-	}
-	if i := strings.LastIndex(id, infraRetrySuffix); i >= 0 {
-		if n, err := strconv.Atoi(id[i+len(infraRetrySuffix):]); err != nil || n <= 0 {
-			return false
+// scheduledOrRepoCancelReason reports why run should be cancelled on repo
+// whose stored CI mode is mode, or "" when run is a scheduled workflow's own
+// `schedule` run (scheduledWorkflowRequester, or an infra re-run of one)
+// whose schedule opts in to grain CI under mode (model.Schedule.GrainCI) --
+// a run the sweep of a ci_mode: github repository must leave alone, since
+// the schedule's own reconciler started it there on purpose. When that
+// schedule has been renamed or withdrawn, the reason says so rather than
+// blaming a repository switch.
+func scheduledOrRepoCancelReason(ctx context.Context, store *model.Store, repo model.RepoRef, run ci.Run, mode model.CIMode) string {
+	if run.Event == ci.EventSchedule && store != nil {
+		if id, ok := strings.CutPrefix(run.RequestedBy, scheduledWorkflowStarter+":"); ok {
+			if i := strings.LastIndex(id, infraRetrySuffix); i >= 0 {
+				if n, err := strconv.Atoi(id[i+len(infraRetrySuffix):]); err == nil && n > 0 {
+					id = id[:i]
+				} else {
+					return cancelReasonForCIMode(mode)
+				}
+			}
+			sched, err := store.GetSchedule(ctx, id)
+			if err == nil && sched != nil && sched.Target.Same(repo) && sched.WorkflowRunsUnder(mode) {
+				return ""
+			}
+			if err == nil && sched == nil && mode != model.CIModeNone {
+				return scheduleGoneCancelReason(id, mode)
+			}
 		}
-		id = id[:i]
 	}
-	sched, err := store.GetSchedule(ctx, id)
-	return err == nil && sched != nil && sched.Target.Same(repo) && sched.WorkflowRunsUnder(mode)
+	return cancelReasonForCIMode(mode)
 }
 
 // repoExplicitlyDisablesGrainCI reports whether repo's stored RepoConfig
@@ -983,7 +989,7 @@ func announceCIRun(ctx context.Context, deps Deps, task model.Task, run ci.Run,
 		return nil
 	}
 	body := ciCommentBody(run, faults, ciFaultFixes(ctx, deps))
-	if _, err := deps.Client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, body); err != nil {
+	if _, err := deps.Client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, body); err != nil {
 		return fmt.Errorf("orchestrator: commenting grain CI's verdict on %s: %w", ref, err)
 	}
 	return nil

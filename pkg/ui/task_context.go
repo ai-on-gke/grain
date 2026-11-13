@@ -107,6 +107,7 @@ func (c *Client) CompactTask(ctx context.Context, id string, by model.Principal,
 		return TaskContextView{}, err
 	}
 	now := c.now()
+	by = c.contextPrincipal(by)
 	label := principalLabel(by)
 	if strings.TrimSpace(req.Handover) == "" {
 		if err := c.Store.RequestCompaction(ctx, id, label, now); err != nil {
@@ -129,7 +130,7 @@ func (c *Client) SetTaskBrief(ctx context.Context, id string, by model.Principal
 	if strings.TrimSpace(req.Reason) == "" {
 		return TaskContextView{}, validationErrorf("say why the brief changed (reason)")
 	}
-	if err := c.Store.SetTaskBrief(ctx, id, req.Brief, principalLabel(by), req.Reason, c.now()); err != nil {
+	if err := c.Store.SetTaskBrief(ctx, id, req.Brief, principalLabel(c.contextPrincipal(by)), req.Reason, c.now()); err != nil {
 		return TaskContextView{}, err
 	}
 	return c.TaskContext(ctx, id)
@@ -158,6 +159,21 @@ func (c *Client) RolloverTask(ctx context.Context, id string) (model.RolloverRes
 		c.Config.Wake()
 	}
 	return result, nil
+}
+
+// contextPrincipal is who a compaction or brief edit is recorded as: by,
+// or -- for a caller the request names no one for, such as the access
+// code -- the deployment's own person, as a comment from the same caller
+// is (requestPersonOrOperator). Otherwise the brief's history says
+// "human" rather than who.
+func (c *Client) contextPrincipal(by model.Principal) model.Principal {
+	if strings.TrimSpace(by.ID) != "" || (by.Kind != "" && by.Kind != model.PrincipalHuman) {
+		return by
+	}
+	if p := c.operatorPerson(); p != "" {
+		return model.Principal{Kind: model.PrincipalHuman, ID: p, Source: by.Source}
+	}
+	return by
 }
 
 func contextActor(r *http.Request) model.Principal {

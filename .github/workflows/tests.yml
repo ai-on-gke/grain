@@ -74,6 +74,7 @@ jobs:
       run-host: ${{ steps.guard.outputs.run-host || steps.filter.outputs.run-host }}
       host-script-container: ${{ steps.guard.outputs.host-script-container || steps.filter.outputs.host-script-container }}
       ui-e2e: ${{ steps.guard.outputs.ui-e2e || steps.filter.outputs.ui-e2e }}
+      ui-ng-e2e: ${{ steps.guard.outputs.ui-ng-e2e || steps.filter.outputs.ui-ng-e2e }}
       installer-e2e: ${{ steps.guard.outputs.installer-e2e || steps.filter.outputs.installer-e2e }}
       installer: ${{ steps.guard.outputs.installer || steps.filter.outputs.installer }}
       package-cache: ${{ steps.guard.outputs.package-cache || steps.filter.outputs.package-cache }}
@@ -120,7 +121,7 @@ jobs:
           esac
           echo "run_all=$run_all" >> "$GITHUB_OUTPUT"
           if [[ "$run_all" == "true" ]]; then
-            for key in go_program go_backend go_unit granule frontend lint terraform go go-e2e go-orchestrator go-model go-unit postgres run-host host-script-container ui-e2e installer-e2e installer package-cache real-vm real-kubernetes; do
+            for key in go_program go_backend go_unit granule frontend lint terraform go go-e2e go-orchestrator go-model go-unit postgres run-host host-script-container ui-e2e ui-ng-e2e installer-e2e installer package-cache real-vm real-kubernetes; do
               echo "$key=true" >> "$GITHUB_OUTPUT"
             done
           fi
@@ -141,7 +142,7 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     concurrency:
       group: ${{ github.workflow }}-go-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -186,10 +187,7 @@ jobs:
 
       - name: Install sandbox guest dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bubblewrap expect zstd socat psmisc
+          ./scripts/ci-apt-install.sh bubblewrap expect zstd socat psmisc
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo git config --system user.name "grain-ci"
           sudo git config --system user.email "grain-ci@example.com"
@@ -212,7 +210,7 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: ./scripts/run-go-tests.sh go test -race -timeout 25m ./pkg/ui/... ./cmd/grain/... ./ui/e2e/...
+        run: ./scripts/run-go-tests.sh go test -race -timeout 35m ./pkg/ui/... ./cmd/grain/... ./ui/e2e/...
 
   go-e2e:
     name: go e2e
@@ -265,10 +263,7 @@ jobs:
 
       - name: Install sandbox guest dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bubblewrap expect zstd socat psmisc shellcheck
+          ./scripts/ci-apt-install.sh bubblewrap expect zstd socat psmisc shellcheck
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo sysctl -w kernel.yama.ptrace_scope=0 || true
           tmpsrc="$(mktemp -d)"
@@ -387,10 +382,7 @@ jobs:
 
       - name: Install sandbox guest dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bubblewrap expect zstd socat psmisc iproute2 iptables
+          ./scripts/ci-apt-install.sh bubblewrap expect zstd socat psmisc iproute2 iptables
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo git config --system user.name "grain-ci"
           sudo git config --system user.email "grain-ci@example.com"
@@ -531,10 +523,7 @@ jobs:
 
       - name: Install sandbox guest dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bubblewrap expect zstd socat psmisc iproute2 iptables
+          ./scripts/ci-apt-install.sh bubblewrap expect zstd socat psmisc iproute2 iptables
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           sudo git config --system user.name "grain-ci"
           sudo git config --system user.email "grain-ci@example.com"
@@ -639,10 +628,7 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            iproute2 iptables dnsmasq-base e2fsprogs socat
+          ./scripts/ci-apt-install.sh iproute2 iptables dnsmasq-base e2fsprogs socat
 
       - name: Test
         working-directory: third_party/granule
@@ -744,9 +730,7 @@ jobs:
               printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
               sudo chmod +x /usr/sbin/policy-rc.d
             fi
-            sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-            sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql >/dev/null
+            ./scripts/ci-apt-install.sh postgresql >/dev/null
           fi
           ls /usr/lib/postgresql/*/bin/initdb
 
@@ -919,10 +903,11 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.go_program == 'true' && needs.changes.outputs.ui-e2e == 'true'
     runs-on: ubuntu-latest
-    # The suite alone runs about 32 minutes now (887 tests, one worker per
+    # The suite alone runs about 41 minutes now (1150 tests, one worker per
     # two cores), and the frontend build and browser download come on top:
-    # at 35 a slow runner was cancelled mid-suite with no verdict at all.
-    timeout-minutes: 50
+    # at 35, and again at 50, a slow runner was cancelled mid-suite with no
+    # verdict at all.
+    timeout-minutes: 65
     concurrency:
       group: ${{ github.workflow }}-ui-e2e-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -989,8 +974,19 @@ jobs:
       - name: Build frontend
         run: make frontend
 
+      # --with-deps runs apt-get, which fails the whole job on one
+      # unreachable archive (see scripts/ci-apt-install.sh), so the
+      # download is retried with a growing pause.
       - name: Download the browsers the suite drives
-        run: make playwright-browsers
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if make playwright-browsers; then exit 0; fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "playwright-browsers: attempt $attempt of 5 failed; retrying in $((attempt * 20))s" >&2
+              sleep $((attempt * 20))
+            fi
+          done
+          exit 1
 
       - name: Test e2e
         run: |
@@ -1006,6 +1002,114 @@ jobs:
         with:
           name: playwright-test-results
           path: ui/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # The Angular UI at /next/ in a real browser over `grain demo`:
+  # ui-ng/e2e (ui-ng/playwright.config.ts), projects desktop, phone and
+  # dark, sharing ui/e2e's one-demo-per-worker harness (ui-shared/e2e/).
+  # Path-filtered on what it exercises -- ui-ng/**, ui-shared/** and the
+  # whole Go backend that serves /next/ (scripts/github-ci-changes.sh) --
+  # so only a change to the classic ui/ or ui-hub/ alone skips it.
+  #
+  # Not a required check for its first week (from 2026-11-12): it becomes
+  # one in branch protection once it has gone 7 days on main without a
+  # flake (docs/test-plans/classic-ui-e2e-migration/README.md, "Bucket 2").
+  ui-ng-e2e:
+    name: ui-ng e2e
+    needs: [changes]
+    if: needs.changes.outputs.ui-ng-e2e == 'true'
+    runs-on: ubuntu-latest
+    # About four minutes of suite on top of the frontend build and the
+    # browser download.
+    timeout-minutes: 30
+    concurrency:
+      group: ${{ github.workflow }}-ui-ng-e2e-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+    env:
+      PLAYWRIGHT_BROWSERS: chromium
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Setup Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Cache npm and node_modules
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.npm
+            ui/node_modules
+            ui-ng/node_modules
+            ui-hub/node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('ui/package-lock.json', 'ui-ng/package-lock.json', 'ui-hub/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: Prepare Playwright browser cache directory
+        run: |
+          sudo mkdir -p /var/cache/playwright
+          sudo chown -R "$USER:$USER" /var/cache/playwright
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /var/cache/playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('ui/package-lock.json') }}
+
+      - name: Disable unused third-party apt sources
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
+
+      - name: Fill the npm cache from the registry
+        run: ./scripts/warm-npm-cache.sh ui && ./scripts/warm-npm-cache.sh ui-ng && ./scripts/warm-npm-cache.sh ui-hub
+
+      - name: Build frontend
+        run: make frontend
+
+      # The same retry as `ui e2e`: --with-deps runs apt-get, which fails
+      # the whole job on one unreachable archive.
+      - name: Download the browsers the suite drives
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if make playwright-browsers; then exit 0; fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "playwright-browsers: attempt $attempt of 5 failed; retrying in $((attempt * 20))s" >&2
+              sleep $((attempt * 20))
+            fi
+          done
+          exit 1
+
+      - name: Test e2e
+        run: make test-e2e-ng-suite
+
+      - name: Upload Playwright test results
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-ng-test-results
+          path: ui-ng/test-results
           if-no-files-found: ignore
           retention-days: 7
 
@@ -1457,10 +1561,7 @@ jobs:
       - name: Configure /dev/kvm udev permissions
         run: |
           set -euo pipefail
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            iproute2 iptables nftables dnsmasq-base e2fsprogs socat openssh-client
+          ./scripts/ci-apt-install.sh iproute2 iptables nftables dnsmasq-base e2fsprogs socat openssh-client
           if [ ! -e /dev/kvm ]; then
             echo "/dev/kvm is not in this runner, so the suite below would skip rather than run. A green tick here would mean nothing." >&2
             exit 1

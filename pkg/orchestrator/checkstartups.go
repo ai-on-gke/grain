@@ -171,7 +171,7 @@ func (f *repoFinder) unfixable(repo model.RepoRef, declared []string) forge.Unfi
 // scope is missing makes every escalation from now on a little less
 // useful than it could be, and nothing else would ever say so.
 func repositoryRunStarts(client github.Client, repo model.RepoRef) github.RunStarts {
-	starts, err := client.RecentRunStarts(repo.Owner, repo.Name, github.RunStartsRead)
+	starts, err := client.RecentRunStarts(repo.StoredOwner(), repo.Name, github.RunStartsRead)
 	if err != nil {
 		log.Printf("orchestrator: could not read what %s has been running lately (%v), so the "+
 			"escalation about to be written cannot say whether this failure is the "+

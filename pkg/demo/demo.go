@@ -49,7 +49,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/namespace"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/systemlog"
@@ -90,6 +89,8 @@ type Options struct {
 	CloudIdentityEndpoint string
 	Addr                  string
 	Actor                 string
+	DBDriver              string
+	DBDSN                 string
 	Repo                  model.RepoRef // -default-target-repo
 	Open                  bool
 	Observability         bool
@@ -340,13 +341,13 @@ func Run(opts Options) error {
 	// every demo that was stopped (docs/test-runs/
 	// 2026-11-09-demo-config-change.md, finding 3).
 	defer os.RemoveAll(dir)
-	removeOnSignal(dir)
-	db, err := sqlite.Open(sqlite.DefaultConfig(dir))
+	db, driver, closeDB, err := openDemoDB(ctx, dir, opts.DBDriver, opts.DBDSN)
 	if err != nil {
-		return fmt.Errorf("grain demo: opening the throwaway store: %v", err)
+		return err
 	}
-	defer db.Close()
-	cfg.SourceDB, cfg.DBDriver = db, "sqlite"
+	defer closeDB()
+	removeOnSignal(dir, closeDB)
+	cfg.SourceDB, cfg.DBDriver = db, driver
 	// The release-approval signing key: a deployment keeps it in its
 	// data directory, which a demo has none of, so an Inbox Approve or a
 	// rollback over -github-sim answered 500
@@ -736,6 +737,7 @@ func Run(opts Options) error {
 	if baseBranch != nil {
 		srv = baseBranchDemoHandler(srv, baseBranch)
 	}
+	srv = accessRequestDemoHandler(srv, store)
 	if opts.GitHubSim {
 		if simClient, ok := cfg.GitHubBranches.(github.Client); ok {
 			srv = githubSimDemoHandler(srv, simClient)
@@ -749,7 +751,7 @@ func Run(opts Options) error {
 		return fmt.Errorf("grain demo: listening on %s: %v", opts.Addr, err)
 	}
 	// ln.Addr() rather than opts.Addr, so a demo told to listen on port 0
-	// says which port the kernel actually gave it. ui/e2e/fixtures.js
+	// says which port the kernel actually gave it. ui-shared/e2e/demo.js
 	// does exactly that -- it starts one of these per Playwright worker
 	// on 127.0.0.1:0 and reads the port back off this line, having no
 	// other way to learn it -- so the URL here is a small interface as
@@ -1664,6 +1666,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 				Title:     "Declared Nightly Maintenance",
 				Target:    &declRepo,
 				AutoMerge: true,
+				// A declared `sandbox: {disk-gb: 100}` (grain/task-4591),
+				// so the template page shows a sized template.
+				Sandbox: model.SandboxShape{DiskGB: 100},
 			},
 		}},
 		Suites: []model.DeclaredSuiteFile{{
@@ -3002,7 +3007,7 @@ func processDemoGitHubWebhooks(ctx context.Context, store *model.Store, events o
 // the demo was started ignoring (SIGINT, for a job a shell put in the
 // background) is left ignored: catching it would remove the directory
 // from under a demo the re-raised signal then does not stop.
-func removeOnSignal(dir string) {
+func removeOnSignal(dir string, cleanup ...func()) {
 	var watch []os.Signal
 	for _, sig := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
 		if !signal.Ignored(sig) {
@@ -3016,6 +3021,11 @@ func removeOnSignal(dir string) {
 	signal.Notify(sigs, watch...)
 	go func() {
 		sig := <-sigs
+		for _, fn := range cleanup {
+			if fn != nil {
+				fn()
+			}
+		}
 		_ = os.RemoveAll(dir)
 		signal.Stop(sigs)
 		if p, err := os.FindProcess(os.Getpid()); err == nil && p.Signal(sig) == nil {

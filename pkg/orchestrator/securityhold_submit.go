@@ -191,7 +191,7 @@ func carryApprovedAcrossBaseMerge(ctx context.Context, store *model.Store, clien
 	if rules.Broken != "" || linkTarget(task, model.LinkTrustBoundaryCleared) != clearedTarget(shown, rules) {
 		return task, false, nil
 	}
-	files, err := client.ListPullRequestFiles(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	files, err := client.ListPullRequestFiles(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil || len(files) >= github.PullRequestFilesCap {
 		return task, false, nil
 	}
@@ -208,14 +208,14 @@ func carryApprovedAcrossBaseMerge(ctx context.Context, store *model.Store, clien
 		}
 		base := task.Base
 		if base == "" {
-			detail, derr := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+			detail, derr := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 			if derr != nil || detail.BaseRef == "" {
 				return task, false, nil
 			}
 			base = detail.BaseRef
 		}
-		afterDiff, err1 := differ.CompareDiff(ref.Repo.Owner, ref.Repo.Name, base, headSHA)
-		beforeDiff, err2 := differ.CompareDiff(ref.Repo.Owner, ref.Repo.Name, base, shown)
+		afterDiff, err1 := differ.CompareDiff(ref.Repo.StoredOwner(), ref.Repo.Name, base, headSHA)
+		beforeDiff, err2 := differ.CompareDiff(ref.Repo.StoredOwner(), ref.Repo.Name, base, shown)
 		if err1 != nil || err2 != nil {
 			return task, false, nil
 		}

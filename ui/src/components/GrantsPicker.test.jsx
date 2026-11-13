@@ -564,6 +564,37 @@ describe("GrantsPicker", () => {
     expect(onRemove).toHaveBeenCalledWith(held);
   });
 
+  // grain/task-4797: an edit still waiting out its save delay when its
+  // section was removed was saved as the section unmounted, and that
+  // save put the removed grant back.
+  it("drops an edit not saved yet when its section is removed", async () => {
+    serve({ current: [cloudKey] });
+    const held = grantOf(cloudKey, { account: "dev", ttl: 60 });
+    const onSubmit = vi.fn().mockResolvedValue();
+    const onRemove = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    const props = {
+      config,
+      onApiChange: vi.fn(),
+      onSubmit,
+      onRemove,
+    };
+    const { rerender } = render(<GrantsPicker grants={[held]} {...props} />);
+    const section = await waitFor(() => {
+      const el = document.querySelector(`[data-grant='${held}']`);
+      expect(el?.querySelector("input")).toBeTruthy();
+      return el;
+    });
+    const ttl = within(section).getByLabelText(/^ttl/);
+    await user.clear(ttl);
+    await user.type(ttl, "90");
+    await user.click(within(section).getByRole("button", { name: /^Remove / }));
+    expect(onRemove).toHaveBeenCalledWith(held);
+    rerender(<GrantsPicker grants={[]} {...props} />);
+    await new Promise((r) => setTimeout(r, 700));
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("draws a grant without arguments on one line, flagged when its server is gone", async () => {
     serve({ current: [hostScript] });
     render(

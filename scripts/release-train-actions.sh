@@ -106,7 +106,33 @@ gh_post() { # gh_post <path> [json body]
     ${2:+-H "Content-Type: application/json" -d "$2"} "${api%/}/repos/$repo/$1" -o /dev/null
 }
 
+scripts_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 rc_commit() { git rev-parse --verify -q "refs/tags/$1^{commit}" || true; }
+
+# workflow_job_ids <rc>: the job keys in $workflow that a selective
+# workflow_dispatch (inputs.jobs) can run -- read from the rc tag when it
+# carries the workflow file, else from this checkout or beside scripts/.
+workflow_job_ids() {
+  local raw=""
+  if git cat-file -e "refs/tags/$1:.github/workflows/$workflow" 2>/dev/null; then
+    raw="$(git show "refs/tags/$1:.github/workflows/$workflow")"
+  elif [ -f ".github/workflows/$workflow" ]; then
+    raw="$(cat ".github/workflows/$workflow")"
+  elif [ -f "$scripts_dir/../.github/workflows/$workflow" ]; then
+    raw="$(cat "$scripts_dir/../.github/workflows/$workflow")"
+  else
+    return 1
+  fi
+  printf '%s\n' "$raw" | awk '
+    /^jobs:/ { in_jobs = 1; next }
+    in_jobs && /^[^ #]/ { in_jobs = 0 }
+    in_jobs && /^  [A-Za-z0-9_-]+:[[:space:]]*(#.*)?$/ {
+      id = $1; sub(/:$/, "", id)
+      if (id != "stage-1") print id
+    }
+  '
+}
 
 # open_runs <rc> <sha>: the ids of the Stage 1 runs on the rc's tag not
 # yet completed -- never a run of main's own schedule that happens to be
@@ -146,9 +172,27 @@ done
 rc="$(value qualifying_rc)"
 reruns="$(value qualification_rerun)"
 if [ -n "$rc" ] && [ -n "$reruns" ]; then
-  jobs="$(printf '%s\n' "$reruns" | tr ',' '\n' | awk -F: '$1 == "nightly" { print $2 }' | sort -u | paste -sd, -)"
-  others="$(printf '%s\n' "$reruns" | tr ',' '\n' | awk -F: '$1 != "nightly"' | paste -sd, -)"
+  entries="$(printf '%s\n' "$reruns" | sed -E 's/:(flake|infra),/:\1\n/g')"
+  mapfile -t requested < <(printf '%s\n' "$entries" | sed -nE 's/^nightly:(.+):(flake|infra)$/\1/p' | awk 'NF' | sort -u)
+  others="$(printf '%s\n' "$entries" | grep -v '^nightly:' | paste -sd, - || true)"
   [ -z "$others" ] || say "$rc: $others is the deployment's to re-run (it posts grain/release-qualification); nothing to do here"
+  valid_jobs=()
+  if [ "${#requested[@]}" -gt 0 ]; then
+    if known_ids="$(workflow_job_ids "$rc")"; then
+      for j in "${requested[@]}"; do
+        if grep -qxF "$j" <<< "$known_ids"; then
+          valid_jobs+=("$j")
+        else
+          warn "$rc: '$j' is not a dispatchable job key in $workflow; refusing to dispatch it (add id=$j to scripts/candidate-gate.sh)"
+          echo "::error::release-train: $rc asked to re-run '$j', which is not a job key in $workflow"
+          status=1
+        fi
+      done
+    else
+      valid_jobs=("${requested[@]}")
+    fi
+  fi
+  jobs="$(IFS=,; echo "${valid_jobs[*]}")"
   if [ -n "$jobs" ] && can_call "re-running $jobs on $rc"; then
     sha="$(rc_commit "$rc")"
     open=""

@@ -39,10 +39,33 @@ browser, stub only an external boundary and say which, file a dated
 report under `docs/test-runs/`, and fix what is safe to fix in the task
 itself rather than only reporting it.
 
-Outside the walkthrough, every change to `ui/` follows the standing "UI
+## Which UI they walk
+
+grain has two UIs side by side: the Angular UI in `ui-ng/`, served at
+`/next/`, is the new experience, and the classic React UI in `ui/`,
+served at `/`, is being deprecated ("Two UIs" in `PROMPT.md` has the
+rule the operator approved on 2026-11-12). So the protocol walks
+`/next/` first. Each step runs on its `/next/` page where one exists,
+and on the classic page only where it does not yet --
+`ui-ng/src/app/shell/nav.ts` lists the rail's destinations (with the
+classic page each replaces) and `ui-ng/src/app/app.routes.ts` every
+route; a page in neither still lives only in the classic UI. The report says which
+UI each step ran against. New regression coverage goes in
+`ui-ng/e2e/` specs (`make test-e2e-ng`);
+the classic specs keep passing and are not deleted, but nothing new is
+added to them. A classic page gets a fix only where it is broken for
+users today, and the same page in `ui-ng/` gets it too.
+
+The chunks' Coverage bullets were written against the classic UI, and
+some name screens `/next/` has reorganised or not built (System is
+Fleet there; Boards has no `/next/` page yet). The weekly
+review below rewrites them against `/next/` as pages move over.
+
+Outside the walkthrough, every UI change follows the standing "UI
 changes" rule in `.grain/settings.yml`: screenshots at desktop and phone
 widths, in light and dark, taken and looked at before the change counts as
-done. `make ui-screenshots` takes them; see `docs/ui-screenshots.md`.
+done -- of the `/next/` pages first. `make ui-screenshots` takes them; see
+`docs/ui-screenshots.md`.
 
 ## Running it at release time
 

@@ -247,7 +247,10 @@ What takes judgement is the steward's. Woken by
    posting the completed `grain/release-qualification` failure; Phase 2 reads
    that check run and cuts nothing (`rc_held=vX.Y.Z-rc.(N+1)`) until it
    completes. Every fix or revert task's title starts
-   `[rc-blocker vX.Y.Z-rc.N]` (`model.RCBlockerMarker`). While any task with
+   `[rc-blocker vX.Y.Z-rc.N]` (`model.RCBlockerMarker`) and passes
+   `found_in: vX.Y.Z-rc.N`, so the defect is recorded against that
+   candidate (`model.LinkFoundIn`; grain reads it out of the marker when
+   the steward leaves it out). While any task with
    it is open, the reconciler keeps `grain/rc-hold` in progress (updating its
    summary to name the blockers) past the triage window. The reconciler
    completes the check once every blocker has landed, when the steward's
