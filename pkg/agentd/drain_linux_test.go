@@ -21,6 +21,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -100,5 +101,31 @@ func TestSIGUSR1Drains(t *testing.T) {
 	<-done
 	if got := c.n.Load(); got != 1 {
 		t.Errorf("drains after one SIGUSR1 = %d, want 1", got)
+	}
+}
+
+// TestDefaultSocketFallsBackToTheUsersRunDir: with XDG_RUNTIME_DIR
+// dropped (sudo -u, su), the default is still the socket
+// grain-agentd.service listens on, in the user's own /run/user/<uid>
+// (F1); a run dir missing or owned by somebody else falls back to /tmp.
+func TestDefaultSocketFallsBackToTheUsersRunDir(t *testing.T) {
+	uid := os.Getuid()
+	base := t.TempDir()
+	if got, want := defaultSocketFor("/xdg", uid, base), filepath.Join("/xdg", Program, "agentd.sock"); got != want {
+		t.Errorf("with XDG_RUNTIME_DIR: %q, want %q", got, want)
+	}
+	tmp := filepath.Join(os.TempDir(), Program+"-"+strconv.Itoa(uid), "agentd.sock")
+	if got := defaultSocketFor("", uid, base); got != tmp {
+		t.Errorf("with no run dir: %q, want %q", got, tmp)
+	}
+	run := filepath.Join(base, strconv.Itoa(uid))
+	if err := os.Mkdir(run, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := defaultSocketFor("", uid, base), filepath.Join(run, Program, "agentd.sock"); got != want {
+		t.Errorf("with the user's run dir: %q, want %q", got, want)
+	}
+	if got := defaultSocketFor("", uid+1, base); got != filepath.Join(os.TempDir(), Program+"-"+strconv.Itoa(uid+1), "agentd.sock") {
+		t.Errorf("another uid's run dir that is not there: %q", got)
 	}
 }

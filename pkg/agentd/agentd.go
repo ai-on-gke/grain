@@ -64,6 +64,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -437,10 +438,38 @@ func readToken(path string) (string, error) {
 }
 
 func defaultSocket() string {
-	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
+	return defaultSocketFor(os.Getenv("XDG_RUNTIME_DIR"), os.Getuid(), runUserDir)
+}
+
+// runUserDir is where systemd puts a user's XDG_RUNTIME_DIR; a seam for
+// tests.
+var runUserDir = "/run/user"
+
+// defaultSocketFor is defaultSocket for a runtime dir, uid and the base
+// of systemd's per-user runtime dirs. With no XDG_RUNTIME_DIR -- a shell
+// opened with `sudo -u` or `su`, which drop it -- the user's own
+// /run/user/<uid> is still the runtime dir grain-agentd.service runs
+// with, so `grain-agentd -drain` from that shell finds the socket the
+// unit listens on rather than a /tmp one nothing serves (the 2026-11-13
+// walkthrough, docs/test-runs/2026-11-13-hosts-env-drain.md, F1).
+func defaultSocketFor(xdg string, uid int, runUser string) string {
+	if xdg != "" {
+		return filepath.Join(xdg, Program, "agentd.sock")
+	}
+	if d := filepath.Join(runUser, strconv.Itoa(uid)); ownedDir(d, uid) {
 		return filepath.Join(d, Program, "agentd.sock")
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", Program, os.Getuid()), "agentd.sock")
+	return filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", Program, uid), "agentd.sock")
+}
+
+// ownedDir reports whether path is a directory owned by uid.
+func ownedDir(path string, uid int) bool {
+	st, err := os.Stat(path)
+	if err != nil || !st.IsDir() {
+		return false
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	return ok && int(sys.Uid) == uid
 }
 
 func allowlistOrDetectedCLIs(path string, owners []uint32) []string {
