@@ -22,7 +22,7 @@ g-model-picker {
   border-radius: var(--md-sys-shape-corner-small);
   background: var(--md-sys-color-surface);
   color: var(--md-sys-color-on-surface);
-  font: 400 13px/20px var(--grain-font-body);
+  font: 400 14px/20px var(--grain-font-body);
   text-align: left;
   cursor: pointer;
 }
@@ -50,7 +50,7 @@ g-model-picker {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--grain-font-mono, monospace);
-  font-size: 12.5px;
+  font-size: 13.5px;
 }
 .mp-trigger-label.mp-placeholder {
   font-family: var(--grain-font-body);
@@ -136,7 +136,7 @@ g-model-picker {
   min-height: 34px;
   padding: 6px 10px;
   border-radius: var(--md-sys-shape-corner-small);
-  font: 400 12.5px/18px var(--grain-font-mono, monospace);
+  font: 400 13.5px/20px var(--grain-font-mono, monospace);
   cursor: pointer;
 }
 .mp-option.is-active,
@@ -221,7 +221,7 @@ g-model-picker.mp-inline {
   flex: 1 1 12em;
   min-width: 0;
   overflow-wrap: anywhere;
-  font: 400 12.5px/18px var(--grain-font-mono, monospace);
+  font: 400 13.5px/20px var(--grain-font-mono, monospace);
 }
 .mp-chain-actions {
   display: inline-flex;

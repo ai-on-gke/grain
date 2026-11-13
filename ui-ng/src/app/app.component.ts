@@ -528,7 +528,12 @@ export class DeferErrorDirective implements OnInit {
               <span class="live-dot" aria-hidden="true"></span>
             }
           </button>
-          <label class="search-box">
+          <form
+            class="search-box"
+            role="search"
+            autocomplete="off"
+            (submit)="$event.preventDefault()"
+          >
             <span class="search-icon" aria-hidden="true">
               <svg width="18" height="18" viewBox="0 0 24 24">
                 <path [attr.d]="icons['search']" fill="currentColor" />
@@ -538,6 +543,12 @@ export class DeferErrorDirective implements OnInit {
               #searchInput
               class="search-input"
               type="search"
+              name="grain-view-filter"
+              autocomplete="off"
+              spellcheck="false"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              data-form-type="other"
               placeholder="Filter this view"
               aria-label="Filter this view"
               data-testid="view-filter"
@@ -552,7 +563,7 @@ export class DeferErrorDirective implements OnInit {
                 >/</span
               >
             }
-          </label>
+          </form>
           <button
             type="button"
             class="icon-btn"

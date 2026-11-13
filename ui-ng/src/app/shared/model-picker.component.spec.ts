@@ -113,7 +113,9 @@ describe("ModelPickerComponent", () => {
     search.dispatchEvent(new Event("input"));
     await fixture.whenStable();
     expect(options()).toEqual(["agy:gemini-flash"]);
-    expect(search.getAttribute("aria-activedescendant")).toBeTruthy();
+    const optEl = q<HTMLElement>('[data-testid="mp-opt"]')!;
+    expect(optEl.id).toMatch(/^mp-\d+-o-0-0$/);
+    expect(search.getAttribute("aria-activedescendant")).toBe(optEl.id);
     search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
     await fixture.whenStable();
     expect(host.chosen).toEqual(["gemini-flash"]);

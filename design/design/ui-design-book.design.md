@@ -224,7 +224,17 @@ inspector and Task Detail. Sessions shares its message styles.
 ### Settings
 
 Settings uses a 280px grouped section drawer beside flat `.s-card` forms capped
-at 1180px. Single-choice pickers use `<g-pill-select>`; a model is always chosen
+at 1180px, stacked with 24px vertical rhythm (`g-settings-*` flex hosts) and
+24px internal padding. Inputs, descriptions, table cells and `<g-pill-select>`
+controls use the proportional 14/20 body stack (`.s-num` aligns numeric figures
+without switching prose or human names to monospace; `.s-mono` is reserved for
+technical slugs, model IDs and paths). Tables keep row actions on one right-aligned
+line (`.s-row-actions`), separate any below-table creation/edit form with a
+`.s-subsection` divider, and collapse per-connection password inputs behind an
+on-demand `Credential` row. Search filters live inside `<form role="search"
+autocomplete="off">` and secret inputs carry `autocomplete="new-password"` inside
+`<form autocomplete="off">` so browser password managers never autofill emails
+into search bars. Single-choice pickers use `<g-pill-select>`; a model is always chosen
 with `<g-model-picker>` over what the connections advertise, never typed into a
 text field. Ordered lists (the fallback models) are rows with Up / Down /
 Remove buttons and an add picker that excludes what is already listed. Booleans use `.g-switch`

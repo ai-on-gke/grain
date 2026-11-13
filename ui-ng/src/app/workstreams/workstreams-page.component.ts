@@ -293,16 +293,28 @@ function saveView(v: WsView): void {
             "
           />
 
-          <input
-            #searchEl
-            type="search"
-            class="ws-search"
-            aria-label="Filter workstreams"
-            placeholder="Filter streams (/)"
-            data-testid="ws-search"
-            [value]="q() || viewFilter.query() || ''"
-            (input)="onSearchInput(val($event))"
-          />
+          <form
+            role="search"
+            autocomplete="off"
+            style="display: contents"
+            (submit)="$event.preventDefault()"
+          >
+            <input
+              #searchEl
+              type="search"
+              name="grain-ws-filter"
+              autocomplete="off"
+              spellcheck="false"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              class="ws-search"
+              aria-label="Filter workstreams"
+              placeholder="Filter streams (/)"
+              data-testid="ws-search"
+              [value]="q() || viewFilter.query() || ''"
+              (input)="onSearchInput(val($event))"
+            />
+          </form>
         </div>
 
         @if (activeScope() === "system" || activeSubs().size > 0) {

@@ -295,6 +295,7 @@ describe("Settings → Models default and fallback models", () => {
     const { q, api, settle } = await mount();
     q<HTMLButtonElement>('[data-testid="picker-default-model"]')!.click();
     await settle();
+    expect(q('[data-testid="picker-default-model-panel"]')).not.toBeNull();
     q<HTMLButtonElement>(
       '[data-testid="picker-default-model-refresh"]',
     )!.click();

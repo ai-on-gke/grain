@@ -31,7 +31,6 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
-import { ConfirmDialogComponent, type ConfirmRequest } from "../shared/confirm-dialog.component";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 import {
@@ -111,21 +110,21 @@ interface StateRepoEntryDto {
                     <th>Base branch</th>
                     <th>CI mode</th>
                     <th>Base repair bypass</th>
-                    <th>Manage</th>
+                    <th class="s-actions-cell">Manage</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (repo of repos(); track repo) {
                     @let fact = repoFacts()[repo];
                     <tr [attr.data-testid]="'repo-row-' + repo">
-                      <td class="tabular">
+                      <td class="s-mono">
                         <a
                           [routerLink]="repoRoute(repo)"
                           [attr.data-testid]="'repo-link-' + repo"
                           >{{ repo }}</a
                         >
                       </td>
-                      <td class="tabular">{{ fact?.baseBranch || "main" }}</td>
+                      <td class="s-mono">{{ fact?.baseBranch || "main" }}</td>
                       <td>
                         <span class="status-pill neutral">{{
                           fact?.ciMode || "grain"
@@ -152,8 +151,8 @@ interface StateRepoEntryDto {
                           "
                         ></button>
                       </td>
-                      <td>
-                        <div class="s-inline">
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
                           <a
                             class="btn-tonal s-btn-sm"
                             style="text-decoration: none"
@@ -187,101 +186,116 @@ interface StateRepoEntryDto {
             </div>
           }
 
-          <div class="s-grid">
-            @if (reachableRepos().length > 0) {
+          <div class="s-subsection">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Add repository</h4>
+            </div>
+            <div class="s-grid">
+              @if (reachableRepos().length > 0) {
+                <div class="s-field">
+                  <span class="s-label">Connected repositories</span>
+                  <g-pill-select
+                    [options]="reachableRepoOptions()"
+                    [value]="
+                      hasReachableRepo(newRepoSlug()) ? newRepoSlug() : ''
+                    "
+                    ariaLabel="Connected repository"
+                    align="left"
+                    testid="select-reachable-repo"
+                    [disabled]="
+                      state.sectionLocked('repositories') ||
+                      !access.can('POST /api/repos')
+                    "
+                    (valueChange)="$event && newRepoSlug.set($event)"
+                  />
+                </div>
+              }
               <div class="s-field">
-                <span class="s-label">Connected repositories</span>
-                <g-pill-select
-                  [options]="reachableRepoOptions()"
-                  [value]="
-                    reachableRepos().includes(newRepoSlug())
-                      ? newRepoSlug()
-                      : ''
-                  "
-                  ariaLabel="Connected repository"
-                  align="left"
-                  testid="select-reachable-repo"
+                <label class="s-label" for="add-repo-slug"
+                  >Repository (owner/name)</label
+                >
+                <input
+                  id="add-repo-slug"
+                  class="s-input s-mono"
+                  type="text"
+                  list="reachable-repos-list"
+                  data-testid="input-add-repo"
+                  placeholder="acme/platform or Other repository..."
+                  [value]="newRepoSlug()"
                   [disabled]="
                     state.sectionLocked('repositories') ||
                     !access.can('POST /api/repos')
                   "
-                  (valueChange)="$event && newRepoSlug.set($event)"
+                  (input)="newRepoSlug.set($any($event.target).value)"
+                  (focus)="loadReachableRepos()"
+                />
+                <datalist id="reachable-repos-list">
+                  @for (r of reachableRepos(); track r.repo) {
+                    <option [value]="r.repo">{{ r.repo }}</option>
+                  }
+                </datalist>
+                @if (loadingReachableRepos()) {
+                  <div class="s-caption">Checking reachable repositories…</div>
+                }
+                @if (reachableErrors().length) {
+                  <div class="s-banner error">
+                    <span
+                      >Errors checking reachable repos:
+                      {{ reachableErrors().join("; ") }}</span
+                    >
+                  </div>
+                }
+                @if (reachableHostMismatches().length) {
+                  <div class="s-banner warn">
+                    <span
+                      >Host mismatches:
+                      {{ reachableHostMismatches().join("; ") }}</span
+                    >
+                  </div>
+                }
+                @if (reachableReason()) {
+                  <div class="s-caption">{{ reachableReason() }}</div>
+                }
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="add-repo-url"
+                  >Clone URL (optional)</label
+                >
+                <input
+                  id="add-repo-url"
+                  class="s-input s-mono"
+                  type="text"
+                  placeholder="https://github.com/acme/platform.git"
+                  [value]="newRepoUrl()"
+                  [disabled]="
+                    state.sectionLocked('repositories') ||
+                    !access.can('POST /api/repos')
+                  "
+                  (input)="newRepoUrl.set($any($event.target).value)"
                 />
               </div>
-            }
-            <div class="s-field">
-              <label class="s-label" for="add-repo-slug">Repository (owner/name)</label>
-              <input
-                id="add-repo-slug"
-                class="s-input tabular"
-                type="text"
-                list="reachable-repos-list"
-                data-testid="input-add-repo"
-                placeholder="acme/platform or Other repository..."
-                [value]="newRepoSlug()"
-                [disabled]="state.sectionLocked('repositories') || !access.can('POST /api/repos')"
-                (input)="newRepoSlug.set($any($event.target).value)"
-                (focus)="loadReachableRepos()"
-              />
-              <datalist id="reachable-repos-list">
-                @for (r of reachableRepos(); track r.repo) {
-                  <option [value]="r.repo">{{ r.repo }}</option>
-                }
-              </datalist>
-              @if (loadingReachableRepos()) {
-                <div class="s-caption">Checking reachable repositories...</div>
-              }
-              @if (reachableErrors().length) {
-                <div class="s-callout error">
-                  <p>Errors checking reachable repos: {{ reachableErrors().join('; ') }}</p>
-                </div>
-              }
-              @if (reachableHostMismatches().length) {
-                <div class="s-callout warning">
-                  <p>Host mismatches: {{ reachableHostMismatches().join('; ') }}</p>
-                </div>
-              }
-              @if (reachableReason()) {
-                <div class="s-caption">{{ reachableReason() }}</div>
-              }
             </div>
-            <div class="s-field">
-              <label class="s-label" for="add-repo-url"
-                >Clone URL (optional)</label
-              >
-              <input
-                id="add-repo-url"
-                class="s-input tabular"
-                type="text"
-                placeholder="https://github.com/acme/platform.git"
-                [value]="newRepoUrl()"
+            <div class="s-inline">
+              <button
+                type="button"
+                class="btn-primary"
+                data-testid="add-repo-btn"
                 [disabled]="
+                  busyRepo() ||
+                  !newRepoSlug().trim() ||
                   state.sectionLocked('repositories') ||
                   !access.can('POST /api/repos')
                 "
-                (input)="newRepoUrl.set($any($event.target).value)"
-              />
-            </div>
-          </div>
-          <div class="s-inline">
-            <button
-              type="button"
-              class="btn-primary"
-              data-testid="add-repo-btn"
-              [disabled]="
-                !newRepoSlug().trim() ||
-                state.sectionLocked('repositories') ||
-                !access.can('POST /api/repos')
-              "
-              (click)="addRepo()"
-            >
-              Add repository
-            </button>
-            @if (reachableCount() > 0) {
-              <span class="s-hint tabular"
-                >{{ reachableCount() }} reachable via Git connections</span
+                (click)="addRepo()"
               >
-            }
+                Add repository
+              </button>
+              @if (reachableCount() > 0) {
+                <span class="s-hint s-num"
+                  >{{ reachableCount() }} reachable via Git connections</span
+                >
+              }
+            </div>
           </div>
         </div>
       }
@@ -316,7 +330,7 @@ interface StateRepoEntryDto {
               >
               <input
                 id="git-author-email"
-                class="s-input tabular"
+                class="s-input"
                 type="email"
                 data-testid="input-git-author-email"
                 placeholder="grain@example.com"
@@ -334,7 +348,7 @@ interface StateRepoEntryDto {
               <label class="s-label" for="git-host">Default GitHub host</label>
               <input
                 id="git-host"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 placeholder="github.com"
                 [value]="state.val('githubHost', 'github.com')"
@@ -395,7 +409,12 @@ interface StateRepoEntryDto {
           </div>
 
           @if (gitCheckMessage()) {
-            <div [class]="'s-banner ' + (gitCheckMessage() === 'OK' ? 'ok' : 'error')" data-testid="git-check-banner">
+            <div
+              [class]="
+                's-banner ' + (gitCheckMessage() === 'OK' ? 'ok' : 'error')
+              "
+              data-testid="git-check-banner"
+            >
               {{ gitCheckMessage() }}
             </div>
           }
@@ -409,30 +428,42 @@ interface StateRepoEntryDto {
                     <th>Host</th>
                     <th>Scope</th>
                     <th>Type</th>
-                    <th>Actions</th>
+                    <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (c of gitConnections(); track c.credential || c.id) {
                     @let cred = c.credential || c.id || "default";
                     <tr [attr.data-testid]="'git-conn-row-' + cred">
-                      <td class="tabular">{{ cred }}</td>
-                      <td class="tabular">{{ c.host || "github.com" }}</td>
-                      <td class="tabular">{{ c.scope || "All repos on host" }}</td>
-                      <td>{{ c.authType || c.type || "pat" }}</td>
+                      <td class="s-mono">{{ cred }}</td>
+                      <td class="s-mono">{{ c.host || "github.com" }}</td>
                       <td>
-                        <button
-                          type="button"
-                          class="btn-text s-btn-sm"
-                          [disabled]="
-                            !access.can(
-                              'DELETE /api/deployment/git-connections/{cred}'
-                            ) || state.sectionLocked('git')
-                          "
-                          (click)="deleteGitConnection(cred)"
-                        >
-                          Remove
-                        </button>
+                        @if (c.scope) {
+                          <span class="s-mono">{{ c.scope }}</span>
+                        } @else {
+                          All repos on host
+                        }
+                      </td>
+                      <td>
+                        <span class="status-pill neutral">{{
+                          c.authType || c.type || "pat"
+                        }}</span>
+                      </td>
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
+                          <button
+                            type="button"
+                            class="btn-text s-btn-sm"
+                            [disabled]="
+                              !access.can(
+                                'DELETE /api/deployment/git-connections/{cred}'
+                              ) || state.sectionLocked('git')
+                            "
+                            (click)="deleteGitConnection(cred)"
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   }
@@ -441,200 +472,224 @@ interface StateRepoEntryDto {
             </div>
           }
 
-          <div class="s-grid">
-            <div class="s-field">
-              <span class="s-label">Credential source</span>
-              <g-pill-select
-                testid="select-git-conn-mode"
-                ariaLabel="Credential source"
-                align="left"
-                [options]="gitModeOptions"
-                [value]="gitConnMode()"
-                (valueChange)="gitConnMode.set($event)"
-              />
+          <form
+            class="s-subsection"
+            autocomplete="off"
+            (submit)="$event.preventDefault(); saveGitConnection()"
+          >
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Add Git connection</h4>
             </div>
-            <div class="s-field">
-              <label class="s-label" for="gc-host">Host</label>
-              <input
-                id="gc-host"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-git-conn-host"
-                placeholder="github.com"
-                [value]="newGitHost()"
-                (input)="newGitHost.set($any($event.target).value)"
-              />
-            </div>
-            <div class="s-field">
-              <label class="s-label" for="gc-scope">Scope (optional)</label>
-              <input
-                id="gc-scope"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-git-conn-scope"
-                placeholder="All repos on host, or acme/widgets"
-                [value]="newGitScope()"
-                (input)="newGitScope.set($any($event.target).value)"
-              />
-            </div>
-
-            @if (gitConnMode() === "existing") {
+            <div class="s-grid">
               <div class="s-field">
-                <label class="s-label" for="gc-cred"
-                  >Existing stored credential name</label
-                >
-                <input
-                  id="gc-cred"
-                  class="s-input tabular"
-                  type="text"
-                  data-testid="input-git-conn-name"
-                  placeholder="github-main"
-                  [value]="newGitCred()"
-                  (input)="newGitCred.set($any($event.target).value)"
-                />
-              </div>
-            } @else {
-              <div class="s-field">
-                <span class="s-label">Auth type</span>
+                <span class="s-label">Credential source</span>
                 <g-pill-select
-                  testid="select-git-conn-type"
-                  ariaLabel="Git auth type"
+                  testid="select-git-conn-mode"
+                  ariaLabel="Credential source"
                   align="left"
-                  [options]="gitTypeOptions"
-                  [value]="newGitType()"
-                  (valueChange)="newGitType.set($event)"
+                  [options]="gitModeOptions"
+                  [value]="gitConnMode()"
+                  (valueChange)="gitConnMode.set($event)"
+                />
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="gc-host">Host</label>
+                <input
+                  id="gc-host"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-git-conn-host"
+                  placeholder="github.com"
+                  [value]="newGitHost()"
+                  (input)="newGitHost.set($any($event.target).value)"
+                />
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="gc-scope">Scope (optional)</label>
+                <input
+                  id="gc-scope"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-git-conn-scope"
+                  placeholder="All repos on host, or acme/widgets"
+                  [value]="newGitScope()"
+                  (input)="newGitScope.set(inputVal($event))"
                 />
               </div>
 
-              @if (newGitType() === "pat") {
+              @if (gitConnMode() === "existing") {
                 <div class="s-field">
-                  <label class="s-label" for="gc-val"
-                    >Personal access token</label
+                  <label class="s-label" for="gc-cred"
+                    >Existing stored credential name</label
                   >
                   <input
-                    id="gc-val"
-                    class="s-input"
-                    type="password"
-                    autocomplete="off"
-                    data-testid="input-git-conn-secret"
-                    placeholder="ghp_..."
-                    [value]="newGitSecret()"
-                    (input)="newGitSecret.set($any($event.target).value)"
+                    id="gc-cred"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-git-conn-name"
+                    placeholder="github-main"
+                    [value]="newGitCred()"
+                    (input)="newGitCred.set($any($event.target).value)"
                   />
                 </div>
-              } @else if (newGitType() === "ssh") {
+              } @else {
                 <div class="s-field">
-                  <label class="s-label" for="gc-ssh">SSH private key</label>
-                  <textarea
-                    id="gc-ssh"
-                    class="s-textarea tabular"
-                    rows="2"
-                    data-testid="input-git-conn-ssh-key"
-                    placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                    [value]="newGitSecret()"
-                    (input)="newGitSecret.set($any($event.target).value)"
-                  ></textarea>
-                </div>
-              } @else if (newGitType() === "app") {
-                <div class="s-field">
-                  <label class="s-label" for="gc-appid">GitHub App ID</label>
-                  <input
-                    id="gc-appid"
-                    class="s-input tabular"
-                    type="number"
-                    min="1"
-                    data-testid="input-git-app-id"
-                    [value]="newGitAppId()"
-                    (input)="newGitAppId.set($any($event.target).value)"
+                  <span class="s-label">Auth type</span>
+                  <g-pill-select
+                    testid="select-git-conn-type"
+                    ariaLabel="Git auth type"
+                    align="left"
+                    [options]="gitTypeOptions"
+                    [value]="newGitType()"
+                    (valueChange)="newGitType.set($event)"
                   />
                 </div>
-                <div class="s-field">
-                  <label class="s-label" for="gc-instid">Installation ID</label>
-                  <input
-                    id="gc-instid"
-                    class="s-input tabular"
-                    type="number"
-                    min="1"
-                    data-testid="input-git-app-install-id"
-                    [value]="newGitAppInstallId()"
-                    (input)="newGitAppInstallId.set($any($event.target).value)"
-                  />
-                </div>
-                <div class="s-field">
-                  <label class="s-label" for="gc-appkey"
-                    >App private key (PEM)</label
-                  >
-                  <textarea
-                    id="gc-appkey"
-                    class="s-textarea tabular"
-                    rows="2"
-                    data-testid="input-git-app-private-key"
-                    placeholder="-----BEGIN RSA PRIVATE KEY-----"
-                    [value]="newGitSecret()"
-                    (input)="newGitSecret.set($any($event.target).value)"
-                  ></textarea>
-                </div>
-              }
-            }
-          </div>
-          <div class="s-inline">
-            <button
-              type="button"
-              class="btn-tonal"
-              data-testid="save-git-conn-btn"
-              [disabled]="
-                !canSubmitGitConnection() ||
-                !access.can('POST /api/deployment/git-connections')
-              "
-              (click)="saveGitConnection()"
-            >
-              Add Git connection
-            </button>
-          </div>
 
-          <div class="s-field">
-            <span class="s-label"
-              >Named GitHub personal/bot tokens ({{
-                githubTokens().join(", ") || "none"
-              }})</span
-            >
-            <span class="s-hint" data-testid="gh-token-default-hint">
-              If no unscoped github.com Git connection exists yet, saving a
-              named token also registers it as the default github.com
-              connection.
-            </span>
+                @if (newGitType() === "pat") {
+                  <div class="s-field">
+                    <label class="s-label" for="gc-val"
+                      >Personal access token</label
+                    >
+                    <input
+                      id="gc-val"
+                      class="s-input"
+                      type="password"
+                      name="grain-git-conn-secret"
+                      autocomplete="new-password"
+                      data-lpignore="true"
+                      data-1p-ignore="true"
+                      data-testid="input-git-conn-secret"
+                      placeholder="ghp_..."
+                      [value]="newGitSecret()"
+                      (input)="newGitSecret.set($any($event.target).value)"
+                    />
+                  </div>
+                } @else if (newGitType() === "ssh") {
+                  <div class="s-field">
+                    <label class="s-label" for="gc-ssh">SSH private key</label>
+                    <textarea
+                      id="gc-ssh"
+                      class="s-textarea s-mono"
+                      rows="2"
+                      data-testid="input-git-conn-ssh-key"
+                      placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                      [value]="newGitSecret()"
+                      (input)="newGitSecret.set($any($event.target).value)"
+                    ></textarea>
+                  </div>
+                } @else if (newGitType() === "app") {
+                  <div class="s-field">
+                    <label class="s-label" for="gc-appid">GitHub App ID</label>
+                    <input
+                      id="gc-appid"
+                      class="s-input s-num"
+                      type="number"
+                      min="1"
+                      data-testid="input-git-app-id"
+                      [value]="newGitAppId()"
+                      (input)="newGitAppId.set($any($event.target).value)"
+                    />
+                  </div>
+                  <div class="s-field">
+                    <label class="s-label" for="gc-instid"
+                      >Installation ID</label
+                    >
+                    <input
+                      id="gc-instid"
+                      class="s-input s-num"
+                      type="number"
+                      min="1"
+                      data-testid="input-git-app-install-id"
+                      [value]="newGitAppInstallId()"
+                      (input)="
+                        newGitAppInstallId.set($any($event.target).value)
+                      "
+                    />
+                  </div>
+                  <div class="s-field">
+                    <label class="s-label" for="gc-appkey"
+                      >App private key (PEM)</label
+                    >
+                    <textarea
+                      id="gc-appkey"
+                      class="s-textarea s-mono"
+                      rows="2"
+                      data-testid="input-git-app-private-key"
+                      placeholder="-----BEGIN RSA PRIVATE KEY-----"
+                      [value]="newGitSecret()"
+                      (input)="newGitSecret.set($any($event.target).value)"
+                    ></textarea>
+                  </div>
+                }
+              }
+            </div>
             <div class="s-inline">
-              <input
-                class="s-input s-input-inline tabular"
-                type="text"
-                aria-label="GitHub token name"
-                placeholder="token-name"
-                [value]="ghTokenName()"
-                (input)="ghTokenName.set($any($event.target).value)"
-              />
-              <input
-                class="s-input s-input-inline"
-                type="password"
-                autocomplete="off"
-                aria-label="GitHub token secret"
-                placeholder="ghp_..."
-                [value]="ghTokenValue()"
-                (input)="ghTokenValue.set($any($event.target).value)"
-              />
               <button
-                type="button"
-                class="btn-tonal s-btn-sm"
+                type="submit"
+                class="btn-tonal"
+                data-testid="save-git-conn-btn"
                 [disabled]="
-                  !ghTokenName().trim() ||
-                  !ghTokenValue().trim() ||
-                  !access.can('PUT /api/github-tokens/{name}')
+                  !canSubmitGitConnection() ||
+                  !access.can('POST /api/deployment/git-connections')
                 "
-                (click)="saveGithubToken()"
               >
-                Save token
+                Add Git connection
               </button>
             </div>
-          </div>
+          </form>
+
+          <form
+            class="s-subsection"
+            autocomplete="off"
+            (submit)="$event.preventDefault(); saveGithubToken()"
+          >
+            <div class="s-field">
+              <span class="s-label"
+                >Named GitHub personal/bot tokens ({{
+                  githubTokens().join(", ") || "none"
+                }})</span
+              >
+              <span class="s-hint" data-testid="gh-token-default-hint">
+                If no unscoped github.com Git connection exists yet, saving a
+                named token also registers it as the default github.com
+                connection.
+              </span>
+              <div class="s-inline">
+                <input
+                  class="s-input s-input-inline s-mono"
+                  type="text"
+                  autocomplete="off"
+                  aria-label="GitHub token name"
+                  placeholder="token-name"
+                  [value]="ghTokenName()"
+                  (input)="ghTokenName.set($any($event.target).value)"
+                />
+                <input
+                  class="s-input s-input-inline"
+                  type="password"
+                  name="grain-gh-token-secret"
+                  autocomplete="new-password"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  aria-label="GitHub token secret"
+                  placeholder="ghp_..."
+                  [value]="ghTokenValue()"
+                  (input)="ghTokenValue.set($any($event.target).value)"
+                />
+                <button
+                  type="submit"
+                  class="btn-tonal s-btn-sm"
+                  [disabled]="
+                    !ghTokenName().trim() ||
+                    !ghTokenValue().trim() ||
+                    !access.can('PUT /api/github-tokens/{name}')
+                  "
+                >
+                  Save token
+                </button>
+              </div>
+            </div>
+          </form>
         </div>
       }
 
@@ -664,7 +719,7 @@ interface StateRepoEntryDto {
               <label class="s-label" for="ci-per-run">CI jobs per run</label>
               <input
                 id="ci-per-run"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 data-testid="input-ci-jobs-per-run"
@@ -682,7 +737,7 @@ interface StateRepoEntryDto {
               <label class="s-label" for="ci-hist">CI runs kept</label>
               <input
                 id="ci-hist"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 [value]="state.val('ciRunHistory', 200)"
                 [disabled]="!canWriteSettings()"
@@ -700,7 +755,7 @@ interface StateRepoEntryDto {
               >
               <input
                 id="ci-cache-mb"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 [value]="state.val('ciCacheMb', 2048)"
@@ -714,7 +769,7 @@ interface StateRepoEntryDto {
               <label class="s-label" for="ci-art-mb">CI artifacts (MiB)</label>
               <input
                 id="ci-art-mb"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 [value]="state.val('ciArtifactMb', 1024)"
@@ -733,7 +788,7 @@ interface StateRepoEntryDto {
               >
               <input
                 id="ci-reserve"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="text"
                 placeholder="5m"
                 [value]="state.val('ciReserveAfter', '')"
@@ -745,7 +800,7 @@ interface StateRepoEntryDto {
             </div>
           </div>
           @if (ciFaultCount() > 0) {
-            <p class="s-hint tabular">
+            <p class="s-hint s-num">
               {{ ciFaultCount() }} shared CI fault classification rule(s)
               active.
             </p>
@@ -765,7 +820,7 @@ interface StateRepoEntryDto {
             </div>
             <div class="s-inline">
               <span
-                class="status-pill neutral tabular"
+                class="status-pill neutral s-mono"
                 data-testid="state-repo-status"
               >
                 {{ stateRepoSummary() }}
@@ -789,7 +844,7 @@ interface StateRepoEntryDto {
               class="s-banner warn"
               data-testid="staged-config-changes-banner"
             >
-              <span class="tabular">
+              <span class="s-num">
                 {{ state.refusedChanges().length }} rehearsed config file
                 change(s) ready:
                 {{ refusedPathsSummary() }}
@@ -853,7 +908,7 @@ interface StateRepoEntryDto {
                 <label class="s-label" for="sr-remote">Remote Git URL</label>
                 <input
                   id="sr-remote"
-                  class="s-input tabular"
+                  class="s-input s-mono"
                   type="text"
                   data-testid="input-state-repo-remote"
                   placeholder="https://github.com/org/grain-config.git"
@@ -865,7 +920,7 @@ interface StateRepoEntryDto {
                 <label class="s-label" for="sr-branch">Branch</label>
                 <input
                   id="sr-branch"
-                  class="s-input tabular"
+                  class="s-input s-mono"
                   type="text"
                   placeholder="main"
                   [value]="remoteBranch()"
@@ -899,7 +954,7 @@ interface StateRepoEntryDto {
               <label class="s-label" for="sr-kms">Cloud KMS key resource</label>
               <input
                 id="sr-kms"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 placeholder="projects/.../cryptoKeys/..."
                 [value]="kmsKeyUri()"
@@ -913,16 +968,25 @@ interface StateRepoEntryDto {
               <label class="s-label" for="sr-imp-key"
                 >Import raw secrets key</label
               >
-              <input
-                id="sr-imp-key"
-                class="s-input"
-                type="password"
+              <form
+                style="display: contents"
                 autocomplete="off"
-                placeholder="age-secret-key-..."
-                [value]="importKeyDraft()"
-                [disabled]="!access.can('POST /api/state-repo/import-key')"
-                (input)="importKeyDraft.set($any($event.target).value)"
-              />
+                (submit)="$event.preventDefault()"
+              >
+                <input
+                  id="sr-imp-key"
+                  class="s-input"
+                  type="password"
+                  name="grain-state-repo-key"
+                  autocomplete="new-password"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  placeholder="age-secret-key-..."
+                  [value]="importKeyDraft()"
+                  [disabled]="!access.can('POST /api/state-repo/import-key')"
+                  (input)="importKeyDraft.set($any($event.target).value)"
+                />
+              </form>
             </div>
           </div>
           <div class="s-inline">
@@ -1020,49 +1084,22 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly repos = signal<string[]>([]);
   protected readonly repoFacts = signal<Record<string, RepoFacts>>({});
   protected readonly reachableCount = signal(0);
-  protected readonly reachableRepos = signal<string[]>([]);
+  protected readonly reachableRepos = signal<{ repo: string; push: boolean }[]>(
+    [],
+  );
   protected readonly reachableRepoOptions = computed<PillOption[]>(() => [
     { value: "", label: "Choose connected repository…" },
-    ...this.reachableRepos().map((r) => ({ value: r, label: r })),
+    ...this.reachableRepos().map((r) => ({ value: r.repo, label: r.repo })),
   ]);
   protected readonly newRepoSlug = signal("");
   protected readonly newRepoUrl = signal("");
+  protected readonly busyRepo = signal(false);
   protected readonly reposPlanNotice = signal("");
   protected readonly confirmReq = signal<ConfirmRequest | null>(null);
-  protected readonly reachableRepos = signal<{repo: string, push: boolean}[]>([]);
   protected readonly loadingReachableRepos = signal(false);
   protected readonly reachableErrors = signal<string[]>([]);
   protected readonly reachableHostMismatches = signal<string[]>([]);
   protected readonly reachableReason = signal("");
-
-  protected repoWarning(repo: string): string | null {
-    const policy = (this.state.config() as Record<string, Record<string, string[]>> | undefined)?.['localPolicy']?.['repos'];
-    if (policy && policy.length > 0 && !policy.includes(repo)) return "Blocked by local policy";
-    if (this.reachableRepos().length > 0 && !this.reachableRepos().find(r => r.repo === repo)) return "Unreachable";
-    return null;
-  }
-
-  protected async loadReachableRepos(): Promise<void> {
-    if (this.reachableRepos().length > 0 || this.loadingReachableRepos()) return;
-    this.loadingReachableRepos.set(true);
-    try {
-      const res = await this.api.get<{
-        repos?: {repo: string, push: boolean}[];
-        errors?: string[];
-        hostMismatches?: string[];
-        reason?: string;
-      }>("GET /api/deployment/reachable-repos");
-      this.reachableRepos.set(res?.repos || []);
-      this.reachableErrors.set(res?.errors || []);
-      this.reachableHostMismatches.set(res?.hostMismatches || []);
-      this.reachableReason.set(res?.reason || "");
-      this.reachableCount.set(this.reachableRepos().length);
-    } catch (err) {
-      this.state.error.set(errText(err));
-    } finally {
-      this.loadingReachableRepos.set(false);
-    }
-  }
 
   protected readonly gitConnections = signal<GitConnectionRow[]>([]);
   protected readonly gitCheckMessage = signal("");
@@ -1090,6 +1127,80 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly configFiles = signal<string[]>([]);
   protected readonly selectedConfigFile = signal("");
   protected readonly configFileContent = signal("");
+
+  protected inputVal(ev: Event): string {
+    const target = ev.target;
+    return target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement
+      ? target.value
+      : "";
+  }
+
+  protected repoWarning(repo: string): string | null {
+    const policy = (
+      this.state.config() as
+        Record<string, Record<string, string[]>> | undefined
+    )?.["localPolicy"]?.["repos"];
+    if (policy && policy.length > 0 && !policy.includes(repo))
+      return "Blocked by local policy";
+    if (
+      this.reachableRepos().length > 0 &&
+      !this.reachableRepos().some((r) => r.repo === repo)
+    )
+      return "Unreachable";
+    return null;
+  }
+
+  protected hasReachableRepo(slug: string): boolean {
+    return this.reachableRepos().some((r) => r.repo === slug);
+  }
+
+  protected async loadReachableRepos(): Promise<void> {
+    if (this.reachableRepos().length > 0 || this.loadingReachableRepos())
+      return;
+    this.loadingReachableRepos.set(true);
+    try {
+      const res = await this.api.get<
+        | unknown[]
+        | {
+            repos?: unknown[];
+            errors?: string[];
+            hostMismatches?: string[];
+            reason?: string;
+          }
+      >("GET /api/deployment/reachable-repos");
+      const rawList = Array.isArray(res) ? res : (res?.repos ?? []);
+      const parsed: { repo: string; push: boolean }[] = [];
+      const seen = new Set<string>();
+      for (const item of rawList) {
+        let slug = "";
+        let push = true;
+        if (typeof item === "string") {
+          slug = item.trim();
+        } else if (item && typeof item === "object" && "repo" in item) {
+          const obj = item as { repo?: unknown; push?: unknown };
+          slug = typeof obj.repo === "string" ? obj.repo.trim() : "";
+          if (typeof obj.push === "boolean") push = obj.push;
+        }
+        if (slug && !seen.has(slug)) {
+          seen.add(slug);
+          parsed.push({ repo: slug, push });
+        }
+      }
+      parsed.sort((a, b) => a.repo.localeCompare(b.repo));
+      this.reachableRepos.set(parsed);
+      this.reachableErrors.set(!Array.isArray(res) ? (res?.errors ?? []) : []);
+      this.reachableHostMismatches.set(
+        !Array.isArray(res) ? (res?.hostMismatches ?? []) : [],
+      );
+      this.reachableReason.set(!Array.isArray(res) ? (res?.reason ?? "") : "");
+      this.reachableCount.set(parsed.length);
+    } catch (err) {
+      this.state.error.set(errText(err));
+    } finally {
+      this.loadingReachableRepos.set(false);
+    }
+  }
 
   protected configFileOptions(): PillOption[] {
     return this.configFiles().map((f) => ({ value: f, label: f }));
@@ -1150,30 +1261,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     if (sec === "repositories") {
       this.syncReposList();
       if (this.access.can("GET /api/deployment/reachable-repos")) {
-        void this.api
-          .get<unknown[] | { repos?: unknown[] }>(
-            "GET /api/deployment/reachable-repos",
-          )
-          .then((r) => {
-            const list = Array.isArray(r) ? r : (r?.repos ?? []);
-            const names = Array.from(
-              new Set(
-                list
-                  .map((item) => {
-                    if (typeof item === "string") return item.trim();
-                    if (item && typeof item === "object" && "repo" in item) {
-                      const slug = (item as { repo?: unknown }).repo;
-                      return typeof slug === "string" ? slug.trim() : "";
-                    }
-                    return "";
-                  })
-                  .filter(Boolean),
-              ),
-            ).sort((a, b) => a.localeCompare(b));
-            this.reachableCount.set(list.length);
-            this.reachableRepos.set(names);
-          })
-          .catch(() => undefined);
+        void this.loadReachableRepos();
       }
     } else if (sec === "git") {
       void this.loadGitConnections();
@@ -1279,6 +1367,8 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   }
 
   private async performAddRepo(repo: string): Promise<void> {
+    if (this.busyRepo()) return;
+    this.busyRepo.set(true);
     try {
       const cloneUrl = this.newRepoUrl().trim();
       await this.api.post("POST /api/repos", undefined, {
@@ -1292,6 +1382,8 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       this.snackbar.show(`Added ${repo}`);
     } catch (err) {
       this.state.error.set(errText(err));
+    } finally {
+      this.busyRepo.set(false);
     }
   }
 
@@ -1311,24 +1403,6 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     }
   }
 
-  protected async planRepoRemoval(repo: string): Promise<void> {
-    try {
-      this.reposPlanNotice.set("Checking stranded tasks...");
-      const plan = await this.api.post<{ tasks?: string[]; schedules?: string[] }>(
-        "POST /api/repos/plan",
-        undefined,
-        { targetRepos: this.repos().filter((r) => r !== repo) }
-      );
-      const stranded = (plan?.tasks?.length || 0) + (plan?.schedules?.length || 0);
-      let msg = "";
-      if (stranded > 0) msg += `Warning: This will strand ${stranded} tasks/schedules.\n`;
-      msg += `Warning: Per-repo settings (setup command, prompt, grants) will be deleted.`;
-      this.reposPlanNotice.set(msg);
-    } catch (err) {
-      this.reposPlanNotice.set(errText(err));
-    }
-  }
-
   protected async startRemoveRepo(repo: string): Promise<void> {
     this.reposPlanNotice.set("Checking stranded tasks...");
     this.confirmReq.set({
@@ -1344,18 +1418,21 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
         });
         this.repos.update((list) => list.filter((r) => r !== repo));
         this.snackbar.show(`Removed ${repo}`);
-      }
+      },
     });
 
     try {
-      const plan = await this.api.post<{ tasks?: string[]; schedules?: string[] }>(
-        "POST /api/repos/plan",
-        undefined,
-        { targetRepos: this.repos().filter((r) => r !== repo) }
-      );
-      const stranded = (plan?.tasks?.length || 0) + (plan?.schedules?.length || 0);
+      const plan = await this.api.post<{
+        tasks?: string[];
+        schedules?: string[];
+      }>("POST /api/repos/plan", undefined, {
+        targetRepos: this.repos().filter((r) => r !== repo),
+      });
+      const stranded =
+        (plan?.tasks?.length || 0) + (plan?.schedules?.length || 0);
       let msg = "";
-      if (stranded > 0) msg += `Warning: This will strand ${stranded} tasks/schedules.\n`;
+      if (stranded > 0)
+        msg += `Warning: This will strand ${stranded} tasks/schedules.\n`;
       msg += `Warning: Per-repo settings (setup command, prompt, grants) will be deleted.`;
       this.reposPlanNotice.set(msg);
       // Update the request with the new message
@@ -1496,13 +1573,18 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       const res = await this.api.post<{
         ok?: boolean;
         summary?: string;
-        repos?: { repo?: string; read?: boolean; push?: boolean; error?: string }[];
+        repos?: {
+          repo?: string;
+          read?: boolean;
+          push?: boolean;
+          error?: string;
+        }[];
       }>("POST /api/deployment/git-connections/check", undefined, {});
-      
-      const unreachable = res?.repos?.filter(r => !r.read || r.error) || [];
+
+      const unreachable = res?.repos?.filter((r) => !r.read || r.error) || [];
       if (unreachable.length > 0) {
         this.gitCheckMessage.set(
-          `OK, but unreachable repos: ${unreachable.map(r => r.repo + (r.error ? ` (${r.error})` : "")).join("; ")}`
+          `OK, but unreachable repos: ${unreachable.map((r) => r.repo + (r.error ? ` (${r.error})` : "")).join("; ")}`,
         );
       } else {
         this.gitCheckMessage.set(

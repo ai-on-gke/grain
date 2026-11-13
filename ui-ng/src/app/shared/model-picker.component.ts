@@ -17,9 +17,11 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
+  Injector,
   NgZone,
   OnDestroy,
   ViewEncapsulation,
+  afterNextRender,
   computed,
   inject,
   input,
@@ -216,6 +218,7 @@ let nextModelPickerId = 0;
 export class ModelPickerComponent implements OnDestroy {
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
+  private readonly injector = inject(Injector);
   private readonly uid = ++nextModelPickerId;
   protected readonly panelId = `mp-panel-${this.uid}`;
   protected readonly listId = `mp-list-${this.uid}`;
@@ -284,13 +287,13 @@ export class ModelPickerComponent implements OnDestroy {
         rows: [{ key: `mp-${this.uid}-current`, model: v, groupId: "" }],
       });
     }
-    groups.forEach((g, gi) => {
+    for (const [gi, g] of groups.entries()) {
       const rows = g.models.filter(keep).map((m, mi) => ({
         key: `mp-${this.uid}-o-${gi}-${mi}`,
         model: m,
         groupId: g.id,
       }));
-      if (!rows.length) return;
+      if (!rows.length) continue;
       const notes: string[] = [];
       if (g.framework) notes.push(g.framework);
       if (g.disabled) notes.push("disabled");
@@ -302,7 +305,7 @@ export class ModelPickerComponent implements OnDestroy {
         note: notes.join(" · "),
         rows,
       });
-    });
+    }
     return out;
   });
 
@@ -332,9 +335,12 @@ export class ModelPickerComponent implements OnDestroy {
     this.zone.runOutsideAngular(() => {
       this.doc.addEventListener("keydown", this.onCaptureKeydown, true);
     });
-    setTimeout(() => {
-      if (this.open()) this.searchEl()?.nativeElement.focus();
-    }, 0);
+    afterNextRender(
+      () => {
+        if (this.open()) this.searchEl()?.nativeElement.focus();
+      },
+      { injector: this.injector },
+    );
   }
 
   private close(restoreFocus: boolean): void {
