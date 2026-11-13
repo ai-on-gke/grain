@@ -1481,7 +1481,7 @@ export function formatHostdLabels(
                            checks who enrolled the host and the key it
                            will be bound to (docs/host-placement.md). -->
                       <td
-                        class="tabular"
+                        class="s-fingerprint"
                         [attr.data-testid]="'pending-key-fingerprint-' + p.id"
                       >
                         {{ p.key_fingerprint || "—" }}
