@@ -1091,7 +1091,7 @@ export function duration(from?: string, to?: string): string {
               }
               <dt>Filed</dt>
               <dd>
-                {{ ago(t.createdAt) }} ago by
+                {{ filedAgo(t.createdAt) }} by
                 {{ t.authorLabel || t.author || "unknown" }}
               </dd>
               @if (t.approvedByLabel) {
@@ -1268,6 +1268,13 @@ export class TaskDetailComponent implements OnDestroy {
 
   protected readonly label = stateLabel;
   protected readonly ago = ago;
+  // filedAgo reads "just now" rather than "now ago" for a task filed in
+  // the last minute (ago() says "now" there).
+  protected filedAgo(iso: string | undefined): string {
+    const a = ago(iso);
+    if (!a) return "";
+    return a === "now" ? "just now" : `${a} ago`;
+  }
   protected readonly dur = duration;
   protected readonly prio = priorityOf;
   protected readonly level = levelOf;

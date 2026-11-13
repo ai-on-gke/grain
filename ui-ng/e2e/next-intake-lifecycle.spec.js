@@ -86,6 +86,10 @@ test("files a stored template from the New task sheet with the template's priori
     expect(t.priority).toBe(8);
     expect(t.templateId).toBe(tmpl.id);
     expect(t.title).toBe("Urgent: walk");
+    // Its page says it was filed "just now", never "now ago".
+    await page.goto(`task/${createdId}`);
+    await expect(page.getByText(/just now by/)).toBeVisible();
+    await expect(page.getByText(/\bnow ago\b/)).toHaveCount(0);
   } finally {
     if (createdId) {
       await fetch(`${demoServer}/api/tasks/${createdId}/close`, {
