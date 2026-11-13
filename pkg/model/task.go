@@ -2257,6 +2257,18 @@ type Task struct {
 	// may push (Store.GitDeclaredPush). Never inherited by a proposal: an
 	// agent cannot hand its own push set on to work it files.
 	TemplateID string
+	// SourceTemplateID is the template this task's content was filed
+	// from, for reporting alone (grain/task-5273): what the code-quality
+	// report splits change failure rate, first-push CI and review findings
+	// by. It is TemplateID wherever that is set, and besides it records
+	// what TemplateID deliberately does not: an agent's proposal naming a
+	// template_id, and a port of a task filed from one. It grants nothing
+	// -- no push set, no template-restricted capability, no goal -- which
+	// is what lets it be recorded where TemplateID may not be. Stored in
+	// task_source_template; putTask writes TemplateID there when this is
+	// empty, so a firing that sets only TemplateID is recorded too, and a
+	// task rewritten on redispatch keeps whatever was recorded at filing.
+	SourceTemplateID string
 	// Owner is the account responsible for this task (attribution.design.md):
 	// fixed at creation from the filer / on-behalf-of / schedule owner /
 	// deployment fallback, inherited along DerivedFrom, and reassignable by
