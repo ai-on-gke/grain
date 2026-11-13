@@ -456,7 +456,8 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, task model.
 		body := strings.TrimSpace(filled.Body) + "\n\n---\n\n" + fmt.Sprintf(
 			"You are reviewing task %s (%q), whose work is on `%s` and proposed in %s. "+
 				"Your checkout is that branch itself: diff it against %s's base to see the change, and push "+
-				"any fix to it.\n", task.ID, task.Title, task.BranchName(), ref, ref) + facts
+				"any fix to it.\n\n", task.ID, task.Title, task.BranchName(), ref, ref) +
+			changeUnderReviewSection(task, true) + facts
 		review, err = newReview(ctx, store, task, filled, securityReviewTitle(task), body, true, now)
 	case settings.fixes:
 		review, err = newReview(ctx, store, task, filled, reviewTaskTitle(filled, task),
@@ -534,11 +535,17 @@ func incrementalNote(since, head string, delta []string) string {
 	return b.String()
 }
 
+const reviewFactsHeader = "\n\n---\n\ngrain: filed by the path trigger(s) "
+
 // stripIncrementalReview converts an undispatched incremental review into a
 // full review when the earlier review it depended on closed without finishing.
 func stripIncrementalReview(t *model.Task) {
-	if idx := strings.Index(t.Body, incrementalNoteHeader); idx >= 0 {
-		t.Body = t.Body[:idx]
+	searchFrom := 0
+	if factsIdx := strings.LastIndex(t.Body, reviewFactsHeader); factsIdx >= 0 {
+		searchFrom = factsIdx
+	}
+	if rel := strings.Index(t.Body[searchFrom:], incrementalNoteHeader); rel >= 0 {
+		t.Body = t.Body[:searchFrom+rel]
 	}
 	t.Tags = slices.DeleteFunc(t.Tags, func(tag string) bool {
 		return strings.HasPrefix(tag, "path-trigger-since:")
@@ -565,6 +572,7 @@ func reviewFindingsBody(tmpl model.Template, task model.Task, ref model.PullRequ
 		task.ID, task.Title, branch, ref, ref, task.ID)
 	b.WriteString("\n\n" + reviewFindingsTestingAndCINote)
 	b.WriteString("\n\n" + reviewHumanReviewNote)
+	b.WriteString("\n\n" + changeUnderReviewSection(task, true))
 	return b.String()
 }
 
