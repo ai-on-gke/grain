@@ -30,6 +30,21 @@ const FOCUSABLE_SELECTOR =
 const INITIAL_FOCUS_SELECTOR =
   'input:not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
 
+function isFocusableVisible(
+  el: HTMLElement,
+  host: HTMLElement,
+  win: Window | null,
+): boolean {
+  if (el.hidden || el.closest("[hidden],[inert]")) return false;
+  if (!win || typeof win.getComputedStyle !== "function") return true;
+  for (let cur: HTMLElement | null = el; cur; cur = cur.parentElement) {
+    const st = win.getComputedStyle(cur);
+    if (st.display === "none" || st.visibility === "hidden") return false;
+    if (cur === host) break;
+  }
+  return true;
+}
+
 @Directive({
   selector: "[gDialogTrap]",
 })
@@ -69,7 +84,10 @@ export class DialogTrapDirective implements OnInit, AfterViewInit, OnDestroy {
     }
     queueMicrotask(() => {
       if (!host.isConnected) return;
-      const first = host.querySelector<HTMLElement>(INITIAL_FOCUS_SELECTOR);
+      const win = this.doc.defaultView;
+      const first = Array.from(
+        host.querySelectorAll<HTMLElement>(INITIAL_FOCUS_SELECTOR),
+      ).find((item) => isFocusableVisible(item, host, win));
       (first ?? host).focus();
     });
   }
@@ -87,9 +105,10 @@ export class DialogTrapDirective implements OnInit, AfterViewInit, OnDestroy {
 
   private trapTab(ev: KeyboardEvent): void {
     const host = this.el.nativeElement;
+    const win = this.doc.defaultView;
     const items = Array.from(
       host.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
-    );
+    ).filter((item) => isFocusableVisible(item, host, win));
     if (items.length === 0) {
       ev.preventDefault();
       host.focus();

@@ -77,7 +77,9 @@ const DIFF_TTL_MS = 60000;
 
 export function wantsDiff(e: InboxEntry | null): boolean {
   if (!e?.taskId) return false;
-  return DIFF_KINDS.has(e.kind) || !!e.task?.pullRequest;
+  if (DIFF_KINDS.has(e.kind) || !!e.task?.pullRequest) return true;
+  if (e.kind === "proposal") return !!e.repo;
+  return false;
 }
 
 function loadSeen(): Set<string> {

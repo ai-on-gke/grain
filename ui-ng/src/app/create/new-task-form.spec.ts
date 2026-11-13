@@ -271,6 +271,12 @@ describe("new task form", () => {
       "newBranchName",
     );
     expect(validate({ ...d, title: "t" })).toBeNull();
+    expect(validate({ ...d, title: "t", foundIn: "not-a-tag" })).toEqual({
+      field: "foundIn",
+      message: "Use a release tag such as v3.6.0 or v3.6.0-rc.2.",
+    });
+    expect(validate({ ...d, title: "t", foundIn: "v3.6.0" })).toBeNull();
+    expect(validate({ ...d, title: "t", foundIn: "v3.6.0-rc.2" })).toBeNull();
 
     const tmpl: Template = {
       id: "bugfix",
