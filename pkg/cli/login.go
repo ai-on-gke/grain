@@ -55,10 +55,19 @@ func flagWasSet(fs *flag.FlagSet, name string) bool {
 // useContextCredential has c send sel's credential to sel's own server
 // (#XC-4), and a google-id-token context's audience, and returns what c's
 // credential comes from: explicit (tokenSource's), else the context.
+//
+// A personal token minted through IAP (an external-token context with an
+// audience) is sent with a Google ID token beside it in
+// Proxy-Authorization, since IAP lets nothing through on a gma_ token
+// alone; $GRAIN_ID_TOKEN is then that ID token, not the credential.
 func useContextCredential(c *ui.HTTPClient, sel selectedContext, explicit string) string {
 	c.ContextToken = contextToken(sel, c.BaseURL, newCredentialStore())
 	if c.Audience == "" && sel.ctx != nil && sel.ctx.Audience != "" && sameOrigin(sel.ctx.Server, c.BaseURL) {
 		c.Audience = sel.ctx.Audience
+	}
+	if (explicit == "" || explicit == "$"+ui.IDTokenEnv) && c.Token == "" && c.ContextToken != nil &&
+		sel.ctx != nil && sel.ctx.Auth == "external-token" && sel.ctx.Audience != "" {
+		c.IAPProxyAuth, explicit = true, ""
 	}
 	return contextTokenSource(explicit, c, sel)
 }
@@ -94,6 +103,9 @@ func contextTokenSource(explicit string, c *ui.HTTPClient, sel selectedContext) 
 type whoamiView struct {
 	Context string `json:"context,omitempty"`
 	Server  string `json:"server"`
+	// Socket is the daemon's API socket the CLI went over in place of
+	// Server (hostSocket).
+	Socket string `json:"socket,omitempty"`
 	ui.AuthWhoamiResponse
 }
 
@@ -116,13 +128,24 @@ func cmdWhoami(ctx context.Context, c *ui.HTTPClient, out *printer, sel selected
 			err: fmt.Errorf("not signed in to %s (it accepts %s): run %s", c.BaseURL, strings.Join(who.AcceptedAuth, ", "), fix)}
 	}
 	if out.json {
-		out.encode(whoamiView{Context: sel.name, Server: c.BaseURL, AuthWhoamiResponse: who})
+		out.encode(whoamiView{Context: sel.name, Server: c.BaseURL, Socket: c.Socket, AuthWhoamiResponse: who})
 		return nil
 	}
 	if sel.name != "" {
 		fmt.Printf("context: %s\n", sel.name)
 	}
-	fmt.Printf("server: %s\nprincipal: %s\n", c.BaseURL, who.Principal)
+	if c.Socket != "" {
+		// Over the socket no credential was sent: the daemon knows the
+		// caller by the uid that connected (external-cli.spec.md#XC-8).
+		fmt.Printf("server: %s, over the API socket %s\n", c.BaseURL, c.Socket)
+	} else {
+		fmt.Printf("server: %s\n", c.BaseURL)
+	}
+	if who.HostAccount {
+		fmt.Printf("principal: %s (the host account uid %d maps to)\n", who.Principal, os.Getuid())
+	} else {
+		fmt.Printf("principal: %s\n", who.Principal)
+	}
 	if who.Owner != "" {
 		fmt.Printf("owner: %s\n", who.Owner)
 	}
@@ -158,7 +181,7 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
 	name := fs.String("name", "", "the context's name (default: from the server's host name)")
 	issue := fs.Bool("issue-token", false, "mint a scoped gma_ token for this workstation and keep it "+
-		"(the default when IAP or a credential source signs in a person; --issue-token=false declines)")
+		"(the default when IAP -- $GRAIN_ID_TOKEN, ADC or gcloud -- or a credential source signs in a person; --issue-token=false declines)")
 	scopeSet := fs.String("scope-set", defaultLoginScopeSet, "the scope set --issue-token mints")
 	repos := fs.String("repos", "", "comma-separated repositories --issue-token limits the token to")
 	expires := fs.String("expires", "30d", "how long --issue-token's token lasts (30d, 12h, ...)")
@@ -252,13 +275,29 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 	}
 	// Signed in as a person IAP or a trusted identity proxy vouched for,
 	// the workstation keeps a personal token of theirs afterwards, so the
-	// CLI needs neither the proxy's sign-in nor the access code day to
-	// day. --issue-token=false signs in through the proxy every time.
+	// CLI needs no access code day to day (behind IAP it still sends an
+	// ID token beside it, useContextCredential). --issue-token=false
+	// signs in through the proxy every time.
+	// $GRAIN_ID_TOKEN is such a sign-in too, when the server says it is a
+	// person: a Google ID token for IAP, never an access code.
 	personal := false
+	explicit := tokenSource(lc.Token)
+	human := who.Authenticated && strings.HasPrefix(who.Principal, string(model.PrincipalHuman)+":")
+	idToken := *auth == "" && explicit == "$"+ui.IDTokenEnv && !ui.IsLoopbackURL(server) && human
+	if idToken {
+		explicit = ""
+	}
 	viaIdentity := (*auth != "" && !builtinAuth[*auth]) ||
-		(*auth == "" && lc.Token == "" && tokenSource("") == "" && !ui.IsLoopbackURL(server))
-	if viaIdentity && !*tokenStdin && !*refresh && !flagWasSet(fs, "issue-token") &&
-		who.Authenticated && strings.HasPrefix(who.Principal, string(model.PrincipalHuman)+":") {
+		(*auth == "" && explicit == "" && !ui.IsLoopbackURL(server))
+	// Behind IAP a gma_ token reaches the daemon only with an ID token
+	// beside it (useContextCredential), so the context keeps the audience.
+	iapAudience := ""
+	if viaIdentity && *auth == "" && contains(who.AcceptedAuth, "iap") {
+		if iapAudience = lc.Audience; iapAudience == "" {
+			iapAudience = server
+		}
+	}
+	if viaIdentity && !*tokenStdin && !*refresh && !flagWasSet(fs, "issue-token") && human {
 		if who.ExternalAgentAPI {
 			*issue, personal = true, true
 		} else {
@@ -312,7 +351,10 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 		if err != nil {
 			return err
 		}
-		entry.Auth, entry.TokenID = "external-token", issued.ID
+		entry.Auth, entry.TokenID, entry.Audience = "external-token", issued.ID, iapAudience
+		if entry.Audience == "" && *refresh && prior != nil {
+			entry.Audience = prior.Audience
+		}
 		if entry.Credential, err = store.store(*name, issued.Token); err != nil {
 			return err
 		}
@@ -321,12 +363,13 @@ func cmdLogin(ctx context.Context, base *ui.HTTPClient, out *printer, sel select
 			return loginRefused(server, nil)
 		}
 		entry.Auth = *auth
-	case lc.Token != "" || tokenSource("") != "":
-		// An access code (or some other secret) given with -token.
+	case explicit != "":
+		// An access code (or some other secret) given with -token or the
+		// environment.
 		if who.ExternalAgentAPI && *auth != "access-code" {
 			return &cliError{exit: exitUsage, code: "access_code_refused", fix: "grain login " + server + " --issue-token",
-				err: fmt.Errorf("not storing the token -token gave: %s accepts gma_ tokens, so mint one with --issue-token "+
-					"(or pass --auth access-code to keep the access code anyway)", server)}
+				err: fmt.Errorf("not storing the token %s gave: %s accepts gma_ tokens, so mint one with --issue-token "+
+					"(or pass --auth access-code to keep the access code anyway)", explicit, server)}
 		}
 		if !who.Authenticated {
 			return loginRefused(server, nil)

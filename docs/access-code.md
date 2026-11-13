@@ -559,14 +559,28 @@ its own.
 ### Elsewhere: `grain login` through IAP or an identity proxy
 
 `grain login <url>` that signs a person in through IAP (a Google ID
-token) or a credential source a wrapper registered (`--auth <source>`)
+token: `$GRAIN_ID_TOKEN`, else Application Default Credentials or
+gcloud) or a credential source a wrapper registered (`--auth <source>`)
 now keeps a personal token afterwards: a `grain/external-dev` `gma_`
 token owned by them, as `--issue-token` mints. From then on the context
 is that token, recorded as `external:cli-…` on behalf of the person,
-and needs neither the proxy's sign-in nor the code day to day. `grain
-logout` revokes it. `--issue-token=false` keeps a context that signs in
-through the proxy on every call instead. A deployment with
-`externalAgentApi` off cannot issue one, and says so.
+and needs no access code day to day. `grain logout` revokes it.
+`--issue-token=false` keeps a context that signs in through the proxy
+on every call instead. A deployment with `externalAgentApi` off cannot
+issue one, says so, and keeps that proxy-every-time context.
+`$GRAIN_ID_TOKEN` counts as a sign-in of this kind, never as an access
+code, whenever the daemon says it signed in a person.
+
+IAP itself lets no request through on a `gma_` token alone ("IAP:
+sign-in required"). So a context minted through IAP remembers IAP's
+audience, and every call it makes sends the `gma_` token in
+`Authorization` with a Google ID token beside it in
+`Proxy-Authorization` — `$GRAIN_ID_TOKEN` when set, else one minted
+from ADC or gcloud for that audience — which IAP checks and removes,
+passing `Authorization` on to the daemon. The daemon then acts on the
+token's scopes, not the person's whole role. Where the daemon is
+reachable without IAP (a tunnel to its port, the host itself), the
+`gma_` token alone is enough.
 
 ## Bootstrap and recovery only: `grain access-code mode`
 

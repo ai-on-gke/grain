@@ -116,7 +116,7 @@ func TestAPISocketRequestIsRecordedAsTheMappedOwner(t *testing.T) {
 	}
 
 	code, body = socketDo(t, c, http.MethodGet, "/api/auth/whoami", nil)
-	if code != http.StatusOK || !strings.Contains(body, `"principal":"human:alice@example.com"`) {
+	if code != http.StatusOK || !strings.Contains(body, `"principal":"human:alice@example.com"`) || !strings.Contains(body, `"hostAccount":true`) {
 		t.Fatalf("GET /api/auth/whoami on the socket: %d %s", code, body)
 	}
 }

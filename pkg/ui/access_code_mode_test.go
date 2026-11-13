@@ -170,18 +170,33 @@ func TestRecoveryModeHoldsTheCodeToAccessAndSettings(t *testing.T) {
 }
 
 // Off refuses the code everywhere: as a bearer token, a session, and at
-// sign-in.
+// sign-in -- and every one of those refusals says the code is switched
+// off rather than asking for it (docs/test-runs/2026-11-11-caller-identity.md),
+// a wrong code alike, so the answer tells nobody whether it was right.
 func TestTurningTheCodeOffRefusesIt(t *testing.T) {
 	srv, _ := testServer(t)
 	ui.SetAccessCodeForTest(srv, testAccessCode)
 	cookie := signInWithCode(t, srv, "alice@example.com")
 	ui.SetAccessCodeModeForTest(srv, ui.AccessCodeOff)
 
-	if rec := serveFrom(srv, networkAddr, http.MethodGet, "/api/tasks", "", map[string]string{"Authorization": "Bearer " + testAccessCode}); rec.Code != http.StatusUnauthorized {
-		t.Errorf("GET /api/tasks with the code switched off: %d %s, want 401", rec.Code, rec.Body)
+	for _, tc := range []struct {
+		what    string
+		headers map[string]string
+	}{
+		{"the code as a bearer token", map[string]string{"Authorization": "Bearer " + testAccessCode}},
+		{"a wrong code as a bearer token", map[string]string{"Authorization": "Bearer NOTTHECODE1234"}},
+		{"the code in " + ui.AccessCodeHeader, map[string]string{ui.AccessCodeHeader: testAccessCode}},
+		{"a session", map[string]string{"Cookie": cookie.String()}},
+	} {
+		rec := serveFrom(srv, networkAddr, http.MethodGet, "/api/tasks", "", tc.headers)
+		if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "switched off") {
+			t.Errorf("GET /api/tasks with %s and the code switched off: %d %s, want 401 saying it is off", tc.what, rec.Code, rec.Body)
+		}
 	}
-	if rec := serveFrom(srv, networkAddr, http.MethodGet, "/api/tasks", "", map[string]string{"Cookie": cookie.String()}); rec.Code != http.StatusUnauthorized {
-		t.Errorf("GET /api/tasks with a session and the code switched off: %d %s, want 401", rec.Code, rec.Body)
+	// A caller showing no code at all is still told how to sign in.
+	if rec := serveFrom(srv, networkAddr, http.MethodGet, "/api/tasks", "", nil); rec.Code != http.StatusUnauthorized ||
+		strings.Contains(rec.Body.String(), "switched off") {
+		t.Errorf("GET /api/tasks with no credential: %d %s, want the usual 401", rec.Code, rec.Body)
 	}
 	body := `{"code":"` + testAccessCode + `","name":"alice@example.com"}`
 	if rec := serveFrom(srv, networkAddr, http.MethodPost, "/api/auth/access-code", body, map[string]string{"Content-Type": "application/json"}); rec.Code != http.StatusForbidden ||

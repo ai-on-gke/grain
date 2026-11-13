@@ -82,6 +82,13 @@ type HTTPClient struct {
 	// and before the local API token or a Google ID token. "" with no
 	// error falls through to those.
 	ContextToken func(ctx context.Context) (string, error)
+	// IAPProxyAuth sends a Google ID token for Audience in
+	// Proxy-Authorization beside the bearer credential, which is what IAP
+	// accepts from a client whose Authorization header carries something
+	// of the app's own (a context's gma_ token): IAP consumes the ID token
+	// and passes Authorization on. $GRAIN_ID_TOKEN, when set, is that ID
+	// token rather than the bearer; otherwise it comes from ADC or gcloud.
+	IAPProxyAuth bool
 	// User is the optional identity to send in proxy identity headers (e.g. X-Forwarded-User).
 	User string
 	// ActingReason, when set, is sent as X-Grain-Acting-Reason: the
@@ -148,6 +155,17 @@ func (c *HTTPClient) prepareRequest(ctx context.Context, req *http.Request) erro
 			}
 		}
 	}
+	if c.IAPProxyAuth {
+		idt := strings.TrimSpace(os.Getenv(IDTokenEnv))
+		if idt == "" {
+			if idt, err = c.getGoogleIDToken(ctx); err != nil {
+				return err
+			}
+		}
+		if idt != "" {
+			req.Header.Set("Proxy-Authorization", "Bearer "+strings.TrimSpace(strings.TrimPrefix(idt, "Bearer ")))
+		}
+	}
 	if c.User != "" {
 		req.Header.Set("X-Forwarded-User", c.User)
 	}
@@ -175,7 +193,11 @@ const (
 
 // TokenEnvVars are the environment variables HTTPClient reads for a bearer
 // token, in precedence order.
-var TokenEnvVars = []string{"GRAIN_TOKEN", "GRAIN_AUTH_TOKEN", "GRAIN_ID_TOKEN", "GRAIN_TUNNEL_TOKEN"}
+var TokenEnvVars = []string{"GRAIN_TOKEN", "GRAIN_AUTH_TOKEN", IDTokenEnv, "GRAIN_TUNNEL_TOKEN"}
+
+// IDTokenEnv is the one of TokenEnvVars that holds a Google ID token: a
+// person's identity for IAP to vouch for, not a secret of the daemon's.
+const IDTokenEnv = "GRAIN_ID_TOKEN"
 
 func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	if c.Token != "" {
@@ -185,6 +207,9 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 		return c.TokenProvider(ctx)
 	}
 	for _, env := range TokenEnvVars {
+		if env == IDTokenEnv && c.IAPProxyAuth {
+			continue // sent in Proxy-Authorization instead
+		}
 		if val := strings.TrimSpace(os.Getenv(env)); val != "" {
 			return val, nil
 		}
