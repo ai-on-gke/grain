@@ -12,7 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Routes } from "@angular/router";
+import { inject } from "@angular/core";
+import {
+  Router,
+  type Routes,
+  type UrlMatchResult,
+  type UrlSegment,
+} from "@angular/router";
+
+// Before the single-tenant reset every page lived under /t/<team>/, and
+// links people saved from then still name one. The team means nothing
+// now, so /t/<team>/<rest> opens <rest> -- the page it names, with its
+// query and fragment -- the way the classic UI's paths.js reads it,
+// rather than falling through to the catch-all and landing on Inbox.
+export function teamPrefixMatcher(
+  segments: UrlSegment[],
+): UrlMatchResult | null {
+  return segments.length >= 2 && segments[0].path === "t"
+    ? { consumed: segments }
+    : null;
+}
 
 // Every page is lazy, so the shell's own bundle stays inside the budget
 // (angular.json) however many pages move over. A path this app does not
@@ -199,6 +218,14 @@ export const routes: Routes = [
     loadComponent: () =>
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
+      ),
+  },
+  {
+    matcher: teamPrefixMatcher,
+    redirectTo: ({ url, queryParams, fragment }) =>
+      inject(Router).createUrlTree(
+        ["/", ...url.slice(2).map((segment) => segment.path)],
+        { queryParams, fragment: fragment ?? undefined },
       ),
   },
   { path: "**", redirectTo: "inbox" },
