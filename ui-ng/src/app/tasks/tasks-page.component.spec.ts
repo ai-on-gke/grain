@@ -488,6 +488,9 @@ describe("TasksPageComponent", () => {
       ).toBe("30");
       expect(q(f, '[data-testid="row-1"]')!.classList).toContain("is-selected");
       expect(q(f, "g-task-detail #task-title")!.textContent).toContain("#1");
+      // The page owns the one h1; the pane's title sits under it as an h2.
+      expect(q(f, "g-task-detail #task-title")!.tagName).toBe("H2");
+      expect(all(f, "h1")).toHaveLength(1);
       // Zero native <select> elements anywhere on g-tasks-page (including embedded g-task-detail).
       expect(all(f, "select")).toHaveLength(0);
 

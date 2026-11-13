@@ -238,14 +238,27 @@ export function duration(from?: string, to?: string): string {
               </span>
             }
           </div>
-          <h1
-            class="view-headline task-title"
-            id="task-title"
-            tabindex="-1"
-            #heading
-          >
-            <span class="muted">#{{ t.id }}</span> {{ t.title }}
-          </h1>
+          <!-- In a pane the page around it owns the h1 (one per page),
+               so the title steps down to h2 and its sections to h3. -->
+          @if (pane()) {
+            <h2
+              class="view-headline task-title"
+              id="task-title"
+              tabindex="-1"
+              #heading
+            >
+              <span class="muted">#{{ t.id }}</span> {{ t.title }}
+            </h2>
+          } @else {
+            <h1
+              class="view-headline task-title"
+              id="task-title"
+              tabindex="-1"
+              #heading
+            >
+              <span class="muted">#{{ t.id }}</span> {{ t.title }}
+            </h1>
+          }
           <div class="task-actions" role="group" aria-label="Task actions">
             @if (
               (t.state === "proposed" ||
@@ -629,7 +642,9 @@ export function duration(from?: string, to?: string): string {
         <!-- Inline Compact Context Box -->
         @if (compactOpen()) {
           <section class="compact-card" data-testid="compact-card">
-            <h2 class="section-title">Compact context for #{{ t.id }}</h2>
+            <h2 [attr.aria-level]="sectionLevel()" class="section-title">
+              Compact context for #{{ t.id }}
+            </h2>
             <p class="muted" style="margin: 0; font-size: 12px">
               Provide a handover note to compact immediately, or leave empty to
               ask the next run to compact first.
@@ -694,7 +709,9 @@ export function duration(from?: string, to?: string): string {
             <div class="task-tab-body">
               @switch (current()) {
                 @case ("conversation") {
-                  <h2 class="sr-only">Conversation</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Conversation
+                  </h2>
                   @if (t.questionSummary && t.state === "awaiting_reply") {
                     <div class="question-card" data-testid="question">
                       <strong>Asked:</strong> {{ t.questionSummary }}
@@ -730,7 +747,9 @@ export function duration(from?: string, to?: string): string {
                   />
                 }
                 @case ("runs") {
-                  <h2 class="sr-only">Runs</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Runs
+                  </h2>
                   @if (attempts().length === 0) {
                     <p class="empty-state">No runs yet.</p>
                   } @else {
@@ -886,7 +905,11 @@ export function duration(from?: string, to?: string): string {
                         aria-labelledby="transcript-h"
                         data-testid="transcript"
                       >
-                        <h2 id="transcript-h" class="section-title">
+                        <h2
+                          [attr.aria-level]="sectionLevel()"
+                          id="transcript-h"
+                          class="section-title"
+                        >
                           Run {{ n }} transcript
                           @if (isLive(n)) {
                             <span class="status-pill setup"
@@ -915,7 +938,9 @@ export function duration(from?: string, to?: string): string {
                 }
 
                 @case ("changes") {
-                  <h2 class="sr-only">Changes and CI</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Changes and CI
+                  </h2>
                   <g-task-changes-tab
                     (forceMerge)="forceMergeReq.set($event)"
                     [task]="t"
@@ -926,7 +951,9 @@ export function duration(from?: string, to?: string): string {
                 }
 
                 @case ("tree") {
-                  <h2 class="sr-only">Work tree</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="sr-only">
+                    Work tree
+                  </h2>
                   @let tree = store.tree();
                   @if (store.treeError(); as err) {
                     <p class="banner banner-error" role="alert">{{ err }}</p>
@@ -964,7 +991,9 @@ export function duration(from?: string, to?: string): string {
                     <p class="muted">Loading…</p>
                   }
 
-                  <h2 class="section-title">Waits on</h2>
+                  <h2 [attr.aria-level]="sectionLevel()" class="section-title">
+                    Waits on
+                  </h2>
                   @if (t.dependsOn?.length) {
                     <ul class="plain-list" data-testid="depends-on-list">
                       @for (d of t.dependsOn; track d) {
@@ -1047,7 +1076,9 @@ export function duration(from?: string, to?: string): string {
 
         <ng-template #details>
           <div class="details" data-testid="task-details">
-            <h2 class="section-title">Details</h2>
+            <h2 [attr.aria-level]="sectionLevel()" class="section-title">
+              Details
+            </h2>
             @if (t.description) {
               <div
                 class="msg-body description"
@@ -1256,6 +1287,9 @@ export class TaskDetailComponent implements OnDestroy {
   // pane is the Tasks right-hand pane: narrower, Details as a tab, its
   // tab kept in ?pane=, links to other tasks select them in the pane.
   readonly pane = input(false);
+  // sectionLevel sits the section headings one below the title: h3 in
+  // a pane (title h2), their own h2 on the full page (title h1).
+  readonly sectionLevel = computed(() => (this.pane() ? 3 : null));
   readonly closable = input(true);
   readonly from = input<string>();
   readonly back = input<BackLink | null>(null);

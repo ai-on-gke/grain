@@ -339,7 +339,10 @@ WCAG 2.1 AA is the floor.
 - Text contrast is at least 4.5:1 (3:1 for large text and UI shapes).
 - Focus is always visible (2px primary outline).
 - Hit targets are at least 24×24.
-- Landmarks and headings are in order (one `h1` per page).
+- Landmarks and headings are in order (one `h1` per page). A detail view
+  embedded in another page's split (task detail in the Tasks, Workstreams
+  and Agents panes) steps its title down to `h2` and its sections to
+  level 3; only its standalone page gives it the `h1`.
 - Live regions announce counts that change.
 - Dialogs trap focus and restore it on close.
 
