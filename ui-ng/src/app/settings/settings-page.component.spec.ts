@@ -19,6 +19,7 @@ import { RouterTestingHarness } from "@angular/router/testing";
 import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
 import { SettingsPageComponent } from "./settings-page.component";
+import { safeManagementUrl } from "./settings-instance.component";
 
 interface RecordedCall {
   method: "GET" | "TEXT" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -41,6 +42,12 @@ class FakeSettingsApi {
       full: true,
       scopes: [],
     },
+  };
+
+  upgradeBody: Record<string, unknown> = {
+    currentVersion: "v3.6.0",
+    phase: "downloading",
+    cancellable: true,
   };
 
   settingsBody: Record<string, unknown> = {
@@ -114,11 +121,7 @@ class FakeSettingsApi {
       return Promise.resolve(["tables/grain_config.json"]);
     }
     if (key === "GET /api/upgrade") {
-      return Promise.resolve({
-        currentVersion: "v3.6.0",
-        phase: "downloading",
-        cancellable: true,
-      });
+      return Promise.resolve(this.upgradeBody);
     }
     if (key === "GET /api/upgrade/targets") {
       return Promise.resolve([
@@ -557,6 +560,70 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     )!.click();
     await new Promise((r) => setTimeout(r, 200));
     expect(api.calls.some((c) => c.key === "POST /api/upgrade")).toBe(true);
+  });
+
+  it("says Not available, offers no Start upgrade and reads no targets when no upgrader is configured", async () => {
+    // 2026-11-13 deployment-operations walkthrough: a demo started without
+    // -upgrade-image read "dev", drew an enabled Start upgrade and 404ed
+    // on GET /api/upgrade/targets twice.
+    const api = new FakeSettingsApi();
+    api.configBody.version = {
+      release: "v0.0.0-20261113022244-4ae6438fdcd4",
+      commit: "4ae6438fdcd4a0fc373fb3da76888724685b75fd",
+      unversioned: true,
+    };
+    api.upgradeBody = { enabled: false, mode: "", phase: "" };
+    const { el } = await mountSettings("/settings/upgrade", api);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(
+      el.querySelector('[data-testid="current-daemon-version"]')?.textContent,
+    ).toContain("4ae6438");
+    expect(
+      el.querySelector('[data-testid="upgrade-unavailable"]')?.textContent,
+    ).toContain("Not available");
+    expect(el.querySelector('[data-testid="start-upgrade-btn"]')).toBeNull();
+    expect(api.calls.some((c) => c.key === "GET /api/upgrade/targets")).toBe(
+      false,
+    );
+  });
+
+  it("shows an externally managed deployment's notice and management link instead of upgrade controls", async () => {
+    const api = new FakeSettingsApi();
+    api.configBody.version = { release: "v3.6.0", commit: "abcdef0123456" };
+    api.upgradeBody = {
+      enabled: false,
+      running: { commit: "4ae6438fdcd4a0fc373fb3da76888724685b75fd" },
+      selfUpgradeDisabled: true,
+      managementUrl: "https://console.example.com/deployments/grain-prod",
+    };
+    const { el } = await mountSettings("/settings/upgrade", api);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(
+      el.querySelector('[data-testid="current-daemon-version"]')?.textContent,
+    ).toContain("4ae6438");
+    expect(
+      el.querySelector('[data-testid="upgrade-externally-managed"]')
+        ?.textContent,
+    ).toContain("managed externally");
+    expect(
+      el
+        .querySelector('[data-testid="upgrade-management-link"]')
+        ?.getAttribute("href"),
+    ).toBe("https://console.example.com/deployments/grain-prod");
+    expect(el.querySelector('[data-testid="upgrade-unavailable"]')).toBeNull();
+    expect(el.querySelector('[data-testid="start-upgrade-btn"]')).toBeNull();
+    expect(api.calls.some((c) => c.key === "GET /api/upgrade/targets")).toBe(
+      false,
+    );
+  });
+
+  it("drops a management URL that is not an absolute http(s) link", () => {
+    expect(safeManagementUrl("javascript:alert(1)")).toBe("");
+    expect(safeManagementUrl("/relative")).toBe("");
+    expect(safeManagementUrl(42)).toBe("");
+    expect(safeManagementUrl("https://console.example.com/x")).toBe(
+      "https://console.example.com/x",
+    );
   });
 
   it("gates operator-only (scope: null) hostds enrollment-codes, pending joins, and state-repo/remote for non-operators without 403 calls", async () => {
