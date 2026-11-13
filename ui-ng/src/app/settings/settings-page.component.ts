@@ -90,7 +90,12 @@ import { SettingsWorkComponent } from "./settings-work.component";
                 >
               }
             </div>
-            <label class="settings-filter-wrap">
+            <form
+              class="settings-filter-wrap"
+              role="search"
+              autocomplete="off"
+              (submit)="$event.preventDefault()"
+            >
               <svg
                 class="settings-filter-icon"
                 width="16"
@@ -106,13 +111,19 @@ import { SettingsWorkComponent } from "./settings-work.component";
               <input
                 class="settings-filter-input"
                 type="search"
+                name="grain-settings-filter"
+                autocomplete="off"
+                spellcheck="false"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-form-type="other"
                 placeholder="Filter settings…"
                 aria-label="Filter settings"
                 data-testid="settings-filter-input"
                 [value]="filterQuery()"
                 (input)="filterQuery.set($any($event.target).value)"
               />
-            </label>
+            </form>
           </div>
 
           <nav class="settings-drawer-scroll" aria-label="Settings categories">
@@ -279,9 +290,9 @@ import { SettingsWorkComponent } from "./settings-work.component";
                         @for (r of rows; track r.field) {
                           <tr data-testid="settings-plan-row">
                             <td>{{ r.label }}</td>
-                            <td class="tabular">{{ r.was }}</td>
-                            <td class="tabular">{{ r.becomes }}</td>
-                            <td class="tabular">
+                            <td class="s-mono">{{ r.was }}</td>
+                            <td class="s-mono">{{ r.becomes }}</td>
+                            <td class="s-meta">
                               {{
                                 r.typed
                                   ? "from " + r.typed
@@ -330,7 +341,7 @@ import { SettingsWorkComponent } from "./settings-work.component";
               aria-label="Unsaved settings changes"
               data-testid="settings-save-bar"
             >
-              <span class="tabular">
+              <span class="s-num">
                 {{ state.dirtyCount() }} unsaved
                 {{ state.dirtyCount() === 1 ? "change" : "changes" }}
               </span>

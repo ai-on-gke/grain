@@ -98,6 +98,11 @@ export class SettingsStateService {
     this.error.set(errText(err));
   }
 
+  clearError(): void {
+    this.refusedChanges.set([]);
+    this.error.set("");
+  }
+
   readonly configRepoOnly = computed(() => {
     const s = this.settings();
     const c = this.config() as Record<string, unknown> | null;

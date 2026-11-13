@@ -185,10 +185,10 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* The shell frame stacks the disconnected banner (when it is up) above
-   the whole app shell, rail included, so the banner pushes the shell
-   down rather than covering the rail or the top bar. */
-.shell-frame {
+/* g-root stacks the disconnected banner (when it is up) above the whole
+   app shell, rail included, so the banner pushes the shell down rather
+   than covering the rail or the top bar. */
+g-root {
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -196,7 +196,7 @@ body {
   overflow: hidden;
 }
 
-.shell-frame > .app-shell {
+g-root > .app-shell {
   flex: 1 1 auto;
   min-height: 0;
   height: auto;
@@ -405,6 +405,7 @@ body {
   display: flex;
   align-items: center;
   width: 280px;
+  margin: 0;
 }
 
 .search-input {

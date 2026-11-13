@@ -171,314 +171,35 @@ export class DeferErrorDirective implements OnInit {
     "(document:keydown)": "onGlobalKey($event)",
   },
   template: `
-    <div class="shell-frame">
-      <!-- Above the rail and the page, never over them: the deployment
-      cannot be reached (shell/disconnected-banner.component.ts). -->
-      <g-disconnected-banner />
-      <div class="app-shell">
-        <nav
-          class="nav-rail"
-          aria-label="Primary destinations"
-          [attr.inert]="modalOpen() ? '' : null"
+    <!-- Above the rail and the page, never over them: the deployment
+      cannot be reached (shell/disconnected-banner.component.ts). g-root
+      stacks it over .app-shell (styles.css). -->
+    <g-disconnected-banner />
+    <div class="app-shell">
+      <nav
+        class="nav-rail"
+        aria-label="Primary destinations"
+        [attr.inert]="modalOpen() ? '' : null"
+      >
+        <a
+          routerLink="/inbox"
+          class="brand-mark-btn"
+          data-testid="brand-mark"
+          aria-label="Grain home: Inbox"
+          gTip="Grain home: Inbox"
+          gTipPlacement="right"
         >
-          <a
-            routerLink="/inbox"
-            class="brand-mark-btn"
-            data-testid="brand-mark"
-            aria-label="Grain home: Inbox"
-            gTip="Grain home: Inbox"
-            gTipPlacement="right"
-          >
-            @if (animateBrandMark()) {
-              <span
-                class="grain-mark-sheet"
-                data-testid="brand-mark-animated"
-                aria-hidden="true"
-              ></span>
-            } @else {
-              <svg
-                class="brand-mark-svg"
-                width="28"
-                height="28"
-                viewBox="0 0 128 128"
-                aria-hidden="true"
-              >
-                <path
-                  style="clip-path: circle(44% at 50% 50%)"
-                  fill="currentColor"
-                  fill-rule="evenodd"
-                  [attr.d]="rosettePath"
-                />
-              </svg>
-            }
-          </a>
-
-          <button
-            type="button"
-            class="rail-fab"
-            data-testid="rail-new-task"
-            aria-label="New task"
-            aria-keyshortcuts="c"
-            [disabled]="!canCreateTask()"
-            [gTip]="
-              canCreateTask()
-                ? 'New task (c): describe the work and Grain files it.'
-                : access.deniedReason('POST /api/tasks')
-            "
-            gTipPlacement="right"
-            (click)="openNewTask($event)"
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-              <path [attr.d]="icons['add']" fill="currentColor" />
-            </svg>
-          </button>
-
-          <div class="rail-create" (focusout)="onCreateFocusOut($event)">
-            <button
-              #createBtn
-              type="button"
-              class="rail-new-btn"
-              data-testid="rail-create-menu"
-              [attr.aria-expanded]="createOpen()"
-              aria-controls="create-menu"
-              (click)="toggleCreate($event)"
-            >
-              New
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path [attr.d]="icons['caret']" fill="currentColor" />
-              </svg>
-            </button>
-            @if (createOpen()) {
-              <ul
-                class="create-menu"
-                id="create-menu"
-                aria-label="Create"
-                data-testid="create-menu"
-                [style.top.px]="createPos().top"
-                [style.left.px]="createPos().left"
-              >
-                @for (item of createItems; track item.label) {
-                  <li>
-                    <ng-container
-                      *ngTemplateOutlet="
-                        createEntry;
-                        context: {
-                          $implicit: item,
-                          cls: 'create-menu-item',
-                          rich: true,
-                        }
-                      "
-                    />
-                  </li>
-                }
-              </ul>
-            }
-          </div>
-
-          <span class="rail-divider" aria-hidden="true"></span>
-
-          @for (
-            d of navConfig.visibleDestinations();
-            track d.id;
-            let i = $index
-          ) {
-            <ng-container
-              *ngTemplateOutlet="
-                railItem;
-                context: { $implicit: d, key: i < 9 ? i + 1 : '' }
-              "
-            />
-          }
-
-          <div class="rail-more-wrap" (focusout)="onRailMoreFocusOut($event)">
-            <button
-              #railMoreBtn
-              type="button"
-              class="rail-item rail-more-btn"
-              data-testid="rail-more"
-              [attr.aria-expanded]="railMoreOpen()"
-              aria-controls="rail-more-menu"
-              gTip="Hidden destinations and rail customization."
-              gTipPlacement="right"
-              (click)="toggleRailMore($event)"
-            >
-              <span class="rail-pill">
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path [attr.d]="icons['more']" fill="currentColor" />
-                </svg>
-                @if (navConfig.hiddenDestinations().length > 0) {
-                  <span class="rail-badge" data-testid="rail-hidden-count">{{
-                    navConfig.hiddenDestinations().length
-                  }}</span>
-                }
-              </span>
-              <span class="rail-label">More</span>
-            </button>
-
-            @if (railMoreOpen()) {
-              <ul
-                class="create-menu rail-more-menu"
-                id="rail-more-menu"
-                aria-label="More navigation options"
-                data-testid="rail-more-menu"
-                [style.top.px]="railMorePos().top"
-                [style.left.px]="railMorePos().left"
-              >
-                @for (d of navConfig.hiddenDestinations(); track d.id) {
-                  <li>
-                    @if (d.route) {
-                      <a
-                        class="create-menu-item"
-                        [routerLink]="d.route"
-                        [attr.data-testid]="'rail-hidden-' + d.id"
-                        (click)="closeMenus()"
-                      >
-                        <svg
-                          class="cm-icon"
-                          width="20"
-                          height="20"
-                          viewBox="0 0 24 24"
-                          aria-hidden="true"
-                        >
-                          <path [attr.d]="icons[d.icon]" fill="currentColor" />
-                        </svg>
-                        <span class="cm-copy">
-                          <span class="cm-title">{{ d.label }}</span>
-                          <span class="cm-sub">{{ d.tip }}</span>
-                        </span>
-                      </a>
-                    } @else {
-                      <a
-                        class="create-menu-item"
-                        [href]="hrefOf(d)"
-                        [attr.data-testid]="'rail-hidden-' + d.id"
-                      >
-                        <svg
-                          class="cm-icon"
-                          width="20"
-                          height="20"
-                          viewBox="0 0 24 24"
-                          aria-hidden="true"
-                        >
-                          <path [attr.d]="icons[d.icon]" fill="currentColor" />
-                        </svg>
-                        <span class="cm-copy">
-                          <span class="cm-title">{{ d.label }}</span>
-                          <span class="cm-sub">{{ d.tip }}</span>
-                        </span>
-                      </a>
-                    }
-                  </li>
-                }
-                <li>
-                  <button
-                    type="button"
-                    class="create-menu-item"
-                    data-testid="rail-customize-nav"
-                    (click)="openCustomizeNav($event)"
-                  >
-                    <svg
-                      class="cm-icon"
-                      width="20"
-                      height="20"
-                      viewBox="0 0 24 24"
-                      aria-hidden="true"
-                    >
-                      <path [attr.d]="icons['tune']" fill="currentColor" />
-                    </svg>
-                    <span class="cm-copy">
-                      <span class="cm-title">Customize navigation</span>
-                      <span class="cm-sub"
-                        >Show, hide, or reorder rail destinations</span
-                      >
-                    </span>
-                  </button>
-                </li>
-              </ul>
-            }
-          </div>
-
-          <span class="rail-spacer" aria-hidden="true"></span>
-          <ng-container
-            *ngTemplateOutlet="
-              railItem;
-              context: { $implicit: settings, key: ',' }
-            "
-          />
-        </nav>
-
-        <ng-template #railItem let-d let-key="key">
-          @if (d.route) {
-            <a
-              class="rail-item"
-              [routerLink]="d.route"
-              routerLinkActive
-              #active="routerLinkActive"
-              [attr.aria-current]="active.isActive ? 'page' : null"
-              [attr.data-testid]="'rail-' + d.id"
-              [gTip]="key ? d.tip + ' (' + key + ')' : d.tip"
-              gTipPlacement="right"
-            >
-              <span class="rail-pill">
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path [attr.d]="icons[d.icon]" fill="currentColor" />
-                </svg>
-                @if (d.id === "inbox" && inboxCount() > 0) {
-                  <span class="rail-badge" data-testid="rail-inbox-count">{{
-                    inboxCount()
-                  }}</span>
-                }
-              </span>
-              <span class="rail-label">{{ d.label }}</span>
-            </a>
+          @if (animateBrandMark()) {
+            <span
+              class="grain-mark-sheet"
+              data-testid="brand-mark-animated"
+              aria-hidden="true"
+            ></span>
           } @else {
-            <a
-              class="rail-item"
-              [href]="d.classic"
-              [attr.data-testid]="'rail-' + d.id"
-              [gTip]="
-                key
-                  ? d.tip + ' Opens in the classic UI. (' + key + ')'
-                  : d.tip + ' Opens in the classic UI.'
-              "
-              gTipPlacement="right"
-            >
-              <span class="rail-pill">
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path [attr.d]="icons[d.icon]" fill="currentColor" />
-                </svg>
-              </span>
-              <span class="rail-label">{{ d.label }}</span>
-            </a>
-          }
-        </ng-template>
-
-        <header class="top-bar" [attr.inert]="modalOpen() ? '' : null">
-          <div class="top-brand-cluster">
             <svg
-              class="mobile-brand-mark"
-              width="24"
-              height="24"
+              class="brand-mark-svg"
+              width="28"
+              height="28"
               viewBox="0 0 128 128"
               aria-hidden="true"
             >
@@ -489,289 +210,99 @@ export class DeferErrorDirective implements OnInit {
                 [attr.d]="rosettePath"
               />
             </svg>
-            <a
-              class="app-wordmark"
-              routerLink="/inbox"
-              aria-label="Grain home: Inbox"
-              >Grain</a
-            >
-          </div>
-          <div class="top-actions">
-            <g-next-up />
-            <a
-              class="live-pill tabular"
-              [class.is-idle]="feed.runningCount() === 0"
-              routerLink="/agents"
-              data-testid="live-pill"
-              [gTip]="livePillTip()"
-            >
-              <span
-                class="live-dot"
-                [class.is-idle]="feed.runningCount() === 0"
-                aria-hidden="true"
-              ></span>
-              <span class="live-pill-text"
-                >{{ feed.runningCount() }}
-                {{ feed.runningCount() === 1 ? "agent" : "agents" }}
-                running</span
-              >
-            </a>
-            <button
-              #directorBtn
-              type="button"
-              class="director-pill"
-              aria-label="Director"
-              [class.is-open]="directorCtx.isOpen()"
-              [class.is-live]="directorLive()"
-              data-testid="director-trigger"
-              [attr.aria-expanded]="directorCtx.isOpen()"
-              aria-keyshortcuts="d Alt+D"
-              gTip="Open Director drawer anywhere (d or Alt+D)."
-              (click)="toggleDirector($event)"
-            >
-              <svg
-                class="director-pill-icon"
-                width="15"
-                height="15"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path [attr.d]="icons['director']" fill="currentColor" />
-              </svg>
-              <span class="director-pill-label">Director</span>
-              @if (directorLive()) {
-                <span class="live-dot" aria-hidden="true"></span>
-              }
-            </button>
-            <label class="search-box">
-              <span class="search-icon" aria-hidden="true">
-                <svg width="18" height="18" viewBox="0 0 24 24">
-                  <path [attr.d]="icons['search']" fill="currentColor" />
-                </svg>
-              </span>
-              <input
-                #searchInput
-                class="search-input"
-                type="search"
-                placeholder="Filter this view"
-                aria-label="Filter this view"
-                data-testid="view-filter"
-                [value]="filter.query()"
-                (input)="filter.query.set($any($event.target).value)"
-              />
-              @if (!filter.query()) {
-                <span
-                  class="search-kbd"
-                  data-testid="search-kbd"
-                  aria-hidden="true"
-                  >/</span
-                >
-              }
-            </label>
-            <!-- Loaded on idle: the alert rules stay out of the initial bundle. -->
-            @defer (on idle) {
-              <g-alerts-button />
-            } @placeholder {
-              <span class="alerts-placeholder" aria-hidden="true"></span>
-            }
-            <button
-              type="button"
-              class="icon-btn"
-              data-testid="theme-toggle"
-              [attr.aria-label]="
-                theme.resolved() === 'dark'
-                  ? 'Switch to light theme'
-                  : 'Switch to dark theme'
-              "
-              gTip="Switch between light and dark (t)."
-              (click)="theme.toggle()"
-            >
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path
-                  [attr.d]="
-                    theme.resolved() === 'dark' ? icons['sun'] : icons['moon']
-                  "
-                  fill="currentColor"
-                />
-              </svg>
-            </button>
-            <button
-              type="button"
-              class="icon-btn"
-              data-testid="help-trigger"
-              aria-label="Help, glossary, and keyboard shortcuts"
-              aria-keyshortcuts="?"
-              gTip="Help, glossary, and keyboard shortcuts (?)."
-              (click)="openHelp($event)"
-            >
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path [attr.d]="icons['help']" fill="currentColor" />
-              </svg>
-            </button>
-            <button
-              #avatarBtn
-              type="button"
-              class="avatar-btn"
-              data-testid="avatar-btn"
-              [attr.aria-expanded]="accountOpen()"
-              aria-controls="account-popover"
-              [attr.aria-label]="
-                'Account and access: ' + access.identityLabel()
-              "
-              aria-keyshortcuts="0"
-              [gTip]="avatarTip()"
-              (click)="toggleAccount($event)"
-            >
-              {{ access.initials() }}
-            </button>
-          </div>
-        </header>
+          }
+        </a>
 
-        <div class="shell-workspace">
-          <main
-            class="main-stage"
-            id="main"
-            [attr.inert]="modalOpen() ? '' : null"
+        <button
+          type="button"
+          class="rail-fab"
+          data-testid="rail-new-task"
+          aria-label="New task"
+          aria-keyshortcuts="c"
+          [disabled]="!canCreateTask()"
+          [gTip]="
+            canCreateTask()
+              ? 'New task (c): describe the work and Grain files it.'
+              : access.deniedReason('POST /api/tasks')
+          "
+          gTipPlacement="right"
+          (click)="openNewTask($event)"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+            <path [attr.d]="icons['add']" fill="currentColor" />
+          </svg>
+        </button>
+
+        <div class="rail-create" (focusout)="onCreateFocusOut($event)">
+          <button
+            #createBtn
+            type="button"
+            class="rail-new-btn"
+            data-testid="rail-create-menu"
+            [attr.aria-expanded]="createOpen()"
+            aria-controls="create-menu"
+            (click)="toggleCreate($event)"
           >
-            <router-outlet />
-          </main>
-          @defer (when directorCtx.isOpen()) {
-            @if (directorCtx.isOpen()) {
-              <g-director-drawer />
-            }
-          } @error {
-            @if (directorCtx.isOpen()) {
-              <span gDeferError (recover)="onDeferError('director')"></span>
-            }
+            New
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+              <path [attr.d]="icons['caret']" fill="currentColor" />
+            </svg>
+          </button>
+          @if (createOpen()) {
+            <ul
+              class="create-menu"
+              id="create-menu"
+              aria-label="Create"
+              data-testid="create-menu"
+              [style.top.px]="createPos().top"
+              [style.left.px]="createPos().left"
+            >
+              @for (item of createItems; track item.label) {
+                <li>
+                  <ng-container
+                    *ngTemplateOutlet="
+                      createEntry;
+                      context: {
+                        $implicit: item,
+                        cls: 'create-menu-item',
+                        rich: true,
+                      }
+                    "
+                  />
+                </li>
+              }
+            </ul>
           }
         </div>
 
-        <footer class="bottom-bar" [attr.inert]="modalOpen() ? '' : null">
-          <span class="bottom-left">
-            <a
-              class="muted bottom-version"
-              routerLink="/settings/upgrade"
-              data-testid="build-stamp"
-              [attr.title]="
-                'Running ' + (version() || 'grain') + ' · Settings → Upgrade'
-              "
-              >grain{{ version() ? " " + version() : "" }}</a
-            >
-            <span class="bottom-sep" aria-hidden="true">·</span>
-            <a
-              class="factory-telemetry tabular"
-              routerLink="/agents"
-              data-testid="factory-telemetry"
-            >
-              <span
-                class="live-dot"
-                [class.is-idle]="feed.runningCount() === 0"
-                aria-hidden="true"
-              ></span>
-              <span>{{ feed.runningCount() }} running</span>
-              @if (updatedAgoLabel(); as ago) {
-                <span class="muted">· Updated {{ ago }}</span>
-              }
-            </a>
-          </span>
-          <span class="bottom-actions">
-            <button
-              type="button"
-              class="btn-text bottom-link"
-              data-testid="shortcuts-toggle"
-              [attr.aria-pressed]="keyboard.enabled()"
-              gTip="Single-key shortcuts (c, /, 1-9, comma, 0, t, ?, and j/k/x in the Inbox). Turn them off if they get in the way of speech input or a screen reader."
-              (click)="keyboard.setEnabled(!keyboard.enabled())"
-            >
-              Shortcuts {{ keyboard.enabled() ? "on" : "off" }}
-            </button>
-          </span>
-        </footer>
+        <span class="rail-divider" aria-hidden="true"></span>
 
-        <!-- Sessions has a composer where the phone FAB would sit, and is
-        itself a place to ask for work (the prototype hides it there too). -->
-        @if (!onSessions()) {
-          <button
-            type="button"
-            class="phone-fab"
-            data-testid="phone-new-task"
-            aria-label="New task"
-            [disabled]="!canCreateTask()"
-            [gTip]="
-              canCreateTask()
-                ? 'New task'
-                : access.deniedReason('POST /api/tasks')
+        @for (
+          d of navConfig.visibleDestinations();
+          track d.id;
+          let i = $index
+        ) {
+          <ng-container
+            *ngTemplateOutlet="
+              railItem;
+              context: { $implicit: d, key: i < 9 ? i + 1 : '' }
             "
-            (click)="openNewTask($event)"
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-              <path [attr.d]="icons['add']" fill="currentColor" />
-            </svg>
-          </button>
+          />
         }
 
-        <nav
-          class="compact-nav"
-          aria-label="Primary destinations (compact)"
-          [attr.inert]="modalOpen() ? '' : null"
-        >
-          @for (d of navConfig.phoneDestinations(); track d.id) {
-            @if (d.route) {
-              <a
-                class="compact-nav-btn"
-                [routerLink]="d.route"
-                routerLinkActive
-                #compact="routerLinkActive"
-                [attr.aria-current]="compact.isActive ? 'page' : null"
-              >
-                <span class="compact-nav-pill">
-                  <svg
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    aria-hidden="true"
-                  >
-                    <path [attr.d]="icons[d.icon]" fill="currentColor" />
-                  </svg>
-                </span>
-                {{ d.label }}
-              </a>
-            } @else {
-              <a class="compact-nav-btn" [href]="d.classic">
-                <span class="compact-nav-pill">
-                  <svg
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    aria-hidden="true"
-                  >
-                    <path [attr.d]="icons[d.icon]" fill="currentColor" />
-                  </svg>
-                </span>
-                {{ d.label }}
-              </a>
-            }
-          }
+        <div class="rail-more-wrap" (focusout)="onRailMoreFocusOut($event)">
           <button
-            #moreBtn
+            #railMoreBtn
             type="button"
-            class="compact-nav-btn"
-            data-testid="compact-more"
-            [attr.aria-expanded]="moreOpen()"
-            aria-controls="more-sheet"
-            (click)="toggleMore($event)"
+            class="rail-item rail-more-btn"
+            data-testid="rail-more"
+            [attr.aria-expanded]="railMoreOpen()"
+            aria-controls="rail-more-menu"
+            gTip="Hidden destinations and rail customization."
+            gTipPlacement="right"
+            (click)="toggleRailMore($event)"
           >
-            <span class="compact-nav-pill">
+            <span class="rail-pill">
               <svg
                 width="20"
                 height="20"
@@ -780,182 +311,638 @@ export class DeferErrorDirective implements OnInit {
               >
                 <path [attr.d]="icons['more']" fill="currentColor" />
               </svg>
+              @if (navConfig.hiddenDestinations().length > 0) {
+                <span class="rail-badge" data-testid="rail-hidden-count">{{
+                  navConfig.hiddenDestinations().length
+                }}</span>
+              }
             </span>
-            More
+            <span class="rail-label">More</span>
           </button>
-        </nav>
 
-        @if (moreOpen()) {
-          <nav
-            class="more-sheet"
-            id="more-sheet"
-            aria-label="More destinations"
-            data-testid="more-sheet"
-            (focusout)="onMoreFocusOut($event)"
-          >
-            <ul class="more-sheet-list">
-              @for (d of navConfig.phoneMoreDestinations(); track d.id) {
+          @if (railMoreOpen()) {
+            <ul
+              class="create-menu rail-more-menu"
+              id="rail-more-menu"
+              aria-label="More navigation options"
+              data-testid="rail-more-menu"
+              [style.top.px]="railMorePos().top"
+              [style.left.px]="railMorePos().left"
+            >
+              @for (d of navConfig.hiddenDestinations(); track d.id) {
                 <li>
                   @if (d.route) {
                     <a
-                      class="more-sheet-item"
+                      class="create-menu-item"
                       [routerLink]="d.route"
+                      [attr.data-testid]="'rail-hidden-' + d.id"
                       (click)="closeMenus()"
-                      >{{ d.label }}</a
                     >
+                      <svg
+                        class="cm-icon"
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                      >
+                        <path [attr.d]="icons[d.icon]" fill="currentColor" />
+                      </svg>
+                      <span class="cm-copy">
+                        <span class="cm-title">{{ d.label }}</span>
+                        <span class="cm-sub">{{ d.tip }}</span>
+                      </span>
+                    </a>
                   } @else {
-                    <a class="more-sheet-item" [href]="hrefOf(d)">{{
-                      d.label
-                    }}</a>
+                    <a
+                      class="create-menu-item"
+                      [href]="hrefOf(d)"
+                      [attr.data-testid]="'rail-hidden-' + d.id"
+                    >
+                      <svg
+                        class="cm-icon"
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                      >
+                        <path [attr.d]="icons[d.icon]" fill="currentColor" />
+                      </svg>
+                      <span class="cm-copy">
+                        <span class="cm-title">{{ d.label }}</span>
+                        <span class="cm-sub">{{ d.tip }}</span>
+                      </span>
+                    </a>
                   }
-                </li>
-              }
-              @for (item of createItems; track item.label) {
-                <li>
-                  <ng-container
-                    *ngTemplateOutlet="
-                      createEntry;
-                      context: {
-                        $implicit: item,
-                        cls: 'more-sheet-item',
-                        rich: false,
-                      }
-                    "
-                  />
                 </li>
               }
               <li>
                 <button
                   type="button"
-                  class="more-sheet-item"
-                  data-testid="more-customize-nav"
+                  class="create-menu-item"
+                  data-testid="rail-customize-nav"
                   (click)="openCustomizeNav($event)"
                 >
-                  Customize navigation
+                  <svg
+                    class="cm-icon"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    aria-hidden="true"
+                  >
+                    <path [attr.d]="icons['tune']" fill="currentColor" />
+                  </svg>
+                  <span class="cm-copy">
+                    <span class="cm-title">Customize navigation</span>
+                    <span class="cm-sub"
+                      >Show, hide, or reorder rail destinations</span
+                    >
+                  </span>
                 </button>
               </li>
             </ul>
-          </nav>
-        }
+          }
+        </div>
 
-        <ng-template #createBody let-item let-rich="rich">
-          @if (rich) {
+        <span class="rail-spacer" aria-hidden="true"></span>
+        <ng-container
+          *ngTemplateOutlet="
+            railItem;
+            context: { $implicit: settings, key: ',' }
+          "
+        />
+      </nav>
+
+      <ng-template #railItem let-d let-key="key">
+        @if (d.route) {
+          <a
+            class="rail-item"
+            [routerLink]="d.route"
+            routerLinkActive
+            #active="routerLinkActive"
+            [attr.aria-current]="active.isActive ? 'page' : null"
+            [attr.data-testid]="'rail-' + d.id"
+            [gTip]="key ? d.tip + ' (' + key + ')' : d.tip"
+            gTipPlacement="right"
+          >
+            <span class="rail-pill">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path [attr.d]="icons[d.icon]" fill="currentColor" />
+              </svg>
+              @if (d.id === "inbox" && inboxCount() > 0) {
+                <span class="rail-badge" data-testid="rail-inbox-count">{{
+                  inboxCount()
+                }}</span>
+              }
+            </span>
+            <span class="rail-label">{{ d.label }}</span>
+          </a>
+        } @else {
+          <a
+            class="rail-item"
+            [href]="d.classic"
+            [attr.data-testid]="'rail-' + d.id"
+            [gTip]="
+              key
+                ? d.tip + ' Opens in the classic UI. (' + key + ')'
+                : d.tip + ' Opens in the classic UI.'
+            "
+            gTipPlacement="right"
+          >
+            <span class="rail-pill">
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path [attr.d]="icons[d.icon]" fill="currentColor" />
+              </svg>
+            </span>
+            <span class="rail-label">{{ d.label }}</span>
+          </a>
+        }
+      </ng-template>
+
+      <header class="top-bar" [attr.inert]="modalOpen() ? '' : null">
+        <div class="top-brand-cluster">
+          <svg
+            class="mobile-brand-mark"
+            width="24"
+            height="24"
+            viewBox="0 0 128 128"
+            aria-hidden="true"
+          >
+            <path
+              style="clip-path: circle(44% at 50% 50%)"
+              fill="currentColor"
+              fill-rule="evenodd"
+              [attr.d]="rosettePath"
+            />
+          </svg>
+          <a
+            class="app-wordmark"
+            routerLink="/inbox"
+            aria-label="Grain home: Inbox"
+            >Grain</a
+          >
+        </div>
+        <div class="top-actions">
+          <g-next-up />
+          <a
+            class="live-pill tabular"
+            [class.is-idle]="feed.runningCount() === 0"
+            routerLink="/agents"
+            data-testid="live-pill"
+            [gTip]="livePillTip()"
+          >
+            <span
+              class="live-dot"
+              [class.is-idle]="feed.runningCount() === 0"
+              aria-hidden="true"
+            ></span>
+            <span class="live-pill-text"
+              >{{ feed.runningCount() }}
+              {{ feed.runningCount() === 1 ? "agent" : "agents" }} running</span
+            >
+          </a>
+          <button
+            #directorBtn
+            type="button"
+            class="director-pill"
+            aria-label="Director"
+            [class.is-open]="directorCtx.isOpen()"
+            [class.is-live]="directorLive()"
+            data-testid="director-trigger"
+            [attr.aria-expanded]="directorCtx.isOpen()"
+            aria-keyshortcuts="d Alt+D"
+            gTip="Open Director drawer anywhere (d or Alt+D)."
+            (click)="toggleDirector($event)"
+          >
             <svg
-              class="cm-icon"
-              width="20"
-              height="20"
+              class="director-pill-icon"
+              width="15"
+              height="15"
               viewBox="0 0 24 24"
               aria-hidden="true"
             >
-              <path [attr.d]="icons[item.icon]" fill="currentColor" />
+              <path [attr.d]="icons['director']" fill="currentColor" />
             </svg>
-            <span class="cm-copy">
-              <span class="cm-title">{{ item.label }}</span>
-              <span class="cm-sub">{{ item.sub }}</span>
+            <span class="director-pill-label">Director</span>
+            @if (directorLive()) {
+              <span class="live-dot" aria-hidden="true"></span>
+            }
+          </button>
+          <form
+            class="search-box"
+            role="search"
+            autocomplete="off"
+            (submit)="$event.preventDefault()"
+          >
+            <span class="search-icon" aria-hidden="true">
+              <svg width="18" height="18" viewBox="0 0 24 24">
+                <path [attr.d]="icons['search']" fill="currentColor" />
+              </svg>
             </span>
-          } @else {
-            {{ item.label }}
-          }
-        </ng-template>
-
-        <ng-template #createEntry let-item let-cls="cls" let-rich="rich">
-          @let allowed = canCreateItem(item);
-          @if (item.kind === "task" || !allowed) {
-            <button
-              type="button"
-              [class]="cls"
-              [disabled]="!allowed"
-              [attr.data-testid]="
-                item.kind === 'task' ? (item.testid ?? 'create-new-task') : null
-              "
-              [gTip]="allowed ? item.tip : access.deniedReason(item.gate!)"
-              gTipPlacement="right"
-              (click)="allowed && openNewTask($event, item.prefill)"
-            >
-              <ng-container
-                *ngTemplateOutlet="
-                  createBody;
-                  context: { $implicit: item, rich: rich }
-                "
-              />
-            </button>
-          } @else if (item.kind === "route") {
-            <a
-              [class]="cls"
-              [routerLink]="item.route"
-              [queryParams]="item.query"
-              [gTip]="item.tip"
-              gTipPlacement="right"
-              (click)="closeMenus()"
-            >
-              <ng-container
-                *ngTemplateOutlet="
-                  createBody;
-                  context: { $implicit: item, rich: rich }
-                "
-              />
-            </a>
-          } @else {
-            <a
-              [class]="cls"
-              [href]="item.href"
-              [gTip]="item.tip"
-              gTipPlacement="right"
-            >
-              <ng-container
-                *ngTemplateOutlet="
-                  createBody;
-                  context: { $implicit: item, rich: rich }
-                "
-              />
-            </a>
-          }
-        </ng-template>
-
-        <!-- Loaded on demand so shell modals and popovers stay out of the initial bundle. -->
-        @defer (when createTask.isOpen(); prefetch on idle) {
-          <g-new-task-sheet />
-        } @error {
-          @if (createTask.isOpen()) {
-            <span gDeferError (recover)="onDeferError('create')"></span>
-          }
-        }
-
-        @defer (when help.isOpen()) {
-          @if (help.isOpen()) {
-            <g-help-dialog />
-          }
-        } @error {
-          @if (help.isOpen()) {
-            <span gDeferError (recover)="onDeferError('help')"></span>
-          }
-        }
-
-        @defer (when accountOpen()) {
-          @if (accountOpen()) {
-            <g-account-popover
-              (closed)="onAccountClosed($event)"
-              (customizeNav)="openCustomizeFromAccount()"
+            <input
+              #searchInput
+              class="search-input"
+              type="search"
+              name="grain-view-filter"
+              autocomplete="off"
+              spellcheck="false"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              data-form-type="other"
+              placeholder="Filter this view"
+              aria-label="Filter this view"
+              data-testid="view-filter"
+              [value]="filter.query()"
+              (input)="filter.query.set($any($event.target).value)"
             />
+            @if (!filter.query()) {
+              <span
+                class="search-kbd"
+                data-testid="search-kbd"
+                aria-hidden="true"
+                >/</span
+              >
+            }
+          </form>
+          <!-- Loaded on idle: the alert rules stay out of the initial bundle. -->
+          @defer (on idle) {
+            <g-alerts-button />
+          } @placeholder {
+            <span class="alerts-placeholder" aria-hidden="true"></span>
+          }
+          <button
+            type="button"
+            class="icon-btn"
+            data-testid="theme-toggle"
+            [attr.aria-label]="
+              theme.resolved() === 'dark'
+                ? 'Switch to light theme'
+                : 'Switch to dark theme'
+            "
+            gTip="Switch between light and dark (t)."
+            (click)="theme.toggle()"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                [attr.d]="
+                  theme.resolved() === 'dark' ? icons['sun'] : icons['moon']
+                "
+                fill="currentColor"
+              />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="icon-btn"
+            data-testid="help-trigger"
+            aria-label="Help, glossary, and keyboard shortcuts"
+            aria-keyshortcuts="?"
+            gTip="Help, glossary, and keyboard shortcuts (?)."
+            (click)="openHelp($event)"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+              <path [attr.d]="icons['help']" fill="currentColor" />
+            </svg>
+          </button>
+          <button
+            #avatarBtn
+            type="button"
+            class="avatar-btn"
+            data-testid="avatar-btn"
+            [attr.aria-expanded]="accountOpen()"
+            aria-controls="account-popover"
+            [attr.aria-label]="'Account and access: ' + access.identityLabel()"
+            aria-keyshortcuts="0"
+            [gTip]="avatarTip()"
+            (click)="toggleAccount($event)"
+          >
+            {{ access.initials() }}
+          </button>
+        </div>
+      </header>
+
+      <div class="shell-workspace">
+        <main
+          class="main-stage"
+          id="main"
+          [attr.inert]="modalOpen() ? '' : null"
+        >
+          <router-outlet />
+        </main>
+        @defer (when directorCtx.isOpen()) {
+          @if (directorCtx.isOpen()) {
+            <g-director-drawer />
           }
         } @error {
-          @if (accountOpen()) {
-            <span gDeferError (recover)="onDeferError('account')"></span>
+          @if (directorCtx.isOpen()) {
+            <span gDeferError (recover)="onDeferError('director')"></span>
           }
         }
-
-        @defer (when navConfig.dialogOpen()) {
-          @if (navConfig.dialogOpen()) {
-            <g-customize-nav-dialog (closed)="onCustomizeNavClosed()" />
-          }
-        } @error {
-          @if (navConfig.dialogOpen()) {
-            <span gDeferError (recover)="onDeferError('customize')"></span>
-          }
-        }
-
-        <g-snackbar />
       </div>
+
+      <footer class="bottom-bar" [attr.inert]="modalOpen() ? '' : null">
+        <span class="bottom-left">
+          <a
+            class="muted bottom-version"
+            routerLink="/settings/upgrade"
+            data-testid="build-stamp"
+            [attr.title]="
+              'Running ' + (version() || 'grain') + ' · Settings → Upgrade'
+            "
+            >grain{{ version() ? " " + version() : "" }}</a
+          >
+          <span class="bottom-sep" aria-hidden="true">·</span>
+          <a
+            class="factory-telemetry tabular"
+            routerLink="/agents"
+            data-testid="factory-telemetry"
+          >
+            <span
+              class="live-dot"
+              [class.is-idle]="feed.runningCount() === 0"
+              aria-hidden="true"
+            ></span>
+            <span>{{ feed.runningCount() }} running</span>
+            @if (updatedAgoLabel(); as ago) {
+              <span class="muted">· Updated {{ ago }}</span>
+            }
+          </a>
+        </span>
+        <span class="bottom-actions">
+          <button
+            type="button"
+            class="btn-text bottom-link"
+            data-testid="shortcuts-toggle"
+            [attr.aria-pressed]="keyboard.enabled()"
+            gTip="Single-key shortcuts (c, /, 1-9, comma, 0, t, ?, and j/k/x in the Inbox). Turn them off if they get in the way of speech input or a screen reader."
+            (click)="keyboard.setEnabled(!keyboard.enabled())"
+          >
+            Shortcuts {{ keyboard.enabled() ? "on" : "off" }}
+          </button>
+        </span>
+      </footer>
+
+      <!-- Sessions has a composer where the phone FAB would sit, and is
+        itself a place to ask for work (the prototype hides it there too). -->
+      @if (!onSessions()) {
+        <button
+          type="button"
+          class="phone-fab"
+          data-testid="phone-new-task"
+          aria-label="New task"
+          [disabled]="!canCreateTask()"
+          [gTip]="
+            canCreateTask()
+              ? 'New task'
+              : access.deniedReason('POST /api/tasks')
+          "
+          (click)="openNewTask($event)"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+            <path [attr.d]="icons['add']" fill="currentColor" />
+          </svg>
+        </button>
+      }
+
+      <nav
+        class="compact-nav"
+        aria-label="Primary destinations (compact)"
+        [attr.inert]="modalOpen() ? '' : null"
+      >
+        @for (d of navConfig.phoneDestinations(); track d.id) {
+          @if (d.route) {
+            <a
+              class="compact-nav-btn"
+              [routerLink]="d.route"
+              routerLinkActive
+              #compact="routerLinkActive"
+              [attr.aria-current]="compact.isActive ? 'page' : null"
+            >
+              <span class="compact-nav-pill">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path [attr.d]="icons[d.icon]" fill="currentColor" />
+                </svg>
+              </span>
+              {{ d.label }}
+            </a>
+          } @else {
+            <a class="compact-nav-btn" [href]="d.classic">
+              <span class="compact-nav-pill">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path [attr.d]="icons[d.icon]" fill="currentColor" />
+                </svg>
+              </span>
+              {{ d.label }}
+            </a>
+          }
+        }
+        <button
+          #moreBtn
+          type="button"
+          class="compact-nav-btn"
+          data-testid="compact-more"
+          [attr.aria-expanded]="moreOpen()"
+          aria-controls="more-sheet"
+          (click)="toggleMore($event)"
+        >
+          <span class="compact-nav-pill">
+            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+              <path [attr.d]="icons['more']" fill="currentColor" />
+            </svg>
+          </span>
+          More
+        </button>
+      </nav>
+
+      @if (moreOpen()) {
+        <nav
+          class="more-sheet"
+          id="more-sheet"
+          aria-label="More destinations"
+          data-testid="more-sheet"
+          (focusout)="onMoreFocusOut($event)"
+        >
+          <ul class="more-sheet-list">
+            @for (d of navConfig.phoneMoreDestinations(); track d.id) {
+              <li>
+                @if (d.route) {
+                  <a
+                    class="more-sheet-item"
+                    [routerLink]="d.route"
+                    (click)="closeMenus()"
+                    >{{ d.label }}</a
+                  >
+                } @else {
+                  <a class="more-sheet-item" [href]="hrefOf(d)">{{
+                    d.label
+                  }}</a>
+                }
+              </li>
+            }
+            @for (item of createItems; track item.label) {
+              <li>
+                <ng-container
+                  *ngTemplateOutlet="
+                    createEntry;
+                    context: {
+                      $implicit: item,
+                      cls: 'more-sheet-item',
+                      rich: false,
+                    }
+                  "
+                />
+              </li>
+            }
+            <li>
+              <button
+                type="button"
+                class="more-sheet-item"
+                data-testid="more-customize-nav"
+                (click)="openCustomizeNav($event)"
+              >
+                Customize navigation
+              </button>
+            </li>
+          </ul>
+        </nav>
+      }
+
+      <ng-template #createBody let-item let-rich="rich">
+        @if (rich) {
+          <svg
+            class="cm-icon"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path [attr.d]="icons[item.icon]" fill="currentColor" />
+          </svg>
+          <span class="cm-copy">
+            <span class="cm-title">{{ item.label }}</span>
+            <span class="cm-sub">{{ item.sub }}</span>
+          </span>
+        } @else {
+          {{ item.label }}
+        }
+      </ng-template>
+
+      <ng-template #createEntry let-item let-cls="cls" let-rich="rich">
+        @let allowed = canCreateItem(item);
+        @if (item.kind === "task" || !allowed) {
+          <button
+            type="button"
+            [class]="cls"
+            [disabled]="!allowed"
+            [attr.data-testid]="
+              item.kind === 'task' ? (item.testid ?? 'create-new-task') : null
+            "
+            [gTip]="allowed ? item.tip : access.deniedReason(item.gate!)"
+            gTipPlacement="right"
+            (click)="allowed && openNewTask($event, item.prefill)"
+          >
+            <ng-container
+              *ngTemplateOutlet="
+                createBody;
+                context: { $implicit: item, rich: rich }
+              "
+            />
+          </button>
+        } @else if (item.kind === "route") {
+          <a
+            [class]="cls"
+            [routerLink]="item.route"
+            [queryParams]="item.query"
+            [gTip]="item.tip"
+            gTipPlacement="right"
+            (click)="closeMenus()"
+          >
+            <ng-container
+              *ngTemplateOutlet="
+                createBody;
+                context: { $implicit: item, rich: rich }
+              "
+            />
+          </a>
+        } @else {
+          <a
+            [class]="cls"
+            [href]="item.href"
+            [gTip]="item.tip"
+            gTipPlacement="right"
+          >
+            <ng-container
+              *ngTemplateOutlet="
+                createBody;
+                context: { $implicit: item, rich: rich }
+              "
+            />
+          </a>
+        }
+      </ng-template>
+
+      <!-- Loaded on demand so shell modals and popovers stay out of the initial bundle. -->
+      @defer (when createTask.isOpen(); prefetch on idle) {
+        <g-new-task-sheet />
+      } @error {
+        @if (createTask.isOpen()) {
+          <span gDeferError (recover)="onDeferError('create')"></span>
+        }
+      }
+
+      @defer (when help.isOpen()) {
+        @if (help.isOpen()) {
+          <g-help-dialog />
+        }
+      } @error {
+        @if (help.isOpen()) {
+          <span gDeferError (recover)="onDeferError('help')"></span>
+        }
+      }
+
+      @defer (when accountOpen()) {
+        @if (accountOpen()) {
+          <g-account-popover
+            (closed)="onAccountClosed($event)"
+            (customizeNav)="openCustomizeFromAccount()"
+          />
+        }
+      } @error {
+        @if (accountOpen()) {
+          <span gDeferError (recover)="onDeferError('account')"></span>
+        }
+      }
+
+      @defer (when navConfig.dialogOpen()) {
+        @if (navConfig.dialogOpen()) {
+          <g-customize-nav-dialog (closed)="onCustomizeNavClosed()" />
+        }
+      } @error {
+        @if (navConfig.dialogOpen()) {
+          <span gDeferError (recover)="onDeferError('customize')"></span>
+        }
+      }
+
+      <g-snackbar />
     </div>
   `,
 })

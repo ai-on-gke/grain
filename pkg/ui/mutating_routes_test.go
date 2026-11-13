@@ -897,6 +897,11 @@ var neverAttributedRoutes = map[string]bool{
 	"POST /api/registry/heartbeat":                       true,
 	"POST /api/settings/plan":                            true,
 	"POST /api/repos/plan":                               true,
+	// Refreshing a connection's discovered models writes only grain's
+	// cache of what the provider said (model.AgentBackend.Discovered),
+	// which RunModelDiscovery rewrites on its own tick with no actor;
+	// nothing a person configured changes.
+	"POST /api/deployment/agent-backends/{backendId}/discover": true,
 	// The MCP endpoints are transports: each tool they serve calls one of
 	// the routes here, and is attributed there. POST /api/mcp's
 	// grain_invoke dispatches the route through s.mux with the outer
@@ -1306,5 +1311,23 @@ func TestABodyNeverNamesAPerson(t *testing.T) {
 				t.Errorf("%s naming mallory: %d %s, want 400", way.name, rec.Code, rec.Body)
 			}
 		}
+	}
+}
+
+func TestPutDeploymentAgentBackendMismatchID(t *testing.T) {
+	srv, _ := testServer(t)
+	body := `{"id":"body-id","framework":"antigravity"}`
+	rec := do(t, srv, "PUT", "/api/deployment/agent-backends/path-id", body)
+	if rec.Code != 400 {
+		t.Errorf("mismatched id status = %d, want 400", rec.Code)
+	}
+}
+
+func TestAddTargetRepoInvalidCloneUrl(t *testing.T) {
+	srv, _ := testServer(t)
+	body := `{"repo":"acme/widgets","cloneUrl":"invalid-url"}`
+	rec := do(t, srv, "POST", "/api/repos", body)
+	if rec.Code != 400 {
+		t.Errorf("invalid cloneUrl status = %d, want 400", rec.Code)
 	}
 }
