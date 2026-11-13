@@ -21,6 +21,11 @@ import { chooseOption } from "./searchSelect.js";
 // priority chip and Declared row, and an edit to 7 from the pane carried
 // back to all three. Every task filed here is closed again.
 
+// Three tasks filed through the form, eight page loads, an edit and three
+// closes: more than the default 30s on a loaded CI runner, where it ran out
+// in the closing loop after every assertion had passed.
+test.setTimeout(90_000);
+
 const sizes = [
   { name: "desktop", width: 1440, height: 900 },
   { name: "phone", width: 390, height: 844 },
