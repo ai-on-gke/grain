@@ -59,11 +59,10 @@ type CapabilitySyntax struct {
 	// capability references and api grants. JobCapabilities and
 	// UnmetRequirements read it.
 	DeclaredOnly func(id string) bool
-	// Canonical is the spelling a name is compared by: a retired name
-	// rewritten to what it became (model.CanonicalLegacyGrant), so a job
-	// declaring `image-signing` is met by a repository granting the
-	// reference it was rewritten to, and the reverse. nil compares names
-	// as written.
+	// Canonical is the spelling a name is compared by (model's
+	// CanonicalCIGrant), so a job declaring a bare or case-varied
+	// reference is met by a repository granting the recorded grant, and
+	// the reverse. nil compares names as written.
 	Canonical func(id string) string
 }
 

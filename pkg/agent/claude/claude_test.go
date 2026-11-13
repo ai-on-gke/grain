@@ -29,6 +29,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // fakeRunner scripts a single canned stream-json transcript and records
@@ -702,14 +703,14 @@ func TestRunPassesTheGrantsToTheMCPServer(t *testing.T) {
 
 	if _, err := f.Run(context.Background(), agent.RunConfig{
 		Prompt: "go", SandboxRoot: t.TempDir(),
-		Grants:         []string{"self-debug", "read-issues"},
+		Grants:         []string{model.GrainSourceGrant, model.GitHubReadIssuesGrant},
 		GrainSourceDir: "/usr/local/share/grain/src",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	args := mcpConfigArgs(t, fake.gotMCPConfig)
-	if !argsHave(args, "-grant", "self-debug") ||
-		!argsHave(args, "-grant", "read-issues") ||
+	if !argsHave(args, "-grant", model.GrainSourceGrant) ||
+		!argsHave(args, "-grant", model.GitHubReadIssuesGrant) ||
 		!argsHave(args, "-grain-src-dir", "/usr/local/share/grain/src") {
 		t.Errorf("mcpserver args = %v, want both -grant pairs and -grain-src-dir among them", args)
 	}

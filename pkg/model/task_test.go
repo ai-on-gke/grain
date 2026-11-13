@@ -82,8 +82,11 @@ func TestGitCredentialCapabilityRoundTrips(t *testing.T) {
 	if name, ok := GitCredentialName("github-credential:release-bot"); !ok || name != "release-bot" {
 		t.Errorf("GitCredentialName(legacy) = %q, %v, want %q true", name, ok, "release-bot")
 	}
-	if got := CanonicalLegacyGrant("github-credential:release-bot"); got != want {
-		t.Errorf("CanonicalLegacyGrant(github-credential:release-bot) = %q, want %q", got, want)
+	if got := CanonicalLegacyGrant("github-credential:release-bot"); got != "github-credential:release-bot" {
+		t.Errorf("CanonicalLegacyGrant(github-credential:release-bot) = %q, want it unchanged: the retired name is no longer an alias", got)
+	}
+	if got := RetiredGrantsBecame("github-credential:release-bot"); len(got) != 1 || got[0] != want {
+		t.Errorf("RetiredGrantsBecame(github-credential:release-bot) = %q, want [%q]", got, want)
 	}
 	if _, ok := GitCredentialName("gemini-key"); ok {
 		t.Error("an ordinary capability id should not read as a named GitHub token")

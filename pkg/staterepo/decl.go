@@ -1684,10 +1684,10 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 			row := map[string]any{parent: id, "via": string(model.GrantByLabel), "folder": nil}
 			if entry.Kind == yaml.ScalarNode {
 				// A retired in-process capability is read as the canonical
-				// grant(s) it became (model.CanonicalLegacyGrants), so a
+				// grant(s) it became (model.RetiredGrantsBecame), so a
 				// grain/config exported before the store migration that
 				// rewrote it imports as what the store now holds.
-				for _, capID := range model.CanonicalLegacyGrants(entry.Value) {
+				for _, capID := range model.RetiredGrantsBecame(entry.Value) {
 					out = append(out, map[string]any{parent: id, "capability": capID, "via": string(model.GrantByLabel), "folder": nil})
 				}
 				continue
@@ -1742,7 +1742,7 @@ func decodeCompanion(path, id, parent string, f declFieldShape, node *yaml.Node,
 					}
 					name = model.CanonicalGrant(encoded).Key()
 				}
-				for _, capID := range model.CanonicalLegacyGrants(name) {
+				for _, capID := range model.RetiredGrantsBecame(name) {
 					out = append(out, map[string]any{
 						parent:       id,
 						"capability": capID,

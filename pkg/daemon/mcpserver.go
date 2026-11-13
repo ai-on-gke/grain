@@ -1482,13 +1482,12 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // served by the run's agent framework -- agent/antigravity's pre-tool
 // hook, say -- rather than by any tool of this process.
 var servedGrants = []string{
-	grainserver.LegacySelfDebug, grainserver.SourceRef, grainserver.SourceGrant,
-	grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant,
-	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
-	grainserver.LegacyReadIssues, grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
-	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
+	grainserver.SourceRef, grainserver.SourceGrant,
+	grainserver.JournalRef, grainserver.JournalGrant,
+	grainserver.CIRef, grainserver.CIGrant, grainserver.HealthRef, grainserver.HealthGrant,
+	grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
-	selfrepair.CapabilityName, grainserver.HostExecRef, grainserver.HostExecGrant,
+	grainserver.HostExecRef, grainserver.HostExecGrant,
 }
 
 func warnUnknownGrants(grants GrantNames) {
@@ -1502,9 +1501,6 @@ func warnUnknownGrants(grants GrantNames) {
 		}
 		if model.IsBootstrapPlaybooksGrant(name) {
 			continue // the bootstrap map, or its retired bare alias: src://playbooks and `grain playbooks` read it
-		}
-		if model.APIAliasPreset(name) != "" {
-			continue // bare alias for an api preset (served by grain-controller on POST /api/mcp)
 		}
 		if !slices.Contains(served, name) {
 			fmt.Fprintf(os.Stderr,

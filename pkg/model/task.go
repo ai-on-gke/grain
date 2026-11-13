@@ -659,9 +659,9 @@ type Grant struct {
 //
 // Both sides are read through CanonicalGrant into the spelling slice 2
 // stores (StoredGrantSpelling), so an api reference and the api:<scope>
-// it stands for compare equal, and retired one-release aliases match
-// the canonical grant(s) they became (CanonicalLegacyGrants) in either
-// direction.
+// it stands for compare equal, and a name a build outside core
+// registered as an alias matches the grant it became
+// (CanonicalLegacyGrants) in either direction.
 func GrantsSubsetOf(grants, allowed []Grant) bool {
 	grants, allowed = storedGrantSpellings(grants), storedGrantSpellings(allowed)
 	have := heldNonRefGrants(allowed)
@@ -1114,9 +1114,9 @@ const ReleaseGateReadCapability = "release-gate-read"
 // deployment status) and GrainSourceGrant, which places the deployment's
 // own baked-in source at grain-src/ in the sandbox (orchestrator's
 // placeGrainSource) and opens src://. Schema migration 115 rewrote the
-// stored grants; the bare name stays readable as an alias for one release
-// (CanonicalLegacyGrants, IsGrainSourceGrant, apiAliasCapabilities). The
-// source grant reaches no repository through the git proxy, and implies
+// stored grants, and an import rewrites an older grain/config
+// (RetiredGrantsBecame); the bare name was an alias for one release and
+// is not any longer. The source grant reaches no repository through the git proxy, and implies
 // none (CapabilityRepos).
 const SelfDebugCapability = "self-debug"
 

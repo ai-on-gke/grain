@@ -132,8 +132,8 @@ type APIPreset struct {
 
 // apiPresets are the bundles a picker offers first. Each is what one of
 // the per-ability capabilities that used to be filed one at a time asked
-// for (tasks 399, 420, 421, 422, 425), plus the older capabilities
-// that now also grant their preset's routes (see apiAliasCapabilities).
+// for (tasks 399, 420, 421, 422, 425), plus the presets the retired
+// in-process capabilities of the same names became.
 var apiPresets = []APIPreset{
 	{Name: "task-admin", Description: "Edit, reorder, retry and close tasks, open and retry their merges, and re-run CI",
 		Scopes: []APIScope{"tasks:read", "tasks:write", "merge:write", "ci:read", "ci:write", "notifications:write"}},
@@ -173,22 +173,6 @@ var apiPresets = []APIPreset{
 			"repos:read", "templates:read", "deployment:read"}},
 	{Name: "external-read", Description: "Read-only observer: read tasks, CI, repositories, templates and deployment status",
 		Scopes: []APIScope{"tasks:read", "ci:read", "repos:read", "templates:read", "deployment:read"}},
-}
-
-// apiAliasCapabilities are the older capabilities that are now aliases
-// for a preset: a task holding one is granted that preset's routes as
-// well as whatever tools it still has under their old names (none, for
-// one legacyGrantReplacements retires).
-var apiAliasCapabilities = map[string]string{
-	"self-debug":        "self-debug",
-	"self-upgrade":      "self-upgrade",
-	"deployment-health": "deployment:read",
-	"pipeline-control":  "pipeline-control",
-	"team-broadcast":    "team-broadcast",
-	"dispatch-control":  "dispatch-control",
-	"memory":            "memory",
-	"release-notes":     "release-notes",
-	"test-quarantine":   "test-quarantine",
 }
 
 // GrainCapabilityServerID is the canonical capability_id of the in-process
@@ -248,10 +232,10 @@ const (
 	GrainCIRef    = GrainCapabilityServerID + "#" + GrainCIMethod
 	GrainCIGrant  = GrainCIRef + "={}"
 
-	// GrainCICapability is the retired bare name of GrainCIGrant. It is
-	// still read as that grant wherever it was not rewritten (a
-	// repository's own .grain declaration, an older grain/config);
-	// schema migration 96 rewrote the stored rows.
+	// GrainCICapability is the retired bare name of GrainCIGrant. Schema
+	// migration 96 rewrote the stored rows and an import rewrites an
+	// older grain/config (RetiredGrantsBecame); nothing else reads it as
+	// the grant.
 	GrainCICapability = "grain-ci"
 
 	// ModelProxyCapabilityServerID is the canonical capability_id of the
@@ -359,8 +343,8 @@ func ParseGCPKeyServerGrant(grant string) (permissionSet string, ok bool) {
 
 // GCPKeySetUnnamed reports whether grant is a gcp#gcp-key capability-server
 // grant that leaves its permission set to the server's first configured set
-// (no permission_set). (Bare "gcp-key" is false: CanonicalLegacyGrant rewrites
-// it to GCPKeySandboxAgentGrant.)
+// (no permission_set). (Bare "gcp-key" is false: it is a retired name, not a
+// grant.)
 func GCPKeySetUnnamed(grant string) bool {
 	s := strings.TrimSpace(grant)
 	if !IsCapabilityRef(s) {
@@ -388,12 +372,9 @@ func init() {
 }
 
 // IsGrainJournalGrant reports whether grant names grain#journal (recorded or
-// bare) or the retired bare grain-log alias.
+// bare).
 func IsGrainJournalGrant(grant string) bool {
 	s := strings.TrimSpace(grant)
-	if s == "grain-log" {
-		return true
-	}
 	return CapabilityGrantRef(s) == GrainJournalRef
 }
 
@@ -403,13 +384,9 @@ func HasGrainJournal(grants []string) bool {
 }
 
 // IsGrainSourceGrant reports whether grant names grain#source (recorded or
-// bare) or the retired bare self-debug alias, which still grants it for
-// one release (SelfDebugCapability).
+// bare).
 func IsGrainSourceGrant(grant string) bool {
 	s := strings.TrimSpace(grant)
-	if s == SelfDebugCapability {
-		return true
-	}
 	return CapabilityGrantRef(s) == GrainSourceRef
 }
 
@@ -427,12 +404,9 @@ func SelfDebugGrants() []string {
 }
 
 // IsGrainHealthGrant reports whether grant names grain#health (recorded or
-// bare) or the retired bare deployment-health alias.
+// bare).
 func IsGrainHealthGrant(grant string) bool {
 	s := strings.TrimSpace(grant)
-	if s == "deployment-health" {
-		return true
-	}
 	return CapabilityGrantRef(s) == GrainHealthRef
 }
 
@@ -442,12 +416,9 @@ func HasGrainHealth(grants []string) bool {
 }
 
 // IsGrainHostExecGrant reports whether grant names grain#host-exec
-// (recorded or bare) or the retired bare self-repair alias.
+// (recorded or bare).
 func IsGrainHostExecGrant(grant string) bool {
 	s := strings.TrimSpace(grant)
-	if s == "self-repair" {
-		return true
-	}
 	return CapabilityGrantRef(s) == GrainHostExecRef
 }
 
@@ -456,13 +427,9 @@ func HasGrainHostExec(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGrainHostExecGrant)
 }
 
-// IsGrainCIGrant reports whether grant names grain#ci (recorded or bare)
-// or the retired bare grain-ci alias.
+// IsGrainCIGrant reports whether grant names grain#ci (recorded or bare).
 func IsGrainCIGrant(grant string) bool {
 	s := strings.TrimSpace(grant)
-	if s == GrainCICapability {
-		return true
-	}
 	return CapabilityGrantRef(s) == GrainCIRef
 }
 
@@ -472,12 +439,9 @@ func HasGrainCI(grants []string) bool {
 }
 
 // IsGitHubReadIssuesGrant reports whether grant names github#read-issues
-// (recorded or bare) or the retired bare read-issues alias.
+// (recorded or bare).
 func IsGitHubReadIssuesGrant(grant string) bool {
 	s := strings.TrimSpace(grant)
-	if s == "read-issues" {
-		return true
-	}
 	return CapabilityGrantRef(s) == GitHubReadIssuesRef
 }
 
@@ -488,12 +452,9 @@ func HasGitHubReadIssues(grants []string) bool {
 }
 
 // IsGitHubSandboxRepoGrant reports whether grant names github#sandbox-repo
-// (recorded or bare) or the retired bare github-sandbox alias.
+// (recorded or bare).
 func IsGitHubSandboxRepoGrant(grant string) bool {
 	s := strings.TrimSpace(grant)
-	if s == LegacyGitHubSandboxCapability {
-		return true
-	}
 	return CapabilityGrantRef(s) == GitHubSandboxRepoRef
 }
 
@@ -503,16 +464,10 @@ func HasGitHubSandboxRepo(grants []string) bool {
 	return slices.ContainsFunc(grants, IsGitHubSandboxRepoGrant)
 }
 
-// ParseGrainSQLGrant reports whether grant names grain#sql (recorded or bare)
-// or the retired bare db-read / db-write aliases, and whether it allows writes.
+// ParseGrainSQLGrant reports whether grant names grain#sql (recorded or bare),
+// and whether it allows writes.
 func ParseGrainSQLGrant(grant string) (ok bool, write bool) {
 	s := strings.TrimSpace(grant)
-	switch s {
-	case "db-read":
-		return true, false
-	case "db-write":
-		return true, true
-	}
 	if !IsCapabilityRef(s) {
 		return false, false
 	}
@@ -587,13 +542,9 @@ func configMapSelectsBootstrap(with map[string]any) bool {
 
 // IsBootstrapPlaybooksGrant reports whether grant names the bootstrap playbooks
 // via config-map#config-map (or its legacy skill alias, including methodless
-// shorthand before server normalization) or the retired bare
-// bootstrap-playbooks alias.
+// shorthand before server normalization).
 func IsBootstrapPlaybooksGrant(grant string) bool {
 	s := strings.TrimSpace(grant)
-	if strings.EqualFold(s, "bootstrap-playbooks") {
-		return true
-	}
 	if len(s) >= len("https://") && strings.EqualFold(s[:len("https://")], "https://") {
 		s = "https://" + s[len("https://"):]
 	}
@@ -726,14 +677,17 @@ func HasBootstrapPlaybooks(grants []string) bool {
 	return slices.ContainsFunc(grants, IsBootstrapPlaybooksGrant)
 }
 
-// legacyGrantReplacements are the bare capabilities converted to api or
+// retiredGrantReplacements are the bare capabilities converted to api or
 // capability-server grants (design/design/unified-grants.design.md §4) whose
-// in-process provider is gone: each is written as its replacement wherever a
-// grant is recorded (CanonicalLegacyGrant / CanonicalLegacyGrants), and the
-// store migration that retired it rewrote the rows already stored. The bare
-// name keeps granting what it did so a grant nothing rewrote -- a
-// repository's own .grain declaration, an older grain/config -- keeps working.
-var legacyGrantReplacements = map[string]string{
+// in-process provider is gone. The store migration that retired each
+// rewrote the rows already stored; this is the migration-only copy the
+// paths that bring in grants written before then read -- a grain/config
+// export being imported (RetiredGrantsBecame), a settings/capabilities.yml
+// still naming the old capability (retiredInProcessNames). A bare name
+// arriving anywhere else is no longer an alias for anything: it was one
+// for a release, and every promoted release since v3.3.0 has carried
+// each conversion.
+var retiredGrantReplacements = map[string]string{
 	"team-broadcast":   APIRef("team-broadcast"),
 	"dispatch-control": APIRef("dispatch-control"),
 	"pipeline-control": APIRef("pipeline-control"),
@@ -773,10 +727,11 @@ var legacyGrantReplacements = map[string]string{
 	LegacyGitHubSandboxCapability: GitHubSandboxRepoGrant,
 }
 
-// legacyGrantMultiReplacements maps retired bare capabilities that split into
-// multiple canonical grants (for example an api scope plus an in-process
-// grain server method).
-var legacyGrantMultiReplacements = map[string][]string{
+// retiredGrantMultiReplacements are the retired bare capabilities that
+// split into several canonical grants (for example an api scope plus an
+// in-process grain server method): retiredGrantReplacements' migration-only
+// copy for them.
+var retiredGrantMultiReplacements = map[string][]string{
 	"deployment-health": {APIRef("deployment:read"), GrainHealthGrant},
 	// Retired by schema migration 115: the REST half of self-debug is its
 	// api preset, the source checkout the grain server's #source method.
@@ -790,10 +745,10 @@ var (
 
 // RegisterLegacyGrantAlias makes the bare capability name from an alias
 // for the grant to until the returned func is called: CanonicalLegacyGrant
-// rewrites it as it does a name in legacyGrantReplacements. It is the seam
-// a build outside core retires one of its own in-process capabilities
-// through (capability.Register's Aliases), so core need not name it. It
-// panics on an empty name or one already an alias, core's or registered.
+// rewrites it wherever a grant is recorded. It is the seam a build outside
+// core retires one of its own in-process capabilities through
+// (capability.Register's Aliases), so core need not name it. It panics on
+// an empty name or one already an alias, or one core retired.
 func RegisterLegacyGrantAlias(from, to string) (unregister func()) {
 	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
 	if from == "" || to == "" {
@@ -801,8 +756,8 @@ func RegisterLegacyGrantAlias(from, to string) (unregister func()) {
 	}
 	registeredLegacyAliasesMu.Lock()
 	defer registeredLegacyAliasesMu.Unlock()
-	_, core := legacyGrantReplacements[from]
-	_, coreMulti := legacyGrantMultiReplacements[from]
+	_, core := retiredGrantReplacements[from]
+	_, coreMulti := retiredGrantMultiReplacements[from]
 	if _, ok := registeredLegacyAliases[from]; ok || core || coreMulti {
 		panic(fmt.Sprintf("model: RegisterLegacyGrantAlias(%q): already an alias", from))
 	}
@@ -814,10 +769,18 @@ func RegisterLegacyGrantAlias(from, to string) (unregister func()) {
 	}
 }
 
-// legacyGrantReplacement is what the retired bare name became, from core's
-// table or a registered alias.
-func legacyGrantReplacement(name string) (string, bool) {
-	if to, ok := legacyGrantReplacements[name]; ok {
+// registeredLegacyAlias is what a registered alias rewrites name to.
+func registeredLegacyAlias(name string) (string, bool) {
+	registeredLegacyAliasesMu.RLock()
+	defer registeredLegacyAliasesMu.RUnlock()
+	to, ok := registeredLegacyAliases[name]
+	return to, ok
+}
+
+// retiredGrantReplacement is what the retired bare name became, from
+// core's migration-only table or a registered alias.
+func retiredGrantReplacement(name string) (string, bool) {
+	if to, ok := retiredGrantReplacements[name]; ok {
 		return to, true
 	}
 	if keyName, ok := GCPKeyName(name); ok {
@@ -831,64 +794,68 @@ func legacyGrantReplacement(name string) (string, bool) {
 	if credName, ok := LegacyGitCredentialName(name); ok && ValidGitCredentialName(credName) {
 		return RepoCredentialGrant(credName), true
 	}
-	registeredLegacyAliasesMu.RLock()
-	defer registeredLegacyAliasesMu.RUnlock()
-	to, ok := registeredLegacyAliases[name]
-	return to, ok
+	return registeredLegacyAlias(name)
 }
 
-// allLegacyGrantReplacements is legacyGrantReplacements with every
+// allRetiredGrantReplacements is retiredGrantReplacements with every
 // registered alias added.
-func allLegacyGrantReplacements() map[string]string {
-	out := maps.Clone(legacyGrantReplacements)
+func allRetiredGrantReplacements() map[string]string {
+	out := maps.Clone(retiredGrantReplacements)
 	registeredLegacyAliasesMu.RLock()
 	defer registeredLegacyAliasesMu.RUnlock()
 	maps.Copy(out, registeredLegacyAliases)
 	return out
 }
 
-// CanonicalLegacyGrant is name, or the single grant a retired 1-to-1
-// in-process capability of that name became. Callers recording a capability
-// list should use CanonicalLegacyGrants so 1-to-many retirements (such as
-// deployment-health) expand to every grant they became.
+// CanonicalLegacyGrant is name, or the grant a registered alias
+// (RegisterLegacyGrantAlias) rewrites it to. Core's own retired names are
+// not aliases any longer: they are what they say, a capability nothing
+// provides.
 func CanonicalLegacyGrant(name string) string {
-	trimmed := strings.TrimSpace(name)
-	if to, ok := legacyGrantReplacement(trimmed); ok {
+	if to, ok := registeredLegacyAlias(strings.TrimSpace(name)); ok {
 		return to
 	}
 	return name
 }
 
-// CanonicalLegacyGrants returns the canonical grant(s) a retired in-process
-// capability became, or []string{name} when name is not retired.
+// CanonicalLegacyGrants is CanonicalLegacyGrant as a list, for callers
+// recording a capability list.
 func CanonicalLegacyGrants(name string) []string {
+	return []string{CanonicalLegacyGrant(name)}
+}
+
+// RetiredGrantsBecame returns the canonical grant(s) a retired in-process
+// capability became -- core's migration-only table, a registered alias,
+// or a runtime expansion (SetRuntimeGrantExpansions) -- or
+// []string{name} when name is not retired. It is for the paths that
+// upgrade grants written before a retirement, such as a grain/config
+// export being imported; a grant being recorded uses
+// CanonicalLegacyGrants.
+func RetiredGrantsBecame(name string) []string {
 	trimmed := strings.TrimSpace(name)
-	if many, ok := legacyGrantMultiReplacements[trimmed]; ok {
+	if many, ok := retiredGrantMultiReplacements[trimmed]; ok {
 		return slices.Clone(many)
 	}
 	if many, ok := runtimeExpansion(trimmed); ok {
 		return many
 	}
-	return []string{CanonicalLegacyGrant(name)}
+	if to, ok := retiredGrantReplacement(trimmed); ok {
+		return []string{to}
+	}
+	return []string{name}
 }
 
 // RetiredGrantNames is every retired bare capability name
-// CanonicalLegacyGrants rewrites, in no particular order.
+// RetiredGrantsBecame rewrites, in no particular order.
 func RetiredGrantNames() []string {
-	names := make([]string, 0, len(legacyGrantReplacements)+len(legacyGrantMultiReplacements))
-	for name := range legacyGrantReplacements {
+	names := make([]string, 0, len(retiredGrantReplacements)+len(retiredGrantMultiReplacements))
+	for name := range retiredGrantReplacements {
 		names = append(names, name)
 	}
-	for name := range legacyGrantMultiReplacements {
+	for name := range retiredGrantMultiReplacements {
 		names = append(names, name)
 	}
 	return append(names, runtimeExpansionNames()...)
-}
-
-// APIAliasPreset returns the preset name that a bare capability name aliases,
-// or "" if name is not a preset alias capability.
-func APIAliasPreset(name string) string {
-	return apiAliasCapabilities[name]
 }
 
 // APIScopes is the vocabulary, in its documented order.
@@ -1110,7 +1077,7 @@ type APIGrantSet struct {
 	all    map[APIScope]bool
 }
 
-// APIGrantsOf reads every api grant (and preset alias) among names.
+// APIGrantsOf reads every api grant among names.
 // Names that are not api grants are ignored; an api grant that does not
 // parse grants nothing.
 func APIGrantsOf(names []string) APIGrantSet {
@@ -1127,9 +1094,6 @@ func SandboxAPIGrantsOf(names []string) APIGrantSet {
 func apiGrantsOf(names []string, sandboxChannel bool) APIGrantSet {
 	set := APIGrantSet{scopes: map[APIScope][]string{}, all: map[APIScope]bool{}}
 	for _, name := range names {
-		if preset, ok := apiAliasCapabilities[name]; ok {
-			name = APIGrantPrefix + preset
-		}
 		g, ok, err := ParseAPIGrant(name)
 		if !ok || err != nil {
 			continue
