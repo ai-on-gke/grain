@@ -24,6 +24,7 @@ import {
   input,
   signal,
 } from "@angular/core";
+import { RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import { type VersionInfo, versionLabel } from "../api/version";
 import { AccessService } from "../services/access.service";
@@ -45,9 +46,50 @@ import {
   PillSelectComponent,
 } from "../shared/pill-select.component";
 import type { SettingsSectionId } from "./settings-sections";
+import { TIME_ZONE_STORAGE_KEY } from "../shared/display-time";
 import { SettingsStateService } from "./settings-state.service";
 
-const TZ_STORAGE_KEY = "grain.timeZone";
+const TZ_STORAGE_KEY = TIME_ZONE_STORAGE_KEY;
+
+// SKILL_AGENTS are the agents `grain skill install` writes a SKILL.md for
+// (pkg/cli/skill.go), each by its own flag.
+const SKILL_AGENTS = [
+  { flag: "--jetski", label: "Jetski" },
+  { flag: "--claude", label: "Claude Code" },
+  { flag: "--codex", label: "Codex" },
+  { flag: "--gemini", label: "Gemini CLI" },
+] as const;
+
+// contextSlug is the context name `grain login` gives a deployment when
+// --name is left out (pkg/cli/login.go contextSlug).
+export function contextSlug(host: string): string {
+  const s = String(host || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return s || "default";
+}
+
+export function cliCommands(origin: string): {
+  install: string;
+  login: string;
+  skills: { flag: string; label: string; command: string }[];
+} {
+  let host = "";
+  try {
+    host = new URL(origin).hostname;
+  } catch {
+    // An origin that is not a URL names no host; the slug is "default".
+  }
+  return {
+    install: `curl -fsSL ${origin}/cli/install.sh | sh`,
+    login: `grain login ${origin} --name ${contextSlug(host)} --issue-token --scope-set grain/external-dev --expires 30d`,
+    skills: SKILL_AGENTS.map((a) => ({
+      ...a,
+      command: `grain skill install ${a.flag}`,
+    })),
+  };
+}
 
 interface UpgradeTargetRow {
   name?: string;
@@ -77,7 +119,7 @@ function formatBytes(bytes: number): string {
 
 @Component({
   selector: "g-settings-instance",
-  imports: [PillSelectComponent, ConfirmDialogComponent],
+  imports: [PillSelectComponent, ConfirmDialogComponent, RouterLink],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -120,7 +162,7 @@ function formatBytes(bytes: number): string {
                 testid="select-timezone"
                 ariaLabel="Display timezone"
                 align="left"
-                [options]="timezoneOptions"
+                [options]="timezoneChoices()"
                 [value]="timeZone()"
                 (valueChange)="setTimeZone($event)"
               />
@@ -288,16 +330,111 @@ function formatBytes(bytes: number): string {
 
       @case ("cli") {
         <div class="s-card" data-testid="card-cli">
-          <h3 class="s-card-title">
-            Workstation grain CLI &amp; agent CLI run locations
-          </h3>
+          <h3 class="s-card-title">Install</h3>
           <p class="s-card-desc">
-            Install the CLI against this Grain server ({{ serverOrigin() }}) and
-            choose where each agent CLI executes on dispatch.
+            Run this on your workstation (Linux or macOS, amd64 or arm64). It
+            downloads
+            @if (cliRelease(); as rel) {
+              <code>grain {{ rel }}</code>
+            } @else {
+              the grain release
+            }
+            this deployment runs, checks its SHA-256 against the release's
+            checksums, and installs <code>grain</code> to
+            <code>~/.local/bin</code> (set <code>GRAIN_INSTALL_DIR</code> for
+            somewhere else).
           </p>
-          <pre class="s-code" data-testid="cli-install-snippet">{{
-            cliSnippet()
-          }}</pre>
+          <div class="s-inline s-cli-command">
+            <pre class="s-code" data-testid="cli-install-command">{{
+              cli().install
+            }}</pre>
+            <button
+              type="button"
+              class="btn-text s-btn-sm"
+              aria-label="Copy install command"
+              data-testid="cli-install-copy"
+              (click)="copyCommand(cli().install)"
+            >
+              Copy
+            </button>
+          </div>
+        </div>
+        <div class="s-card" data-testid="card-cli-login">
+          <h3 class="s-card-title">Sign in</h3>
+          @if (!state.val("externalAgentApi", false)) {
+            <div
+              class="s-banner readonly"
+              data-testid="cli-external-agent-api-off"
+            >
+              <span>
+                The external agent API is off on this deployment, so
+                <code>--issue-token</code> has no token to mint yet. Turn on
+                <em>Accept external agent tokens</em> in
+                <a
+                  routerLink="/settings/access"
+                  data-testid="cli-external-agent-api-link"
+                  >Settings → Access</a
+                >
+                first.
+              </span>
+            </div>
+          }
+          <p class="s-card-desc">
+            Signs <code>grain</code> in to this deployment as you and keeps a
+            30-day token scoped to <code>grain/external-dev</code> for it. Add
+            <code>--repos owner/name,...</code> to limit the token to some
+            repositories.
+          </p>
+          <div class="s-inline s-cli-command">
+            <pre class="s-code" data-testid="cli-login-command">{{
+              cli().login
+            }}</pre>
+            <button
+              type="button"
+              class="btn-text s-btn-sm"
+              aria-label="Copy login command"
+              data-testid="cli-login-copy"
+              (click)="copyCommand(cli().login)"
+            >
+              Copy
+            </button>
+          </div>
+        </div>
+        <div class="s-card" data-testid="card-cli-skills">
+          <h3 class="s-card-title">Agent skills</h3>
+          <p class="s-card-desc">
+            Teaches a coding agent on your workstation to work through
+            <code>grain</code>: each writes a <code>SKILL.md</code> for the
+            signed-in deployment where that agent reads skills. Add
+            <code>--project</code> to write it into the current repository
+            instead, and <code>--mcp</code> to register
+            <code>grain mcp</code> too.
+          </p>
+          @for (sk of cli().skills; track sk.flag) {
+            <div class="s-field">
+              <span class="s-label">{{ sk.label }}</span>
+              <div class="s-inline s-cli-command">
+                <pre
+                  class="s-code"
+                  [attr.data-testid]="'cli-skill-command-' + sk.flag.slice(2)"
+                  >{{ sk.command }}</pre>
+                <button
+                  type="button"
+                  class="btn-text s-btn-sm"
+                  [attr.aria-label]="'Copy ' + sk.label + ' skill command'"
+                  (click)="copyCommand(sk.command)"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+          }
+        </div>
+        <div class="s-card" data-testid="card-cli-run">
+          <h3 class="s-card-title">Agent CLI run locations</h3>
+          <p class="s-card-desc">
+            Choose where each agent CLI executes on dispatch.
+          </p>
 
           @for (fw of cliFrameworks; track fw.id) {
             <div class="s-toggle-row">
@@ -823,6 +960,16 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     { value: "Europe/London", label: "Europe/London" },
   ];
 
+  // timezoneChoices keeps a zone chosen elsewhere (the classic UI offers
+  // every zone) on the list, so the pill names it rather than claiming
+  // browser local time.
+  protected readonly timezoneChoices = computed<readonly PillOption[]>(() => {
+    const tz = this.timeZone();
+    return this.timezoneOptions.some((o) => o.value === tz)
+      ? this.timezoneOptions
+      : [...this.timezoneOptions, { value: tz, label: tz }];
+  });
+
   protected readonly cliFrameworks = [
     {
       id: "claude",
@@ -949,9 +1096,31 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     return this.doc.defaultView?.location?.origin || "http://localhost:8080";
   }
 
-  protected cliSnippet(): string {
-    const origin = this.serverOrigin();
-    return `curl -fsSL ${origin}/api/hostd/install.sh | sh\ngrain login ${origin}`;
+  // cliRelease is the release the install script fetches, named only
+  // when this build is a versioned one.
+  protected readonly cliRelease = computed(() => {
+    const v = (this.state.config() as { version?: unknown } | null)?.version;
+    if (!v || typeof v !== "object") return "";
+    const info = v as VersionInfo;
+    return info.unversioned ? "" : (info.release ?? "");
+  });
+
+  // cli is what Settings → CLI shows, the lines the classic page shows
+  // too: the workstation install script (/cli/install.sh, which installs
+  // the grain CLI -- not /api/hostd/install.sh, which sets up a host), a
+  // login that mints a scoped token, and one skill line per agent.
+  protected readonly cli = computed(() => cliCommands(this.serverOrigin()));
+
+  protected copyCommand(text: string): void {
+    const clip = this.doc.defaultView?.navigator?.clipboard;
+    if (typeof clip?.writeText !== "function") {
+      this.snackbar.show("Copying is not available in this browser");
+      return;
+    }
+    void clip.writeText(text).then(
+      () => this.snackbar.show("Copied"),
+      () => this.snackbar.show("Couldn't copy"),
+    );
   }
 
   private loadForSection(): void {

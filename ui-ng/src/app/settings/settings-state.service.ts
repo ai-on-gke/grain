@@ -129,6 +129,22 @@ export class SettingsStateService {
       Object.keys(this.fieldErrors()).length,
   );
 
+  // editedCards are the cards that keep their own Save button (Memory)
+  // and hold an edit they have not saved, by key, each with the name the
+  // leave prompt gives it. They sit outside the save bar's draft, so the
+  // page asks before a move to another section would drop them too.
+  readonly editedCards = signal<Record<string, string>>({});
+
+  setCardEdited(key: string, label: string | null): void {
+    this.editedCards.update((prev) => {
+      if (label ? prev[key] === label : !(key in prev)) return prev;
+      const next = { ...prev };
+      if (label) next[key] = label;
+      else delete next[key];
+      return next;
+    });
+  }
+
   sectionLocked(section: SettingsSectionId): boolean {
     if (this.configRepoOnly() && isConfigRepoSection(section)) {
       return true;

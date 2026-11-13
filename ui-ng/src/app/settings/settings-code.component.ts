@@ -919,6 +919,11 @@ interface StateRepoEntryDto {
             <pre class="s-code" data-testid="config-file-content">{{
               configFileContent()
             }}</pre>
+          } @else if (configFilesError()) {
+            <p class="s-card-desc" data-testid="config-files-error">
+              The config repository's files can't be listed:
+              {{ configFilesError() }}
+            </p>
           } @else {
             <p class="s-card-desc">
               Select a config file to inspect its committed YAML/JSON state.
@@ -987,6 +992,10 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly kmsKeyUri = signal("");
   protected readonly importKeyDraft = signal("");
   protected readonly configFiles = signal<string[]>([]);
+  // configFilesError is why the file listing failed (no state repository
+  // on this deployment, or one it cannot reach), so the viewer says so
+  // rather than inviting a pick from an empty list.
+  protected readonly configFilesError = signal("");
   protected readonly selectedConfigFile = signal("");
   protected readonly configFileContent = signal("");
 
@@ -1397,10 +1406,11 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
           }
         }
         this.configFiles.set(files);
+        this.configFilesError.set("");
         const init = this.initialFilePath() || files[0] || "";
         if (init) void this.openConfigFile(init);
-      } catch {
-        // Non-fatal
+      } catch (err) {
+        this.configFilesError.set(errText(err));
       }
     }
   }

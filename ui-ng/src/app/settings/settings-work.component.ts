@@ -937,7 +937,7 @@ interface SecretMetaRow {
               [disabled]="
                 !access.can('PUT /api/memory') || state.sectionLocked('memory')
               "
-              (input)="memoryBody.set($any($event.target).value)"
+              (input)="editMemory($any($event.target).value)"
             ></textarea>
           </div>
           @if (memoryDocs().length > 0) {
@@ -993,6 +993,9 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly secretVal = signal("");
 
   protected readonly memoryBody = signal("");
+  // memorySaved is the deployment memory as the server last answered it,
+  // so an edit that differs from it is one the leave prompt protects.
+  private readonly memorySaved = signal("");
   protected readonly memoryDocs = signal<string[]>([]);
   private readonly qaRolloutRaw = signal<{
     epoch: number;
@@ -1444,7 +1447,10 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       try {
         const m = await this.api.get<MemoryRow[]>("GET /api/memory");
         if (Array.isArray(m)) {
-          this.memoryBody.set(m.find((r) => !r.repo)?.text ?? "");
+          const text = m.find((r) => !r.repo)?.text ?? "";
+          this.memoryBody.set(text);
+          this.memorySaved.set(text);
+          this.state.setCardEdited("memory", null);
         }
       } catch {
         // Non-fatal
@@ -1467,11 +1473,20 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
+  protected editMemory(text: string): void {
+    this.memoryBody.set(text);
+    this.state.setCardEdited(
+      "memory",
+      text === this.memorySaved() ? null : "the unsaved deployment memory edit",
+    );
+  }
+
   protected async saveMemory(): Promise<void> {
+    const text = this.memoryBody();
     try {
-      await this.api.put("PUT /api/memory", undefined, {
-        text: this.memoryBody(),
-      });
+      await this.api.put("PUT /api/memory", undefined, { text });
+      this.memorySaved.set(text);
+      this.editMemory(this.memoryBody());
       this.snackbar.show("Memory updated");
     } catch (err) {
       this.state.recordError(err);

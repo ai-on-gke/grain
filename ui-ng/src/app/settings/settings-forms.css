@@ -337,3 +337,16 @@
   padding: 0 12px;
   font-size: 12px;
 }
+
+/* Settings → CLI: a command fills the row and its Copy button sits at the
+   right, top-aligned with the first line when the command wraps. */
+.s-cli-command {
+  align-items: flex-start;
+  flex-wrap: nowrap;
+}
+
+.s-cli-command .s-code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

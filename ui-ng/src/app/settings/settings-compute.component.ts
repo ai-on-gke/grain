@@ -1979,17 +1979,30 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
-  protected async deleteBackend(backendId: string): Promise<void> {
-    try {
-      await this.api.delete(
-        "DELETE /api/deployment/agent-backends/{backendId}",
-        { backendId },
-      );
-      this.backends.update((list) => list.filter((b) => b.id !== backendId));
-      this.snackbar.show(`Removed connection ${backendId}`);
-    } catch (err) {
-      this.state.recordError(err);
-    }
+  // deleteBackend asks first: removing a connection stops work being
+  // dispatched to it, and it cannot be undone from here.
+  protected deleteBackend(backendId: string): void {
+    this.confirmRequest.set({
+      title: `Remove connection ${backendId}?`,
+      message:
+        "Tasks and sessions stop being dispatched to it. Adding it back means setting it up again.",
+      accept: "Remove connection",
+      destructive: true,
+      run: async () => {
+        try {
+          await this.api.delete(
+            "DELETE /api/deployment/agent-backends/{backendId}",
+            { backendId },
+          );
+          this.backends.update((list) =>
+            list.filter((b) => b.id !== backendId),
+          );
+          this.snackbar.show(`Removed connection ${backendId}`);
+        } catch (err) {
+          this.state.recordError(err);
+        }
+      },
+    });
   }
 
   protected async loadDiscoveredModels(): Promise<void> {
