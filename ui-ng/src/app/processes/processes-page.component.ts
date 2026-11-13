@@ -548,9 +548,11 @@ type SuitesPaneView = "suites" | "runs";
                                 sr.id
                               }}</span
                             >
-                            <span class="ci-provider-tag tabular"
-                              >Pass {{ sr.pass }}</span
-                            >
+                            @if (sr.pass > 0) {
+                              <span class="ci-provider-tag tabular"
+                                >Pass {{ sr.pass }}</span
+                              >
+                            }
                           </div>
                           <div class="proc-row-sub">
                             <span class="tabular"
@@ -559,7 +561,7 @@ type SuitesPaneView = "suites" | "runs";
                             >
                             <span class="tabular"
                               >·
-                              {{ sr.taskCount ?? sr.tasks.length }}
+                              {{ sr.taskCount ?? sr.tasks?.length ?? 0 }}
                               tasks</span
                             >
                           </div>
@@ -1083,9 +1085,22 @@ type SuitesPaneView = "suites" | "runs";
                       {{ sr.base || "default" }}</span
                     >
                     <span
-                      >{{ suiteModeOf(sr.mode, sr.count, sr.maxPasses) }} ·
-                      currently on pass {{ sr.pass }}</span
-                    >
+                      >{{ suiteModeOf(sr.mode, sr.count, sr.maxPasses) }}
+                      @if (sr.pass > 0) {
+                        ·
+                        {{
+                          sr.status === "active" ? "currently on" : "ended on"
+                        }}
+                        pass {{ sr.pass }}
+                      } @else {
+                        ·
+                        {{
+                          sr.status === "active"
+                            ? "no pass filed yet"
+                            : "ended without filing a pass"
+                        }}
+                      }
+                    </span>
                     @if (sr.scheduleId) {
                       <span>Started by schedule {{ sr.scheduleId }}</span>
                     }
