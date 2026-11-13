@@ -728,27 +728,52 @@ func MissingGCPKeyRefusal(capability string) string {
 // worded on its own: its material writes nothing and CI hands it to every
 // event, so the sentence the publishing credentials get would misstate it.
 //
-// Repository access, read or write, also says where it does work: a job
+// Repository access, read or write, names the task's own equivalent -- a
+// reads or writes entry naming the repository -- since a task that asked
+// for it wanted that access and has a way to ask for it. It also says
+// where the CI grant does work: a job
 // declares it in its own workflow file (IsRepoAccessGrant), and the repos
 // page's CI capabilities list, which the other CI-only capabilities point
 // to, does not grant it.
 func CIOnlyRefusal(capability string) string {
 	const declare = " Take it off this task. A CI job that needs it declares it in its own `capabilities:` " +
 		"in the repository's .grain/workflows file; the repos page's CI capabilities list does not grant it."
-	if _, ok := RepoReadTarget(capability); ok || CapabilityGrantRef(capability) == RepoReadRef {
+	if repo, ok := RepoReadTarget(capability); ok || CapabilityGrantRef(capability) == RepoReadRef {
+		instead := " A task that needs to read another repository names it in its reads instead."
+		if ok {
+			instead = fmt.Sprintf(" A task that needs to read %s names it in its reads instead: reads: [%q].", repo, repo.String())
+		}
 		return fmt.Sprintf("%s is a CI capability, not a task grant: it gives a CI job read access to "+
-			"another repository, and only a CI job is handed it -- a task run is not one."+declare, capability)
+			"another repository, and only a CI job is handed it -- a task run is not one."+instead+declare, capability)
 	}
-	if _, ok := RepoWriteTarget(capability); ok {
+	if repo, ok := RepoWriteTarget(capability); ok {
 		return fmt.Sprintf("%s is a CI capability, not a task grant: it gives a CI job push access to "+
 			"another repository, released only to a release, a workflow_dispatch or grain's own scheduled "+
-			"run -- a task run is none of them."+declare, capability)
+			"run -- a task run is none of them. A task that needs to push to %s names it in its writes "+
+			"instead: writes: [{repo: %q}]."+declare, capability, repo, repo.String())
 	}
 	return fmt.Sprintf("%s is a CI capability, not a task grant: its material is a credential that "+
 		"writes to the repository itself, so it is released only to a trusted post-merge release or "+
 		"to a run an operator asked for by hand, and a task run is neither. Take it off this task, and "+
 		"enable it for the repository's CI jobs instead -- the repos page, under CI capabilities.",
 		capability)
+}
+
+// TaskGrantCIOnlyRefusal is grain's own refusal of grant as a task
+// grant -- repository access (repo-read:<repo>, repo-write:<repo> or
+// their references) or a method whose server declared a CI-only rule
+// (CIGrantRule) -- or "" when grain's own rules admit it to a task. It
+// is the check admission makes (CapabilityPolicy.Permits with the run
+// kind a task's) without any policy rule, so a filer that cannot reach
+// ui.Client's pickers (orchestrator.relayProposedTasks) refuses a task
+// the very grant every dispatch of it would. An in-process provider's
+// CapabilitySpec.CIOnly is not judged here: that needs a registry, and
+// ResolveGrants asks it.
+func TaskGrantCIOnlyRefusal(grant string) string {
+	if err := (CapabilityPolicy{}).Permits(grant, CapabilitySubject{Kind: CapabilityRunTask}); err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 // Materialized is one grant's Materialize result, with the provider

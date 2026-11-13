@@ -1914,6 +1914,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// The template's sandbox shape (model.Template.Sandbox), filled
 		// into each dimension the proposal leaves unstated below.
 		var tmplSandbox model.SandboxShape
+		// The template the proposal was composed from, recorded for
+		// reporting (model.Task.SourceTemplateID) and never as
+		// TemplateID: a run cannot hand a template's push set or
+		// template-restricted grants on to work it files.
+		var sourceTemplate string
 		if tmplID != "" {
 			tmpl, err := store.GetTemplate(ctx, tmplID)
 			if err != nil {
@@ -1925,6 +1930,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					targetRef = *target
 				}
 				comp := model.ComposeTemplateTask(*tmpl, fieldValues, targetRef, base, false)
+				sourceTemplate = tmpl.ID
 				if title == "" {
 					title = comp.Title
 				}
@@ -2009,6 +2015,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// dropped here, as a non-string entry always was, since the
 		// live propose_task call already refused it.
 		capabilities, _ := model.CapabilityEntries(p["capabilities"])
+		var ciReads []model.RepoRef
 		for _, cap := range capabilities {
 			cap = strings.TrimSpace(cap)
 			if aliasAdm, isLegacyAdm := model.LegacyAdmissionAlias(cap); isLegacyAdm {
@@ -2039,6 +2046,22 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			// matching ui.Client.creationGrants so a relayed proposal stores
 			// the exact same grant set as its live twin.
 			for _, expanded := range expandProposalGrant(cap) {
+				// A CI capability (model.TaskGrantCIOnlyRefusal) is
+				// refused here, as ui.CreateTask refuses the identical
+				// call filed live, rather than filed onto a task every
+				// dispatch of which would then refuse it (task 4532). A
+				// repository read is the one with a task equivalent, and
+				// is filed as that reads entry -- for UngrantedReads below
+				// to judge like any other -- rather than dropped.
+				if why := model.TaskGrantCIOnlyRefusal(expanded); why != "" {
+					if repo, ok := model.RepoReadTarget(expanded); ok {
+						ciReads = append(ciReads, repo)
+						body += ciReadGrantAsReadsNote(cap, repo)
+					} else {
+						body += ciOnlyGrantRefusedNote(cap, why)
+					}
+					continue
+				}
 				found := false
 				for _, g := range grants {
 					if g.Capability == expanded {
@@ -2136,6 +2159,16 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if diskGB == 0 {
 			diskGB = tmplSandbox.DiskGB
 		}
+		// Held to the deployment's maximum, as the live call is
+		// (ui.Client.refuseSandboxShapeAboveMax). That call refuses with a
+		// 400 the agent reads; this run has ended, so the shape is clamped
+		// and the body says so, rather than filing a task nobody can
+		// approve. A shape above the proposer's own is held for a person
+		// below (model.ProposalSandboxShapeAbove), as filed live.
+		shape, shapeNote := clampProposalSandboxShape(ctx, store,
+			model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB})
+		cpus, memoryMB, diskGB = shape.CPUs, shape.MemoryMB, shape.DiskGB
+		body += shapeNote
 		// A proposal chooses a model (model.Task.Model) and, separately, may
 		// pin a connection; the store's own migration and dispatch read a
 		// pin naming no connection as the model choice it used to be.
@@ -2178,6 +2211,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			return fmt.Errorf("orchestrator: placing proposed task %q in the backlog: %w", title, err)
 		}
 		reads := proposedReads(p, target)
+		for _, repo := range ciReads {
+			if (target == nil || !repo.Same(*target)) && !slices.ContainsFunc(reads, repo.Same) {
+				reads = append(reads, repo)
+			}
+		}
 		writes := proposedWrites(p, target, base)
 		reviewTemplateID, reviewTemplateNote, err := proposedReviewTemplate(ctx, store, task, p, target)
 		if err != nil {
@@ -2231,6 +2269,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Reads:            reads,
 			Writes:           writes,
 			ReviewTemplateID: reviewTemplateID,
+			SourceTemplateID: sourceTemplate,
 			Tags:             []string{key},
 			Links:            links,
 			CreatedAt:        &now,
@@ -3290,6 +3329,42 @@ func droppedCustomFieldNote(dropped []string) string {
 		"which named no field this deployment declares or no value the declaration allows. "+
 		"Nothing was recorded for them -- set them by hand if they matter.",
 		"`"+strings.Join(dropped, "`, `")+"`")
+}
+
+// clampProposalSandboxShape holds asked, a relayed proposal's sandbox
+// shape, to this deployment's maximum (model.SandboxShapeLimits.Max with
+// grain's defaults filled in): a dimension above it is lowered to it, and
+// a negative one is dropped to "not stated". The note, "" when nothing
+// changed, is what the proposal's body says about it. A settings row that
+// cannot be read is grain's default maximum, never no maximum.
+func clampProposalSandboxShape(ctx context.Context, store *model.Store, asked model.SandboxShape) (model.SandboxShape, string) {
+	var limits model.SandboxShapeLimits
+	if cfg, err := store.GetConfig(ctx); err == nil && cfg != nil {
+		limits = cfg.SandboxShapeLimits
+	}
+	ceiling := limits.ResolvedMax()
+	out := asked
+	var changed []string
+	clamp := func(name string, v *int, limit int) {
+		switch {
+		case *v < 0:
+			changed = append(changed, fmt.Sprintf("%s %d (dropped)", name, *v))
+			*v = 0
+		case *v > limit:
+			changed = append(changed, fmt.Sprintf("%s %d (lowered to %d)", name, *v, limit))
+			*v = limit
+		}
+	}
+	clamp("sandbox_cpus", &out.CPUs, ceiling.CPUs)
+	clamp("sandbox_memory_mb", &out.MemoryMB, ceiling.MemoryMB)
+	clamp("sandbox_disk_gb", &out.DiskGB, ceiling.DiskGB)
+	if len(changed) == 0 {
+		return out, ""
+	}
+	return out, fmt.Sprintf("\n\n---\n\ngrain: the run that proposed this asked for a sandbox this deployment "+
+		"does not give any task (most it allows: %s), so it was filed at what the deployment allows: %s. "+
+		"An operator can raise sandboxShapeLimits in settings if the work needs more.",
+		ceiling.Describe(), strings.Join(changed, ", "))
 }
 
 // droppedNetworkAccessNote is what a human approving the proposal reads
@@ -4496,6 +4571,23 @@ func parkedOn(ctx context.Context, store *model.Store, taskID string, result *ag
 		}
 	}
 	return parked, nil
+}
+
+// ciReadGrantAsReadsNote is the line added to a proposal whose grant was
+// a CI job's read access to repo (repo-read:<repo>), filed as the reads
+// entry a task reads another repository through instead.
+func ciReadGrantAsReadsNote(grant string, repo model.RepoRef) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for `%s`, a CI capability that no task "+
+		"run is handed, so it was filed with `reads: [%q]` instead -- a task's own read access to %s.",
+		grant, repo.String(), repo)
+}
+
+// ciOnlyGrantRefusedNote is the line added to a proposal whose grant was
+// a CI capability with no task equivalent (model.TaskGrantCIOnlyRefusal),
+// dropped for it with grain's own reason.
+func ciOnlyGrantRefusedNote(grant, why string) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for `%s`, so it was filed without that "+
+		"grant: %s", grant, why)
 }
 
 // reviewOfGrantRefusedNote is the line added to a proposal whose grant

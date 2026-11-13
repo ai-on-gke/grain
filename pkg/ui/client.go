@@ -3703,6 +3703,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Skills:               chosenSkills,
 		ReviewTemplateID:     reviewTemplateID,
 		TemplateID:           filedFrom,
+		SourceTemplateID:     strings.TrimSpace(req.TemplateID),
 		Owner:                resolvedOwner,
 		Creator:              cmp.Or(strings.TrimSpace(req.Author), strings.TrimSpace(req.Creator)),
 		Proposer:             c.proposerForNewTask(ctx, resolvedOwner, sessionBehalf, proposedBy),
@@ -7993,6 +7994,9 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	}
 	now := c.now()
 	if task.Approval == nil {
+		if err := ciOnlyGrantApprovalRefusal(*task); err != nil {
+			return err
+		}
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}
