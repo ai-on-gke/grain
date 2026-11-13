@@ -19,11 +19,13 @@ import {
   OnChanges,
   OnInit,
   ViewEncapsulation,
+  computed,
   inject,
   input,
   signal,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
+import { type VersionInfo, versionLabel } from "../api/version";
 import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
 import { NavConfigService } from "../services/nav-config.service";
@@ -630,6 +632,41 @@ function formatBytes(bytes: number): string {
             </span>
           </div>
 
+          @if (selfUpgradeDisabled()) {
+            <div
+              class="s-banner readonly"
+              role="status"
+              data-testid="upgrade-externally-managed"
+            >
+              <span
+                >In-VM self-upgrade is disabled on this deployment; upgrades and
+                instance lifecycle are managed externally.</span
+              >
+              @if (managementUrl(); as href) {
+                <a
+                  class="s-btn-sm"
+                  data-testid="upgrade-management-link"
+                  [href]="href"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >Manage instance</a
+                >
+              }
+            </div>
+          } @else if (upgradeUnavailable()) {
+            <div
+              class="s-banner readonly"
+              role="status"
+              data-testid="upgrade-unavailable"
+            >
+              <span
+                >Not available: this deployment was started with neither
+                -upgrade-image nor -upgrade-src-dir configured, so there is
+                nothing here that can cut it over to another branch.</span
+              >
+            </div>
+          }
+
           @if (scheduledUpgradeBranch()) {
             <div class="s-banner warn" data-testid="scheduled-upgrade-banner">
               <span
@@ -666,76 +703,82 @@ function formatBytes(bytes: number): string {
             </div>
           }
 
-          <div class="s-grid">
-            <div class="s-field">
-              <span class="s-label">Target channel / branch</span>
-              <g-pill-select
-                testid="select-upgrade-target"
-                ariaLabel="Upgrade target branch"
-                align="left"
-                [options]="upgradeTargetOptions()"
-                [value]="selectedUpgradeBranch()"
-                (valueChange)="onSelectUpgradeBranch($event)"
-              />
+          @if (upgradeControllable()) {
+            <div class="s-grid">
+              <div class="s-field">
+                <span class="s-label">Target channel / branch</span>
+                <g-pill-select
+                  testid="select-upgrade-target"
+                  ariaLabel="Upgrade target branch"
+                  align="left"
+                  [options]="upgradeTargetOptions()"
+                  [value]="selectedUpgradeBranch()"
+                  (valueChange)="onSelectUpgradeBranch($event)"
+                />
+              </div>
+              <div class="s-field">
+                <span class="s-label">Post-upgrade check mode</span>
+                <g-pill-select
+                  testid="select-upgrade-check-mode"
+                  ariaLabel="Post-upgrade check mode"
+                  align="left"
+                  [options]="upgradeCheckOptions"
+                  [value]="state.val('upgradeCheckMode', 'auto')"
+                  [disabled]="!canWriteSettings()"
+                  (valueChange)="state.setField('upgradeCheckMode', $event)"
+                />
+              </div>
             </div>
-            <div class="s-field">
-              <span class="s-label">Post-upgrade check mode</span>
-              <g-pill-select
-                testid="select-upgrade-check-mode"
-                ariaLabel="Post-upgrade check mode"
-                align="left"
-                [options]="upgradeCheckOptions"
-                [value]="state.val('upgradeCheckMode', 'auto')"
-                [disabled]="!canWriteSettings()"
-                (valueChange)="state.setField('upgradeCheckMode', $event)"
-              />
-            </div>
-          </div>
 
-          <div class="s-toggle-row">
-            <div class="s-toggle-copy">
-              <span class="s-toggle-name"
-                >Drain running tasks before restarting</span
-              >
-              <span class="s-hint"
-                >Waits for active agent turns to finish cleanly before switching
-                binaries.</span
-              >
+            <div class="s-toggle-row">
+              <div class="s-toggle-copy">
+                <span class="s-toggle-name"
+                  >Drain running tasks before restarting</span
+                >
+                <span class="s-hint"
+                  >Waits for active agent turns to finish cleanly before
+                  switching binaries.</span
+                >
+              </div>
+              <button
+                type="button"
+                class="g-switch"
+                role="switch"
+                data-testid="switch-upgrade-drain"
+                [attr.aria-checked]="afterTasksFinish()"
+                aria-label="Drain running tasks before restarting"
+                (click)="afterTasksFinish.set(!afterTasksFinish())"
+              ></button>
             </div>
-            <button
-              type="button"
-              class="g-switch"
-              role="switch"
-              data-testid="switch-upgrade-drain"
-              [attr.aria-checked]="afterTasksFinish()"
-              aria-label="Drain running tasks before restarting"
-              (click)="afterTasksFinish.set(!afterTasksFinish())"
-            ></button>
-          </div>
 
-          <div class="s-inline">
-            <button
-              type="button"
-              class="btn-primary"
-              data-testid="start-upgrade-btn"
-              [disabled]="
-                !selectedUpgradeBranch() || !access.can('POST /api/upgrade')
-              "
-              (click)="startUpgrade()"
-            >
-              Start upgrade
-            </button>
-            @if (dbBackendLabel()) {
-              <span class="s-hint tabular"
-                >Database: {{ dbBackendLabel() }}</span
+            <div class="s-inline">
+              <button
+                type="button"
+                class="btn-primary"
+                data-testid="start-upgrade-btn"
+                [disabled]="
+                  !selectedUpgradeBranch() || !access.can('POST /api/upgrade')
+                "
+                (click)="startUpgrade()"
               >
+                Start upgrade
+              </button>
+              @if (dbBackendLabel()) {
+                <span class="s-hint tabular"
+                  >Database: {{ dbBackendLabel() }}</span
+                >
+              }
+            </div>
+
+            @if (releaseNotesText()) {
+              <pre class="s-code" data-testid="upgrade-release-notes">{{
+                releaseNotesText()
+              }}</pre>
             }
-          </div>
-
-          @if (releaseNotesText()) {
-            <pre class="s-code" data-testid="upgrade-release-notes">{{
-              releaseNotesText()
-            }}</pre>
+          } @else if (dbBackendLabel()) {
+            <span class="s-hint tabular" data-testid="upgrade-database"
+              >Database: {{ dbBackendLabel() }}</span
+            >
           }
         </div>
       }
@@ -828,7 +871,25 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected readonly registryStateLabel = signal("Not configured");
 
-  protected readonly currentVersion = signal("dev");
+  // What the daemon reports it runs (GET /api/upgrade's `running`), else
+  // the build stamp GET /api/config carries -- an object on current
+  // servers, so it is read through versionLabel rather than as a string.
+  private readonly upgradeRunningLabel = signal("");
+  protected readonly currentVersion = computed(
+    () =>
+      this.upgradeRunningLabel() ||
+      runningVersionLabel(this.state.config()?.version) ||
+      "unknown",
+  );
+  // GET /api/upgrade's `enabled: false`: no upgrader is configured
+  // (neither -upgrade-image nor -upgrade-src-dir), so there are no targets
+  // to read and nothing Start upgrade could do.
+  protected readonly upgradeUnavailable = signal(false);
+  protected readonly selfUpgradeDisabled = signal(false);
+  protected readonly managementUrl = signal("");
+  protected readonly upgradeControllable = computed(
+    () => !this.upgradeUnavailable() && !this.selfUpgradeDisabled(),
+  );
   protected readonly activeUpgradeState = signal("");
   protected readonly upgradeCancellable = signal(false);
   protected readonly scheduledUpgradeBranch = signal("");
@@ -1107,10 +1168,13 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     const ver =
       running?.release ||
       running?.ref ||
-      running?.commit ||
       (typeof u["currentVersion"] === "string" ? u["currentVersion"] : "") ||
-      (typeof u["version"] === "string" ? u["version"] : "");
-    if (ver) this.currentVersion.set(ver);
+      (typeof u["version"] === "string" ? u["version"] : "") ||
+      (running?.commit ? running.commit.slice(0, 7) : "");
+    this.upgradeRunningLabel.set(ver);
+    this.selfUpgradeDisabled.set(u["selfUpgradeDisabled"] === true);
+    this.upgradeUnavailable.set(u["enabled"] === false);
+    this.managementUrl.set(safeManagementUrl(u["managementUrl"]));
 
     const scheduled = u["scheduled"] as
       { branch?: string; requestedBy?: string } | undefined | null;
@@ -1142,8 +1206,6 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   }
 
   private async loadUpgrade(): Promise<void> {
-    const cfgVer = this.state.config()?.version;
-    if (typeof cfgVer === "string" && cfgVer) this.currentVersion.set(cfgVer);
     if (this.access.can("GET /api/upgrade")) {
       try {
         const u =
@@ -1153,7 +1215,10 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
         // Non-fatal
       }
     }
-    if (this.access.can("GET /api/upgrade/targets")) {
+    if (
+      this.upgradeControllable() &&
+      this.access.can("GET /api/upgrade/targets")
+    ) {
       try {
         const t = await this.api.get<
           | UpgradeTargetRow[]
@@ -1286,5 +1351,29 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     } catch (err) {
       this.state.recordError(err);
     }
+  }
+}
+
+// runningVersionLabel names the build GET /api/config's `version` stamp
+// describes the way the classic pane's "Now running" does: the release,
+// or the short commit when the build carries no real release
+// (`unversioned`, a Go pseudo-version).
+export function runningVersionLabel(v: unknown): string {
+  if (v && typeof v === "object") {
+    const info = v as VersionInfo;
+    if (info.unversioned && info.commit) return info.commit.slice(0, 7);
+  }
+  return versionLabel(v);
+}
+
+// safeManagementUrl keeps only an absolute http(s) link, as the classic
+// ExternallyManagedUpgradeNotice does.
+export function safeManagementUrl(raw: unknown): string {
+  if (typeof raw !== "string" || !raw) return "";
+  try {
+    const u = new URL(raw);
+    return u.protocol === "https:" || u.protocol === "http:" ? u.href : "";
+  } catch {
+    return "";
   }
 }
