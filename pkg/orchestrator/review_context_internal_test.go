@@ -70,17 +70,17 @@ func TestReviewBodiesCarryFencedBriefDesignsCIAndDeploymentChecks(t *testing.T) 
 	}
 	triggerMatches := []reviewMatch{{rule: triggerRule, paths: []string{"pkg/orchestrator/review.go"}}}
 
-	pathSecReview, err := buildPullRequestReview(ctx, store, task, pr, "11111112222222",
+	pathSecReview, err := buildPullRequestReview(ctx, store, nil, task, pr, "11111112222222",
 		model.SecurityReviewTemplateID, triggerMatches,
 		reviewSettings{human: model.TriggerHumanOnFindings, sensitive: true, autoApprove: true, fixes: true},
-		"", nil, now)
+		"", nil, "", now)
 	if err != nil {
 		t.Fatalf("buildPullRequestReview(security): %v", err)
 	}
-	pathFindingsReview, err := buildPullRequestReview(ctx, store, task, pr, "11111112222222",
+	pathFindingsReview, err := buildPullRequestReview(ctx, store, nil, task, pr, "11111112222222",
 		tmpl.ID, triggerMatches,
 		reviewSettings{human: model.TriggerHumanOnFindings, autoApprove: true, fixes: false},
-		"", nil, now)
+		"", nil, "", now)
 	if err != nil {
 		t.Fatalf("buildPullRequestReview(findings): %v", err)
 	}
@@ -261,10 +261,10 @@ func TestIncrementalReviewKeepsBriefAndStripsCleanlyEvenWhenBriefMentionsHeader(
 	}
 	matches := []reviewMatch{{rule: triggerRule, paths: []string{"pkg/orchestrator/review.go"}}}
 
-	review, err := buildPullRequestReview(ctx, store, task, pr, "bbbbbbb2222222",
+	review, err := buildPullRequestReview(ctx, store, nil, task, pr, "bbbbbbb2222222",
 		tmpl.ID, matches,
 		reviewSettings{human: model.TriggerHumanOnFindings, autoApprove: true},
-		"aaaaaaa1111111", []string{"pkg/orchestrator/review.go"}, now)
+		"aaaaaaa1111111", []string{"pkg/orchestrator/review.go"}, "", now)
 	if err != nil {
 		t.Fatalf("buildPullRequestReview: %v", err)
 	}

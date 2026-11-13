@@ -236,6 +236,7 @@ func closeFinishedReview(ctx context.Context, store *model.Store, task model.Tas
 	}); err != nil {
 		return err
 	}
+	refreshQueuedReviewsAfterFinish(ctx, store, nil, task)
 	return reviewComment(ctx, store, task.ID, reviewFinishedNote(task), now)
 }
 
@@ -375,11 +376,23 @@ func fileReviewTask(ctx context.Context, store *model.Store, task model.Task,
 			task.ID, task.ReviewTemplateID)
 	}
 
-	reviewTask, err := putStackedReview(ctx, store, task, *tmpl,
-		reviewTaskTitle(*tmpl, task), reviewTaskBody(*tmpl, task, ref, task.BranchName()), now)
+	headSHA := knownTaskHead(task)
+	body := reviewTaskBody(*tmpl, task, ref, task.BranchName()) +
+		earlierReviewsSection(ctx, store, nil, &task, ref, headSHA, "") +
+		parallelReviewsSection(parallelReviewsFor(ctx, store, &task, ref, headSHA, ""))
+	reviewTask, err := newReview(ctx, store, task, *tmpl, reviewTaskTitle(*tmpl, task), body, false, now)
 	if err != nil {
 		return err
 	}
+	if ref != (model.PullRequestRef{}) {
+		reviewTask.Links = append(reviewTask.Links,
+			model.Link{Kind: model.LinkReviewsPullRequest, Target: ref.String()})
+	}
+	reviewTask.Tags = addReviewHeadTag(reviewTask.Tags, headSHA)
+	if err := store.PutTask(ctx, reviewTask); err != nil {
+		return fmt.Errorf("orchestrator: filing review task %s: %w", reviewTask.ID, err)
+	}
+	syncParallelReviewBodies(ctx, store, &task, ref, headSHA)
 	branch := task.BranchName()
 
 	// Through UpdateTask, for the reason finishWithPullRequest gives: the
@@ -502,11 +515,12 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 		Intent: model.IntentImplement,
 		// A review gates the change it reviews, so it runs at that
 		// change's priority, and never below model.ReviewPriorityFloor.
-		Priority:  model.ReviewPriority(task),
-		Title:     title,
-		Body:      body,
-		Admission: admission,
-		Hosting:   model.NormalizeHosting(tmpl.Hosting),
+		Priority:         model.ReviewPriority(task),
+		Title:            title,
+		Body:             body,
+		SourceTemplateID: tmpl.ID,
+		Admission:        admission,
+		Hosting:          model.NormalizeHosting(tmpl.Hosting),
 		Origin: model.Origin{
 			Attribution: model.Attribution{Actor: reviewer},
 			Reason:      model.ReasonReview,
