@@ -26,6 +26,10 @@ import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
+import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
@@ -96,6 +100,21 @@ interface HostdRow {
   capacity?: number;
 }
 
+// DeletedHostdRow is what deleting a host answers with: its name and the
+// usage-limit pauses that went with it.
+interface DeletedHostdRow {
+  name: string;
+  clearedPauses?: string[] | null;
+}
+
+function deletedHostdLine(d: DeletedHostdRow): string {
+  let line = `Deleted host ${d.name}.`;
+  if (d.clearedPauses?.length) {
+    line += ` Cleared its usage-limit pauses: ${d.clearedPauses.join(", ")}.`;
+  }
+  return line;
+}
+
 interface EnrollmentCodeRow {
   name: string;
   prefix?: string;
@@ -161,7 +180,7 @@ export function formatHostdLabels(
 
 @Component({
   selector: "g-settings-compute",
-  imports: [PillSelectComponent],
+  imports: [PillSelectComponent, ConfirmDialogComponent],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -1212,43 +1231,55 @@ export function formatHostdLabels(
                         {{ formatLabels(h.labels) }}
                       </td>
                       <td>
-                        <div class="s-inline">
-                          <button
-                            type="button"
-                            class="btn-tonal s-btn-sm"
-                            [attr.data-testid]="'rotate-hostd-' + h.name"
-                            [disabled]="
-                              !access.can('POST /api/hostds/{name}/rotate') ||
-                              isRevoked
-                            "
-                            (click)="rotateHostd(h.name)"
-                          >
-                            Rotate
-                          </button>
-                          <button
-                            type="button"
-                            class="btn-tonal s-btn-sm"
-                            [attr.data-testid]="'revoke-hostd-' + h.name"
-                            [disabled]="
-                              !access.can('POST /api/hostds/{name}/revoke') ||
-                              isRevoked
-                            "
-                            (click)="revokeHostd(h.name)"
-                          >
-                            Revoke
-                          </button>
-                          <button
-                            type="button"
-                            class="btn-text s-btn-sm"
-                            [attr.data-testid]="'delete-hostd-' + h.name"
-                            [disabled]="
-                              !access.can('DELETE /api/hostds/{name}')
-                            "
-                            (click)="deleteHostd(h.name)"
-                          >
-                            Delete
-                          </button>
-                        </div>
+                        <!-- local is the co-located host: it holds no
+                             token to rotate and can be neither revoked
+                             nor deleted, so it offers none of the three
+                             (the server refuses each with a 400). -->
+                        @if (h.name !== "local") {
+                          <div class="s-inline">
+                            <button
+                              type="button"
+                              class="btn-tonal s-btn-sm"
+                              [attr.data-testid]="'rotate-hostd-' + h.name"
+                              [disabled]="
+                                !access.can('POST /api/hostds/{name}/rotate') ||
+                                isRevoked
+                              "
+                              (click)="rotateHostd(h.name)"
+                            >
+                              Rotate
+                            </button>
+                            <button
+                              type="button"
+                              class="btn-tonal s-btn-sm"
+                              [attr.data-testid]="'revoke-hostd-' + h.name"
+                              [disabled]="
+                                !access.can('POST /api/hostds/{name}/revoke') ||
+                                isRevoked
+                              "
+                              (click)="revokeHostd(h.name)"
+                            >
+                              Revoke
+                            </button>
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              [attr.data-testid]="'delete-hostd-' + h.name"
+                              [disabled]="
+                                !access.can('DELETE /api/hostds/{name}') ||
+                                !isRevoked
+                              "
+                              [attr.title]="
+                                isRevoked
+                                  ? null
+                                  : 'Revoke a host before deleting it'
+                              "
+                              (click)="deleteHostd(h.name)"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        }
                       </td>
                     </tr>
                   }
@@ -1501,7 +1532,7 @@ export function formatHostdLabels(
                                 'POST /api/hostds/pending/{id}/reject'
                               )
                             "
-                            (click)="rejectPendingHostd(p.id)"
+                            (click)="rejectPendingHostd(p)"
                           >
                             Reject
                           </button>
@@ -1515,6 +1546,10 @@ export function formatHostdLabels(
           }
         </div>
       }
+    }
+
+    @if (confirmRequest(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
     }
   `,
 })
@@ -1611,6 +1646,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly probeMessage = signal("");
 
   protected readonly hostds = signal<HostdRow[]>([]);
+  protected readonly confirmRequest = signal<ConfirmRequest | null>(null);
   protected readonly newHostdName = signal("");
   protected readonly newHostdLabels = signal("");
   protected readonly mintedHostdToken = signal<string | null>(null);
@@ -2159,49 +2195,100 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
-  protected async rotateHostd(name: string): Promise<void> {
-    try {
-      const res = await this.api.post<{
-        token?: string;
-        install?: HostdInstallDto | string;
-      }>("POST /api/hostds/{name}/rotate", { name }, {});
-      const msg = this.formatIssuedHostdSecret(`Rotated token (${name})`, res);
-      if (msg) this.mintedHostdToken.set(msg);
-      await this.loadHostds();
-      this.snackbar.show(`Rotated ${name}`);
-    } catch (err) {
-      this.state.recordError(err);
-    }
+  protected rotateHostd(name: string): void {
+    this.confirmRequest.set({
+      title: `Rotate host ${name}'s token?`,
+      message:
+        "Its current token stops working at once, so the host is disconnected until the new token is installed on it.",
+      accept: "Rotate token",
+      destructive: true,
+      run: async () => {
+        try {
+          const res = await this.api.post<{
+            token?: string;
+            install?: HostdInstallDto | string;
+          }>("POST /api/hostds/{name}/rotate", { name }, {});
+          const msg = this.formatIssuedHostdSecret(
+            `Rotated token (${name})`,
+            res,
+          );
+          if (msg) this.mintedHostdToken.set(msg);
+          await this.loadHostds();
+          this.snackbar.show(`Rotated ${name}`);
+        } catch (err) {
+          this.state.recordError(err);
+        }
+      },
+    });
   }
 
-  protected async revokeHostd(name: string): Promise<void> {
-    try {
-      await this.api.post("POST /api/hostds/{name}/revoke", { name }, {});
-      await this.loadHostds();
-      this.snackbar.show(`Revoked ${name}`);
-    } catch (err) {
-      this.state.recordError(err);
-    }
+  protected revokeHostd(name: string): void {
+    this.confirmRequest.set({
+      title: `Revoke host ${name}?`,
+      message:
+        "It is disconnected at once and cannot be restored: using that machine again means enrolling it anew. A revoked host can then be deleted.",
+      accept: "Revoke host",
+      destructive: true,
+      run: async () => {
+        try {
+          await this.api.post("POST /api/hostds/{name}/revoke", { name }, {});
+          await this.loadHostds();
+          this.snackbar.show(`Revoked ${name}`);
+        } catch (err) {
+          this.state.recordError(err);
+        }
+      },
+    });
   }
 
-  protected async deleteHostd(name: string): Promise<void> {
-    try {
-      await this.api.delete("DELETE /api/hostds/{name}", { name });
-      await this.loadHostds();
-      this.snackbar.show(`Deleted ${name}`);
-    } catch (err) {
-      this.state.recordError(err);
-    }
+  protected deleteHostd(name: string): void {
+    this.confirmRequest.set({
+      title: `Delete host ${name}?`,
+      message:
+        "Its tokens go with it and the name can be registered again; past runs keep showing it, marked deleted.",
+      accept: "Delete host",
+      destructive: true,
+      run: async () => {
+        try {
+          const out = await this.api.delete<DeletedHostdRow>(
+            "DELETE /api/hostds/{name}",
+            { name },
+          );
+          await this.loadHostds();
+          this.snackbar.show(deletedHostdLine(out ?? { name }));
+        } catch (err) {
+          this.state.recordError(err);
+        }
+      },
+    });
   }
 
-  protected async deleteRevokedHostds(): Promise<void> {
-    try {
-      await this.api.post("POST /api/hostds/delete-revoked", undefined, {});
-      await this.loadHostds();
-      this.snackbar.show("Removed revoked hostds");
-    } catch (err) {
-      this.state.recordError(err);
-    }
+  protected deleteRevokedHostds(): void {
+    this.confirmRequest.set({
+      title: "Delete every revoked host?",
+      message:
+        "One a model connection or capability server still names is skipped.",
+      accept: "Delete revoked",
+      destructive: true,
+      run: async () => {
+        try {
+          const out = await this.api.post<{
+            deleted?: DeletedHostdRow[] | null;
+            skipped?: { name: string; reason: string }[] | null;
+          }>("POST /api/hostds/delete-revoked", undefined, {});
+          await this.loadHostds();
+          const lines = (out?.deleted ?? []).map(deletedHostdLine);
+          for (const sk of out?.skipped ?? []) {
+            lines.push(`Skipped ${sk.name}: ${sk.reason}`);
+          }
+          this.snackbar.show(
+            lines.length ? lines.join(" ") : "No revoked hosts to delete.",
+          );
+        } catch (err) {
+          this.state.recordError(err);
+        }
+      },
+    });
   }
 
   protected async createEnrollmentCode(): Promise<void> {
@@ -2227,38 +2314,56 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
-  protected async rotateEnrollmentCode(name: string): Promise<void> {
-    try {
-      const res = await this.api.post<{
-        code?: string;
-        token?: string;
-        install?: HostdInstallDto | string;
-      }>("POST /api/hostds/enrollment-codes/{name}/rotate", { name }, {});
-      const secret = res?.code ?? res?.token;
-      const msg = this.formatIssuedHostdSecret(
-        `Rotated enrollment code (${name})`,
-        { token: secret, install: res?.install },
-      );
-      if (msg) this.mintedHostdToken.set(msg);
-      await this.loadHostds();
-      this.snackbar.show(`Rotated code ${name}`);
-    } catch (err) {
-      this.state.recordError(err);
-    }
+  protected rotateEnrollmentCode(name: string): void {
+    this.confirmRequest.set({
+      title: `Rotate enrollment code ${name}?`,
+      message:
+        "Its invite command stops working at once, so hosts not yet joined with it need the new one. Hosts already joined keep their credentials.",
+      accept: "Rotate code",
+      destructive: true,
+      run: async () => {
+        try {
+          const res = await this.api.post<{
+            code?: string;
+            token?: string;
+            install?: HostdInstallDto | string;
+          }>("POST /api/hostds/enrollment-codes/{name}/rotate", { name }, {});
+          const secret = res?.code ?? res?.token;
+          const msg = this.formatIssuedHostdSecret(
+            `Rotated enrollment code (${name})`,
+            { token: secret, install: res?.install },
+          );
+          if (msg) this.mintedHostdToken.set(msg);
+          await this.loadHostds();
+          this.snackbar.show(`Rotated code ${name}`);
+        } catch (err) {
+          this.state.recordError(err);
+        }
+      },
+    });
   }
 
-  protected async revokeEnrollmentCode(name: string): Promise<void> {
-    try {
-      await this.api.post(
-        "POST /api/hostds/enrollment-codes/{name}/revoke",
-        { name },
-        {},
-      );
-      await this.loadHostds();
-      this.snackbar.show(`Revoked code ${name}`);
-    } catch (err) {
-      this.state.recordError(err);
-    }
+  protected revokeEnrollmentCode(name: string): void {
+    this.confirmRequest.set({
+      title: `Revoke enrollment code ${name}?`,
+      message:
+        "Its invite command stops working for good and the code cannot be restored. Hosts already joined keep their credentials.",
+      accept: "Revoke code",
+      destructive: true,
+      run: async () => {
+        try {
+          await this.api.post(
+            "POST /api/hostds/enrollment-codes/{name}/revoke",
+            { name },
+            {},
+          );
+          await this.loadHostds();
+          this.snackbar.show(`Revoked code ${name}`);
+        } catch (err) {
+          this.state.recordError(err);
+        }
+      },
+    });
   }
 
   protected formatLabelsInput(labels?: Record<string, string> | null): string {
@@ -2301,13 +2406,34 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
-  protected async rejectPendingHostd(id: string): Promise<void> {
-    try {
-      await this.api.post("POST /api/hostds/pending/{id}/reject", { id }, {});
-      await this.loadHostds();
-      this.snackbar.show("Rejected pending hostd");
-    } catch (err) {
-      this.state.recordError(err);
+  protected rejectPendingHostd(p: PendingHostdRow): void {
+    this.confirmRequest.set({
+      title: `Reject the join request from ${p.hostname || p.id}?`,
+      message:
+        "It is discarded, and that host has to run its join command again to ask once more.",
+      accept: "Reject request",
+      destructive: true,
+      run: async () => {
+        try {
+          await this.api.post(
+            "POST /api/hostds/pending/{id}/reject",
+            { id: p.id },
+            {},
+          );
+          await this.loadHostds();
+          this.snackbar.show("Rejected pending hostd");
+        } catch (err) {
+          this.state.recordError(err);
+        }
+      },
+    });
+  }
+
+  protected async onConfirmDone(accepted: boolean): Promise<void> {
+    const req = this.confirmRequest();
+    this.confirmRequest.set(null);
+    if (accepted && req) {
+      await req.run();
     }
   }
 }
