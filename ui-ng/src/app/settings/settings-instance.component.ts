@@ -759,7 +759,7 @@ function formatBytes(bytes: number): string {
                 [disabled]="
                   !selectedUpgradeBranch() || !access.can('POST /api/upgrade')
                 "
-                (click)="startUpgrade()"
+                (click)="confirmStartUpgrade()"
               >
                 Start upgrade
               </button>
@@ -1296,6 +1296,23 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     } catch {
       // Non-fatal
     }
+  }
+
+  // Starting an upgrade restarts grain onto another build, so it asks
+  // first, as the classic Upgrade pane's confirm() does.
+  protected confirmStartUpgrade(): void {
+    const branch = this.selectedUpgradeBranch();
+    if (!branch) return;
+    const drain = this.afterTasksFinish();
+    this.confirmRequest.set({
+      title: `Upgrade grain to ${branch}?`,
+      message: drain
+        ? `Grain waits for running tasks to finish, then restarts onto ${branch}.`
+        : `Grain restarts onto ${branch} now, interrupting agent runs in flight.`,
+      accept: drain ? "Schedule upgrade" : "Upgrade now",
+      destructive: !drain,
+      run: () => this.startUpgrade(),
+    });
   }
 
   protected async startUpgrade(): Promise<void> {
