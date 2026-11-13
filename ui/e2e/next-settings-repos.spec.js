@@ -1,9 +1,9 @@
-const { test, expect } = require('@playwright/test');
+import { test, expect } from './fixtures.js';
 
 test.use({ demoArgs: ["-as", "demo-operator"] });
 
-test('Settings Repositories - Add repo picker, reachability, and removal', async ({ page }) => {
-  await page.goto('/next/settings/repositories');
+test('Settings Git - Verify Git scope column and connections banner', async ({ page }) => {
+  await page.goto('/next/settings/git');
 
   // Verify the Git scope column is visible
   await expect(page.locator('th', { hasText: 'Scope' })).toBeVisible();
@@ -13,7 +13,11 @@ test('Settings Repositories - Add repo picker, reachability, and removal', async
   await verifyBtn.click();
   const banner = page.getByTestId('git-check-banner');
   await expect(banner).toBeVisible();
-  
+});
+
+test('Settings Repositories - Add repo picker, reachability, and removal', async ({ page }) => {
+  await page.goto('/next/settings/repositories');
+
   // Repo Add picker (click and type in combobox)
   const repoInput = page.getByTestId('input-add-repo');
   await repoInput.click(); // Should trigger checking reachable repositories
