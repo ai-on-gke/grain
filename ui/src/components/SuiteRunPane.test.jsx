@@ -256,4 +256,15 @@ describe("SuiteRunPane", () => {
 
     expect(screen.getByText(/filed no tasks yet/)).toBeTruthy();
   });
+
+  it("does not promise a pass for a run that ended without filing one", () => {
+    renderPane({
+      run: { ...run, status: "failed", pass: 0, tasks: [], error: "gone" },
+    });
+
+    expect(
+      screen.getByText("This run ended without filing any tasks."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/first pass is on the way/)).toBeNull();
+  });
 });
