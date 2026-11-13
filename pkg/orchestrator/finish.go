@@ -1726,6 +1726,12 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 	// a refusal that is only a log line leaves the person reading the
 	// runner's task one recommendation short with no word why.
 	var refusedTuning []refusedTuningProposal
+	// Proposals filed with something admission refused or lowered, said
+	// on task's own conversation once the batch is through
+	// (noteProposalAdmissionChanges): the note on each proposal reaches
+	// whoever opens it, but the run that asked has ended and its tool
+	// call only said "Recorded".
+	var changedProposals []proposalAdmissionChange
 
 	// The capability catalogue (settings/capabilities.yml), read once:
 	// each proposal is judged against it below, as ui.CreateTask judges
@@ -2016,6 +2022,12 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// live propose_task call already refused it.
 		capabilities, _ := model.CapabilityEntries(p["capabilities"])
 		var ciReads []model.RepoRef
+		// What admission changed about this proposal -- a CI capability
+		// refused or turned into reads, a sandbox shape lowered -- said
+		// again on the proposer's own conversation once the batch is
+		// through (noteProposalAdmissionChanges), where the run that
+		// asked for it and the person watching that task read it.
+		var admissionChanges []string
 		for _, cap := range capabilities {
 			cap = strings.TrimSpace(cap)
 			if aliasAdm, isLegacyAdm := model.LegacyAdmissionAlias(cap); isLegacyAdm {
@@ -2057,8 +2069,12 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					if repo, ok := model.RepoReadTarget(expanded); ok {
 						ciReads = append(ciReads, repo)
 						body += ciReadGrantAsReadsNote(cap, repo)
+						admissionChanges = append(admissionChanges, fmt.Sprintf(
+							"`%s` is a CI capability, so it was filed with `reads: [%q]` instead", cap, repo.String()))
 					} else {
 						body += ciOnlyGrantRefusedNote(cap, why)
+						admissionChanges = append(admissionChanges, fmt.Sprintf(
+							"`%s` is a CI capability, not a task grant, so it was filed without it", cap))
 					}
 					continue
 				}
@@ -2150,6 +2166,8 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// A dimension the proposal states keeps its value and the
 		// template fills the rest, one at a time, as ui.Client.fromTemplate
 		// does for a filing through the API.
+		templateFilledShape := (cpus == 0 && tmplSandbox.CPUs != 0) ||
+			(memoryMB == 0 && tmplSandbox.MemoryMB != 0) || (diskGB == 0 && tmplSandbox.DiskGB != 0)
 		if cpus == 0 {
 			cpus = tmplSandbox.CPUs
 		}
@@ -2166,9 +2184,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// approve. A shape above the proposer's own is held for a person
 		// below (model.ProposalSandboxShapeAbove), as filed live.
 		shape, shapeNote := clampProposalSandboxShape(ctx, store,
-			model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB})
+			model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB}, templateFilledShape)
 		cpus, memoryMB, diskGB = shape.CPUs, shape.MemoryMB, shape.DiskGB
 		body += shapeNote
+		if shapeNote != "" {
+			admissionChanges = append(admissionChanges, fmt.Sprintf(
+				"its sandbox is above this deployment's maximum, so it was filed at %s",
+				model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB}.Describe()))
+		}
 		// A proposal chooses a model (model.Task.Model) and, separately, may
 		// pin a connection; the store's own migration and dispatch read a
 		// pin naming no connection as the model choice it used to be.
@@ -2616,6 +2639,10 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if err := store.PutTask(ctx, proposal); err != nil {
 			return fmt.Errorf("orchestrator: filing proposed task %q: %w", title, err)
 		}
+		if len(admissionChanges) > 0 {
+			changedProposals = append(changedProposals, proposalAdmissionChange{
+				id: proposal.ID, title: title, changes: admissionChanges})
+		}
 		if goal != nil {
 			if err := store.SetTaskGoal(ctx, proposal.ID, *goal,
 				model.PrincipalString(model.Principal{Kind: model.PrincipalAgent, ID: task.ID}), now); err != nil {
@@ -2658,7 +2685,54 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			}
 		}
 	}
+	if err := noteProposalAdmissionChanges(ctx, store, task, changedProposals, now); err != nil {
+		return err
+	}
 	return noteRefusedTuningProposals(ctx, store, task, refusedTuning, now)
+}
+
+// proposalAdmissionChange is one proposal relayProposedTasks filed with
+// something its run asked for refused or lowered: changes are what
+// admission did, one line each.
+type proposalAdmissionChange struct {
+	id      string
+	title   string
+	changes []string
+}
+
+// noteProposalAdmissionChanges posts one comment on task naming each
+// proposal it filed with a CI capability refused (or turned into reads)
+// or a sandbox shape lowered to the deployment's maximum. Each proposal's
+// own body says so already, but the run that proposed it has ended and
+// its propose_task call answered only "Recorded": this is where that run,
+// on its next turn, and the person watching its task hear about it.
+// Nothing is posted when nothing was changed.
+func noteProposalAdmissionChanges(ctx context.Context, store *model.Store, task model.Task,
+	changed []proposalAdmissionChange, now time.Time) error {
+
+	if len(changed) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	if len(changed) == 1 {
+		b.WriteString("grain filed 1 proposal from this run without something it asked for:\n")
+	} else {
+		fmt.Fprintf(&b, "grain filed %d proposals from this run without something they asked for:\n", len(changed))
+	}
+	for _, c := range changed {
+		fmt.Fprintf(&b, "\n- task %s %q: %s.", c.id, c.title, strings.Join(c.changes, "; "))
+	}
+	b.WriteString("\n\nEach proposal's description says why. An operator can raise sandboxShapeLimits in settings; " +
+		"a CI capability is declared in the repository's CI workflow, not on a task.")
+	if _, err := store.AddComment(ctx, model.Comment{
+		TaskID:    task.ID,
+		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
+		Body:      b.String(),
+		CreatedAt: now,
+	}); err != nil {
+		return fmt.Errorf("orchestrator: noting proposals filed with admission changes on %s: %w", task.ID, err)
+	}
+	return nil
 }
 
 // refusedTuningProposal is one propose_task call of the tuning runner that
@@ -3337,7 +3411,11 @@ func droppedCustomFieldNote(dropped []string) string {
 // a negative one is dropped to "not stated". The note, "" when nothing
 // changed, is what the proposal's body says about it. A settings row that
 // cannot be read is grain's default maximum, never no maximum.
-func clampProposalSandboxShape(ctx context.Context, store *model.Store, asked model.SandboxShape) (model.SandboxShape, string) {
+//
+// fromTemplate says the proposal's template filled at least one dimension
+// (its `sandbox:`), so the note does not put the template's size down to
+// the run alone.
+func clampProposalSandboxShape(ctx context.Context, store *model.Store, asked model.SandboxShape, fromTemplate bool) (model.SandboxShape, string) {
 	var limits model.SandboxShapeLimits
 	if cfg, err := store.GetConfig(ctx); err == nil && cfg != nil {
 		limits = cfg.SandboxShapeLimits
@@ -3361,10 +3439,14 @@ func clampProposalSandboxShape(ctx context.Context, store *model.Store, asked mo
 	if len(changed) == 0 {
 		return out, ""
 	}
-	return out, fmt.Sprintf("\n\n---\n\ngrain: the run that proposed this asked for a sandbox this deployment "+
+	asker := "the run that proposed this asked for"
+	if fromTemplate {
+		asker = "this proposal, with its template's `sandbox:` filled in, asks for"
+	}
+	return out, fmt.Sprintf("\n\n---\n\ngrain: %s a sandbox this deployment "+
 		"does not give any task (most it allows: %s), so it was filed at what the deployment allows: %s. "+
 		"An operator can raise sandboxShapeLimits in settings if the work needs more.",
-		ceiling.Describe(), strings.Join(changed, ", "))
+		asker, ceiling.Describe(), strings.Join(changed, ", "))
 }
 
 // droppedNetworkAccessNote is what a human approving the proposal reads
