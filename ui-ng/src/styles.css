@@ -1740,6 +1740,10 @@ g-sessions-page {
     left: 0;
     right: 0;
     bottom: 56px;
+    /* border-box, as .g-dialog: the max-height is the sheet's whole box,
+       so it stops 16px under the top of the screen rather than its
+       padding pushing it 4-8px above it. */
+    box-sizing: border-box;
     max-height: calc(100dvh - 72px);
     overflow-y: auto;
     z-index: 50;
@@ -1893,6 +1897,11 @@ g-sessions-page {
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  /* border-box: the width below is the dialog's whole box. Left at
+     content-box, the 24px padding and 1px border were added on top of
+     it, so a phone's dialog was 50px wider than the 16px-margined
+     space it was given and ran 9px off both edges of the screen. */
+  box-sizing: border-box;
   width: min(520px, calc(100vw - 32px));
   max-height: calc(100vh - 64px);
   overflow-y: auto;
