@@ -39,7 +39,7 @@ test("Remove repository and every release action ask first; a refused release na
     await page.goto("/next/settings/repositories");
     await page.getByTestId("remove-repo-acme/widgets").click();
     const dialog = page.getByTestId("confirm-dialog");
-    await expect(dialog).toContainText("Remove acme/widgets");
+    await expect(dialog).toContainText("Remove repository acme/widgets?");
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
     await expect(page.getByTestId("remove-repo-acme/widgets")).toBeVisible();

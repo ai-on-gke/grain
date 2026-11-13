@@ -346,6 +346,11 @@ persisted state back.
 - **Remove** asks `Remove acme/widgets, the only repo this deployment
   allows? An empty allowlist is what means unrestricted…`. Focus starts on
   Cancel; Escape closes it and the row stays.
+  - Later the same day `main` landed its own confirmation for this button
+    (`Remove repository acme/widgets?`, with a stranded-task dry run). On
+    merging `main` this branch took that version and dropped its own; the
+    e2e guard in `next-repo-release-guards.spec.js` now checks main's
+    wording.
 - **Delete release** asks `Remove release 2.0-fix? This drops the release
   and its candidates from grain.`. Escape keeps the row; accepting removes
   it.

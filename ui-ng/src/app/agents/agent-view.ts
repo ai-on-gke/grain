@@ -25,23 +25,38 @@ export const SPARK_BUCKETS = 12;
 export type AgentStatus = "working" | "setup" | "quiet";
 
 export interface SandboxReading {
+  // The run's own id (dispatch.RunID, "<task>-<attempt>"), which every
+  // backend reports and which is what joins a row onto its run.
+  sandbox?: string;
   name: string;
   kind?: string;
+  backend?: string;
   ready?: boolean;
   terminationReason?: string;
   cpus?: number;
   loadAverage?: string;
+  // Host-directory sandboxes: CPUs the run's own processes kept busy
+  // over the last cpuWindowMS (orchestrator.SandboxHealth.CPUCores).
+  cpuCores?: number;
+  cpuWindowMS?: number;
   memoryUsedMB?: number;
   memoryTotalMB?: number;
 }
 
 export interface Cpu {
-  // Share of the sandbox's vCPUs in use (load average over vCPUs), 0..1+.
+  // Share of the vCPUs in use, 0..1+: the sandbox's load average over
+  // its own vCPUs, or a host run's busy cores over the host's vCPUs.
   share: number;
+  // Load average (probe) or busy cores (process).
   load: number;
   cpus: number;
   memoryUsedMB?: number;
   bound: boolean;
+  // "probe": the sandbox's own /proc/loadavg. "process": the run's own
+  // processes on a host shared with everything else, so `cpus` is the
+  // host's and is shared with every other host run.
+  source: "probe" | "process";
+  windowMs?: number;
 }
 
 export interface Agent {
@@ -51,6 +66,8 @@ export interface Agent {
   status: AgentStatus;
   quietMs: number;
   cpu: Cpu | null;
+  // Why there is no CPU reading, when there is none.
+  cpuNote: string;
 }
 
 // running is what the screen shows: running tasks, not standing
@@ -83,10 +100,30 @@ export function lastActivity(t: Task, a: Attempt | null, now: number): number {
   return now;
 }
 
-// cpuOf reads a sandbox probe: the 1-minute load average over its vCPUs.
-// A sandbox at its vCPU limit is CPU-bound.
-export function cpuOf(r: SandboxReading | undefined): Cpu | null {
-  if (!r?.cpus || !r.loadAverage) return null;
+// cpuOf reads a sandbox row: a host run's busy cores over the host's
+// vCPUs when the backend measured its processes, otherwise the 1-minute
+// load average over the sandbox's own vCPUs. A sandbox at its vCPU
+// limit is CPU-bound.
+export function cpuOf(
+  r: SandboxReading | undefined,
+  hostCpus?: number,
+): Cpu | null {
+  if (!r) return null;
+  if (typeof r.cpuCores === "number" && Number.isFinite(r.cpuCores)) {
+    const cpus = r.cpus || hostCpus;
+    if (!cpus) return null;
+    const share = r.cpuCores / cpus;
+    return {
+      share,
+      load: r.cpuCores,
+      cpus,
+      memoryUsedMB: r.memoryUsedMB,
+      bound: share >= 0.95,
+      source: "process",
+      windowMs: r.cpuWindowMS,
+    };
+  }
+  if (!r.cpus || !r.loadAverage) return null;
   const load = parseFloat(r.loadAverage.split(/[\s,]+/)[0]);
   if (!Number.isFinite(load)) return null;
   const share = load / r.cpus;
@@ -96,26 +133,61 @@ export function cpuOf(r: SandboxReading | undefined): Cpu | null {
     cpus: r.cpus,
     memoryUsedMB: r.memoryUsedMB,
     bound: share >= 0.95,
+    source: "probe",
   };
 }
 
-// sandboxFor finds the probe row for a task's agent sandbox. The probe
-// rows carry no task id, so this is a heuristic: sandboxes are named
-// after their task (grain-task-<id> and similar). CI sandboxes and rows
-// that are no longer running are skipped; a backend that names them
-// otherwise, or does not probe them, gives no reading.
+// cpuNote says why a run has no CPU reading, so the card can say it
+// rather than print a bare dash.
+export function cpuNote(r: SandboxReading | undefined): string {
+  if (!r) {
+    return "Not sampled: this deployment reported no sandbox for this run yet.";
+  }
+  if (r.backend === "host") {
+    return "Not sampled: none of this run's processes were found in its directory, or this host has no /proc to read them from.";
+  }
+  const where = r.backend ? `The ${r.backend} sandbox` : "This run's sandbox";
+  return `Not sampled: ${where} did not report its load on the last probe.`;
+}
+
+function live(r: SandboxReading): boolean {
+  return (
+    r.ready !== false &&
+    (!r.terminationReason || r.terminationReason === "running") &&
+    !/(^|[^a-z])ci([^a-z]|$)/i.test(`${r.kind ?? ""} ${r.name}`)
+  );
+}
+
+// sandboxFor finds the row for a task's agent sandbox. Rows carry the
+// run id ("<task>-<attempt>"): the current attempt's row when the
+// attempt is known, else the task's newest live one. Rows without it
+// fall back to the name heuristic (grain-task-<id> and similar). CI
+// sandboxes and rows that are no longer running are skipped.
 export function sandboxFor(
   t: Task,
   readings: readonly SandboxReading[],
+  attempt?: Attempt | null,
 ): SandboxReading | undefined {
+  const liveRows = readings.filter(live);
+  if (attempt) {
+    const exact = liveRows.find(
+      (r) => r.sandbox === `${t.id}-${attempt.number}`,
+    );
+    if (exact) return exact;
+  }
+  let best: SandboxReading | undefined;
+  let bestN = -1;
+  for (const r of liveRows) {
+    if (!r.sandbox?.startsWith(`${t.id}-`)) continue;
+    const n = Number(r.sandbox.slice(t.id.length + 1));
+    if (Number.isInteger(n) && n > bestN) {
+      best = r;
+      bestN = n;
+    }
+  }
+  if (best) return best;
   const re = new RegExp(`(^|[^0-9])task-?${t.id}([^0-9]|$)`);
-  return readings.find(
-    (r) =>
-      re.test(r.name) &&
-      r.ready !== false &&
-      (!r.terminationReason || r.terminationReason === "running") &&
-      !/(^|[^a-z])ci([^a-z]|$)/i.test(`${r.kind ?? ""} ${r.name}`),
-  );
+  return liveRows.find((r) => re.test(r.name));
 }
 
 export function toAgent(
@@ -123,8 +195,11 @@ export function toAgent(
   d: TaskDetail | null,
   readings: readonly SandboxReading[],
   now: number,
+  hostCpus?: number,
 ): Agent {
   const attempt = currentAttempt(d);
+  const row = sandboxFor(t, readings, attempt);
+  const cpu = cpuOf(row, hostCpus);
   const quietMs = now - lastActivity(t, attempt, now);
   const status: AgentStatus =
     quietMs >= QUIET_MS ? "quiet" : t.activityBySetup ? "setup" : "working";
@@ -134,7 +209,8 @@ export function toAgent(
     attempt,
     status,
     quietMs,
-    cpu: cpuOf(sandboxFor(t, readings)),
+    cpu,
+    cpuNote: cpu ? "" : cpuNote(row),
   };
 }
 
@@ -218,7 +294,11 @@ export function minutes(ms: number): string {
 export function quietReason(a: Agent): { text: string; stuck: boolean } {
   const base = `No update for ${minutes(a.quietMs)}`;
   if (!a.cpu) return { text: base, stuck: false };
-  if (a.cpu.share >= 0.5) {
+  // A host run's share is of the whole host, so "busy" there is half a
+  // core of its own rather than half the machine.
+  const busy =
+    a.cpu.source === "process" ? a.cpu.load >= 0.5 : a.cpu.share >= 0.5;
+  if (busy) {
     return {
       text: `${base}; CPU busy, probably building or testing`,
       stuck: false,

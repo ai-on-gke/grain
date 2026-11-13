@@ -483,15 +483,27 @@ type ReachableReposPayload =
                     + New pack
                   </button>
                 </div>
-                <input
-                  type="search"
-                  class="ops-input"
-                  placeholder="Search documents by name or summary…"
-                  aria-label="Search memory documents"
-                  data-testid="docs-search-input"
-                  [value]="docSearch()"
-                  (input)="docSearch.set($any($event.target).value)"
-                />
+                <form
+                  role="search"
+                  autocomplete="off"
+                  style="display: contents"
+                  (submit)="$event.preventDefault()"
+                >
+                  <input
+                    type="search"
+                    name="grain-docs-search"
+                    autocomplete="off"
+                    spellcheck="false"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    class="ops-input"
+                    placeholder="Search documents by name or summary…"
+                    aria-label="Search memory documents"
+                    data-testid="docs-search-input"
+                    [value]="docSearch()"
+                    (input)="docSearch.set($any($event.target).value)"
+                  />
+                </form>
               </div>
 
               @if (filteredDocuments().length === 0) {
@@ -605,9 +617,19 @@ type ReachableReposPayload =
                   }
                 </div>
 
-                <div style="display: flex; gap: 6px; min-width: 0">
+                <form
+                  role="search"
+                  autocomplete="off"
+                  style="display: flex; gap: 6px; min-width: 0; margin: 0"
+                  (submit)="$event.preventDefault(); runFsGrep()"
+                >
                   <input
                     type="search"
+                    name="grain-fs-grep"
+                    autocomplete="off"
+                    spellcheck="false"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
                     class="ops-input"
                     style="flex: 1; min-width: 0"
                     placeholder="Grep pattern in subtree…"
@@ -615,18 +637,16 @@ type ReachableReposPayload =
                     data-testid="fs-grep-input"
                     [value]="fsGrepQuery()"
                     (input)="fsGrepQuery.set($any($event.target).value)"
-                    (keydown.enter)="runFsGrep()"
                   />
                   <button
-                    type="button"
+                    type="submit"
                     class="btn-tonal"
                     style="min-height: 36px; padding: 0 12px"
                     data-testid="fs-grep-btn"
-                    (click)="runFsGrep()"
                   >
                     Grep
                   </button>
-                </div>
+                </form>
               </div>
 
               @if (fsGrepHits() !== null) {
