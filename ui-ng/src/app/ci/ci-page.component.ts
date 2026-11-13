@@ -1420,7 +1420,11 @@ export class CIPageComponent implements OnInit, OnDestroy {
   protected readonly sharedFaults = computed(() => this.store.combinedFaults());
 
   protected readonly availableRepos = computed(() => {
-    const set = new Set<string>(this.store.targetRepos());
+    const configured = this.store.targetRepos();
+    if (this.store.hasTargetAllowlist() && configured.length > 0) {
+      return [...configured].sort();
+    }
+    const set = new Set<string>(configured);
     for (const r of this.store.runs()) {
       if (r.repo) set.add(r.repo);
     }
@@ -1842,6 +1846,7 @@ export class CIPageComponent implements OnInit, OnDestroy {
         recheck: this.draftRecheck() || undefined,
       });
       this.runDialogOpen.set(false);
+      if (created?.id) this.openRun(created.id);
       this.snackbar.show(`Started CI run ${created?.id ?? ""}`.trim());
     } catch (err) {
       this.store.actionError.set(errorText(err));
@@ -1873,6 +1878,9 @@ export class CIPageComponent implements OnInit, OnDestroy {
               recheckFailed: failedOnly || undefined,
             },
       );
+      // Follow to the run it started: on /ci/runs/<id> the route's id
+      // would otherwise pull the inspector back to the run just retried.
+      if (created?.id) this.openRun(created.id);
       this.snackbar.show(
         failedOnly
           ? `Re-running failed jobs (${created?.id ?? "started"})`

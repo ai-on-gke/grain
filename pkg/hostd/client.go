@@ -554,6 +554,14 @@ func (c Client) stream(ctx context.Context, conn net.Conn, send func(byte, []byt
 	}
 }
 
+// Stopped reports whether e is a Draining exit recorded because the host
+// agent itself stopped, restarted or crashed while the process ran, rather
+// than an upgrade drain reaching drain_cap (which leaves Error empty; see
+// Exit.Error).
+func (e Exit) Stopped() bool {
+	return e.Draining && e.Error != ""
+}
+
 // String says how the process ended, for an error message.
 func (e Exit) String() string {
 	switch {
