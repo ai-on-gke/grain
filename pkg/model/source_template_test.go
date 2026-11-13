@@ -85,7 +85,7 @@ func TestTheSourceTemplateSurvivesARewriteAndGrantsNothing(t *testing.T) {
 		task := model.Task{
 			ID: "t-" + tc.want + "-x", Title: tc.name, Body: "body", Target: &repo, Base: "main",
 			Binding: model.BindingDirective, TemplateID: tc.templateID, SourceTemplateID: tc.source,
-			Approval: &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "jane"}},
+			Approval:   &model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "jane"}},
 			ApprovedAt: &now, CreatedAt: &now,
 		}
 		if err := store.PutTask(ctx, task); err != nil {
