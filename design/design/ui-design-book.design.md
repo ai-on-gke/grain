@@ -164,7 +164,7 @@ do not pull in an icon font.
   Inbox.
 - **Disconnected banner:** when the shared pollers stop getting answers
   (`services/connection.service.ts`: the shell's `GET /api/config`
-  heartbeat and the task feed, each read bounded at 10 seconds), a
+  heartbeat, each read bounded at 10 seconds, and the task feed), a
   `role="status"` warning strip appears at y=0, above the rail and the
   top bar. It pushes the shell down; it never covers the rail. It says
   whether the connection failed or was accepted with no answer, and since

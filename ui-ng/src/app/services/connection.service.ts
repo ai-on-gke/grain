@@ -112,7 +112,7 @@ export function unreachableReason(err: unknown): string {
 
 // ConnectionService is whether this browser can reach the deployment at
 // all, as the shared pollers see it (ShellStatusStore's GET /api/config,
-// TaskFeedStore's GET /api/tasks). The shell's DisconnectedBanner is
+// bounded at REACH_TIMEOUT_MS, and TaskFeedStore's GET /api/tasks). The shell's DisconnectedBanner is
 // what it looks like on screen.
 //
 // Each poller names itself, and the banner stays up while any of them is
