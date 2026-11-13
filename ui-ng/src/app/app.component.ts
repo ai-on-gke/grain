@@ -38,6 +38,7 @@ import {
   RouterLinkActive,
   RouterOutlet,
 } from "@angular/router";
+import type { RouteKey } from "./api/generated-routes";
 import { GrainApi } from "./api/grain-api.service";
 import { CreateTaskService } from "./create/create-task.service";
 import type { NewTaskDraft } from "./create/new-task-form";
@@ -108,6 +109,7 @@ type CreateItem =
       label: string;
       sub: string;
       tip: string;
+      gate?: RouteKey;
       testid?: string;
       prefill?: Partial<NewTaskDraft>;
     }
@@ -117,6 +119,7 @@ type CreateItem =
       label: string;
       sub: string;
       tip: string;
+      gate?: RouteKey;
       route: string;
       query?: Record<string, unknown>;
     }
@@ -126,6 +129,7 @@ type CreateItem =
       label: string;
       sub: string;
       tip: string;
+      gate?: RouteKey;
       href: string;
     };
 
@@ -206,7 +210,12 @@ export class DeferErrorDirective implements OnInit {
           data-testid="rail-new-task"
           aria-label="New task"
           aria-keyshortcuts="c"
-          gTip="New task (c): describe the work and Grain files it."
+          [disabled]="!canCreateTask()"
+          [gTip]="
+            canCreateTask()
+              ? 'New task (c): describe the work and Grain files it.'
+              : access.deniedReason('POST /api/tasks')
+          "
           gTipPlacement="right"
           (click)="openNewTask($event)"
         >
@@ -616,8 +625,14 @@ export class DeferErrorDirective implements OnInit {
 
       <footer class="bottom-bar" [attr.inert]="modalOpen() ? '' : null">
         <span class="bottom-left">
-          <span class="muted bottom-version" [attr.title]="version()"
-            >grain{{ version() ? " " + version() : "" }}</span
+          <a
+            class="muted bottom-version"
+            routerLink="/settings/upgrade"
+            data-testid="build-stamp"
+            [attr.title]="
+              'Running ' + (version() || 'grain') + ' · Settings → Upgrade'
+            "
+            >grain{{ version() ? " " + version() : "" }}</a
           >
           <span class="bottom-sep" aria-hidden="true">·</span>
           <a
@@ -658,6 +673,12 @@ export class DeferErrorDirective implements OnInit {
           class="phone-fab"
           data-testid="phone-new-task"
           aria-label="New task"
+          [disabled]="!canCreateTask()"
+          [gTip]="
+            canCreateTask()
+              ? 'New task'
+              : access.deniedReason('POST /api/tasks')
+          "
           (click)="openNewTask($event)"
         >
           <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
@@ -779,90 +800,77 @@ export class DeferErrorDirective implements OnInit {
         </nav>
       }
 
+      <ng-template #createBody let-item let-rich="rich">
+        @if (rich) {
+          <svg
+            class="cm-icon"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path [attr.d]="icons[item.icon]" fill="currentColor" />
+          </svg>
+          <span class="cm-copy">
+            <span class="cm-title">{{ item.label }}</span>
+            <span class="cm-sub">{{ item.sub }}</span>
+          </span>
+        } @else {
+          {{ item.label }}
+        }
+      </ng-template>
+
       <ng-template #createEntry let-item let-cls="cls" let-rich="rich">
-        @switch (item.kind) {
-          @case ("task") {
-            <button
-              type="button"
-              [class]="cls"
-              [attr.data-testid]="item.testid ?? 'create-new-task'"
-              [gTip]="item.tip"
-              gTipPlacement="right"
-              (click)="openNewTask($event, item.prefill)"
-            >
-              @if (rich) {
-                <svg
-                  class="cm-icon"
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path [attr.d]="icons[item.icon]" fill="currentColor" />
-                </svg>
-                <span class="cm-copy">
-                  <span class="cm-title">{{ item.label }}</span>
-                  <span class="cm-sub">{{ item.sub }}</span>
-                </span>
-              } @else {
-                {{ item.label }}
-              }
-            </button>
-          }
-          @case ("route") {
-            <a
-              [class]="cls"
-              [routerLink]="item.route"
-              [queryParams]="item.query"
-              [gTip]="item.tip"
-              gTipPlacement="right"
-              (click)="closeMenus()"
-            >
-              @if (rich) {
-                <svg
-                  class="cm-icon"
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path [attr.d]="icons[item.icon]" fill="currentColor" />
-                </svg>
-                <span class="cm-copy">
-                  <span class="cm-title">{{ item.label }}</span>
-                  <span class="cm-sub">{{ item.sub }}</span>
-                </span>
-              } @else {
-                {{ item.label }}
-              }
-            </a>
-          }
-          @default {
-            <a
-              [class]="cls"
-              [href]="item.href"
-              [gTip]="item.tip"
-              gTipPlacement="right"
-            >
-              @if (rich) {
-                <svg
-                  class="cm-icon"
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path [attr.d]="icons[item.icon]" fill="currentColor" />
-                </svg>
-                <span class="cm-copy">
-                  <span class="cm-title">{{ item.label }}</span>
-                  <span class="cm-sub">{{ item.sub }}</span>
-                </span>
-              } @else {
-                {{ item.label }}
-              }
-            </a>
-          }
+        @let allowed = canCreateItem(item);
+        @if (item.kind === "task" || !allowed) {
+          <button
+            type="button"
+            [class]="cls"
+            [disabled]="!allowed"
+            [attr.data-testid]="
+              item.kind === 'task' ? (item.testid ?? 'create-new-task') : null
+            "
+            [gTip]="allowed ? item.tip : access.deniedReason(item.gate!)"
+            gTipPlacement="right"
+            (click)="allowed && openNewTask($event, item.prefill)"
+          >
+            <ng-container
+              *ngTemplateOutlet="
+                createBody;
+                context: { $implicit: item, rich: rich }
+              "
+            />
+          </button>
+        } @else if (item.kind === "route") {
+          <a
+            [class]="cls"
+            [routerLink]="item.route"
+            [queryParams]="item.query"
+            [gTip]="item.tip"
+            gTipPlacement="right"
+            (click)="closeMenus()"
+          >
+            <ng-container
+              *ngTemplateOutlet="
+                createBody;
+                context: { $implicit: item, rich: rich }
+              "
+            />
+          </a>
+        } @else {
+          <a
+            [class]="cls"
+            [href]="item.href"
+            [gTip]="item.tip"
+            gTipPlacement="right"
+          >
+            <ng-container
+              *ngTemplateOutlet="
+                createBody;
+                context: { $implicit: item, rich: rich }
+              "
+            />
+          </a>
         }
       </ng-template>
 
@@ -943,6 +951,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "addTask",
       label: "New task",
       sub: "Describe work for an agent to run",
+      gate: "POST /api/tasks",
       tip: "Describe a piece of work for an agent to do.",
     },
     {
@@ -950,6 +959,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "workstreams",
       label: "Start a workstream",
       sub: "Break a goal into connected tasks",
+      gate: "POST /api/tasks",
       testid: "create-start-workstream",
       tip: "State a goal; an agent plans it and proposes tasks into one stream.",
       prefill: { workstream: true, origin: "" },
@@ -959,6 +969,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "sessions",
       label: "New session",
       sub: "Start a standing chat with an agent",
+      gate: "POST /api/console-sessions",
       route: "/sessions",
       query: { new: 1 },
       tip: "Start a standing conversation with an agent.",
@@ -968,6 +979,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "processes",
       label: "Task from template",
       sub: "File from a saved process template",
+      gate: "POST /api/tasks/from-template",
       route: "/processes/templates",
       query: { launch: 1 },
       tip: "File a task from a saved deployment or repository template.",
@@ -977,6 +989,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "ci",
       label: "Run a suite",
       sub: "Launch a multi-pass template suite",
+      gate: "POST /api/suite-runs",
       route: "/processes/suites",
       query: { run: 1 },
       tip: "Run a set of templates together against a repository and branch.",
@@ -986,6 +999,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "processes",
       label: "New schedule",
       sub: "Automate recurring tasks or triggers",
+      gate: "POST /api/schedules",
       route: "/processes/schedules",
       query: { new: 1 },
       tip: "Create a recurring schedule or event trigger.",
@@ -995,6 +1009,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "tasks",
       label: "New board",
       sub: "Create a saved task view",
+      gate: "POST /api/boards",
       route: "/tasks",
       query: { newBoard: 1 },
       tip: "Save a filtered view of tasks as a reusable board.",
@@ -1002,6 +1017,11 @@ export class AppComponent implements OnInit, OnDestroy {
   ];
 
   protected readonly createTask = inject(CreateTaskService);
+  protected readonly canCreateTask = computed(
+    () =>
+      this.access.can("POST /api/tasks") ||
+      this.access.can("POST /api/tasks/from-template"),
+  );
   protected readonly onSessions = signal(false);
   protected readonly version = computed(() => this.inboxRef()?.version() ?? "");
   protected readonly inboxCount = computed(
@@ -1095,6 +1115,15 @@ export class AppComponent implements OnInit, OnDestroy {
     }
     this.probeBrandSprite();
 
+    if (!this.access.configLoaded() && typeof this.api.config === "function") {
+      void this.api
+        .config()
+        .then((c) => {
+          if (c && !this.access.configLoaded()) this.access.setConfig(c);
+        })
+        .catch(() => undefined);
+    }
+
     if (typeof this.api.whoami === "function") {
       void this.api
         .whoami()
@@ -1107,6 +1136,7 @@ export class AppComponent implements OnInit, OnDestroy {
     const r = (key: string, description: string, run: () => void) =>
       this.unregister.push(this.keyboard.register({ key, description, run }));
     r("c", "New task", () => {
+      if (!this.canCreateTask()) return;
       this.closeMenus();
       this.createTask.open();
     });
@@ -1130,7 +1160,7 @@ export class AppComponent implements OnInit, OnDestroy {
     r(",", "Open Settings", () => this.open(SETTINGS));
     r("t", "Switch light and dark", () => this.theme.toggle());
     r("d", "Toggle Director drawer", () =>
-      this.directorCtx.toggle(this.directorBtn()?.nativeElement),
+      this.directorCtx.toggle(this.activeOpener()),
     );
 
     // Keep number keys 1..9 synchronized with the user's visible rail order.
@@ -1219,7 +1249,25 @@ export class AppComponent implements OnInit, OnDestroy {
     });
   }
 
+  protected canCreateItem(item: CreateItem): boolean {
+    if (item.kind === "task") return this.canCreateTask();
+    return item.gate ? this.access.can(item.gate) : true;
+  }
+
+  private activeOpener(): HTMLElement | null {
+    const active = this.doc.activeElement;
+    if (
+      active instanceof HTMLElement &&
+      active !== this.doc.body &&
+      !active.closest('[data-testid="director-drawer"]')
+    ) {
+      return active;
+    }
+    return this.directorBtn()?.nativeElement ?? null;
+  }
+
   protected openNewTask(ev: Event, prefill: Partial<NewTaskDraft> = {}): void {
+    if (!this.canCreateTask()) return;
     const opener = this.moreOpen()
       ? this.moreBtn()?.nativeElement
       : this.createOpen()
@@ -1262,7 +1310,7 @@ export class AppComponent implements OnInit, OnDestroy {
     if (!isAltD && !isCtrlShiftD) return;
     ev.preventDefault();
     this.closeMenus();
-    this.directorCtx.toggle(this.directorBtn()?.nativeElement);
+    this.directorCtx.toggle(this.activeOpener());
   }
 
   protected onDeferError(

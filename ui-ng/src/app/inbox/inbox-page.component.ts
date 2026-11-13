@@ -1088,6 +1088,12 @@ const ONE_KEY = new Set(["approve"]);
                           rel="noopener noreferrer"
                           >See the whole pull request</a
                         >
+                      } @else if (sel.taskLink) {
+                        <a
+                          [routerLink]="sel.taskLink"
+                          [queryParams]="{ from: 'inbox', tab: 'changes' }"
+                          >See the full diff</a
+                        >
                       }
                     </p>
                   }

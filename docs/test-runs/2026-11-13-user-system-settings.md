@@ -334,3 +334,23 @@ customisation beyond the rail; Display timezone across the rest of
 - Screenshots (`ui/e2e/screenshot.mjs --full-page`) of
   `/next/settings/{cli,audit,access,config-repo}` at desktop and phone,
   light and dark, before (`:8420`) and after (`:8425`); not committed.
+
+## Follow-up after review (task 5533), 15:45 UTC
+
+- The leave prompt now uses the shared confirm dialog
+  (`g-confirm-dialog`, destructive, accept "Discard"), not
+  `window.confirm`: the guard returns a promise the dialog settles. Only
+  a reload still uses the browser's own `beforeunload` prompt, which it
+  requires. The two leave tests drive the dialog's Cancel / Discard and
+  assert no native dialog appears.
+- `/admin/integrations` and `/system/integrations` no longer carry a
+  `#credentials` fragment: `/next/` Settings has no card anchors yet
+  (listed in the follow-up), so the redirect no longer promises one.
+- Merged `main`, whose new `/system/:tab` redirects sit after this
+  change's exact `/system/{executors,integrations,upgrade}` entries.
+- Re-run on the merge: full `ui-ng` Playwright suite 55 passed, 2
+  failed: `next-inbox.spec.js` "links the classic Inbox…" needs the
+  classic UI built (this fresh sandbox had only built `ui-ng`), and
+  `next-walkthrough-director-sessions-diff.spec.js` timed out under the
+  full-suite load. Both passed when re-run after `cd ui && npm run build`
+  (14/14 with this change's spec).

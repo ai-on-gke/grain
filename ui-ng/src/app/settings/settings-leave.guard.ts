@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DOCUMENT } from "@angular/common";
-import { inject } from "@angular/core";
 import type { CanDeactivateFn } from "@angular/router";
 
 // SettingsLeaveCheck is what the Settings page answers the guard with:
@@ -22,6 +20,9 @@ import type { CanDeactivateFn } from "@angular/router";
 export interface SettingsLeaveCheck {
   unsavedWorkLostBy(nextUrl: string): string | null;
   forgetUnsavedCards(): void;
+  // confirmLeave asks, in the page's own confirm dialog, whether to
+  // throw away what unsavedWorkLostBy named; true when the person agrees.
+  confirmLeave(lost: string): Promise<boolean>;
 }
 
 // settingsLeaveGuard asks before a navigation drops unsaved Settings
@@ -36,8 +37,8 @@ export const settingsLeaveGuard: CanDeactivateFn<SettingsLeaveCheck> = (
 ) => {
   const lost = component?.unsavedWorkLostBy?.(next?.url ?? "");
   if (!lost) return true;
-  const win = inject(DOCUMENT).defaultView;
-  const ok = win?.confirm(`Discard ${lost}?`) ?? true;
-  if (ok) component.forgetUnsavedCards();
-  return ok;
+  return component.confirmLeave(lost).then((ok) => {
+    if (ok) component.forgetUnsavedCards();
+    return ok;
+  });
 };

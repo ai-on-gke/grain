@@ -155,6 +155,13 @@ do not pull in an icon font.
   Agents; it pulses only when the number is above zero.
 - **Phone (< 600px):** the rail becomes a bottom bar with Inbox, Tasks,
   Sessions and More, plus a floating New task button.
+- **Build stamp:** the "grain v…" stamp at the left of the bottom bar is a
+  link to Settings → Upgrade, as it is in the classic UI. It ellipsizes
+  before the live count beside it gives way, and is hidden on phones.
+- **Old addresses:** a classic address that has a page here (`/system/<tab>`,
+  `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
+  its query kept (`app.routes.ts`), rather than falling through to the
+  Inbox.
 
 ### Destinations fill the stage
 

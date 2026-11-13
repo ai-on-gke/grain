@@ -27,6 +27,10 @@ import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
 import { ViewFilter } from "../services/view-filter.service";
+import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
 import { SettingsCodeComponent } from "./settings-code.component";
 import { SettingsComputeComponent } from "./settings-compute.component";
 import { SettingsInstanceComponent } from "./settings-instance.component";
@@ -54,6 +58,7 @@ import { SettingsWorkComponent } from "./settings-work.component";
     SettingsWorkComponent,
     SettingsSecurityComponent,
     SettingsInstanceComponent,
+    ConfirmDialogComponent,
   ],
   providers: [SettingsStateService],
   encapsulation: ViewEncapsulation.None,
@@ -387,6 +392,9 @@ import { SettingsWorkComponent } from "./settings-work.component";
         </div>
       </div>
     </section>
+    @if (leaveRequest(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onLeaveDone($event)" />
+    }
   `,
 })
 export class SettingsPageComponent
@@ -476,6 +484,34 @@ export class SettingsPageComponent
     }
     if (lost.length === 0) return null;
     return lost.join(" and ");
+  }
+
+  // leaveRequest is the open "Discard …?" dialog, and resolveLeave the
+  // guard's answer waiting on it.
+  protected readonly leaveRequest = signal<ConfirmRequest | null>(null);
+  private resolveLeave: ((ok: boolean) => void) | null = null;
+
+  confirmLeave(lost: string): Promise<boolean> {
+    // A second move while the dialog is open answers the first as "stay".
+    this.resolveLeave?.(false);
+    return new Promise<boolean>((resolve) => {
+      this.resolveLeave = resolve;
+      this.leaveRequest.set({
+        title: `Discard ${lost}?`,
+        message:
+          "Leaving now throws it away. Stay to save it first (the save bar, or the card's own Save).",
+        accept: "Discard",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+  }
+
+  protected onLeaveDone(accepted: boolean): void {
+    this.leaveRequest.set(null);
+    const resolve = this.resolveLeave;
+    this.resolveLeave = null;
+    resolve?.(accepted);
   }
 
   // forgetUnsavedCards drops the card edits a confirmed move threw away,

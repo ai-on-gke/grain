@@ -493,9 +493,11 @@ export function buildPayload(
 }
 
 export interface Problem {
-  field: "title" | "newBranchName" | "templateField";
+  field: "title" | "newBranchName" | "templateField" | "foundIn" | "form";
   message: string;
 }
+
+const FOUND_IN_TAG_RE = /^v?\d+\.\d+\.\d+(?:-rc\.\d+)?$/;
 
 export function validate(
   d: NewTaskDraft,
@@ -525,6 +527,17 @@ export function validate(
     return {
       field: "newBranchName",
       message: "Name the new branch, or untick the new-branch box.",
+    };
+  }
+  const foundInShown = !fields || fields.foundIn.visibility !== "hidden";
+  if (
+    foundInShown &&
+    d.foundIn.trim() &&
+    !FOUND_IN_TAG_RE.test(d.foundIn.trim())
+  ) {
+    return {
+      field: "foundIn",
+      message: "Use a release tag such as v3.6.0 or v3.6.0-rc.2.",
     };
   }
   return null;

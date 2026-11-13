@@ -1,0 +1,13 @@
+task 2: awaiting_reply
+proposals (GET /api/tasks/{id} .foundIn):
+  #3 proposed foundIn=v1.1.0-rc.2 [rc-blocker v1.1.0-rc.2] Revert the scheduler change
+  #4 proposed foundIn=v1.1.0-rc.1 [rc-blocker v1.1.0-rc.2] Fix the flaky import
+  #5 proposed foundIn=v1.0.0 Fix the crash on upgrade
+  #6 proposed foundIn=- Fix the misnamed release
+  #7 proposed foundIn=- Tidy the README
+task_link rows of kind found-in:
+  3|v1.1.0-rc.2
+  4|v1.1.0-rc.1
+  5|v1.0.0
+note left on the bad value:
+  _grain could not record the release this proposal is found in ("the latest one"): want a tag such as v2.5.0 or v2.5.0-rc.2._

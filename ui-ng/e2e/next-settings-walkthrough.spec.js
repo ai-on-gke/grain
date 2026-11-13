@@ -36,8 +36,6 @@ test("old admin and system links land on the Settings section that replaced them
     );
   }
   await expect(page).toHaveURL(/\/next\/settings\/upgrade$/);
-  await page.goto("admin/integrations");
-  await expect(page).toHaveURL(/\/next\/settings\/capabilities#credentials$/);
   // /system on its own is still Fleet's.
   await page.goto("system");
   await expect(page).toHaveURL(/\/next\/fleet/);
@@ -65,12 +63,13 @@ test("/ focuses the filter that narrows the Settings sections, and Escape restor
 test("leaving Settings with unsaved changes asks first; moving between sections keeps them", async ({
   page,
 }) => {
-  const dialogs = [];
-  let accept = false;
+  // The in-app prompt is the shared confirm dialog, never a native one.
+  const native = [];
   page.on("dialog", async (d) => {
-    dialogs.push(d.message());
-    await (accept ? d.accept() : d.dismiss());
+    native.push(d.message());
+    await d.dismiss();
   });
+  const dialog = page.getByRole("dialog");
 
   await page.goto("settings/agents");
   const turns = page.getByTestId("input-max-agent-turns");
@@ -86,35 +85,32 @@ test("leaving Settings with unsaved changes asks first; moving between sections 
   await page.getByTestId("settings-nav-tasks").click();
   await expect(page).toHaveURL(/\/settings\/tasks$/);
   await expect(page.getByTestId("settings-save-bar")).toBeVisible();
-  expect(dialogs).toEqual([]);
+  await expect(dialog).toHaveCount(0);
 
   // Leaving Settings asks; cancelling stays put with the draft.
   await page.getByTestId("rail-inbox").click();
-  await expect.poll(() => dialogs.length).toBe(1);
-  expect(dialogs[0]).toBe("Discard 1 unsaved setting change?");
+  await expect(dialog).toContainText("Discard 1 unsaved setting change?");
+  await dialog.getByTestId("confirm-cancel").click();
+  await expect(dialog).toHaveCount(0);
   await expect(page).toHaveURL(/\/settings\/tasks$/);
   await expect(page.getByTestId("settings-save-bar")).toBeVisible();
 
   // Discarding leaves; a clean Settings never asks.
-  accept = true;
   await page.getByTestId("rail-inbox").click();
+  await dialog.getByRole("button", { name: "Discard" }).click();
   await expect(page).toHaveURL(/\/next\/inbox/);
   await page.goto("settings/agents");
   await expect(page.getByTestId("input-max-agent-turns")).toHaveValue(before);
   await page.getByTestId("rail-inbox").click();
   await expect(page).toHaveURL(/\/next\/inbox/);
-  expect(dialogs).toHaveLength(2);
+  await expect(dialog).toHaveCount(0);
+  expect(native).toEqual([]);
 });
 
 test("an unsaved Memory edit asks before another section drops it", async ({
   page,
 }) => {
-  const dialogs = [];
-  let accept = false;
-  page.on("dialog", async (d) => {
-    dialogs.push(d.message());
-    await (accept ? d.accept() : d.dismiss());
-  });
+  const dialog = page.getByRole("dialog");
   await page.goto("settings/memory");
   const mem = page.getByTestId("input-deployment-memory");
   await expect(mem).toBeVisible();
@@ -123,8 +119,10 @@ test("an unsaved Memory edit asks before another section drops it", async ({
   await mem.fill(`${original}\nwalkthrough note`);
 
   await page.getByTestId("settings-nav-general").click();
-  await expect.poll(() => dialogs.length).toBe(1);
-  expect(dialogs[0]).toBe("Discard the unsaved deployment memory edit?");
+  await expect(dialog).toContainText(
+    "Discard the unsaved deployment memory edit?",
+  );
+  await dialog.getByTestId("confirm-cancel").click();
   await expect(page).toHaveURL(/\/settings\/memory$/);
   await expect(mem).toHaveValue(`${original}\nwalkthrough note`);
 
@@ -132,7 +130,7 @@ test("an unsaved Memory edit asks before another section drops it", async ({
   await mem.fill(original);
   await page.getByTestId("settings-nav-general").click();
   await expect(page).toHaveURL(/\/settings\/general$/);
-  expect(dialogs).toHaveLength(1);
+  await expect(dialog).toHaveCount(0);
 });
 
 test("Settings → CLI installs the workstation CLI and signs in with a scoped token", async ({

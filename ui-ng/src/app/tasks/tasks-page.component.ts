@@ -52,6 +52,7 @@ import {
   priorityTone,
 } from "../shared/priority-chip.component";
 import { scopeOf } from "../shared/scope";
+import { boardLabels } from "./board-labels";
 import { DEFAULT_RATIO } from "../shared/split";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
@@ -209,15 +210,25 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                           type="button"
                           class="board-apply-btn"
                           [attr.data-testid]="'board-apply-' + b.id"
+                          [attr.aria-label]="
+                            boardLabel(b) === b.name ? null : boardLabel(b)
+                          "
                           (click)="applyBoard(b)"
                         >
                           {{ b.name }}
+                          @if (b.folder) {
+                            <span
+                              class="board-folder muted"
+                              aria-hidden="true"
+                              >{{ b.folder }}</span
+                            >
+                          }
                         </button>
                         @if (canWriteBoards()) {
                           <button
                             type="button"
                             class="board-del-btn"
-                            [attr.aria-label]="'Delete board ' + b.name"
+                            [attr.aria-label]="'Delete board ' + boardLabel(b)"
                             [attr.data-testid]="'board-delete-' + b.id"
                             (click)="removeBoard(b, $event)"
                           >
@@ -2103,12 +2114,44 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     });
   }
 
-  protected async removeBoard(b: Board, ev: Event): Promise<void> {
+  // boardLabel is the name a board's buttons are announced by: its own
+  // name, or, where another board shares it, the name and its folder
+  // (board-labels.ts).
+  protected boardLabel(b: Board): string {
+    return this.boardLabelById().get(b.id) ?? b.name;
+  }
+  private readonly boardLabelById = computed(() =>
+    boardLabels(this.store.boards()),
+  );
+
+  // removeBoard asks before deleting. A saved board is one of the
+  // deployment's own settings -- the same on every browser, for every
+  // reader -- and the × sat a few pixels from the board's own button,
+  // so one stray click deleted it for everybody with nothing to undo it
+  // (2026-11-13 saved boards walkthrough, task 5385). The menu closes
+  // and focus goes back to its Boards button first, so the dialog has a
+  // live element to hand focus back to on Cancel or Escape.
+  protected removeBoard(b: Board, ev: Event): void {
     ev.stopPropagation();
-    const ok = await this.store.deleteBoard(b.id);
-    if (ok) {
-      this.snack(`Deleted board "${b.name}"`);
-    }
+    this.openMenu.set(null);
+    this.menuTrigger = null;
+    const trigger = (): HTMLElement | null =>
+      document.querySelector<HTMLElement>('[data-testid="saved-boards-btn"]');
+    trigger()?.focus();
+    const label = this.boardLabel(b);
+    this.confirming.set({
+      title: `Delete board ${label}?`,
+      message:
+        `Delete the saved board "${label}"? Boards are shared settings, so ` +
+        `it goes for everyone on this deployment, not just this browser.`,
+      accept: "Delete board",
+      destructive: true,
+      run: async () => {
+        const ok = await this.store.deleteBoard(b.id);
+        if (ok) this.snack(`Deleted board "${label}"`);
+        setTimeout(() => trigger()?.focus());
+      },
+    });
   }
 
   // ---------- confirmations ----------
