@@ -723,9 +723,10 @@ overlap group "sync-oss-release" is still open (running)`.
   the repository the firing goes into, so another repository's schedule
   naming the same group neither holds nor is held by these.
 - **Tagged tasks.** Every task a grouped schedule files carries
-  `schedule-group:<owner>/<name>:<group>` beside its own `schedule:<id>`
-  tag, so a task keeps holding the group after the schedule that filed
-  it is renamed or withdrawn.
+  `schedule-group:<owner>/<name>:<group>` (beside `schedule:<id>` for a
+  task or workflow-review schedule, and in every pass of a suite
+  schedule's run), so it keeps holding the group after the schedule that
+  filed it is renamed or withdrawn.
 - **Names.** Letters, digits, `.`, `_` and `-`, starting with a letter or
   digit, at most 128 characters.
 - **Refused combinations.** A group is a skip by definition, so

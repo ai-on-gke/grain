@@ -150,6 +150,22 @@ func TestCapabilityMethodsListArgumentSchemas(t *testing.T) {
 	if !slices.ContainsFunc(methods, func(m ui.CapabilityMethod) bool { return m.Ref == model.GrainJournalRef && !m.RequiresArgs }) {
 		t.Errorf("methods missing in-process %s: %+v", model.GrainJournalRef, methods)
 	}
+	byRef := map[string]ui.CapabilityMethod{}
+	for _, m := range methods {
+		byRef[m.Ref] = m
+	}
+	if got := byRef["https://grain.dev/capabilities/api#grain/task-admin"].AliasOf; !slices.Equal(got, []string{"https://grain.dev/capabilities/api#task-admin"}) {
+		t.Errorf("api#grain/task-admin AliasOf = %v, want [api#task-admin]", got)
+	}
+	for _, canonical := range []string{
+		"https://grain.dev/capabilities/api#task-admin",
+		"https://grain.dev/capabilities/api#grain/viewer",
+		"https://grain.dev/capabilities/api#grain/operator",
+	} {
+		if got := byRef[canonical].AliasOf; len(got) != 0 {
+			t.Errorf("%s AliasOf = %v, want empty", canonical, got)
+		}
+	}
 
 	if err := client.SetCapabilityPolicy(context.Background(), model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{

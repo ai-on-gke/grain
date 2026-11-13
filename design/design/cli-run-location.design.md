@@ -993,7 +993,11 @@ run cut short.
   - `RecoverOrphanedRunsExcept` spares every adopted row, so a daemon
     upgrade never re-dispatches a run hostd is still running.
   - A hostd that does not answer hello decides nothing, and its rows
-    are recovered as any other.
+    are recovered as any other. The error (`HostdAwayError`) names
+    them, and the daemon cancels their processes once that hostd
+    answers again (`orchestrator.CancelWhenBack`, for up to a day), so
+    none holds a host CLI slot until its own deadline or runs beside
+    its run's next attempt.
 - **Handshake gating.**
   - An incompatible hostd (`hostd.Compatible`) starts no new host run.
     The run's resolution and Settings (`HostdStatus.Mismatch`) name the
