@@ -342,6 +342,7 @@ func (c Composition) Task(id string, actor Principal, reason OriginReason, now t
 		NothingNeededAction:  c.NothingNeededAction,
 		Model:                c.Model,
 		TemplateID:           c.TemplateID,
+		SourceTemplateID:     c.TemplateID,
 		Interactive:          c.Interactive,
 		KeepRunning:          c.KeepRunning,
 		Admission:            NormalizeAdmission(c.Admission),

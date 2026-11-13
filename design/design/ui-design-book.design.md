@@ -262,6 +262,12 @@ Rules:
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).
 - **Every control has a name.** Icon buttons get `aria-label` and a `gTip`.
+- **A dialog fits the screen.** `.g-dialog` (and its `.is-drawer` width) is
+  `box-sizing: border-box`, so its `min(520px, 100vw - 32px)` width
+  includes its padding and border. That leaves a 16px margin either side
+  on a phone. A fixed-position box sized against `100vw` must be
+  border-box, or its padding pushes it off both edges
+  (`ui-ng/e2e/next-dialog-fits-phone.spec.js`).
 
 ## 5. Interaction
 

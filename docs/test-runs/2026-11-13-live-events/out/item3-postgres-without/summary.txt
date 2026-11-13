@@ -1,0 +1,13 @@
+== 139: dev (unstamped)
+version: 139
+integration_event columns: id,type,at,task_id,repo,previous_state,state,question_summary,comment_id,external_ref,origin,pull_request,filed_via,ci_provider,ci_run_id,ci_commit,ci_conclusion,ci_detail,actor_kind,actor_id,actor_source,behalf_kind,behalf_id,behalf_source
+integration_event rows: 3
+dropped integration_event; columns now: ''
+== HEAD: v0.0.0-20261113052350-0b41488e1cfb (unversioned) · 0b41488 · 2026-11-13 05:23Z
+version: 146
+integration_event columns: id,type,at,task_id,repo,previous_state,state,question_summary,comment_id,external_ref,origin,pull_request,filed_via,ci_provider,ci_run_id,ci_commit,ci_conclusion,ci_detail,actor_kind,actor_id,actor_source,behalf_kind,behalf_id,behalf_source,notification_id,subject,severity,summary,approval_id,script,decision
+rows before any new write: 0
+events since 0:
+  1 notification.raised 1 warning
+migration lines in daemon.log:
+  2026/11/13 05:29:18 grain: migrated the store in place from schema 139 to 146

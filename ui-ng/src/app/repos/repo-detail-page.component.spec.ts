@@ -29,6 +29,8 @@ interface RepoCall {
 
 class FakeRepoApi {
   calls: RepoCall[] = [];
+  ciMode = "grain";
+  refusePut: string | null = null;
 
   configBody: GrainConfig = {
     version: "v3.6.0",
@@ -53,7 +55,7 @@ class FakeRepoApi {
     }
     if (key === "GET /api/repos/{owner}/{name}/settings") {
       return Promise.resolve({
-        ciMode: "grain",
+        ciMode: this.ciMode,
         mergeOnGreen: true,
         requireBranchUpToDate: false,
       });
@@ -87,6 +89,16 @@ class FakeRepoApi {
 
   put = (key: string, params?: RouteParams, body?: unknown) => {
     this.calls.push({ method: "PUT", key, params, body });
+    if (this.refusePut === key) {
+      // Rejected on a later tick, as a real refusal is: a promise that
+      // is already rejected when the component awaits it is reported
+      // by zone.js as unhandled before the await attaches.
+      return new Promise((_, reject) =>
+        setTimeout(() =>
+          reject(new Error('ciMode: must be "grain", "github", or "none"')),
+        ),
+      );
+    }
     return Promise.resolve({ ok: true });
   };
 
@@ -250,5 +262,99 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
           "POST /api/repos/{owner}/{name}/candidates/{id}/qualification/approve",
       ),
     ).toBe(true);
+  });
+  // 2026-11-13 repository walkthrough: the CI mode pill offered "both"
+  // and "off", which PUT .../ci-mode refuses, and had no "none", so a
+  // repository on no CI read as Grain CI.
+  it("offers exactly the CI modes the server accepts and shows a repo on none as No CI", async () => {
+    const api = new FakeRepoApi();
+    api.ciMode = "none";
+    const { el, harness } = await mountRepo("/repos/acme/platform/ci", api);
+    const pill = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-repo-ci-mode"]',
+    )!;
+    expect(pill.textContent).toContain("No CI");
+    pill.click();
+    harness.detectChanges();
+    const opts = [
+      ...el.querySelectorAll<HTMLElement>(
+        '[data-testid^="select-repo-ci-mode-opt-"]',
+      ),
+    ].map((o) => o.dataset["testid"]!.replace("select-repo-ci-mode-opt-", ""));
+    expect(opts).toEqual(["grain", "github", "none"]);
+  });
+
+  it("puts the CI mode pill back when the server refuses the new mode", async () => {
+    const api = new FakeRepoApi();
+    api.refusePut = "PUT /api/repos/{owner}/{name}/ci-mode";
+    const { el, harness } = await mountRepo("/repos/acme/platform/ci", api);
+    const pill = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-repo-ci-mode"]',
+    )!;
+    expect(pill.textContent).toContain("Grain CI");
+    pill.click();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-repo-ci-mode-opt-github"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "PUT /api/repos/{owner}/{name}/ci-mode" &&
+          (c.body as { ciMode?: string })?.ciMode === "github",
+      ),
+    ).toBe(true);
+    expect(pill.textContent).toContain("Grain CI");
+  });
+  // 2026-11-13 repository walkthrough: one click on the switch let
+  // base-branch repair PRs merge with no human; the classic page asks.
+  it("asks before letting base-branch repairs bypass the human gate, and not when turning it off", async () => {
+    const { el, api, harness } = await mountRepo(
+      "/repos/acme/platform/merge-queue",
+    );
+    const key =
+      "PUT /api/repos/{owner}/{name}/base-repair-bypasses-human-gates";
+    const sw = () =>
+      el.querySelector<HTMLButtonElement>(
+        'button[aria-label="Base-branch repairs bypass human review gates"]',
+      )!;
+    sw().click();
+    harness.detectChanges();
+    const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+    expect(dialog?.textContent).toContain(
+      "Let base-branch repair PRs in acme/platform merge without a human",
+    );
+    expect(api.calls.some((c) => c.key === key)).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+    expect(api.calls.some((c) => c.key === key)).toBe(false);
+    expect(sw().getAttribute("aria-checked")).toBe("false");
+
+    sw().click();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(api.calls.filter((c) => c.key === key).map((c) => c.body)).toEqual([
+      { baseRepairBypassesHumanGates: true },
+    ]);
+    expect(sw().getAttribute("aria-checked")).toBe("true");
+
+    sw().click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+    expect(api.calls.filter((c) => c.key === key).map((c) => c.body)).toEqual([
+      { baseRepairBypassesHumanGates: true },
+      { baseRepairBypassesHumanGates: false },
+    ]);
   });
 });
