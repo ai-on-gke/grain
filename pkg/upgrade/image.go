@@ -40,6 +40,8 @@ package upgrade
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"regexp"
@@ -671,12 +673,56 @@ const imageInspectTimeout = time.Minute
 // present), so Docker must never implicitly pull a missing ref -- in
 // particular a hostless `grain/*` ref left in RefFile by an earlier
 // release-asset install, which Docker would resolve on Docker Hub.
+//
+// The default argv also labels the container checkContainerLabel. Killing
+// `docker run` -- which is what cancelling an upgrade's context does to it
+// -- stops the client and not the container, so a cancelled health check
+// left its container behind (created or still running), and that
+// container then kept docker from removing the image the cancel was meant
+// to remove. The label is how removeCheckContainers finds them again.
 func (u *Upgrader) dockerRunArgs(extra ...string) []string {
 	argv := u.cfg.Image.RunCmd
 	if len(argv) == 0 {
-		argv = []string{"docker", "run", "--rm", "--pull=never"}
+		argv = []string{"docker", "run", "--rm", "--pull=never", "--label=" + u.checkContainerLabel()}
 	}
 	return append(append([]string{}, argv...), extra...)
+}
+
+// checkContainerLabelKey is the label every container ModeImage starts
+// with the default run command carries.
+const checkContainerLabelKey = "grain.upgrade-check"
+
+// checkContainerLabel is checkContainerLabelKey=<this deployment>: the ref
+// file's path, hashed, so two deployments sharing one docker daemon never
+// clean up each other's checks.
+func (u *Upgrader) checkContainerLabel() string {
+	sum := sha256.Sum256([]byte(u.cfg.Image.RefFile))
+	return checkContainerLabelKey + "=" + hex.EncodeToString(sum[:6])
+}
+
+// removeCheckContainers force-removes every container this deployment's
+// default run command started that is still there: on a cancel, the one
+// whose `docker run` client the cancel killed. Best-effort, and a no-op
+// when ImageConfig.RunCmd replaces docker run, since nothing then carries
+// the label.
+func (u *Upgrader) removeCheckContainers(ctx context.Context, p *progress) {
+	if len(u.cfg.Image.RunCmd) > 0 {
+		return
+	}
+	out, err := newCommand(ctx, "", "docker", "ps", "-aq", "--filter", "label="+u.checkContainerLabel()).Output()
+	if err != nil {
+		p.logf("cancel cleanup: could not list check containers: %v", err)
+		return
+	}
+	ids := strings.Fields(string(out))
+	if len(ids) == 0 {
+		return
+	}
+	if out, err := newCommand(ctx, "", "docker", append([]string{"rm", "-f"}, ids...)...).CombinedOutput(); err != nil {
+		p.logf("cancel cleanup: could not remove check container(s) %s: %v (%s)", strings.Join(ids, " "), err, strings.TrimSpace(string(out)))
+		return
+	}
+	p.logf("cancel cleanup: removed check container(s) %s", strings.Join(ids, " "))
 }
 
 // healthCheckImage runs the just-pulled image with HealthCheckArgs, the
