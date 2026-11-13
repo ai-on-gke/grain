@@ -1,0 +1,126 @@
+
+=== 1a. no hold: held and free both fire
+ id |        title        | admission | disk | state  
+----+---------------------+-----------+------+--------
+ 3  | Plain widgets sweep | standard  |    0 | queued
+(1 row)
+
+ id |        title        | admission | disk | state  
+----+---------------------+-----------+------+--------
+ 2  | Plain widgets sweep | standard  |    0 | queued
+(1 row)
+
+
+=== 1b. raise the hold: seed base_branch_release and open a triage task
+triage task: 4
+[
+  {
+    "repo": "acme/widgets",
+    "branch": "main",
+    "failures": 3,
+    "failingSince": "2026-11-13T00:11:40.702731Z",
+    "failingForMS": 14400126,
+    "conclusion": "failure",
+    "commit": "deadbeef",
+    "runID": "run-3",
+    "runInFlight": false,
+    "triageTaskID": "4",
+    "gated": true,
+    "detail": "Nothing has published from acme/widgets main since 2026-11-13 00:11 UTC, 4h ago: 3 releases have been started since and every one of them published nothing, the last of them ending failure. Nothing is held up by that -- the merge queue is gated on this branch's own CI run and never on its release (docs/merge-queue-behind.md) -- so this repository is merging changes and shipping none of them, and will go on doing so until somebody looks at the publisher. Further releases on this branch are held pending resolution of triage task 4."
+  }
+]
+
+=== 1c. held and free come due under the hold
+ id |        title        | admission | disk | state  
+----+---------------------+-----------+------+--------
+ 3  | Plain widgets sweep | standard  |    0 | closed
+(1 row)
+
+ id |        title        | admission | disk | state  
+----+---------------------+-----------+------+--------
+ 5  | Plain widgets sweep | standard  |    0 | queued
+ 2  | Plain widgets sweep | standard  |    0 | closed
+(2 rows)
+
+           schedule_id           | outcome |     reason     | task_id |                                             detail                                             
+---------------------------------+---------+----------------+---------+------------------------------------------------------------------------------------------------
+ repo:schedule:acme:widgets:held |         | publishingHeld | 4       | publishing held by task 4 (acme/widgets main has published nothing since 2026-11-13 00:11 UTC)
+(1 row)
+
+--- /api/schedules (held, free)
+[
+  {
+    "id": "repo:schedule:acme:widgets:held",
+    "nextRunAt": "2026-11-13T04:11:40.024733Z",
+    "suppressed": {
+      "reason": "publishingHeld",
+      "taskId": "4",
+      "detail": "skipped: publishing held by task 4 (acme/widgets main has published nothing since 2026-11-13 00:11 UTC)"
+    },
+    "lastSkip": [
+      {
+        "occurrence": "2026-11-13T04:11:40.024733Z",
+        "at": "2026-11-13T04:11:41.921373Z",
+        "reason": "publishingHeld",
+        "summary": "skipped at 2026-11-13 04:11 UTC: publishing held by task 4 (acme/widgets main has published nothing since 2026-11-13 00:11 UTC)",
+        "taskId": "4"
+      }
+    ]
+  },
+  {
+    "id": "repo:schedule:acme:widgets:free",
+    "nextRunAt": "2026-11-13T04:21:40.024733Z",
+    "suppressed": null,
+    "lastSkip": null
+  }
+]
+--- grain health
+WARNING: target repositories missing their git host:
+  acme/upstream: this entry resolves to 127.0.0.1:4270; did you mean github.com/acme/upstream?
+  acme/downstream: this entry resolves to 127.0.0.1:4270; did you mean github.com/acme/downstream?
+  acme/widgets: this entry resolves to 127.0.0.1:4270; did you mean github.com/acme/widgets?
+
+--- grain health -json | .baseBranchPublishing
+[
+  {
+    "repo": "acme/widgets",
+    "branch": "main",
+    "failures": 3,
+    "failingSince": "2026-11-13T00:11:40.702731Z",
+    "failingForMS": 14404809,
+    "conclusion": "failure",
+    "commit": "deadbeef",
+    "runID": "run-3",
+    "runInFlight": false,
+    "triageTaskID": "4",
+    "gated": true,
+    "detail": "Nothing has published from acme/widgets main since 2026-11-13 00:11 UTC, 4h ago: 3 releases have been started since and every one of them published nothing, the last of them ending failure. Nothing is held up by that -- the merge queue is gated on this branch's own CI run and never on its release (docs/merge-queue-behind.md) -- so this repository is merging changes and shipping none of them, and will go on doing so until somebody looks at the publisher. Further releases on this branch are held pending resolution of triage task 4."
+  }
+]
+
+=== 1d. a second tick under the hold re-skips without a second record
+ skips 
+-------
+     1
+(1 row)
+
+
+=== 1e. close the triage task: held fires once on the next tick
+ id |        title        | admission | disk | state  
+----+---------------------+-----------+------+--------
+ 6  | Plain widgets sweep | standard  |    0 | queued
+ 3  | Plain widgets sweep | standard  |    0 | closed
+(2 rows)
+
+           schedule_id           | outcome |     reason     | task_id |          resolved_at          
+---------------------------------+---------+----------------+---------+-------------------------------
+ repo:schedule:acme:widgets:held | fired   | publishingHeld | 4       | 2026-11-13 04:11:49.921656+00
+(1 row)
+
+[
+  {
+    "id": "repo:schedule:acme:widgets:held",
+    "nextRunAt": "2026-11-13T04:21:40.024733Z",
+    "suppressed": null
+  }
+]
