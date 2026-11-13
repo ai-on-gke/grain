@@ -17,6 +17,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -44,7 +45,15 @@ func resolveTaskQAAssignment(
 			qaCfg = mc.QA
 		}
 	}
-	rootOrigin := qa.ResolveRootOrigin(string(task.WorkOrigin), task.ID)
+	rawOrigin := strings.TrimSpace(string(task.WorkOrigin))
+	if qaCfg.Enabled && store != nil && rawOrigin == "" && task.Parent() != "" {
+		treeOrig, err := store.TreeOrigin(ctx, task.ID)
+		if err != nil {
+			return model.QAAssignment{}, fmt.Errorf("orchestrator: resolving work-tree origin for %s: %w", task.ID, err)
+		}
+		rawOrigin = string(treeOrig)
+	}
+	rootOrigin := qa.ResolveRootOrigin(rawOrigin, task.ID)
 	tier := qa.ClassifyTaskComplexity(task.Title, task.Body)
 	if !qaCfg.Enabled || store == nil {
 		return qa.AssignOrLoadArm(ctx, store, rootOrigin, tier, qaCfg, now)

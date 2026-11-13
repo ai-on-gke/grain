@@ -89,3 +89,91 @@ func TestResolveTaskQAAssignment_OffWritesNothingAndEnabledPersistsStickyArm(t *
 		t.Fatalf("expected arm-assign JSONL perf sample, got (%q, %v)", string(perfBytes), err)
 	}
 }
+
+func TestResolveTaskQAAssignment_OriginlessChildInheritsRootTreeArm(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatalf("opening sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("store.Init: %v", err)
+	}
+
+	// Pick deterministic root and child IDs whose standalone "task:<id>" buckets
+	// land on opposite sides of 30% in epoch 1 so a broken fallback diverges.
+	var rootID, childID string
+	for i := 1; i < 500; i++ {
+		id := strings.TrimSpace(string(rune('0'+i/100)) + string(rune('0'+(i/10)%10)) + string(rune('0'+i%10)))
+		id = strings.TrimLeft(id, "0")
+		if rootID == "" && qa.ComputeArmBucket("task:"+id, 1) < 30 {
+			rootID = id
+		} else if childID == "" && id != rootID && qa.ComputeArmBucket("task:"+id, 1) >= 30 {
+			childID = id
+		}
+		if rootID != "" && childID != "" {
+			break
+		}
+	}
+	if rootID == "" || childID == "" {
+		t.Fatalf("failed to pick opposite-bucket task IDs")
+	}
+
+	put := func(id string, links ...model.Link) {
+		t.Helper()
+		tk := model.Task{
+			ID:      id,
+			Intent:  model.IntentImplement,
+			Title:   "task " + id,
+			Origin:  model.Origin{Attribution: model.Attribution{Actor: model.TriggerPrincipal}, Reason: model.ReasonDirect},
+			Binding: model.BindingDirective,
+			Links:   links,
+		}
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatalf("PutTask(%s): %v", id, err)
+		}
+	}
+	put(rootID)
+	// Stored before its proposed-by link was added so WorkOrigin stays ""
+	// (matching pre-origin / updated-link work trees).
+	put(childID)
+	put(childID, model.Link{Kind: model.LinkProposedBy, Target: rootID})
+
+	rootTask, err := store.GetTask(ctx, rootID)
+	if err != nil || rootTask == nil {
+		t.Fatalf("GetTask(%s): %v", rootID, err)
+	}
+	childTask, err := store.GetTask(ctx, childID)
+	if err != nil || childTask == nil || childTask.WorkOrigin != "" || childTask.Parent() != rootID {
+		t.Fatalf("childTask = %+v (%v), want empty WorkOrigin and parent %s", childTask, err, rootID)
+	}
+
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	cfgOn := Config{
+		QA: model.QAConfig{
+			Enabled:    true,
+			FlowID:     model.QAFlowGoldenV1Minimal,
+			RolloutPct: 30,
+			Epoch:      1,
+			RegimeID:   1,
+		},
+	}
+
+	rootAssign, err := resolveTaskQAAssignment(ctx, store, cfgOn, *rootTask, rootID+"-1", now)
+	if err != nil {
+		t.Fatalf("resolveTaskQAAssignment root: %v", err)
+	}
+	childAssign, err := resolveTaskQAAssignment(ctx, store, cfgOn, *childTask, childID+"-1", now)
+	if err != nil {
+		t.Fatalf("resolveTaskQAAssignment child: %v", err)
+	}
+	if rootAssign.RootOrigin != "task:"+rootID || childAssign.RootOrigin != "task:"+rootID {
+		t.Fatalf("origins = (%q, %q), want both %q", rootAssign.RootOrigin, childAssign.RootOrigin, "task:"+rootID)
+	}
+	if rootAssign.Arm != model.QAArmTreatment || childAssign.Arm != rootAssign.Arm {
+		t.Fatalf("arms = (root=%q, child=%q), want both %q", rootAssign.Arm, childAssign.Arm, model.QAArmTreatment)
+	}
+}

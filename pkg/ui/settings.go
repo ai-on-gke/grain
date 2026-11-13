@@ -556,6 +556,7 @@ type Settings struct {
 	Skills           *model.SkillsConfig `json:"skills,omitempty"`
 	RepairTemplateID string              `json:"repairTemplateID"`
 	// Quality control engine and single-instance PR rollout settings (model.Config.QA).
+	QAConfigured      bool     `json:"qaConfigured"`
 	QAEnabled         bool     `json:"qaEnabled"`
 	QAFlowID          string   `json:"qaFlowId"`
 	QAFlowIDs         []string `json:"qaFlowIds"`
@@ -1213,6 +1214,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		PromptExtension:                    cfg.PromptExtension,
 		Skills:                             cfg.Skills.Clone(),
 		RepairTemplateID:                   cfg.RepairTemplateID,
+		QAConfigured:                       !cfg.QA.IsZero(),
 		QAEnabled:                          cfg.QA.Enabled,
 		QAFlowID:                           cfg.QA.FlowIDOrDefault(),
 		QAFlowIDs:                          model.QAFlowIDs(),
@@ -1480,6 +1482,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AgentKeyChecksEnabled:              c.Config.AgentKeyChecks != nil,
 			ApprovedByDefault:                  def.ApprovedByDefault,
 			AutoMergeByDefault:                 def.AutoMergeByDefault,
+			QAConfigured:                       !def.QA.IsZero(),
 			QAEnabled:                          def.QA.Enabled,
 			QAFlowID:                           def.QA.FlowIDOrDefault(),
 			QAFlowIDs:                          model.QAFlowIDs(),

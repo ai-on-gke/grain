@@ -138,7 +138,7 @@ func cmdQA(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) e
 			if err != nil {
 				return err
 			}
-			if current.QARolloutPct == 0 && !current.QAEnabled {
+			if !current.QAConfigured && current.QARolloutPct == 0 && !current.QAEnabled {
 				defaultRollout := 30
 				req.QARolloutPct = &defaultRollout
 			}

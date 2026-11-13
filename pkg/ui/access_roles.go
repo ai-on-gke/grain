@@ -1388,6 +1388,44 @@ func accessRoleInfo(ctx context.Context) *AccessRoleInfo {
 		Full: a.Full, Scopes: scopes, RepoLimits: limits}
 }
 
+// agentCallAccessRoleInfo reports an external agent token's or task agent
+// call's resolved scopes for GET /api/config so UI clients never mistake a
+// scoped bearer token (such as grain/viewer) for an unlimited operator.
+func agentCallAccessRoleInfo(call agentCall) *AccessRoleInfo {
+	role := "agent"
+	if call.external != nil {
+		if ss := strings.TrimSpace(call.external.ScopeSet); ss != "" {
+			role = ss
+		} else {
+			role = "external-token"
+		}
+	}
+	var scopes []APIScope
+	limits := map[APIScope][]string{}
+	for _, info := range model.APIScopes() {
+		if !call.grants.Has(info.Scope) {
+			continue
+		}
+		scopes = append(scopes, info.Scope)
+		if repos := call.grants.Repos(info.Scope); len(repos) > 0 {
+			limits[info.Scope] = repos
+		}
+	}
+	if scopes == nil {
+		scopes = []APIScope{}
+	}
+	if len(limits) == 0 {
+		limits = nil
+	}
+	return &AccessRoleInfo{
+		Role:       role,
+		Roles:      []string{role},
+		Full:       false,
+		Scopes:     scopes,
+		RepoLimits: limits,
+	}
+}
+
 // knownRepos returns the sorted repositories explicitly named across a's
 // repo-limited scopes, or nil when a is nil or unlimited.
 func (a *accessRole) knownRepos() []string {

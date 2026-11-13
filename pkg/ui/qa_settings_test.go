@@ -15,7 +15,12 @@
 package ui_test
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -34,9 +39,9 @@ func TestQASettingsShipOffPlanCleanlyAndBumpRegimeOnRolloutChange(t *testing.T) 
 	if err != nil {
 		t.Fatalf("GetSettings initial: %v", err)
 	}
-	if initial.QAEnabled || initial.QARolloutPct != 0 || initial.QAFlowID != model.DefaultQAFlowID || !initial.QAShadowOnControl {
-		t.Fatalf("unexpected initial QA settings: enabled=%v rollout=%d flow=%q shadow=%v",
-			initial.QAEnabled, initial.QARolloutPct, initial.QAFlowID, initial.QAShadowOnControl)
+	if initial.QAConfigured || initial.QAEnabled || initial.QARolloutPct != 0 || initial.QAFlowID != model.DefaultQAFlowID || !initial.QAShadowOnControl {
+		t.Fatalf("unexpected initial QA settings: configured=%v enabled=%v rollout=%d flow=%q shadow=%v",
+			initial.QAConfigured, initial.QAEnabled, initial.QARolloutPct, initial.QAFlowID, initial.QAShadowOnControl)
 	}
 
 	enable := true
@@ -103,5 +108,63 @@ func TestQASettingsShipOffPlanCleanlyAndBumpRegimeOnRolloutChange(t *testing.T) 
 	epoch1 := 1
 	if _, err := c.PlanSettings(ctx, ui.UpdateSettingsRequest{QAEpoch: &epoch1}); err == nil || !strings.Contains(err.Error(), "epoch cannot decrease") {
 		t.Fatalf("expected epoch downgrade rejection, got %v", err)
+	}
+}
+
+func TestExternalViewerTokenGetsNonFullAccessOnGetConfigAnd403OnSettingsWrite(t *testing.T) {
+	t.Parallel()
+	srv, c := testServer(t)
+	ctx := context.Background()
+	s := firstSettings()
+	extAPI := true
+	s.ExternalAgentAPI = &extAPI
+	if _, err := c.UpdateSettings(ctx, s); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "alice@example.com"})
+	minted, err := c.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name:     "qa-viewer-tok",
+		ScopeSet: "grain/viewer",
+	})
+	if err != nil {
+		t.Fatalf("CreateExternalAgentToken: %v", err)
+	}
+	rawTok := minted.Token
+
+	cfgReq := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	cfgReq.Header.Set("Authorization", "Bearer "+rawTok)
+	cfgRec := httptest.NewRecorder()
+	srv.ServeHTTP(cfgRec, cfgReq)
+	if cfgRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/config: %d %s", cfgRec.Code, cfgRec.Body.String())
+	}
+
+	var parsed struct {
+		Access *ui.AccessRoleInfo `json:"access"`
+	}
+	if err := json.Unmarshal(cfgRec.Body.Bytes(), &parsed); err != nil {
+		t.Fatalf("unmarshal /api/config: %v", err)
+	}
+	if parsed.Access == nil {
+		t.Fatalf("GET /api/config returned nil access for grain/viewer external token; UI would treat viewer as full operator")
+	}
+	if parsed.Access.Full || parsed.Access.Role != "grain/viewer" {
+		t.Fatalf("unexpected access info: %+v", parsed.Access)
+	}
+	if !slices.Contains(parsed.Access.Scopes, "settings:read") || slices.Contains(parsed.Access.Scopes, "settings:write") {
+		t.Fatalf("unexpected viewer scopes: %+v", parsed.Access.Scopes)
+	}
+
+	for _, method := range []string{http.MethodPost, http.MethodPut} {
+		wReq := httptest.NewRequest(method, "/api/settings", strings.NewReader(`{"qaEnabled":true,"qaRolloutPct":50}`))
+		wReq.Header.Set("Authorization", "Bearer "+rawTok)
+		wReq.Header.Set("Content-Type", "application/json")
+		wRec := httptest.NewRecorder()
+		srv.ServeHTTP(wRec, wReq)
+		if wRec.Code != http.StatusForbidden || !strings.Contains(wRec.Body.String(), "settings:write") {
+			t.Fatalf("%s /api/settings as grain/viewer = %d %s, want 403 naming settings:write",
+				method, wRec.Code, wRec.Body.String())
+		}
 	}
 }

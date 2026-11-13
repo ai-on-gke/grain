@@ -2481,6 +2481,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func narrowConfigForAgentCall(resp *configResponse, call agentCall) {
+	if resp.Access == nil {
+		resp.Access = agentCallAccessRoleInfo(call)
+	}
 	if !call.grants.Allows("settings:read", "") {
 		resp.Deployment = nil
 		resp.PromptExtension = ""
