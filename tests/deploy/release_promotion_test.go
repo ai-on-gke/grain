@@ -140,13 +140,15 @@ func TestPromoteReleaseIsDeclaredHumanRequired(t *testing.T) {
 	}
 	for _, p := range []string{promoteReleasePath, ".github/workflows/promote-release.yml", "pkg/ui/release_approval.go",
 		// The Inbox approval on GitHub Actions repos (gap 4): the route that
-		// signs and dispatches it, the record it signs, and the script the
-		// workflow verifies it with.
-		"pkg/ui/release_approval_github.go", "pkg/releaseapproval/releaseapproval.go", "scripts/verify-release-approval.sh",
+		// signs and dispatches it, the record and key stores that sign it, and
+		// the script the workflow verifies it with.
+		"pkg/ui/release_approval_github.go",
+		"pkg/releaseapproval/releaseapproval.go", "pkg/releaseapproval/keystore.go", "pkg/releaseapproval/kms.go",
+		"scripts/verify-release-approval.sh",
 		// The continuous train's own promotion (playbook section 1).
 		"scripts/release-from-trunk.sh", "scripts/release.conf", "scripts/release-train-task.sh",
 		".grain/schedules/release-train.yml", ".github/workflows/publish-release.yml"} {
-		if !containsString(trigger.Paths, p) {
+		if len(trigger.Match([]string{p})) == 0 {
 			t.Errorf("the release-promotion trigger does not hold %s (paths %v)", p, trigger.Paths)
 		}
 		matches := trustboundary.Classify([]string{p})
@@ -178,7 +180,9 @@ func TestReleaseMachineryClearsOnSecurityReview(t *testing.T) {
 		".grain/workflows/release.yml", ".github/workflows/release.yml",
 		".grain/workflows/promote.yml", ".github/workflows/promote.yml",
 		".grain/workflows/release-train.yml", ".github/workflows/release-train.yml",
-		"scripts/release-assets.sh", "scripts/build-cli.sh", ".github/workflows/release-train-assets.yml",
+		"scripts/release-assets.sh", "scripts/build-cli.sh", "scripts/build-agentd.sh",
+		"pkg/agentd/release/release.go", "pkg/agentd/release/cmd/grain-agentd-sign/main.go",
+		".github/workflows/release-train-assets.yml",
 		"scripts/buildvcs.sh", "scripts/configure-dockerhub-auth.sh", "scripts/release-image-repos.sh",
 	} {
 		if len(trigger.Match([]string{p})) == 0 {

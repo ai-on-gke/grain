@@ -21,7 +21,7 @@ paths:
   - .github/workflows/promote-release.yml
   - pkg/ui/release_approval.go
   - pkg/ui/release_approval_github.go
-  - pkg/releaseapproval/releaseapproval.go
+  - pkg/releaseapproval/**
   - scripts/verify-release-approval.sh
   - scripts/release-from-trunk.sh
   - scripts/release.conf
