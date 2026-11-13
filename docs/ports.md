@@ -28,7 +28,8 @@ The range is split so that adding one kind of port never moves another:
 | 4251      | the gchat capability server's data plane (loopback) | `intree.DefaultGChatPort` (`pkg/capability/intree/gchat.go`) |
 | 4252      | the gcp capability server's token data plane (loopback) | `intree.DefaultGCPTokenPort` (`pkg/capability/intree/gcp_token.go`) |
 | 4253      | the figma capability server's data plane (loopback) | `ports.Figma`, `intree.DefaultFigmaPort` (`pkg/capability/intree/figma.go`) |
-| 4200-4241, 4254-4279 | unallocated                                     |                                              |
+| 4254      | the git capability server's data plane (loopback, forwarded into the sandbox) | `ports.Git`, `intree.DefaultGitPort` (`pkg/capability/intree/git.go`) |
+| 4200-4241, 4255-4279 | unallocated                                     |                                              |
 
 The constants are in [`pkg/ports`](../pkg/ports/ports.go). Code names
 them rather than writing the number. Do not use `pkg/portpick` for this:
