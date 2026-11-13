@@ -44,7 +44,7 @@ const test = base.extend(pageErrors);
 // edit in that task's checkout, then emits the stream shape Grain receives
 // from agy. The built-in config check likewise runs through Grain CI, in the
 // daemon itself, with nothing stubbed.
-test.setTimeout(120_000);
+test.setTimeout(240_000);
 
 // landSubmitted waits for a submitted grain/config change to land. Submit
 // records a person's approval only; when the change touches the config
@@ -214,6 +214,11 @@ test("takes grain/config through its native pull request and restart", async ({
     const sandbox = await eventually(
       () => activeSandbox(sandboxDir),
       "the config task did not reach a live host sandbox",
+      // Dispatch, clone and agent start on a CI runner already busy with
+      // the rest of the suite can take longer than eventually's 30s
+      // default; it failed there once at exactly 30s while passing in
+      // 1.6m locally (task 4730).
+      90_000,
     );
     const checkout = path.join(sandbox, "work");
     const gitEnv = { ...process.env, HOME: sandbox };
@@ -433,6 +438,7 @@ test("takes grain/config through its native pull request and restart", async ({
     const replacementSandbox = await eventually(
       () => activeSandbox(sandboxDir, existingSandboxes),
       "the replacement backup changed the config checkout alias",
+      90_000,
     );
     const replacementOrigin = execFileSync(
       "git",
