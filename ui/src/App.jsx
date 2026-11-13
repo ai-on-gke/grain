@@ -2601,7 +2601,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
         const first = failed[0].reason;
         showError(
           new Error(
-            `${failed.length} of ${ids.length} task(s) failed: ${
+            `${failed.length} of ${ids.length} ${
+              ids.length === 1 ? "task" : "tasks"
+            } failed: ${
               isVerifierUnavailable(first)
                 ? VERIFIER_ACTION_REASON
                 : first?.message || first
