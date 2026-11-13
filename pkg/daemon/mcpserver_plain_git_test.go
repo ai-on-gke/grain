@@ -191,3 +191,53 @@ func TestCredentialTokenSourceReadsAPlainGitHostsBranchOverGit(t *testing.T) {
 		t.Error("a repository on github.com was read over git rather than left to the API")
 	}
 }
+
+func TestGitHubDefaultBranchReaderOnEnterpriseHostUsesBarePathAndHostToken(t *testing.T) {
+	var gotPath, gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"default_branch":"trunk"}`)
+	}))
+	defer server.Close()
+
+	hostPort := strings.TrimPrefix(server.URL, "http://")
+	dataDir := t.TempDir()
+	secretsDir := filepath.Join(dataDir, "secrets", "github")
+	if err := os.MkdirAll(secretsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	creds, err := gitproxy.LoadCredentialSet(secretsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := creds.SetToken("ghe-cred", "secret-ghe-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := creds.SetHost("ghe-cred", gitproxy.CredentialHost{
+		Host:    hostPort,
+		Kind:    model.GitHostGitHub,
+		BaseURL: server.URL,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	readDefault := githubDefaultBranchReader(dataDir, "api.github.com", true, "ghe-cred")
+	if readDefault == nil {
+		t.Fatal("githubDefaultBranchReader returned nil")
+	}
+	branch, err := readDefault(hostPort+"/acme", "widgets")
+	if err != nil {
+		t.Fatalf("readDefault: %v", err)
+	}
+	if branch != "trunk" {
+		t.Errorf("branch = %q, want trunk", branch)
+	}
+	if gotPath != "/api/v3/repos/acme/widgets" {
+		t.Errorf("path = %q, want /api/v3/repos/acme/widgets", gotPath)
+	}
+	if gotAuth != "token secret-ghe-token" {
+		t.Errorf("Authorization = %q, want the enterprise host's token", gotAuth)
+	}
+}

@@ -21,7 +21,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 | Kind | Commands |
 |---|---|
 | Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume`, `inbox`, `wait`, `logs` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|role|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
+| Task CLI: deployment | `config`, `settings`, `qa …`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|role|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
 | Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `db check`, `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
@@ -847,6 +847,39 @@ _No flags._
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** *untested*.
+
+### 4.9a `grain qa` {#CLI-112}
+
+Inspects or updates the deployment-wide quality control engine and single-instance pull-request rollout configuration (`GET /api/settings` and `POST /api/settings`, matching `Settings -> Tasks`).
+
+- `qa` or `qa status` reads `GET /api/settings` and prints whether quality control is off or enabled alongside the active flow package, rollout percentage, passive control-arm shadow scoring flag, experiment epoch, and regime ID.
+- `qa enable [-flow id] [-rollout pct] [-shadow-control=bool] [-epoch n]` enables quality control via `POST /api/settings`. Only flags explicitly passed are overwritten; when enabling an unconfigured deployment (`0%` rollout) without `-rollout`, the rollout defaults to `30%`.
+- `qa disable` sets `qaEnabled` to `false` via `POST /api/settings`, leaving the stored flow, rollout percentage, shadow-control flag, and epoch intact.
+
+**Scope:** `settings:read` (`status`), `settings:write` (`enable`, `disable`).
+
+<!-- BEGIN GENERATED FLAGS: grain qa -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa status -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa enable -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-epoch` | int |  |  | experiment epoch (>=1) to re-randomize sticky work-tree assignments |
+| `-flow` | string |  |  | quality flow package (golden-v1-minimal, deterministic-s3-only, repo-custom) |
+| `-rollout` | int | `30` |  | percentage of work-tree PRs assigned to treatment (0..100); defaults to 30 when unconfigured |
+| `-shadow-control` | bool | `true` |  | run passive shadow checks on control-arm PRs |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa disable -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/qa_test.go`: `TestQACommandStatusEnableDisableAndFlagPreservation`.
 
 ### 4.10 `grain release approve|reject|rollback vX.Y.Z` {#CLI-39}
 

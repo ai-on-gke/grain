@@ -51,7 +51,7 @@ and on the classic page only where it does not yet --
 classic page each replaces) and `ui-ng/src/app/app.routes.ts` every
 route; a page in neither still lives only in the classic UI. The report says which
 UI each step ran against. New regression coverage goes in
-`ui/e2e/next-*.spec.js` specs (`npm --prefix ui run test:e2e:next`);
+`ui-ng/e2e/` specs (`make test-e2e-ng`);
 the classic specs keep passing and are not deleted, but nothing new is
 added to them. A classic page gets a fix only where it is broken for
 users today, and the same page in `ui-ng/` gets it too.

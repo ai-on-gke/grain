@@ -19,6 +19,8 @@ package hostd
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -367,5 +369,391 @@ func TestAHostdServesWithNoSocket(t *testing.T) {
 	if err := (&Server{Allowlist: allow, AllowlistOwners: []uint32{uint32(os.Getuid())}}).Serve(context.Background()); err == nil ||
 		!strings.Contains(err.Error(), "nothing to serve") {
 		t.Fatalf("Serve with neither a socket nor a server = %v", err)
+	}
+}
+
+// A drained hostd delivers the Exit of the last run to end to the
+// controller streaming it before it exits: the run ending is what lets
+// the drain finish, and closing the session at that moment cut the
+// stream off before the Exit, so the controller saw it drop and waited
+// for a host to come back to finish the run from its spool.
+func TestADrainedHostdDeliversTheLastRunsExitBeforeExiting(t *testing.T) {
+	ctl := startController(t, "s3cret")
+	ts := startRemoteServer(t, ctl, "s3cret", "")
+	release := filepath.Join(ts.dir, "release")
+	started := make(chan Started, 1)
+	c := ctl.client()
+	c.Detach = func(context.Context) bool { return true }
+	c.OnStarted = func(s Started) { started <- s }
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	type result struct {
+		exit Exit
+		err  error
+	}
+	done := make(chan result, 1)
+	var out bytes.Buffer
+	go func() {
+		exit, err := c.Run(ctx, Request{
+			Kind: KindCLI, Name: "sh",
+			Args:   []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.02; done; echo done; exit 4`, "sh", ts.dir, filepath.Base(release)},
+			Detach: true, Run: "run-1", Task: "7",
+		}, nil, &out, nil)
+		done <- result{exit, err}
+	}()
+	<-started
+	if err := ts.client.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := <-done
+	if r.err != nil || r.exit.Code != 4 || out.String() != "done\n" {
+		t.Fatalf("run across the drain = %+v, %v, stdout %q; want its Exit (code 4) and its output", r.exit, r.err, out.String())
+	}
+	select {
+	case err := <-ts.done:
+		ts.done <- err
+	case <-time.After(15 * time.Second):
+		t.Fatal("hostd did not exit once its run ended and its Exit was read")
+	}
+}
+
+// Dropping the remote mux session while frameExit is in flight (before the
+// controller cleanly closes its stream) must not mistake the broken session
+// for the controller having read the Exit and delete the spool.
+func TestARemoteSessionDropWhileExitIsInFlightKeepsTheSpool(t *testing.T) {
+	ctl := startController(t, "s3cret")
+	startServer(t, "", func(s *Server) {
+		s.drainExitGrace = 2 * time.Second
+		s.Remote = Dialer{Server: ctl.http.URL, Token: "s3cret", Host: "workstation", Build: "test-build"}.Dial
+		s.RemoteMinBackoff = 20 * time.Millisecond
+		s.RemoteMaxBackoff = 200 * time.Millisecond
+	})
+	waitConnected(t, ctl.remote, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	stConn, err := ctl.remote.Dial(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stConn.Close()
+
+	req := Request{
+		Op: OpStart, Kind: KindCLI, Name: "sh",
+		Args:   []string{"-c", "echo drop-ok; exit 5"},
+		Detach: true, Run: "run-drop", Task: "9",
+	}
+	if err := writeJSON(stConn, frameRequest, req); err != nil {
+		t.Fatal(err)
+	}
+	typ, payload, err := readFrame(stConn)
+	if err != nil || typ != frameStarted {
+		t.Fatalf("first frame = %q, %v; want frameStarted", typ, err)
+	}
+	var started Started
+	if err := json.Unmarshal(payload, &started); err != nil {
+		t.Fatal(err)
+	}
+	// Read until frameExit arrives on stConn without closing stConn: attach
+	// has now deterministically written frameExit and entered DrainExitGrace.
+	for {
+		typ, _, err := readFrame(stConn)
+		if err != nil {
+			t.Fatalf("reading before Exit: %v", err)
+		}
+		if typ == frameExit {
+			break
+		}
+	}
+	// Send a late signal (which control must ignore on a reaped process) and
+	// flush a request over the same mux session before dropping it.
+	_ = writeJSON(stConn, frameSignal, SignalMsg{Signal: "TERM"})
+	if _, err := ctl.client().Processes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ctl.drop()
+
+	waitConnected(t, ctl.remote, 2)
+	var out bytes.Buffer
+	exit, _, err := ctl.client().Attach(ctx, started.ID, Cursor{}, &out, nil)
+	if err != nil || exit.Code != 5 || out.String() != "drop-ok\n" {
+		t.Fatalf("Attach after session drop = %+v, %q, %v; want Exit code 5 and kept spool output", exit, out.String(), err)
+	}
+}
+
+// Stopping Serve while attach is inside DrainExitGrace waiting for the
+// controller to hang up must not mistake the local mux close for the
+// controller having read the Exit and remove the spool.
+func TestAServeCancelWhileExitIsHeldKeepsTheSpool(t *testing.T) {
+	state, err := os.MkdirTemp("", "hostd-cancel-grace-state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(state) })
+
+	ctl := startController(t, "s3cret")
+	ts := startServer(t, "", func(s *Server) {
+		s.StateDir = state
+		s.drainExitGrace = 5 * time.Second
+		s.Remote = Dialer{Server: ctl.http.URL, Token: "s3cret", Host: "workstation", Build: "test-build"}.Dial
+		s.RemoteMinBackoff = 20 * time.Millisecond
+		s.RemoteMaxBackoff = 200 * time.Millisecond
+	})
+	waitConnected(t, ctl.remote, 1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	stConn, err := ctl.remote.Dial(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stConn.Close()
+
+	req := Request{
+		Op: OpStart, Kind: KindCLI, Name: "sh",
+		Args:   []string{"-c", "echo cancel-ok; exit 6"},
+		Detach: true, Run: "run-cancel", Task: "10",
+	}
+	if err := writeJSON(stConn, frameRequest, req); err != nil {
+		t.Fatal(err)
+	}
+	typ, payload, err := readFrame(stConn)
+	if err != nil || typ != frameStarted {
+		t.Fatalf("first frame = %q, %v; want frameStarted", typ, err)
+	}
+	var started Started
+	if err := json.Unmarshal(payload, &started); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		typ, _, err := readFrame(stConn)
+		if err != nil {
+			t.Fatalf("reading before Exit: %v", err)
+		}
+		if typ == frameExit {
+			break
+		}
+	}
+	ts.cancel()
+	select {
+	case err := <-ts.done:
+		ts.done <- err
+	case <-time.After(3 * time.Second):
+		t.Fatal("Serve did not exit promptly when cancelled during DrainExitGrace")
+	}
+
+	ts2 := startServer(t, "", func(s *Server) { s.StateDir = state })
+	var out bytes.Buffer
+	exit, _, err := ts2.client.Attach(ctx, started.ID, Cursor{}, &out, nil)
+	if err != nil || exit.Code != 6 || out.String() != "cancel-ok\n" {
+		t.Fatalf("Attach on restarted hostd = %+v, %q, %v; want Exit code 6 and kept spool output", exit, out.String(), err)
+	}
+}
+
+type holdExitConn struct {
+	net.Conn
+	onExit    func()
+	reset     chan struct{}
+	resetOnce sync.Once
+	hdr       [5]byte
+	hdrN      int
+	rem       uint32
+}
+
+func (c *holdExitConn) Reset() error {
+	defer c.resetOnce.Do(func() { close(c.reset) })
+	if r, ok := c.Conn.(interface{ Reset() error }); ok {
+		return r.Reset()
+	}
+	return nil
+}
+
+func (c *holdExitConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	for i := 0; i < n; {
+		if c.rem > 0 {
+			take := min(uint32(n-i), c.rem)
+			c.rem -= take
+			i += int(take)
+			continue
+		}
+		c.hdr[c.hdrN] = b[i]
+		c.hdrN++
+		i++
+		if c.hdrN == 5 {
+			typ := c.hdr[0]
+			c.rem = binary.BigEndian.Uint32(c.hdr[1:5])
+			c.hdrN = 0
+			if typ == frameExit && c.onExit != nil {
+				fn := c.onExit
+				c.onExit = nil
+				fn()
+				<-c.reset
+				return 0, errors.New("stream reset on detach")
+			}
+		}
+	}
+	return n, err
+}
+
+// A daemon detaching (Client.Detach) over a live remote mux session while
+// hostd's frameExit is already in flight must reset the stream rather than
+// closing it with FrameCloseWrite, so hostd keeps the spool for the next
+// daemon instead of mistaking the detach for a read Exit.
+func TestADetachRacingExitOverRemoteSessionKeepsTheSpool(t *testing.T) {
+	ctl := startController(t, "s3cret")
+	ts := startServer(t, "", func(s *Server) {
+		s.Poll = 20 * time.Millisecond
+		s.drainExitGrace = 2 * time.Second
+		s.Remote = Dialer{Server: ctl.http.URL, Token: "s3cret", Host: "workstation", Build: "test-build"}.Dial
+		s.RemoteMinBackoff = 20 * time.Millisecond
+		s.RemoteMaxBackoff = 200 * time.Millisecond
+	})
+	waitConnected(t, ctl.remote, 1)
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	started := make(chan Started, 1)
+	c := Client{
+		Dial: func(ctx context.Context) (net.Conn, error) {
+			raw, err := ctl.remote.Dial(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return &holdExitConn{Conn: raw, onExit: cancelRun, reset: make(chan struct{})}, nil
+		},
+		Detach:    func(context.Context) bool { return true },
+		OnStarted: func(s Started) { started <- s },
+	}
+	var first bytes.Buffer
+	_, err := c.Run(runCtx, Request{
+		Kind: KindCLI, Name: "sh",
+		Args:   []string{"-c", "echo race-ok; exit 7"},
+		Detach: true, Run: "run-race", Task: "11",
+	}, nil, &first, nil)
+	if !errors.Is(err, ErrDetached) {
+		t.Fatalf("Run detaching in flight with Exit = %v, want ErrDetached", err)
+	}
+	st := <-started
+	deadline := time.Now().Add(5 * time.Second)
+	for listed(t, ts, st.ID).Attached {
+		if time.Now().After(deadline) {
+			t.Fatal("attach never let go after stream reset")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var rest bytes.Buffer
+	exit, _, err := ctl.client().Attach(context.Background(), st.ID, Cursor{Stdout: int64(first.Len())}, &rest, nil)
+	if err != nil || exit.Code != 7 || first.String()+rest.String() != "race-ok\n" {
+		t.Fatalf("Attach after detach racing Exit = %+v, %v, stdout %q; want Exit code 7 and full output",
+			exit, err, first.String()+rest.String())
+	}
+}
+
+// A protocol-1 (non-detached) run ending on a drained remote hostd must also
+// have its Exit delivered before Serve closes the mux session, since it has
+// no spool to re-attach to on the replacement hostd.
+func TestADrainedHostdDeliversANonDetachedRunsExitBeforeExiting(t *testing.T) {
+	ctl := startController(t, "s3cret")
+	ts := startRemoteServer(t, ctl, "s3cret", "")
+	release := filepath.Join(ts.dir, "release-nondetach")
+	started := make(chan Started, 1)
+	c := ctl.client()
+	c.OnStarted = func(s Started) { started <- s }
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	type result struct {
+		exit Exit
+		err  error
+	}
+	done := make(chan result, 1)
+	var out bytes.Buffer
+	go func() {
+		exit, err := c.Run(ctx, Request{
+			Kind: KindCLI, Name: "sh",
+			Args: []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.02; done; echo plain-done; exit 3`, "sh", ts.dir, filepath.Base(release)},
+			Run:  "run-plain", Task: "12",
+		}, nil, &out, nil)
+		done <- result{exit, err}
+	}()
+	<-started
+	if err := ts.client.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := <-done
+	if r.err != nil || r.exit.Code != 3 || out.String() != "plain-done\n" {
+		t.Fatalf("non-detached run across drain = %+v, %v, stdout %q; want Exit (code 3) and output", r.exit, r.err, out.String())
+	}
+	select {
+	case err := <-ts.done:
+		ts.done <- err
+	case <-time.After(15 * time.Second):
+		t.Fatal("hostd did not exit once its non-detached run ended and its Exit was read")
+	}
+}
+
+// A detached start admitted during a Cutover has its Exit delivered before
+// Serve closes the remote session when all runs end together.
+func TestACutoverDeliversDetachedRunsExitsBeforeExiting(t *testing.T) {
+	ctl := startController(t, "s3cret")
+	ts := startRemoteServer(t, ctl, "s3cret", "")
+	hold := filepath.Join(ts.dir, "hold-cutover")
+	started := make(chan Started, 1)
+	c := ctl.client()
+	c.Detach = func(context.Context) bool { return true }
+	c.OnStarted = func(s Started) { started <- s }
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	holderDone := make(chan error, 1)
+	go func() {
+		_, err := c.Run(ctx, Request{
+			Kind: KindCLI, Name: "sh",
+			Args:   []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.02; done`, "sh", ts.dir, filepath.Base(hold)},
+			Detach: true, Run: "run-hold", Task: "13",
+		}, nil, nil, nil)
+		holderDone <- err
+	}()
+	<-started
+	if err := ts.client.Cutover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fastStarted := make(chan Started, 1)
+	fc := ctl.client()
+	fc.Detach = func(context.Context) bool { return true }
+	fc.OnStarted = func(s Started) { fastStarted <- s }
+	var fastOut bytes.Buffer
+	fastDone := make(chan error, 1)
+	go func() {
+		exit, err := fc.Run(ctx, Request{
+			Kind: KindCLI, Name: "sh",
+			Args:   []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.02; done; echo fast-ok; exit 2`, "sh", ts.dir, filepath.Base(hold)},
+			Detach: true, Run: "run-fast", Task: "14",
+		}, nil, &fastOut, nil)
+		if err == nil && exit.Code != 2 {
+			err = fmt.Errorf("exit = %+v, want code 2", exit)
+		}
+		fastDone <- err
+	}()
+	<-fastStarted
+	if err := os.WriteFile(hold, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-holderDone; err != nil {
+		t.Fatalf("holder run across cutover = %v", err)
+	}
+	if err := <-fastDone; err != nil || fastOut.String() != "fast-ok\n" {
+		t.Fatalf("detached run started during cutover = %v, stdout %q; want nil and fast-ok", err, fastOut.String())
+	}
+	select {
+	case err := <-ts.done:
+		ts.done <- err
+	case <-time.After(15 * time.Second):
+		t.Fatal("hostd did not exit after cutover")
 	}
 }

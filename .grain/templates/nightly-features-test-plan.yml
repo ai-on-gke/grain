@@ -37,7 +37,7 @@ body: |
       UIs" in `PROMPT.md`). Walk the classic page only where the feature
       lives there alone (a page in neither `ui-ng/src/app/shell/nav.ts`
       nor `ui-ng/src/app/app.routes.ts`, such as Boards), and plan new e2e coverage as
-      `ui/e2e/next-*.spec.js` specs rather than classic ones.
+      `ui-ng/e2e/` specs rather than classic ones.
   - Author a new test plan document under `docs/test-plans/YYYY-MM-DD.md` (using
     the current date) capturing the full analysis and plan.
   - Commit the new test plan file to the task's branch.

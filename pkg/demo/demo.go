@@ -283,7 +283,7 @@ func Run(opts Options) error {
 		return err
 	}
 	defer s.Close()
-	// ui/e2e/fixtures.js starts one of these per Playwright worker on
+	// ui-shared/e2e/demo.js starts one of these per Playwright worker on
 	// 127.0.0.1:0 and reads the port back off this line, having no other
 	// way to learn it -- so the URL here is a small interface as well as
 	// a courtesy to whoever ran the command.

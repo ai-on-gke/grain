@@ -1993,6 +1993,27 @@ g-sessions-page {
   outline-offset: 2px;
 }
 
+button.g-switch:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+  background: var(--md-sys-color-surface-container);
+  border-color: var(--md-sys-color-outline-variant);
+}
+
+button.g-switch:disabled::after {
+  background: var(--md-sys-color-on-surface-variant);
+}
+
+button.g-switch[aria-checked="true"]:disabled {
+  background: var(--md-sys-color-surface-container-high);
+  border-color: var(--md-sys-color-outline);
+}
+
+button.g-switch[aria-checked="true"]:disabled::after {
+  left: 23px;
+  background: var(--md-sys-color-on-surface-variant);
+}
+
 button.create-menu-item,
 button.more-sheet-item {
   width: 100%;

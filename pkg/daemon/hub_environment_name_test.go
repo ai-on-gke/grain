@@ -149,3 +149,38 @@ func TestHubHeartbeatAppliesTheEntrysEnvironmentNameAsADefault(t *testing.T) {
 		t.Errorf("the hub's name overrode the operator's: environment name %q, want my laptop", got)
 	}
 }
+
+// A freshly provisioned hosted instance starts on an empty database:
+// run() adopts -default-environment-name (GRAIN_DEFAULT_ENVIRONMENT_NAME)
+// before LoadConfig seeds grain_config from the daemon's flags, and that
+// seed must keep the hub's name rather than replace the row that holds it.
+// Before the fix the first start logged the name as adopted and Settings
+// showed none until the instance restarted (docs/test-runs/
+// 2026-11-11-new-ui-surfaces.md, finding 1).
+func TestDefaultEnvironmentNameSurvivesTheFirstStartsSeed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, closeStore := openTestStore(t, t.TempDir())
+	defer closeStore()
+
+	adoptDefaultEnvironmentName(ctx, store, "Fresh hosted")
+	if _, err := LoadConfig(ctx, store, Config{PollInterval: time.Minute, MaxWorkers: 2}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if name, fromHub := environmentNames(t, store); name != "Fresh hosted" || fromHub != "Fresh hosted" {
+		t.Fatalf("after the first start's seed: stored name=%q hub=%q, want Fresh hosted for both", name, fromHub)
+	}
+	// The flags still seeded everything else.
+	stored, err := store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.MaxWorkers != 2 {
+		t.Errorf("seeded MaxWorkers = %d, want the flags' 2", stored.MaxWorkers)
+	}
+	// The next hub name still renames it: the seed kept it hub-owned.
+	adoptDefaultEnvironmentName(ctx, store, "Renamed hosted")
+	if name, _ := environmentNames(t, store); name != "Renamed hosted" {
+		t.Errorf("after a later hub rename: name=%q, want Renamed hosted", name)
+	}
+}
