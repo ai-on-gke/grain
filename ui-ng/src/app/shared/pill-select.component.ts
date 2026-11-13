@@ -32,6 +32,13 @@ export interface PillOption {
   value: string;
   label: string;
   toneClass?: string;
+  // disabled options stay in the list (and in keyboard order) so the
+  // reader can see what exists, but choosing one does nothing: the
+  // server's own vocabulary says it cannot run here (label says why).
+  disabled?: boolean;
+  // hint is a second, smaller line under the label (why an option is
+  // disabled, or what choosing it means).
+  hint?: string;
 }
 
 let nextPillSelectId = 0;
@@ -95,10 +102,12 @@ let nextPillSelectId = 0;
                 type="button"
                 role="option"
                 [attr.aria-selected]="active"
+                [attr.aria-disabled]="opt.disabled ? 'true' : null"
+                [class.is-disabled]="opt.disabled"
                 [attr.data-testid]="
                   testid() ? testid() + '-opt-' + opt.value : null
                 "
-                (click)="choose(opt.value, $event)"
+                (click)="choose(opt, $event)"
               >
                 @if (opt.toneClass) {
                   <span
@@ -106,7 +115,12 @@ let nextPillSelectId = 0;
                     aria-hidden="true"
                   ></span>
                 }
-                <span class="pill-opt-label">{{ opt.label }}</span>
+                <span class="pill-opt-label"
+                  >{{ opt.label }}
+                  @if (opt.hint) {
+                    <span class="pill-opt-hint">{{ opt.hint }}</span>
+                  }
+                </span>
                 @if (active) {
                   <svg
                     class="pill-check"
@@ -210,10 +224,11 @@ export class PillSelectComponent implements OnDestroy {
     }
   }
 
-  protected choose(val: string, ev: Event): void {
+  protected choose(opt: PillOption, ev: Event): void {
     ev.stopPropagation();
+    if (opt.disabled) return;
     this.close(true);
-    this.valueChange.emit(val);
+    this.valueChange.emit(opt.value);
   }
 
   protected onDocClick(ev: Event): void {

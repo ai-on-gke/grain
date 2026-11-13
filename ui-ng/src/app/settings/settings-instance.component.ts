@@ -414,12 +414,13 @@ function formatBytes(bytes: number): string {
                 class="s-input tabular"
                 type="number"
                 min="0"
-                [value]="state.val('packageCacheSizeGb', 20)"
+                [value]="state.defaultedNumber('packageCacheSizeGb')"
+                [placeholder]="state.defaultHint('packageCacheSizeGb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'packageCacheSizeGb',
-                    Number($any($event.target).value)
+                    $any($event.target).value
                   )
                 "
               />
@@ -433,12 +434,13 @@ function formatBytes(bytes: number): string {
                 class="s-input tabular"
                 type="number"
                 min="0"
-                [value]="state.val('actionsCacheSizeGb', 20)"
+                [value]="state.defaultedNumber('actionsCacheSizeGb')"
+                [placeholder]="state.defaultHint('actionsCacheSizeGb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'actionsCacheSizeGb',
-                    Number($any($event.target).value)
+                    $any($event.target).value
                   )
                 "
               />
@@ -460,8 +462,8 @@ function formatBytes(bytes: number): string {
                 class="s-input tabular"
                 type="text"
                 data-testid="input-poll-interval"
-                placeholder="30s"
-                [value]="state.val('pollInterval', '30s')"
+                [placeholder]="state.defaultHint('pollInterval', '10s')"
+                [value]="state.val('pollInterval', '')"
                 [disabled]="!canWriteSettings()"
                 (input)="
                   state.setField('pollInterval', $any($event.target).value)
@@ -476,13 +478,19 @@ function formatBytes(bytes: number): string {
                 type="number"
                 min="1"
                 data-testid="input-max-workers"
-                [value]="state.val('maxWorkers', 4)"
+                [value]="state.defaultedNumber('maxWorkers')"
+                [placeholder]="state.defaultHint('maxWorkers', '10')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'maxWorkers',
-                    Number($any($event.target).value)
+                    $any($event.target).value,
+                    10,
+                    true
                   )
+                "
+                (change)="
+                  state.setNumber('maxWorkers', $any($event.target).value, 10)
                 "
               />
             </div>
@@ -495,12 +503,22 @@ function formatBytes(bytes: number): string {
                 class="s-input tabular"
                 type="number"
                 min="1"
-                [value]="state.val('maxMergesPerRepo', 1)"
+                [value]="state.defaultedNumber('maxMergesPerRepo')"
+                [placeholder]="state.defaultHint('maxMergesPerRepo', '5')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'maxMergesPerRepo',
-                    Number($any($event.target).value)
+                    $any($event.target).value,
+                    5,
+                    true
+                  )
+                "
+                (change)="
+                  state.setNumber(
+                    'maxMergesPerRepo',
+                    $any($event.target).value,
+                    5
                   )
                 "
               />
@@ -535,7 +553,7 @@ function formatBytes(bytes: number): string {
         <div class="s-card" data-testid="card-registry">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">Grain Registry &amp; Hub connection</h3>
+              <h3 class="s-card-title">Grain Hub connection</h3>
               <p class="s-card-desc">
                 Advertise repository scopes and health heartbeats to a central
                 Grain Hub directory.
@@ -843,9 +861,9 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected readonly cliLocationOptions: readonly PillOption[] = [
     { value: "", label: "Deployment default" },
-    { value: "host", label: "Host (grain hostd)" },
+    { value: "host", label: "Host (grain host)" },
     { value: "container", label: "Daemon container" },
-    { value: "detached", label: "Detached hostd session" },
+    { value: "detached", label: "Detached host session" },
   ];
 
   protected readonly hubAuthOptions: readonly PillOption[] = [

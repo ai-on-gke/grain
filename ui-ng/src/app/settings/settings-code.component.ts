@@ -608,13 +608,11 @@ interface StateRepoEntryDto {
                 type="number"
                 min="0"
                 data-testid="input-ci-jobs-per-run"
-                [value]="state.val('ciJobsPerRun', 4)"
+                [value]="state.defaultedNumber('ciJobsPerRun')"
+                [placeholder]="state.defaultHint('ciJobsPerRun', 'no limit')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
-                    'ciJobsPerRun',
-                    Number($any($event.target).value)
-                  )
+                  state.setNumber('ciJobsPerRun', $any($event.target).value)
                 "
               />
             </div>
@@ -624,13 +622,11 @@ interface StateRepoEntryDto {
                 id="ci-hist"
                 class="s-input tabular"
                 type="number"
-                [value]="state.val('ciRunHistory', 200)"
+                [value]="state.defaultedNumber('ciRunHistory')"
+                [placeholder]="state.defaultHint('ciRunHistory')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
-                    'ciRunHistory',
-                    Number($any($event.target).value)
-                  )
+                  state.setNumber('ciRunHistory', $any($event.target).value)
                 "
               />
             </div>
@@ -643,10 +639,11 @@ interface StateRepoEntryDto {
                 class="s-input tabular"
                 type="number"
                 min="0"
-                [value]="state.val('ciCacheMb', 2048)"
+                [value]="state.defaultedNumber('ciCacheMb')"
+                [placeholder]="state.defaultHint('ciCacheMb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField('ciCacheMb', Number($any($event.target).value))
+                  state.setNumber('ciCacheMb', $any($event.target).value)
                 "
               />
             </div>
@@ -657,13 +654,11 @@ interface StateRepoEntryDto {
                 class="s-input tabular"
                 type="number"
                 min="0"
-                [value]="state.val('ciArtifactMb', 1024)"
+                [value]="state.defaultedNumber('ciArtifactMb')"
+                [placeholder]="state.defaultHint('ciArtifactMb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
-                    'ciArtifactMb',
-                    Number($any($event.target).value)
-                  )
+                  state.setNumber('ciArtifactMb', $any($event.target).value)
                 "
               />
             </div>
@@ -675,7 +670,7 @@ interface StateRepoEntryDto {
                 id="ci-reserve"
                 class="s-input tabular"
                 type="text"
-                placeholder="5m"
+                [placeholder]="state.defaultHint('ciReserveAfter', '1m')"
                 [value]="state.val('ciReserveAfter', '')"
                 [disabled]="!canWriteSettings()"
                 (input)="
