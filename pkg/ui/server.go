@@ -270,7 +270,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			ctx = s.tasks.withOperatorActor(ctx)
 		}
 		agent := model.Principal{Kind: model.PrincipalAgent, ID: taskID, Source: model.SourceInternal}
-		r = r.WithContext(withAuthMethod(WithPrincipal(ctx, agent), AuthMethodTrusted))
+		callCtx := withAuthMethod(WithPrincipal(ctx, agent), AuthMethodTrusted)
+		r = r.WithContext(model.WithEventActor(callCtx, RequestActor(callCtx)))
 		s.mux.ServeHTTP(w, r)
 		return
 	}
