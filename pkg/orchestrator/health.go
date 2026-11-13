@@ -340,11 +340,13 @@ type cpuSample struct {
 // into a rate per sandbox, keeping the previous sweep's totals. Its
 // zero value is ready; read, now and sleep are swapped by tests.
 type hostCPUSampler struct {
-	mu    sync.Mutex
-	prev  map[string]cpuSample
-	read  func(map[string]string) (map[string]time.Duration, error)
-	now   func() time.Time
-	sleep func(time.Duration)
+	mu        sync.Mutex
+	prev      map[string]cpuSample
+	swept     map[string]bool
+	lastSweep time.Time
+	read      func(map[string]string) (map[string]time.Duration, error)
+	now       func() time.Time
+	sleep     func(time.Duration)
 }
 
 func (c *hostCPUSampler) sample(roots map[string]string) map[string]cpuReading {
@@ -365,11 +367,34 @@ func (c *hostCPUSampler) sample(roots map[string]string) map[string]cpuReading {
 	defer c.mu.Unlock()
 
 	at := now()
+	if c.swept != nil {
+		if age := at.Sub(c.lastSweep); age >= 0 && age < cpuMinWindow {
+			allSwept := true
+			for name := range roots {
+				if !c.swept[name] {
+					allSwept = false
+					break
+				}
+			}
+			if allSwept {
+				out := make(map[string]cpuReading, len(c.prev))
+				for name := range roots {
+					if p, ok := c.prev[name]; ok && p.last != nil {
+						out[name] = *p.last
+					}
+				}
+				return out
+			}
+		}
+	}
+
 	totals, err := read(roots)
 	if err != nil {
 		// No /proc (darwin, windows): no reading for any sandbox,
 		// rather than a made-up zero.
 		c.prev = nil
+		c.swept = nil
+		c.lastSweep = time.Time{}
 		return nil
 	}
 	out := make(map[string]cpuReading, len(totals))
@@ -416,8 +441,15 @@ func (c *hostCPUSampler) sample(roots map[string]string) map[string]cpuReading {
 				next[name] = cpuSample{at: at2, total: t2, last: &r}
 			}
 		}
+		at = at2
+	}
+	swept := make(map[string]bool, len(roots))
+	for name := range roots {
+		swept[name] = true
 	}
 	c.prev = next
+	c.swept = swept
+	c.lastSweep = at
 	return out
 }
 

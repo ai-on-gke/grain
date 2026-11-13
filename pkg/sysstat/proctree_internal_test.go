@@ -53,10 +53,22 @@ func fakeProc(t *testing.T, procDir string, pid, ppid int, comm, cwd string, uti
 func TestReadProcessTreeCPUAttributesByWorkingDirectoryAndDescent(t *testing.T) {
 	t.Parallel()
 	proc := t.TempDir()
-	runs := "/srv/sandboxes/runs"
+	runs := filepath.Join(t.TempDir(), "runs")
+	outside := t.TempDir()
+	for _, d := range []string{filepath.Join(runs, "1-1"), filepath.Join(runs, "1-10")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	escapeLink := filepath.Join(runs, "1-1", "escape")
+	if err := os.Symlink(outside, escapeLink); err != nil {
+		t.Fatal(err)
+	}
 	// 1: init, owns nothing. 50: the daemon, cwd elsewhere.
 	fakeProc(t, proc, 1, 0, "init", "/", 900, 900, 0, 0)
-	fakeProc(t, proc, 50, 1, "grain", "/srv", 500, 500, 0, 0)
+	fakeProc(t, proc, 50, 1, "grain", outside, 500, 500, 0, 0)
+	// A symlink inside 1-1 pointing outside must not attribute an unrelated process.
+	fakeProc(t, proc, 60, 50, "escaped", escapeLink, 999, 999, 0, 0)
 	// Run 1-1: the harness in its directory, a child that cd'd to /tmp,
 	// and a grandchild under the checkout. 1 + 2 + 3 + 4 s in all.
 	fakeProc(t, proc, 100, 50, "agent cli", runs+"/1-1", 60, 20, 10, 10)

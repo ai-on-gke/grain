@@ -236,11 +236,15 @@ test("Agents: selected card and row look selected, are clickable, and every insp
   });
   await axeClean(page);
 
-  // Phone: one column, no pane; cards still say they are clickable.
+  // Phone: one column, no pane; cards still say they are clickable and clear the bottom bar + FAB.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/next/agents`);
   await expect(card).toBeVisible();
   expect((await styleOf(card)).cursor).toBe("pointer");
+  const mobilePadBottom = await page
+    .locator(".agents-body")
+    .evaluate((el) => parseFloat(getComputedStyle(el).paddingBottom));
+  expect(mobilePadBottom).toBeGreaterThanOrEqual(100);
   await expect(page.getByTestId("agents-pane")).toHaveCount(0);
   await page.screenshot({ path: path.join(dir, "agents-390-dark.png") });
   await axeClean(page);

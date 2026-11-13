@@ -415,6 +415,9 @@ body.agents-wall .agent-title {
 }
 
 @media (max-width: 599.95px) {
+  .agents-body {
+    padding-bottom: calc(var(--grain-bottombar-height, 92px) + 16px);
+  }
   .agent-grid {
     padding: 12px;
     grid-template-columns: minmax(0, 1fr);

@@ -23,6 +23,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/safepath"
 )
 
 // userHZ is the unit of /proc/<pid>/stat's utime, stime, cutime and
@@ -102,11 +104,14 @@ func readProcessTreeCPU(procDir string, roots map[string]string) (map[string]tim
 }
 
 // rootFor names the root whose directory cwd is, or is under. Roots are
-// compared on a path boundary so that runs/1-1 does not claim runs/1-10.
+// compared with safepath.Within so symlinks are resolved and runs/1-1
+// never claims runs/1-10 or a symlink pointing outside the root.
 func rootFor(roots map[string]string, cwd string) (string, bool) {
-	cwd = filepath.Clean(cwd)
+	if !filepath.IsAbs(cwd) {
+		return "", false
+	}
 	for key, dir := range roots {
-		if cwd == dir || strings.HasPrefix(cwd, dir+string(filepath.Separator)) {
+		if resolved, err := safepath.Within(dir, cwd); err == nil && resolved != "" {
 			return key, true
 		}
 	}

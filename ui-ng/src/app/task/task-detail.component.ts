@@ -1336,7 +1336,7 @@ export class TaskDetailComponent implements OnDestroy {
     return id ? (this.wsStore.taskToStream().get(id) ?? null) : null;
   });
   protected readonly current = computed<TaskTab>(() => {
-    const v = this.tab() ?? (this.pane() ? this.routePane() : undefined);
+    const v = (this.pane() ? this.routePane() : undefined) ?? this.tab();
     if (
       v === "details" &&
       !this.pane() &&

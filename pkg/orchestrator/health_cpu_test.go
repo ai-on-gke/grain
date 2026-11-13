@@ -94,9 +94,9 @@ func TestHostSandboxesHealthReportsEachRunsCPUAsARate(t *testing.T) {
 	reads = []map[string]time.Duration{{"t1-1": 30*time.Second + 125*time.Millisecond}}
 	wantCores(t, "second sweep", healthByName(t, h)["t1-1"], 2, 10*time.Second)
 
-	// A sweep within cpuMinWindow repeats the last reading.
+	// A sweep within cpuMinWindow repeats the last reading without
+	// walking /proc again across concurrent browser tabs.
 	clock = clock.Add(400 * time.Millisecond)
-	reads = []map[string]time.Duration{{"t1-1": 31 * time.Second}}
 	wantCores(t, "quick sweep", healthByName(t, h)["t1-1"], 2, 10*time.Second)
 
 	// A total that went backwards (part of the tree reaped outside it)
@@ -112,6 +112,7 @@ func TestHostSandboxesHealthReportsEachRunsCPUAsARate(t *testing.T) {
 	}
 
 	// No /proc: no reading at all, not zeros.
+	clock = clock.Add(2 * time.Second)
 	readErr = errors.ErrUnsupported
 	for name, e := range healthByName(t, h) {
 		if e.CPUCores != nil {
