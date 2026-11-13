@@ -156,12 +156,12 @@ Resolved credentials **MUST** be sent as `Authorization: Bearer <token>` on JSON
    ```json
    {"error": {"code": "auth_expired", "message": "token for context team expired on 2026-11-28", "fix": "grain login --refresh"}}
    ```
-   (`"fix"` is omitted or empty when no concrete command remediation applies), and stdout **MUST** remain empty (unless the exit code is `1` on a completed `wait` / `ci show` / `ci wait` query whose JSON payload describes the failed run or task, in which case the result document is written to stdout and no redundant error wrapper is needed).
+   (`"fix"` is omitted or empty when no concrete command remediation applies), and stdout **MUST** remain empty (unless the exit code is `1` on a completed `wait` / `ci show` / `ci wait` / `health` query whose JSON payload describes the failed run or task, in which case the result document is written to stdout and no redundant error wrapper is needed).
 2. All external CLI commands **MUST** use the following exit codes:
    | Exit code | Meaning |
    |---:|---|
    | `0` | Success (and for `wait` / `ci wait`, the target met the requested condition without failure). |
-   | `1` | The target entity asked about failed (for example, `ci wait` concluded `failure` or `cancelled`, or `wait --until=merged` saw the task close unmerged/failed), an unclassified daemon/internal error (`5xx`), or the token's rate limit (`429 Too Many Requests`, code `rate_limited`: the same command succeeds once it refills). |
+   | `1` | The target entity asked about failed (for example, `ci wait` concluded `failure` or `cancelled`, or `wait --until=merged` saw the task close unmerged/failed, or `health` printed a `FAILING` section), an unclassified daemon/internal error (`5xx`), or the token's rate limit (`429 Too Many Requests`, code `rate_limited`: the same command succeeds once it refills). |
    | `2` | CLI usage error, unknown command/flag, stray positional argument, missing required flag, invalid state precondition (`400 Bad Request`, `409 Conflict`, `422 Unprocessable Entity`), or unknown context. |
    | `3` | Authentication or authorization failure (`401 Unauthorized`, `403 Forbidden`, expired `gma_` token, insecure credential file permissions, missing local sign-in session, or login redirect). |
    | `4` | Daemon unreachable (DNS failure, TCP connection refused/reset, TLS handshake error, or HTTP connection/response timeout before receiving a daemon status). |
