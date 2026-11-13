@@ -54,7 +54,24 @@ interface CapabilityServerRow {
   config?: CapabilityServerConfig;
   builtin?: unknown;
   inProcess?: { name?: string; summary?: string } | null;
-  status?: { attached?: boolean; error?: string } | null;
+  status?: { attached?: boolean; error?: string; state?: string } | null;
+}
+
+// capServerState is the chip a server row shows: disabled when an
+// operator turned it off, otherwise the server's own status.state
+// ("attached" reads as enabled; needs-config / needs-hostd say what is
+// missing) rather than "enabled" for a server that cannot attach yet.
+export function capServerState(srv: CapabilityServerRow): {
+  label: string;
+  tone: string;
+} {
+  if (srv.config?.disabled) return { label: "disabled", tone: "neutral" };
+  const st = String(srv.status?.state ?? "").trim();
+  if (!st || st === "attached") return { label: "enabled", tone: "healthy" };
+  if (st === "needs-config") {
+    return { label: "needs-configuring", tone: "blast" };
+  }
+  return { label: st, tone: st.startsWith("needs") ? "blast" : "neutral" };
 }
 
 export interface CapabilityPolicyRule {
@@ -521,13 +538,13 @@ interface SecretMetaRow {
                         }}
                       </td>
                       <td>
+                        @let chip = capServerState(srv);
                         <span
-                          [class]="
-                            'status-pill ' +
-                            (!isDisabled ? 'healthy' : 'neutral')
-                          "
+                          [class]="'status-pill ' + chip.tone"
+                          [attr.data-testid]="'cap-server-state-' + srv.id"
+                          [attr.title]="srv.status?.error || null"
                         >
-                          {{ !isDisabled ? "enabled" : "disabled" }}
+                          {{ chip.label }}
                         </span>
                       </td>
                       <td>
@@ -551,17 +568,22 @@ interface SecretMetaRow {
                               {{ isDisabled ? "Enable" : "Disable" }}
                             </button>
                           }
-                          <button
-                            type="button"
-                            class="btn-tonal s-btn-sm"
-                            [attr.data-testid]="'test-cap-server-' + srv.id"
-                            [disabled]="
-                              !access.can('POST /api/capability-servers/test')
-                            "
-                            (click)="testCapServer(srv.id)"
-                          >
-                            Test
-                          </button>
+                          <!-- An in-process server has no connection to
+                               probe: the server answers Test with "no
+                               capability server ... is configured". -->
+                          @if (!srv.inProcess) {
+                            <button
+                              type="button"
+                              class="btn-tonal s-btn-sm"
+                              [attr.data-testid]="'test-cap-server-' + srv.id"
+                              [disabled]="
+                                !access.can('POST /api/capability-servers/test')
+                              "
+                              (click)="testCapServer(srv.id)"
+                            >
+                              Test
+                            </button>
+                          }
                           @if (
                             !srv.builtin &&
                             !srv.config?.builtin &&
@@ -591,7 +613,12 @@ interface SecretMetaRow {
           }
 
           @if (capTestNotice()) {
-            <div class="s-banner ok" data-testid="cap-test-notice">
+            <div
+              class="s-banner"
+              [class.ok]="capTestOk()"
+              [class.warn]="!capTestOk()"
+              data-testid="cap-test-notice"
+            >
               {{ capTestNotice() }}
             </div>
           }
@@ -640,7 +667,11 @@ interface SecretMetaRow {
           </div>
         </div>
 
-        <div class="s-card" data-testid="card-capability-policy">
+        <div
+          class="s-card"
+          id="capability-policy"
+          data-testid="card-capability-policy"
+        >
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">Capability grant policy</h3>
@@ -782,7 +813,11 @@ interface SecretMetaRow {
           </div>
         </div>
 
-        <div class="s-card" data-testid="card-scope-sets-secrets">
+        <div
+          class="s-card"
+          id="api-scope-sets"
+          data-testid="card-scope-sets-secrets"
+        >
           <h3 class="s-card-title">API scope sets &amp; secret vault</h3>
           @if (scopeSets().length > 0) {
             <div class="s-inline">
@@ -827,7 +862,7 @@ interface SecretMetaRow {
             </button>
           </div>
 
-          <div class="s-field">
+          <div class="s-field s-anchor" id="other-secrets">
             <span class="s-label"
               >Stored secrets ({{ secretsList().length }}) — write-only</span
             >
@@ -976,6 +1011,8 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly newServerId = signal("");
   protected readonly newServerUrl = signal("");
   protected readonly capTestNotice = signal("");
+  protected readonly capTestOk = signal(true);
+  protected readonly capServerState = capServerState;
 
   protected readonly policyRules = signal<CapabilityPolicyRule[]>([]);
   protected readonly newRuleCap = signal("");
@@ -1315,13 +1352,24 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   protected async testCapServer(id: string): Promise<void> {
     try {
-      const res = await this.api.post<{ ok?: boolean; detail?: string }>(
-        "POST /api/capability-servers/test",
-        undefined,
-        { id },
-      );
+      const res = await this.api.post<{
+        ok?: boolean;
+        detail?: string;
+        error?: string;
+        methods?: unknown[];
+      }>("POST /api/capability-servers/test", undefined, { id });
+      // The probe answers ok/error/methods; it has no `detail`, so a
+      // failure read only "failed" with the reason dropped.
+      const ok = res?.ok !== false;
+      const n = Array.isArray(res?.methods) ? res.methods.length : 0;
+      this.capTestOk.set(ok);
       this.capTestNotice.set(
-        `${id}: ${res?.detail || (res?.ok === false ? "failed" : "reachable")}`,
+        `${id}: ${
+          res?.detail ||
+          (ok
+            ? `reachable${n ? `, ${n} method${n === 1 ? "" : "s"}` : ""}`
+            : `failed — ${res?.error || "no reason given"}`)
+        }`,
       );
     } catch (err) {
       this.state.recordError(err);

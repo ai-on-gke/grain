@@ -337,3 +337,10 @@
   padding: 0 12px;
   font-size: 12px;
 }
+
+/* A card a link scrolls to (#capability-policy, /settings/secrets)
+   stops clear of the sticky page header rather than under it. */
+.s-card[id],
+.s-anchor {
+  scroll-margin-top: 80px;
+}

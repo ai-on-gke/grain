@@ -550,7 +550,7 @@ function formatBytes(bytes: number): string {
       }
 
       @case ("registry") {
-        <div class="s-card" data-testid="card-registry">
+        <div class="s-card" id="registry-status" data-testid="card-registry">
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">Grain Hub connection</h3>
