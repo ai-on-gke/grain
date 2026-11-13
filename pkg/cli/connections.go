@@ -63,6 +63,8 @@ The file is YAML (JSON is YAML too):
       host: github.com            # optional; the deployment's default host
       scope: ""                   # "" (the host default), "owner" or "owner/repo"
       token_file: /run/bot.token  # optional; stored as secrets/github/bot.token
+      merge_credential: ""        # optional; a credential already under secrets/github
+                                  # (a GitHub App's) to merge pull requests with
   models:                         # model connections, matched by id
     - id: gemini
       framework: antigravity      # antigravity, claude or codex

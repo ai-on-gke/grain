@@ -37,6 +37,12 @@ type TeamGitConnectionView struct {
 	AuthType   string              `json:"authType,omitempty"`
 	Status     GitCredentialStatus `json:"status"`
 	Legacy     bool                `json:"legacy,omitempty"`
+	// MergeCredential is the credential the connection's pull requests
+	// are merged with (model.TeamGitConnection.MergeCredential), empty
+	// when merges go out under Credential. Without it here a merge
+	// credential set by `grain connections import` was invisible to every
+	// reader of this route, the UIs included.
+	MergeCredential string `json:"mergeCredential,omitempty"`
 }
 
 // AddTeamGitConnectionRequest is the body of POST /api/deployment/git-connections.
@@ -151,6 +157,8 @@ func (c *Client) teamGitConnectionViews(settings model.Config) []TeamGitConnecti
 			Scope:      conn.Scope,
 			AuthType:   authType,
 			Status:     status,
+
+			MergeCredential: conn.MergeCredential,
 		})
 		seenCreds[conn.Credential] = true
 	}
