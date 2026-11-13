@@ -31,6 +31,11 @@ import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { errText } from "../settings/settings-state.service";
 import {
+  ConfirmDialogComponent,
+  bypassConfirm,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
+import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
@@ -106,7 +111,7 @@ interface PendingReleaseRow {
 
 @Component({
   selector: "g-repo-detail-page",
-  imports: [RouterLink, PillSelectComponent],
+  imports: [RouterLink, PillSelectComponent, ConfirmDialogComponent],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
@@ -380,7 +385,7 @@ interface PendingReleaseRow {
                       </h2>
                       <p class="s-card-desc">
                         Choose whether Grain runs .grain/workflows, waits for
-                        GitHub checks, or both.
+                        GitHub checks, or merges without waiting for CI.
                       </p>
                     </div>
                     <button
@@ -1145,6 +1150,9 @@ interface PendingReleaseRow {
           }
         </div>
       </div>
+      @if (confirmReq(); as req) {
+        <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+      }
     </section>
   `,
 })
@@ -1161,11 +1169,15 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   readonly tab = input<string | undefined>(undefined);
 
   protected readonly tabs = REPO_TABS;
+  // The three modes PUT .../ci-mode accepts (model.CIMode: grain,
+  // github, none). The page used to offer "both" and "off", which the
+  // server refuses with a 400, and had no option for "none", so a repo
+  // on no CI read as the first option, Grain CI (2026-11-13 repository
+  // walkthrough).
   protected readonly ciModeOptions: readonly PillOption[] = [
     { value: "grain", label: "Grain CI (.grain/workflows)" },
     { value: "github", label: "GitHub Actions checks" },
-    { value: "both", label: "Both Grain & GitHub CI" },
-    { value: "off", label: "Off" },
+    { value: "none", label: "No CI (merge without waiting)" },
   ];
 
   private readonly routeHost = signal("");
@@ -1197,6 +1209,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly mergeOnGreen = signal(false);
   protected readonly requireUpToDate = signal(false);
   protected readonly bypassHumanGates = signal(false);
+  protected readonly confirmReq = signal<ConfirmRequest | null>(null);
 
   protected readonly setupCommand = signal("");
   protected readonly promptExtension = signal("");
@@ -1698,6 +1711,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async saveCiMode(ciMode: string): Promise<void> {
+    const previous = this.ciMode();
     this.ciMode.set(ciMode);
     try {
       await this.api.put(
@@ -1707,6 +1721,10 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       this.snackbar.show(`CI mode set to ${ciMode}`);
     } catch (err) {
+      // A refused mode is not the repo's mode: put the pill back on
+      // what the server still has rather than leave it naming one it
+      // refused.
+      this.ciMode.set(previous);
       this.error.set(errText(err));
     }
   }
@@ -1887,8 +1905,25 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected async toggleBypassHumanGates(): Promise<void> {
+  protected async onConfirmDone(accepted: boolean): Promise<void> {
+    const req = this.confirmReq();
+    this.confirmReq.set(null);
+    if (!accepted || !req) return;
+    await req.run();
+  }
+
+  protected toggleBypassHumanGates(): void {
     const next = !this.bypassHumanGates();
+    if (next) {
+      this.confirmReq.set(
+        bypassConfirm(this.repoSlug(), () => this.saveBypassHumanGates(true)),
+      );
+      return;
+    }
+    void this.saveBypassHumanGates(false);
+  }
+
+  private async saveBypassHumanGates(next: boolean): Promise<void> {
     try {
       await this.api.put(
         "PUT /api/repos/{owner}/{name}/base-repair-bypasses-human-gates",
