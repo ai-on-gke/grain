@@ -185,6 +185,13 @@
   white-space: nowrap;
 }
 
+/* A board's folder, after its name: what tells two same-named boards
+   apart by eye (their buttons' accessible names say it too). */
+.boards-menu-row .board-folder {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
 .boards-menu-row .board-del-btn {
   width: 28px;
   height: 28px;
