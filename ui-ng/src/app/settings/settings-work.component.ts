@@ -191,7 +191,7 @@ interface SecretMetaRow {
               >
               <input
                 id="t-depth"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="1"
                 data-testid="input-max-autosubmit-depth"
@@ -211,7 +211,7 @@ interface SecretMetaRow {
               >
               <input
                 id="t-fanout"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="1"
                 [value]="state.val('maxAutoSubmitFanOut', 5)"
@@ -228,7 +228,7 @@ interface SecretMetaRow {
               <label class="s-label" for="t-branch">Branch name template</label>
               <input
                 id="t-branch"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 placeholder="grain/task-{id}"
                 [value]="state.val('taskBranchTemplate', '')"
@@ -296,7 +296,7 @@ interface SecretMetaRow {
               <label class="s-label" for="t-qa-rollout">PR rollout (%)</label>
               <input
                 id="t-qa-rollout"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 max="100"
@@ -356,7 +356,7 @@ interface SecretMetaRow {
               <label class="s-label" for="ag-turns">Max agent turns</label>
               <input
                 id="ag-turns"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 data-testid="input-max-agent-turns"
@@ -376,7 +376,7 @@ interface SecretMetaRow {
               >
               <input
                 id="ag-caps"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 placeholder="repo:read,ci:read"
                 [value]="defaultCapsText()"
@@ -405,23 +405,23 @@ interface SecretMetaRow {
                     <th>ID / Title</th>
                     <th>Model</th>
                     <th>State</th>
-                    <th>Actions</th>
+                    <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (cs of consoleSessions(); track cs.id) {
                     <tr>
-                      <td class="tabular">
+                      <td>
                         {{ cs.title || cs.name || cs.id }}
                       </td>
-                      <td class="tabular">{{ cs.model || "default" }}</td>
+                      <td class="s-mono">{{ cs.model || "default" }}</td>
                       <td>
                         <span class="status-pill neutral">{{
                           cs.state || "idle"
                         }}</span>
                       </td>
-                      <td>
-                        <div class="s-inline">
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
                           <button
                             type="button"
                             class="btn-tonal s-btn-sm"
@@ -505,15 +505,15 @@ interface SecretMetaRow {
                     <th>Server ID</th>
                     <th>Endpoint / Command</th>
                     <th>State</th>
-                    <th>Actions</th>
+                    <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (srv of capServers(); track srv.id) {
                     @let isDisabled = Boolean(srv.config?.disabled);
                     <tr [attr.data-testid]="'cap-server-row-' + srv.id">
-                      <td class="tabular">{{ srv.id }}</td>
-                      <td class="tabular">
+                      <td class="s-mono">{{ srv.id }}</td>
+                      <td class="s-mono">
                         {{
                           srv.config?.serverUrl ||
                             srv.config?.command ||
@@ -530,8 +530,8 @@ interface SecretMetaRow {
                           {{ !isDisabled ? "enabled" : "disabled" }}
                         </span>
                       </td>
-                      <td>
-                        <div class="s-inline">
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
                           @if (!srv.inProcess) {
                             <button
                               type="button"
@@ -596,47 +596,54 @@ interface SecretMetaRow {
             </div>
           }
 
-          <div class="s-grid">
-            <div class="s-field">
-              <label class="s-label" for="cs-id">Server ID</label>
-              <input
-                id="cs-id"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-cap-server-id"
-                placeholder="jira-mcp"
-                [value]="newServerId()"
-                (input)="newServerId.set($any($event.target).value)"
-              />
+          <div class="s-subsection">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Add capability server</h4>
             </div>
-            <div class="s-field">
-              <label class="s-label" for="cs-url">HTTP URL or stdio cmd</label>
-              <input
-                id="cs-url"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-cap-server-url"
-                placeholder="https://mcp.internal/sse"
-                [value]="newServerUrl()"
-                (input)="newServerUrl.set($any($event.target).value)"
-              />
+            <div class="s-grid">
+              <div class="s-field">
+                <label class="s-label" for="cs-id">Server ID</label>
+                <input
+                  id="cs-id"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-cap-server-id"
+                  placeholder="jira-mcp"
+                  [value]="newServerId()"
+                  (input)="newServerId.set($any($event.target).value)"
+                />
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="cs-url"
+                  >HTTP URL or stdio cmd</label
+                >
+                <input
+                  id="cs-url"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-cap-server-url"
+                  placeholder="https://mcp.internal/sse"
+                  [value]="newServerUrl()"
+                  (input)="newServerUrl.set($any($event.target).value)"
+                />
+              </div>
             </div>
-          </div>
-          <div class="s-inline">
-            <button
-              type="button"
-              class="btn-tonal"
-              data-testid="save-cap-server-btn"
-              [disabled]="
-                !newServerId().trim() ||
-                !newServerUrl().trim() ||
-                !access.can('PUT /api/capability-servers') ||
-                state.sectionLocked('capabilities')
-              "
-              (click)="saveCapServer()"
-            >
-              Save capability server
-            </button>
+            <div class="s-inline">
+              <button
+                type="button"
+                class="btn-tonal"
+                data-testid="save-cap-server-btn"
+                [disabled]="
+                  !newServerId().trim() ||
+                  !newServerUrl().trim() ||
+                  !access.can('PUT /api/capability-servers') ||
+                  state.sectionLocked('capabilities')
+                "
+                (click)="saveCapServer()"
+              >
+                Save capability server
+              </button>
+            </div>
           </div>
         </div>
 
@@ -683,13 +690,13 @@ interface SecretMetaRow {
                     <th>Effect</th>
                     <th>Repo filter</th>
                     <th>Untrusted</th>
-                    <th></th>
+                    <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (r of policyRules(); track $index; let idx = $index) {
                     <tr [attr.data-testid]="'policy-rule-row-' + idx">
-                      <td class="tabular">{{ r.capability }}</td>
+                      <td class="s-mono">{{ r.capability }}</td>
                       <td>
                         <span
                           [class]="
@@ -699,7 +706,7 @@ interface SecretMetaRow {
                           {{ r.deny ? "Deny" : "Admit" }}
                         </span>
                       </td>
-                      <td class="tabular">
+                      <td class="s-mono">
                         {{ r.repos?.join(", ") || "*" }}
                       </td>
                       <td>
@@ -709,18 +716,20 @@ interface SecretMetaRow {
                             : "Trusted only"
                         }}
                       </td>
-                      <td>
-                        <button
-                          type="button"
-                          class="btn-text s-btn-sm"
-                          [disabled]="
-                            !access.can('PUT /api/capability-policy') ||
-                            state.sectionLocked('capabilities')
-                          "
-                          (click)="removePolicyRule(idx)"
-                        >
-                          Remove
-                        </button>
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
+                          <button
+                            type="button"
+                            class="btn-text s-btn-sm"
+                            [disabled]="
+                              !access.can('PUT /api/capability-policy') ||
+                              state.sectionLocked('capabilities')
+                            "
+                            (click)="removePolicyRule(idx)"
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   }
@@ -731,7 +740,7 @@ interface SecretMetaRow {
 
           <div class="s-inline">
             <input
-              class="s-input s-input-inline tabular"
+              class="s-input s-input-inline s-mono"
               type="text"
               aria-label="Capability pattern"
               data-testid="input-policy-capability"
@@ -740,7 +749,7 @@ interface SecretMetaRow {
               (input)="newRuleCap.set($any($event.target).value)"
             />
             <input
-              class="s-input s-input-inline tabular"
+              class="s-input s-input-inline s-mono"
               type="text"
               aria-label="Repositories filter (comma-separated)"
               data-testid="input-policy-repos"
@@ -757,7 +766,7 @@ interface SecretMetaRow {
               (valueChange)="newRuleEffect.set($event)"
             />
             @if (newRuleEffect() !== "deny") {
-              <label class="s-inline" style="font-size: 12px" for="dummy">
+              <div class="s-inline">
                 <button
                   type="button"
                   class="g-switch"
@@ -767,8 +776,8 @@ interface SecretMetaRow {
                   aria-label="Allow untrusted triggers"
                   (click)="newRuleAllowUntrusted.set(!newRuleAllowUntrusted())"
                 ></button>
-                <span>Allow untrusted</span>
-              </label>
+                <span class="s-label">Allow untrusted</span>
+              </div>
             }
             <button
               type="button"
@@ -787,7 +796,7 @@ interface SecretMetaRow {
           @if (scopeSets().length > 0) {
             <div class="s-inline">
               @for (ss of scopeSets(); track ss.name) {
-                <span class="status-pill neutral tabular"
+                <span class="status-pill neutral s-mono"
                   >{{ ss.name }} ({{ ss.scopes.length }})</span
                 >
               }
@@ -795,7 +804,7 @@ interface SecretMetaRow {
           }
           <div class="s-inline">
             <input
-              class="s-input s-input-inline tabular"
+              class="s-input s-input-inline s-mono"
               type="text"
               aria-label="Scope set name"
               data-testid="input-scope-set-name"
@@ -804,7 +813,7 @@ interface SecretMetaRow {
               (input)="newScopeSetName.set($any($event.target).value)"
             />
             <input
-              class="s-input s-input-inline tabular"
+              class="s-input s-input-inline s-mono"
               type="text"
               aria-label="Scopes list"
               data-testid="input-scope-set-scopes"
@@ -833,7 +842,7 @@ interface SecretMetaRow {
             >
             <div class="s-inline">
               <input
-                class="s-input s-input-inline tabular"
+                class="s-input s-input-inline s-mono"
                 type="text"
                 aria-label="Secret name"
                 data-testid="input-secret-name"
@@ -842,7 +851,7 @@ interface SecretMetaRow {
                 (input)="secretName.set($any($event.target).value)"
               />
               <input
-                class="s-input s-input-inline tabular"
+                class="s-input s-input-inline s-mono"
                 type="text"
                 aria-label="Secret key"
                 data-testid="input-secret-key"
@@ -851,7 +860,7 @@ interface SecretMetaRow {
                 (input)="secretKey.set($any($event.target).value)"
               />
               <textarea
-                class="s-textarea s-input-inline tabular"
+                class="s-textarea s-input-inline s-mono"
                 rows="1"
                 aria-label="Secret value"
                 data-testid="input-secret-value"
@@ -930,7 +939,7 @@ interface SecretMetaRow {
             >
             <textarea
               id="mem-doc"
-              class="s-textarea tabular"
+              class="s-textarea s-mono"
               rows="6"
               data-testid="input-deployment-memory"
               [value]="memoryBody()"
@@ -944,7 +953,7 @@ interface SecretMetaRow {
             <div class="s-inline">
               <span class="s-label">Documents:</span>
               @for (doc of memoryDocs(); track doc) {
-                <span class="status-pill neutral tabular">{{ doc }}</span>
+                <span class="status-pill neutral s-mono">{{ doc }}</span>
               }
             </div>
           }

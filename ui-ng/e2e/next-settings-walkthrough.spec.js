@@ -240,7 +240,7 @@ test("removing a model connection asks first", async ({ page }) => {
   expect(deletes).toBe(0);
 
   await remove.click();
-  await dialog.getByRole("button", { name: "Remove connection" }).click();
+  await dialog.getByRole("button", { name: "Remove", exact: true }).click();
   await expect(remove).toHaveCount(0);
   await page.reload();
   await expect(page.getByTestId("input-new-backend-id")).toBeVisible();
