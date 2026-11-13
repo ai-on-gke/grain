@@ -68,26 +68,6 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 			wantAutoMerge: true,
 		},
 		{
-			name: "self-debug covered by unmigrated bare self-debug parent",
-			parentGrants: []model.Grant{
-				{Capability: "self-debug", Via: model.GrantByLabel},
-			},
-			proposalPayload: map[string]any{
-				"title":        "Follow up from bare parent",
-				"body":         "Inspect daemon state",
-				"repo":         "acme/widgets",
-				"branch":       "main",
-				"auto_merge":   true,
-				"capabilities": []any{"api:self-debug", model.GrainSourceGrant},
-			},
-			wantGrants: []model.Grant{
-				{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
-				{Capability: model.GrainSourceGrant, Via: model.GrantByLabel},
-			},
-			wantState:     model.StateQueued,
-			wantAutoMerge: true,
-		},
-		{
 			name:         "self-debug escalated when parent lacks it",
 			parentGrants: nil,
 			proposalPayload: map[string]any{

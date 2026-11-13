@@ -307,7 +307,7 @@ func TestConsoleSessionAddingCapabilityMidConversationRestartsAndResumes(t *test
 	}
 
 	// Add self-debug capability while the conversation run is live.
-	cfg.ConsoleSessions[0].Capabilities = []string{model.APIRef("self-debug")}
+	cfg.ConsoleSessions[0].Capabilities = []string{"api:self-debug", model.GrainSourceGrant}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}

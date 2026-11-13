@@ -221,7 +221,7 @@ func TestProcessResultAttachesRequestedCapabilitiesToProposedTasks(t *testing.T)
 		Arguments: map[string]any{
 			"title":        "follow-up with requested capabilities",
 			"body":         "needs gcp key",
-			"capabilities": []any{"gcp-key"},
+			"capabilities": []any{model.GCPKeySandboxAgentGrant},
 		},
 	})
 	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {

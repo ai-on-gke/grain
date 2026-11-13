@@ -825,7 +825,7 @@ func TestWhatASessionProposesWaitsUnlessTheDeploymentSaysOtherwise(t *testing.T)
 				t.Fatalf("the proposal reads %q, want %q", state, tc.want)
 			}
 			noted := strings.Contains(proposal.Body, "`"+model.GrainHostExecGrant+"`")
-			if want := slices.Contains(tc.caps, any("self-repair")); noted != want {
+			if want := slices.Contains(tc.caps, any(model.GrainHostExecGrant)); noted != want {
 				t.Errorf("escalation note in body = %v, want %v: %q", noted, want, proposal.Body)
 			}
 		})
