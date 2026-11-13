@@ -319,7 +319,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
         id: "general",
         label: "General",
         subtitle:
-          "Environment display name, settings UI lock, deployment ID, and live operator broadcast banner.",
+          "Environment display name, settings UI lock, deployment ID, post-upgrade check, and live operator broadcast banner.",
         keywords: [
           "general",
           "environment",
@@ -328,6 +328,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "banner",
           "lock",
           "timezone",
+          "upgrade check",
         ],
       },
       {
@@ -415,6 +416,10 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "channel",
           "rollback",
           "database",
+          "image",
+          "retracted",
+          "postgres",
+          "migration",
         ],
       },
     ],
