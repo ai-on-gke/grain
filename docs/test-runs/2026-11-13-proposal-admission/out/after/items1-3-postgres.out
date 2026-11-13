@@ -1,0 +1,115 @@
+== set sandboxShapeLimits (max 2 cpus / 4096 MB / 100 GB)
+{"max":{"cpus":2,"memoryMb":4096,"diskGb":100}}
+== file the parent task
+parent=2
+parent state=awaiting_reply
+== tool results the agent saw
+{"tool":"propose_task","isError":false,"text":"Recorded (1 proposed task(s) so far this run). Each is filed as a real task in grain's queue when this run finishes -- unapproved until a human approves it there, unless your own task's permission already covers it. `repo-read:acme/gadgets` is a CI capability no task run is handed, so this proposal will be filed with reads: [\"acme/gadgets\"] in its place."}
+{"tool":"propose_task","isError":false,"text":"Recorded (2 proposed task(s) so far this run). Each is filed as a real task in grain's queue when this run finishes -- unapproved until a human approves it there, unless your own task's permission already covers it. `repo-write:acme/widgets` will be left off this proposal: https://grain.dev/capabilities/repo#write={\"repo\":\"acme/widgets\"} is a CI capability, not a task grant: it gives a CI job push"}
+{"tool":"propose_task","isError":false,"text":"Recorded (3 proposed task(s) so far this run). Each is filed as a real task in grain's queue when this run finishes -- unapproved until a human approves it there, unless your own task's permission already covers it."}
+{"tool":"propose_task","isError":false,"text":"Recorded (4 proposed task(s) so far this run). Each is filed as a real task in grain's queue when this run finishes -- unapproved until a human approves it there, unless your own task's permission already covers it."}
+{"tool":"comment_on_issue","isError":false,"text":"Recorded. When this run finishes, grain relays this comment into the task's conversation; with no branch pushed and no question asked, it is the task's closing note."}
+== tasks filed from the run
+{"id":"3","title":"A1 CI-only cross-repo read","state":"proposed"}
+{"id":"4","title":"A2 CI-only repository write","state":"proposed"}
+{"id":"5","title":"B oversized sandbox","state":"proposed"}
+{"id":"6","title":"C valid follow-up","state":"proposed"}
+-- task 3
+{
+  "id": "3",
+  "title": "A1 CI-only cross-repo read",
+  "state": "proposed",
+  "reads": [
+    "acme/gadgets"
+  ],
+  "capabilities": [
+    "https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/widgets\"}"
+  ],
+  "sandboxCpus": null,
+  "sandboxMemoryMb": null,
+  "sandboxDiskGb": null,
+  "description": "needs acme/gadgets\n\n---\n\ngrain: this proposal asked for `repo-read:acme/gadgets`, a CI capability that no task run is handed, so it was filed with `reads: [\"acme/gadgets\"]` instead -- a task's own read access to acme/gadgets.\n\n---\n\ngrain: this proposal asks to read `acme/gadgets`, which task 2, which proposed it, could not read itself. It was filed with them, so it waits for a person: approving it grants that read access as well as the work. Remove them from the task first if it should not have them."
+}
+-- task 4
+{
+  "id": "4",
+  "title": "A2 CI-only repository write",
+  "state": "proposed",
+  "reads": null,
+  "capabilities": [
+    "https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/widgets\"}"
+  ],
+  "sandboxCpus": null,
+  "sandboxMemoryMb": null,
+  "sandboxDiskGb": null,
+  "description": "wants to push\n\n---\n\ngrain: this proposal asked for `repo-write:acme/widgets`, so it was filed without that grant: https://grain.dev/capabilities/repo#write={\"repo\":\"acme/widgets\"} is a CI capability, not a task grant: it gives a CI job push access to another repository, released only to a release, a workflow_dispatch or grain's own scheduled run -- a task run is none of them. A task that needs to push to acme/widgets names it in its writes instead: writes: [{repo: \"acme/widgets\"}]. Take it off this task. A CI job that needs it declares it in its own `capabilities:` in the repository's .grain/workflows file; the repos page's CI capabilities list does not grant it."
+}
+-- task 5
+{
+  "id": "5",
+  "title": "B oversized sandbox",
+  "state": "proposed",
+  "reads": null,
+  "capabilities": [
+    "https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/widgets\"}"
+  ],
+  "sandboxCpus": 2,
+  "sandboxMemoryMb": 4096,
+  "sandboxDiskGb": 100,
+  "description": "big build\n\n---\n\ngrain: the run that proposed this asked for a sandbox this deployment does not give any task (most it allows: 2 vCPU, 4096 MiB, 100 GiB disk), so it was filed at what the deployment allows: sandbox_cpus 16 (lowered to 2), sandbox_memory_mb 65536 (lowered to 4096), sandbox_disk_gb 500 (lowered to 100). An operator can raise sandboxShapeLimits in settings if the work needs more.\n\n_Filed for a person to approve: it asks for a larger sandbox than task 2 that proposed it runs in (sandboxDiskGb 100 (ceiling 30))._"
+}
+-- task 6
+{
+  "id": "6",
+  "title": "C valid follow-up",
+  "state": "proposed",
+  "reads": null,
+  "capabilities": [
+    "https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/widgets\"}"
+  ],
+  "sandboxCpus": null,
+  "sandboxMemoryMb": null,
+  "sandboxDiskGb": 50,
+  "description": "small fix\n\n_Filed for a person to approve: it asks for a larger sandbox than task 2 that proposed it runs in (sandboxDiskGb 50 (ceiling 30))._"
+}
+== parent conversation
+[grain] grain filed 3 proposals from this run without something they asked for:
+
+- task 3 "A1 CI-only cross-repo read": `repo-read:acme/gadgets` is a CI capability, so it was filed with `reads: ["acme/gadgets"]` instead.
+- task 4 "A2 CI-only repository write": `repo-write:acme/widgets` is a CI capability, not a task grant, so it was filed without it.
+- task 5 "B oversized sandbox": its sandbox is above this deployment's maximum, so it was filed at 2 vCPU, 4096 MiB, 100 GiB disk.
+
+Each proposal's description says why. An operator can raise sandboxShapeLimits in settings; a CI capability is declared in 
+[grain] proposed four follow-ups
+== seed pre-change proposal rows
+-- POST /api/tasks/3/approve
+400
+{"error":"task 3 cannot be approved holding https://grain.dev/capabilities/repo#write={\"repo\":\"acme/widgets\"}: https://grain.dev/capabilities/repo#write={\"repo\":\"acme/widgets\"} is a CI capability, not a task grant: it gives a CI job push access to another repository, released only to a release, a workflow_dispatch or grain's own scheduled run -- a task run is none of them. A task that needs to push to acme/widgets names it in its writes instead: writes: [{repo: \"acme/widgets\"}]. Take it off this task. A CI job that needs it declares it in its own `capabilities:` in the repository's .grain/workflows file; the repos page's CI capabilities list does not grant it."}
+
+   state now: proposed
+-- POST /api/tasks/4/approve
+400
+{"error":"sandbox shape is above this deployment's maximum: sandboxDiskGb 500 (ceiling 100); ask for less, or have an operator raise sandboxShapeLimits in settings"}
+
+   state now: proposed
+-- POST /api/tasks/5/approve
+400
+{"error":"sandbox shape is above this deployment's maximum: sandboxCpus 16 (ceiling 2), sandboxMemoryMb 65536 (ceiling 4096); ask for less, or have an operator raise sandboxShapeLimits in settings"}
+
+   state now: proposed
+-- POST /api/tasks/6/approve
+400
+{"error":"task 6 cannot be approved holding repo-read:acme/gadgets: https://grain.dev/capabilities/repo#read={\"repo\":\"acme/gadgets\"} is a CI capability, not a task grant: it gives a CI job read access to another repository, and only a CI job is handed it -- a task run is not one. A task that needs to read acme/gadgets names it in its reads instead: reads: [\"acme/gadgets\"]. Take it off this task. A CI job that needs it declares it in its own `capabilities:` in the repository's .grain/workflows file; the repos page's CI capabilities list does not grant it."}
+
+   state now: proposed
+== run-now on an unapproved seeded proposal (the other approval route)
+{"error":"task 6 cannot be approved holding repo-read:acme/gadgets: https://grain.dev/capabilities/repo#read={\"repo\":\"acme/gadgets\"} is a CI capability, not a task grant: it gives a CI job read access to another repository, and only a CI job is handed it -- a task run is not one. A task that needs to read acme/gadgets names it in its reads instead: reads: [\"acme/gadgets\"]. Take it off this task. A CI job that needs it declares it in its own `capabilities:` in the repository's .grain/workflows file; the repos page's CI capabilities list does not grant it."}
+ 400
+== templates
+big=template-1 small=template-2
+parent=7
+{"tool":"propose_task","isError":false,"text":"Recorded (1 proposed task(s) so far this run). Each is filed as a real task in grain's queue when this run finishes -- unapproved until a human approves it there, unless your own task's permission already covers it."}
+{"tool":"propose_task","isError":false,"text":"Recorded (2 proposed task(s) so far this run). Each is filed as a real task in grain's queue when this run finishes -- unapproved until a human approves it there, unless your own task's permission already covers it."}
+{"tool":"comment_on_issue","isError":false,"text":"Recorded. When this run finishes, grain relays this comment into the task's conversation; with no branch pushed and no question asked, it is the task's closing note."}
+{"id":"8","title":"T-big from template","state":"proposed","sandboxCpus":null,"sandboxMemoryMb":null,"sandboxDiskGb":100,"generatedFrom":"7","description":"template fill above max\n\n---\n\ngrain: the run that proposed this asked for a sandbox this deployment does not give any task (most it allows: 2 vCPU, 4096 MiB, 100 GiB disk), so it was filed at what the deployment allows: sandbox_disk_gb 200 (lowered to 100). An operator can raise sandboxShapeLimits in settings if the work needs more.\n\n_Filed for a person to approve: it asks for a larger sandbox than task 7 that proposed it runs in (sandboxDiskGb 100 (ceiling 30))._"}
+{"id":"9","title":"T-small from template","state":"proposed","sandboxCpus":null,"sandboxMemoryMb":null,"sandboxDiskGb":60,"generatedFrom":"7","description":"template fill under max\n\n_Filed for a person to approve: it asks for a larger sandbox than task 7 that proposed it runs in (sandboxDiskGb 60 (ceiling 30))._"}
