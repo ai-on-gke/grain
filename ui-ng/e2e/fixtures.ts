@@ -72,6 +72,16 @@ export const test = base.extend<Fixtures, WorkerFixtures>({
       if (options.disableRules?.length) {
         builder = builder.disableRules(options.disableRules);
       }
+      // Measure the colours the page settles on, not a frame of a CSS
+      // transition (next-inbox.spec.js's transitionsDone says why).
+      await page.evaluate(() =>
+        Promise.all(
+          document
+            .getAnimations()
+            .filter((a) => a instanceof CSSTransition)
+            .map((a) => a.finished.catch(() => {})),
+        ),
+      );
       const { violations } = await builder.analyze();
       return violations.filter((v) => SEVERE.includes(v.impact ?? ""));
     });

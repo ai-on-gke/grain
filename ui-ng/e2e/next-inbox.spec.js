@@ -26,6 +26,23 @@ import { test, expect } from "./fixtures.js";
 // Everything this file answers it files itself, so the demo store's own
 // fixtures are left for the specs that need them.
 
+// transitionsDone waits out the CSS transitions still running -- a theme
+// switch fades backgrounds over 150ms -- so axe measures the colours the
+// page settles on, not a frame halfway between light and dark. On a slow
+// runner the scan landed mid-fade and reported a contrast failure no
+// reader ever sees. Infinite animations (the live ping) are left alone:
+// they never finish.
+async function transitionsDone(page) {
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((a) => a instanceof CSSTransition)
+        .map((a) => a.finished.catch(() => {})),
+    ),
+  );
+}
+
 async function apiPost(baseURL, code, path, data) {
   const res = await fetch(`${baseURL}${path}`, {
     method: "POST",
@@ -206,11 +223,19 @@ test("offers a viewer nothing it cannot do, and axe passes in light and dark", a
     await expect(page.getByTestId("action-approve")).toBeDisabled();
     await expect(page.getByTestId("rbac-denied")).toContainText("grain/viewer");
 
+    await transitionsDone(page);
+
     const light = await new AxeBuilder({ page }).analyze();
     expect(light.violations).toEqual([]);
 
     await page.getByTestId("theme-toggle").click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    // Off the toggle, so its hover tip (400ms, appended to <body>) is not
+    // part of the page being scanned: whether a scan landed before or
+    // after that timer decided whether axe saw it (task 5097).
+    await page.mouse.move(0, 0);
+    await expect(page.locator("#g-tip")).toBeHidden();
+    await transitionsDone(page);
     const dark = await new AxeBuilder({ page }).analyze();
     expect(dark.violations).toEqual([]);
   } finally {
@@ -241,6 +266,8 @@ test("at a phone width the inspector is a full-screen sheet, and axe passes", as
   const box = await sheet.boundingBox();
   expect(box.x).toBe(0);
   expect(box.width).toBe(390);
+
+  await transitionsDone(page);
 
   const phone = await new AxeBuilder({ page }).analyze();
   expect(phone.violations).toEqual([]);
@@ -349,6 +376,8 @@ test("shows a submit decision's diff in the inspector, tinted edge to edge", asy
   expect(short.scrolls).toBe(false);
   expect(short.widths).toEqual([short.visible]);
 
+  await transitionsDone(page);
+
   const light = await new AxeBuilder({ page })
     .include('[data-testid="inspector-diff"]')
     .analyze();
@@ -356,6 +385,7 @@ test("shows a submit decision's diff in the inspector, tinted edge to edge", asy
   await page.evaluate(() =>
     document.documentElement.setAttribute("data-theme", "dark"),
   );
+  await transitionsDone(page);
   const dark = await new AxeBuilder({ page })
     .include('[data-testid="inspector-diff"]')
     .analyze();
