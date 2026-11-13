@@ -193,3 +193,157 @@ func TestStartedScheduleTickIsNotStarved(t *testing.T) {
 		t.Errorf("notification for a tick that is running: %+v", n)
 	}
 }
+
+// A workflow schedule held by its previous firing's review, which has sat
+// queued without ever starting (grain/task-5445): on 2026-11-13 a daily
+// workflow's review sat queued at priority 5 for over 30 hours and held
+// the next morning's firing in silence, because the held skip's reason is
+// SuppressedByOpenReview rather than SuppressedByOpenTask. A review that
+// never got a worker is not one a person is reading, so it is raised and
+// notified on the same rule as a task schedule's never-started firing.
+func TestStarvedWorkflowScheduleReviewIsRaisedAndNotified(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	firstMorning := time.Date(2026, 11, 12, 5, 53, 0, 0, time.UTC)
+	templateID := model.WorkflowReviewTemplateID("live-secrets")
+	sched := model.Schedule{
+		ID:         "repo:schedule:acme:widgets:live-secrets",
+		Title:      `Review the "live-secrets" workflow run`,
+		Target:     repo,
+		TemplateID: &templateID,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 5*60 + 53},
+		Overlap:    model.OverlapSkip,
+		Enabled:    true,
+		NextRunAt:  firstMorning.Add(24 * time.Hour),
+		CreatedAt:  firstMorning.Add(-24 * time.Hour),
+	}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatalf("filing schedule: %v", err)
+	}
+	busyQueue(t, store, "busy-9", 9)
+
+	// Yesterday's firing: its run finished and its review was filed, and
+	// the review has been queued ever since without a run.
+	filed := firstMorning.Add(5 * time.Minute)
+	review := filedTask(t, ctx, store, "review-1", repo)
+	review.Title = sched.Title
+	review.Origin = model.Origin{Attribution: model.Attribution{Actor: model.SchedulePrincipal},
+		Reason: model.ReasonSchedule}
+	review.Approval = &model.Attribution{Actor: model.SchedulePrincipal}
+	review.Tags = []string{model.ScheduleFiringTag(sched.ID)}
+	review.CreatedAt = &filed
+	review.Priority = model.DefaultTaskPriority
+	if err := store.PutTask(ctx, review); err != nil {
+		t.Fatal(err)
+	}
+	finished := filed
+	if err := store.PutScheduledWorkflowRun(ctx, model.ScheduledWorkflowRun{
+		ScheduleID:   sched.ID,
+		Stem:         "live-secrets",
+		Repo:         repo,
+		FiredAt:      firstMorning,
+		FinishedAt:   &finished,
+		Conclusion:   "success",
+		ReviewTaskID: review.ID,
+	}); err != nil {
+		t.Fatalf("recording yesterday's firing: %v", err)
+	}
+
+	// Half an hour into this morning's held occurrence: held, not raised.
+	held := firstMorning.Add(24 * time.Hour)
+	if err := runScheduleOnly(t, store, held.Add(30*time.Minute)); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if got, _ := store.GetTask(ctx, review.ID); got.Priority != model.DefaultTaskPriority {
+		t.Fatalf("review priority 30m into the hold = %d, want %d left alone", got.Priority, model.DefaultTaskPriority)
+	}
+	if n := starvedNotification(t, store, sched.ID); n != nil {
+		t.Fatalf("notification 30m into the hold: %+v", n)
+	}
+
+	// An hour in: starved. The review is kept, raised and in the Inbox.
+	if err := runScheduleOnly(t, store, held.Add(time.Hour)); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	got, err := store.GetTask(ctx, review.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Priority != 9 {
+		t.Errorf("starved review priority = %d, want 9, the highest queued", got.Priority)
+	}
+	if bodies := commentBodies(t, ctx, store, review.ID); len(bodies) != 1 || !strings.Contains(bodies[0], "from 5 to 9") {
+		t.Errorf("comments on the starved review = %q, want one saying it was raised from 5 to 9", bodies)
+	}
+	n := starvedNotification(t, store, sched.ID)
+	if n == nil {
+		t.Fatal("no pipeline.schedule-starved notification for a workflow schedule held an hour by a never-started review")
+	}
+	if n.TaskID != review.ID || n.RaiseCount != 1 || !strings.Contains(n.Title, "never started") {
+		t.Errorf("notification = %+v, want one raise naming review %s", n, review.ID)
+	}
+
+	// The review closes: the notification clears with it.
+	closedAt := held.Add(90 * time.Minute)
+	if err := store.ObserveClose(ctx, review.ID, closedAt, model.SchedulePrincipal, "done",
+		func(o *model.Observation) { o.CompletedAt, o.ClosedAt = &closedAt, &closedAt }); err != nil {
+		t.Fatal(err)
+	}
+	if err := runScheduleOnly(t, store, closedAt.Add(time.Minute)); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if n := starvedNotification(t, store, sched.ID); n != nil {
+		t.Errorf("notification after the review closed = %+v, want it cleared", n)
+	}
+}
+
+// A review that has started holds the schedule as workflowReviewHold
+// means it to: it is somebody's to read, and never raised as starved.
+func TestStartedWorkflowScheduleReviewIsNotStarved(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	firstMorning := time.Date(2026, 11, 12, 5, 53, 0, 0, time.UTC)
+	templateID := model.WorkflowReviewTemplateID("live-secrets")
+	sched := model.Schedule{
+		ID: "live-secrets", Title: "Review live-secrets", Target: repo, TemplateID: &templateID,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 5*60 + 53},
+		Overlap:    model.OverlapSkip, Enabled: true,
+		NextRunAt: firstMorning.Add(24 * time.Hour), CreatedAt: firstMorning.Add(-24 * time.Hour),
+	}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatalf("filing schedule: %v", err)
+	}
+	busyQueue(t, store, "busy-9", 9)
+	filed := firstMorning.Add(5 * time.Minute)
+	review := filedTask(t, ctx, store, "review-1", repo)
+	review.Origin = model.Origin{Attribution: model.Attribution{Actor: model.SchedulePrincipal},
+		Reason: model.ReasonSchedule}
+	review.Tags = []string{model.ScheduleFiringTag(sched.ID)}
+	review.CreatedAt = &filed
+	if err := store.PutTask(ctx, review); err != nil {
+		t.Fatal(err)
+	}
+	finished := filed
+	if err := store.PutScheduledWorkflowRun(ctx, model.ScheduledWorkflowRun{
+		ScheduleID: sched.ID, Stem: "live-secrets", Repo: repo, FiredAt: firstMorning,
+		FinishedAt: &finished, Conclusion: "success", ReviewTaskID: review.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	start := filed.Add(time.Minute)
+	if err := store.StartRun(ctx, model.Run{ID: review.ID + "-1", TaskID: review.ID, Attempt: 1, StartedAt: start},
+		model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runScheduleOnly(t, store, firstMorning.Add(26*time.Hour)); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if got, _ := store.GetTask(ctx, review.ID); got.Priority != model.DefaultTaskPriority {
+		t.Errorf("started review priority = %d, want it left at %d", got.Priority, model.DefaultTaskPriority)
+	}
+	if n := starvedNotification(t, store, sched.ID); n != nil {
+		t.Errorf("notification for a review that has started: %+v", n)
+	}
+}
