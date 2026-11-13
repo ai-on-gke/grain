@@ -114,7 +114,12 @@ func reconcileSchedule(ctx context.Context, deps Deps, now time.Time) error {
 			if err != nil {
 				errs = append(errs, fmt.Errorf("orchestrator: schedule %s: %w", sched.ID, err))
 			}
-			if starved.Raised() || starved.Notified {
+			if (starved.Raised() || starved.Notified) && starved.SuiteRunID != 0 {
+				log.Printf("orchestrator: schedule %s has been held %s (%d occurrences) by suite run %d, which has "+
+					"not started any task of its pass %d; raised %d never-started task(s) to priority %d",
+					sched.ID, starved.HeldFor.Round(time.Minute), starved.Occurrences, starved.SuiteRunID,
+					starved.Pass, len(starved.Tasks), starved.To)
+			} else if starved.Raised() || starved.Notified {
 				log.Printf("orchestrator: schedule %s has been held %s (%d occurrences) by task %s, which has "+
 					"never started; priority %d -> %d", sched.ID, starved.HeldFor.Round(time.Minute),
 					starved.Occurrences, starved.TaskID, starved.From, starved.To)
