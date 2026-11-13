@@ -25,7 +25,7 @@ test("classic System addresses land on the matching /next/ page", async ({
   page,
 }) => {
   const cases = [
-    ["system/health", "/next/fleet"],
+    ["system/health", "/next/fleet?tab=health"],
     ["system/sandboxes", "/next/fleet"],
     ["system/top", "/next/fleet"],
     ["system/logs", "/next/fleet?tab=logs"],

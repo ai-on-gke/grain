@@ -38,6 +38,7 @@ import {
 } from "../shared/confirm-dialog.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
+import { FleetHealthComponent } from "./fleet-health.component";
 import {
   type ActionsCacheState,
   type AgentPauseEntry,
@@ -64,10 +65,12 @@ import {
   formatRelativeAge,
   parseArgv,
 } from "./fleet.models";
+import { POWER_ACTIONS, type PowerAction } from "./system-health";
 
 const TABS: readonly { id: FleetTab; label: string }[] = [
   { id: "sandboxes", label: "Sandboxes" },
   { id: "hostds", label: "Hosts" },
+  { id: "health", label: "Health" },
   { id: "controls", label: "Pauses & Controls" },
   { id: "logs", label: "Daemon Logs" },
 ];
@@ -90,6 +93,7 @@ const PERSISTENT_ACTIONS: readonly {
     StatusIconComponent,
     ActorChipComponent,
     ConfirmDialogComponent,
+    FleetHealthComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -997,6 +1001,16 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
         }
 
         <!-- TAB 3: PAUSES, CACHES & DAEMON LIFECYCLE -->
+        @if (tab() === "health") {
+          <div
+            id="fleet-panel-health"
+            role="tabpanel"
+            aria-labelledby="fleet-tab-btn-health"
+          >
+            <g-fleet-health />
+          </div>
+        }
+
         @if (tab() === "controls") {
           <div
             id="fleet-panel-controls"
@@ -1008,7 +1022,8 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
               !canReadDispatch() &&
               !canReadCaches() &&
               !canReadSandboxes() &&
-              !canRestartDaemon()
+              !canRestartDaemon() &&
+              !canPowerAny()
             ) {
               <p class="empty-state" data-testid="fleet-controls-denied">
                 {{
@@ -1353,6 +1368,67 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                     </button>
                   </div>
                 </article>
+
+                <!-- Host power: reboot and shut down the machine -->
+                <article
+                  class="ops-card"
+                  id="fleet-power"
+                  tabindex="-1"
+                  aria-labelledby="fleet-power-title"
+                  data-testid="fleet-power-card"
+                >
+                  <div class="ops-card-head">
+                    <div>
+                      <h2 class="ops-card-title" id="fleet-power-title">
+                        Host Power
+                      </h2>
+                      <p class="ops-card-sub">
+                        Reboot or power off the machine grain runs on
+                      </p>
+                    </div>
+                    @if (powerRequested(); as req) {
+                      <span
+                        class="status-pill blast"
+                        role="status"
+                        data-testid="fleet-power-requested"
+                      >
+                        <g-status-icon tone="blast" kind="warning" />
+                        {{
+                          req.id === "reboot" ? "Rebooting" : "Shutting down"
+                        }}
+                      </span>
+                    }
+                  </div>
+                  @for (a of powerActions; track a.id) {
+                    <div class="fleet-power-row">
+                      <p class="ops-card-sub fleet-power-hint">
+                        {{ a.hint }}
+                        @if (!canPower(a)) {
+                          <span
+                            class="fleet-power-off"
+                            [attr.data-testid]="'power-' + a.id + '-off'"
+                          >
+                            {{ powerDeniedReason(a) }}
+                          </span>
+                        }
+                      </p>
+                      <button
+                        type="button"
+                        class="btn-primary is-destructive"
+                        [attr.data-testid]="'power-' + a.id + '-btn'"
+                        [disabled]="!canPower(a)"
+                        [gTip]="
+                          canPower(a)
+                            ? a.label + ' (asks confirmation first)'
+                            : powerDeniedReason(a)
+                        "
+                        (click)="confirmPower(a)"
+                      >
+                        {{ a.label }}
+                      </button>
+                    </div>
+                  }
+                </article>
               </div>
             }
           </div>
@@ -1612,6 +1688,35 @@ export class FleetPageComponent implements OnInit {
       ? this.access.deniedReason("POST /api/host/restart")
       : "Restarting grain is not enabled for this deployment.",
   );
+  // The host power controls beside Restart daemon (/api/config's
+  // rebootEnabled and shutdownEnabled), each off with its reason where
+  // the deployment has no command for it or the reader's role lacks
+  // deployment:reboot.
+  protected readonly powerActions = POWER_ACTIONS;
+  protected readonly powerEnabled = signal<Record<string, boolean>>({});
+  // The power action the host last accepted; a dropped connection counts
+  // as accepted, as it is what a host going down looks like from here.
+  protected readonly powerRequested = signal<PowerAction | null>(null);
+  protected canPower(a: PowerAction): boolean {
+    return (
+      !!this.powerEnabled()[a.enabledKey] &&
+      this.access.can(a.route) &&
+      !this.isScopeRepoLimited("deployment:reboot")
+    );
+  }
+  protected readonly canPowerAny = computed(() =>
+    this.powerActions.some((a) => this.canPower(a)),
+  );
+  protected powerDeniedReason(a: PowerAction): string {
+    if (!this.powerEnabled()[a.enabledKey])
+      return a.id === "reboot"
+        ? "Rebooting the host is not enabled for this deployment."
+        : "Shutting down the host is not enabled for this deployment.";
+    return (
+      this.access.deniedReason(a.route) ||
+      "Your role holds deployment:reboot on some repositories only."
+    );
+  }
   protected readonly canRecreateTaskSandbox = computed(() =>
     this.access.can("POST /api/tasks/{id}/sandbox/recreate"),
   );
@@ -1770,7 +1875,9 @@ export class FleetPageComponent implements OnInit {
       .subscribe((params) => {
         const t = params.get("tab");
         const next: FleetTab =
-          t === "hostds" || t === "controls" || t === "logs" ? t : "sandboxes";
+          t === "hostds" || t === "health" || t === "controls" || t === "logs"
+            ? t
+            : "sandboxes";
         if (next === this.tab()) return;
         this.tab.set(next);
         if (
@@ -1780,6 +1887,18 @@ export class FleetPageComponent implements OnInit {
         ) {
           void this.loadLogLines();
         }
+      });
+    // /system/power lands on #fleet-power (app.routes.ts): bring the
+    // Host Power card into view once the controls tab has drawn it.
+    this.route.fragment
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe((f) => {
+        if (f !== "fleet-power") return;
+        setTimeout(() => {
+          const el = this.doc.getElementById("fleet-power");
+          el?.scrollIntoView?.({ block: "start" });
+          el?.focus?.({ preventScroll: true });
+        });
       });
     void this.bootstrap();
   }
@@ -1797,6 +1916,10 @@ export class FleetPageComponent implements OnInit {
         this.access.setConfig(cfg);
         this.hostSandboxes.set(Boolean(cfg["hostSandboxes"]));
         this.restartEnabled.set(cfg["restartEnabled"] !== false);
+        this.powerEnabled.set({
+          rebootEnabled: cfg["rebootEnabled"] === true,
+          shutdownEnabled: cfg["shutdownEnabled"] === true,
+        });
       }
     } catch {
       // Non-fatal.
@@ -2278,6 +2401,31 @@ export class FleetPageComponent implements OnInit {
         } catch {
           // Will clear on next refresh once reachable.
         }
+      },
+    });
+  }
+
+  protected confirmPower(a: PowerAction): void {
+    if (!this.canPower(a)) return;
+    this.confirmReq.set({
+      title: a.title,
+      message: a.confirm,
+      accept: a.label,
+      destructive: true,
+      run: async () => {
+        this.powerRequested.set(null);
+        try {
+          await this.api.post(a.route, undefined, {});
+        } catch (err) {
+          // A dropped connection (status 0) is the host going down; any
+          // answer is the daemon refusing, and nothing is going down.
+          if ((err as { status?: number })?.status !== 0) {
+            this.snackbar.show(`${a.failed}: ${errorText(err)}`);
+            return;
+          }
+        }
+        this.powerRequested.set(a);
+        this.snackbar.show(a.requested);
       },
     });
   }

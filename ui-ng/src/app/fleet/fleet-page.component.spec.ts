@@ -19,6 +19,7 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { GrainConfig } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { SnackbarService } from "../services/snackbar.service";
 import { FleetPageComponent } from "./fleet-page.component";
 import {
   type ActionsCacheState,
@@ -726,5 +727,89 @@ describe("FleetPageComponent", () => {
     expect(
       root.querySelector('[data-testid="logs-viewer"]')?.textContent,
     ).toContain("certificate renewed");
+  });
+
+  it("gates Reboot host and Shut down host on /api/config, confirms each, and reports a refused POST", async () => {
+    const api = new FakeFleetApi();
+    api.configBody = {
+      ...api.configBody,
+      rebootEnabled: true,
+      shutdownEnabled: false,
+    } as GrainConfig;
+    const { fixture, root } = await setup(api);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-controls"]')!
+      .click();
+    await settle(fixture);
+
+    const reboot = root.querySelector<HTMLButtonElement>(
+      '[data-testid="power-reboot-btn"]',
+    )!;
+    const shutdown = root.querySelector<HTMLButtonElement>(
+      '[data-testid="power-shutdown-btn"]',
+    )!;
+    expect(reboot.disabled).toBe(false);
+    expect(shutdown.disabled).toBe(true);
+    expect(
+      root.querySelector('[data-testid="power-shutdown-off"]')?.textContent,
+    ).toContain("Shutting down the host is not enabled for this deployment.");
+
+    // Cancel posts nothing.
+    reboot.click();
+    await settle(fixture);
+    expect(
+      root.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Reboot the host machine?");
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-cancel"]')!
+      .click();
+    await settle(fixture);
+    expect(api.calls.some((c) => c.route === "POST /api/host/reboot")).toBe(
+      false,
+    );
+
+    // A refusal is a failure, and nothing is shown as going down.
+    const okPost = api.post;
+    api.post = (route, params, body, query) => {
+      if (route === "POST /api/host/reboot") {
+        api.calls.push({ method: "POST", route, params, body, query });
+        return new Promise((_resolve, reject) =>
+          setTimeout(() =>
+            reject({
+              status: 500,
+              error: { error: "sudo: a password is required" },
+            }),
+          ),
+        );
+      }
+      return okPost(route, params, body, query);
+    };
+    reboot.click();
+    await settle(fixture);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await settle(fixture);
+    expect(
+      api.calls.filter((c) => c.route === "POST /api/host/reboot").length,
+    ).toBe(1);
+    expect(TestBed.inject(SnackbarService).current()?.message).toBe(
+      "Reboot failed: sudo: a password is required",
+    );
+    expect(root.querySelector('[data-testid="fleet-power-requested"]')).toBe(
+      null,
+    );
+
+    // An accepted reboot says so.
+    api.post = okPost;
+    reboot.click();
+    await settle(fixture);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await settle(fixture);
+    expect(
+      root.querySelector('[data-testid="fleet-power-requested"]')?.textContent,
+    ).toContain("Rebooting");
   });
 });

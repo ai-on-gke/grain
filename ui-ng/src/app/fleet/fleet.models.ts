@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export type FleetTab = "sandboxes" | "hostds" | "controls" | "logs";
+export type FleetTab = "sandboxes" | "hostds" | "health" | "controls" | "logs";
 
 export interface SandboxSnapshot {
   sandbox: string;
