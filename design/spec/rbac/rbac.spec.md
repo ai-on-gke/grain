@@ -500,6 +500,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/deployment/git-connections/check` | `connections:read` | `admin` | Probes git forge connection credential. |
 | `PUT /api/deployment/agent-backends/{backendId}` | `connections:write` | `admin` | Configures model backend. |
 | `DELETE /api/deployment/agent-backends/{backendId}` | `connections:write` | `admin` | Removes model backend. |
+| `POST /api/deployment/agent-backends/{backendId}/discover` | `connections:write` | `admin` | Refreshes the models the backend's provider advertises (writes only the discovered-models cache). |
 | `PUT /api/deployment/repos/{owner}/{name}/git-connection` | `connections:write` | `admin` | Binds git connection to repository. |
 | `GET /api/deployment/secret-audit` | `secrets:read` | `admin` | Reads secret access/write audit log. |
 | `GET /api/deployment/audit-logs` | `secrets:read` | `admin` | Reads deployment security/config audit logs. |

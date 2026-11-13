@@ -44,6 +44,7 @@ func (s *Server) deploymentRoutes() {
 	s.route("POST /api/deployment/git-connections/check", s.handleCheckDeploymentGitConnection)
 	s.route("PUT /api/deployment/agent-backends/{backendId}", s.handlePutDeploymentAgentBackend)
 	s.route("DELETE /api/deployment/agent-backends/{backendId}", s.handleDeleteDeploymentAgentBackend)
+	s.route("POST /api/deployment/agent-backends/{backendId}/discover", s.handleRefreshDiscoveredModels)
 	s.route("GET /api/deployment/repos/{owner}/{name}/config", s.handleGetDeploymentRepoConfig)
 	s.route("PUT /api/deployment/repos/{owner}/{name}/config", s.handleSetDeploymentRepoConfig)
 	s.route("PUT /api/deployment/repos/{owner}/{name}/git-connection", s.handleSetDeploymentRepoGitConnection)

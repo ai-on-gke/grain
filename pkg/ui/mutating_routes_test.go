@@ -897,6 +897,11 @@ var neverAttributedRoutes = map[string]bool{
 	"POST /api/registry/heartbeat":                       true,
 	"POST /api/settings/plan":                            true,
 	"POST /api/repos/plan":                               true,
+	// Refreshing a connection's discovered models writes only grain's
+	// cache of what the provider said (model.AgentBackend.Discovered),
+	// which RunModelDiscovery rewrites on its own tick with no actor;
+	// nothing a person configured changes.
+	"POST /api/deployment/agent-backends/{backendId}/discover": true,
 	// The MCP endpoints are transports: each tool they serve calls one of
 	// the routes here, and is attributed there. POST /api/mcp's
 	// grain_invoke dispatches the route through s.mux with the outer
