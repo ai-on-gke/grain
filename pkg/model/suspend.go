@@ -255,8 +255,39 @@ func (s *Store) HoldResumeOn(ctx context.Context, taskID string, when ResumeOn, 
 // resumeSuspensionsTx marks taskID's open suspensions resumed by runID,
 // inside startRun's transaction: the run that starts next is the one
 // that resumes them, whatever started it.
+//
+// A park on tasks is over once it is resumed, so the depends-on links it
+// wrote itself (ResumeOn.Links) go with it. Left in place, a target
+// reopened later counted as open again in task_blocked and held the task
+// out of dispatch on a wait no run was still making. Links the task
+// already had when it parked are not in Links, and stay.
 func resumeSuspensionsTx(ctx context.Context, tx *sql.Tx, taskID, runID string, at time.Time) error {
-	_, err := tx.ExecContext(ctx,
+	var parkLinks []string
+	err := each(ctx, tx,
+		"SELECT `resume_on` FROM `task_suspension` WHERE `task_id` = ? AND `resumed_at` IS NULL AND `kind` = ?",
+		[]any{taskID, string(SuspendRequested)}, func(rows *sql.Rows) error {
+			var raw sql.NullString
+			if err := rows.Scan(&raw); err != nil {
+				return err
+			}
+			on, err := ParseResumeOn(raw.String)
+			if err != nil {
+				return nil
+			}
+			parkLinks = append(parkLinks, on.Links...)
+			return nil
+		})
+	if err != nil {
+		return err
+	}
+	for _, target := range parkLinks {
+		if _, err := tx.ExecContext(ctx,
+			"DELETE FROM `task_link` WHERE `task_id` = ? AND `kind` = ? AND `target` = ?",
+			taskID, string(LinkDependsOn), target); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx,
 		"UPDATE `task_suspension` SET `resumed_at` = ?, `resumed_run_id` = ? "+
 			"WHERE `task_id` = ? AND `resumed_at` IS NULL",
 		at.UTC(), runID, taskID)
