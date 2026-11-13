@@ -5,9 +5,9 @@
 # host agent say to each other -- the wire types, ops and frames, the
 # feature list, the dial-out headers, the allowlist schema the host owner
 # writes, the on-host stage and spool layout -- strands every host that has
-# not been updated. A pull request touching one of these files
-# .grain/templates/agentd-contract-review.yml to check the design doc's
-# extensibility rules -- optional fields only, new behaviour behind a new
+# not been updated. A pull request touching one of these files gets a
+# review from .grain/templates/agentd-contract-review.yml, which checks it
+# against the design doc's extensibility rules -- optional fields only, new behaviour behind a new
 # feature the daemon checks and degrades without, nothing removed inside its
 # deprecation window -- and still waits for a person's Submit.
 # pkg/hostd/contract_test.go fails the same change unless the doc's generated

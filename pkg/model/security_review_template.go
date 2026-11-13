@@ -85,8 +85,8 @@ func ExternalSecurityReviewBody() string {
 	b.WriteString(securityReviewBullets)
 	b.WriteString("**Correctness, second.** Your primary job is the trust boundary above; do not " +
 		"turn this into a style pass. Even so, a correctness bug you notice while reading is " +
-		"still a finding: record it with `add_review_comment` (or on the every-PR review's " +
-		"thread), rather than dropping it as \"not a security issue\".\n\n")
+		"still a finding: record it with `add_review_comment`, rather than dropping it as " +
+		"\"not a security issue\".\n\n")
 	b.WriteString("Do not commit, push or open a pull request; do not push to the branch under review.")
 	return b.String()
 }
