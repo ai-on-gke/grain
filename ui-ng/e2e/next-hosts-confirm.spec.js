@@ -16,7 +16,8 @@ import { test, expect } from "./fixtures.js";
 
 // Settings → Hosts under /next/ revoked, rotated, deleted and rejected on
 // one click, and offered all three row actions on the co-located `local`
-// host, which the server refuses with a 400 -- the 2026-11-13
+// host, which the server refuses with a 400; its join requests showed a
+// pairing code nobody compares instead of the key fingerprint -- the 2026-11-13
 // connections and infrastructure settings walkthrough
 // (docs/test-runs/2026-11-13-connections-infrastructure-settings.md).
 test("Settings -> Hosts asks before destructive actions and offers none on local", async ({
@@ -32,6 +33,13 @@ test("Settings -> Hosts asks before destructive actions and offers none on local
   const local = page.getByTestId("hostd-row-local");
   await expect(local).toBeVisible();
   await expect(local.getByRole("button")).toHaveCount(0);
+
+  // A join request is checked on who enrolled it and the key it binds:
+  // there is no pairing code to compare (docs/host-placement.md).
+  const pending = page.getByTestId("hostds-pending-table");
+  await expect(pending).toContainText("carol@example.com");
+  await expect(pending).toContainText("SHA256:");
+  await expect(pending).not.toContainText(/pairing code/i);
 
   // Delete is for revoked hosts only.
   await expect(page.getByTestId("delete-hostd-cloudtop-alice")).toBeDisabled();

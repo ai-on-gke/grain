@@ -132,7 +132,7 @@ interface PendingHostdRow {
   enrolled_by?: string;
   os?: string;
   arch?: string;
-  pairing_code?: string;
+  key_fingerprint?: string;
   default_labels?: Record<string, string> | null;
   default_capacity?: number;
   created_at?: string;
@@ -1465,7 +1465,7 @@ export function formatHostdLabels(
                 <thead>
                   <tr>
                     <th>ID / Hostname</th>
-                    <th>Pairing code</th>
+                    <th>Key fingerprint</th>
                     <th>Enrolled by</th>
                     <th>Platform</th>
                     <th>Approve / Reject</th>
@@ -1477,13 +1477,14 @@ export function formatHostdLabels(
                       <td class="tabular">
                         {{ p.suggested_name || p.hostname || p.id }}
                       </td>
-                      <td>
-                        <strong
-                          class="status-pill warn tabular"
-                          [attr.data-testid]="'pending-pairing-code-' + p.id"
-                        >
-                          {{ p.pairing_code || "—" }}
-                        </strong>
+                      <!-- There is no pairing code to compare: the owner
+                           checks who enrolled the host and the key it
+                           will be bound to (docs/host-placement.md). -->
+                      <td
+                        class="tabular"
+                        [attr.data-testid]="'pending-key-fingerprint-' + p.id"
+                      >
+                        {{ p.key_fingerprint || "—" }}
                       </td>
                       <td>{{ p.enrolled_by || "—" }}</td>
                       <td class="tabular">
