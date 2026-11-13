@@ -447,3 +447,7 @@ func SessionTestRegistry(providers ...model.CapabilityProvider) *model.Capabilit
 	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	return reg
 }
+
+// RecordDispatchedReviewHead is recordDispatchedReviewHead, which
+// dispatch calls as a review's run starts.
+var RecordDispatchedReviewHead = recordDispatchedReviewHead

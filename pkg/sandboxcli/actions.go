@@ -357,6 +357,9 @@ func (c *sandboxCLI) prReviewComment(p sandboxArgs) error {
 	if path != "" {
 		req["path"], req["line"] = path, line
 	}
+	if category := p.get("category"); category != "" {
+		req["category"] = category
+	}
 	return c.post("/cli/pr/review-comment", req, c.out)
 }
 

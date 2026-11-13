@@ -3032,6 +3032,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 			preRunBranchSHA = head.SHA
 		}
 	}
+	recordDispatchedReviewHead(ctx, deps.Store, deps.Client, *task)
 	if deps.Client != nil && d.Attempt > 1 {
 		if _, err := ReattachPullRequest(ctx, deps.Store, deps.Client, *task, false, now); err != nil {
 			log.Printf("orchestrator: %v", err)

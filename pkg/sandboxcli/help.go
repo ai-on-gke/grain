@@ -54,7 +54,7 @@ CI & PULL REQUEST (scoped to this task's repository and branch):
   grain pr resolve (--thread-id <id> | --comment-id <id>)
                                          Mark a review conversation on this branch's pull request resolved
   grain pr threads [--unresolved]        List the review threads on this branch's pull request with their IDs
-  grain pr review-comment <body|--file f> [--path <file> --line <N>]
+  grain pr review-comment <body|--file f> [--path <file> --line <N>] [--category <c>]
                                          Record a review finding (relayed when the run finishes)
   grain merge-queue                      Merge queue batches, queued PRs and held gates
 
@@ -299,9 +299,11 @@ var sandboxCommandHelp = map[string]string{
 		"and the comment with its replies. --unresolved lists only the open ones, outdated ones\n" +
 		"included -- the set a branch requiring conversation resolution will not merge past.\n" +
 		"Needs no CI grant.\n",
-	"pr review-comment": "grain pr review-comment <body|--file f> [--path <file> --line <N>]\n\n" +
+	"pr review-comment": "grain pr review-comment <body|--file f> [--path <file> --line <N>] [--category <c>]\n\n" +
 		"Record one review finding, as add_review_comment does: on a line with --path and --line,\n" +
-		"or a general remark without. They are relayed together when this run finishes.\n",
+		"or a general remark without. They are relayed together when this run finishes.\n" +
+		"--category files the finding under correctness, tests, security, compatibility or other\n" +
+		"(the default), as the review's recorded verdict counts it.\n",
 	"git revert": "grain git revert (--task <id> | --commit <sha>) --reason <why> [-C <dir>]\n\n" +
 		"Commit a git revert in this sandbox's working tree (the current directory, or -C <dir>) of\n" +
 		"a task's merge -- found by the branch grain recorded for it -- or of one commit. A merge is\n" +

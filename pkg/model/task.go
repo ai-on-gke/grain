@@ -1347,6 +1347,23 @@ const (
 	// nothing. Written by orchestrator's finish, read by
 	// settleSecurityHold; blocks nothing.
 	LinkReviewerHead LinkKind = "reviewer-head"
+	// LinkReviewedHead records, on a review task of any kind, the head of
+	// the change under review that the review was filed to read (-> the
+	// commit sha): the pull request head a gating trigger, an external
+	// pull request review or a security hold was judging when it filed
+	// the review, or -- for a review filed with no head in hand, a
+	// declared stacked review -- the head of the reviewed branch when the
+	// review's first run was dispatched. Unlike LinkReviewerHead it is
+	// never the review's own fixes: it is what reports group reviews by
+	// to find two reviews of one head (ReviewedHead). Provenance only;
+	// blocks nothing.
+	LinkReviewedHead LinkKind = "reviewed-head"
+	// LinkReviewVerdict records, on a review task, the verdict its last
+	// finished run reached (-> ReviewVerdictRecord JSON): clean, findings
+	// or questions, how many findings it left and a category for each.
+	// Written by orchestrator's finish (recordReviewVerdict), replaced by
+	// each later run; blocks nothing.
+	LinkReviewVerdict LinkKind = "review-verdict"
 	// LinkTrustBoundaryCleared records the commit grain last read this
 	// task's pull request file list at in full, and classified
 	// (-> "<trustboundary.Version>@<head sha>"): one that touched no

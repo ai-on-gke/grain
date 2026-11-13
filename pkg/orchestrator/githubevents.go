@@ -720,6 +720,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	if r.shepherdTask != nil {
 		model.InheritContext(&task, *r.shepherdTask)
 	}
+	model.SetReviewedHead(&task, headSHA)
 	if err := deps.Store.PutTask(ctx, task); err != nil {
 		return "", fmt.Errorf("filing external PR review task %s: %w", task.ID, err)
 	}

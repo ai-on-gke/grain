@@ -248,6 +248,16 @@ type Task struct {
 	// and link to the review that decides it.
 	SecurityHold       string `json:"securityHold,omitempty"`
 	SecurityReviewTask string `json:"securityReviewTask,omitempty"`
+	// ReviewedHead is, on a review task of any kind, the head of the
+	// change under review it was filed to read (model.ReviewedHead).
+	// ReviewerHead is, on a review working on that change's own branch,
+	// the head it left there when it pushed fixes (model.LinkReviewerHead).
+	ReviewedHead string `json:"reviewedHead,omitempty"`
+	ReviewerHead string `json:"reviewerHead,omitempty"`
+	// ReviewVerdict is, on a review task, the verdict its last finished
+	// run reached: clean, findings or questions, its finding count and
+	// a category per finding (model.LinkReviewVerdict).
+	ReviewVerdict *model.ReviewVerdictRecord `json:"reviewVerdict,omitempty"`
 	// Approvals is each rule this task's change waits on a named
 	// approver's Submit for -- a sensitive trigger with `human:
 	// required`, or grain's own guard over the repository's triggers --
@@ -1319,7 +1329,14 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		out.ChangeTargetKind = t.ChangeTarget.Kind
 	}
 	out.Reviewers = slices.Clone(t.Reviewers)
+	out.ReviewedHead = model.ReviewedHead(t)
+	if v, ok := model.ReviewVerdictOf(t); ok {
+		out.ReviewVerdict = &v
+	}
 	for _, l := range t.Links {
+		if l.Kind == model.LinkReviewerHead {
+			out.ReviewerHead = l.Target
+		}
 		if l.Kind == model.LinkFixes && !model.LinkOffTarget(t, l) {
 			out.PullRequest = l.Target
 		}

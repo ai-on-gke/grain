@@ -320,7 +320,7 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	}
 
 	tmpl := model.SystemTemplate(model.SecurityReviewTemplateID, model.RepoRef{})
-	review, fileErr := putSecurityReview(ctx, store, *current, ref, *tmpl,
+	review, fileErr := putSecurityReview(ctx, store, *current, ref, headSHA, *tmpl,
 		securityReviewTitle(*current), securityReviewBody(*tmpl, *current, ref, matches, known), now)
 	if fileErr == nil {
 		fileErr = store.UpdateTask(ctx, task.ID, func(t *model.Task) error {

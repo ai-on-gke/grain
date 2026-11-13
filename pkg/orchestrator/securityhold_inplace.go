@@ -69,9 +69,10 @@ import (
 // putSecurityReview files the security review of task for ref:
 // putStackedReview's review, working on task's own branch (putReview's
 // inPlace) and recording ref as model.LinkReviewsPullRequest so settling an
-// earlier pull request on task can never close a review filed for ref.
+// earlier pull request on task can never close a review filed for ref, and
+// headSHA, the head it was filed to read, as model.LinkReviewedHead.
 func putSecurityReview(ctx context.Context, store *model.Store, task model.Task, ref model.PullRequestRef,
-	tmpl model.Template, title, body string, now time.Time) (model.Task, error) {
+	headSHA string, tmpl model.Template, title, body string, now time.Time) (model.Task, error) {
 	reviewTask, err := newReview(ctx, store, task, tmpl, title, body, true, now)
 	if err != nil {
 		return model.Task{}, err
@@ -80,6 +81,7 @@ func putSecurityReview(ctx context.Context, store *model.Store, task model.Task,
 		reviewTask.Links = append(reviewTask.Links,
 			model.Link{Kind: model.LinkReviewsPullRequest, Target: ref.String()})
 	}
+	model.SetReviewedHead(&reviewTask, headSHA)
 	if err := store.PutTask(ctx, reviewTask); err != nil {
 		return model.Task{}, fmt.Errorf("orchestrator: filing review task %s: %w", reviewTask.ID, err)
 	}

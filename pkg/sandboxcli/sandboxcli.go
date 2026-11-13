@@ -216,7 +216,7 @@ var sandboxCommandFlags = map[string][]string{
 	"pr reply":              {"file", "comment-id"},
 	"pr resolve":            {"thread-id", "comment-id"},
 	"pr threads":            {"unresolved"},
-	"pr review-comment":     {"file", "path", "line"},
+	"pr review-comment":     {"file", "path", "line", "category"},
 	"git revert":            {"task", "commit", "reason", "C"},
 	"merge-queue":           nil,
 	"status":                {"file"},

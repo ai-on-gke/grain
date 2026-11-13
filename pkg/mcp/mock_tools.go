@@ -1473,6 +1473,13 @@ func addReviewCommentTool(sink *MockSink) Tool {
 						"shown in the diff) the comment applies to. " +
 						"Required if path is given.",
 				},
+				"category": map[string]any{
+					"type": "string",
+					"enum": reviewCategoryEnum(),
+					"description": "What kind of finding this is: correctness, tests, " +
+						"security, compatibility, or other (the default). Recorded " +
+						"in the review's verdict.",
+				},
 			},
 			"required": []string{"body"},
 		},
@@ -1516,6 +1523,16 @@ func addReviewCommentTool(sink *MockSink) Tool {
 				"reviewing a pull request, relays them into this task's own conversation.", n)}
 		},
 	}
+}
+
+// reviewCategoryEnum is add_review_comment's category enum, built from
+// model.ReviewFindingCategories.
+func reviewCategoryEnum() []any {
+	out := make([]any, len(model.ReviewFindingCategories))
+	for i, c := range model.ReviewFindingCategories {
+		out[i] = c
+	}
+	return out
 }
 
 // networkAccessEnum is propose_task's network_access enum, built from
