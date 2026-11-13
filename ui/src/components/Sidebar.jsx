@@ -264,6 +264,27 @@ function RailCount({ value, color = "text.secondary", title, sx }) {
   );
 }
 
+// BoardsRailCount is the Boards entry's figure. A boards load that
+// failed with nothing held yet is not "0 boards": the Boards page says
+// why they could not be loaded, and the rail used to sit beside it
+// claiming there were none (2026-11-13 saved boards walkthrough, task
+// 5385). It takes the warning the Tasks entry shows for the same
+// failure instead, named for a screen reader.
+function BoardsRailCount({ count, error }) {
+  if (error && count === 0) {
+    return (
+      <WarningAmberIcon
+        color="warning"
+        className="rail-count"
+        data-testid="rail-boards-load-failed"
+        titleAccess={`Boards could not be loaded (${error})`}
+        sx={{ fontSize: "0.95rem", ml: 0.5 }}
+      />
+    );
+  }
+  return <RailCount value={count} />;
+}
+
 // FooterItem is one of the three destinations at the foot of the rail:
 // its figure, its label, and whatever the entry hangs on the right-hand
 // edge. The colour rule sits on the button rather than on the label, and
@@ -626,6 +647,9 @@ export default function Sidebar({
   processTriggers = [],
   ciRuns = [],
   boards = [],
+  // Why GET /api/boards last failed, or null. With no boards held it
+  // puts a warning where the count goes (BoardsRailCount).
+  boardsError = null,
   openBoardId = null,
   onOpenBoard,
   // The standing sessions this deployment keeps open -- the director
@@ -1485,7 +1509,10 @@ export default function Sidebar({
                       fontWeight: 500,
                     }}
                   />
-                  <RailCount value={visibleBoards.length} />
+                  <BoardsRailCount
+                    count={visibleBoards.length}
+                    error={boardsError}
+                  />
                 </ListItemButton>
               );
             }
@@ -1728,7 +1755,10 @@ export default function Sidebar({
                   fontWeight: 500,
                 }}
               />
-              <RailCount value={visibleBoards.length} />
+              <BoardsRailCount
+                count={visibleBoards.length}
+                error={boardsError}
+              />
             </ListItemButton>
           )}
 

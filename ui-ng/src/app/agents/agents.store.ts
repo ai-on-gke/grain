@@ -69,8 +69,9 @@ export class AgentsStore implements OnDestroy {
     const now = this.now();
     const d = this.details();
     const r = this.readings();
+    const hostCpus = this.host()?.cpus;
     return running(this.tasks()).map((t) =>
-      toAgent(t, d[t.id] ?? null, r, now),
+      toAgent(t, d[t.id] ?? null, r, now, hostCpus),
     );
   });
 

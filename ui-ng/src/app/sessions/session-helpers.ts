@@ -171,8 +171,19 @@ export function errorText(err: unknown): string {
   const e = err as {
     error?: { error?: string; message?: string } | string;
     message?: string;
+    status?: number;
+    statusText?: string;
   };
   if (typeof e?.error === "string" && e.error) return e.error;
+  // An error answer whose body is not JSON -- a proxy's HTML 502 page, a
+  // plain-text 500 -- reaches here as the parser's SyntaxError ("Unexpected
+  // token '<' ..."), which says nothing about what went wrong: name the
+  // HTTP status instead.
+  if (e?.error instanceof Error && typeof e.status === "number" && e.status) {
+    const text =
+      e.statusText && e.statusText !== "OK" ? ` ${e.statusText}` : "";
+    return `The server answered ${e.status}${text}.`;
+  }
   if (e?.error && typeof e.error === "object") {
     const m = e.error.error ?? e.error.message;
     if (m) return m;

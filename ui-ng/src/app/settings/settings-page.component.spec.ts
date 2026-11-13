@@ -555,8 +555,26 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       api.calls.some((c) => c.key === "DELETE /api/upgrade/scheduled"),
     ).toBe(true);
 
+    // Start upgrade asks first (2026-11-13 deployment-operations
+    // walkthrough, task 5390): Cancel sends nothing, the accept starts it.
+    const startUpgrade = () =>
+      el
+        .querySelector<HTMLButtonElement>('[data-testid="start-upgrade-btn"]')!
+        .click();
+    startUpgrade();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Upgrade grain to");
     el.querySelector<HTMLButtonElement>(
-      '[data-testid="start-upgrade-btn"]',
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(api.calls.some((c) => c.key === "POST /api/upgrade")).toBe(false);
+    startUpgrade();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
     )!.click();
     await new Promise((r) => setTimeout(r, 200));
     expect(api.calls.some((c) => c.key === "POST /api/upgrade")).toBe(true);
