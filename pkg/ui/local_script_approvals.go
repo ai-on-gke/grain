@@ -691,6 +691,11 @@ func (s *Server) recordLocalScriptEvent(ctx context.Context, typ model.Integrati
 	if s.tasks == nil {
 		return
 	}
+	if _, ok := model.EventActorFromContext(ctx); !ok {
+		if _, hasPrincipal := PrincipalFromContext(ctx); hasPrincipal {
+			ctx = model.WithEventActor(ctx, RequestActor(ctx))
+		}
+	}
 	s.tasks.recordLocalScriptEvent(ctx, typ, a)
 }
 

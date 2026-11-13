@@ -349,3 +349,97 @@ func TestEventsAttributeACallersOwnExpiry(t *testing.T) {
 		t.Fatalf("expiry attributed to %s %q, want the caller %s %q", answered.ActorKind, answered.Actor, pending.ActorKind, pending.Actor)
 	}
 }
+
+// A real host-script server authenticates to /local-script-approvals and
+// /expire with a task-scoped ghsa_ callback token (MintToken), which takes
+// serveHTTP's early callback path rather than the normal request gate. Its
+// local_script.pending and caller-driven /expire must name the task's agent
+// principal, while a sweep expiry still names grain.
+func TestEventsAttributeACallbackTokensOwnExpiry(t *testing.T) {
+	t.Parallel()
+	_, store, ctx := localScriptsClient(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	approvals := &ui.LocalScriptApprovals{}
+	client := ui.NewClient(ui.Config{
+		Actor:                ui.DefaultActor("alice"),
+		DefaultTarget:        &repo,
+		Capabilities:         ui.OfferedCapabilities(),
+		LocalAPIToken:        "daemon-secret-token",
+		LocalScriptApprovals: approvals,
+	}, store)
+	task := create(t, client, ctx)
+	grantLocalScripts(t, store, ctx, task.ID)
+	handler := ui.NewServerWithClient(client)
+
+	cbTok, err := approvals.MintToken(task.ID, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cbHdr := map[string]string{
+		"Authorization": "Bearer " + cbTok,
+		"Content-Type":  "application/json",
+	}
+	opHdr := map[string]string{
+		"Authorization": "Bearer daemon-secret-token",
+	}
+
+	head, err := store.LatestIntegrationEventID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Caller expires its own pending call via its ghsa_ callback token.
+	createRec := doWithHeaders(t, handler, http.MethodPost,
+		"/api/tasks/"+task.ID+"/local-script-approvals",
+		`{"id":"1","tool":"host_script","script":"deploy","deadline":"`+time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)+`"}`,
+		cbHdr)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("requesting approval with callback token: %d %s", createRec.Code, createRec.Body.String())
+	}
+	var first ui.LocalScriptApproval
+	if err := json.Unmarshal(createRec.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	expireRec := doWithHeaders(t, handler, http.MethodPost,
+		"/api/tasks/"+task.ID+"/local-script-approvals/"+first.ID+"/expire", `{}`, cbHdr)
+	if expireRec.Code != http.StatusOK {
+		t.Fatalf("expiring approval with callback token: %d %s", expireRec.Code, expireRec.Body.String())
+	}
+
+	// 2. Sweep settles a second call past its deadline before /expire arrives.
+	createRec2 := doWithHeaders(t, handler, http.MethodPost,
+		"/api/tasks/"+task.ID+"/local-script-approvals",
+		`{"id":"2","tool":"host_script","script":"slow","deadline":"`+time.Now().Add(200*time.Millisecond).UTC().Format(time.RFC3339Nano)+`"}`,
+		cbHdr)
+	if createRec2.Code != http.StatusOK {
+		t.Fatalf("requesting second approval: %d %s", createRec2.Code, createRec2.Body.String())
+	}
+	var second ui.LocalScriptApproval
+	if err := json.Unmarshal(createRec2.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(350 * time.Millisecond)
+	if rec := doWithHeaders(t, handler, http.MethodGet, "/api/tasks/"+task.ID, "", opHdr); rec.Code != http.StatusOK {
+		t.Fatalf("reading task: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := doWithHeaders(t, handler, http.MethodPost,
+		"/api/tasks/"+task.ID+"/local-script-approvals/"+second.ID+"/expire", `{}`, cbHdr); rec.Code != http.StatusOK {
+		t.Fatalf("expiring second approval: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec := doWithHeaders(t, handler, http.MethodGet,
+		"/api/events?since="+itoa(head)+"&types=local_script.pending,local_script.answered", "", opHdr)
+	events := apiEventsOf(t, rec.Code, rec.Body.String())
+	if len(events) != 4 {
+		t.Fatalf("events = %+v, want 4", events)
+	}
+	for i, ev := range events[:3] {
+		if ev.ActorKind != model.PrincipalAgent || ev.Actor != task.ID || ev.ActorSource != model.SourceInternal {
+			t.Fatalf("events[%d] (%s %s) actor = {%s %q %s}, want {agent %q internal}",
+				i, ev.Type, ev.ApprovalID, ev.ActorKind, ev.Actor, ev.ActorSource, task.ID)
+		}
+	}
+	if sweeper := events[3]; sweeper.ActorKind != model.PrincipalAutomation || sweeper.Actor != "grain" {
+		t.Fatalf("sweep expiry actor = {%s %q}, want {automation \"grain\"}", sweeper.ActorKind, sweeper.Actor)
+	}
+}
