@@ -700,6 +700,9 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 		"finding with `add_review_comment` (supplying `path` and `line` for inline diff findings). " +
 		"If the pull request looks clean with no findings, summarize what you checked via `comment_on_issue`.")
 
+	b.WriteString(earlierReviewsSection(ctx, deps.Store, deps.Client, r.shepherdTask, ref, headSHA, id))
+	b.WriteString(parallelReviewsSection(parallelReviewsFor(ctx, deps.Store, r.shepherdTask, ref, headSHA, id)))
+
 	task := model.Task{
 		ID:         id,
 		Intent:     model.IntentReview,
@@ -713,6 +716,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 		Base:       base,
 		WorkOrigin: model.GitHubOrigin(repo, number),
 		Grants:     grants,
+		Tags:       addReviewHeadTag(nil, headSHA),
 		Links:      links,
 		CreatedAt:  &now,
 		OrderKey:   orderKey,
@@ -723,6 +727,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	if err := deps.Store.PutTask(ctx, task); err != nil {
 		return "", fmt.Errorf("filing external PR review task %s: %w", task.ID, err)
 	}
+	syncParallelReviewBodies(ctx, deps.Store, r.shepherdTask, ref, headSHA)
 	log.Printf("orchestrator: filed external PR review task %s (trusted=%v) for %s", task.ID, trusted, ref)
 	return task.ID, nil
 }
