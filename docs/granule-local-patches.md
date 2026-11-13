@@ -27,16 +27,33 @@ the resync that carries it lands.
 
 ## Synced at
 
-`gke-labs/granule` `main` at `1e60085` (`1e60085da2dcf946bd7c070fd009a0120fa02c8c`,
-"Merge pull request #254 from gke-labs/grain/098073e4/task-3941-rebuild-granule-guest-binaries",
-2026-11-10).
+`gke-labs/granule` `main` at `ccdbc4b` (`ccdbc4b77525a7f78e10e36f1b30efe35194f4c1`,
+"Merge pull request #256 from gke-labs/grain/098073e4/task-4451-dockervm-treat-removal-of",
+2026-11-12).
 
-The tree was replaced wholesale from a `git archive` of `1e60085` with no
+The tree was replaced wholesale from a `git archive` of `ccdbc4b` with no
 local patches on top -- `third_party/granule` is byte-identical to upstream
-(grain task 3942). The previous sync was `1463ed6` (`1463ed60`, grain task
-3350).
+(grain task 4452). The previous sync was `1e60085` (`1e60085d`, grain task
+3942).
 
-This sync carries PRs #245–#254 on top of `1463ed6`:
+This sync carries PRs #255–#256 on top of `1e60085`:
+- `pkg/dockervm`'s `docker rm -f` and `docker stop` treat docker's
+  "removal of container ... is already in progress" as a removal under
+  way, and wait (up to a minute, or until ctx ends) for `docker inspect`
+  to stop finding the container, so `granule vm delete` racing another
+  delete of the same VM clears the saved state instead of failing
+  (gke-labs/granule#256). grain's `granule.Command.Delete` dropped the
+  retry loop it carried for this (grain task 4395) and is a plain
+  pass-through again.
+- granule's own `.grain/` gains a gating `pr-review` trigger and template
+  (gke-labs/granule#255); it only applies to granule's repository.
+
+`go.sum` and `vendor/` are unchanged, and `pkg/guestimage`'s contract is
+untouched, so `scripts/granule/build-granule-image.sh` and
+`scripts/granule/guest-inputs.sh` need no change.
+
+### What the `1e60085` sync carried
+
 - granule's guest binaries (`granule-shim`, `granule-agent`,
   `granule-container`, `granule-mem-agent`) are built on
   `golang:1.26-bookworm` rather than go1.22, and `go.mod` says `go 1.25.13`
@@ -51,10 +68,6 @@ This sync carries PRs #245–#254 on top of `1463ed6`:
   `test/sandbox-access-vm.sh`, `test/granulefiles/run.sh`,
   `benchmarks/microbenchmarks`, the stale `docs/konturfile.md` removed;
   gke-labs/granule#245–#251).
-
-`go.sum` and `vendor/` are unchanged, and `pkg/guestimage`'s contract is
-untouched, so `scripts/granule/build-granule-image.sh` and
-`scripts/granule/guest-inputs.sh` need no change.
 
 ### What the `1463ed6` sync carried
 
