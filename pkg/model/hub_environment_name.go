@@ -49,6 +49,23 @@ func (c *Config) AdoptHubEnvironmentName(name string) bool {
 	return true
 }
 
+// WithHubEnvironmentNameOf is c carrying the name a Grain Hub gave prior,
+// a grain_config row written before c replaced it: the first start's
+// adoptDefaultEnvironmentName (pkg/daemon) writes a row holding nothing but
+// the hub's name, and seeding the configuration from flags over that row
+// (pkg/daemon.LoadConfig) would otherwise drop it, leaving a freshly
+// provisioned hosted instance unnamed until its next restart. A name prior's
+// operator set, or one c already holds, is left alone, as
+// AdoptHubEnvironmentName leaves it.
+func (c Config) WithHubEnvironmentNameOf(prior Config) Config {
+	hub := strings.TrimSpace(prior.HubEnvironmentName)
+	if hub == "" || strings.TrimSpace(prior.EnvironmentName) != hub {
+		return c
+	}
+	c.AdoptHubEnvironmentName(hub)
+	return c
+}
+
 // AdoptHubEnvironmentName applies a hub-supplied default environment name
 // to the stored config (Config.AdoptHubEnvironmentName), writing only when
 // it changes something, and reports whether it did.

@@ -916,7 +916,31 @@ func (a actionsExternalRuns) FindExternalRunsCounted(ctx context.Context, f ci.R
 		}
 		return nil, 0, refused.reason
 	}
-	return a.c.listActionsRunsCounted(ctx, repo, f, limit)
+	runs, matched, note := a.c.listActionsRunsCounted(ctx, repo, f, limit)
+	if repair := a.c.openBaseRepairNote(ctx, repo, f.Ref); repair != "" {
+		if note != "" {
+			note += "; "
+		}
+		note += repair
+	}
+	return runs, matched, note
+}
+
+// openBaseRepairNote is what a listing of ref's runs says about repo's
+// open default-branch repair (orchestrator's githubbaserepair.go), or "":
+// "repair task <id> is open for the red <ref>", which the release train
+// repeats when it has no known-good commit to cut (release-from-trunk.sh).
+func (c *Client) openBaseRepairNote(ctx context.Context, repo model.RepoRef, ref string) string {
+	ref = strings.TrimPrefix(strings.TrimSpace(ref), "refs/heads/")
+	if c.Store == nil || (ref != "main" && ref != "master") {
+		return ""
+	}
+	ids, err := c.Store.OpenTasksWithTag(ctx, model.GitHubBaseRepairTag(repo))
+	if err != nil || len(ids) == 0 {
+		return ""
+	}
+	sort.Strings(ids)
+	return fmt.Sprintf("repair task %s is open for the red %s", ids[0], ref)
 }
 
 var _ ci.ExternalRunsRepos = actionsExternalRuns{}

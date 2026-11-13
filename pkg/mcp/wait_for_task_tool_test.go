@@ -200,6 +200,12 @@ func TestWaitForTaskParksAWaitTheRunCannotAfford(t *testing.T) {
 	if len(w.parked) != 1 {
 		t.Fatalf("parked %v, want one park", w.parked)
 	}
+	// The condition as taken rides on the result -- with the links the
+	// park wrote, where the daemon reports any -- for processResult to
+	// record (ResumeLaterTaken).
+	if taken, ok := ResumeLaterTaken(res.Text); !ok || len(taken.Tasks) != 1 || taken.Tasks[0] != "4944" {
+		t.Fatalf("taken = %+v, %v; want tasks [4944] read back off the result", taken, ok)
+	}
 }
 
 func TestWaitForTaskIDsNormalizes(t *testing.T) {

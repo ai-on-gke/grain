@@ -144,7 +144,7 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	}
 
 	if headSHA == "" {
-		detail, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil {
 			log.Printf("orchestrator: reading %s's head before classifying it: %v -- "+
 				"it is classified again before it merges", ref, err)
@@ -153,7 +153,7 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 		}
 	}
 
-	files, err := client.ListPullRequestFiles(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	files, err := client.ListPullRequestFiles(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	known := err == nil && len(files) < github.PullRequestFilesCap
 	if err != nil {
 		log.Printf("orchestrator: reading which files %s touches: %v -- holding it for a "+
@@ -389,7 +389,7 @@ func securityHoldNote(ctx context.Context, store *model.Store, client github.Cli
 		return nil
 	}
 	prBody = fmt.Sprintf("**grain security hold** (task %s)\n\n%s", taskID, prBody)
-	if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, prBody); err != nil {
+	if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, prBody); err != nil {
 		log.Printf("orchestrator: noting %s's security hold on %s: %v -- it is on the task only", taskID, ref, err)
 	}
 	return nil
@@ -604,10 +604,10 @@ func settleSecurityHold(ctx context.Context, store *model.Store, client github.C
 		}
 		advancedClearance = clearedTarget(reviewerHead, repoRulesFor(ctx, store, *task.Target))
 	} else if clean && pushed && landed && ref != nil && client != nil && task.Target != nil {
-		if detail, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number); err == nil && detail.HeadSHA != "" {
+		if detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number); err == nil && detail.HeadSHA != "" {
 			_, recordedSHA, ok := strings.Cut(linkTarget(task, model.LinkTrustBoundaryCleared), "@")
 			if ok && recordedSHA != "" && detail.HeadSHA != recordedSHA {
-				files, ferr := client.ListPullRequestFiles(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+				files, ferr := client.ListPullRequestFiles(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 				known := ferr == nil && len(files) < github.PullRequestFilesCap
 				matches := trustboundary.Classify(files)
 				rules, guarded := repoGuard(ctx, store, client, *task.Target, files, known)
@@ -942,10 +942,10 @@ func loadConfigRepoAutoMergePaths(client github.Client, repo model.RepoRef) []st
 		return nil
 	}
 	base := "main"
-	if def, err := client.DefaultBranch(repo.Owner, repo.Name); err == nil && strings.TrimSpace(def) != "" {
+	if def, err := client.DefaultBranch(repo.StoredOwner(), repo.Name); err == nil && strings.TrimSpace(def) != "" {
 		base = strings.TrimSpace(def)
 	}
-	data, exists, err := reader.ReadFile(repo.Owner, repo.Name, base, trustboundary.ConfigPolicyPath)
+	data, exists, err := reader.ReadFile(repo.StoredOwner(), repo.Name, base, trustboundary.ConfigPolicyPath)
 	if err != nil {
 		log.Printf("orchestrator: reading %s from %s@%s: %v -- holding all config paths for human Submit",
 			trustboundary.ConfigPolicyPath, repo, base, err)

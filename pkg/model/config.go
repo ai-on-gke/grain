@@ -1028,6 +1028,10 @@ type Config struct {
 	// configured, requiring changes to go through config pull requests.
 	// False by default so settings remain editable from the UI and API.
 	SettingsLocked bool `json:"settings_locked"`
+	// QA configures the deployment-wide quality control engine and PR rollout
+	// experiment (qa.go). Zero value keeps the engine completely off with zero
+	// runtime overhead on dispatch or git pushes. Stored as JSON in grain_config.qa.
+	QA QAConfig `json:"qa"`
 }
 
 // Default Kubernetes sandbox configuration values.

@@ -32,5 +32,5 @@ Where things are in `ui-ng/`:
 - Read `design/design/ui-design-book.design.md` (brand, tokens, layout, review mandate) and `design/design/angular-ui.design.md` before changing anything.
 - Develop: `cd ui-ng && npm ci && npm start` runs `ng serve` (port 4200 by default) and proxies `/api` to a grain on `127.0.0.1:8080` (`proxy.conf.json`). `make frontend` builds it into `pkg/ui/static-next`.
 - Unit tests and lint: `cd ui-ng && npm run lint && npm test` (vitest). Formatting: `npm run format:check`.
-- E2E: the `/next/` Playwright specs live beside the classic ones as `ui/e2e/next-*.spec.js`. Run them with `npm --prefix ui run test:e2e:next`, and add a new spec to that script. `ui/e2e/next-full-system.spec.js` must pass for every `ui-ng/` change.
+- E2E: the `/next/` Playwright specs live in `ui-ng/e2e/` (`ui-ng/playwright.config.ts`, CI job `ui-ng e2e`). Run them with `make test-e2e-ng`; a new `*.spec.ts` there is picked up on its own. `ui-ng/e2e/next-full-system.spec.js` must pass for every `ui-ng/` change.
 - Screenshots: `make ui-screenshots PAGES=/next/inbox,/next/tasks OUT=screenshots/after` (`docs/ui-screenshots.md`).

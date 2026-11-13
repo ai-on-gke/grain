@@ -180,7 +180,7 @@ func (o *PullRequestOpener) Comment(ctx context.Context, ref, body string) error
 	if err != nil {
 		return err
 	}
-	_, err = o.Client.CreateComment(pr.Repo.Owner, pr.Repo.Name, pr.Number, body)
+	_, err = o.Client.CreateComment(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number, body)
 	return err
 }
 
@@ -198,7 +198,7 @@ func (o *PullRequestOpener) Close(ctx context.Context, ref string) error {
 	if err != nil {
 		return err
 	}
-	return o.Client.ClosePullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number)
+	return o.Client.ClosePullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number)
 }
 
 // pullRequestGate is the ui.Config.PullRequests the UI/API server is

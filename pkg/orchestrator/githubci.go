@@ -304,6 +304,9 @@ func reconcileGitHubCITails(ctx context.Context, deps Deps, now time.Time) error
 	if err := reconcileStage1Repairs(ctx, deps, now); err != nil {
 		errs = append(errs, err)
 	}
+	if err := reconcileGitHubBaseRepairs(ctx, deps, now); err != nil {
+		errs = append(errs, err)
+	}
 	if err := reconcileReleaseLoopIdle(ctx, deps, now); err != nil {
 		errs = append(errs, err)
 	}
@@ -372,9 +375,13 @@ func annotateGitHubSharedFaults(ctx context.Context, deps Deps, now time.Time) e
 			errs = append(errs, err)
 			continue
 		}
+		// Noted already when the same sentence was said about this same
+		// commit: a new commit failing the same way is a new verdict, and
+		// its marker is what rerunSharedFaultRed reads back.
+		marker := sharedFaultMarker(run.Commit, sharedFaultJobs(run, faults))
 		alreadyNoted := false
 		for _, c := range comments {
-			if strings.Contains(c.Body, shared) {
+			if strings.Contains(c.Body, shared) && strings.Contains(c.Body, sharedFaultMarkerPrefix(run.Commit)) {
 				alreadyNoted = true
 				break
 			}
@@ -383,10 +390,10 @@ func annotateGitHubSharedFaults(ctx context.Context, deps Deps, now time.Time) e
 			continue
 		}
 		commit := shortSHA(run.Commit)
-		taskBody := fmt.Sprintf("GitHub CI failure at `%s`.\n\n%s", commit, shared)
+		taskBody := fmt.Sprintf(sharedFaultCommentLead+"%s`.\n\n%s\n\n%s", commit, shared, marker)
 		if _, err := deps.Store.AddComment(ctx, model.Comment{
 			TaskID:    task.ID,
-			Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
+			Author:    model.Attribution{Actor: sharedFaultAnnotator},
 			Body:      taskBody,
 			CreatedAt: now,
 		}); err != nil {
@@ -401,7 +408,7 @@ func annotateGitHubSharedFaults(ctx context.Context, deps Deps, now time.Time) e
 		if prBody == "" {
 			continue
 		}
-		if _, err := deps.Client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, prBody); err != nil {
+		if _, err := deps.Client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, prBody); err != nil {
 			errs = append(errs, fmt.Errorf("orchestrator: commenting GitHub CI shared fault on %s: %w", ref, err))
 		}
 	}
@@ -585,6 +592,11 @@ func pollConcludedGitHubWorkflowRuns(ctx context.Context, deps Deps, now time.Ti
 				}
 			}
 		}
+		if ok, err := gitHubActionsJudges(ctx, deps.Store, repo); err == nil && ok {
+			if def, err := gitHubBasePollDefaultBranch(deps, repo, now); err == nil && def != "" {
+				branches = appendUniquePollBranch(branches, def)
+			}
+		}
 		for _, branch := range branches {
 			if err := ctx.Err(); err != nil {
 				errs = append(errs, err)
@@ -722,6 +734,13 @@ func gitHubWorkflowRunPollTargets(ctx context.Context, store *model.Store) ([]gi
 			}
 		}
 	}
+	if configs, err := store.ListRepoConfigs(ctx); err == nil {
+		for _, c := range configs {
+			if c.CIMode == model.CIModeGitHub {
+				add(c.Repo)
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -752,8 +771,10 @@ func isGitHubBranchWorkflowEvent(event string) bool {
 
 // handleConcludedGitHubWorkflowRun deduplicates a concluded workflow run by
 // (repo, run_id, attempt), ensures its jobs and failure tails are recorded in
-// github_ci_job, fires any matching github_workflow_run schedules, and checks
-// release triage parity on the base branch.
+// github_ci_job, fires any matching github_workflow_run schedules, checks
+// release triage parity on the base branch, and files or updates the
+// repairs of a red Stage 1 (stage1repair.go) or a red default branch
+// (githubbaserepair.go).
 func handleConcludedGitHubWorkflowRun(ctx context.Context, deps Deps, run ConcludedGitHubWorkflowRun, now time.Time) error {
 	if deps.Store == nil || run.RunID == 0 || run.Conclusion == "" {
 		return nil
@@ -782,6 +803,9 @@ func handleConcludedGitHubWorkflowRun(ctx context.Context, deps Deps, run Conclu
 		errs = append(errs, err)
 	}
 	if err := handleStage1Verdict(ctx, deps, run, jobs, now); err != nil {
+		errs = append(errs, err)
+	}
+	if err := handleGitHubBaseVerdict(ctx, deps, run, jobs, now); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)

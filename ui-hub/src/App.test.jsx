@@ -1937,6 +1937,84 @@ describe("Entry detail auto-refresh", () => {
     );
   });
 
+  it("treats an edit the server has caught up with as synced, with no overwrite hint", async () => {
+    let entry = { ...sampleEntries[0] };
+    serveEntry(entry.name, () => entry);
+    renderApp(`/entries/${entry.name}`);
+    const displayInput = await screen.findByLabelText("Display name");
+    fireEvent.change(displayInput, { target: { value: "Agreed name" } });
+
+    // Somebody else saved the very same value.
+    entry = { ...entry, display_name: "Agreed name" };
+    await advance(20000);
+    await waitFor(() =>
+      expect(screen.getByTestId("entry-refresh-status")).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("server-changed-displayName")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Discard my edits" }),
+    ).toBeNull();
+
+    // In sync again, the next server change is written to the field.
+    entry = { ...entry, display_name: "Changed again" };
+    await advance(20000);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Display name")).toHaveValue(
+        "Changed again",
+      ),
+    );
+  });
+
+  it("drops a poll that answers for the entry the page has navigated away from", async () => {
+    const a = { ...sampleEntries[0], name: "entry-a", display_name: "Entry A" };
+    const b = { ...sampleEntries[0], name: "entry-b", display_name: "Entry B" };
+    let releaseA = null;
+    let aCalls = 0;
+    let bCalls = 0;
+    globalThis.fetch = createFetchMock({
+      "GET /api/entries/entry-a": () => {
+        aCalls += 1;
+        if (aCalls === 1)
+          return new Response(JSON.stringify(a), { status: 200 });
+        // The background poll for entry-a hangs until released.
+        return new Promise((resolve) => {
+          releaseA = () =>
+            resolve(new Response(JSON.stringify(a), { status: 200 }));
+        });
+      },
+      "GET /api/entries/entry-b": () => {
+        bCalls += 1;
+        return new Response(JSON.stringify(b), { status: 200 });
+      },
+    });
+    renderApp("/entries/entry-a");
+    expect(await screen.findByLabelText("Display name")).toHaveValue("Entry A");
+
+    await advance(20000);
+    await waitFor(() => expect(releaseA).not.toBeNull());
+
+    // Navigate to entry-b (a scope-conflict link does this in place).
+    act(() => {
+      window.history.pushState(null, "", "/entries/entry-b");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Display name")).toHaveValue("Entry B"),
+    );
+
+    // entry-a's late answer must not land on entry-b's page and form.
+    await act(async () => {
+      releaseA();
+    });
+    await advance(0);
+    expect(screen.getByLabelText("Display name")).toHaveValue("Entry B");
+    expect(screen.queryByTestId("lifecycle-badge-entry-a")).toBeNull();
+
+    // ...nor hold up entry-b's own polling.
+    await advance(20000);
+    await waitFor(() => expect(bCalls).toBe(2));
+  });
+
   it("keeps showing the last good entry with a subtle indicator when a poll fails", async () => {
     const entry = { ...sampleEntries[0] };
     let fail = false;
