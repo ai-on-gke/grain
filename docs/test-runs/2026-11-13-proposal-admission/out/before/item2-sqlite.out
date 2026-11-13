@@ -1,0 +1,24 @@
+== seed pre-change proposal rows
+-- POST /api/tasks/3/approve
+400
+{"error":"task 3 cannot be approved holding https://grain.dev/capabilities/repo#write={\"repo\":\"acme/widgets\"}: https://grain.dev/capabilities/repo#write={\"repo\":\"acme/widgets\"} is a CI capability, not a task grant: it gives a CI job push access to another repository, released only to a release, a workflow_dispatch or grain's own scheduled run -- a task run is none of them. A task that needs to push to acme/widgets names it in its writes instead: writes: [{repo: \"acme/widgets\"}]. Take it off this task. A CI job that needs it declares it in its own `capabilities:` in the repository's .grain/workflows file; the repos page's CI capabilities list does not grant it."}
+
+   state now: proposed
+-- POST /api/tasks/4/approve
+400
+{"error":"sandbox shape is above this deployment's maximum: sandboxDiskGb 500 (ceiling 100); ask for less, or have an operator raise sandboxShapeLimits in settings"}
+
+   state now: proposed
+-- POST /api/tasks/5/approve
+400
+{"error":"sandbox shape is above this deployment's maximum: sandboxCpus 16 (ceiling 2), sandboxMemoryMb 65536 (ceiling 4096); ask for less, or have an operator raise sandboxShapeLimits in settings"}
+
+   state now: proposed
+-- POST /api/tasks/6/approve
+400
+{"error":"task 6 cannot be approved holding repo-read:acme/gadgets: https://grain.dev/capabilities/repo#read={\"repo\":\"acme/gadgets\"} is a CI capability, not a task grant: it gives a CI job read access to another repository, and only a CI job is handed it -- a task run is not one. A task that needs to read acme/gadgets names it in its reads instead: reads: [\"acme/gadgets\"]. Take it off this task. A CI job that needs it declares it in its own `capabilities:` in the repository's .grain/workflows file; the repos page's CI capabilities list does not grant it."}
+
+   state now: proposed
+== run-now on an unapproved seeded proposal (the other approval route)
+{"error":"task 6 cannot be approved holding repo-read:acme/gadgets: https://grain.dev/capabilities/repo#read={\"repo\":\"acme/gadgets\"} is a CI capability, not a task grant: it gives a CI job read access to another repository, and only a CI job is handed it -- a task run is not one. A task that needs to read acme/gadgets names it in its reads instead: reads: [\"acme/gadgets\"]. Take it off this task. A CI job that needs it declares it in its own `capabilities:` in the repository's .grain/workflows file; the repos page's CI capabilities list does not grant it."}
+ 400

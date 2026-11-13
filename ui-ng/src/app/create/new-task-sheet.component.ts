@@ -1041,14 +1041,28 @@ const FRAMEWORKS: readonly PillOption[] = [
           <label class="field">
             <span>{{ f.label || "Found in release" }}</span>
             <input
+              #foundInInput
               type="text"
               data-testid="nt-found-in"
               placeholder="v2.5.0-rc.2"
               autocomplete="off"
               spellcheck="false"
+              [attr.aria-invalid]="error()?.field === 'foundIn' ? 'true' : null"
+              [attr.aria-describedby]="
+                error()?.field === 'foundIn' ? 'nt-found-in-error' : null
+              "
               [value]="draft().foundIn"
               (input)="set('foundIn', val($event))"
             />
+            @if (error()?.field === "foundIn") {
+              <small
+                id="nt-found-in-error"
+                class="nt-field-error"
+                role="alert"
+                data-testid="nt-found-in-error"
+                >{{ error()!.message }}</small
+              >
+            }
           </label>
         }
         @case ("promptExtension") {
@@ -1125,6 +1139,8 @@ export class NewTaskSheetComponent {
     viewChild<ElementRef<HTMLInputElement>>("branchInput");
   private readonly shapeCpusInput =
     viewChild<ElementRef<HTMLInputElement>>("shapeCpus");
+  private readonly foundInInput =
+    viewChild<ElementRef<HTMLInputElement>>("foundInInput");
 
   private readonly knownTasks = computed(() => {
     const byId = new Map<string, Task>();
@@ -1789,10 +1805,17 @@ export class NewTaskSheetComponent {
     const problem = validate(d, this.fields(), tmpl, tvals);
     if (problem) {
       this.error.set(problem);
-      (problem.field === "title"
-        ? this.titleInput()
-        : this.branchInput()
-      )?.nativeElement.focus();
+      if (problem.field === "foundIn") {
+        if (this.fields().foundIn.visibility === "more") {
+          this.moreOpen.set(true);
+        }
+        queueMicrotask(() => this.foundInInput()?.nativeElement.focus());
+      } else {
+        (problem.field === "title"
+          ? this.titleInput()
+          : this.branchInput()
+        )?.nativeElement.focus();
+      }
       return;
     }
     this.busy.set(true);
@@ -1888,7 +1911,9 @@ export class NewTaskSheetComponent {
       this.svc.close();
       this.announce(created, d.approved, !!d.workstream);
     } catch (err) {
-      const message = `The task was not filed: ${errorText(err)}`;
+      const msg = errorText(err);
+      const message = `The task was not filed: ${msg}`;
+      const isFoundIn = /found[- ]in|release tag/i.test(msg);
       if (isSandboxShapeRefusal(message) && !this.shapeIgnored()) {
         // Said beside the fields it is about, opening "More options" if
         // that is where they are, rather than at the top of the sheet.
@@ -1900,7 +1925,10 @@ export class NewTaskSheetComponent {
           input?.focus();
         });
       } else {
-        this.error.set({ field: "title", message });
+        if (isFoundIn && this.fields().foundIn.visibility === "more") {
+          this.moreOpen.set(true);
+        }
+        this.error.set({ field: isFoundIn ? "foundIn" : "form", message });
       }
     } finally {
       this.busy.set(false);

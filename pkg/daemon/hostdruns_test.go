@@ -212,3 +212,96 @@ func TestRunOnANonDefaultHostdIsReadoptedFromThatHostd(t *testing.T) {
 		t.Fatalf("re-attaching pinned-1 on box-b = (%q, %v), want it run to its end there", out, err)
 	}
 }
+
+// A hostd that is away for the adoption pass leaves its runs to
+// RecoverOrphanedRunsExcept, and the pass names them (adoptionPass.away);
+// cancelAbandoned, started once those runs are finished, cancels their
+// processes once the hostd answers -- even one back before the recovery.
+func TestAbandonedHostdRunsAreCancelledOnceRecoveredAndHostdIsBack(t *testing.T) {
+	t.Parallel()
+	client := serveTestHostd(t)
+
+	ctx := context.Background()
+	store, db, err := OpenStore("sqlite", "", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	previous := &runhost.Hostd{Client: client, CursorEvery: time.Millisecond,
+		OnCursor: func(ctx context.Context, run string, n int64) {
+			_ = store.SetHostdCursor(ctx, run, n, time.Now().UTC())
+		}}
+	now := time.Now().UTC()
+	if err := store.PutTask(ctx, model.Task{ID: "away", Title: "away"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: "away-1", TaskID: "away", Sandbox: "away-1", Attempt: 1, StartedAt: now.Add(-time.Minute)}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	var tee lockedBuffer
+	runCtx := runhost.WithRun(ctx, runhost.Run{Task: "away", Run: "away-1", Deadline: now.Add(time.Hour)})
+	detached := make(chan error, 1)
+	go func() {
+		_, err := previous.Host(agent.LocalHost{}, "sh").Run(runCtx, agent.Command{Args: []string{"-c", "echo ready; sleep 30"}}, &tee)
+		detached <- err
+	}()
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(tee.String(), "ready\n"); {
+		if time.Now().After(deadline) {
+			t.Fatalf("away-1 never printed ready: %q", tee.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := previous.Flush(ctx); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	if err := <-detached; !errors.Is(err, agent.ErrDetached) {
+		t.Fatalf("detached run err = %v, want ErrDetached", err)
+	}
+
+	// The next daemon reaches the hostd through a socket path that is not
+	// there yet: the hostd is mid-restart.
+	link := filepath.Join(t.TempDir(), "hostd.sock")
+	away := hostd.Client{Socket: link, Build: "test"}
+	next := testHostdRunSet(model.LocalHostd, map[string]*runhost.Hostd{model.LocalHostd: {Client: away}})
+	// Bounded well under hostd.Client's own dial retry, so the test does
+	// not wait that out.
+	actx, cancelAdopt := context.WithTimeout(ctx, time.Second)
+	pass, _, err := adoptAll(actx, store, nil, nil, next, orchestrator.NewHostSandboxes(t.TempDir()))
+	cancelAdopt()
+	var awayErr *orchestrator.HostdAwayError
+	if !errors.As(err, &awayErr) {
+		t.Fatalf("adoptAll err = %v, want a HostdAwayError", err)
+	}
+	if len(pass.took) != 0 || len(pass.away) != 1 || strings.Join(pass.away[0].abandoned, ",") != "away-1" {
+		t.Fatalf("pass = %+v, want away-1 left, and named, for the hostd that did not answer", pass)
+	}
+	// Back before its runs are recovered: had anything started cancelling
+	// already, it would find away-1 still live and spare it for good.
+	if err := os.Symlink(client.Socket, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.RecoverOrphanedRunsExcept(ctx, store, nil, time.Now().UTC(), pass.took); err != nil {
+		t.Fatal(err)
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	t.Cleanup(cancel)
+	pass.cancelAbandoned(cctx, store)
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		procs, err := client.Processes(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		left := false
+		for _, p := range procs {
+			left = left || p.Run == "away-1"
+		}
+		if !left {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("away-1's process is still in hostd: %+v", procs)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

@@ -994,7 +994,7 @@ _No flags._
 - `metrics [-window 7d | -since t -until t] [-repo R]… [-author A]…` calls `GET /api/metrics`. It prints throughput, latency, prompt sizes and sandbox cost, and says what it was scoped to. An impossible span is refused before the daemon is asked.
 - `failures [-window 7d] [-suspect]` calls `GET /api/unmatched-failures` and prints what runs said when they failed for a reason grain could not name.
 - `usage` calls `GET /api/usage` and prints token usage per connection and model: used in the window, the limit (configured, or learned from a provider's refusal and marked `~`), what is left, the next reset, the burn rate and the workers the remainder sustains, then the deployment rollup, the advisory estimate and warnings for default-list models about to run out. `-mode`, `-min-workers`, `-retention-days`, `-budget` (repeatable, replacing every budget) and `-clear-budgets` change the settings with `PUT /api/usage/settings` first. `-json` prints the whole response.
-- `health` calls `GET /api/sandboxes` and prints its `counters`: each section a layer built on grain registered with `ui.RegisterHealthCounters`, sorted by key. They are in-process counts since the daemon started. `-json` prints the whole response.
+- `health` calls `GET /api/sandboxes` and prints its `counters`: each section a layer built on grain registered with `ui.RegisterHealthCounters`, sorted by key. They are in-process counts since the daemon started. `-json` prints the whole response. Before them it prints a `FAILING:` section for each failing check -- dispatch blocked, capability servers out of use, schedules with no run in more than twice their cadence, repository declarations not read in full -- and `WARNING:`/`ALERT:` sections for the rest. It exits `1` whenever a `FAILING` check is present, text or `-json` (on stderr `grain: health: failing: <checks>` in text mode; nothing extra under `-json`), and `0` when there are only warnings or nothing at all, so a monitoring script reads the verdict from the status. A `set -e` script that only wants the report writes `grain health || true`.
 
 <!-- BEGIN GENERATED FLAGS: grain metrics -->
 | Flag | Type | Default | Env | Description |
@@ -1028,7 +1028,7 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/metrics_test.go`: `TestPrintMetricsSaysWhatItWasScopedTo`, `TestRunCLIMetricsScopesTheReport`, `TestRunCLIMetricsTakesAnAbsoluteSpan`, `TestCmdMetricsRejectsAnImpossibleSpanBeforeAsking`; `pkg/cli/failures_test.go`: `TestPrintFailures`, `TestPrintFailuresJSON`; `pkg/cli/health_test.go`: `TestGrainHealthShowsRegisteredCountersUntilUnregistered`; `pkg/cli/usage_cmd_test.go`: `TestParseBudget`, `TestGrainUsageShowsAndSets`.
+**Pinned by:** `pkg/cli/metrics_test.go`: `TestPrintMetricsSaysWhatItWasScopedTo`, `TestRunCLIMetricsScopesTheReport`, `TestRunCLIMetricsTakesAnAbsoluteSpan`, `TestCmdMetricsRejectsAnImpossibleSpanBeforeAsking`; `pkg/cli/failures_test.go`: `TestPrintFailures`, `TestPrintFailuresJSON`; `pkg/cli/health_test.go`: `TestGrainHealthShowsRegisteredCountersUntilUnregistered`, `TestGrainHealthExitsOneWhenACheckIsFailing`; `pkg/cli/usage_cmd_test.go`: `TestParseBudget`, `TestGrainUsageShowsAndSets`.
 
 ### 4.12 `grain ci …` {#CLI-62}
 

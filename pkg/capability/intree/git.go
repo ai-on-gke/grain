@@ -33,6 +33,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
+	"github.com/ai-on-gke/grain/pkg/ports"
 )
 
 // GitTokenEnv is the environment variable the git server reads its root
@@ -40,8 +41,12 @@ import (
 // upstream git host with, bound in grain/config through $secret:<name>.
 const GitTokenEnv = "GIT_REPO_TOKEN"
 
-// DefaultGitPort is the git server's data-plane port (§6.3).
-const DefaultGitPort = 9728
+// DefaultGitPort is the git server's data-plane port (§6.3) unless
+// -listen says otherwise. Not anywhere in the -sandbox-port-base block
+// (9728-9983 by default): the daemon binds that block itself, 9728 being
+// its own git proxy, and a sandbox reaches the proxy at 9728 on its
+// loopback, where this port is forwarded too.
+const DefaultGitPort = ports.Git
 
 // Argument patterns for mint_git-repo. Every one is anchored, and none
 // admits a quote, a space, a backslash or a leading dash, so each value
@@ -262,23 +267,46 @@ func newConfigurableGit(fallback GitConfig) (*Server, error) {
 	if listen == "" {
 		listen = "127.0.0.1:" + strconv.Itoa(DefaultGitPort)
 	}
-	addr, err := s.listen(listen, p)
-	if err != nil {
-		return nil, fmt.Errorf("git: %w", err)
+	// The listener is bound once there is a configuration to serve, as
+	// host-script's is: an unconfigured built-in holds no port, so it
+	// cannot collide with another grain process's on the same machine.
+	listening := false
+	ensureListen := func() error {
+		if listening {
+			return nil
+		}
+		addr, err := s.listen(listen, p)
+		if err != nil {
+			return fmt.Errorf("git: %w", err)
+		}
+		p.hostPort = addr.Port
+		if fallback.SandboxPort == 0 {
+			fallback.SandboxPort = addr.Port
+		}
+		listening = true
+		return nil
 	}
-	p.hostPort = addr.Port
-	if fallback.SandboxPort == 0 {
-		fallback.SandboxPort = addr.Port
-	}
-	if m, err := newGitMethod(fallback, p); err == nil {
-		if err := s.SetMethods(m); err != nil {
+	if _, err := checkGit(fallback); err == nil {
+		if err := ensureListen(); err != nil {
 			s.Close(context.Background())
 			return nil, err
 		}
-		s.Methods = []*protocol.Method{m}
-		s.Log.Printf("git: proxying %s on %s", p.origin(), addr)
+		if m, err := newGitMethod(fallback, p); err == nil {
+			if err := s.SetMethods(m); err != nil {
+				s.Close(context.Background())
+				return nil, err
+			}
+			s.Methods = []*protocol.Method{m}
+			s.Log.Printf("git: proxying %s on %s", p.origin(), s.addr)
+		}
 	}
 	err = s.configurable(gitConfigSchema, func(_ context.Context, config map[string]any) ([]*protocol.Method, error) {
+		if _, err := checkGit(withGitConfig(fallback, config)); err != nil {
+			return nil, err
+		}
+		if err := ensureListen(); err != nil {
+			return nil, err
+		}
 		m, err := newGitMethod(withGitConfig(fallback, config), p)
 		if err != nil {
 			return nil, err

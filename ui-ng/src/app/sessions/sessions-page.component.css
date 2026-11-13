@@ -277,8 +277,16 @@
   color: var(--md-sys-color-on-surface-variant);
 }
 
+@media (max-width: 839.95px) {
+  .sessions-split.has-canvas g-session-canvas {
+    top: 52px;
+    bottom: 92px;
+  }
+}
+
 @media (max-width: 599.95px), (max-height: 480px) and (orientation: landscape) {
-  .sessions-split {
+  .sessions-split,
+  .sessions-split.has-canvas {
     grid-template-columns: 1fr;
   }
   .sessions-split .chat-pane {

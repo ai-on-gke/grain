@@ -1,0 +1,53 @@
+6	notification.raised	2	warning			acme/widgets	alice@example.com
+7	notification.raised	2	critical			acme/widgets	alice@example.com
+8	notification.acked	2	critical			acme/widgets	alice@example.com
+9	notification.cleared	2	critical			acme/widgets	alice@example.com
+12	local_script.pending			lsa-1		acme/widgets	alice@example.com
+13	local_script.answered			lsa-1	approved	acme/widgets	alice@example.com
+14	task.comment					acme/widgets	alice@example.com
+15	local_script.pending			lsa-2		acme/widgets	alice@example.com
+16	local_script.answered			lsa-2	denied	acme/widgets	alice@example.com
+17	task.comment					acme/widgets	alice@example.com
+18	local_script.pending			lsa-3		acme/widgets	alice@example.com
+19	local_script.answered			lsa-3	expired	acme/widgets	alice@example.com
+20	local_script.pending			lsa-4		acme/widgets	alice@example.com
+21	notification.raised	5	warning			acme/widgets	alice@example.com
+22	notification.raised	6	warning			acme/widgets	alice@example.com
+23	notification.raised	7	warning			acme/widgets	alice@example.com
+24	notification.raised	8	warning			acme/widgets	alice@example.com
+25	notification.raised	9	warning			acme/widgets	alice@example.com
+26	notification.raised	10	warning			acme/widgets	alice@example.com
+27	notification.raised	11	warning			acme/widgets	alice@example.com
+28	notification.raised	12	warning			acme/widgets	alice@example.com
+29	notification.raised	13	warning			acme/widgets	alice@example.com
+30	notification.raised	14	warning			acme/widgets	alice@example.com
+31	notification.raised	15	warning			acme/widgets	alice@example.com
+32	notification.raised	16	warning			acme/widgets	alice@example.com
+33	notification.raised	17	warning			acme/widgets	alice@example.com
+34	notification.raised	18	warning			acme/widgets	alice@example.com
+35	notification.raised	19	warning			acme/widgets	alice@example.com
+36	notification.raised	20	warning			acme/widgets	alice@example.com
+37	notification.raised	21	warning			acme/widgets	alice@example.com
+38	notification.raised	22	warning			acme/widgets	alice@example.com
+39	notification.raised	23	warning			acme/widgets	alice@example.com
+40	notification.raised	24	warning			acme/widgets	alice@example.com
+41	notification.raised	25	warning			acme/widgets	alice@example.com
+42	notification.raised	26	warning			acme/widgets	alice@example.com
+43	notification.raised	27	warning			acme/widgets	alice@example.com
+44	notification.raised	28	warning			acme/widgets	alice@example.com
+45	notification.raised	29	warning			acme/widgets	alice@example.com
+46	notification.raised	30	warning			acme/widgets	alice@example.com
+47	notification.raised	31	warning			acme/widgets	alice@example.com
+48	notification.raised	32	warning			acme/widgets	alice@example.com
+49	notification.raised	33	warning			acme/widgets	alice@example.com
+50	notification.raised	34	warning			acme/widgets	alice@example.com
+51	notification.raised	35	warning			acme/widgets	alice@example.com
+52	notification.raised	36	warning			acme/widgets	alice@example.com
+53	notification.raised	37	warning			acme/widgets	alice@example.com
+54	notification.raised	38	warning			acme/widgets	alice@example.com
+55	notification.raised	39	warning			acme/widgets	alice@example.com
+56	notification.raised	40	warning			acme/widgets	alice@example.com
+57	notification.raised	41	warning			acme/widgets	alice@example.com
+58	notification.raised	42	warning			acme/widgets	alice@example.com
+59	notification.raised	43	warning			acme/widgets	alice@example.com
+60	notification.raised	44	warning			acme/widgets	alice@example.com

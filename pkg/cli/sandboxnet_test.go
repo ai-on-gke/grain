@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
@@ -709,5 +710,39 @@ func TestTheSandboxServiceIsResolvedToOneClusterIP(t *testing.T) {
 	defer stop(context.Background())
 	if want := "http://" + net.JoinHostPort("10.96.0.42", strconv.Itoa(cfg.SandboxPortBase+daemon.OffsetGitProxy)); endpoint.URL != want {
 		t.Errorf("the git proxy is handed out at %s, want the Service's %s", endpoint.URL, want)
+	}
+}
+
+// TestBuiltinCapabilityPortsStayOutOfTheDaemonsBlock: a built-in
+// capability server is a separate process the daemon starts after it has
+// bound its block, so a default port inside the block is one the daemon
+// already holds -- the git built-in's 9728 was the git proxy's, and it
+// never started (bind: address already in use) -- and one a sandbox
+// reaches the daemon's own service at. host-script's 9733 is the one
+// grandfathered exception, at an offset kept free for it.
+func TestBuiltinCapabilityPortsStayOutOfTheDaemonsBlock(t *testing.T) {
+	first, last := DefaultSandboxPortBase, DefaultSandboxPortBase+daemon.SandboxPortBlockSize-1
+	for name, port := range map[string]int{
+		"git":       intree.DefaultGitPort,
+		"gchat":     intree.DefaultGChatPort,
+		"figma":     intree.DefaultFigmaPort,
+		"gcp token": intree.DefaultGCPTokenPort,
+	} {
+		if port >= first && port <= last {
+			t.Errorf("the %s built-in's default port %d is inside the daemon's block %d-%d", name, port, first, last)
+		}
+	}
+	if got := intree.DefaultHostScriptPort - DefaultSandboxPortBase; got != daemon.OffsetHostScriptHeld {
+		t.Errorf("host-script's %d is offset %d of the default block, but the held offset is %d",
+			intree.DefaultHostScriptPort, got, daemon.OffsetHostScriptHeld)
+	}
+	offsets, err := daemon.SandboxPortOffsets()
+	if err != nil {
+		t.Fatalf("SandboxPortOffsets: %v", err)
+	}
+	for name, offset := range offsets {
+		if offset == daemon.OffsetHostScriptHeld {
+			t.Errorf("%q takes offset %d, which host-script's %d holds", name, offset, intree.DefaultHostScriptPort)
+		}
 	}
 }

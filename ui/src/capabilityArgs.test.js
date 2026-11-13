@@ -68,6 +68,23 @@ describe("unsupportedReason", () => {
     };
     expect(unsupportedReason(schema)).toBe("");
   });
+
+  it("draws an enum that also carries string bounds or a pattern", () => {
+    const schema = {
+      type: "object",
+      required: ["credential"],
+      properties: {
+        credential: {
+          type: "string",
+          pattern: "^[a-z0-9-]+$",
+          minLength: 1,
+          maxLength: 64,
+          enum: ["default"],
+        },
+      },
+    };
+    expect(unsupportedReason(schema)).toBe("");
+  });
 });
 
 describe("methodMenuLabel", () => {

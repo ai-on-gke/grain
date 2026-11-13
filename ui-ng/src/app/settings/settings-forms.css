@@ -268,6 +268,17 @@
   word-break: break-word;
 }
 
+/* A key fingerprint in a table cell: one unbroken 50-character token, so
+   it wraps anywhere rather than widening its column. */
+.s-fingerprint {
+  font-family: var(--grain-font-mono);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  min-width: 16ch;
+  max-width: 28ch;
+}
+
 .s-banner {
   display: flex;
   align-items: center;

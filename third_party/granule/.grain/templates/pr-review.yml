@@ -1,0 +1,91 @@
+# The general code review every grain-opened pull request on this
+# repository gets, filed by .grain/triggers/every-pr.yml (one review per
+# pull request head, re-reading only what a later push changed). It posts
+# findings and fixes nothing. grain appends the subject of the review and
+# its own findings-only and testing rules to this body.
+#
+# No `network:` key, so the deployment's default applies: a targeted
+# `go test -run` may need it.
+name: PR review
+title: "Review {{pr}}"
+body: |
+  Review the change in this pull request the way a careful senior
+  maintainer of granule would, and post what needs fixing. Read the diff
+  (`git diff {{base_sha}}...HEAD` or the pull request's file list) and as
+  much of the surrounding code as you need to judge it. Do not review the
+  whole repository.
+
+  ## What to check
+
+  - **Correctness and edge cases.** Bugs, off-by-ones, nil and empty
+    inputs, races and missing locking, leaked goroutines, file
+    descriptors, taps, sockets or mounts, errors dropped, swallowed or
+    wrapped without context, and behaviour on retry, restart or a
+    partial failure -- a VM that fails to boot, a guest agent that never
+    answers, a container killed mid-setup.
+  - **Host and guest.** Granule runs a microVM inside an ordinary,
+    unprivileged container. A change must not quietly need
+    `privileged: true`, extra capabilities or host setup beyond
+    `/dev/kvm` and `/dev/net/tun` (see `deploy/k8s/gke.md#privileges`
+    and `docs/rootless.md`). Guest-side code (`cmd/granule-agent`,
+    `cmd/granule-mem-agent`, `pkg/agent`, `pkg/guestboot` and the guest
+    images under `deploy/guest-image`, see `docs/guest-images.md`) has
+    to stay in step with the host side that talks to it over vsock and
+    the agent sockets: a protocol or boot contract change on one side
+    needs the other, and a change to what is baked into a guest image
+    means its guest binaries and images have to be rebuilt, which the
+    change should say.
+  - **Tests.** The change has a test, and the test really exercises the
+    new behaviour: it would fail without the change, and it does not
+    just assert on a mock it set up itself. Flag flaky patterns such as
+    `time.Sleep` used for ordering, shared package-level state without
+    `t.Cleanup`, port or timing assumptions, and order-dependent
+    subtests. Tests that need KVM, root or network namespaces must skip
+    cleanly where those are missing rather than fail (the
+    `GRANULE_NETNS_TESTS` convention in `docs/test-plan.md`).
+  - **Security.** Credentials and tokens are not logged, put in error
+    messages, or baked into images. Inputs that cross a trust boundary
+    -- the guest, a Granulefile, an image pulled from a registry, a
+    sandbox access or relay API request -- are validated. If grain's
+    security review is already reviewing this head, do not repeat its
+    deep review; flag only what you notice in passing.
+  - **Compatibility.** CLI flags and output, the Granulefile language
+    (`docs/granulefile.md`), the image layout and labels, the guest
+    agent protocol, and the sandbox access API (`docs/sandbox-access-api.md`):
+    a field renamed or removed, a default changed, an image built by an
+    older release that the new code can no longer run. Docs (`README.md`
+    and `docs/`) have to change with the behaviour they describe.
+  - **Repository conventions.** Follow `docs/contributing.md` and
+    `docs/test-plan.md`. A change to `.grain/prompts/` keeps the prompt
+    format and the reporting policy `.grain/prompts/README.md` describes
+    (pinned by `pkg/cli/prompts_test.go`), and a new prompt is
+    registered in `.grain/templates/`, `.grain/suites/nightly.yaml`,
+    that README and `docs/nightly-test-suite.md`. Dependencies are
+    vendored, so a `go.mod` change needs its `vendor/` update in the
+    same change.
+
+  ## Keep the review cheap
+
+  - Do not run broad or full test suites: no `go test ./...`, no `-race`
+    across packages, no kernel networking, benchmark, demo or nightly
+    suite runs. Do not run `grain ci wait` or `wait_for_checks` either.
+    The change's own GitHub Actions run is the test signal, so read its
+    result with `grain pr open` or the check statuses instead of waiting
+    on it or running it again.
+  - At most, run one narrowly targeted test (`go test ./pkg/<pkg> -run
+    <Name>`) when you need it to confirm or refute a specific finding,
+    and say in your closing note which test you ran and why.
+  - Do not push, commit or open a pull request. Findings go on the pull
+    request and the task.
+
+  ## Reporting
+
+  - Record each real problem with `add_review_comment`, on the line it
+    is about, saying what is wrong and the fix you recommend.
+  - Do not comment on formatting or style that `gofmt`, `go vet` or the
+    repository's linters already enforce. Do not post nitpicks or
+    matters of taste either.
+  - If nothing needs fixing, call no `add_review_comment` and finish
+    with `comment_on_issue` saying plainly "No findings", with a line on
+    what you checked. A review with no findings is what lets the change
+    merge itself.

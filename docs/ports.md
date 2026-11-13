@@ -28,7 +28,8 @@ The range is split so that adding one kind of port never moves another:
 | 4251      | the gchat capability server's data plane (loopback) | `intree.DefaultGChatPort` (`pkg/capability/intree/gchat.go`) |
 | 4252      | the gcp capability server's token data plane (loopback) | `intree.DefaultGCPTokenPort` (`pkg/capability/intree/gcp_token.go`) |
 | 4253      | the figma capability server's data plane (loopback) | `ports.Figma`, `intree.DefaultFigmaPort` (`pkg/capability/intree/figma.go`) |
-| 4200-4241, 4254-4279 | unallocated                                     |                                              |
+| 4254      | the git capability server's data plane (loopback, forwarded into the sandbox) | `ports.Git`, `intree.DefaultGitPort` (`pkg/capability/intree/git.go`) |
+| 4200-4241, 4255-4279 | unallocated                                     |                                              |
 
 The constants are in [`pkg/ports`](../pkg/ports/ports.go). Code names
 them rather than writing the number. Do not use `pkg/portpick` for this:
@@ -83,6 +84,7 @@ Class:
 | 4251 | operator | gchat capability data plane (container, or on the host via host) | `-listen 127.0.0.1:4251`, `intree.DefaultGChatPort`; the built-in entry's args and host's `grain-gchat` entry |
 | 4252 | operator | gcp capability token data plane, for permission sets over an existing service account with `credential: token`; listens only once such a set is configured | `-listen 127.0.0.1:4252`, `intree.DefaultGCPTokenPort` |
 | 4253 | operator | figma capability data plane, serving attempt-scoped Figma MCP toolsets once configured | `-listen 127.0.0.1:4253`, `ports.Figma`, `intree.DefaultFigmaPort` |
+| 4254 | sandbox | git capability (`git-repo`) proxy data plane, on the host and, forwarded, in the sandbox; listens only once configured. It was 9728, the daemon's own git proxy, so the built-in never started in a daemon | `-listen 127.0.0.1:4254`, `ports.Git`, `intree.DefaultGitPort` |
 | 4290 | operator | `grain demo` | `-addr` default `127.0.0.1:4290` (`pkg/cli/demo.go`); was `127.0.0.1:8420` |
 | 4295, 4296 | developer | `tests/bench/tunnelbench` (tunnel-vs-direct benchmark) | endpoint server `-addr :4295` and the forward process's CPU stats; a throwaway benchmark, never part of a deployment |
 
@@ -98,7 +100,7 @@ explicitly. See [Migrating the sandbox block](#migrating-the-sandbox-block).
 
 | Port | Class | Owner | Where |
 |------|-------|-------|-------|
-| 9728 | sandbox | git proxy; the base of the `-sandbox-port-base` block | `cli.DefaultSandboxPortBase`, `daemon.OffsetGitProxy`, `intree.DefaultGitPort`, `deploy/kubernetes/grain.yaml` (`-sandbox-port-base=9728`, the `grain-sandbox` Service) |
+| 9728 | sandbox | git proxy; the base of the `-sandbox-port-base` block | `cli.DefaultSandboxPortBase`, `daemon.OffsetGitProxy`, `deploy/kubernetes/grain.yaml` (`-sandbox-port-base=9728`, the `grain-sandbox` Service) |
 | 9729 | sandbox | package cache (block offset 1) | `daemon.OffsetPackageCache`; pip/apt/docker config in sandboxes (`pkg/pkgcache`) |
 | 9729+ | sandbox | model-proxy capability server's data planes, one per vendor | `intree.DefaultModelProxyPort` (a separate capability server process, not the daemon's block) |
 | 9730 | sandbox | Actions cache (block offset 2) | `daemon.OffsetActionsCache` |
@@ -107,7 +109,7 @@ explicitly. See [Migrating the sandbox block](#migrating-the-sandbox-block).
 | 9744-9746 | sandbox | daemon model proxies: claude, openai, gemini (block offsets 16-18) | `daemon.OffsetModelProxyBase`, `deploy/kubernetes/grain.yaml` |
 | 9728-9983 | sandbox | the whole block (256 ports, aligned) | firewall rules, nftables, `pkg/daemon/sandboxnet.go` |
 | 9727 | sandbox | self-debug capability data plane | `-listen 127.0.0.1:9727` (`pkg/capability/intree/selfdebug.go`) |
-| 9733 | sandbox | host-script capability data plane | `intree.DefaultHostScriptPort` |
+| 9733 | sandbox | host-script capability data plane: offset 5 of the default block, which the daemon gives no service of its own | `intree.DefaultHostScriptPort`, `daemon.OffsetHostScriptHeld` |
 | 38017 | sandbox | first guest-loopback port for a CI job's capability endpoints | `orchestrator.ciEndpointPortBase` (inside the guest only) |
 
 ### Grandfathered: operator-facing, not moved

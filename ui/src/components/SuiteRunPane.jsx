@@ -333,7 +333,12 @@ export default function SuiteRunPane({
       ))}
       {total === 0 && (
         <ListEmpty>
-          This run has filed no tasks yet -- its first pass is on the way.
+          {/* A run that ended before filing anything (a template its
+              first pass names was gone, say) has no pass on the way:
+              saying one is would read as a run still working. */}
+          {run.status === "active"
+            ? "This run has filed no tasks yet -- its first pass is on the way."
+            : "This run ended without filing any tasks."}
         </ListEmpty>
       )}
     </Overlay>
