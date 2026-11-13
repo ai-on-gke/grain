@@ -348,7 +348,10 @@ WCAG 2.1 AA is the floor.
 - Landmarks and headings are in order (one `h1` per page). A detail view
   embedded in another page's split (task detail in the Tasks, Workstreams
   and Agents panes) steps its title down to `h2` and its sections to
-  level 3; only its standalone page gives it the `h1`.
+  level 3, and everything below steps down with them: subsections to
+  level 4, and the headings of child components it renders (gate cards,
+  the edit panel, the Changes tab) take a `pane` input and do the same.
+  Only its standalone page gives it the `h1`.
 - Live regions announce counts that change.
 - Dialogs trap focus and restore it on close.
 

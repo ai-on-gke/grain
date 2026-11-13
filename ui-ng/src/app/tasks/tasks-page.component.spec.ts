@@ -474,6 +474,28 @@ describe("TasksPageComponent", () => {
       return f;
     }
 
+    it("steps every heading in the pane below its h2 title, gate cards included", async () => {
+      const api = new FakeApi();
+      api.live[0] = task("1", "queued", 8, {
+        pendingSecret: { name: "deploy-token", reason: "to deploy" },
+      } as Partial<Task>);
+      const f = await render(api);
+      expect(q(f, '[data-testid="park"]')).toBeTruthy();
+      const level = (h: Element) =>
+        Number(h.getAttribute("aria-level") ?? h.tagName.slice(1));
+      const headings = all(
+        f,
+        "g-task-detail h1, g-task-detail h2, g-task-detail h3, g-task-detail h4",
+      );
+      expect(level(q(f, "g-task-detail #task-title")!)).toBe(2);
+      const others = headings.filter((h) => h.id !== "task-title");
+      expect(others.length).toBeGreaterThan(0);
+      for (const h of others) {
+        expect(level(h), h.textContent ?? "").toBeGreaterThanOrEqual(3);
+      }
+      expect(level(q(f, "#gate-secret-h")!)).toBe(3);
+    });
+
     it("auto-selects the first row into the persistent 30/70 pane and updates selection on click", async () => {
       localStorage.removeItem("grain.tasks.splitRatio");
       const f = await render(new FakeApi());

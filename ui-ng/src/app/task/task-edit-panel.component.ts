@@ -101,7 +101,11 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
     >
       <div class="edit-main-col">
         <div class="edit-drawer-head">
-          <h2 id="task-edit-h" class="section-title">
+          <h2
+            [attr.aria-level]="pane() ? 3 : null"
+            id="task-edit-h"
+            class="section-title"
+          >
             Edit task #{{ task().id }}
           </h2>
           <div class="edit-head-actions">
@@ -288,7 +292,11 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
         <!-- Prompt Brief Override (POST /api/tasks/{id}/brief) -->
         @if (can("POST /api/tasks/{id}/brief")) {
           <div class="edit-subcard" data-testid="edit-brief-section">
-            <h3 class="section-subtitle" style="margin: 0">
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              class="section-subtitle"
+              style="margin: 0"
+            >
               Standing prompt brief
             </h3>
             <p class="muted" style="margin: 0; font-size: 12px">
@@ -334,7 +342,13 @@ const GOAL_ON_LIMIT: readonly PillOption[] = [
         <!-- Durable Task Goal Editor (PUT / DELETE /api/tasks/{id}/goal) -->
         @if (can("PUT /api/tasks/{id}/goal") && task().state !== "closed") {
           <div class="edit-subcard" data-testid="edit-goal-section">
-            <h3 class="section-subtitle" style="margin: 0">Task goal</h3>
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              class="section-subtitle"
+              style="margin: 0"
+            >
+              Task goal
+            </h3>
             <div class="edit-grid">
               <div class="edit-field">
                 <span>Goal kind</span>
@@ -482,6 +496,10 @@ export class TaskEditPanelComponent {
   private readonly snackbar = inject(SnackbarService);
 
   readonly task = input.required<TaskDetail>();
+  // pane is set when the task detail sits inside another page (the
+  // Tasks split): its title is an h2 there, so these headings step down
+  // one level with it (aria-level 3, and 4 below them).
+  readonly pane = input(false);
   readonly acted = output<void>();
   readonly closed = output<void>();
 

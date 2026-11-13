@@ -629,6 +629,7 @@ export function duration(from?: string, to?: string): string {
         }
         <g-task-gates-bar
           [task]="t"
+          [pane]="pane()"
           (acted)="acted.emit()"
           (replyInWordsChange)="onReplyInWords($event)"
         />
@@ -638,6 +639,7 @@ export function duration(from?: string, to?: string): string {
           @if (editOpen()) {
             <g-task-edit-panel
               [task]="t"
+              [pane]="pane()"
               (acted)="acted.emit()"
               (closed)="editOpen.set(false)"
             />
@@ -870,7 +872,10 @@ export function duration(from?: string, to?: string): string {
                         data-testid="capability-audit"
                         aria-label="Capability audit log"
                       >
-                        <h3 class="section-title">
+                        <h3
+                          [attr.aria-level]="subsectionLevel()"
+                          class="section-title"
+                        >
                           Run {{ auditNum }} capability audit
                         </h3>
                         @if (store.auditError(); as err) {
@@ -947,6 +952,7 @@ export function duration(from?: string, to?: string): string {
                     Changes and CI
                   </h2>
                   <g-task-changes-tab
+                    [pane]="pane()"
                     (forceMerge)="forceMergeReq.set($event)"
                     [task]="t"
                     [prUrl]="prUrl()"
@@ -1152,7 +1158,12 @@ export function duration(from?: string, to?: string): string {
 
             <!-- Capabilities & Grants Editor -->
             @if (can("POST /api/tasks/{id}/capabilities")) {
-              <h3 class="section-subtitle">Manage capabilities &amp; grants</h3>
+              <h3
+                [attr.aria-level]="subsectionLevel()"
+                class="section-subtitle"
+              >
+                Manage capabilities &amp; grants
+              </h3>
               <g-grants-picker
                 testid="task-grants"
                 [offered]="offeredCapabilities()"
@@ -1166,7 +1177,12 @@ export function duration(from?: string, to?: string): string {
 
             <!-- Dependencies Quick Editor in Details -->
             @if (can("POST /api/tasks/{id}/depends-on")) {
-              <h3 class="section-subtitle">Dependencies</h3>
+              <h3
+                [attr.aria-level]="subsectionLevel()"
+                class="section-subtitle"
+              >
+                Dependencies
+              </h3>
               @if (t.dependsOn?.length) {
                 <div style="display: flex; flex-wrap: wrap; gap: 6px">
                   @for (d of t.dependsOn; track d) {
@@ -1215,7 +1231,12 @@ export function duration(from?: string, to?: string): string {
             }
 
             @if (transitions().length) {
-              <h3 class="section-subtitle">History</h3>
+              <h3
+                [attr.aria-level]="subsectionLevel()"
+                class="section-subtitle"
+              >
+                History
+              </h3>
               <ol class="history">
                 @for (h of transitions(); track $index) {
                   <li>
@@ -1295,6 +1316,8 @@ export class TaskDetailComponent implements OnDestroy {
   // sectionLevel sits the section headings one below the title: h3 in
   // a pane (title h2), their own h2 on the full page (title h1).
   readonly sectionLevel = computed(() => (this.pane() ? 3 : null));
+  // subsectionLevel keeps the h3s under those sections one further down.
+  readonly subsectionLevel = computed(() => (this.pane() ? 4 : null));
   readonly closable = input(true);
   readonly from = input<string>();
   readonly back = input<BackLink | null>(null);
