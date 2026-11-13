@@ -224,7 +224,10 @@ inspector and Task Detail. Sessions shares its message styles.
 ### Settings
 
 Settings uses a 280px grouped section drawer beside flat `.s-card` forms capped
-at 1180px. Single-choice pickers use `<g-pill-select>`, booleans use `.g-switch`
+at 1180px. Single-choice pickers use `<g-pill-select>`; a model is always chosen
+with `<g-model-picker>` over what the connections advertise, never typed into a
+text field. Ordered lists (the fallback models) are rows with Up / Down /
+Remove buttons and an add picker that excludes what is already listed. Booleans use `.g-switch`
 (`role="switch"`), and edits stage into `.settings-save-bar` (`Discard` /
 `Save changes` with a `POST /api/settings/plan` diff preview). Opt-in workflow
 controls (such as quality control PR rollout in `Settings -> Tasks`) live inside
@@ -244,6 +247,7 @@ it rather than copy it.
 | Component | File | Use |
 |---|---|---|
 | Pill select | `shared/pill-select.component.ts` | every single-choice dropdown (no native `<select>`) |
+| Model picker | `shared/model-picker.component.ts` (+ `shared/model-catalog.ts`) | every model choice: searchable, grouped by connection, keeps and flags a value no connection advertises, optional *Refresh models* |
 | Priority chip | `shared/priority-chip.component.ts` | named priority levels with grain's number |
 | Actor chip | `shared/actor-chip.component.ts` | who did something, shape-coded, "on behalf of" |
 | Status icon | `shared/status-icon.component.ts` | the shape inside every status pill |

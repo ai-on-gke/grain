@@ -18,6 +18,7 @@ import {
   OnChanges,
   OnInit,
   ViewEncapsulation,
+  computed,
   inject,
   input,
   signal,
@@ -29,6 +30,15 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import {
+  type ModelBackendLike,
+  availabilityNote,
+  containsModel,
+  modelAvailability,
+  modelGroups,
+  parseDefaultModels,
+} from "../shared/model-catalog";
+import { ModelPickerComponent } from "../shared/model-picker.component";
 import {
   type PillOption,
   PillSelectComponent,
@@ -56,7 +66,7 @@ interface ModelSettingRow {
   effort?: string;
 }
 
-interface BackendEntry {
+interface BackendEntry extends ModelBackendLike {
   id: string;
   name?: string;
   framework: string;
@@ -180,7 +190,7 @@ export function formatHostdLabels(
 
 @Component({
   selector: "g-settings-compute",
-  imports: [PillSelectComponent, ConfirmDialogComponent],
+  imports: [PillSelectComponent, ConfirmDialogComponent, ModelPickerComponent],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -193,28 +203,121 @@ export function formatHostdLabels(
                 Default model &amp; per-model reasoning effort
               </h3>
               <p class="s-card-desc">
-                Selects the deployment default model and per-model reasoning
-                effort preferences when a task does not pin one.
+                The model a task runs on when it does not pin one, the fallback
+                models tried after it, and per-model reasoning effort. The
+                choices are the models your connections advertise.
               </p>
             </div>
           </div>
           <div class="s-grid">
             <div class="s-field">
-              <label class="s-label" for="f-default-model"
-                >Deployment default model</label
-              >
-              <input
-                id="f-default-model"
-                class="s-input"
-                type="text"
-                data-testid="input-default-model"
-                placeholder="gemini-2.5-pro"
-                [value]="defaultModelVal()"
-                [disabled]="!canWriteSettings() && !canWriteDeployment()"
-                (input)="setDefaultModelVal($any($event.target).value)"
+              <span class="s-label">Deployment default model</span>
+              <g-model-picker
+                testid="picker-default-model"
+                ariaLabel="Deployment default model"
+                placeholder="Not set: each connection's own default"
+                [groups]="modelGroups()"
+                [value]="modelChain()[0] || ''"
+                [disabled]="!canEditChain()"
+                [refreshable]="canRefreshModels() && anyDiscovers()"
+                [refreshing]="refreshingModels()"
+                [refreshNote]="refreshNote()"
+                (refresh)="refreshDiscoveredModels()"
+                (valueChange)="setDefaultModel($event)"
               />
             </div>
           </div>
+
+          <div class="s-field mp-fallbacks" data-testid="fallback-models">
+            <span class="s-label">Fallback models</span>
+            <span class="s-hint">
+              Tried in order after the default model when it is paused after a
+              usage limit, its connections are at their concurrency limit, or no
+              enabled connection advertises it. A task that pins its own model
+              never falls back.
+            </span>
+            @if (fallbackModels().length > 0) {
+              <ol class="mp-chain" aria-label="Fallback models, in order">
+                @for (
+                  m of fallbackModels();
+                  track m;
+                  let i = $index, first = $first, last = $last
+                ) {
+                  <li
+                    class="mp-chain-row"
+                    [attr.data-testid]="'fallback-row-' + i"
+                  >
+                    <span class="mp-chain-pos" aria-hidden="true">{{
+                      i + 1
+                    }}</span>
+                    <span class="mp-chain-model">{{ m }}</span>
+                    @if (modelNote(m)) {
+                      <span class="mp-flag">{{ modelNote(m) }}</span>
+                    }
+                    <span class="mp-chain-actions">
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        [attr.aria-label]="'Move ' + m + ' up'"
+                        [attr.data-testid]="'fallback-up-' + i"
+                        [disabled]="first || !canEditChain()"
+                        (click)="moveFallback(i, -1)"
+                      >
+                        Up
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        [attr.aria-label]="'Move ' + m + ' down'"
+                        [attr.data-testid]="'fallback-down-' + i"
+                        [disabled]="last || !canEditChain()"
+                        (click)="moveFallback(i, 1)"
+                      >
+                        Down
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        [attr.aria-label]="'Remove ' + m"
+                        [attr.data-testid]="'fallback-remove-' + i"
+                        [disabled]="!canEditChain()"
+                        (click)="removeFallback(i)"
+                      >
+                        Remove
+                      </button>
+                    </span>
+                  </li>
+                }
+              </ol>
+            }
+            <g-model-picker
+              testid="picker-add-fallback"
+              ariaLabel="Add fallback model"
+              [placeholder]="
+                modelChain().length
+                  ? 'Add fallback model'
+                  : 'Choose a default model first'
+              "
+              [groups]="modelGroups()"
+              [exclude]="modelChain()"
+              [disabled]="!canEditChain() || modelChain().length === 0"
+              [refreshable]="canRefreshModels() && anyDiscovers()"
+              [refreshing]="refreshingModels()"
+              [refreshNote]="refreshNote()"
+              (refresh)="refreshDiscoveredModels()"
+              (valueChange)="addFallback($event)"
+            />
+          </div>
+
+          @if (chainWarning()) {
+            <div
+              class="s-banner warn"
+              role="status"
+              data-testid="default-model-warning"
+            >
+              {{ chainWarning() }}
+            </div>
+          }
 
           @if (modelSettingsRows().length > 0) {
             <div class="s-table-wrap">
@@ -253,15 +356,15 @@ export function formatHostdLabels(
           }
 
           <div class="s-inline">
-            <input
-              class="s-input s-input-inline tabular"
-              type="text"
-              aria-label="Model identifier"
-              data-testid="input-model-setting-model"
-              placeholder="gemini-2.5-pro"
+            <g-model-picker
+              class="mp-inline"
+              testid="picker-model-setting-model"
+              ariaLabel="Model for a reasoning effort setting"
+              placeholder="Choose a model"
+              [groups]="modelGroups()"
               [value]="newModelSettingName()"
               [disabled]="!canWriteDeployment()"
-              (input)="newModelSettingName.set($any($event.target).value)"
+              (valueChange)="newModelSettingName.set($event)"
             />
             <g-pill-select
               testid="select-model-setting-effort"
@@ -554,6 +657,20 @@ export function formatHostdLabels(
                         </div>
                       </td>
                       <td>
+                        @if (discovers(b)) {
+                          <button
+                            type="button"
+                            class="btn-text s-btn-sm"
+                            [attr.data-testid]="'refresh-backend-' + b.id"
+                            [attr.aria-label]="'Refresh models of ' + b.id"
+                            [disabled]="
+                              !canRefreshModels() || refreshingModels()
+                            "
+                            (click)="refreshDiscoveredModels(b.id)"
+                          >
+                            Refresh models
+                          </button>
+                        }
                         <button
                           type="button"
                           class="btn-text s-btn-sm"
@@ -1680,19 +1797,142 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     );
   }
 
-  protected defaultModelVal(): string {
-    return (
-      this.state.val<string>("defaultModel", "") ||
-      this.state.deployVal<string>("defaultModel", "")
+  // The deployment's default model list (model.Config.DefaultModels):
+  // the default first, then its fallbacks, tried in that order. Settings
+  // and the deployment record are two views of one grain_config column, so
+  // a staged edit on either wins over both stored values.
+  protected readonly modelChain = computed<string[]>(() => {
+    const dep = this.state.deployDraft();
+    if ("defaultModels" in dep) return parseDefaultModels(dep["defaultModels"]);
+    const draft = this.state.draft();
+    if ("defaultModel" in draft)
+      return parseDefaultModels(draft["defaultModel"]);
+    const stored = this.state.settings()["defaultModel"];
+    if (typeof stored === "string") return parseDefaultModels(stored);
+    const d = this.state.deployment();
+    return parseDefaultModels(d["defaultModels"] ?? d["defaultModel"]);
+  });
+  protected readonly fallbackModels = computed(() =>
+    this.modelChain().slice(1),
+  );
+  protected readonly modelGroups = computed(() => modelGroups(this.backends()));
+  protected readonly refreshingModels = signal(false);
+  protected readonly refreshNote = signal("");
+
+  protected readonly chainWarning = computed(() => {
+    const chain = this.modelChain();
+    const groups = this.modelGroups();
+    if (!chain.length || !groups.length) return "";
+    if (chain.some((m) => modelAvailability(m, groups) === "enabled")) {
+      return "";
+    }
+    return chain.length === 1
+      ? `No enabled connection advertises ${chain[0]}. Tasks on the default model wait in the queue until one does.`
+      : `No enabled connection advertises any default or fallback model (${chain.join(", ")}). Tasks on the default model wait in the queue until one does.`;
+  });
+
+  protected canEditChain(): boolean {
+    return this.canWriteSettings() || this.canWriteDeployment();
+  }
+
+  protected canRefreshModels(): boolean {
+    return this.access.can(
+      "POST /api/deployment/agent-backends/{backendId}/discover",
     );
   }
 
-  protected setDefaultModelVal(v: string): void {
+  protected modelNote(m: string): string {
+    return availabilityNote(modelAvailability(m, this.modelGroups()));
+  }
+
+  // setModelChain stages the whole list through whichever write this
+  // person has: POST /api/settings takes it comma-joined (defaultModel),
+  // PUT /api/deployment as a list (defaultModels). Both normalise the same
+  // way (model.NormalizeDefaultModel).
+  private setModelChain(list: string[]): void {
+    const next = parseDefaultModels(list);
     if (this.canWriteSettings()) {
-      this.state.setField("defaultModel", v);
+      this.state.setField("defaultModel", next.join(","));
     } else if (this.canWriteDeployment()) {
-      this.state.setDeployField("defaultModel", v);
+      this.state.setDeployField("defaultModels", next);
     }
+  }
+
+  protected setDefaultModel(m: string): void {
+    const rest = this.fallbackModels().filter(
+      (x) => x.toLowerCase() !== m.toLowerCase(),
+    );
+    this.setModelChain(m ? [m, ...rest] : rest);
+  }
+
+  protected addFallback(m: string): void {
+    const chain = this.modelChain();
+    if (!m || !chain.length || containsModel(chain, m)) return;
+    this.setModelChain([...chain, m]);
+  }
+
+  protected moveFallback(idx: number, delta: -1 | 1): void {
+    const fb = [...this.fallbackModels()];
+    const to = idx + delta;
+    if (to < 0 || to >= fb.length) return;
+    [fb[idx], fb[to]] = [fb[to], fb[idx]];
+    this.setModelChain([this.modelChain()[0], ...fb]);
+  }
+
+  protected removeFallback(idx: number): void {
+    const fb = this.fallbackModels().filter((_, i) => i !== idx);
+    this.setModelChain([this.modelChain()[0], ...fb]);
+  }
+
+  protected anyDiscovers(): boolean {
+    return this.backends().some((b) => this.discovers(b));
+  }
+
+  protected discovers(b: BackendEntry): boolean {
+    return !(b.models ?? []).some((m) => m.trim());
+  }
+
+  // refreshDiscoveredModels asks providers which models they serve now
+  // (POST .../discover): one connection, or every connection that
+  // advertises what its provider reports.
+  protected async refreshDiscoveredModels(only?: string): Promise<void> {
+    const ids = this.backends()
+      .filter((b) => (only ? b.id === only : this.discovers(b)))
+      .map((b) => b.id);
+    if (!ids.length || !this.canRefreshModels()) return;
+    this.refreshingModels.set(true);
+    this.refreshNote.set("");
+    const problems: string[] = [];
+    let asked = 0;
+    for (const backendId of ids) {
+      try {
+        const res = await this.api.post<{
+          backend?: BackendEntry;
+          asked?: boolean;
+          error?: string;
+        }>("POST /api/deployment/agent-backends/{backendId}/discover", {
+          backendId,
+        });
+        if (res?.backend) {
+          const fresh = res.backend;
+          this.backends.update((list) =>
+            list.map((b) => (b.id === fresh.id ? { ...b, ...fresh } : b)),
+          );
+        }
+        if (res?.asked) asked++;
+        if (res?.error) problems.push(`${backendId}: ${res.error}`);
+      } catch (err) {
+        problems.push(`${backendId}: ${errText(err)}`);
+      }
+    }
+    this.refreshingModels.set(false);
+    const note =
+      (asked
+        ? `Refreshed ${asked} connection${asked === 1 ? "" : "s"}.`
+        : "No provider was asked.") +
+      (problems.length ? ` ${problems.join("; ")}` : "");
+    this.refreshNote.set(note);
+    this.snackbar.show(note);
   }
 
   protected modelSettingsRows(): ModelSettingRow[] {
@@ -1774,7 +2014,6 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     const raw =
       this.state.settings()["agentBackends"] ??
       this.state.deployment()["agentBackends"];
-    console.log("BACKENDS RAW:", raw);
     if (Array.isArray(raw)) {
       this.backends.set(raw as BackendEntry[]);
     }
