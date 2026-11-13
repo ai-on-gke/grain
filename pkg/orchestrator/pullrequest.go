@@ -236,7 +236,7 @@ func OpenPullRequestForTask(ctx context.Context, store *model.Store, client gith
 			return status, err
 		}
 	}
-	detail, err := client.GetPullRequest(prRepo.Owner, prRepo.Name, pr.Number)
+	detail, err := client.GetPullRequest(prRepo.StoredOwner(), prRepo.Name, pr.Number)
 	if err != nil {
 		status.ChecksError = fmt.Sprintf("reading %s: %v", ref, err)
 		return status, nil

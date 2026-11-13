@@ -76,3 +76,51 @@ func TestCompactingToTheSameHandoverConfirmsIt(t *testing.T) {
 		t.Errorf("a new handover body left the version at %d, want %d", changed.HandoverVersion, first.HandoverVersion+1)
 	}
 }
+
+// A handover's age by comments counts what people and agents said since,
+// not grain's own notices: a durable task that parks gets two or three
+// of those every run, and counting them made it stale with nobody having
+// said anything (docs/test-runs/2026-11-11-durable-tasks.md, follow-up
+// B). Grain relaying a person's words still counts.
+func TestHandoverAgeLeavesOutGrainsOwnNotices(t *testing.T) {
+	store, ctx := open(t)
+	tk := queuedTask(t, store, ctx, "9102", &widgets)
+	human := model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}}
+	if _, err := store.CompactTask(ctx, tk.ID, "the hub is green", 0, human, "alice", now); err != nil {
+		t.Fatal(err)
+	}
+	grain := model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}}
+	agent := model.Attribution{Actor: model.Principal{Kind: model.PrincipalAgent, ID: tk.ID}}
+	relayed := model.Attribution{
+		Actor:      model.Principal{Kind: model.PrincipalAutomation, ID: "grain"},
+		OnBehalfOf: &model.Principal{Kind: model.PrincipalHuman, ID: "bob"},
+	}
+	at := now
+	post := func(by model.Attribution, body string) {
+		t.Helper()
+		at = at.Add(time.Minute)
+		if _, err := store.AddComment(ctx, model.Comment{TaskID: tk.ID, Author: by, Body: body, CreatedAt: at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < model.HandoverStaleComments; i++ {
+		post(grain, "grain: this task's run parked it until later.")
+	}
+	age, err := store.TaskHandoverAge(ctx, tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if age.Comments != 0 || age.Stale() {
+		t.Errorf("after %d of grain's own notices: %d comments, stale %v; want 0, not stale",
+			model.HandoverStaleComments, age.Comments, age.Stale())
+	}
+	post(human, "a person's note")
+	post(agent, "an agent's note")
+	post(relayed, "a person's words relayed")
+	if age, err = store.TaskHandoverAge(ctx, tk.ID); err != nil {
+		t.Fatal(err)
+	}
+	if age.Comments != 3 {
+		t.Errorf("after a person's, an agent's and a relayed comment: %d comments, want 3", age.Comments)
+	}
+}

@@ -336,3 +336,136 @@ func TestParkUntilMergedIsRecordedOnTheSuspension(t *testing.T) {
 		})
 	}
 }
+
+// The links a park wrote are the park's own: the run that resumes it
+// takes them off, so the target reopening afterwards neither holds the
+// task again nor is told to later runs as a dependency it declared. A
+// link the task already had when it parked is left where it was.
+func TestAResumedParkLeavesNoLinkBehindForAReopenedTarget(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	target := filedTask(t, ctx, store, "b1", repo)
+	declared := filedTask(t, ctx, store, "c1", repo)
+	task := filedTask(t, ctx, store, "a1", repo)
+	task.Links = append(slices.Clone(task.Links), model.Link{Kind: model.LinkDependsOn, Target: declared.ID})
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	runID := "a1-1"
+	if err := store.StartRun(ctx, model.Run{ID: runID, TaskID: task.ID, Sandbox: "s1", Attempt: 1, StartedAt: baseTime}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	// What ui.Client.WaitOn does while the run is still going: it writes
+	// b1's link and finds c1's already there, and the result says so.
+	parked := task
+	parked.Links = append(slices.Clone(parked.Links), model.Link{Kind: model.LinkDependsOn, Target: target.ID})
+	if err := store.PutTask(ctx, parked); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, runID, baseTime, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	result := toolResult(agent.ToolCall{Name: "wait_for_task",
+		Arguments: map[string]any{"task_ids": []any{target.ID, declared.ID}, "park": true},
+		Text: "Parked. This task now depends on #" + target.ID + ", #" + declared.ID + ".\n" +
+			`resume_on: {"tasks":["` + target.ID + `","` + declared.ID + `"],"links":["` + target.ID + `"]}`})
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, runID, baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	susps, err := store.Suspensions(ctx, task.ID)
+	if err != nil || len(susps) != 1 {
+		t.Fatalf("suspensions = %+v (%v), want the park's one", susps, err)
+	}
+	if on, _ := model.ParseResumeOn(susps[0].ResumeOn); !slices.Equal(on.Links, []string{target.ID}) {
+		t.Fatalf("ResumeOn = %+v, want links [%s]: the one the park wrote", on, target.ID)
+	}
+
+	closedAt := baseTime
+	for _, id := range []string{target.ID, declared.ID} {
+		if err := store.ObserveField(ctx, id, baseTime, func(o *model.Observation) {
+			o.CompletedAt, o.ClosedAt = &closedAt, &closedAt
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.StartRun(ctx, model.Run{ID: "a1-2", TaskID: task.ID, Sandbox: "s2", Attempt: 2,
+		StartedAt: baseTime.Add(time.Hour)}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := store.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := orchestrator.DependenciesOf(ctx, store, *resumed, nil)
+	if len(deps) != 1 || deps[0].ID != declared.ID {
+		t.Fatalf("dependencies after the park resumed = %+v, want the declared %s alone", deps, declared.ID)
+	}
+	if err := store.FinishRun(ctx, "a1-2", baseTime.Add(2*time.Hour), "failed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ObserveField(ctx, target.ID, baseTime, func(o *model.Observation) {
+		o.CompletedAt, o.ClosedAt = nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := store.OpenBlockers(ctx, task.ID); err != nil || n != 0 {
+		t.Fatalf("open blockers = %d (%v) with %s reopened after the park resumed, want 0", n, err, target.ID)
+	}
+}
+
+// The links a resumption deletes come off the run's own tool results, so
+// a result naming a link the task already had before the run -- a
+// declared dependency, not the park's -- is not taken at its word: that
+// link is not recorded as the park's, and the resumption leaves it.
+func TestAParkResultCannotClaimADeclaredLink(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	declared := filedTask(t, ctx, store, "c1", repo)
+	task := filedTask(t, ctx, store, "a1", repo)
+	task.Links = append(slices.Clone(task.Links), model.Link{Kind: model.LinkDependsOn, Target: declared.ID})
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	runID := "a1-1"
+	if err := store.StartRun(ctx, model.Run{ID: runID, TaskID: task.ID, Sandbox: "s1", Attempt: 1, StartedAt: baseTime}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, runID, baseTime, "succeeded", ""); err != nil {
+		t.Fatal(err)
+	}
+	result := toolResult(agent.ToolCall{Name: "resume_later",
+		Arguments: map[string]any{"reason": "waiting", "when": map[string]any{"task": declared.ID}},
+		Text:      "Parked. Stopped.\n\n" + `resume_on: {"tasks":["` + declared.ID + `"],"links":["` + declared.ID + `"]}`})
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, runID, baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	susps, err := store.Suspensions(ctx, task.ID)
+	if err != nil || len(susps) != 1 {
+		t.Fatalf("suspensions = %+v (%v), want the park's one", susps, err)
+	}
+	if on, _ := model.ParseResumeOn(susps[0].ResumeOn); len(on.Links) != 0 {
+		t.Fatalf("ResumeOn = %+v, want no links: %s was declared before the run", on, declared.ID)
+	}
+	closedAt := baseTime
+	if err := store.ObserveField(ctx, declared.ID, baseTime, func(o *model.Observation) {
+		o.CompletedAt, o.ClosedAt = &closedAt, &closedAt
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.StartRun(ctx, model.Run{ID: "a1-2", TaskID: task.ID, Sandbox: "s2", Attempt: 2,
+		StartedAt: baseTime.Add(time.Hour)}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := store.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deps := orchestrator.DependenciesOf(ctx, store, *resumed, nil); len(deps) != 1 || deps[0].ID != declared.ID {
+		t.Fatalf("dependencies after the park resumed = %+v, want the declared %s kept", deps, declared.ID)
+	}
+}

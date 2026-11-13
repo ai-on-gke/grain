@@ -246,6 +246,9 @@ type ProposedTask struct {
 	// NoPort files the proposal as one whose change is not ported to its
 	// repository's other paired branches (model.Task.NoPort).
 	NoPort bool
+	// FoundIn is the release the proposal is filed against, as the
+	// agent wrote it (model.LinkFoundIn); "" for none stated.
+	FoundIn string
 	// KeepRunning files the proposal so that its task immediately restarts
 	// when its run exits rather than completing or parking (model.Task.KeepRunning).
 	KeepRunning bool
@@ -1003,8 +1006,12 @@ func proposeTaskProperties(proposeRepos []string) map[string]any {
 			"type": "string",
 			"enum": []any{"close", "ack"},
 		},
-		"keep_running":      map[string]any{"type": "boolean"},
-		"no_port":           map[string]any{"type": "boolean"},
+		"keep_running": map[string]any{"type": "boolean"},
+		"no_port":      map[string]any{"type": "boolean"},
+		"found_in": map[string]any{
+			"type":        "string",
+			"description": "Release the bug was found in: vX.Y.Z or vX.Y.Z-rc.N",
+		},
 		"fixes_base_branch": map[string]any{"type": "boolean"},
 		"origin":            map[string]any{"type": "string"},
 		"no_repo":           map[string]any{"type": "boolean"},
@@ -1195,6 +1202,13 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			}
 			if noPort, ok := argBool(args, "no_port"); ok {
 				task.NoPort = noPort
+			}
+			if foundIn, ok := argString(args, "found_in"); ok {
+				normalized, err := model.NormalizeFoundIn(foundIn)
+				if err != nil {
+					return Result{Text: err.Error(), IsError: true}
+				}
+				task.FoundIn = normalized
 			}
 			if keepRunning, ok := argBool(args, "keep_running"); ok {
 				task.KeepRunning = keepRunning

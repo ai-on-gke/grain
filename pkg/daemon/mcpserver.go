@@ -185,7 +185,7 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 	if err != nil {
 		return mcp.TaskRecord{}, err
 	}
-	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, AuthorLabel: detail.AuthorLabel, Provenance: detail.Provenance, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
+	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, AuthorLabel: detail.AuthorLabel, Provenance: detail.Provenance, Base: detail.Base, FoundIn: detail.Task.FoundIn, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
 	for _, a := range detail.Attempts {
 		record.Attempts = append(record.Attempts, mcp.TaskAttempt{Number: a.Number, StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, Outcome: a.Outcome, Detail: a.Detail, PromptBytes: a.PromptBytes, PromptTokens: a.PromptTokens, Model: a.Model, AgentFramework: a.AgentFramework})
 	}
@@ -1898,6 +1898,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		Title: p.Title, Description: p.Body, Repo: repo, NoRepo: p.NoRepo, ChangeTarget: p.ChangeTarget, Base: base, Priority: priority, AutoMerge: auto,
 		DeclineAutoMerge: p.AutoMerge != nil && !*p.AutoMerge,
 		TemplateID:       p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
+		FoundIn:   p.FoundIn,
 		DependsOn: deps, CustomFields: fields, Supersedes: supersedes,
 		Reads: p.Reads, Designs: p.Designs, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,
 		ProposedBy: f.parent, ProposalKey: key, Capabilities: caps,
@@ -2723,9 +2724,16 @@ func repoTransport(credentials *gitproxy.CredentialSet, insecureHTTP bool, defau
 // name that is not in that store resolves to nothing, exactly as no name
 // does (credentialTokenSource.selectGitCredential).
 func runCredentialSource(credentials *gitproxy.CredentialSet, credential string) credentialTokenSource {
+	return runCredentialSourceOn(credentials, credential, "")
+}
+
+func runCredentialSourceOn(credentials *gitproxy.CredentialSet, credential, offDefaultHost string) credentialTokenSource {
 	src := credentialTokenSource{credentials: credentials}
 	if name := strings.TrimSpace(credential); name != "" {
 		src.teamCredential = func(string, string, string) (string, bool) { return name, true }
+	}
+	if off := strings.TrimSpace(offDefaultHost); off != "" {
+		src.hostOf = func(string, string) string { return off }
 	}
 	return src
 }
@@ -2756,7 +2764,11 @@ func issueReader(dataDir, githubHost string, insecureHTTP bool, repo, credential
 		return nil, scope, fmt.Errorf("loading the GitHub credential ladder: %w", err)
 	}
 	var transport github.Transport
+	var offDefaultHost string
 	if repo != "" {
+		if ref, err := model.ParseRepo(repo); err == nil {
+			offDefaultHost = ref.OffDefaultHost()
+		}
 		t, _, err := repoTransport(credentials, insecureHTTP, githubHost, repo, credential)
 		if err != nil {
 			return nil, scope, fmt.Errorf("repository %q is on a plain git host with no issues API: %w", repo, err)
@@ -2767,7 +2779,7 @@ func issueReader(dataDir, githubHost string, insecureHTTP bool, repo, credential
 		rt.UseTLS = !insecureHTTP
 		transport = rt
 	}
-	client := github.NewClient(transport, runCredentialSource(credentials, credential))
+	client := github.NewClient(transport, runCredentialSourceOn(credentials, credential, offDefaultHost))
 	client.Caller = "agent tools"
 	return client, scope, nil
 }
@@ -2832,7 +2844,7 @@ func githubDefaultBranchReader(dataDir, githubHost string, insecureHTTP bool, cr
 		if err != nil {
 			return "", err
 		}
-		client := github.NewClient(transport, runCredentialSource(credentials, credential))
+		client := github.NewClient(transport, runCredentialSourceOn(credentials, credential, ref.OffDefaultHost()))
 		client.Caller = "agent tools"
 		return client.DefaultBranch(ref.Owner, ref.Name)
 	}
@@ -2896,7 +2908,7 @@ func pullRequestReaderWithUpstream(dataDir, githubHost string, insecureHTTP bool
 	// the repository at all: a private repository read with no
 	// credential is a 404, which pull_request_status would otherwise
 	// report as a branch that was never pushed.
-	client := github.NewClient(transport, runCredentialSource(credentials, credential))
+	client := github.NewClient(transport, runCredentialSourceOn(credentials, credential, ref.OffDefaultHost()))
 	client.Caller = "agent tools"
 	// An unset -pr-base is carried through as the empty string rather
 	// than resolved here: it is the ordinary case, and what it resolves
