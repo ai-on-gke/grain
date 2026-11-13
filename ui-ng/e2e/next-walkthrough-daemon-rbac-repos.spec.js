@@ -417,10 +417,21 @@ test("real daemon walkthrough: rail parity & deep links, viewer RBAC & CSRF, 5-v
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
 
-    // Sessions model picker excludes unconfigured CLI catalog models
+    // Sessions model picker excludes unconfigured CLI catalog models. The
+    // display names come from GET /api/agent-models, which runs the agy
+    // catalog listing on the daemon; under the full suite on a CI runner
+    // that has outlasted the 5s matcher (the menu read raw ids), so wait
+    // for that listing to answer before reading the menu.
+    const agentModels = page.waitForResponse(
+      (r) =>
+        new URL(r.url()).pathname === "/api/agent-models" &&
+        r.request().method() === "GET",
+      { timeout: 45_000 },
+    );
     await page.goto(`${iapProxyUrl}/next/sessions/director`, {
       waitUntil: "domcontentloaded",
     });
+    expect((await agentModels).status()).toBe(200);
     await page.getByTestId("chat-head-model").click();
     const modelMenu = page.getByTestId("chat-head-model-menu");
     await expect(modelMenu).toContainText("Claude Sonnet 4.6");
