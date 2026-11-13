@@ -387,6 +387,12 @@ How it relates to what exists:
 - `wait_for_task(park: true)` is `resume_later(when: {task})`.
 - `wait_for_task(resume_at)` is `resume_later(when: {at})`.
 
+A park on tasks holds its task with `depends_on` links. The ones the park
+wrote itself are recorded on the suspension (`resume_on.links`), and the
+run that resumes the park removes them. A target that is reopened later
+then neither holds the task again nor shows up in later prompts as a
+declared dependency. Links the task already declared when it parked stay.
+
 Both tools keep their names and arguments, because agents and templates
 use them. Their implementation becomes one call into `Store.Suspend`, and
 `model.ParkedOutcome` becomes `suspend_kind = requested`. The new
