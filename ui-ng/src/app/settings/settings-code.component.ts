@@ -70,9 +70,6 @@ interface StateRepoEntryDto {
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    @if (confirmReq(); as req) {
-      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
-    }
     @switch (section()) {
       @case ("repositories") {
         <div class="s-card" data-testid="card-repositories">
@@ -468,6 +465,18 @@ interface StateRepoEntryDto {
                 (input)="newGitHost.set($any($event.target).value)"
               />
             </div>
+            <div class="s-field">
+              <label class="s-label" for="gc-scope">Scope (optional)</label>
+              <input
+                id="gc-scope"
+                class="s-input tabular"
+                type="text"
+                data-testid="input-git-conn-scope"
+                placeholder="All repos on host, or acme/widgets"
+                [value]="newGitScope()"
+                (input)="newGitScope.set($any($event.target).value)"
+              />
+            </div>
 
             @if (gitConnMode() === "existing") {
               <div class="s-field">
@@ -589,6 +598,11 @@ interface StateRepoEntryDto {
                 githubTokens().join(", ") || "none"
               }})</span
             >
+            <span class="s-hint" data-testid="gh-token-default-hint">
+              If no unscoped github.com Git connection exists yet, saving a
+              named token also registers it as the default github.com
+              connection.
+            </span>
             <div class="s-inline">
               <input
                 class="s-input s-input-inline tabular"
@@ -1055,6 +1069,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly gitConnMode = signal("inline");
   protected readonly newGitCred = signal("");
   protected readonly newGitHost = signal("github.com");
+  protected readonly newGitScope = signal("");
   protected readonly newGitType = signal("pat");
   protected readonly newGitSecret = signal("");
   protected readonly newGitAppId = signal("");
@@ -1247,11 +1262,23 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected async addRepo(): Promise<void> {
     const repo = this.newRepoSlug().trim();
     if (!repo) return;
-    
-    if (this.repoWarning(repo)) {
-       if (!confirm(`Warning: ${this.repoWarning(repo)}. Add anyway?`)) return;
+
+    const warn = this.repoWarning(repo);
+    if (warn) {
+      this.confirmReq.set({
+        title: `Add repository ${repo} anyway?`,
+        message: `${warn}. Tasks targeting ${repo} will wait until a Git connection and local policy allow it.`,
+        accept: "Add anyway",
+        destructive: false,
+        run: () => this.performAddRepo(repo),
+      });
+      return;
     }
-    
+
+    await this.performAddRepo(repo);
+  }
+
+  private async performAddRepo(repo: string): Promise<void> {
     try {
       const cloneUrl = this.newRepoUrl().trim();
       await this.api.post("POST /api/repos", undefined, {
@@ -1345,21 +1372,15 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     }
   }
 
-  protected onConfirmDone(accepted: boolean): void {
-    const req = this.confirmReq();
-    this.confirmReq.set(null);
-    if (accepted && req) {
-      req.run().catch((err) => this.state.error.set(errText(err)));
-    }
-  }
-
-  protected readonly confirmReq = signal<ConfirmRequest | null>(null);
-
   protected async onConfirmDone(accepted: boolean): Promise<void> {
     const req = this.confirmReq();
     this.confirmReq.set(null);
     if (!accepted || !req) return;
-    await req.run();
+    try {
+      await req.run();
+    } catch (err) {
+      this.state.error.set(errText(err));
+    }
   }
 
   protected toggleRepoBypass(repo: string, on: boolean): void {
@@ -1420,11 +1441,13 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected async saveGitConnection(): Promise<void> {
     if (!this.canSubmitGitConnection()) return;
     const host = this.newGitHost().trim() || "github.com";
+    const scope = this.newGitScope().trim();
     let payload: Record<string, unknown>;
     if (this.gitConnMode() === "existing") {
       payload = {
         credential: this.newGitCred().trim(),
         host,
+        ...(scope ? { scope } : {}),
       };
     } else {
       const type = this.newGitType();
@@ -1432,6 +1455,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
         credential: "",
         host,
         type,
+        ...(scope ? { scope } : {}),
       };
       if (type === "pat") {
         payload["value"] = this.newGitSecret().trim();
@@ -1456,6 +1480,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
         payload,
       );
       this.newGitCred.set("");
+      this.newGitScope.set("");
       this.newGitSecret.set("");
       this.newGitAppId.set("");
       this.newGitAppInstallId.set("");
@@ -1505,12 +1530,22 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     const name = this.ghTokenName().trim();
     const value = this.ghTokenValue().trim();
     if (!name || !value) return;
+    const hadUnscopedDefault = this.gitConnections().some(
+      (c) => (!c.host || c.host === "github.com") && !c.scope,
+    );
     try {
       await this.api.put("PUT /api/github-tokens/{name}", { name }, { value });
       this.ghTokenName.set("");
       this.ghTokenValue.set("");
       await this.loadGitConnections();
-      this.snackbar.show(`Saved GitHub token ${name}`);
+      const nowHasDefault = this.gitConnections().some(
+        (c) => c.credential === name && !c.scope,
+      );
+      this.snackbar.show(
+        !hadUnscopedDefault && nowHasDefault
+          ? `Saved GitHub token ${name} and registered it as the default github.com connection`
+          : `Saved GitHub token ${name}`,
+      );
     } catch (err) {
       this.state.error.set(errText(err));
     }

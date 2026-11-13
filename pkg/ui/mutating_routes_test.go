@@ -1325,7 +1325,7 @@ func TestPutDeploymentAgentBackendMismatchID(t *testing.T) {
 
 func TestAddTargetRepoInvalidCloneUrl(t *testing.T) {
 	srv, _ := testServer(t)
-	body := `{"repo":"sidthe/grain","cloneUrl":"invalid-url"}`
+	body := `{"repo":"acme/widgets","cloneUrl":"invalid-url"}`
 	rec := do(t, srv, "POST", "/api/repos", body)
 	if rec.Code != 400 {
 		t.Errorf("invalid cloneUrl status = %d, want 400", rec.Code)

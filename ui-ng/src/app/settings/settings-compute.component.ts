@@ -43,6 +43,10 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -676,6 +680,20 @@ export function formatHostdLabels(
                           >
                             Set
                           </button>
+                          <button
+                            type="button"
+                            class="btn-text s-btn-sm"
+                            [attr.data-testid]="'clear-cred-' + b.id"
+                            [attr.aria-label]="'Clear credential for ' + b.id"
+                            [disabled]="
+                              !access.can(
+                                'DELETE /api/agent-backends/{id}/credential'
+                              )
+                            "
+                            (click)="clearBackendCred(b.id)"
+                          >
+                            Clear
+                          </button>
                         </div>
                       </td>
                       <td>
@@ -693,8 +711,26 @@ export function formatHostdLabels(
                             Refresh models
                           </button>
                         }
-                        <button type="button" class="btn-text s-btn-sm" (click)="editBackend(b)">Edit</button>
-                        <button type="button" class="btn-text s-btn-sm" [attr.data-testid]="'remove-backend-' + b.id" [disabled]="!access.can('DELETE /api/deployment/agent-backends/{backendId}')" (click)="deleteBackend(b.id)">Remove</button>
+                        <button
+                          type="button"
+                          class="btn-text s-btn-sm"
+                          (click)="editBackend(b)"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          class="btn-text s-btn-sm"
+                          [attr.data-testid]="'remove-backend-' + b.id"
+                          [disabled]="
+                            !access.can(
+                              'DELETE /api/deployment/agent-backends/{backendId}'
+                            )
+                          "
+                          (click)="startDeleteBackend(b.id)"
+                        >
+                          Remove
+                        </button>
                       </td>
                     </tr>
                   }
@@ -2243,6 +2279,28 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
+  protected async clearBackendCred(id: string): Promise<void> {
+    try {
+      await this.api.delete("DELETE /api/agent-backends/{id}/credential", {
+        id,
+      });
+      this.setBackendCredDraft(id, "");
+      this.snackbar.show(`Cleared credential for ${id}`);
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  protected startDeleteBackend(backendId: string): void {
+    this.confirmRequest.set({
+      title: `Remove connection ${backendId}?`,
+      message: `Tasks routed to ${backendId} will fall back to remaining connections or wait until another connection advertises their model.`,
+      accept: "Remove",
+      destructive: true,
+      run: () => this.deleteBackend(backendId),
+    });
+  }
+
   protected editBackend(b: BackendEntry): void {
     this.editingBackendId.set(b.id);
     this.newBackendId.set(b.id);
@@ -2713,7 +2771,11 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     const req = this.confirmRequest();
     this.confirmRequest.set(null);
     if (accepted && req) {
-      await req.run();
+      try {
+        await req.run();
+      } catch (err) {
+        this.state.recordError(err);
+      }
     }
   }
 }

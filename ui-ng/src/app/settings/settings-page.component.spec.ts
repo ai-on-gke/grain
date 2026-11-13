@@ -151,6 +151,14 @@ class FakeSettingsApi {
         },
       ]);
     }
+    if (key === "GET /api/deployment/reachable-repos") {
+      return Promise.resolve({
+        repos: [{ repo: "acme/alpha", push: true }],
+        errors: ["enterprise host returned HTML"],
+        hostMismatches: ["ghe.internal mismatch"],
+        reason: "1 repository reachable",
+      });
+    }
     return Promise.resolve({});
   };
 
@@ -850,18 +858,115 @@ describe("SettingsPageComponent (M13 D-12)", () => {
 
 
 
-  it("Settings → Repositories > renders reachable repos loading indicator and errors", async () => {
-    const { el, harness } = await mountSettings("/settings/repositories");
-    
-    const input = el.querySelector('[data-testid="input-add-repo"]') as HTMLInputElement;
-    if (input) {
-      input.dispatchEvent(new Event("focus"));
-      await harness.fixture.whenStable();
-      harness.fixture.detectChanges();
-    }
-    
-    // Verify it doesn't crash
-    expect(true).toBe(true);
+  it("renders reachable repos errors/mismatches and confirms adding an unreachable repository via g-confirm-dialog", async () => {
+    const { el, harness, api } = await mountSettings("/settings/repositories");
+
+    const input = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-add-repo"]',
+    )!;
+    expect(input).toBeTruthy();
+    input.dispatchEvent(new Event("focus"));
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.fixture.detectChanges();
+
+    expect(
+      Array.from(el.querySelectorAll("#reachable-repos-list option")).map(
+        (o) => (o as HTMLOptionElement).value,
+      ),
+    ).toContain("acme/alpha");
+    expect(el.textContent).toContain("enterprise host returned HTML");
+    expect(el.textContent).toContain("ghe.internal mismatch");
+
+    setInput(input, "acme/unreachable-repo");
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>('[data-testid="add-repo-btn"]')!.click();
+    harness.fixture.detectChanges();
+
+    const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+    expect(dialog?.textContent).toContain("acme/unreachable-repo");
+    expect(
+      api.calls.some((c) => c.key === "POST /api/repos"),
+    ).toBe(false);
+
+    el.querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "POST /api/repos" &&
+          (c.body as { repo?: string })?.repo === "acme/unreachable-repo",
+      ),
+    ).toBe(true);
   });
 
+  it("clears connection credentials, confirms connection removal, and passes Git connection scope", async () => {
+    const api = new FakeSettingsApi();
+    (api.deploymentBody as Record<string, unknown>)["agentBackends"] = [
+      { id: "claude-team", framework: "claude", name: "Claude Team" },
+    ];
+    const { el, harness } = await mountSettings("/settings/models", api);
+
+    const clearBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="clear-cred-claude-team"]',
+    )!;
+    expect(clearBtn).toBeTruthy();
+    clearBtn.click();
+    await harness.fixture.whenStable();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "DELETE /api/agent-backends/{id}/credential" &&
+          c.params?.["id"] === "claude-team",
+      ),
+    ).toBe(true);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="remove-backend-claude-team"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(el.querySelector('[data-testid="confirm-dialog"]')?.textContent).toContain(
+      "claude-team",
+    );
+    expect(
+      api.calls.some(
+        (c) => c.key === "DELETE /api/deployment/agent-backends/{backendId}",
+      ),
+    ).toBe(false);
+    el.querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "DELETE /api/deployment/agent-backends/{backendId}" &&
+          c.params?.["backendId"] === "claude-team",
+      ),
+    ).toBe(true);
+
+    await harness.navigateByUrl("/settings/git");
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    setInput(
+      el.querySelector<HTMLInputElement>('[data-testid="input-git-conn-scope"]')!,
+      "acme/widgets",
+    );
+    setInput(
+      el.querySelector<HTMLInputElement>('[data-testid="input-git-conn-secret"]')!,
+      "ghp_test_token_123",
+    );
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-git-conn-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "POST /api/deployment/git-connections" &&
+          (c.body as { scope?: string })?.scope === "acme/widgets",
+      ),
+    ).toBe(true);
+  });
 });
