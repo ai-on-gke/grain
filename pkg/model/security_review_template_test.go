@@ -96,6 +96,7 @@ func TestExternalSecurityReviewBodyHasNoPushContradiction(t *testing.T) {
 	for _, want := range []string{
 		"**This is a security review.**",
 		"authentication or authorization weakened",
+		"injection through prompts",
 		"**Correctness, second.**",
 		"add_review_comment",
 		"\"not a security issue\"",
