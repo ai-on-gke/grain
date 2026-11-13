@@ -28,19 +28,38 @@ export const TIP_DELAY_MS = 400;
 // pointer can move onto the tip itself (WCAG 1.4.13: hoverable).
 export const TIP_LEAVE_MS = 120;
 
+export const TIP_REGION_ID = "g-tip-region";
+
 // One tooltip element for the whole app (spec D-16): created on first
-// use, reused by every [gTip], role="tooltip".
+// use, reused by every [gTip], role="tooltip". It sits in a labelled
+// region at the end of <body>, shown only while the tip is, so a
+// showing tip is inside a landmark: bare in <body> it was "page content
+// not contained by landmarks" to axe, which failed the Inbox's dark
+// axe pass whenever the theme toggle's tip appeared mid-scan (ui-ng
+// e2e, 2026-11-13). The tip is position: fixed, so the wrapper changes
+// nothing on screen.
 function tipElement(doc: Document): HTMLElement {
   let el = doc.getElementById(TIP_ID);
   if (!el) {
+    const region = doc.createElement("div");
+    region.id = TIP_REGION_ID;
+    region.setAttribute("role", "region");
+    region.setAttribute("aria-label", "Tooltip");
+    region.hidden = true;
     el = doc.createElement("div");
     el.id = TIP_ID;
     el.className = "g-tip";
     el.setAttribute("role", "tooltip");
     el.hidden = true;
-    doc.body.appendChild(el);
+    region.appendChild(el);
+    doc.body.appendChild(region);
   }
   return el;
+}
+
+function setTipShown(el: HTMLElement, shown: boolean): void {
+  el.hidden = !shown;
+  if (el.parentElement?.id === TIP_REGION_ID) el.parentElement.hidden = !shown;
 }
 
 // The directive whose text the shared element is showing, if any: one
@@ -133,7 +152,7 @@ export class TipDirective implements OnDestroy {
     if (owner && owner !== this) owner.hide();
     const el = tipElement(this.doc);
     el.textContent = text;
-    el.hidden = false;
+    setTipShown(el, true);
     this.position(el);
     addToken(this.host.nativeElement, "aria-describedby", TIP_ID);
     if (owner !== this) {
@@ -155,7 +174,7 @@ export class TipDirective implements OnDestroy {
     owner = null;
     const el = this.doc.getElementById(TIP_ID);
     if (el) {
-      el.hidden = true;
+      setTipShown(el, false);
       el.removeEventListener("mouseenter", this.onTipEnter);
       el.removeEventListener("mouseleave", this.onTipLeave);
     }

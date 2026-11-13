@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "./fixtures";
 
 // The shell every /next/ page sits in, checked at each project's size and
@@ -59,4 +60,18 @@ test("the primary destinations are reachable by name from the Inbox", async ({
   await expect(
     page.getByRole("heading", { level: 1, name: "Tasks", exact: true }),
   ).toBeVisible();
+});
+
+// A showing tooltip is page content too: bare in <body> it sat outside
+// every landmark (axe "region"), which failed next-inbox's dark axe pass
+// whenever the theme toggle's tip appeared mid-scan (2026-11-13). Hover
+// on purpose and wait for the tip, so the case is not left to timing.
+test("a showing tooltip sits inside a landmark", async ({ page }) => {
+  await page.goto("inbox");
+  await page.getByTestId("theme-toggle").hover();
+  await expect(page.getByRole("tooltip")).toBeVisible();
+  const { violations } = await new AxeBuilder({ page })
+    .withRules(["region"])
+    .analyze();
+  expect(violations.map((v) => v.nodes.map((n) => n.html))).toEqual([]);
 });

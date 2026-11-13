@@ -423,3 +423,29 @@ persisted state back.
 - **Settings → Repositories shows the raw CI mode** (`github`).
 - **Settings → Git `Remove` on a git connection** also acts on one click.
   That is outside this area and was left alone.
+
+## Follow-up fixes (task 5386, merge-queue repair run)
+- **Cancelled tab switch (review of task 5515):** the leave guard also
+  runs when only `:tab` changes. `selectTab()` switched the pane before
+  navigating, so pressing Cancel left the Agents pane showing under a
+  `/ci` URL. Clicking CI again then reloaded the workflows over the
+  unsaved edit.
+  - **Fix:** `selectTab()` now waits for the router and switches only
+    when the navigation lands. The workflow and capabilities loaders
+    also never overwrite a group with unsaved edits.
+  - **Coverage:** a Vitest case (fails on the previous component) and an
+    e2e case in `next-repo-release-guards.spec.js`.
+- **`ui-ng e2e` red on `next-inbox.spec.js:174`:** the dark axe pass
+  failed `region` on `<div id="g-tip" role="tooltip">`. That is the theme
+  toggle's tooltip, appended bare to `<body>`, appearing mid-scan. This
+  is a real landmark gap that shows whenever a tooltip is up, not only
+  in this test.
+  - **Fix:** the shared tip now sits in a `role="region"
+    aria-label="Tooltip"` wrapper at the end of `<body>`, shown only
+    while the tip is (`shared/tip.directive.ts`). The tip is
+    `position: fixed`, so nothing moves.
+  - **Coverage:** `shell.spec.ts` hovers the toggle, waits for the
+    tooltip and runs axe's `region` rule. It failed on a build with the
+    old directive and passes with the fix. There is also a Vitest case
+    in `tip.directive.spec.ts`.
+  - **Result:** the full ui-ng e2e suite passed locally (43 tests).

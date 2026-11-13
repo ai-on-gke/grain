@@ -566,4 +566,60 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
     harness.detectChanges();
     expect(await router.navigateByUrl("/settings/repositories")).toBe(true);
   });
+  // Review of task 5386: a tab click with unsaved edits asks through the
+  // leave guard; Cancel used to leave the Agents pane under a /ci URL,
+  // and the click back on CI then reloaded the workflows over the edit.
+  it("keeps the tab and the unsaved workflow edit when a tab switch is cancelled", async () => {
+    const { el, harness } = await mountRepo("/repos/acme/platform/ci");
+    const router = TestBed.inject(Router);
+    const settle = async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      harness.detectChanges();
+    };
+    const yaml = () =>
+      el.querySelector<HTMLTextAreaElement>(
+        '[data-testid="input-repo-workflow"]',
+      );
+    yaml()!.value = "name: unsaved";
+    yaml()!.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repo-tab-agents"]',
+    )!.click();
+    await settle();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain(DISCARD_PROMPT);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await settle();
+    expect(router.url).toBe("/repos/acme/platform/ci");
+    expect(
+      el
+        .querySelector('[data-testid="repo-tab-ci"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("page");
+    expect(yaml()?.value).toBe("name: unsaved");
+
+    el.querySelector<HTMLButtonElement>('[data-testid="repo-tab-ci"]')!.click();
+    await settle();
+    expect(yaml()?.value).toBe("name: unsaved");
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repo-tab-agents"]',
+    )!.click();
+    await settle();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await settle();
+    expect(router.url).toBe("/repos/acme/platform/agents");
+    expect(
+      el
+        .querySelector('[data-testid="repo-tab-agents"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("page");
+  });
 });

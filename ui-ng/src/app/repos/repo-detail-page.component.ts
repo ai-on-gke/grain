@@ -1543,18 +1543,21 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     this.errorFrom.set(null);
   }
 
-  protected selectTab(tab: RepoTabId): void {
-    this.routeTab.set(tab);
+  // selectTab navigates first and switches the pane only once the router
+  // has gone there: the repo routes' leave guard may cancel the move
+  // (unsaved edits), and switching up front left the Agents pane under
+  // a /ci URL, after which a click back on CI -- a navigation to the URL
+  // already shown, which the router skips -- reloaded the workflows over
+  // the unsaved edit (review of task 5386). A navigation that lands
+  // reuses this page and its paramMap subscription loads the tab; one
+  // that changes route config builds a fresh page that loads itself.
+  protected async selectTab(tab: RepoTabId): Promise<void> {
+    if (tab === this.activeTab()) return;
     const h = this.resolvedHost();
     const o = this.resolvedOwner();
     const n = this.resolvedName();
     const base = h ? ["/repos", h, o, n] : ["/repos", o, n];
-    if (tab === "overview") {
-      void this.router.navigate(base);
-    } else {
-      void this.router.navigate([...base, tab]);
-    }
-    void this.loadTabData(tab);
+    await this.router.navigate(tab === "overview" ? base : [...base, tab]);
   }
 
   private params(): { owner: string; name: string } {
@@ -1690,6 +1693,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
             p,
           )
           .then((w) => {
+            // Never reload over an edit the reader has not saved.
+            if (this.dirty().has("workflows")) return;
             const list = (Array.isArray(w) ? w : (w?.workflows ?? [])).map(
               (item) => ({
                 path: item.path,
@@ -1718,7 +1723,10 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
             p,
           )
           .then((c) => {
-            if (Array.isArray(c?.defaultCapabilities)) {
+            if (
+              Array.isArray(c?.defaultCapabilities) &&
+              !this.dirty().has("agents")
+            ) {
               this.repoCaps.set(c.defaultCapabilities.join(", "));
             }
           })

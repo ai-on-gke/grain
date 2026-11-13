@@ -149,3 +149,30 @@ test("a phone deep link keeps the selected repository tab on screen", async ({
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(390);
 });
+
+// Review of task 5386: a tab click with an unsaved workflow asks through
+// the leave guard; Cancel used to switch the pane anyway (Agents under a
+// /ci URL), and clicking back on CI reloaded the workflows over the edit.
+test("cancelling a tab switch keeps the tab and the unsaved workflow edit", async ({
+  page,
+}) => {
+  await page.goto("/next/repos/acme/widgets/ci");
+  const yaml = page.getByTestId("input-repo-workflow");
+  await yaml.fill("name: unsaved-5386\n");
+  await page.getByTestId("repo-tab-agents").click();
+  await expect(page.getByTestId("confirm-dialog")).toContainText(
+    "You have unsaved changes here.",
+  );
+  await page.getByTestId("confirm-cancel").click();
+  await expect(page).toHaveURL(/\/next\/repos\/acme\/widgets\/ci$/);
+  await expect(page.getByTestId("repo-tab-ci")).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await page.getByTestId("repo-tab-ci").click();
+  await expect(yaml).toHaveValue("name: unsaved-5386\n");
+
+  await page.getByTestId("repo-tab-agents").click();
+  await page.getByTestId("confirm-accept").click();
+  await expect(page).toHaveURL(/\/next\/repos\/acme\/widgets\/agents$/);
+});
