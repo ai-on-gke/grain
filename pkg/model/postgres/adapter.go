@@ -712,6 +712,7 @@ var (
 	boolColumns = []string{
 		"auto_merge",
 		"tail_fetched",
+		"history_only",
 		"requires_person",
 		"deprecated",
 		"blocks",

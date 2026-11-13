@@ -511,15 +511,19 @@ func (o GitHubCIOutcome) JobKey() string {
 }
 
 // GitHubCIOutcomes is every recorded GitHub CI job, oldest first -- the
-// whole table (kept 14 days), for the reason TaskTimings gives, and
-// windowed by pkg/metrics against each job's own conclusion. It reads
+// whole table (fourteen days of every ref, eight weeks of the default
+// branches and release candidates: GitHubCIPrune), for the reason
+// TaskTimings gives, and windowed by pkg/metrics against each job's own
+// conclusion. A HistoryOnly failure is left out: it is kept for its
+// failing tests after its branch's passes went, and counted beside none
+// of them it would read that branch as red. It reads
 // github_ci_job only: grain's own CI (ci_run) is CIJobTimings', and the
 // two never share a query.
 func (s *Store) GitHubCIOutcomes(ctx context.Context) ([]GitHubCIOutcome, error) {
 	var out []GitHubCIOutcome
 	err := each(ctx, s.db,
 		"SELECT `repo`,`check_run_id`,`ref`,`commit_sha`,`workflow`,`job_name`,`run_attempt`,`conclusion`,"+
-			"`completed_at`,`recorded_at` FROM `github_ci_job` "+
+			"`completed_at`,`recorded_at` FROM `github_ci_job` WHERE `history_only` = 0 "+
 			"ORDER BY COALESCE(`completed_at`, `recorded_at`), `check_run_id`", nil,
 		func(rows *sql.Rows) error {
 			var o GitHubCIOutcome

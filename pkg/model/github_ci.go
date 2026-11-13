@@ -91,6 +91,11 @@ type GitHubCIJob struct {
 	// weeks of a repository's jobs rather than over the logs grain still
 	// holds.
 	FailedTests []string `json:"failedTests,omitempty"`
+	// HistoryOnly marks a failed job a pruning kept past its branch's
+	// other jobs, for its verdict and FailedTests alone (GitHubCIPrune):
+	// the passes beside it are gone, so GitHubCIOutcomes leaves it out of
+	// the rates it feeds rather than read the branch as failing.
+	HistoryOnly bool `json:"historyOnly,omitempty"`
 	// TailFetched records that grain has already asked GitHub for this
 	// job's log, whatever it answered, so a log past its retention window
 	// is asked for once rather than every cycle.
@@ -354,7 +359,7 @@ func clampGitHubCIText(s string) string {
 
 const gitHubCIJobColumns = "`repo`,`check_run_id`,`source`,`app`,`ref`,`commit_sha`,`workflow`,`run_id`," +
 	"`run_attempt`,`job_name`,`conclusion`,`started_at`,`completed_at`,`failing_step`,`run_url`," +
-	"`job_url`,`output`,`failure_tail`,`tail_source`,`tail_fetched`,`via`,`recorded_at`,`updated_at`,`failed_tests`"
+	"`job_url`,`output`,`failure_tail`,`tail_source`,`tail_fetched`,`via`,`recorded_at`,`updated_at`,`failed_tests`,`history_only`"
 
 func putGitHubCIJob(ctx context.Context, tx *sql.Tx, j GitHubCIJob) error {
 	var started, completed any
@@ -365,11 +370,11 @@ func putGitHubCIJob(ctx context.Context, tx *sql.Tx, j GitHubCIJob) error {
 		completed = j.CompletedAt.UTC()
 	}
 	_, err := tx.ExecContext(ctx,
-		"REPLACE INTO `github_ci_job` ("+gitHubCIJobColumns+") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `github_ci_job` ("+gitHubCIJobColumns+") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		j.Repo, j.CheckRunID, j.Source, j.App, j.Ref, j.Commit, j.Workflow, j.RunID,
 		j.RunAttempt, j.JobName, j.Conclusion, started, completed, j.FailingStep, j.RunURL,
 		j.JobURL, j.Output, j.FailureTail, j.TailSource, j.TailFetched, j.Via,
-		j.RecordedAt.UTC(), j.UpdatedAt.UTC(), strings.Join(j.FailedTests, "\n"))
+		j.RecordedAt.UTC(), j.UpdatedAt.UTC(), strings.Join(j.FailedTests, "\n"), j.HistoryOnly)
 	return err
 }
 
@@ -380,7 +385,7 @@ func scanGitHubCIJob(scan func(...any) error) (GitHubCIJob, error) {
 	if err := scan(&j.Repo, &j.CheckRunID, &j.Source, &j.App, &j.Ref, &j.Commit, &j.Workflow, &j.RunID,
 		&j.RunAttempt, &j.JobName, &j.Conclusion, &started, &completed, &j.FailingStep, &j.RunURL,
 		&j.JobURL, &j.Output, &j.FailureTail, &j.TailSource, &j.TailFetched, &j.Via,
-		&j.RecordedAt, &j.UpdatedAt, &tests); err != nil {
+		&j.RecordedAt, &j.UpdatedAt, &tests, &j.HistoryOnly); err != nil {
 		return GitHubCIJob{}, err
 	}
 	if tests != "" {
@@ -576,6 +581,7 @@ func (s *Store) PruneGitHubCIJobs(ctx context.Context, p GitHubCIPrune) (int64, 
 				args = append(args, ref)
 			}
 		}
+		onKeptRef := strings.Join(kept[1:], " OR ")
 		res, err = tx.ExecContext(ctx, "DELETE FROM `github_ci_job` WHERE `recorded_at` < ? AND NOT ("+
 			strings.Join(kept, " OR ")+")", args...)
 		if err != nil {
@@ -583,6 +589,13 @@ func (s *Store) PruneGitHubCIJobs(ctx context.Context, p GitHubCIPrune) (int64, 
 		}
 		dropped, _ := res.RowsAffected()
 		n += dropped
+		// A failure on any other ref is all that is left of its branch now:
+		// history_only, so the outcome rates leave it out rather than count
+		// it against passes that are gone (GitHubCIOutcomes).
+		if _, err := tx.ExecContext(ctx, "UPDATE `github_ci_job` SET `history_only` = 1 "+
+			"WHERE `recorded_at` < ? AND `history_only` = 0 AND NOT ("+onKeptRef+")", args...); err != nil {
+			return err
+		}
 		_, err = tx.ExecContext(ctx, "UPDATE `github_ci_job` SET `failure_tail` = '', `output` = '' "+
 			"WHERE `recorded_at` < ? AND (`failure_tail` <> '' OR `output` <> '')", p.Compact.UTC())
 		return err

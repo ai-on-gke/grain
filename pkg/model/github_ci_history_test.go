@@ -128,8 +128,24 @@ func testPruneGitHubCIJobsKeepsVerdictHistory(t *testing.T, st *model.Store) {
 	if old.FailureTail != "" || !reflect.DeepEqual(old.FailedTests, []string{"TestFlaky"}) || old.Conclusion != "failure" {
 		t.Errorf("an old failure keeps its verdict and failing tests, not its tail: %+v", old)
 	}
+	if !old.HistoryOnly || byID[1].HistoryOnly || byID[2].HistoryOnly || byID[9].HistoryOnly {
+		t.Errorf("history_only should mark the old task-branch failure alone: %+v", left)
+	}
 	if recent := byID[9]; recent.FailureTail != tail {
 		t.Errorf("a recent failure keeps its tail: %+v", recent)
+	}
+	// The outcome rates leave the failure out: its branch's passes are gone.
+	outcomes, err := st.GitHubCIOutcomes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range outcomes {
+		if o.CheckRunID == 4 {
+			t.Errorf("a history-only failure fed the outcome rates: %+v", o)
+		}
+	}
+	if len(outcomes) != 5 {
+		t.Errorf("outcomes = %d rows, want the 5 that are not history-only", len(outcomes))
 	}
 	// A prune with no Compact forgets only by Before, as it always did.
 	if _, err := st.PruneGitHubCIJobs(ctx, model.GitHubCIPrune{Before: now.Add(-56 * 24 * time.Hour)}); err != nil {

@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // actionsForge is a forge serving one workflow run, its jobs, one job's
@@ -394,5 +395,32 @@ func TestActionsJobLogAnsweredEmptyNamesStatusHostsAndServer(t *testing.T) {
 				t.Errorf("error %q leaks the signed URL's query", err)
 			}
 		})
+	}
+}
+
+// A window's ends are GitHub's own ?created= qualifier, so a listing of an
+// older window is GitHub's runs of that window rather than the newest
+// MaxActionsRunsLimit narrowed to it (grain/task-5274).
+func TestListActionsRunsAsksForTheCreatedWindow(t *testing.T) {
+	t.Parallel()
+	var asked []string
+	forge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Query().Get("created"))
+		w.Write([]byte(`{"total_count":0,"workflow_runs":[]}`))
+	}))
+	t.Cleanup(forge.Close)
+	transport := &RealTransport{Host: strings.TrimPrefix(forge.URL, "http://"), ledger: &callerLedger{logf: func(string, ...any) {}}}
+	client := NewClient(transport, StaticToken{strPtr("t")})
+
+	since := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)
+	for _, q := range []ActionsRunsQuery{{Since: since}, {Until: until}, {Since: since, Until: until}, {}} {
+		if _, err := client.ListActionsRunsPage("acme", "widgets", q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{">=2026-10-16T00:00:00Z", "<2026-11-06T00:00:00Z", "2026-10-16T00:00:00Z..2026-11-06T00:00:00Z", ""}
+	if strings.Join(asked, "|") != strings.Join(want, "|") {
+		t.Fatalf("created = %q, want %q", asked, want)
 	}
 }
