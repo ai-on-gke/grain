@@ -109,9 +109,33 @@ export const routes: Routes = [
         (m) => m.ProcessesPageComponent,
       ),
   },
+  // One item, deep-linked: /processes/<tab>/<id> selects that schedule,
+  // template or suite, and /processes/suites/runs/<id> that suite run --
+  // the classic UI's own URL for a run, so a link written for either UI
+  // lands on the run here rather than falling through to the inbox.
+  {
+    path: "processes/suites/runs/:runId",
+    title: "Processes · grain",
+    data: { tab: "suites" },
+    loadComponent: () =>
+      import("./processes/processes-page.component").then(
+        (m) => m.ProcessesPageComponent,
+      ),
+  },
+  {
+    path: "processes/:tab/:id",
+    title: "Processes · grain",
+    loadComponent: () =>
+      import("./processes/processes-page.component").then(
+        (m) => m.ProcessesPageComponent,
+      ),
+  },
   { path: "schedules", redirectTo: "processes/schedules", pathMatch: "full" },
   { path: "templates", redirectTo: "processes/templates", pathMatch: "full" },
   { path: "suites", redirectTo: "processes/suites", pathMatch: "full" },
+  { path: "schedules/:id", redirectTo: "processes/schedules/:id" },
+  { path: "templates/:id", redirectTo: "processes/templates/:id" },
+  { path: "suites/:id", redirectTo: "processes/suites/:id" },
   {
     path: "telemetry",
     title: "Telemetry · grain",

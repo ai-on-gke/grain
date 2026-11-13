@@ -504,6 +504,7 @@ describe("ProcessesPageComponent (D-9)", () => {
           [
             { path: "processes", component: ProcessesPageComponent },
             { path: "processes/:tab", component: ProcessesPageComponent },
+            { path: "processes/:tab/:id", component: ProcessesPageComponent },
             { path: "task/:id", component: ProcessesPageComponent },
           ],
           withComponentInputBinding(),
@@ -1003,5 +1004,33 @@ describe("ProcessesPageComponent (D-9)", () => {
     expect(
       root.querySelectorAll('[data-testid^="decl-repo-row-"]').length,
     ).toBe(2);
+  });
+  it("deep-links a template by id and asks for no composition a required field without a default cannot fill", async () => {
+    api.templates.push({
+      id: "tmpl-needs-input",
+      name: "needs-input",
+      title: "Bump {{pkg}}",
+      description: "Bump {{pkg}}.",
+      fields: [{ name: "pkg", required: true }],
+      autoMerge: false,
+      capabilities: [],
+    });
+    const harness = await RouterTestingHarness.create(
+      "/processes/templates/tmpl-needs-input",
+    );
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+    expect(
+      root
+        .querySelector('[data-testid="tmpl-row-tmpl-needs-input"]')
+        ?.getAttribute("aria-current"),
+    ).toBe("true");
+    expect(
+      api.calls.some(
+        (c) =>
+          c.route === "GET /api/templates/{id}/composition" &&
+          JSON.stringify(c.params ?? {}).includes("tmpl-needs-input"),
+      ),
+    ).toBe(false);
   });
 });

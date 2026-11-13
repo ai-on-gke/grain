@@ -256,7 +256,7 @@ type SuitesPaneView = "suites" | "runs";
           {{ err }}
         </p>
       }
-      @if (store.actionError(); as err) {
+      @if (!modalOpen() && store.actionError(); as err) {
         <p
           class="banner banner-error"
           role="alert"
@@ -557,7 +557,7 @@ type SuitesPaneView = "suites" | "runs";
                           <div class="proc-row-sub">
                             <span class="tabular"
                               >{{ sr.repo }} &#64;
-                              {{ sr.base || "default" }}</span
+                              {{ sr.base || "default branch" }}</span
                             >
                             <span class="tabular"
                               >·
@@ -781,8 +781,17 @@ type SuitesPaneView = "suites" | "runs";
                     <span
                       >Overlap: <strong>{{ s.overlap || "skip" }}</strong></span
                     >
-                    @if (s.nextRunAt) {
-                      <span class="tabular">Next: {{ s.nextRunAt }}</span>
+                    @if (s.suppressed) {
+                      <!-- A suppressed schedule files nothing, so the
+                           far-future placeholder the store keeps in
+                           nextRunAt is not a time it will run. -->
+                      <span class="tabular" data-testid="sched-next-run"
+                        >Next: suppressed</span
+                      >
+                    } @else if (s.nextRunAt) {
+                      <span class="tabular" data-testid="sched-next-run"
+                        >Next: {{ s.nextRunAt }}</span
+                      >
                     }
                     @if (s.lastRunAt) {
                       <span class="tabular">Last: {{ s.lastRunAt }}</span>
@@ -1082,7 +1091,7 @@ type SuitesPaneView = "suites" | "runs";
                   <div class="proc-meta-row">
                     <span class="tabular"
                       >Target: <strong>{{ sr.repo }}</strong> &#64;
-                      {{ sr.base || "default" }}</span
+                      {{ sr.base || "default branch" }}</span
                     >
                     <span
                       >{{ suiteModeOf(sr.mode, sr.count, sr.maxPasses) }}
@@ -1272,7 +1281,7 @@ type SuitesPaneView = "suites" | "runs";
                             (click)="selectSuiteRun(r.id, true)"
                           >
                             Run #{{ r.id }} · {{ r.repo }} &#64;
-                            {{ r.base }} (pass {{ r.pass }})
+                            {{ r.base || "default branch" }} (pass {{ r.pass }})
                           </button>
                           <span class="ci-provider-tag">{{ r.status }}</span>
                         </li>
@@ -1744,7 +1753,7 @@ type SuitesPaneView = "suites" | "runs";
               <span>Every N minutes</span>
               <input
                 type="number"
-                min="5"
+                min="10"
                 [value]="sDraftEveryMin()"
                 (input)="sDraftEveryMin.set(+$any($event.target).value || 15)"
               />
@@ -1927,6 +1936,17 @@ type SuitesPaneView = "suites" | "runs";
           }
         }
 
+        @if (store.actionError(); as err) {
+          <!-- The page's own error banner sits behind this dialog (inert
+               while it is open), so a refused save says why here. -->
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2071,6 +2091,17 @@ type SuitesPaneView = "suites" | "runs";
           }
         }
 
+        @if (store.actionError(); as err) {
+          <!-- The page's own error banner sits behind this dialog (inert
+               while it is open), so a refused save says why here. -->
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           <button type="button" class="btn-text" (click)="closeLaunchDialog()">
             Cancel
@@ -2226,6 +2257,17 @@ type SuitesPaneView = "suites" | "runs";
           ></button>
           <span>Auto-merge passing pull requests</span>
         </div>
+        @if (store.actionError(); as err) {
+          <!-- The page's own error banner sits behind this dialog (inert
+               while it is open), so a refused save says why here. -->
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2386,6 +2428,17 @@ type SuitesPaneView = "suites" | "runs";
           </div>
         }
 
+        @if (store.actionError(); as err) {
+          <!-- The page's own error banner sits behind this dialog (inert
+               while it is open), so a refused save says why here. -->
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2476,6 +2529,17 @@ type SuitesPaneView = "suites" | "runs";
             (input)="runSuiteBase.set($any($event.target).value)"
           />
         </label>
+        @if (store.actionError(); as err) {
+          <!-- The page's own error banner sits behind this dialog (inert
+               while it is open), so a refused save says why here. -->
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2535,6 +2599,17 @@ type SuitesPaneView = "suites" | "runs";
             (input)="wfEditorText.set($any($event.target).value)"
           ></textarea>
         </label>
+        @if (store.actionError(); as err) {
+          <!-- The page's own error banner sits behind this dialog (inert
+               while it is open), so a refused save says why here. -->
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           @if (wfEditorOriginalPath() && canEditWorkflow()) {
             <button
@@ -2584,6 +2659,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   readonly launchTemplate = input<string | undefined>(undefined);
   readonly run = input<string | undefined>(undefined);
   readonly runSuite = input<string | undefined>(undefined);
+  // Deep links (app.routes.ts): /processes/<tab>/<id> names one schedule,
+  // template or suite; /processes/suites/runs/<runId> one suite run.
+  readonly id = input<string | undefined>(undefined);
+  readonly runId = input<string | undefined>(undefined);
 
   protected readonly store = inject(ProcessesStore);
   protected readonly access = inject(AccessService);
@@ -2859,9 +2938,58 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   });
 
   private handledDeepLinkKey = "";
+  private handledItemLinkKey = "";
 
   constructor() {
     afterNextRender(() => this.sp.attach());
+
+    // A dialog opens with no error left over from an earlier action, so
+    // the one it shows (proc-dialog-error) is always its own.
+    let modalWasOpen = false;
+    effect(() => {
+      const open = this.modalOpen();
+      untracked(() => {
+        if (open && !modalWasOpen) this.store.actionError.set(null);
+        modalWasOpen = open;
+      });
+    });
+
+    // Select the deep-linked item once its list has loaded, before the
+    // auto-select below would pick the top row instead.
+    effect(() => {
+      const loaded = this.store.loaded();
+      const tab = this.activeTab();
+      const id = this.id();
+      const runId = this.runId();
+      // Read the lists so a link to an item that arrives with a later
+      // refresh still lands on it.
+      const scheds = this.store.schedules();
+      const tmpls = this.store.templates();
+      const suites = this.store.suites();
+      untracked(() => {
+        if (!loaded || (!id && !runId)) return;
+        const key = `${tab}:${id ?? ""}:${runId ?? ""}`;
+        if (key === this.handledItemLinkKey) return;
+        if (runId) {
+          const n = Number(runId);
+          if (!Number.isInteger(n) || n <= 0) return;
+          this.handledItemLinkKey = key;
+          this.selectSuiteRun(n, true);
+          return;
+        }
+        const target = id as string;
+        if (tab === "schedules" && scheds.some((s) => s.id === target)) {
+          this.handledItemLinkKey = key;
+          this.selectSchedule(target, true);
+        } else if (tab === "templates" && tmpls.some((t) => t.id === target)) {
+          this.handledItemLinkKey = key;
+          this.selectTemplate(target, true);
+        } else if (tab === "suites" && suites.some((s) => s.id === target)) {
+          this.handledItemLinkKey = key;
+          this.selectSuite(target, true);
+        }
+      });
+    });
 
     // Auto-select top item per tab on desktop when data loads.
     effect(() => {
@@ -2873,6 +3001,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const repos = this.filteredDeclRepos();
       untracked(() => {
         if (!loaded) return;
+        // A deep link picks its own item (the effect above).
+        if (this.id() || this.runId()) return;
         const isDesktop = (this.doc.defaultView?.innerWidth ?? 1280) >= 600;
         if (!isDesktop) return;
         if (tab === "schedules" && !this.selectedScheduleId() && scheds[0]) {
@@ -3016,6 +3146,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       for (const f of tmpl.fields ?? []) {
         if (f.default) defaults[f.name] = f.default;
       }
+      // A required field with no default has no value to compose with:
+      // the server refuses the preview (400 "field is required"), so
+      // asking only logs a failed request on every selection.
+      if ((tmpl.fields ?? []).some((f) => f.required && !f.default)) return;
       void this.store
         .fetchTemplateComposition(
           id,
