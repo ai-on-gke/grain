@@ -169,6 +169,8 @@ export interface Task {
   reviewers?: string[];
   reviewTemplateId?: string;
   reviewTemplateName?: string;
+  // The template the task was filed from, absent for one written from scratch.
+  templateId?: string;
   sandboxCpus?: number;
   sandboxMemoryMb?: number;
   sandboxDiskGb?: number;

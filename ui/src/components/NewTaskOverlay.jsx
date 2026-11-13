@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import AccessGate from "./AccessGate.jsx";
+import { useAccess } from "../AccessContext.jsx";
 import { isApiGrant, isLegacyApiGrant } from "../apiGrants.js";
 import GrantsPicker from "./GrantsPicker.jsx";
 import { checkGrants, localGrantHandlers } from "./capabilityMethods.js";
@@ -112,6 +113,7 @@ export default function NewTaskOverlay({
   onOpenSettings,
   showError,
 }) {
+  const { reason: accessReason } = useAccess(config);
   // If there is a stored draft and no explicit prefill from a button,
   // seed the form from the draft so leaving the window preserves work.
   //
@@ -245,6 +247,10 @@ export default function NewTaskOverlay({
   const [title, setTitle] = useState(
     () => draft?.title ?? prefill?.title ?? "",
   );
+  // Create task's "what is missing" tooltip (below), open while hovered
+  // or focused and for a few seconds after a tap.
+  const [blockedTipHovered, setBlockedTipHovered] = useState(false);
+  const [blockedTipTapped, setBlockedTipTapped] = useState(false);
   const [description, setDescription] = useState(
     () => draft?.description ?? prefill?.description ?? "",
   );
@@ -2293,6 +2299,43 @@ export default function NewTaskOverlay({
   const moreSlots = slots.filter((s) => s.visibility === "more");
   const renderSlot = (s) => <Fragment key={s.key}>{s.node}</Fragment>;
 
+  // What keeps Create task from being offered, in words, so a disabled
+  // button says what it is waiting for rather than leaving it to be
+  // guessed (grain/task-4298 O1). The first missing thing wins, in the
+  // order the form asks for them.
+  const submitBlocker =
+    !title.trim() && !pickedTemplate
+      ? `Give the task a ${(F.title.label || "Title").toLowerCase()}, or pick a template.`
+      : !noRepo && !repo.trim() && !pickedTemplate?.repo
+        ? `Pick a repo under ${F.repo.label || "Repos"}, or choose No repo.`
+        : !noRepo && newBranch && !newBranchName.trim()
+          ? `Name the new branch, or untick ${F.newBranch.label || "Create a new branch"}.`
+          : priorityInvalid
+            ? "Fix the task priority: it must be a whole number."
+            : forkHeadInvalid
+              ? `Fix the ${F.base.label || "Base branch"}: it is not a branch grain can use.`
+              : "";
+  const accessRepo = noRepo ? undefined : repo.trim() || undefined;
+  const blockedWhy = accessReason("tasks:write", accessRepo)
+    ? ""
+    : submitBlocker;
+  // The tapped tooltip goes away by itself, as a long-pressed one does.
+  useEffect(() => {
+    if (!blockedTipTapped) return undefined;
+    const timer = setTimeout(() => setBlockedTipTapped(false), 3000);
+    return () => clearTimeout(timer);
+  }, [blockedTipTapped]);
+  const submitButton = (
+    <Button
+      type="submit"
+      variant="contained"
+      onClick={markSubmitAttempt}
+      disabled={submitting || !!submitBlocker}
+    >
+      Create task
+    </Button>
+  );
+
   return (
     <SidePanel
       title="New task"
@@ -2317,27 +2360,33 @@ export default function NewTaskOverlay({
           ) : (
             <span />
           )}
-          <AccessGate
-            scope="tasks:write"
-            repo={noRepo ? undefined : repo.trim() || undefined}
-            config={config}
+          {/* A disabled button takes no pointer events, so the tooltip
+            saying what is missing hangs on a wrapper, as AccessGate's
+            does. The wrapper is drawn whether or not anything is
+            missing, so typing the last missing field does not remount
+            the button. A refused role says so through AccessGate
+            instead, rather than through two tooltips at once. A tap
+            shows it too, for a while: on a phone there is no hover, and
+            the mouse events a tap sends close a hover tooltip as soon
+            as it opens. */}
+          <Tooltip
+            title={blockedWhy}
+            describeChild
+            open={blockedTipHovered || blockedTipTapped}
+            onOpen={() => setBlockedTipHovered(true)}
+            onClose={() => setBlockedTipHovered(false)}
           >
-            <Button
-              type="submit"
-              variant="contained"
-              onClick={markSubmitAttempt}
-              disabled={
-                submitting ||
-                priorityInvalid ||
-                forkHeadInvalid ||
-                (!title.trim() && !pickedTemplate) ||
-                (!noRepo && !repo.trim() && !pickedTemplate?.repo) ||
-                (!noRepo && newBranch && !newBranchName.trim())
-              }
+            <span
+              data-create-blocked={blockedWhy ? "" : undefined}
+              tabIndex={blockedWhy ? 0 : undefined}
+              onClick={() => blockedWhy && setBlockedTipTapped(true)}
+              style={{ display: "inline-flex", flexDirection: "column" }}
             >
-              Create task
-            </Button>
-          </AccessGate>
+              <AccessGate scope="tasks:write" repo={accessRepo} config={config}>
+                {submitButton}
+              </AccessGate>
+            </span>
+          </Tooltip>
         </Stack>
       }
     >

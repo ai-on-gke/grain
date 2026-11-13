@@ -48,7 +48,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // DefaultStateDir matches bwsalmon/granule's own default: pkg/cli's
@@ -402,42 +401,14 @@ func (c Command) Create(ctx context.Context, stateDir, name string, extraArgs ..
 
 // Delete runs "granule vm delete" through c.
 //
-// A delete that finds docker already removing the VM's container is not
-// a failure: something else in this process -- a run's Release racing an
-// orphan sweep, say -- asked first, and what this caller wanted is
-// already under way. granule's own `docker rm -f` treats only "No such
-// container" as gone, so its delete fails on docker's "removal of
-// container ... is already in progress" before it reaches the saved
-// state. The delete is retried until that removal settles, when granule
-// finds no container and clears the state the way a plain delete does;
-// one that has still not settled when the retries or ctx run out is
-// success anyway, since the container is going regardless and a state
-// file left behind is the next sweep's to clear.
+// A delete that finds docker already removing the VM's container -- a
+// run's Release racing an orphan sweep, say -- needs nothing here:
+// granule's own `docker rm -f` waits that removal out and then clears the
+// saved state (gke-labs/granule#256). One that has not settled within
+// granule's own bound, or before ctx ends, is an error.
 func (c Command) Delete(ctx context.Context, stateDir, name string) error {
-	for attempt := 1; ; attempt++ {
-		err := c.vm(ctx, "delete", stateDir, name)
-		if err == nil || !RemovalInProgress(err) {
-			return err
-		}
-		if attempt >= deleteInProgressAttempts {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(deleteInProgressInterval):
-		}
-	}
+	return c.vm(ctx, "delete", stateDir, name)
 }
-
-// deleteInProgressAttempts and deleteInProgressInterval bound how long
-// Delete waits out a removal someone else started: long enough for docker
-// to drop a VM's tens of GB of overlay, short enough that a release does
-// not sit on a removal that has wedged. Variables so tests need not wait.
-var (
-	deleteInProgressAttempts = 30
-	deleteInProgressInterval = 2 * time.Second
-)
 
 // RemovalInProgress reports whether err is docker refusing a `docker rm`
 // because the same container is already being removed -- which, for a

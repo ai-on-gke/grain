@@ -3703,6 +3703,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Skills:               chosenSkills,
 		ReviewTemplateID:     reviewTemplateID,
 		TemplateID:           filedFrom,
+		SourceTemplateID:     strings.TrimSpace(req.TemplateID),
 		Owner:                resolvedOwner,
 		Creator:              cmp.Or(strings.TrimSpace(req.Author), strings.TrimSpace(req.Creator)),
 		Proposer:             c.proposerForNewTask(ctx, resolvedOwner, sessionBehalf, proposedBy),
