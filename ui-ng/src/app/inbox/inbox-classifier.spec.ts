@@ -156,6 +156,38 @@ describe("inbox classifier", () => {
     ).toBeNull();
   });
 
+  it("offers a stuck task the control its sub-case names, and none where it names none", () => {
+    const stuck = (state: string, control?: string) =>
+      classifyTask(
+        task({
+          id: "22",
+          state,
+          stall: "this has stood here for more than 72h",
+          reason: { reason: `${state}/x`, class: "driven", control },
+        }),
+      );
+    const only = (e: ReturnType<typeof classifyTask>) =>
+      e?.actions.map((a) => [a.label, a.route, !!a.confirm]);
+    expect(stuck("queued", "Run now")?.groupId).toBe("stalled");
+    expect(only(stuck("queued", "Run now"))).toEqual([
+      ["Run now", "POST /api/tasks/{id}/run-now", false],
+    ]);
+    expect(only(stuck("running", "Cancel"))).toEqual([
+      ["Cancel", "POST /api/tasks/{id}/close", true],
+    ]);
+    // Its dialog must not offer a "Cancel" beside the Cancel it confirms.
+    expect(stuck("running", "Cancel")?.actions[0].dismiss).toBe(
+      "Keep it running",
+    );
+    expect(only(stuck("deferred", "Undefer"))).toEqual([
+      ["Undefer", "POST /api/tasks/{id}/undefer", false],
+    ]);
+    expect(only(stuck("completed", "Retry merge"))).toEqual([
+      ["Retry merge", "POST /api/tasks/{id}/retry-merge", false],
+    ]);
+    expect(only(stuck("running"))).toEqual([]);
+  });
+
   it("reads a pending release, its soak, breaking changes and a failed dispatch", () => {
     const n: Notification = {
       id: 7,

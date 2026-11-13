@@ -55,6 +55,27 @@ describe("merge gates", () => {
     ).toBe("passed");
   });
 
+  it("reads a changelist task's Submit from clSubmit, not its absent gates", () => {
+    expect(
+      submitBlock(t(undefined, { clSubmit: { canSubmit: true } }), true),
+    ).toBe("");
+    expect(
+      submitBlock(
+        t(undefined, {
+          clSubmit: {
+            canSubmit: false,
+            reasons: ["review is not approved (draft)", "behind head: sync it"],
+          },
+        }),
+      ),
+    ).toBe(
+      "Not submittable yet: review is not approved (draft); behind head: sync it.",
+    );
+    expect(submitBlock(t(undefined, { clSubmit: { canSubmit: false } }))).toBe(
+      "Not submittable yet.",
+    );
+  });
+
   it("blocks Submit on failing, findings, needed or unreported gates, not on running", () => {
     expect(submitBlock(t())).toContain("has not reported");
     expect(

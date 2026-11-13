@@ -247,7 +247,13 @@ export interface Task {
     canMail?: boolean;
     [key: string]: unknown;
   };
-  clSubmit?: { canSync?: boolean; [key: string]: unknown };
+  clSubmit?: {
+    canSubmit?: boolean;
+    canSync?: boolean;
+    reasons?: string[];
+    target?: string;
+    [key: string]: unknown;
+  };
   derivedFrom?: string[];
   designs?: string[];
   // Open dependencies and the state of each (GET /api/tasks).
