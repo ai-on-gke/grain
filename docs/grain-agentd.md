@@ -58,6 +58,8 @@ With `-join`:
 
 The unit restarts `grain-agentd` whenever it exits (`Restart=always`): a drain ends with a clean exit once the last agent CLI finishes, so the binary `~/.local/bin/grain-agentd` names takes over. A unit written by an older `grain-agentd install` said `Restart=on-failure`, which left a drained host offline; re-run `grain-agentd install -server <url>` without `-join`, passing the same `-name` and `-iap-audience` you installed with (the unit is rewritten from the flags given), to rewrite it. That re-run keeps the existing allowlist, credential and `-key-file`.
 
+To drain a host by hand -- before replacing `~/.local/bin/grain-agentd`, say -- run `grain-agentd -drain` as the same user (it finds the socket from `$XDG_RUNTIME_DIR`, or pass `-socket`), or send the unit `SIGUSR1` (`systemctl --user kill -s USR1 --kill-whom=main grain-agentd`). A host agent of this build cuts over: it keeps taking starts and exits the moment no agent CLI runs, refusing new starts only if that moment has not come within the allowlist's `drain_cap`. `SIGUSR1`, and `-drain` against an older host agent, refuse new starts at once and wait for the running CLIs, up to `drain_cap`, cancelling any still running then. Either way systemd starts it again.
+
 Then point a model connection at the accepted host name (**Settings → Models** → the connection → **Run on** `<host>`); see [host-placement.md](host-placement.md).
 
 ### Migrating an existing per-host token (`-rekey`)
