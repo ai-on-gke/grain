@@ -58,8 +58,11 @@ import (
 // or change it.
 
 // DefaultHostScriptPort is the host-script server's data-plane port
-// unless -listen says otherwise: beside the git proxy's 9728 and the
-// model proxy's 9729.
+// unless -listen says otherwise. It is inside the default
+// -sandbox-port-base block (9728-9983) at offset 5, which the daemon
+// leaves unassigned for it (daemon.OffsetHostScriptHeld); it stays there
+// because running sandboxes hold it (docs/ports.md, "Grandfathered"). A
+// new built-in takes a 42xx port from pkg/ports instead.
 const DefaultHostScriptPort = 9733
 
 // HostScriptBinDir is where a grant installs hostScriptFallback as
