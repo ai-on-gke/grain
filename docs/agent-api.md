@@ -146,7 +146,7 @@ or open network access -- asks for it with the turn-ending
  "requests": [
    {"kind": "read", "repo": "acme/docs"},
    {"kind": "write", "repo": "acme/lib", "base": "release-2"},
-   {"kind": "grant", "capability": "api:tasks:admin"},
+   {"kind": "grant", "capability": "https://grain.dev/capabilities/api#tasks:admin"},
    {"kind": "grant", "capability": "<server>#gcp-key", "with": {"permission_set": "reader"}},
    {"kind": "network", "access": "open"}]}
 ```
@@ -454,18 +454,22 @@ A workflow job can hold the same grants, in its `capabilities:`:
 ```yaml
 jobs:
   cut-or-promote:
-    capabilities: ["api:ci:read", "api:tasks:read", release-gate-read]
+    capabilities:
+      - "https://grain.dev/capabilities/api#ci:read"
+      - "https://grain.dev/capabilities/api#tasks:read"
+      - "https://grain.dev/capabilities/api#release-gate-read"
 ```
 
 A job has no agent to serve tools to, so its api grants are worth one
 bearer token instead (`pkg/capability/ciapi`). It is minted when the
 job's sandbox is acquired, revoked when the sandbox is released, and
+exported in every step as `GRAIN_API_TOKEN`, beside the listener's
+address as `GRAIN_API_URL`. In a VM or container sandbox both are also
 placed in `/home/debian/.grain-api/`: `url`, `token`, and `env`, which
-exports `GRAIN_API_URL` and `GRAIN_API_TOKEN`. However many api grants
-the job declares, it holds one token worth all of them.
+exports them; a host sandbox has only the environment. However many api
+grants the job declares, it holds one token worth all of them.
 
 ```sh
-. /home/debian/.grain-api/env
 curl -fsS -H "Authorization: Bearer $GRAIN_API_TOKEN" "$GRAIN_API_URL/api/ci/runs?ref=main&limit=100"
 ```
 
@@ -530,7 +534,8 @@ templates through grain's API.
 
 `release-gate-read`, the release train's capability
 (`design/design/release-from-trunk.design.md`, RFT-3), is the built-in preset
-`api:release-gate-read`. A job may declare it under either name.
+`https://grain.dev/capabilities/api#release-gate-read`. A job may still declare it by its retired names,
+`release-gate-read` or `api:release-gate-read`, for one release.
 
 ## GitHub Actions runs
 
@@ -1120,7 +1125,10 @@ It is refused on the caller's own task.
 An agent may edit, re-queue or speak in another task only when that
 task is within its own task's envelope. `PATCH /api/tasks/{id}`,
 `retry`, `reopen`, `undefer`, `resume`, `comments`, `reply`,
-`PUT /api/tasks/{id}/goal`, `agent-messages` and `notes` are refused
+`PUT` and `DELETE /api/tasks/{id}/goal`, `agent-messages`, `notes`, and the
+context routes `brief`, `compact` and `rollover` (a brief or handover
+becomes the target's next prompt, and a rollover files a successor
+carrying its grants) are refused
 with `403` on a target that carries a grant the calling task does not
 hold (a capability, an `api:*` scope, or the secrets and credentials a
 capability's arguments bind), writes to or reads a repository the
@@ -1323,7 +1331,9 @@ task by task:
   state, CI checks passed, open questions and pull requests.
   `grain list -external-ref CA-204` lists the tasks themselves.
 - `GET /api/events` (`tasks:read`) is an ordered, cursor-resumable feed of
-  `task.state`, `task.question`, `task.comment` and `task.ci` events
+  `task.state`, `task.question`, `task.comment` and `task.ci` events, and
+  of `notification.raised`/`acked`/`cleared` and host-script
+  `local_script.pending`/`answered` events
   ([integration-events.design.md](../design/design/integration-events.design.md)).
   It answers a JSON page (`?since=<event id>`, `limit` 1 to 500, default
   100; `since=now` starts at the head), long-polls with `&wait=<seconds>`
@@ -1333,6 +1343,12 @@ task by task:
   the caller reads. Events carry ids, one-line summaries, external
   references and attribution, never comment bodies, prompts, transcripts
   or CI logs, and the store keeps the latest 10,000.
+- `GET /api/tasks/{id}/diff-preview?max=N` (`tasks:read`) is the first
+  `N` hunks (default 6, at most 30) of the task's branch against its
+  base, file by file: each hunk cut to 40 lines of 240 characters, the
+  whole diff passed through the deployment's secret redactor, and the
+  change's total file and hunk counts beside them. A task whose branch
+  has nothing pushed yet answers 404.
 
 `grain skill install [-jetski|-claude|-codex|-gemini|-dir D] [-project]`
 writes a `SKILL.md` for the active context into the coding agent's skill
@@ -1542,11 +1558,12 @@ A director session granted the following can do the whole cut through
 generated tools:
 
 ```
-api:tasks:write  api:merge:write  api:ci:read  api:ci:write
-api:schedules:write  api:releases:write
+https://grain.dev/capabilities/api#tasks:write      https://grain.dev/capabilities/api#merge:write
+https://grain.dev/capabilities/api#ci:read          https://grain.dev/capabilities/api#ci:write
+https://grain.dev/capabilities/api#schedules:write  https://grain.dev/capabilities/api#releases:write
 ```
 
-Or grant `api:release-manager`, which also adds the reads.
+Or grant `https://grain.dev/capabilities/api#release-manager`, which also adds the reads.
 
 | Step | Tool | Arguments |
 |---|---|---|

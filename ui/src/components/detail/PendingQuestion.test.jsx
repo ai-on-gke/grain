@@ -78,4 +78,46 @@ describe("DetailOverlay pending question", () => {
         .querySelector(".question-summary-line"),
     ).toHaveTextContent("Which base branch?");
   });
+
+  // A director that relays a person's answer in its own words leaves the
+  // task waiting (task 2588): the pane keeps the question it is parked on,
+  // and says a person's reply is still needed.
+  it("keeps the question and says an agent's relayed answer did not count", () => {
+    open({
+      ...baseTask,
+      state: "awaiting_reply",
+      questionCommentId: 3,
+      uncountedAgentReplyFrom: "director for alice@example.com",
+      uncountedAgentReplyId: 4,
+      comments: [
+        {
+          id: 3,
+          author: "grain",
+          authorKind: "automation",
+          body: "Staging or production?",
+        },
+        {
+          id: 4,
+          author: "2578",
+          authorKind: "agent",
+          body: "Operator's answers, relayed: staging.",
+        },
+      ],
+    });
+    const box = screen.getByTestId("pending-question");
+    expect(box).toHaveTextContent("Staging or production?");
+    expect(box).not.toHaveTextContent("Operator's answers");
+    expect(screen.getByTestId("uncounted-agent-reply")).toHaveTextContent(
+      "director for alice@example.com relayed an answer in the conversation; a person's reply is still needed.",
+    );
+  });
+
+  it("says nothing of a relay when no agent's comment is waiting", () => {
+    open({
+      ...baseTask,
+      state: "awaiting_reply",
+      comments: [{ id: 3, body: "Which base branch?" }],
+    });
+    expect(screen.queryByTestId("uncounted-agent-reply")).toBeNull();
+  });
 });

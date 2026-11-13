@@ -71,6 +71,7 @@ var hostSpecSubcommands = map[string][]string{
 		"rename", "update", "revoke", "delete", "delete-revoked", "rekey", "register", "install", "set-owner"},
 	"init": {"workstation"},
 	"pr":   {"adopt", "review", "status", "submit"},
+	"qa":   {"status", "enable", "disable"},
 	"hub": {"status", "list", "directory", "route", "show", "create", "register", "unregister",
 		"update", "scopes", "rotate-credential", "upgrade", "resize", "delete", "restore", "stop", "start", "transfer", "accept-transfer",
 		"delegating-apps list", "delegating-apps create", "delegating-apps disable", "delegating-apps enable",
@@ -86,6 +87,7 @@ var hostSpecSubcommands = map[string][]string{
 	"skill":         {"install", "status"},
 	"state": {"status", "repo", "sync", "resets clear", "reformat", "restore-snapshot", "prepare-upgrade",
 		"check", "key show", "key path", "key import", "key retired", "key retired delete", "key wrap", "key unwrap"},
+	"upgrade": {"status", "start", "cancel", "rollback"},
 }
 
 // hostSpecNoHelp are commands -h cannot be asked of: hooks that read a

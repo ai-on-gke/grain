@@ -40,11 +40,13 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/policy"
+	"github.com/ai-on-gke/grain/pkg/qa"
 	"github.com/ai-on-gke/grain/pkg/sandboxaddr"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -218,6 +220,15 @@ func Run(ctx context.Context, cfg Config) error {
 	if lost := writerLockLost.Load(); lost != nil {
 		_ = db.Close()
 		return *lost
+	}
+	// Every read-write transaction from here on first confirms the lease
+	// is still this process's, so the writes made between losing it and
+	// the keep-alive noticing are refused rather than committed beside
+	// the new writer's (postgres/write_fence.go).
+	if writerLock != nil {
+		if err := postgres.FenceWrites(db, writerLock); err != nil {
+			return err
+		}
 	}
 	// And the same on a PostgreSQL store itself, which a tool on another
 	// host can see where it cannot see the lock file (postgres.HoldDaemonLease).
@@ -729,6 +740,9 @@ func Run(ctx context.Context, cfg Config) error {
 			DiskOvercommit:       cfg.DiskOvercommit,
 			DefaultNetworkAccess: cfg.networkAccess,
 			Access:               access,
+			// Whether grain-sandbox-egress is enforced, so external
+			// capability grants are only admitted where it is.
+			NetworkPolicyEnforced: cfg.K8sNetworkPolicy,
 		})
 		accessLive = granuleSandboxes.Live
 		sandboxes = granuleSandboxes
@@ -1474,6 +1488,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	if err := orchestrator.RecoverOrphanedRunsExcept(ctx, store, githubClient, time.Now().UTC(), adoptedRuns); err != nil {
 		log.Printf("grain daemon: recovering orphaned runs: %v", err)
 	}
+	// Their processes run on in a hostd that did not answer, until it is
+	// back to cancel them.
+	adopted.cancelAbandoned(ctx, store)
 	orchestrator.SyncSandboxLedger(ctx, orchestrator.Deps{
 		Store:      store,
 		Ledger:     cfg.Ledger,
@@ -1488,17 +1505,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			ciProviders := func() *model.CapabilityRegistry {
 				return newCapabilityRegistryWithStore(store, CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
 			}
-			ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live))
-			ciService.SandboxImage = live.CurrentSandboxImage
-			// A trusted release runs only from a branch the repository has
-			// reviewed into, whoever asked for it (grain/task-949).
-			ciService.ReleaseRefRefusal = CiReleaseRefRefusal(store, githubClient)
-			// The attached capability servers a job's capability references
-			// are minted through, the same ones a task's are.
-			WithCICapabilityServers(ciService, func() orchestrator.CapabilityServers { return capabilityServerLookup(live) })
-			// And the relay their ports and mcp_endpoints reach a job's
-			// sandbox through, the same one a task's do.
-			WithCICapabilityPorts(ciService, capabilityPorts, capabilityPortsURL)
+			ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live),
+				WithDaemonCIWiring(live.CurrentSandboxImage, CiReleaseRefRefusal(store, githubClient), pkgCache,
+					func() orchestrator.CapabilityServers { return capabilityServerLookup(live) }, capabilityPorts, capabilityPortsURL))
 			LiveCI.Store(ciService)
 			defer ciService.Detach()
 			log.Printf("grain daemon: grain CI is on for repos whose CI mode is \"Use Grain CI\" (Settings -> Repos); "+
@@ -1666,6 +1675,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// Every agent sandbox found OOM-killed is a decrease signal
 			// for auto overcommit (orchestrator.applySandboxOOM).
 			NoteOOM: overcommitNoteOOM(cfg.Overcommit),
+			// resume_later's CI waits are woken regardless past this
+			// (-ci-wake-backstop, orchestrator.reconcileWake).
+			CIWakeBackstop: cfg.CIWakeBackstop,
 			// The mechanical first attempt at a port, through the git
 			// proxy started above (porter.go); nil files every port as
 			// an agent task.
@@ -1841,6 +1853,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// release-triggered automatic upgrade follows.
 			LatestRelease:      latestRelease(upgrader),
 			UpgradeDrainWindow: cfg.UpgradeDrainWindow,
+			QAProfiler:         qa.NewProfiler(qa.DefaultPerfLogPath(cfg.DataDir)),
+			// nil in every build a deployment runs (debug_clock.go).
+			ReleaseUpgradeClockOffset: DebugClockOffset,
 		},
 		MintSandboxGrant:   tokens.EnsureGrant,
 		MintSandboxToken:   tokens.EnsureToken,

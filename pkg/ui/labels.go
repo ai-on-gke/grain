@@ -44,6 +44,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/mergelogins"
 	"github.com/ai-on-gke/grain/pkg/metrics"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -142,6 +143,11 @@ type Config struct {
 	// ladder is configured, even if empty; nil when unconfigured). Used by
 	// Settings -> GitHub tokens and per-client repo#credential validation.
 	OfferedGitCredentials []string
+	// MergeLoginWarnings is the reviewed-merge logins that belong to a
+	// user account (pkg/mergelogins), for GET /api/sandboxes' and `grain
+	// health`'s warning. nil -- a deployment with no forge client -- says
+	// nothing.
+	MergeLoginWarnings func(context.Context) []mergelogins.Warning
 	// LocalScriptApprovals is where a run's local-script calls wait for a
 	// person (LocalScriptApprovals). nil gives the server one of its own,
 	// which is all a single daemon needs: the runs that post to it and
@@ -1074,6 +1080,11 @@ type Config struct {
 	// store's directory so an Inbox Approve over -github-sim can sign
 	// its record.
 	ReleaseApprovalDir string
+	// ReleaseApprovalKMSKey is the Cloud KMS EC_SIGN_P256_SHA256 key
+	// version (projects/.../cryptoKeyVersions/N) release approvals are
+	// signed with, the daemon's -release-approval-kms-key. Empty keeps
+	// the key in the secrets store under ReleaseApprovalDir.
+	ReleaseApprovalKMSKey string
 	// SourceDB is the raw *sql.DB backing this store, which a task's
 	// database access queries (task_db.go).
 	SourceDB *sql.DB
@@ -1205,11 +1216,13 @@ type StallNoter func(state model.State, since, now time.Time) string
 // orchestrator.MergeReason, in this package's types.
 type ReasonClassifier interface {
 	// TaskReason is the sub-case of state t is in, given its observation
-	// (nil for none), the blocking tasks it is still waiting on, the
-	// grant wait dispatch recorded for it (nil for none), and, for an
-	// awaiting_reply task, which ask it is parked on (Task.replyFacts).
+	// (nil for none), the blocking tasks it is still waiting on,
+	// which of those only a person can close (model.Store.BlockerHolds,
+	// nil for none), the grant wait dispatch recorded for it (nil for
+	// none), and, for an awaiting_reply task, which ask it is parked on
+	// (Task.replyFacts).
 	TaskReason(t model.Task, state model.State, obs *model.Observation, openDeps []string,
-		wait *model.GrantWait, asked model.ReplyFacts) Reason
+		holds []model.BlockerHold, wait *model.GrantWait, asked model.ReplyFacts) Reason
 	// MergeReason classifies a merge-queue sub-case the cycle recorded,
 	// or answers the zero Reason for one it does not know.
 	MergeReason(reason string) Reason
@@ -1290,7 +1303,10 @@ type SettingsHistoryReader interface {
 	// an error -- a repository seeded this minute has no history and that
 	// is not a failure -- and an error here is a report without its
 	// changes section rather than no report at all (Client.Metrics).
-	SettingsChanges(ctx context.Context, since time.Time) ([]metrics.SettingsChange, error)
+	//
+	// reaches is how far back the reader actually got -- the moment before
+	// which a change might be missing -- or zero if it cannot say.
+	SettingsChanges(ctx context.Context, since time.Time) (changes []metrics.SettingsChange, reaches time.Time, err error)
 }
 
 // LiveTranscript is implemented by whatever can read back a still-running

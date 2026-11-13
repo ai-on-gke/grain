@@ -507,6 +507,8 @@ var NeverAutoMergePaths = []string{
     "tables/standing_sandbox.json", "tables/standing_sandbox_secret.json",
     "tables/standing_sandbox_env.json", "tables/persistent_sandbox.json",
     "tables/gcp_key.json",
+    // Token budgets and the usage mode: how many runs dispatch at once.
+    "tables/usage_setting.json",
     "scripts/**",
     "workflows/**",
     ".github/**",
@@ -541,6 +543,7 @@ From `ui/src/components/NewTaskOverlay.jsx` and `ui/src/components/GrantsPicker.
 | `autoMerge` | `Checkbox` ("Auto-merge once checks pass") | `shown` (when git repo target) | `!!config.autoMergeByDefault` |
 | `noPort` | `Checkbox` ("Don't port to the repo's paired branches") | `shown` (when git repo target) | `false` |
 | `fixesBaseBranch` | `Checkbox` ("This fixes a red `<branch>`") | `shown` (when `!noRepo`) | `false` |
+| `foundIn` | `/next/` only: text input ("Found in release", `vX.Y.Z` or `vX.Y.Z-rc.N`); the classic form draws nothing, though a hidden default still applies | `more` (More options) | `""` (grain derives it, `model.DerivedFoundIn`) |
 | `legacyCapabilities` | None: the "Legacy capabilities" select is removed (PR #985), and the id is read as an alias of `grants` | — | — |
 | `grants` | `GrantsPicker` ("Grants" — `api:` presets/scopes and `<server>#<method>` capability grants with `with:` args) | `shown` | `defaultCapabilitiesFor(config, repo)` filtered to `api:` + capability refs |
 | `model` | `ModelSelect` ("Model") | `shown` (when `models.length > 0`) | `""` (deployment default rotation) |

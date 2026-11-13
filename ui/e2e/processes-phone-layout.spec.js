@@ -26,6 +26,7 @@ import { test, expect } from "./fixtures.js";
 // desktop halves assert they still draw the chip beside the name, the
 // layout this change was not meant to touch.
 const PHONE = { width: 390, height: 844 };
+const NARROW = { width: 620, height: 900 };
 const TABLET = { width: 820, height: 1180 };
 const DESKTOP = { width: 1440, height: 900 };
 
@@ -225,3 +226,71 @@ for (const [label, viewport, extra] of [
     });
   });
 }
+
+// At 620×900 (2026-11-11 walkthrough, task 4301) the sidebar is still
+// visible and data-phone is not set, leaving the pane 388px wide. The
+// ≤900px grid kept a 6.5rem (104px) kind column beside a ~108px name
+// column, so suite mode chips ("run until clean (max 3)") ellipsized.
+// Under 700px the kind chip moves above the name, giving the name column
+// the row's width and leaving the mode chip unclipped.
+test.describe("Processes rows in a narrow desktop window", () => {
+  test.use({ viewport: NARROW });
+
+  test("give the name column more width than the kind column and keep suite chips unclipped", async ({
+    page,
+  }) => {
+    await page.goto("/processes?kind=suite");
+    expect(
+      await page.evaluate(() => document.documentElement.dataset.phone),
+    ).toBe("false");
+    await expect(page.locator(".sidebar")).toBeVisible();
+
+    const row = page.locator(".process-row-suite").filter({
+      has: page.getByRole("link", {
+        name: "Smoke Verification Suite",
+        exact: true,
+      }),
+    });
+    await expect(row).toBeVisible();
+
+    const kindBox = await row.locator(".process-kind").boundingBox();
+    const nameBox = await row.locator(".process-name").boundingBox();
+    expect(kindBox).toBeTruthy();
+    expect(nameBox).toBeTruthy();
+    expect(nameBox.width).toBeGreaterThan(kindBox.width);
+    expect(nameBox.width).toBeGreaterThanOrEqual(250);
+
+    for (const label of [
+      "Declared by acme/widgets",
+      "run until clean (max 3)",
+    ]) {
+      const chip = row
+        .locator(".process-name .MuiChip-root")
+        .filter({ hasText: label });
+      await expect(chip).toBeVisible();
+      const chipBox = await chip.boundingBox();
+      expect(chipBox.x + chipBox.width).toBeLessThanOrEqual(
+        nameBox.x + nameBox.width + 1,
+      );
+      const labelWidths = await chip
+        .locator(".MuiChip-label")
+        .evaluate((el) => ({
+          client: el.clientWidth,
+          scroll: el.scrollWidth,
+        }));
+      expect(labelWidths.scroll, `${label} clipped`).toBeLessThanOrEqual(
+        labelWidths.client,
+      );
+    }
+
+    const modeChip = row
+      .locator(".process-name .MuiChip-root")
+      .filter({ hasText: "run until clean (max 3)" });
+    await expect(modeChip).toHaveAttribute("title", "run until clean (max 3)");
+
+    const scrollWidth = await page.evaluate(
+      () => document.documentElement.scrollWidth,
+    );
+    expect(scrollWidth).toBeLessThanOrEqual(NARROW.width);
+  });
+});

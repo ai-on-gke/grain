@@ -20,6 +20,8 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/repodecl"
 )
 
 // Grain reads a cron under .grain/workflows as a task schedule of its own
@@ -77,6 +79,51 @@ func TestTheNightlysVerdictIsBackedByAGrainWorkflowThatIsActuallyScheduled(t *te
 		triggers := upTo(t, stripComments(read(t, ".github", "workflows", file)), "jobs:")
 		contains(t, triggers, "schedule:")
 		contains(t, triggers, cron)
+	}
+}
+
+// ai-on-gke/grain is ci_mode: github, so grain drops the firing of every
+// .grain/workflows cron (model.Store.suppressWorkflowGrainCIOff) -- which
+// is how live-secrets-repo.yml went unrun after the mode change, with
+// nothing saying so. A workflow kept on grain CI with an `on: schedule`
+// therefore needs a .grain/schedules entry with `grain-ci: true` on main,
+// or its cron is a nightly that never happens.
+func TestEveryScheduledGrainWorkflowRunsUnderCIModeGitHub(t *testing.T) {
+	root := repoRoot(t)
+	workflows, err := ci.LoadNativeDir(os.DirFS(root))
+	if err != nil {
+		t.Fatalf("this repository's own %s does not parse: %v", ci.WorkflowDir, err)
+	}
+	decl, err := repodecl.Load(os.DirFS(root), model.GrainSourceRepo())
+	if err != nil {
+		t.Fatalf("repodecl.Load: %v", err)
+	}
+	runs := map[string]bool{}
+	for _, sf := range decl.Schedules {
+		sched := sf.Schedule
+		if sched.TemplateID == nil || !sched.Enabled || !sched.WorkflowRunsUnder(model.CIModeGitHub) {
+			continue
+		}
+		if sched.Base != "" && sched.Base != "main" {
+			continue
+		}
+		if stem, ok := model.WorkflowReviewStem(*sched.TemplateID); ok {
+			runs[stem] = true
+		}
+	}
+	for _, w := range workflows {
+		if len(w.On.Schedule) == 0 {
+			continue
+		}
+		stem := model.DeclarationStem(w.Path)
+		if !runs[stem] {
+			t.Errorf("%s declares `on: schedule`, which never fires in a ci_mode: github repository: add "+
+				"%s/%s.yml with `workflow: %s` and `grain-ci: true` (docs/declarations.md), or drop the cron",
+				w.Path, model.ScheduleDeclarationDir, stem, stem)
+		}
+	}
+	if !runs["live-secrets-repo"] {
+		t.Errorf("no grain-ci schedule runs live-secrets-repo on main any more")
 	}
 }
 

@@ -387,6 +387,12 @@ How it relates to what exists:
 - `wait_for_task(park: true)` is `resume_later(when: {task})`.
 - `wait_for_task(resume_at)` is `resume_later(when: {at})`.
 
+A park on tasks holds its task with `depends_on` links. The ones the park
+wrote itself are recorded on the suspension (`resume_on.links`), and the
+run that resumes the park removes them. A target that is reopened later
+then neither holds the task again nor shows up in later prompts as a
+declared dependency. Links the task already declared when it parked stay.
+
 Both tools keep their names and arguments, because agents and templates
 use them. Their implementation becomes one call into `Store.Suspend`, and
 `model.ParkedOutcome` becomes `suspend_kind = requested`. The new
@@ -494,6 +500,13 @@ A goal is set by the template (`Template.Goal`), by `propose_task`
   It rests until the goal check, a message, or a progress-limit
   notification moves it. The closing comment is posted as an ordinary
   comment.
+- **A report-only sub-task** (filed by another task's run, no goal)
+  that ends on a closing note alone closes rather than completing
+  (`model.ClosesOnAnswer`, docs/closing-a-task-from-a-run.md), so what
+  depends on it dispatches without a person's close. A parent that wants
+  a person to close its child gives it `nothing_needed_action: ack` or
+  this `person-closes` goal, which keeps `until: closed` meaning a
+  person's close.
 - **`nothing_needed`** on a goal task means "nothing to do *now*". The
   only things that close a goal task are the goal being met with
   `on_met: close`, or a person.
@@ -864,12 +877,25 @@ deterministic checker, `stewardReportCheck`, runs when a steward wake
 posts its report and computes:
 
 - *uncited claims*: report lines with no `[… id]` citation;
-- *unread citations*: cited ids with no read of that id in the run's call
-  log before the report;
+- *unread citations*: cited ids with no read of that id anywhere in the
+  run's call log. That log is the run's MCP calls followed by the grain
+  CLI's reads through the sandbox proxy, so a CLI read is stored after
+  `comment_on_issue` even though it came first. The checker therefore does
+  not cut the log at the report. A listing or feed read (the
+  pipeline-changes feed, `grain task list`, the merge queue) counts every
+  id its output showed (`model.ReadOutputIDs`), whichever path it took;
 - *attribute mismatches*: for each cited task, whether the words in its
   line contradict the record's kind tags or state. For example, "port"
   for a task with no port tag, or "merged" for an open one. This uses a
-  small fixed vocabulary of states and kinds, not free-text judgement.
+  small fixed vocabulary of states and kinds, not free-text judgement. A
+  transition's source state ("queued→running") and a task's CI or job
+  failing are not claims about the task's state.
+
+Lines under an `## Unverified` heading are the steward saying it could not
+ground them in this wake's reads, and are not counted. Before it posts,
+the steward runs the same check on its draft with `grain report check`
+(`orchestrator.CheckStewardReportDraft`). If the draft fails, it re-reads
+what the check names, fixes or moves each line, and checks once more.
 
 The results are stored as `task_run_report_check(run_id, claims, uncited,
 unread, mismatched)` and shown in the `agents` metrics section. A wake
@@ -951,7 +977,9 @@ exactly as before.
   a new version.
 - **Age** is measured, not stored: the runs started and the comments
   posted since the handover was written or confirmed
-  (`model.HandoverAge`). Past `HandoverStaleRuns` (10) runs or
+  (`model.HandoverAge`). Only comments from people and agents count:
+  grain's own notices (automation on nobody's behalf, such as the park
+  notice every parked run leaves) do not. Past `HandoverStaleRuns` (10) runs or
   `HandoverStaleComments` (30) comments it is **stale**. The durable
   task's prompt then asks for a replacement or confirmation, and
   `GET /api/tasks/{id}/context` returns `handover_stale`.
@@ -1014,7 +1042,7 @@ nothing load the whole of it at once. Where that stands:
 | `model.Store.Comments` in dispatch | Reads `CommentsAfter(cursor)` plus `LatestHandover` (`dispatchComments`): O(since compaction) | Done (grain/task-4194) |
 | `GET /api/tasks/{id}` / `TaskDetail` | Whole by default. `?comments_limit=`, `?comments_before=` (a comment ID), `?attempts_limit=` and `?attempts_before=` (an attempt number) build the page directly from the store (`Store.CommentsBefore`, `Store.RunsBefore`), with bounded reads for transitions, the pending question comment, session names and the failure streak, and cache the head page by change token | Done (grain/task-4194, grain/task-4219) |
 | `GET /api/tasks/{id}/messages?after=` and its delivered mark | Read every comment, then filtered past the cursor | Done: `CommentsAfter` (grain/task-4194) |
-| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link, and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
+| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link (500 at a time, every page through the target merged and drawn once), and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
 | `grain task read`, `read_grain_task(view: full)` | Whole record | `view: summary` default (DT-13), `conversation, after:` paging |
 | SSE updates | Per-event deltas | No change needed |
 | State-repo export | Every comment and run, every export | Unchanged in size: the export is the backup. Rollover bounds it |
@@ -1052,7 +1080,9 @@ closed task.
   from [task N](/tasks/N)". It starts with a fresh `task_context`.
 - **The predecessor** closes with outcome `rolled_over` and the note
   "rolled over to #M". It keeps everything; nothing is copied or moved
-  except references.
+  except references. It is not reopened: Reopen and "Reopen and send"
+  are refused with a pointer to the successor, before any comment is
+  written, so the same durable work is never queued twice.
 - **References move** in one transaction: `depends_on` entries naming
   it, `wait_for_task` parks and `task_suspension.resume_on` targets,
   schedules whose standing task it is, notification subjects and
@@ -1150,7 +1180,7 @@ local, and pruned after 30 days.
 | `notify_operator(...)` | all (critical needs task-admin) | Raises or bumps a notification and does not park. |
 | `message_task(task, body)` | task-admin, or parent/child | A note to another task's agent. Never parks it. |
 | `read_pipeline_changes(after)` | self-debug | The delta feed. |
-| `write_handover` | all | Also requested at a `context` suspension and, on a durable task, at any park or suspension that did not write or confirm it. Writing the same handover again confirms it. |
+| `grain handover write` (was `write_handover`) | all | Also requested at a `context` suspension and, on a durable task, at any park or suspension that did not write or confirm it. Writing the same handover again confirms it. |
 | `compact_context(handover)` | all | Writes a fresh handover and moves the compaction cursor to the last comment before the run started (DT-15). |
 | `update_brief(brief, reason)` | all | Replaces the current brief that stands in for the description in prompts (DT-15). |
 

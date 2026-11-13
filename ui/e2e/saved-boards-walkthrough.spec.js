@@ -809,11 +809,21 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     await page
       .getByRole("button", { name: `Move section 2, “Latency ${stamp}”` })
       .click();
+    // The drop PATCHes the board's sections asynchronously (App's
+    // moveSection), so the API is read only once that write has answered:
+    // read straight after the click, it raced the PATCH and saw the old
+    // order whenever the read won.
+    const saved = page.waitForResponse(
+      (r) =>
+        r.request().method() === "PATCH" &&
+        new URL(r.url()).pathname === `/api/boards/${reportBoard.id}`,
+    );
     await page
       .getByRole("button", {
         name: `Move here, above section 1, “Throughput ${stamp}”`,
       })
       .click();
+    expect((await saved).ok()).toBe(true);
 
     // Check API persistence of reordered sections
     const res = await page.request.get("/api/boards");

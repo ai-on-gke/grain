@@ -57,7 +57,7 @@ func stewardAuditBody(stateRepo RepoRef) string {
 		stateNote = fmt.Sprintf(
 			"You have read access to `%s`, this deployment's state repository (settings, templates, and schedules exported as text). "+
 				"Note that tasks, runs, and comments live in the daemon's database rather than the state export: "+
-				"use the `self-debug` task commands (`grain task list`, `grain task read <id>`, `grain task prompt <id>`, `grain task transcript <id>`) and CI tools (`list_ci_runs`, `get_ci_log`) to read the steward task and the tasks or CI runs its wakes cited.\n\n",
+				"use the `https://grain.dev/capabilities/api#self-debug` task commands (`grain task list`, `grain task read <id>`, `grain task prompt <id>`, `grain task transcript <id>`) and CI tools (`list_ci_runs`, `get_ci_log`) to read the steward task and the tasks or CI runs its wakes cited.\n\n",
 			stateRepo)
 	}
 	return strings.TrimSpace("You are the weekly sampled audit for the pipeline steward (`" + PipelineStewardTemplateID + "`).\n\n" +
@@ -72,7 +72,8 @@ func stewardAuditBody(stateRepo RepoRef) string {
 		"   - Count:\n" +
 		"     - `claims`: distinct factual claims about tasks, pull requests, branches, or CI runs in the wake's report.\n" +
 		"     - `uncited`: claims that assert a fact about a task or run without citing a `#<id>` or run id.\n" +
-		"     - `unread`: cited task or run ids that the wake did not read before making the claim.\n" +
+		"     - `unread`: cited task or run ids that the wake did not read before making the claim. A read through the `grain` CLI in a `run_command` call counts (`grain task read <id>`, `grain read task://<id>/...`, `grain ci log`), and so does every task a `grain read deploy://pipeline-changes`, `grain task list` or `grain merge-queue` page it read showed.\n" +
+		"     - Lines under the report's `" + PipelineStewardUnverifiedHeading + "` heading are the steward saying it could not ground them: they are not claims, and you do not count them.\n" +
 		"     - `mismatched`: claims whose description of a cited task's kind (`port`, `repair`, `session`, `proposal`, `durable`), state, title, or relationship to another task contradicts the record.\n" +
 		"4. Finish with `comment_on_issue`. Include one machine-readable summary line per audited wake in your closing comment using this exact format:\n\n" +
 		"```\n" +

@@ -233,9 +233,14 @@ func (u *Upgrader) EffectiveKubeRepository() string {
 // names, carry the schema across if it moved, and repoint the
 // Deployment.
 func (u *Upgrader) stageKube(ctx context.Context, p *progress, branch string) (string, error) {
-	ref, err := u.imageRefIn(u.EffectiveKubeRepository(), branch)
-	if err != nil {
-		return "", err
+	override := u.overrideRef()
+	ref := override
+	var err error
+	if ref == "" {
+		ref, err = u.imageRefIn(u.EffectiveKubeRepository(), branch)
+		if err != nil {
+			return "", err
+		}
 	}
 	client := u.cfg.Kube.client()
 
@@ -280,9 +285,9 @@ func (u *Upgrader) stageKube(ctx context.Context, p *progress, branch string) (s
 			return "", fmt.Errorf("%w; leaving this deployment on the image it already runs", err)
 		}
 		signed := fmt.Sprintf("%s is signed as %s", tag, strings.TrimPrefix(checked, tag+"@"))
-		if u.sameKubeVersion(current, branch, tag, checked) || u.discardedRCUnchangedDetail(ctx, branch) != "" {
+		if u.sameKubeVersion(current, branch, tag, checked) || (override == "" && u.discardedRCUnchangedDetail(ctx, branch) != "") {
 			p.done(stepVerify, signed)
-			if msg := u.discardedRCUnchangedDetail(ctx, branch); msg != "" {
+			if msg := u.discardedRCUnchangedDetail(ctx, branch); msg != "" && override == "" {
 				return p.markUnchanged(msg), nil
 			}
 			return p.markUnchanged(fmt.Sprintf("the version on %s has not changed (already running %s)", branch, checked)), nil
@@ -326,8 +331,8 @@ func (u *Upgrader) stageKube(ctx context.Context, p *progress, branch string) (s
 		return "", fmt.Errorf("the health check's pod ran %s, not the %s that was verified; leaving this deployment on the image it already runs", ref, checked)
 	}
 	p.done(stepHealthCheck, fmt.Sprintf("%s runs in this cluster as %s", tag, strings.TrimPrefix(ref, tag+"@")))
-	if u.sameKubeVersion(current, branch, tag, ref) || u.discardedRCUnchangedDetail(ctx, branch) != "" {
-		if msg := u.discardedRCUnchangedDetail(ctx, branch); msg != "" {
+	if u.sameKubeVersion(current, branch, tag, ref) || (override == "" && u.discardedRCUnchangedDetail(ctx, branch) != "") {
+		if msg := u.discardedRCUnchangedDetail(ctx, branch); msg != "" && override == "" {
 			return p.markUnchanged(msg), nil
 		}
 		return p.markUnchanged(fmt.Sprintf("the version on %s has not changed (already running %s)", branch, ref)), nil
@@ -407,19 +412,40 @@ func (u *Upgrader) stageKube(ctx context.Context, p *progress, branch string) (s
 	// rows' export, so that the cursors the flush writes are in it on an
 	// upgrade that migrates.
 	resume := u.kubeFlush(ctx, p, client, ref)
+	if err := ctx.Err(); err != nil {
+		resume()
+		return "", err
+	}
 	// Last before the cut-over, for the reason stageImage puts it there:
 	// the shorter the gap between exporting this deployment's rows and
 	// stopping the process still writing them, the less of it is lost.
-	migrating, err := u.schemaStep(ctx, p, branch, kubeRunner{u: u, ref: ref, security: security})
+	migrating, schemaPrepared, err := u.schemaStep(ctx, p, branch, kubeRunner{u: u, ref: ref, security: security})
 	if err != nil {
 		resume()
 		return "", err
 	}
 	detail += migrating
 
+	// Point of no return on the Kubernetes pipeline: repointing the
+	// Deployment begins the Recreate rollout immediately.
+	if !u.markIrreversible() {
+		if schemaPrepared {
+			u.discardSchemaUpgrade()
+		}
+		resume()
+		if cerr := ctx.Err(); cerr != nil {
+			return "", cerr
+		}
+		return "", context.Canceled
+	}
+
 	p.start(stepRollout)
-	if err := client.SetDeploymentImage(ctx, u.cfg.Kube.Deployment, u.cfg.Kube.container(), ref); err != nil {
-		u.discardSchemaUpgrade()
+	rolloutCtx, rolloutCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer rolloutCancel()
+	if err := client.SetDeploymentImage(rolloutCtx, u.cfg.Kube.Deployment, u.cfg.Kube.container(), ref); err != nil {
+		if schemaPrepared {
+			u.discardSchemaUpgrade()
+		}
 		resume()
 		return "", fmt.Errorf("repointing the deployment: %w", err)
 	}
@@ -447,7 +473,7 @@ func (u *Upgrader) kubeFlush(ctx context.Context, p *progress, client k8s.Client
 		p.logf("not flushing the runs in run hosts: deployment/%s already runs %s, so nothing rolls out", u.cfg.Kube.Deployment, ref)
 		return func() {}
 	}
-	return u.flush(p)
+	return u.flush(ctx, p)
 }
 
 func kubeDigestRef(ref string) (string, bool) {
@@ -506,6 +532,12 @@ func kubePin(ref, imageID string) (string, error) {
 	if !ok || !strings.HasPrefix(digest, "sha256:") || len(digest) == len("sha256:") ||
 		normalizeRepository(repo) != normalizeRepository(repositoryOf(ref)) {
 		return "", fmt.Errorf("the health check's pod reported no registry digest for %s (its imageID was %q), so there is nothing to pin the upgrade to", ref, imageID)
+	}
+	if withoutDigest, pinned, isPinned := strings.Cut(ref, "@"); isPinned {
+		if pinned != digest {
+			return "", fmt.Errorf("the health check's pod ran %s@%s, not the pinned %s", withoutDigest, digest, ref)
+		}
+		return ref, nil
 	}
 	return ref + "@" + digest, nil
 }

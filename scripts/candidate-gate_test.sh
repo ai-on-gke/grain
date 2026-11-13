@@ -233,9 +233,10 @@ tag=v3.1.0-rc.1
 stage1_names=("go, shuffled and repeated (1)" "go, shuffled and repeated (2)" "state repository soak" "sustained load"
   "metadata and model scalability" "merge liveness stress" "end-to-end long term tests" "long randomized cluster simulation"
   "postgres concurrency and stress" "reverse tunnel multiplexer stress" "ui e2e, repeated (1)" "ui e2e, repeated (2)"
-  "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" "pkg/cli stress under load" "upgrade from previous versions")
+  "installer trixie and hostmode" "govulncheck" "release image vulnerabilities" "pkg/cli stress under load" "upgrade from previous versions"
+  "real KVM sandboxes" "twenty two-VM boots" "real kubernetes")
 stage1_ids=(go-long staterepo-soak loadtest scalability merge-stress long-term-test long-sim postgres-stress
-  tunnel-stress ui-e2e-long installer-variants vulns image-vulns cmd-grain-stress upgrade-test)
+  tunnel-stress ui-e2e-long installer-variants vulns image-vulns cmd-grain-stress upgrade-test kvm-sandboxes kvm-route-stress real-kubernetes)
 
 # gh_job <name> <conclusion|in_progress> [<run-id>] [<attempt>] [<created-epoch>] [<sha>]: one
 # job, as GET /repos/{owner}/{repo}/actions/runs/{id}/jobs?filter=all lists it.
@@ -392,10 +393,89 @@ mapfile -t j < <(stage1_run success | grep -v '"govulncheck"')
 qualify "$(jobs_file q-missing "${j[@]}")" "$(checks_file q-checks-pass10 success)"
 check "check-qualification: a required job missing from a finished run fails" 1 "FAIL vulns: did not run on $tag"
 mapfile -t j < <(stage1_run success 100 1 "$recent" "upgrade from previous versions=skipped")
-qualify "$(jobs_file q-missing2 "${j[@]}" "$(gh_job "real KVM sandboxes" skipped)")" "$(checks_file q-checks-pass11 success)"
+qualify "$(jobs_file q-missing2 "${j[@]}" "$(gh_job "an optional extra" skipped)")" "$(checks_file q-checks-pass11 success)"
 check "check-qualification: an optional job that was skipped is ignored, a required one is not" 1 \
   "FAIL upgrade-test: never ran (skipped)"
-lacks "check-qualification: the skipped optional job is not judged" "real KVM"
+lacks "check-qualification: the skipped optional job is not judged" "optional extra"
+
+# Optional nightly.yml jobs (grant-matrix-ui) are ignored when skipped or
+# absent, mapped to their workflow job id when they run so retries dispatch
+# by id, and judged like any other job once they run.
+mapfile -t j < <(stage1_run success 100 1 "$recent")
+qualify "$(jobs_file q-opt-skip "${j[@]}" "$(gh_job "grant matrix through the UI" skipped 100 1 "$recent")")" \
+  "$(checks_file q-checks-opt-skip success)"
+check "check-qualification: skipped grant-matrix-ui remains optional" 0 "Qualification: PASS $tag."
+lacks "check-qualification: skipped grant-matrix-ui carries no verdict" "grant-matrix-ui"
+
+qualify "$(jobs_file q-opt-flake1 "${j[@]}" "$(gh_job "grant matrix through the UI" failure 100 1 "$recent")")" \
+  "$(checks_file q-checks-opt-flake1 success)"
+check "check-qualification: grant-matrix-ui retries by job id, not display name" 2 \
+  "PENDING grant-matrix-ui: failed for the first time (failure); it gets one retry on $tag" \
+  "RERUN nightly grant-matrix-ui flake" "Qualification: PENDING $tag (grant-matrix-ui)"
+lacks "check-qualification: mapped optional job emits no unknown-id warning" "WARNING"
+
+mapfile -t j_retry < <(stage1_run skipped 101 1 $((recent + 600)))
+qualify "$(jobs_file q-opt-flake2 "${j[@]}" "$(gh_job "grant matrix through the UI" failure 100 1 "$recent")" \
+  "${j_retry[@]}" "$(gh_job "grant matrix through the UI" success 101 1 $((recent + 600)))")" \
+  "$(checks_file q-checks-opt-flake2 success)"
+check "check-qualification: grant-matrix-ui passing on its retry qualifies the RC" 0 \
+  "PASS grant-matrix-ui: passed on its one retry (failure,success): a flake" "Qualification: PASS $tag."
+
+qualify "$(jobs_file q-opt-red "${j[@]}" "$(gh_job "grant matrix through the UI" failure 100 1 "$recent")" \
+  "${j_retry[@]}" "$(gh_job "grant matrix through the UI" failure 101 1 $((recent + 600)))")" \
+  "$(checks_file q-checks-opt-red success)"
+check "check-qualification: grant-matrix-ui failing its retry is confirmed red" 1 \
+  "FAIL grant-matrix-ui: failed again on its retry (failure,failure): confirmed red" \
+  "Qualification: FAIL $tag (grant-matrix-ui)"
+
+# A job known only by display name (missing from CHECK_QUALIFICATION_JOBS
+# and CHECK_QUALIFICATION_OPTIONAL) warns loudly when it asks for a rerun,
+# and a dispatched retry in which it ended skipped counts as infra and
+# escalates to stalled rather than staying pending on its first failure.
+qualify "$(jobs_file q-unmapped "${j[@]}" "$(gh_job "unmapped UI walk" failure 100 1 "$recent")")" \
+  "$(checks_file q-checks-unmapped success)"
+check "check-qualification: a job known only by display name warns on rerun" 2 \
+  "WARNING unmapped UI walk: not a dispatchable job key in nightly.yml" \
+  "RERUN nightly unmapped UI walk flake"
+
+# idle-gate is optional and runs on every dispatch, so its retry is a
+# dispatch naming it, with no unknown-key warning.
+qualify "$(jobs_file q-idle-gate-infra "${j[@]}" "$(gh_job "idle-gate" cancelled 100 1 "$recent")")" \
+  "$(checks_file q-checks-idle-gate-infra success)"
+check "check-qualification: a cancelled idle-gate re-runs by its job id" 3 \
+  "RERUN nightly idle-gate infra"
+lacks "check-qualification: idle-gate is a dispatchable job key" "WARNING"
+
+qualify "$(jobs_file q-skipped-retry1 "${j[@]}" "$(gh_job "grant matrix through the UI" failure 100 1 "$recent")" \
+  "${j_retry[@]}" "$(gh_job "grant matrix through the UI" skipped 101 1 $((recent + 600)))")" \
+  "$(checks_file q-checks-skipped-retry1 success)"
+check "check-qualification: a dispatched retry where the failing job ended skipped counts as infra" 3 \
+  "INFRA grant-matrix-ui: cancelled, timed out or starved of capacity (failure,infra); re-run, not red" \
+  "RERUN nightly grant-matrix-ui infra" "Qualification: INFRA $tag (grant-matrix-ui)"
+
+qualify "$(jobs_file q-skipped-stall "${j[@]}" "$(gh_job "grant matrix through the UI" failure 100 1 "$recent")" \
+  "${j_retry[@]}" "$(gh_job "grant matrix through the UI" skipped 101 1 $((recent + 600)))" \
+  "$(gh_job "grant matrix through the UI" skipped 102 1 $((recent + 1200)))" \
+  "$(gh_job "grant matrix through the UI" skipped 103 1 $((recent + 1800)))")" \
+  "$(checks_file q-checks-skipped-stall success)"
+check "check-qualification: repeated skipped retries escalate as infra-stalled instead of pending forever" 3 \
+  "INFRA grant-matrix-ui: cancelled, timed out or starved of capacity (failure,infra,infra,infra); re-run, not red; stalled after 3 infra attempts in a row" \
+  "RERUN nightly grant-matrix-ui infra"
+
+qualify "$(jobs_file q-skipped-then-pass "${j[@]}" "$(gh_job "grant matrix through the UI" failure 100 1 "$recent")" \
+  "${j_retry[@]}" "$(gh_job "grant matrix through the UI" skipped 101 1 $((recent + 600)))" \
+  "$(gh_job "grant matrix through the UI" success 102 1 $((recent + 1200)))")" \
+  "$(checks_file q-checks-skipped-pass success)"
+check "check-qualification: a real retry passing after a skipped retry still qualifies as a flake" 0 \
+  "PASS grant-matrix-ui: passed on its one retry (failure,infra,success): a flake" "Qualification: PASS $tag."
+
+qualify "$(jobs_file q-skipped-then-fail "${j[@]}" "$(gh_job "grant matrix through the UI" failure 100 1 "$recent")" \
+  "${j_retry[@]}" "$(gh_job "grant matrix through the UI" skipped 101 1 $((recent + 600)))" \
+  "$(gh_job "grant matrix through the UI" failure 102 1 $((recent + 1200)))")" \
+  "$(checks_file q-checks-skipped-fail success)"
+check "check-qualification: a real retry failing after a skipped retry is confirmed red" 1 \
+  "FAIL grant-matrix-ui: failed again on its retry (failure,infra,failure): confirmed red" \
+  "Qualification: FAIL $tag (grant-matrix-ui)"
 
 qualify "$green1" "$(checks_file q-c-flake failure)"
 # grain concludes grain/release-qualification failure only once an item

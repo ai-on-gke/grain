@@ -914,7 +914,7 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 	}
 
 	b.WriteString("The record of what this deployment has actually done is read through the " +
-		"self-debug capability, if this session holds it, with the `grain` CLI in your sandbox " +
+		"`https://grain.dev/capabilities/api#self-debug` grant, if this session holds it, with the `grain` CLI in your sandbox " +
 		"(`grain help`): `grain task list` for the tasks, `grain task read <id>` for one task's whole " +
 		"record -- every attempt, how each ended, and the conversation on it -- " +
 		"`grain task prompt <id>` for what an agent was told, and " +
@@ -924,17 +924,17 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 		"Any question about how this deployment behaves in general is that command's rather " +
 		"than a guess from the tasks you happened to read. If you do not hold it, or " +
 		"those commands refuse because this session has no route back to the daemon, then the " +
-		"history is not available to you: say that, and say it would need the self-debug " +
-		"capability, rather than answering from configuration or from what you remember of " +
+		"history is not available to you: say that, and say it would need the " +
+		"`https://grain.dev/capabilities/api#self-debug` grant, rather than answering from configuration or from what you remember of " +
 		"this conversation.\n\n")
 
 	b.WriteString("Whatever else you hold is on this task's capabilities, and the person you " +
 		"are talking to can change them in the same pane this chat is in. Not every change " +
 		"reaches you at the same moment: repositories added to or removed from this " +
-		"session's reads and writes, and `api:*` scopes (once `grain-controller` is attached, " +
+		"session's reads and writes, and agent API scopes (`https://grain.dev/capabilities/api#<scope>`; once `grain-controller` is attached, " +
 		"or when called through `grain api`), take effect at once; everything else -- a new or " +
-		"removed sandbox capability, or a model-only `api:*` scope added when this session " +
-		"started with no `api:*` grant at all -- takes effect when grain restarts this " +
+		"removed sandbox capability, or a model-only API scope added when this session " +
+		"started with no API grant at all -- takes effect when grain restarts this " +
 		"session to pick it up, which it says in this chat and which loses nothing said " +
 		"here. Check what you " +
 		"actually have before promising anything: if you are asked to do something you have no " +
@@ -955,14 +955,14 @@ func DirectorSessionBody(stateRepo RepoRef, session ConsoleSession) string {
 	}
 
 	b.WriteString("Anything a person can do in grain's UI you can do through grain's own API, if " +
-		"you are granted its scope: an `api:<scope>` or `api:<preset>` capability on this task " +
+		"you are granted its scope: an `https://grain.dev/capabilities/api#<scope>` or `https://grain.dev/capabilities/api#<preset>` grant on this task " +
 		"attaches the `grain-controller` MCP server (`grain_explore_scope` to list authorized " +
 		"scopes and inspect route schemas, `grain_invoke` to execute any authorized route, plus " +
 		"`grain_list_tasks`, `grain_get_task`, `grain_filing_context`, and `grain_submit_task`) " +
 		"and serves sandbox-allowed routes to `grain api routes` / `grain api <METHOD> <path>` " +
-		"(docs/agent-api.md) -- `api:task-admin` " +
-		"to edit, reorder, retry and close tasks and re-run their CI, `api:ci-read` to read CI " +
-		"logs, `api:release-manager` to run schedules and cut and promote release candidates. " +
+		"(docs/agent-api.md) -- `https://grain.dev/capabilities/api#task-admin` " +
+		"to edit, reorder, retry and close tasks and re-run their CI, `https://grain.dev/capabilities/api#ci-read` to read CI " +
+		"logs, `https://grain.dev/capabilities/api#release-manager` to run schedules and cut and promote release candidates. " +
 		"When stopping or closing a task, pass an `expect` state precondition (such as " +
 		"`expect: {\"state\": \"running\"}`) so a task whose state moved since you read it is " +
 		"left alone, and always pass an explicit `reason` (`reason` on `grain_invoke` and the " +
@@ -1097,12 +1097,12 @@ func DirectorNetworkAccess(networkIsolates bool) NetworkAccess {
 
 // DirectorPolicyCapabilities is every capability the shipped Director is
 // granted (DefaultConsoleSessions, by way of ConsoleSessionGrants), as
-// local policy's capabilities.allow names it: a capability reference
-// carrying narrowing arguments keeps its canonical =<json> arguments so
-// a starter policy admits only that grant (for example the built-in
-// bootstrap config map, without opening operator config maps or
-// secrets), while one with empty arguments is named by its reference
-// alone. It is read from the running binary, so a capability a
+// local policy's capabilities.allow names it: an api reference with empty
+// arguments is named by its reference alone so repository-scoped grants
+// of the same scope are admitted too, while every other capability
+// reference keeps its canonical =<json> arguments (={} included) so a
+// starter policy admits only that exact grant and does not open arbitrary
+// method arguments. It is read from the running binary, so a capability a
 // linked-in package registers for the Director is among them.
 func DirectorPolicyCapabilities() []string {
 	var out []string
@@ -1113,12 +1113,12 @@ func DirectorPolicyCapabilities() []string {
 		for _, g := range ConsoleSessionGrants(s) {
 			c := g.Capability
 			if IsCapabilityRef(c) {
-				if spec, err := CapabilityGrantSpec(c); err == nil && len(spec.With) > 0 {
-					if enc, err := EncodeCapabilityGrant(spec); err == nil {
+				if spec, err := CapabilityGrantSpec(c); err == nil {
+					if IsAPIGrantRef(spec.Capability) && len(spec.With) == 0 {
+						c = CapabilityGrantRef(c)
+					} else if enc, err := EncodeCapabilityGrant(spec); err == nil {
 						c = enc
 					}
-				} else {
-					c = CapabilityGrantRef(c)
 				}
 			}
 			if !slices.Contains(out, c) {

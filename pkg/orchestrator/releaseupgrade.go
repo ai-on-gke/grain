@@ -107,12 +107,18 @@ func reconcileReleaseUpgrade(ctx context.Context, deps Deps, now time.Time) erro
 		return nil
 	}
 	minInterval := cfg.AutoUpgradeMinInterval()
+	// The settle window and the minimum interval are measured on clock:
+	// the real time everywhere but a walkthrough's grain_debugclock build
+	// (Config.ReleaseUpgradeClockOffset). What is compared with another subsystem's
+	// times -- the schedule an upgrade's start is matched against -- stays
+	// on the real clock.
+	clock := now.Add(deps.Config.releaseUpgradeClockOffset())
 	if record.Newest != newest {
-		record.Newest, record.SeenAt = newest, now.UTC()
+		record.Newest, record.SeenAt = newest, clock.UTC()
 		if err := deps.Store.SetAutoUpgradeRelease(ctx, *record); err != nil {
 			return fmt.Errorf("orchestrator: %w", err)
 		}
-		if minInterval > 0 && record.SucceededAt != nil && record.SucceededAt.Add(minInterval).After(now.Add(releaseUpgradeSettle)) {
+		if minInterval > 0 && record.SucceededAt != nil && record.SucceededAt.Add(minInterval).After(clock.Add(releaseUpgradeSettle)) {
 			log.Printf("orchestrator: release %s is published; upgrading once it has stood for %s and %s has passed since the last automatic upgrade",
 				newest, releaseUpgradeSettle, minInterval)
 		} else {
@@ -120,7 +126,7 @@ func reconcileReleaseUpgrade(ctx context.Context, deps Deps, now time.Time) erro
 				newest, releaseUpgradeSettle)
 		}
 	}
-	if now.Sub(record.SeenAt) < releaseUpgradeSettle {
+	if clock.Sub(record.SeenAt) < releaseUpgradeSettle {
 		return nil
 	}
 	target := releaseUpgradeTarget(cfg.AutoUpgradeChannel, newest)
@@ -155,7 +161,7 @@ func reconcileReleaseUpgrade(ctx context.Context, deps Deps, now time.Time) erro
 		}
 		return act(model.AutoUpgradeScheduled, &at)
 	}
-	if minInterval > 0 && record.SucceededAt != nil && now.Sub(*record.SucceededAt) < minInterval {
+	if minInterval > 0 && record.SucceededAt != nil && clock.Sub(*record.SucceededAt) < minInterval {
 		return nil
 	}
 	underway, err := upgradeUnderway(ctx, deps)
@@ -267,6 +273,8 @@ func watchAutoUpgrade(ctx context.Context, deps Deps, now time.Time) error {
 			return err
 		}
 		record.Outcome = model.AutoUpgradeFailed
+	case upgrade.PhaseCancelled:
+		record.Outcome = model.AutoUpgradeCancelled
 	case upgrade.PhaseOK:
 		if err := clearUpgradeFailed(ctx, deps); err != nil {
 			return err
@@ -277,6 +285,9 @@ func watchAutoUpgrade(ctx context.Context, deps Deps, now time.Time) error {
 			if status.FinishedAt != nil {
 				finished = status.FinishedAt.UTC()
 			}
+			// On the clock reconcileReleaseUpgrade measures the
+			// interval with (Config.ReleaseUpgradeClockOffset).
+			finished = finished.Add(deps.Config.releaseUpgradeClockOffset())
 			record.SucceededAt = &finished
 		}
 	default:
@@ -348,6 +359,18 @@ func failedUpgradeStage(status upgrade.Status) (stage, detail string) {
 		return step.Name, detail
 	}
 	return "upgrade", status.Detail
+}
+
+// releaseUpgradeClockOffset is Config.ReleaseUpgradeClockOffset's
+// answer, or none.
+func (c Config) releaseUpgradeClockOffset() time.Duration {
+	if c.ReleaseUpgradeClockOffset == nil {
+		return 0
+	}
+	if d := c.ReleaseUpgradeClockOffset(); d > 0 {
+		return d
+	}
+	return 0
 }
 
 // logExcerpt is the end of detail, at most autoUpgradeExcerptLines lines

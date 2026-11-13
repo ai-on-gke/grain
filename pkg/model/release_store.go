@@ -39,6 +39,7 @@ func scanRelease(scan func(...any) error) (Release, error) {
 		&prURL, &lastError, &mergeNote); err != nil {
 		return Release{}, err
 	}
+	r.Repo = RepoFromStored(r.Repo.Owner, r.Repo.Name)
 	r.Status = ReleaseStatus(status)
 	r.MergedAt = timePtr(mergedAt)
 	r.PullRequestURL = prURL.String
@@ -62,7 +63,7 @@ func getRelease(ctx context.Context, q querier, repo RepoRef, name string) (*Rel
 	r, err := scanRelease(q.QueryRowContext(ctx,
 		"SELECT "+releaseColumns+" FROM `release` WHERE `owner` = ? AND `repo` = ? AND `name` = ? "+
 			"ORDER BY `id` DESC LIMIT 1",
-		repo.Owner, repo.Name, name).Scan)
+		repo.StoredOwner(), repo.Name, name).Scan)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -95,7 +96,7 @@ func (s *Store) ListReleases(ctx context.Context, repo RepoRef) ([]Release, erro
 	var out []Release
 	err := each(ctx, s.db,
 		"SELECT "+releaseColumns+" FROM `release` WHERE `owner` = ? AND `repo` = ? ORDER BY `id` DESC",
-		[]any{repo.Owner, repo.Name},
+		[]any{repo.StoredOwner(), repo.Name},
 		func(rows *sql.Rows) error {
 			r, err := scanRelease(rows.Scan)
 			if err != nil {
@@ -155,7 +156,7 @@ func insertRelease(ctx context.Context, tx *sql.Tx, r Release) (int64, error) {
 	res, err := tx.ExecContext(ctx,
 		"INSERT INTO `release` (`owner`,`repo`,`name`,`status`,`created_at`,`merged_at`,`pull_request_url`,`last_error`,`merge_note`) "+
 			"VALUES (?,?,?,?,?,?,?,?,?)",
-		r.Repo.Owner, r.Repo.Name, r.Name, string(r.Status), r.CreatedAt.UTC(), timeOf(r.MergedAt),
+		r.Repo.StoredOwner(), r.Repo.Name, r.Name, string(r.Status), r.CreatedAt.UTC(), timeOf(r.MergedAt),
 		nullable(r.PullRequestURL), nullable(r.LastError), nullable(r.MergeNote))
 	if err != nil {
 		return 0, fmt.Errorf("creating release %q for %s: %w", r.Name, r.Repo, err)
@@ -302,6 +303,7 @@ func scanCandidate(scan func(...any) error) (Candidate, error) {
 		&c.Branch, &status, &c.CreatedAt, &promotedAt, &lastError); err != nil {
 		return Candidate{}, err
 	}
+	c.Repo = RepoFromStored(c.Repo.Owner, c.Repo.Name)
 	c.CreatedAt = c.CreatedAt.UTC()
 	c.Status = CandidateStatus(status)
 	c.LastError = lastError.String
@@ -411,7 +413,7 @@ func insertCandidate(ctx context.Context, tx *sql.Tx, c Candidate) (int64, error
 		"INSERT INTO `release_candidate` "+
 			"(`release_id`,`owner`,`repo`,`number`,`branch`,`status`,`created_at`,`promoted_at`,`last_error`) "+
 			"VALUES (?,?,?,?,?,?,?,?,?)",
-		c.ReleaseID, c.Repo.Owner, c.Repo.Name, c.Number,
+		c.ReleaseID, c.Repo.StoredOwner(), c.Repo.Name, c.Number,
 		c.Branch, string(c.Status), c.CreatedAt.UTC(), timeOf(c.PromotedAt), nullable(c.LastError))
 	if err != nil {
 		return 0, fmt.Errorf("cutting a release candidate for %s: %w", c.Repo, err)
@@ -564,7 +566,7 @@ func (s *Store) DeleteRelease(ctx context.Context, repo RepoRef, name string) er
 		var ids []any
 		if err := each(ctx, tx,
 			"SELECT `id` FROM `release` WHERE `owner` = ? AND `repo` = ? AND `name` = ?",
-			[]any{repo.Owner, repo.Name, name},
+			[]any{repo.StoredOwner(), repo.Name, name},
 			func(rows *sql.Rows) error {
 				var id int64
 				if err := rows.Scan(&id); err != nil {
@@ -586,7 +588,7 @@ func (s *Store) DeleteRelease(ctx context.Context, repo RepoRef, name string) er
 		}
 		if _, err := tx.ExecContext(ctx,
 			"DELETE FROM `release` WHERE `owner` = ? AND `repo` = ? AND `name` = ?",
-			repo.Owner, repo.Name, name); err != nil {
+			repo.StoredOwner(), repo.Name, name); err != nil {
 			return fmt.Errorf("deleting release %q for %s: %w", name, repo, err)
 		}
 		return nil

@@ -344,3 +344,35 @@ func TestATasksOwnCommentDoesNotWakeItFromAMessageHold(t *testing.T) {
 		t.Fatalf("after another task's comment: DeferredAt = %v (%v), want woken", task.DeferredAt, err)
 	}
 }
+
+// A park on tasks reports the links it wrote itself (ResumeOn.Links), and
+// only those: a dependency the task already declared is not the park's to
+// take off when it resumes, and a caller cannot name links of its own.
+func TestResumeLaterOnTasksReportsTheLinksItWrote(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	self := create(t, c, ctx)
+	declared := create(t, c, ctx)
+	target := create(t, c, ctx)
+	if err := c.SetDependency(ctx, self.ID, declared.ID, true); err != nil {
+		t.Fatal(err)
+	}
+
+	taken, err := c.ResumeLater(ctx, self.ID, model.ResumeOn{
+		Tasks: []string{declared.ID, target.ID},
+		Links: []string{declared.ID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(taken.Links) != 1 || taken.Links[0] != target.ID {
+		t.Fatalf("links = %v, want [%s]: the one the park wrote", taken.Links, target.ID)
+	}
+	got, err := c.Task(ctx, self.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.DependsOn) != 2 {
+		t.Fatalf("depends on %v, want %s and %s", got.DependsOn, declared.ID, target.ID)
+	}
+}

@@ -136,7 +136,7 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 	now := c.now().UTC()
 	releaseDispatchMu.Lock()
 	defer releaseDispatchMu.Unlock()
-	commit, err := github.TagCommit(tags, repo.Owner, repo.Name, version+"-pending")
+	commit, err := github.TagCommit(tags, repo.StoredOwner(), repo.Name, version+"-pending")
 	if err != nil {
 		return ReleaseDispatch{}, fmt.Errorf("reading %s's %s-pending tag: %w", repo, version, github.Readable(err))
 	}
@@ -153,7 +153,7 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 				"watch that run rather than starting another", version, prior.DecidedBy, prior.Workflow, prior.DecidedAt.Format(time.RFC3339))
 		}
 	}
-	signer, err := releaseapproval.LoadSigner(c.releaseApprovalDir())
+	signer, err := c.releaseApprovalSigner(ctx)
 	if err != nil {
 		return ReleaseDispatch{}, err
 	}
@@ -176,7 +176,7 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 		inputs["short_soak_ok"] = fmt.Sprint(answers.ShortSoakOK)
 		inputs["allow_breaking"] = fmt.Sprint(answers.AllowBreaking)
 	}
-	if err := dispatcher.DispatchWorkflow(repo.Owner, repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
+	if err := dispatcher.DispatchWorkflow(repo.StoredOwner(), repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
 		return ReleaseDispatch{}, fmt.Errorf("dispatching %s's %s: %w", repo, GitHubPromoteReleaseWorkflow, github.Readable(err))
 	}
 	if c.Store != nil {
@@ -217,14 +217,14 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 				"watch that run rather than starting another", version, d.By, d.Workflow, d.At.Format(time.RFC3339))
 		}
 	}
-	commit, err := github.TagCommit(tags, repo.Owner, repo.Name, version)
+	commit, err := github.TagCommit(tags, repo.StoredOwner(), repo.Name, version)
 	if err != nil {
 		return ReleaseDispatch{}, fmt.Errorf("reading %s's %s tag: %w", repo, version, github.Readable(err))
 	}
 	if commit == "" {
 		return ReleaseDispatch{}, &NotFoundError{ID: version, message: fmt.Sprintf("%s is not a release: %s has no %s tag", version, repo, version)}
 	}
-	signer, err := releaseapproval.LoadSigner(c.releaseApprovalDir())
+	signer, err := c.releaseApprovalSigner(ctx)
 	if err != nil {
 		return ReleaseDispatch{}, err
 	}
@@ -249,7 +249,7 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 	if opts.Reason != "" {
 		inputs["reason"] = opts.Reason
 	}
-	if err := dispatcher.DispatchWorkflow(repo.Owner, repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
+	if err := dispatcher.DispatchWorkflow(repo.StoredOwner(), repo.Name, GitHubPromoteReleaseWorkflow, releaseTrunk, inputs); err != nil {
 		return ReleaseDispatch{}, fmt.Errorf("dispatching %s's %s: %w", repo, GitHubPromoteReleaseWorkflow, github.Readable(err))
 	}
 	releaseDispatches[key] = d
@@ -259,13 +259,20 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 // ReleaseApprovalKey is the public key promote-release.yml verifies an
 // Inbox approval with: the value for the repository variable
 // GRAIN_RELEASE_APPROVAL_KEY.
-func (c *Client) ReleaseApprovalKey(context.Context) (string, error) {
-	signer, err := releaseapproval.LoadSigner(c.releaseApprovalDir())
+func (c *Client) ReleaseApprovalKey(ctx context.Context) (string, error) {
+	signer, err := c.releaseApprovalSigner(ctx)
 	if err != nil {
 		return "", err
 	}
 	return signer.PublicKeyPEM()
 }
+
+// releaseApprovalKeyNote is what GET /api/release-approval-key says
+// beside the key: the variable is a copy, so it goes stale when the key
+// changes.
+const releaseApprovalKeyNote = "Changing the deployment's signing key -- its -release-approval-kms-key, " +
+	"or its release-approval-key secret -- means updating GRAIN_RELEASE_APPROVAL_KEY to match " +
+	"in every repository that runs promote-release.yml."
 
 func (s *Server) handleReleaseApprovalKey(w http.ResponseWriter, r *http.Request) {
 	key, err := s.tasks.ReleaseApprovalKey(r.Context())
@@ -273,7 +280,18 @@ func (s *Server) handleReleaseApprovalKey(w http.ResponseWriter, r *http.Request
 		writeClientError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"variable": "GRAIN_RELEASE_APPROVAL_KEY", "publicKey": key})
+	writeJSON(w, http.StatusOK, map[string]string{"variable": "GRAIN_RELEASE_APPROVAL_KEY", "publicKey": key,
+		"note": releaseApprovalKeyNote})
+}
+
+// releaseApprovalSigner is the deployment's signing key: the Cloud KMS
+// key version Config.ReleaseApprovalKMSKey names, else the one kept
+// under releaseApprovalDir.
+func (c *Client) releaseApprovalSigner(ctx context.Context) (*releaseapproval.Signer, error) {
+	if c.Config.ReleaseApprovalKMSKey != "" {
+		return releaseapproval.LoadKMSSigner(ctx, c.Config.ReleaseApprovalKMSKey)
+	}
+	return releaseapproval.LoadSigner(c.releaseApprovalDir())
 }
 
 // releaseApprovalDir is the directory the deployment's signing key is

@@ -136,7 +136,7 @@ Usage: `grain grep <pattern> <uri> [-i] [-C N] [--glob <pat>] [--max N]`
 
 ## 3. CI and pull request
 
-These are scoped by the proxy to the run's task repository and branch. **Needs** `…/grain#ci` (own repository) or `ci-read` (others). `ci retrigger` and `ci run-job` are grain-CI-only.
+These are scoped by the proxy to the run's task repository and branch. **Needs** `…/grain#ci` (own repository) or `ci-read` (others). On a repository GitHub Actions gates (`ci_mode: github`), `ci retrigger` and `ci run-job` need no grant: they re-run the Actions runs at the head of the task's own pull request instead of starting grain CI (§3.7).
 
 ### 3.1 `grain ci list` {#CLI-86}
 
@@ -302,6 +302,8 @@ The external `grain ci retrigger <run-id>` is [host #CLI-62](host.spec.md#CLI-62
 
 `POST /cli/ci/retrigger` with `{"jobs"?, "all"?, "commit"?, "workflow"?}`. Reruns failed or named jobs fresh and uncached.
 
+On a repository GitHub Actions gates (`ci_mode: github`) it re-runs the GitHub Actions runs at the head of the task's own pull request (its branch's newest commit with runs, before one is open), through the daemon's forge connection, with no commit pushed: `POST .../actions/runs/{id}/rerun-failed-jobs` for each concluded red or cancelled run by default, `.../runs/{id}/rerun` with `--all`, and, for `--jobs`, `.../actions/jobs/{id}/rerun` when it names one job of a run (GitHub re-runs one job, all failed jobs or every job of a run at once, so naming several jobs of one run is refused unless they are exactly its failed jobs or all of them, which take the two calls above). `grain ci run-job <job>` does the last for one job and answers as a wait still running, to be followed by `grain ci wait`. The request names no repository or run, and a `--commit` that is not that head is refused, so a run re-runs only its own pull request's checks; re-running any other run is `POST /api/ci/runs/{id}/rerun`, which needs `ci:write` on that run's repository. No run at one commit is re-run more than 3 times (`ui.MaxActionsRerunsPerHead`), counted from GitHub's `run_attempt`, so the merge queue's automatic re-runs of a runner fault count towards it.
+
 <!-- BEGIN GENERATED FLAGS: grain ci retrigger -->
 Usage: `grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <file>]`
 
@@ -313,7 +315,7 @@ Usage: `grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <
 | `--workflow` | string |
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestStage3SandboxCLICommands`.
+**Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestStage3SandboxCLICommands`; `pkg/gitproxy/cli_actions_test.go`: `TestCIRetriggerAndRunJobReRunGitHubActionsWhenRepoUsesGitHubCIMode`; `pkg/ui/ci_actions_rerun_test.go`: `TestRetriggerOnGitHubActionsReRunsTheRunsAtTheTasksOwnHead`, `TestRetriggerOnGitHubActionsRefusesAnotherTasksChecks`, `TestRetriggerOnGitHubActionsIsBoundedPerHead`.
 
 ### 3.8 `grain pr …` {#CLI-94}
 
@@ -450,6 +452,23 @@ Usage: `grain handover write (<text> | --file <f>)`
 
 **Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestStage3SandboxCLICommands`.
 
+### 4.2.1 `grain report check` {#CLI-111}
+
+`grain report check (<text> | --file f | -)` sends `POST /cli/report/check {"report"}`. The proxy checks the draft the same way grain checks a pipeline steward's closing report once it is posted (`orchestrator.CheckStewardReportDraft`). It uses every read the run has made so far, which the proxy records as it serves them.
+- A passing report prints `Report check passes: claims=<n> uncited=0 unread=0 mismatched=0`.
+- A failing one is answered 422. The command exits non-zero and prints the counts, the task ids cited but not read in this run, and each line that is uncited or mismatched.
+- Lines under an `Unverified` heading are not checked.
+
+<!-- BEGIN GENERATED FLAGS: grain report check -->
+Usage: `grain report check (<text> | --file <f>)`
+
+| Flag | Type |
+|---|---|
+| `--file` | string |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/gitproxy/activity_test.go`: `TestReportCheckRouteAnswersTheDraftsVerdict`.
+
 ### 4.3 `grain notify` {#CLI-98}
 
 `grain notify --subject <key> --title <t> [--body b | --file f | <body…>]` sends `POST /cli/notify` with `{subject, title, body, severity, task, clears_when}`.
@@ -483,6 +502,7 @@ Usage: `grain notify --subject <key> --title <one-line> [--body <md> | --file <f
 | `task prompt <id>` / `task transcript <id>` | reads `task://<id>/[attempts/<n>/]prompt.md` / `transcript.md`. `transcript` reports the file's size on stderr |
 | `task wait <id>…` | `POST /cli/tasks/wait {"ids", "until", "timeout_seconds"}`. Prints `Task wait (<status>, waited <d>…):` and the summary. When not settled, it adds how to keep waiting and how to park. `--park` or `--resume-at` is refused: `parking a task ends the run and is a model-only control operation: call the wait_for_task (park: true) or resume_later MCP tool instead` |
 | `task message <id> <body…> \| --body \| --file` | `POST /cli/tasks/<id>/notes {"body"}` |
+| `task message <id> <body…> --relay` | `POST /api/tasks/<id>/comments {"body", "relay": true}`: a console session relays the answer of the person it acts for, written as "<person> via <session>" and counted as their reply |
 | `task propose` | `POST /cli/proposals`. Always files **unapproved** with `auto_merge=false`. Refuses `--supersedes`, `--auto-merge` and `--hold-for-approval=false` with messages pointing at the `propose_task` tool. Requires `--title` (status 2) and `--body`/`--file` (`--body (or --file) is required: run 'grain help propose' for usage`). `--custom-field` must be `key=value`; `--priority` must be a positive integer; `--not-before` must be `YYYY-MM-DD` or RFC 3339 |
 
 <!-- BEGIN GENERATED FLAGS: grain task list -->
@@ -545,12 +565,13 @@ Usage: `grain task wait <id>... [--until closed|merged] [--timeout 9m]`
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain task message -->
-Usage: `grain task message <id> (<body> | --body <b> | --file <f>)`
+Usage: `grain task message <id> (<body> | --body <b> | --file <f>) [--relay]`
 
 | Flag | Type |
 |---|---|
 | `--body` | string |
 | `--file` | string |
+| `--relay` | bool |
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain task propose -->

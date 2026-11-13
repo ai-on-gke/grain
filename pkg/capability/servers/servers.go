@@ -599,15 +599,28 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 	}
 	r.mu.RUnlock()
 	opts := protocol.DialOptions{ConfigRoot: r.opts.ConfigRoot, Hostd: r.opts.Hostd, Identity: identity, Managed: r.opts.Managed}
+	// The end of its stderr is kept, as Probe keeps it, so a server that
+	// exits before it answers is reported with why rather than only
+	// "closed its output" -- the reason is otherwise one log line.
+	stderr := &tailBuffer{max: probeStderrMax}
+	opts.Stderr = stderr
 	if r.opts.Stderr != nil {
 		if w := r.opts.Stderr(id); w != nil {
-			opts.Stderr = &scrubbedLines{w: w, secrets: resolved}
+			opts.Stderr = io.MultiWriter(stderr, &scrubbedLines{w: w, secrets: resolved})
 		}
 	}
 	server, err := r.opts.Attach(ctx, id, cfg, lookup, opts)
 	now := r.opts.Now()
 	if err != nil {
-		msg := Scrub(err.Error(), resolved.values())
+		// A stdio server whose output closed before it answered did not
+		// start: its process exited, a listener it binds being taken
+		// (bind: address already in use) the usual reason.
+		exited := cfg.Stdio() && errors.Is(err, protocol.ErrClosedOutput)
+		errText := err.Error()
+		if out := strings.TrimSpace(stderr.String()); exited && out != "" {
+			errText += "; its stderr: " + out
+		}
+		msg := Scrub(errText, resolved.values())
 		var schema map[string]any
 		var ce *protocol.ConfigureError
 		isConfigure := errors.As(err, &ce)
@@ -620,9 +633,13 @@ func (r *Registry) attach(ctx context.Context, id string, cfg protocol.ServerCon
 			waiting = we.Waiting
 		}
 		state := Failed
-		if cfg.Builtin != "" && (isConfigure || len(cfg.Config) == 0) {
+		if cfg.Builtin != "" && (isConfigure || (len(cfg.Config) == 0 && !(exited && !cfg.OnHost()))) {
 			// A built-in refused before anybody configured it, or for its
-			// configuration, is waiting to be configured, not broken.
+			// configuration, is waiting to be configured, not broken. One
+			// in the daemon's own environment that exited before it
+			// answered is broken, configured or not: every built-in comes
+			// up unconfigured, so a fault here is one no configuring
+			// fixes, and needs-config would keep it out of `grain health`.
 			state = NeedsConfig
 		}
 		var prevState State

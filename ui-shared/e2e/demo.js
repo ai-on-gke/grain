@@ -1,0 +1,318 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+import { execFileSync, spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { newAccessCode, signIn, writeAccessCode } from "./accesscode.js";
+
+// The `grain demo` harness both Playwright suites drive: ui/e2e (the
+// classic UI at /) and ui-ng/e2e (the Angular UI at /next/). It is shared
+// rather than copied so the two suites cannot drift apart on how a worker
+// starts its server, signs in, or tears down -- and it imports nothing
+// from @playwright/test, because each suite resolves its own copy of that
+// out of its own node_modules, and Playwright refuses a second one in the
+// same run. demoFixtures below is plain fixture definitions; each suite's
+// fixtures.js hands it to its own `test.extend`.
+
+// One `grain demo` per Playwright worker, on a port of its own, in place
+// of the single shared server playwright.config.js's `webServer` used to
+// start for the whole suite (grain/task-292).
+//
+// # What the shared one cost
+//
+// `fullyParallel: false` keeps the tests *within* a file serial, and
+// nothing keeps two files apart: Playwright runs as many files at once
+// as it has workers, which is half the machine's cores by default, and
+// every one of them was driving one store seeded once. The specs here
+// are not written for that. They assert on rows `grain demo` seeded --
+// the backlog's order, how many tasks match a filter, which task is
+// waiting on an answer -- and several of them reorder or edit exactly
+// those rows. Two files doing that at the same time fail each other, and
+// the failure reads as a bug in the pane under test rather than as
+// another spec's write: grain/task-236 reproduced it as one copy of
+// "moves a task to the top of the backlog" asserting on a backlog
+// another copy had just reordered.
+//
+// A store per worker ends that whole class. What a worker sees is a
+// freshly seeded store, then its own files run over it one after
+// another -- which is an ordering the suite already had to survive when
+// everything shared one server, minus every interleaving that only
+// concurrency could produce.
+//
+// # What it does not fix
+//
+// `--repeat-each` is still not usable, and this is not a step towards
+// it. A worker starts one server and keeps it for every test it is
+// given, so the second repeat of a file inherits the first repeat's
+// store however the repeats are spread across workers -- which is the
+// deterministic failure e2e/inbox.spec.js documents, where answering
+// the seeded parked question spends a fixture nothing can put back. The
+// Makefile's test-e2e-long repeats the suite by running it three times
+// over three fresh stores for that reason, and still should.
+//
+// # Cost
+//
+// One `grain demo` process per worker rather than one per run: a
+// process, an SQLite store in a temp directory, and the seeding, all of
+// which take well under a second now that global setup has already
+// built the binary. Everything expensive here is still the browsers.
+
+// READY_MS is how long a worker waits for its server to say it is
+// listening. Generous, because a cold CI runner starting several of
+// these at once while also unpacking browsers is the slow case, and a
+// short ceiling here would turn that into a flake of its own -- a
+// passing run never spends it. `webServer` allowed 60s for the same
+// wait, and had a `go run` compile inside its budget where this has
+// only an exec.
+const READY_MS = 60_000;
+
+// accessCodeArgs gives the demo the run's access code (accesscode.js):
+// every caller, loopback included, shows that code, and nobody is named
+// in X-Grain-User, as on every grain daemon (docs/access-code.md). A
+// spec that passes -access-code-file itself (access-code-walkthrough.spec.js)
+// keeps its own file and code. Resolves to the arguments and the file the
+// code is in.
+async function accessCodeArgs(tmpDir, demoArgs) {
+  const at = demoArgs.indexOf("-access-code-file");
+  if (at >= 0) return { args: demoArgs, codeFile: demoArgs[at + 1] };
+  const codeFile = path.join(tmpDir, "access-code");
+  await writeAccessCode(codeFile);
+  return { args: [...demoArgs, "-access-code-file", codeFile], codeFile };
+}
+
+// startDemoServer runs the binary buildDemoBinary built and resolves to
+// the URL it says it is listening on, and the access code it serves.
+async function startDemoServer(tmpDir, demoArgs) {
+  const { args, codeFile } = await accessCodeArgs(tmpDir, demoArgs);
+  const bin = process.env.GRAIN_E2E_DEMO_BIN;
+  if (!bin) {
+    throw new Error(
+      "GRAIN_E2E_DEMO_BIN is unset: the suite's global setup builds `grain` and " +
+        "puts its path there, so this suite has to run through " +
+        "its playwright.config rather than with its globalSetup overridden.",
+    );
+  }
+  // -addr 127.0.0.1:0 asks the kernel for a free port and reads back
+  // which one it gave, rather than picking one and hoping. With a server
+  // per worker there is no fixed port that could be right anyway, and
+  // guessing would put the suite back in the business of colliding --
+  // with its own other workers, with a second copy of the suite, or with
+  // whatever a developer already has listening.
+  //
+  // TMPDIR is the worker's own directory so that the throwaway store
+  // `grain demo` creates for itself (os.MkdirTemp, in demo.go) -- SQLite
+  // by default, or an embedded PostgreSQL under GRAIN_E2E_DB_DRIVER=postgres
+  // (GRAIN_E2E_DB_DSN names a server to take a fresh schema on instead)
+  // -- lands somewhere this fixture can delete when the worker is done.
+  const dbArgs = [];
+  if (
+    process.env.GRAIN_E2E_DB_DRIVER &&
+    !args.includes("-db-driver") &&
+    !args.some((a) => a.startsWith("-db-driver="))
+  ) {
+    dbArgs.push("-db-driver", process.env.GRAIN_E2E_DB_DRIVER);
+    if (process.env.GRAIN_E2E_DB_DSN) {
+      dbArgs.push("-db-dsn", process.env.GRAIN_E2E_DB_DSN);
+    }
+  }
+  const proc = spawn(
+    bin,
+    ["demo", "-addr", "127.0.0.1:0", "-open=false", ...dbArgs, ...args],
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, TMPDIR: tmpDir },
+    },
+  );
+
+  let output = "";
+  const url = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        new Error(
+          `grain demo did not start within ${READY_MS}ms. Output:\n${output}`,
+        ),
+      );
+    }, READY_MS);
+    const done = (fn, arg) => {
+      clearTimeout(timer);
+      fn(arg);
+    };
+    const read = (chunk) => {
+      output += chunk;
+      // demo.go logs "... at http://127.0.0.1:PORT -- nothing here is
+      // real" once its listener is open, which is the only place the
+      // port it was given actually exists. A file whose demoArgs move it
+      // onto every interface (-addr 0.0.0.0:0, which Go reports as
+      // "[::]") is still reached over loopback here, which it also
+      // answers on.
+      const at = output.match(
+        /at http:\/\/(127\.0\.0\.1|0\.0\.0\.0|\[::\]):(\d+)/,
+      );
+      if (at) done(resolve, `http://127.0.0.1:${at[2]}`);
+    };
+    proc.stdout.on("data", read);
+    proc.stderr.on("data", read);
+    proc.on("error", (err) => done(reject, err));
+    proc.on("exit", (code, signal) =>
+      done(
+        reject,
+        new Error(
+          `grain demo exited (code ${code}, signal ${signal}) before it was ` +
+            `listening. Output:\n${output}`,
+        ),
+      ),
+    );
+  });
+
+  // The listener is open by the time that line is printed, so this is
+  // not really a wait -- it is the same check `webServer` made before
+  // any test ran, kept because a server that is listening and cannot
+  // answer should fail here, once, rather than in whichever test drew
+  // the worker first. The demo is single-tenant (see accessCodeArgs), so
+  // it is asked the way the grain CLI asks a daemon: with its access code
+  // as a bearer token.
+  const code = (await fs.readFile(codeFile, "utf8")).trim();
+  const res = await fetch(`${url}/api/config`, {
+    headers: { Authorization: `Bearer ${code}` },
+  });
+  if (!res.ok) {
+    proc.kill("SIGKILL");
+    throw new Error(`GET ${url}/api/config: ${res.status}`);
+  }
+
+  return { url, proc, code };
+}
+
+// buildDemoBinary is the half of each suite's global setup that both
+// share: it builds `grain` into dir, makes the run's access code, and
+// puts both where startDemoServer and accesscode.js read them. Workers
+// are forked after global setup returns, so they inherit the environment.
+export function buildDemoBinary(dir) {
+  const root = fileURLToPath(new URL("../..", import.meta.url));
+  const bin = path.join(dir, "grain");
+  execFileSync(
+    "go",
+    [
+      "build",
+      // grain_e2e compiles in the local-directory sandbox backend
+      // (pkg/daemon's grain_e2e seam) that config.spec.js's daemon
+      // dispatches into: no deployment build has one, and this suite
+      // owns no container runtime to give it a real backend instead.
+      "-tags",
+      "grain_e2e",
+      "-ldflags",
+      "-X github.com/ai-on-gke/grain/pkg/version.Release=v1.2.0",
+      "-o",
+      bin,
+      "./cmd/grain",
+    ],
+    {
+      cwd: root,
+      stdio: "inherit",
+    },
+  );
+  process.env.GRAIN_E2E_DEMO_BIN = bin;
+  // One access code for every server the run starts -- each worker's
+  // demo, and the daemons and fixture servers specs start of their own
+  // -- so the access session a worker signs in for once (demoFixtures)
+  // is good on all of them: the cookie is 127.0.0.1's, whatever the
+  // port, and is signed with the code alone.
+  process.env.GRAIN_E2E_ACCESS_CODE = newAccessCode();
+  return { root, bin };
+}
+
+// demoFixtures are the worker's server and its signed-in session, as
+// Playwright fixture definitions: `base.extend({ ...demoFixtures })`.
+export const demoFixtures = {
+  // An opt-in executable scenario for specs that need more than the seeded
+  // store. It is worker-scoped so every file assigned to this worker sees the
+  // same server shape, just as it sees the same store.
+  demoArgs: [[], { option: true, scope: "worker" }],
+  // Worker-scoped: started once for the worker, torn down when
+  // Playwright retires it, and shared by every test that worker runs.
+  demo: [
+    async ({ demoArgs }, use) => {
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "grain-e2e-run-"));
+      const { url, proc, code } = await startDemoServer(tmpDir, demoArgs);
+      // Stopped with SIGTERM first (see finally below): the store is a
+      // temp directory nobody else has the path to, but under
+      // GRAIN_E2E_DB_DRIVER=postgres it is also a server or a schema
+      // that only the demo's own signal handler takes down.
+      const stopped = new Promise((resolve) => proc.on("exit", resolve));
+      try {
+        await use({ url, code });
+      } finally {
+        // SIGTERM lets demo's removeOnSignal stop an embedded postgres or
+        // drop its throwaway schema before SIGKILL tears down the process.
+        proc.kill("SIGTERM");
+        const graceful = await Promise.race([
+          stopped.then(() => true),
+          new Promise((resolve) => setTimeout(() => resolve(false), 10_000)),
+        ]);
+        if (!graceful) {
+          proc.kill("SIGKILL");
+          await stopped;
+        }
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    },
+    { scope: "worker" },
+  ],
+  // The worker's server's URL.
+  demoServer: [
+    async ({ demo }, use) => {
+      await use(demo.url);
+    },
+    { scope: "worker" },
+  ],
+  // The access code the worker's server serves, for a spec that has to
+  // present it itself (a bearer token to a CLI, say).
+  accessCode: [
+    async ({ demo }, use) => {
+      await use(demo.code);
+    },
+    { scope: "worker" },
+  ],
+  // Whether the tests start signed in with the access code. Only a spec
+  // whose subject is signing in (access-code-walkthrough.spec.js) turns
+  // it off.
+  signedIn: [true, { option: true, scope: "worker" }],
+  // accessSession signs in once per worker, as a person does on the
+  // "Enter access code" page, and keeps the session cookie it is given.
+  accessSession: [
+    async ({ demo }, use) => {
+      await use(await signIn(demo.url, demo.code));
+    },
+    { scope: "worker" },
+  ],
+  // Overrides Playwright's own `storageState` option, which seeds every
+  // browser context and API request context a test opens -- `page`,
+  // `request`, and the ones a spec makes with `browser.newContext()` or
+  // `playwright.request.newContext()` -- so all of them carry the access
+  // session. A cookie rather than an `Authorization` header because
+  // specs replace `extraHTTPHeaders` (`test.use({ extraHTTPHeaders: {}
+  // })`), and because the browser itself signs in that way.
+  storageState: async ({ signedIn, accessSession }, use) => {
+    await use(signedIn ? accessSession : undefined);
+  },
+  // Overrides Playwright's own `baseURL` option, which is what makes
+  // `page.goto("/inbox")` and `page.request.get("/api/tasks")` in the
+  // specs address this worker's server without any of them naming it.
+  baseURL: async ({ demoServer }, use) => {
+    await use(demoServer);
+  },
+};

@@ -207,11 +207,6 @@ func (c Command) Forward(ctx context.Context, cfg KubectlForwardConfig) error {
 	return nil
 }
 
-// Forward runs `granule forward pod/<pod>` through Local.
-func Forward(ctx context.Context, cfg KubectlForwardConfig) error {
-	return Local.Forward(ctx, cfg)
-}
-
 // KubectlForwardArgs renders the `kubectl` command-line arguments that reach
 // the guest agent's forwarding session inside a Kubernetes sandbox pod: the
 // shim's `granule forward-stdio` mode over `kubectl exec -i`. The mappings

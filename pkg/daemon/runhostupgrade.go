@@ -223,6 +223,32 @@ type adoptionPass struct {
 	hostd   []hostdAdopted
 	// took is every adopted run, for RecoverOrphanedRunsExcept to spare.
 	took map[string]bool
+	// away is, per grain hostd that did not answer, the live runs the pass
+	// left to RecoverOrphanedRunsExcept (hostdAdopted.abandoned), for
+	// cancelAbandoned once those are finished.
+	away []hostdAdopted
+}
+
+// cancelAbandoned cancels, in the background, the processes of the runs
+// each away hostd did not answer for (orchestrator.CancelWhenBack), once
+// it answers again. Call it only after RecoverOrphanedRunsExcept has
+// finished those runs: CancelWhenBack spares a run that is still live, so
+// a hostd back before then would have nothing cancelled.
+func (p adoptionPass) cancelAbandoned(ctx context.Context, store *model.Store) {
+	for _, h := range p.away {
+		go func() {
+			wctx, cancel := context.WithTimeout(ctx, hostdAbandonedWait)
+			defer cancel()
+			cancelled, err := orchestrator.CancelWhenBack(wctx, store, h.host.Client, h.abandoned, h.host.Reconnected)
+			if err != nil {
+				log.Printf("grain daemon: grain hostd %s: %v", h.name, err)
+			}
+			if len(cancelled) > 0 {
+				log.Printf("grain daemon: grain hostd %s is back; cancelled %d process(es) of runs it did not answer for at startup",
+					h.name, len(cancelled))
+			}
+		}()
+	}
 }
 
 // hostdAdopted is the runs one grain hostd's adoption took, and the
@@ -231,6 +257,8 @@ type hostdAdopted struct {
 	name string
 	host *runhost.Hostd
 	runs []orchestrator.AdoptedRun
+	// abandoned is, in adoptionPass.away, the runs it did not answer for.
+	abandoned []string
 }
 
 // adoptAll is the whole adoption pass: run hosts (adoptRunHosts) when this
@@ -259,10 +287,13 @@ func adoptAll(ctx context.Context, store *model.Store, client github.Client, hos
 		targets, err := hostdAdoptionTargets(ctx, store, hd)
 		errs = append(errs, err)
 		for _, t := range targets {
-			adopted, took, r, err := adoptHostd(ctx, store, client, t, sandboxes)
+			adopted, took, away, r, err := adoptHostd(ctx, store, client, t, sandboxes)
 			errs = append(errs, err)
 			if len(adopted) > 0 {
 				out.hostd = append(out.hostd, hostdAdopted{name: t.name, host: t.host, runs: adopted})
+			}
+			if len(away) > 0 {
+				out.away = append(out.away, hostdAdopted{name: t.name, host: t.host, abandoned: away})
 			}
 			for run := range took {
 				out.took[run] = true
@@ -279,6 +310,12 @@ func adoptAll(ctx context.Context, store *model.Store, client github.Client, hos
 // hostds its live runs ran on to dial in again after a restart, all of
 // them together, before deciding without the ones still away.
 const hostdAdoptWait = 30 * time.Second
+
+// hostdAbandonedWait bounds how long the processes of runs a hostd did
+// not answer for at startup are waited on to cancel
+// (orchestrator.CancelWhenBack): past a run's budget and allowance,
+// hostd ends the process itself.
+const hostdAbandonedWait = 24 * time.Hour
 
 // hostdAdoptionTarget is one grain hostd an adoption pass asks, and the
 // live runs it decides there: those whose recorded hostd
@@ -382,9 +419,10 @@ func liveRunHostds(ctx context.Context, store *model.Store, defaultName string) 
 // adoptHostd is adoptRunHosts for one grain hostd
 // (orchestrator.RecoverHostdRuns): a detached host CLI of a run t owns
 // whose sandbox this backend can claim back is adopted, for the caller to
-// resume through t.host.
+// resume through t.host. away is the live runs it decided nothing about
+// because the hostd did not answer (orchestrator.HostdAwayError).
 func adoptHostd(ctx context.Context, store *model.Store, client github.Client, t hostdAdoptionTarget,
-	sandboxes orchestrator.Sandboxes) ([]orchestrator.AdoptedRun, map[string]bool, *orchestrator.AdoptionReport, error) {
+	sandboxes orchestrator.Sandboxes) ([]orchestrator.AdoptedRun, map[string]bool, []string, *orchestrator.AdoptionReport, error) {
 	var adopted []orchestrator.AdoptedRun
 	took := map[string]bool{}
 	now := time.Now().UTC()
@@ -400,11 +438,16 @@ func adoptHostd(ctx context.Context, store *model.Store, client github.Client, t
 			took[a.Claim.Run] = true
 			return true
 		})
+	var away []string
+	var awayErr *orchestrator.HostdAwayError
+	if errors.As(err, &awayErr) {
+		away = awayErr.Runs
+	}
 	if err != nil {
 		err = fmt.Errorf("recovering the host agent %s's host CLIs: %w", t.name, err)
 	}
 	report := orchestrator.NewAdoptionReport(now, plan, took)
 	log.Printf("grain daemon: grain hostd %s adoption: %d adopted, %d lost, %d unclaimed process(es) released",
 		t.name, len(report.Adopted), len(report.Lost), report.Freed)
-	return adopted, took, report, err
+	return adopted, took, away, report, err
 }

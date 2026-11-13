@@ -1,0 +1,77 @@
+# The general code review every grain-opened pull request on this
+# repository gets, filed by .grain/triggers/every-pr.yml (one review per
+# pull request head, re-reading only what a later push changed). It posts
+# findings and fixes nothing. grain appends the subject of the review and
+# its own findings-only and testing rules to this body.
+#
+# No `network:` key, so the deployment's default applies. `none` would
+# fail setup on any host that cannot isolate a sandbox's network
+# (orchestrator.sandboxesIsolateNetwork), and it would also block the
+# module downloads that a targeted `go test -run` needs.
+name: PR review
+title: "Review {{pr}}"
+body: |
+  Review the change in this pull request the way a careful senior
+  maintainer of grain would, and post what needs fixing. Read the diff
+  (`git diff {{base_sha}}...HEAD` or the pull request's file list) and as
+  much of the surrounding code as you need to judge it. Do not review the
+  whole repository.
+
+  ## What to check
+
+  - **Correctness and edge cases.** Bugs, off-by-ones, nil and empty
+    inputs, races and missing locking, leaked goroutines or handles,
+    errors dropped, swallowed or wrapped without context, and behaviour
+    on retry, restart or a partial failure.
+  - **Tests.** The change has a test, and the test really exercises the
+    new behaviour: it would fail without the change, and it does not
+    just assert on a mock it set up itself. Flag flaky patterns such as
+    `time.Sleep` used for ordering, shared package-level state without
+    `t.Cleanup`, port or timing assumptions, and order-dependent
+    subtests.
+  - **Security.** Credentials and tokens are not logged, put in error
+    messages, or written into prompts or tasks. Inputs that cross a trust
+    boundary are validated. If the change touches a trust-boundary path,
+    grain's security review is already reviewing that head, so do not
+    repeat its deep review. Flag only what you notice in passing.
+  - **Compatibility.** API, CLI, wire-protocol and config compatibility:
+    a field renamed or removed, a default changed, a schema migration
+    that cannot be read back. Docs (`docs/`, `design/`, CLI help and
+    specs) have to change with the behaviour they describe. Follow the
+    repository conventions in `PROMPT.md` and `.grain/settings.yml`,
+    for example conventional-commit subjects, no Google-internal tokens
+    in core, and "hosts" rather than `hostd` in user-facing text.
+  - **Which UI.** Follow "Two UIs" in `PROMPT.md`: `ui-ng/` (served at
+    `/next/`) is the new experience and the classic `ui/` is being
+    deprecated. Flag a new UI feature built in `ui/` instead of `ui-ng/`
+    (unless the feature can't work without it), a classic bug fix that
+    leaves the same page broken in `ui-ng/`, new e2e coverage or
+    screenshots added for classic pages instead of `/next/`, deleted
+    classic tests, and an API change that breaks either UI or leaves
+    `ui-ng/src/app/api/generated-routes.ts` out of date.
+
+  ## Keep the review cheap
+
+  - Do not run broad or full test suites: no `go test ./...`, no `-race`
+    across packages, and not the whole of `pkg/ui` or `pkg/orchestrator`.
+    Do not run `grain ci wait` or `wait_for_checks` either. The change's
+    own GitHub Actions run is the test signal, so read its result with
+    `grain pr open` or the check statuses instead of waiting on it or
+    running it again.
+  - At most, run one narrowly targeted test (`go test ./pkg/<pkg> -run
+    <Name>`) when you need it to confirm or refute a specific finding,
+    and say in your closing note which test you ran and why.
+  - Do not push, commit or open a pull request. Findings go on the pull
+    request and the task.
+
+  ## Reporting
+
+  - Record each real problem with `add_review_comment`, on the line it
+    is about, saying what is wrong and the fix you recommend.
+  - Do not comment on formatting or style that `gofmt`, `go vet`,
+    prettier or the repository's linters already enforce. Do not post
+    nitpicks or matters of taste either.
+  - If nothing needs fixing, call no `add_review_comment` and finish
+    with `comment_on_issue` saying plainly "No findings", with a line on
+    what you checked. A review with no findings is what lets the change
+    merge itself.

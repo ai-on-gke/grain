@@ -19,8 +19,21 @@ import { expect, test } from "./fixtures.js";
 // audit beside them with their principals as stored, each table inside
 // its card -- on a wide screen and on a phone, with nothing pushing the
 // page sideways.
+// A distinct demoArgs gives this spec a demo server of its own rather than
+// the shared worker's: AuditSection reads ?limit=100, and when earlier specs
+// on the shared worker record 100+ configuration writes, the oldest seeded
+// audit rows scroll past that limit and disappear from the page.
+test.use({ demoArgs: ["-as", "audit-settings-layout"] });
+
 const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
+
+// A demo of its own (a demoArgs no other file uses): every configuration
+// write through the API adds a config_audit row, and on a worker's shared
+// server the suite's other files make enough of them to push the seeded
+// rows -- the operator's a day old -- off the newest the page reads,
+// however many that is.
+test.use({ demoArgs: ["-open=false", "-as", "audit-settings-layout"] });
 
 for (const [name, viewport] of [
   ["desktop", DESKTOP],
@@ -34,9 +47,7 @@ for (const [name, viewport] of [
     await expect(config).toBeVisible();
     // A table on a wide screen, one block per entry on a phone.
     const rows = config.locator('[data-testid^="config-audit-row-"]');
-    // The demo server is shared by the suite's workers, so other specs'
-    // settings saves add rows of their own: find the seeded ones by what
-    // they say rather than counting.
+    // Find the seeded rows by what they say rather than counting them.
     const alice = rows.filter({ hasText: "max concurrent runs 4 → 6" });
     const operator = rows.filter({ hasText: "default model set to" });
     await expect(alice).toContainText("alice@example.com");

@@ -1,0 +1,82 @@
+
+=== 1a. all three kinds due at once in acme/widgets, plus acme/other's same-named group
+--- open schedule tasks
+id  repo          title                  priority  tags                                                                          state 
+--  ------------  ---------------------  --------  ----------------------------------------------------------------------------  ------
+2   acme/other    Tidy other             5         schedule-group:acme/other:train,schedule:repo:schedule:acme:other:tidy        queued
+3   acme/widgets  Nightly widgets sweep  5         schedule-group:acme/widgets:train,schedule:repo:schedule:acme:widgets:a-task  queued
+--- active suite runs
+--- unsettled scheduled workflow runs
+--- last skips
+schedule_id                            outcome  reason  task_id  held_by_schedule_id                detail                                                                        
+-------------------------------------  -------  ------  -------  ---------------------------------  ------------------------------------------------------------------------------
+repo:schedule:acme:widgets:c-workflow           task    3        repo:schedule:acme:widgets:a-task  schedule "a-task" (repo:schedule:acme:widgets:a-task) in overlap group "train"
+repo:schedule:acme:widgets:b-suite              task    3        repo:schedule:acme:widgets:a-task  schedule "a-task" (repo:schedule:acme:widgets:a-task) in overlap group "train"
+acme/widgets group holder task: 3; acme/other group task: 2
+
+=== 3a. starved: b-suite's held occurrence 25m old (3 occurrences) behind never-started #3
+id  priority
+--  --------
+3   7       
+id  subject                                                       task_id  title                                                                                                                                               cleared_at
+--  ------------------------------------------------------------  -------  --------------------------------------------------------------------------------------------------------------------------------------------------  ----------
+1   pipeline.schedule-starved:repo:schedule:acme:widgets:b-suite  3        Schedule "b-suite" has not fired for 25m0s: #3 from schedule repo:schedule:acme:widgets:a-task's firing in overlap group "train" has never started            
+
+=== 1b/3b. close #3: the starved notice clears, b-suite's held occurrence fires a suite run, c-workflow is held by it
+--- open schedule tasks
+id  repo        title       priority  tags                                                                    state 
+--  ----------  ----------  --------  ----------------------------------------------------------------------  ------
+2   acme/other  Tidy other  7         schedule-group:acme/other:train,schedule:repo:schedule:acme:other:tidy  queued
+--- active suite runs
+id  schedule_id                         status
+--  ----------------------------------  ------
+1   repo:schedule:acme:widgets:b-suite  active
+--- unsettled scheduled workflow runs
+--- last skips
+schedule_id                            outcome  reason    task_id  held_by_schedule_id                 detail                                                                          
+-------------------------------------  -------  --------  -------  ----------------------------------  --------------------------------------------------------------------------------
+repo:schedule:acme:widgets:b-suite     fired    task      3        repo:schedule:acme:widgets:a-task   schedule "a-task" (repo:schedule:acme:widgets:a-task) in overlap group "train"  
+repo:schedule:acme:widgets:c-workflow           suiteRun           repo:schedule:acme:widgets:b-suite  schedule "b-suite" (repo:schedule:acme:widgets:b-suite) in overlap group "train"
+repo:schedule:acme:widgets:b-suite     fired    task      3        repo:schedule:acme:widgets:a-task   schedule "a-task" (repo:schedule:acme:widgets:a-task) in overlap group "train"  
+id  cleared_at                               cleared_by
+--  ---------------------------------------  ----------
+1   2026-11-11 20:56:00.461142444 +0000 UTC  condition 
+task_id  tag                              
+-------  ---------------------------------
+4        schedule-group:acme/widgets:train
+
+=== 1c. withdraw b-suite while its run is active; a-task and c-workflow come due
+id  schedule_id                         status
+--  ----------------------------------  ------
+1   repo:schedule:acme:widgets:b-suite  active
+--- open schedule tasks
+id  repo        title       priority  tags                                                                    state 
+--  ----------  ----------  --------  ----------------------------------------------------------------------  ------
+2   acme/other  Tidy other  7         schedule-group:acme/other:train,schedule:repo:schedule:acme:other:tidy  queued
+--- active suite runs
+id  schedule_id                         status
+--  ----------------------------------  ------
+1   repo:schedule:acme:widgets:b-suite  active
+--- unsettled scheduled workflow runs
+--- last skips
+schedule_id                            outcome  reason  task_id  held_by_schedule_id                 detail                                                                        
+-------------------------------------  -------  ------  -------  ----------------------------------  ------------------------------------------------------------------------------
+repo:schedule:acme:widgets:c-workflow           task    4        repo:schedule:acme:widgets:b-suite  schedule repo:schedule:acme:widgets:b-suite in overlap group "train"          
+repo:schedule:acme:widgets:a-task               task    4        repo:schedule:acme:widgets:b-suite  schedule repo:schedule:acme:widgets:b-suite in overlap group "train"          
+repo:schedule:acme:widgets:b-suite     fired    task    3        repo:schedule:acme:widgets:a-task   schedule "a-task" (repo:schedule:acme:widgets:a-task) in overlap group "train"
+open tasks in acme/widgets' group: 4 (want only suite task 4)
+
+=== 1d. close the suite task: the run finishes and the group passes on
+--- open schedule tasks
+id  repo          title                  priority  tags                                                                          state 
+--  ------------  ---------------------  --------  ----------------------------------------------------------------------------  ------
+2   acme/other    Tidy other             7         schedule-group:acme/other:train,schedule:repo:schedule:acme:other:tidy        queued
+5   acme/widgets  Nightly widgets sweep  5         schedule-group:acme/widgets:train,schedule:repo:schedule:acme:widgets:a-task  queued
+--- active suite runs
+--- unsettled scheduled workflow runs
+--- last skips
+schedule_id                            outcome  reason  task_id  held_by_schedule_id                 detail                                                                        
+-------------------------------------  -------  ------  -------  ----------------------------------  ------------------------------------------------------------------------------
+repo:schedule:acme:widgets:c-workflow           task    5        repo:schedule:acme:widgets:a-task   schedule "a-task" (repo:schedule:acme:widgets:a-task) in overlap group "train"
+repo:schedule:acme:widgets:a-task      fired    task    4        repo:schedule:acme:widgets:b-suite  schedule repo:schedule:acme:widgets:b-suite in overlap group "train"          
+repo:schedule:acme:widgets:b-suite     fired    task    3        repo:schedule:acme:widgets:a-task   schedule "a-task" (repo:schedule:acme:widgets:a-task) in overlap group "train"

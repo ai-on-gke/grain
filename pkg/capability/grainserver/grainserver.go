@@ -193,11 +193,6 @@ var (
 // RepoCredentialGrant returns the canonical repo#credential grant for name.
 func RepoCredentialGrant(name string) string { return model.RepoCredentialGrant(name) }
 
-// ParseRepoCredentialGrant parses a canonical repo#credential grant.
-func ParseRepoCredentialGrant(grant string) (string, bool) {
-	return model.ParseRepoCredentialGrant(grant)
-}
-
 // ConfigureRepoCredentials sets the callback returning the deployment's
 // configured named git credentials under secrets/github (empty non-nil slice
 // when a credential directory is configured with no named credentials; nil when
@@ -497,8 +492,6 @@ func validSortedCredentialNames(names []string) []string {
 func repoCredentialArgs(configured []string) (map[string]any, []string) {
 	prop := map[string]any{
 		"type":        "string",
-		"pattern":     githubtoken.NamePattern,
-		"not":         map[string]any{"const": "anonymous"},
 		"description": "Named GitHub credential under secrets/github (<name>.token, <name>.app.json, or <name>.ssh.json) to authenticate this task's git operations with.",
 	}
 	var valid []string
@@ -509,6 +502,9 @@ func repoCredentialArgs(configured []string) (map[string]any, []string) {
 			enum[i] = n
 		}
 		prop["enum"] = enum
+	} else {
+		prop["pattern"] = githubtoken.NamePattern
+		prop["not"] = map[string]any{"const": "anonymous"}
 	}
 	return map[string]any{
 		"type":                 "object",
@@ -850,25 +846,11 @@ func IsInProcessGrant(grant string) bool {
 	return err == nil && IsInProcessID(ref.CapabilityID)
 }
 
-// IsJournalGrant reports whether grant names grain#journal (recorded or bare)
-// or the retired bare grain-log alias.
-func IsJournalGrant(grant string) bool { return model.IsGrainJournalGrant(grant) }
-
 // HasJournal reports whether any grant in grants opens grain#journal.
 func HasJournal(grants []string) bool { return model.HasGrainJournal(grants) }
 
-// IsHealthGrant reports whether grant names grain#health (recorded or bare)
-// or the retired bare deployment-health alias.
-func IsHealthGrant(grant string) bool { return model.IsGrainHealthGrant(grant) }
-
 // HasHealth reports whether any grant in grants opens grain#health.
 func HasHealth(grants []string) bool { return model.HasGrainHealth(grants) }
-
-// IsSQLGrant reports whether grant names grain#sql (read or write) or a retired db-read/db-write alias.
-func IsSQLGrant(grant string) bool { return model.IsGrainSQLGrant(grant) }
-
-// IsSQLWriteGrant reports whether grant names grain#sql with write: true or the retired db-write alias.
-func IsSQLWriteGrant(grant string) bool { return model.IsGrainSQLWriteGrant(grant) }
 
 // HasSQL reports whether any grant in grants opens grain#sql (read or write).
 func HasSQL(grants []string) bool { return model.HasGrainSQL(grants) }

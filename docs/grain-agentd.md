@@ -24,13 +24,20 @@ you can edit it. That is acceptable only because this allowlist can name
 agent CLIs and nothing else, and an agent CLI already runs as you with your
 shell.
 
-## Build it
+## Build or download it
 
 ```sh
 make grain-agentd        # bin/grain-agentd, static
+make dist-agentd         # bin/dist-agentd/grain-agentd-linux-{amd64,arm64} + .manifest.json
 ```
 
-`make build` does not build it, and no release ships it yet.
+`vX.Y.Z` and `vX.Y.Z-rc.N` releases publish signed static binaries and
+manifests for `linux/amd64` and `linux/arm64`
+([agentd-release-signing.md](agentd-release-signing.md)), and the controller
+serves them at `GET /api/hostd/agentd/linux/{amd64,arm64}` (and
+`.../manifest.json`) for hosts that cannot reach the internet. The hosted
+installer (`/hostd/install --agentd`) downloads `grain-agentd` from the
+controller automatically when none is on `$PATH` or `~/.local/bin`.
 
 ## Enroll and install it (`--join`, recommended)
 
@@ -48,6 +55,8 @@ With `-join`:
 2. authenticates your enrolling identity (through your identity proxy / `-iap-audience`, or via an interactive GitHub device-flow prompt on deployments without a proxy verifier);
 3. files a join request naming you and the host, and waits for the deployment owner to click **Accept** in **Settings → Hosts** (or run `grain host accept <id>`);
 4. writes the issued 30-day key-bound credential to `~/.config/grain/agentd-token` (`0600`), installs `~/.config/grain/agentd.yaml` and `~/.config/systemd/user/grain-agentd.service`, and starts `grain-agentd`, which signs every `/api/hostd/connect` upgrade with its Ed25519 key and renews its 30-day credential silently while connected.
+
+The unit restarts `grain-agentd` whenever it exits (`Restart=always`): a drain ends with a clean exit once the last agent CLI finishes, so the binary `~/.local/bin/grain-agentd` names takes over. A unit written by an older `grain-agentd install` said `Restart=on-failure`, which left a drained host offline; re-run `grain-agentd install -server <url>` without `-join`, passing the same `-name` and `-iap-audience` you installed with (the unit is rewritten from the flags given), to rewrite it. That re-run keeps the existing allowlist, credential and `-key-file`.
 
 Then point a model connection at the accepted host name (**Settings → Models** → the connection → **Run on** `<host>`); see [host-placement.md](host-placement.md).
 
@@ -85,7 +94,9 @@ GRAIN_HOSTD_TOKEN=<token> ./bin/grain-agentd install -server https://grain.examp
 With no `$GRAIN_HOSTD_TOKEN` it asks for the token on the terminal without
 echoing it (and puts the terminal back if you interrupt it). `install`:
 
-1. copies the binary to `~/.local/bin/grain-agentd`;
+1. copies the binary to `~/.local/bin/grain-agentd` and writes its embedded
+   release public key to `~/.config/grain/agentd-release.pub` (mode `0644`, kept
+   as it is on re-runs; see [agentd-release-signing.md](agentd-release-signing.md));
 2. prepares any registered transport;
 3. fetches the allowlist template from `/hostd/install?template=agentd` on the
    controller, fills in every template CLI whose binary exists on this machine,

@@ -47,7 +47,7 @@ var allowlist = []allowed{
 	// breaking change the operator has to schedule.
 	{9728, "", "-sandbox-port-base block: the git proxy, http://192.168.9.1:9728"},
 	{9729, "", "sandbox port block offset 1 (package cache) and the model-proxy capability's first data-plane port"},
-	{9733, "pkg/capability/intree/", "host-script capability's data plane, beside 9728/9729"},
+	{9733, "pkg/capability/intree/", "host-script capability's data plane: sandbox port block offset 5, held unassigned for it (daemon.OffsetHostScriptHeld)"},
 	{38017, "pkg/orchestrator/", "first guest-loopback port a CI job's capability endpoints are forwarded to"},
 	// The legacy UI address, kept so an old unit that names it keeps it.
 	{8420, "pkg/hostinit/", "LegacyUIAddr: the UI's pre-4242 default, pinned into an older unit rather than moved"},
