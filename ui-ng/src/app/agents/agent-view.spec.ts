@@ -18,6 +18,7 @@ import {
   type Agent,
   QUIET_MS,
   cpuLevel,
+  cpuNote,
   cpuOf,
   groupAgents,
   minutes,
@@ -208,13 +209,13 @@ describe("agent-view", () => {
     });
     const busy = quietReason({
       ...base,
-      cpu: { share: 0.8, load: 3.2, cpus: 4, bound: false },
+      cpu: { share: 0.8, load: 3.2, cpus: 4, bound: false, source: "probe" },
     });
     expect(busy.text).toContain("probably building or testing");
     expect(busy.stuck).toBe(false);
     const idle = quietReason({
       ...base,
-      cpu: { share: 0.1, load: 0.4, cpus: 4, bound: false },
+      cpu: { share: 0.1, load: 0.4, cpus: 4, bound: false, source: "probe" },
     });
     expect(idle.text).toContain("likely stuck");
     expect(idle.stuck).toBe(true);
@@ -235,5 +236,103 @@ describe("agent-view", () => {
     expect(minutes(-5)).toBe("0m");
     expect(minutes(59 * 60000)).toBe("59m");
     expect(minutes(125 * 60000)).toBe("2h 5m");
+  });
+});
+
+describe("agent-view CPU from run ids and host processes", () => {
+  const row = (sandbox: string, extra: Record<string, unknown> = {}) => ({
+    sandbox,
+    name: `/data/runs/${sandbox}`,
+    kind: "agent",
+    backend: "host",
+    ready: true,
+    terminationReason: "running",
+    ...extra,
+  });
+
+  it("joins a sandbox row to its run by run id", () => {
+    const rs = [row("1-1"), row("1-3"), row("12-1"), row("1-2")];
+    // The current attempt's own row.
+    expect(sandboxFor(task("1"), rs, { number: 2 } as Attempt)?.sandbox).toBe(
+      "1-2",
+    );
+    // Attempt unknown: the newest live attempt, never task 12's.
+    expect(sandboxFor(task("1"), rs)?.sandbox).toBe("1-3");
+    expect(sandboxFor(task("12"), rs)?.sandbox).toBe("12-1");
+    expect(sandboxFor(task("2"), rs)).toBeUndefined();
+    // CI and dead rows are skipped here too.
+    expect(
+      sandboxFor(task("4"), [
+        row("4-1", { kind: "ci", name: "c4-1" }),
+        row("4-2", { terminationReason: "gone" }),
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("reads a host run's busy cores against the host's vCPUs", () => {
+    const c = cpuOf(row("1-1", { cpuCores: 3, cpuWindowMS: 15000 }), 24)!;
+    expect(c).toEqual(
+      expect.objectContaining({
+        source: "process",
+        load: 3,
+        cpus: 24,
+        share: 0.125,
+        bound: false,
+        windowMs: 15000,
+      }),
+    );
+    // An idle run's 0 is a reading, not an absence.
+    expect(cpuOf(row("1-1", { cpuCores: 0 }), 24)!.share).toBe(0);
+    // Without a denominator there is no share to draw.
+    expect(cpuOf(row("1-1", { cpuCores: 1 }))).toBeNull();
+    // A probed sandbox keeps its own load average reading.
+    expect(
+      cpuOf({ name: "vm", cpus: 4, loadAverage: "2 1 1" }, 24)!.source,
+    ).toBe("probe");
+  });
+
+  it("toAgent carries the reading or the reason there is none", () => {
+    const d = detail([{ number: 1, startedAt: iso(60000) }]);
+    const a = toAgent(task("1"), d, [row("1-1", { cpuCores: 1.2 })], NOW, 8);
+    expect(a.cpu?.load).toBe(1.2);
+    expect(a.cpuNote).toBe("");
+    const b = toAgent(task("1"), d, [row("1-1")], NOW, 8);
+    expect(b.cpu).toBeNull();
+    expect(b.cpuNote).toContain("none of this run's processes were found");
+  });
+
+  it("names why there is no reading by backend", () => {
+    expect(cpuNote(undefined)).toContain("reported no sandbox for this run");
+    expect(cpuNote(row("1-1"))).toContain("no /proc");
+    expect(
+      cpuNote({ name: "vm-1", backend: "granule", sandbox: "1-1" }),
+    ).toContain("The granule sandbox did not report its load");
+  });
+
+  it("treats half a core of a host run as busy when quiet", () => {
+    const base = { quietMs: 12 * 60000, cpu: null } as Agent;
+    const busy = quietReason({
+      ...base,
+      cpu: {
+        share: 0.03,
+        load: 0.7,
+        cpus: 24,
+        bound: false,
+        source: "process",
+      },
+    });
+    expect(busy.stuck).toBe(false);
+    expect(busy.text).toContain("probably building");
+    const idle = quietReason({
+      ...base,
+      cpu: {
+        share: 0.004,
+        load: 0.1,
+        cpus: 24,
+        bound: false,
+        source: "process",
+      },
+    });
+    expect(idle.stuck).toBe(true);
   });
 });

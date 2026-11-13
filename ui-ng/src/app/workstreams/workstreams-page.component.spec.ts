@@ -439,3 +439,72 @@ describe("WorkstreamsPageComponent", () => {
     expect(el.querySelector('[data-testid="ws-show-tree"]')).toBeNull();
   });
 });
+
+describe("Workstreams detail embedded task pane", () => {
+  let api: FakeApi;
+  beforeEach(() => {
+    api = new FakeApi();
+    localStorage.clear();
+  });
+  afterEach(() => TestBed.resetTestingModule());
+
+  it("switches the embedded task pane's tabs without a [tab] binding", async () => {
+    api.open = [
+      t("200", { title: "Voice stream", state: "running" }),
+      t("201", {
+        title: "Step",
+        state: "running",
+        origin: "task:200",
+        generatedFrom: "200",
+      }),
+    ];
+    TestBed.configureTestingModule({
+      imports: [WorkstreamsPageComponent],
+      providers: [
+        provideRouter(
+          [
+            { path: "workstreams/:key", component: WorkstreamsPageComponent },
+            { path: "**", children: [] },
+          ],
+          withComponentInputBinding(),
+        ),
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    TestBed.inject(AccessService).setConfig({
+      access: null,
+      viewerOwner: "alice",
+    });
+    const harness = await RouterTestingHarness.create(
+      "/workstreams/task:200?node=201",
+    );
+    await TestBed.inject(WorkstreamsStore).refresh(true);
+    const settle = async () => {
+      for (let i = 0; i < 3; i++) {
+        harness.detectChanges();
+        await harness.fixture.whenStable();
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      harness.detectChanges();
+    };
+    await settle();
+    const el = harness.routeNativeElement as HTMLElement;
+    const detail = () => el.querySelector("g-task-detail")!;
+    const current = () =>
+      detail()
+        .querySelector(".task-tabs [aria-current]")
+        ?.getAttribute("data-testid");
+    expect(detail()).not.toBeNull();
+    expect(current()).toBe("task-tab-conversation");
+    detail()
+      .querySelector<HTMLElement>('[data-testid="task-tab-runs"]')!
+      .click();
+    await settle();
+    expect(TestBed.inject(Router).url).toContain("pane=runs");
+    expect(current()).toBe("task-tab-runs");
+    expect(detail().querySelector(".task-tab-body h2")!.textContent).toBe(
+      "Runs",
+    );
+  });
+});

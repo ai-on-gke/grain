@@ -451,3 +451,11 @@ func SessionTestRegistry(providers ...model.CapabilityProvider) *model.Capabilit
 // RecordDispatchedReviewHead is recordDispatchedReviewHead, which
 // dispatch calls as a review's run starts.
 var RecordDispatchedReviewHead = recordDispatchedReviewHead
+
+// SetCPUSamplerForTest swaps the /proc reader, clock and settle wait
+// behind HostSandboxes.Health's per-run CPU reading (hostCPUSampler).
+func (h *HostSandboxes) SetCPUSamplerForTest(read func(map[string]string) (map[string]time.Duration, error), now func() time.Time, sleep func(time.Duration)) {
+	h.cpu.mu.Lock()
+	defer h.cpu.mu.Unlock()
+	h.cpu.read, h.cpu.now, h.cpu.sleep = read, now, sleep
+}

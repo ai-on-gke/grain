@@ -155,6 +155,13 @@ do not pull in an icon font.
   Agents; it pulses only when the number is above zero.
 - **Phone (< 600px):** the rail becomes a bottom bar with Inbox, Tasks,
   Sessions and More, plus a floating New task button.
+- **Build stamp:** the "grain v…" stamp at the left of the bottom bar is a
+  link to Settings → Upgrade, as it is in the classic UI. It ellipsizes
+  before the live count beside it gives way, and is hidden on phones.
+- **Old addresses:** a classic address that has a page here (`/system/<tab>`,
+  `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
+  its query kept (`app.routes.ts`), rather than falling through to the
+  Inbox.
 
 ### Destinations fill the stage
 
@@ -183,6 +190,18 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   arrows, Enter collapses, double-click resets) and a "Hide list" toggle.
   The choice is remembered per surface.
 - The detail pane is always there on desktop; it is not a modal.
+- **The selected item looks selected.** Whatever the list is drawn as —
+  queue rows, table rows, cards — the item the pane shows carries
+  `surface-container` with a 3px `primary` leading bar (`inset 3px 0 0`),
+  and cards add a `primary` border unless a status border (quiet) says
+  more. It is `aria-current="true"`, focusable (`tabindex="0"`, a 2px
+  `primary` `:focus-visible` ring), `cursor: pointer`, and Enter or Space
+  on the item itself selects it without also firing the page's Enter
+  shortcut. A click on a link or button inside the item stays that
+  control's.
+- **Pane tabs live in `?pane=`, and the pane reads them back itself.**
+  `g-task-detail` in pane mode follows `?pane=` whether or not the host
+  binds `[tab]`, so a new host cannot ship tabs that do nothing.
 - **Empty is a state of its own.** When a surface has nothing to list and
   nothing is selected (no agents running), drop the split and show one
   centred empty state: what this place is for, and one or two ways onward.
