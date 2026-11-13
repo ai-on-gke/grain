@@ -721,8 +721,10 @@ export function duration(from?: string, to?: string): string {
                           : 'Comment on this task',
                       submitLabel: 'Send to #' + t.id,
                       disabled: store.isBusy('send', t.id),
+                      deniedReason: t.state === 'closed' ? '' : commentDenied(),
                       hidden:
                         t.state === 'closed' ||
+                        !!commentDenied() ||
                         (this.parked() && !this.allowWordsOnParked()) ||
                         this.isStopped(),
                     }"
@@ -1325,6 +1327,15 @@ export class TaskDetailComponent implements OnDestroy {
     }
     return isTab(v) ? v : "conversation";
   });
+  // Why this person cannot comment (a viewer without tasks:write), or "".
+  // The composer is hidden and this note shown in its place, rather than
+  // offering a box whose Send the server refuses.
+  protected readonly commentDenied = computed(() =>
+    this.access.deniedReason(
+      "POST /api/tasks/{id}/comments",
+      this.t()?.repo || undefined,
+    ),
+  );
   // What a parked task waits for, if it is a grant rather than a reply.
   protected readonly parked = computed(() => {
     const t = this.t();

@@ -46,6 +46,7 @@ import type { InboxStore } from "./inbox/inbox.store";
 import type { SessionsStore } from "./sessions/sessions.store";
 import { DirectorContextService } from "./director/director-context.service";
 import { DirectorDrawerComponent } from "./director/director-drawer.component";
+import type { RouteKey } from "./api/generated-routes";
 import { AccessService } from "./services/access.service";
 import { HelpService } from "./services/help.service";
 import { KeyboardService } from "./services/keyboard.service";
@@ -101,7 +102,10 @@ const ICONS: Record<string, string> = {
     "M12 2l2.1 5.9L20 10l-5.9 2.1L12 18l-2.1-5.9L4 10l5.9-2.1L12 2zm6.5 13l1.1 2.9 2.9 1.1-2.9 1.1L18.5 23l-1.1-2.9L14.5 19l2.9-1.1L18.5 15z",
 };
 
-type CreateItem =
+// needs is the route the item ends in, so a person without the scope to
+// call it -- a viewer -- is not offered it (the access service decides,
+// as for every other write control).
+type CreateItem = { needs: RouteKey } & (
   | {
       kind: "task";
       icon: string;
@@ -127,7 +131,8 @@ type CreateItem =
       sub: string;
       tip: string;
       href: string;
-    };
+    }
+);
 
 @Directive({ selector: "[gDeferError]" })
 export class DeferErrorDirective implements OnInit {
@@ -200,62 +205,71 @@ export class DeferErrorDirective implements OnInit {
           }
         </a>
 
-        <button
-          type="button"
-          class="rail-fab"
-          data-testid="rail-new-task"
-          aria-label="New task"
-          aria-keyshortcuts="c"
-          gTip="New task (c): describe the work and Grain files it."
-          gTipPlacement="right"
-          (click)="openNewTask($event)"
-        >
-          <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-            <path [attr.d]="icons['add']" fill="currentColor" />
-          </svg>
-        </button>
-
-        <div class="rail-create" (focusout)="onCreateFocusOut($event)">
+        @if (canFileTasks()) {
           <button
-            #createBtn
             type="button"
-            class="rail-new-btn"
-            data-testid="rail-create-menu"
-            [attr.aria-expanded]="createOpen()"
-            aria-controls="create-menu"
-            (click)="toggleCreate($event)"
+            class="rail-fab"
+            data-testid="rail-new-task"
+            aria-label="New task"
+            aria-keyshortcuts="c"
+            gTip="New task (c): describe the work and Grain files it."
+            gTipPlacement="right"
+            (click)="openNewTask($event)"
           >
-            New
-            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
-              <path [attr.d]="icons['caret']" fill="currentColor" />
+            <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+              <path [attr.d]="icons['add']" fill="currentColor" />
             </svg>
           </button>
-          @if (createOpen()) {
-            <ul
-              class="create-menu"
-              id="create-menu"
-              aria-label="Create"
-              data-testid="create-menu"
-              [style.top.px]="createPos().top"
-              [style.left.px]="createPos().left"
+        }
+
+        @if (createItems().length) {
+          <div class="rail-create" (focusout)="onCreateFocusOut($event)">
+            <button
+              #createBtn
+              type="button"
+              class="rail-new-btn"
+              data-testid="rail-create-menu"
+              [attr.aria-expanded]="createOpen()"
+              aria-controls="create-menu"
+              (click)="toggleCreate($event)"
             >
-              @for (item of createItems; track item.label) {
-                <li>
-                  <ng-container
-                    *ngTemplateOutlet="
-                      createEntry;
-                      context: {
-                        $implicit: item,
-                        cls: 'create-menu-item',
-                        rich: true,
-                      }
-                    "
-                  />
-                </li>
-              }
-            </ul>
-          }
-        </div>
+              New
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path [attr.d]="icons['caret']" fill="currentColor" />
+              </svg>
+            </button>
+            @if (createOpen()) {
+              <ul
+                class="create-menu"
+                id="create-menu"
+                aria-label="Create"
+                data-testid="create-menu"
+                [style.top.px]="createPos().top"
+                [style.left.px]="createPos().left"
+              >
+                @for (item of createItems(); track item.label) {
+                  <li>
+                    <ng-container
+                      *ngTemplateOutlet="
+                        createEntry;
+                        context: {
+                          $implicit: item,
+                          cls: 'create-menu-item',
+                          rich: true,
+                        }
+                      "
+                    />
+                  </li>
+                }
+              </ul>
+            }
+          </div>
+        }
 
         <span class="rail-divider" aria-hidden="true"></span>
 
@@ -652,7 +666,7 @@ export class DeferErrorDirective implements OnInit {
 
       <!-- Sessions has a composer where the phone FAB would sit, and is
         itself a place to ask for work (the prototype hides it there too). -->
-      @if (!onSessions()) {
+      @if (!onSessions() && canFileTasks()) {
         <button
           type="button"
           class="phone-fab"
@@ -751,7 +765,7 @@ export class DeferErrorDirective implements OnInit {
                 }
               </li>
             }
-            @for (item of createItems; track item.label) {
+            @for (item of createItems(); track item.label) {
               <li>
                 <ng-container
                   *ngTemplateOutlet="
@@ -937,11 +951,12 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly hrefOf = hrefFor;
 
   // Rich 2-line create menu (spec D-23).
-  protected readonly createItems: CreateItem[] = [
+  private readonly allCreateItems: CreateItem[] = [
     {
       kind: "task",
       icon: "addTask",
       label: "New task",
+      needs: "POST /api/tasks",
       sub: "Describe work for an agent to run",
       tip: "Describe a piece of work for an agent to do.",
     },
@@ -949,6 +964,7 @@ export class AppComponent implements OnInit, OnDestroy {
       kind: "task",
       icon: "workstreams",
       label: "Start a workstream",
+      needs: "POST /api/tasks",
       sub: "Break a goal into connected tasks",
       testid: "create-start-workstream",
       tip: "State a goal; an agent plans it and proposes tasks into one stream.",
@@ -958,6 +974,7 @@ export class AppComponent implements OnInit, OnDestroy {
       kind: "route",
       icon: "sessions",
       label: "New session",
+      needs: "POST /api/console-sessions",
       sub: "Start a standing chat with an agent",
       route: "/sessions",
       query: { new: 1 },
@@ -967,6 +984,7 @@ export class AppComponent implements OnInit, OnDestroy {
       kind: "route",
       icon: "processes",
       label: "Task from template",
+      needs: "POST /api/tasks",
       sub: "File from a saved process template",
       route: "/processes/templates",
       query: { launch: 1 },
@@ -976,6 +994,7 @@ export class AppComponent implements OnInit, OnDestroy {
       kind: "route",
       icon: "ci",
       label: "Run a suite",
+      needs: "POST /api/suite-runs",
       sub: "Launch a multi-pass template suite",
       route: "/processes/suites",
       query: { run: 1 },
@@ -985,6 +1004,7 @@ export class AppComponent implements OnInit, OnDestroy {
       kind: "route",
       icon: "processes",
       label: "New schedule",
+      needs: "POST /api/schedules",
       sub: "Automate recurring tasks or triggers",
       route: "/processes/schedules",
       query: { new: 1 },
@@ -994,12 +1014,19 @@ export class AppComponent implements OnInit, OnDestroy {
       kind: "route",
       icon: "tasks",
       label: "New board",
+      needs: "POST /api/boards",
       sub: "Create a saved task view",
       route: "/tasks",
       query: { newBoard: 1 },
       tip: "Save a filtered view of tasks as a reusable board.",
     },
   ];
+  protected readonly createItems = computed(() =>
+    this.allCreateItems.filter((item) => this.access.can(item.needs)),
+  );
+  protected readonly canFileTasks = computed(() =>
+    this.access.can("POST /api/tasks"),
+  );
 
   protected readonly createTask = inject(CreateTaskService);
   protected readonly onSessions = signal(false);
@@ -1107,6 +1134,7 @@ export class AppComponent implements OnInit, OnDestroy {
     const r = (key: string, description: string, run: () => void) =>
       this.unregister.push(this.keyboard.register({ key, description, run }));
     r("c", "New task", () => {
+      if (!this.canFileTasks()) return;
       this.closeMenus();
       this.createTask.open();
     });
@@ -1334,7 +1362,7 @@ export class AppComponent implements OnInit, OnDestroy {
     if (!next) return;
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     const winH = this.doc.defaultView?.innerHeight ?? 900;
-    const estH = Math.min(this.createItems.length * 58 + 16, winH - 24);
+    const estH = Math.min(this.createItems().length * 58 + 16, winH - 24);
     this.createPos.set({
       top: Math.max(12, Math.min(Math.round(r.top), winH - estH - 12)),
       left: Math.round(r.right + 8),

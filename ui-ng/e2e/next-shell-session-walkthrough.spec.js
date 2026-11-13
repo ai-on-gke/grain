@@ -23,7 +23,9 @@ import { test, expect } from "./fixtures.js";
 test("an old /t/<team>/ link opens its team-less page", async ({ page }) => {
   await page.goto("/next/t/default/tasks");
   await expect(page).toHaveURL(/\/next\/tasks$/);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Tasks");
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Tasks", exact: true }),
+  ).toBeVisible();
 
   await page.goto("/next/t/platform/settings/access");
   await expect(page).toHaveURL(/\/next\/settings\/access$/);
@@ -67,3 +69,74 @@ for (const size of [
     },
   );
 }
+
+// A viewer -- a role without write scopes -- is not offered the shell's
+// create controls or a task's composer, whose calls the server refuses.
+// GET /api/config is the server's statement of the caller's access; it
+// is rewritten here to a read-only role, as the demo signs everyone in
+// as the operator. Everything else is the real server.
+async function asViewer(page) {
+  await page.route("**/api/config", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.access = {
+      role: "grain/viewer",
+      roles: ["grain/viewer"],
+      full: false,
+      scopes: ["tasks:read", "sessions:read", "deployment:read"],
+    };
+    await route.fulfill({ response, json });
+  });
+}
+
+test("a viewer sees no create controls on a desktop", async ({ page }) => {
+  await asViewer(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/next/tasks");
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Tasks", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByTestId("rail-new-task")).toHaveCount(0);
+  await expect(page.getByTestId("rail-create-menu")).toHaveCount(0);
+  // The c shortcut does not open the New task sheet either.
+  await page.locator("body").press("c");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  await page.goto("/next/task/3");
+  await expect(page.getByTestId("reply-blocked")).toBeVisible();
+  await expect(page.getByTestId("task-composer")).toHaveCount(0);
+});
+
+test(
+  "a viewer sees no New task button on a phone",
+  { tag: ["@phone"] },
+  async ({ page }) => {
+    await asViewer(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/next/inbox");
+    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
+    await expect(page.getByTestId("phone-new-task")).toHaveCount(0);
+    await page.getByTestId("compact-more").click();
+    const sheet = page.getByTestId("more-sheet");
+    await expect(sheet).toBeVisible();
+    await expect(sheet.getByTestId("create-new-task")).toHaveCount(0);
+    await expect(sheet.getByText("New session")).toHaveCount(0);
+  },
+);
+
+test("an operator still has every create control", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/next/tasks");
+  await expect(page.getByTestId("rail-new-task")).toBeVisible();
+  await page.getByTestId("rail-create-menu").click();
+  const menu = page.getByTestId("create-menu");
+  for (const label of [
+    "New task",
+    "New session",
+    "New schedule",
+    "New board",
+  ]) {
+    await expect(menu.getByText(label, { exact: true })).toBeVisible();
+  }
+  await page.keyboard.press("Escape");
+});
