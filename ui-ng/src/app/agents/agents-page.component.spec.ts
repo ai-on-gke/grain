@@ -26,9 +26,14 @@ class MockTaskDetailComponent {
 import { TaskDetailComponent } from "../task/task-detail.component";
 
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
-import { provideRouter, Router } from "@angular/router";
+import {
+  provideRouter,
+  Router,
+  withComponentInputBinding,
+} from "@angular/router";
+import { RouterTestingHarness } from "@angular/router/testing";
 import { NEVER } from "rxjs";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task, TaskDetail } from "../api/models";
@@ -222,7 +227,10 @@ describe("AgentsPageComponent", () => {
     const f = await render(api);
     expect(
       q(f, '[data-testid="agent-1"] .cpu .sr-only')!.textContent,
-    ).toContain("No CPU reading");
+    ).toContain("Not sampled: this deployment reported no sandbox");
+    expect(
+      q(f, '[data-testid="agent-1"] .cpu .cpu-none')!.textContent!.trim(),
+    ).toBe("not sampled");
     expect(q(f, '[data-testid="agent-1"] .cpu-meter')).toBeNull();
     expect(q(f, '[data-testid="agents-summary"]')!.textContent).not.toContain(
       "vCPU",
@@ -739,5 +747,268 @@ describe("AgentsPageComponent", () => {
         node = node.parentElement;
       }
     }
+  });
+});
+
+async function renderRouted(
+  api: FakeApi,
+  url: string,
+): Promise<{ harness: RouterTestingHarness; router: Router }> {
+  TestBed.configureTestingModule({
+    imports: [AgentsPageComponent],
+    providers: [
+      { provide: GrainApi, useValue: api },
+      { provide: GrainEvents, useValue: { events: () => NEVER } },
+      provideRouter(
+        [
+          { path: "agents", component: AgentsPageComponent },
+          { path: "**", children: [] },
+        ],
+        withComponentInputBinding(),
+      ),
+    ],
+  });
+  const harness = await RouterTestingHarness.create();
+  await harness.navigateByUrl(url, AgentsPageComponent);
+  const store = TestBed.inject(AgentsStore);
+  await store.refresh();
+  await store.refreshSlow();
+  await settle(harness);
+  return { harness, router: TestBed.inject(Router) };
+}
+
+async function settle(harness: RouterTestingHarness): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  harness.detectChanges();
+}
+
+describe("AgentsPageComponent selection and inspector", () => {
+  const two = () => [
+    run("123", { activityAt: iso(30_000) }),
+    run("456", { activityAt: iso(30_000) }),
+  ];
+
+  it("marks only the selected card: is-selected and aria-current", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    f.componentRef.setInput("task", "456");
+    f.detectChanges();
+    const sel = q(f, '[data-testid="agent-456"]')!;
+    const other = q(f, '[data-testid="agent-123"]')!;
+    expect(sel.classList).toContain("is-selected");
+    expect(sel.getAttribute("aria-current")).toBe("true");
+    expect(other.classList).not.toContain("is-selected");
+    expect(other.hasAttribute("aria-current")).toBe(false);
+    expect(sel.getAttribute("tabindex")).toBe("0");
+  });
+
+  it("selects from a click on the card body but leaves the title link alone", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    vi.spyOn(router, "navigateByUrl").mockResolvedValue(true);
+    q(f, '[data-testid="agent-456"] .agent-activity')!.click();
+    expect(nav).toHaveBeenCalledTimes(1);
+    expect(nav).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: "456" } }),
+    );
+    q(f, '[data-testid="agent-123"] .agent-title a')!.click();
+    expect(nav).toHaveBeenCalledTimes(1);
+    expect(router.navigateByUrl).toHaveBeenCalled();
+  });
+
+  it("selects the focused card with Enter or Space and does not open the previously selected task", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    f.componentRef.setInput("task", "123");
+    f.detectChanges();
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    const card = q(f, '[data-testid="agent-456"]')!;
+    card.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    card.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: " ",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(nav).toHaveBeenCalledTimes(2);
+    for (const call of nav.mock.calls) {
+      expect(call[0]).toEqual([]);
+      expect(call[1]).toEqual(
+        expect.objectContaining({ queryParams: { task: "456" } }),
+      );
+    }
+  });
+
+  it("selects and marks list rows like cards", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    q(f, '[data-testid="layout-list"]')!.click();
+    f.componentRef.setInput("task", "456");
+    await f.whenStable();
+    const sel = q(f, '[data-testid="agent-row-456"]')!;
+    const other = q(f, '[data-testid="agent-row-123"]')!;
+    expect(sel.classList).toContain("is-selected");
+    expect(sel.getAttribute("aria-current")).toBe("true");
+    expect(sel.getAttribute("tabindex")).toBe("0");
+    expect(other.classList).not.toContain("is-selected");
+    expect(other.hasAttribute("aria-current")).toBe(false);
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    (other.querySelectorAll("td")[2] as HTMLElement).click();
+    expect(nav).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: "123" } }),
+    );
+    other.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(nav).toHaveBeenCalledTimes(2);
+  });
+
+  it("switches inspector tabs from the embedded pane", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    api.details = {
+      "1": {
+        id: "1",
+        title: "Task 1",
+        state: "running",
+        attempts: [
+          { number: 1, startedAt: iso(600_000), outcome: "", model: "m" },
+        ],
+        comments: [],
+      } as unknown as TaskDetail,
+    };
+    const { harness, router } = await renderRouted(api, "/agents?task=1");
+    const root = harness.routeNativeElement as HTMLElement;
+    const pane = () => root.querySelector('[data-testid="agents-pane"]')!;
+    const current = () =>
+      pane()
+        .querySelector(".task-tabs [aria-current]")
+        ?.getAttribute("data-testid");
+    const body = () =>
+      pane().querySelector(".task-tab-body")!.textContent!.replace(/\s+/g, " ");
+    expect(current()).toBe("task-tab-conversation");
+
+    pane().querySelector<HTMLElement>('[data-testid="task-tab-runs"]')!.click();
+    await settle(harness);
+    expect(router.url).toContain("pane=runs");
+    expect(current()).toBe("task-tab-runs");
+    expect(pane().querySelector(".task-tab-body h2")!.textContent).toBe("Runs");
+
+    pane()
+      .querySelector<HTMLElement>('[data-testid="task-tab-details"]')!
+      .click();
+    await settle(harness);
+    expect(current()).toBe("task-tab-details");
+    expect(pane().querySelector('[data-testid="task-details"]')).not.toBeNull();
+
+    pane()
+      .querySelector<HTMLElement>('[data-testid="task-tab-conversation"]')!
+      .click();
+    await settle(harness);
+    expect(current()).toBe("task-tab-conversation");
+    expect(body()).toContain("Conversation");
+  });
+});
+
+describe("AgentsPageComponent CPU", () => {
+  const hostRow = (sandbox: string, extra: Record<string, unknown> = {}) => ({
+    sandbox,
+    name: `/data/sandboxes/runs/${sandbox}`,
+    kind: "agent",
+    backend: "host",
+    ready: true,
+    terminationReason: "running",
+    ...extra,
+  });
+
+  it("shows a host run's own CPU in vCPU, joined by run id, with what it measures", async () => {
+    const api = new FakeApi();
+    api.live = [run("1"), run("2")];
+    api.details = {
+      "1": {
+        state: "running",
+        attempts: [{ number: 1 }, { number: 2 }],
+      } as unknown as TaskDetail,
+    };
+    api.sandboxes = {
+      host: { cpus: 24 },
+      sandboxes: [
+        hostRow("1-2", { cpuCores: 1.5, cpuWindowMS: 15000 }),
+        hostRow("12-1", { cpuCores: 9 }),
+        hostRow("2-1", { cpuCores: 0.25, cpuWindowMS: 15000 }),
+      ],
+    };
+    const f = await render(api);
+    const cpu = q(f, '[data-testid="agent-1"] [data-testid="agent-cpu"]')!;
+    expect(cpu.textContent).toContain("1.5 vCPU");
+    expect(cpu.querySelector(".cpu-meter")).not.toBeNull();
+    expect(cpu.querySelector(".sr-only")!.textContent).toContain(
+      "This run's own processes kept 1.50 vCPU busy over the last 15 s: 6% of this host's 24 vCPU",
+    );
+    expect(
+      q(f, '[data-testid="agent-2"] [data-testid="agent-cpu"]')!.textContent,
+    ).toContain("0.3 vCPU");
+    // Two runs on one host count its 24 vCPU once.
+    const strip = q(f, '[data-testid="agents-summary"]')!.textContent!;
+    expect(strip).toContain("CPU 1.8 of 24 vCPU");
+
+    q(f, '[data-testid="layout-list"]')!.click();
+    await f.whenStable();
+    const cell = q(f, '[data-testid="agent-row-1"]')!.querySelectorAll("td")[6];
+    expect(cell.textContent!.trim()).toBe("1.5 vCPU");
+    expect(cell.getAttribute("title")).toContain("this host's 24 vCPU");
+  });
+
+  it("says CPU is not sampled, and why, when a host run has no reading", async () => {
+    const api = new FakeApi();
+    api.live = [run("1")];
+    api.sandboxes = { host: { cpus: 24 }, sandboxes: [hostRow("1-1")] };
+    const f = await render(api);
+    const cpu = q(f, '[data-testid="agent-1"] [data-testid="agent-cpu"]')!;
+    expect(cpu.querySelector(".cpu-none")!.textContent!.trim()).toBe(
+      "not sampled",
+    );
+    expect(cpu.querySelector(".sr-only")!.textContent).toContain(
+      "none of this run's processes were found in its directory",
+    );
+    expect(cpu.textContent).not.toContain("—");
+  });
+
+  it("reads a quiet host run with half a core busy as building, not stuck", async () => {
+    const api = new FakeApi();
+    api.live = [run("1", { activityAt: iso(15 * 60000) })];
+    api.sandboxes = {
+      host: { cpus: 24 },
+      sandboxes: [hostRow("1-1", { cpuCores: 0.8, cpuWindowMS: 15000 })],
+    };
+    const f = await render(api);
+    expect(
+      q(f, '[data-testid="agent-1"] [data-testid="quiet-line"]')!.textContent,
+    ).toContain("CPU busy, probably building or testing");
   });
 });
