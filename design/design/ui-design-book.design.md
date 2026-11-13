@@ -295,6 +295,26 @@ Rules:
 - **Live, quietly.** Server-sent events update lists in place. Never steal
   focus or scroll position on an update; hold an update while the person is
   interacting with the row.
+- **Saved boards speak one grammar.** A board is one row on the deployment,
+  read by both UIs, so its `query` is always the classic board grammar
+  (`q=…&sort=…&f=<attr>:<op>:<v1>|<v2>`, `model.Board.Query`). `/next/`
+  never stores its own URL keys in it: the Boards menu writes a tab as a
+  condition on state and a repository as `f=repo:any:…`
+  (`ui-ng/src/app/tasks/board-query.ts`), and reads boards the same way.
+  A board `/next/tasks` cannot show exactly (a Kanban, Timeline, Tree,
+  Panels or Report board, a sort, any other condition) is a link to its
+  classic page, `/boards/<id>`, tagged with where it goes. It never opens
+  as a wider list. A board-grammar link (`/next/tasks?f=state:any:queued`)
+  opens its tab, or says why it cannot.
+- **Saving the view on screen writes the board directly.** "+ Save current
+  view…" creates a list board through `POST /api/boards`, the same way
+  classic writes a board's place (folder, order, panels) through
+  `PATCH /api/boards/{id}`. The board's content is the address already on
+  screen, with no words for an agent to supply. Asking for a board that
+  needs describing (columns, panels, sections, a different kind) stays a
+  task filed against the state repository: classic's "New board"
+  (`ui/src/boards.js` `newBoardTask`). Both paths land in the same exported
+  `board` table.
 
 ## 6. Motion
 

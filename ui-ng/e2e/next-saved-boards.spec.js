@@ -32,6 +32,16 @@ async function expectMenuLaidOut(page, boardId) {
   expect(await apply.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(
     true,
   );
+  // A board that opens on the classic page: its name drawn in full too,
+  // and its "Classic ↗" tag inside the row.
+  const name = apply.locator(".board-classic-name");
+  if (await name.count()) {
+    expect(await name.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(
+      true,
+    );
+    const tag = await apply.locator(".board-classic-tag").boundingBox();
+    expect(tag.x + tag.width).toBeLessThanOrEqual(a.x + a.width);
+  }
 }
 
 // The Boards menu on /next/tasks deleted a saved board -- a setting
@@ -124,11 +134,130 @@ test("the Boards menu opens on the screen at phone width @phone", async ({
   });
   expect(res.ok()).toBe(true);
   const b = await res.json();
+  const kb = await (
+    await page.request.post("/api/boards", {
+      data: { name: "E2E Phone kanban", folder: "E2E Folder", kind: "kanban" },
+    })
+  ).json();
   try {
     await page.goto("tasks");
     await page.getByTestId("saved-boards-btn").click();
     await expectMenuLaidOut(page, b.id);
+    // A board that opens on the classic page fits as well, tag and all.
+    await expectMenuLaidOut(page, kb.id);
   } finally {
     await page.request.delete(`/api/boards/${b.id}`).catch(() => {});
+    await page.request.delete(`/api/boards/${kb.id}`).catch(() => {});
+  }
+});
+
+// The /next/ Boards menu and the classic boards read one query grammar
+// (ui-ng/src/app/tasks/board-query.ts). /next/ used to read only its own
+// tab=&q=&repo= keys, so a classic board -- f=state:any:queued -- or a
+// Kanban, Report, Tree or Panels board opened as an unnarrowed Backlog,
+// and a view saved here lost its tab on /boards/<id> (2026-11-13 saved
+// boards walkthrough, task 5385, §2.8 and §4).
+test("the Boards menu opens a classic board on its tab and sends a Kanban board to the classic page @dark", async ({
+  page,
+  axe,
+}) => {
+  const made = [];
+  const mk = async (data) => {
+    const res = await page.request.post("/api/boards", { data });
+    expect(res.ok(), `POST /api/boards: ${res.status()}`).toBe(true);
+    const b = await res.json();
+    made.push(b.id);
+    return b;
+  };
+  try {
+    const asked = await mk({
+      name: "E2E Asked retry",
+      kind: "list",
+      query: "q=retry&f=state:any:awaiting_reply|failed",
+    });
+    const kanban = await mk({ name: "E2E Flow", kind: "kanban", query: "" });
+    const report = await mk({ name: "E2E Report", kind: "report" });
+
+    await page.goto("tasks");
+    const trigger = page.getByTestId("saved-boards-btn");
+    await trigger.click();
+    await page.getByTestId(`board-apply-${asked.id}`).click();
+    await expect(page).toHaveURL(/[?&]tab=asked\b/);
+    await expect(page).toHaveURL(/[?&]q=retry\b/);
+    await expect(page.getByTestId("tab-asked")).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    // The Boards button names the board on screen.
+    await expect(trigger).toContainText("E2E Asked retry");
+
+    // A Kanban or Report board is a link to its classic page, and says so.
+    await trigger.click();
+    const menu = page.getByTestId("saved-boards-menu");
+    // Opening the menu focuses its first entry, link or button.
+    await expect(menu.locator("a[href], button").first()).toBeFocused();
+    for (const [b, kind] of [
+      [kanban, "Kanban"],
+      [report, "Report"],
+    ]) {
+      const link = menu.getByRole("link", {
+        name: `${b.name}, opens on the classic page: it is a ${kind} board`,
+      });
+      await expect(link).toHaveAttribute("href", `/boards/${b.id}`);
+      await expect(page.getByTestId(`board-classic-${b.id}`)).toHaveText(
+        "Classic ↗",
+      );
+    }
+    await expectMenuLaidOut(page, kanban.id);
+    // The tag sits inside the row, after the name, on one line.
+    const tag = await page
+      .getByTestId(`board-classic-${kanban.id}`)
+      .boundingBox();
+    const row = await page
+      .getByTestId(`board-apply-${kanban.id}`)
+      .boundingBox();
+    expect(tag.x + tag.width).toBeLessThanOrEqual(row.x + row.width);
+    expect(tag.height).toBeLessThan(row.height);
+    expect(await axe()).toEqual([]);
+    await menu.getByRole("link", { name: /^E2E Flow,/ }).click();
+    await expect(page).toHaveURL(new RegExp(`/boards/${kanban.id}$`));
+  } finally {
+    for (const id of made) {
+      await page.request.delete(`/api/boards/${id}`).catch(() => {});
+    }
+  }
+});
+
+test("a view saved on /next/ is stored in the board grammar and a board-grammar link opens its tab", async ({
+  page,
+}) => {
+  let id = "";
+  try {
+    await page.goto("tasks?tab=asked&q=retry");
+    await page.getByTestId("saved-boards-btn").click();
+    await page.getByTestId("board-save-open").click();
+    await page.getByTestId("board-name-input").fill("E2E Saved asked");
+    const posted = page.waitForResponse(
+      (r) =>
+        r.request().method() === "POST" &&
+        new URL(r.url()).pathname === "/api/boards",
+    );
+    await page.getByTestId("board-save-submit").click();
+    const b = await (await posted).json();
+    id = b.id;
+    // The tab is a condition on state, which the classic list honours.
+    expect(b.kind).toBe("list");
+    expect(b.query).toBe("q=retry&f=state:any:awaiting_reply|failed");
+
+    // A link in that grammar opens the tab it names here too.
+    await page.goto("tasks?f=state:any:awaiting_reply|failed");
+    await expect(page).toHaveURL(/[?&]tab=asked\b/);
+    await expect(page).not.toHaveURL(/[?&]f=/);
+    await expect(page.getByTestId("tab-asked")).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  } finally {
+    if (id) await page.request.delete(`/api/boards/${id}`).catch(() => {});
   }
 });

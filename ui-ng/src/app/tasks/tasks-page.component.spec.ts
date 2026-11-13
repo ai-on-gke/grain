@@ -959,6 +959,50 @@ describe("TasksPageComponent", () => {
       });
     });
 
+    it("opens a classic board on its tab, and links a Kanban board to the classic page", async () => {
+      const api = new FakeApi();
+      api.boards = [
+        {
+          id: "tri",
+          name: "Triage",
+          kind: "list",
+          query: "f=state:any:queued",
+        },
+        { id: "kb", name: "Flow", kind: "kanban", query: "" },
+        {
+          id: "who",
+          name: "Alice",
+          kind: "list",
+          query: "f=author:any:alice",
+        },
+      ];
+      const f = await render(api, "asked");
+      await TestBed.inject(TasksStore).loadBoards();
+      await settle(f);
+      const nav = vi
+        .spyOn(TestBed.inject(Router), "navigate")
+        .mockResolvedValue(true);
+      q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+      await settle(f);
+      const kb = q<HTMLAnchorElement>(f, '[data-testid="board-apply-kb"]')!;
+      expect(kb.tagName).toBe("A");
+      expect(kb.getAttribute("href")).toBe("/boards/kb");
+      expect(kb.getAttribute("aria-label")).toBe(
+        "Flow, opens on the classic page: it is a Kanban board",
+      );
+      expect(q(f, '[data-testid="board-classic-kb"]')!.textContent).toContain(
+        "Classic ↗",
+      );
+      const who = q<HTMLAnchorElement>(f, '[data-testid="board-apply-who"]')!;
+      expect(who.tagName).toBe("A");
+      expect(who.getAttribute("aria-label")).toContain("narrows by author");
+      q<HTMLButtonElement>(f, '[data-testid="board-apply-tri"]')!.click();
+      expect(nav).toHaveBeenCalledWith(["/tasks"], {
+        queryParams: { tab: null, group: null, q: null, repo: null },
+        replaceUrl: false,
+      });
+    });
+
     it("renders Repair badge, broken-base banner, inline Retry on failed tasks, Saved Boards CRUD, and Timeline view", async () => {
       const api = new FakeApi();
       api.gates = [
@@ -1019,6 +1063,11 @@ describe("TasksPageComponent", () => {
           .boards()
           .map((b) => b.name),
       ).toEqual(["All Triage"]);
+      // Saved in the board grammar the classic boards read, its tab as
+      // a condition on state (board-query.ts).
+      expect(TestBed.inject(TasksStore).boards()[0].query).toBe(
+        "f=state:none:closed",
+      );
 
       const nav = vi
         .spyOn(TestBed.inject(Router), "navigate")
@@ -1028,6 +1077,7 @@ describe("TasksPageComponent", () => {
       q<HTMLButtonElement>(f, '[data-testid="board-apply-b1"]')!.click();
       expect(nav).toHaveBeenCalledWith(["/tasks"], {
         queryParams: { tab: "all", group: null, q: null, repo: null },
+        replaceUrl: false,
       });
 
       q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();

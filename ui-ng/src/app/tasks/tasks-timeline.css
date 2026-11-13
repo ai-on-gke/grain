@@ -210,6 +210,45 @@
   font-size: 12px;
 }
 
+/* A board /next/tasks cannot show exactly (a Kanban, Timeline, Tree,
+   Panels or Report board, or a query naming what this page cannot
+   filter on) is a link to the classic page, drawn like its neighbours
+   and tagged with where it goes (board-query.ts). */
+.boards-menu.pop-menu .boards-menu-row a.board-apply-btn {
+  display: flex;
+  align-items: center;
+  color: var(--md-sys-color-on-surface);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.boards-menu.pop-menu .boards-menu-row a.board-apply-btn:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.boards-menu.pop-menu .boards-menu-row a.board-apply-btn:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
+/* The name gives way before the tag does: where a board goes is the
+   one thing the row must not cut off. */
+.boards-menu.pop-menu .boards-menu-row .board-classic-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.boards-menu.pop-menu .boards-menu-row .board-classic-tag {
+  flex-shrink: 0;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 999px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 11px;
+}
+
 .boards-menu.pop-menu .boards-menu-row .board-del-btn {
   width: 28px;
   height: 28px;
