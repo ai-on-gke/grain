@@ -31,6 +31,11 @@ import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { errText } from "../settings/settings-state.service";
 import {
+  ConfirmDialogComponent,
+  bypassConfirm,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
+import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
@@ -106,7 +111,7 @@ interface PendingReleaseRow {
 
 @Component({
   selector: "g-repo-detail-page",
-  imports: [RouterLink, PillSelectComponent],
+  imports: [RouterLink, PillSelectComponent, ConfirmDialogComponent],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
@@ -1145,6 +1150,9 @@ interface PendingReleaseRow {
           }
         </div>
       </div>
+      @if (confirmReq(); as req) {
+        <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+      }
     </section>
   `,
 })
@@ -1201,6 +1209,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly mergeOnGreen = signal(false);
   protected readonly requireUpToDate = signal(false);
   protected readonly bypassHumanGates = signal(false);
+  protected readonly confirmReq = signal<ConfirmRequest | null>(null);
 
   protected readonly setupCommand = signal("");
   protected readonly promptExtension = signal("");
@@ -1896,8 +1905,25 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected async toggleBypassHumanGates(): Promise<void> {
+  protected async onConfirmDone(accepted: boolean): Promise<void> {
+    const req = this.confirmReq();
+    this.confirmReq.set(null);
+    if (!accepted || !req) return;
+    await req.run();
+  }
+
+  protected toggleBypassHumanGates(): void {
     const next = !this.bypassHumanGates();
+    if (next) {
+      this.confirmReq.set(
+        bypassConfirm(this.repoSlug(), () => this.saveBypassHumanGates(true)),
+      );
+      return;
+    }
+    void this.saveBypassHumanGates(false);
+  }
+
+  private async saveBypassHumanGates(next: boolean): Promise<void> {
     try {
       await this.api.put(
         "PUT /api/repos/{owner}/{name}/base-repair-bypasses-human-gates",

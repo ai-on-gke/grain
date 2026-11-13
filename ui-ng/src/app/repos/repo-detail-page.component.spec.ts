@@ -308,4 +308,53 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
     ).toBe(true);
     expect(pill.textContent).toContain("Grain CI");
   });
+  // 2026-11-13 repository walkthrough: one click on the switch let
+  // base-branch repair PRs merge with no human; the classic page asks.
+  it("asks before letting base-branch repairs bypass the human gate, and not when turning it off", async () => {
+    const { el, api, harness } = await mountRepo(
+      "/repos/acme/platform/merge-queue",
+    );
+    const key =
+      "PUT /api/repos/{owner}/{name}/base-repair-bypasses-human-gates";
+    const sw = () =>
+      el.querySelector<HTMLButtonElement>(
+        'button[aria-label="Base-branch repairs bypass human review gates"]',
+      )!;
+    sw().click();
+    harness.detectChanges();
+    const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+    expect(dialog?.textContent).toContain(
+      "Let base-branch repair PRs in acme/platform merge without a human",
+    );
+    expect(api.calls.some((c) => c.key === key)).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+    expect(api.calls.some((c) => c.key === key)).toBe(false);
+    expect(sw().getAttribute("aria-checked")).toBe("false");
+
+    sw().click();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(api.calls.filter((c) => c.key === key).map((c) => c.body)).toEqual([
+      { baseRepairBypassesHumanGates: true },
+    ]);
+    expect(sw().getAttribute("aria-checked")).toBe("true");
+
+    sw().click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+    expect(api.calls.filter((c) => c.key === key).map((c) => c.body)).toEqual([
+      { baseRepairBypassesHumanGates: true },
+      { baseRepairBypassesHumanGates: false },
+    ]);
+  });
 });
