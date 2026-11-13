@@ -1689,3 +1689,72 @@ func TestWorkflowRunScheduleSkipNamesTheOpenFiringsState(t *testing.T) {
 		t.Errorf("skip summary = %q, want it to name the open firing as queued", s)
 	}
 }
+
+// A github_workflow_run schedule that names its own template -- the
+// release manager's (.grain/schedules/release-manager.yml) -- still tells
+// the filed task which run fired it: the run's head branch, which for a
+// tag push is the rc tag, is in the task's body and its opening comment.
+// The release manager reads the version it manages from there, so a
+// firing that dropped it would leave the manager not knowing its release.
+// A second rc tag while that manager is open is dropped (overlap: skip).
+func TestAWorkflowRunScheduleWithItsOwnTemplateNamesTheRunsTag(t *testing.T) {
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	t.Cleanup(orchestrator.SetGitHubCIBudgetLow(false))
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+
+	tmpl := model.Template{
+		ID:     model.RepoDeclaredID(model.DeclaredTemplate, repo, "release-manager"),
+		Name:   "Release manager",
+		Title:  "Release manager for {{version}}",
+		Body:   "Manage {{version}} to published images.",
+		Fields: []model.TemplateField{{Name: "version", Default: "the newest rc"}},
+		Target: &repo,
+	}
+	if err := store.PutTemplate(ctx, tmpl); err != nil {
+		t.Fatal(err)
+	}
+	sched := model.Schedule{
+		ID: "sched-release-manager", Title: "Release manager", Target: repo, Enabled: true,
+		Overlap: model.OverlapSkip, TemplateID: &tmpl.ID,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceGitHubWorkflowRun,
+			GitHubWorkflowRun: &model.GitHubWorkflowRunTrigger{Workflow: "release-train-assets.yml",
+				Branches: []string{"v*-rc.*"}, Conclusions: []string{"success", "failure"}}},
+	}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatal(err)
+	}
+	run := func(id int64, tag string, at time.Time) githubsim.WorkflowRun {
+		return githubsim.WorkflowRun{ID: id, Name: "release-train-assets", Path: ".github/workflows/release-train-assets.yml",
+			HeadBranch: tag, HeadSHA: "abcdefabcdefabcd", Event: "push", Status: "completed", Conclusion: "success",
+			RunAttempt: 1, CreatedAt: at, UpdatedAt: at.Add(5 * time.Minute),
+			Jobs: []githubsim.WorkflowJob{{Name: "publish release-train assets", Conclusion: "success"}}}
+	}
+	sim.WorkflowRuns = []githubsim.WorkflowRun{run(5001, "v3.7.0-rc.1", baseTime)}
+	runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime.Add(10*time.Minute))
+
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("filed %d tasks for v3.7.0-rc.1, want 1: %+v", len(tasks), tasks)
+	}
+	manager := tasks[0]
+	if manager.Title != "Release manager for the newest rc" {
+		t.Errorf("title = %q, want the template's title with the field's default", manager.Title)
+	}
+	if !strings.Contains(manager.Body, "Manage the newest rc") || !strings.Contains(manager.Body, "5001") {
+		t.Errorf("body does not carry both the template and the run:\n%s", manager.Body)
+	}
+	comments := commentBodies(t, ctx, store, manager.ID)
+	if len(comments) == 0 || !strings.Contains(comments[0], "`v3.7.0-rc.1`") {
+		t.Errorf("opening comments = %q, want the first to name the rc tag", comments)
+	}
+
+	sim.WorkflowRuns = append([]githubsim.WorkflowRun{run(5002, "v3.7.0-rc.2", baseTime.Add(time.Hour))}, sim.WorkflowRuns...)
+	runGitHubCITails(t, ctx, orchestrator.Deps{Store: store, Client: client}, baseTime.Add(time.Hour+10*time.Minute))
+	if tasks, _ := store.ListTasks(ctx); len(tasks) != 1 {
+		t.Fatalf("filed %d tasks after v3.7.0-rc.2 with the manager still open, want 1", len(tasks))
+	}
+}

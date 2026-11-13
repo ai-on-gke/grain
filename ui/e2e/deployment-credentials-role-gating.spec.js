@@ -100,7 +100,11 @@ test("a role with capabilities:admin but not settings:write or secrets:write see
       await page.setViewportSize(viewport);
       await page.goto("/settings/capabilities#credentials");
       const card = page.locator("#credentials");
-      await expect(card.getByText("cosign-key")).toBeVisible();
+      // The first wait after a fresh load covers the secrets list
+      // arriving on a busy CI runner, not the assertion itself.
+      await expect(card.getByText("cosign-key")).toBeVisible({
+        timeout: 15000,
+      });
       // Capabilities itself is open to this role: no page-level note.
       await expect(page.getByTestId("settings-role-read-only")).toHaveCount(0);
       const note = card.getByTestId("credentials-read-only");
@@ -148,7 +152,11 @@ test("a role with settings:write and secrets:write but not capabilities:admin ca
       await page.setViewportSize(viewport);
       await page.goto("/settings/capabilities#credentials");
       const card = page.locator("#credentials");
-      await expect(card.getByText("cosign-key")).toBeVisible();
+      // The first wait after a fresh load covers the secrets list
+      // arriving on a busy CI runner, not the assertion itself.
+      await expect(card.getByText("cosign-key")).toBeVisible({
+        timeout: 15000,
+      });
       // The page's note names what capabilities:admin holds back, which
       // is not this card.
       const pageNote = page.getByTestId("settings-role-read-only");
@@ -195,7 +203,9 @@ test("an operator still gets every control, and no read-only note", async ({
   try {
     await page.goto("/settings/capabilities#credentials");
     const card = page.locator("#credentials");
-    await expect(card.getByText("cosign-key")).toBeVisible();
+    // The first wait after a fresh load covers the secrets list
+    // arriving on a busy CI runner, not the assertion itself.
+    await expect(card.getByText("cosign-key")).toBeVisible({ timeout: 15000 });
     await expect(card.getByTestId("credentials-read-only")).toHaveCount(0);
     await expect(card.locator("input[name=githubHost]")).toBeEnabled();
     await expect(

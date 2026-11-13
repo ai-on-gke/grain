@@ -98,6 +98,13 @@ type ResumeOn struct {
 	// Tasks are task ids the task now depends on.
 	Tasks       []string `json:"tasks,omitempty"`
 	UntilMerged bool     `json:"until_merged,omitempty"`
+	// Links are the Tasks whose depends-on links the park itself wrote
+	// (ui.Client.ResumeLater), as against ones the task already declared.
+	// They are the park's own hold, and the run that resumes it takes them
+	// off again (resumeSuspensionsTx): a target reopened after the park
+	// is over must not hold the task a second time, nor be told to later
+	// runs as a dependency it never declared.
+	Links []string `json:"links,omitempty"`
 	// At is a wake time: the task is deferred until it.
 	At *time.Time `json:"at,omitempty"`
 	// CI is a CI run id (grain CI or gha:<owner>:<name>:<run-id> for GitHub

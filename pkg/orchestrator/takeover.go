@@ -165,7 +165,7 @@ func handleTakeoverCommand(ctx context.Context, deps Deps, repo model.RepoRef, n
 	if deps.Client == nil {
 		return nil
 	}
-	detail, err := deps.Client.GetPullRequest(repo.Owner, repo.Name, number)
+	detail, err := deps.Client.GetPullRequest(repo.StoredOwner(), repo.Name, number)
 	if err != nil {
 		return fmt.Errorf("reading %s to take it over: %w", ref, err)
 	}
@@ -207,10 +207,11 @@ func handleTakeoverCommand(ctx context.Context, deps Deps, repo model.RepoRef, n
 // allows maintainers to modify it -- is out of its reach, and gets a
 // replacement pull request instead.
 func headPushable(client github.Client, repo model.RepoRef, detail github.PullRequestDetail) bool {
-	if detail.HeadRepo != "" && !strings.EqualFold(detail.HeadRepo, repo.String()) {
+	if detail.HeadRepo != "" && !strings.EqualFold(detail.HeadRepo, repo.Owner+"/"+repo.Name) &&
+		!strings.EqualFold(detail.HeadRepo, repo.String()) {
 		return false
 	}
-	exists, err := client.BranchExists(repo.Owner, repo.Name, detail.HeadRef)
+	exists, err := client.BranchExists(repo.StoredOwner(), repo.Name, detail.HeadRef)
 	return err == nil && exists
 }
 
@@ -312,8 +313,8 @@ func openReplacementPR(client github.Client, ref model.PullRequestRef, detail gi
 
 	repo := ref.Repo
 	branch := fmt.Sprintf("grain/takeover-%d", ref.Number)
-	if err := client.CreateBranch(repo.Owner, repo.Name, branch, detail.HeadSHA); err != nil {
-		if exists, xerr := client.BranchExists(repo.Owner, repo.Name, branch); xerr != nil || !exists {
+	if err := client.CreateBranch(repo.StoredOwner(), repo.Name, branch, detail.HeadSHA); err != nil {
+		if exists, xerr := client.BranchExists(repo.StoredOwner(), repo.Name, branch); xerr != nil || !exists {
 			return model.PullRequestRef{}, "", fmt.Errorf("copying %s's head to %s: %w", ref, branch, err)
 		}
 	}
@@ -326,9 +327,9 @@ func openReplacementPR(client github.Client, ref model.PullRequestRef, detail gi
 		"branch is in a fork grain has no push access to. This branch starts from that pull request's head, "+
 		"so its commits and authorship are unchanged; grain's own commits carry a Co-authored-by trailer "+
 		"crediting %s.\n\nThe original stays open until a person closes it.", ref.Number, credit, taskID, credit)
-	pr, err := client.FindOpenPullRequestForBranch(repo.Owner, repo.Name, branch)
+	pr, err := client.FindOpenPullRequestForBranch(repo.StoredOwner(), repo.Name, branch)
 	if err != nil || pr == nil {
-		created, cerr := client.CreatePullRequest(repo.Owner, repo.Name, branch, detail.BaseRef,
+		created, cerr := client.CreatePullRequest(repo.StoredOwner(), repo.Name, branch, detail.BaseRef,
 			strings.TrimSpace(detail.Title), body)
 		if cerr != nil {
 			return model.PullRequestRef{}, "", fmt.Errorf("opening the replacement for %s: %w", ref, cerr)
@@ -393,7 +394,7 @@ func postPRComment(client github.Client, ref model.PullRequestRef, body string) 
 	if client == nil {
 		return
 	}
-	if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, body); err != nil {
+	if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, body); err != nil {
 		log.Printf("orchestrator: commenting on %s: %v", ref, err)
 	}
 }
@@ -418,7 +419,7 @@ func handleReleaseCommand(ctx context.Context, deps Deps, repo model.RepoRef, nu
 		return err
 	}
 	if author == "" && deps.Client != nil {
-		if detail, err := deps.Client.GetPullRequest(repo.Owner, repo.Name, number); err == nil {
+		if detail, err := deps.Client.GetPullRequest(repo.StoredOwner(), repo.Name, number); err == nil {
 			author = detail.AuthorLogin
 		}
 	}
@@ -530,7 +531,7 @@ func settleTakeover(ctx context.Context, deps Deps, id string, trustCache map[st
 	if ownRaw == "" {
 		// Approved since it was filed without a branch grain can push:
 		// make the replacement now.
-		detail, err := deps.Client.GetPullRequest(taken.Repo.Owner, taken.Repo.Name, taken.Number)
+		detail, err := deps.Client.GetPullRequest(taken.Repo.StoredOwner(), taken.Repo.Name, taken.Number)
 		if err != nil {
 			return err
 		}
@@ -555,7 +556,7 @@ func settleTakeover(ctx context.Context, deps Deps, id string, trustCache map[st
 	if err != nil {
 		return nil
 	}
-	detail, err := deps.Client.GetPullRequest(own.Repo.Owner, own.Repo.Name, own.Number)
+	detail, err := deps.Client.GetPullRequest(own.Repo.StoredOwner(), own.Repo.Name, own.Number)
 	if err != nil {
 		return err
 	}
@@ -644,7 +645,7 @@ func fileTakeoverReviews(ctx context.Context, deps Deps, task model.Task, own mo
 		security = true
 		why = append(why, "its author is not a collaborator")
 	}
-	if paths, err := deps.Client.ListPullRequestFiles(repo.Owner, repo.Name, own.Number); err != nil {
+	if paths, err := deps.Client.ListPullRequestFiles(repo.StoredOwner(), repo.Name, own.Number); err != nil {
 		// A list grain cannot read is one it cannot clear.
 		security = true
 		why = append(why, "grain could not read its file list")
@@ -684,7 +685,7 @@ func fileTakeoverReviews(ctx context.Context, deps Deps, task model.Task, own mo
 
 	var checkLink *model.Link
 	if checks, ok := deps.Client.(github.CheckRunWriter); ok {
-		checkID, err := checks.CreateCheckRun(repo.Owner, repo.Name, github.CheckRunWrite{
+		checkID, err := checks.CreateCheckRun(repo.StoredOwner(), repo.Name, github.CheckRunWrite{
 			Name:    externalReviewCheckName,
 			HeadSHA: detail.HeadSHA,
 			Status:  "in_progress",
@@ -852,7 +853,7 @@ func updateTakeoverCheck(client github.Client, task model.Task, checkID int64, s
 	if !ok || task.Target == nil {
 		return
 	}
-	if err := checks.UpdateCheckRun(task.Target.Owner, task.Target.Name, checkID, github.CheckRunWrite{
+	if err := checks.UpdateCheckRun(task.Target.StoredOwner(), task.Target.Name, checkID, github.CheckRunWrite{
 		Status: status, Conclusion: conclusion,
 		Output: &github.CheckRunOutput{Title: title, Summary: summary},
 	}); err != nil {
