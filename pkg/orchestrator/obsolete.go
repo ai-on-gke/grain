@@ -467,6 +467,25 @@ func supersedeStaleReview(ctx context.Context, store *model.Store, review model.
 	if !staleReview(state, obs) {
 		return nil
 	}
+	// An incremental review reads only what changed since the older
+	// review's head, and checkIncrementalDependencies trusts that delta
+	// only because the dependency on the older review is still there to
+	// check: one that never finished cleanly either widens the newer
+	// review to the whole change (before it runs) or blocks its verdict
+	// (after). Dropping the dependency without widening the review would
+	// let a delta-only verdict clear a change nobody read in full. So the
+	// newer review is widened here, in the same update that drops the
+	// link -- and if it has already been dispatched, and so can no longer
+	// be widened, it is left depending on the older one for
+	// checkIncrementalDependencies to judge.
+	incremental := reviewSince(review.Tags) != ""
+	if incremental {
+		if attempts, err := store.Attempts(ctx, review.ID); err != nil {
+			return fmt.Errorf("orchestrator: checking whether review %s has run: %w", review.ID, err)
+		} else if attempts > 0 {
+			return nil
+		}
+	}
 	if err := store.UpdateTask(ctx, prevID, func(t *model.Task) error {
 		t.Links = append(withoutLinks(t.Links, model.LinkSupersededBy),
 			model.Link{Kind: model.LinkSupersededBy, Target: review.ID})
@@ -488,6 +507,9 @@ func supersedeStaleReview(ctx context.Context, store *model.Store, review model.
 			kept = append(kept, l)
 		}
 		t.Links = append(kept, model.Link{Kind: model.LinkSupersedes, Target: prevID})
+		if incremental {
+			stripIncrementalReview(t)
+		}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("orchestrator: releasing review %s from %s: %w", review.ID, prevID, err)

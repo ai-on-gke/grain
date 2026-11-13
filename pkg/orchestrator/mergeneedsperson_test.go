@@ -431,3 +431,63 @@ func TestANewerReviewStillWaitsOnARunningOlderOne(t *testing.T) {
 		t.Error("the newer review stopped waiting on an older one that has not finished")
 	}
 }
+
+// A newer review that only reads the delta since the older review's head
+// is widened to the whole change when that older review is superseded:
+// dropping the dependency is what checkIncrementalDependencies read to
+// know the delta alone was not enough, so a delta-only verdict must not be
+// left to clear a change whose earlier review never finished cleanly.
+func TestSupersedingAStuckReviewWidensAnIncrementalSuccessor(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	reviewed := filedTask(t, ctx, store, "t1", repo)
+	kindTag := "path-trigger-review:acme/widgets#1:code"
+
+	old := filedTask(t, ctx, store, "r1", repo)
+	old.Origin.Reason = model.ReasonReview
+	old.Base = reviewed.BranchName()
+	old.AutoMerge = true
+	old.Tags = []string{model.PathTriggerMarkerTag, kindTag, "path-trigger-head:08f6232f"}
+	old.Links = append(old.Links, model.Link{Kind: model.LinkProposedBy, Target: reviewed.ID},
+		model.Link{Kind: model.LinkFixes, Target: "acme/widgets#2"})
+	if err := store.PutTask(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	done := baseTime
+	if err := store.ObserveField(ctx, old.ID, done, func(o *model.Observation) {
+		o.CompletedAt = &done
+		o.MergeQueueState = "repair_needed"
+		o.MergeQueueStateAt = &done
+	}); err != nil {
+		t.Fatal(err)
+	}
+	newer := filedTask(t, ctx, store, "r2", repo)
+	newer.Origin.Reason = model.ReasonReview
+	newer.Base = reviewed.BranchName()
+	newer.Tags = []string{model.PathTriggerMarkerTag, kindTag, "path-trigger-head:1234abcd",
+		"path-trigger-since:08f6232f"}
+	newer.AutoMerge = true
+	newer.Links = append(newer.Links, model.Link{Kind: model.LinkProposedBy, Target: reviewed.ID},
+		model.Link{Kind: model.LinkDependsOn, Target: old.ID})
+	if err := store.PutTask(ctx, newer); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := orchestrator.SyncReviews(ctx, store, baseTime.Add(time.Hour)); err != nil {
+		t.Fatalf("SyncReviews: %v", err)
+	}
+	if state, err := store.State(ctx, old.ID); err != nil || state != model.StateClosed {
+		t.Fatalf("the stuck older review reads %q (%v), want closed", state, err)
+	}
+	gotNew, _ := store.GetTask(ctx, newer.ID)
+	if hasLink(*gotNew, model.LinkDependsOn, old.ID) {
+		t.Errorf("the newer review still depends on the one it superseded: %+v", gotNew.Links)
+	}
+	for _, tag := range gotNew.Tags {
+		if strings.HasPrefix(tag, "path-trigger-since:") {
+			t.Errorf("the newer review was released from its dependency but still reviews only the delta (%s): %v",
+				tag, gotNew.Tags)
+		}
+	}
+}
