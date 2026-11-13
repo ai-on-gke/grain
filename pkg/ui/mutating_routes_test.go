@@ -1313,3 +1313,21 @@ func TestABodyNeverNamesAPerson(t *testing.T) {
 		}
 	}
 }
+
+func TestPutDeploymentAgentBackendMismatchID(t *testing.T) {
+	srv, _ := testServer(t)
+	body := `{"id":"body-id","framework":"antigravity"}`
+	rec := do(t, srv, "PUT", "/api/deployment/agent-backends/path-id", body)
+	if rec.Code != 400 {
+		t.Errorf("mismatched id status = %d, want 400", rec.Code)
+	}
+}
+
+func TestAddTargetRepoInvalidCloneUrl(t *testing.T) {
+	srv, _ := testServer(t)
+	body := `{"repo":"sidthe/grain","cloneUrl":"invalid-url"}`
+	rec := do(t, srv, "POST", "/api/repos", body)
+	if rec.Code != 400 {
+		t.Errorf("invalid cloneUrl status = %d, want 400", rec.Code)
+	}
+}

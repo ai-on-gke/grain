@@ -561,7 +561,7 @@ export function formatHostdLabels(
                 type="button"
                 class="btn-text s-btn-sm"
                 data-testid="clear-codex-auth"
-                [disabled]="!access.can('DELETE /api/codex-auth')"
+                [disabled]="!this.codexAuthJsonSet() || !access.can('DELETE /api/codex-auth')"
                 (click)="clearCodexAuth()"
               >
                 Clear Codex auth
@@ -570,6 +570,12 @@ export function formatHostdLabels(
           </div>
         </div>
 
+        @if (!modelsConfigured()) {
+          <div class="s-callout">
+            <span class="icon">info</span>
+            <p>No connections configured. Its tasks run only on these, and wait until it has one.</p>
+          </div>
+        }
         <div class="s-card" data-testid="card-model-backends">
           <div class="s-card-head">
             <div>
@@ -620,6 +626,22 @@ export function formatHostdLabels(
                             ? " · [" + b.models?.join(", ") + "]"
                             : ""
                         }}
+                        @if (b.discovered) {
+                          <div class="s-caption" style="margin-top: 4px;">
+                            <details>
+                              <summary>
+                                Discovered: {{ b.discovered.models?.length || 0 }} models
+                                @if (b.discovered.refreshedAt) {
+                                  (at {{ b.discovered.refreshedAt }})
+                                }
+                              </summary>
+                              <div>{{ b.discovered.models?.join(', ') || 'None' }}</div>
+                            </details>
+                            @if (b.discovered.error) {
+                              <div class="status-pill error" style="margin-top: 4px;">{{ b.discovered.error }}</div>
+                            }
+                          </div>
+                        }
                       </td>
                       <td>
                         <div class="s-inline">
@@ -671,19 +693,8 @@ export function formatHostdLabels(
                             Refresh models
                           </button>
                         }
-                        <button
-                          type="button"
-                          class="btn-text s-btn-sm"
-                          [attr.data-testid]="'remove-backend-' + b.id"
-                          [disabled]="
-                            !access.can(
-                              'DELETE /api/deployment/agent-backends/{backendId}'
-                            )
-                          "
-                          (click)="deleteBackend(b.id)"
-                        >
-                          Remove
-                        </button>
+                        <button type="button" class="btn-text s-btn-sm" (click)="editBackend(b)">Edit</button>
+                        <button type="button" class="btn-text s-btn-sm" [attr.data-testid]="'remove-backend-' + b.id" [disabled]="!access.can('DELETE /api/deployment/agent-backends/{backendId}')" (click)="deleteBackend(b.id)">Remove</button>
                       </td>
                     </tr>
                   }
@@ -939,15 +950,15 @@ export function formatHostdLabels(
               [disabled]="!access.can('PUT /api/usage/settings')"
               (input)="newBudgetConn.set($any($event.target).value)"
             />
-            <input
-              class="s-input s-input-inline tabular"
-              type="text"
-              aria-label="Budget model (optional)"
-              data-testid="input-budget-model"
+            <g-model-picker
+              class="mp-inline"
+              testid="picker-budget-model"
+              ariaLabel="Budget model (optional)"
               placeholder="model (optional)"
+              [groups]="modelGroups()"
               [value]="newBudgetModel()"
               [disabled]="!access.can('PUT /api/usage/settings')"
-              (input)="newBudgetModel.set($any($event.target).value)"
+              (valueChange)="newBudgetModel.set($event)"
             />
             <input
               class="s-input s-input-inline tabular"
@@ -1741,7 +1752,10 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly newBackendId = signal("");
   protected readonly newBackendName = signal("");
   protected readonly newBackendFw = signal("antigravity");
+  protected readonly editingBackendId = signal("");
   protected readonly newBackendAuthMode = signal("");
+  
+  protected readonly modelsConfigured = computed(() => this.backends().length > 0);
   protected readonly newBackendModels = signal("");
   protected readonly newBackendHostd = signal("");
   protected readonly newBackendCliPath = signal("");
@@ -2163,6 +2177,10 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected async saveBackend(): Promise<void> {
     const backendId = this.newBackendId().trim();
     if (!backendId) return;
+    if (this.editingBackendId() !== backendId && this.backends().some(b => b.id === backendId)) {
+      this.state.error.set(`Connection ${backendId} already exists. To edit it, click Edit on its row.`);
+      return;
+    }
     const models = this.newBackendModels()
       .split(",")
       .map((s) => s.trim())
@@ -2171,7 +2189,11 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     const authMode = this.newBackendAuthMode().trim();
     const hostd = this.newBackendHostd().trim();
     const cliPath = this.newBackendCliPath().trim();
-    const concurrency = Number(this.newBackendConcurrency()) || 0;
+    const concurrency = this.newBackendConcurrency() || 0;
+    if (concurrency !== 0 && concurrency < 1) {
+      this.state.error.set("Concurrency must be 1 or greater, or blank for unlimited.");
+      return;
+    }
     const payload: BackendEntry = {
       id: backendId,
       framework: this.newBackendFw(),
@@ -2194,6 +2216,9 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       this.newBackendHostd.set("");
       this.newBackendCliPath.set("");
       this.newBackendConcurrency.set(0);
+      this.newBackendFw.set("antigravity");
+      this.newBackendAuthMode.set("");
+      this.editingBackendId.set("");
       await this.state.loadCore();
       this.syncBackendsFromState();
       this.snackbar.show(`Saved model connection ${backendId}`);
@@ -2218,6 +2243,18 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
+  protected editBackend(b: BackendEntry): void {
+    this.editingBackendId.set(b.id);
+    this.newBackendId.set(b.id);
+    this.newBackendName.set(b.name || "");
+    this.newBackendFw.set(b.framework || "antigravity");
+    this.newBackendAuthMode.set(b.authMode || "");
+    this.newBackendHostd.set(b.hostd || "");
+    this.newBackendCliPath.set(b.cliPath || "");
+    this.newBackendModels.set(b.models?.join(", ") || "");
+    this.newBackendConcurrency.set(b.concurrency || 0);
+  }
+
   protected async deleteBackend(backendId: string): Promise<void> {
     try {
       await this.api.delete(
@@ -2234,7 +2271,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected async loadDiscoveredModels(): Promise<void> {
     try {
       const res = await this.api.get<
-        string[] | { models?: (string | { id?: string; name?: string })[] }
+        string[] | { models?: (string | { id?: string; name?: string })[]; available?: boolean; error?: string }
       >("GET /api/agent-models");
       const raw = Array.isArray(res) ? res : (res?.models ?? []);
       this.discoveredModels.set(
@@ -2242,6 +2279,9 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
           .map((m) => (typeof m === "string" ? m : (m.id ?? m.name ?? "")))
           .filter(Boolean),
       );
+      if (!Array.isArray(res) && res?.error) {
+        this.state.error.set(res.error);
+      }
     } catch (err) {
       this.state.recordError(err);
     }

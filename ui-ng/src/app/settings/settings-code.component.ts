@@ -31,6 +31,7 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { ConfirmDialogComponent, type ConfirmRequest } from "../shared/confirm-dialog.component";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 import {
@@ -69,6 +70,9 @@ interface StateRepoEntryDto {
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
+    @if (confirmReq(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+    }
     @switch (section()) {
       @case ("repositories") {
         <div class="s-card" data-testid="card-repositories">
@@ -173,7 +177,7 @@ interface StateRepoEntryDto {
                               state.sectionLocked('repositories') ||
                               !access.can('DELETE /api/repos/{owner}/{name}')
                             "
-                            (click)="removeRepo(repo)"
+                            (click)="startRemoveRepo(repo)"
                           >
                             Remove
                           </button>
@@ -209,22 +213,40 @@ interface StateRepoEntryDto {
               </div>
             }
             <div class="s-field">
-              <label class="s-label" for="add-repo-slug"
-                >Repository (owner/name)</label
-              >
+              <label class="s-label" for="add-repo-slug">Repository (owner/name)</label>
               <input
                 id="add-repo-slug"
                 class="s-input tabular"
                 type="text"
+                list="reachable-repos-list"
                 data-testid="input-add-repo"
-                placeholder="acme/platform"
+                placeholder="acme/platform or Other repository..."
                 [value]="newRepoSlug()"
-                [disabled]="
-                  state.sectionLocked('repositories') ||
-                  !access.can('POST /api/repos')
-                "
+                [disabled]="state.sectionLocked('repositories') || !access.can('POST /api/repos')"
                 (input)="newRepoSlug.set($any($event.target).value)"
+                (focus)="loadReachableRepos()"
               />
+              <datalist id="reachable-repos-list">
+                @for (r of reachableRepos(); track r.repo) {
+                  <option [value]="r.repo">{{ r.repo }}</option>
+                }
+              </datalist>
+              @if (loadingReachableRepos()) {
+                <div class="s-caption">Checking reachable repositories...</div>
+              }
+              @if (reachableErrors().length) {
+                <div class="s-callout error">
+                  <p>Errors checking reachable repos: {{ reachableErrors().join('; ') }}</p>
+                </div>
+              }
+              @if (reachableHostMismatches().length) {
+                <div class="s-callout warning">
+                  <p>Host mismatches: {{ reachableHostMismatches().join('; ') }}</p>
+                </div>
+              }
+              @if (reachableReason()) {
+                <div class="s-caption">{{ reachableReason() }}</div>
+              }
             </div>
             <div class="s-field">
               <label class="s-label" for="add-repo-url"
@@ -376,7 +398,7 @@ interface StateRepoEntryDto {
           </div>
 
           @if (gitCheckMessage()) {
-            <div class="s-banner ok" data-testid="git-check-banner">
+            <div [class]="'s-banner ' + (gitCheckMessage() === 'OK' ? 'ok' : 'error')" data-testid="git-check-banner">
               {{ gitCheckMessage() }}
             </div>
           }
@@ -388,6 +410,7 @@ interface StateRepoEntryDto {
                   <tr>
                     <th>Credential</th>
                     <th>Host</th>
+                    <th>Scope</th>
                     <th>Type</th>
                     <th>Actions</th>
                   </tr>
@@ -398,6 +421,7 @@ interface StateRepoEntryDto {
                     <tr [attr.data-testid]="'git-conn-row-' + cred">
                       <td class="tabular">{{ cred }}</td>
                       <td class="tabular">{{ c.host || "github.com" }}</td>
+                      <td class="tabular">{{ c.scope || "All repos on host" }}</td>
                       <td>{{ c.authType || c.type || "pat" }}</td>
                       <td>
                         <button
@@ -990,6 +1014,41 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly newRepoSlug = signal("");
   protected readonly newRepoUrl = signal("");
   protected readonly reposPlanNotice = signal("");
+  protected readonly confirmReq = signal<ConfirmRequest | null>(null);
+  protected readonly reachableRepos = signal<{repo: string, push: boolean}[]>([]);
+  protected readonly loadingReachableRepos = signal(false);
+  protected readonly reachableErrors = signal<string[]>([]);
+  protected readonly reachableHostMismatches = signal<string[]>([]);
+  protected readonly reachableReason = signal("");
+
+  protected repoWarning(repo: string): string | null {
+    const policy = (this.state.config() as Record<string, Record<string, string[]>> | undefined)?.['localPolicy']?.['repos'];
+    if (policy && policy.length > 0 && !policy.includes(repo)) return "Blocked by local policy";
+    if (this.reachableRepos().length > 0 && !this.reachableRepos().find(r => r.repo === repo)) return "Unreachable";
+    return null;
+  }
+
+  protected async loadReachableRepos(): Promise<void> {
+    if (this.reachableRepos().length > 0 || this.loadingReachableRepos()) return;
+    this.loadingReachableRepos.set(true);
+    try {
+      const res = await this.api.get<{
+        repos?: {repo: string, push: boolean}[];
+        errors?: string[];
+        hostMismatches?: string[];
+        reason?: string;
+      }>("GET /api/deployment/reachable-repos");
+      this.reachableRepos.set(res?.repos || []);
+      this.reachableErrors.set(res?.errors || []);
+      this.reachableHostMismatches.set(res?.hostMismatches || []);
+      this.reachableReason.set(res?.reason || "");
+      this.reachableCount.set(this.reachableRepos().length);
+    } catch (err) {
+      this.state.error.set(errText(err));
+    } finally {
+      this.loadingReachableRepos.set(false);
+    }
+  }
 
   protected readonly gitConnections = signal<GitConnectionRow[]>([]);
   protected readonly gitCheckMessage = signal("");
@@ -1188,6 +1247,11 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected async addRepo(): Promise<void> {
     const repo = this.newRepoSlug().trim();
     if (!repo) return;
+    
+    if (this.repoWarning(repo)) {
+       if (!confirm(`Warning: ${this.repoWarning(repo)}. Add anyway?`)) return;
+    }
+    
     try {
       const cloneUrl = this.newRepoUrl().trim();
       await this.api.post("POST /api/repos", undefined, {
@@ -1220,17 +1284,72 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     }
   }
 
-  protected async removeRepo(repo: string): Promise<void> {
-    const { owner, name } = splitRepo(repo);
+  protected async planRepoRemoval(repo: string): Promise<void> {
     try {
-      await this.api.delete("DELETE /api/repos/{owner}/{name}", {
-        owner,
-        name,
-      });
-      this.repos.update((list) => list.filter((r) => r !== repo));
-      this.snackbar.show(`Removed ${repo}`);
+      this.reposPlanNotice.set("Checking stranded tasks...");
+      const plan = await this.api.post<{ tasks?: string[]; schedules?: string[] }>(
+        "POST /api/repos/plan",
+        undefined,
+        { targetRepos: this.repos().filter((r) => r !== repo) }
+      );
+      const stranded = (plan?.tasks?.length || 0) + (plan?.schedules?.length || 0);
+      let msg = "";
+      if (stranded > 0) msg += `Warning: This will strand ${stranded} tasks/schedules.\n`;
+      msg += `Warning: Per-repo settings (setup command, prompt, grants) will be deleted.`;
+      this.reposPlanNotice.set(msg);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.reposPlanNotice.set(errText(err));
+    }
+  }
+
+  protected async startRemoveRepo(repo: string): Promise<void> {
+    this.reposPlanNotice.set("Checking stranded tasks...");
+    this.confirmReq.set({
+      title: `Remove repository ${repo}?`,
+      message: "Checking stranded tasks...",
+      accept: "Remove",
+      destructive: true,
+      run: async () => {
+        const { owner, name } = splitRepo(repo);
+        await this.api.delete("DELETE /api/repos/{owner}/{name}", {
+          owner,
+          name,
+        });
+        this.repos.update((list) => list.filter((r) => r !== repo));
+        this.snackbar.show(`Removed ${repo}`);
+      }
+    });
+
+    try {
+      const plan = await this.api.post<{ tasks?: string[]; schedules?: string[] }>(
+        "POST /api/repos/plan",
+        undefined,
+        { targetRepos: this.repos().filter((r) => r !== repo) }
+      );
+      const stranded = (plan?.tasks?.length || 0) + (plan?.schedules?.length || 0);
+      let msg = "";
+      if (stranded > 0) msg += `Warning: This will strand ${stranded} tasks/schedules.\n`;
+      msg += `Warning: Per-repo settings (setup command, prompt, grants) will be deleted.`;
+      this.reposPlanNotice.set(msg);
+      // Update the request with the new message
+      const req = this.confirmReq();
+      if (req) {
+        this.confirmReq.set({ ...req, message: msg });
+      }
+    } catch (err) {
+      this.reposPlanNotice.set(errText(err));
+      const req = this.confirmReq();
+      if (req) {
+        this.confirmReq.set({ ...req, message: errText(err) });
+      }
+    }
+  }
+
+  protected onConfirmDone(accepted: boolean): void {
+    const req = this.confirmReq();
+    this.confirmReq.set(null);
+    if (accepted && req) {
+      req.run().catch((err) => this.state.error.set(errText(err)));
     }
   }
 
@@ -1349,14 +1468,22 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
 
   protected async checkGitConnections(): Promise<void> {
     try {
-      const res = await this.api.post<{ ok?: boolean; summary?: string }>(
-        "POST /api/deployment/git-connections/check",
-        undefined,
-        {},
-      );
-      this.gitCheckMessage.set(
-        res?.summary || (res?.ok === false ? "Check reported issues" : "OK"),
-      );
+      const res = await this.api.post<{
+        ok?: boolean;
+        summary?: string;
+        repos?: { repo?: string; read?: boolean; push?: boolean; error?: string }[];
+      }>("POST /api/deployment/git-connections/check", undefined, {});
+      
+      const unreachable = res?.repos?.filter(r => !r.read || r.error) || [];
+      if (unreachable.length > 0) {
+        this.gitCheckMessage.set(
+          `OK, but unreachable repos: ${unreachable.map(r => r.repo + (r.error ? ` (${r.error})` : "")).join("; ")}`
+        );
+      } else {
+        this.gitCheckMessage.set(
+          res?.summary || (res?.ok === false ? "Check reported issues" : "OK"),
+        );
+      }
     } catch (err) {
       this.state.error.set(errText(err));
     }

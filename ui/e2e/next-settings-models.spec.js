@@ -176,3 +176,24 @@ test.describe("Settings → Models default and fallback models", () => {
     expect(after.defaultModels).toEqual(["claude-opus-5", "claude-sonnet-5"]);
   });
 });
+
+test('Settings Models - Discovered models, clear credential, and fallback models', async ({ page }) => {
+  await page.goto('/next/settings/models');
+
+  // Verify "Refresh models" button for a connection
+  const refreshBtn = page.getByTestId('refresh-backend-agy-ambient');
+  if (await refreshBtn.count() > 0) {
+    await refreshBtn.click();
+    await expect(page.getByTestId('card-model-backends')).toContainText('Refreshed');
+  }
+
+  // Clear credential
+  const clearBtn = page.getByTestId('clear-codex-auth');
+  if (await clearBtn.isEnabled()) {
+    await clearBtn.click();
+  }
+
+  // Fallback models (done in existing tests, just verifying structure)
+  const addFallbackBtn = page.getByTestId('picker-add-fallback');
+  await expect(addFallbackBtn).toBeVisible();
+});

@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -154,7 +155,19 @@ func (s *Server) handlePutDeploymentAgentBackend(w http.ResponseWriter, r *http.
 	if !readJSON(w, r, &req) {
 		return
 	}
+	if req.AgentBackend.ID != "" && req.AgentBackend.ID != r.PathValue("backendId") {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("connection ID in body (%s) must match path (%s)", req.AgentBackend.ID, r.PathValue("backendId")))
+		return
+	}
 	saved, err := s.tasks.PutTeamAgentBackend(r.Context(), model.DefaultTeamID, r.PathValue("backendId"), req.AgentBackend, requestPerson(r.Context()))
+	if err != nil {
+		// Strip the "agentBackends[X]: " prefix from the error message.
+		if idx := strings.Index(err.Error(), "agentBackends["); idx >= 0 {
+			if end := strings.Index(err.Error()[idx:], "]: "); end > 0 {
+				err = fmt.Errorf("%s", err.Error()[idx+end+3:])
+			}
+		}
+	}
 	writeDeploymentResult(w, saved, err)
 }
 
