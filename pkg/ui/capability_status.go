@@ -16,6 +16,7 @@ package ui
 
 import (
 	"bytes"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -367,12 +368,29 @@ func ciOnlyCapability(name string) bool {
 	return false
 }
 
+// taskRepoGrantRefusal explains why a task's own repository target or write
+// target (repo#target, repo#write {repo, base}) is refused as a capability
+// grant: a task's repository access lives on its target/writes (or in grants:,
+// which splits them out), never in capabilities.
+func taskRepoGrantRefusal(id string) (string, bool) {
+	switch model.CapabilityGrantRef(id) {
+	case model.RepoTargetRef:
+		return fmt.Sprintf("%s is a task's own repository, not a capability grant: set it as the task's repo and base (under Repository access, or in grants:), not in capabilities.", id), true
+	case model.RepoWriteRef:
+		if _, _, hasBase, err := model.RepoGrantArgs(model.CanonicalGrant(id)); err == nil && hasBase {
+			return fmt.Sprintf("%s is a task's repository write target, not a capability grant: add it to the task's writes (under Repository access, or in grants:), not in capabilities.", id), true
+		}
+	}
+	return "", false
+}
+
 // capabilityRefusal is what every picker says about an id it will not
 // accept -- the one sentence for a CI-only capability
 // (model.CIOnlyRefusal, the same words a refused grant would have been
 // failed with), the one for grain-ci (grainci.Refusal: a repo's CI Mode
-// is what grants it), and the plain "unknown capability" for everything
-// else.
+// is what grants it), the one for a task's own repository access
+// (taskRepoGrantRefusal), and the plain "unknown capability" for
+// everything else.
 //
 // One function because there are five of these validations
 // (UpdateSettings, SetRepoDefaultCapabilities, grantsFor, SetCapability,
@@ -392,6 +410,9 @@ func capabilityRefusal(id string) string {
 		if err := model.CheckCapabilityGrantSyntax(id); err != nil {
 			return err.Error()
 		}
+	}
+	if msg, ok := taskRepoGrantRefusal(id); ok {
+		return msg
 	}
 	if g, ok, err := model.ParseAPIGrant(id); ok && err == nil {
 		if err := g.OutsideRepoLimit(); err != nil {

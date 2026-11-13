@@ -157,7 +157,7 @@ func decidePort(ctx context.Context, store *model.Store, client github.Client, t
 	// The pull request's own commits, as GitHub recorded them: what the
 	// footers are read from, rather than the description grain builds
 	// out of them.
-	own, err := client.ListPullRequestCommits(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	own, err := client.ListPullRequestCommits(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		return portDecision{}, fmt.Errorf("listing %s's commits: %w", ref, err)
 	}
@@ -300,7 +300,7 @@ func revertsAbsent(client github.Client, ref model.PullRequestRef, source, targe
 			return false
 		}
 		if !portedRead {
-			commits, err := client.CompareCommits(ref.Repo.Owner, ref.Repo.Name, source, target)
+			commits, err := client.CompareCommits(ref.Repo.StoredOwner(), ref.Repo.Name, source, target)
 			if err != nil || len(commits) >= compareCap {
 				return false
 			}
@@ -322,7 +322,7 @@ func revertsAbsent(client github.Client, ref model.PullRequestRef, source, targe
 // commits a merge sha brought in -- with ok true only when GitHub says
 // target has none of them.
 func lackedChange(client github.Client, ref model.PullRequestRef, target, sha string) ([]string, bool) {
-	missing, err := client.CompareCommits(ref.Repo.Owner, ref.Repo.Name, target, sha)
+	missing, err := client.CompareCommits(ref.Repo.StoredOwner(), ref.Repo.Name, target, sha)
 	if err != nil || len(missing) == 0 || len(missing) >= compareCap {
 		return nil, false
 	}
@@ -337,7 +337,7 @@ func lackedChange(client github.Client, ref model.PullRequestRef, target, sha st
 	if len(reverted.Parents) < 2 {
 		return nil, false
 	}
-	brought, err := client.CompareCommits(ref.Repo.Owner, ref.Repo.Name, reverted.Parents[0], reverted.Parents[1])
+	brought, err := client.CompareCommits(ref.Repo.StoredOwner(), ref.Repo.Name, reverted.Parents[0], reverted.Parents[1])
 	if err != nil || len(brought) >= compareCap {
 		return nil, false
 	}
@@ -386,7 +386,7 @@ func lackedBy(client github.Client, ref model.PullRequestRef, detail github.Pull
 	}
 	var lacking map[string]bool
 	if head != "" {
-		commits, err := client.CompareCommits(ref.Repo.Owner, ref.Repo.Name, target, head)
+		commits, err := client.CompareCommits(ref.Repo.StoredOwner(), ref.Repo.Name, target, head)
 		if err == nil && len(commits) < compareCap {
 			lacking = make(map[string]bool, len(commits))
 			for _, c := range commits {
@@ -428,7 +428,7 @@ func portedOnto(client github.Client, ref model.PullRequestRef, branch string, c
 // does not resolve -- reads as "no", which is the answer that keeps a
 // footer counting as a port and a commit counting as one to port.
 func onBranch(client github.Client, ref model.PullRequestRef, branch, sha string) bool {
-	commits, err := client.CompareCommits(ref.Repo.Owner, ref.Repo.Name, branch, sha)
+	commits, err := client.CompareCommits(ref.Repo.StoredOwner(), ref.Repo.Name, branch, sha)
 	return err == nil && len(commits) == 0
 }
 
@@ -776,6 +776,13 @@ func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref
 	// approval of its own.
 	model.InheritRequester(&port, source)
 	model.InheritContext(&port, source)
+	// A backport onto release/vX.Y.Z fixes a defect vX.Y.Z shipped,
+	// whatever release the source was filed against on its own branch.
+	if v, ok := model.ReleaseBranchVersion(target); ok {
+		model.SetFoundIn(&port, v)
+	} else if v := model.FoundIn(source); v != "" {
+		model.SetFoundIn(&port, v)
+	}
 	return port, nil
 }
 

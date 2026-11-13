@@ -296,7 +296,7 @@ func pollGitHubCIResume(
 	// or that is gone, is a verdict of its own -- whatever was being
 	// waited for is stale, and the task's next run is what should look.
 	var headSHA string
-	head, herr := deps.Client.GetBranchHead(h.Repo.Owner, h.Repo.Name, h.Branch)
+	head, herr := deps.Client.GetBranchHead(h.Repo.StoredOwner(), h.Repo.Name, h.Branch)
 	if herr == nil && head != nil {
 		headSHA = strings.TrimSpace(head.SHA)
 	}
@@ -319,7 +319,7 @@ func pollGitHubCIResume(
 		if !hasAR {
 			return false, false, nil
 		}
-		wfRun, gerr := ar.GetActionsRun(h.Repo.Owner, h.Repo.Name, runID)
+		wfRun, gerr := ar.GetActionsRun(h.Repo.StoredOwner(), h.Repo.Name, runID)
 		if gerr != nil {
 			return false, false, gerr
 		}
@@ -349,7 +349,7 @@ func pollGitHubCIResume(
 		extAfterHold int
 	)
 	if headSHA != "" {
-		checks, cerr := deps.Client.ListCheckRuns(h.Repo.Owner, h.Repo.Name, headSHA)
+		checks, cerr := deps.Client.ListCheckRuns(h.Repo.StoredOwner(), h.Repo.Name, headSHA)
 		if cerr != nil {
 			return false, false, cerr
 		}
@@ -391,7 +391,7 @@ func pollGitHubCIResume(
 		wfAfterHold int
 	)
 	if ar, ok := deps.Client.(github.ActionsReader); ok {
-		runs, rerr := ar.ListActionsRuns(h.Repo.Owner, h.Repo.Name, github.ActionsRunsQuery{Branch: h.Branch, Limit: 20})
+		runs, rerr := ar.ListActionsRuns(h.Repo.StoredOwner(), h.Repo.Name, github.ActionsRunsQuery{Branch: h.Branch, Limit: 20})
 		if rerr == nil && len(runs) > 0 {
 			hasHeadMatch := false
 			if headSHA != "" {

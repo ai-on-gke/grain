@@ -504,7 +504,7 @@ func TestADeferralWhoseWakeTimeHasPassedStalls(t *testing.T) {
 
 	// The sub-case agrees: driven by the same component, escalated to a
 	// person, with the control the row is meant to offer.
-	reason := TaskReason(task, model.StateDeferred, nil, nil, nil, model.ReplyFacts{}, "", "")
+	reason := TaskReason(task, model.StateDeferred, nil, nil, nil, nil, model.ReplyFacts{}, "", "")
 	if reason.Reason != taskReasonDeferredWake || reason.Driver != deferredWake.driver || reason.Control != "Undefer" {
 		t.Errorf("TaskReason = %+v, want %s driven by %s with Undefer", reason, taskReasonDeferredWake, deferredWake.driver)
 	}

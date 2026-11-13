@@ -105,7 +105,8 @@ func ListTaskPage(tasks []TaskSummary, q TaskListQuery) TaskListPage {
 }
 
 // Lines is the page one line per task -- id, state, repo ("-" for none)
-// and title, then "(stopped by operator)" or "(stalled)" and "blocked on <ids>" where they apply --
+// and title, then "(stopped by operator)" or "(stalled)" and "blocked on <ids>" where they apply,
+// with ", which needs a person" after the ids when one of them only a person can close --
 // with nothing else in it, so that a count of lines is a count of tasks.
 // What the list leaves out is Note's to say.
 func (p TaskListPage) Lines() string {
@@ -122,6 +123,9 @@ func (p TaskListPage) Lines() string {
 		}
 		if len(t.BlockedBy) > 0 {
 			fmt.Fprintf(&b, "  blocked on %s", strings.Join(t.BlockedBy, ", "))
+			if blockedOnPerson(t) {
+				b.WriteString(", which needs a person")
+			}
 		}
 		b.WriteString("\n")
 	}

@@ -1058,6 +1058,13 @@ var Migrations = []Migration{
 			"(StoredOwner) for repositories a target repo places off the default host (grain/task-4489)",
 		Up: migrateReleaseOwners,
 	},
+	{
+		Version:     146,
+		Description: "add grain_config.qa, the deployment-wide quality control engine and PR rollout configuration",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `qa` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

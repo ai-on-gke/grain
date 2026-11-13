@@ -1216,11 +1216,13 @@ type StallNoter func(state model.State, since, now time.Time) string
 // orchestrator.MergeReason, in this package's types.
 type ReasonClassifier interface {
 	// TaskReason is the sub-case of state t is in, given its observation
-	// (nil for none), the blocking tasks it is still waiting on, the
-	// grant wait dispatch recorded for it (nil for none), and, for an
-	// awaiting_reply task, which ask it is parked on (Task.replyFacts).
+	// (nil for none), the blocking tasks it is still waiting on,
+	// which of those only a person can close (model.Store.BlockerHolds,
+	// nil for none), the grant wait dispatch recorded for it (nil for
+	// none), and, for an awaiting_reply task, which ask it is parked on
+	// (Task.replyFacts).
 	TaskReason(t model.Task, state model.State, obs *model.Observation, openDeps []string,
-		wait *model.GrantWait, asked model.ReplyFacts) Reason
+		holds []model.BlockerHold, wait *model.GrantWait, asked model.ReplyFacts) Reason
 	// MergeReason classifies a merge-queue sub-case the cycle recorded,
 	// or answers the zero Reason for one it does not know.
 	MergeReason(reason string) Reason

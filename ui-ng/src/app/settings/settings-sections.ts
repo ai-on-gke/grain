@@ -207,7 +207,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
         id: "tasks",
         label: "Tasks",
         subtitle:
-          "Default proposal approval, auto-merge depth and fan-out, branch naming templates, and backlog defaults.",
+          "Default proposal approval, auto-merge depth and fan-out, branch naming templates, and quality control PR rollout.",
         keywords: [
           "tasks",
           "approval",
@@ -217,6 +217,10 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "merge queue",
           "gates",
           "custom fields",
+          "quality",
+          "qa",
+          "rollout",
+          "ab",
         ],
       },
       {
@@ -518,6 +522,12 @@ export const SETTING_LABELS: Readonly<Record<string, string>> = {
   autoMergeByDefault: "Auto-merge new tasks by default",
   maxAutoSubmitDepth: "Max unreviewed follow-up depth",
   maxAutoSubmitFanOut: "Max unreviewed follow-up per task",
+  qaEnabled: "Enable quality control engine",
+  qaFlowId: "Quality flow package",
+  qaRolloutPct: "Quality control PR rollout (%)",
+  qaShadowOnControl: "Passive shadow scoring on control PRs",
+  qaEpoch: "Quality rollout experiment epoch",
+  qaRegimeId: "Quality rollout regime",
   defaultModel: "Default model",
   modelSettings: "Model reasoning settings",
   agentBackends: "Model connections",

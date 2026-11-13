@@ -387,6 +387,12 @@ How it relates to what exists:
 - `wait_for_task(park: true)` is `resume_later(when: {task})`.
 - `wait_for_task(resume_at)` is `resume_later(when: {at})`.
 
+A park on tasks holds its task with `depends_on` links. The ones the park
+wrote itself are recorded on the suspension (`resume_on.links`), and the
+run that resumes the park removes them. A target that is reopened later
+then neither holds the task again nor shows up in later prompts as a
+declared dependency. Links the task already declared when it parked stay.
+
 Both tools keep their names and arguments, because agents and templates
 use them. Their implementation becomes one call into `Store.Suspend`, and
 `model.ParkedOutcome` becomes `suspend_kind = requested`. The new
@@ -1036,7 +1042,7 @@ nothing load the whole of it at once. Where that stands:
 | `model.Store.Comments` in dispatch | Reads `CommentsAfter(cursor)` plus `LatestHandover` (`dispatchComments`): O(since compaction) | Done (grain/task-4194) |
 | `GET /api/tasks/{id}` / `TaskDetail` | Whole by default. `?comments_limit=`, `?comments_before=` (a comment ID), `?attempts_limit=` and `?attempts_before=` (an attempt number) build the page directly from the store (`Store.CommentsBefore`, `Store.RunsBefore`), with bounded reads for transitions, the pending question comment, session names and the failure streak, and cache the head page by change token | Done (grain/task-4194, grain/task-4219) |
 | `GET /api/tasks/{id}/messages?after=` and its delivered mark | Read every comment, then filtered past the cursor | Done: `CommentsAfter` (grain/task-4194) |
-| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link, and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
+| Task page (UI) | Loads at most 50 comments and 20 runs (`?comments_limit=50&attempts_limit=20`), fetches earlier pages via `comments_before=` / `attempts_before=` on "Show earlier" or when following a `/tasks/N#comment=ID` deep link (500 at a time, every page through the target merged and drawn once), and collapses summarised comments (at or before `compacted_through` / `compactedThrough`) in place | Done (grain/task-4193, grain/task-4219) |
 | `grain task read`, `read_grain_task(view: full)` | Whole record | `view: summary` default (DT-13), `conversation, after:` paging |
 | SSE updates | Per-event deltas | No change needed |
 | State-repo export | Every comment and run, every export | Unchanged in size: the export is the backup. Rollover bounds it |
@@ -1174,7 +1180,7 @@ local, and pruned after 30 days.
 | `notify_operator(...)` | all (critical needs task-admin) | Raises or bumps a notification and does not park. |
 | `message_task(task, body)` | task-admin, or parent/child | A note to another task's agent. Never parks it. |
 | `read_pipeline_changes(after)` | self-debug | The delta feed. |
-| `write_handover` | all | Also requested at a `context` suspension and, on a durable task, at any park or suspension that did not write or confirm it. Writing the same handover again confirms it. |
+| `grain handover write` (was `write_handover`) | all | Also requested at a `context` suspension and, on a durable task, at any park or suspension that did not write or confirm it. Writing the same handover again confirms it. |
 | `compact_context(handover)` | all | Writes a fresh handover and moves the compaction cursor to the last comment before the run started (DT-15). |
 | `update_brief(brief, reason)` | all | Replaces the current brief that stands in for the description in prompts (DT-15). |
 
