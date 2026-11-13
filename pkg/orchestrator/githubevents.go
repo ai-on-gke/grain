@@ -680,13 +680,7 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 		fmt.Fprintf(&b, "Reviewer request from @%s:\n\n%s\n\n", sender, strings.TrimSpace(extraNote))
 	}
 	if r.security {
-		if tmpl := model.SystemTemplate(model.SecurityReviewTemplateID, model.RepoRef{}); tmpl != nil &&
-			strings.TrimSpace(tmpl.Body) != "" {
-			fmt.Fprintf(&b, "%s\n\n", strings.TrimSpace(tmpl.Body))
-		}
-		b.WriteString("Review this change as a security review: look for anything that widens what an " +
-			"untrusted party can do -- credentials, capabilities, workflow and CI changes, sandbox and " +
-			"proxy scoping, injection through prompts or shell. Do not push to the branch under review.\n\n")
+		fmt.Fprintf(&b, "%s\n\n", model.ExternalSecurityReviewBody())
 	}
 	b.WriteString(conformanceInstructions(r.spec, r.design))
 	if r.designReview {

@@ -52,6 +52,45 @@ func securityReviewTemplate() *Template {
 	}
 }
 
+const securityReviewBullets = "" +
+	"- authentication or authorization weakened, bypassed, or routes added without it;\n" +
+	"- credentials, tokens or keys exposed to a sandbox, a log, a comment or a URL, or forwarded " +
+	"to a host they were not meant for;\n" +
+	"- a sandbox or agent gaining a capability, a network route, a command or a file it did not " +
+	"have, or the orchestrator acting on agent output it used to check;\n" +
+	"- merge, review or CI gates loosened: auto-merge rules, required checks, baselines, " +
+	"quarantined tests, workflow triggers or permissions, the list of trust-boundary paths itself;\n" +
+	"- a repository's own `.grain` declarations reaching further: a template's `capabilities:` " +
+	"(or its unified spelling, `grants:`) naming another repository, or its `push:` adding a ref, broadening a pattern, or adding " +
+	"`force: true` or `delete: true` -- each lets the runs of tasks filed from it move refs " +
+	"of this repository beyond their own branch, with no other grant, once it merges;\n" +
+	"- a security regression test deleted, skipped or made to assert less than it did;\n" +
+	"- images, setup scripts or deployment definitions pulling unpinned or new third-party " +
+	"code, or running with more privilege than before;\n" +
+	"- anything the change does that its own commit messages do not say it does.\n\n"
+
+// ExternalSecurityReviewBody is the findings-only security review prompt for a
+// pull request grain did not open (orchestrator.fileExternalPRReview): the
+// same trust-boundary criteria and correctness-second rule as
+// securityReviewBody, without the in-place fix/push/auto-merge instructions
+// that contradict an external review's read-only checkout.
+func ExternalSecurityReviewBody() string {
+	var b strings.Builder
+	b.WriteString("**This is a security review.** Look for anything that widens what an " +
+		"untrusted party can do across grain's trust boundary -- authentication and routes, " +
+		"capability grants and secrets, what a sandbox may execute and which tools an agent may " +
+		"call, the proxies that hold credentials, what decides a build is green, the security " +
+		"tests, deployment, CI configuration, and sandbox images. Read what each touched path " +
+		"is for before deciding a change to it is harmless, and look in particular for:\n\n")
+	b.WriteString(securityReviewBullets)
+	b.WriteString("**Correctness, second.** Your primary job is the trust boundary above; do not " +
+		"turn this into a style pass. Even so, a correctness bug you notice while reading is " +
+		"still a finding: record it with `add_review_comment` (or on the every-PR review's " +
+		"thread), rather than dropping it as \"not a security issue\".\n\n")
+	b.WriteString("Do not commit, push or open a pull request; do not push to the branch under review.")
+	return b.String()
+}
+
 func securityReviewBody() string {
 	var b strings.Builder
 	b.WriteString("**This is a security review.** The change below touches files on grain's trust " +
@@ -65,21 +104,12 @@ func securityReviewBody() string {
 	b.WriteString("Review the whole diff against its base, starting with the trust-boundary paths " +
 		"listed at the end of this task, and read what each of them is for before deciding a change " +
 		"to it is harmless. Look in particular for:\n\n")
-	b.WriteString("- authentication or authorization weakened, bypassed, or routes added without it;\n" +
-		"- credentials, tokens or keys exposed to a sandbox, a log, a comment or a URL, or forwarded " +
-		"to a host they were not meant for;\n" +
-		"- a sandbox or agent gaining a capability, a network route, a command or a file it did not " +
-		"have, or the orchestrator acting on agent output it used to check;\n" +
-		"- merge, review or CI gates loosened: auto-merge rules, required checks, baselines, " +
-		"quarantined tests, workflow triggers or permissions, the list of trust-boundary paths itself;\n" +
-		"- a repository's own `.grain` declarations reaching further: a template's `capabilities:` " +
-		"(or its unified spelling, `grants:`) naming another repository, or its `push:` adding a ref, broadening a pattern, or adding " +
-		"`force: true` or `delete: true` -- each lets the runs of tasks filed from it move refs " +
-		"of this repository beyond their own branch, with no other grant, once it merges;\n" +
-		"- a security regression test deleted, skipped or made to assert less than it did;\n" +
-		"- images, setup scripts or deployment definitions pulling unpinned or new third-party " +
-		"code, or running with more privilege than before;\n" +
-		"- anything the change does that its own commit messages do not say it does.\n\n")
+	b.WriteString(securityReviewBullets)
+	b.WriteString("**Correctness, second.** Your primary job is the trust boundary above; do not " +
+		"turn this into a style pass. Even so, a correctness bug you notice while reading is " +
+		"still a finding: fix it, or record it with `add_review_comment` (or on the every-PR " +
+		"review's thread) when the owner must decide, rather than dropping it as \"not a " +
+		"security issue\".\n\n")
 	b.WriteString("**Fix what you find; ask only what you cannot settle.** You are working on the " +
 		"reviewed change's own branch, not a branch of your own: a fix you commit and push lands " +
 		"in the change's own pull request, and there is no second pull request to open. For " +

@@ -588,7 +588,8 @@ func reviewTaskBody(tmpl model.Template, task model.Task, ref model.PullRequestR
 	var b strings.Builder
 	// The template's defaults fill its holes here too -- reviewTaskTitle's
 	// own note on why a review has nobody to ask.
-	if body := strings.TrimSpace(model.SubstituteFields(tmpl.Body, tmpl.FieldValues(nil))); body != "" {
+	body := strings.TrimSpace(model.SubstituteFields(tmpl.Body, tmpl.FieldValues(nil)))
+	if body != "" {
 		b.WriteString(body)
 		b.WriteString("\n\n---\n\n")
 	}
@@ -609,6 +610,9 @@ func reviewTaskBody(tmpl model.Template, task model.Task, ref model.PullRequestR
 			"about, and put to the owner on task %s; any such call holds the change for "+
 			"their decision, and their reply sends another run to carry it out.",
 		task.ID, task.Title, branch, ref, branch, branch, task.ID, ref, task.ID)
+	if checklist := model.ReviewChecklist(); !strings.Contains(body, checklist) {
+		b.WriteString("\n\n**What to check.**\n\n" + checklist)
+	}
 	b.WriteString("\n\n" + reviewTestingAndCINote)
 	b.WriteString("\n\n" + reviewHumanReviewNote)
 	return b.String()

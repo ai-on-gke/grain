@@ -64,8 +64,15 @@ custom-fields:                     # optional; this deployment's declared fields
 ```
 
 This review is the one attached to a task, and it is stacked on the task's
-branch to fix what it finds. The reviews a gating path trigger files work
-differently: one per pull request head and review template however many
+branch to fix what it finds. Both this stacked review (`orchestrator.reviewTaskBody`)
+and this repository's `.grain/templates/pr-review.yml` carry grain's shared
+correctness checklist (`model.ReviewChecklist`): callers and consumers outside
+the diff, external contracts (MCP schemas, REST/CLI shapes, VM metadata keys,
+the host agent protocol), multi-host and edition paths, nil optional
+dependencies and `-count=2 -shuffle=on` test shape, task-lifecycle edges,
+idempotent SQLite and Postgres migrations and stored-data compatibility, and
+docs or messages that point somewhere. The reviews a gating path trigger files
+work differently: one per pull request head and review template however many
 triggers match, posting findings rather than pushing fixes unless asked to,
 and re-reading only what a new push changed. See "Gating reviews" under
 `.grain/triggers/<name>.yml`.
@@ -870,7 +877,11 @@ review, whose own instructions ask for fixes and which works on the
 change's own branch (so a fix lands in the change's pull request, never a
 second one), and a review whose triggers all say `fixes: true`, which is
 stacked on the change's branch with a pull request of its own merged back
-into it before the change can land.
+into it before the change can land. Grain's security review checks the
+trust boundary first, and treats any correctness bug noticed while reading
+as a finding too -- fixing it on the branch, or recording it with
+`add_review_comment` (or on the every-PR review's thread) when the owner
+must decide, rather than dropping it as "not a security issue".
 
 **Priority.** A gating review runs at the priority of the change it gates,
 and never below 7 (`model.ReviewPriorityFloor`). That applies to grain's
@@ -929,7 +940,8 @@ did change, the review of each kind is filed again for the new head:
 - If the last review of that kind finished -- clean, or with findings the
   push may have addressed -- or is still running, the new one is
   *incremental*: it reads `git diff <last reviewed head> <new head>`,
-  lists the change's files those commits touch, and re-checks that the
+  lists the change's files those commits touch, traces callers outside the
+  diff for only what those new commits altered, and re-checks that the
   earlier review's findings were addressed.
 - It is a *full* review instead when the new head does not descend from
   the old one (a rebase or force-push), when commits from the base brought
@@ -975,11 +987,15 @@ approvers: [team:payments, alice] # optional; default: the deployment's owner
 ```
 
 - **Review.** The template defaults to grain's own security review
-  (`system:security-review`). A sensitive path needs at least one kind of
-  review, so `template: none` is refused unless `human: required`. If a
-  template the trigger names has gone by the time it fires (a deployment
-  template deleted since the sync), grain files its security review in
-  its place.
+  (`system:security-review`), or a sensitive trigger may name a dedicated
+  review template for its surface (for example,
+  `.grain/triggers/agentd-contract.yml` names
+  `.grain/templates/agentd-contract-review.yml` to check the host agent
+  extensibility rules while keeping `human: required`). A sensitive path needs
+  at least one kind of review, so `template: none` is refused unless
+  `human: required`. If a template the trigger names has gone by the time it
+  fires (a deployment template deleted since the sync), grain files its
+  security review in its place.
 - **Approvers.** Under `human: required`, a clean review does not release
   the change: a person has to press Submit. Whoever holds the access code
   is the deployment's owner ([access-code.md](access-code.md)), and a

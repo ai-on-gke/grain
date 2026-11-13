@@ -66,3 +66,49 @@ func TestSecurityReviewTemplateDoesNotGrantGrainCI(t *testing.T) {
 		t.Errorf("security review template grants = %+v, want no grain#ci grant", tmpl.Grants)
 	}
 }
+
+func TestSecurityReviewTemplateKeepsCorrectnessBugsAsFindings(t *testing.T) {
+	t.Parallel()
+	tmpl := model.SystemTemplate(model.SecurityReviewTemplateID, model.RepoRef{})
+	if tmpl == nil {
+		t.Fatal("this build ships no security review template")
+	}
+	for _, want := range []string{
+		"**Correctness, second.**",
+		"still a finding",
+		"add_review_comment",
+		"every-PR review's thread",
+		"\"not a security issue\"",
+	} {
+		if !strings.Contains(tmpl.Body, want) {
+			t.Errorf("security review template body missing %q:\n%s", want, tmpl.Body)
+		}
+	}
+}
+
+func TestExternalSecurityReviewBodyHasNoPushContradiction(t *testing.T) {
+	t.Parallel()
+	got := model.ExternalSecurityReviewBody()
+	for _, want := range []string{
+		"**This is a security review.**",
+		"authentication or authorization weakened",
+		"**Correctness, second.**",
+		"add_review_comment",
+		"\"not a security issue\"",
+		"do not push to the branch under review",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("ExternalSecurityReviewBody() missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{
+		"Fix what you find",
+		"commit and push",
+		"Never leave a finding you could have fixed",
+		"You are working on the reviewed change's own branch",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("ExternalSecurityReviewBody() contradicts read-only review with %q:\n%s", forbidden, got)
+		}
+	}
+}

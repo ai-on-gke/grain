@@ -1,0 +1,69 @@
+# Review filed by .grain/triggers/agentd-contract.yml on pull requests that
+# touch the host agent wire protocol, allowlist schema, stage/spool layout,
+# dial-out/enrollment or compatibility suite
+# (design/design/agentd-stable-contract.design.md). Posts findings without
+# pushing; the trigger still holds the pull request for a person's Submit.
+name: Host agent contract review
+title: "Contract review {{pr}}"
+body: |
+  Review this pull request against the host agent contract
+  (`design/design/agentd-stable-contract.design.md`), and post any rule it
+  breaks. Host agents installed on operators' other machines are updated by
+  hand, so every change across these paths (`{{paths}}`) must keep older
+  released host agents working with newer daemons. Read the diff
+  (`git diff {{base_sha}}...HEAD`) and the design doc's *Extensibility rules*
+  and *Allowlist stability* sections.
+
+  ## What to check
+
+  - **Optional fields and keys only.** Every new JSON wire field uses
+    `omitempty` or `omitzero`, wire frame decoders never use
+    `DisallowUnknownFields`, and a zero value means the existing behaviour.
+    Every new allowlist key is optional, defaults to the existing behaviour,
+    and is never written by installers or Settings snippets for a host that
+    does not advertise its feature.
+  - **New behaviour is feature-gated.** Any new op, frame, stage operation,
+    allowlist capability, or field whose absence or being ignored would be
+    misread or unsafe ships under a named feature in `pkg/hostd/features.go`
+    (`Hello.Features`) with a row in the design doc's feature table. The
+    daemon checks `Hello.Has` before relying on it and degrades gracefully
+    when a host lacks it -- holding for another host, falling back, or
+    explaining why -- rather than failing runs on older hosts.
+  - **Frozen meanings, mechanism and spools.** Released fields, ops, frame
+    bytes, stage ops and feature names keep their meaning; `ProtocolVersion`
+    stays at 4; compiled-in mechanism defaults do not move silently except
+    for a security fix; CLI- or model-specific policy stays in the daemon
+    rather than compiled into the host agent; and a newer host agent still
+    adopts an older host agent's `process.json` and `exit.json` spools.
+  - **Deprecation window.** Nothing released -- no field, op, frame, key or
+    feature -- is removed or narrowed inside the deprecation window (six
+    minor releases and at least ninety days after its replacement shipped).
+    Any removal with `GRAIN_AGENTD_CONTRACT_REMOVE=1` must cite the completed
+    window.
+  - **Generated contract block and compatibility suite.** Confirm the design
+    doc's generated contract listing matches the code
+    (`go test ./pkg/hostd -run AgentdContract`), and check CI's `run host`
+    job (which runs `scripts/agentd-compat.sh` / `tests/agentdcompat` against
+    released host agents) or run `go test ./pkg/hostd -run AgentdContract`
+    yourself if CI has not reported yet.
+
+  ## Keep the review cheap
+
+  - Read the change's GitHub Actions check statuses (`grain pr open` or
+    `grain ci checks <sha>`) rather than running broad suites or calling
+    `grain ci wait`. Run `go test ./pkg/hostd -run AgentdContract` (or
+    `scripts/agentd-compat.sh` only when a wire/spool change is in doubt and
+    CI has not run it) and name what you ran in your closing note.
+  - Do not push, commit or open a pull request. Findings go on the pull
+    request and the task.
+
+  ## Reporting
+
+  - Record each contract violation or compatibility hazard with
+    `add_review_comment`, on the line it is about, citing the rule in
+    `design/design/agentd-stable-contract.design.md` and the fix you
+    recommend.
+  - If the change keeps the contract intact, call no `add_review_comment`
+    and finish with `comment_on_issue` saying plainly "No findings", with a
+    line on which contract rules and checks you verified. The pull request
+    still waits for its owner's Submit.

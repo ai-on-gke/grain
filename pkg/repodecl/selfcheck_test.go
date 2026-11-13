@@ -69,6 +69,71 @@ func TestThisRepositoryOwnDeclarationsAreWellFormed(t *testing.T) {
 	}
 }
 
+func TestPRReviewTemplateCarriesSharedReviewChecklist(t *testing.T) {
+	declared := loadRepo(t)
+	var prReview *model.Template
+	for i := range declared.Templates {
+		if declared.Templates[i].Path == ".grain/templates/pr-review.yml" {
+			prReview = &declared.Templates[i].Template
+			break
+		}
+	}
+	if prReview == nil {
+		t.Fatal(".grain/templates/pr-review.yml is not declared")
+	}
+	checklist := model.ReviewChecklist()
+	if !strings.Contains(prReview.Body, checklist) {
+		t.Errorf(".grain/templates/pr-review.yml body does not carry model.ReviewChecklist() verbatim.\nwant substring:\n%s\n\ngot body:\n%s",
+			checklist, prReview.Body)
+	}
+}
+
+func TestAgentdContractTriggerNamesDedicatedReviewTemplate(t *testing.T) {
+	declared := loadRepo(t)
+	var trigger *model.PathTrigger
+	for i := range declared.Triggers {
+		if declared.Triggers[i].Name == "agentd-contract" {
+			trigger = &declared.Triggers[i]
+			break
+		}
+	}
+	if trigger == nil {
+		t.Fatal(".grain/triggers/agentd-contract.yml is not declared")
+	}
+	wantID := model.RepoDeclaredID(model.DeclaredTemplate, repo, "agentd-contract-review")
+	if trigger.Template != wantID {
+		t.Errorf("agentd-contract trigger template = %q, want %q (not the generic security review)",
+			trigger.Template, wantID)
+	}
+	if !trigger.Gate || trigger.Human != model.TriggerHumanRequired || !trigger.Sensitive || !trigger.AutoApprove {
+		t.Errorf("agentd-contract trigger = gate %v, human %q, sensitive %v, autoApprove %v; want true, required, true, true",
+			trigger.Gate, trigger.Human, trigger.Sensitive, trigger.AutoApprove)
+	}
+	var tmpl *model.Template
+	for i := range declared.Templates {
+		if declared.Templates[i].Path == ".grain/templates/agentd-contract-review.yml" {
+			tmpl = &declared.Templates[i].Template
+			break
+		}
+	}
+	if tmpl == nil {
+		t.Fatal(".grain/templates/agentd-contract-review.yml is not declared")
+	}
+	for _, want := range []string{
+		"Optional fields and keys only",
+		"pkg/hostd/features.go",
+		"Hello.Has",
+		"Deprecation window",
+		"AgentdContract",
+		"scripts/agentd-compat.sh",
+		"Do not push, commit or open a pull request",
+	} {
+		if !strings.Contains(tmpl.Body, want) {
+			t.Errorf("agentd-contract-review.yml body missing %q:\n%s", want, tmpl.Body)
+		}
+	}
+}
+
 // This repository declares no settings of its own, and the two tests
 // that used to stand here are gone with the reach that made them
 // necessary (grain/task-340).
