@@ -146,7 +146,7 @@ describe("BatchActionsBar", () => {
     await user.click(screen.getByRole("button", { name: "Close" }));
 
     expect(confirmSpy).toHaveBeenCalledWith(
-      "Close 2 task(s)? 1 of them is not shown in this view.",
+      "Close 2 tasks? 1 of them is not shown in this view.",
     );
   });
 
