@@ -462,19 +462,32 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   private anchorTimer: ReturnType<typeof setInterval> | null = null;
 
-  // scrollToAnchor waits up to 5s for the element: a section's cards
-  // appear only after its own requests answer.
+  // scrollToAnchor waits up to 5s for the element -- a section's cards
+  // appear only after its own requests answer -- and scrolls it into
+  // view again while cards above it are still arriving and pushing it
+  // down, stopping once it has held still for three ticks.
   private scrollToAnchor(id: string): void {
     if (this.anchorTimer) clearInterval(this.anchorTimer);
     this.anchorTimer = null;
     if (!id || typeof document === "undefined") return;
     let tries = 0;
+    let lastTop = Number.NaN;
+    let still = 0;
     this.anchorTimer = setInterval(() => {
       const el = document.getElementById(id);
-      if (el || ++tries > 50) {
+      if (el) {
+        const top = Math.round(el.getBoundingClientRect().top);
+        if (top === lastTop) {
+          still++;
+        } else {
+          still = 0;
+          el.scrollIntoView({ block: "start" });
+          lastTop = Math.round(el.getBoundingClientRect().top);
+        }
+      }
+      if (still >= 3 || ++tries > 50) {
         if (this.anchorTimer) clearInterval(this.anchorTimer);
         this.anchorTimer = null;
-        el?.scrollIntoView({ block: "start" });
       }
     }, 100);
   }
