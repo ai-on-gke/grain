@@ -32,6 +32,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -40,6 +41,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/releaseapproval"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // GitHubPromoteReleaseWorkflow is the GitHub Actions workflow a person's
@@ -153,11 +155,7 @@ func (c *Client) dispatchGitHubRelease(ctx context.Context, repo model.RepoRef, 
 				"watch that run rather than starting another", version, prior.DecidedBy, prior.Workflow, prior.DecidedAt.Format(time.RFC3339))
 		}
 	}
-	signer, err := c.releaseApprovalSigner(ctx)
-	if err != nil {
-		return ReleaseDispatch{}, err
-	}
-	signed, err := signer.Sign(ctx, releaseapproval.Record{
+	signed, err := c.signReleaseApproval(ctx, releaseapproval.Record{
 		Repo: repo.String(), Version: version, Decision: decision, Commit: commit, Approver: approver,
 		ShortSoakOK: answers.ShortSoakOK, AllowBreaking: answers.AllowBreaking, Issued: now, Expires: now.Add(releaseapproval.Lifetime),
 	})
@@ -224,11 +222,7 @@ func (c *Client) dispatchGitHubRollback(ctx context.Context, repo model.RepoRef,
 	if commit == "" {
 		return ReleaseDispatch{}, &NotFoundError{ID: version, message: fmt.Sprintf("%s is not a release: %s has no %s tag", version, repo, version)}
 	}
-	signer, err := c.releaseApprovalSigner(ctx)
-	if err != nil {
-		return ReleaseDispatch{}, err
-	}
-	signed, err := signer.Sign(ctx, releaseapproval.Record{
+	signed, err := c.signReleaseApproval(ctx, releaseapproval.Record{
 		Repo: repo.String(), Version: version, Decision: "rollback", Commit: commit, Approver: actor,
 		RollbackTo: opts.To, Reason: opts.Reason, Issued: now, Expires: now.Add(releaseapproval.Lifetime),
 	})
@@ -287,12 +281,63 @@ func (s *Server) handleReleaseApprovalKey(w http.ResponseWriter, r *http.Request
 // releaseApprovalSigner is the deployment's signing key: the Cloud KMS
 // key version Config.ReleaseApprovalKMSKey names, else the one kept
 // under releaseApprovalDir.
+//
+// A KMS key the deployment cannot read -- permission denied, a version
+// that does not exist or is disabled, KMS unreachable -- is a
+// releaseApprovalKMSError: the fault is upstream of this process and the
+// operator has to fix it there, so the route says which key it is rather
+// than answering an opaque "internal server error" (walkthrough
+// 2026-11-13 §9, F2). What KMS said stays in the daemon's log, under the
+// reference the answer carries, as for every other 5xx.
 func (c *Client) releaseApprovalSigner(ctx context.Context) (*releaseapproval.Signer, error) {
 	if c.Config.ReleaseApprovalKMSKey != "" {
-		return releaseapproval.LoadKMSSigner(ctx, c.Config.ReleaseApprovalKMSKey)
+		signer, err := releaseapproval.LoadKMSSigner(ctx, c.Config.ReleaseApprovalKMSKey)
+		if err != nil {
+			return nil, &releaseApprovalKMSError{err: err}
+		}
+		return signer, nil
 	}
 	return releaseapproval.LoadSigner(c.releaseApprovalDir())
 }
+
+// signReleaseApproval loads the deployment's signing key and signs r.
+//
+// Once GET /api/release-approval-key (or an earlier signing call) has
+// cached a Cloud KMS key version's public key, releaseApprovalSigner
+// returns without calling KMS, so a missing asymmetricSign grant, a
+// disabled version or an unreachable KMS surfaces on Sign instead. Wrap
+// that KMS error in releaseApprovalKMSError too, so Approve, Reject and
+// Rollback still answer 502 naming -release-approval-kms-key rather than
+// an opaque 500.
+func (c *Client) signReleaseApproval(ctx context.Context, r releaseapproval.Record) (releaseapproval.Signed, error) {
+	signer, err := c.releaseApprovalSigner(ctx)
+	if err != nil {
+		return releaseapproval.Signed{}, err
+	}
+	signed, err := signer.Sign(ctx, r)
+	if err != nil {
+		if c.Config.ReleaseApprovalKMSKey != "" && errors.Is(err, secrets.ErrKMS) {
+			return releaseapproval.Signed{}, &releaseApprovalKMSError{err: err}
+		}
+		return releaseapproval.Signed{}, err
+	}
+	return signed, nil
+}
+
+// releaseApprovalKMSError is a release approval signing key held in
+// Cloud KMS that could not be read or signed with. writeClientError answers
+// it 502 (apierror.CodeUpstream) with releaseApprovalKMSMessage, logging err in full.
+type releaseApprovalKMSError struct{ err error }
+
+// releaseApprovalKMSMessage is what a caller is shown for a
+// releaseApprovalKMSError: which setting to check, nothing of KMS's answer.
+const releaseApprovalKMSMessage = "the release approval signing key in Cloud KMS (-release-approval-kms-key) " +
+	"could not be used: check the key version exists and is enabled, and that this deployment may view its " +
+	"public key and sign with it; the daemon log has KMS's answer"
+
+func (e *releaseApprovalKMSError) Error() string { return e.err.Error() }
+
+func (e *releaseApprovalKMSError) Unwrap() error { return e.err }
 
 // releaseApprovalDir is the directory the deployment's signing key is
 // kept in: Config.ReleaseApprovalDir, else its data directory.
