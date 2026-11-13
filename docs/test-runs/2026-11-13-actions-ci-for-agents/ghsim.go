@@ -150,6 +150,20 @@ func main() {
 		mu.Unlock()
 		fmt.Fprintf(w, `{"seeded":%d}`+"\n", len(seeded))
 	})
+	mux.HandleFunc("/_sim/mergeable", func(w http.ResponseWriter, r *http.Request) {
+		// GitHub computes mergeability asynchronously; the sim leaves it
+		// unknown until told, so the walkthrough says when it is known.
+		n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+		yes := true
+		mu.Lock()
+		defer mu.Unlock()
+		for i := range sim.PullRequests {
+			if sim.PullRequests[i].Number == n {
+				sim.PullRequests[i].Mergeable = &yes
+			}
+		}
+		fmt.Fprintf(w, `{"mergeable":%d}`+"\n", n)
+	})
 	mux.HandleFunc("/_sim/reruns", func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
