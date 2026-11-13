@@ -49,6 +49,7 @@ interface GitConnectionRow {
   id?: string;
   credential?: string;
   host?: string;
+  kind?: string;
   scope?: string;
   authType?: string;
   type?: string;
@@ -354,7 +355,12 @@ interface StateRepoEntryDto {
           </div>
 
           @if (gitCheckMessage()) {
-            <div class="s-banner ok" data-testid="git-check-banner">
+            <div
+              class="s-banner"
+              [class.ok]="gitCheckOk()"
+              [class.warn]="!gitCheckOk()"
+              data-testid="git-check-banner"
+            >
               {{ gitCheckMessage() }}
             </div>
           }
@@ -366,6 +372,7 @@ interface StateRepoEntryDto {
                   <tr>
                     <th>Credential</th>
                     <th>Host</th>
+                    <th>Kind</th>
                     <th>Type</th>
                     <th>Actions</th>
                   </tr>
@@ -376,6 +383,7 @@ interface StateRepoEntryDto {
                     <tr [attr.data-testid]="'git-conn-row-' + cred">
                       <td class="tabular">{{ cred }}</td>
                       <td class="tabular">{{ c.host || "github.com" }}</td>
+                      <td>{{ c.kind === "git" ? "git host" : "GitHub" }}</td>
                       <td>{{ c.authType || c.type || "pat" }}</td>
                       <td>
                         <button
@@ -386,7 +394,12 @@ interface StateRepoEntryDto {
                               'DELETE /api/deployment/git-connections/{cred}'
                             ) || state.sectionLocked('git')
                           "
-                          (click)="deleteGitConnection(cred)"
+                          (click)="
+                            confirmDeleteGitConnection(
+                              cred,
+                              c.host || 'github.com'
+                            )
+                          "
                         >
                           Remove
                         </button>
@@ -422,6 +435,17 @@ interface StateRepoEntryDto {
                 (input)="newGitHost.set($any($event.target).value)"
               />
             </div>
+            <div class="s-field">
+              <span class="s-label">Host kind</span>
+              <g-pill-select
+                testid="select-git-conn-kind"
+                ariaLabel="Host kind"
+                align="left"
+                [options]="gitKindOptions"
+                [value]="newGitKind()"
+                (valueChange)="setGitKind($event)"
+              />
+            </div>
 
             @if (gitConnMode() === "existing") {
               <div class="s-field">
@@ -445,7 +469,7 @@ interface StateRepoEntryDto {
                   testid="select-git-conn-type"
                   ariaLabel="Git auth type"
                   align="left"
-                  [options]="gitTypeOptions"
+                  [options]="gitTypeOptionsForKind()"
                   [value]="newGitType()"
                   (valueChange)="newGitType.set($event)"
                 />
@@ -478,6 +502,20 @@ interface StateRepoEntryDto {
                     placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
                     [value]="newGitSecret()"
                     (input)="newGitSecret.set($any($event.target).value)"
+                  ></textarea>
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="gc-known-hosts"
+                    >Known hosts (optional)</label
+                  >
+                  <textarea
+                    id="gc-known-hosts"
+                    class="s-textarea tabular"
+                    rows="2"
+                    data-testid="input-git-conn-known-hosts"
+                    placeholder="git.example.com ssh-ed25519 AAAA..."
+                    [value]="newGitKnownHosts()"
+                    (input)="newGitKnownHosts.set($any($event.target).value)"
                   ></textarea>
                 </div>
               } @else if (newGitType() === "app") {
@@ -961,6 +999,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
 
   protected readonly gitConnections = signal<GitConnectionRow[]>([]);
   protected readonly gitCheckMessage = signal("");
+  protected readonly gitCheckOk = signal(true);
   protected readonly gitConnMode = signal("inline");
   protected readonly newGitCred = signal("");
   protected readonly newGitHost = signal("github.com");
@@ -968,6 +1007,33 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly newGitSecret = signal("");
   protected readonly newGitAppId = signal("");
   protected readonly newGitAppInstallId = signal("");
+  protected readonly newGitKnownHosts = signal("");
+  // newGitKind is the connection's host kind (model.GitHostKind): a
+  // GitHub host, or a plain git host with no GitHub API. The server
+  // reads an empty kind as GitHub, so a plain host has to say so.
+  protected readonly newGitKind = signal<"github" | "git">("github");
+  protected readonly gitKindOptions: readonly PillOption[] = [
+    { value: "github", label: "GitHub (github.com or Enterprise)" },
+    { value: "git", label: "Plain git host" },
+  ];
+  // A GitHub App needs a GitHub host: a plain git host has no App API,
+  // and the server refuses one there only on save.
+  protected gitTypeOptionsForKind(): PillOption[] {
+    return this.gitTypeOptions.map((o) =>
+      o.value === "app" && this.newGitKind() === "git"
+        ? {
+            ...o,
+            disabled: true,
+            hint: "Needs a GitHub host: a plain git host has no App API",
+          }
+        : o,
+    );
+  }
+  protected setGitKind(kind: string): void {
+    const k = kind === "git" ? "git" : "github";
+    this.newGitKind.set(k);
+    if (k === "git" && this.newGitType() === "app") this.newGitType.set("pat");
+  }
   protected readonly githubTokens = signal<string[]>([]);
   protected readonly ghTokenName = signal("");
   protected readonly ghTokenValue = signal("");
@@ -1265,20 +1331,26 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       payload = {
         credential: "",
         host,
+        kind: this.newGitKind(),
         type,
       };
       if (type === "pat") {
         payload["value"] = this.newGitSecret().trim();
       } else if (type === "ssh") {
-        payload["ssh"] = { privateKey: this.newGitSecret() };
+        const knownHosts = this.newGitKnownHosts().trim();
+        payload["ssh"] = {
+          privateKey: this.newGitSecret(),
+          ...(knownHosts ? { knownHosts } : {}),
+        };
       } else if (type === "app") {
-        const appId = Math.floor(Number(this.newGitAppId()) || 0);
-        const installationId = Math.floor(
-          Number(this.newGitAppInstallId()) || 0,
-        );
+        // AppCredentialInput takes both IDs as strings: a JSON number
+        // is refused outright ("cannot unmarshal number ... of type
+        // string"), which made every App save from here fail.
+        const appId = this.newGitAppId().trim();
+        const installationId = this.newGitAppInstallId().trim();
         payload["app"] = {
           appId,
-          ...(installationId > 0 ? { installationId } : {}),
+          ...(installationId ? { installationId } : {}),
           privateKey: this.newGitSecret(),
         };
       }
@@ -1293,6 +1365,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       this.newGitSecret.set("");
       this.newGitAppId.set("");
       this.newGitAppInstallId.set("");
+      this.newGitKnownHosts.set("");
       await this.loadGitConnections();
       this.snackbar.show(`Saved Git connection on ${host}`);
     } catch (err) {
@@ -1302,17 +1375,37 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
 
   protected async checkGitConnections(): Promise<void> {
     try {
-      const res = await this.api.post<{ ok?: boolean; summary?: string }>(
-        "POST /api/deployment/git-connections/check",
-        undefined,
-        {},
-      );
+      const res = await this.api.post<{
+        ok?: boolean;
+        summary?: string;
+        error?: string;
+        host?: string;
+      }>("POST /api/deployment/git-connections/check", undefined, {});
+      // The check says what is wrong in `error` (a refused token, an
+      // unreachable host); "Check reported issues" alone left nobody
+      // able to act on it.
+      this.gitCheckOk.set(res?.ok !== false);
       this.gitCheckMessage.set(
-        res?.summary || (res?.ok === false ? "Check reported issues" : "OK"),
+        res?.summary ||
+          (res?.ok === false
+            ? `${res.host ? res.host + ": " : ""}${res.error || "the check reported a problem"}`
+            : `OK${res?.host ? " — " + res.host + " answered" : ""}`),
       );
     } catch (err) {
       this.state.error.set(errText(err));
     }
+  }
+
+  // Removing a connection stops every clone and push through it, so it
+  // asks first, as the classic page does.
+  protected confirmDeleteGitConnection(cred: string, host: string): void {
+    this.confirmReq.set({
+      title: "Remove Git connection?",
+      message: `Remove ${cred} on ${host}? Repositories using it can no longer clone or push until another connection covers ${host}.`,
+      accept: "Remove",
+      destructive: true,
+      run: () => this.deleteGitConnection(cred),
+    });
   }
 
   protected async deleteGitConnection(cred: string): Promise<void> {
