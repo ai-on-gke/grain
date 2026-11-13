@@ -2136,6 +2136,16 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if diskGB == 0 {
 			diskGB = tmplSandbox.DiskGB
 		}
+		// Held to the deployment's maximum, as the live call is
+		// (ui.Client.refuseSandboxShapeAboveMax). That call refuses with a
+		// 400 the agent reads; this run has ended, so the shape is clamped
+		// and the body says so, rather than filing a task nobody can
+		// approve. A shape above the proposer's own is held for a person
+		// below (model.ProposalSandboxShapeAbove), as filed live.
+		shape, shapeNote := clampProposalSandboxShape(ctx, store,
+			model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB})
+		cpus, memoryMB, diskGB = shape.CPUs, shape.MemoryMB, shape.DiskGB
+		body += shapeNote
 		// A proposal chooses a model (model.Task.Model) and, separately, may
 		// pin a connection; the store's own migration and dispatch read a
 		// pin naming no connection as the model choice it used to be.
@@ -3297,6 +3307,42 @@ func droppedCustomFieldNote(dropped []string) string {
 // sandbox for. The proposal carries no override instead, so it runs on
 // the deployment's default -- which may be more network than the run
 // meant to ask for, and is why this is said rather than left silent.
+// clampProposalSandboxShape holds asked, a relayed proposal's sandbox
+// shape, to this deployment's maximum (model.SandboxShapeLimits.Max with
+// grain's defaults filled in): a dimension above it is lowered to it, and
+// a negative one is dropped to "not stated". The note, "" when nothing
+// changed, is what the proposal's body says about it. A settings row that
+// cannot be read is grain's default maximum, never no maximum.
+func clampProposalSandboxShape(ctx context.Context, store *model.Store, asked model.SandboxShape) (model.SandboxShape, string) {
+	var limits model.SandboxShapeLimits
+	if cfg, err := store.GetConfig(ctx); err == nil && cfg != nil {
+		limits = cfg.SandboxShapeLimits
+	}
+	ceiling := limits.ResolvedMax()
+	out := asked
+	var changed []string
+	clamp := func(name string, v *int, limit int) {
+		switch {
+		case *v < 0:
+			changed = append(changed, fmt.Sprintf("%s %d (dropped)", name, *v))
+			*v = 0
+		case *v > limit:
+			changed = append(changed, fmt.Sprintf("%s %d (lowered to %d)", name, *v, limit))
+			*v = limit
+		}
+	}
+	clamp("sandbox_cpus", &out.CPUs, ceiling.CPUs)
+	clamp("sandbox_memory_mb", &out.MemoryMB, ceiling.MemoryMB)
+	clamp("sandbox_disk_gb", &out.DiskGB, ceiling.DiskGB)
+	if len(changed) == 0 {
+		return out, ""
+	}
+	return out, fmt.Sprintf("\n\n---\n\ngrain: the run that proposed this asked for a sandbox this deployment "+
+		"does not give any task (most it allows: %s), so it was filed at what the deployment allows: %s. "+
+		"An operator can raise sandboxShapeLimits in settings if the work needs more.",
+		ceiling.Describe(), strings.Join(changed, ", "))
+}
+
 func droppedNetworkAccessNote(asked string) string {
 	return fmt.Sprintf("\n\n---\n\ngrain: the run that proposed this asked for network_access %q, "+
 		"which is not one grain can build a sandbox for (%s). Nothing was recorded, so it "+
