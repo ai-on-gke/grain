@@ -17,12 +17,15 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/dispatchcondition"
 	"github.com/ai-on-gke/grain/pkg/hub/api"
+	"github.com/ai-on-gke/grain/pkg/mergelogins"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -223,5 +226,54 @@ func TestGrainHealthNamesRefusedDeclarations(t *testing.T) {
 	}
 	if strings.Contains(out, "no counters") {
 		t.Errorf("grain health says there is nothing to report:\n%s", out)
+	}
+}
+
+// `grain health` exits 1 whenever it prints a FAILING section, text or
+// -json, so a monitoring script can tell a failing deployment by status
+// (docs/test-runs/2026-11-11-schedule-groups.md, F4); a WARNING alone
+// leaves it at 0.
+func TestGrainHealthExitsOneWhenACheckIsFailing(t *testing.T) {
+	last := time.Date(2026, 11, 8, 7, 37, 0, 0, time.UTC)
+	stale := ui.SandboxHealthResponse{StaleSchedules: []model.StaleSchedule{{
+		ID: "repo:schedule:acme:widgets:workflow.live", Repo: model.RepoRef{Owner: "acme", Name: "widgets"},
+		Cadence: 24 * time.Hour, LastRunAt: &last,
+	}}}
+	warning := ui.SandboxHealthResponse{MergeLoginWarnings: []mergelogins.Warning{{
+		Repo: "acme/widgets", Login: "octocat", Message: "octocat is a user account",
+	}}}
+	for _, tc := range []struct {
+		name     string
+		health   ui.SandboxHealthResponse
+		args     []string
+		wantExit int
+		wantOut  string
+	}{
+		{"stale schedule", stale, []string{"health"}, exitFailed, "FAILING: schedules with no run"},
+		{"stale schedule -json", stale, []string{"-json", "health"}, exitFailed, `"repo:schedule:acme:widgets:workflow.live"`},
+		{"dispatch blocked", ui.SandboxHealthResponse{DispatchBlocked: []ui.DispatchCondition{{Condition: dispatchcondition.Condition{Name: "hosts", Error: "every host is disconnected"}}}}, []string{"health"}, exitFailed, "FAILING: dispatch is blocked"},
+		{"capability server down", ui.SandboxHealthResponse{CapabilityServers: []ui.CapabilityServerDown{{ID: "https://walk.example/caps/cm", State: "failed"}}}, []string{"health"}, exitFailed, "FAILING: capability servers out of use"},
+		{"refused declarations", ui.SandboxHealthResponse{RefusedDeclarations: []ui.RefusedDeclarations{{Repo: "acme/widgets", Error: "bad yaml"}}}, []string{"health"}, exitFailed, "FAILING: repository declarations"},
+		{"warning only", warning, []string{"health"}, exitOK, "WARNING: reviewed-merge logins"},
+		{"healthy", ui.SandboxHealthResponse{}, []string{"health"}, exitOK, "no counters"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/sandboxes" {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(tc.health)
+			}))
+			defer ts.Close()
+			out, err := runAccessCLI(t, ts.URL, "token", tc.args...)
+			if exit, _, _ := classifyError(err); exit != tc.wantExit {
+				t.Errorf("grain %s exit = %d (err %v), want %d", strings.Join(tc.args, " "), exit, err, tc.wantExit)
+			}
+			if !strings.Contains(out, tc.wantOut) {
+				t.Errorf("grain %s output missing %q:\n%s", strings.Join(tc.args, " "), tc.wantOut, out)
+			}
+		})
 	}
 }
