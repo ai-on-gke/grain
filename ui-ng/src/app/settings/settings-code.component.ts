@@ -32,6 +32,11 @@ import {
 } from "../shared/pill-select.component";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
+import {
+  ConfirmDialogComponent,
+  bypassConfirm,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
 
 interface RepoFacts {
   ciMode?: string;
@@ -59,7 +64,7 @@ interface StateRepoEntryDto {
 
 @Component({
   selector: "g-settings-code",
-  imports: [RouterLink, PillSelectComponent],
+  imports: [RouterLink, PillSelectComponent, ConfirmDialogComponent],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -922,6 +927,9 @@ interface StateRepoEntryDto {
         </div>
       }
     }
+    @if (confirmReq(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+    }
   `,
 })
 export class SettingsCodeComponent implements OnInit, OnChanges {
@@ -1184,7 +1192,26 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     }
   }
 
-  protected async toggleRepoBypass(repo: string, on: boolean): Promise<void> {
+  protected readonly confirmReq = signal<ConfirmRequest | null>(null);
+
+  protected async onConfirmDone(accepted: boolean): Promise<void> {
+    const req = this.confirmReq();
+    this.confirmReq.set(null);
+    if (!accepted || !req) return;
+    await req.run();
+  }
+
+  protected toggleRepoBypass(repo: string, on: boolean): void {
+    if (on) {
+      this.confirmReq.set(
+        bypassConfirm(repo, () => this.saveRepoBypass(repo, true)),
+      );
+      return;
+    }
+    void this.saveRepoBypass(repo, false);
+  }
+
+  private async saveRepoBypass(repo: string, on: boolean): Promise<void> {
     const { owner, name } = splitRepo(repo);
     try {
       await this.api.put(

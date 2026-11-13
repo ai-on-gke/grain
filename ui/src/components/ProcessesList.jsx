@@ -478,7 +478,10 @@ export default function ProcessesList({
                   )}
                 </ChipStrip>
                 <span className="template-title hint">
-                  pass {run.pass} · {describeRunPlan(run)}
+                  {/* pass 0 is a run that has filed no pass yet (or
+                      ended before it could): there is no pass to name. */}
+                  {run.pass > 0 && `pass ${run.pass} · `}
+                  {describeRunPlan(run)}
                 </span>
                 {run.error && (
                   <span
