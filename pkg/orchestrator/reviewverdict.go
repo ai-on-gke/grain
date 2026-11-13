@@ -40,7 +40,7 @@ import (
 //
 // What it found is model.LinkReviewVerdict, written as each run of the
 // review finishes (recordReviewVerdict) from what the run itself did: a
-// question it parked on, the findings it left (add_review_comment, each
+// question it parked on or a hold for a person's review, the findings it left (add_review_comment, each
 // with its category), and fixes it pushed.
 
 // recordDispatchedReviewHead records, as a review's run is dispatched, the
@@ -74,8 +74,9 @@ func recordDispatchedReviewHead(ctx context.Context, store *model.Store, client 
 }
 
 // reviewVerdictOf is the verdict a finished run of a review reached:
-// questions when it asked a person something (asked), findings when it
-// left any or pushed fixes of its own, clean otherwise.
+// questions when it asked a person something (asked) -- an ask_question,
+// or a request_human_review holding the change for a person's decision --
+// findings when it left any or pushed fixes of its own, clean otherwise.
 func reviewVerdictOf(findings []reviewFinding, asked, pushed bool) model.ReviewVerdictRecord {
 	r := model.ReviewVerdictRecord{Verdict: model.VerdictClean, FindingCount: len(findings), FixesPushed: pushed}
 	for _, f := range findings {
@@ -108,7 +109,10 @@ func recordReviewVerdict(ctx context.Context, store *model.Store, client github.
 	if _, inPlace := reviewsInPlace(review); !inPlace && !asked {
 		pushed = stackedReviewPushed(client, review)
 	}
-	verdict := reviewVerdictOf(reviewFindings(result), asked, pushed)
+	// A review that held the change for a person (request_human_review)
+	// did not pass it: it handed a decision to a person, as a question
+	// does, even though its run finished rather than parked.
+	verdict := reviewVerdictOf(reviewFindings(result), asked || madeCall(result, humanReviewTool), pushed)
 	verdict.RunID, verdict.At = runID, now
 	if err := store.UpdateTask(ctx, review.ID, func(t *model.Task) error {
 		verdict.Head = model.ReviewedHead(*t)
@@ -138,6 +142,20 @@ func stackedReviewPushed(client github.Client, review model.Task) bool {
 		return false
 	}
 	return len(cmp.Commits) > 0
+}
+
+// humanReviewTool is the call a review makes to hold the change it reviews
+// for a person's decision (model/human_review_hold.go).
+const humanReviewTool = "request_human_review"
+
+// madeCall reports whether result made a successful call to tool.
+func madeCall(result *agent.Result, tool string) bool {
+	for _, c := range result.ToolCalls {
+		if !c.IsError && c.Name == tool {
+			return true
+		}
+	}
+	return false
 }
 
 // leftWaiting reports whether result made a call that leaves its task open

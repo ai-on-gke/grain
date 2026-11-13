@@ -112,6 +112,14 @@ func TestAStackedReviewRecordsItsVerdict(t *testing.T) {
 		},
 		want:       model.VerdictQuestions,
 		categories: []string{"compatibility"},
+	}, {
+		// A review that holds the change for a person has not passed it.
+		name: "held for a person's review",
+		calls: []agent.ToolCall{
+			{Name: "request_human_review", Arguments: map[string]any{"reason": "the brief's intent is unclear"}},
+			{Name: "comment_on_issue", Arguments: map[string]any{"comment": "code is fine; a person must decide"}},
+		},
+		want: model.VerdictQuestions,
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
