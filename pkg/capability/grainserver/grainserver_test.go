@@ -368,6 +368,15 @@ func TestRepoServerCredentialValidatesConfiguredNamesAndConflicts(t *testing.T) 
 			if slices.Equal(enum, []any{"docs-bot", "release-bot"}) {
 				foundEnum = true
 			}
+			// Once configured credentials populate enum, pattern and not
+			// are omitted so CapabilityArgsForm draws the credential select
+			// rather than falling back to the raw JSON editor.
+			if _, hasNot := credProp["not"]; hasNot {
+				t.Errorf("configured repo#credential schema still carries 'not': %+v", credProp)
+			}
+			if _, hasPattern := credProp["pattern"]; hasPattern {
+				t.Errorf("configured repo#credential schema still carries 'pattern': %+v", credProp)
+			}
 		}
 	}
 	if !foundEnum {

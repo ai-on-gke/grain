@@ -105,7 +105,13 @@ test("lists the API presets before every scope, with what each preset grants", a
   // https://grain.dev/capabilities/api#* entries are owned by the Grain API
   // groups rather than duplicated under Capability server methods.
   await page.getByLabel("Search grants").fill("merge:force");
-  await expect(menu.locator(".api-grant-row")).toHaveCount(1);
+  await expect(menu.locator(".api-grant-row")).toHaveCount(2);
+  await expect(
+    menu.locator('[data-api-grant="api:grain/operator"]'),
+  ).toHaveCount(1);
+  await expect(menu.locator('[data-api-grant="api:merge:force"]')).toHaveCount(
+    1,
+  );
   await expect(menu.locator(".method-grant-row")).toHaveCount(0);
   await page.keyboard.press("Escape");
 
