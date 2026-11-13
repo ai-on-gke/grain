@@ -172,7 +172,7 @@ interface StateRepoEntryDto {
                               state.sectionLocked('repositories') ||
                               !access.can('DELETE /api/repos/{owner}/{name}')
                             "
-                            (click)="removeRepo(repo)"
+                            (click)="askRemoveRepo(repo)"
                           >
                             Remove
                           </button>
@@ -1176,6 +1176,43 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     } catch (err) {
       this.state.error.set(errText(err));
     }
+  }
+
+  // askRemoveRepo asks before taking repo off the target list, in the
+  // classic Repo page's words (ui/src/components/RepoPage.jsx): what the
+  // removal costs, from the same POST /api/repos/plan dry run, and that
+  // removing the only entry makes the list unrestricted again. The
+  // /next/ Remove button removed the repository on one click (2026-11-13
+  // repository walkthrough, task 5386).
+  protected async askRemoveRepo(repo: string): Promise<void> {
+    const allowed = this.repos();
+    const rest = allowed.filter((r) => r.toLowerCase() !== repo.toLowerCase());
+    const unrestricts = allowed.length > 0 && rest.length === 0;
+    let cost = "";
+    try {
+      const plan = await this.api.post<{
+        targetReposStranded?: { summary?: string }[];
+      }>("POST /api/repos/plan", undefined, { targetRepos: rest });
+      cost = (plan?.targetReposStranded ?? [])
+        .map((s) => s.summary ?? "")
+        .filter(Boolean)
+        .join(" ");
+    } catch {
+      // A plan this build cannot get must not stop a removal that never
+      // depended on one; the question then says what it always says.
+    }
+    const consequence = unrestricts
+      ? `Remove ${repo}, the only repo this deployment allows? An empty allowlist is what means unrestricted, so removing it allows any repo again: new tasks may target any repo, ${repo} included. To stay restricted, add the repo you want first.`
+      : `Remove ${repo} from target repos? New tasks won't be able to target it until it's added back, and it will drop off the repos list.`;
+    this.confirmReq.set({
+      title: `Remove ${repo}?`,
+      message:
+        consequence +
+        (cost ? ` ${cost}` : " Tasks already filed there are not affected."),
+      accept: "Remove repository",
+      destructive: true,
+      run: () => this.removeRepo(repo),
+    });
   }
 
   protected async removeRepo(repo: string): Promise<void> {

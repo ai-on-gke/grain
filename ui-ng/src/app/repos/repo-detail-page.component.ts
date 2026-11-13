@@ -15,9 +15,12 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
+  HostListener,
   OnDestroy,
   OnInit,
   ViewEncapsulation,
+  afterRenderEffect,
   computed,
   inject,
   input,
@@ -52,6 +55,16 @@ const REPO_TABS: readonly { id: RepoTabId; label: string }[] = [
   { id: "releases", label: "Releases" },
 ];
 
+export const DISCARD_PROMPT =
+  "You have unsaved changes here. Leave and discard them?";
+
+// Which unsaved group a clean save of each action settles.
+const SAVE_CLEARS: Record<string, string> = {
+  saveWorkflows: "workflows",
+  saveIssueImportSettings: "issueImport",
+  saveAgentTabSettings: "agents",
+};
+
 function isRepoTabId(val: string | null | undefined): val is RepoTabId {
   const clean = (val ?? "").toLowerCase();
   return REPO_TABS.some((t) => t.id === clean);
@@ -66,11 +79,40 @@ function normalizeWorkflowPath(raw: string): string {
   return `.grain/workflows/${withExt}`;
 }
 
+// importOutcomeText says what one "Import issues now" pass did, in the
+// classic Repo page's words (ui/src/components/RepoPage.jsx). An error
+// with nothing open is the listing itself failing -- a per-issue
+// failure needs an issue to fail on -- so it says nothing was read
+// rather than "Read 0 open issues", which reads as a source with none.
+export function importOutcomeText(out: {
+  source?: string;
+  open?: number;
+  imported?: unknown[] | null;
+  skipped?: number;
+  error?: string;
+}): { error: boolean; text: string } {
+  const open = out.open ?? 0;
+  const source = out.source || "the source repository";
+  if (out.error && !open) {
+    return {
+      error: true,
+      text: `Could not read the open issues on ${source}: ${out.error}`,
+    };
+  }
+  const n = (out.imported ?? []).length;
+  let text = `Read ${open} open issue${open === 1 ? "" : "s"} on ${source}: imported ${n}, ${out.skipped ?? 0} already imported.`;
+  if (out.error) text += ` Some could not be imported: ${out.error}`;
+  return { error: Boolean(out.error), text };
+}
+
+// One branch grain was asked to create (GET .../branches answers
+// {repo, name, from, status, error?, createdAt}). The table used to
+// show a "HEAD" column these rows never carry, so every row read "—".
 interface BranchRow {
   name: string;
-  sha?: string;
-  head?: string;
-  protected?: boolean;
+  from?: string;
+  status?: string;
+  error?: string;
 }
 
 interface RepoWorkflowRow {
@@ -187,7 +229,7 @@ interface PendingReleaseRow {
               <button
                 type="button"
                 class="btn-text s-btn-sm"
-                (click)="error.set(null)"
+                (click)="dismissError()"
               >
                 Dismiss
               </button>
@@ -312,7 +354,10 @@ interface PendingReleaseRow {
                       [attr.aria-checked]="importEnabled()"
                       [disabled]="!canWriteSettings()"
                       aria-label="Enable issue importer"
-                      (click)="importEnabled.set(!importEnabled())"
+                      (click)="
+                        importEnabled.set(!importEnabled());
+                        markDirty('issueImport')
+                      "
                     ></button>
                   </div>
 
@@ -329,7 +374,10 @@ interface PendingReleaseRow {
                         placeholder="grain-ready"
                         [value]="importLabel()"
                         [disabled]="!canWriteSettings()"
-                        (input)="importLabel.set($any($event.target).value)"
+                        (input)="
+                          importLabel.set($any($event.target).value);
+                          markDirty('issueImport')
+                        "
                       />
                     </div>
                     <div class="s-field">
@@ -345,7 +393,8 @@ interface PendingReleaseRow {
                         [value]="importSourceRepo()"
                         [disabled]="!canWriteSettings()"
                         (input)="
-                          importSourceRepo.set($any($event.target).value)
+                          importSourceRepo.set($any($event.target).value);
+                          markDirty('issueImport')
                         "
                       />
                     </div>
@@ -366,13 +415,23 @@ interface PendingReleaseRow {
                       class="btn-tonal s-btn-sm"
                       data-testid="import-issues-btn"
                       [disabled]="
+                        importing() ||
                         !can('POST /api/repos/{owner}/{name}/import-issues')
                       "
                       (click)="importIssues()"
                     >
-                      Import issues now
+                      {{ importing() ? "Importing…" : "Import issues now" }}
                     </button>
                   </div>
+                  @if (importOutcome(); as o) {
+                    <p
+                      [class]="o.error ? 's-field-error' : 's-hint'"
+                      role="status"
+                      data-testid="import-issues-outcome"
+                    >
+                      {{ o.text }}
+                    </p>
+                  }
                 </div>
               }
 
@@ -625,7 +684,10 @@ interface PendingReleaseRow {
                         configRepoOnly() ||
                         !can('PUT /api/repos/{owner}/{name}/setup-command')
                       "
-                      (input)="setupCommand.set($any($event.target).value)"
+                      (input)="
+                        setupCommand.set($any($event.target).value);
+                        markDirty('agents')
+                      "
                     />
                   </div>
                   <div class="s-field">
@@ -642,7 +704,10 @@ interface PendingReleaseRow {
                         configRepoOnly() ||
                         !can('PUT /api/repos/{owner}/{name}/prompt-extension')
                       "
-                      (input)="promptExtension.set($any($event.target).value)"
+                      (input)="
+                        promptExtension.set($any($event.target).value);
+                        markDirty('agents')
+                      "
                     ></textarea>
                   </div>
                   <div class="s-field">
@@ -658,7 +723,10 @@ interface PendingReleaseRow {
                         configRepoOnly() ||
                         !can('PUT /api/repos/{owner}/{name}/capabilities')
                       "
-                      (input)="repoCaps.set($any($event.target).value)"
+                      (input)="
+                        repoCaps.set($any($event.target).value);
+                        markDirty('agents')
+                      "
                     />
                   </div>
                   <div class="s-inline">
@@ -684,21 +752,34 @@ interface PendingReleaseRow {
                         <thead>
                           <tr>
                             <th>Branch</th>
-                            <th>HEAD</th>
+                            <th>From</th>
+                            <th>Status</th>
                           </tr>
                         </thead>
                         <tbody>
                           @for (b of branches(); track b.name) {
                             <tr [attr.data-testid]="'branch-row-' + b.name">
                               <td class="tabular">{{ b.name }}</td>
-                              <td class="tabular">
-                                {{ (b.sha || b.head || "—").slice(0, 10) }}
+                              <td class="tabular">{{ b.from || "—" }}</td>
+                              <td>
+                                <span class="status-pill neutral">{{
+                                  b.status || "—"
+                                }}</span>
+                                @if (b.error) {
+                                  <span class="s-field-error">{{
+                                    b.error
+                                  }}</span>
+                                }
                               </td>
                             </tr>
                           }
                         </tbody>
                       </table>
                     </div>
+                  } @else {
+                    <p class="s-hint" data-testid="repo-branches-empty">
+                      No branches have been created here through grain yet.
+                    </p>
                   }
                   <div class="s-grid">
                     <div class="s-field">
@@ -1014,31 +1095,37 @@ interface PendingReleaseRow {
                                         'POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote'
                                       )
                                     "
-                                    (click)="promoteCandidate(rel.name)"
+                                    (click)="askPromote(rel)"
                                   >
                                     Promote RC
                                   </button>
                                   <button
                                     type="button"
                                     class="btn-tonal s-btn-sm"
+                                    [attr.data-testid]="
+                                      'merge-release-' + rel.name
+                                    "
                                     [disabled]="
                                       !can(
                                         'POST /api/repos/{owner}/{name}/releases/{release}/merge'
                                       )
                                     "
-                                    (click)="mergeRelease(rel.name)"
+                                    (click)="askMerge(rel)"
                                   >
                                     Merge back
                                   </button>
                                   <button
                                     type="button"
                                     class="btn-text s-btn-sm"
+                                    [attr.data-testid]="
+                                      'delete-release-' + rel.name
+                                    "
                                     [disabled]="
                                       !can(
                                         'DELETE /api/repos/{owner}/{name}/releases/{release}'
                                       )
                                     "
-                                    (click)="deleteRelease(rel.name)"
+                                    (click)="askDelete(rel)"
                                   >
                                     Delete
                                   </button>
@@ -1125,11 +1212,18 @@ interface PendingReleaseRow {
                       aria-label="New release name"
                       data-testid="input-new-release-name"
                       placeholder="v1.4.0"
+                      [attr.aria-describedby]="
+                        releaseNameError() ? 'new-release-name-error' : null
+                      "
+                      [attr.aria-invalid]="releaseNameError() ? 'true' : null"
                       [value]="newReleaseName()"
                       [disabled]="
                         !can('POST /api/repos/{owner}/{name}/releases')
                       "
-                      (input)="newReleaseName.set($any($event.target).value)"
+                      (input)="
+                        newReleaseName.set($any($event.target).value);
+                        releaseNameError.set(null)
+                      "
                     />
                     <button
                       type="button"
@@ -1144,6 +1238,16 @@ interface PendingReleaseRow {
                       Create release
                     </button>
                   </div>
+                  @if (releaseNameError(); as e) {
+                    <p
+                      class="s-field-error"
+                      id="new-release-name-error"
+                      role="alert"
+                      data-testid="new-release-name-error"
+                    >
+                      {{ e }}
+                    </p>
+                  }
                 </div>
               }
             }
@@ -1162,6 +1266,27 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   private readonly snackbar = inject(SnackbarService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly hostEl = inject<ElementRef<HTMLElement>>(ElementRef);
+
+  constructor() {
+    // Keep the selected tab inside the tab strip, which scrolls sideways
+    // on a phone: a deep link or reload on Releases left it at x 589 of a
+    // 390 px screen, out of sight (2026-11-13 repository walkthrough,
+    // task 5386).
+    afterRenderEffect(() => {
+      const id = this.activeTab();
+      const nav =
+        this.hostEl.nativeElement.querySelector<HTMLElement>(".repo-tabs");
+      const btn = nav?.querySelector<HTMLElement>(
+        `[data-testid="repo-tab-${id}"]`,
+      );
+      if (!nav || !btn) return;
+      const n = nav.getBoundingClientRect();
+      const b = btn.getBoundingClientRect();
+      if (b.left < n.left) nav.scrollLeft -= n.left - b.left + 8;
+      else if (b.right > n.right) nav.scrollLeft += b.right - n.right + 8;
+    });
+  }
 
   readonly host = input<string | undefined>(undefined);
   readonly owner = input<string | undefined>(undefined);
@@ -1188,6 +1313,25 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly ready = signal(false);
   protected readonly configRepoOnly = signal(false);
   protected readonly error = signal<string | null>(null);
+  // errorFrom names the action whose refusal the banner is showing, so
+  // that action saving cleanly clears it (refuse/saved below). Without
+  // it a refused setting's banner stayed up after the same setting was
+  // fixed and saved (2026-11-13 repository walkthrough, task 5386).
+  private readonly errorFrom = signal<string | null>(null);
+  // Groups of fields edited since they were last saved; see confirmLeave.
+  private readonly dirty = signal<ReadonlySet<string>>(new Set());
+  private leaveResolve: ((leave: boolean) => void) | null = null;
+  // What the last "Import issues now" pass read and imported, or why it
+  // read nothing (POST .../import-issues answers {source, open,
+  // imported, skipped, error}); the page used to say only "triggered".
+  protected readonly importOutcome = signal<{
+    error: boolean;
+    text: string;
+  } | null>(null);
+  protected readonly importing = signal(false);
+  // A refused release name is reported on its own box, not the banner,
+  // and clears on the next edit or create.
+  protected readonly releaseNameError = signal<string | null>(null);
 
   protected readonly baseBranch = signal("main");
   protected readonly cloneUrl = signal("");
@@ -1338,6 +1482,65 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
 
   protected can(route: RouteKey): boolean {
     return this.access.can(route, this.repoSlug());
+  }
+
+  // refuse shows err in the page's banner on behalf of action; saved
+  // clears that banner once the same action goes through, the way the
+  // classic Repo page's refused-setting banner does.
+  private refuse(action: string, err: unknown): void {
+    this.error.set(errText(err));
+    this.errorFrom.set(action);
+  }
+
+  private saved(action: string): void {
+    const group = SAVE_CLEARS[action];
+    if (group) {
+      this.dirty.update((d) => {
+        const next = new Set(d);
+        next.delete(group);
+        return next;
+      });
+    }
+    if (this.errorFrom() === action) {
+      this.error.set(null);
+      this.errorFrom.set(null);
+    }
+  }
+
+  protected markDirty(group: string): void {
+    if (this.dirty().has(group)) return;
+    this.dirty.update((d) => new Set(d).add(group));
+  }
+
+  // confirmLeave is what the route's canDeactivate guard asks
+  // (confirmLeaveGuard in app.routes.ts): true at once with nothing unsaved, else
+  // the classic Repo page's question in the shared dialog. Leaving with
+  // an unsaved workflow, issue-import, setup, prompt or capabilities
+  // edit used to drop it silently (2026-11-13 repository walkthrough,
+  // task 5386).
+  confirmLeave(): boolean | Promise<boolean> {
+    if (this.dirty().size === 0) return true;
+    return new Promise<boolean>((resolve) => {
+      this.leaveResolve?.(false);
+      this.leaveResolve = resolve;
+      this.confirmReq.set({
+        title: "Discard unsaved changes?",
+        message: DISCARD_PROMPT,
+        accept: "Leave",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+  }
+
+  @HostListener("window:beforeunload", ["$event"])
+  protected onBeforeUnload(e: BeforeUnloadEvent): void {
+    if (this.dirty().size > 0) e.preventDefault();
+  }
+
+  protected dismissError(): void {
+    this.error.set(null);
+    this.errorFrom.set(null);
   }
 
   protected selectTab(tab: RepoTabId): void {
@@ -1645,8 +1848,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         },
       );
       this.snackbar.show("Repository configuration saved");
+      this.saved("saveRepoConfig");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("saveRepoConfig", err);
     }
   }
 
@@ -1659,8 +1863,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { credential },
       );
       this.snackbar.show("Pinned Git connection");
+      this.saved("pinGitConnection");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("pinGitConnection", err);
     }
   }
 
@@ -1674,8 +1879,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       const st = res?.state ?? res?.stage;
       if (st) this.lifecycleState.set(st);
       this.snackbar.show("Lifecycle refreshed");
+      this.saved("refreshLifecycle");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("refreshLifecycle", err);
     }
   }
 
@@ -1692,21 +1898,28 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         },
       );
       this.snackbar.show("Issue importer settings saved");
+      this.saved("saveIssueImportSettings");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("saveIssueImportSettings", err);
     }
   }
 
   protected async importIssues(): Promise<void> {
+    this.importing.set(true);
+    this.importOutcome.set(null);
     try {
-      await this.api.post(
-        "POST /api/repos/{owner}/{name}/import-issues",
-        this.params(),
-        {},
-      );
-      this.snackbar.show("Issue import triggered");
+      const out = await this.api.post<{
+        source?: string;
+        open?: number;
+        imported?: unknown[] | null;
+        skipped?: number;
+        error?: string;
+      }>("POST /api/repos/{owner}/{name}/import-issues", this.params(), {});
+      this.importOutcome.set(importOutcomeText(out ?? {}));
     } catch (err) {
-      this.error.set(errText(err));
+      this.importOutcome.set({ error: true, text: errText(err) });
+    } finally {
+      this.importing.set(false);
     }
   }
 
@@ -1720,12 +1933,13 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { ciMode },
       );
       this.snackbar.show(`CI mode set to ${ciMode}`);
+      this.saved("saveCiMode");
     } catch (err) {
       // A refused mode is not the repo's mode: put the pill back on
       // what the server still has rather than leave it naming one it
       // refused.
       this.ciMode.set(previous);
-      this.error.set(errText(err));
+      this.refuse("saveCiMode", err);
     }
   }
 
@@ -1738,8 +1952,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { watchDefaultBranch: next },
       );
       this.watchDefaultBranch.set(next);
+      this.saved("toggleWatchDefaultBranch");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("toggleWatchDefaultBranch", err);
     }
   }
 
@@ -1751,8 +1966,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { branch: this.baseBranch() || "main" },
       );
       this.snackbar.show("Triggered base-branch CI run");
+      this.saved("triggerBaseCiRun");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("triggerBaseCiRun", err);
     }
   }
 
@@ -1763,6 +1979,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected onEditWorkflowText(text: string): void {
+    this.markDirty("workflows");
     this.workflowYaml.set(text);
     const path = this.selectedWorkflowPath();
     this.workflows.update((list) => {
@@ -1777,6 +1994,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected addWorkflowFile(): void {
     const path = normalizeWorkflowPath(this.newWorkflowPath());
     if (!path) return;
+    this.markDirty("workflows");
     this.newWorkflowPath.set("");
     const existing = this.workflows().find((w) => w.path === path);
     if (existing) {
@@ -1811,8 +2029,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       this.selectedWorkflowPath.set(next?.path ?? ".grain/workflows/ci.yml");
       this.workflowYaml.set(next?.text ?? "");
       this.snackbar.show(`Removed workflow ${target}`);
+      this.saved("deleteSelectedWorkflow");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("deleteSelectedWorkflow", err);
     }
   }
 
@@ -1847,8 +2066,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.workflows.set(next);
       }
       this.snackbar.show("Workflows saved");
+      this.saved("saveWorkflows");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("saveWorkflows", err);
     }
   }
 
@@ -1872,8 +2092,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.applyReleaseSettings(res);
       }
       this.snackbar.show("Release settings saved");
+      this.saved("saveReleaseSettings");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("saveReleaseSettings", err);
     }
   }
 
@@ -1886,8 +2107,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { mergeOnGreen: next },
       );
       this.mergeOnGreen.set(next);
+      this.saved("toggleMergeOnGreen");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("toggleMergeOnGreen", err);
     }
   }
 
@@ -1900,14 +2122,22 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { requireBranchUpToDate: next },
       );
       this.requireUpToDate.set(next);
+      this.saved("toggleRequireUpToDate");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("toggleRequireUpToDate", err);
     }
   }
 
   protected async onConfirmDone(accepted: boolean): Promise<void> {
     const req = this.confirmReq();
     this.confirmReq.set(null);
+    const leave = this.leaveResolve;
+    if (leave) {
+      this.leaveResolve = null;
+      if (accepted) this.dirty.set(new Set());
+      leave(accepted);
+      return;
+    }
     if (!accepted || !req) return;
     await req.run();
   }
@@ -1931,8 +2161,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { baseRepairBypassesHumanGates: next },
       );
       this.bypassHumanGates.set(next);
+      this.saved("saveBypassHumanGates");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("saveBypassHumanGates", err);
     }
   }
 
@@ -1961,8 +2192,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         });
       }
       this.snackbar.show("Saved repository agent settings");
+      this.saved("saveAgentTabSettings");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("saveAgentTabSettings", err);
     }
   }
 
@@ -1978,14 +2210,16 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       this.newBranchName.set("");
       await this.loadTabData();
       this.snackbar.show(`Created branch ${name}`);
+      this.saved("createBranch");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("createBranch", err);
     }
   }
 
   protected async createRelease(): Promise<void> {
     const name = this.newReleaseName().trim();
     if (!name) return;
+    this.releaseNameError.set(null);
     try {
       await this.api.post(
         "POST /api/repos/{owner}/{name}/releases",
@@ -1996,8 +2230,50 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       await this.loadReleasesTab();
       this.snackbar.show(`Created release ${name}`);
     } catch (err) {
-      this.error.set(errText(err));
+      this.releaseNameError.set(errText(err));
     }
+  }
+
+  // Promote, merge back and delete each act on branches or drop grain's
+  // record of the release, so each asks first and names what it is
+  // about to touch, as the classic Releases pane does
+  // (ui/src/components/RepoReleases.jsx). The /next/ buttons did it on
+  // one click (2026-11-13 repository walkthrough, task 5386).
+  protected askPromote(rel: ReleaseRow): void {
+    const prod = rel.prodBranch || rel.name;
+    const rc =
+      this.selectedRelease() === rel.name
+        ? this.candidates()[0]?.branch
+        : undefined;
+    const what = rc ?? `${rel.name}'s current release candidate`;
+    this.confirmReq.set({
+      title: `Promote ${rc ?? "the current RC"}?`,
+      message: `Promote ${what} to ${prod}? This moves ${this.repoSlug()}'s ${prod} branch to ${rc ?? "it"}.`,
+      accept: "Promote",
+      destructive: false,
+      run: () => this.promoteCandidate(rel.name),
+    });
+  }
+
+  protected askMerge(rel: ReleaseRow): void {
+    const prod = rel.prodBranch || rel.name;
+    this.confirmReq.set({
+      title: `Merge ${prod} back?`,
+      message: `Merge ${prod} into ${this.repoSlug()}'s default branch? This opens a pull request on GitHub from ${prod}.`,
+      accept: "Open pull request",
+      destructive: false,
+      run: () => this.mergeRelease(rel.name),
+    });
+  }
+
+  protected askDelete(rel: ReleaseRow): void {
+    this.confirmReq.set({
+      title: `Remove release ${rel.name}?`,
+      message: `Remove release ${rel.name}? This drops the release and its candidates from grain.`,
+      accept: "Remove release",
+      destructive: true,
+      run: () => this.deleteRelease(rel.name),
+    });
   }
 
   protected async cutCandidate(release: string): Promise<void> {
@@ -2009,8 +2285,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       await this.loadReleasesTab();
       this.snackbar.show(`Cut candidate for ${release}`);
+      this.saved("cutCandidate");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("cutCandidate", err);
     }
   }
 
@@ -2023,8 +2300,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       await this.loadReleasesTab();
       this.snackbar.show(`Promoted candidate on ${release}`);
+      this.saved("promoteCandidate");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("promoteCandidate", err);
     }
   }
 
@@ -2037,8 +2315,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       await this.loadReleasesTab();
       this.snackbar.show(`Merged ${release}`);
+      this.saved("mergeRelease");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("mergeRelease", err);
     }
   }
 
@@ -2050,8 +2329,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       await this.loadReleasesTab();
       this.snackbar.show(`Deleted release ${release}`);
+      this.saved("deleteRelease");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("deleteRelease", err);
     }
   }
 
@@ -2064,8 +2344,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       await this.loadReleasesTab();
       this.snackbar.show("Approved candidate qualification");
+      this.saved("approveQualification");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("approveQualification", err);
     }
   }
 
@@ -2077,8 +2358,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         {},
       );
       this.snackbar.show("Started release workflow run");
+      this.saved("triggerReleaseRun");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("triggerReleaseRun", err);
     }
   }
 
@@ -2091,8 +2373,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       await this.loadReleasesTab();
       this.snackbar.show(`Approved release ${version}`);
+      this.saved("approvePendingRelease");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("approvePendingRelease", err);
     }
   }
 
@@ -2105,8 +2388,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       await this.loadReleasesTab();
       this.snackbar.show(`Rejected release ${version}`);
+      this.saved("rejectPendingRelease");
     } catch (err) {
-      this.error.set(errText(err));
+      this.refuse("rejectPendingRelease", err);
     }
   }
 }
