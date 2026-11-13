@@ -170,6 +170,15 @@ test("Reboot host and Shut down host are off where /api/config says so", async (
   await expect(page.getByTestId("power-shutdown-off")).toContainText(
     "Shutting down the host is not enabled for this deployment.",
   );
+  // Each button sits inside the card, at the right of its own hint.
+  const card = await page.getByTestId("fleet-power-card").boundingBox();
+  for (const id of ["reboot", "shutdown"]) {
+    const btn = await page.getByTestId(`power-${id}-btn`).boundingBox();
+    const hint = await page.getByTestId(`power-${id}-off`).boundingBox();
+    expect(btn.x + btn.width).toBeLessThanOrEqual(card.x + card.width);
+    expect(btn.x).toBeGreaterThan(hint.x + hint.width - 1);
+    expect(btn.y).toBeLessThan(hint.y + hint.height);
+  }
   expect(posts).toEqual([]);
 });
 
