@@ -163,3 +163,82 @@ test("a non-JSON error answer names its HTTP status", async ({ page }) => {
   await expect(err).toContainText("The server answered 502");
   await expect(err).not.toContainText("Unexpected token");
 });
+
+// The demo runs no grain CI, so the runs are stubbed at /api/ci/runs; the
+// page, its router and the user's clicks are real.
+test("Re-run failed follows to the run it starts", async ({ page }) => {
+  const at = new Date(Date.now() - 3600e3).toISOString();
+  let runs = [
+    {
+      id: "ci-fail-1",
+      provider: "grain",
+      repo: "acme/widgets",
+      branch: "feature/audit-log",
+      workflow: "tests",
+      taskId: "6",
+      status: "completed",
+      conclusion: "failure",
+      startedAt: at,
+      finishedAt: at,
+      jobs: [
+        { jobId: "go", name: "go", conclusion: "success", status: "completed" },
+        {
+          jobId: "e2e",
+          name: "e2e",
+          conclusion: "failure",
+          status: "completed",
+        },
+      ],
+    },
+  ];
+  const posted = [];
+  await page.route(/\/api\/ci\/runs(\?.*)?$/, (route) => {
+    if (route.request().method() === "POST") {
+      posted.push(route.request().postDataJSON());
+      runs = [
+        {
+          id: "ci-rerun-2",
+          provider: "grain",
+          repo: "acme/widgets",
+          branch: "feature/audit-log",
+          workflow: "tests",
+          taskId: "6",
+          status: "queued",
+          startedAt: new Date().toISOString(),
+          jobs: [],
+        },
+        ...runs,
+      ];
+      return route.fulfill({ status: 201, json: { id: "ci-rerun-2" } });
+    }
+    return route.fulfill({
+      json: { enabled: true, runs, matched: runs.length, stored: runs.length },
+    });
+  });
+  await page.route(/\/api\/ci\/runs\/[^/?]+(\?.*)?$/, (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").pop();
+    const run = runs.find((r) => r.id === id);
+    return run
+      ? route.fulfill({ json: run })
+      : route.fulfill({ status: 404, json: { error: `no CI run ${id}` } });
+  });
+  await page.route(/\/api\/ci\/runs\/[^/]+\/artifacts/, (route) =>
+    route.fulfill({ json: { available: false, artifacts: [] } }),
+  );
+
+  await page.goto("ci/runs/ci-fail-1");
+  await expect(page.getByTestId("ci-detail-status")).toContainText("Failed");
+  await page.getByTestId("ci-rerun-failed-btn").click();
+  await expect(page).toHaveURL(/\/next\/ci\/runs\/ci-rerun-2$/);
+  await expect(page.getByTestId("ci-run-row-ci-rerun-2")).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  expect(posted).toEqual([
+    expect.objectContaining({
+      taskId: "6",
+      recheck: true,
+      recheckFailed: true,
+    }),
+  ]);
+});
