@@ -625,8 +625,14 @@ export class DeferErrorDirective implements OnInit {
 
       <footer class="bottom-bar" [attr.inert]="modalOpen() ? '' : null">
         <span class="bottom-left">
-          <span class="muted bottom-version" [attr.title]="version()"
-            >grain{{ version() ? " " + version() : "" }}</span
+          <a
+            class="muted bottom-version"
+            routerLink="/settings/upgrade"
+            data-testid="build-stamp"
+            [attr.title]="
+              'Running ' + (version() || 'grain') + ' · Settings → Upgrade'
+            "
+            >grain{{ version() ? " " + version() : "" }}</a
           >
           <span class="bottom-sep" aria-hidden="true">·</span>
           <a
