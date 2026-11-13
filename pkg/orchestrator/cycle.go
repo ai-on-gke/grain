@@ -844,6 +844,7 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
 			deps.Config.Skills = mc.Skills.Clone()
+			deps.Config.QA = mc.QA.Clone()
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
@@ -934,6 +935,7 @@ func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
 			deps.Config.Skills = mc.Skills.Clone()
+			deps.Config.QA = mc.QA.Clone()
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
@@ -3026,7 +3028,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	obs, _ := deps.Store.GetObservation(ctx, task.ID)
 	var preRunBranchSHA string
 	if deps.Client != nil && task.Target != nil && (d.Attempt > 1 || obs.RepairInFlight() || hasFixesLink(*task)) {
-		if head, err := deps.Client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName()); err == nil && head != nil {
+		if head, err := deps.Client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName()); err == nil && head != nil {
 			preRunBranchSHA = head.SHA
 		}
 	}
@@ -3124,7 +3126,7 @@ func afterAgentRun(ctx context.Context, deps Deps, task model.Task, runID string
 			// usage-limit-paused repair as completed.
 			salvage := true
 			if preRunBranchSHA != "" && deps.Client != nil && task.Target != nil {
-				head, err := deps.Client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName())
+				head, err := deps.Client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName())
 				salvage = err == nil && head != nil && head.SHA != preRunBranchSHA
 			} else if obs, err := deps.Store.GetObservation(ctx, task.ID); err == nil && obs.RepairInFlight() {
 				salvage = false

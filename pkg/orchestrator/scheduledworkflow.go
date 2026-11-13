@@ -883,7 +883,7 @@ func scheduledWorkflowRef(deps Deps, row model.ScheduledWorkflowRun) (string, er
 	if deps.Client == nil {
 		return "", fmt.Errorf("no GitHub client to ask %s's default branch of", row.Repo)
 	}
-	def, err := deps.Client.DefaultBranch(row.Repo.Owner, row.Repo.Name)
+	def, err := deps.Client.DefaultBranch(row.Repo.StoredOwner(), row.Repo.Name)
 	if err != nil {
 		return "", fmt.Errorf("reading %s's default branch: %w", row.Repo, err)
 	}

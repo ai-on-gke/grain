@@ -179,6 +179,8 @@ export interface Task {
   nothingNeededAction?: string;
   promptExtension?: string;
   noPort?: boolean;
+  // The release this task is filed against (vX.Y.Z or vX.Y.Z-rc.N).
+  foundIn?: string;
   keepRunning?: boolean;
   hosting?: string;
   paused?: TaskPaused | null;

@@ -19,15 +19,18 @@ package hostd
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -1190,4 +1193,301 @@ func TestAnUnadoptableSurvivingDetachedRunIsReaped(t *testing.T) {
 		t.Fatalf("orphaned spool listing = %+v, want Exited with Draining=true", p)
 	}
 	waitGone(t, pid, 10*time.Second)
+}
+
+// A daemon that has been written a process's Exit but does not hang up
+// within DrainExitGrace is not known to have read it: hostd keeps the
+// process and its spool, so the next attach still gets the Exit.
+func TestAnExitNobodyHungUpOnKeepsItsSpoolForTheNextAttach(t *testing.T) {
+	ts := startServer(t, "", func(s *Server) {
+		s.Poll = 20 * time.Millisecond
+		s.drainExitGrace = 200 * time.Millisecond
+	})
+	release := filepath.Join(ts.dir, "release")
+	started := make(chan Started, 1)
+	c := detachedClient(ts, started)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Run(ctx, Request{
+			Kind: KindCLI, Name: "sh",
+			Args:     []string{"-c", `cd "$1" && while [ ! -e "$2" ]; do sleep 0.02; done; echo kept; exit 5`, "sh", ts.dir, filepath.Base(release)},
+			Detach:   true,
+			Run:      "run-1",
+			Task:     "42",
+			Deadline: time.Now().Add(time.Minute),
+		}, nil, nil, nil)
+		done <- err
+	}()
+	st := <-started
+	cancel()
+	if err := <-done; !errors.Is(err, ErrDetached) {
+		t.Fatalf("Run after the daemon stopped = %v, want ErrDetached", err)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A daemon reads the Exit and then holds the connection open.
+	conn, err := net.Dial("unix", ts.srv.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := writeJSON(conn, frameRequest, Request{Op: OpAttach, ID: st.ID}); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		typ, _, err := readFrame(conn)
+		if err != nil {
+			t.Fatalf("reading the attach before its Exit: %v", err)
+		}
+		if typ == frameExit {
+			break
+		}
+	}
+	// attach logs before its defer clears Attached, so wait for both.
+	var p Process
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		p = listed(t, ts, st.ID)
+		if strings.Contains(ts.logs.String(), "did not hang up") && p.Exited && !p.Attached {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after the unacknowledged Exit: listing %+v, logs:\n%s", p, ts.logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(p.Spool); err != nil {
+		t.Fatalf("after the unacknowledged Exit: spool stat %v; want it kept", err)
+	}
+	var out bytes.Buffer
+	exit, _, err := ts.client.Attach(context.Background(), st.ID, Cursor{}, &out, nil)
+	if err != nil || exit.Code != 5 || out.String() != "kept\n" {
+		t.Fatalf("the next attach = %+v, %v, stdout %q; want the kept Exit (code 5) and output", exit, err, out.String())
+	}
+}
+
+// A connection that breaks mid-frame (io.ErrUnexpectedEOF) during Exit grace
+// is an aborted client, not a clean hang-up, so hostd keeps the spool.
+func TestATruncatedFrameDuringExitGraceKeepsTheSpool(t *testing.T) {
+	ts := startServer(t, "", func(s *Server) {
+		s.Poll = 20 * time.Millisecond
+		s.drainExitGrace = 2 * time.Second
+	})
+	conn, err := net.Dial("unix", ts.srv.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Op: OpStart, Kind: KindCLI, Name: "sh",
+		Args:   []string{"-c", "echo trunc-ok; exit 8"},
+		Detach: true, Run: "run-trunc", Task: "43",
+	}
+	if err := writeJSON(conn, frameRequest, req); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	typ, payload, err := readFrame(conn)
+	if err != nil || typ != frameStarted {
+		conn.Close()
+		t.Fatalf("first frame = %q, %v; want frameStarted", typ, err)
+	}
+	var st Started
+	if err := json.Unmarshal(payload, &st); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	for {
+		typ, _, err := readFrame(conn)
+		if err != nil {
+			conn.Close()
+			t.Fatalf("reading before Exit: %v", err)
+		}
+		if typ == frameExit {
+			break
+		}
+	}
+	// Write a partial 2-byte frame header and close so control reads
+	// io.ErrUnexpectedEOF while attach is waiting in DrainExitGrace.
+	_, _ = conn.Write([]byte{frameSignal, 0})
+	conn.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for listed(t, ts, st.ID).Attached {
+		if time.Now().After(deadline) {
+			t.Fatal("attach never let go after truncated frame")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var out bytes.Buffer
+	exit, _, err := ts.client.Attach(context.Background(), st.ID, Cursor{}, &out, nil)
+	if err != nil || exit.Code != 8 || out.String() != "trunc-ok\n" {
+		t.Fatalf("Attach after truncated frame = %+v, %v, stdout %q; want kept Exit (code 8) and output", exit, err, out.String())
+	}
+}
+
+type holdExitUnixConn struct {
+	net.Conn
+	onExit    func()
+	closed    chan struct{}
+	closeOnce sync.Once
+	hdr       [5]byte
+	hdrN      int
+	rem       uint32
+}
+
+func (c *holdExitUnixConn) Close() error {
+	defer c.closeOnce.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+func (c *holdExitUnixConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	for i := 0; i < n; {
+		if c.rem > 0 {
+			take := min(uint32(n-i), c.rem)
+			c.rem -= take
+			i += int(take)
+			continue
+		}
+		c.hdr[c.hdrN] = b[i]
+		c.hdrN++
+		i++
+		if c.hdrN == 5 {
+			typ := c.hdr[0]
+			c.rem = binary.BigEndian.Uint32(c.hdr[1:5])
+			c.hdrN = 0
+			if typ == frameExit && c.onExit != nil {
+				fn := c.onExit
+				c.onExit = nil
+				fn()
+				<-c.closed
+				return 0, net.ErrClosed
+			}
+		}
+	}
+	return n, err
+}
+
+// A daemon detaching (Client.Detach) over a local Unix domain socket while
+// hostd's frameExit is already in flight must not send a clean EOF (which
+// AF_UNIX Close delivers even when unread frames sit in the receive buffer),
+// so hostd keeps the spool for the replacement daemon.
+func TestADetachRacingExitOverUnixSocketKeepsTheSpool(t *testing.T) {
+	ts := startServer(t, "", func(s *Server) {
+		s.Poll = 20 * time.Millisecond
+		s.drainExitGrace = 2 * time.Second
+	})
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	started := make(chan Started, 1)
+	c := Client{
+		Dial: func(ctx context.Context) (net.Conn, error) {
+			raw, err := (&net.Dialer{}).DialContext(ctx, "unix", ts.srv.Socket)
+			if err != nil {
+				return nil, err
+			}
+			return &holdExitUnixConn{Conn: raw, onExit: cancelRun, closed: make(chan struct{})}, nil
+		},
+		Detach:    func(context.Context) bool { return true },
+		OnStarted: func(s Started) { started <- s },
+	}
+	var first bytes.Buffer
+	_, err := c.Run(runCtx, Request{
+		Kind: KindCLI, Name: "sh",
+		Args:   []string{"-c", "echo unix-race-ok; exit 9"},
+		Detach: true, Run: "run-unix-race", Task: "44",
+	}, nil, &first, nil)
+	if !errors.Is(err, ErrDetached) {
+		t.Fatalf("Run detaching in flight with Exit over unix socket = %v, want ErrDetached", err)
+	}
+	st := <-started
+	deadline := time.Now().Add(5 * time.Second)
+	for listed(t, ts, st.ID).Attached {
+		if time.Now().After(deadline) {
+			t.Fatal("attach never let go after unix socket abort")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var rest bytes.Buffer
+	exit, _, err := ts.client.Attach(context.Background(), st.ID, Cursor{Stdout: int64(first.Len())}, &rest, nil)
+	if err != nil || exit.Code != 9 || first.String()+rest.String() != "unix-race-ok\n" {
+		t.Fatalf("Attach after unix detach racing Exit = %+v, %v, stdout %q; want Exit code 9 and full output",
+			exit, err, first.String()+rest.String())
+	}
+}
+
+// endlessStdin is a stdin that never ends, counting what has been read of it.
+type endlessStdin struct{ n atomic.Int64 }
+
+func (r *endlessStdin) Read(p []byte) (int, error) {
+	r.n.Add(int64(len(p)))
+	return len(p), nil
+}
+
+// Detaching while a stdin frame is blocked on a hostd that has stopped
+// reading must still end the stream: abort may not wait on the send lock
+// that the blocked write holds.
+func TestDetachingWhileStdinIsBlockedOnHostdEndsTheStream(t *testing.T) {
+	dir, err := os.MkdirTemp("", "hostd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "hostd.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	// A hostd that starts the process and then reads nothing more.
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		t.Cleanup(func() { conn.Close() })
+		if _, _, err := readFrame(conn); err != nil {
+			return
+		}
+		_ = writeJSON(conn, frameStarted, Started{PID: 1, ID: "blocked"})
+	}()
+	stdin := &endlessStdin{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan Started, 1)
+	c := Client{
+		Socket:    sock,
+		Detach:    func(context.Context) bool { return true },
+		OnStarted: func(s Started) { started <- s },
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Run(ctx, Request{Kind: KindCLI, Name: "sh", Detach: true}, stdin, nil, nil)
+		done <- err
+	}()
+	<-started
+	// Wait for stdin to stop being read: its send is blocked on the socket.
+	deadline := time.Now().Add(10 * time.Second)
+	for last := int64(-1); ; {
+		n := stdin.n.Load()
+		if n > 0 && n == last {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stdin never blocked (read %d bytes)", n)
+		}
+		last = n
+		time.Sleep(100 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrDetached) {
+			t.Fatalf("Run after detaching = %v, want ErrDetached", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return after detaching while a stdin frame was blocked")
+	}
 }

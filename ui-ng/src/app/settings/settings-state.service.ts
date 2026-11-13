@@ -80,6 +80,8 @@ export class SettingsStateService {
   readonly deployment = signal<Record<string, unknown>>({});
   readonly draft = signal<Record<string, unknown>>({});
   readonly deployDraft = signal<Record<string, unknown>>({});
+  readonly fieldErrors = signal<Record<string, string>>({});
+  readonly discardEpoch = signal(0);
 
   readonly loading = signal(false);
   readonly planning = signal(false);
@@ -112,13 +114,19 @@ export class SettingsStateService {
   readonly hasDeployDraft = computed(
     () => Object.keys(this.deployDraft()).length > 0,
   );
+  readonly hasFieldErrors = computed(
+    () => Object.keys(this.fieldErrors()).length > 0,
+  );
   readonly isDirty = computed(
-    () => this.hasSettingsDraft() || this.hasDeployDraft(),
+    () =>
+      this.hasSettingsDraft() || this.hasDeployDraft() || this.hasFieldErrors(),
   );
 
   readonly dirtyCount = computed(
     () =>
-      Object.keys(this.draft()).length + Object.keys(this.deployDraft()).length,
+      Object.keys(this.draft()).length +
+      Object.keys(this.deployDraft()).length +
+      Object.keys(this.fieldErrors()).length,
   );
 
   sectionLocked(section: SettingsSectionId): boolean {
@@ -175,9 +183,24 @@ export class SettingsStateService {
     });
   }
 
+  setFieldError(key: string, message: string | null): void {
+    this.planPreview.set(null);
+    this.fieldErrors.update((prev) => {
+      const next = { ...prev };
+      if (!message) {
+        delete next[key];
+      } else {
+        next[key] = message;
+      }
+      return next;
+    });
+  }
+
   discard(): void {
     this.draft.set({});
     this.deployDraft.set({});
+    this.fieldErrors.set({});
+    this.discardEpoch.update((n) => n + 1);
     this.planPreview.set(null);
     this.error.set(null);
   }
@@ -217,7 +240,9 @@ export class SettingsStateService {
   }
 
   async previewPlan(): Promise<void> {
-    if (!this.access.can("POST /api/settings/plan")) return;
+    if (this.hasFieldErrors() || !this.access.can("POST /api/settings/plan")) {
+      return;
+    }
     const payload = this.draft();
     if (Object.keys(payload).length === 0) return;
     this.planning.set(true);
@@ -239,7 +264,7 @@ export class SettingsStateService {
   }
 
   async saveChanges(): Promise<void> {
-    if (!this.isDirty()) return;
+    if (!this.isDirty() || this.hasFieldErrors()) return;
     this.saving.set(true);
     this.error.set(null);
     try {
@@ -273,6 +298,8 @@ export class SettingsStateService {
         }
         this.deployDraft.set({});
       }
+      this.fieldErrors.set({});
+      this.discardEpoch.update((n) => n + 1);
       this.planPreview.set(null);
       this.snackbar.show("Settings saved");
     } catch (err) {

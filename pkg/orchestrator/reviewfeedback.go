@@ -203,10 +203,10 @@ func relayReviewFeedback(ctx context.Context, store *model.Store, client github.
 	var reviewID int
 	if submitter, canSubmit := client.(github.ReviewSubmitter); canSubmit && (isApp || reviewed == nil) {
 		submitted = true
-		reviewID, err = submitter.SubmitReview(ref.Repo.Owner, ref.Repo.Name, ref.Number,
+		reviewID, err = submitter.SubmitReview(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number,
 			github.ReviewEventComment, submittedReviewBody(task, findings), inlineComments(findings))
 	} else {
-		reviewID, err = client.CreateReview(ref.Repo.Owner, ref.Repo.Name, ref.Number,
+		reviewID, err = client.CreateReview(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number,
 			draftReviewBody(task, findings), inlineComments(findings))
 	}
 	if err != nil {
