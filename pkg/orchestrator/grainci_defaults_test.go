@@ -30,7 +30,7 @@ func TestProcessResultAppliesDefaultsToProposedTasks(t *testing.T) {
 	_, client := newSim(t, "acme", "widgets", "main")
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutConfig(ctx, model.Config{
-		DefaultCapabilities: []string{"self-debug"},
+		DefaultCapabilities: []string{"api:self-debug", model.GrainSourceGrant},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestProcessResultAttachesRequestedCapabilitiesToProposedTasks(t *testing.T)
 	_, client := newSim(t, "acme", "widgets", "main")
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutConfig(ctx, model.Config{
-		DefaultCapabilities: []string{"self-debug"},
+		DefaultCapabilities: []string{"api:self-debug", model.GrainSourceGrant},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestProcessResultPassesOverARequestedGrainCI(t *testing.T) {
 		Arguments: map[string]any{
 			"title":        "follow-up naming grain-ci",
 			"body":         "carry on",
-			"capabilities": []any{"grain-ci"},
+			"capabilities": []any{model.GrainCIGrant},
 		},
 	})
 	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
@@ -274,7 +274,7 @@ func TestProcessResultPassesOverARequestedGrainCI(t *testing.T) {
 		t.Fatal("the proposed task was never filed")
 	}
 	for _, grant := range proposal.Grants {
-		if grant.Capability == "grain-ci" {
+		if model.IsGrainCIGrant(grant.Capability) {
 			t.Errorf("grants = %+v, want no grain-ci on a repo whose CI Mode does not grant it", proposal.Grants)
 		}
 	}

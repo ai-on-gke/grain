@@ -58,7 +58,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"repo":         "acme/widgets",
 				"branch":       "main",
 				"auto_merge":   true,
-				"capabilities": []any{"self-debug"},
+				"capabilities": []any{"api:self-debug", model.GrainSourceGrant},
 			},
 			wantGrants: []model.Grant{
 				{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
@@ -78,7 +78,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"repo":         "acme/widgets",
 				"branch":       "main",
 				"auto_merge":   true,
-				"capabilities": []any{"self-debug"},
+				"capabilities": []any{"api:self-debug", model.GrainSourceGrant},
 			},
 			wantGrants: []model.Grant{
 				{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
@@ -96,7 +96,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"repo":         "acme/widgets",
 				"branch":       "main",
 				"auto_merge":   true,
-				"capabilities": []any{"self-debug"},
+				"capabilities": []any{"api:self-debug", model.GrainSourceGrant},
 			},
 			wantGrants: []model.Grant{
 				{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
@@ -116,7 +116,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"repo":         "acme/widgets",
 				"branch":       "main",
 				"auto_merge":   true,
-				"capabilities": []any{"self-repair"},
+				"capabilities": []any{model.GrainHostExecGrant},
 			},
 			wantGrants: []model.Grant{
 				{Capability: model.GrainHostExecGrant, Via: model.GrantByLabel},
@@ -135,7 +135,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"repo":         "acme/widgets",
 				"branch":       "main",
 				"auto_merge":   true,
-				"capabilities": []any{"self-upgrade"},
+				"capabilities": []any{"api:self-upgrade"},
 			},
 			wantGrants: []model.Grant{
 				{Capability: model.APIRef("self-upgrade"), Via: model.GrantByLabel},
@@ -146,7 +146,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 		{
 			name: "defaults and unified grants with api# reference and bare alias",
 			defaultCaps: []string{
-				"self-debug",
+				"api:self-debug", model.GrainSourceGrant,
 			},
 			parentGrants: []model.Grant{
 				{Capability: "api:self-debug", Via: model.GrantByDefault},
@@ -161,7 +161,7 @@ func TestLiveAndRelayedProposalsStoreIdenticalGrants(t *testing.T) {
 				"grants": []any{
 					map[string]any{"capability": "https://grain.dev/capabilities/repo#target", "with": map[string]any{"repo": "acme/widgets", "base": "main"}},
 					map[string]any{"capability": "https://grain.dev/capabilities/api#tasks:read", "with": map[string]any{"repo": "acme/widgets"}},
-					"memory",
+					"api:memory",
 				},
 			},
 			wantGrants: []model.Grant{

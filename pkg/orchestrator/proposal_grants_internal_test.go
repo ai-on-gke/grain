@@ -98,7 +98,7 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 			Arguments: map[string]any{
 				"id":           "bare-legacy-cap",
 				"title":        "Bare legacy capability name",
-				"body":         "Expands one-release retired aliases like ui.Client.CreateTask",
+				"body":         "Retired bare names are kept as written, not expanded",
 				"repo":         "acme/app",
 				"branch":       "main",
 				"capabilities": []any{"self-repair", "self-debug"},
@@ -153,10 +153,11 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 	if bareLegacy.Approval != nil {
 		t.Errorf("bare-legacy-cap proposal approved unexpectedly: %+v", bareLegacy.Approval)
 	}
+	// The retired bare names are no aliases any longer: the proposal
+	// records them as written, which dispatch refuses.
 	wantExpanded := []model.Grant{
-		{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
-		{Capability: model.GrainHostExecGrant, Via: model.GrantByLabel},
-		{Capability: model.GrainSourceGrant, Via: model.GrantByLabel},
+		{Capability: "self-debug", Via: model.GrantByLabel},
+		{Capability: "self-repair", Via: model.GrantByLabel},
 	}
 	bareLegacy.Grants = model.GrantsBeyondCIReadDefault(bareLegacy)
 	if len(bareLegacy.Grants) != len(wantExpanded) {
