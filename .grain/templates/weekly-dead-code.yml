@@ -32,7 +32,7 @@ body: |
       vars, which deadcode does not report.
 
     `grain-plc/` is its own module. Run the same commands inside it.
-  - **JS.** In `ui/` (and `ui-shared/` and `ui-registry/` where they
+  - **JS.** In `ui/` (and `ui-shared/` and `ui-hub/` where they
     exist), run `npm ci`, then
     `npx -y knip@5.70.0 --no-progress --reporter compact`. It reports
     unused files, exports and dependencies. If knip cannot cope with a
