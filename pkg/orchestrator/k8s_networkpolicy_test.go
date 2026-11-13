@@ -409,9 +409,13 @@ func TestBundledEgressPolicySelectsEveryOpenSandboxOfItsBackend(t *testing.T) {
 	for _, tc := range []struct {
 		file   string
 		labels func(Shape) map[string]string
+		// none is what may select a network:none pod: grain.yaml ships
+		// grain-sandbox-network-none, grain-granule.yaml ships nothing
+		// for it (its guests boot with no network device).
+		none []string
 	}{
-		{"grain.yaml", sandboxPodLabels},
-		{"grain-granule.yaml", granuleSandboxPodLabels},
+		{"grain.yaml", sandboxPodLabels, []string{"grain-sandbox-network-none"}},
+		{"grain-granule.yaml", granuleSandboxPodLabels, nil},
 	} {
 		policies := loadNetworkPoliciesFrom(t, tc.file)
 		for _, access := range []model.NetworkAccess{model.NetworkOpen, ""} {
@@ -419,8 +423,8 @@ func TestBundledEgressPolicySelectsEveryOpenSandboxOfItsBackend(t *testing.T) {
 				t.Errorf("%s: a %q sandbox pod is selected by %v, want only grain-sandbox-egress", tc.file, access, got)
 			}
 		}
-		if got := selectingPolicies(t, policies, tc.labels(Shape{NetworkAccess: model.NetworkNone})); slices.Contains(got, "grain-sandbox-egress") {
-			t.Errorf("%s: a network:none sandbox pod is selected by %v -- additive egress would hand it the internet", tc.file, got)
+		if got := selectingPolicies(t, policies, tc.labels(Shape{NetworkAccess: model.NetworkNone})); !slices.Equal(got, tc.none) {
+			t.Errorf("%s: a network:none sandbox pod is selected by %v, want %v -- additive egress would hand it the internet", tc.file, got, tc.none)
 		}
 		if got := selectingPolicies(t, policies, map[string]string{"app.kubernetes.io/name": "grain"}); len(got) != 0 {
 			t.Errorf("%s: the grain pod is selected by %v", tc.file, got)
