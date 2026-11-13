@@ -510,6 +510,58 @@ function taskAction(
   };
 }
 
+// stallControl is the button that ends a stuck task's kind of wait, as
+// the orchestrator names it on the task's liveness reason
+// (ui.Task.Reason.control, orchestrator's taskReasons): Run now on a
+// queued task nothing dispatches, Cancel on a run no process is
+// finishing, Undefer on a deferral whose wake time has passed, Retry
+// merge on a change the queue gave up on. A sub-case with no control (a
+// task waiting on another, a change on the merge queue) gets none: what
+// holds it is the thing waited on. The classic Inbox's stalled group
+// offers the same (ui/src/state.js reasonControl).
+export function stallControl(t: Task): InboxAction | null {
+  switch (t.reason?.control) {
+    case "Run now":
+      return taskAction(
+        t,
+        "run-now",
+        "Run now",
+        "POST /api/tasks/{id}/run-now",
+        "primary",
+      );
+    case "Cancel":
+      return taskAction(
+        t,
+        "cancel",
+        "Cancel",
+        "POST /api/tasks/{id}/close",
+        "primary",
+        {
+          confirm: `Cancel #${t.id}? The run in flight is stopped and the task is closed; it can be reopened later.`,
+          destructive: true,
+        },
+      );
+    case "Undefer":
+      return taskAction(
+        t,
+        "undefer",
+        "Undefer",
+        "POST /api/tasks/{id}/undefer",
+        "primary",
+      );
+    case "Retry merge":
+      return taskAction(
+        t,
+        "retry-merge",
+        "Retry merge",
+        "POST /api/tasks/{id}/retry-merge",
+        "primary",
+      );
+    default:
+      return null;
+  }
+}
+
 function taskEntry(t: Task, kind: EntryKind, groupId: string): InboxEntry {
   return {
     key: `task:${t.id}:${kind}`,
@@ -715,6 +767,8 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     e.pillTone = "blast";
     e.summary = t.stall;
     e.rationale = "Grain reads this as stuck rather than busy.";
+    const control = stallControl(t);
+    if (control) e.actions.push(control);
     return e;
   }
   if (t.state === "proposed") {

@@ -243,4 +243,32 @@ describe("inbox classifier", () => {
     expect(hs?.taskLink).toBe("/task/2");
     expect(hs?.externalLink).toBeNull();
   });
+
+  it("offers the control a stuck task's sub-case names, and none where there is none", () => {
+    const stuck = (state: string, control?: string) =>
+      classifyTask(
+        task({
+          state: state as Task["state"],
+          stall: "this has stood here for longer than it should",
+          reason: { reason: `${state}/x`, ...(control ? { control } : {}) },
+        }),
+      );
+    const ids = (state: string, control?: string) =>
+      stuck(state, control)?.actions.map((a) => `${a.id}:${a.route}`);
+    expect(stuck("queued", "Run now")?.groupId).toBe("stalled");
+    expect(ids("queued", "Run now")).toEqual([
+      "run-now:POST /api/tasks/{id}/run-now",
+    ]);
+    expect(ids("deferred", "Undefer")).toEqual([
+      "undefer:POST /api/tasks/{id}/undefer",
+    ]);
+    expect(ids("completed", "Retry merge")).toEqual([
+      "retry-merge:POST /api/tasks/{id}/retry-merge",
+    ]);
+    const cancel = stuck("running", "Cancel")?.actions[0];
+    expect(cancel?.route).toBe("POST /api/tasks/{id}/close");
+    expect(cancel?.confirm).toContain("can be reopened");
+    expect(cancel?.destructive).toBe(true);
+    expect(ids("completed")).toEqual([]);
+  });
 });
