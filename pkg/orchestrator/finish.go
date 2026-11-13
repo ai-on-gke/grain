@@ -1914,6 +1914,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// The template's sandbox shape (model.Template.Sandbox), filled
 		// into each dimension the proposal leaves unstated below.
 		var tmplSandbox model.SandboxShape
+		// The template the proposal was composed from, recorded for
+		// reporting (model.Task.SourceTemplateID) and never as
+		// TemplateID: a run cannot hand a template's push set or
+		// template-restricted grants on to work it files.
+		var sourceTemplate string
 		if tmplID != "" {
 			tmpl, err := store.GetTemplate(ctx, tmplID)
 			if err != nil {
@@ -1925,6 +1930,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					targetRef = *target
 				}
 				comp := model.ComposeTemplateTask(*tmpl, fieldValues, targetRef, base, false)
+				sourceTemplate = tmpl.ID
 				if title == "" {
 					title = comp.Title
 				}
@@ -2231,6 +2237,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Reads:            reads,
 			Writes:           writes,
 			ReviewTemplateID: reviewTemplateID,
+			SourceTemplateID: sourceTemplate,
 			Tags:             []string{key},
 			Links:            links,
 			CreatedAt:        &now,

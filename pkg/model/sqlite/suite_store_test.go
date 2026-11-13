@@ -281,6 +281,15 @@ func TestCreateSuiteRunFilesOneTaskPerItemInTheFirstPass(t *testing.T) {
 	if tasks[0].TemplateName != "Smoke" || tasks[1].TemplateName != "Lint" {
 		t.Fatalf("got names %q/%q, want the resolved template names", tasks[0].TemplateName, tasks[1].TemplateName)
 	}
+	for _, ts := range tasks {
+		task, err := store.GetTask(ctx, ts.TaskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.TemplateID != ts.TemplateID || task.SourceTemplateID != ts.TemplateID {
+			t.Errorf("task %s: template %q, source template %q, want both %q", ts.TaskID, task.TemplateID, task.SourceTemplateID, ts.TemplateID)
+		}
+	}
 
 	for _, ts := range tasks {
 		if !ts.Approved {

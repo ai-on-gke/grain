@@ -2890,6 +2890,14 @@ func TestProcessResultFilesProposedTaskWithDeclarativeParametersAndTemplates(t *
 	if proposal.Title != "Audit auth" {
 		t.Errorf("title = %q, want 'Audit auth'", proposal.Title)
 	}
+	// Recorded as the template it was filed from, for reporting -- and
+	// not as TemplateID, which a run cannot hand on to work it files.
+	if proposal.SourceTemplateID != "audit-template" {
+		t.Errorf("source template = %q, want audit-template", proposal.SourceTemplateID)
+	}
+	if proposal.TemplateID != "" {
+		t.Errorf("template = %q, want none: a proposal takes no template's push set", proposal.TemplateID)
+	}
 	if !strings.Contains(proposal.Body, "Perform full audit for auth on standard tier") {
 		t.Errorf("body = %q, want interpolated body", proposal.Body)
 	}
