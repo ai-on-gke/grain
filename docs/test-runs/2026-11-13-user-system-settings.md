@@ -296,9 +296,14 @@ POST /api/capability-grants/check by alice@example.com from 127.0.0.1`
   signed in as answers the existing `confirm_self` refusal. Classic now
   shows the server's explanation with `Yes, narrow my own access`; `/next/`
   shows `Remove your own access entry?`; Cancel keeps the entry and
-  confirming (`?confirmSelf=1`) removes it. Other entries are unchanged.
+  confirming (`?confirmSelf=1`) removes it. Other entries are unchanged, and
+  removing it when no other `user:`/`group:` entry remains asks nothing (an
+  allowlist naming nobody lets the code sign in as any email; the UI's
+  last-entry warning covers that case — `access-principals-settings.spec.js`
+  caught the first version asking there).
 
 **Regression coverage:** `pkg/ui/access_code_mode_test.go`
 (`TestAccessCodeReadOnlyPostIsNotAConfigurationChange`,
-`TestAccessCodeSessionConfirmsRemovingItsOwnEntry`), each failing without
+`TestAccessCodeSessionConfirmsRemovingItsOwnEntry`,
+`TestAccessCodeSessionRemovesItsOwnLastEntryWithoutConfirming`), each failing without
 its fix. `go test ./pkg/ui ./pkg/cli ./tests/security` pass.

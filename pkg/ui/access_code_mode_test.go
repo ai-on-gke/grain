@@ -337,3 +337,26 @@ func TestAccessCodeSessionConfirmsRemovingItsOwnEntry(t *testing.T) {
 		t.Fatalf("DELETE user:alice@example.com?confirmSelf=1: %d %s, want it removed once confirmed", rec.Code, rec.Body)
 	}
 }
+
+// Removing the session's own entry when it is the last person on the
+// allowlist asks nothing: an allowlist naming nobody lets the access code
+// sign in as any email, so nothing is narrowed.
+func TestAccessCodeSessionRemovesItsOwnLastEntryWithoutConfirming(t *testing.T) {
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+
+	cookie := signInWithCode(t, srv, "alice@example.com")
+	headers := map[string]string{"Cookie": cookie.String(), "Content-Type": "application/json"}
+	for _, entry := range []string{"user:alice@example.com", "serviceAccount:bot@demo-project.iam.gserviceaccount.com"} {
+		rec := serveFrom(srv, networkAddr, http.MethodPost, "/api/access/principals",
+			`{"entry":"`+entry+`","role":"grain/viewer","reason":"test"}`, headers)
+		if rec.Code/100 != 2 {
+			t.Fatalf("POST /api/access/principals %s: %d %s", entry, rec.Code, rec.Body)
+		}
+	}
+	rec := serveFrom(srv, networkAddr, http.MethodDelete, "/api/access/principals/user:alice@example.com", "", headers)
+	if rec.Code/100 != 2 {
+		t.Fatalf("DELETE user:alice@example.com, the last person listed: %d %s, want it removed without a confirmation", rec.Code, rec.Body)
+	}
+}

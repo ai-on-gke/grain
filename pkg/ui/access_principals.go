@@ -628,7 +628,7 @@ func (c *Client) checkAccessChange(ctx context.Context, ch accessChange) error {
 		return validationErrorf("%s: give a reason to %s (--reason, or the reason field)", ch.entry, describeAccessChange(ch))
 	}
 	if caller == nil {
-		return checkAccessCodeSelfRemoval(ctx, ch)
+		return c.checkAccessCodeSelfRemoval(ctx, ch)
 	}
 	if err := checkSelfAccessEscalation(ctx, caller, ch); err != nil {
 		return err
@@ -716,13 +716,29 @@ func checkSelfAccessConfirm(ctx context.Context, caller *accessRole, ch accessCh
 // its next sign-in with the code -- Settings -> Access removed it without a
 // word (docs/test-runs/2026-11-13-user-system-settings.md, F2). The refusal
 // is the confirm_self one both UIs and `grain access deny --confirm-self`
-// already answer.
-func checkAccessCodeSelfRemoval(ctx context.Context, ch accessChange) error {
+// already answer. Removing the last user: or group: entry asks nothing
+// here: an allowlist naming nobody lets the code sign in as any email, and
+// Settings -> Access already warns about removing the last entry.
+func (c *Client) checkAccessCodeSelfRemoval(ctx context.Context, ch accessChange) error {
 	if ch.role != "" || ch.confirmSelf {
 		return nil
 	}
 	name := accessCodeNameFromContext(ctx)
 	if name == "" || !strings.EqualFold(ch.entry, "user:"+name) {
+		return nil
+	}
+	entries, err := c.Store.ListAllowedPrincipals(ctx)
+	if err != nil {
+		return err
+	}
+	othersNamed := false
+	for _, e := range entries {
+		if !strings.EqualFold(e.Entry, ch.entry) && (strings.HasPrefix(e.Entry, "user:") || strings.HasPrefix(e.Entry, "group:")) {
+			othersNamed = true
+			break
+		}
+	}
+	if !othersNamed {
 		return nil
 	}
 	return forbiddenCodeErrorf("confirm_self", "%s is the email this access-code session signed in as: confirm that you want to remove it, "+
