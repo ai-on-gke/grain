@@ -16,6 +16,7 @@ import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
   NgZone,
   type OnDestroy,
@@ -29,7 +30,7 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
-import { Router, RouterLink } from "@angular/router";
+import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import type {
   AttachmentUpload,
@@ -1269,9 +1270,14 @@ export class TaskDetailComponent implements OnDestroy {
 
   readonly id = input.required<string>();
   readonly tab = input<string>();
-  // pane is the Tasks right-hand pane: narrower, Details as a tab, its
-  // tab kept in ?pane=, links to other tasks select them in the pane.
+  // pane is a list | detail right-hand pane (Tasks, Agents, Workstreams):
+  // narrower, Details as a tab, its tab kept in ?pane=, links to other
+  // tasks select them in the pane.
   readonly pane = input(false);
+  // routePane is ?pane= as the router has it. The tab strip writes it, so
+  // the pane reads it back itself: a host that does not also bind [tab]
+  // (Agents, Workstreams) still switches tabs.
+  private readonly routePane = signal<string | undefined>(undefined);
   readonly closable = input(true);
   readonly from = input<string>();
   readonly back = input<BackLink | null>(null);
@@ -1330,7 +1336,7 @@ export class TaskDetailComponent implements OnDestroy {
     return id ? (this.wsStore.taskToStream().get(id) ?? null) : null;
   });
   protected readonly current = computed<TaskTab>(() => {
-    const v = this.tab();
+    const v = this.tab() ?? (this.pane() ? this.routePane() : undefined);
     if (
       v === "details" &&
       !this.pane() &&
@@ -1519,6 +1525,10 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   constructor() {
+    const paneSub = inject(ActivatedRoute).queryParamMap.subscribe((q) =>
+      this.routePane.set(q.get("pane") ?? undefined),
+    );
+    inject(DestroyRef).onDestroy(() => paneSub.unsubscribe());
     effect(() => {
       const id = this.id();
       untracked(() => {
