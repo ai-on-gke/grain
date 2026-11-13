@@ -14,12 +14,33 @@
 
 import { expect, test } from "./fixtures.js";
 
-// The in-process github server's card on Settings -> Capabilities
-// renders without widening the page at desktop and phone widths.
+// Settings -> Capabilities opens on its Capability servers card, with no
+// deprecation notice above it now the retired names' aliases are gone,
+// and the in-process github server's card renders without widening the
+// page, at desktop and phone widths.
 for (const [label, width, height] of [
   ["desktop", 1280, 900],
   ["phone", 390, 844],
 ]) {
+  test(`opens on the capability servers card at ${label} width`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height });
+    await page.goto("/settings/capabilities");
+    const servers = page.getByRole("heading", { name: "Capability servers" });
+    await expect(servers).toBeVisible();
+    await expect(
+      page.locator('[data-testid$="-deprecation-notice"]'),
+    ).toHaveCount(0);
+    const box = await servers.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(width);
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth,
+    );
+    expect(overflow).toBe(false);
+  });
+
   test(`renders the in-process github server card cleanly at ${label} width`, async ({
     page,
   }) => {
