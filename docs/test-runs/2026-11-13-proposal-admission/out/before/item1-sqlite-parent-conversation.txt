@@ -1,0 +1,14 @@
+Before the fix (HEAD 51844bb2c), SQLite, parent task 2 after its run proposed
+A1 (repo-read:acme/gadgets), A2 (repo-write:acme/widgets), B (16 vCPU /
+65536 MiB / 500 GiB) and C (50 GiB). Every propose_task call answered only
+"Recorded (n proposed task(s) so far this run)..." (before/item1-sqlite-tool-results.jsonl).
+
+GET /api/tasks/2 .comments:
+[grain] proposed four follow-ups
+
+Proposals 3-6 were filed with the notes in their own descriptions:
+3 A1: reads ["acme/gadgets"], note "filed with `reads: [\"acme/gadgets\"]` instead"
+4 A2: no repo-write grant, note "filed without that grant: ... is a CI capability, not a task grant"
+5 B:  2 vCPU / 4096 MiB / 100 GiB, note "sandbox_cpus 16 (lowered to 2), sandbox_memory_mb 65536 (lowered to 4096), sandbox_disk_gb 500 (lowered to 100)"
+6 C:  50 GiB, filed as asked (held for a person: above the proposer's own 30 GiB)
+Nothing on the parent's conversation said any of it.
