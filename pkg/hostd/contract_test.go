@@ -92,7 +92,7 @@ var contractFields = map[string]Feature{
 	"Request.deadline": FeatureStart, "Request.hello": FeatureStart,
 	"Request.detach": FeatureDetach, "Request.run": FeatureDetach, "Request.task": FeatureDetach,
 	"Request.id": FeatureDetach, "Request.cursor": FeatureDetach,
-	"Request.idle": FeatureDrain, "Request.inode": FeatureSocketOwner,
+	"Request.idle": FeatureDrain, "Request.handover": FeatureHandover, "Request.inode": FeatureSocketOwner,
 	"Request.stage": FeatureStage, "Request.renew": FeatureRenew,
 
 	"Hello.protocol_version": FeatureStart, "Hello.min_compatible": FeatureStart, "Hello.build": FeatureStart,
@@ -114,6 +114,7 @@ var contractFields = map[string]Feature{
 
 	"SignalMsg.signal": FeatureStart, "Started.pid": FeatureStart, "Started.id": FeatureDetach,
 	"Exit.code": FeatureStart, "Exit.signal": FeatureStart, "Exit.deadline": FeatureStart,
+	"Exit.draining":   FeatureHandover,
 	"Exit.wait_delay": FeatureStart, "Exit.error": FeatureStart, "Exit.finished_at": FeatureStart,
 	"Refusal.reason": FeatureStart, "Refusal.draining": FeatureDrain,
 	"Offer.kind": FeatureStart, "Offer.name": FeatureStart, "Offer.path": FeatureStart,
@@ -316,6 +317,9 @@ func renderContract(t *testing.T) (string, []string) {
 	}
 	for _, v := range envDenyPatterns() {
 		fmt.Fprintf(&b, "env_deny %s\n", v)
+	}
+	for _, v := range envDenyV2 {
+		fmt.Fprintf(&b, "env_deny_v2 %s\n", v)
 	}
 	fmt.Fprintf(&b, "max_frame %d\n", maxFrame)
 	fmt.Fprintf(&b, "max_stage_data %d\n", MaxStageData)

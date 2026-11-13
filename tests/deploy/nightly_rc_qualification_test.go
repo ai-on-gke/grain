@@ -46,6 +46,7 @@ var stage1Jobs = []string{
 	"go-long", "staterepo-soak", "loadtest", "scalability", "merge-stress",
 	"long-term-test", "long-sim", "postgres-stress", "tunnel-stress",
 	"ui-e2e-long", "installer-variants", "vulns", "image-vulns", "cmd-grain-stress", "upgrade-test",
+	"kvm-sandboxes", "kvm-route-stress", "real-kubernetes",
 }
 
 type nightlyWorkflowFile struct {
@@ -64,6 +65,7 @@ type nightlyWorkflowFile struct {
 		} `yaml:"workflow_dispatch"`
 	} `yaml:"on"`
 	Jobs map[string]struct {
+		Name        string            `yaml:"name"`
 		If          string            `yaml:"if"`
 		Needs       []string          `yaml:"needs"`
 		Permissions map[string]string `yaml:"permissions"`
@@ -259,6 +261,107 @@ func TestTheStage1VerdictCoversEveryRequiredJob(t *testing.T) {
 	}
 	if out, err := runStage1(retry, ""); err == nil {
 		t.Errorf("stage-1 passed a full run with skipped Stage 1 jobs:\n%s", out)
+	}
+}
+
+// scripts/candidate-gate.sh maps GitHub Actions jobs back to workflow job IDs
+// via CHECK_QUALIFICATION_JOBS (required), CHECK_QUALIFICATION_OPTIONAL
+// (judged when they ran, optional otherwise) and CHECK_QUALIFICATION_IGNORE
+// (the roll-up), so every job in nightly.yml must appear in exactly one of
+// them with its exact display name.
+func TestCandidateGateMatchesNightlyStage1Jobs(t *testing.T) {
+	wf := parseNightly(t)
+	gate := read(t, "scripts", "candidate-gate.sh")
+	header, _, ok := strings.Cut(gate, "\nusage() {")
+	if !ok {
+		t.Fatal("scripts/candidate-gate.sh has no usage() boundary after its default variables")
+	}
+	cmd := exec.Command("bash", "-c", "unset CHECK_QUALIFICATION_JOBS CHECK_QUALIFICATION_OPTIONAL CHECK_QUALIFICATION_IGNORE CANDIDATE_GATE_ADVISORY\n"+
+		header+"\nprintf '%s\\0%s\\0%s\\0%s' \"$CHECK_QUALIFICATION_JOBS\" \"$CHECK_QUALIFICATION_OPTIONAL\" \"$CHECK_QUALIFICATION_IGNORE\" \"$CANDIDATE_GATE_ADVISORY\"")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("evaluating candidate-gate.sh defaults: %v\n%s", err, out)
+	}
+	parts := strings.Split(string(out), "\x00")
+	if len(parts) != 4 {
+		t.Fatalf("unexpected candidate-gate.sh defaults output: %q", string(out))
+	}
+	parsePairs := func(label, raw string) ([]string, map[string]string) {
+		var ids []string
+		byID := map[string]string{}
+		for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			id, name, ok := strings.Cut(line, "=")
+			id, name = strings.TrimSpace(id), strings.TrimSpace(name)
+			if !ok || id == "" || name == "" {
+				t.Errorf("%s entry %q is not id=name", label, line)
+				continue
+			}
+			if prev, dup := byID[id]; dup {
+				t.Errorf("%s lists %q twice (%q and %q)", label, id, prev, name)
+				continue
+			}
+			ids = append(ids, id)
+			byID[id] = name
+		}
+		return ids, byID
+	}
+
+	gotIDs, gotNames := parsePairs("CHECK_QUALIFICATION_JOBS", parts[0])
+	slices.Sort(gotIDs)
+	wantIDs := slices.Clone(stage1Jobs)
+	slices.Sort(wantIDs)
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Errorf("CHECK_QUALIFICATION_JOBS IDs = %v, want Stage 1 jobs %v", gotIDs, wantIDs)
+	}
+
+	optIDs, optNames := parsePairs("CHECK_QUALIFICATION_OPTIONAL", parts[1])
+	slices.Sort(optIDs)
+	if !slices.Contains(optIDs, "grant-matrix-ui") {
+		t.Errorf("CHECK_QUALIFICATION_OPTIONAL IDs = %v, want grant-matrix-ui mapped while it stays outside stage-1 needs", optIDs)
+	}
+
+	ignoreIDs, ignoreNames := parsePairs("CHECK_QUALIFICATION_IGNORE", parts[2])
+	if !slices.Equal(ignoreIDs, []string{"stage-1"}) {
+		t.Errorf("CHECK_QUALIFICATION_IGNORE IDs = %v, want [stage-1]", ignoreIDs)
+	}
+
+	mapped := map[string]string{}
+	for _, group := range []struct {
+		label string
+		pairs map[string]string
+	}{
+		{"CHECK_QUALIFICATION_JOBS", gotNames},
+		{"CHECK_QUALIFICATION_OPTIONAL", optNames},
+		{"CHECK_QUALIFICATION_IGNORE", ignoreNames},
+	} {
+		for id, gotName := range group.pairs {
+			if prev, dup := mapped[id]; dup {
+				t.Errorf("job %q appears in both %s and %s", id, prev, group.label)
+				continue
+			}
+			mapped[id] = group.label
+			job, exists := wf.Jobs[id]
+			if !exists {
+				t.Errorf("%s job %q does not exist in nightly.yml", group.label, id)
+				continue
+			}
+			if job.Name != gotName {
+				t.Errorf("%s[%q] = %q, want nightly.yml jobs.%s.name %q", group.label, id, gotName, id, job.Name)
+			}
+		}
+	}
+	for id, job := range wf.Jobs {
+		if _, ok := mapped[id]; !ok {
+			t.Errorf("nightly.yml job %q (name %q) is missing from candidate-gate.sh's CHECK_QUALIFICATION_JOBS / CHECK_QUALIFICATION_OPTIONAL / CHECK_QUALIFICATION_IGNORE, so selective retries would pass its display name instead of its id", id, job.Name)
+		}
+	}
+
+	if !slices.Contains(strings.Fields(parts[3]), "gcp-smoke") {
+		t.Errorf("CANDIDATE_GATE_ADVISORY = %q, want it to retain gcp-smoke while WIF variables can skip gcp-smoke.yml", parts[3])
 	}
 }
 

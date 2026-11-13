@@ -434,6 +434,15 @@ func (s *Server) listenCarry(ctx context.Context, conn net.Conn, m *mux.Mux, id 
 		ln.Close()
 		return
 	}
+	s.mu.Lock()
+	s.listeners++
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.listeners--
+		s.mu.Unlock()
+		s.signalChanged()
+	}()
 	var mu sync.Mutex
 	open := map[net.Conn]bool{}
 	done := make(chan struct{})

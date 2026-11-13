@@ -178,12 +178,20 @@ func (c *RESTClient) EnqueuePullRequest(owner, repo string, number int, headSHA 
 	if headSHA != "" {
 		sha = headSHA
 	}
+	// The hand-off to GitHub's queue is grain's decision to merge, so it
+	// goes out under the repository's merge credential, as a direct merge
+	// would (MergeTokenSource): the pull request's timeline then names the
+	// App, not the pushing person, as the one that queued it.
+	merger, err := c.forMerge(owner, repo)
+	if err != nil {
+		return MergeQueueEntry{}, err
+	}
 	var queued struct {
 		EnqueuePullRequest *struct {
 			MergeQueueEntry *mergeQueueEntryJSON `json:"mergeQueueEntry"`
 		} `json:"enqueuePullRequest"`
 	}
-	if err := c.graphql(owner, repo, enqueuePullRequestMutation, map[string]any{
+	if err := merger.graphql(owner, repo, enqueuePullRequestMutation, map[string]any{
 		"id": pr.ID, "sha": sha,
 	}, &queued); err != nil {
 		return MergeQueueEntry{}, err

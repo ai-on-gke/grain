@@ -473,7 +473,7 @@ file backend, so a DB password *can* live in it, and already does
 | `local-api-token` (access code) | **Stay** | It is the credential *for reaching* the daemon. The host CLI, per-run `grain mcpserver` and setup.sh's group-read grant read it (`pkg/ui/localtoken.go:61-93`, `pkg/daemon/ui_server.go:250-264`). Putting it in the store would make every CLI caller need the store key, which is strictly more privilege. Rotation exists |
 | Session-cookie key | **Nothing to move** | It is derived from the access code (`pkg/ui/accesscode.go:244-247`) |
 | `registry-registration-token` | **Already in the store.** The `HubTokenFile` fallback should import on first start and warn (`pkg/daemon/config.go:896-903`) | Part of [§0](#SKP-0) |
-| `release-approval-key.pem` | **Move** (Phase 3). Cloud KMS asymmetric signing as an option on GCP | Only the daemon signs (`pkg/ui/release_approval_github.go:156`). KMS signing means the key never leaves KMS, as the hub's JWT key already does (`design/design/hub.design.md`) |
+| `release-approval-key.pem` | **Moved** (Phase 3) into secret `release-approval-key` (`pkg/releaseapproval/keystore.go`). Cloud KMS asymmetric signing as an option on GCP: the daemon's `-release-approval-kms-key <cryptoKeyVersion>` signs with `:asymmetricSign` and reports `:getPublicKey` (`pkg/releaseapproval/kms.go`) | Only the daemon signs (`pkg/ui/release_approval_github.go:156`). KMS signing means the key never leaves KMS, as the hub's JWT key already does (`design/design/hub.design.md`). Switching to or between KMS key versions changes the public key, so `GRAIN_RELEASE_APPROVAL_KEY` must be updated to match |
 | `package-cache-ca.pem`, `sandbox-access-ca.pem` | **Move** (Phase 3) | Daemon-only readers. The sandbox-access CA already has a pluggable store (`pkg/daemon/sandbox_access.go:96-99`), so add a `secrets.Store` CAStore. Either CA key lets someone on-path impersonate TLS to sandboxes |
 | `state-repo-token`, `secrets-repo-token` | **Move** (Phase 3), served to git by a credential helper that reads the store | Written as files only so git can read them (`pkg/daemon/statemanager.go:1195-1212`) |
 | `relay/token` file | **Deprecate the file fallback** (`pkg/daemon/run.go:86`); import on start | The store already holds `relay/token` |
@@ -482,6 +482,58 @@ file backend, so a DB password *can* live in it, and already does
 | Host Ed25519 key / token on remote hosts, `grit` `attest.key` | **Stay** | Each is a separate machine's or component's own identity, with its own rekey path |
 | `/run/grain-secrets` (GCE) | **Stay** | tmpfs, sourced from Secret Manager |
 | `/etc/grain/daemon.env` | **Stay, but document** that secrets belong in the store, not here | Operator-owned |
+
+### 5.1 Downgrading past the move {#SKP-5-1}
+
+The moves above ship in v3.5.0. A build from before them reads these
+credentials only from their files, and it cannot parse a KMS-wrapped key
+([§6.2](#SKP-6-2)). `GRAIN_GITHUB_CREDENTIALS=files` reverses the moves.
+That covers the credential half of a downgrade, and the
+[2026-11-11 walkthrough](../../docs/test-runs/2026-11-11-secrets-store.md)
+found every file written back, with the CAs and approval key
+byte-identical. It does **not** make the data directory openable by the
+older build. The same release raised the store schema, and the newer build
+migrates the store in place with no pre-upgrade copy. The older build then
+exits with `database schema is newer than this build` (walkthrough finding
+F2). A downgrade therefore also needs the database back at the older
+schema. In the order an operator runs it:
+
+1. **`grain state key unwrap`**, if the key is wrapped (Settings → State
+   shows it). It needs KMS decrypt.
+2. **Start the newer build once with `GRAIN_GITHUB_CREDENTIALS=files`**
+   (on a `setup.sh` install, in `/etc/grain/daemon.env`). It writes git
+   credentials, repository tokens, the CA bundles and
+   `release-approval-key.pem` back to their files and drops the store's
+   copies. Remove the variable before upgrading again.
+3. **Bring the database back to the older schema**, from the database
+   step 2 ran against, by one of two routes:
+   - **`grain upgrade rollback`** (Settings → Upgrade → Roll back), where
+     the upgrade went through the Upgrade pipeline. Its schema step
+     exports the rows, and the older build moves the newer store aside
+     (`store.schemaN-<time>`, or Postgres schema `_schemaN_<time>`). The
+     older build then rebuilds the store from that export, dropping only
+     what its schema has no place for. This route also does step 4.
+   - **Restore a database the older build wrote before the upgrade**, with
+     the daemon stopped:
+     - a `grain backup` archive's `database/grain.dump` (`pg_restore`) or
+       `database/grain.db` (SQLite);
+     - a pre-upgrade `pg_dump -Fc`;
+     - the store half (`store/` or `postgres/`) of a cold copy or disk
+       snapshot of the data directory, taken with the daemon stopped;
+     - a pre-upgrade `grain export` bundle, on SQLite only. On Postgres
+       the bundle has no rows.
+
+     Keep the current `secrets/`. Start the older build once with
+     `GRAIN_ACCEPT_STORE_BEHIND=1`, because the restored store is behind
+     the high-water mark. Never start the newer build on it again.
+
+   Grain keeps no pre-upgrade copy of its own. If neither route is
+   available, there is no supported way back to the older schema.
+4. **Start the older build** (`setup.sh` with `GRAIN_IMAGE_TAG` pinned to
+   it, or the older binary).
+
+The operator-facing version, with the commands, is
+[Downgrading to an earlier build](../../docs/host-setup.md#downgrading-to-an-earlier-build).
 
 ---
 
@@ -530,13 +582,16 @@ Why KMS wrap rather than the SM backend as the GCE/GKE default:
    `grain state key import` from the operator's escrowed plaintext. **Unwrap
    before downgrading:** an older build cannot parse the wrapped form. It
    starts, but cannot read secrets (`pkg/daemon/staterepo.go:197-207`). The
-   release notes for the phase must say so.
+   release notes for the phase must say so. A downgrade also needs the
+   database at the older schema: see [§5.1](#SKP-5-1).
 
 **Key rotation, loose-file moves and the Postgres password** are each
 reversible on their own:
 - rotation keeps the retired key ([§4.1](#SKP-4-1));
 - loose-file moves rename the file to `<file>.migrated` and delete it only one
-  release later, so rolling back is renaming it back;
+  release later. Rolling back is a start with `GRAIN_GITHUB_CREDENTIALS=files`,
+  which writes each file back from the store. The downgrade around it is
+  [§5.1](#SKP-5-1);
 - the Postgres change keeps the old password valid until the new one is
   verified ([Phase 4](#SKP-P4)).
 

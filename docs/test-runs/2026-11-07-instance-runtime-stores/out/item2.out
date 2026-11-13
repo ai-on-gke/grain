@@ -1,0 +1,50 @@
+
+== 2a. gateway + daemon A (gateway mode), three events
+2026/11/08 03:27:08 grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+{"accepted":true,"duplicate":false,"seq":1}
+
+{"accepted":true,"duplicate":false,"seq":2}
+
+{"accepted":true,"duplicate":false,"seq":3}
+
+github_webhook_cursor after A: 3
+no github-webhook-cursor.json in A's data dir (cursor lives in PostgreSQL)
+
+== 2b. daemon B on the same database while A holds the lease
+B exited after 30s; A alive=yes
+2026/11/08 03:27:12 grain daemon: PostgreSQL single-writer advisory lock (schema=public) is held by pid=155026 app="grain-daemon-writer-lock" addr=127.0.0.1/32 state=idle; waiting up to 30s for drain
+2026/11/08 03:27:42 grain daemon: acquiring PostgreSQL single-writer lock: postgres: another grain daemon holds the single-writer advisory lock (schema=public, key=3409768085759000264, held by pid=155026 app="grain-daemon-writer-lock" addr=127.0.0.1/32 state=idle)
+B's UI port: 000
+grain-daemon-writer-lock|idle
+
+== 2c. lease loss under active writes: terminate A's lock session while B waits
+{"id":"2","title":"fence target"}
+terminating A's writer-lock backend at 03:27:47.478914335
+A's lock session terminated at 2026-11-08 03:27:47.52294+00 (database clock)
+A exited (alive=no)
+2026/11/08 03:27:48 grain daemon: PostgreSQL single-writer advisory lock lost: postgres: another grain daemon holds the single-writer advisory lock: taken by pid=155398 app="grain-daemon-writer-lock" addr=127.0.0.1/32 state=idle while session was disconnected; fencing database pool and stopping imme
+2026/11/08 03:27:49 api: 500 internal [ref 5ece1fa31abd]: postgres: write refused: this daemon no longer holds the single-writer lease on the store (its lock session is disconnected)
+2026/11/08 03:27:49 grain daemon: releasing PostgreSQL single-writer advisory lock (schema=public)
+2026/11/08 03:27:49 grain daemon: PostgreSQL single-writer advisory lock lost: postgres: another grain daemon holds the single-writer advisory lock: taken by pid=155398 app="grain-daemon-writer-lock" addr=127.0.0.1/32 state=idle while session was disconnected
+2026/11/08 03:27:47 grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+writer loop status codes:      20 000      72 200       2 500 
+A writes acknowledged 200: 72 (last #72); A writes in the database: 72
+max committed A write: 72 at 2026-11-08 03:27:47.514096+00
+A writes committed after its lease was gone: 0 (none)
+B acquired at 2026/11/08 03:27:47
+2026/11/08 03:27:47 api: 500 internal [ref 9e647294904b]: postgres: write refused: this daemon no longer holds the single-writer lease on the store (lock session pid 155026 no longer holds it)
+2026/11/08 03:27:49 api: 500 internal [ref 5ece1fa31abd]: postgres: write refused: this daemon no longer holds the single-writer lease on the store (its lock session is disconnected)
+first failed A write: #73 at 03:27:47 code 500
+
+== 2d. cursor handoff to B (fresh data dir, gateway mode): no replay, then advance
+2026/11/08 03:27:49 grain daemon: long-polling verified GitHub App webhook events from http://127.0.0.1:4297
+cursor before event 4: 3
+{"accepted":true,"duplicate":false,"seq":4}
+
+cursor after B consumed event 4: 4
+
+== 2e. daemon C, a replacement VM in local-listener mode: DB cursor ahead of an empty local store
+2026/11/08 03:27:55 grain daemon: GitHub webhook cursor 4 in the database is ahead of local store /tmp/walk/i2-c/github-webhooks.jsonl (latest 0), which was replaced; starting from its beginning
+{"accepted":true,"duplicate":false,"seq":1}
+
+cursor after C's first local event (local seq 1): 1

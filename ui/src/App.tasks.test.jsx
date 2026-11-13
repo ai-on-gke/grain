@@ -214,6 +214,60 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
+  // The same tick's read can also be overtaken on the same task: asked
+  // for before a mutation landed and answered after act()'s own re-read,
+  // it put back what the mutation had just changed -- a grant just
+  // removed reappeared on the pane until the next tick (task 4828, the
+  // grant matrix's github#sandbox-repo flake).
+  it("drops a polled detail that an act's own re-read overtook", async () => {
+    vi.useFakeTimers();
+    setupApi();
+    const realImpl = api.getMockImplementation();
+    let held = ["legacy-cap"];
+    const detailOf = async (path) => ({
+      ...(await realImpl(path, { method: "GET" })),
+      capabilities: [...held],
+    });
+    let release = null;
+    let holdNext = false;
+    api.mockImplementation((path, opts) => {
+      if (path === "/api/tasks/1/capabilities" && opts?.method === "POST") {
+        held = [];
+        return Promise.resolve({});
+      }
+      if (isTaskDetailGetPath(path, "1")) {
+        if (opts?.poll && holdNext) {
+          holdNext = false;
+          // Answered now, before the removal; delivered after it.
+          const stale = detailOf(path);
+          return new Promise((resolve) => {
+            release = () => resolve(stale);
+          });
+        }
+        return detailOf(path);
+      }
+      return realImpl(path, opts);
+    });
+    window.history.replaceState(null, "", "/tasks/1");
+    render(<App />);
+    await runTimers();
+    const remove = () =>
+      screen.queryByRole("button", { name: "Remove legacy-cap" });
+    expect(remove()).toBeInTheDocument();
+
+    holdNext = true;
+    await runTimers(POLL_INTERVAL_MS);
+    expect(release).toBeTypeOf("function");
+
+    fireEvent.click(remove());
+    await runTimers();
+    expect(remove()).not.toBeInTheDocument();
+
+    release();
+    await runTimers();
+    expect(remove()).not.toBeInTheDocument();
+  });
+
   // Two opens in quick succession start two fetches, and the one the
   // user asked for last is the one the pane should land on, whichever
   // answers last.

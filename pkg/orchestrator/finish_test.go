@@ -3206,3 +3206,54 @@ func TestProcessResultRelaysAnAttachmentStagedByPath(t *testing.T) {
 		t.Fatalf("attachments = %d, want the staged contact sheet alone, byte for byte", len(attachments))
 	}
 }
+
+// A proposal naming a template carries the template's sandbox shape
+// (model.Template.Sandbox), one dimension at a time: a dimension the
+// proposal states keeps its value, and the template fills the rest.
+func TestProcessResultProposedTaskTakesItsTemplatesSandbox(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "t1", repo)
+
+	tmpl := model.Template{
+		ID:      "publish-images",
+		Name:    "Publish images",
+		Title:   "Publish the release images",
+		Body:    "Build and push them",
+		Sandbox: model.SandboxShape{CPUs: 4, DiskGB: 100},
+	}
+	if err := store.PutTemplate(ctx, tmpl); err != nil {
+		t.Fatal(err)
+	}
+
+	result := toolResult(agent.ToolCall{
+		Name: "propose_task",
+		Arguments: map[string]any{
+			"template_id":       "publish-images",
+			"sandbox_cpus":      8,
+			"sandbox_memory_mb": 16384,
+		},
+	})
+	if err := orchestrator.ProcessResult(ctx, store, client, task, result, "t1-1", baseTime); err != nil {
+		t.Fatalf("ProcessResult: %v", err)
+	}
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proposal *model.Task
+	for i := range tasks {
+		if tasks[i].ID != task.ID {
+			proposal = &tasks[i]
+		}
+	}
+	if proposal == nil {
+		t.Fatal("proposal was not filed")
+	}
+	if proposal.SandboxCPUs != 8 || proposal.SandboxMemoryMB != 16384 || proposal.SandboxDiskGB != 100 {
+		t.Errorf("sizing = cpus:%d, mem:%d, disk:%d; want 8 and 16384 from the proposal, 100 from the template",
+			proposal.SandboxCPUs, proposal.SandboxMemoryMB, proposal.SandboxDiskGB)
+	}
+}

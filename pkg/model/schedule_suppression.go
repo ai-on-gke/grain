@@ -65,6 +65,12 @@ const (
 	// must be reported ahead of the due-time check so Processes does not
 	// render it as actively polling ("on ref move").
 	SuppressedByWatchedRepoOffTarget ScheduleSuppressionReason = "watchedRepoOffTarget"
+	// SuppressedByPublishingHeld is a schedule that declares
+	// `skip-when: publishing-held` (SkipWhenPublishingHeld) whose base
+	// branch's publishing is held pending the release triage task TaskID
+	// names (BaseBranchPublishing.Gated, grain/task-4393). Held, as an
+	// overlap is: it fires once when that task closes.
+	SuppressedByPublishingHeld ScheduleSuppressionReason = "publishingHeld"
 )
 
 // ScheduleSuppression is a firing that has come due and is not
@@ -189,8 +195,12 @@ func (s *Store) SuppressedFiring(ctx context.Context, sched Schedule, now time.T
 			}
 		}
 	}
-	if sched.Overlap.Allows() || sched.NextRunAt.After(now) {
+	if sched.NextRunAt.After(now) {
 		return nil, nil
+	}
+	if sched.Overlap.Allows() {
+		// Nothing of its own holds it; its declared condition still may.
+		return s.publishingSuppression(ctx, sched, now)
 	}
 	_, workflow := workflowReviewSchedule(sched)
 	switch {
@@ -245,7 +255,9 @@ func (s *Store) SuppressedFiring(ctx context.Context, sched Schedule, now time.T
 			return sup, nil
 		}
 	}
-	return nil, nil
+	// A declared condition last, as each fireXSchedule asks it: a
+	// previous firing still going is the more useful thing to name.
+	return s.publishingSuppression(ctx, sched, now)
 }
 
 // overlapGroupRepo is the repository sched's overlap group is scoped to:
@@ -351,7 +363,8 @@ func (s *Store) OverlapGroupInFlight(ctx context.Context, sched Schedule, repo R
 		}
 	}
 
-	ids, err := s.OpenTasksWithTag(ctx, ScheduleOverlapGroupTag(repo, group))
+	groupTag := ScheduleOverlapGroupTag(repo, group)
+	ids, err := s.OpenTasksWithTag(ctx, groupTag)
 	if err != nil {
 		return nil, fmt.Errorf("checking open tasks in overlap group %q: %w", group, err)
 	}
@@ -367,6 +380,13 @@ func (s *Store) OverlapGroupInFlight(ctx context.Context, sched Schedule, repo R
 		if task != nil {
 			holder = scheduleIDFromTags(task.Tags)
 		}
+		if holder == "" {
+			// A task a scheduled suite run filed names its schedule on
+			// the run rather than in a tag.
+			if holder, err = s.ScheduleOfSuiteRunTask(ctx, id); err != nil {
+				return nil, err
+			}
+		}
 		if holder == sched.ID {
 			// Its own task: the schedule's own check has already
 			// answered for it.
@@ -379,6 +399,23 @@ func (s *Store) OverlapGroupInFlight(ctx context.Context, sched Schedule, repo R
 		}
 		return &ScheduleSuppression{Reason: SuppressedByOpenTask, TaskID: id, HeldByScheduleID: holder,
 			Detail: overlapGroupDetail(group, holder, title, SuppressedByOpenTask)}, nil
+	}
+	holders, err := s.ActiveSuiteRunSchedulesWithGroupTag(ctx, groupTag)
+	if err != nil {
+		return nil, fmt.Errorf("checking active suite runs in overlap group %q: %w", group, err)
+	}
+	for _, holder := range holders {
+		if holder == sched.ID {
+			continue
+		}
+		var title string
+		if holder != "" {
+			if h, err := s.GetSchedule(ctx, holder); err == nil && h != nil {
+				title = h.Title
+			}
+		}
+		return &ScheduleSuppression{Reason: SuppressedBySuiteRun, HeldByScheduleID: holder,
+			Detail: overlapGroupDetail(group, holder, title, SuppressedBySuiteRun)}, nil
 	}
 	return nil, nil
 }

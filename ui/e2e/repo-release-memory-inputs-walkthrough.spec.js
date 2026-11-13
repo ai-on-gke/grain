@@ -33,15 +33,21 @@ test.describe("Repository Settings, Releases, and Memory Views Inputs Walkthroug
     // Try submitting with invalid branch name containing ".."
     await branchInput.fill("feature..invalid");
     await page.getByRole("button", { name: "Add branch" }).click();
-    // Error is shown in global error banner / toast
-    await expect(page.getByText(/invalid branch name/i)).toBeVisible();
+    // The refusal is on the box itself, not a toast that goes while the
+    // refused name is still typed there (2026-11-11 walkthrough).
+    await expect(branchInput).toHaveAccessibleDescription(
+      /invalid branch name/i,
+    );
+    await expect(branchInput).toHaveAttribute("aria-invalid", "true");
 
     // Fill valid branch name and verify submission
     const testBranch = `feat-${Date.now().toString(36)}`;
     await branchInput.fill(testBranch);
+    await expect(branchInput).toHaveAttribute("aria-invalid", "false");
     await page.getByRole("button", { name: "Add branch" }).click();
     await expect(page.getByText(testBranch)).toBeVisible();
     await expect(branchInput).toBeEmpty();
+    await expect(page.getByText(/invalid branch name/i)).toHaveCount(0);
 
     // Test duplicate branch validation notice
     await branchInput.fill(testBranch);

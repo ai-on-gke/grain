@@ -184,7 +184,7 @@ func explainCreateFailure(ctx context.Context, m *iamMinter, account string, err
 		return fmt.Errorf("GCP refuses to create keys for %s at all: the organization "+
 			"policy constraints/iam.disableServiceAccountKeyCreation forbids user-managed "+
 			"service-account keys in project %s. Either have that constraint lifted for "+
-			"this project, or stop granting gcp-key here (Settings -> Capabilities, and "+
+			"this project, or stop granting https://grain.dev/capabilities/gcp#gcp-key here (Settings -> Capabilities, and "+
 			"each task's own capability picker): %w", email, project, wrapped)
 	}
 	if !isFailedPrecondition(detailOf(err, apiErr)) {
@@ -215,7 +215,7 @@ func explainCreateFailure(ctx context.Context, m *iamMinter, account string, err
 	return fmt.Errorf("%w\n\nThis is not the %d-key cap -- %s holds 0. The usual cause "+
 		"is the organization policy constraints/iam.disableServiceAccountKeyCreation, "+
 		"which forbids user-managed service-account keys in project %s; either have it "+
-		"lifted for this project, or stop granting gcp-key here (Settings -> "+
+		"lifted for this project, or stop granting https://grain.dev/capabilities/gcp#gcp-key here (Settings -> "+
 		"Capabilities).", wrapped, maxUserManagedKeys, email, project)
 }
 

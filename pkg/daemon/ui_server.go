@@ -190,11 +190,6 @@ func CheckUIRequireVerifier(cfg Config) error {
 	return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: configure that verifier first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
 }
 
-// CheckUIRequireIAP is an alias for CheckUIRequireVerifier.
-func CheckUIRequireIAP(cfg Config) error {
-	return CheckUIRequireVerifier(cfg)
-}
-
 // startUIServer serves pkg/ui.Server -- the JSON API plus the static
 // frontend -- on addr, over the same store RunCycle dispatches against,
 // returning a shutdown func the same shape startGitProxy's own is.
@@ -340,6 +335,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		DBDriver:                   cfg.DbDriver,
 		DBDSN:                      cfg.DbDSN,
 		DataDir:                    cfg.DataDir,
+		ReleaseApprovalKMSKey:      cfg.ReleaseApprovalKMSKey,
 		SourceDB:                   db,
 		// The fixed set grain ships providers for, plus the api rows appended
 		// last as a marker that this picker offers the agent API (pickerCapabilities).
@@ -441,6 +437,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		// and the New task pickers can offer what it can (grain/task-1850).
 		GitReach:               &gitproxy.Reach{Credentials: uiCredentials, API: githubTransport, Host: restClientHost(cfg.GithubHost)},
 		GitHubBranches:         githubClient,
+		MergeLoginWarnings:     mergeLoginWarnings(cfg, store, githubClient),
 		GitHubPullRequestFiles: githubClient,
 		GitHubPullRequests:     githubClient,
 		GitHubForkPullRequests: githubClient,

@@ -11,7 +11,7 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 
 - **Triggers (`on:`)**:
   - `tests.yml`: `push` on `main`, `pull_request`, `merge_group`, and `workflow_dispatch` (with optional comma-separated `jobs` input for selective job execution)
-  - `nightly.yml`: `push` of release-candidate tags (`v*-rc.*`, excluding `v*-rc.*-*` markers such as `-discarded`), `schedule` (`cron: "11 2 * * *"`, a safety net on `main`; its `idle-gate` job skips every other job, `stage-1` included, when a `vX.Y.Z-rc.N` run concluded in the last 24h) and `workflow_dispatch` (with optional comma-separated `jobs` input, e.g. `upgrade-test` for a single-job flake retry on an RC, or `kvm-route-stress`). It is Stage 1 of RC qualification (`design/playbook/releases.playbook.md`); runs on `main` and on `refs/tags/v*` are never cancelled by a later run on the same ref, and its `stage-1` job fails unless all 14 hosted Stage 1 jobs ended `success` (a skipped job fails it). A tag pushed with the default `GITHUB_TOKEN` starts no `push` workflow, so a train pushing with it must dispatch `nightly.yml` on the tag instead
+  - `nightly.yml`: `push` of release-candidate tags (`v*-rc.*`, excluding `v*-rc.*-*` markers such as `-discarded`), `schedule` (`cron: "11 2 * * *"`, a safety net on `main`; its `idle-gate` job skips every other job, `stage-1` included, when a `vX.Y.Z-rc.N` run concluded in the last 24h) and `workflow_dispatch` (with optional comma-separated `jobs` input, e.g. `upgrade-test` for a single-job flake retry on an RC, or `kvm-route-stress`). It is Stage 1 of RC qualification (`design/playbook/releases.playbook.md`); runs on `main` and on `refs/tags/v*` are never cancelled by a later run on the same ref, and its `stage-1` job fails unless all 18 hosted Stage 1 jobs ended `success` (a skipped job fails it). A tag pushed with the default `GITHUB_TOKEN` starts no `push` workflow, so a train pushing with it must dispatch `nightly.yml` on the tag instead
   - `post-reset-e2e.yml`: `schedule` (`cron: "23 5 * * *"`) and `workflow_dispatch`
   - `gcp-smoke.yml`: `schedule` (`cron: "41 4 * * *"`) and `workflow_dispatch`
 - **Concurrency (`concurrency:`)**:
@@ -41,6 +41,7 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 | `host-script-container` | `host-script container` | Builds `Dockerfile.k8s-sandbox` (without agent CLIs) and runs `TestHostScriptGrantInARealContainerSandbox` | Same commands against the runner's Docker daemon | Active (`ubuntu-latest`) |
 | `frontend` | `frontend` | Runs `make frontend`, `make fmt-frontend`, and `npm test -- --maxWorkers=4` | Same commands on `ubuntu-latest` with `actions/setup-node` and npm/`ui/node_modules` caching | Active (`ubuntu-latest`) |
 | `ui-e2e` | `ui e2e` | Builds frontend, installs Playwright Chromium (`make playwright-browsers`), runs `make test-e2e-suite`, collects `ui/test-results` | Same commands on `ubuntu-latest` with third-party apt source cleanup, `/var/cache/playwright` caching, and `actions/upload-artifact` on failure | Active (`ubuntu-latest`) |
+| `ui-ng-e2e` | `ui-ng e2e` | — (GitHub Actions only) | Builds frontend, installs Playwright Chromium, runs `make test-e2e-ng-suite` (`ui-ng/e2e`, projects desktop/phone/dark) and uploads `ui-ng/test-results` on failure. Not a required check for its first week | Active (`ubuntu-latest`) |
 | `lint` | `lint` | Runs `shellcheck` over `git ls-files -- 'scripts/*.sh' 'deploy/terraform/*.sh'` | Runs `actionlint` over `.github/workflows/` and `shellcheck` over tracked shell scripts | Active (`ubuntu-latest`) |
 | `terraform` | `terraform` | Runs `terraform fmt -check`, `init -backend=false`, and `validate` for `deploy/terraform/gcp` | Pins Terraform `1.9.8` via `hashicorp/setup-terraform` and runs the same format/init/validate steps | Active (`ubuntu-latest`) |
 | `installer-e2e` | `installer` | Assembles `grain-installer:test` via `scripts/installer-test-image.sh` and runs `./tests/installer` (`GRAIN_INSTALLER_E2E=1`) | Same commands on `ubuntu-latest` (pulls from `docker.io/grainai/*`, authenticated when `DOCKER_PAT` is set, and uses host systemd/Docker) | Active (`ubuntu-latest`) |
@@ -60,12 +61,13 @@ Because GitHub Actions only supports native `paths:` / `paths-ignore:` filters a
   - **`frontend`** (gates `frontend`): `true` when any changed file matches `ui/**`, `Makefile`, `scripts/warm-npm-cache.sh`, or `.github/workflows/tests.yml`.
   - **`lint`** (gates `lint`): `true` when any changed file matches `scripts/**/*.sh`, `deploy/terraform/**/*.sh`, or `.github/workflows/tests.yml`.
   - **`terraform`** (gates `terraform`): `true` when any changed file matches `deploy/terraform/**` or `.github/workflows/tests.yml`.
+  - **`ui-ng-e2e`** (gates `ui-ng e2e`, a job-level filter rather than a group): `true` when any changed file matches `ui-ng/**`, `ui-shared/**`, `pkg/ui/**`, `pkg/demo/**`, or the job's own plumbing -- `Makefile`, `scripts/warm-npm-cache.sh`, `ui/package.json`, `ui/package-lock.json` (whose Playwright `make playwright-browsers` installs the browser from) and `.github/workflows/tests.yml` -- or whenever `go_backend` is `true` (the /next/ specs drive the whole Go server, as they did inside `ui e2e`), so only a change to the rest of `ui/**` or `ui-hub/**` alone skips it. GitHub-only: grain CI has no counterpart job.
 - **Full suite on `push` and `merge_group`**: When `github.event_name` is `push` or `merge_group` (or when `git diff` against the PR base cannot be resolved cleanly), `scripts/github-ci-changes.sh` fails open (`true` for every group and job).
 - **Subset selection on `workflow_dispatch` (`inputs.jobs`)**: Operators or agents can pass a comma-separated list of job IDs (e.g. `go-model,postgres`) via the `jobs` workflow input to run only those jobs on a branch; leaving `jobs` empty runs all active jobs. Grain's GitHub check reader (`pkg/forge/health.go`, `HealthFrom`) treats `"skipped"` check runs as passing (`PrClean`).
 
 ### 2. Nightly Suite (`.grain/workflows/nightly.yml` -> `.github/workflows/nightly.yml`)
 
-Triggers: every pushed `vX.Y.Z-rc.N` tag, `cron: "11 2 * * *"`, and `workflow_dispatch` (optional `jobs`). The `stage-1` job (`stage 1 qualification verdict`) needs `idle-gate` and the 15 hosted jobs from `go-long` through `upgrade-test` below (KVM and `real-kubernetes` excluded until they are required) and is the run's Stage 1 verdict. Every job needs `idle-gate`, which outputs `run=false` only on a `schedule` run within 24h of an rc's Stage 1 (playbook §15), so that run skips cleanly instead of failing.
+Triggers: every pushed `vX.Y.Z-rc.N` tag, `cron: "11 2 * * *"`, and `workflow_dispatch` (optional `jobs`). The `stage-1` job (`stage 1 qualification verdict`) needs `idle-gate` and the 18 hosted jobs from `go-long` through `real-kubernetes` below (the KVM jobs and `real-kubernetes` included) and is the run's Stage 1 verdict. Every job needs `idle-gate`, which outputs `run=false` only on a `schedule` run within 24h of an rc's Stage 1 (playbook §15), so that run skips cleanly instead of failing.
 
 | Job ID | Display Name | Grain CI (`.grain/workflows/nightly.yml`) | GitHub Actions (`.github/workflows/nightly.yml`) | Hosted Runner Status |
 | :--- | :--- | :--- | :--- | :--- |
@@ -133,9 +135,9 @@ These `.grain/workflows/` files have no Actions counterpart, because they need s
 | :--- | :--- | :--- |
 | `agy-surface.yml`, `claude-surface.yml`, `codex-surface.yml` | `workflow_dispatch` | They capture each agent CLI's tool and config surface inside grain's own sandbox image and network, which is what they compare against. They hold no credential. |
 | `kvm-route-stress.yml` | `workflow_dispatch` | The grain-sandbox form of the stress run; the scheduled form is `nightly.yml`'s `kvm-route-stress` job. |
-| `live-secrets-repo.yml` | `schedule` (05:53 UTC), `workflow_dispatch` | It needs the `github-sandbox` capability: a GitHub token with Contents: write on a private repository, which is deliberately kept out of GitHub Actions secrets. **Its schedule no longer fires in a `ci_mode: github` repository**; it needs a `.grain/schedules/` entry with `grain-ci: true` (`docs/declarations.md`) to run nightly again. |
+| `live-secrets-repo.yml` | `.grain/schedules/live-secrets-repo.yml` (05:53 UTC, `grain-ci: true`), `workflow_dispatch` | It needs the `https://grain.dev/capabilities/github#sandbox-repo` capability (formerly `github-sandbox`): a GitHub token with Contents: write on a private repository, which is deliberately kept out of GitHub Actions secrets. Its own `on: schedule` cron is dropped in a `ci_mode: github` repository; it stays because a schedule can only run a workflow that answers a schedule event. The schedule file's `grain-ci: true` (`docs/declarations.md`) is what runs it nightly. |
 
-A scheduled grain CI workflow in a `ci_mode: github` repository does not run by itself. `grain health` reports any scheduled workflow or schedule that has gone more than twice its cadence without a run, by name (`stale-schedules`).
+A scheduled grain CI workflow in a `ci_mode: github` repository does not run by itself; `tests/deploy/scheduled_workflows_test.go` requires a `grain-ci: true` schedule for every `.grain/workflows` file that declares `on: schedule`. `grain health` reports any scheduled workflow or schedule that has gone more than twice its cadence without a run, by name (`stale-schedules`).
 
 ## What Was Emulated from the Grain Sandbox Image (`Granulefile`)
 
@@ -144,8 +146,8 @@ Grain CI runs jobs inside a pre-provisioned VM/container image built from `Granu
 1. **Grain Dialect Keys Removed**:
    - Grain-only keys (`capabilities:`, `optional-capabilities:`, `sandbox:`, `infrastructure:`, `guest-cache:`, and job-level `paths:` / `paths-ignore:` / `artifacts:`) are removed or translated to standard GitHub Actions equivalents (`actions/upload-artifact`).
 2. **Checkout and Toolchains (`actions/checkout`, `actions/setup-go`, `actions/setup-node`)**:
-   - Grain sandboxes start with the repository pre-checked-out and Go `1.26.10` + Node.js `20` pre-installed.
-   - Every GitHub Actions job checks out the repository with `actions/checkout` (`persist-credentials: false`; jobs that invoke `scripts/export-source.sh` or inspect git tags/history pass `fetch-depth: 0`), installs Go from `go.mod`'s `toolchain` directive (`go1.26.10`) via `actions/setup-go`, and installs Node.js `20` via `actions/setup-node` where needed.
+   - Grain sandboxes start with the repository pre-checked-out and Go `1.26.11` + Node.js `20` pre-installed.
+   - Every GitHub Actions job checks out the repository with `actions/checkout` (`persist-credentials: false`; jobs that invoke `scripts/export-source.sh` or inspect git tags/history pass `fetch-depth: 0`), installs Go from `go.mod`'s `toolchain` directive (`go1.26.11`) via `actions/setup-go`, and installs Node.js `20` via `actions/setup-node` where needed.
    - Jobs that run Go tests launching `git` subprocesses with scrubbed environments configure system and global `git config user.name` and `user.email`.
 3. **Explicit Caching (`actions/cache`)**:
    - Go jobs cache `~/go/pkg/mod` and `~/.cache/go-build` keyed on `hashFiles('go.sum', 'third_party/granule/go.sum')`.
@@ -235,15 +237,15 @@ The cost is that a superseded commit has no `docker.io/grainai/*:sha-<short>` im
 
 On grain CI these are methods of the in-process release server (`https://grain.dev/capabilities/release#package-publish`, `#image-signing`, `#registry-push`; the bare names are one-release aliases, see [ci-capabilities.md](ci-capabilities.md)). The names below are those grain CI capabilities; GitHub Actions has no capability grants and maps each to secrets and permissions instead.
 
-1. **`package-publish`**:
+1. **`release#package-publish`**:
    - Mapped via `scripts/configure-dockerhub-auth.sh` to `PACKAGE_PUBLISH_REGISTRY` (default `docker.io`), `PACKAGE_PUBLISH_USERNAME` (from `vars.DOCKERHUB_USERNAME`, default `grainai`), and `PACKAGE_PUBLISH_TOKEN` (from `secrets.DOCKER_PAT`). Missing `DOCKER_PAT` or a failed `docker login` fails fast before any build or push step runs.
    - In `release-train.yml`, `scripts/configure-dockerhub-auth.sh --write-files` also writes `/home/debian/.package-publish-{registry,username,token}` (`chmod 600`) so the pre-flight `Require the publishing credential` check fails fast before tagging any git ref if no registry token is configured.
    - In `release.yml`'s `Prune old package versions` step, `cmd/ghcr-prune` authenticates against the Docker Hub v2 API with `DOCKER_PAT` and `DOCKERHUB_USERNAME` (default `grainai`), while retaining `-registry=ghcr.io` compatibility when overridden.
-2. **`image-signing` (optional capability)**:
+2. **`release#image-signing` (optional capability)**:
    - Mapped to `secrets.IMAGE_SIGNING_KEY` (and optional `secrets.IMAGE_SIGNING_PASSWORD`).
    - When `secrets.IMAGE_SIGNING_KEY` is set, the workflow installs `cosign` (if not already present), writes the key to `$RUNNER_TEMP/image-signing.key` (`chmod 600`), and exports `IMAGE_SIGNING_KEY` and `IMAGE_SIGNING_PASSWORD_FILE` for `scripts/release-images.sh`.
    - When `secrets.IMAGE_SIGNING_KEY` is unset, `scripts/release-images.sh` logs `WARNING: IMAGE_SIGNING_KEY is not set; publishing ... UNSIGNED` and continues, matching `.grain/workflows`.
-3. **`repo-write:ai-on-gke/grain` and `release-gate-read`**:
+3. **`repo#write` `{repo: ai-on-gke/grain}` and `api#release-gate-read`** (formerly `repo-write:ai-on-gke/grain` and `release-gate-read`):
    - In `release-train.yml` (always dry since the grain-task train took over) mapped to `permissions: contents: write`, `actions/checkout` with `persist-credentials: true` and `token: ${{ secrets.REPO_WRITE_TOKEN || secrets.GITHUB_TOKEN }}`, plus the optional `GRAIN_API_URL` (`vars.GRAIN_API_URL`) and `GRAIN_API_TOKEN` (`secrets.GRAIN_API_TOKEN`). The live train is the grain task from `.grain/templates/release-train.yml`, which pushes with its template's `push:` grant.
    - **What `scripts/release-from-trunk.sh` reads and writes**:
      - **Git repository (`origin`)**:
@@ -288,6 +290,7 @@ Configure the following in `ai-on-gke/grain` under **GitHub Repository -> Settin
 | `RELEASE_IMAGES` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional | Set to `off` only if `release-from-trunk.sh` should skip invoking `scripts/release-images.sh`; leave unset for normal operation. |
 | `RELEASE_NOTES_TASK` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional | Set to `off` to skip filing the `release-notes` task when staging `vX.Y.0-pending`; leave unset for normal operation. |
 | `RELEASE_NOTIFY` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional | Set to `off` to skip sending the `release-pending` notification; leave unset for normal operation. |
+| `GRAIN_MERGE_LOGINS` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | Optional (unset: only forge-approved merges publish) | Comma-separated forge logins grain merges as. `scripts/release-images.sh`'s reviewed-merge check (`cmd/reviewed-merge`) publishes an image for a commit merged by one of them without asking for a review, so it must name only an identity no person merges as by hand: a GitHub App's `<slug>[bot]` that grain merges through (see [A merge identity of grain's own](#a-merge-identity-of-grains-own)), never a person's login. `grain health` warns when it names a user account. |
 | `RELEASE_QUALIFICATION_APP` | Variable | Settings -> Secrets and variables -> Actions -> **Variables** | **Required** for an rc to pass Stage 2, unless `scripts/release.conf` sets it | Slug or numeric id of the GitHub App grain's forge connection posts the `grain/release-qualification` and `grain/rc-hold` check runs as. `scripts/candidate-gate.sh` judges only that app's check run and reports a same-named one from any other app (an Actions workflow with `checks: write`, another installed app) as `IGNORED`. Empty here, `scripts/release-from-trunk.sh` reads `RELEASE_QUALIFICATION_APP` from `scripts/release.conf` as `main` has it; unset in both, it trusts no check run and the train stops at Stage 2 rather than guess. Set explicitly to `none` (for a forge connection that is a personal access token, which cannot post check runs), it trusts no check run and skips Stage 2, so Stage 1 (`nightly.yml`) alone qualifies an rc, and no `grain/rc-hold` holds the next one. It is never `none` by default. A numeric id also narrows the GitHub query (`app_id=`). |
 
 ### Setting Up Workload Identity Federation for `gcp-smoke.yml`
@@ -323,6 +326,153 @@ Re-running `./scripts/setup-gcp-smoke-wif.sh <gcp-project-id>` is safe and conve
 6. **Cost and cleanup**:
    - **Per-run cost**: ~$0.01–$0.04 per ~14-minute run (`e2-micro` + 10 GB disk for ~90s is <$0.001; a 1->2 node `e2-medium` zonal GKE cluster with 50 GB `pd-balanced` disks for ~12m is ~$0.012 in compute/disk, plus $0 GKE cluster fee under the billing account's single free zonal cluster tier or ~$0.025 without it). Running once daily costs ~$0.40–$1.20/month (plus ~$1.00/month if `gcp-smoke-nat` was created in a project with no existing Cloud NAT). WIF pools, providers, service accounts, and firewall rules cost $0.
    - **Cleanup on failure**: both `scripts/gce-vm-smoke.sh` and `scripts/gke-cluster-smoke.sh` register `trap cleanup EXIT` to delete `$VM` (and verify its auto-delete boot disk is gone) and `$CLUSTER` (including node VMs and disks) on normal exit, `set -e` errors, or interrupts. As a second layer, `.github/workflows/gcp-smoke.yml` runs `Delete anything left behind` under `if: always() && steps.auth.outcome == 'success'`, sweeping both any `gce-smoke-*` VM or `gke-smoke-*` cluster created by the current workflow run and any stale `labels.purpose=gce-vm-smoke` / `resourceLabels.purpose=gke-cluster-smoke` resources older than 2 hours.
+
+## A merge identity of grain's own
+
+Task 4386. The reviewed-merge gate (`scripts/release-images.sh`
+`check_reviewed_merge`, `pkg/reviewedmerge`, `cmd/reviewed-merge`;
+[image-signing.md](image-signing.md)) publishes an image only for a commit
+that reached `main` through a reviewed merge: approved on the forge by
+somebody other than its author, or merged by a login in
+`vars.GRAIN_MERGE_LOGINS`. The second path is only as good as the
+identity behind those logins. When grain's git connection is a person's
+token, grain merges *as that person*: the forge's `merged_by` reads the
+same login for grain's merges and for the merges the person makes by hand,
+so trusting grain means trusting every hand merge too.
+
+### The options
+
+| | (a) A GitHub App for everything | (b) A dedicated machine user | (c) The person's token for clone and push, an App for merges |
+| :--- | :--- | :--- | :--- |
+| What `merged_by` reads | `<slug>[bot]` | the machine user's login | `<slug>[bot]` |
+| Can a person merge by hand as it? | Only by extracting the App's private key, which the App's settings and the audit log record | Yes: whoever holds its password, 2FA or a token signs in as it | As (a) |
+| GitHub side | Create an App, install it on the repository | A second account (GitHub's terms allow one free machine account per person), an organization seat, its own PAT and 2FA | As (a), with the App doing only merges |
+| `cla/google` | Commits and pull requests would be the App's: grain's run identity follows its credential (`<slug>[bot] <id+slug[bot]@users.noreply.github.com>`, [git-hosts.md](git-hosts.md)), and a bot author is not CLA-covered unless the CLA check is told about it. **Breaks the check** without that. | Its commits need its own CLA coverage | **Unchanged**: commits are still authored, and pull requests opened, by the CLA-covered person's credential. `cla/google` reads commit authors, not who merged. |
+| Branch protection and rulesets | The App needs `contents: write` and `pull_requests: write`; it is held to required reviews and checks like anybody, and must be on the "restrict who can push" allowance where that is on. Give it **no** ruleset bypass. | The same, as a user | As (a) |
+| `grain health` | quiet | still warns: it is a user account, and the gate cannot tell it from a person | quiet |
+
+**Recommendation: (c).** It is the smallest change that gives the gate an
+identity no person merges as, and it leaves `cla/google`, commit
+attribution and pull request authorship exactly as they are. (a) is (c)
+plus moving clone and push to the App, which only makes sense once the CLA
+check accepts the App's commits. (b) replaces "grain is a person" with
+"grain is an account somebody can sign in to", which is the problem
+again, and costs a seat.
+
+What (c) does not remove: anyone holding the App's private key, or a task
+granted the App's credential as a `repo#credential`, can merge as the App.
+Keep the key only in grain's credential store, and never grant the App's
+credential to a task.
+
+### What grain does
+
+A git connection may name a **merge credential**: `merge_credential`
+beside `credential` (`model.TeamGitConnection.MergeCredential`, stored in
+`grain_config.git_connections`' JSON, so no schema change). For a
+repository whose connection names one:
+
+- the merge (`PUT /repos/{owner}/{repo}/pulls/{n}/merge`) and the hand-off
+  to GitHub's own merge queue (`enqueuePullRequest`) go out under the merge
+  credential's token, and nothing else does: cloning, pushing, opening and
+  commenting on the pull request and reading checks stay on `credential`
+  (`github.MergeTokenSource`, `credentialTokenSource.MergeTokenFor`);
+- a merge credential that gives no token (an App whose installation token
+  cannot be minted, a credential not in the store, or a connection whose
+  `credential` sends its forge calls through its host's own tool, which
+  authenticates every API call as that tool's login whatever token grain
+  hands it) **refuses the merge**
+  (`github.ErrNoMergeToken`, shown as the merge queue's refusal). grain
+  never falls back to merging under the push credential: that would be
+  the merge-as-a-person the setting is there to stop;
+- after each merge the merge queue records who merged it as a
+  `merged-as` task event, with the forge's `merged_by` and the merge
+  credential used ("`acme/widgets#7 merged by grain-merge[bot] through
+  merge credential grain-merge (grain-merge[bot])`"), in the task's
+  pipeline change feed;
+- `grain health` (and `GET /api/sandboxes`' `mergeLoginWarnings`) warns
+  when a target repository's `GRAIN_MERGE_LOGINS` variable, or the
+  daemon's `-upgrade-reviewed-merge-logins`, names a GitHub **user**
+  account (`GET /users/{login}` type `User`) rather than an App's
+  `<slug>[bot]`. It reads the variable with the repository's push
+  credential, which needs Actions variables read (a classic token's `repo`
+  scope); a read it cannot make is logged, not warned about. An
+  organization-level variable is not read. One check stands for 15
+  minutes; the health read that finds it stale makes the next one.
+
+A repository's own `RepoConfig.GitCredential` override changes what it
+pushes with, not what it merges with: the merge credential comes from the
+deployment connection that covers the repository.
+
+### Switching a repository's merges to an App (operator steps)
+
+The order matters. The gate checks every first-parent commit since the
+last published image, so commits merged as the person before the switch
+still need the person's login in `GRAIN_MERGE_LOGINS` until an image
+whose chain covers them has published.
+
+1. **Create the App.** GitHub -> your account (or the organization) ->
+   Settings -> Developer settings -> GitHub Apps -> **New GitHub App**.
+   Name it (its slug, say `grain-merge`, gives the login
+   `grain-merge[bot]`); untick **Webhook -> Active**; set **Repository
+   permissions**: *Contents: Read and write*, *Pull requests: Read and
+   write*, *Metadata: Read-only*, and *Workflows: Read and write* (GitHub
+   refuses an App's merge of a pull request that changes
+   `.github/workflows/*` without it). Nothing else. **Where can this
+   GitHub App be installed?** -> *Only on this account*. Create it, note
+   the **App ID**, and under **Private keys** generate one (a `.pem`
+   download).
+2. **Install it** on the repository only: the App's page -> **Install
+   App** -> the owner -> *Only select repositories* -> the repository.
+   The installation's URL ends in its **installation ID**.
+3. **Let it merge where protection restricts who may.** Repository ->
+   Settings -> Branches (or Rules -> Rulesets) -> the rule for `main` and
+   `release/v*`: if *Restrict who can push to matching branches* (or a
+   ruleset's *Restrict updates*) is on, add the App to the allowed
+   actors. Leave required reviews and required checks as they are, and do
+   **not** add the App to any bypass list.
+4. **Store the App's credential in grain**, as material only (not as a
+   connection): write `secrets/github/grain-merge.app.json` under the
+   daemon's data directory, mode `0600`:
+
+   ```json
+   {"app_id": "<App ID>", "installation_id": "<installation ID>",
+    "private_key": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"}
+   ```
+
+   and delete the downloaded `.pem`.
+5. **Point the repository's connection's merges at it.** With a seed file
+   naming the connection the repository already uses (its `credential`
+   unchanged) plus `merge_credential`:
+
+   ```yaml
+   git:
+     - credential: <the push credential the repository uses now>
+       scope: <owner>/<repo>
+       merge_credential: grain-merge
+   ```
+
+   run `grain connections -data-dir DIR import seed.yaml`. An entry
+   replaces the connection for the same host and scope, so naming the
+   scope the repository's connection already has changes only its merges.
+   (A repository covered only by an owner-wide or host-default connection
+   gets the `merge_credential` on that entry instead, which switches every
+   repository it covers.) Then restart the daemon, which reads a new
+   credential file at start.
+6. **Check the first merge.** The next pull request grain merges there
+   shows `merged by grain-merge[bot]` on GitHub, and its task has a
+   `merged-as` event saying so. A merge refused with "gave no token"
+   means the App's ID, installation or key is wrong.
+7. **Trust the App in the gate**: set `GRAIN_MERGE_LOGINS` to
+   `grain-merge[bot],<person>` (Settings -> Secrets and variables ->
+   Actions -> Variables).
+8. **Once an image built after the switch has published, drop the
+   person**: set `GRAIN_MERGE_LOGINS=grain-merge[bot]`. From then on the
+   person's hand merges need a forge approval like anybody's, and `grain
+   health` stops warning. A deployment that also passes
+   `-upgrade-reviewed-merge-logins` changes that flag the same way.
+
+The same App can be the one `RELEASE_QUALIFICATION_APP` names, if grain
+is given it for posting check runs too; that is a separate decision.
 
 # Reading Actions runs from an agent
 

@@ -1006,6 +1006,65 @@ var Migrations = []Migration{
 			"ALTER TABLE `auto_upgrade_release` ADD COLUMN `succeeded_at` DATETIME NULL",
 		},
 	},
+	{
+		Version: 140,
+		Description: "add integration_event's notification and host-script approval columns, for GET /api/events's " +
+			"notification.* and local_script.* events (grain/task-4284)",
+		// integration_event came in with no rung of its own, so a store
+		// from before it has none to alter: create it first (as it now
+		// stands), and every ADD COLUMN after passes over a column it
+		// already has.
+		Statements: []string{
+			integrationEventTable,
+			"ALTER TABLE `integration_event` ADD COLUMN `notification_id` INTEGER NOT NULL DEFAULT 0",
+			"ALTER TABLE `integration_event` ADD COLUMN `subject` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `severity` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `summary` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `approval_id` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `script` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `integration_event` ADD COLUMN `decision` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version:     141,
+		Description: "add schedule.skip_when, a condition such as held base-branch publishing that holds a schedule's firings (grain/task-4393)",
+		Statements: []string{
+			"ALTER TABLE `schedule` ADD COLUMN `skip_when` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 142,
+		Description: "host-qualify the owner column of qualification_config, qualification_item, " +
+			"qualification_item_depends_on and scheduled_workflow_run (StoredOwner) for rows a schedule " +
+			"or a target repo places off the default host (grain/task-4335)",
+		Up: migrateStoredOwners,
+	},
+	{
+		Version:     143,
+		Description: "add template.sandbox, the sandbox shape every task filed from a template asks for (grain/task-4591)",
+		Statements: []string{
+			"ALTER TABLE `template` ADD COLUMN `sandbox` TEXT NOT NULL DEFAULT ''",
+		},
+	},
+	{
+		Version: 144,
+		Description: "take the copies of a template's admission, hosting and grants off the schedules that fire it, " +
+			"leaving what each schedule adds to its template (grain/task-4607)",
+		Up: migrateScheduleOwnSettings,
+	},
+	{
+		Version: 145,
+		Description: "host-qualify the owner column of release, release_candidate and qualification_run " +
+			"(StoredOwner) for repositories a target repo places off the default host (grain/task-4489)",
+		Up: migrateReleaseOwners,
+	},
+	{
+		Version:     146,
+		Description: "add grain_config.qa, the deployment-wide quality control engine and PR rollout configuration",
+		Statements: []string{
+			"ALTER TABLE `grain_config` ADD COLUMN `qa` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99

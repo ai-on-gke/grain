@@ -1184,6 +1184,7 @@ func TestExternalCIWaitVerdictsSharedFaultsZeroWaitCreditAndExitCodes(t *testing
 // same repository, branch and commit, with the job cache bypassed.
 func TestExternalCIRetriggerRunsUncachedFailedJobs(t *testing.T) {
 	var got []ui.CIRunRequest
+	var reruns []ui.ActionsRerunRequest
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -1194,6 +1195,13 @@ func TestExternalCIRetriggerRunsUncachedFailedJobs(t *testing.T) {
 			run.ID, run.Provider = "gh", "github"
 			run.Actions = &ci.ActionsRun{RunID: 1}
 			json.NewEncoder(w).Encode(run)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/ci/runs/gha:acme:widgets:42/rerun":
+			var req ui.ActionsRerunRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			reruns = append(reruns, req)
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(ui.ActionsRerunResult{Repo: "acme/widgets", Head: "0123456789abcdef", Bound: 3,
+				Runs: []ui.ActionsRerunRun{{ID: "gha:acme:widgets:42", Workflow: "Tests", Mode: "failed", Attempt: 2}}})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/ci/runs":
 			var req ui.CIRunRequest
 			json.NewDecoder(r.Body).Decode(&req)
@@ -1236,6 +1244,20 @@ func TestExternalCIRetriggerRunsUncachedFailedJobs(t *testing.T) {
 	got = nil
 	if _, err := ciCLI(t, handler, "retrigger", "gh"); err == nil || len(got) != 0 {
 		t.Errorf("a GitHub Actions run is not grain CI's to rerun: err=%v, started %+v", err, got)
+	}
+	// A GitHub Actions run named by its gha: id is re-run on GitHub, as
+	// its next attempt, through POST /api/ci/runs/{id}/rerun.
+	out, err = ciCLI(t, handler, "retrigger", "gha:acme:widgets:42", "-jobs", "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reruns) != 1 || !slices.Equal(reruns[0].Jobs, []string{"go"}) || len(got) != 0 {
+		t.Errorf("retrigger gha:... asked for %+v (and started %+v), want a re-run of job go", reruns, got)
+	}
+	for _, s := range []string{"gha:acme:widgets:42 (Tests)", "attempt 2 of at most 4", `grain ci wait gha:acme:widgets:42"`} {
+		if !strings.Contains(out, s) {
+			t.Errorf("retrigger gha:... does not say %q:\n%s", s, out)
+		}
 	}
 	if _, err := ciCLI(t, handler, "retrigger"); err == nil || !strings.Contains(err.Error(), "grain ci retrigger <run-id>") {
 		t.Errorf("a retrigger with no run should say so: %v", err)

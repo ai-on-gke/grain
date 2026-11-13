@@ -242,6 +242,9 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 			}
 			summary := t.QuestionSummary
 			if summary == "" {
+				summary = t.NoteSummary
+			}
+			if summary == "" {
 				summary = "reply to run it again, or acknowledge to close it"
 			}
 			// A question's item links to the question itself, not just
@@ -284,7 +287,8 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 		if n.Severity != model.NotificationWarning && n.Severity != model.NotificationCritical {
 			continue
 		}
-		if heldTasks[n.TaskID] && n.Subject == model.HumanReviewNotificationSubject(n.TaskID) {
+		if heldTasks[n.TaskID] && (n.Subject == model.HumanReviewNotificationSubject(n.TaskID) ||
+			n.Subject == model.NotificationSubject(model.FamilyMergeNeedsPerson, n.TaskID)) {
 			// The merge-held item already says it, with the reason.
 			continue
 		}

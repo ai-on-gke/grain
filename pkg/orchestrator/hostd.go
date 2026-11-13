@@ -53,7 +53,10 @@ var _ HostdLister = hostd.Client{}
 // with that reason.
 //
 // A hostd that does not answer decides nothing: its rows are left to
-// RecoverOrphanedRuns, and the error says why.
+// RecoverOrphanedRuns, and the error, a *HostdAwayError, says why and
+// names them, so their processes -- which hostd keeps running until
+// their own deadlines -- can be cancelled once it is back
+// (CancelWhenBack).
 func RecoverHostd(ctx context.Context, store *model.Store, client github.Client, hd HostdLister, build string,
 	now time.Time, adopted func(runhost.Adoption, int64) bool) (runhost.Plan, error) {
 	return RecoverHostdRuns(ctx, store, client, hd, build, now, nil, adopted)
@@ -70,20 +73,31 @@ func RecoverHostdRuns(ctx context.Context, store *model.Store, client github.Cli
 	if err != nil {
 		return runhost.Plan{}, fmt.Errorf("orchestrator: reading host cursors: %w", err)
 	}
+	runs, err := store.LiveRuns(ctx)
+	if err != nil {
+		return runhost.Plan{}, fmt.Errorf("orchestrator: reading live runs: %w", err)
+	}
+	// away is the error for a hostd that did not answer: the live runs
+	// driven through it this pass decides nothing about, for
+	// CancelWhenBack to cancel once it does.
+	away := func(err error) error {
+		var left []string
+		for _, r := range runs {
+			if _, ok := cursors[r.ID]; ok && (owns == nil || owns(r.ID)) {
+				left = append(left, r.ID)
+			}
+		}
+		return &HostdAwayError{Runs: left, Err: err}
+	}
 	peer, err := hd.Hello(ctx)
 	if err != nil {
-		return runhost.Plan{}, fmt.Errorf("orchestrator: the host agent did not answer hello, so the %d run(s) driven "+
-			"through it are recovered as any other: %w", len(cursors), err)
+		return runhost.Plan{}, away(fmt.Errorf("orchestrator: the host agent did not answer hello: %w", err))
 	}
 	var procs []hostd.Process
 	if peer.SupportsAttach() {
 		if procs, err = hd.Processes(ctx); err != nil {
-			return runhost.Plan{}, fmt.Errorf("orchestrator: listing the host agent's processes: %w", err)
+			return runhost.Plan{}, away(fmt.Errorf("orchestrator: listing the host agent's processes: %w", err))
 		}
-	}
-	runs, err := store.LiveRuns(ctx)
-	if err != nil {
-		return runhost.Plan{}, fmt.Errorf("orchestrator: reading live runs: %w", err)
 	}
 	named := map[string]bool{}
 	for _, p := range procs {
@@ -139,4 +153,89 @@ func RecoverHostdRuns(ctx context.Context, store *model.Store, client github.Cli
 			"adopt the run (see its journal for why)", a.Host.Name))
 	}
 	return plan, errors.Join(errs...)
+}
+
+// HostdAwayError is RecoverHostdRuns's error for a hostd that did not
+// answer, hello or the listing after it: Runs are the live runs driven
+// through it that the pass decided nothing about. They are left to
+// RecoverOrphanedRuns, which finishes them as interrupted and re-queues
+// them, while their processes may still be running in hostd -- each
+// holding a host CLI slot, beside the run's next attempt -- until
+// CancelWhenBack cancels them.
+type HostdAwayError struct {
+	Runs []string
+	Err  error
+}
+
+func (e *HostdAwayError) Error() string {
+	return fmt.Sprintf("%v; the %d run(s) driven through it are recovered as any other, and their processes "+
+		"cancelled once it answers again", e.Err, len(e.Runs))
+}
+
+func (e *HostdAwayError) Unwrap() error { return e.Err }
+
+// hostdBackPoll bounds how long CancelWhenBack waits between two tries
+// at a hostd that has not answered yet.
+var hostdBackPoll = 5 * time.Second
+
+// CancelWhenBack is the far side of a HostdAwayError: once hd answers
+// hello again and lists its processes, it cancels each detached process
+// of one of runs that is no longer live -- the adoption pass gave up on
+// it, and RecoverOrphanedRuns finished it -- so none runs on to its own
+// deadline, and an exited one's spool is dropped. reconnected, when set, blocks until hd is reachable again
+// or ctx is done (hostd.Remote.WaitHostd for a hostd that dials in);
+// nil polls. It returns the processes it cancelled, and gives up when
+// ctx is done.
+func CancelWhenBack(ctx context.Context, store *model.Store, hd HostdLister, runs []string,
+	reconnected func(ctx context.Context) error) ([]string, error) {
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	abandoned := map[string]bool{}
+	for _, r := range runs {
+		abandoned[r] = true
+	}
+	var procs []hostd.Process
+	wait := 100 * time.Millisecond
+	for {
+		if reconnected != nil {
+			_ = reconnected(ctx)
+		}
+		peer, err := hd.Hello(ctx)
+		if err == nil && peer.SupportsAttach() {
+			procs, err = hd.Processes(ctx)
+		}
+		if err == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("orchestrator: the host agent did not answer again, so the processes of %d "+
+				"abandoned run(s) may still be running there: %w", len(runs), ctx.Err())
+		case <-time.After(wait):
+		}
+		wait = min(wait*2, hostdBackPoll)
+	}
+	live, err := store.LiveRuns(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("orchestrator: reading live runs: %w", err)
+	}
+	for _, r := range live {
+		delete(abandoned, r.ID)
+	}
+	var cancelled []string
+	var errs []error
+	for _, p := range procs {
+		if !p.Detached || !abandoned[p.Run] {
+			continue
+		}
+		log.Printf("orchestrator: cancelling grain hostd process %s (task %s, run %s): the host agent did not answer "+
+			"at startup, so its run was finished as interrupted", p.ID, p.Task, p.Run)
+		if err := hd.Cancel(ctx, p.ID); err != nil {
+			errs = append(errs, fmt.Errorf("orchestrator: cancelling the host agent process %s: %w", p.ID, err))
+			continue
+		}
+		cancelled = append(cancelled, p.ID)
+	}
+	return cancelled, errors.Join(errs...)
 }

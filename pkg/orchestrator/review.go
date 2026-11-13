@@ -101,6 +101,9 @@ func SyncReviews(ctx context.Context, store *model.Store, now time.Time) error {
 	if err := closeObsoleteReviews(ctx, store, now); err != nil {
 		errs = append(errs, err)
 	}
+	if err := releaseStaleReviewDependencies(ctx, store, now); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -495,8 +498,11 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 			task.ID, tmpl.Admission, tmpl.ID, admission)
 	}
 	reviewTask := model.Task{
-		ID:        id,
-		Intent:    model.IntentImplement,
+		ID:     id,
+		Intent: model.IntentImplement,
+		// A review gates the change it reviews, so it runs at that
+		// change's priority, and never below model.ReviewPriorityFloor.
+		Priority:  model.ReviewPriority(task),
 		Title:     title,
 		Body:      body,
 		Admission: admission,

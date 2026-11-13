@@ -137,6 +137,10 @@ type GitProxy struct {
 	// review-comment, and grain git revert's revert-info
 	// (cli_actions.go). Nil answers each of them 501.
 	CLIActions CLIActions
+	// ReportChecker, when set, answers POST /cli/report/check (grain
+	// report check): a draft closing report checked against what the run
+	// has read so far. Nil answers it 501.
+	ReportChecker CLIReportChecker
 	// WaitCredit, when set, credits the time /cli/ci/wait and
 	// /cli/ci/run-job block back to the run's wall-clock deadline.
 	WaitCredit   CLIWaitCreditor

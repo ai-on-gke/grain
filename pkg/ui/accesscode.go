@@ -1053,11 +1053,19 @@ func localReturnPath(next string) string {
 //
 // It also fills in the form's return path from the address bar, which
 // is the deep link the browser was trying to open, unless the page
-// already carries one (a wrong code shown it again).
+// already carries one (a wrong code shown it again). The deep link's
+// #fragment (a Settings card, /settings/agents#external-agents) never
+// reaches the server, so it rides on the form's action instead: a
+// redirect whose Location has no fragment keeps the request's, which
+// puts the browser back on the card it asked for.
 const accessCodeScript = `(function () {
+  var form = document.querySelector("form");
   var next = document.querySelector('form input[name="` + accessReturnField + `"]');
   if (next && !next.value && window.location.pathname.indexOf("/api/") !== 0) {
     next.value = window.location.pathname + window.location.search;
+  }
+  if (form && window.location.hash) {
+    form.action = form.getAttribute("action").split("#")[0] + window.location.hash;
   }
 })();
 fetch("/api/auth/access-code", {credentials: "same-origin"})

@@ -17,6 +17,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -217,5 +218,32 @@ func TestHTTPClientRetryStopsWithTheContext(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
 		t.Errorf("took %s, want about the context's 100ms", elapsed)
+	}
+}
+
+// roundTripFunc is an http.RoundTripper made of a function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// A context that runs out during an attempt still comes back as the
+// context's error, even when the transport's own error -- a refused
+// dial here, as a loaded machine can return at the deadline -- does not
+// wrap it.
+func TestHTTPClientRetryReportsTheContextWhenItEndsMidAttempt(t *testing.T) {
+	c := NewHTTPClient("http://127.0.0.1:1")
+	c.RetryPolicy = &RetryPolicy{Budget: time.Minute, Initial: 10 * time.Millisecond, Max: 20 * time.Millisecond}
+	c.HTTP = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}
+	})}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := c.do(ctx, http.MethodGet, "/api/sandboxes", nil, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want the context's deadline", err)
+	}
+	if !strings.Contains(fmt.Sprint(err), "connection refused") {
+		t.Errorf("err = %v, want the last attempt's error kept in the message", err)
 	}
 }

@@ -82,6 +82,33 @@ default branch" is not the assurance "this commit is already merged" is, so
 there is no task-path equivalent of that gate to apply. Settings shows both
 capabilities as **CI only** rather than as something a task could be given.
 
+## Spelling a job's capabilities
+
+Write a job's `capabilities:` and `optional-capabilities:` as canonical
+capability references, as grain's own `.grain/workflows` do:
+
+| Grant | Canonical spelling in a workflow | Retired spelling still read |
+| --- | --- | --- |
+| publish packages | `https://grain.dev/capabilities/release#package-publish` | `package-publish` (one release) |
+| sign images | `https://grain.dev/capabilities/release#image-signing` | `image-signing` (one release) |
+| push to a registry | `https://grain.dev/capabilities/release#registry-push` | `registry-push` (one release) |
+| temporary GitHub repository | `https://grain.dev/capabilities/github#sandbox-repo` | `github-sandbox` (one release) |
+| the release gate's API reads | `https://grain.dev/capabilities/api#release-gate-read` | `release-gate-read`, `api:release-gate-read` (one release) |
+| an agent API scope or preset | `https://grain.dev/capabilities/api#<scope>` | `api:<scope>` (one release) |
+| repository access | `{capability: https://grain.dev/capabilities/repo#write, with: {repo: <owner>/<repo>}}` (or `#read`) | `repo-write:<owner>/<repo>`, `repo-read:<owner>/<repo>` |
+| a GCP key | `https://grain.dev/capabilities/gcp#gcp-key` (`with: {permission_set: <name>}`) |
+| a model proxy | `{capability: https://grain.dev/capabilities/model-proxy#model-proxy, with: {vendor: claude}}` | `claude-proxy`, `openai-proxy`, `gemini-proxy` (one release) | `gcp-key`, `gcp-key:<name>` (one release) |
+
+Each pair resolves to the same grant (`model.CanonicalCIGrant`, and the
+release server's own `model.CIGrantRule`), and a repository's CI
+capabilities list matches either. No bare name is the documented canonical
+form of any requirement any more. `repo-read:` and `repo-write:` are the one
+retired spelling grain will keep reading beyond the alias release, because
+workflow files live in other people's repositories (see
+[Repository access](#repository-access-declared-in-the-repository-enforced-by-the-teams-credential)).
+`tests/hygiene`'s `TestNoLegacyCapabilityNames` refuses a retired spelling in
+this repository's own `.grain/`.
+
 ## What a job is given
 
 A job's `capabilities:` key decides how much of the repository's CI
@@ -93,10 +120,10 @@ the same:
 | --- | --- |
 | no `capabilities:` key | **everything** this list grants the repository -- what every job got before the key existed |
 | `capabilities: []` | **nothing** from this list (only what it names under `optional-capabilities:` and is granted) |
-| `capabilities: [github-sandbox]` | exactly what it names; a name this list does not grant means the job does not run, and says which |
+| `capabilities: ["https://grain.dev/capabilities/github#sandbox-repo"]` | exactly what it names; a name this list does not grant means the job does not run, and says which |
 
-The table is about this list. Capability references, repository access and
-`api:` grants are granted by being declared, whichever case applies, and a job
+The table is about this list. Other capability references, repository
+access and agent API grants (`…/api#<scope>`) are granted by being declared, whichever case applies, and a job
 that does not declare one never gets it. A job given a capability mints its
 material at admission and queues for it where the pool is finite, whether or
 not its steps ever read it. So a job that uses no
@@ -109,8 +136,8 @@ every job that uses none, and `gcp-smoke.yml`'s `smoke` job is the one that
 asks for a GCP key, as the gcp server's reference
 `https://grain.dev/capabilities/gcp#gcp-key`.
 
-Repository access (`repo#read` / `repo#write` `{repo}`, or `repo-read:` /
-`repo-write:`) and capability references
+Repository access (`repo#read` / `repo#write` `{repo}`, or their retired
+spellings `repo-read:` / `repo-write:`) and capability references
 are unaffected by all three: they are granted by being declared, never by
 this list ([below](#repository-access-declared-in-the-repository-enforced-by-the-teams-credential)).
 A grain build older than the empty-list rule reads `capabilities: []` as an
@@ -366,7 +393,7 @@ grant, since an optional declaration (below) is placed as soon as it is
 granted.
 
 `.grain/workflows/release.yml`'s `images` job declares it as
-`optional-capabilities: [image-signing]`. It was a requirement once
+`optional-capabilities: ["https://grain.dev/capabilities/release#image-signing"]`. It was a requirement once
 (d0d4ff46b), and a deployment whose build predated the provider refused every
 release for it -- including the one that would have published a build with the
 provider (grain/task-2016). As an optional capability, a granted key signs
@@ -383,8 +410,10 @@ can do its work without it declares it under `optional-capabilities:` instead:
 ```yaml
 jobs:
   images:
-    capabilities: [package-publish]          # refused without it
-    optional-capabilities: [image-signing]   # placed when granted
+    # refused without it
+    capabilities: ["https://grain.dev/capabilities/release#package-publish"]
+    # placed when granted
+    optional-capabilities: ["https://grain.dev/capabilities/release#image-signing"]
 ```
 
 - It is placed exactly when a required one would be: the deployment provides
@@ -543,20 +572,25 @@ No request it allows approves a release: that is
 `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve`, which
 only a person may call (design/design/release-from-trunk.design.md §4).
 
-The job finds the listener in `/home/debian/.grain-api/`:
+Every step of the job finds the listener's address and its token in its
+environment, as `GRAIN_API_URL` and `GRAIN_API_TOKEN`:
 
 ```sh
-. /home/debian/.grain-api/env   # GRAIN_API_URL, GRAIN_API_TOKEN
 curl -fsS -H "Authorization: Bearer $GRAIN_API_TOKEN" \
   "$GRAIN_API_URL/api/ci/runs?ref=main&limit=100"
 ```
 
-The address and the token are also in `url` and `token` in the same
-directory. The token stops working when the job's sandbox is released.
+A step that sets either variable itself keeps its own value. In a VM or
+container sandbox both are also in `/home/debian/.grain-api/` (`url`,
+`token`, and `env`, which exports them). A host sandbox (`-host-sandboxes`)
+writes those files under the job's own directory instead, where that path
+does not reach them, so read the environment. The token stops working when
+the job's sandbox is released.
 
 Like repository access, a job gets api grants by declaring them
-(`capabilities: [release-gate-read]`), and they are not granted from this
-list. They are CI-only in this form. Like `repo-write`, they are released
+(`capabilities: ["https://grain.dev/capabilities/api#release-gate-read"]`,
+as `.grain/workflows/release-train.yml` does), and they are not granted from
+this list. They are CI-only in this form. Like `repo-write`, they are released
 only to a `release`, a `workflow_dispatch` and a cron grain fires itself.
 They are honoured only for jobs of grain's own repository
 (`model.GrainSourceRepo`, `ai-on-gke/grain`, unless the provider is configured
@@ -614,12 +648,13 @@ read or write access to a repository only when both of these hold:
    # .grain/workflows/nightly.yml
    jobs:
      publish-notes:
-       capabilities: ["repo-write:acme/widgets"]
+       capabilities:
+         - {capability: "https://grain.dev/capabilities/repo#write", with: {repo: acme/widgets}}
    ```
 
    The declaration is least-privilege. A job that declares no
-   `repo-write:` never gets write, even if its team's token could push.
-   A job that declares only `repo-read:` gets fetch access through the
+   `repo#write` never gets write, even if its team's token could push.
+   A job that declares only `repo#read` gets fetch access through the
    proxy and no push.
 
 2. **The team's own GitHub credential can do it.** A job holding

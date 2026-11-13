@@ -197,7 +197,7 @@ func fileEffects(files []github.ComparedFile) map[string]string {
 // pull request that is real.
 func workOnBase(client github.Client, repo model.RepoRef, base, branch string) landedWork {
 	w := landedWork{Base: base, Branch: branch}
-	ahead, err := client.CompareRefs(repo.Owner, repo.Name, base, branch)
+	ahead, err := client.CompareRefs(repo.StoredOwner(), repo.Name, base, branch)
 	if err != nil || len(ahead.Commits) == 0 || ahead.FilesTruncated {
 		return w
 	}
@@ -211,7 +211,7 @@ func workOnBase(client github.Client, repo model.RepoRef, base, branch string) l
 		// the last of those merges: if that was something, it is
 		// something the base now holds.
 		w.Known = true
-		if behind, err := client.CompareRefs(repo.Owner, repo.Name, branch, base); err == nil {
+		if behind, err := client.CompareRefs(repo.StoredOwner(), repo.Name, branch, base); err == nil {
 			w.BaseCommits = behind.Commits
 		}
 		for i := len(ahead.Commits) - 1; i >= 0; i-- {
@@ -219,7 +219,7 @@ func workOnBase(client github.Client, repo model.RepoRef, base, branch string) l
 			if !c.Merge || len(c.Parents) == 0 {
 				continue
 			}
-			before, err := client.CompareRefs(repo.Owner, repo.Name, base, c.Parents[0])
+			before, err := client.CompareRefs(repo.StoredOwner(), repo.Name, base, c.Parents[0])
 			if err != nil || before.FilesTruncated {
 				w.Known = false
 				return w
@@ -229,7 +229,7 @@ func workOnBase(client github.Client, repo model.RepoRef, base, branch string) l
 			}
 			// Where it landed: what the base gained since the branch first
 			// forked from it, not since that merge (which is nothing).
-			if since, err := client.CompareRefs(repo.Owner, repo.Name, c.Parents[0], base); err == nil {
+			if since, err := client.CompareRefs(repo.StoredOwner(), repo.Name, c.Parents[0], base); err == nil {
 				w.BaseCommits = since.Commits
 			}
 			if len(w.Landed) > 0 {
@@ -247,7 +247,7 @@ func workOnBase(client github.Client, repo model.RepoRef, base, branch string) l
 		w.Known = true
 		return w
 	}
-	behind, err := client.CompareRefs(repo.Owner, repo.Name, branch, base)
+	behind, err := client.CompareRefs(repo.StoredOwner(), repo.Name, branch, base)
 	if err != nil {
 		return w
 	}
@@ -339,7 +339,7 @@ func commitOrPortIn(commits []github.Commit, sha string) bool {
 // fork point has moved past where the source landed -- a re-arm that
 // merged base in before the paired branches were synced (grain/task-189).
 func portedCommitsOnBase(client github.Client, ref model.PullRequestRef, base, head string) ([]string, bool) {
-	ahead, err := client.CompareCommits(ref.Repo.Owner, ref.Repo.Name, base, head)
+	ahead, err := client.CompareCommits(ref.Repo.StoredOwner(), ref.Repo.Name, base, head)
 	if err != nil || len(ahead) == 0 {
 		return nil, false
 	}
@@ -408,7 +408,7 @@ func mergedPortSourceOnBase(ctx context.Context, store *model.Store, client gith
 				onBranch(client, *merged, base, mdetail.HeadSHA)) {
 			return merged, mdetail, true
 		}
-		if own, err := client.ListPullRequestCommits(merged.Repo.Owner, merged.Repo.Name, merged.Number); err == nil &&
+		if own, err := client.ListPullRequestCommits(merged.Repo.StoredOwner(), merged.Repo.Name, merged.Number); err == nil &&
 			len(own) > 0 && len(lackedBy(client, *merged, mdetail, base, own)) == 0 {
 			return merged, mdetail, true
 		}
@@ -429,7 +429,7 @@ func mergedPullRequestOf(client github.Client, task model.Task, skip *model.Pull
 		if err != nil || (skip != nil && ref == *skip) {
 			continue
 		}
-		detail, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil || !detail.Merged {
 			continue
 		}
@@ -438,15 +438,11 @@ func mergedPullRequestOf(client github.Client, task model.Task, skip *model.Pull
 	return nil, github.PullRequestDetail{}, false
 }
 
-// landedForTask is workOnBase for task's own branch, with the task's own
-// merged pull request (if it has one) folded in -- both to name where the
+// landedForTaskWithStore is workOnBase for task's own branch, with the task's
+// own merged pull request (if it has one) folded in -- both to name where the
 // work landed, and as the first of the two checks: a merged pull request
 // whose head is still the branch's tip is the same work, whatever the
 // content check could or could not read.
-func landedForTask(client github.Client, task model.Task, base string, skip *model.PullRequestRef) landedWork {
-	return landedForTaskWithStore(context.Background(), nil, client, task, base, skip)
-}
-
 func landedForTaskWithStore(ctx context.Context, store *model.Store, client github.Client, task model.Task, base string, skip *model.PullRequestRef) landedWork {
 	branch := task.BranchName()
 	prRepo, headRef, _ := taskPullRequestTarget(ctx, store, task)
@@ -455,7 +451,7 @@ func landedForTaskWithStore(ctx context.Context, store *model.Store, client gith
 	if ref, detail, ok := mergedPullRequestOf(client, task, skip); ok {
 		w.MergedPR, w.MergedSHA = ref, detail.MergeCommitSHA
 		if detail.HeadSHA != "" {
-			if head, err := client.GetBranchHead(task.Target.Owner, task.Target.Name, branch); err == nil &&
+			if head, err := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, branch); err == nil &&
 				head != nil && head.SHA == detail.HeadSHA {
 				w.MergedHead = true
 			}
@@ -587,10 +583,10 @@ func closeIfLanded(ctx context.Context, store *model.Store, client github.Client
 			"the same change a second time.\n\nTask %s is marked done.", ref, w.Base,
 			strings.Join(short, ", "), w.where(), task.ID)
 	}
-	if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, body); err != nil {
+	if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, body); err != nil {
 		log.Printf("orchestrator: could not say why %s is being closed: %v", ref, err)
 	}
-	if err := client.ClosePullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number); err != nil {
+	if err := client.ClosePullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number); err != nil {
 		return false, fmt.Errorf("orchestrator: closing %s, whose work already landed: %w", ref, err)
 	}
 	if err := noteOnTask(ctx, store, task.ID, body, now); err != nil {
@@ -625,7 +621,7 @@ func ReattachPullRequest(ctx context.Context, store *model.Store, client github.
 		return nil, nil
 	}
 	prRepo, headRef, _ := taskPullRequestTarget(ctx, store, task)
-	pr, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef)
+	pr, err := client.FindOpenPullRequestForBranch(prRepo.StoredOwner(), prRepo.Name, headRef)
 	if err != nil {
 		return nil, fmt.Errorf("orchestrator: looking for %s's open pull request: %w", task.ID, err)
 	}
@@ -648,7 +644,7 @@ func ReattachPullRequest(ctx context.Context, store *model.Store, client github.
 	body := fmt.Sprintf("Task %s's branch `%s` still has %s open, so grain has attached it to the "+
 		"task again and is watching it: the next run continues on it, and it merges through "+
 		"the task as usual.", task.ID, task.BranchName(), ref)
-	if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, body); err != nil {
+	if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, body); err != nil {
 		log.Printf("orchestrator: could not say on %s that task %s took it back: %v", ref, task.ID, err)
 	}
 	return &ref, noteOnTask(ctx, store, task.ID, body, now)

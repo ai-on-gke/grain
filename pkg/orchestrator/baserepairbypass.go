@@ -263,7 +263,7 @@ func fileBaseRepairReviewFollowUp(ctx context.Context, store *model.Store, clien
 	}
 	if client != nil && ref.Number > 0 {
 		prNote := fmt.Sprintf("**grain review alert** (task %s)\n\n%s", reviewed.ID, loudNote)
-		if _, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number, prNote); err != nil {
+		if _, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, prNote); err != nil {
 			log.Printf("orchestrator: noting %s's review follow-up task %s on %s: %v -- it is on the task only",
 				reviewed.ID, followUp.ID, ref, err)
 		}

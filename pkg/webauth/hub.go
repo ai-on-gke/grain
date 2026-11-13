@@ -198,13 +198,6 @@ var (
 	hubRefetchFloor = hubKeysRefetchFloor
 )
 
-// SetHubIssuer sets the expected issuer for registry JWT verification.
-func SetHubIssuer(issuer string) {
-	hubMu.Lock()
-	defer hubMu.Unlock()
-	hubIssuer = strings.TrimSpace(issuer)
-}
-
 // GetHubIssuer returns the configured issuer for registry JWT verification.
 func GetHubIssuer() string {
 	hubMu.RLock()
@@ -213,13 +206,6 @@ func GetHubIssuer() string {
 		return hubIssuer
 	}
 	return strings.TrimSpace(hubenv.Get("GRAIN_HUB_ISSUER"))
-}
-
-// SetHubAudience sets the expected audience for registry JWT verification.
-func SetHubAudience(aud string) {
-	hubMu.Lock()
-	defer hubMu.Unlock()
-	hubAudience = strings.TrimSpace(aud)
 }
 
 // GetHubAudience returns the configured audience for registry JWT verification.
@@ -232,13 +218,6 @@ func GetHubAudience() string {
 	return strings.TrimSpace(hubenv.Get("GRAIN_HUB_AUDIENCE"))
 }
 
-// SetHubKeysURL sets the JWKS endpoint URL for registry JWT verification.
-func SetHubKeysURL(u string) {
-	hubMu.Lock()
-	defer hubMu.Unlock()
-	hubKeysURL = strings.TrimSpace(u)
-}
-
 // GetHubKeysURL returns the configured JWKS endpoint URL for registry JWT verification.
 func GetHubKeysURL() string {
 	hubMu.RLock()
@@ -247,17 +226,6 @@ func GetHubKeysURL() string {
 		return hubKeysURL
 	}
 	return strings.TrimSpace(hubenv.Get("GRAIN_HUB_KEYS_URL"))
-}
-
-// SetHubHTTPClient sets a custom http.Client for fetching registry JWKS keys.
-func SetHubHTTPClient(client *http.Client) {
-	hubMu.Lock()
-	defer hubMu.Unlock()
-	if client != nil {
-		hubHTTPClient = client
-	} else {
-		hubHTTPClient = &http.Client{Timeout: 5 * time.Second}
-	}
 }
 
 // SetHubRefetchFloor overrides the minimum interval between JWKS refetches
@@ -576,33 +544,8 @@ func IdentityFromHubClaims(claims *HubClaims) (VerifiedIdentity, error) {
 	}, nil
 }
 
-// VerifyHubToken validates a registry JWT assertion against the audience
-// active on ctx and returns the normalized authenticated email.
-func VerifyHubToken(ctx context.Context, tokenStr string) (string, error) {
-	tokenStr = strings.TrimSpace(tokenStr)
-	if tokenStr == "" {
-		return "", errors.New("empty registry assertion token")
-	}
-	claims, err := ValidateHubToken(ctx, tokenStr, HubAudienceFor(ctx))
-	if err != nil {
-		return "", err
-	}
-	id, err := IdentityFromHubClaims(claims)
-	if err != nil {
-		return "", err
-	}
-	return id.Email, nil
-}
-
 // HubVerifierOption configures a HubVerifier created by NewHubVerifier.
 type HubVerifierOption func(*HubVerifier)
-
-// WithHubValidator overrides JWT validation on a HubVerifier.
-func WithHubValidator(v HubValidator) HubVerifierOption {
-	return func(rv *HubVerifier) {
-		rv.validator = v
-	}
-}
 
 // WithHubAudience pins an expected single-URL audience on a
 // HubVerifier, taking precedence over request/package defaults.

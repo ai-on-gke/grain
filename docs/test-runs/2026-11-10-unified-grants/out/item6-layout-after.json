@@ -1,0 +1,168 @@
+{
+  "total": 16,
+  "passed": 16,
+  "failed": [],
+  "pageErrors": [],
+  "checks": [
+    {
+      "surface": "taskPane",
+      "viewport": "desktop",
+      "theme": "light",
+      "pass": true,
+      "rowCount": 12,
+      "docOverflow": false,
+      "pickerWidth": 260,
+      "problems": []
+    },
+    {
+      "surface": "templateEditor",
+      "viewport": "desktop",
+      "theme": "light",
+      "pass": true,
+      "rowCount": 10,
+      "docOverflow": false,
+      "pickerWidth": 704,
+      "problems": []
+    },
+    {
+      "surface": "newTaskOverlay",
+      "viewport": "desktop",
+      "theme": "light",
+      "pass": true,
+      "rowCount": 4,
+      "docOverflow": false,
+      "pickerWidth": 512,
+      "problems": []
+    },
+    {
+      "surface": "consoleSession",
+      "viewport": "desktop",
+      "theme": "light",
+      "pass": true,
+      "rowCount": 25,
+      "docOverflow": false,
+      "pickerWidth": 1118,
+      "problems": []
+    },
+    {
+      "surface": "taskPane",
+      "viewport": "desktop",
+      "theme": "dark",
+      "pass": true,
+      "rowCount": 12,
+      "docOverflow": false,
+      "pickerWidth": 260,
+      "problems": []
+    },
+    {
+      "surface": "templateEditor",
+      "viewport": "desktop",
+      "theme": "dark",
+      "pass": true,
+      "rowCount": 10,
+      "docOverflow": false,
+      "pickerWidth": 704,
+      "problems": []
+    },
+    {
+      "surface": "newTaskOverlay",
+      "viewport": "desktop",
+      "theme": "dark",
+      "pass": true,
+      "rowCount": 4,
+      "docOverflow": false,
+      "pickerWidth": 512,
+      "problems": []
+    },
+    {
+      "surface": "consoleSession",
+      "viewport": "desktop",
+      "theme": "dark",
+      "pass": true,
+      "rowCount": 25,
+      "docOverflow": false,
+      "pickerWidth": 1118,
+      "problems": []
+    },
+    {
+      "surface": "taskPane",
+      "viewport": "phone",
+      "theme": "light",
+      "pass": true,
+      "rowCount": 12,
+      "docOverflow": false,
+      "pickerWidth": 357,
+      "problems": []
+    },
+    {
+      "surface": "templateEditor",
+      "viewport": "phone",
+      "theme": "light",
+      "pass": true,
+      "rowCount": 10,
+      "docOverflow": false,
+      "pickerWidth": 357,
+      "problems": []
+    },
+    {
+      "surface": "newTaskOverlay",
+      "viewport": "phone",
+      "theme": "light",
+      "pass": true,
+      "rowCount": 4,
+      "docOverflow": false,
+      "pickerWidth": 342,
+      "problems": []
+    },
+    {
+      "surface": "consoleSession",
+      "viewport": "phone",
+      "theme": "light",
+      "pass": true,
+      "rowCount": 25,
+      "docOverflow": false,
+      "pickerWidth": 327,
+      "problems": []
+    },
+    {
+      "surface": "taskPane",
+      "viewport": "phone",
+      "theme": "dark",
+      "pass": true,
+      "rowCount": 12,
+      "docOverflow": false,
+      "pickerWidth": 357,
+      "problems": []
+    },
+    {
+      "surface": "templateEditor",
+      "viewport": "phone",
+      "theme": "dark",
+      "pass": true,
+      "rowCount": 10,
+      "docOverflow": false,
+      "pickerWidth": 357,
+      "problems": []
+    },
+    {
+      "surface": "newTaskOverlay",
+      "viewport": "phone",
+      "theme": "dark",
+      "pass": true,
+      "rowCount": 4,
+      "docOverflow": false,
+      "pickerWidth": 342,
+      "problems": []
+    },
+    {
+      "surface": "consoleSession",
+      "viewport": "phone",
+      "theme": "dark",
+      "pass": true,
+      "rowCount": 25,
+      "docOverflow": false,
+      "pickerWidth": 327,
+      "problems": []
+    }
+  ]
+}

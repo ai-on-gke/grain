@@ -380,6 +380,145 @@ describe("AccessSection", () => {
       /access code still works on a direct connection/,
     );
   });
+
+  it("skips principal and history reads when the caller lacks access:read, and refreshes config on self-narrowing", async () => {
+    const user = userEvent.setup();
+    const showError = vi.fn();
+    render(
+      <AccessSection
+        showError={showError}
+        config={{
+          authenticated: true,
+          actor: "user:carol@example.com",
+          authMethod: "iap",
+          access: {
+            role: "carol-limited",
+            roles: ["carol-limited"],
+            full: false,
+            scopes: ["tasks:read", "tasks:admin", "dispatch:write"],
+            repoLimits: { "tasks:admin": ["acme/widgets"] },
+          },
+        }}
+      />,
+    );
+    expect(screen.getByTestId("access-read-only")).toHaveTextContent(
+      /does not include access:read/,
+    );
+    expect(api).not.toHaveBeenCalled();
+    expect(showError).not.toHaveBeenCalled();
+
+    // Self-narrowing refreshes config via onSaved and clears stale confirmSelf on a subsequent refusal.
+    let attempt = 0;
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/access/principals" && !opts?.method) {
+        return {
+          entries: [{ entry: "user:bob@example.com", role: "grain/operator" }],
+          roles: [
+            { name: "grain/operator", builtin: true, person: true },
+            { name: "carol-limited", builtin: false, person: false },
+          ],
+        };
+      }
+      if (path === "/api/access/history") return [];
+      if (opts?.method === "PATCH") {
+        attempt++;
+        if (attempt === 1) {
+          const err = new Error("confirm narrowing your own access");
+          err.code = "confirm_self";
+          err.status = 403;
+          throw err;
+        }
+        if (attempt === 2) {
+          const err = new Error(
+            "user:bob@example.com is the last entry holding a full admin role",
+          );
+          err.code = "last_admin";
+          err.status = 403;
+          throw err;
+        }
+        return {};
+      }
+      return {};
+    });
+
+    const onSaved = vi.fn(async () => ({
+      authenticated: true,
+      actor: "user:bob@example.com",
+      authMethod: "iap",
+      access: {
+        role: "carol-limited",
+        roles: ["carol-limited"],
+        full: false,
+        scopes: ["tasks:read", "dispatch:write"],
+      },
+    }));
+
+    const { rerender } = render(
+      <AccessSection
+        showError={showError}
+        onSaved={onSaved}
+        config={{
+          authenticated: true,
+          actor: "user:bob@example.com",
+          authMethod: "iap",
+          access: {
+            role: "grain/operator",
+            roles: ["grain/operator"],
+            full: true,
+            scopes: ["access:read", "access:write"],
+          },
+        }}
+      />,
+    );
+    await screen.findByText("user:bob@example.com");
+    await user.click(screen.getByLabelText("Role of user:bob@example.com"));
+    await user.click(screen.getByRole("option", { name: "carol-limited" }));
+    await user.type(
+      await screen.findByTestId("access-change-reason"),
+      "step down",
+    );
+    await user.click(screen.getByTestId("access-change-apply"));
+    expect(
+      await screen.findByTestId("access-confirm-self"),
+    ).toBeInTheDocument();
+
+    // Second attempt fails with last_admin: confirm_self prompt is cleared while error stays visible.
+    await user.click(
+      screen.getByRole("button", { name: "Yes, narrow my own access" }),
+    );
+    expect(await screen.findByTestId("access-change-error")).toHaveTextContent(
+      /last entry holding a full admin role/,
+    );
+    expect(screen.queryByTestId("access-confirm-self")).toBeNull();
+
+    // Third attempt succeeds (after adding another admin): onSaved runs and skips forbidden GETs.
+    api.mockClear();
+    await user.click(screen.getByTestId("access-change-apply"));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(
+      api.mock.calls.filter(
+        ([p, o]) => !o?.method && p.startsWith("/api/access/"),
+      ),
+    ).toHaveLength(0);
+    rerender(
+      <AccessSection
+        showError={showError}
+        onSaved={onSaved}
+        config={{
+          authenticated: true,
+          actor: "user:bob@example.com",
+          authMethod: "iap",
+          access: {
+            role: "carol-limited",
+            roles: ["carol-limited"],
+            full: false,
+            scopes: ["tasks:read", "dispatch:write"],
+          },
+        }}
+      />,
+    );
+    expect(screen.queryByTestId("allowed-principals-table")).toBeNull();
+  });
 });
 
 describe("validatePrincipalEntry", () => {
@@ -446,7 +585,11 @@ describe("validatePrincipalEntry", () => {
               authenticated: true,
               actor: "user:dana@example.com",
               authMethod: "iap",
-              access: { role: "grain/viewer", full: false, scopes: [] },
+              access: {
+                role: "grain/viewer",
+                full: false,
+                scopes: ["access:read"],
+              },
             },
           })}
         </TimeZoneProvider>,

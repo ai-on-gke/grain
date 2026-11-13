@@ -475,6 +475,17 @@ func TestAPICapabilitiesCarryPickerFields(t *testing.T) {
 		[]string{"tasks:read", "tasks:write", "merge:write", "ci:read", "ci:write", "notifications:write"}) {
 		t.Errorf("api:task-admin = %+v", r)
 	}
+	if _, dup := byID["api:grain/task-admin"]; dup {
+		t.Errorf("api:grain/task-admin offered alongside api:task-admin")
+	}
+	for _, role := range []string{"api:grain/viewer", "api:grain/contributor", "api:grain/delegated"} {
+		if r := byID[role]; !r.Preset || r.Dangerous || len(r.Scopes) == 0 {
+			t.Errorf("%s = %+v, want non-dangerous preset", role, r)
+		}
+	}
+	if r := byID["api:grain/operator"]; !r.Preset || !r.Dangerous || len(r.Scopes) == 0 {
+		t.Errorf("api:grain/operator = %+v, want dangerous preset", r)
+	}
 	if r := byID["api:merge:force"]; !r.Dangerous || r.Preset {
 		t.Errorf("api:merge:force = %+v, want a dangerous scope", r)
 	}
@@ -1198,6 +1209,7 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/tasks/{id}/attempts/{number}/capability-audit":         true,
 	"GET /api/tasks/{id}/attempts/{number}/transcript":               true,
 	"GET /api/tasks/{id}/prompt":                                     true,
+	"GET /api/tasks/{id}/diff-preview":                               true,
 	"GET /api/tasks/{id}/tree":                                       true,
 	"GET /api/templates/{id}/composition":                            true,
 	"GET /api/upgrade":                                               true,

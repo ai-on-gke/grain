@@ -38,6 +38,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/ai-on-gke/grain/pkg/agentd/release"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -201,6 +202,42 @@ func install(args []string, stdout, stderr io.Writer) int {
 		step("installed %s", p.Bin)
 	}
 
+	// 1b. Pin the embedded release public key at ~/.config/grain/agentd-release.pub.
+	if st, err := os.Lstat(p.ReleasePub); errors.Is(err, os.ErrNotExist) {
+		pub, err := release.EmbeddedPublicKey()
+		if err != nil {
+			fmt.Fprintf(stderr, "%s install: embedded release key: %v\n", Program, err)
+			return 1
+		}
+		pubPEM, err := release.FormatPublicKeyPEM(pub)
+		if err != nil {
+			fmt.Fprintf(stderr, "%s install: formatting release key: %v\n", Program, err)
+			return 1
+		}
+		if err := os.MkdirAll(filepath.Dir(p.ReleasePub), 0o700); err != nil {
+			fmt.Fprintln(stderr, Program+" install: "+err.Error())
+			return 1
+		}
+		if err := writeFileAtomic(p.ReleasePub, pubPEM, 0o644); err != nil {
+			fmt.Fprintln(stderr, Program+" install: writing the release key: "+err.Error())
+			return 1
+		}
+		step("wrote %s (key %s)", p.ReleasePub, release.KeyID(pub))
+	} else if err != nil {
+		fmt.Fprintln(stderr, Program+" install: "+err.Error())
+		return 1
+	} else {
+		if st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular() {
+			fmt.Fprintf(stderr, "%s install: %s must be a regular file, not a symlink\n", Program, p.ReleasePub)
+			return 1
+		}
+		if _, err := PinnedReleasePublicKey(home); err != nil {
+			fmt.Fprintln(stderr, Program+" install: "+err.Error())
+			return 1
+		}
+		step("keeping %s as it is", p.ReleasePub)
+	}
+
 	// 2. A registered transport's own preparation, done before contacting the
 	// controller so template fetches, enrollment and the first start can use it.
 	unit := unitConfig{Bin: p.Bin, Server: *server, Name: *name, IAPAudience: *iapAudience,
@@ -290,6 +327,9 @@ func install(args []string, stdout, stderr io.Writer) int {
 		if token == "" {
 			if have, _ := readTokenFile(p.Token); have != "" {
 				step("keeping the token in %s (set %s to replace it)", p.Token, TokenEnv)
+				if st, err := os.Stat(p.Key); err == nil && st.Mode().IsRegular() {
+					unit.Key = p.Key
+				}
 			} else if token, err = promptToken(); err != nil {
 				fmt.Fprintln(stderr, Program+" install: "+err.Error())
 				return 2
@@ -403,13 +443,21 @@ func (u unitConfig) commandLine() string {
 	return u.Bin + " " + strings.Join(u.args(), " ")
 }
 
+// unitTemplate restarts grain-agentd whenever it exits, not only on a
+// failure: a drain or cutover (OpDrain) ends with grain-agentd exiting 0
+// so the binary ~/.local/bin/grain-agentd now names takes over, as
+// grain-hostd.service does with Restart=always. With Restart=on-failure a
+// drained host stayed offline, and a run whose Exit frame raced the drain
+// waited out the daemon's re-attach window
+// (docs/test-runs/2026-11-11-host-agent-contract.md). systemctl --user
+// stop still stops it: a stop is never restarted.
 var unitTemplate = template.Must(template.New("unit").Parse(`[Unit]
 Description={{.Program}}: agent CLIs for the grain daemon at {{.Server}}
 After=network-online.target
 
 [Service]
 ExecStart={{.Command}}
-Restart=on-failure
+Restart=always
 RestartSec=10
 
 [Install]

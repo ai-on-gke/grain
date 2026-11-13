@@ -226,6 +226,9 @@ func (d *Hostd) Attach(ctx context.Context, info Info, cursor int64, tee io.Writ
 	if err != nil {
 		return whole.String(), err
 	}
+	if exit.Draining {
+		return whole.String(), fmt.Errorf("%w: %s", agent.ErrHostdDraining, exit.String())
+	}
 	if exit.Code != 0 || exit.Error != "" {
 		tail := stderr.Bytes()
 		if len(tail) > 16<<10 {
@@ -304,7 +307,11 @@ func (d *Hostd) stream(ctx context.Context, run string, proc *procRef, skip int6
 		}}
 	ew := &countingWriter{w: stderr}
 	exit, err := call(sctx, c, w, ew)
-	if errors.Is(err, hostd.ErrNoExit) && d.ReattachTimeout > 0 && proc.get() != "" {
+	// An attach that never reached hostd (an adopted run's, whose process
+	// is named from the start) is a drop as much as one cut off midway:
+	// hostd restarting onto a new build under the daemon that adopts the
+	// run is the usual reason, and the process is still there.
+	if (errors.Is(err, hostd.ErrNoExit) || errors.Is(err, hostd.ErrUnreachable)) && d.ReattachTimeout > 0 && proc.get() != "" {
 		exit, err = d.reattach(sctx, c, run, proc.get(), w, ew)
 	}
 	w.flush()
@@ -364,7 +371,7 @@ func (d *Hostd) reattach(ctx context.Context, c hostd.Client, run, id string, ou
 			return lost()
 		}
 		actx, cancel := context.WithDeadline(ctx, give)
-		exit, _, err := c.Attach(actx, id, hostd.Cursor{Stdout: out.cursor(), Stderr: errOut.count()}, out, errOut)
+		exit, _, err := c.Attach(actx, id, hostd.Cursor{Stdout: out.written(), Stderr: errOut.count()}, out, errOut)
 		cancel()
 		switch {
 		case err == nil, errors.Is(err, hostd.ErrDetached):
@@ -383,7 +390,7 @@ func (d *Hostd) reattach(ctx context.Context, c hostd.Client, run, id string, ou
 		if errors.As(err, &refused) {
 			// hostd answered, and has no such process to attach to: it
 			// is gone (hostd restarted without it), and so is the run.
-			return exit, fmt.Errorf("%s is back, but run %s's CLI (%s) is not: %w", d.hostdName(), run, id, err)
+			return exit, fmt.Errorf("%w: %s is back, but run %s's CLI (%s) is not: %v", agent.ErrHostdLost, d.hostdName(), run, id, err)
 		}
 		if !time.Now().Before(give) {
 			return lost()
@@ -477,6 +484,15 @@ func (w *cursorWriter) cursor() int64 {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return max(w.n, w.skip)
+}
+
+// written is how much of the stream has reached whole: where a re-attach
+// resumes. Not cursor, which an adopted run's attach starts at: what it
+// had not read back yet below that is the stdout the framework parses.
+func (w *cursorWriter) written() int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.n
 }
 
 // Flush lets go of every run this Hostd is streaming, each with its

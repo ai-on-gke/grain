@@ -243,6 +243,8 @@ that predates the list is credited from its protocol version
 | `env_open` | contract v1 | `env: ["*"]` (any variable outside the frozen deny set), `~/`-relative `path`/`paths_under`/`cwd_under`, and ignored `x-*` annotation keys | installer and Settings snippets write closed `env:` lists and absolute paths |
 | `logins_map` | contract v1+ | top-level `logins:` map in the allowlist; `Hello.login_targets` and `stage symlink` accept any regular file it names (`Hello.codex_auth` deprecated) | falls back to `Hello.codex_auth` for codex's login |
 | `hook_policy` | contract v1+ | `agy-tool-hook` and `claude-stop-hook` accept `-policy` and evaluate a staged per-run hook policy file (`pkg/agent/hookpolicy`) | stages no policy file and omits `-policy`; hooks fall back to the roster and stop rule compiled into the host binary |
+| `handover` | contract v1+ | `Request.handover` on `drain` (`idle`) hands live detached CLI runs over across an in-place re-exec and adopts them in `loadSpools`; `Exit.draining` marks processes ended by hostd's own drain or stop | cuts over only when idle, and cannot distinguish drain-cap kills on `Exit` |
+| `env_deny_v2` | contract v1+ | `env: ["*"]` and `NAME_*` patterns also refuse the `env_deny_v2` names (`DYLD_*`, `GIT_*`, `JAVA_TOOL_OPTIONS`, `NODE_PATH`, ...); only an exact name admits one | nothing to do: the daemon sends none of those names, and an exact name is admitted by every host |
 
 `renew`, `logins` and `agents_only` shipped before the feature list existed;
 hosts on those builds are credited with neither, which is exactly the
@@ -336,7 +338,8 @@ x-notes: anything                   # proposed: x-* keys are ignored
 - **`env: ["*"]`** admits any variable the daemon sends except a deny set
   frozen in the contract: the identity variables, `LD_*`, and the
   interpreter and shell injection variables (`BASH_ENV`, `ENV`,
-  `NODE_OPTIONS`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`). A
+  `NODE_OPTIONS`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`),
+  which feature `env_deny_v2` widens (below). A
   host owner who wants a closed list keeps writing names. A path-like value
   must still sit under `paths_under`; `set_env` and `pass_env` still cannot
   be overridden. For an agents-only host this gives the daemon nothing it
@@ -344,6 +347,44 @@ x-notes: anything                   # proposed: x-* keys are ignored
   prompt asks, as the user -- while a new CLI version's new variables stop
   needing a file edit. The installer writes `env: ["*"]` only for hosts
   that advertise the feature (`env_open`).
+- **The deny set grows only under a new feature.** The 2026-11-11
+  walkthrough (`docs/test-runs/2026-11-11-host-agent-contract.md`, item 2)
+  found `"*"` still admitting variables that change what the child loads
+  or runs: `JAVA_TOOL_OPTIONS=-javaagent:...` and `GIT_CONFIG_PARAMETERS`
+  (not path-like, so `paths_under` never applies), `PROMPT_COMMAND`,
+  `SHELLOPTS`, `PS4`, and module paths (`GCONV_PATH`, `NODE_PATH`,
+  `PYTHONHOME`, `PERL5LIB`, `RUBYLIB`) under the stage directory the
+  daemon writes. The agents-only argument above covers `clis:` entries, but
+  `"*"` is accepted on `capabilities:` entries too, whose fixed argv is the
+  whole of what the daemon may run there; on one of those, these variables
+  are code execution the daemon otherwise lacks. So feature `env_deny_v2`
+  adds them (`envDenyV2`: `DYLD_*`, `GCONV_PATH`, `BASHOPTS`, `SHELLOPTS`,
+  `PROMPT_COMMAND`, `PS4`, `ZDOTDIR`, `NODE_PATH`, `PYTHONHOME`,
+  `PYTHONUSERBASE`, `PERL5LIB`, `PERLLIB`, `PERL5DB`, `RUBYLIB`,
+  `PYTHONWARNINGS`, `CLASSPATH`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`,
+  `_JAVA_OPTIONS`, `GIT_*`, `XDG_CONFIG_HOME`, `OPENSSL_CONF`,
+  `OPENSSL_ENGINES`, `OPENSSL_MODULES`, `LUA_INIT*`, `LUA_PATH*`,
+  `LUA_CPATH*`) on top of the frozen v1 set, which stays as it is. `PYTHONWARNINGS` is there because the
+  interpreter imports a filter's dotted category at startup (with
+  `BROWSER`, a stdlib-only way to run a command), and `XDG_CONFIG_HOME`
+  because its `git/config` is git's global config, the same reach as
+  `GIT_CONFIG_*`. `OPENSSL_CONF` is read at library init by any child
+  linking OpenSSL (curl, git over https, python's `ssl`), and a config can
+  load an engine or provider shared object -- `GCONV_PATH`'s reach -- and
+  Lua runs `LUA_INIT` at startup. (Bash's exported functions, `BASH_FUNC_name%%`, need no
+  entry: no valid env name contains `%`.) Growing the set is the one
+  change to `"*"` that needs no daemon change: the daemon sends none of
+  these names to codex, claude or agy (their `HostdEnv`, held by
+  `TestHostdEnvSendsNoDeniedNameButAgyHome`), and an exact name in `env`
+  admits any of them on every host. The cost falls on a host owner who
+  hand-wrote `"*"` for a capability that needs one of them -- grain's own
+  `git` server, placed on a host, reads `GIT_REPO_TOKEN` -- after the
+  upgrade the start is refused naming the variable, and listing it by exact
+  name fixes it. Generic command variables (`EDITOR`, `PAGER`,
+  `SSH_ASKPASS`) and package-manager configuration (`npm_config_*`,
+  `GEM_PATH`) were considered and left open: what reads them is a tool the
+  child chooses to run, not the child's own startup, and a deny set that
+  chased every tool's configuration would never be complete.
 - **`logins:`** moves login knowledge from the binary to host-owned data.
   It names the files that are a CLI's login; agentd reports which exist (by
   name) and lets `stage symlink` target only those. A new CLI's login is
@@ -519,6 +560,8 @@ feature features
 feature env_open
 feature logins_map
 feature hook_policy
+feature handover
+feature env_deny_v2
 json Request.op hostd.Op [start]
 json Request.kind hostd.Kind [start]
 json Request.name string [start]
@@ -533,6 +576,7 @@ json Request.task string [detach]
 json Request.id string [detach]
 json Request.cursor hostd.Cursor [detach]
 json Request.idle bool [drain]
+json Request.handover bool [handover]
 json Request.inode uint64 [socket_owner]
 json Request.stage *hostd.StageOp [stage]
 json Request.renew *hostd.RenewProof [renew]
@@ -576,6 +620,7 @@ json Started.id string [detach]
 json Exit.code int [start]
 json Exit.signal string [start]
 json Exit.deadline bool [start]
+json Exit.draining bool [handover]
 json Exit.wait_delay bool [start]
 json Exit.error string [start]
 json Exit.finished_at time.Time [start]
@@ -694,6 +739,33 @@ env_deny PYTHONSTARTUP
 env_deny PYTHONPATH
 env_deny PERL5OPT
 env_deny RUBYOPT
+env_deny_v2 DYLD_*
+env_deny_v2 GCONV_PATH
+env_deny_v2 BASHOPTS
+env_deny_v2 SHELLOPTS
+env_deny_v2 PROMPT_COMMAND
+env_deny_v2 PS4
+env_deny_v2 ZDOTDIR
+env_deny_v2 NODE_PATH
+env_deny_v2 PYTHONHOME
+env_deny_v2 PYTHONUSERBASE
+env_deny_v2 PERL5LIB
+env_deny_v2 PERLLIB
+env_deny_v2 PERL5DB
+env_deny_v2 RUBYLIB
+env_deny_v2 PYTHONWARNINGS
+env_deny_v2 CLASSPATH
+env_deny_v2 JAVA_TOOL_OPTIONS
+env_deny_v2 JDK_JAVA_OPTIONS
+env_deny_v2 _JAVA_OPTIONS
+env_deny_v2 GIT_*
+env_deny_v2 XDG_CONFIG_HOME
+env_deny_v2 OPENSSL_CONF
+env_deny_v2 OPENSSL_ENGINES
+env_deny_v2 OPENSSL_MODULES
+env_deny_v2 LUA_INIT*
+env_deny_v2 LUA_PATH*
+env_deny_v2 LUA_CPATH*
 max_frame 1048576
 max_stage_data 524288
 ```

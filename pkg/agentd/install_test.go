@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agentd/release"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
@@ -77,6 +78,21 @@ func TestInstall(t *testing.T) {
 	if st, err := os.Stat(p.Bin); err != nil || st.Mode()&0o111 == 0 {
 		t.Errorf("the binary at %s: %v", p.Bin, err)
 	}
+	// The pinned release public key (~/.config/grain/agentd-release.pub), mode 0644.
+	wantPub, err := release.EmbeddedPublicKey()
+	if err != nil {
+		t.Fatalf("EmbeddedPublicKey: %v", err)
+	}
+	gotPub, err := PinnedReleasePublicKey(h.home)
+	if err != nil {
+		t.Fatalf("PinnedReleasePublicKey: %v", err)
+	}
+	if !bytes.Equal(gotPub, wantPub) {
+		t.Errorf("pinned release key %x != embedded %x", gotPub, wantPub)
+	}
+	if st, _ := os.Stat(p.ReleasePub); st == nil || st.Mode().Perm() != 0o644 {
+		t.Errorf("release key file mode = %v, want 0644", st)
+	}
 	// The token, 0600, in a 0700 directory.
 	if got, err := os.ReadFile(p.Token); err != nil || strings.TrimSpace(string(got)) != "ghd_install" {
 		t.Errorf("token file = %q, %v", got, err)
@@ -110,6 +126,12 @@ func TestInstall(t *testing.T) {
 	if want := "ExecStart=" + p.Bin + " -server https://grain.example.com -token-file " + p.Token + " -allowlist " + p.Allowlist + " -state-dir " + p.StateDir + " -name ws-1"; !strings.Contains(string(unit), want) {
 		t.Errorf("unit lacks %q:\n%s", want, unit)
 	}
+	// A drain or cutover exits 0 for the new binary to take over, so the
+	// unit must restart on any exit (the 2026-11-11 §9 walkthrough found a
+	// drained host left offline under Restart=on-failure).
+	if !strings.Contains(string(unit), "\nRestart=always\n") || strings.Contains(string(unit), "Restart=on-failure") {
+		t.Errorf("unit does not restart a drained grain-agentd (want Restart=always):\n%s", unit)
+	}
 	// Started, and lingering enabled.
 	want := []string{
 		"systemctl --user daemon-reload",
@@ -129,7 +151,7 @@ func TestInstall(t *testing.T) {
 	if code := install([]string{"-server", "https://grain.example.com", "-no-start"}, &out, &errOut); code != 0 {
 		t.Fatalf("install again = %d: %s", code, errOut.String())
 	}
-	for _, want := range []string{"keeping the token in " + p.Token, "keeping " + p.Allowlist + " as it is", "-no-start"} {
+	for _, want := range []string{"keeping " + p.ReleasePub + " as it is", "keeping the token in " + p.Token, "keeping " + p.Allowlist + " as it is", "-no-start"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("second install's output lacks %q:\n%s", want, out.String())
 		}
@@ -246,6 +268,25 @@ func TestInstallJoinHandshake(t *testing.T) {
 	}
 	if !strings.Contains(string(unit), "-key-file "+p.Key) {
 		t.Fatalf("unit missing -key-file %s:\n%s", p.Key, unit)
+	}
+
+	// Re-running `grain-agentd install -server <url>` (without -join) to
+	// upgrade an older Restart=on-failure unit rewrites the unit with
+	// Restart=always while preserving -key-file for the existing key-bound
+	// credential.
+	oldUnit := strings.ReplaceAll(string(unit), "Restart=always", "Restart=on-failure")
+	writeFile(t, filepath.Join(p.UnitDir, UnitName), oldUnit, 0o644)
+	out.Reset()
+	errOut.Reset()
+	if code := install([]string{"-server", ts.URL}, &out, &errOut); code != 0 {
+		t.Fatalf("re-run install = %d: %s", code, errOut.String())
+	}
+	rewritten, err := os.ReadFile(filepath.Join(p.UnitDir, UnitName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rewritten), "\nRestart=always\n") || !strings.Contains(string(rewritten), "-key-file "+p.Key) {
+		t.Fatalf("rewritten unit dropped Restart=always or -key-file %s:\n%s", p.Key, rewritten)
 	}
 }
 

@@ -164,27 +164,6 @@ func ExtractLegacyHostingStrings(caps []string) (kept []string, mapped Hosting, 
 	return kept, mapped, aliases
 }
 
-// ExtractLegacyHostingGrants strips bare console grants from grants, returning
-// the remaining grants, the Hosting named (or "" if none appeared), and the
-// distinct legacy names seen.
-func ExtractLegacyHostingGrants(grants []Grant) (kept []Grant, mapped Hosting, aliases []string) {
-	if grants != nil {
-		kept = make([]Grant, 0, len(grants))
-	}
-	for _, g := range grants {
-		if h, ok := LegacyHostingAlias(g.Capability); ok {
-			mapped = MaxHosting(mapped, h)
-			name := strings.TrimSpace(g.Capability)
-			if !slices.Contains(aliases, name) {
-				aliases = append(aliases, name)
-			}
-			continue
-		}
-		kept = append(kept, g)
-	}
-	return kept, mapped, aliases
-}
-
 const (
 	// TaskEventHostingChanged records a change to an existing task's hosting
 	// setting with the old value, new value and actor.

@@ -473,7 +473,7 @@ func seedWatchedBaseBranch(ctx context.Context, deps Deps, repo model.RepoRef,
 			repo, policy.Refusal)
 		return false, nil
 	}
-	branch, err := deps.Client.DefaultBranch(repo.Owner, repo.Name)
+	branch, err := deps.Client.DefaultBranch(repo.StoredOwner(), repo.Name)
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: reading %s's default branch: %w", repo, err)
 	}
@@ -2188,6 +2188,7 @@ func baseBranchRepairBody(row model.BaseBranchCI, merged *model.Task) string {
 		"merge above if that is the right answer, or repair the broken suites directly. Iterate and "+
 		"re-run CI until all required jobs in the suite pass.\n\n", row.Branch)
 	b.WriteString(model.RedCIProcedureReminder + "\n\n")
+	b.WriteString(model.RepairNeedsAPersonReminder + "\n\n")
 	fmt.Fprintf(&b, "The merge queue is still merging green changes into `%s` -- a red base "+
 		"branch is not a gate on merging, because a gate whose own failure blocks the only route "+
 		"to fixing it is a deadlock rather than a control. What does wait is work that would only "+
