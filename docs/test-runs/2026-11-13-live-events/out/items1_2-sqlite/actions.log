@@ -1,21 +1,21 @@
-1794543828.818702315 raise N1 warning (task 2)
-1794543829.208289473 raise N1 again, same severity (no event expected)
-1794543829.568101247 raise N1 at critical (re-raise)
-1794543829.912618525 ack N1
+1794547546.222252871 raise N1 warning (task 2)
+1794547546.582963317 raise N1 again, same severity (no event expected)
+1794547546.919386560 raise N1 at critical (re-raise)
+1794547547.266009500 ack N1
 flaky dropped after id 8
-1794543830.283571852 ack N1 again (no event expected)
-1794543830.625154517 clear N1
-1794543830.964811502 raise N2 repo acme/secret (viewer must not see)
-1794543831.310961646 raise N3 deployment-wide (viewer must not see)
+1794547547.622680769 ack N1 again (no event expected)
+1794547547.958824884 clear N1
+1794547548.298747866 raise N2 repo acme/secret (viewer must not see)
+1794547548.637296091 raise N3 deployment-wide (viewer must not see)
 flaky reconnected with Last-Event-ID: 8
-1794543832.175456461 host-script A1 requested
-1794543832.554195407 A1 approved
-1794543832.908126178 host-script A2 requested
-1794543833.283974418 A2 denied
-1794543833.636317374 host-script A3 requested
-1794543834.002272028 A3 expired by its caller (/expire)
-1794543834.346403944 host-script A4 requested, 2 s deadline
-1794543837.714581658 A4 past its deadline: a task-page read (GET /api/tasks/2)
-1794543838.058026668 A4 caller gives up (/expire)
+1794547549.482205290 host-script A1 requested
+1794547549.855591368 A1 approved
+1794547550.226005425 host-script A2 requested
+1794547550.588686360 A2 denied
+1794547550.932557289 host-script A3 requested
+1794547551.298074741 A3 expired by its caller (/expire)
+1794547551.640177491 host-script A4 requested, 2 s deadline
+1794547555.022199066 A4 past its deadline: a task-page read (GET /api/tasks/2)
+1794547555.371823052 A4 caller gives up (/expire)
 A4 as the caller sees it: {"id":"lsa-4","status":"expired"}
-1794543838.432751298 burst: 40 concurrent raises
+1794547555.734025884 burst: 40 concurrent raises

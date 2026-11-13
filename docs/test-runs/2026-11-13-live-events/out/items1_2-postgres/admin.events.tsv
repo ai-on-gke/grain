@@ -11,7 +11,7 @@
 16	local_script.answered			lsa-2	denied	acme/widgets	alice@example.com
 17	task.comment					acme/widgets	alice@example.com
 18	local_script.pending			lsa-3		acme/widgets	alice@example.com
-19	local_script.answered			lsa-3	expired	acme/widgets	grain
+19	local_script.answered			lsa-3	expired	acme/widgets	alice@example.com
 20	local_script.pending			lsa-4		acme/widgets	alice@example.com
 21	local_script.answered			lsa-4	expired	acme/widgets	grain
 22	notification.raised	5	warning			acme/widgets	alice@example.com
