@@ -12,7 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Routes } from "@angular/router";
+import { inject } from "@angular/core";
+import { type RedirectFunction, Router, type Routes } from "@angular/router";
+
+// Where the classic UI's System tabs (/system/<tab>) and its older
+// addresses live in this app: a bookmark or a link pasted out of the
+// classic UI lands on the page that has the same content rather than
+// falling through to the Inbox. Each entry is the path and, for Fleet,
+// the ?tab= that shows it.
+const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
+  health: ["/fleet"],
+  sandboxes: ["/fleet"],
+  top: ["/fleet"],
+  logs: ["/fleet", "logs"],
+  pipeline: ["/fleet", "controls"],
+  power: ["/fleet", "controls"],
+  caches: ["/settings/caches"],
+  metrics: ["/telemetry"],
+  upgrade: ["/settings/upgrade"],
+};
+
+// legacy redirects to the page SYSTEM_TABS names for `tab`, keeping the
+// query the old link carried (a /system/metrics?repo=... narrowing, say).
+function legacy(tab: string): RedirectFunction {
+  return ({ queryParams }) => {
+    const [path, fleetTab] = SYSTEM_TABS[tab] ?? ["/fleet"];
+    return inject(Router).createUrlTree([path], {
+      queryParams: fleetTab ? { ...queryParams, tab: fleetTab } : queryParams,
+    });
+  };
+}
 
 // Every page is lazy, so the shell's own bundle stays inside the budget
 // (angular.json) however many pages move over. A path this app does not
@@ -127,7 +156,14 @@ export const routes: Routes = [
     loadComponent: () =>
       import("./fleet/fleet-page.component").then((m) => m.FleetPageComponent),
   },
-  { path: "system", redirectTo: "fleet" },
+  { path: "system", redirectTo: "fleet", pathMatch: "full" },
+  {
+    path: "system/:tab",
+    redirectTo: (route) => legacy(String(route.params["tab"]))(route),
+  },
+  { path: "admin/logs", redirectTo: legacy("logs") },
+  { path: "sandboxes", redirectTo: legacy("sandboxes"), pathMatch: "full" },
+  { path: "caches", redirectTo: legacy("caches"), pathMatch: "full" },
   { path: "staging", redirectTo: "fleet" },
   {
     path: "context",

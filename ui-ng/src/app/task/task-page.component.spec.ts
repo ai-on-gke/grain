@@ -699,6 +699,18 @@ describe("TaskPageComponent", () => {
     } as never);
     await settle(f);
     expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+
+    // Standalone page uses <h1> for #task-title; viewer loses Reply on awaiting_reply.
+    expect(q(f, "h1#task-title")).toBeTruthy();
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        full: false,
+        role: "grain/viewer",
+        scopes: ["tasks:read"],
+      },
+    } as never);
+    await settle(f);
+    expect(q(f, '[data-testid="act-reply"]')).toBeNull();
   });
 
   it("offers Rollover for a durable idle task but not Recreate sandbox", async () => {

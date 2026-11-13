@@ -18,6 +18,7 @@ import {
   OnChanges,
   OnInit,
   ViewEncapsulation,
+  computed,
   inject,
   input,
   signal,
@@ -186,6 +187,27 @@ interface StateRepoEntryDto {
           }
 
           <div class="s-grid">
+            @if (reachableRepos().length > 0) {
+              <div class="s-field">
+                <span class="s-label">Connected repositories</span>
+                <g-pill-select
+                  [options]="reachableRepoOptions()"
+                  [value]="
+                    reachableRepos().includes(newRepoSlug())
+                      ? newRepoSlug()
+                      : ''
+                  "
+                  ariaLabel="Connected repository"
+                  align="left"
+                  testid="select-reachable-repo"
+                  [disabled]="
+                    state.sectionLocked('repositories') ||
+                    !access.can('POST /api/repos')
+                  "
+                  (valueChange)="$event && newRepoSlug.set($event)"
+                />
+              </div>
+            }
             <div class="s-field">
               <label class="s-label" for="add-repo-slug"
                 >Repository (owner/name)</label
@@ -960,6 +982,11 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly repos = signal<string[]>([]);
   protected readonly repoFacts = signal<Record<string, RepoFacts>>({});
   protected readonly reachableCount = signal(0);
+  protected readonly reachableRepos = signal<string[]>([]);
+  protected readonly reachableRepoOptions = computed<PillOption[]>(() => [
+    { value: "", label: "Choose connected repository…" },
+    ...this.reachableRepos().map((r) => ({ value: r, label: r })),
+  ]);
   protected readonly newRepoSlug = signal("");
   protected readonly newRepoUrl = signal("");
   protected readonly reposPlanNotice = signal("");
@@ -1055,7 +1082,22 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
           )
           .then((r) => {
             const list = Array.isArray(r) ? r : (r?.repos ?? []);
+            const names = Array.from(
+              new Set(
+                list
+                  .map((item) => {
+                    if (typeof item === "string") return item.trim();
+                    if (item && typeof item === "object" && "repo" in item) {
+                      const slug = (item as { repo?: unknown }).repo;
+                      return typeof slug === "string" ? slug.trim() : "";
+                    }
+                    return "";
+                  })
+                  .filter(Boolean),
+              ),
+            ).sort((a, b) => a.localeCompare(b));
             this.reachableCount.set(list.length);
+            this.reachableRepos.set(names);
           })
           .catch(() => undefined);
       }
