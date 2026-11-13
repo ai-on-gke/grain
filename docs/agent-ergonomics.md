@@ -482,7 +482,11 @@ and `force`, and works in two modes:
   depends-on links (`POST /api/tasks/{id}/wait-on`, `ui.Client.WaitOn`).
   `processResult` records the run as `parked` (which no failure streak
   counts) and leaves the task queued. The scheduler dispatches it again
-  once the targets close, or once a person removes the links. The next
+  once the targets close, or once a person removes the links. The links
+  the park wrote are the park's own: they are recorded on its suspension
+  (`ResumeOn.Links`), and the run that resumes it removes them
+  (`resumeSuspensionsTx`), so a target reopened later holds the task no
+  more. A dependency the task already declared stays. The next
   prompt says it resumed from a park and how each target ended
   (`parkedResumeSection`). The sandbox does not survive a park, so a park
   with unpushed commits or uncommitted changes is refused unless

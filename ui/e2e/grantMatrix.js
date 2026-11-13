@@ -50,14 +50,17 @@ export const SURFACES = [
 // cell is held to the same bar as the rest.
 const KNOWN_GAPS = {
   // A task's own repository and write target are given under "Repository
-  // access" (repoGrants.js), not as repo#target or repo#write {repo, base};
-  // check passes them while capability writes refuse them (4401 follow-up).
+  // access" (repoGrants.js), not as repo#target or repo#write {repo, base}.
+  // The API now refuses them in check and the writes alike, saying so
+  // (EXPECTED_REFUSALS, grain/task-4426); the UI walk does not drive the
+  // Repository access path yet, so its cells stay known (4401 follow-up).
   // Note: repo#write oneOf[2] ({refs, force}) was #4400 and now passes.
   "https://grain.dev/capabilities/repo#target *": "4401 follow-up",
   "https://grain.dev/capabilities/repo#write oneOf[1]": "4401 follow-up",
   "https://grain.dev/capabilities/repo#write oneOf[1] full": "4401 follow-up",
-  // A scope set limited to some repositories: check passes a repo outside
-  // them, the write refuses it.
+  // A scope set limited to some repositories, given a repo outside them:
+  // the API refuses it in check and the writes (grain/task-4426); the UI
+  // walk's cell has not been re-run against that yet.
   "https://grain.dev/capabilities/api#ops/triage full": "4401 follow-up",
 };
 
@@ -76,22 +79,7 @@ export function knownGap(ref, variant, surfaceId = "") {
 // refuse, so a form that trusts the check is told otherwise only on save.
 // The refusals themselves are grant semantics and stay; the gap is the
 // check not saying so, and the wording.
-const KNOWN_API_GAPS = {
-  // A task's repository is its target (repo#target, repo#write {repo,
-  // base}), given through the task's repository rather than its
-  // capabilities, but the capabilities routes refuse it as "unknown
-  // capability" and check records it as valid.
-  "https://grain.dev/capabilities/repo#target *":
-    "check passes; capability write says only 'unknown capability'",
-  "https://grain.dev/capabilities/repo#write oneOf[1]":
-    "check passes; capability write says only 'unknown capability'",
-  "https://grain.dev/capabilities/repo#write oneOf[1] full":
-    "check passes; capability write says only 'unknown capability'",
-  // A scope set limited to some repositories: check passes a repo
-  // outside them, the write refuses it.
-  "https://grain.dev/capabilities/api#ops/triage full":
-    "check passes a repo outside the scope set's reach; write refuses",
-};
+const KNOWN_API_GAPS = {};
 
 export function knownAPIGap(ref, variant) {
   return lookup(KNOWN_API_GAPS, ref, variant) || "";
@@ -101,8 +89,8 @@ const API_PREFIX = "https://grain.dev/capabilities/api#";
 
 // EXPECTED_REFUSALS are refusals a method's policy verdict does not
 // carry, because they are grain's own rule for one spelling of it rather
-// than the policy's: the cell passes when the surface refuses it with
-// this message, and fails if it grants it.
+// than the policy's: the cell passes when check and the task surfaces
+// refuse it with this message, and fails if any of them grants it.
 const EXPECTED_REFUSALS = {
   // grain#ci follows the repository's CI Mode and is never attached by
   // hand (grainci.Refusal; grain/task-4361, grain/task-4364).
@@ -111,6 +99,16 @@ const EXPECTED_REFUSALS = {
   // is a task/session grant, while repo-ci admits {repo}.
   "https://grain.dev/capabilities/repo#write oneOf[0]": /CI capability/,
   "https://grain.dev/capabilities/repo#write oneOf[0] full": /CI capability/,
+  // A task's repository is given through its target/writes ("Repository
+  // access"), not its capabilities.
+  "https://grain.dev/capabilities/repo#target required": /Repository access/,
+  "https://grain.dev/capabilities/repo#target full": /Repository access/,
+  "https://grain.dev/capabilities/repo#write oneOf[1]": /Repository access/,
+  "https://grain.dev/capabilities/repo#write oneOf[1] full":
+    /Repository access/,
+  // A scope set limited to some repositories refuses a repo outside them.
+  "https://grain.dev/capabilities/api#ops/triage full":
+    /scope set ops\/triage reaches only/,
 };
 
 // DIRECTOR_FORBIDDEN_SCOPES mirrors pkg/model/director_floor.go's Tier 3
@@ -154,6 +152,19 @@ export function expectedRefusal(ref, variant, surface = null) {
     if (DIRECTOR_FORBIDDEN_SCOPES.has(scope)) return DIRECTOR_FLOOR_REFUSAL;
   }
   return lookup(EXPECTED_REFUSALS, ref, variant) || null;
+}
+
+// TASK_ONLY_REFUSALS are EXPECTED_REFUSALS that only a task refuses: the
+// repos page's CI capabilities list grants them through the same POST
+// /api/capability-grants/check, so the bare check records them and only
+// a check naming a task (subject) refuses them, in catalogueRefusal.
+const TASK_ONLY_REFUSALS = {
+  "https://grain.dev/capabilities/repo#write oneOf[0]": true,
+  "https://grain.dev/capabilities/repo#write oneOf[0] full": true,
+};
+
+export function refusedOnlyForTasks(ref, variant) {
+  return Boolean(lookup(TASK_ONLY_REFUSALS, ref, variant));
 }
 
 function lookup(table, ref, variant) {
