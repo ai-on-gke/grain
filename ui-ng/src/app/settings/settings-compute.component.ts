@@ -18,6 +18,7 @@ import {
   OnChanges,
   OnInit,
   ViewEncapsulation,
+  computed,
   inject,
   input,
   signal,
@@ -29,6 +30,15 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import {
+  type ModelBackendLike,
+  availabilityNote,
+  containsModel,
+  modelAvailability,
+  modelGroups,
+  parseDefaultModels,
+} from "../shared/model-catalog";
+import { ModelPickerComponent } from "../shared/model-picker.component";
 import {
   type PillOption,
   PillSelectComponent,
@@ -56,7 +66,7 @@ interface ModelSettingRow {
   effort?: string;
 }
 
-interface BackendEntry {
+interface BackendEntry extends ModelBackendLike {
   id: string;
   name?: string;
   framework: string;
@@ -178,9 +188,32 @@ export function formatHostdLabels(
   return entries.map(([k, v]) => `${k}=${v}`).join(", ");
 }
 
+function formatRefreshedAt(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return `${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${hh}:${mm} UTC`;
+}
+
 @Component({
   selector: "g-settings-compute",
-  imports: [PillSelectComponent, ConfirmDialogComponent],
+  imports: [PillSelectComponent, ConfirmDialogComponent, ModelPickerComponent],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -193,96 +226,199 @@ export function formatHostdLabels(
                 Default model &amp; per-model reasoning effort
               </h3>
               <p class="s-card-desc">
-                Selects the deployment default model and per-model reasoning
-                effort preferences when a task does not pin one.
+                The model a task runs on when it does not pin one, the fallback
+                models tried after it, and per-model reasoning effort. The
+                choices are the models your connections advertise.
               </p>
             </div>
           </div>
           <div class="s-grid">
             <div class="s-field">
-              <label class="s-label" for="f-default-model"
-                >Deployment default model</label
-              >
-              <input
-                id="f-default-model"
-                class="s-input"
-                type="text"
-                data-testid="input-default-model"
-                placeholder="gemini-2.5-pro"
-                [value]="defaultModelVal()"
-                [disabled]="!canWriteSettings() && !canWriteDeployment()"
-                (input)="setDefaultModelVal($any($event.target).value)"
+              <span class="s-label">Deployment default model</span>
+              <g-model-picker
+                testid="picker-default-model"
+                ariaLabel="Deployment default model"
+                placeholder="Not set: each connection's own default"
+                [groups]="modelGroups()"
+                [value]="modelChain()[0] || ''"
+                [disabled]="!canEditChain()"
+                [refreshable]="canRefreshModels() && anyDiscovers()"
+                [refreshing]="refreshingModels()"
+                [refreshNote]="refreshNote()"
+                (refresh)="refreshDiscoveredModels()"
+                (valueChange)="setDefaultModel($event)"
               />
             </div>
           </div>
 
-          @if (modelSettingsRows().length > 0) {
-            <div class="s-table-wrap">
-              <table class="s-table" aria-label="Per-model reasoning settings">
-                <thead>
-                  <tr>
-                    <th>Model</th>
-                    <th>Reasoning effort</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (
-                    ms of modelSettingsRows();
-                    track ms.model;
-                    let idx = $index
-                  ) {
-                    <tr [attr.data-testid]="'model-setting-row-' + ms.model">
-                      <td class="tabular">{{ ms.model }}</td>
-                      <td class="tabular">{{ ms.effort || "default" }}</td>
-                      <td>
-                        <button
-                          type="button"
-                          class="btn-text s-btn-sm"
-                          [disabled]="!canWriteDeployment()"
-                          (click)="removeModelSetting(idx)"
-                        >
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  }
-                </tbody>
-              </table>
+          <div class="s-field mp-fallbacks" data-testid="fallback-models">
+            <span class="s-label">Fallback models</span>
+            <span class="s-hint">
+              Tried in order after the default model when it is paused after a
+              usage limit, its connections are at their concurrency limit, or no
+              enabled connection advertises it. A task that pins its own model
+              never falls back.
+            </span>
+            @if (fallbackModels().length > 0) {
+              <ol class="mp-chain" aria-label="Fallback models, in order">
+                @for (
+                  m of fallbackModels();
+                  track m;
+                  let i = $index, first = $first, last = $last
+                ) {
+                  <li
+                    class="mp-chain-row"
+                    [attr.data-testid]="'fallback-row-' + i"
+                  >
+                    <span class="mp-chain-pos" aria-hidden="true">{{
+                      i + 1
+                    }}</span>
+                    <span class="mp-chain-model">{{ m }}</span>
+                    @if (modelNote(m)) {
+                      <span class="mp-flag">{{ modelNote(m) }}</span>
+                    }
+                    <span class="mp-chain-actions">
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        [attr.aria-label]="'Move ' + m + ' up'"
+                        [attr.data-testid]="'fallback-up-' + i"
+                        [disabled]="first || !canEditChain()"
+                        (click)="moveFallback(i, -1)"
+                      >
+                        Up
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        [attr.aria-label]="'Move ' + m + ' down'"
+                        [attr.data-testid]="'fallback-down-' + i"
+                        [disabled]="last || !canEditChain()"
+                        (click)="moveFallback(i, 1)"
+                      >
+                        Down
+                      </button>
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        [attr.aria-label]="'Remove ' + m"
+                        [attr.data-testid]="'fallback-remove-' + i"
+                        [disabled]="!canEditChain()"
+                        (click)="removeFallback(i)"
+                      >
+                        Remove
+                      </button>
+                    </span>
+                  </li>
+                }
+              </ol>
+            }
+            <g-model-picker
+              testid="picker-add-fallback"
+              ariaLabel="Add fallback model"
+              [placeholder]="
+                modelChain().length
+                  ? 'Add fallback model'
+                  : 'Choose a default model first'
+              "
+              [groups]="modelGroups()"
+              [exclude]="modelChain()"
+              [disabled]="!canEditChain() || modelChain().length === 0"
+              [refreshable]="canRefreshModels() && anyDiscovers()"
+              [refreshing]="refreshingModels()"
+              [refreshNote]="refreshNote()"
+              (refresh)="refreshDiscoveredModels()"
+              (valueChange)="addFallback($event)"
+            />
+          </div>
+
+          @if (chainWarning()) {
+            <div
+              class="s-banner warn"
+              role="status"
+              data-testid="default-model-warning"
+            >
+              {{ chainWarning() }}
             </div>
           }
 
-          <div class="s-inline">
-            <input
-              class="s-input s-input-inline tabular"
-              type="text"
-              aria-label="Model identifier"
-              data-testid="input-model-setting-model"
-              placeholder="gemini-2.5-pro"
-              [value]="newModelSettingName()"
-              [disabled]="!canWriteDeployment()"
-              (input)="newModelSettingName.set($any($event.target).value)"
-            />
-            <g-pill-select
-              testid="select-model-setting-effort"
-              ariaLabel="Reasoning effort"
-              align="left"
-              [options]="effortOptions"
-              [value]="newModelSettingEffort()"
-              [disabled]="!canWriteDeployment()"
-              (valueChange)="newModelSettingEffort.set($event)"
-            />
-            <button
-              type="button"
-              class="btn-tonal s-btn-sm"
-              data-testid="add-model-setting-btn"
-              [disabled]="
-                !newModelSettingName().trim() || !canWriteDeployment()
-              "
-              (click)="addModelSetting()"
-            >
-              Set model effort
-            </button>
+          <div class="s-subsection">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Per-model reasoning effort</h4>
+            </div>
+            @if (modelSettingsRows().length > 0) {
+              <div class="s-table-wrap">
+                <table
+                  class="s-table"
+                  aria-label="Per-model reasoning settings"
+                >
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th>Reasoning effort</th>
+                      <th class="s-actions-cell">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (
+                      ms of modelSettingsRows();
+                      track ms.model;
+                      let idx = $index
+                    ) {
+                      <tr [attr.data-testid]="'model-setting-row-' + ms.model">
+                        <td class="s-mono">{{ ms.model }}</td>
+                        <td>{{ ms.effort || "default" }}</td>
+                        <td class="s-actions-cell">
+                          <div class="s-row-actions">
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              [disabled]="!canWriteDeployment()"
+                              (click)="removeModelSetting(idx)"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            }
+
+            <div class="s-inline">
+              <g-model-picker
+                class="mp-inline"
+                testid="picker-model-setting-model"
+                ariaLabel="Model for a reasoning effort setting"
+                placeholder="Choose a model"
+                [groups]="modelGroups()"
+                [value]="newModelSettingName()"
+                [disabled]="!canWriteDeployment()"
+                (valueChange)="newModelSettingName.set($event)"
+              />
+              <g-pill-select
+                testid="select-model-setting-effort"
+                ariaLabel="Reasoning effort"
+                align="left"
+                [options]="effortOptions"
+                [value]="newModelSettingEffort()"
+                [disabled]="!canWriteDeployment()"
+                (valueChange)="newModelSettingEffort.set($event)"
+              />
+              <button
+                type="button"
+                class="btn-tonal s-btn-sm"
+                data-testid="add-model-setting-btn"
+                [disabled]="
+                  !newModelSettingName().trim() || !canWriteDeployment()
+                "
+                (click)="addModelSetting()"
+              >
+                Set model effort
+              </button>
+            </div>
           </div>
         </div>
 
@@ -312,14 +448,13 @@ export function formatHostdLabels(
                   <tr>
                     <th>Framework</th>
                     <th>Status</th>
-                    <th>Update key</th>
-                    <th>Verify</th>
+                    <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (fw of frameworks; track fw) {
                     <tr>
-                      <td class="tabular">{{ fw }}</td>
+                      <td class="s-cell-title">{{ fw }}</td>
                       <td>
                         <span
                           [class]="
@@ -342,35 +477,34 @@ export function formatHostdLabels(
                           </span>
                         }
                       </td>
-                      <td>
-                        <div class="s-inline">
-                          <input
-                            class="s-input s-input-inline"
-                            type="password"
-                            autocomplete="off"
-                            [attr.aria-label]="fw + ' API key'"
-                            [attr.data-testid]="'input-agent-key-' + fw"
-                            placeholder="Paste secret key…"
-                            [value]="keyDrafts()[fw] || ''"
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
+                          <button
+                            type="button"
+                            class="btn-tonal s-btn-sm"
+                            [attr.data-testid]="'toggle-agent-key-' + fw"
+                            [attr.aria-expanded]="openKeyFramework() === fw"
+                            [attr.aria-label]="'Update API key for ' + fw"
                             [disabled]="
                               !agentKeysEnabled() ||
                               !access.can('PUT /api/agent-keys/{framework}')
                             "
-                            (input)="setKeyDraft(fw, $any($event.target).value)"
-                          />
+                            (click)="toggleKeyEditor(fw)"
+                          >
+                            Update key
+                          </button>
                           <button
                             type="button"
                             class="btn-tonal s-btn-sm"
-                            [attr.data-testid]="'save-agent-key-' + fw"
+                            [attr.data-testid]="'check-agent-key-' + fw"
                             [disabled]="
-                              !agentKeysEnabled() ||
-                              !(keyDrafts()[fw] || '').trim() ||
-                              !access.can('PUT /api/agent-keys/{framework}') ||
-                              busyKey() === fw
+                              !access.can(
+                                'POST /api/agent-keys/{framework}/check'
+                              ) || busyKey() === fw
                             "
-                            (click)="saveAgentKey(fw)"
+                            (click)="checkAgentKey(fw)"
                           >
-                            Save key
+                            Check
                           </button>
                           @if (isKeyConfigured(fw)) {
                             <button
@@ -391,82 +525,142 @@ export function formatHostdLabels(
                           }
                         </div>
                       </td>
-                      <td>
-                        <button
-                          type="button"
-                          class="btn-tonal s-btn-sm"
-                          [attr.data-testid]="'check-agent-key-' + fw"
-                          [disabled]="
-                            !access.can(
-                              'POST /api/agent-keys/{framework}/check'
-                            ) || busyKey() === fw
-                          "
-                          (click)="checkAgentKey(fw)"
-                        >
-                          Check
-                        </button>
-                      </td>
                     </tr>
+                    @if (openKeyFramework() === fw) {
+                      <tr
+                        class="s-subrow"
+                        [attr.data-testid]="'agent-key-row-' + fw"
+                      >
+                        <td colspan="3">
+                          <form
+                            class="s-cred-bar"
+                            autocomplete="off"
+                            (submit)="$event.preventDefault(); saveAgentKey(fw)"
+                          >
+                            <span class="s-label"
+                              >API key for
+                              <span class="s-mono">{{ fw }}</span></span
+                            >
+                            <input
+                              class="s-input s-input-inline"
+                              type="password"
+                              [attr.name]="'grain-agent-key-' + fw"
+                              autocomplete="new-password"
+                              data-lpignore="true"
+                              data-1p-ignore="true"
+                              [attr.aria-label]="fw + ' API key'"
+                              [attr.data-testid]="'input-agent-key-' + fw"
+                              placeholder="Paste secret key…"
+                              [value]="keyDrafts()[fw] || ''"
+                              [disabled]="
+                                !agentKeysEnabled() ||
+                                !access.can('PUT /api/agent-keys/{framework}')
+                              "
+                              (input)="
+                                setKeyDraft(fw, $any($event.target).value)
+                              "
+                            />
+                            <button
+                              type="submit"
+                              class="btn-primary s-btn-sm"
+                              [attr.data-testid]="'save-agent-key-' + fw"
+                              [disabled]="
+                                !agentKeysEnabled() ||
+                                !(keyDrafts()[fw] || '').trim() ||
+                                !access.can(
+                                  'PUT /api/agent-keys/{framework}'
+                                ) ||
+                                busyKey() === fw
+                              "
+                            >
+                              Save key
+                            </button>
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              (click)="openKeyFramework.set(null)"
+                            >
+                              Close
+                            </button>
+                          </form>
+                        </td>
+                      </tr>
+                    }
                   }
                 </tbody>
               </table>
             </div>
           }
 
-          <div class="s-field">
-            <div class="s-inline">
-              <label class="s-label" for="f-codex-auth"
-                >Codex auth.json (OAuth session bundle)</label
-              >
-              <span
-                [class]="
-                  'status-pill ' + (codexAuthJsonSet() ? 'healthy' : 'neutral')
-                "
-                data-testid="codex-auth-status"
-              >
-                {{ codexAuthJsonSet() ? "Configured" : "Not set" }}
-              </span>
-              @if (codexAuthRefreshError()) {
-                <span class="status-pill error">{{
-                  codexAuthRefreshError()
-                }}</span>
-              }
-            </div>
-            <textarea
-              id="f-codex-auth"
-              class="s-textarea tabular"
-              rows="2"
-              data-testid="input-codex-auth"
-              placeholder='{"tokens": {...}}'
-              [value]="codexAuthDraft()"
-              [disabled]="!access.can('PUT /api/codex-auth')"
-              (input)="codexAuthDraft.set($any($event.target).value)"
-            ></textarea>
-            <div class="s-inline">
-              <button
-                type="button"
-                class="btn-tonal s-btn-sm"
-                data-testid="save-codex-auth"
-                [disabled]="
-                  !codexAuthDraft().trim() || !access.can('PUT /api/codex-auth')
-                "
-                (click)="saveCodexAuth()"
-              >
-                Save Codex auth
-              </button>
-              <button
-                type="button"
-                class="btn-text s-btn-sm"
-                data-testid="clear-codex-auth"
-                [disabled]="!access.can('DELETE /api/codex-auth')"
-                (click)="clearCodexAuth()"
-              >
-                Clear Codex auth
-              </button>
+          <div class="s-subsection">
+            <div class="s-field">
+              <div class="s-inline">
+                <label class="s-label" for="f-codex-auth"
+                  >Codex auth.json (OAuth session bundle)</label
+                >
+                <span
+                  [class]="
+                    'status-pill ' +
+                    (codexAuthJsonSet() ? 'healthy' : 'neutral')
+                  "
+                  data-testid="codex-auth-status"
+                >
+                  {{ codexAuthJsonSet() ? "Configured" : "Not set" }}
+                </span>
+                @if (codexAuthRefreshError()) {
+                  <span class="status-pill error">{{
+                    codexAuthRefreshError()
+                  }}</span>
+                }
+              </div>
+              <textarea
+                id="f-codex-auth"
+                class="s-textarea s-mono"
+                rows="2"
+                data-testid="input-codex-auth"
+                placeholder='{"tokens": {...}}'
+                [value]="codexAuthDraft()"
+                [disabled]="!access.can('PUT /api/codex-auth')"
+                (input)="codexAuthDraft.set($any($event.target).value)"
+              ></textarea>
+              <div class="s-inline">
+                <button
+                  type="button"
+                  class="btn-tonal s-btn-sm"
+                  data-testid="save-codex-auth"
+                  [disabled]="
+                    !codexAuthDraft().trim() ||
+                    !access.can('PUT /api/codex-auth')
+                  "
+                  (click)="saveCodexAuth()"
+                >
+                  Save Codex auth
+                </button>
+                <button
+                  type="button"
+                  class="btn-text s-btn-sm"
+                  data-testid="clear-codex-auth"
+                  [disabled]="
+                    !this.codexAuthJsonSet() ||
+                    !access.can('DELETE /api/codex-auth')
+                  "
+                  (click)="clearCodexAuth()"
+                >
+                  Clear Codex auth
+                </button>
+              </div>
             </div>
           </div>
         </div>
 
+        @if (!modelsConfigured()) {
+          <div class="s-banner readonly">
+            <span
+              >No connections configured yet. Tasks run only on configured
+              connections and wait until at least one is available.</span
+            >
+          </div>
+        }
         <div class="s-card" data-testid="card-model-backends">
           <div class="s-card-head">
             <div>
@@ -494,204 +688,354 @@ export function formatHostdLabels(
               <table class="s-table" aria-label="Model connections">
                 <thead>
                   <tr>
-                    <th>ID / Name</th>
+                    <th>Connection</th>
                     <th>Framework</th>
-                    <th>Placement &amp; Auth</th>
-                    <th>Credential</th>
-                    <th>Actions</th>
+                    <th>Placement &amp; discovery</th>
+                    <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (b of backends(); track b.id) {
                     <tr [attr.data-testid]="'backend-row-' + b.id">
-                      <td class="tabular">
-                        {{ b.id }}{{ b.name ? " (" + b.name + ")" : "" }}
-                      </td>
-                      <td>{{ b.framework }}</td>
-                      <td class="tabular">
-                        {{ b.authMode || "default"
-                        }}{{ b.hostd ? " · hostd:" + b.hostd : ""
-                        }}{{ b.concurrency ? " · max:" + b.concurrency : ""
-                        }}{{
-                          b.models?.length
-                            ? " · [" + b.models?.join(", ") + "]"
-                            : ""
-                        }}
-                      </td>
                       <td>
-                        <div class="s-inline">
-                          <input
-                            class="s-input s-input-inline"
-                            type="password"
-                            [attr.aria-label]="'Credential for ' + b.id"
-                            placeholder="Set secret…"
-                            [value]="backendCredDrafts()[b.id] || ''"
-                            [disabled]="
-                              !access.can(
-                                'PUT /api/agent-backends/{id}/credential'
-                              )
-                            "
-                            (input)="
-                              setBackendCredDraft(
-                                b.id,
-                                $any($event.target).value
-                              )
-                            "
-                          />
-                          <button
-                            type="button"
-                            class="btn-tonal s-btn-sm"
-                            [disabled]="
-                              !(backendCredDrafts()[b.id] || '').trim() ||
-                              !access.can(
-                                'PUT /api/agent-backends/{id}/credential'
-                              )
-                            "
-                            (click)="saveBackendCred(b.id)"
-                          >
-                            Set
-                          </button>
+                        <div class="s-cell-stack">
+                          <span class="s-cell-title">{{ b.name || b.id }}</span>
+                          @if (b.name) {
+                            <span class="s-meta-mono">{{ b.id }}</span>
+                          }
                         </div>
                       </td>
                       <td>
-                        <button
-                          type="button"
-                          class="btn-text s-btn-sm"
-                          [attr.data-testid]="'remove-backend-' + b.id"
-                          [disabled]="
-                            !access.can(
-                              'DELETE /api/deployment/agent-backends/{backendId}'
-                            )
-                          "
-                          (click)="deleteBackend(b.id)"
-                        >
-                          Remove
-                        </button>
+                        <span class="status-pill neutral">{{
+                          b.framework
+                        }}</span>
+                      </td>
+                      <td>
+                        <div>
+                          {{ b.authMode || "default"
+                          }}{{ b.hostd ? " · host " + b.hostd : ""
+                          }}{{ b.concurrency ? " · max " + b.concurrency : "" }}
+                        </div>
+                        @if (b.models?.length) {
+                          <div class="s-meta">
+                            Pinned:
+                            <span class="s-mono">{{
+                              b.models?.join(", ")
+                            }}</span>
+                          </div>
+                        }
+                        @if (b.discovered) {
+                          <details class="s-disc-details">
+                            <summary>
+                              {{ b.discovered.models?.length || 0 }} models
+                              discovered
+                              @if (b.discovered.refreshedAt) {
+                                <span
+                                  class="s-meta"
+                                  [attr.title]="b.discovered.refreshedAt"
+                                >
+                                  ·
+                                  {{
+                                    formatRefreshedAt(b.discovered.refreshedAt)
+                                  }}</span
+                                >
+                              }
+                            </summary>
+                            <div class="s-disc-models">
+                              {{ b.discovered.models?.join(", ") || "None" }}
+                            </div>
+                          </details>
+                          @if (b.discovered.error) {
+                            <div
+                              class="status-pill error"
+                              style="margin-top: 6px"
+                            >
+                              {{ b.discovered.error }}
+                            </div>
+                          }
+                        }
+                      </td>
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
+                          @if (discovers(b)) {
+                            <button
+                              type="button"
+                              class="btn-tonal s-btn-sm"
+                              [attr.data-testid]="'refresh-backend-' + b.id"
+                              [attr.aria-label]="'Refresh models of ' + b.id"
+                              [disabled]="
+                                !canRefreshModels() || refreshingModels()
+                              "
+                              (click)="refreshDiscoveredModels(b.id)"
+                            >
+                              Refresh
+                            </button>
+                          }
+                          @if (b.authMode !== "ambient") {
+                            <button
+                              type="button"
+                              class="btn-tonal s-btn-sm"
+                              [attr.data-testid]="'toggle-cred-' + b.id"
+                              [attr.aria-expanded]="
+                                openCredBackendId() === b.id
+                              "
+                              [attr.aria-label]="
+                                'Manage credential for ' + b.id
+                              "
+                              (click)="toggleCredEditor(b.id)"
+                            >
+                              Credential
+                            </button>
+                          }
+                          <button
+                            type="button"
+                            class="btn-tonal s-btn-sm"
+                            [attr.data-testid]="'edit-backend-' + b.id"
+                            [attr.aria-label]="'Edit connection ' + b.id"
+                            (click)="editBackend(b)"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            class="btn-text s-btn-sm"
+                            [attr.data-testid]="'remove-backend-' + b.id"
+                            [attr.aria-label]="'Remove connection ' + b.id"
+                            [disabled]="
+                              !access.can(
+                                'DELETE /api/deployment/agent-backends/{backendId}'
+                              )
+                            "
+                            (click)="startDeleteBackend(b.id)"
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </td>
                     </tr>
+                    @if (
+                      openCredBackendId() === b.id && b.authMode !== "ambient"
+                    ) {
+                      <tr
+                        class="s-subrow"
+                        [attr.data-testid]="'backend-cred-row-' + b.id"
+                      >
+                        <td colspan="4">
+                          <form
+                            class="s-cred-bar"
+                            autocomplete="off"
+                            (submit)="
+                              $event.preventDefault(); saveBackendCred(b.id)
+                            "
+                          >
+                            <span class="s-label"
+                              >Credential for
+                              <span class="s-mono">{{ b.id }}</span></span
+                            >
+                            <input
+                              class="s-input s-input-inline"
+                              type="password"
+                              [attr.name]="'grain-backend-cred-' + b.id"
+                              autocomplete="new-password"
+                              data-lpignore="true"
+                              data-1p-ignore="true"
+                              [attr.aria-label]="'Credential for ' + b.id"
+                              placeholder="Paste API key or secret…"
+                              [value]="backendCredDrafts()[b.id] || ''"
+                              [disabled]="
+                                !access.can(
+                                  'PUT /api/agent-backends/{id}/credential'
+                                )
+                              "
+                              (input)="
+                                setBackendCredDraft(
+                                  b.id,
+                                  $any($event.target).value
+                                )
+                              "
+                            />
+                            <button
+                              type="submit"
+                              class="btn-primary s-btn-sm"
+                              [disabled]="
+                                !(backendCredDrafts()[b.id] || '').trim() ||
+                                !access.can(
+                                  'PUT /api/agent-backends/{id}/credential'
+                                )
+                              "
+                            >
+                              Save secret
+                            </button>
+                            <button
+                              type="button"
+                              class="btn-tonal s-btn-sm"
+                              [attr.data-testid]="'clear-cred-' + b.id"
+                              [attr.aria-label]="'Clear credential for ' + b.id"
+                              [disabled]="
+                                !access.can(
+                                  'DELETE /api/agent-backends/{id}/credential'
+                                )
+                              "
+                              (click)="clearBackendCred(b.id)"
+                            >
+                              Clear stored secret
+                            </button>
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              (click)="openCredBackendId.set(null)"
+                            >
+                              Close
+                            </button>
+                          </form>
+                        </td>
+                      </tr>
+                    }
                   }
                 </tbody>
               </table>
             </div>
           }
 
-          <div class="s-grid">
-            <div class="s-field">
-              <label class="s-label" for="nb-id">Connection ID</label>
-              <input
-                id="nb-id"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-new-backend-id"
-                placeholder="claude-team-1"
-                [value]="newBackendId()"
-                (input)="newBackendId.set($any($event.target).value)"
-              />
+          <div class="s-subsection">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">
+                {{
+                  editingBackendId()
+                    ? "Edit connection: " + editingBackendId()
+                    : "Add a model connection"
+                }}
+              </h4>
+              @if (editingBackendId()) {
+                <button
+                  type="button"
+                  class="btn-text s-btn-sm"
+                  (click)="cancelEditBackend()"
+                >
+                  Cancel edit
+                </button>
+              }
             </div>
-            <div class="s-field">
-              <label class="s-label" for="nb-name">Display name</label>
-              <input
-                id="nb-name"
-                class="s-input"
-                type="text"
-                data-testid="input-new-backend-name"
-                placeholder="Team Claude"
-                [value]="newBackendName()"
-                (input)="newBackendName.set($any($event.target).value)"
-              />
+            <div class="s-grid">
+              <div class="s-field">
+                <label class="s-label" for="nb-id">Connection ID</label>
+                <input
+                  id="nb-id"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-new-backend-id"
+                  placeholder="claude-team-1"
+                  [value]="newBackendId()"
+                  (input)="newBackendId.set($any($event.target).value)"
+                />
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="nb-name">Display name</label>
+                <input
+                  id="nb-name"
+                  class="s-input"
+                  type="text"
+                  data-testid="input-new-backend-name"
+                  placeholder="Team Claude"
+                  [value]="newBackendName()"
+                  (input)="newBackendName.set($any($event.target).value)"
+                />
+              </div>
+              <div class="s-field">
+                <span class="s-label">Framework</span>
+                <g-pill-select
+                  testid="select-new-backend-fw"
+                  ariaLabel="Backend framework"
+                  align="left"
+                  [options]="frameworkOptions"
+                  [value]="newBackendFw()"
+                  (valueChange)="newBackendFw.set($event)"
+                />
+              </div>
+              <div class="s-field">
+                <span class="s-label">Auth mode</span>
+                <g-pill-select
+                  testid="select-new-backend-auth"
+                  ariaLabel="Backend auth mode"
+                  align="left"
+                  [options]="authModeOptions"
+                  [value]="newBackendAuthMode()"
+                  (valueChange)="newBackendAuthMode.set($event)"
+                />
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="nb-models"
+                  >Pinned models (comma-separated)</label
+                >
+                <input
+                  id="nb-models"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-new-backend-models"
+                  placeholder="empty = discover all"
+                  [value]="newBackendModels()"
+                  (input)="newBackendModels.set($any($event.target).value)"
+                />
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="nb-hostd"
+                  >Hostd name or label selector</label
+                >
+                <input
+                  id="nb-hostd"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-new-backend-hostd"
+                  placeholder="workstation-01 or env=dev"
+                  [value]="newBackendHostd()"
+                  (input)="newBackendHostd.set($any($event.target).value)"
+                />
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="nb-clipath"
+                  >CLI path override</label
+                >
+                <input
+                  id="nb-clipath"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-new-backend-clipath"
+                  placeholder="/usr/local/bin/agy"
+                  [value]="newBackendCliPath()"
+                  (input)="newBackendCliPath.set($any($event.target).value)"
+                />
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="nb-conc"
+                  >Concurrency limit (0 = default)</label
+                >
+                <input
+                  id="nb-conc"
+                  class="s-input s-num"
+                  type="number"
+                  min="0"
+                  data-testid="input-new-backend-concurrency"
+                  [value]="newBackendConcurrency()"
+                  (input)="
+                    newBackendConcurrency.set(Number($any($event.target).value))
+                  "
+                />
+              </div>
             </div>
-            <div class="s-field">
-              <span class="s-label">Framework</span>
-              <g-pill-select
-                testid="select-new-backend-fw"
-                ariaLabel="Backend framework"
-                align="left"
-                [options]="frameworkOptions"
-                [value]="newBackendFw()"
-                (valueChange)="newBackendFw.set($event)"
-              />
-            </div>
-            <div class="s-field">
-              <span class="s-label">Auth mode</span>
-              <g-pill-select
-                testid="select-new-backend-auth"
-                ariaLabel="Backend auth mode"
-                align="left"
-                [options]="authModeOptions"
-                [value]="newBackendAuthMode()"
-                (valueChange)="newBackendAuthMode.set($event)"
-              />
-            </div>
-            <div class="s-field">
-              <label class="s-label" for="nb-models"
-                >Pinned models (comma-separated)</label
-              >
-              <input
-                id="nb-models"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-new-backend-models"
-                placeholder="empty = discover all"
-                [value]="newBackendModels()"
-                (input)="newBackendModels.set($any($event.target).value)"
-              />
-            </div>
-            <div class="s-field">
-              <label class="s-label" for="nb-hostd"
-                >Hostd name or label selector</label
-              >
-              <input
-                id="nb-hostd"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-new-backend-hostd"
-                placeholder="workstation-01 or env=dev"
-                [value]="newBackendHostd()"
-                (input)="newBackendHostd.set($any($event.target).value)"
-              />
-            </div>
-            <div class="s-field">
-              <label class="s-label" for="nb-clipath">CLI path override</label>
-              <input
-                id="nb-clipath"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-new-backend-clipath"
-                placeholder="/usr/local/bin/agy"
-                [value]="newBackendCliPath()"
-                (input)="newBackendCliPath.set($any($event.target).value)"
-              />
-            </div>
-            <div class="s-field">
-              <label class="s-label" for="nb-conc"
-                >Concurrency limit (0 = default)</label
-              >
-              <input
-                id="nb-conc"
-                class="s-input tabular"
-                type="number"
-                min="0"
-                data-testid="input-new-backend-concurrency"
-                [value]="newBackendConcurrency()"
-                (input)="
-                  newBackendConcurrency.set(Number($any($event.target).value))
+            <div class="s-inline">
+              <button
+                type="button"
+                class="btn-tonal"
+                data-testid="add-model-backend"
+                [disabled]="
+                  !newBackendId().trim() ||
+                  !access.can('PUT /api/deployment/agent-backends/{backendId}')
                 "
-              />
+                (click)="saveBackend()"
+              >
+                Save model connection
+              </button>
             </div>
-          </div>
-          <div class="s-inline">
-            <button
-              type="button"
-              class="btn-tonal"
-              data-testid="add-model-backend"
-              [disabled]="
-                !newBackendId().trim() ||
-                !access.can('PUT /api/deployment/agent-backends/{backendId}')
-              "
-              (click)="saveBackend()"
-            >
-              Save model connection
-            </button>
           </div>
 
           @if (discoveredModels().length > 0) {
@@ -701,7 +1045,7 @@ export function formatHostdLabels(
               >
               <div class="s-inline" data-testid="discovered-models-list">
                 @for (m of discoveredModels(); track m) {
-                  <span class="status-pill neutral tabular">{{ m }}</span>
+                  <span class="status-pill neutral s-mono">{{ m }}</span>
                 }
               </div>
             </div>
@@ -747,7 +1091,7 @@ export function formatHostdLabels(
               >
               <input
                 id="us-min-workers"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="1"
                 data-testid="input-usage-min-workers"
@@ -762,7 +1106,7 @@ export function formatHostdLabels(
               >
               <input
                 id="us-retention"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="1"
                 data-testid="input-usage-retention-days"
@@ -775,101 +1119,110 @@ export function formatHostdLabels(
             </div>
           </div>
 
-          @if (usageBudgets().length > 0) {
-            <div class="s-table-wrap">
-              <table class="s-table" aria-label="Token budgets">
-                <thead>
-                  <tr>
-                    <th>Connection</th>
-                    <th>Model</th>
-                    <th>Tokens</th>
-                    <th>Window</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (b of usageBudgets(); track $index; let idx = $index) {
-                    <tr [attr.data-testid]="'usage-budget-row-' + idx">
-                      <td class="tabular">{{ b.connection }}</td>
-                      <td class="tabular">{{ b.model || "*" }}</td>
-                      <td class="tabular">{{ b.tokens }}</td>
-                      <td class="tabular">{{ b.window }}</td>
-                      <td>
-                        <button
-                          type="button"
-                          class="btn-text s-btn-sm"
-                          [disabled]="!access.can('PUT /api/usage/settings')"
-                          (click)="removeUsageBudget(idx)"
-                        >
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  }
-                </tbody>
-              </table>
+          <div class="s-subsection">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Per-connection token budgets</h4>
             </div>
-          }
-
-          <div class="s-inline">
-            <input
-              class="s-input s-input-inline tabular"
-              type="text"
-              aria-label="Budget connection ID"
-              data-testid="input-budget-connection"
-              placeholder="connection-id"
-              [value]="newBudgetConn()"
-              [disabled]="!access.can('PUT /api/usage/settings')"
-              (input)="newBudgetConn.set($any($event.target).value)"
-            />
-            <input
-              class="s-input s-input-inline tabular"
-              type="text"
-              aria-label="Budget model (optional)"
-              data-testid="input-budget-model"
-              placeholder="model (optional)"
-              [value]="newBudgetModel()"
-              [disabled]="!access.can('PUT /api/usage/settings')"
-              (input)="newBudgetModel.set($any($event.target).value)"
-            />
-            <input
-              class="s-input s-input-inline tabular"
-              type="number"
-              min="1"
-              aria-label="Token limit"
-              data-testid="input-budget-tokens"
-              placeholder="1000000"
-              [value]="newBudgetTokens()"
-              [disabled]="!access.can('PUT /api/usage/settings')"
-              (input)="newBudgetTokens.set($any($event.target).value)"
-            />
-            <input
-              class="s-input s-input-inline tabular"
-              type="text"
-              aria-label="Budget window duration"
-              data-testid="input-budget-window"
-              placeholder="24h"
-              [value]="newBudgetWindow()"
-              [disabled]="!access.can('PUT /api/usage/settings')"
-              (input)="newBudgetWindow.set($any($event.target).value)"
-            />
-            <button
-              type="button"
-              class="btn-tonal s-btn-sm"
-              data-testid="add-usage-budget-btn"
-              [disabled]="
-                !newBudgetConn().trim() ||
-                !(Number(newBudgetTokens()) > 0) ||
-                !newBudgetWindow().trim() ||
-                !access.can('PUT /api/usage/settings')
-              "
-              (click)="addUsageBudget()"
-            >
-              Add budget
-            </button>
-            @if (usageSummary()) {
-              <span class="s-hint tabular">{{ usageSummary() }}</span>
+            @if (usageBudgets().length > 0) {
+              <div class="s-table-wrap">
+                <table class="s-table" aria-label="Token budgets">
+                  <thead>
+                    <tr>
+                      <th>Connection</th>
+                      <th>Model</th>
+                      <th>Tokens</th>
+                      <th>Window</th>
+                      <th class="s-actions-cell">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (b of usageBudgets(); track $index; let idx = $index) {
+                      <tr [attr.data-testid]="'usage-budget-row-' + idx">
+                        <td class="s-mono">{{ b.connection }}</td>
+                        <td class="s-mono">{{ b.model || "*" }}</td>
+                        <td class="s-num">{{ b.tokens }}</td>
+                        <td class="s-num">{{ b.window }}</td>
+                        <td class="s-actions-cell">
+                          <div class="s-row-actions">
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              [disabled]="
+                                !access.can('PUT /api/usage/settings')
+                              "
+                              (click)="removeUsageBudget(idx)"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
             }
+
+            <div class="s-inline">
+              <input
+                class="s-input s-input-inline s-mono"
+                type="text"
+                aria-label="Budget connection ID"
+                data-testid="input-budget-connection"
+                placeholder="connection-id"
+                [value]="newBudgetConn()"
+                [disabled]="!access.can('PUT /api/usage/settings')"
+                (input)="newBudgetConn.set($any($event.target).value)"
+              />
+              <g-model-picker
+                class="mp-inline"
+                testid="picker-budget-model"
+                ariaLabel="Budget model (optional)"
+                placeholder="model (optional)"
+                [groups]="modelGroups()"
+                [value]="newBudgetModel()"
+                [disabled]="!access.can('PUT /api/usage/settings')"
+                (valueChange)="newBudgetModel.set($event)"
+              />
+              <input
+                class="s-input s-input-inline s-num"
+                type="number"
+                min="1"
+                aria-label="Token limit"
+                data-testid="input-budget-tokens"
+                placeholder="1000000"
+                [value]="newBudgetTokens()"
+                [disabled]="!access.can('PUT /api/usage/settings')"
+                (input)="newBudgetTokens.set($any($event.target).value)"
+              />
+              <input
+                class="s-input s-input-inline s-num"
+                type="text"
+                aria-label="Budget window duration"
+                data-testid="input-budget-window"
+                placeholder="24h"
+                [value]="newBudgetWindow()"
+                [disabled]="!access.can('PUT /api/usage/settings')"
+                (input)="newBudgetWindow.set($any($event.target).value)"
+              />
+              <button
+                type="button"
+                class="btn-tonal s-btn-sm"
+                data-testid="add-usage-budget-btn"
+                [disabled]="
+                  !newBudgetConn().trim() ||
+                  !(Number(newBudgetTokens()) > 0) ||
+                  !newBudgetWindow().trim() ||
+                  !access.can('PUT /api/usage/settings')
+                "
+                (click)="addUsageBudget()"
+              >
+                Add budget
+              </button>
+              @if (usageSummary()) {
+                <span class="s-hint s-num">{{ usageSummary() }}</span>
+              }
+            </div>
           </div>
         </div>
       }
@@ -929,7 +1282,7 @@ export function formatHostdLabels(
               <label class="s-label" for="sb-cpus">vCPUs per sandbox</label>
               <input
                 id="sb-cpus"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 data-testid="input-sandbox-cpus"
@@ -947,7 +1300,7 @@ export function formatHostdLabels(
               <label class="s-label" for="sb-mem">Memory (MiB)</label>
               <input
                 id="sb-mem"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 data-testid="input-sandbox-memory"
@@ -965,7 +1318,7 @@ export function formatHostdLabels(
               <label class="s-label" for="sb-disk">Disk (GiB)</label>
               <input
                 id="sb-disk"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 data-testid="input-sandbox-disk"
@@ -985,7 +1338,7 @@ export function formatHostdLabels(
               >
               <input
                 id="sb-ttl"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="text"
                 placeholder="30m"
                 [value]="state.val('sessionSandboxIdleTtl', '')"
@@ -1004,7 +1357,7 @@ export function formatHostdLabels(
               >
               <input
                 id="sb-image"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 [value]="state.val('sandboxImage', '')"
                 [disabled]="!canWriteSettings()"
@@ -1035,7 +1388,7 @@ export function formatHostdLabels(
               <label class="s-label" for="sb-cpu-oc">CPU overcommit (x)</label>
               <input
                 id="sb-cpu-oc"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 step="0.25"
@@ -1055,7 +1408,7 @@ export function formatHostdLabels(
               >
               <input
                 id="sb-mem-oc"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 step="0.25"
@@ -1073,7 +1426,7 @@ export function formatHostdLabels(
               <label class="s-label" for="k8s-ns">Kubernetes namespace</label>
               <input
                 id="k8s-ns"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 [value]="state.val('k8sNamespace', '')"
                 [disabled]="!canWriteSettings()"
@@ -1121,20 +1474,20 @@ export function formatHostdLabels(
                   <tr>
                     <th>Name</th>
                     <th>State</th>
-                    <th>Actions</th>
+                    <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (ps of persistentSandboxes(); track ps.name) {
                     <tr>
-                      <td class="tabular">{{ ps.name }}</td>
+                      <td class="s-mono">{{ ps.name }}</td>
                       <td>
                         <span class="status-pill neutral">{{
                           ps.state || "ready"
                         }}</span>
                       </td>
-                      <td>
-                        <div class="s-inline">
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
                           @for (
                             act of ["start", "restart", "rebuild", "stop"];
                             track act
@@ -1202,7 +1555,7 @@ export function formatHostdLabels(
                     <th>Owner</th>
                     <th>Status</th>
                     <th>Labels</th>
-                    <th>Actions</th>
+                    <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1211,7 +1564,7 @@ export function formatHostdLabels(
                       Boolean(h.revokedAt || h.revoked_at) ||
                       h.state === "revoked";
                     <tr [attr.data-testid]="'hostd-row-' + h.name">
-                      <td class="tabular">{{ h.name }}</td>
+                      <td class="s-mono">{{ h.name }}</td>
                       <td>{{ h.owner || "—" }}</td>
                       <td>
                         <span
@@ -1227,16 +1580,16 @@ export function formatHostdLabels(
                           {{ isRevoked ? "revoked" : h.state || "offline" }}
                         </span>
                       </td>
-                      <td class="tabular">
+                      <td class="s-mono">
                         {{ formatLabels(h.labels) }}
                       </td>
-                      <td>
+                      <td class="s-actions-cell">
                         <!-- local is the co-located host: it holds no
                              token to rotate and can be neither revoked
                              nor deleted, so it offers none of the three
                              (the server refuses each with a 400). -->
                         @if (h.name !== "local") {
-                          <div class="s-inline">
+                          <div class="s-row-actions">
                             <button
                               type="button"
                               class="btn-tonal s-btn-sm"
@@ -1288,48 +1641,53 @@ export function formatHostdLabels(
             </div>
           }
 
-          <div class="s-grid">
-            <div class="s-field">
-              <label class="s-label" for="hd-name">New hostd name</label>
-              <input
-                id="hd-name"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-new-hostd-name"
-                placeholder="workstation-01"
-                [value]="newHostdName()"
-                [disabled]="!access.can('POST /api/hostds')"
-                (input)="newHostdName.set($any($event.target).value)"
-              />
+          <div class="s-subsection">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Register workstation host</h4>
             </div>
-            <div class="s-field">
-              <label class="s-label" for="hd-labels"
-                >Labels (key=value pairs)</label
+            <div class="s-grid">
+              <div class="s-field">
+                <label class="s-label" for="hd-name">New hostd name</label>
+                <input
+                  id="hd-name"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-new-hostd-name"
+                  placeholder="workstation-01"
+                  [value]="newHostdName()"
+                  [disabled]="!access.can('POST /api/hostds')"
+                  (input)="newHostdName.set($any($event.target).value)"
+                />
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="hd-labels"
+                  >Labels (key=value pairs)</label
+                >
+                <input
+                  id="hd-labels"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-new-hostd-labels"
+                  placeholder="os=linux,gpu=true"
+                  [value]="newHostdLabels()"
+                  [disabled]="!access.can('POST /api/hostds')"
+                  (input)="newHostdLabels.set($any($event.target).value)"
+                />
+              </div>
+            </div>
+            <div class="s-inline">
+              <button
+                type="button"
+                class="btn-primary"
+                data-testid="create-hostd-btn"
+                [disabled]="
+                  !newHostdName().trim() || !access.can('POST /api/hostds')
+                "
+                (click)="createHostd()"
               >
-              <input
-                id="hd-labels"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-new-hostd-labels"
-                placeholder="os=linux,gpu=true"
-                [value]="newHostdLabels()"
-                [disabled]="!access.can('POST /api/hostds')"
-                (input)="newHostdLabels.set($any($event.target).value)"
-              />
+                Register hostd
+              </button>
             </div>
-          </div>
-          <div class="s-inline">
-            <button
-              type="button"
-              class="btn-primary"
-              data-testid="create-hostd-btn"
-              [disabled]="
-                !newHostdName().trim() || !access.can('POST /api/hostds')
-              "
-              (click)="createHostd()"
-            >
-              Register hostd
-            </button>
           </div>
           @if (mintedHostdToken(); as tok) {
             <div class="s-banner ok" data-testid="minted-hostd-token">
@@ -1376,24 +1734,24 @@ export function formatHostdLabels(
                       <th>Code name</th>
                       <th>Uses</th>
                       <th>Expires</th>
-                      <th>Actions</th>
+                      <th class="s-actions-cell">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     @for (c of enrollmentCodes(); track c.name) {
                       @let codeRevoked = Boolean(c.revoked_at);
                       <tr [attr.data-testid]="'enrollment-code-row-' + c.name">
-                        <td class="tabular">{{ c.name }}</td>
-                        <td class="tabular">
+                        <td class="s-mono">{{ c.name }}</td>
+                        <td class="s-num">
                           {{ c.uses ?? 0 }} / {{ c.max_uses || "∞" }}
                         </td>
-                        <td class="tabular">
+                        <td class="s-num">
                           {{
                             codeRevoked ? "revoked" : c.expires_at || "never"
                           }}
                         </td>
-                        <td>
-                          <div class="s-inline">
+                        <td class="s-actions-cell">
+                          <div class="s-row-actions">
                             <button
                               type="button"
                               class="btn-tonal s-btn-sm"
@@ -1428,7 +1786,7 @@ export function formatHostdLabels(
             }
             <div class="s-inline">
               <input
-                class="s-input s-input-inline tabular"
+                class="s-input s-input-inline s-mono"
                 type="text"
                 aria-label="Enrollment code name"
                 data-testid="input-enrollment-code-name"
@@ -1474,7 +1832,7 @@ export function formatHostdLabels(
                 <tbody>
                   @for (p of pendingHostds(); track p.id) {
                     <tr [attr.data-testid]="'pending-hostd-row-' + p.id">
-                      <td class="tabular">
+                      <td class="s-mono">
                         {{ p.suggested_name || p.hostname || p.id }}
                       </td>
                       <!-- There is no pairing code to compare: the owner
@@ -1487,13 +1845,13 @@ export function formatHostdLabels(
                         {{ p.key_fingerprint || "—" }}
                       </td>
                       <td>{{ p.enrolled_by || "—" }}</td>
-                      <td class="tabular">
+                      <td class="s-mono">
                         {{ p.os || "?" }}/{{ p.arch || "?" }}
                       </td>
                       <td>
                         <div class="s-inline">
                           <input
-                            class="s-input s-input-inline tabular"
+                            class="s-input s-input-inline s-mono"
                             type="text"
                             [attr.aria-label]="
                               'Labels for ' + (p.hostname || p.id)
@@ -1565,6 +1923,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly Number = Number;
   protected readonly Boolean = Boolean;
   protected readonly formatLabels = formatHostdLabels;
+  protected readonly formatRefreshedAt = formatRefreshedAt;
   protected readonly frameworks = ["antigravity", "claude", "codex"] as const;
 
   protected readonly frameworkOptions: readonly PillOption[] = [
@@ -1614,6 +1973,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly keyDrafts = signal<Record<string, string>>({});
   protected readonly keyChecks = signal<Record<string, KeyCheckResult>>({});
   protected readonly busyKey = signal<string | null>(null);
+  protected readonly openKeyFramework = signal<string | null>(null);
   protected readonly codexAuthDraft = signal("");
 
   protected readonly newModelSettingName = signal("");
@@ -1621,10 +1981,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
 
   protected readonly backends = signal<BackendEntry[]>([]);
   protected readonly backendCredDrafts = signal<Record<string, string>>({});
+  protected readonly openCredBackendId = signal<string | null>(null);
   protected readonly newBackendId = signal("");
   protected readonly newBackendName = signal("");
   protected readonly newBackendFw = signal("antigravity");
+  protected readonly editingBackendId = signal("");
   protected readonly newBackendAuthMode = signal("");
+
+  protected readonly modelsConfigured = computed(
+    () => this.backends().length > 0,
+  );
   protected readonly newBackendModels = signal("");
   protected readonly newBackendHostd = signal("");
   protected readonly newBackendCliPath = signal("");
@@ -1656,6 +2022,40 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly pendingHostds = signal<PendingHostdRow[]>([]);
   protected readonly pendingLabelDrafts = signal<Record<string, string>>({});
 
+  // The deployment's default model list (model.Config.DefaultModels):
+  // the default first, then its fallbacks, tried in that order. Settings
+  // and the deployment record are two views of one grain_config column, so
+  // a staged edit on either wins over both stored values.
+  protected readonly modelChain = computed<string[]>(() => {
+    const dep = this.state.deployDraft();
+    if ("defaultModels" in dep) return parseDefaultModels(dep["defaultModels"]);
+    const draft = this.state.draft();
+    if ("defaultModel" in draft)
+      return parseDefaultModels(draft["defaultModel"]);
+    const stored = this.state.settings()["defaultModel"];
+    if (typeof stored === "string") return parseDefaultModels(stored);
+    const d = this.state.deployment();
+    return parseDefaultModels(d["defaultModels"] ?? d["defaultModel"]);
+  });
+  protected readonly fallbackModels = computed(() =>
+    this.modelChain().slice(1),
+  );
+  protected readonly modelGroups = computed(() => modelGroups(this.backends()));
+  protected readonly refreshingModels = signal(false);
+  protected readonly refreshNote = signal("");
+
+  protected readonly chainWarning = computed(() => {
+    const chain = this.modelChain();
+    const groups = this.modelGroups();
+    if (!chain.length || !groups.length) return "";
+    if (chain.some((m) => modelAvailability(m, groups) === "enabled")) {
+      return "";
+    }
+    return chain.length === 1
+      ? `No enabled connection advertises ${chain[0]}. Tasks on the default model wait in the queue until one does.`
+      : `No enabled connection advertises any default or fallback model (${chain.join(", ")}). Tasks on the default model wait in the queue until one does.`;
+  });
+
   ngOnInit(): void {
     this.loadForSection();
   }
@@ -1680,19 +2080,108 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     );
   }
 
-  protected defaultModelVal(): string {
-    return (
-      this.state.val<string>("defaultModel", "") ||
-      this.state.deployVal<string>("defaultModel", "")
+  protected canEditChain(): boolean {
+    return this.canWriteSettings() || this.canWriteDeployment();
+  }
+
+  protected canRefreshModels(): boolean {
+    return this.access.can(
+      "POST /api/deployment/agent-backends/{backendId}/discover",
     );
   }
 
-  protected setDefaultModelVal(v: string): void {
+  protected modelNote(m: string): string {
+    return availabilityNote(modelAvailability(m, this.modelGroups()));
+  }
+
+  // setModelChain stages the whole list through whichever write this
+  // person has: POST /api/settings takes it comma-joined (defaultModel),
+  // PUT /api/deployment as a list (defaultModels). Both normalise the same
+  // way (model.NormalizeDefaultModel).
+  private setModelChain(list: string[]): void {
+    const next = parseDefaultModels(list);
     if (this.canWriteSettings()) {
-      this.state.setField("defaultModel", v);
+      this.state.setField("defaultModel", next.join(","));
     } else if (this.canWriteDeployment()) {
-      this.state.setDeployField("defaultModel", v);
+      this.state.setDeployField("defaultModels", next);
     }
+  }
+
+  protected setDefaultModel(m: string): void {
+    const rest = this.fallbackModels().filter(
+      (x) => x.toLowerCase() !== m.toLowerCase(),
+    );
+    this.setModelChain(m ? [m, ...rest] : rest);
+  }
+
+  protected addFallback(m: string): void {
+    const chain = this.modelChain();
+    if (!m || !chain.length || containsModel(chain, m)) return;
+    this.setModelChain([...chain, m]);
+  }
+
+  protected moveFallback(idx: number, delta: -1 | 1): void {
+    const fb = [...this.fallbackModels()];
+    const to = idx + delta;
+    if (to < 0 || to >= fb.length) return;
+    [fb[idx], fb[to]] = [fb[to], fb[idx]];
+    this.setModelChain([this.modelChain()[0], ...fb]);
+  }
+
+  protected removeFallback(idx: number): void {
+    const fb = this.fallbackModels().filter((_, i) => i !== idx);
+    this.setModelChain([this.modelChain()[0], ...fb]);
+  }
+
+  protected anyDiscovers(): boolean {
+    return this.backends().some((b) => this.discovers(b));
+  }
+
+  protected discovers(b: BackendEntry): boolean {
+    return !(b.models ?? []).some((m) => m.trim());
+  }
+
+  // refreshDiscoveredModels asks providers which models they serve now
+  // (POST .../discover): one connection, or every connection that
+  // advertises what its provider reports.
+  protected async refreshDiscoveredModels(only?: string): Promise<void> {
+    const ids = this.backends()
+      .filter((b) => (only ? b.id === only : this.discovers(b)))
+      .map((b) => b.id);
+    if (!ids.length || !this.canRefreshModels()) return;
+    this.refreshingModels.set(true);
+    this.refreshNote.set("");
+    const problems: string[] = [];
+    let asked = 0;
+    for (const backendId of ids) {
+      try {
+        const res = await this.api.post<{
+          backend?: BackendEntry;
+          asked?: boolean;
+          error?: string;
+        }>("POST /api/deployment/agent-backends/{backendId}/discover", {
+          backendId,
+        });
+        if (res?.backend) {
+          const fresh = res.backend;
+          this.backends.update((list) =>
+            list.map((b) => (b.id === fresh.id ? { ...b, ...fresh } : b)),
+          );
+        }
+        if (res?.asked) asked++;
+        if (res?.error) problems.push(`${backendId}: ${res.error}`);
+      } catch (err) {
+        problems.push(`${backendId}: ${errText(err)}`);
+      }
+    }
+    this.refreshingModels.set(false);
+    const note =
+      (asked
+        ? `Refreshed ${asked} connection${asked === 1 ? "" : "s"}.`
+        : "No provider was asked.") +
+      (problems.length ? ` ${problems.join("; ")}` : "");
+    this.refreshNote.set(note);
+    this.snackbar.show(note);
   }
 
   protected modelSettingsRows(): ModelSettingRow[] {
@@ -1774,7 +2263,6 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     const raw =
       this.state.settings()["agentBackends"] ??
       this.state.deployment()["agentBackends"];
-    console.log("BACKENDS RAW:", raw);
     if (Array.isArray(raw)) {
       this.backends.set(raw as BackendEntry[]);
     }
@@ -1814,6 +2302,10 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     this.keyDrafts.update((p) => ({ ...p, [fw]: val }));
   }
 
+  protected toggleKeyEditor(fw: string): void {
+    this.openKeyFramework.update((cur) => (cur === fw ? null : fw));
+  }
+
   protected async saveAgentKey(fw: string): Promise<void> {
     const value = (this.keyDrafts()[fw] ?? "").trim();
     if (!value) return;
@@ -1825,6 +2317,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
         { value },
       );
       this.setKeyDraft(fw, "");
+      this.openKeyFramework.set(null);
       if (res && "geminiApiKeySet" in res) {
         this.applyAgentKeysResponse(res);
       } else {
@@ -1924,6 +2417,15 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected async saveBackend(): Promise<void> {
     const backendId = this.newBackendId().trim();
     if (!backendId) return;
+    if (
+      this.editingBackendId() !== backendId &&
+      this.backends().some((b) => b.id === backendId)
+    ) {
+      this.state.error.set(
+        `Connection ${backendId} already exists. To edit it, click Edit on its row.`,
+      );
+      return;
+    }
     const models = this.newBackendModels()
       .split(",")
       .map((s) => s.trim())
@@ -1932,7 +2434,13 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     const authMode = this.newBackendAuthMode().trim();
     const hostd = this.newBackendHostd().trim();
     const cliPath = this.newBackendCliPath().trim();
-    const concurrency = Number(this.newBackendConcurrency()) || 0;
+    const concurrency = this.newBackendConcurrency() || 0;
+    if (concurrency !== 0 && concurrency < 1) {
+      this.state.error.set(
+        "Concurrency must be 1 or greater, or blank for unlimited.",
+      );
+      return;
+    }
     const payload: BackendEntry = {
       id: backendId,
       framework: this.newBackendFw(),
@@ -1955,6 +2463,9 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       this.newBackendHostd.set("");
       this.newBackendCliPath.set("");
       this.newBackendConcurrency.set(0);
+      this.newBackendFw.set("antigravity");
+      this.newBackendAuthMode.set("");
+      this.editingBackendId.set("");
       await this.state.loadCore();
       this.syncBackendsFromState();
       this.snackbar.show(`Saved model connection ${backendId}`);
@@ -1979,6 +2490,56 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
+  protected async clearBackendCred(id: string): Promise<void> {
+    try {
+      await this.api.delete("DELETE /api/agent-backends/{id}/credential", {
+        id,
+      });
+      this.setBackendCredDraft(id, "");
+      this.snackbar.show(`Cleared credential for ${id}`);
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  protected startDeleteBackend(backendId: string): void {
+    this.confirmRequest.set({
+      title: `Remove connection ${backendId}?`,
+      message: `Tasks routed to ${backendId} will fall back to remaining connections or wait until another connection advertises their model.`,
+      accept: "Remove",
+      destructive: true,
+      run: () => this.deleteBackend(backendId),
+    });
+  }
+
+  protected toggleCredEditor(id: string): void {
+    this.openCredBackendId.update((cur) => (cur === id ? null : id));
+  }
+
+  protected cancelEditBackend(): void {
+    this.editingBackendId.set("");
+    this.newBackendId.set("");
+    this.newBackendName.set("");
+    this.newBackendFw.set("antigravity");
+    this.newBackendAuthMode.set("");
+    this.newBackendHostd.set("");
+    this.newBackendCliPath.set("");
+    this.newBackendModels.set("");
+    this.newBackendConcurrency.set(0);
+  }
+
+  protected editBackend(b: BackendEntry): void {
+    this.editingBackendId.set(b.id);
+    this.newBackendId.set(b.id);
+    this.newBackendName.set(b.name || "");
+    this.newBackendFw.set(b.framework || "antigravity");
+    this.newBackendAuthMode.set(b.authMode || "");
+    this.newBackendHostd.set(b.hostd || "");
+    this.newBackendCliPath.set(b.cliPath || "");
+    this.newBackendModels.set(b.models?.join(", ") || "");
+    this.newBackendConcurrency.set(b.concurrency || 0);
+  }
+
   protected async deleteBackend(backendId: string): Promise<void> {
     try {
       await this.api.delete(
@@ -1995,7 +2556,12 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected async loadDiscoveredModels(): Promise<void> {
     try {
       const res = await this.api.get<
-        string[] | { models?: (string | { id?: string; name?: string })[] }
+        | string[]
+        | {
+            models?: (string | { id?: string; name?: string })[];
+            available?: boolean;
+            error?: string;
+          }
       >("GET /api/agent-models");
       const raw = Array.isArray(res) ? res : (res?.models ?? []);
       this.discoveredModels.set(
@@ -2003,6 +2569,9 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
           .map((m) => (typeof m === "string" ? m : (m.id ?? m.name ?? "")))
           .filter(Boolean),
       );
+      if (!Array.isArray(res) && res?.error) {
+        this.state.error.set(res.error);
+      }
     } catch (err) {
       this.state.recordError(err);
     }
@@ -2434,7 +3003,11 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     const req = this.confirmRequest();
     this.confirmRequest.set(null);
     if (accepted && req) {
-      await req.run();
+      try {
+        await req.run();
+      } catch (err) {
+        this.state.recordError(err);
+      }
     }
   }
 }

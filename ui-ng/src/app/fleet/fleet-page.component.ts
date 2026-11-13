@@ -1474,16 +1474,28 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                       }
                     </div>
 
-                    <input
-                      type="search"
-                      class="ops-input"
-                      style="flex: 1 1 200px"
-                      placeholder="Filter log lines…"
-                      aria-label="Filter log lines"
-                      data-testid="logs-search-input"
-                      [value]="logQuery()"
-                      (input)="logQuery.set($any($event.target).value)"
-                    />
+                    <form
+                      role="search"
+                      autocomplete="off"
+                      style="display: contents"
+                      (submit)="$event.preventDefault()"
+                    >
+                      <input
+                        type="search"
+                        name="grain-logs-filter"
+                        autocomplete="off"
+                        spellcheck="false"
+                        data-lpignore="true"
+                        data-1p-ignore="true"
+                        class="ops-input"
+                        style="flex: 1 1 200px"
+                        placeholder="Filter log lines…"
+                        aria-label="Filter log lines"
+                        data-testid="logs-search-input"
+                        [value]="logQuery()"
+                        (input)="logQuery.set($any($event.target).value)"
+                      />
+                    </form>
                   </div>
 
                   <pre

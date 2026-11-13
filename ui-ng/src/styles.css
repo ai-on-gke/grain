@@ -338,6 +338,7 @@ body {
   display: flex;
   align-items: center;
   width: 280px;
+  margin: 0;
 }
 
 .search-input {
