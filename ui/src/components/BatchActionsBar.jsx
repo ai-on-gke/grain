@@ -206,7 +206,12 @@ export default function BatchActionsBar({
                   hidden > 0
                     ? ` ${hidden} of them ${hidden === 1 ? "is" : "are"} not shown in this view.`
                     : "";
-                if (!confirm(`Close ${count} task(s)?${unseen}`)) return;
+                if (
+                  !confirm(
+                    `Close ${count} ${count === 1 ? "task" : "tasks"}?${unseen}`,
+                  )
+                )
+                  return;
                 run("/close");
               }}
             >

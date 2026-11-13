@@ -220,8 +220,15 @@ type Task struct {
 	// telling a reader apart from "no review".
 	ReviewTemplateID   string `json:"reviewTemplateId,omitempty"`
 	ReviewTemplateName string `json:"reviewTemplateName,omitempty"`
-	Owner              string `json:"owner"`
-	Creator            string `json:"creator,omitempty"`
+	// TemplateID is the template this task was filed from --
+	// model.Task.SourceTemplateID: a schedule's, a suite's or a path
+	// trigger's firing, a filing or a proposal naming a templateId, or a
+	// port of a task that was. Omitted for a task written from scratch,
+	// and for every task filed before grain recorded it. A record for
+	// reporting, deciding nothing about the task.
+	TemplateID string `json:"templateId,omitempty"`
+	Owner      string `json:"owner"`
+	Creator    string `json:"creator,omitempty"`
 	// FiledVia is the X-Grain-Client label of the tool that filed the
 	// task (model.Task.FiledVia), and Provenance the line it reads as
 	// ("filed from jetski/1.4 by jane@example.com"); both "" for a task
@@ -1258,6 +1265,7 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		PromptExtension:      t.PromptExtension,
 		Skills:               t.Skills.Clone(),
 		ReviewTemplateID:     t.ReviewTemplateID,
+		TemplateID:           t.SourceTemplateID,
 		ReviewTemplateName:   reviewTemplateName,
 		Owner:                cmp.Or(strings.TrimSpace(t.Owner), strings.TrimSpace(t.Creator), model.DefaultTaskOwner),
 		Creator:              t.Creator,
@@ -3493,6 +3501,14 @@ func writeClientError(w http.ResponseWriter, err error) {
 	var nf *NotFoundError
 	if errors.As(err, &nf) {
 		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	// The release approval key in Cloud KMS could not be read: KMS is
+	// upstream of this process, so 502, naming the setting to check.
+	var rak *releaseApprovalKMSError
+	if errors.As(err, &rak) {
+		writeJSON(w, http.StatusBadGateway, apierror.Withheld(http.StatusBadGateway, apierror.CodeUpstream,
+			releaseApprovalKMSMessage, err))
 		return
 	}
 	var snf *scheduleNotFoundError

@@ -16,6 +16,12 @@
 // in the daemon (ui.RegisterHealthCounters), read off GET /api/sandboxes
 // -- the same response System → Health and an agent's `grain health`
 // read. -json prints that whole response.
+//
+// It exits 1 whenever it prints a FAILING section (or, under -json,
+// whenever the response carries one), so a monitoring script or a
+// `set -e` check can tell a failing deployment from a healthy one by
+// status alone (docs/test-runs/2026-11-11-schedule-groups.md, F4).
+// WARNING and ALERT sections leave it at 0.
 
 package cli
 
@@ -45,7 +51,29 @@ func cmdHealth(ctx context.Context, c *ui.HTTPClient, out *printer, args []strin
 		return err
 	}
 	out.health(health)
+	if failing := healthFailing(health); len(failing) > 0 {
+		return targetFailed(fmt.Errorf("health: failing: %s", strings.Join(failing, ", ")))
+	}
 	return nil
+}
+
+// healthFailing names each FAILING section the printer shows for h, in
+// the order it shows them: what makes `grain health` exit 1.
+func healthFailing(h ui.SandboxHealthResponse) []string {
+	var failing []string
+	if len(h.DispatchBlocked) > 0 {
+		failing = append(failing, "dispatch is blocked")
+	}
+	if len(h.CapabilityServers) > 0 {
+		failing = append(failing, fmt.Sprintf("%d capability server(s) out of use", len(h.CapabilityServers)))
+	}
+	if len(h.StaleSchedules) > 0 {
+		failing = append(failing, fmt.Sprintf("%d stale schedule(s)", len(h.StaleSchedules)))
+	}
+	if len(h.RefusedDeclarations) > 0 {
+		failing = append(failing, fmt.Sprintf("%d repository declaration set(s) not read in full", len(h.RefusedDeclarations)))
+	}
+	return failing
 }
 
 func (p *printer) health(h ui.SandboxHealthResponse) {

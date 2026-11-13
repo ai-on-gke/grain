@@ -22,6 +22,7 @@ import type { GrainConfig, Task, WhoamiResponse } from "./api/models";
 import { AppComponent } from "./app.component";
 import { CreateTaskService } from "./create/create-task.service";
 import { DirectorContextService } from "./director/director-context.service";
+import { AccessService } from "./services/access.service";
 import {
   SIDEBAR_HIDDEN_KEY,
   SIDEBAR_ORDER_KEY,
@@ -610,6 +611,46 @@ describe("AppComponent shell", () => {
     await f.whenStable();
     expect(el(f).querySelector('[data-testid="new-task-sheet"]')).toBeTruthy();
     TestBed.inject(CreateTaskService).close();
+  });
+
+  it("disables New task FABs, create menu actions, and shortcut c for a viewer role", async () => {
+    const { fixture: f } = await render();
+    const access = TestBed.inject(AccessService);
+    const createTask = TestBed.inject(CreateTaskService);
+    access.setConfig({
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: ["tasks:read"],
+      },
+    } as never);
+    f.detectChanges();
+    await f.whenStable();
+
+    expect(
+      el(f).querySelector<HTMLButtonElement>('[data-testid="rail-new-task"]')
+        ?.disabled,
+    ).toBe(true);
+    expect(
+      el(f).querySelector<HTMLButtonElement>('[data-testid="phone-new-task"]')
+        ?.disabled,
+    ).toBe(true);
+
+    el(f)
+      .querySelector<HTMLButtonElement>('[data-testid="rail-create-menu"]')!
+      .click();
+    await f.whenStable();
+    expect(
+      el(f).querySelector<HTMLButtonElement>('[data-testid="create-new-task"]')
+        ?.disabled,
+    ).toBe(true);
+    press("Escape");
+    await f.whenStable();
+
+    press("c");
+    await f.whenStable();
+    expect(createTask.isOpen()).toBe(false);
   });
 
   it("toggles the coplanar Director drawer from top bar, d, Alt+D, and Escape", async () => {

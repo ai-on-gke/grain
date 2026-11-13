@@ -430,14 +430,14 @@ func buildGranuleCLI(t *testing.T) string {
 }
 
 // writeFakeDockerRemoving installs, as granule's docker (GRANULE_DOCKER),
-// a docker that is already removing the VM's container: its first
-// inProgress `rm`s of it fail the way docker says so, and after that the
-// container is gone. inProgress < 0 is a removal that never finishes.
-// Every argv is logged to argvLog.
-func writeFakeDockerRemoving(t *testing.T, argvLog string, inProgress int) {
+// a docker that is already removing the VM's container: every `rm` of it
+// fails the way docker says so, and `inspect` still finds it for the first
+// present polls, after which it is gone. present < 0 is a removal that
+// never finishes. Every argv is logged to argvLog.
+func writeFakeDockerRemoving(t *testing.T, argvLog string, present int) {
 	t.Helper()
 	dir := t.TempDir()
-	counter := filepath.Join(dir, "rm-count")
+	counter := filepath.Join(dir, "inspect-count")
 	script := fmt.Sprintf(`#!/bin/sh
 echo "$*" >> %[1]q
 case "$1" in
@@ -450,22 +450,23 @@ rm)
     echo "Error response from daemon: No such container: $name" >&2
     exit 1 ;;
   esac
+  echo "Error response from daemon: removal of container $name is already in progress" >&2
+  exit 1 ;;
+inspect)
+  name=$(eval echo "\${$#}")
   n=$(cat %[2]q 2>/dev/null || echo 0)
   n=$((n + 1))
   echo "$n" > %[2]q
   if [ %[3]d -lt 0 ] || [ "$n" -le %[3]d ]; then
-    echo "Error response from daemon: removal of container $name is already in progress" >&2
-  else
-    echo "Error response from daemon: No such container: $name" >&2
+    echo true
+    exit 0
   fi
-  exit 1 ;;
-inspect)
-  echo "Error: No such object: $2" >&2
+  echo "Error: No such object: $name" >&2
   exit 1 ;;
 esac
 echo "unexpected docker $*" >&2
 exit 2
-`, argvLog, counter, inProgress)
+`, argvLog, counter, present)
 	path := filepath.Join(dir, "docker")
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -473,52 +474,61 @@ exit 2
 	t.Setenv("GRANULE_DOCKER", path)
 }
 
-func fastDeleteRetries(t *testing.T, attempts int) {
+func writeSavedState(t *testing.T, stateDir, name string) string {
 	t.Helper()
-	oldAttempts, oldInterval := deleteInProgressAttempts, deleteInProgressInterval
-	deleteInProgressAttempts, deleteInProgressInterval = attempts, time.Millisecond
-	t.Cleanup(func() { deleteInProgressAttempts, deleteInProgressInterval = oldAttempts, oldInterval })
+	path := filepath.Join(stateDir, name+".json")
+	if err := os.WriteFile(path, []byte(`{"name": "`+name+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 // A delete that finds docker already removing the container waits that
 // removal out and then finishes the job -- the saved state included,
-// which granule only clears once its own `docker rm` has succeeded.
+// which granule only clears once the container is gone. granule does the
+// waiting itself now, so Delete runs it once.
 func TestDeleteWaitsOutARemovalAlreadyInProgress(t *testing.T) {
 	c := Command{buildGranuleCLI(t)}
 	argvLog := filepath.Join(t.TempDir(), "docker-argv")
 	writeFakeDockerRemoving(t, argvLog, 2)
-	fastDeleteRetries(t, 10)
 
 	stateDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(stateDir, "g-1.json"), []byte(`{"name": "g-1"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	state := writeSavedState(t, stateDir, "g-1")
 	if err := c.Delete(context.Background(), stateDir, "g-1"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(stateDir, "g-1.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
 		t.Errorf("the VM's saved state survived the delete (stat: %v)", err)
 	}
 	data, _ := os.ReadFile(argvLog)
-	if got := strings.Count(string(data), "rm -f granule-vm-g-1\n"); got != 3 {
-		t.Errorf("docker rm of the VM container ran %d times, want 3 (two in progress, then gone):\n%s", got, data)
+	if got := strings.Count(string(data), "rm -f granule-vm-g-1\n"); got != 1 {
+		t.Errorf("docker rm of the VM container ran %d times, want 1 (granule waits, grain does not retry):\n%s", got, data)
+	}
+	if got := strings.Count(string(data), "inspect "); got != 3 {
+		t.Errorf("docker inspect ran %d times, want 3 (two still there, then gone):\n%s", got, data)
 	}
 }
 
-// One that never settles is still not this caller's failure to report:
-// the container is going, and its state file is the next sweep's.
-func TestDeleteTreatsARemovalThatNeverSettlesAsSuccess(t *testing.T) {
+// One that never settles is reported once ctx runs out, and leaves the
+// saved state for the next sweep: Delete no longer calls it success.
+func TestDeleteReportsARemovalThatNeverSettles(t *testing.T) {
 	c := Command{buildGranuleCLI(t)}
 	argvLog := filepath.Join(t.TempDir(), "docker-argv")
 	writeFakeDockerRemoving(t, argvLog, -1)
-	fastDeleteRetries(t, 3)
 
-	if err := c.Delete(context.Background(), t.TempDir(), "g-1"); err != nil {
-		t.Fatalf("Delete: %v", err)
+	stateDir := t.TempDir()
+	state := writeSavedState(t, stateDir, "g-1")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.Delete(ctx, stateDir, "g-1"); err == nil {
+		t.Fatal("Delete of a removal that never settled succeeded")
+	}
+	if _, err := os.Stat(state); err != nil {
+		t.Errorf("the VM's saved state went with a removal that never finished (stat: %v)", err)
 	}
 	data, _ := os.ReadFile(argvLog)
-	if got := strings.Count(string(data), "rm -f granule-vm-g-1\n"); got != 3 {
-		t.Errorf("docker rm of the VM container ran %d times, want one per attempt (3):\n%s", got, data)
+	if got := strings.Count(string(data), "rm -f granule-vm-g-1\n"); got != 1 {
+		t.Errorf("docker rm of the VM container ran %d times, want 1:\n%s", got, data)
 	}
 }
 
@@ -532,7 +542,6 @@ func TestDeleteReportsAnyOtherDockerFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("GRANULE_DOCKER", filepath.Join(dir, "docker"))
-	fastDeleteRetries(t, 10)
 
 	err := c.Delete(context.Background(), t.TempDir(), "g-1")
 	if err == nil || !strings.Contains(err.Error(), "Cannot connect") {

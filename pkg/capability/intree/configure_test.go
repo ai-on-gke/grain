@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -97,6 +98,30 @@ func TestGitIsConfiguredThroughConfigure(t *testing.T) {
 	}
 	if _, err := ps.Release(context.Background(), "git-repo", "e1-2-0"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestAnUnconfiguredGitHoldsNoPort: the built-in comes up unconfigured
+// on every deployment, so it binds its listener only once it is
+// configured -- an unconfigured one on a port another process holds
+// still starts, and its first configure is what says the port is taken.
+func TestAnUnconfiguredGitHoldsNoPort(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	s, err := newConfigurableGit(GitConfig{Listen: held.Addr().String()})
+	if err != nil {
+		t.Fatalf("an unconfigured git on a held port: %v, want it to start", err)
+	}
+	defer s.Close(context.Background())
+	if s.addr != "" {
+		t.Errorf("an unconfigured git listens on %s, want no listener", s.addr)
+	}
+	_, err = attachConfigured(t, s, map[string]any{"repos": []any{"o/r"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
+	if err == nil || !strings.Contains(err.Error(), "address already in use") {
+		t.Errorf("configuring it on a held port: %v, want the bind error", err)
 	}
 }
 

@@ -290,3 +290,70 @@ for (const [label, size] of [
     }
   });
 }
+
+for (const [label, size] of [
+  ["desktop", { width: 1440, height: 900 }],
+  ["phone", { width: 390, height: 844 }],
+]) {
+  test(`grain/* role presets and repo#credential draft stay aligned within the pane (${label})`, async ({
+    page,
+    request,
+  }) => {
+    await page.setViewportSize(size);
+    const created = await request.post("/api/tasks", {
+      data: {
+        title: `E2E grain presets & credential layout ${Date.now()}`,
+        noRepo: true,
+        capabilities: [],
+      },
+    });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+    await page.goto(`/tasks/${task.id}`);
+
+    const section = page.getByTestId(`task-${task.id}-grants`);
+    await section.getByRole("button", { name: "Add grant…" }).click();
+    const menu = page.getByRole("menu", { name: "Grants to add" });
+    await page.getByLabel("Search grants").fill("grain/operator");
+
+    const opRow = menu.locator('[data-api-grant="api:grain/operator"]');
+    await expect(opRow).toBeVisible();
+    const menuBox = await menu.boundingBox();
+    const rowBox = await opRow.boundingBox();
+    expect(rowBox.x).toBeGreaterThanOrEqual(menuBox.x - 0.5);
+    expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(
+      menuBox.x + menuBox.width + 0.5,
+    );
+    expect(rowBox.height).toBeLessThanOrEqual(160);
+
+    const codeBox = await opRow.locator("code").boundingBox();
+    const badgeBox = await opRow.locator(".api-dangerous").boundingBox();
+    expect(
+      Math.abs(
+        badgeBox.y + badgeBox.height / 2 - (codeBox.y + codeBox.height / 2),
+      ),
+    ).toBeLessThan(4);
+
+    await page
+      .getByLabel("Search grants")
+      .fill("https://grain.dev/capabilities/repo#credential");
+    await menu
+      .locator('[data-method="https://grain.dev/capabilities/repo#credential"]')
+      .click();
+
+    const draft = section.locator(
+      '[data-method="https://grain.dev/capabilities/repo#credential"] [data-grant-draft]',
+    );
+    await expect(draft).toBeVisible();
+    const draftBox = await draft.boundingBox();
+    expect(draftBox.x).toBeGreaterThanOrEqual(0);
+    expect(draftBox.x + draftBox.width).toBeLessThanOrEqual(size.width);
+
+    const select = draft.locator("[id*='-args-'][id$='-credential']").first();
+    const selectBox = await select.boundingBox();
+    expect(selectBox.x).toBeGreaterThanOrEqual(draftBox.x - 0.5);
+    expect(selectBox.x + selectBox.width).toBeLessThanOrEqual(
+      draftBox.x + draftBox.width + 0.5,
+    );
+  });
+}

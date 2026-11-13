@@ -43,6 +43,10 @@ import {
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
 import { DialogTrapDirective } from "../shared/dialog-trap.directive";
+import {
+  type PillOption,
+  PillSelectComponent,
+} from "../shared/pill-select.component";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
@@ -128,10 +132,12 @@ type SuitesPaneView = "suites" | "runs";
     ConfirmDialogComponent,
     CompositionViewComponent,
     DialogTrapDirective,
+    PillSelectComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/pill-select.css",
     "../inbox/inbox-queue.css",
     "../ci/ci-list.css",
     "./processes-list.css",
@@ -548,9 +554,11 @@ type SuitesPaneView = "suites" | "runs";
                                 sr.id
                               }}</span
                             >
-                            <span class="ci-provider-tag tabular"
-                              >Pass {{ sr.pass }}</span
-                            >
+                            @if (sr.pass > 0) {
+                              <span class="ci-provider-tag tabular"
+                                >Pass {{ sr.pass }}</span
+                              >
+                            }
                           </div>
                           <div class="proc-row-sub">
                             <span class="tabular"
@@ -559,7 +567,7 @@ type SuitesPaneView = "suites" | "runs";
                             >
                             <span class="tabular"
                               >·
-                              {{ sr.taskCount ?? sr.tasks.length }}
+                              {{ sr.taskCount ?? sr.tasks?.length ?? 0 }}
                               tasks</span
                             >
                           </div>
@@ -1083,9 +1091,22 @@ type SuitesPaneView = "suites" | "runs";
                       {{ sr.base || "default" }}</span
                     >
                     <span
-                      >{{ suiteModeOf(sr.mode, sr.count, sr.maxPasses) }} ·
-                      currently on pass {{ sr.pass }}</span
-                    >
+                      >{{ suiteModeOf(sr.mode, sr.count, sr.maxPasses) }}
+                      @if (sr.pass > 0) {
+                        ·
+                        {{
+                          sr.status === "active" ? "currently on" : "ended on"
+                        }}
+                        pass {{ sr.pass }}
+                      } @else {
+                        ·
+                        {{
+                          sr.status === "active"
+                            ? "no pass filed yet"
+                            : "ended without filing a pass"
+                        }}
+                      }
+                    </span>
                     @if (sr.scheduleId) {
                       <span>Started by schedule {{ sr.scheduleId }}</span>
                     }
@@ -1683,16 +1704,31 @@ type SuitesPaneView = "suites" | "runs";
           }
 
           <div class="proc-field-grid">
-            <label class="field">
+            <div class="field">
               <span>Repository (owner/name)</span>
+              @if (store.knownRepos().length > 0) {
+                <g-pill-select
+                  [options]="schedRepoOptions()"
+                  [value]="
+                    store.knownRepos().includes(sDraftRepo())
+                      ? sDraftRepo()
+                      : ''
+                  "
+                  ariaLabel="Schedule repository"
+                  align="left"
+                  testid="sched-repo-select"
+                  (valueChange)="$event && sDraftRepo.set($event)"
+                />
+              }
               <input
                 type="text"
+                aria-label="Repository (owner/name)"
                 data-testid="sched-repo-input"
                 placeholder="acme/widgets"
                 [value]="sDraftRepo()"
                 (input)="sDraftRepo.set($any($event.target).value)"
               />
-            </label>
+            </div>
             <label class="field">
               <span>Base branch</span>
               <input
@@ -2636,6 +2672,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly sDraftTemplateId = signal("");
   protected readonly sDraftSuiteId = signal("");
   protected readonly sDraftRepo = signal("");
+  protected readonly schedRepoOptions = computed<PillOption[]>(() => [
+    { value: "", label: "Choose configured repository…" },
+    ...this.store.knownRepos().map((r) => ({ value: r, label: r })),
+  ]);
   protected readonly sDraftBase = signal("main");
   protected readonly sDraftKind = signal("daily");
   protected readonly sDraftEveryMin = signal(15);

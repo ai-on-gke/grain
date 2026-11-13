@@ -95,6 +95,10 @@ describe("session-artifacts helpers", () => {
           effort: "high",
           family: "gemini-3.1-pro",
         },
+        {
+          id: "unconfigured-cli-catalog-model",
+          label: "Unconfigured CLI Model",
+        },
       ],
       ["gemini-3.1-pro-high", "claude-sonnet-4"],
       "gemini-3.1-pro-high",

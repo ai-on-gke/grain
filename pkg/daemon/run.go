@@ -1854,6 +1854,8 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			LatestRelease:      latestRelease(upgrader),
 			UpgradeDrainWindow: cfg.UpgradeDrainWindow,
 			QAProfiler:         qa.NewProfiler(qa.DefaultPerfLogPath(cfg.DataDir)),
+			// nil in every build a deployment runs (debug_clock.go).
+			ReleaseUpgradeClockOffset: DebugClockOffset,
 		},
 		MintSandboxGrant:   tokens.EnsureGrant,
 		MintSandboxToken:   tokens.EnsureToken,

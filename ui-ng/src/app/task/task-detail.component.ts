@@ -275,7 +275,12 @@ export function duration(from?: string, to?: string): string {
                 Approve
               </button>
             }
-            @if (t.state === "awaiting_reply" && !parked() && !isStopped()) {
+            @if (
+              t.state === "awaiting_reply" &&
+              !parked() &&
+              !isStopped() &&
+              can("POST /api/tasks/{id}/comments")
+            ) {
               <button
                 type="button"
                 class="btn-primary"
