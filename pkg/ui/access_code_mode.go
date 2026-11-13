@@ -360,6 +360,15 @@ func (s *Server) admitAccessCodeRequest(w http.ResponseWriter, r *http.Request) 
 	r = r.WithContext(withAccessCodeName(r.Context(), name))
 	recovery := s.accessCodeRestricted(r.Context(), cfg)
 	use := accessCodeUse{Name: name, Source: accessSource(r), Method: r.Method, Path: r.URL.Path}
+	if _, scope, ok := s.APIRoute(r); ok && strings.HasSuffix(string(scope), ":read") {
+		// A POST that only reads -- POST /api/capability-grants/check,
+		// /api/settings/plan and the like, held to a :read scope -- is
+		// not a change, so it is not recorded as one: Settings -> Tasks
+		// and New task each check their grants on open, which filled
+		// Settings -> Audit's Configuration changes with a row per visit
+		// (docs/test-runs/2026-11-13-user-system-settings.md, F1).
+		use.Method = http.MethodGet
+	}
 	if recovery && !accessCodeRecoveryRoute(r) {
 		writeError(w, http.StatusForbidden, errors.New(errAccessCodeRecovery))
 		return r, false
