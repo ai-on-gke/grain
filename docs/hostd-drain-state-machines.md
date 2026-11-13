@@ -22,7 +22,7 @@ or a detached stdin closes).
 | Handover | `OpDrain{Idle,Handover}` with `Reexec`/`AllowHandover` → `markHandover`, answer, `beginHandover` | taken | `Cutover` | Closing+handedOver once no protocol-1 CLI, carried listener, admitted start or open detached stdin remains; Draining at `drain_cap` (handover semantics then end, and every detached run counts) |
 | Draining | `OpDrain{}` → `refuseStarts`, answer, `startDrainLocked`; `Drain()`; a cutover's first cap | CLI refused (`Refusal.Draining`); capability servers taken | `Draining` | Closing when `n == 0`; at the second cap stuck runs are killed with `killDraining` |
 | Closing | `waitDrained` sees `n == 0`, under the same lock as the count | all refused | `Draining` | `waitDrained` returns → `cancel()` → Serve returns (exit; systemd starts the new build), or `Reexec` in the same pid |
-| Stopped from outside | SIGTERM / ctx done, not handed over | — | — | every live process is killed with `killDraining` (since task 4821) |
+| Stopped from outside | SIGTERM / ctx done, not handed over | — | — | every live process is killed with `killStopping`: its exit says Draining, with the Error "stopped because the host agent stopped or restarted" (since task 4821; `killStopping` since task 4910) |
 
 `n` in `waitDrained` is `cliStarts` (starts admitted but not yet in
 `procs`) + live non-capability processes (minus kept detached ones in a
@@ -57,7 +57,7 @@ start admitted ──► running ──(exit)──► exited (exit.json written
    │                 ├─ OpCancel ─► killCanceled ─► exited
    │                 ├─ deadline timer ─► killDeadline ─► exited (Exit.Deadline)
    │                 ├─ drain_cap ─► killDraining ─► exited (Exit.Draining)
-   │                 ├─ hostd stopped ─► killDraining ─► exited (Exit.Draining)
+   │                 ├─ hostd stopped ─► killStopping ─► exited (Exit{Draining, "stopped because the host agent stopped or restarted"})
    │                 ├─ handover ─► watcher released, process left running ─► adopted by the re-exec'd hostd (canAdoptLiveSpool)
    │                 └─ hostd crashed ─► no exit.json ─► next hostd writes Exit{Draining, "the host agent stopped while it ran"}
    └─ refused (draining / closing) ─► Refusal{Draining}
@@ -83,7 +83,7 @@ How the daemon reads an exit (`pkg/agent/hostd.go`, `runhost.Hostd.Attach`,
 | Cutover answered vs Hello | `markCutover` | reports Cutover (fixed in 727b8c86d, #4715) |
 | Start admitted vs `waitDrained` count | `cliStarts` under `mu` | counted, holds the drain open |
 | Process exit vs drain-cap kill | `p.cancel` reads `Exited` under `mu` | first `killKind` wins; an exited process is not re-killed |
-| Serve stop vs protocol-1 `CommandContext` kill | `run` | the kill through Serve's ctx is counted as `killDraining` (task 4821) |
+| Serve stop vs protocol-1 `CommandContext` kill | `run` | the kill through Serve's ctx is counted as `killStopping` (task 4821; `killDraining` until task 4910) |
 | Exit written vs hostd exiting | `attach` is in `s.wg`; Serve waits for it | the exit is delivered, or the spool is kept |
 | Handover close vs attach loop | `handoverCh` in the attach select; `handedOverNow` | stream detaches, the daemon reattaches |
 | Hostd away when an adopted run attaches | `runhost.Hostd.stream` | waits out ReattachTimeout (task 4821) |
