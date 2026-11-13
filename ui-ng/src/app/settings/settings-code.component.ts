@@ -18,6 +18,7 @@ import {
   OnChanges,
   OnInit,
   ViewEncapsulation,
+  computed,
   inject,
   input,
   signal,
@@ -32,6 +33,11 @@ import {
 } from "../shared/pill-select.component";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
+import {
+  ConfirmDialogComponent,
+  bypassConfirm,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
 
 interface RepoFacts {
   ciMode?: string;
@@ -59,7 +65,7 @@ interface StateRepoEntryDto {
 
 @Component({
   selector: "g-settings-code",
-  imports: [RouterLink, PillSelectComponent],
+  imports: [RouterLink, PillSelectComponent, ConfirmDialogComponent],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -181,6 +187,27 @@ interface StateRepoEntryDto {
           }
 
           <div class="s-grid">
+            @if (reachableRepos().length > 0) {
+              <div class="s-field">
+                <span class="s-label">Connected repositories</span>
+                <g-pill-select
+                  [options]="reachableRepoOptions()"
+                  [value]="
+                    reachableRepos().includes(newRepoSlug())
+                      ? newRepoSlug()
+                      : ''
+                  "
+                  ariaLabel="Connected repository"
+                  align="left"
+                  testid="select-reachable-repo"
+                  [disabled]="
+                    state.sectionLocked('repositories') ||
+                    !access.can('POST /api/repos')
+                  "
+                  (valueChange)="$event && newRepoSlug.set($event)"
+                />
+              </div>
+            }
             <div class="s-field">
               <label class="s-label" for="add-repo-slug"
                 >Repository (owner/name)</label
@@ -922,6 +949,9 @@ interface StateRepoEntryDto {
         </div>
       }
     }
+    @if (confirmReq(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+    }
   `,
 })
 export class SettingsCodeComponent implements OnInit, OnChanges {
@@ -952,6 +982,11 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly repos = signal<string[]>([]);
   protected readonly repoFacts = signal<Record<string, RepoFacts>>({});
   protected readonly reachableCount = signal(0);
+  protected readonly reachableRepos = signal<string[]>([]);
+  protected readonly reachableRepoOptions = computed<PillOption[]>(() => [
+    { value: "", label: "Choose connected repository…" },
+    ...this.reachableRepos().map((r) => ({ value: r, label: r })),
+  ]);
   protected readonly newRepoSlug = signal("");
   protected readonly newRepoUrl = signal("");
   protected readonly reposPlanNotice = signal("");
@@ -1047,7 +1082,22 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
           )
           .then((r) => {
             const list = Array.isArray(r) ? r : (r?.repos ?? []);
+            const names = Array.from(
+              new Set(
+                list
+                  .map((item) => {
+                    if (typeof item === "string") return item.trim();
+                    if (item && typeof item === "object" && "repo" in item) {
+                      const slug = (item as { repo?: unknown }).repo;
+                      return typeof slug === "string" ? slug.trim() : "";
+                    }
+                    return "";
+                  })
+                  .filter(Boolean),
+              ),
+            ).sort((a, b) => a.localeCompare(b));
             this.reachableCount.set(list.length);
+            this.reachableRepos.set(names);
           })
           .catch(() => undefined);
       }
@@ -1184,7 +1234,26 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     }
   }
 
-  protected async toggleRepoBypass(repo: string, on: boolean): Promise<void> {
+  protected readonly confirmReq = signal<ConfirmRequest | null>(null);
+
+  protected async onConfirmDone(accepted: boolean): Promise<void> {
+    const req = this.confirmReq();
+    this.confirmReq.set(null);
+    if (!accepted || !req) return;
+    await req.run();
+  }
+
+  protected toggleRepoBypass(repo: string, on: boolean): void {
+    if (on) {
+      this.confirmReq.set(
+        bypassConfirm(repo, () => this.saveRepoBypass(repo, true)),
+      );
+      return;
+    }
+    void this.saveRepoBypass(repo, false);
+  }
+
+  private async saveRepoBypass(repo: string, on: boolean): Promise<void> {
     const { owner, name } = splitRepo(repo);
     try {
       await this.api.put(

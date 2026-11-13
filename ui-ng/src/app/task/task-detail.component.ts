@@ -238,14 +238,25 @@ export function duration(from?: string, to?: string): string {
               </span>
             }
           </div>
-          <h1
-            class="view-headline task-title"
-            id="task-title"
-            tabindex="-1"
-            #heading
-          >
-            <span class="muted">#{{ t.id }}</span> {{ t.title }}
-          </h1>
+          @if (pane()) {
+            <h2
+              class="view-headline task-title"
+              id="task-title"
+              tabindex="-1"
+              #heading
+            >
+              <span class="muted">#{{ t.id }}</span> {{ t.title }}
+            </h2>
+          } @else {
+            <h1
+              class="view-headline task-title"
+              id="task-title"
+              tabindex="-1"
+              #heading
+            >
+              <span class="muted">#{{ t.id }}</span> {{ t.title }}
+            </h1>
+          }
           <div class="task-actions" role="group" aria-label="Task actions">
             @if (
               (t.state === "proposed" ||
@@ -262,7 +273,12 @@ export function duration(from?: string, to?: string): string {
                 Approve
               </button>
             }
-            @if (t.state === "awaiting_reply" && !parked() && !isStopped()) {
+            @if (
+              t.state === "awaiting_reply" &&
+              !parked() &&
+              !isStopped() &&
+              can("POST /api/tasks/{id}/comments")
+            ) {
               <button
                 type="button"
                 class="btn-primary"

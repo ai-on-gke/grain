@@ -1233,6 +1233,18 @@ var Tables = []string{
   PRIMARY KEY (` + "`task_id`" + `)
 )`,
 
+	// The template a task's content was filed from, for reporting alone
+	// (Task.SourceTemplateID, grain/task-5273): task_filed_template's
+	// rows, and besides them an agent's proposal naming a template and a
+	// port of a task filed from one. Nothing reads it to decide what a
+	// task may do. Needs no SchemaVersion bump, for task_filed_template's
+	// own reason: an older store reads back as no task recording one.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_source_template`" + ` (
+  ` + "`task_id`" + `     TEXT NOT NULL,
+  ` + "`template_id`" + ` TEXT NOT NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`,
+
 	// A queued task may be ready in every ordinary sense and still be
 	// waiting for a finite capability resource. This is deliberately not a
 	// task state and not a run: admission writes it before StartRun, and

@@ -69,10 +69,17 @@ import (
 // putSecurityReview files the security review of task for ref:
 // putStackedReview's review, working on task's own branch (putReview's
 // inPlace) and recording ref as model.LinkReviewsPullRequest so settling an
-// earlier pull request on task can never close a review filed for ref, and
-// headSHA, the head it was filed to read, as model.LinkReviewedHead.
+// earlier pull request on task can never close a review filed for ref.
 func putSecurityReview(ctx context.Context, store *model.Store, task model.Task, ref model.PullRequestRef,
-	headSHA string, tmpl model.Template, title, body string, now time.Time) (model.Task, error) {
+	tmpl model.Template, title, body string, now time.Time) (model.Task, error) {
+	return putSecurityReviewAt(ctx, store, task, ref, "", "", tmpl, title, body, now)
+}
+
+// putSecurityReviewAt is putSecurityReview for a review of headSHA, the
+// head it was filed to read (recorded as model.LinkReviewedHead and its
+// review-head tag), reading only what changed since since when that is set.
+func putSecurityReviewAt(ctx context.Context, store *model.Store, task model.Task, ref model.PullRequestRef,
+	headSHA, since string, tmpl model.Template, title, body string, now time.Time) (model.Task, error) {
 	reviewTask, err := newReview(ctx, store, task, tmpl, title, body, true, now)
 	if err != nil {
 		return model.Task{}, err
@@ -82,6 +89,10 @@ func putSecurityReview(ctx context.Context, store *model.Store, task model.Task,
 			model.Link{Kind: model.LinkReviewsPullRequest, Target: ref.String()})
 	}
 	model.SetReviewedHead(&reviewTask, headSHA)
+	reviewTask.Tags = addReviewHeadTag(reviewTask.Tags, headSHA)
+	if since != "" {
+		reviewTask.Tags = append(reviewTask.Tags, reviewSinceTag(since))
+	}
 	if err := store.PutTask(ctx, reviewTask); err != nil {
 		return model.Task{}, fmt.Errorf("orchestrator: filing review task %s: %w", reviewTask.ID, err)
 	}
@@ -129,7 +140,11 @@ func recordReviewerHead(ctx context.Context, store *model.Store, client github.C
 			"so that head is classified again before it merges", review.ID, review.BranchName(), err)
 		return false, nil
 	}
-	if _, filedAt, ok := strings.Cut(linkTarget(*reviewed, model.LinkTrustBoundaryCleared), "@"); ok && filedAt == head.SHA {
+	_, filedAt, _ := strings.Cut(linkTarget(*reviewed, model.LinkTrustBoundaryCleared), "@")
+	if filedAt == "" {
+		filedAt = filedReviewHead(review)
+	}
+	if filedAt != "" && strings.EqualFold(filedAt, head.SHA) {
 		return false, nil
 	}
 	if raced, err := reviewedRanSince(ctx, store, reviewedID, review.CreatedAt); err != nil || raced {
@@ -146,6 +161,7 @@ func recordReviewerHead(ctx context.Context, store *model.Store, client github.C
 	}); err != nil {
 		return false, fmt.Errorf("orchestrator: recording the head review %s left: %w", review.ID, err)
 	}
+	refreshQueuedReviewsAfterFinish(ctx, store, client, review)
 	return true, noteOnTask(ctx, store, review.ID, fmt.Sprintf(
 		"This review pushed fixes to `%s`, the branch under review, up to `%s`. If it left no findings "+
 			"or questions, task %s is cleared at that commit and merges automatically again.",

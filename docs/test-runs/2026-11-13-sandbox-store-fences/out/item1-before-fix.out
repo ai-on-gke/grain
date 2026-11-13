@@ -1,0 +1,47 @@
+
+== 1a. cluster and CNI
+NAME STATUS INTERNAL-IP
+fences-control-plane Ready 10.241.0.2
+fences-worker Ready 10.241.0.3
+calico-node ready 2/2
+
+== 1b. apply: /home/debian/scratch/grain.yaml.orig 
+namespace/grain unchanged
+networkpolicy.networking.k8s.io/grain-sandbox-egress created
+NAME                   POD-SELECTOR                                                                                            AGE
+grain-sandbox-egress   app.kubernetes.io/component=sandbox,app.kubernetes.io/managed-by=grain,grain.dev/network notin (none)   0s
+
+== 1c. targets
+worker=fences-worker (10.241.0.3) control-plane=10.241.0.2 peer=192.168.100.143 nspeer=192.168.100.144 grain-standin=192.168.100.145
+
+== 1d. probes
+control pod (namespace default, no labels):
+  internet   reached  (curl exit 0)
+  dns        reached  (curl exit 0)
+  metadata   reached  (curl exit 0)
+  apiserver  reached  (curl exit 0)
+  apinode    reached  (curl exit 0)
+  pod        reached  (curl exit 0)
+  nspod      reached  (curl exit 0)
+  node       reached  (curl exit 0)
+  grainpod   reached  (curl exit 0)
+open-network sandbox pod:
+  internet   reached  (curl exit 0)
+  dns        reached  (curl exit 0)
+  metadata   blocked  (curl exit 28)
+  apiserver  blocked  (curl exit 28)
+  apinode    blocked  (curl exit 28)
+  pod        blocked  (curl exit 28)
+  nspod      blocked  (curl exit 28)
+  node       blocked  (curl exit 28)
+  grainpod   reached  (curl exit 0)
+network:none sandbox pod:
+  internet   reached  (curl exit 0)
+  dns        reached  (curl exit 0)
+  metadata   reached  (curl exit 0)
+  apiserver  reached  (curl exit 0)
+  apinode    reached  (curl exit 0)
+  pod        reached  (curl exit 0)
+  nspod      reached  (curl exit 0)
+  node       reached  (curl exit 0)
+  grainpod   reached  (curl exit 0)

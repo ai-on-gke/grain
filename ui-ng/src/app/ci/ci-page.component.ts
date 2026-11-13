@@ -1420,7 +1420,11 @@ export class CIPageComponent implements OnInit, OnDestroy {
   protected readonly sharedFaults = computed(() => this.store.combinedFaults());
 
   protected readonly availableRepos = computed(() => {
-    const set = new Set<string>(this.store.targetRepos());
+    const configured = this.store.targetRepos();
+    if (this.store.hasTargetAllowlist() && configured.length > 0) {
+      return [...configured].sort();
+    }
+    const set = new Set<string>(configured);
     for (const r of this.store.runs()) {
       if (r.repo) set.add(r.repo);
     }

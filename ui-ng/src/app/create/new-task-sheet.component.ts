@@ -988,14 +988,28 @@ const FRAMEWORKS: readonly PillOption[] = [
           <label class="field">
             <span>{{ f.label || "Found in release" }}</span>
             <input
+              #foundInInput
               type="text"
               data-testid="nt-found-in"
               placeholder="v2.5.0-rc.2"
               autocomplete="off"
               spellcheck="false"
+              [attr.aria-invalid]="error()?.field === 'foundIn' ? 'true' : null"
+              [attr.aria-describedby]="
+                error()?.field === 'foundIn' ? 'nt-found-in-error' : null
+              "
               [value]="draft().foundIn"
               (input)="set('foundIn', val($event))"
             />
+            @if (error()?.field === "foundIn") {
+              <small
+                id="nt-found-in-error"
+                class="nt-field-error"
+                role="alert"
+                data-testid="nt-found-in-error"
+                >{{ error()!.message }}</small
+              >
+            }
           </label>
         }
         @case ("promptExtension") {
@@ -1070,6 +1084,8 @@ export class NewTaskSheetComponent {
     viewChild<ElementRef<HTMLInputElement>>("titleInput");
   private readonly branchInput =
     viewChild<ElementRef<HTMLInputElement>>("branchInput");
+  private readonly foundInInput =
+    viewChild<ElementRef<HTMLInputElement>>("foundInInput");
 
   private readonly knownTasks = computed(() => {
     const byId = new Map<string, Task>();
@@ -1708,10 +1724,17 @@ export class NewTaskSheetComponent {
     const problem = validate(d, this.fields(), tmpl, tvals);
     if (problem) {
       this.error.set(problem);
-      (problem.field === "title"
-        ? this.titleInput()
-        : this.branchInput()
-      )?.nativeElement.focus();
+      if (problem.field === "foundIn") {
+        if (this.fields().foundIn.visibility === "more") {
+          this.moreOpen.set(true);
+        }
+        queueMicrotask(() => this.foundInInput()?.nativeElement.focus());
+      } else {
+        (problem.field === "title"
+          ? this.titleInput()
+          : this.branchInput()
+        )?.nativeElement.focus();
+      }
       return;
     }
     this.busy.set(true);
@@ -1807,9 +1830,14 @@ export class NewTaskSheetComponent {
       this.svc.close();
       this.announce(created, d.approved, !!d.workstream);
     } catch (err) {
+      const msg = errorText(err);
+      const isFoundIn = /found[- ]in|release tag/i.test(msg);
+      if (isFoundIn && this.fields().foundIn.visibility === "more") {
+        this.moreOpen.set(true);
+      }
       this.error.set({
-        field: "title",
-        message: `The task was not filed: ${errorText(err)}`,
+        field: isFoundIn ? "foundIn" : "form",
+        message: `The task was not filed: ${msg}`,
       });
     } finally {
       this.busy.set(false);

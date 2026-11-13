@@ -126,7 +126,7 @@ func TestLinkPullRequestResetsSettledTimestampsAndScopesSecurityReviewSettle(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	review, err := putSecurityReview(ctx, store, *updated, pr2, "", *tmpl, "Security review: release train", "body", now)
+	review, err := putSecurityReview(ctx, store, *updated, pr2, *tmpl, "Security review: release train", "body", now)
 	if err != nil {
 		t.Fatal(err)
 	}
