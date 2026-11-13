@@ -387,6 +387,12 @@ How it relates to what exists:
 - `wait_for_task(park: true)` is `resume_later(when: {task})`.
 - `wait_for_task(resume_at)` is `resume_later(when: {at})`.
 
+A park on tasks holds its task with `depends_on` links. The ones the park
+wrote itself are recorded on the suspension (`resume_on.links`), and the
+run that resumes the park removes them. A target that is reopened later
+then neither holds the task again nor shows up in later prompts as a
+declared dependency. Links the task already declared when it parked stay.
+
 Both tools keep their names and arguments, because agents and templates
 use them. Their implementation becomes one call into `Store.Suspend`, and
 `model.ParkedOutcome` becomes `suspend_kind = requested`. The new
@@ -1174,7 +1180,7 @@ local, and pruned after 30 days.
 | `notify_operator(...)` | all (critical needs task-admin) | Raises or bumps a notification and does not park. |
 | `message_task(task, body)` | task-admin, or parent/child | A note to another task's agent. Never parks it. |
 | `read_pipeline_changes(after)` | self-debug | The delta feed. |
-| `write_handover` | all | Also requested at a `context` suspension and, on a durable task, at any park or suspension that did not write or confirm it. Writing the same handover again confirms it. |
+| `grain handover write` (was `write_handover`) | all | Also requested at a `context` suspension and, on a durable task, at any park or suspension that did not write or confirm it. Writing the same handover again confirms it. |
 | `compact_context(handover)` | all | Writes a fresh handover and moves the compaction cursor to the last comment before the run started (DT-15). |
 | `update_brief(brief, reason)` | all | Replaces the current brief that stands in for the description in prompts (DT-15). |
 

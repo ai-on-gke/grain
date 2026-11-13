@@ -30,15 +30,18 @@ func TestTaskListPageLinesAreOnePerTaskInFilingOrder(t *testing.T) {
 		{ID: "999", State: "running", Repo: "acme/widgets", Title: "Middle", CreatedAt: at(2), Stall: "running for 9h"},
 		{ID: "10", State: "proposed", Title: "Oldest", CreatedAt: at(1)},
 		{ID: "11", State: "closed", Repo: "acme/gadgets", Title: "Closed", CreatedAt: at(0)},
+		{ID: "12", State: "queued", Title: "Behind a failure", CreatedAt: at(0), BlockedBy: []string{"10"},
+			Reason: &TaskReason{Reason: reasonBlockedOnPerson}},
 	}
 	page := ListTaskPage(tasks, TaskListQuery{States: []string{"queued", "running", "proposed"}})
-	want := "10  proposed  -  Oldest\n" +
+	want := "12  queued  -  Behind a failure  (stalled)  blocked on 10, which needs a person\n" +
+		"10  proposed  -  Oldest\n" +
 		"999  running  acme/widgets  Middle  (stalled)\n" +
 		"1000  queued  acme/widgets  Newest fix  blocked on 999, 998\n"
 	if got := page.Lines(); got != want {
 		t.Errorf("Lines() =\n%s\nwant\n%s", got, want)
 	}
-	if note := page.Note(); note != "3 task(s) shown of 3 matching, oldest first." {
+	if note := page.Note(); note != "4 task(s) shown of 4 matching, oldest first." {
 		t.Errorf("Note() = %q", note)
 	}
 
