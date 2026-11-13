@@ -14,6 +14,26 @@
 
 import { test, expect } from "./fixtures.js";
 
+// expectMenuLaidOut checks the Boards menu's geometry: the whole menu on
+// the screen, each board's name and folder drawn in full, and the ×
+// a small square beside it. A generic "button { width: 100% }" rule
+// used to stretch the × across the row and squeeze every name to a
+// 28px ellipsis, and at phone width the menu opened off the left edge.
+async function expectMenuLaidOut(page, boardId) {
+  const vw = page.viewportSize().width;
+  const menu = await page.getByTestId("saved-boards-menu").boundingBox();
+  expect(menu.x).toBeGreaterThanOrEqual(0);
+  expect(menu.x + menu.width).toBeLessThanOrEqual(vw);
+  const apply = page.getByTestId(`board-apply-${boardId}`);
+  const del = await page.getByTestId(`board-delete-${boardId}`).boundingBox();
+  expect(del.width).toBeLessThanOrEqual(32);
+  const a = await apply.boundingBox();
+  expect(a.x + a.width).toBeLessThanOrEqual(del.x + 1);
+  expect(await apply.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(
+    true,
+  );
+}
+
 // The Boards menu on /next/tasks deleted a saved board -- a setting
 // shared by everyone on the deployment -- on one click of its ×, and
 // named three same-named boards in different folders "Triage" and
@@ -56,6 +76,7 @@ test("the Boards menu tells same-named boards apart and asks before deleting one
     await expect(page.getByTestId(`board-apply-${ops.id}`)).toContainText(
       "E2E Ops",
     );
+    await expectMenuLaidOut(page, ops.id);
 
     // × asks first. Cancel deletes nothing and hands focus back to the
     // Boards button.
@@ -92,5 +113,22 @@ test("the Boards menu tells same-named boards apart and asks before deleting one
     for (const id of made) {
       await page.request.delete(`/api/boards/${id}`).catch(() => {});
     }
+  }
+});
+
+test("the Boards menu opens on the screen at phone width @phone", async ({
+  page,
+}) => {
+  const res = await page.request.post("/api/boards", {
+    data: { name: "E2E Phone board", folder: "E2E Folder", kind: "list" },
+  });
+  expect(res.ok()).toBe(true);
+  const b = await res.json();
+  try {
+    await page.goto("tasks");
+    await page.getByTestId("saved-boards-btn").click();
+    await expectMenuLaidOut(page, b.id);
+  } finally {
+    await page.request.delete(`/api/boards/${b.id}`).catch(() => {});
   }
 });
