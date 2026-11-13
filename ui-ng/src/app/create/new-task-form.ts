@@ -494,7 +494,13 @@ export function buildPayload(
 }
 
 export interface Problem {
-  field: "title" | "newBranchName" | "templateField" | "foundIn" | "form" | "sandboxShape";
+  field:
+    | "title"
+    | "newBranchName"
+    | "templateField"
+    | "foundIn"
+    | "form"
+    | "sandboxShape";
   message: string;
 }
 
