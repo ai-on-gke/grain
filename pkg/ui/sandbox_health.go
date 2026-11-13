@@ -51,12 +51,20 @@ type SandboxSnapshot struct {
 	// failure detail when it can no longer be reached.
 	TerminationReason string `json:"terminationReason"`
 	LoadAverage       string `json:"loadAverage,omitempty"`
-	MemoryUsedMB      int    `json:"memoryUsedMB,omitempty"`
-	MemoryTotalMB     int    `json:"memoryTotalMB,omitempty"`
-	SwapUsedMB        int    `json:"swapUsedMB,omitempty"`
-	SwapTotalMB       int    `json:"swapTotalMB,omitempty"`
-	DiskUsedMB        int    `json:"diskUsedMB,omitempty"`
-	DiskTotalMB       int    `json:"diskTotalMB,omitempty"`
+	// CPUCores is how many CPUs the run's own processes kept busy over
+	// the last CPUWindowMS -- orchestrator.SandboxHealth.CPUCores, set by
+	// host-directory sandboxes, whose load average is the host's. A
+	// pointer so an idle run's 0 is a reading, not an absence; nil (and
+	// omitted) when the backend gave none.
+	CPUCores *float64 `json:"cpuCores,omitempty"`
+	// CPUWindowMS is the span CPUCores is averaged over, in milliseconds.
+	CPUWindowMS   int64 `json:"cpuWindowMS,omitempty"`
+	MemoryUsedMB  int   `json:"memoryUsedMB,omitempty"`
+	MemoryTotalMB int   `json:"memoryTotalMB,omitempty"`
+	SwapUsedMB    int   `json:"swapUsedMB,omitempty"`
+	SwapTotalMB   int   `json:"swapTotalMB,omitempty"`
+	DiskUsedMB    int   `json:"diskUsedMB,omitempty"`
+	DiskTotalMB   int   `json:"diskTotalMB,omitempty"`
 	// ProbeMS is how long the probe behind this row took, in
 	// milliseconds -- orchestrator.SandboxHealth.ProbeMS, carried through
 	// for the reason that field's own comment gives: an Error on its own
