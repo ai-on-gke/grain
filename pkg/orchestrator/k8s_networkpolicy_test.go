@@ -364,12 +364,38 @@ func TestBundledSandboxEgressPolicyMatchesNetworkPolicyYAML(t *testing.T) {
 			t.Errorf("%s's grain-sandbox-egress differs from networkpolicy.yaml's; edit both or neither.\n%s:\n%s\nnetworkpolicy.yaml:\n%s",
 				file, file, gb, wb)
 		}
-		// The network:none policy stays networkpolicy.yaml's alone: it is
-		// half of an opt-in (-k8s-network-policy), and nothing in either
-		// deployment manifest should look like that opt-in was taken.
-		if namedNetworkPolicy(t, file, "grain-sandbox-network-none") != nil {
-			t.Errorf("%s ships grain-sandbox-network-none, which belongs to networkpolicy.yaml's opt-in", file)
-		}
+	}
+}
+
+// TestGrainYAMLShipsTheNetworkNonePolicy: grain.yaml carries
+// grain-sandbox-network-none too, the same object as networkpolicy.yaml's.
+// -k8s-network-policy both admits network:none tasks on K8sSandboxes and
+// lets external capability grants through, so an operator who set it for
+// the grants after applying grain.yaml alone got network:none pods that
+// no policy selected: on kind with Calico such a pod reached the metadata
+// server, the API server, peer pods and node IPs, where an open-network
+// pod reached none of them (docs/test-runs/2026-11-13-sandbox-store-fences.md,
+// F1). grain-granule.yaml does not need it: a granule network:none guest
+// boots with no network device at all (K8sGranuleSandboxes.IsolatesNetwork).
+func TestGrainYAMLShipsTheNetworkNonePolicy(t *testing.T) {
+	t.Parallel()
+	want := namedNetworkPolicy(t, "networkpolicy.yaml", "grain-sandbox-network-none")
+	if want == nil {
+		t.Fatal("networkpolicy.yaml has no grain-sandbox-network-none policy")
+	}
+	got := namedNetworkPolicy(t, "grain.yaml", "grain-sandbox-network-none")
+	if got == nil {
+		t.Fatal("grain.yaml ships no grain-sandbox-network-none: with -k8s-network-policy set, a network:none " +
+			"sandbox pod is selected by no policy and reaches the metadata server and the cluster")
+	}
+	if !reflect.DeepEqual(got, want) {
+		gb, _ := yaml.Marshal(got)
+		wb, _ := yaml.Marshal(want)
+		t.Errorf("grain.yaml's grain-sandbox-network-none differs from networkpolicy.yaml's; edit both or neither.\ngrain.yaml:\n%s\nnetworkpolicy.yaml:\n%s", gb, wb)
+	}
+	policies := loadNetworkPoliciesFrom(t, "grain.yaml")
+	if got := selectingPolicies(t, policies, sandboxPodLabels(Shape{NetworkAccess: model.NetworkNone})); !slices.Equal(got, []string{"grain-sandbox-network-none"}) {
+		t.Errorf("grain.yaml: a network:none sandbox pod is selected by %v, want only grain-sandbox-network-none", got)
 	}
 }
 
@@ -393,7 +419,7 @@ func TestBundledEgressPolicySelectsEveryOpenSandboxOfItsBackend(t *testing.T) {
 				t.Errorf("%s: a %q sandbox pod is selected by %v, want only grain-sandbox-egress", tc.file, access, got)
 			}
 		}
-		if got := selectingPolicies(t, policies, tc.labels(Shape{NetworkAccess: model.NetworkNone})); len(got) != 0 {
+		if got := selectingPolicies(t, policies, tc.labels(Shape{NetworkAccess: model.NetworkNone})); slices.Contains(got, "grain-sandbox-egress") {
 			t.Errorf("%s: a network:none sandbox pod is selected by %v -- additive egress would hand it the internet", tc.file, got)
 		}
 		if got := selectingPolicies(t, policies, map[string]string{"app.kubernetes.io/name": "grain"}); len(got) != 0 {
