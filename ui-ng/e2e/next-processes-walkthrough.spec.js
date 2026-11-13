@@ -64,7 +64,9 @@ test("Processes deep links land on the suite, schedule and suite run they name",
   await expect(page.locator(".inbox-split")).toContainText(`Run #${run.id}`);
 });
 
-test("a refused schedule save says why inside the dialog", async ({ page }) => {
+test("a refused schedule save says why inside the dialog @phone", async ({
+  page,
+}) => {
   await page.goto("/next/processes/schedules");
   await page.getByTestId("proc-new-schedule-btn").click();
   const dialog = page.getByRole("dialog");
@@ -81,6 +83,11 @@ test("a refused schedule save says why inside the dialog", async ({ page }) => {
   const error = dialog.getByTestId("proc-dialog-error");
   await expect(error).toContainText("at least 10");
   await expect(error).toBeInViewport();
+  // It wraps inside the dialog rather than running past its edge.
+  const box = await error.boundingBox();
+  const frame = await dialog.boundingBox();
+  expect(box.x).toBeGreaterThanOrEqual(frame.x);
+  expect(box.x + box.width).toBeLessThanOrEqual(frame.x + frame.width + 0.5);
   // The page's banner does not repeat it behind the scrim.
   await expect(page.getByTestId("proc-action-error")).toHaveCount(0);
 
