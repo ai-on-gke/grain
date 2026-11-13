@@ -108,7 +108,7 @@ func TestCreateTaskFromATemplateFillsInTheHoles(t *testing.T) {
 	tmpl, err := c.CreateTemplate(ctx, ui.CreateTemplateRequest{
 		Name: "Deploy", Title: "Deploy {{service}} to {{environment}}",
 		Description:  "Deploy {{service}}, then watch it.",
-		Capabilities: []string{"github-sandbox"},
+		Capabilities: []string{model.GitHubSandboxRepoGrant},
 		Reads:        []string{"acme/shared-lib"},
 		AutoMerge:    true,
 		Fields: []ui.TemplateField{

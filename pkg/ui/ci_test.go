@@ -241,7 +241,7 @@ func TestTaskScopedCIRunDerivesScopeAndRecordsTheRun(t *testing.T) {
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutTask(context.Background(), model.Task{
 		ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-		Grants: []model.Grant{{Capability: "grain-ci"}},
+		Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestTaskScopedSelectiveCIRunDoesNotReplaceTheRequiredVerdict(t *testing.T) 
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutTask(context.Background(), model.Task{
 		ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-		Grants: []model.Grant{{Capability: "grain-ci"}},
+		Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestTaskScopedRecheckRerunsOnlyTheFailedJobsAndBecomesTheVerdictsSecondSamp
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutTask(context.Background(), model.Task{
 		ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-		Grants: []model.Grant{{Capability: "grain-ci"}},
+		Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestTaskScopedRecheckBeforePullRequestJoinsWaitForChecks(t *testing.T) {
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutTask(context.Background(), model.Task{
 		ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-		Grants: []model.Grant{{Capability: "grain-ci"}},
+		Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +444,7 @@ func TestTaskScopedRecheckAfterTimedOutAndFailedRunIsRecordedAndJoined(t *testin
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutTask(context.Background(), model.Task{
 		ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-		Grants: []model.Grant{{Capability: "grain-ci"}},
+		Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,7 @@ func TestTaskScopedSelectiveRunsAreSuperseded(t *testing.T) {
 		repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 		if err := store.PutTask(context.Background(), model.Task{
 			ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-			Grants: []model.Grant{{Capability: "grain-ci"}},
+			Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -534,7 +534,7 @@ func TestTaskScopedSelectiveRunsAreSuperseded(t *testing.T) {
 		repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 		if err := store.PutTask(context.Background(), model.Task{
 			ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-			Grants: []model.Grant{{Capability: "grain-ci"}},
+			Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -560,7 +560,7 @@ func TestTaskScopedSelectiveRunsAreSuperseded(t *testing.T) {
 		repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 		if err := store.PutTask(context.Background(), model.Task{
 			ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-			Grants: []model.Grant{{Capability: "grain-ci"}},
+			Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -592,7 +592,7 @@ func TestTaskScopedSelectiveRunsAreSuperseded(t *testing.T) {
 		repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 		if err := store.PutTask(context.Background(), model.Task{
 			ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-			Grants: []model.Grant{{Capability: "grain-ci"}},
+			Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -634,7 +634,7 @@ func TestTaskScopedSelectiveRunsAreSuperseded(t *testing.T) {
 		repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 		if err := store.PutTask(context.Background(), model.Task{
 			ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-			Grants: []model.Grant{{Capability: "grain-ci"}},
+			Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -676,7 +676,7 @@ func TestTaskScopedSelectiveRunsAreSuperseded(t *testing.T) {
 		repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 		if err := store.PutTask(context.Background(), model.Task{
 			ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-			Grants: []model.Grant{{Capability: "grain-ci"}},
+			Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -726,7 +726,7 @@ func TestTaskScopedRecheckOfTheFailedJobsIsAtTheNewestCommit(t *testing.T) {
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutTask(context.Background(), model.Task{
 		ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-		Grants: []model.Grant{{Capability: "grain-ci"}},
+		Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -762,7 +762,7 @@ func TestTaskScopedRecheckJobSelection(t *testing.T) {
 			repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 			if err := store.PutTask(context.Background(), model.Task{
 				ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-				Grants: []model.Grant{{Capability: "grain-ci"}},
+				Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -1363,9 +1363,9 @@ func TestTaskScopedCIRunRefusalsSayWhy(t *testing.T) {
 	for _, task := range []model.Task{
 		{ID: "8", Intent: model.IntentImplement, Title: "no grant", Target: &repo},
 		{ID: "9", Intent: model.IntentImplement, Title: "unpushed", Target: &repo,
-			Grants: []model.Grant{{Capability: "grain-ci"}}},
+			Grants: []model.Grant{{Capability: model.GrainCIGrant}}},
 		{ID: "10", Intent: model.IntentImplement, Title: "no repo",
-			Grants: []model.Grant{{Capability: "grain-ci"}}},
+			Grants: []model.Grant{{Capability: model.GrainCIGrant}}},
 	} {
 		if err := store.PutTask(context.Background(), task); err != nil {
 			t.Fatal(err)
@@ -1409,7 +1409,7 @@ func TestCloseCancelsInFlightTaskCIRuns(t *testing.T) {
 	for _, id := range []string{"11", "12", "13"} {
 		if err := store.PutTask(ctx, model.Task{
 			ID: id, Intent: model.IntentImplement, Title: "task " + id, Target: &repo,
-			Grants: []model.Grant{{Capability: "grain-ci"}},
+			Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -1485,7 +1485,7 @@ func TestTaskScopedCIRunRetargetsStackedTaskBaseWhenUpstreamTaskMerged(t *testin
 		Title:  "stacked review",
 		Target: &repo,
 		Base:   "grain/049f1e09/task-732",
-		Grants: []model.Grant{{Capability: "grain-ci"}},
+		Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1546,7 +1546,7 @@ func TestTaskScopedCIRunRetargetedReviewLosesAutoMerge(t *testing.T) {
 		Base:      "grain/049f1e09/task-732",
 		AutoMerge: true,
 		Origin:    model.Origin{Reason: model.ReasonReview},
-		Grants:    []model.Grant{{Capability: "grain-ci"}},
+		Grants:    []model.Grant{{Capability: model.GrainCIGrant}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1589,7 +1589,7 @@ func TestStartTaskCIRunOptRefusesFullSuiteWhenRepoUsesGitHubCIMode(t *testing.T)
 		Title:  "pre-existing task with default grant",
 		Target: &repo,
 		Base:   "main",
-		Grants: []model.Grant{{Capability: "grain-ci", Via: model.GrantByDefault}},
+		Grants: []model.Grant{{Capability: model.GrainCIGrant, Via: model.GrantByDefault}},
 	}); err != nil {
 		t.Fatal(err)
 	}

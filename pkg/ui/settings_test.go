@@ -312,7 +312,7 @@ func TestUpdateSettingsRoundTripsDefaultCapabilities(t *testing.T) {
 
 	// Repeated deliberately: a picker can produce a duplicate, and this
 	// is a set.
-	defaults := []string{"github-sandbox", "github-sandbox"}
+	defaults := []string{model.GitHubSandboxRepoGrant, model.GitHubSandboxRepoGrant}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &defaults})
 	if err != nil {
 		t.Fatalf("setting default capabilities: %v", err)
@@ -393,18 +393,18 @@ func TestUpdateSettingsAcceptsDroppingARetiredDefaultCapability(t *testing.T) {
 	// it can only be one that had a row when it was chosen and lost it to
 	// an upgrade since (OfferedCapabilities' own "scratch-repo", now
 	// github-sandbox).
-	putDefaultCapabilities(t, ctx, store, "github-sandbox", "scratch-repo")
+	putDefaultCapabilities(t, ctx, store, model.GitHubSandboxRepoGrant, "scratch-repo")
 
 	read, err := c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"github-sandbox", "scratch-repo"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant, "scratch-repo"}) {
 		t.Fatalf("DefaultCapabilities = %v, want it reported as stored: an operator can only clear one they can see",
 			read.DefaultCapabilities)
 	}
 
-	kept := []string{"github-sandbox"}
+	kept := []string{model.GitHubSandboxRepoGrant}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &kept})
 	if err != nil {
 		t.Fatalf("dropping a retired default capability: %v", err)
@@ -433,11 +433,11 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
 		t.Fatal(err)
 	}
-	deployment := []string{"github-sandbox"}
+	deployment := []string{model.GitHubSandboxRepoGrant}
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &deployment}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"github-sandbox"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{model.GitHubSandboxRepoGrant}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -457,7 +457,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if got := byID[model.GitHubSandboxRepoGrant].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
 		t.Errorf("github-sandbox DefaultRepos = %v, want [acme/gadgets]", got)
 	}
-	if got := byID[model.CanonicalLegacyGrant("image-signing")].DefaultRepos; len(got) != 0 {
+	if got := byID[model.ImageSigningRef+"={}"].DefaultRepos; len(got) != 0 {
 		t.Errorf("image-signing DefaultRepos = %v, want none", got)
 	}
 
@@ -492,7 +492,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"github-sandbox"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{model.GitHubSandboxRepoGrant}); err != nil {
 		t.Fatal(err)
 	}
 
