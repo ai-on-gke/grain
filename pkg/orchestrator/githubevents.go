@@ -568,6 +568,13 @@ func fileExternalPRReview(ctx context.Context, deps Deps, r externalReview, now 
 	repo, number, sender, trusted := r.repo, r.number, r.sender, r.trusted
 	prTitle, prBody, headRef, headSHA, baseRef := r.prTitle, r.prBody, r.headRef, r.headSHA, r.baseRef
 	eventKey, extraNote := r.eventKey, r.extraNote
+	// The pull request's own text is written by whoever opened it, and the
+	// sections grain appends to this body later are found again by their
+	// headers (syncParallelReviewBodies, refreshQueuedReviewsAfterFinish):
+	// a description carrying one must not be mistaken for grain's own.
+	prTitle = neutralizeReviewSectionHeaders(prTitle)
+	prBody = neutralizeReviewSectionHeaders(prBody)
+	extraNote = neutralizeReviewSectionHeaders(extraNote)
 
 	if (headRef == "" || headSHA == "") && deps.Client != nil {
 		if detail, err := deps.Client.GetPullRequest(repo.StoredOwner(), repo.Name, number); err == nil {

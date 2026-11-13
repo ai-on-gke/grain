@@ -807,10 +807,63 @@ func capitalizeFirst(s string) string {
 }
 
 func setParallelReviewsSection(body, section string) string {
-	if idx := strings.Index(body, parallelReviewsHeader); idx >= 0 {
+	if idx := generatedParallelSectionAt(body); idx >= 0 {
 		body = body[:idx]
 	}
 	return body + section
+}
+
+// generatedParallelSectionAt returns where the "## Parallel reviews of this
+// head" section parallelReviewsSection appended to body starts, or -1. Only
+// the last occurrence of the header, followed by exactly the one line
+// parallelReviewsSection writes, is grain's own: an earlier occurrence --
+// one quoted from a pull request's description, say -- is left alone, so
+// refreshing the section can never cut away the instructions that follow it.
+func generatedParallelSectionAt(body string) int {
+	idx := strings.LastIndex(body, parallelReviewsHeader)
+	if idx < 0 {
+		return -1
+	}
+	rest := body[idx+len(parallelReviewsHeader):]
+	line, ok := strings.CutSuffix(rest, "\n")
+	if !ok || strings.Contains(line, "\n") || !strings.HasSuffix(line, "`grain pr open`.") {
+		return -1
+	}
+	return idx
+}
+
+// isGeneratedEarlierSection reports whether content -- what follows an
+// earlierReviewsHeader up to the next section -- is a list
+// earlierReviewsSection wrote: nothing but "- Task" entries and their
+// indented question lines.
+func isGeneratedEarlierSection(content string) bool {
+	content, ok := strings.CutSuffix(content, "\n")
+	if !ok || content == "" {
+		return false
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if !strings.HasPrefix(line, "- Task ") && !strings.HasPrefix(line, "  - ") {
+			return false
+		}
+	}
+	return true
+}
+
+// neutralizeReviewSectionHeaders rewrites, in text written outside this
+// deployment (a pull request's title, description or a reviewer's request),
+// every occurrence of the headers grain later finds its own appended review
+// sections by, so none of it can be taken for one of them.
+func neutralizeReviewSectionHeaders(text string) string {
+	for _, h := range []struct{ header, replacement string }{
+		{earlierReviewsHeader, "\n\n### Earlier reviews of this pull request\n\n"},
+		{parallelReviewsHeader, "\n\n### Parallel reviews of this head\n\n"},
+		{incrementalNoteHeader, "\n**This is an incremental review**."},
+	} {
+		for strings.Contains(text, h.header) {
+			text = strings.ReplaceAll(text, h.header, h.replacement)
+		}
+	}
+	return text
 }
 
 // syncParallelReviewBodies refreshes the "## Parallel reviews of this head"
@@ -1038,28 +1091,25 @@ func securityReviewDelta(ctx context.Context, store *model.Store, client github.
 }
 
 func setEarlierReviewsSection(body, section string) string {
-	if idx := strings.Index(body, earlierReviewsHeader); idx >= 0 {
-		after := body[idx+len(earlierReviewsHeader):]
-		end := len(after)
-		if i := strings.Index(after, incrementalNoteHeader); i >= 0 && i < end {
-			end = i
-		}
-		if i := strings.Index(after, parallelReviewsHeader); i >= 0 && i < end {
-			end = i
-		}
-		body = body[:idx] + after[end:]
+	// grain's own sections sit at the end of the body, in the order
+	// earlier reviews, incremental note, parallel reviews: find them from
+	// the end, so a header quoted earlier in the body is never taken for one.
+	tail := len(body)
+	if p := generatedParallelSectionAt(body); p >= 0 {
+		tail = p
+	}
+	if i := strings.LastIndex(body[:tail], incrementalNoteHeader); i >= 0 {
+		tail = i
+	}
+	if e := strings.LastIndex(body[:tail], earlierReviewsHeader); e >= 0 &&
+		isGeneratedEarlierSection(body[e+len(earlierReviewsHeader):tail]) {
+		body = body[:e] + body[tail:]
+		tail = e
 	}
 	if section == "" {
 		return body
 	}
-	insertAt := len(body)
-	if i := strings.Index(body, incrementalNoteHeader); i >= 0 && i < insertAt {
-		insertAt = i
-	}
-	if i := strings.Index(body, parallelReviewsHeader); i >= 0 && i < insertAt {
-		insertAt = i
-	}
-	return body[:insertAt] + section + body[insertAt:]
+	return body[:tail] + section + body[tail:]
 }
 
 // refreshQueuedReviewsAfterFinish updates the "## Earlier reviews of this pull
