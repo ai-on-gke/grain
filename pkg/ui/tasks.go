@@ -3503,6 +3503,14 @@ func writeClientError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
+	// The release approval key in Cloud KMS could not be read: KMS is
+	// upstream of this process, so 502, naming the setting to check.
+	var rak *releaseApprovalKMSError
+	if errors.As(err, &rak) {
+		writeJSON(w, http.StatusBadGateway, apierror.Withheld(http.StatusBadGateway, apierror.CodeUpstream,
+			releaseApprovalKMSMessage, err))
+		return
+	}
 	var snf *scheduleNotFoundError
 	if errors.As(err, &snf) {
 		writeError(w, http.StatusNotFound, err)

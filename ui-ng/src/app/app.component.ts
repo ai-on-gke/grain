@@ -38,6 +38,7 @@ import {
   RouterLinkActive,
   RouterOutlet,
 } from "@angular/router";
+import type { RouteKey } from "./api/generated-routes";
 import { GrainApi } from "./api/grain-api.service";
 import { CreateTaskService } from "./create/create-task.service";
 import type { NewTaskDraft } from "./create/new-task-form";
@@ -46,7 +47,6 @@ import type { InboxStore } from "./inbox/inbox.store";
 import type { SessionsStore } from "./sessions/sessions.store";
 import { DirectorContextService } from "./director/director-context.service";
 import { DirectorDrawerComponent } from "./director/director-drawer.component";
-import type { RouteKey } from "./api/generated-routes";
 import { AccessService } from "./services/access.service";
 import { HelpService } from "./services/help.service";
 import { KeyboardService } from "./services/keyboard.service";
@@ -102,16 +102,14 @@ const ICONS: Record<string, string> = {
     "M12 2l2.1 5.9L20 10l-5.9 2.1L12 18l-2.1-5.9L4 10l5.9-2.1L12 2zm6.5 13l1.1 2.9 2.9 1.1-2.9 1.1L18.5 23l-1.1-2.9L14.5 19l2.9-1.1L18.5 15z",
 };
 
-// needs is the route the item ends in, so a person without the scope to
-// call it -- a viewer -- is not offered it (the access service decides,
-// as for every other write control).
-type CreateItem = { needs: RouteKey } & (
+type CreateItem =
   | {
       kind: "task";
       icon: string;
       label: string;
       sub: string;
       tip: string;
+      gate?: RouteKey;
       testid?: string;
       prefill?: Partial<NewTaskDraft>;
     }
@@ -121,6 +119,7 @@ type CreateItem = { needs: RouteKey } & (
       label: string;
       sub: string;
       tip: string;
+      gate?: RouteKey;
       route: string;
       query?: Record<string, unknown>;
     }
@@ -130,9 +129,9 @@ type CreateItem = { needs: RouteKey } & (
       label: string;
       sub: string;
       tip: string;
+      gate?: RouteKey;
       href: string;
-    }
-);
+    };
 
 @Directive({ selector: "[gDeferError]" })
 export class DeferErrorDirective implements OnInit {
@@ -205,71 +204,67 @@ export class DeferErrorDirective implements OnInit {
           }
         </a>
 
-        @if (canFileTasks()) {
+        <button
+          type="button"
+          class="rail-fab"
+          data-testid="rail-new-task"
+          aria-label="New task"
+          aria-keyshortcuts="c"
+          [disabled]="!canCreateTask()"
+          [gTip]="
+            canCreateTask()
+              ? 'New task (c): describe the work and Grain files it.'
+              : access.deniedReason('POST /api/tasks')
+          "
+          gTipPlacement="right"
+          (click)="openNewTask($event)"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+            <path [attr.d]="icons['add']" fill="currentColor" />
+          </svg>
+        </button>
+
+        <div class="rail-create" (focusout)="onCreateFocusOut($event)">
           <button
+            #createBtn
             type="button"
-            class="rail-fab"
-            data-testid="rail-new-task"
-            aria-label="New task"
-            aria-keyshortcuts="c"
-            gTip="New task (c): describe the work and Grain files it."
-            gTipPlacement="right"
-            (click)="openNewTask($event)"
+            class="rail-new-btn"
+            data-testid="rail-create-menu"
+            [attr.aria-expanded]="createOpen()"
+            aria-controls="create-menu"
+            (click)="toggleCreate($event)"
           >
-            <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
-              <path [attr.d]="icons['add']" fill="currentColor" />
+            New
+            <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+              <path [attr.d]="icons['caret']" fill="currentColor" />
             </svg>
           </button>
-        }
-
-        @if (createItems().length) {
-          <div class="rail-create" (focusout)="onCreateFocusOut($event)">
-            <button
-              #createBtn
-              type="button"
-              class="rail-new-btn"
-              data-testid="rail-create-menu"
-              [attr.aria-expanded]="createOpen()"
-              aria-controls="create-menu"
-              (click)="toggleCreate($event)"
+          @if (createOpen()) {
+            <ul
+              class="create-menu"
+              id="create-menu"
+              aria-label="Create"
+              data-testid="create-menu"
+              [style.top.px]="createPos().top"
+              [style.left.px]="createPos().left"
             >
-              New
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path [attr.d]="icons['caret']" fill="currentColor" />
-              </svg>
-            </button>
-            @if (createOpen()) {
-              <ul
-                class="create-menu"
-                id="create-menu"
-                aria-label="Create"
-                data-testid="create-menu"
-                [style.top.px]="createPos().top"
-                [style.left.px]="createPos().left"
-              >
-                @for (item of createItems(); track item.label) {
-                  <li>
-                    <ng-container
-                      *ngTemplateOutlet="
-                        createEntry;
-                        context: {
-                          $implicit: item,
-                          cls: 'create-menu-item',
-                          rich: true,
-                        }
-                      "
-                    />
-                  </li>
-                }
-              </ul>
-            }
-          </div>
-        }
+              @for (item of createItems; track item.label) {
+                <li>
+                  <ng-container
+                    *ngTemplateOutlet="
+                      createEntry;
+                      context: {
+                        $implicit: item,
+                        cls: 'create-menu-item',
+                        rich: true,
+                      }
+                    "
+                  />
+                </li>
+              }
+            </ul>
+          }
+        </div>
 
         <span class="rail-divider" aria-hidden="true"></span>
 
@@ -666,12 +661,18 @@ export class DeferErrorDirective implements OnInit {
 
       <!-- Sessions has a composer where the phone FAB would sit, and is
         itself a place to ask for work (the prototype hides it there too). -->
-      @if (!onSessions() && canFileTasks()) {
+      @if (!onSessions()) {
         <button
           type="button"
           class="phone-fab"
           data-testid="phone-new-task"
           aria-label="New task"
+          [disabled]="!canCreateTask()"
+          [gTip]="
+            canCreateTask()
+              ? 'New task'
+              : access.deniedReason('POST /api/tasks')
+          "
           (click)="openNewTask($event)"
         >
           <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
@@ -765,7 +766,7 @@ export class DeferErrorDirective implements OnInit {
                 }
               </li>
             }
-            @for (item of createItems(); track item.label) {
+            @for (item of createItems; track item.label) {
               <li>
                 <ng-container
                   *ngTemplateOutlet="
@@ -793,90 +794,77 @@ export class DeferErrorDirective implements OnInit {
         </nav>
       }
 
+      <ng-template #createBody let-item let-rich="rich">
+        @if (rich) {
+          <svg
+            class="cm-icon"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path [attr.d]="icons[item.icon]" fill="currentColor" />
+          </svg>
+          <span class="cm-copy">
+            <span class="cm-title">{{ item.label }}</span>
+            <span class="cm-sub">{{ item.sub }}</span>
+          </span>
+        } @else {
+          {{ item.label }}
+        }
+      </ng-template>
+
       <ng-template #createEntry let-item let-cls="cls" let-rich="rich">
-        @switch (item.kind) {
-          @case ("task") {
-            <button
-              type="button"
-              [class]="cls"
-              [attr.data-testid]="item.testid ?? 'create-new-task'"
-              [gTip]="item.tip"
-              gTipPlacement="right"
-              (click)="openNewTask($event, item.prefill)"
-            >
-              @if (rich) {
-                <svg
-                  class="cm-icon"
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path [attr.d]="icons[item.icon]" fill="currentColor" />
-                </svg>
-                <span class="cm-copy">
-                  <span class="cm-title">{{ item.label }}</span>
-                  <span class="cm-sub">{{ item.sub }}</span>
-                </span>
-              } @else {
-                {{ item.label }}
-              }
-            </button>
-          }
-          @case ("route") {
-            <a
-              [class]="cls"
-              [routerLink]="item.route"
-              [queryParams]="item.query"
-              [gTip]="item.tip"
-              gTipPlacement="right"
-              (click)="closeMenus()"
-            >
-              @if (rich) {
-                <svg
-                  class="cm-icon"
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path [attr.d]="icons[item.icon]" fill="currentColor" />
-                </svg>
-                <span class="cm-copy">
-                  <span class="cm-title">{{ item.label }}</span>
-                  <span class="cm-sub">{{ item.sub }}</span>
-                </span>
-              } @else {
-                {{ item.label }}
-              }
-            </a>
-          }
-          @default {
-            <a
-              [class]="cls"
-              [href]="item.href"
-              [gTip]="item.tip"
-              gTipPlacement="right"
-            >
-              @if (rich) {
-                <svg
-                  class="cm-icon"
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path [attr.d]="icons[item.icon]" fill="currentColor" />
-                </svg>
-                <span class="cm-copy">
-                  <span class="cm-title">{{ item.label }}</span>
-                  <span class="cm-sub">{{ item.sub }}</span>
-                </span>
-              } @else {
-                {{ item.label }}
-              }
-            </a>
-          }
+        @let allowed = canCreateItem(item);
+        @if (item.kind === "task" || !allowed) {
+          <button
+            type="button"
+            [class]="cls"
+            [disabled]="!allowed"
+            [attr.data-testid]="
+              item.kind === 'task' ? (item.testid ?? 'create-new-task') : null
+            "
+            [gTip]="allowed ? item.tip : access.deniedReason(item.gate!)"
+            gTipPlacement="right"
+            (click)="allowed && openNewTask($event, item.prefill)"
+          >
+            <ng-container
+              *ngTemplateOutlet="
+                createBody;
+                context: { $implicit: item, rich: rich }
+              "
+            />
+          </button>
+        } @else if (item.kind === "route") {
+          <a
+            [class]="cls"
+            [routerLink]="item.route"
+            [queryParams]="item.query"
+            [gTip]="item.tip"
+            gTipPlacement="right"
+            (click)="closeMenus()"
+          >
+            <ng-container
+              *ngTemplateOutlet="
+                createBody;
+                context: { $implicit: item, rich: rich }
+              "
+            />
+          </a>
+        } @else {
+          <a
+            [class]="cls"
+            [href]="item.href"
+            [gTip]="item.tip"
+            gTipPlacement="right"
+          >
+            <ng-container
+              *ngTemplateOutlet="
+                createBody;
+                context: { $implicit: item, rich: rich }
+              "
+            />
+          </a>
         }
       </ng-template>
 
@@ -951,21 +939,21 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly hrefOf = hrefFor;
 
   // Rich 2-line create menu (spec D-23).
-  private readonly allCreateItems: CreateItem[] = [
+  protected readonly createItems: CreateItem[] = [
     {
       kind: "task",
       icon: "addTask",
       label: "New task",
-      needs: "POST /api/tasks",
       sub: "Describe work for an agent to run",
+      gate: "POST /api/tasks",
       tip: "Describe a piece of work for an agent to do.",
     },
     {
       kind: "task",
       icon: "workstreams",
       label: "Start a workstream",
-      needs: "POST /api/tasks",
       sub: "Break a goal into connected tasks",
+      gate: "POST /api/tasks",
       testid: "create-start-workstream",
       tip: "State a goal; an agent plans it and proposes tasks into one stream.",
       prefill: { workstream: true, origin: "" },
@@ -974,8 +962,8 @@ export class AppComponent implements OnInit, OnDestroy {
       kind: "route",
       icon: "sessions",
       label: "New session",
-      needs: "POST /api/console-sessions",
       sub: "Start a standing chat with an agent",
+      gate: "POST /api/console-sessions",
       route: "/sessions",
       query: { new: 1 },
       tip: "Start a standing conversation with an agent.",
@@ -984,8 +972,8 @@ export class AppComponent implements OnInit, OnDestroy {
       kind: "route",
       icon: "processes",
       label: "Task from template",
-      needs: "POST /api/tasks",
       sub: "File from a saved process template",
+      gate: "POST /api/tasks/from-template",
       route: "/processes/templates",
       query: { launch: 1 },
       tip: "File a task from a saved deployment or repository template.",
@@ -994,8 +982,8 @@ export class AppComponent implements OnInit, OnDestroy {
       kind: "route",
       icon: "ci",
       label: "Run a suite",
-      needs: "POST /api/suite-runs",
       sub: "Launch a multi-pass template suite",
+      gate: "POST /api/suite-runs",
       route: "/processes/suites",
       query: { run: 1 },
       tip: "Run a set of templates together against a repository and branch.",
@@ -1004,8 +992,8 @@ export class AppComponent implements OnInit, OnDestroy {
       kind: "route",
       icon: "processes",
       label: "New schedule",
-      needs: "POST /api/schedules",
       sub: "Automate recurring tasks or triggers",
+      gate: "POST /api/schedules",
       route: "/processes/schedules",
       query: { new: 1 },
       tip: "Create a recurring schedule or event trigger.",
@@ -1014,21 +1002,20 @@ export class AppComponent implements OnInit, OnDestroy {
       kind: "route",
       icon: "tasks",
       label: "New board",
-      needs: "POST /api/boards",
       sub: "Create a saved task view",
+      gate: "POST /api/boards",
       route: "/tasks",
       query: { newBoard: 1 },
       tip: "Save a filtered view of tasks as a reusable board.",
     },
   ];
-  protected readonly createItems = computed(() =>
-    this.allCreateItems.filter((item) => this.access.can(item.needs)),
-  );
-  protected readonly canFileTasks = computed(() =>
-    this.access.can("POST /api/tasks"),
-  );
 
   protected readonly createTask = inject(CreateTaskService);
+  protected readonly canCreateTask = computed(
+    () =>
+      this.access.can("POST /api/tasks") ||
+      this.access.can("POST /api/tasks/from-template"),
+  );
   protected readonly onSessions = signal(false);
   protected readonly version = computed(() => this.inboxRef()?.version() ?? "");
   protected readonly inboxCount = computed(
@@ -1122,6 +1109,15 @@ export class AppComponent implements OnInit, OnDestroy {
     }
     this.probeBrandSprite();
 
+    if (!this.access.configLoaded() && typeof this.api.config === "function") {
+      void this.api
+        .config()
+        .then((c) => {
+          if (c && !this.access.configLoaded()) this.access.setConfig(c);
+        })
+        .catch(() => undefined);
+    }
+
     if (typeof this.api.whoami === "function") {
       void this.api
         .whoami()
@@ -1134,7 +1130,7 @@ export class AppComponent implements OnInit, OnDestroy {
     const r = (key: string, description: string, run: () => void) =>
       this.unregister.push(this.keyboard.register({ key, description, run }));
     r("c", "New task", () => {
-      if (!this.canFileTasks()) return;
+      if (!this.canCreateTask()) return;
       this.closeMenus();
       this.createTask.open();
     });
@@ -1158,7 +1154,7 @@ export class AppComponent implements OnInit, OnDestroy {
     r(",", "Open Settings", () => this.open(SETTINGS));
     r("t", "Switch light and dark", () => this.theme.toggle());
     r("d", "Toggle Director drawer", () =>
-      this.directorCtx.toggle(this.directorBtn()?.nativeElement),
+      this.directorCtx.toggle(this.activeOpener()),
     );
 
     // Keep number keys 1..9 synchronized with the user's visible rail order.
@@ -1247,7 +1243,25 @@ export class AppComponent implements OnInit, OnDestroy {
     });
   }
 
+  protected canCreateItem(item: CreateItem): boolean {
+    if (item.kind === "task") return this.canCreateTask();
+    return item.gate ? this.access.can(item.gate) : true;
+  }
+
+  private activeOpener(): HTMLElement | null {
+    const active = this.doc.activeElement;
+    if (
+      active instanceof HTMLElement &&
+      active !== this.doc.body &&
+      !active.closest('[data-testid="director-drawer"]')
+    ) {
+      return active;
+    }
+    return this.directorBtn()?.nativeElement ?? null;
+  }
+
   protected openNewTask(ev: Event, prefill: Partial<NewTaskDraft> = {}): void {
+    if (!this.canCreateTask()) return;
     const opener = this.moreOpen()
       ? this.moreBtn()?.nativeElement
       : this.createOpen()
@@ -1290,7 +1304,7 @@ export class AppComponent implements OnInit, OnDestroy {
     if (!isAltD && !isCtrlShiftD) return;
     ev.preventDefault();
     this.closeMenus();
-    this.directorCtx.toggle(this.directorBtn()?.nativeElement);
+    this.directorCtx.toggle(this.activeOpener());
   }
 
   protected onDeferError(
@@ -1362,7 +1376,7 @@ export class AppComponent implements OnInit, OnDestroy {
     if (!next) return;
     const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
     const winH = this.doc.defaultView?.innerHeight ?? 900;
-    const estH = Math.min(this.createItems().length * 58 + 16, winH - 24);
+    const estH = Math.min(this.createItems.length * 58 + 16, winH - 24);
     this.createPos.set({
       top: Math.max(12, Math.min(Math.round(r.top), winH - estH - 12)),
       left: Math.round(r.right + 8),

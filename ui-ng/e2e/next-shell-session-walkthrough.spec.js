@@ -70,8 +70,10 @@ for (const size of [
   );
 }
 
-// A viewer -- a role without write scopes -- is not offered the shell's
-// create controls or a task's composer, whose calls the server refuses.
+// A viewer -- a role without write scopes -- is not offered a working
+// create control or a task's composer, whose calls the server refuses:
+// the shell's New task buttons are disabled with the reason (main's
+// gating), and a task's composer gives way to the denial sentence.
 // GET /api/config is the server's statement of the caller's access; it
 // is rewritten here to a read-only role, as the demo signs everyone in
 // as the operator. Everything else is the real server.
@@ -89,54 +91,44 @@ async function asViewer(page) {
   });
 }
 
-test("a viewer sees no create controls on a desktop", async ({ page }) => {
+test("a viewer cannot file or comment on a desktop", async ({ page }) => {
   await asViewer(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/next/tasks");
   await expect(
     page.getByRole("heading", { level: 1, name: "Tasks", exact: true }),
   ).toBeVisible();
-  await expect(page.getByTestId("rail-new-task")).toHaveCount(0);
-  await expect(page.getByTestId("rail-create-menu")).toHaveCount(0);
+  await expect(page.getByTestId("rail-new-task")).toBeDisabled();
   // The c shortcut does not open the New task sheet either.
   await page.locator("body").press("c");
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
   await page.goto("/next/task/3");
   await expect(page.getByTestId("reply-blocked")).toBeVisible();
+  await expect(page.getByTestId("reply-blocked")).toContainText("tasks:write");
   await expect(page.getByTestId("task-composer")).toHaveCount(0);
 });
 
 test(
-  "a viewer sees no New task button on a phone",
+  "a viewer cannot comment on a task on a phone",
   { tag: ["@phone"] },
   async ({ page }) => {
     await asViewer(page);
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/next/inbox");
-    await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
-    await expect(page.getByTestId("phone-new-task")).toHaveCount(0);
-    await page.getByTestId("compact-more").click();
-    const sheet = page.getByTestId("more-sheet");
-    await expect(sheet).toBeVisible();
-    await expect(sheet.getByTestId("create-new-task")).toHaveCount(0);
-    await expect(sheet.getByText("New session")).toHaveCount(0);
+    await page.goto("/next/task/3");
+    const note = page.getByTestId("reply-blocked");
+    await expect(note).toBeVisible();
+    await expect(page.getByTestId("task-composer")).toHaveCount(0);
+    const box = await note.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
   },
 );
 
-test("an operator still has every create control", async ({ page }) => {
+test("an operator still has the composer", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/next/tasks");
-  await expect(page.getByTestId("rail-new-task")).toBeVisible();
-  await page.getByTestId("rail-create-menu").click();
-  const menu = page.getByTestId("create-menu");
-  for (const label of [
-    "New task",
-    "New session",
-    "New schedule",
-    "New board",
-  ]) {
-    await expect(menu.getByText(label, { exact: true })).toBeVisible();
-  }
-  await page.keyboard.press("Escape");
+  await page.goto("/next/task/3");
+  await expect(page.getByTestId("task-composer")).toBeVisible();
+  await expect(page.getByTestId("reply-blocked")).toHaveCount(0);
+  await expect(page.getByTestId("rail-new-task")).toBeEnabled();
 });

@@ -143,6 +143,7 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 		return nil
 	}
 
+	var baseRef string
 	if headSHA == "" {
 		detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil {
@@ -150,6 +151,7 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 				"it is classified again before it merges", ref, err)
 		} else {
 			headSHA = detail.HeadSHA
+			baseRef = detail.BaseRef
 		}
 	}
 
@@ -244,6 +246,15 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 		return nil
 	}
 
+	var incSince string
+	var incDelta []string
+	if known && headSHA != "" {
+		incSince = securityIncrementalBase(ctx, store, *current, ref, headSHA, rules)
+		if incSince != "" {
+			incDelta, incSince = securityReviewDelta(ctx, store, client, *current, ref, baseRef, incSince, headSHA, files)
+		}
+	}
+
 	var submittedThisHead bool
 	var needsHumanSubmit bool
 	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
@@ -320,8 +331,12 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 	}
 
 	tmpl := model.SystemTemplate(model.SecurityReviewTemplateID, model.RepoRef{})
-	review, fileErr := putSecurityReview(ctx, store, *current, ref, *tmpl,
-		securityReviewTitle(*current), securityReviewBody(*tmpl, *current, ref, matches, known), now)
+	body := securityReviewBody(*tmpl, *current, ref, matches, known) +
+		earlierReviewsSection(ctx, store, client, current, ref, headSHA, "", prevReview) +
+		incrementalNote(incSince, headSHA, incDelta) +
+		parallelReviewsSection(parallelReviewsFor(ctx, store, current, ref, headSHA, "", prevReview))
+	review, fileErr := putSecurityReviewAt(ctx, store, *current, ref, headSHA, incSince, *tmpl,
+		securityReviewTitle(*current), body, now)
 	if fileErr == nil {
 		fileErr = store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
 			t.Links = append(t.Links, model.Link{Kind: model.LinkSecurityReviewTask, Target: review.ID})
@@ -342,10 +357,13 @@ func holdForTrustBoundary(ctx context.Context, store *model.Store, client github
 				return nil
 			})
 		}
-	} else if err := supersedeSecurityReview(ctx, store, prevReview, review, now); err != nil {
-		// The new review is filed and the hold names it, so the old one can
-		// no longer release anything; at worst it runs for nothing.
-		log.Printf("orchestrator: %v", err)
+	} else {
+		if err := supersedeSecurityReview(ctx, store, prevReview, review, now); err != nil {
+			// The new review is filed and the hold names it, so the old one can
+			// no longer release anything; at worst it runs for nothing.
+			log.Printf("orchestrator: %v", err)
+		}
+		syncParallelReviewBodies(ctx, store, current, ref, headSHA)
 	}
 	prFileErr := fileErr
 	if fileErr != nil {

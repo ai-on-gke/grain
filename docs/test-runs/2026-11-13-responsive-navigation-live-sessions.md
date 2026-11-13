@@ -569,17 +569,23 @@ already hid New session and its composer for the same role.
 
 **Fix:**
 
-- Each create-menu item in `ui-ng/src/app/app.component.ts` names the
-  route it ends in. The menu shows only the items the access service
-  allows, and the New button is hidden when none are allowed.
-- The New task buttons and `c` need `POST /api/tasks`.
-- `task-detail.component.ts` hides the composer when
-  `POST /api/tasks/{id}/comments` is denied, and shows the access
-  service's sentence in its place: "Your role grain/viewer does not hold
-  tasks:write, which this needs." At 390 that note measures 13..377.
+- **Shell (superseded on merge).** This branch first hid the shell's
+  create controls from a viewer. While it was in CI, `main` gained
+  `1f3f18bed` ("fix /next/ walkthrough defects"), which gates the same
+  controls a different way: it disables them and gives the reason in
+  their tooltip. That also follows the design book's "Role-aware" rule.
+  The merge took `main`'s `app.component.ts`, so this branch no longer
+  changes the shell.
+- **Task composer (kept).** `task-detail.component.ts` hides the
+  composer when `POST /api/tasks/{id}/comments` is denied, and shows the
+  access service's sentence in its place: "Your role grain/viewer does
+  not hold tasks:write, which this needs." At 390 that note measures
+  13..377. `main` had not changed this.
 
-After the fix, no write control was visible on any of the eight pages
-walked as a viewer, at 1440 or 390. An operator's controls are unchanged.
+Before the merge, the walkthrough as a viewer found no write control
+visible on any of the eight pages, at 1440 or 390. After the merge, the
+New task buttons are present but disabled, and `c` does nothing. An
+operator's controls are unchanged.
 
 ## Regression coverage
 
@@ -589,11 +595,10 @@ New `ui-ng/e2e/next-shell-session-walkthrough.spec.js`, run with
 - `/next/t/<team>/…` opens the team-less page, keeping the query;
 - a new session focuses its composer at 1440 and at 390×664, typing
   goes into it, and Send is on screen;
-- a viewer sees no New task, New menu or `c` sheet at 1440, and gets the
-  denial note instead of a composer on a task;
-- a viewer sees no New task button or create items in the More sheet at
-  390;
-- an operator still has the whole create menu.
+- as a viewer at 1440, New task is disabled, `c` opens nothing, and a
+  task shows the denial note instead of a composer;
+- as a viewer at 390, the note fits the screen and no composer shows;
+- an operator still has the composer, and New task is enabled.
 
 The `/t/` and focus cases were reproduced on the base build by hand, as
 above. With the fixes, the new spec passes together with

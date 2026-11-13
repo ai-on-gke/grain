@@ -517,7 +517,7 @@ func TestADetachedRunIsNotRetried(t *testing.T) {
 // A hostd drain or mid-run loss stops the retry loop at once rather than
 // mistaking an unopened resume stream for a refused --resume flag.
 func TestAHostdStopIsNotRetriedAndKeepsSession(t *testing.T) {
-	for _, stopErr := range []error{agent.ErrHostdDraining, agent.ErrHostdLost} {
+	for _, stopErr := range []error{agent.ErrHostdDraining, agent.ErrHostdStopped, agent.ErrHostdLost} {
 		r := &attemptRunner{replies: []attemptReply{
 			{stdout: "", err: fmt.Errorf("runhost: %w", stopErr)},
 			{stdout: stream(systemInit("sess-fresh"), assistantText("done"), successResult("done", 1))},

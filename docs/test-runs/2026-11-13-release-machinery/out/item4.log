@@ -1,0 +1,31 @@
+grep: /etc/hosts: No such file or directory
+== a. the approved merge (alice's PR, approved by bob)
+{"type":"https://github.com/ai-on-gke/grain/reviewed-merge/v1","repo":"ghe.example.com/acme/widgets","commit":"2f474dd00d66408eb3edd394b4162bd4cbf4a331","since":"4729bff32ca2297fb1119becde669c991a1ed602","merges":[{"commit":"2f474dd00d66408eb3edd394b4162bd4cbf4a331","pull":9000,"base":"main","via":"review","by":"bob"}]}
+exit 0
+  forge calls:
+    GET ghe.example.com/api/v3/repos/acme/widgets/commits/2f474dd00d66408eb3edd394b4162bd4cbf4a331/pulls?per_page=100
+    GET ghe.example.com/api/v3/repos/acme/widgets/pulls/9000
+    GET ghe.example.com/api/v3/repos/acme/widgets/pulls/9000/reviews?per_page=100&page=1
+    GET ghe.example.com/api/v3/repos/acme/widgets/git/commits/2f474dd00d66408eb3edd394b4162bd4cbf4a331
+== b. the self-merge on top (alice's PR, merged by alice, no review)
+reviewed-merge: refused: d28a02414244 did not reach main through a reviewed merge: pull request #9001 was merged by alice, with no approval from an owner, member or collaborator other than its author, and not by grain
+exit 1
+  forge calls:
+    GET ghe.example.com/api/v3/repos/acme/widgets/commits/d28a024142444b07bfa98179ed0921e641fb02e5/pulls?per_page=100
+    GET ghe.example.com/api/v3/repos/acme/widgets/pulls/9001
+    GET ghe.example.com/api/v3/repos/acme/widgets/pulls/9001/reviews?per_page=100&page=1
+== c. the approved merge again, the first request answered 502
+{"type":"https://github.com/ai-on-gke/grain/reviewed-merge/v1","repo":"ghe.example.com/acme/widgets","commit":"2f474dd00d66408eb3edd394b4162bd4cbf4a331","since":"4729bff32ca2297fb1119becde669c991a1ed602","merges":[{"commit":"2f474dd00d66408eb3edd394b4162bd4cbf4a331","pull":9000,"base":"main","via":"review","by":"bob"}]}
+exit 0
+  forge calls:
+    GET ghe.example.com/api/v3/repos/acme/widgets/commits/2f474dd00d66408eb3edd394b4162bd4cbf4a331/pulls?per_page=100 -> 502 (injected)
+    GET ghe.example.com/api/v3/repos/acme/widgets/commits/2f474dd00d66408eb3edd394b4162bd4cbf4a331/pulls?per_page=100
+    GET ghe.example.com/api/v3/repos/acme/widgets/pulls/9000
+    GET ghe.example.com/api/v3/repos/acme/widgets/pulls/9000/reviews?per_page=100&page=1
+    GET ghe.example.com/api/v3/repos/acme/widgets/git/commits/2f474dd00d66408eb3edd394b4162bd4cbf4a331
+== d. every request answered 502
+reviewed-merge: forge error, not a policy refusal: could not read the pull requests for 2f474dd00d66: after 5 attempts: GET /repos/acme/widgets/commits/2f474dd00d66408eb3edd394b4162bd4cbf4a331/pulls?per_page=100: 502 Bad Gateway: {"message":"Bad Gateway"}
+exit 3
+  forge calls (count): 5
+== e. any request to api.github.com?
+0
