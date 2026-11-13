@@ -100,17 +100,18 @@ type LocalScriptApprovals struct {
 	changed map[string]chan struct{}
 	tokens  map[string]approvalCallbackToken
 
-	// onExpire, when set, hears of every approval that settles as
-	// expired, once each, outside mu: by its caller's /expire or by a
-	// sweep that found it past its deadline (prune runs on every read
-	// of the registry, and a task-page read could otherwise settle it
-	// silently, leaving its /expire nothing to report). unreported
+	// onExpire, when set, hears of every approval a sweep settles as
+	// expired past its deadline, once each, outside mu (prune runs on
+	// every read of the registry, and a task-page read could otherwise
+	// settle it silently, leaving its /expire nothing to report; an
+	// approval /expire settles itself is recorded by that handler,
+	// under its caller's attribution). unreported
 	// holds those settled under mu until flushExpired hands them on.
 	onExpire   func(LocalScriptApproval)
 	unreported []LocalScriptApproval
 }
 
-// SetOnExpire installs fn to hear of each approval that settles as
+// SetOnExpire installs fn to hear of each approval a sweep settles as
 // expired; see onExpire.
 func (a *LocalScriptApprovals) SetOnExpire(fn func(LocalScriptApproval)) {
 	a.mu.Lock()
@@ -337,7 +338,6 @@ func (a *LocalScriptApprovals) Expire(task, id string, now time.Time) bool {
 	defer a.mu.Unlock()
 	if r, ok := a.byID[id]; ok && r.TaskID == task && r.Status == LocalScriptPending {
 		a.settle(r, LocalScriptExpired, "", now)
-		a.unreported = append(a.unreported, *r)
 		return true
 	}
 	return false
@@ -582,14 +582,18 @@ func (s *Server) handleExpireLocalScriptApproval(w http.ResponseWriter, r *http.
 		writeClientError(w, forbiddenErrorf("task %s's run may not expire approvals on task %s", p.ID, id))
 		return
 	}
-	// The registry's onExpire records local_script.answered, here and
-	// for an approval a sweep already found past its deadline.
+	// An approval this settles is recorded here, under the caller's
+	// attribution; one a sweep already found past its deadline was
+	// recorded by the registry's onExpire, as grain's.
 	reg := s.tasks.localScriptApprovals()
-	reg.Expire(id, r.PathValue("approval"), s.tasks.now())
+	settled := reg.Expire(id, r.PathValue("approval"), s.tasks.now())
 	approval, ok := reg.Get(id, r.PathValue("approval"))
 	if !ok {
 		writeClientError(w, &NotFoundError{ID: r.PathValue("approval")})
 		return
+	}
+	if settled {
+		s.recordLocalScriptEvent(r.Context(), model.IntegrationEventLocalScriptAnswered, approval)
 	}
 	writeJSON(w, http.StatusOK, approval)
 }

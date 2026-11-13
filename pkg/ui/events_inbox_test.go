@@ -306,3 +306,46 @@ func TestEventsCarryAnExpiryASweepFoundFirst(t *testing.T) {
 		t.Fatalf("local-script events:\n%s\nwant (each once):\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
+
+// The caller's own /expire records local_script.answered under the
+// caller's attribution, as its local_script.pending was, and not as
+// grain's: only an expiry a sweep finds first has no caller to name
+// (review of task 5355's F1 fix).
+func TestEventsAttributeACallersOwnExpiry(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := localScriptsClient(t)
+	task := create(t, client, ctx)
+	grantLocalScripts(t, store, ctx, task.ID)
+	handler := ui.NewServerWithClient(client)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	run := serverAccessClient(handler, srv.URL)
+
+	head, err := store.LatestIntegrationEventID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := run.RequestLocalScriptApproval(ctx, task.ID, approvalRequest{
+		ID: "1", Tool: "local_deploy", Script: "deploy", Deadline: time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.ExpireLocalScriptApproval(ctx, task.ID, approval.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := doWithHeaders(t, handler, http.MethodGet,
+		"/api/events?since="+itoa(head)+"&types=local_script.pending,local_script.answered", "", nil)
+	events := apiEventsOf(t, rec.Code, rec.Body.String())
+	if len(events) != 2 || events[1].Decision != "expired" {
+		t.Fatalf("events %+v: want the call's pending and its expiry", events)
+	}
+	pending, answered := events[0], events[1]
+	if pending.Actor == "" {
+		t.Fatalf("pending %+v names no actor", pending)
+	}
+	if answered.Actor != pending.Actor || answered.ActorKind != pending.ActorKind {
+		t.Fatalf("expiry attributed to %s %q, want the caller %s %q", answered.ActorKind, answered.Actor, pending.ActorKind, pending.Actor)
+	}
+}
