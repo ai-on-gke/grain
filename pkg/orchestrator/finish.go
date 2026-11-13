@@ -3302,11 +3302,6 @@ func droppedCustomFieldNote(dropped []string) string {
 		"`"+strings.Join(dropped, "`, `")+"`")
 }
 
-// droppedNetworkAccessNote is what a human approving the proposal reads
-// in place of a network_access the run asked for and grain has no
-// sandbox for. The proposal carries no override instead, so it runs on
-// the deployment's default -- which may be more network than the run
-// meant to ask for, and is why this is said rather than left silent.
 // clampProposalSandboxShape holds asked, a relayed proposal's sandbox
 // shape, to this deployment's maximum (model.SandboxShapeLimits.Max with
 // grain's defaults filled in): a dimension above it is lowered to it, and
@@ -3343,6 +3338,11 @@ func clampProposalSandboxShape(ctx context.Context, store *model.Store, asked mo
 		ceiling.Describe(), strings.Join(changed, ", "))
 }
 
+// droppedNetworkAccessNote is what a human approving the proposal reads
+// in place of a network_access the run asked for and grain has no
+// sandbox for. The proposal carries no override instead, so it runs on
+// the deployment's default -- which may be more network than the run
+// meant to ask for, and is why this is said rather than left silent.
 func droppedNetworkAccessNote(asked string) string {
 	return fmt.Sprintf("\n\n---\n\ngrain: the run that proposed this asked for network_access %q, "+
 		"which is not one grain can build a sandbox for (%s). Nothing was recorded, so it "+
