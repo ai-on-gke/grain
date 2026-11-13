@@ -29,6 +29,8 @@ interface RepoCall {
 
 class FakeRepoApi {
   calls: RepoCall[] = [];
+  ciMode = "grain";
+  refusePut: string | null = null;
 
   configBody: GrainConfig = {
     version: "v3.6.0",
@@ -53,7 +55,7 @@ class FakeRepoApi {
     }
     if (key === "GET /api/repos/{owner}/{name}/settings") {
       return Promise.resolve({
-        ciMode: "grain",
+        ciMode: this.ciMode,
         mergeOnGreen: true,
         requireBranchUpToDate: false,
       });
@@ -87,6 +89,16 @@ class FakeRepoApi {
 
   put = (key: string, params?: RouteParams, body?: unknown) => {
     this.calls.push({ method: "PUT", key, params, body });
+    if (this.refusePut === key) {
+      // Rejected on a later tick, as a real refusal is: a promise that
+      // is already rejected when the component awaits it is reported
+      // by zone.js as unhandled before the await attaches.
+      return new Promise((_, reject) =>
+        setTimeout(() =>
+          reject(new Error('ciMode: must be "grain", "github", or "none"')),
+        ),
+      );
+    }
     return Promise.resolve({ ok: true });
   };
 
@@ -250,5 +262,50 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
           "POST /api/repos/{owner}/{name}/candidates/{id}/qualification/approve",
       ),
     ).toBe(true);
+  });
+  // 2026-11-13 repository walkthrough: the CI mode pill offered "both"
+  // and "off", which PUT .../ci-mode refuses, and had no "none", so a
+  // repository on no CI read as Grain CI.
+  it("offers exactly the CI modes the server accepts and shows a repo on none as No CI", async () => {
+    const api = new FakeRepoApi();
+    api.ciMode = "none";
+    const { el, harness } = await mountRepo("/repos/acme/platform/ci", api);
+    const pill = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-repo-ci-mode"]',
+    )!;
+    expect(pill.textContent).toContain("No CI");
+    pill.click();
+    harness.detectChanges();
+    const opts = [
+      ...el.querySelectorAll<HTMLElement>(
+        '[data-testid^="select-repo-ci-mode-opt-"]',
+      ),
+    ].map((o) => o.dataset["testid"]!.replace("select-repo-ci-mode-opt-", ""));
+    expect(opts).toEqual(["grain", "github", "none"]);
+  });
+
+  it("puts the CI mode pill back when the server refuses the new mode", async () => {
+    const api = new FakeRepoApi();
+    api.refusePut = "PUT /api/repos/{owner}/{name}/ci-mode";
+    const { el, harness } = await mountRepo("/repos/acme/platform/ci", api);
+    const pill = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-repo-ci-mode"]',
+    )!;
+    expect(pill.textContent).toContain("Grain CI");
+    pill.click();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-repo-ci-mode-opt-github"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "PUT /api/repos/{owner}/{name}/ci-mode" &&
+          (c.body as { ciMode?: string })?.ciMode === "github",
+      ),
+    ).toBe(true);
+    expect(pill.textContent).toContain("Grain CI");
   });
 });

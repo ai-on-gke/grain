@@ -380,7 +380,7 @@ interface PendingReleaseRow {
                       </h2>
                       <p class="s-card-desc">
                         Choose whether Grain runs .grain/workflows, waits for
-                        GitHub checks, or both.
+                        GitHub checks, or merges without waiting for CI.
                       </p>
                     </div>
                     <button
@@ -1161,11 +1161,15 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   readonly tab = input<string | undefined>(undefined);
 
   protected readonly tabs = REPO_TABS;
+  // The three modes PUT .../ci-mode accepts (model.CIMode: grain,
+  // github, none). The page used to offer "both" and "off", which the
+  // server refuses with a 400, and had no option for "none", so a repo
+  // on no CI read as the first option, Grain CI (2026-11-13 repository
+  // walkthrough).
   protected readonly ciModeOptions: readonly PillOption[] = [
     { value: "grain", label: "Grain CI (.grain/workflows)" },
     { value: "github", label: "GitHub Actions checks" },
-    { value: "both", label: "Both Grain & GitHub CI" },
-    { value: "off", label: "Off" },
+    { value: "none", label: "No CI (merge without waiting)" },
   ];
 
   private readonly routeHost = signal("");
@@ -1698,6 +1702,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async saveCiMode(ciMode: string): Promise<void> {
+    const previous = this.ciMode();
     this.ciMode.set(ciMode);
     try {
       await this.api.put(
@@ -1707,6 +1712,10 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       this.snackbar.show(`CI mode set to ${ciMode}`);
     } catch (err) {
+      // A refused mode is not the repo's mode: put the pill back on
+      // what the server still has rather than leave it naming one it
+      // refused.
+      this.ciMode.set(previous);
       this.error.set(errText(err));
     }
   }
