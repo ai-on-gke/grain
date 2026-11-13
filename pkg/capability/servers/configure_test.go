@@ -511,7 +511,11 @@ func TestAConfigureStartFailureMarksABuiltinFailedAndRetriesOncePortIsFree(t *te
 		}
 	})
 	attach := func(ctx context.Context, id string, cfg protocol.ServerConfig, secrets protocol.SecretLookup, opts protocol.DialOptions) (*protocol.Server, error) {
-		srv, err := gitBuilder.Build(ctx, []string{"-listen", listenAddr}, func(string) string { return "" }, nil)
+		buildArgs := []string{"-listen", listenAddr}
+		if len(cfg.Args) > 2 {
+			buildArgs = cfg.Args[2:]
+		}
+		srv, err := gitBuilder.Build(ctx, buildArgs, func(string) string { return "" }, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -586,6 +590,19 @@ func TestAConfigureStartFailureMarksABuiltinFailedAndRetriesOncePortIsFree(t *te
 	if probeRes.OK || probeRes.ConfigRefused || probeRes.ConfigSchema == nil {
 		t.Errorf("Probe with port held = %+v, want !OK, !ConfigRefused, ConfigSchema kept", probeRes)
 	}
+	// Probe on a non-loopback -listen address is still a configuration refusal,
+	// so Settings refuses to save it rather than treating it as a start error.
+	badListen := servers[gitID]
+	badListen.Args = []string{"capability", "git", "-listen", "0.0.0.0:4254"}
+	if badRes := r.Probe(ctx, gitID, badListen, nil); badRes.OK || !badRes.ConfigRefused {
+		t.Errorf("Probe with non-loopback -listen = %+v, want !OK and ConfigRefused", badRes)
+	}
+	// A pending Update clears StartError on Statuses until Sync runs.
+	r.Update(map[string]protocol.ServerConfig{gitID: badListen})
+	if pst := r.Statuses()[0]; pst.State != Pending || pst.StartError != "" || pst.ConfigRefused {
+		t.Errorf("Statuses while Pending = %+v, want Pending with StartError cleared", pst)
+	}
+	r.Update(servers)
 
 	// Free the port: after RetryInterval the next Sync attaches with no restart.
 	_ = held.Close()

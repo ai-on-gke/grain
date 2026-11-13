@@ -129,6 +129,19 @@ func TestAnUnconfiguredGitHoldsNoPort(t *testing.T) {
 	if badErr == nil || protocol.IsStartError(badErr) {
 		t.Errorf("configuring it with a bad repo: %v (IsStartError=%v), want a configuration refusal", badErr, protocol.IsStartError(badErr))
 	}
+	// A malformed or non-loopback -listen address is also a configuration
+	// refusal rather than a transient runtime start failure, so Settings
+	// refuses to save it and the registry does not retry it every minute.
+	for _, badAddr := range []string{"0.0.0.0:4254", "not-host-port"} {
+		badSrv, err := newConfigurableGit(GitConfig{Listen: badAddr})
+		if err != nil {
+			t.Fatalf("newConfigurableGit(%q): %v", badAddr, err)
+		}
+		_, listenErr := attachConfigured(t, badSrv, map[string]any{"repos": []any{"o/r"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
+		if listenErr == nil || protocol.IsStartError(listenErr) {
+			t.Errorf("configuring with -listen %q: %v (IsStartError=%v), want a configuration refusal", badAddr, listenErr, protocol.IsStartError(listenErr))
+		}
+	}
 }
 
 func TestGitFallsBackToItsFlagsAndEnvironment(t *testing.T) {

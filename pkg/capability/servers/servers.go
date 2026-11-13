@@ -377,7 +377,7 @@ func (r *Registry) RotateManaged(capabilityID string) ([]string, error) {
 	defer r.syncMu.Unlock()
 	var closing *protocol.Server
 	r.set(capabilityID, func(e *entry) {
-		closing, e.server, e.state = e.server, nil, Pending
+		closing, e.server, e.state, e.configRefused, e.startErr, e.waiting = e.server, nil, Pending, false, "", ""
 	})
 	if closing != nil {
 		_ = closing.Close()
@@ -409,7 +409,7 @@ func (r *Registry) Statuses() []Status {
 		st := e.status(id)
 		if r.updated {
 			if cfg, ok := r.pending[id]; ok && !reflect.DeepEqual(cfg, e.cfg) && !cfg.Disabled {
-				st.State = Pending
+				st.State, st.ConfigRefused, st.StartError, st.Waiting = Pending, false, "", ""
 			}
 		}
 		out = append(out, st)
