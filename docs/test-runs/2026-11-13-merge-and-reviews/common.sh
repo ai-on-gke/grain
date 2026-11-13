@@ -35,6 +35,9 @@ clean_review_action() {
 }
 
 boot() {
+	# One environment at a time: they share the ports.
+	local d
+	for d in /tmp/walk-merge*; do [[ -d $d ]] && stop_env "$d"; done
 	init_env "${1:-/tmp/walk-merge}"
 	push_action >"$WORK_DIR/action-default.json"
 	clean_review_action >"$WORK_DIR/action-review.json"

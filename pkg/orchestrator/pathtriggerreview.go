@@ -276,7 +276,8 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 }
 
 // incrementalBase is the head a re-review reads from, or "" for a full
-// review. An undispatched review being superseded hands on its own base
+// review: the head the last review read, or the latest head its result
+// was carried to (carryLastReviewed). An undispatched review being superseded hands on its own base
 // (it never read anything); a review still running, or one that finished
 // cleanly, read its recorded head. One that failed, closed without finishing,
 // or had its stacked fixes closed without merging read nothing.
@@ -288,7 +289,9 @@ func incrementalBase(ctx context.Context, store *model.Store, prev *model.Task, 
 	}
 	if prev != nil {
 		head := reviewHead(prev.Tags)
-		if head == "" {
+		if head == "" || (lastID == prev.ID && lastHead != "") {
+			// lastHead is prev's own head, moved on by any carry since
+			// (carryLastReviewed) to a head proposing the same change.
 			head = lastHead
 		}
 		obs, err := store.GetObservation(ctx, prev.ID)
