@@ -318,6 +318,9 @@ func renderContract(t *testing.T) (string, []string) {
 	for _, v := range envDenyPatterns() {
 		fmt.Fprintf(&b, "env_deny %s\n", v)
 	}
+	for _, v := range envDenyV2 {
+		fmt.Fprintf(&b, "env_deny_v2 %s\n", v)
+	}
 	fmt.Fprintf(&b, "max_frame %d\n", maxFrame)
 	fmt.Fprintf(&b, "max_stage_data %d\n", MaxStageData)
 	return b.String(), problems
