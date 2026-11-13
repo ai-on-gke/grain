@@ -337,6 +337,37 @@ describe("NewTaskOverlay", () => {
     expect(createButton).toBeDisabled();
   });
 
+  // Found in the 2026-11-11 intake walkthrough (grain/task-4298 O1): a
+  // greyed-out Create task said nothing about what it was waiting for.
+  // It names the first missing thing on the wrapper its tooltip hangs
+  // on, as AccessGate does for a refused role.
+  it("says why Create task is greyed out, one missing thing at a time", async () => {
+    const user = userEvent.setup();
+    render(
+      <NewTaskOverlay
+        config={{ targetRepos: ["acme/widgets"] }}
+        onClose={() => {}}
+        onCreated={() => Promise.resolve()}
+        showError={() => {}}
+      />,
+    );
+    const createButton = screen.getByRole("button", { name: "Create task" });
+    const why = () =>
+      createButton.closest("[data-create-blocked]")?.getAttribute("title") ??
+      null;
+
+    expect(why()).toBe("Give the task a title, or pick a template.");
+    await user.type(screen.getByLabelText(/Title/), "Fix");
+    expect(why()).toBe("Pick a repo under Repos, or choose No repo.");
+    await chooseOption(user, screen.getByLabelText(/^Repos/), "acme/widgets");
+    await user.click(screen.getByLabelText("Create a new branch"));
+    expect(createButton).toBeDisabled();
+    expect(why()).toBe("Name the new branch, or untick Create a new branch.");
+    await user.type(screen.getByTestId("new-branch-name"), "feature/x");
+    expect(createButton).toBeEnabled();
+    expect(why()).toBeNull();
+  });
+
   it("reads and includes a picked file as an attachment", async () => {
     const upload = {
       filename: "screenshot.png",
