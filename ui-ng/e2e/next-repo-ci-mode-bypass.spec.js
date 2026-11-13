@@ -47,16 +47,16 @@ test("CI mode pill offers grain, github and none, and a repo on none reads No CI
         .boundingBox();
       expect(menu.x + menu.width).toBeLessThanOrEqual(width);
       await page.getByRole("option", { name: /^No CI/ }).click();
-      await expect.poll(async () => (await settingsOf(page)).ciMode).toBe(
-        "none",
-      );
+      await expect
+        .poll(async () => (await settingsOf(page)).ciMode)
+        .toBe("none");
       await page.reload();
       await expect(pill).toContainText("No CI");
       await pill.click();
       await page.getByRole("option", { name: /^GitHub/ }).click();
-      await expect.poll(async () => (await settingsOf(page)).ciMode).toBe(
-        "github",
-      );
+      await expect
+        .poll(async () => (await settingsOf(page)).ciMode)
+        .toBe("github");
     }
   } finally {
     await page.request.put("/api/repos/acme/widgets/ci-mode", {
