@@ -379,9 +379,7 @@ test("real daemon walkthrough: rail parity & deep links, viewer RBAC & CSRF, 5-v
     // Settings -> Repositories lists all 5 connected repos
     await expect(page.getByTestId("select-reachable-repo")).toBeVisible();
     await page.getByTestId("select-reachable-repo").click();
-    const reachableText = await page
-      .getByTestId("select-reachable-repo-menu")
-      .innerText();
+    const reachableMenu = page.getByTestId("select-reachable-repo-menu");
     for (const slug of [
       "acme/api",
       "acme/docs",
@@ -389,32 +387,33 @@ test("real daemon walkthrough: rail parity & deep links, viewer RBAC & CSRF, 5-v
       "acme/mobile",
       "acme/widgets",
     ]) {
-      expect(reachableText).toContain(slug);
+      await expect(reachableMenu).toContainText(slug);
     }
     await page.keyboard.press("Escape");
 
-    // Operational pickers (CI & Schedules & New task) show only the 2 configured acme repos
+    // Operational pickers (CI & Schedules & New task) show only the 2 configured
+    // acme repos. The menus fill in reactively once GET /api/config lands, so
+    // assert with auto-retrying locator matchers rather than one innerText read.
     await page.goto(`${iapProxyUrl}/next/ci`, {
       waitUntil: "domcontentloaded",
     });
     await page.getByTestId("ci-repo-pill").click();
-    const ciMenuText = await page.getByTestId("ci-repo-menu").innerText();
-    expect(ciMenuText).toContain("acme/widgets");
-    expect(ciMenuText).toContain("acme/api");
-    expect(ciMenuText).not.toContain("acme/docs");
+    const ciMenu = page.getByTestId("ci-repo-menu");
+    await expect(ciMenu).toContainText("acme/widgets");
+    await expect(ciMenu).toContainText("acme/api");
+    await expect(ciMenu).not.toContainText("acme/docs");
     await page.keyboard.press("Escape");
 
     await page.goto(`${iapProxyUrl}/next/processes/schedules`, {
       waitUntil: "domcontentloaded",
     });
     await page.getByTestId("proc-new-schedule-btn").click();
+    await expect(page.getByTestId("sched-repo-select")).toBeVisible();
     await page.getByTestId("sched-repo-select").click();
-    const schedMenuText = await page
-      .getByTestId("sched-repo-select-menu")
-      .innerText();
-    expect(schedMenuText).toContain("acme/widgets");
-    expect(schedMenuText).toContain("acme/api");
-    expect(schedMenuText).not.toContain("acme/docs");
+    const schedMenu = page.getByTestId("sched-repo-select-menu");
+    await expect(schedMenu).toContainText("acme/widgets");
+    await expect(schedMenu).toContainText("acme/api");
+    await expect(schedMenu).not.toContainText("acme/docs");
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
 
@@ -423,12 +422,10 @@ test("real daemon walkthrough: rail parity & deep links, viewer RBAC & CSRF, 5-v
       waitUntil: "domcontentloaded",
     });
     await page.getByTestId("chat-head-model").click();
-    const modelMenuText = await page
-      .getByTestId("chat-head-model-menu")
-      .innerText();
-    expect(modelMenuText).toContain("Claude Sonnet 4.6");
-    expect(modelMenuText).toContain("Gemini 2.5 Pro");
-    expect(modelMenuText).not.toContain("Unconfigured Alpha");
+    const modelMenu = page.getByTestId("chat-head-model-menu");
+    await expect(modelMenu).toContainText("Claude Sonnet 4.6");
+    await expect(modelMenu).toContainText("Gemini 2.5 Pro");
+    await expect(modelMenu).not.toContainText("Unconfigured Alpha");
     await page.keyboard.press("Escape");
 
     // Found in release: malformed error under field + valid v3.6.0 stored + absent in classic

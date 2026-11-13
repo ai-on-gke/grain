@@ -117,3 +117,9 @@ All helpers live under [`docs/test-runs/2026-11-13-next-ui-complete/`](./2026-11
 1. **Design angle:** Verified GM3 surface/outline tokens (`--md-sys-color-*`), zero raw hex values in touched CSS, zero native `<select>` elements (`<g-pill-select>` used for `select-reachable-repo` and `sched-repo-select`), single `<h1>` per route, crisp disabled FAB states without `opacity: .35`, and initial bundle size `449.59 kB < 450.00 kB` with **0 build warnings**.
 2. **Functional angle:** Verified keyboard navigation (`c`, `d`, `Alt+D`, `Escape`, compact `Tab` trap), ARIA attributes (`aria-invalid`, `aria-describedby`, `role="alert"`), deep-link reloads, SQLite `task_link` persistence, and ETag `304` caching.
 3. **Adversarial angle:** Verified viewer/contributor/personal-token forced mutating `POST`s return `403`, cross-origin `POST`s (`Origin: https://evil.example`) return `403`, long unbroken URLs/identifiers inside `390×844` Canvas wrap without horizontal scroll, and unpushed proposal branches (`404`) leave no empty diff container.
+
+---
+
+## 5. CI repair (merge-queue run, attempt 3)
+
+PR #1479's first `ui-ng e2e` run failed in the new `next-walkthrough-daemon-rbac-repos.spec.js`: the spec opened the `/next/ci` repository menu and read its `innerText` once, before `CIStore.loadConfig()` had returned, so the menu held only "All repositories". This was a race in the new test, not a product defect: the menu is a computed signal and fills in as soon as `GET /api/config` lands. It did not fail on the base branch, because the spec is new in this PR. The CI, Schedules, Settings → Repositories and Sessions model menu checks now use auto-retrying `expect(locator).toContainText(...)` / `not.toContainText(...)` matchers. Both new specs passed 6/6 under `--repeat-each=3 --workers=6`.
