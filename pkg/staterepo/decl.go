@@ -783,7 +783,16 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 			continue
 		}
 		if f.table != "" {
-			node, err := companionNode(f, mine(companions[f.table], k.parent, id))
+			rows := mine(companions[f.table], k.parent, id)
+			if (f.shape == shapeRepos || f.shape == shapeWrites) && hasGrantsField(k) {
+				// unified-grants §3: a row grants: already spells as
+				// …/repo#read or …/repo#write is written there alone;
+				// reads:/writes: keep only the rows it cannot carry.
+				rows = slices.DeleteFunc(slices.Clone(rows), func(row map[string]any) bool {
+					return repoGrantEntry(f, row) != nil
+				})
+			}
+			node, err := companionNode(f, rows)
 			if err != nil {
 				return nil, err
 			}
@@ -818,10 +827,10 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 // repoGrantEntries is an entry's reads:/writes: spelt as the task-level
 // repository grants they are -- …/repo#read {repo} for each read row,
 // …/repo#write {repo, base} for each write row -- which the export writes
-// under grants: as well (unified-grants §3). The import projects them back
-// into the read and write tables (projectedRepoRow), where each is the row
-// reads:/writes: already names. A row whose repository is anything but a
-// plain owner/name on the default host is left to reads:/writes: alone.
+// under grants: in their place (unified-grants §3). The import projects
+// them back into the read and write tables (projectedRepoRow). A row whose
+// repository is anything but a plain owner/name on the default host is
+// left to reads:/writes:.
 func repoGrantEntries(k declKind, id string, companions map[string][]map[string]any) []*yaml.Node {
 	var out []*yaml.Node
 	for _, f := range k.fields {
@@ -829,22 +838,42 @@ func repoGrantEntries(k declKind, id string, companions map[string][]map[string]
 			continue
 		}
 		for _, row := range mine(companions[f.table], k.parent, id) {
-			repo, ok := plainRepo(row)
-			if !ok {
-				continue
+			if entry := repoGrantEntry(f, row); entry != nil {
+				out = append(out, entry)
 			}
-			if f.shape == shapeRepos {
-				out = append(out, str(model.TaskRepoReadGrant(repo).Key()))
-				continue
-			}
-			base, ok := textOf(row["base"])
-			if !ok {
-				continue
-			}
-			out = append(out, str(model.TaskRepoWriteGrant(model.WriteTarget{Repo: repo, Base: base}).Key()))
 		}
 	}
 	return out
+}
+
+// repoGrantEntry is one read (shapeRepos) or write (shapeWrites) row as
+// the grants: entry that stands for it, or nil when the row is not one a
+// grant can carry and so stays under reads:/writes:.
+func repoGrantEntry(f declFieldShape, row map[string]any) *yaml.Node {
+	repo, ok := plainRepo(row)
+	if !ok {
+		return nil
+	}
+	if f.shape == shapeRepos {
+		return str(model.TaskRepoReadGrant(repo).Key())
+	}
+	base, ok := textOf(row["base"])
+	if !ok {
+		return nil
+	}
+	return str(model.TaskRepoWriteGrant(model.WriteTarget{Repo: repo, Base: base}).Key())
+}
+
+// hasGrantsField reports whether k's entries have a grants: list, the
+// only place a plain read or write row can be written instead of
+// reads:/writes:.
+func hasGrantsField(k declKind) bool {
+	for _, f := range k.fields {
+		if f.shape == shapeGrants {
+			return true
+		}
+	}
+	return false
 }
 
 // plainRepo is a read or write row's repository when its owner and name

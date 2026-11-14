@@ -293,8 +293,18 @@ once with a fidelity test.**
   repository is not a plain `owner/name` on the default host goes under
   `reads:`/`writes:` only. On import the two spellings collapse into one
   row, so export → import → export is stable
-  (`TestRepoAccessExportedAsGrantsRoundTrips`). Dropping `reads:`/`writes:`
-  from the export, a release after this, is not done yet.
+  (`TestRepoAccessExportedAsGrantsRoundTrips`).
+  *As built ([Task #5460](/tasks/5460)):* Task #4063's merge
+  (`02b08e160`) shipped in `v3.8.0`. The export no longer writes a plain
+  `owner/name` read or write row under `reads:`/`writes:`: such a row is
+  written once, under `grants:` (`repoGrantEntry`). `reads:`/`writes:`
+  are still written for the rows a grant cannot carry -- a repository
+  off the default host, or a write row whose base is NULL -- so no row is
+  lost. The import still reads `reads:`/`writes:` (`declschema`), so a
+  grain/config written by an older release keeps loading, and export →
+  import → export stays byte-for-byte stable
+  (`TestRepoAccessExportedAsGrantsRoundTrips`,
+  `TestSettingsGrantsAndReadsWritesAreOneKey`).
 - **Repository declarations.** `.grain/templates/*.yml` and
   `.grain/schedules/*.yml` accept `grants:` beside `capabilities:`,
   `reads:`, `writes:` and `push:` indefinitely. These live in other
