@@ -67,3 +67,38 @@ func TestOpenSharedDoesNotShareAStoreWithItsOwnKeySource(t *testing.T) {
 		t.Fatal("a Config with its own KeySource was handed the shared store")
 	}
 }
+
+// TestShareKeyUnwrapsOnceButAuditsOnlyItsOwnResolutions: the daemon's
+// store shares OpenShared's key so a wrapped key is unwrapped once per
+// process, but what the readers of the shared store resolve is not the
+// daemon's to audit.
+func TestShareKeyUnwrapsOnceButAuditsOnlyItsOwnResolutions(t *testing.T) {
+	s, fake, _ := wrappedStore(t)
+	cfg := Config{File: s.File(), KeyFile: s.KeyFile()}
+	before := fake.Decrypts()
+	shared := OpenShared(cfg)
+	own := shared.ShareKey()
+	audit := &mockAuditLogger{}
+	own.SetAuditLogger(audit)
+	ctx := context.Background()
+	for _, store := range []*Store{own, shared, own, shared} {
+		if v, err := store.Resolve(ctx, "github/token"); err != nil || v != "ghp_example" {
+			t.Fatalf("resolve = %q, %v", v, err)
+		}
+	}
+	if got := fake.Decrypts() - before; got != 1 {
+		t.Fatalf("two stores sharing a key made %d KMS decrypts, want 1", got)
+	}
+	if len(audit.entries) != 2 {
+		t.Fatalf("audited %d resolutions, want the 2 made through the store it was set on", len(audit.entries))
+	}
+	// A drop by one is a drop for both: neither keeps a key the other
+	// found stale.
+	own.forgetKey()
+	if _, err := shared.Resolve(ctx, "github/token"); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.Decrypts() - before; got != 2 {
+		t.Fatalf("after one store dropped the key, %d KMS decrypts in all, want 2", got)
+	}
+}

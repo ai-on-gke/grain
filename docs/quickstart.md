@@ -270,7 +270,12 @@ journalctl --user -u grain -n 50      # confirm it came up
 `~/.local/bin/grain` in place is enough. If you moved it, re-run `grain
 init workstation -non-interactive`. That rewrites `daemon.sh` and the unit,
 and keeps your policy. To go back, install the previous version the same
-way.
+way. That works only while both versions are at the same store schema
+(`grain schema-version`). The new version migrates `~/.grain`'s store in
+place on its first start and keeps no copy, and an older version refuses
+it. So copy `~/.grain` with the daemon stopped before you upgrade, and
+follow [Downgrading to an earlier build](host-setup.md#downgrading-to-an-earlier-build)
+to go back across a schema change.
 
 ## Uninstalling
 

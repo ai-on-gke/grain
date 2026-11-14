@@ -15,10 +15,13 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  HostListener,
   OnDestroy,
   OnInit,
   ViewEncapsulation,
+  afterRenderEffect,
   computed,
+  ElementRef,
   inject,
   input,
   signal,
@@ -30,6 +33,11 @@ import { GrainApi, splitRepo } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { errText } from "../settings/settings-state.service";
+import {
+  ConfirmDialogComponent,
+  bypassConfirm,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
 import {
   type PillOption,
   PillSelectComponent,
@@ -59,6 +67,86 @@ function normalizeWorkflowPath(raw: string): string {
   const withExt =
     clean.endsWith(".yml") || clean.endsWith(".yaml") ? clean : `${clean}.yml`;
   return `.grain/workflows/${withExt}`;
+}
+
+// importOutcomeText words one import pass the way the classic Repo page
+// does (ui/src/components/RepoPage.jsx importIssuesNow): an error with
+// nothing open is the listing itself failing, so nothing was read.
+export function importOutcomeText(
+  out: {
+    source?: string;
+    open?: number;
+    imported?: string[] | null;
+    skipped?: number;
+    error?: string;
+  },
+  repo: string,
+): { error: boolean; text: string } {
+  const source = out.source || repo;
+  const open = out.open ?? 0;
+  if (out.error && !open) {
+    return {
+      error: true,
+      text: `Could not read the open issues on ${source}: ${out.error}`,
+    };
+  }
+  const n = (out.imported ?? []).length;
+  let text = `Read ${open} open issue${open === 1 ? "" : "s"} on ${source}: imported ${n}, ${out.skipped ?? 0} already imported.`;
+  if (out.error) text += ` Some could not be imported: ${out.error}`;
+  return { error: Boolean(out.error), text };
+}
+
+// releaseActionReasons says why Cut RC and Promote RC are off for a
+// release, one sentence each, or null for a button that is on: the
+// classic pane's rule (ui/src/components/RepoReleases.jsx). candidate is
+// the release's newest candidate, undefined when it is not loaded.
+export function releaseActionReasons(
+  release: { name: string; status?: string; latestBranch?: string },
+  candidate: { branch?: string; status?: string } | null | undefined,
+  loaded: boolean,
+): { cut: string | null; promote: string | null } {
+  const status = release.status || "active";
+  if (status !== "active") {
+    const why =
+      status === "provisioning"
+        ? `${release.name} is still provisioning: grain cuts and promotes its candidates once its ${release.latestBranch || release.name + ".latest"} branch exists.`
+        : `${release.name} is ${status}: only an active release cuts or promotes candidates.`;
+    return { cut: why, promote: why };
+  }
+  if (!loaded) return { cut: null, promote: null };
+  let cut: string | null = null;
+  if (candidate && candidate.status !== "promoted") {
+    cut =
+      candidate.status === "cutting"
+        ? `${candidate.branch} is still being cut.`
+        : `${candidate.branch} is ${candidate.status || "active"}: a new RC is cut once it is promoted.`;
+  }
+  let promote: string | null = null;
+  if (!candidate) {
+    promote = "No candidate to promote yet: cut one first.";
+  } else if (candidate.status === "promoted") {
+    promote = `${candidate.branch} is already promoted: a candidate is promoted once.`;
+  } else if (candidate.status && candidate.status !== "active") {
+    promote = `${candidate.branch} is ${candidate.status}: only an active candidate can be promoted.`;
+  }
+  return { cut, promote };
+}
+
+function workflowKey(list: readonly { path: string; text: string }[]): string {
+  return JSON.stringify(list.map((w) => [w.path, w.text ?? ""]));
+}
+
+interface ImportFields {
+  enabled: boolean;
+  label: string;
+  repo: string;
+  approved: boolean;
+}
+
+interface AgentFields {
+  setup: string;
+  prompt: string;
+  caps: string;
 }
 
 interface BranchRow {
@@ -106,11 +194,11 @@ interface PendingReleaseRow {
 
 @Component({
   selector: "g-repo-detail-page",
-  imports: [RouterLink, PillSelectComponent],
+  imports: [RouterLink, PillSelectComponent, ConfirmDialogComponent],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
-    "../shared/pill-select.css",
+    "../shared/surface-controls.css",
     "../settings/settings-forms.css",
     "./repo-detail.css",
   ],
@@ -311,6 +399,35 @@ interface PendingReleaseRow {
                     ></button>
                   </div>
 
+                  <div class="s-toggle-row">
+                    <div class="s-toggle-copy">
+                      <span class="s-toggle-name"
+                        >Queue imported tasks at once</span
+                      >
+                      <span class="s-hint" data-testid="issue-import-trust-hint"
+                        >With this off, each imported task waits as Imported
+                        until somebody approves it. Turn it on only if you trust
+                        everybody who can open an issue on
+                        {{ importSourceRepo().trim() || repoSlug() }}: they
+                        write what the agent is told to do.</span
+                      >
+                    </div>
+                    <button
+                      type="button"
+                      class="g-switch"
+                      role="switch"
+                      data-testid="switch-issue-import-approved"
+                      [attr.aria-checked]="importApproved()"
+                      [disabled]="!canWriteSettings()"
+                      [attr.aria-label]="
+                        'Queue imported issues in ' +
+                        repoSlug() +
+                        ' without approval'
+                      "
+                      (click)="importApproved.set(!importApproved())"
+                    ></button>
+                  </div>
+
                   <div class="s-grid">
                     <div class="s-field">
                       <label class="s-label" for="imp-label"
@@ -361,6 +478,7 @@ interface PendingReleaseRow {
                       class="btn-tonal s-btn-sm"
                       data-testid="import-issues-btn"
                       [disabled]="
+                        importing() ||
                         !can('POST /api/repos/{owner}/{name}/import-issues')
                       "
                       (click)="importIssues()"
@@ -368,6 +486,19 @@ interface PendingReleaseRow {
                       Import issues now
                     </button>
                   </div>
+                  @if (importOutcome(); as out) {
+                    <p
+                      class="s-hint"
+                      role="status"
+                      data-testid="import-issues-outcome"
+                      [class.is-error]="out.error"
+                      [style.color]="
+                        out.error ? 'var(--md-sys-color-error)' : null
+                      "
+                    >
+                      {{ out.text }}
+                    </p>
+                  }
                 </div>
               }
 
@@ -380,7 +511,7 @@ interface PendingReleaseRow {
                       </h2>
                       <p class="s-card-desc">
                         Choose whether Grain runs .grain/workflows, waits for
-                        GitHub checks, or both.
+                        GitHub checks, or merges without waiting for CI.
                       </p>
                     </div>
                     <button
@@ -989,7 +1120,9 @@ interface PendingReleaseRow {
                                     type="button"
                                     class="btn-tonal s-btn-sm"
                                     [attr.data-testid]="'cut-rc-' + rel.name"
+                                    [attr.title]="reasonsFor(rel).cut"
                                     [disabled]="
+                                      !!reasonsFor(rel).cut ||
                                       !can(
                                         'POST /api/repos/{owner}/{name}/releases/{release}/candidates'
                                       )
@@ -1004,12 +1137,14 @@ interface PendingReleaseRow {
                                     [attr.data-testid]="
                                       'promote-rc-' + rel.name
                                     "
+                                    [attr.title]="reasonsFor(rel).promote"
                                     [disabled]="
+                                      !!reasonsFor(rel).promote ||
                                       !can(
                                         'POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote'
                                       )
                                     "
-                                    (click)="promoteCandidate(rel.name)"
+                                    (click)="askPromoteCandidate(rel)"
                                   >
                                     Promote RC
                                   </button>
@@ -1021,7 +1156,7 @@ interface PendingReleaseRow {
                                         'POST /api/repos/{owner}/{name}/releases/{release}/merge'
                                       )
                                     "
-                                    (click)="mergeRelease(rel.name)"
+                                    (click)="askMergeRelease(rel)"
                                   >
                                     Merge back
                                   </button>
@@ -1033,7 +1168,10 @@ interface PendingReleaseRow {
                                         'DELETE /api/repos/{owner}/{name}/releases/{release}'
                                       )
                                     "
-                                    (click)="deleteRelease(rel.name)"
+                                    [attr.data-testid]="
+                                      'delete-release-' + rel.name
+                                    "
+                                    (click)="askDeleteRelease(rel.name)"
                                   >
                                     Delete
                                   </button>
@@ -1044,6 +1182,25 @@ interface PendingReleaseRow {
                         </tbody>
                       </table>
                     </div>
+                  }
+
+                  @for (rel of releases(); track rel.name) {
+                    @if (rel.name === selectedRelease()) {
+                      @let why = reasonsFor(rel);
+                      @if (why.cut || why.promote) {
+                        <p class="s-hint" data-testid="release-action-reasons">
+                          @if (why.cut) {
+                            <span>Cut RC: {{ why.cut }}</span>
+                          }
+                          @if (why.cut && why.promote) {
+                            <br />
+                          }
+                          @if (why.promote) {
+                            <span>Promote RC: {{ why.promote }}</span>
+                          }
+                        </p>
+                      }
+                    }
                   }
 
                   @if (releases().length > 1) {
@@ -1120,11 +1277,16 @@ interface PendingReleaseRow {
                       aria-label="New release name"
                       data-testid="input-new-release-name"
                       placeholder="v1.4.0"
+                      aria-describedby="new-release-error"
+                      [attr.aria-invalid]="newReleaseError() ? 'true' : null"
                       [value]="newReleaseName()"
                       [disabled]="
                         !can('POST /api/repos/{owner}/{name}/releases')
                       "
-                      (input)="newReleaseName.set($any($event.target).value)"
+                      (input)="
+                        newReleaseName.set($any($event.target).value);
+                        newReleaseError.set(null)
+                      "
                     />
                     <button
                       type="button"
@@ -1139,12 +1301,26 @@ interface PendingReleaseRow {
                       Create release
                     </button>
                   </div>
+                  @if (newReleaseError(); as relErr) {
+                    <p
+                      id="new-release-error"
+                      class="s-hint"
+                      role="alert"
+                      data-testid="new-release-error"
+                      style="color: var(--md-sys-color-error)"
+                    >
+                      {{ relErr }}
+                    </p>
+                  }
                 </div>
               }
             }
           }
         </div>
       </div>
+      @if (confirmReq(); as req) {
+        <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+      }
     </section>
   `,
 })
@@ -1161,11 +1337,15 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   readonly tab = input<string | undefined>(undefined);
 
   protected readonly tabs = REPO_TABS;
+  // The three modes PUT .../ci-mode accepts (model.CIMode: grain,
+  // github, none). The page used to offer "both" and "off", which the
+  // server refuses with a 400, and had no option for "none", so a repo
+  // on no CI read as the first option, Grain CI (2026-11-13 repository
+  // walkthrough).
   protected readonly ciModeOptions: readonly PillOption[] = [
     { value: "grain", label: "Grain CI (.grain/workflows)" },
     { value: "github", label: "GitHub Actions checks" },
-    { value: "both", label: "Both Grain & GitHub CI" },
-    { value: "off", label: "Off" },
+    { value: "none", label: "No CI (merge without waiting)" },
   ];
 
   private readonly routeHost = signal("");
@@ -1186,6 +1366,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly importLabel = signal("");
   protected readonly importSourceRepo = signal("");
   protected readonly importApproved = signal(false);
+  protected readonly importing = signal(false);
+  protected readonly importOutcome = signal<{
+    error: boolean;
+    text: string;
+  } | null>(null);
 
   protected readonly ciMode = signal("grain");
   protected readonly watchDefaultBranch = signal(false);
@@ -1197,6 +1382,50 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly mergeOnGreen = signal(false);
   protected readonly requireUpToDate = signal(false);
   protected readonly bypassHumanGates = signal(false);
+  protected readonly confirmReq = signal<ConfirmRequest | null>(null);
+  private discardResolve: ((ok: boolean) => void) | null = null;
+
+  // What the server last said for the fields that wait for a Save
+  // button. Leaving the page (or switching tab, which reloads a tab's
+  // data) with one of them changed used to drop the edit without a word,
+  // where the classic page asks (2026-11-14 repository walkthrough).
+  private readonly importBaseline = signal<ImportFields>({
+    enabled: false,
+    label: "",
+    repo: "",
+    approved: false,
+  });
+  private readonly agentBaseline = signal<AgentFields>({
+    setup: "",
+    prompt: "",
+    caps: "",
+  });
+  private readonly workflowBaseline = signal<string>("[]");
+
+  protected readonly unsavedSections = computed(() => {
+    const out: string[] = [];
+    const ib = this.importBaseline();
+    if (
+      ib.enabled !== this.importEnabled() ||
+      ib.label !== this.importLabel() ||
+      ib.repo !== this.importSourceRepo() ||
+      ib.approved !== this.importApproved()
+    ) {
+      out.push("issue import");
+    }
+    const ab = this.agentBaseline();
+    if (
+      ab.setup !== this.setupCommand() ||
+      ab.prompt !== this.promptExtension() ||
+      ab.caps !== this.repoCaps()
+    ) {
+      out.push("agent settings");
+    }
+    if (this.workflowBaseline() !== workflowKey(this.workflows())) {
+      out.push("CI workflows");
+    }
+    return out;
+  });
 
   protected readonly setupCommand = signal("");
   protected readonly promptExtension = signal("");
@@ -1213,10 +1442,28 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly releases = signal<ReleaseRow[]>([]);
   protected readonly selectedRelease = signal("");
   protected readonly candidates = signal<CandidateRow[]>([]);
+  private readonly candidatesFor = signal("");
   protected readonly pendingReleases = signal<PendingReleaseRow[]>([]);
   protected readonly newReleaseName = signal("");
+  // A refused release name is said beside its box, the way the classic
+  // pane does, not in the page-wide banner, and clears on the next edit
+  // or a clean create.
+  protected readonly newReleaseError = signal<string | null>(null);
 
   private subs: Subscription[] = [];
+  private readonly hostEl = inject(ElementRef<HTMLElement>);
+
+  // On a phone the tab bar scrolls sideways, and a deep link or reload
+  // on a later tab (/releases) left the selected tab off screen
+  // (2026-11-14 repository walkthrough). Bring it into view whenever the
+  // tab changes.
+  private readonly keepActiveTabInView = afterRenderEffect(() => {
+    this.activeTab();
+    const btn = (this.hostEl.nativeElement as HTMLElement).querySelector(
+      ".repo-tab-btn.is-active",
+    ) as HTMLElement | null;
+    btn?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  });
 
   private readonly normalizedRouteParts = computed(() => {
     const rawHost = this.routeHost() || this.host() || "";
@@ -1327,7 +1574,64 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     return this.access.can(route, this.repoSlug());
   }
 
-  protected selectTab(tab: RepoTabId): void {
+  private markImportSaved(): void {
+    this.importBaseline.set({
+      enabled: this.importEnabled(),
+      label: this.importLabel(),
+      repo: this.importSourceRepo(),
+      approved: this.importApproved(),
+    });
+  }
+
+  // canLeave asks before unsaved edits are dropped: by the route's
+  // canDeactivate guard (app.routes.ts) for Back, the rail and links,
+  // and by selectTab, since switching tab reloads that tab's data over
+  // the edit. Discarding puts the fields back on what the server has, so
+  // the guard that runs next does not ask a second time.
+  async canLeave(): Promise<boolean> {
+    const sections = this.unsavedSections();
+    if (sections.length === 0) return true;
+    if (this.discardResolve) return false;
+    const ok = await new Promise<boolean>((resolve) => {
+      this.discardResolve = resolve;
+      this.confirmReq.set({
+        title: "Discard unsaved changes?",
+        message: `You have unsaved ${sections.join(", ")} changes on ${this.repoSlug()}. Leave and discard them?`,
+        accept: "Discard",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+    if (ok) this.revertUnsaved();
+    return ok;
+  }
+
+  private revertUnsaved(): void {
+    const ib = this.importBaseline();
+    this.importEnabled.set(ib.enabled);
+    this.importLabel.set(ib.label);
+    this.importSourceRepo.set(ib.repo);
+    this.importApproved.set(ib.approved);
+    const ab = this.agentBaseline();
+    this.setupCommand.set(ab.setup);
+    this.promptExtension.set(ab.prompt);
+    this.repoCaps.set(ab.caps);
+    const wf = JSON.parse(this.workflowBaseline()) as [string, string][];
+    this.workflows.set(wf.map(([path, text]) => ({ path, text })));
+    const cur = this.workflows().find(
+      (w) => w.path === this.selectedWorkflowPath(),
+    );
+    this.workflowYaml.set(cur?.text ?? "");
+  }
+
+  @HostListener("window:beforeunload", ["$event"])
+  protected onBeforeUnload(ev: BeforeUnloadEvent): void {
+    if (this.unsavedSections().length > 0) ev.preventDefault();
+  }
+
+  protected async selectTab(tab: RepoTabId): Promise<void> {
+    if (tab === this.activeTab()) return;
+    if (!(await this.canLeave())) return;
     this.routeTab.set(tab);
     const h = this.resolvedHost();
     const o = this.resolvedOwner();
@@ -1359,8 +1663,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           ),
         );
       }
-      await this.loadCoreRepo();
-      await this.loadTabData();
+      await Promise.all([this.loadCoreRepo(), this.loadTabData()]);
       this.ready.set(true);
     } catch (err) {
       this.error.set(errText(err));
@@ -1370,84 +1673,99 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   private async loadCoreRepo(): Promise<void> {
     const p = this.params();
     if (!p.owner || !p.name) return;
+    const jobs: Promise<void>[] = [];
     if (this.can("GET /api/deployment/repos/{owner}/{name}/config")) {
-      try {
-        const cfg = await this.api.get<Record<string, unknown>>(
-          "GET /api/deployment/repos/{owner}/{name}/config",
-          p,
-        );
-        const eff =
-          (cfg?.["effective"] as Record<string, unknown> | undefined) ?? cfg;
-        if (eff?.["cloneUrl"] !== undefined) {
-          this.cloneUrl.set(String(eff["cloneUrl"] ?? ""));
-        }
-        if (eff?.["gitCredential"] !== undefined) {
-          this.gitCredential.set(String(eff["gitCredential"] ?? ""));
-        }
-      } catch {
-        // Non-fatal
-      }
+      jobs.push(
+        this.api
+          .get<Record<string, unknown>>(
+            "GET /api/deployment/repos/{owner}/{name}/config",
+            p,
+          )
+          .then((cfg) => {
+            const eff =
+              (cfg?.["effective"] as Record<string, unknown> | undefined) ??
+              cfg;
+            if (eff?.["cloneUrl"] !== undefined) {
+              this.cloneUrl.set(String(eff["cloneUrl"] ?? ""));
+            }
+            if (eff?.["gitCredential"] !== undefined) {
+              this.gitCredential.set(String(eff["gitCredential"] ?? ""));
+            }
+          })
+          .catch(() => undefined),
+      );
     }
     if (this.can("GET /api/repos/{owner}/{name}/settings")) {
-      try {
-        const st = await this.api.get<Record<string, unknown>>(
-          "GET /api/repos/{owner}/{name}/settings",
-          p,
-        );
-        if (st?.["ciMode"]) this.ciMode.set(String(st["ciMode"]));
-        if (st?.["mergeOnGreen"] !== undefined) {
-          this.mergeOnGreen.set(Boolean(st["mergeOnGreen"]));
-        }
-        if (st?.["requireBranchUpToDate"] !== undefined) {
-          this.requireUpToDate.set(Boolean(st["requireBranchUpToDate"]));
-        }
-        if (st?.["baseRepairBypassesHumanGates"] !== undefined) {
-          this.bypassHumanGates.set(
-            Boolean(st["baseRepairBypassesHumanGates"]),
-          );
-        }
-        if (st?.["watchDefaultBranch"] !== undefined) {
-          this.watchDefaultBranch.set(Boolean(st["watchDefaultBranch"]));
-        }
-        if (st?.["setupCommand"] !== undefined) {
-          this.setupCommand.set(String(st["setupCommand"] ?? ""));
-        }
-        if (st?.["promptExtension"] !== undefined) {
-          this.promptExtension.set(String(st["promptExtension"] ?? ""));
-        }
-        const imp = st?.["issueImport"] as
-          | {
-              enabled?: boolean;
-              label?: string;
-              repo?: string;
-              approved?: boolean;
+      jobs.push(
+        this.api
+          .get<Record<string, unknown>>(
+            "GET /api/repos/{owner}/{name}/settings",
+            p,
+          )
+          .then((st) => {
+            if (st?.["ciMode"]) this.ciMode.set(String(st["ciMode"]));
+            if (st?.["mergeOnGreen"] !== undefined) {
+              this.mergeOnGreen.set(Boolean(st["mergeOnGreen"]));
             }
-          | undefined;
-        if (imp && typeof imp === "object") {
-          this.importEnabled.set(Boolean(imp.enabled));
-          this.importLabel.set(String(imp.label ?? ""));
-          this.importSourceRepo.set(String(imp.repo ?? ""));
-          this.importApproved.set(Boolean(imp.approved));
-        }
-      } catch {
-        // Non-fatal
-      }
+            if (st?.["requireBranchUpToDate"] !== undefined) {
+              this.requireUpToDate.set(Boolean(st["requireBranchUpToDate"]));
+            }
+            if (st?.["baseRepairBypassesHumanGates"] !== undefined) {
+              this.bypassHumanGates.set(
+                Boolean(st["baseRepairBypassesHumanGates"]),
+              );
+            }
+            if (st?.["watchDefaultBranch"] !== undefined) {
+              this.watchDefaultBranch.set(Boolean(st["watchDefaultBranch"]));
+            }
+            if (st?.["setupCommand"] !== undefined) {
+              this.setupCommand.set(String(st["setupCommand"] ?? ""));
+            }
+            if (st?.["promptExtension"] !== undefined) {
+              this.promptExtension.set(String(st["promptExtension"] ?? ""));
+            }
+            const imp = st?.["issueImport"] as
+              | {
+                  enabled?: boolean;
+                  label?: string;
+                  repo?: string;
+                  approved?: boolean;
+                }
+              | undefined;
+            if (imp && typeof imp === "object") {
+              this.importEnabled.set(Boolean(imp.enabled));
+              this.importLabel.set(String(imp.label ?? ""));
+              this.importSourceRepo.set(String(imp.repo ?? ""));
+              this.importApproved.set(Boolean(imp.approved));
+            }
+            this.markImportSaved();
+            this.agentBaseline.update((b) => ({
+              ...b,
+              setup: this.setupCommand(),
+              prompt: this.promptExtension(),
+            }));
+          })
+          .catch(() => undefined),
+      );
     }
     if (this.access.can("GET /api/deployment/git-connections")) {
-      try {
-        const conns = await this.api.get<
-          { credential?: string; id?: string }[] | { connections?: unknown[] }
-        >("GET /api/deployment/git-connections");
-        const arr = (
-          Array.isArray(conns) ? conns : (conns?.connections ?? [])
-        ) as { credential?: string; id?: string }[];
-        this.availableGitCreds.set(
-          arr.map((c) => c.credential ?? c.id ?? "").filter(Boolean),
-        );
-      } catch {
-        // Non-fatal
-      }
+      jobs.push(
+        this.api
+          .get<
+            { credential?: string; id?: string }[] | { connections?: unknown[] }
+          >("GET /api/deployment/git-connections")
+          .then((conns) => {
+            const arr = (
+              Array.isArray(conns) ? conns : (conns?.connections ?? [])
+            ) as { credential?: string; id?: string }[];
+            this.availableGitCreds.set(
+              arr.map((c) => c.credential ?? c.id ?? "").filter(Boolean),
+            );
+          })
+          .catch(() => undefined),
+      );
     }
+    await Promise.all(jobs);
   }
 
   private async loadTabData(t: RepoTabId = this.activeTab()): Promise<void> {
@@ -1482,6 +1800,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
               }),
             );
             this.workflows.set(list);
+            this.workflowBaseline.set(workflowKey(list));
             const cur = this.selectedWorkflowPath();
             const active = list.find((x) => x.path === cur) ?? list[0] ?? null;
             if (active) {
@@ -1505,6 +1824,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
             if (Array.isArray(c?.defaultCapabilities)) {
               this.repoCaps.set(c.defaultCapabilities.join(", "));
             }
+            this.agentBaseline.update((b) => ({ ...b, caps: this.repoCaps() }));
           })
           .catch(() => undefined);
       }
@@ -1614,6 +1934,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           ? cands
           : (cands?.candidates ?? cands?.items ?? []),
       );
+      this.candidatesFor.set(release);
     } catch {
       // Non-fatal
     }
@@ -1678,26 +1999,39 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           issueImportApproved: this.importApproved(),
         },
       );
+      this.markImportSaved();
       this.snackbar.show("Issue importer settings saved");
     } catch (err) {
       this.error.set(errText(err));
     }
   }
 
+  // importIssues runs one import pass now and says what it did, as the
+  // classic Repo page does. The route answers 200 with an "error" beside
+  // the counts when the source cannot be listed (or some issues failed),
+  // so a bare "triggered" toast read as success for a source repository
+  // that does not exist (2026-11-14 repository walkthrough).
   protected async importIssues(): Promise<void> {
+    this.importing.set(true);
+    this.importOutcome.set(null);
     try {
-      await this.api.post(
-        "POST /api/repos/{owner}/{name}/import-issues",
-        this.params(),
-        {},
-      );
-      this.snackbar.show("Issue import triggered");
+      const out = await this.api.post<{
+        source?: string;
+        open?: number;
+        imported?: string[] | null;
+        skipped?: number;
+        error?: string;
+      }>("POST /api/repos/{owner}/{name}/import-issues", this.params(), {});
+      this.importOutcome.set(importOutcomeText(out ?? {}, this.repoSlug()));
     } catch (err) {
-      this.error.set(errText(err));
+      this.importOutcome.set({ error: true, text: errText(err) });
+    } finally {
+      this.importing.set(false);
     }
   }
 
   protected async saveCiMode(ciMode: string): Promise<void> {
+    const previous = this.ciMode();
     this.ciMode.set(ciMode);
     try {
       await this.api.put(
@@ -1707,6 +2041,10 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       this.snackbar.show(`CI mode set to ${ciMode}`);
     } catch (err) {
+      // A refused mode is not the repo's mode: put the pill back on
+      // what the server still has rather than leave it naming one it
+      // refused.
+      this.ciMode.set(previous);
       this.error.set(errText(err));
     }
   }
@@ -1789,6 +2127,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         },
       );
       this.workflows.set(remaining);
+      this.workflowBaseline.set(workflowKey(remaining));
       const next = remaining[0] ?? null;
       this.selectedWorkflowPath.set(next?.path ?? ".grain/workflows/ci.yml");
       this.workflowYaml.set(next?.text ?? "");
@@ -1828,6 +2167,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       } else {
         this.workflows.set(next);
       }
+      this.workflowBaseline.set(workflowKey(this.workflows()));
       this.snackbar.show("Workflows saved");
     } catch (err) {
       this.error.set(errText(err));
@@ -1887,8 +2227,31 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected async toggleBypassHumanGates(): Promise<void> {
+  protected async onConfirmDone(accepted: boolean): Promise<void> {
+    const req = this.confirmReq();
+    this.confirmReq.set(null);
+    const resolve = this.discardResolve;
+    if (resolve) {
+      this.discardResolve = null;
+      resolve(accepted);
+      return;
+    }
+    if (!accepted || !req) return;
+    await req.run();
+  }
+
+  protected toggleBypassHumanGates(): void {
     const next = !this.bypassHumanGates();
+    if (next) {
+      this.confirmReq.set(
+        bypassConfirm(this.repoSlug(), () => this.saveBypassHumanGates(true)),
+      );
+      return;
+    }
+    void this.saveBypassHumanGates(false);
+  }
+
+  private async saveBypassHumanGates(next: boolean): Promise<void> {
     try {
       await this.api.put(
         "PUT /api/repos/{owner}/{name}/base-repair-bypasses-human-gates",
@@ -1925,6 +2288,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           defaultCapabilities,
         });
       }
+      this.agentBaseline.set({
+        setup: this.setupCommand(),
+        prompt: this.promptExtension(),
+        caps: this.repoCaps(),
+      });
       this.snackbar.show("Saved repository agent settings");
     } catch (err) {
       this.error.set(errText(err));
@@ -1958,10 +2326,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { name },
       );
       this.newReleaseName.set("");
+      this.newReleaseError.set(null);
       await this.loadReleasesTab();
       this.snackbar.show(`Created release ${name}`);
     } catch (err) {
-      this.error.set(errText(err));
+      this.newReleaseError.set(errText(err));
     }
   }
 
@@ -1977,6 +2346,57 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     } catch (err) {
       this.error.set(errText(err));
     }
+  }
+
+  protected reasonsFor(rel: ReleaseRow): {
+    cut: string | null;
+    promote: string | null;
+  } {
+    const selected = rel.name === this.selectedRelease();
+    return releaseActionReasons(
+      rel,
+      selected ? this.candidates()[0] : undefined,
+      selected && this.candidatesFor() === rel.name,
+    );
+  }
+
+  // Promote, merge back and delete act on branches or drop the release,
+  // so each asks first with the classic pane's words; the /next/ page
+  // used to run them on the first click (2026-11-14 repository
+  // walkthrough).
+  protected askPromoteCandidate(rel: ReleaseRow): void {
+    const rc =
+      (rel.name === this.selectedRelease() && this.candidates()[0]?.branch) ||
+      `${rel.name}'s current candidate`;
+    const prod = rel.prodBranch || rel.name;
+    this.confirmReq.set({
+      title: `Promote ${rc}?`,
+      message: `Promote ${rc} to ${prod}? This moves ${this.repoSlug()}'s ${prod} branch to ${rc}.`,
+      accept: "Promote",
+      destructive: false,
+      run: () => this.promoteCandidate(rel.name),
+    });
+  }
+
+  protected askMergeRelease(rel: ReleaseRow): void {
+    const prod = rel.prodBranch || rel.name;
+    this.confirmReq.set({
+      title: `Merge ${prod} back?`,
+      message: `Merge ${prod} into ${this.repoSlug()}'s default branch? This opens a pull request on GitHub from ${prod}.`,
+      accept: "Open pull request",
+      destructive: false,
+      run: () => this.mergeRelease(rel.name),
+    });
+  }
+
+  protected askDeleteRelease(release: string): void {
+    this.confirmReq.set({
+      title: `Remove release ${release}?`,
+      message: `Remove release ${release}? This drops the release and its candidates from grain.`,
+      accept: "Remove release",
+      destructive: true,
+      run: () => this.deleteRelease(release),
+    });
   }
 
   protected async promoteCandidate(release: string): Promise<void> {

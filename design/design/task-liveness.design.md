@@ -132,6 +132,7 @@ Why these choices:
 |---|---|---|---|
 | `queued/ready` | a worker slot and a sandbox | reconcileDispatch | person (inbox stalled group, "Run now") |
 | `queued/blocked_on_task` | the task it depends on | reconcileDispatch | resource |
+| `queued/blocked_on_person` | a person acting on a task it depends on that never closes by itself -- failed, proposed, awaiting a reply or Submit, paused, deferred with no wake time, goal or `resume_later` hold, or never-completing (`model.BlockerHoldOf`); the resource names each such blocker and what ends its hold | -- | person ("Act on the blocker", pressed on the blocker's own row); counted as stalled by `--stalled` / `list_grain_tasks(stalled)` at once |
 | `queued/usage_limit_paused` | the connection's limit window | reconcileDispatch | person ("Run now") |
 | `queued/held_by_suspension` | its latest suspension's own resume time (a setup suspension waiting out its backoff), named in the resource; an agent's own `resume_later` / `wait_for_task` time is its deferral's, never this | reconcileDispatch | person ("Run now") |
 | `queued/held_by_local_policy` | an edit to the `-policy` file allowing the refused claim, and a restart (external) | -- | resource |

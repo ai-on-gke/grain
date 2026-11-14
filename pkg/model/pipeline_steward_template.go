@@ -272,7 +272,8 @@ func writeRedRCSection(b *strings.Builder) {
 		"grain posts check run `" + ReleaseHoldCheckName + "` in progress on the red candidate's commit " +
 		"while triage is pending, so `rc.(N+1)` is not cut before your wake finishes. For each suspect, `propose_task` a " +
 		"revert, or a fix where a revert would lose more than it saves. Target `main`, pass " +
-		"`at_front: true` (a priority above your own waits for a person), and start the title with `" +
+		"`at_front: true` (a priority above your own waits for a person), pass `found_in: <rc_tag>` so " +
+		"the defect is counted against that release, and start the title with `" +
 		marker + "` exactly. That title keeps the hold. While any task with it is open, grain keeps check " +
 		"run `" + ReleaseHoldCheckName + "` in progress on the red candidate's commit, so `rc.(N+1)` is " +
 		"not cut onto a tree you know is broken. It completes by itself once they have all landed (or when " +

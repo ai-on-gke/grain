@@ -36,6 +36,7 @@ var routeScopes = map[string]APIScope{
 	"POST /api/deployment/git-connections/check":                           "connections:read",
 	"PUT /api/deployment/agent-backends/{backendId}":                       "connections:write",
 	"DELETE /api/deployment/agent-backends/{backendId}":                    "connections:write",
+	"POST /api/deployment/agent-backends/{backendId}/discover":             "connections:write",
 	"GET /api/deployment/repos/{owner}/{name}/config":                      "repos:read",
 	"PUT /api/deployment/repos/{owner}/{name}/config":                      "repos:write",
 	"PUT /api/deployment/repos/{owner}/{name}/git-connection":              "connections:write",

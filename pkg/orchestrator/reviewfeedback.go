@@ -157,6 +157,10 @@ func relayReviewFeedback(ctx context.Context, store *model.Store, client github.
 	if len(findings) == 0 {
 		return 0, nil
 	}
+	if isReviewTask(task) {
+		recordPostedReviewFindings(ctx, store, task.ID, findings)
+		defer refreshQueuedReviewsAfterFinish(ctx, store, client, task)
+	}
 	// Read before either hold is dropped below, since dropping one turns
 	// auto-merge off: a change that was merging itself, or held under a
 	// hold grain would have released, goes through again once its owner

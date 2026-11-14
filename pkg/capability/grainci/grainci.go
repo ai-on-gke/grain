@@ -68,15 +68,15 @@ import (
 // puts through grain CI.
 const Grant = model.GrainCIGrant
 
-// LegacyName is the retired bare name of Grant, still read as it
-// (model.IsGrainCIGrant) wherever nothing rewrote it.
+// LegacyName is the retired bare name of Grant. Schema migration 96 and
+// an import (model.RetiredGrantsBecame) rewrite it; nothing else reads it
+// as the grant.
 const LegacyName = model.GrainCICapability
 
 // Description is what grain says the grant does, wherever it is listed.
 const Description = "Run this repository's own .grain/workflows in grain's sandboxes for the branches this task pushes, and hold the merge queue until they pass"
 
-// IsGrant reports whether id names grain#ci, recorded or bare, or the
-// retired grain-ci alias.
+// IsGrant reports whether id names grain#ci, recorded or bare.
 func IsGrant(id string) bool { return model.IsGrainCIGrant(id) }
 
 // RepoUsesGrainCI reports whether the repository is configured to use Grain CI.

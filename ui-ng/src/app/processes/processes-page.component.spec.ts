@@ -758,6 +758,40 @@ describe("ProcessesPageComponent (D-9)", () => {
     ]);
   });
 
+  it("lists a suite run that has filed no tasks (tasks: null) beside the others, naming no pass", async () => {
+    // A run that ended before its first pass was filed comes back from the
+    // server with `tasks: null` and `pass: 0`; reading .length off it threw
+    // and the rest of the runs list never rendered.
+    api.suiteRuns = [
+      ...api.suiteRuns,
+      {
+        ...api.suiteRuns[0],
+        id: 9,
+        status: "failed",
+        pass: 0,
+        base: "",
+        error: "pass 1 could not be filed: template gone",
+        tasks: null,
+      },
+    ];
+    const harness = await RouterTestingHarness.create("/processes/suites");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suites-subview-runs"]')!
+      .click();
+    await flush(harness);
+
+    const empty = root.querySelector('[data-testid="suite-run-row-9"]')!;
+    expect(empty).toBeTruthy();
+    expect(root.querySelector('[data-testid="suite-run-row-7"]')).toBeTruthy();
+    expect(empty.textContent).toContain("0 tasks");
+    expect(empty.textContent).not.toMatch(/Pass 0/);
+    expect(
+      root.querySelector('[data-testid="suite-run-row-7"]')!.textContent,
+    ).toContain("Pass 1");
+  });
+
   it("preserves Suite requireApproval/autoMerge on PATCH, launches Suite Runs via ?run=1, and closes all non-closed pass tasks (including running)", async () => {
     const harness = await RouterTestingHarness.create("/processes/suites");
     await flush(harness);
@@ -916,5 +950,58 @@ describe("ProcessesPageComponent (D-9)", () => {
       (c) => c.route === "PUT /api/repos/{owner}/{name}/workflows",
     )!;
     expect(putCall.body).toEqual({ workflows: [] });
+  });
+
+  it("never floods Declarations with GitHub-wide reachable-repos when targetRepos is configured", async () => {
+    api.configBody = {
+      access: {
+        role: "grain/operator",
+        roles: ["grain/operator"],
+        full: true,
+        scopes: [],
+      },
+      targetRepos: ["acme/widgets"],
+      reposWithWorkflows: ["acme/external-ci"],
+      approvedByDefault: true,
+    };
+    const baseGet = api.get;
+    api.get = (route: string, params?: Record<string, unknown>) => {
+      if (route === "GET /api/deployment/reachable-repos") {
+        api.calls.push({ method: "GET", route, params });
+        return Promise.resolve({
+          available: true,
+          repos: Array.from({ length: 200 }, (_, i) => ({
+            repo: `github-org/unrelated-${i}`,
+            push: true,
+          })),
+        });
+      }
+      return baseGet(route, params);
+    };
+
+    const harness = await RouterTestingHarness.create(
+      "/processes/declarations",
+    );
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    // Never calls reachable-repos on Processes; only lists instance-configured repos.
+    expect(
+      api.calls.some((c) => c.route === "GET /api/deployment/reachable-repos"),
+    ).toBe(false);
+    expect(
+      root.querySelector('[data-testid="decl-repo-row-acme/widgets"]'),
+    ).not.toBeNull();
+    expect(
+      root.querySelector('[data-testid="decl-repo-row-acme/external-ci"]'),
+    ).not.toBeNull();
+    expect(
+      root.querySelector(
+        '[data-testid="decl-repo-row-github-org/unrelated-0"]',
+      ),
+    ).toBeNull();
+    expect(
+      root.querySelectorAll('[data-testid^="decl-repo-row-"]').length,
+    ).toBe(2);
   });
 });

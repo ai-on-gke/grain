@@ -88,7 +88,7 @@ const OperatorPausedDetail = "paused by the operator; the task resumes its conve
 // its next tool result -- pkg/mcp's addenda).
 func PauseMessage(grace time.Duration) string {
 	return fmt.Sprintf("The operator has paused this task. Within the next %s, commit and push any work "+
-		"you want kept, write your handover with write_handover, then stop. Do not start new work.",
+		"you want kept, write your handover with `grain handover write --file <path>`, then stop. Do not start new work.",
 		humanDuration(grace))
 }
 

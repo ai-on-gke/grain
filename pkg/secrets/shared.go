@@ -50,3 +50,21 @@ func OpenShared(cfg Config) *Store {
 	v, _ := sharedStores.LoadOrStore(id, store)
 	return v.(*Store)
 }
+
+// ShareKey is a Store over s's files that holds s's key with it: loaded
+// once for both, and dropped for both when either finds it stale or has
+// another imported. Everything else is its own -- its audit logger in
+// particular, so a caller that audits what it resolves (the daemon's own
+// store) can share OpenShared's key without auditing every other reader
+// of that store, a repository token read on every sync among them.
+func (s *Store) ShareKey() *Store {
+	return &Store{
+		backend: s.backend,
+		cfg:     s.cfg,
+		sm:      s.sm,
+		openErr: s.openErr,
+		created: s.created,
+		keys:    s.keys,
+		now:     s.now,
+	}
+}

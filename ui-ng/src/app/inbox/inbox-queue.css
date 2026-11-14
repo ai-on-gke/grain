@@ -292,3 +292,88 @@ g-inbox-page {
   font-size: 12px;
   text-align: center;
 }
+
+@keyframes inline-shimmer {
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: -200% 0%;
+  }
+}
+
+:where(.aurora-surface) {
+  --aurora-surface-bg: var(--md-sys-color-surface);
+  border-radius: var(--md-sys-shape-corner-large);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--aurora-surface-bg);
+}
+
+.aurora-surface[data-aurora-state="anticipating"] {
+  border-color: var(--aurora-border-glow);
+  background: linear-gradient(
+    135deg,
+    var(--aurora-surface-bg, var(--md-sys-color-surface)) 70%,
+    color-mix(
+        in srgb,
+        var(--aurora-stop-cyan) calc(var(--aurora-intensity) * 100%),
+        var(--aurora-surface-bg, var(--md-sys-color-surface))
+      )
+      100%
+  );
+}
+
+.aurora-surface[data-aurora-state="receiving"] {
+  border-color: var(--md-sys-color-secondary);
+  background: linear-gradient(
+    135deg,
+    var(--aurora-surface-bg, var(--md-sys-color-surface)) 45%,
+    color-mix(
+        in srgb,
+        var(--aurora-stop-cyan) calc(var(--aurora-intensity) * 100%),
+        var(--aurora-surface-bg, var(--md-sys-color-surface))
+      )
+      82%,
+    color-mix(
+        in srgb,
+        var(--aurora-stop-indigo) calc(var(--aurora-intensity) * 100%),
+        var(--aurora-surface-bg, var(--md-sys-color-surface))
+      )
+      100%
+  );
+}
+
+.aurora-surface[data-aurora-state="processing"] {
+  border-color: var(--md-sys-color-secondary);
+  background: linear-gradient(
+    90deg,
+    var(--aurora-stop-base) 0%,
+    var(--aurora-stop-cyan) 25%,
+    var(--aurora-stop-indigo) 50%,
+    var(--aurora-stop-cyan) 75%,
+    var(--aurora-stop-base) 100%
+  );
+  background-size: 200% 100%;
+  animation: inline-shimmer 2.4s var(--md-sys-motion-effects) infinite;
+}
+
+.aurora-surface[data-aurora-state="responding"] {
+  border-color: var(--md-sys-color-primary);
+  background: linear-gradient(
+    135deg,
+    color-mix(
+        in srgb,
+        var(--aurora-stop-cyan) calc(var(--aurora-intensity) * 100%),
+        var(--aurora-surface-bg, var(--md-sys-color-surface))
+      )
+      0%,
+    var(--aurora-surface-bg, var(--md-sys-color-surface)) 65%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora-surface[data-aurora-state="processing"] {
+    animation: none;
+    background: var(--md-sys-color-secondary-container);
+  }
+}

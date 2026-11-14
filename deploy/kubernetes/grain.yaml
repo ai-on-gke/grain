@@ -4,9 +4,11 @@
 # namespace, identity and permissions, the priorities sandbox pods run
 # at, storage, the key upgrades are
 # verified against, the deployment itself, a Service in front of its UI,
-# and a Service in front of what its sandboxes reach, and the egress
-# policy that keeps open-network sandbox pods off the metadata server and
-# the cluster (grain-sandbox-egress, a copy of networkpolicy.yaml's). `kubectl apply -f grain.yaml` after editing the CHANGEME values called
+# and a Service in front of what its sandboxes reach, and the two
+# policies that fence sandbox pods: grain-sandbox-egress, which keeps
+# open-network ones off the metadata server and the cluster, and
+# grain-sandbox-network-none, which holds network:none ones to grain's
+# own pod (copies of networkpolicy.yaml's). `kubectl apply -f grain.yaml` after editing the CHANGEME values called
 # out below stands a deployment up; see
 # deploy/kubernetes/README.md for what those values are and what has to
 # exist before this will run.
@@ -608,8 +610,9 @@ spec:
             # Uncomment once this cluster's CNI enforces NetworkPolicy
             # (GKE Dataplane V2 or Calico network policy enforcement) and
             # you have checked grain-sandbox-egress, at the end of this
-            # file, holds an open sandbox pod off 169.254.169.254 --
-            # plus deploy/kubernetes/networkpolicy.yaml for network:none.
+            # file, holds an open sandbox pod off 169.254.169.254, and
+            # grain-sandbox-network-none holds a network:none one off
+            # the internet.
             # Without it a task asking for no network access is refused
             # rather than quietly given a networked pod, and so is any
             # attempt holding an external capability grant.
@@ -978,3 +981,65 @@ spec:
               - fc00::/7
               - fe80::/10
               - ::1/128
+---
+# grain-sandbox-network-none: the fence around every sandbox pod whose
+# task asked for no network access, bundled here for the same reason as
+# grain-sandbox-egress above. -k8s-network-policy is what lets a
+# network:none task run on this backend at all, and it is also what
+# external capability grants need, so a deployment that sets it for the
+# grants and applied only this file would otherwise run network:none
+# tasks in pods no policy selects -- with more reach than an open one:
+# the metadata server, the API server, every pod and node (found on kind
+# with Calico, docs/test-runs/2026-11-13-sandbox-store-fences.md). It
+# selects only pods labelled grain.dev/network=none, which grain creates
+# only once that flag is set, so without the flag it changes nothing.
+# A verbatim copy of networkpolicy.yaml's, which explains every rule;
+# pkg/orchestrator/k8s_networkpolicy_test.go fails if they drift apart.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: grain-sandbox-network-none
+  namespace: grain
+  labels:
+    app.kubernetes.io/name: grain
+spec:
+  # grain labels exactly those sandbox pods whose task asked for no
+  # network access (orchestrator.NetworkLabel). Every other sandbox pod
+  # is unselected by this policy and held instead by
+  # grain-sandbox-egress, above.
+  podSelector:
+    matchLabels:
+      grain.dev/network: none
+  policyTypes:
+    - Ingress
+    - Egress
+  # No ingress at all. Nothing dials a sandbox: grain reaches one through
+  # the API server with `kubectl exec`, which is the kubelet's connection
+  # to the container and not a network route into the pod, so denying
+  # ingress costs this backend nothing.
+  ingress: []
+  egress:
+    # The one exception, and the reason this is a policy rather than
+    # "deny everything": a sandbox with no route at all is not an
+    # isolated sandbox, it is a broken one. Its first act is to clone the
+    # task's repository through grain's own git proxy, and its model
+    # calls go through grain's model proxy -- both of which live in the
+    # grain pod. Take that away and every task in such a sandbox fails
+    # during preparation, which is the failure orchestrator's own
+    # enforceGuestNetwork exists to prevent on the granule backend.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grain
+      # This also covers the grain-sandbox Service (grain.yaml), which
+      # is where a sandbox reaches the git proxy and the model proxies:
+      # a policy sees the pod a Service forwards to, not the cluster IP,
+      # and the daemon hands sandboxes that IP rather than a name, so no
+      # rule for kube-dns is needed either.
+      #
+      # No ports: named, deliberately. What a sandbox reaches here moves
+      # with -sandbox-port-base and with the package cache's interception
+      # listeners (53, 80 and 443), so a port list is one more thing to
+      # keep in step -- what is narrowed here is the peer, which is the
+      # part that matters: one pod in one namespace, rather than the
+      # internet.

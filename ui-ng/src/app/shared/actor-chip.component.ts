@@ -15,6 +15,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ViewEncapsulation,
   computed,
   input,
 } from "@angular/core";
@@ -31,7 +32,14 @@ export function normalizeActorKind(
   const l = (label || "").trim().toLowerCase();
   if (k === "automation" || k === "grain" || l === "grain") return "grain";
   if (k === "agent") return "agent";
-  if (k === "service") return "service";
+  if (
+    k === "service" ||
+    k === "system" ||
+    l.startsWith("system:") ||
+    l.startsWith("repo:")
+  ) {
+    return "service";
+  }
   return "human";
 }
 
@@ -41,7 +49,70 @@ export function normalizeActorKind(
 // textContent and screen readers read the clean actor name without noise.
 @Component({
   selector: "g-actor-chip",
+  encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
+  styles: [
+    `
+      .actor {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 100%;
+        vertical-align: middle;
+        font: 500 12px/16px var(--grain-font-body);
+        color: var(--md-sys-color-on-surface);
+        white-space: nowrap;
+      }
+      .actor:focus-visible {
+        outline: 2px solid var(--md-sys-color-primary);
+        outline-offset: 2px;
+        border-radius: var(--md-sys-shape-corner-xs);
+      }
+      .actor-avatar[data-initials]::before {
+        content: attr(data-initials);
+      }
+      .actor-avatar {
+        display: inline-grid;
+        place-items: center;
+        width: 20px;
+        height: 20px;
+        flex: none;
+        font: 500 10px/1 var(--grain-font-body);
+      }
+      .actor-human .actor-avatar {
+        border-radius: var(--md-sys-shape-corner-full);
+        background: var(--md-sys-color-tertiary-container);
+        color: var(--md-sys-color-on-tertiary-container);
+      }
+      .actor-agent .actor-avatar {
+        border-radius: 3px;
+        background: var(--md-sys-color-secondary-container);
+        color: var(--md-sys-color-on-secondary-container);
+      }
+      .actor-grain .actor-avatar {
+        border-radius: 6px;
+        background: var(--md-sys-color-primary-container);
+        color: var(--md-sys-color-on-primary-container);
+      }
+      .actor-service .actor-avatar {
+        border-radius: 3px;
+        background: var(--md-sys-color-surface-container-highest);
+        color: var(--md-sys-color-on-surface-variant);
+      }
+      .actor-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .actor-behalf {
+        font-weight: 400;
+        color: var(--md-sys-color-on-surface-variant);
+      }
+      .is-human .actor,
+      .is-human .actor-behalf {
+        color: inherit;
+      }
+    `,
+  ],
   template: `
     <span [class]="'actor actor-' + resolvedKind()" data-testid="actor-chip">
       @if (resolvedKind() === "grain") {

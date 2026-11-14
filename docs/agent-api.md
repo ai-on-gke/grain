@@ -266,16 +266,18 @@ table only so the table stays total.
 | `external-dev` | `tasks:read`, `tasks:write`, `ci:read`, `ci:write`, `merge:write`, `repos:read`, `templates:read`, `deployment:read` |
 | `external-read` | `tasks:read`, `ci:read`, `repos:read`, `templates:read`, `deployment:read` |
 
-The `self-debug` capability is now an alias. A task holding it is also
-served its preset's routes, and keeps the tools it always had under
-their old names (`list_grain_tasks`, `read_grain_metrics`, ...).
+The `self-debug` capability was retired onto `api:self-debug` plus
+`https://grain.dev/capabilities/grain#source={}` (schema migration 115):
+`api:self-debug` serves the preset's routes and keeps the tools under their
+existing names (`list_grain_tasks`, `read_grain_metrics`, ...), while
+`grain#source` provides the source checkout. Its bare name was an alias for
+one release and is not any longer.
 
 `team-broadcast`, `dispatch-control`, `pipeline-control`, `memory`,
-`release-notes`, `self-upgrade` and `test-quarantine` are aliases
-too, but their
-in-process capabilities are retired (design/design/unified-grants.design.md §4):
-they have no tools of their own any longer, and a run holding one is
-served its preset's routes through `grain-controller` and `grain` CLI subcommands instead (`api_deployment_broadcast`
+`release-notes`, `self-upgrade` and `test-quarantine` were retired onto
+the `api:<preset>` presets of the same names (design/design/unified-grants.design.md §4):
+they have no tools of their own any longer, and a run holding the preset is
+served its routes through `grain-controller` and `grain` CLI subcommands instead (`api_deployment_broadcast`
 for `broadcast_team_message`; the pipeline-pause, run-now and defer
 routes for `pause_pipeline`, `resume_pipeline`, `run_task_now` and
 `defer_task`; for pipeline-control, the pipeline-pause routes, which an
@@ -284,13 +286,11 @@ upgrade's hold; for `memory` and `release-notes`, the `/api/memory*` and
 `/api/release-notes*` routes and `grain memory` / `grain release-notes`;
 for `self-upgrade`, `api_start_upgrade` and `api_cancel_scheduled_upgrade`
 plus `GET /api/upgrade` via `grain api`; for `test-quarantine`,
-`POST /api/tests/quarantine` (`api_quarantine_test`) and `grain quarantine`). Every place a grant is recorded writes it as
-`api:<preset>` (`model.CanonicalLegacyGrant`), importing a grain/config
-does the same, and schema migrations 67, 68, 69, 71, 72, 75 and 76 rewrote the grants
+`POST /api/tests/quarantine` (`api_quarantine_test`) and `grain quarantine`). Schema migrations 67, 68, 69, 71, 72, 75 and 76 rewrote the grants
 already stored -- tasks, templates, schedules, the default capability
-lists and the standing sessions. The bare name keeps granting the preset
-wherever it is still written, such as a repository's own `.grain`
-declarations.
+lists and the standing sessions -- and importing an older `grain/config`
+export upgrades them the same way (`model.RetiredGrantsBecame`). The bare
+names were aliases for one release and are no longer accepted.
 
 The per-ability capabilities that were queued separately are presets over
 this mechanism rather than new tool plumbing:

@@ -27,6 +27,7 @@ import type {
   TaskDetail,
 } from "../api/models";
 import type { GrainPlanBlock } from "../director/director-draft";
+import { AccessService } from "../services/access.service";
 import { topologicalPlanOrder } from "./session-artifacts";
 import {
   DIRECTOR_ID,
@@ -96,6 +97,7 @@ const RUN_FIXED_KEYS: (keyof UpdateSessionPatch)[] = [
 export class SessionsStore {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
+  private readonly access = inject(AccessService);
   private readonly zone = inject(NgZone);
 
   readonly sessions = signal<ConsoleSession[]>([]);
@@ -239,6 +241,9 @@ export class SessionsStore {
   private async loadConfigModels(): Promise<void> {
     try {
       const cfg = (await this.api.config()) as GrainConfig | null;
+      if (cfg && !this.access.configLoaded()) {
+        this.access.setConfig(cfg);
+      }
       if (Array.isArray(cfg?.models)) this.models.set(cfg.models);
       if (typeof cfg?.defaultModel === "string") {
         this.defaultModel.set(cfg.defaultModel);

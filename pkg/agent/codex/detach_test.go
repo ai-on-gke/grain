@@ -131,7 +131,7 @@ func TestADetachedCodexRunIsLeftAlone(t *testing.T) {
 }
 
 func TestAHostdStopIsNotRetriedAndKeepsThread(t *testing.T) {
-	for _, stopErr := range []error{agent.ErrHostdDraining, agent.ErrHostdLost} {
+	for _, stopErr := range []error{agent.ErrHostdDraining, agent.ErrHostdStopped, agent.ErrHostdLost} {
 		r := &attemptRunner{replies: []attemptReply{
 			{stdout: "", err: fmt.Errorf("hostd: %w", stopErr)},
 			{stdout: attemptStream(agentMessage("done"), `{"type":"turn.completed"}`)},

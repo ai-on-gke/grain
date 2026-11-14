@@ -1,0 +1,1 @@
+{"staleSchedules":[{"id":"repo:schedule:acme:widgets:c-workflow","title":"Review last night's \"check\" workflow run","repo":{"Owner":"acme","Name":"widgets","Host":""},"workflow":"check","cadence":600000000000,"reason":"held: the task schedule \"a-task\" (repo:schedule:acme:widgets:a-task) filed is still open, and both are in overlap group \"train\""}]}

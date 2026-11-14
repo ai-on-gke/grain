@@ -1,0 +1,51 @@
+=== counts
+  React /inbox groups:
+    2	notifications	Notifications
+    1	pending-releases	Asked: approve a release
+    7	awaiting_submit	Asked: submit for merge
+    2	proposed	Approve a proposal
+  /next/inbox groups:
+    1 (1 rows)	release	Asked: approve a release
+    7 (7 rows)	submit	Asked: submit for merge
+    2 (2 rows)	proposal	Approve a proposal
+    2 (2 rows)	notification	Alerts
+  /next/ filter counts: {"all":12,"asked":0,"approvals":1,"merges":7,"proposals":2,"alerts":2,"unread":12}
+  totals: React 12, next 12
+=== gate
+  no code: GET /next/ -> 401 
+  no code: GET /next/inbox -> 401 
+  no code: GET /next/api/x -> 401 
+  no code: GET /next/main.js -> 401 
+  with code: GET /next/ -> 200
+    content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' da
+    x-frame-options: DENY
+    x-content-type-options: nosniff
+    referrer-policy: same-origin
+  POST /api/notifications/ack-all (cross-site) -> 403
+  POST /api/notifications/ack-all (foreign Origin) -> 403
+  POST /api/notifications/ack-all (same-origin) -> 404
+=== deeplinks
+  /next/ -> HTTP 200 lands on /next/inbox inbox=true
+  /next/inbox -> HTTP 200 lands on /next/inbox inbox=true
+  /next/inbox?filter=proposals -> HTTP 200 lands on /next/inbox?filter=proposals inbox=true
+  /next/nowhere/deep -> HTTP 200 lands on /next/inbox inbox=true
+  /next/tasks/1 -> HTTP 200 lands on /next/inbox inbox=true
+=== layout
+  1440x900 light: {"scrollW":1440,"clientW":1440,"theme":"light","bg":"rgb(255, 255, 255)","overflow":[]}
+  1440x900 dark: {"scrollW":1440,"clientW":1440,"theme":"dark","bg":"rgb(19, 19, 20)","overflow":[]}
+  390x844 light: {"scrollW":390,"clientW":390,"theme":"light","bg":"rgb(255, 255, 255)","overflow":[]}
+  390x844 dark: {"scrollW":390,"clientW":390,"theme":"dark","bg":"rgb(19, 19, 20)","overflow":[]}
+=== viewer
+    v2.4.0 · v2.4.0 is ready to promote enabled=[] rbacNote=1
+    #6 · Cache the capability readiness prob enabled=[] rbacNote=1
+    #14 · Port the retry budget to the depot enabled=[] rbacNote=1
+    #15 · Move the depot retry budget behind enabled=[] rbacNote=1
+    #16 · Add a TAP project for the retry bu enabled=[] rbacNote=1
+    #17 · Document the depot retry budget enabled=[] rbacNote=1
+    #18 · Trim the retry budget's BUILD deps enabled=[] rbacNote=1
+    #19 · Sync the depot retry budget with h enabled=[] rbacNote=1
+    #12 · [#42] Search results drop the last enabled=[] rbacNote=1
+    #21 · Live-update probe proposal enabled=[] rbacNote=1
+    agent.1:flaky-e2e · agent.1:flaky-e2e enabled=[] rbacNote=1
+    pipeline.merge-stalled:1 · pipeline.merg enabled=[] rbacNote=1
+  viewer: 12 rows, bulk buttons 0

@@ -832,7 +832,7 @@ func continueSessionTurns(
 		if _, ok := firstToolCallArg(turnResult, "propose_config_change", "summary"); ok {
 			break
 		}
-		if _, ok, _ := requestedSuspension(daemonCtx, store, task.ID, turnResult); ok {
+		if _, ok, _ := requestedSuspension(daemonCtx, store, task, turnResult); ok {
 			break
 		}
 		if taskPaused(daemonCtx, store, task.ID) {

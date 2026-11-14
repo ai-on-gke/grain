@@ -20,6 +20,7 @@ import type { TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { errorText } from "../sessions/session-helpers";
+import { configuredInstanceRepos } from "../shared/instance-repos";
 import {
   type Composition,
   type CreateScheduleRequest,
@@ -69,7 +70,8 @@ export class ProcessesStore {
   readonly suites = signal<Suite[]>([]);
   readonly suiteRuns = signal<SuiteRun[]>([]);
   readonly acceptances = signal<DeclarationAcceptanceView[]>([]);
-  readonly reachableRepos = signal<string[]>([]);
+  readonly configuredRepos = signal<string[]>([]);
+  readonly hasTargetAllowlist = signal(false);
   readonly approvedByDefault = signal(false);
 
   readonly repoDefaults = signal<Record<string, RepoDefaultsView>>({});
@@ -77,19 +79,34 @@ export class ProcessesStore {
   readonly repoLoading = signal<string | null>(null);
 
   readonly knownRepos = computed(() => {
-    const set = new Set<string>(this.reachableRepos());
-    for (const s of this.schedules()) if (s.repo) set.add(s.repo);
+    const seen = new Map<string, string>();
+    const add = (repo: string | undefined): void => {
+      if (!repo) return;
+      const trimmed = repo.trim();
+      if (!trimmed) return;
+      const key = trimmed.toLowerCase();
+      if (!seen.has(key)) seen.set(key, trimmed);
+    };
+
+    for (const r of this.configuredRepos()) add(r);
+    for (const s of this.schedules()) add(s.repo);
     for (const t of this.templates()) {
-      if (t.repo) set.add(t.repo);
-      if (t.declaredIn?.repo) set.add(t.declaredIn.repo);
+      add(t.repo);
+      add(t.declaredIn?.repo);
     }
     for (const st of this.suites()) {
-      if (st.declaredIn?.repo) set.add(st.declaredIn.repo);
+      add(st.declaredIn?.repo);
     }
-    for (const sr of this.suiteRuns()) if (sr.repo) set.add(sr.repo);
-    for (const acc of this.acceptances()) if (acc.repo) set.add(acc.repo);
-    for (const t of this.taskFeed.tasks()) if (t.repo) set.add(t.repo);
-    return [...set].filter(Boolean).sort();
+    for (const sr of this.suiteRuns()) add(sr.repo);
+    for (const acc of this.acceptances()) add(acc.repo);
+    // Match classic ui/src/state.js repoRows: only derive repo rows from task
+    // history when the deployment has no explicit targetRepos allowlist.
+    if (!this.hasTargetAllowlist()) {
+      for (const t of this.taskFeed.tasks()) {
+        if (!t.consoleSession && !t.interactive) add(t.repo);
+      }
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
   });
 
   readonly awaitingAcceptancesCount = computed(
@@ -134,42 +151,12 @@ export class ProcessesStore {
       if (cfg) {
         this.access.setConfig(cfg);
         this.approvedByDefault.set(!!cfg["approvedByDefault"]);
-        const targetRepos = Array.isArray(cfg["targetRepos"])
-          ? (cfg["targetRepos"] as string[])
-          : [];
-        if (targetRepos.length) {
-          this.reachableRepos.update((prev) =>
-            [...new Set([...prev, ...targetRepos])].sort(),
-          );
-        }
+        const summary = configuredInstanceRepos(cfg);
+        this.hasTargetAllowlist.set(summary.hasTargetAllowlist);
+        this.configuredRepos.set(summary.repos);
       }
     } catch {
       // Non-fatal.
-    }
-
-    if (this.activeCount === 0) return;
-    if (this.access.can("GET /api/deployment/reachable-repos")) {
-      try {
-        const raw = await this.api.get<unknown>(
-          "GET /api/deployment/reachable-repos",
-        );
-        if (this.activeCount === 0) return;
-        const list = unwrapList<string | { repo?: string; name?: string }>(
-          raw,
-          "repos",
-        )
-          .map((item) =>
-            typeof item === "string" ? item : item.repo || item.name || "",
-          )
-          .filter(Boolean);
-        if (list.length) {
-          this.reachableRepos.update((prev) =>
-            [...new Set([...prev, ...list])].sort(),
-          );
-        }
-      } catch {
-        // Optional discovery endpoint.
-      }
     }
   }
 

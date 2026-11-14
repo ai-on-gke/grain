@@ -58,6 +58,9 @@ type waitOnResponse struct {
 // person removing the link -- and the scheduler needs to know nothing new
 // about it. orchestrator.processResult is what notices, as the run ends,
 // that it parked, and leaves the task queued rather than finishing it.
+// The links a park wrote are its own, not dependencies the task declared:
+// the run that resumes the park takes them off again (model.ResumeOn.Links),
+// so a target reopened later does not hold the task a second time.
 // The comment posted here is for the person reading the task's page.
 //
 // Each target is described as id may be told it (model.Store.WaitTargetFor):
@@ -67,43 +70,55 @@ type waitOnResponse struct {
 // calls in with the daemon's own credential rather than the run's, so the
 // agent API gate's own trimming of this route never sees it.
 func (c *Client) WaitOn(ctx context.Context, id string, ids []string, park bool) ([]model.WaitTarget, error) {
+	targets, _, err := c.waitOn(ctx, id, ids, park)
+	return targets, err
+}
+
+// waitOn is WaitOn, also returning the targets whose depends-on links a
+// park wrote: those id did not already depend on. ResumeLater records
+// them (model.ResumeOn.Links) so that the run resuming the park takes
+// them off again, and leaves the dependencies id declared alone.
+func (c *Client) waitOn(ctx context.Context, id string, ids []string, park bool) ([]model.WaitTarget, []string, error) {
 	self, err := c.Store.GetTask(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if self == nil {
-		return nil, &NotFoundError{ID: id}
+		return nil, nil, &NotFoundError{ID: id}
 	}
 	links, err := c.dependsOnLinks(ctx, ids, self.ID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(links) == 0 {
-		return nil, validationErrorf("name at least one task to wait on")
+		return nil, nil, validationErrorf("name at least one task to wait on")
 	}
 	targets := make([]model.WaitTarget, 0, len(links))
 	for _, l := range links {
 		target, err := c.Store.WaitTargetFor(ctx, *self, l.Target, c.now())
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if target == nil {
-			return nil, validationErrorf("depends on unknown task %s", l.Target)
+			return nil, nil, validationErrorf("depends on unknown task %s", l.Target)
 		}
 		targets = append(targets, *target)
 	}
 	if !park {
-		return targets, nil
+		return targets, nil, nil
 	}
+	var added []string
 	if err := c.mutate(ctx, self.ID, func(task *model.Task) error {
+		added = nil
 		for _, l := range links {
 			if !hasDependency(task.Links, l.Target) {
 				task.Links = append(task.Links, l)
+				added = append(added, l.Target)
 			}
 		}
 		return nil
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if _, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    self.ID,
@@ -111,14 +126,14 @@ func (c *Client) WaitOn(ctx context.Context, id string, ids []string, park bool)
 		Body:      parkedComment(targets),
 		CreatedAt: c.now(),
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ids = make([]string, len(targets))
 	for i, t := range targets {
 		ids[i] = t.ID
 	}
 	c.noteTaskAction(ctx, self.ID, model.TaskEventParked, "waiting on "+strings.Join(ids, ", "))
-	return targets, nil
+	return targets, added, nil
 }
 
 // hasDependency reports whether links already has a depends-on link to
@@ -270,7 +285,8 @@ type resumeLaterRequest struct {
 // then is what already held a park:
 //
 //   - Tasks: depends-on links on them (WaitOn with park), which the
-//     scheduler releases once every one has closed;
+//     scheduler releases once every one has closed; the ones the park
+//     wrote come back as Links, and go again when the park is resumed;
 //   - At alone: a deferral with that wake time (ParkUntil);
 //   - CI or Message, with or without At: a deferral with At, or with no
 //     wake time at all, released by the condition arriving
@@ -284,14 +300,20 @@ type resumeLaterRequest struct {
 // The run is recorded as a requested suspension when it ends
 // (orchestrator.processResult); nothing here ends it.
 func (c *Client) ResumeLater(ctx context.Context, id string, when model.ResumeOn) (model.ResumeOn, error) {
+	// Links is grain's record of what the park wrote, never the caller's
+	// to name: a resume that removed links it was handed could strip a
+	// task's declared dependencies.
+	when.Links = nil
 	if len(when.Tasks) > 0 {
 		if when.At != nil || when.CI != "" || when.Message {
 			return when, validationErrorf("resume on tasks takes no other condition: wait on the tasks, " +
 				"or on a time, CI or a message, not both")
 		}
-		if _, err := c.WaitOn(ctx, id, when.Tasks, true); err != nil {
+		_, added, err := c.waitOn(ctx, id, when.Tasks, true)
+		if err != nil {
 			return when, err
 		}
+		when.Links = added
 		return when, nil
 	}
 	if when.CI == "" && !when.Message {

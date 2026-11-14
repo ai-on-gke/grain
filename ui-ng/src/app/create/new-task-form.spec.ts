@@ -139,7 +139,7 @@ describe("new task form", () => {
       },
       "sidthe/grain",
     );
-    expect(Object.keys(f)).toHaveLength(23);
+    expect(Object.keys(f)).toHaveLength(24);
     expect(f.approved.default).toBe(true);
     expect(f.autoMerge.default).toBe(false);
     expect(f.model).toMatchObject({ visibility: "more", default: "fast" });
@@ -184,6 +184,7 @@ describe("new task form", () => {
         reviewers: ["ana"],
         noPort: true,
         fixesBaseBranch: true,
+        foundIn: " v2.5.0-rc.2 ",
         customFields: { team: "infra" },
       },
       config,
@@ -201,7 +202,15 @@ describe("new task form", () => {
       reviewers: ["ana"],
       noPort: true,
       fixesBaseBranch: true,
+      foundIn: "v2.5.0-rc.2",
       customFields: { team: "infra" },
+    });
+    // No release stated: the body says nothing of one, and the server
+    // records what the task's own title and branches say.
+    expect(buildPayload(d, config)).not.toHaveProperty("foundIn");
+    expect(resolveFields(null).foundIn).toMatchObject({
+      visibility: "more",
+      default: "",
     });
 
     const branch = buildPayload(
@@ -250,6 +259,25 @@ describe("new task form", () => {
     expect(
       fromTemplateStem("sidthe/grain", { ...repoTmpl, system: true }),
     ).toBe("");
+    // The server's own declared id, with no declaredIn beside it.
+    expect(
+      fromTemplateStem("sidthe/grain", {
+        ...repoTmpl,
+        id: "repo:template:sidthe:grain:triage",
+        declaredIn: undefined,
+      }),
+    ).toBe("triage");
+    // A stored template (POST /api/templates) is not the repository's:
+    // it files through POST /api/tasks { templateId }, never from-template.
+    expect(
+      fromTemplateStem("sidthe/grain", {
+        id: "template-3",
+        name: "Urgent fix",
+        title: "Urgent: ",
+        description: "",
+        priority: 8,
+      }),
+    ).toBe("");
   });
 
   it("says what stops filing, including required template fields", () => {
@@ -262,6 +290,12 @@ describe("new task form", () => {
       "newBranchName",
     );
     expect(validate({ ...d, title: "t" })).toBeNull();
+    expect(validate({ ...d, title: "t", foundIn: "not-a-tag" })).toEqual({
+      field: "foundIn",
+      message: "Use a release tag such as v3.6.0 or v3.6.0-rc.2.",
+    });
+    expect(validate({ ...d, title: "t", foundIn: "v3.6.0" })).toBeNull();
+    expect(validate({ ...d, title: "t", foundIn: "v3.6.0-rc.2" })).toBeNull();
 
     const tmpl: Template = {
       id: "bugfix",

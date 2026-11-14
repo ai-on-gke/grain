@@ -188,7 +188,23 @@ func OpenSecretsForConfig(cfg Config, catalogue secrets.Catalogue) (*secrets.Sto
 // an operator has to know to run.
 func OpenSecrets(dataDir string) *secrets.Store {
 	moveSecretsOutOfStateRepo(dataDir)
-	store := secrets.Open(SecretsConfig(dataDir))
+	cfg := SecretsConfig(dataDir)
+	var store *secrets.Store
+	if _, err := os.Stat(cfg.KeyFile); err == nil {
+		// The key is there, so nothing is minted: share its load with
+		// the readers that open this store through secrets.OpenShared
+		// (repository tokens, git credentials, the release-approval
+		// key), so a KMS-wrapped key is unwrapped once per process
+		// rather than once per store. ShareKey, not the shared Store
+		// itself: the daemon audits what its store resolves, and the
+		// readers' every-sync reads are not resolutions to audit.
+		store = secrets.OpenShared(cfg).ShareKey()
+	} else {
+		// A fresh install, or a key file gone missing: Open is the one
+		// that mints, or refuses to over a secrets file it cannot read.
+		// Readers never mint, so nothing shared is opened here.
+		store = secrets.Open(cfg)
+	}
 	if store.KeyCreated() {
 		log.Printf("grain: generated a new secrets key at %s -- back this file up: "+
 			"without it, %s cannot be decrypted by anyone, grain included",

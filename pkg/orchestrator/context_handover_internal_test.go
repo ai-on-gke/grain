@@ -61,7 +61,7 @@ func TestContextExhaustionSuspendsAndAsksForAHandover(t *testing.T) {
 	fw := &handoverFramework{}
 	lastTurnForHandover(ctx, store, cfg, fw, agent.RunConfig{Prompt: "the original prompt", MaxTurns: 100}, tk, "sess-1", contextHandoverPrompt)
 	if len(fw.got) != 1 || fw.got[0].ResumeSession != "sess-1" || fw.got[0].MaxTurns != contextHandoverTurns ||
-		!strings.Contains(fw.got[0].Prompt, "write_handover") {
+		!strings.Contains(fw.got[0].Prompt, "grain handover write") {
 		t.Fatalf("last turn = %+v, want one turn in sess-1 asking for the handover", fw.got)
 	}
 	comments, err := store.Comments(ctx, tk.ID)

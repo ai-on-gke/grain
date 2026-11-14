@@ -1799,7 +1799,14 @@ function EntryDetailView({
     const changed = {};
     Object.keys(next).forEach((key) => {
       const reset = resetKeys === "all" || resetKeys.includes(key) || !base;
-      if (!reset && !sameFormValue(now[key], base[key])) {
+      // An edit the server has caught up with (somebody saved the same
+      // value) is no longer an edit: it syncs, with no "saving will
+      // overwrite it" hint over a save that would change nothing.
+      if (
+        !reset &&
+        !sameFormValue(now[key], base[key]) &&
+        !sameFormValue(now[key], next[key])
+      ) {
         nextBase[key] = base[key];
         if (!sameFormValue(next[key], base[key])) changed[key] = next[key];
         return;
@@ -1823,17 +1830,28 @@ function EntryDetailView({
   const syncRef = useRef(syncFromEntry);
   syncRef.current = syncFromEntry;
 
+  // shownEntryRef names the entry this page shows now. A fetch started for
+  // another entry -- the page has since moved on, through a scope-conflict
+  // link or Back -- is dropped when it answers instead of being merged into
+  // this entry's page and form, where a Save would write it to this entry.
+  const shownEntryRef = useRef(entryName);
+  shownEntryRef.current = entryName;
+
   const loadEntry = useCallback(
     async (resetKeys = "all") => {
       setLoading(true);
       setError("");
       try {
         const data = await fetchEntry(entryName);
-        syncRef.current(data, resetKeys);
+        if (shownEntryRef.current === entryName) {
+          syncRef.current(data, resetKeys);
+        }
       } catch (err) {
-        setError(err.message || `Failed to load ${entryName}`);
+        if (shownEntryRef.current === entryName) {
+          setError(err.message || `Failed to load ${entryName}`);
+        }
       } finally {
-        setLoading(false);
+        if (shownEntryRef.current === entryName) setLoading(false);
       }
     },
     [entryName],
@@ -1848,18 +1866,22 @@ function EntryDetailView({
 
   // refreshEntry is one background poll: it never shows the loading state or
   // the error banner, and a failure keeps the last good entry on screen.
-  const refreshInFlight = useRef(false);
+  // refreshInFlight names the entry a poll is outstanding for, so a poll
+  // still hanging for an entry the page has left does not hold up this one's.
+  const refreshInFlight = useRef(null);
   const refreshEntry = useCallback(async () => {
-    if (refreshInFlight.current) return;
-    refreshInFlight.current = true;
     const requested = entryName;
+    if (refreshInFlight.current === requested) return;
+    refreshInFlight.current = requested;
     try {
       const data = await fetchEntry(requested);
-      if (requested === entryName) syncRef.current(data);
+      if (shownEntryRef.current === requested) syncRef.current(data);
     } catch (err) {
-      setRefreshError(err.message || "refresh failed");
+      if (shownEntryRef.current === requested) {
+        setRefreshError(err.message || "refresh failed");
+      }
     } finally {
-      refreshInFlight.current = false;
+      if (refreshInFlight.current === requested) refreshInFlight.current = null;
     }
   }, [entryName]);
 

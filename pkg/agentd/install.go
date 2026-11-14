@@ -451,12 +451,24 @@ func (u unitConfig) commandLine() string {
 // waited out the daemon's re-attach window
 // (docs/test-runs/2026-11-11-host-agent-contract.md). systemctl --user
 // stop still stops it: a stop is never restarted.
+//
+// KillMode=mixed sends SIGTERM to grain-agentd alone, so a stop or restart
+// lets Serve mark its running CLIs with killStopping (interrupted) rather
+// than racing a cgroup-wide SIGTERM that can reap a CLI as a plain failure
+// first, and then sends SIGKILL to anything left in the cgroup once
+// grain-agentd exits (or crashes), so stopped or uninstalled units never
+// leak unsupervised CLIs. KillMode=process would not keep detached runs
+// usable across a PID-changing restart anyway: hostd spawns CLIs directly
+// (Wait4 needs ppid == os.Getpid() in canAdoptLiveSpool), holds their
+// deadline timers and remote OpListen loopback endpoints in-process, and
+// kills unadoptable survivors in ReapRecorded.
 var unitTemplate = template.Must(template.New("unit").Parse(`[Unit]
 Description={{.Program}}: agent CLIs for the grain daemon at {{.Server}}
 After=network-online.target
 
 [Service]
 ExecStart={{.Command}}
+KillMode=mixed
 Restart=always
 RestartSec=10
 

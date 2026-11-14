@@ -328,28 +328,34 @@ type Store struct {
 	// ensureMu makes Ensure's check-then-set one step, so two attaches
 	// of the same server never generate two values.
 	ensureMu sync.Mutex
-	// keyMu guards key, the private key as cfg's KeySource last gave
-	// it. It is loaded once and kept for the life of the Store rather
-	// than re-read on every load and save: a source may be a KMS unwrap,
-	// and even a file is one more open of the key per Resolve.
-	// ImportKey drops it, and so does a load that finds the file sealed
-	// to some other key (another process -- `grain state key import`
-	// with the daemon running -- may have installed one).
-	keyMu sync.Mutex
-	key   *Key
-	// keyErr is the last KMS failure loading the key, and keyRetryAt
-	// when the next attempt may be made: until then every use of the
-	// store answers keyErr rather than calling KMS again, and each
-	// failure doubles keyBackoff up to maxKeyBackoff. Only KMS failures
-	// (ErrKMS) are held like this; they are the ones that put
-	// themselves right.
-	keyErr     error
-	keyRetryAt time.Time
-	keyBackoff time.Duration
-	// lastUnwrap is when KMS last handed this store its key.
-	lastUnwrap time.Time
+	// keys is the key as cfg's KeySource last gave it, and the state of
+	// loading it. ShareKey hands the same keys to another Store.
+	keys *keyCache
 	// now is time.Now, replaceable in tests.
 	now func() time.Time
+}
+
+// keyCache is a Store's private key, loaded once and kept for the life
+// of the Store rather than re-read on every load and save: a source may
+// be a KMS unwrap, and even a file is one more open of the key per
+// Resolve. ImportKey drops it, and so does a load that finds the file
+// sealed to some other key (another process -- `grain state key import`
+// with the daemon running -- may have installed one). Stores made by
+// ShareKey hold one keyCache between them, so a drop by either is a
+// drop for both.
+type keyCache struct {
+	mu  sync.Mutex
+	key *Key
+	// err is the last KMS failure loading the key, and retryAt when
+	// the next attempt may be made: until then every use of the store
+	// answers err rather than calling KMS again, and each failure
+	// doubles backoff up to maxKeyBackoff. Only KMS failures (ErrKMS)
+	// are held like this; they are the ones that put themselves right.
+	err     error
+	retryAt time.Time
+	backoff time.Duration
+	// lastUnwrap is when KMS last handed this key over.
+	lastUnwrap time.Time
 }
 
 const (
@@ -366,50 +372,53 @@ func (s *Store) clock() time.Time {
 
 // currentKey is the cached key, loading it on first use.
 func (s *Store) currentKey() (Key, error) {
-	s.keyMu.Lock()
-	defer s.keyMu.Unlock()
-	if s.key != nil {
-		return *s.key, nil
+	k := s.keys
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.key != nil {
+		return *k.key, nil
 	}
-	if s.keyErr != nil && s.clock().Before(s.keyRetryAt) {
-		return Key{}, s.keyErr
+	if k.err != nil && s.clock().Before(k.retryAt) {
+		return Key{}, k.err
 	}
-	k, err := s.cfg.keySource().Load(context.Background())
+	key, err := s.cfg.keySource().Load(context.Background())
 	if err != nil {
 		if errors.Is(err, ErrKMS) {
-			s.keyBackoff = min(max(2*s.keyBackoff, minKeyBackoff), maxKeyBackoff)
-			s.keyErr, s.keyRetryAt = err, s.clock().Add(s.keyBackoff)
+			k.backoff = min(max(2*k.backoff, minKeyBackoff), maxKeyBackoff)
+			k.err, k.retryAt = err, s.clock().Add(k.backoff)
 		}
 		return Key{}, err
 	}
-	if s.keyErr != nil {
+	if k.err != nil {
 		log.Printf("grain: the secrets key unwrapped after earlier failures; the store is readable again")
 	}
-	s.keyErr, s.keyBackoff = nil, 0
+	k.err, k.backoff = nil, 0
 	if info, ierr := ReadKeyFileInfo(s.cfg.KeyFile); ierr == nil && info.Protection == ProtectionKMS {
-		s.lastUnwrap = s.clock()
+		k.lastUnwrap = s.clock()
 	}
-	s.key = &k
-	return k, nil
+	k.key = &key
+	return key, nil
 }
 
 // KeyRetryIn is how long until the store will next try to load a key
 // KMS failed to unwrap, or 0 when it is not waiting on one.
 func (s *Store) KeyRetryIn() time.Duration {
-	s.keyMu.Lock()
-	defer s.keyMu.Unlock()
-	if s.key != nil || s.keyErr == nil {
+	k := s.keys
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.key != nil || k.err == nil {
 		return 0
 	}
-	return max(s.keyRetryAt.Sub(s.clock()), 0)
+	return max(k.retryAt.Sub(s.clock()), 0)
 }
 
 // WaitingOnKMS reports whether the store's key is not loaded because
 // KMS last failed to unwrap it.
 func (s *Store) WaitingOnKMS() bool {
-	s.keyMu.Lock()
-	defer s.keyMu.Unlock()
-	return s.key == nil && s.keyErr != nil
+	k := s.keys
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.key == nil && k.err != nil
 }
 
 // KeyProtection is how this store's key is protected at rest, for
@@ -436,20 +445,22 @@ func (s *Store) KeyProtection() KeyProtection {
 	if info, err := ReadKeyFileInfo(s.cfg.KeyFile); err == nil {
 		out.Mode, out.KMSKey = info.Protection, info.KMSKey
 	}
-	s.keyMu.Lock()
-	defer s.keyMu.Unlock()
-	out.LastUnwrap = s.lastUnwrap
-	if s.key == nil && s.keyErr != nil {
-		out.Error = s.keyErr.Error()
+	k := s.keys
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	out.LastUnwrap = k.lastUnwrap
+	if k.key == nil && k.err != nil {
+		out.Error = k.err.Error()
 	}
 	return out
 }
 
 // forgetKey drops the cached key, so the next use loads it again.
 func (s *Store) forgetKey() {
-	s.keyMu.Lock()
-	s.key = nil
-	s.keyMu.Unlock()
+	k := s.keys
+	k.mu.Lock()
+	k.key = nil
+	k.mu.Unlock()
 }
 
 // Backend reports which storage backend this Store uses (BackendFile or
@@ -482,7 +493,7 @@ func (s *Store) SetAuditLogger(l AuditLogger) {
 // storage and a key on disk, and the operator can go and put that key
 // somewhere safe whenever they like.
 func Open(cfg Config) *Store {
-	s := &Store{backend: BackendFile, cfg: cfg}
+	s := &Store{backend: BackendFile, cfg: cfg, keys: &keyCache{}}
 	if cfg.File == "" || cfg.KeyFile == "" {
 		s.openErr = errors.New("secrets: both a file and a key file are required")
 		return s
@@ -507,7 +518,7 @@ func Open(cfg Config) *Store {
 			s.openErr = writeErr
 			return s
 		}
-		s.key = &key
+		s.keys.key = &key
 		s.created = true
 	case errors.Is(err, ErrKMS):
 		// KMS is down, or has been told not to answer this host. The

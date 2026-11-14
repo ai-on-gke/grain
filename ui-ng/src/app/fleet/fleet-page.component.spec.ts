@@ -727,4 +727,31 @@ describe("FleetPageComponent", () => {
       root.querySelector('[data-testid="logs-viewer"]')?.textContent,
     ).toContain("certificate renewed");
   });
+
+  it("defers controls and logs fetches until their tabs are activated", async () => {
+    const { fixture, root, api } = await setup();
+
+    const calledRoutes = () => new Set(api.calls.map((c) => c.route));
+    expect(calledRoutes().has("GET /api/sandboxes")).toBe(true);
+    expect(calledRoutes().has("GET /api/hostds")).toBe(true);
+    expect(calledRoutes().has("GET /api/pipeline-pause")).toBe(false);
+    expect(calledRoutes().has("GET /api/pause")).toBe(false);
+    expect(calledRoutes().has("GET /api/package-cache")).toBe(false);
+    expect(calledRoutes().has("GET /api/actions-cache")).toBe(false);
+    expect(calledRoutes().has("GET /api/logs")).toBe(false);
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-controls"]')!
+      .click();
+    await settle(fixture);
+    expect(calledRoutes().has("GET /api/pipeline-pause")).toBe(true);
+    expect(calledRoutes().has("GET /api/logs")).toBe(false);
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-logs"]')!
+      .click();
+    await settle(fixture);
+    expect(calledRoutes().has("GET /api/logs")).toBe(true);
+    expect(calledRoutes().has("GET /api/logs/{source}")).toBe(true);
+  });
 });
