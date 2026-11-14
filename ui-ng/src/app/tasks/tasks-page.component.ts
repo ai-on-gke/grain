@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { LocationStrategy, NgTemplateOutlet } from "@angular/common";
+import { DOCUMENT, LocationStrategy, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -29,8 +29,19 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
-import { Router, RouterLink } from "@angular/router";
+import { toSignal } from "@angular/core/rxjs-interop";
+import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Board, Task } from "../api/models";
+import {
+  type BoardPlan,
+  type BoardView,
+  LEGACY_FILTER_ATTRS,
+  boardKindLabel,
+  boardQueryForView,
+  planForBoard,
+  sameView,
+  viewForQuery,
+} from "./board-query";
 import { AccessService } from "../services/access.service";
 import { DirectorContextService } from "../director/director-context.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
@@ -208,24 +219,67 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                   >
                     @for (b of store.boards(); track b.id) {
                       <div class="boards-menu-row">
-                        <button
-                          type="button"
-                          class="board-apply-btn"
-                          [attr.data-testid]="'board-apply-' + b.id"
-                          [attr.aria-label]="
-                            boardLabel(b) === b.name ? null : boardLabel(b)
-                          "
-                          (click)="applyBoard(b)"
-                        >
-                          {{ b.name }}
-                          @if (b.folder) {
-                            <span
-                              class="board-folder muted"
-                              aria-hidden="true"
-                              >{{ b.folder }}</span
+                        @if (boardPlan(b); as plan) {
+                          @if (plan.open === "here") {
+                            <button
+                              type="button"
+                              class="board-apply-btn"
+                              [attr.data-testid]="'board-apply-' + b.id"
+                              [attr.aria-current]="
+                                activeBoard()?.id === b.id ? 'true' : null
+                              "
+                              [attr.aria-label]="
+                                boardLabel(b) === b.name ? null : boardLabel(b)
+                              "
+                              (click)="applyBoard(b)"
                             >
+                              {{ b.name }}
+                              @if (b.folder) {
+                                <span
+                                  class="board-folder muted"
+                                  aria-hidden="true"
+                                  >{{ b.folder }}</span
+                                >
+                              }
+                            </button>
+                          } @else {
+                            <!-- A board /next/tasks cannot show exactly
+                                 opens on the classic page, and says so,
+                                 rather than as a wider list here. -->
+                            <a
+                              class="board-apply-btn board-classic"
+                              [href]="'/boards/' + encodeId(b.id)"
+                              [attr.data-testid]="'board-apply-' + b.id"
+                              [attr.aria-label]="
+                                boardLabel(b) +
+                                ', opens on the classic page: ' +
+                                plan.why
+                              "
+                              [title]="
+                                boardKindLabel(b.kind) +
+                                ' board. Opens on the classic page: ' +
+                                plan.why
+                              "
+                            >
+                              <span class="board-classic-name"
+                                >{{ b.name }}
+                                @if (b.folder) {
+                                  <span
+                                    class="board-folder muted"
+                                    aria-hidden="true"
+                                    >{{ b.folder }}</span
+                                  >
+                                }
+                              </span>
+                              <span
+                                class="board-classic-tag"
+                                aria-hidden="true"
+                                [attr.data-testid]="'board-classic-' + b.id"
+                                >Classic ↗</span
+                              >
+                            </a>
                           }
-                        </button>
+                        }
                         @if (canWriteBoards()) {
                           <button
                             type="button"
@@ -1367,6 +1421,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   private readonly snackbar = inject(SnackbarService);
   private readonly filter = inject(ViewFilter);
   private readonly router = inject(Router);
+  private readonly doc = inject(DOCUMENT);
   private readonly location = inject(LocationStrategy);
   private readonly keyboard = inject(KeyboardService);
   private readonly splitEl = viewChild<ElementRef<HTMLElement>>("split");
@@ -1383,6 +1438,13 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   readonly q = input<string>();
   readonly view = input<string>();
   readonly newBoard = input<string>();
+  // ?f= and the route's queryParamMap (?sort= and classic's legacy keys)
+  // are in the saved-board grammar (board-query.ts): a link copied off a
+  // classic list or a board's own query.
+  readonly f = input<string | string[]>();
+  private readonly queryParamMap = toSignal(
+    inject(ActivatedRoute).queryParamMap,
+  );
 
   protected readonly groupOptions = GROUP_OPTIONS;
   protected readonly batchPriorityOptions = BATCH_PRIORITY_OPTIONS;
@@ -1633,11 +1695,19 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly canWriteBoards = computed(() =>
     this.access.can("POST /api/boards"),
   );
-  protected readonly activeBoardName = computed(() => {
-    const cur = this.currentBoardQuery();
-    if (!cur) return "";
-    return this.store.boards().find((b) => (b.query || "") === cur)?.name ?? "";
+  protected readonly activeBoard = computed(() => {
+    const cur = this.currentView();
+    const plans = this.boardPlans();
+    return (
+      this.store.boards().find((b) => {
+        const plan = plans.get(b.id);
+        return plan?.open === "here" && sameView(plan.view, cur);
+      }) ?? null
+    );
   });
+  protected readonly activeBoardName = computed(
+    () => this.activeBoard()?.name ?? "",
+  );
   protected readonly dispatchPause = computed(() =>
     summarizeDispatchStatus(
       this.access.rawConfig(),
@@ -1720,6 +1790,56 @@ export class TasksPageComponent implements OnInit, OnDestroy {
           repo: t?.repo,
           state: t?.state,
         });
+      });
+    });
+    // A link in the board grammar (?f=state:any:queued, the address a
+    // classic list writes) opens the tab and repository it names, or
+    // says why this page cannot show it, rather than sitting on Backlog
+    // as though nothing had been asked.
+    effect(() => {
+      const fVal = this.f();
+      const qm = this.queryParamMap();
+      const classicKeys = ["f", "sort", ...LEGACY_FILTER_ATTRS] as const;
+      const fromRoute = !!qm && classicKeys.some((k) => qm.has(k));
+      if (fVal === undefined && !fromRoute) return;
+      untracked(() => {
+        const p = new URLSearchParams();
+        if (fromRoute && qm) {
+          for (const k of qm.keys) {
+            for (const x of qm.getAll(k)) p.append(k, x);
+          }
+        } else {
+          if (this.q()) p.set("q", this.q()!);
+          if (this.tab()) p.set("tab", this.tab()!);
+          if (this.group()) p.set("group", this.group()!);
+          if (this.repo()) p.set("repo", this.repo()!);
+          if (fVal !== undefined) {
+            for (const x of Array.isArray(fVal) ? fVal : [fVal])
+              p.append("f", x);
+          }
+        }
+        const rawQuery = p.toString();
+        const read = viewForQuery(rawQuery);
+        if ("view" in read) {
+          this.openView(read.view, true);
+        } else {
+          const cleared: Record<string, null> = {};
+          for (const k of classicKeys) cleared[k] = null;
+          void this.router.navigate([], {
+            queryParams: cleared,
+            queryParamsHandling: "merge",
+            replaceUrl: true,
+          });
+          this.snackbar.show(
+            `This link only opens on the classic task list: ${read.why}.`,
+            {
+              label: "Open classic",
+              run: () => {
+                this.doc.defaultView?.location.assign(`/?${rawQuery}`);
+              },
+            },
+          );
+        }
       });
     });
     // ?newBoard=1 from the shell's Create menu opens the Save Board bar.
@@ -2055,7 +2175,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       setTimeout(() =>
         (
           document.querySelector(
-            ".boards-menu button, [id^='menu-list-'] button",
+            ".boards-menu button, .boards-menu a[href], [id^='menu-list-'] button",
           ) as HTMLElement | null
         )?.focus(),
       );
@@ -2112,15 +2232,31 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   // ---------- saved boards ----------
 
+  // currentView is the part of this page's address a saved board
+  // carries; currentBoardQuery writes it in the board grammar the
+  // classic boards read too (board-query.ts).
+  private currentView(): BoardView {
+    return {
+      tab: this.current(),
+      q: (this.q() || this.filter.query()).trim(),
+      repo: (this.repo() || "").trim(),
+      group: this.groupBy(),
+    };
+  }
+
   private currentBoardQuery(): string {
-    const p = new URLSearchParams();
-    if (this.current() !== "backlog") p.set("tab", this.current());
-    if (this.groupBy() !== "none") p.set("group", this.groupBy());
-    const q = (this.q() || this.filter.query()).trim();
-    if (q) p.set("q", q);
-    const repo = (this.repo() || "").trim();
-    if (repo) p.set("repo", repo);
-    return p.toString();
+    return boardQueryForView(this.currentView());
+  }
+
+  private readonly boardPlans = computed(
+    () => new Map(this.store.boards().map((b) => [b.id, planForBoard(b)])),
+  );
+  protected boardPlan(b: Board): BoardPlan {
+    return this.boardPlans().get(b.id) ?? planForBoard(b);
+  }
+  protected readonly boardKindLabel = boardKindLabel;
+  protected encodeId(id: string): string {
+    return encodeURIComponent(id);
   }
 
   protected openBoardSave(): void {
@@ -2148,16 +2284,28 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   protected applyBoard(b: Board): void {
     this.closeMenu(false);
-    const p = new URLSearchParams(b.query || "");
-    const nextQ = p.get("q") || "";
-    this.filter.query.set(nextQ);
+    const plan = this.boardPlan(b);
+    if (plan.open === "classic") {
+      // The menu links these to /boards/<id>; this is only reached by a
+      // caller that skipped the link.
+      this.doc.defaultView?.location.assign(
+        `/boards/${encodeURIComponent(b.id)}`,
+      );
+      return;
+    }
+    this.openView(plan.view);
+  }
+
+  private openView(v: BoardView, replaceUrl = false): void {
+    this.filter.query.set(v.q);
     void this.router.navigate(["/tasks"], {
       queryParams: {
-        tab: p.get("tab") || null,
-        group: p.get("group") || null,
-        q: nextQ || null,
-        repo: p.get("repo") || null,
+        tab: v.tab === "backlog" ? null : v.tab,
+        group: v.group === "none" ? null : v.group,
+        q: v.q || null,
+        repo: v.repo || null,
       },
+      replaceUrl,
     });
   }
 
