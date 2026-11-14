@@ -270,6 +270,9 @@ func runServe(ctx context.Context, args []string, stdout, stderr io.Writer) erro
 			return err
 		}
 		defer st.Close()
+		if label := cfg.HubEntryLabel(); label != "" {
+			st.SetReservedEntryNames(label)
+		}
 
 		if err := seedStoreFromConfig(ctx, st, cfg); err != nil {
 			return err
