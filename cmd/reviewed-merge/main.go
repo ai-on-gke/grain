@@ -18,7 +18,11 @@
 // scripts/release-images.sh attests onto the images it publishes.
 //
 //	reviewed-merge -repo owner/name -commit <sha> [-since <sha>] \
-//	  [-branches main,release/v*] [-mergers grain-login,...]
+//	  [-branches main,release/v*] [-mergers grain-login,...] [-accepted file]
+//
+// -accepted names a file of commits a person accepted although the forge
+// has no review record for them (reviewedmerge.ParseAccepted); a missing
+// file is a usage error.
 //
 // -since is the commit already checked -- what the branch's published
 // image was built from -- and every first-parent commit after it up to
@@ -67,6 +71,7 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string, fo
 	since := fs.String("since", "", "the commit already checked; every first-parent commit after it is checked too")
 	branches := fs.String("branches", "main,release/v*", "the release branches, comma-separated path patterns")
 	mergers := fs.String("mergers", "", "the forge logins grain merges as, comma-separated")
+	accepted := fs.String("accepted", "", "a file of commits accepted without a forge review record, one `<sha> <reason>` per line")
 	max := fs.Int("max", 1000, "the most first-parent commits to walk")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -79,6 +84,19 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string, fo
 		forge = reviewedmerge.REST{BaseURL: getenv("GITHUB_API_URL"), Token: getenv("GITHUB_TOKEN")}
 	}
 	policy := reviewedmerge.Policy{Repo: *repo, Branches: splitList(*branches), Mergers: splitList(*mergers)}
+	if *accepted != "" {
+		f, err := os.Open(*accepted)
+		if err != nil {
+			fmt.Fprintf(stderr, "reviewed-merge: -accepted: %v\n", err)
+			return 2
+		}
+		policy.Accepted, err = reviewedmerge.ParseAccepted(f)
+		f.Close()
+		if err != nil {
+			fmt.Fprintf(stderr, "reviewed-merge: -accepted %s: %v\n", *accepted, err)
+			return 2
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	rec, err := policy.CheckChain(ctx, forge, *commit, *since, *max)

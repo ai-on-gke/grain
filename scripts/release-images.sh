@@ -1501,7 +1501,8 @@ sign_image() {
 # only grain's credential is and which merges only once grain's holds have
 # let a change go -- or with the forge's review record, an approval by an
 # owner, member or collaborator other than its author of the head that
-# was merged. So is every first-parent commit between $commit and the one
+# was merged -- or one scripts/reviewed-merge-accepted.txt names, a commit
+# a person accepted after reviewing it out of band. So is every first-parent commit between $commit and the one
 # this branch's published grain image was built from, since a reviewed merge on top of an
 # unreviewed one carries it into the release too. Where that image is not
 # an ancestor of $commit (a branch with nothing published yet, such as a
@@ -1545,13 +1546,18 @@ check_reviewed_merge() {
   out="${TMPDIR:-/tmp}/reviewed-merge-$short.json"
   # Built, not go run: go run exits 1 whatever the program exits with,
   # which would hide the forge error's 3 behind a refusal's message.
+  # Commits a person accepted though the forge has no review record for
+  # them (reviewed out of band), read from the commit being released.
+  local accepted=""
+  [ ! -f scripts/reviewed-merge-accepted.txt ] || accepted="scripts/reviewed-merge-accepted.txt"
   local rc=0 bin="${TMPDIR:-/tmp}/reviewed-merge-$short"
   if ! go build -o "$bin" ./cmd/reviewed-merge; then
     echo "release-images.sh: refusing to publish $short: could not build cmd/reviewed-merge to check its reviewed merge (above)" >&2
     return 1
   fi
   "$bin" -repo "$GRAIN_CI_REPO" -commit "$commit" ${since:+-since "$since"} \
-    -branches "${RELEASE_REVIEWED_BRANCHES:-main,release/v*}" -mergers "${GRAIN_MERGE_LOGINS:-}" >"$out" || rc=$?
+    -branches "${RELEASE_REVIEWED_BRANCHES:-main,release/v*}" -mergers "${GRAIN_MERGE_LOGINS:-}" \
+    ${accepted:+-accepted "$accepted"} >"$out" || rc=$?
   case "$rc" in
     0) ;;
     3)

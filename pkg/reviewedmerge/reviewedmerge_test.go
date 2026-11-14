@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -393,5 +394,53 @@ func TestRESTAsksAnEnterpriseRepositorysOwnAPI(t *testing.T) {
 	}
 	if len(urls) != 1 || !strings.HasPrefix(urls[0], "https://api.github.com/repos/example/grain/") {
 		t.Fatalf("owner/name asked %q", urls)
+	}
+}
+
+// TestAnAcceptedCommitCarriesTheChain: the chain past a self-merged
+// commit passes once that commit is accepted, and only that one.
+func TestAnAcceptedCommitCarriesTheChain(t *testing.T) {
+	const evil = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	f := fakeForge{
+		pulls: map[string][]Pull{
+			"top": {merged(5, "top", "main", "grain-bot[bot]", "grain-bot[bot]", "h5")},
+			evil:  {merged(4, evil, "main", "alice", "alice", "h4")},
+		},
+		parents: map[string]string{"top": evil, evil: "prev"},
+	}
+	p := policy
+	if _, err := p.CheckChain(context.Background(), f, "top", "prev", 100); err == nil {
+		t.Fatal("chain passed without the acceptance")
+	}
+	acc, err := ParseAccepted(strings.NewReader("# why\n" + strings.ToUpper(evil) + "\tPR #4 reviewed out of band\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Accepted = acc
+	rec, err := p.CheckChain(context.Background(), f, "top", "prev", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := rec.Merges[1]; m.Via != "accepted" || m.By != "PR #4 reviewed out of band" {
+		t.Fatalf("merge = %+v", m)
+	}
+	for _, bad := range []string{"abc reason\n", evil + "\n", evil + "   \n"} {
+		if _, err := ParseAccepted(strings.NewReader(bad)); err == nil {
+			t.Errorf("ParseAccepted(%q) = nil error", bad)
+		}
+	}
+}
+
+// TestTheAcceptedListParses keeps scripts/reviewed-merge-accepted.txt,
+// which the release passes to cmd/reviewed-merge, readable: a malformed
+// line would stop every release at the gate.
+func TestTheAcceptedListParses(t *testing.T) {
+	f, err := os.Open("../../scripts/reviewed-merge-accepted.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := ParseAccepted(f); err != nil {
+		t.Fatal(err)
 	}
 }

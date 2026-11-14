@@ -56,10 +56,13 @@
 package reviewedmerge
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path"
+	"regexp"
 	"strings"
 )
 
@@ -81,6 +84,13 @@ type Policy struct {
 	// every hold grain puts in front of those. Empty, only the forge's
 	// review record counts.
 	Mergers []string
+	// Accepted are commits a person has accepted onto a release branch
+	// although the forge has no review record for them -- reviewed out of
+	// band -- each full sha mapped to the reason given (ParseAccepted).
+	// The list is read from the commit being released, so an entry only
+	// stands once the commit that added it has itself passed this check:
+	// a self-merged commit cannot vouch for itself or for another.
+	Accepted map[string]string
 }
 
 // Pull is the part of a pull request this reads.
@@ -155,9 +165,10 @@ type Merge struct {
 	Pull   int    `json:"pull"`
 	Base   string `json:"base"`
 	// Via is "grain" for a merge grain made, "review" for one the forge's
-	// review record covers.
+	// review record covers, "accepted" for one Policy.Accepted names.
 	Via string `json:"via"`
-	// By is the login that merged (Via "grain") or approved (Via "review").
+	// By is the login that merged (Via "grain") or approved (Via
+	// "review"), or the reason the commit was accepted (Via "accepted").
 	By string `json:"by"`
 }
 
@@ -193,6 +204,9 @@ func (p Policy) isMerger(login string) bool {
 // Check answers for one commit: how it reached a release branch, or why it
 // did not reach one through a reviewed merge.
 func (p Policy) Check(ctx context.Context, f Forge, sha string) (Merge, error) {
+	if reason, ok := p.Accepted[strings.ToLower(sha)]; ok {
+		return Merge{Commit: sha, Via: "accepted", By: reason}, nil
+	}
 	pulls, err := f.PullsForCommit(ctx, p.Repo, sha)
 	if err != nil {
 		return Merge{}, &ForgeError{What: "the pull requests for " + short(sha), Err: err}
@@ -308,6 +322,40 @@ func (p Policy) CheckChain(ctx context.Context, f Forge, sha, since string, max 
 		}
 		at = parent
 	}
+}
+
+var fullSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// ParseAccepted reads a list of accepted commits: one per line, a full
+// 40-hex sha, whitespace, and the reason it was accepted (who reviewed it
+// and where). Blank lines and lines starting with # are ignored. A line
+// without a full sha or a reason is an error, so a typo cannot quietly
+// accept nothing -- or something else.
+func ParseAccepted(r io.Reader) (map[string]string, error) {
+	out := map[string]string{}
+	sc := bufio.NewScanner(r)
+	for n := 1; sc.Scan(); n++ {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		sha, reason := line, ""
+		if i := strings.IndexAny(line, " \t"); i >= 0 {
+			sha, reason = line[:i], line[i+1:]
+		}
+		sha, reason = strings.ToLower(sha), strings.TrimSpace(reason)
+		if !fullSHARe.MatchString(sha) {
+			return nil, fmt.Errorf("line %d: %q is not a full 40-character commit sha", n, sha)
+		}
+		if reason == "" {
+			return nil, fmt.Errorf("line %d: %s gives no reason it was accepted", n, short(sha))
+		}
+		out[sha] = reason
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func short(sha string) string {
