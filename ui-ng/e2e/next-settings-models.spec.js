@@ -143,7 +143,13 @@ test.describe("Settings → Models default and fallback models", () => {
       "claude-sonnet-5",
     );
     // Move it to the top of the fallbacks, drop the retired one.
+    // Wait for each move to render before the next click: the row test ids
+    // are re-bound on change detection, so a second click fired before the
+    // first move lands can hit the button of the row that used to sit there.
     await card.getByTestId("fallback-up-2").click();
+    await expect(card.getByTestId("fallback-row-1")).toContainText(
+      "claude-sonnet-5",
+    );
     await card.getByTestId("fallback-up-1").click();
     await expect(card.getByTestId("fallback-row-0")).toContainText(
       "claude-sonnet-5",
