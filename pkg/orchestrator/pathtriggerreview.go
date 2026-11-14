@@ -465,7 +465,8 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, client gith
 		body := strings.TrimSpace(filled.Body) + "\n\n---\n\n" + fmt.Sprintf(
 			"You are reviewing task %s (%q), whose work is on `%s` and proposed in %s. "+
 				"Your checkout is that branch itself: diff it against %s's base to see the change, and push "+
-				"any fix to it.\n", task.ID, task.Title, task.BranchName(), ref, ref) + facts
+				"any fix to it.\n\n", task.ID, task.Title, task.BranchName(), ref, ref) +
+			changeUnderReviewSection(task, true) + facts
 		review, err = newReview(ctx, store, task, filled, securityReviewTitle(task), body, true, now)
 	case settings.fixes:
 		review, err = newReview(ctx, store, task, filled, reviewTaskTitle(filled, task),
@@ -543,15 +544,40 @@ func incrementalNote(since, head string, delta []string) string {
 	return b.String()
 }
 
+const reviewFactsHeader = "\n\n---\n\ngrain: filed by the path trigger(s) "
+
+// generatedIncrementalNoteAt returns where grain's incrementalNote appendix at
+// the end of body (ahead of any already-stripped parallel-reviews section)
+// starts, or -1. Checking both the last occurrence and incrementalNote's
+// framing lines keeps a header quoted earlier in a brief, template or PR
+// description from being mistaken for grain's appendix.
+func generatedIncrementalNoteAt(body string) int {
+	idx := strings.LastIndex(body, incrementalNoteHeader)
+	if idx < 0 {
+		return -1
+	}
+	rest := body[idx+len(incrementalNoteHeader):]
+	if !strings.HasPrefix(rest, " An earlier review of this kind read the change at ") ||
+		!strings.HasSuffix(rest, "Do not re-review the rest of the change.\n") {
+		return -1
+	}
+	return idx
+}
+
 // stripIncrementalReview converts an undispatched incremental review into a
 // full review when the earlier review it depended on closed without finishing.
 func stripIncrementalReview(t *model.Task) {
-	if idx := strings.Index(t.Body, incrementalNoteHeader); idx >= 0 {
-		if p := strings.Index(t.Body[idx:], parallelReviewsHeader); p >= 0 {
-			t.Body = t.Body[:idx] + t.Body[idx+p:]
-		} else {
-			t.Body = t.Body[:idx]
-		}
+	tail := len(t.Body)
+	if p := generatedParallelSectionAt(t.Body); p >= 0 {
+		tail = p
+	}
+	searchFrom := 0
+	if factsIdx := strings.LastIndex(t.Body[:tail], reviewFactsHeader); factsIdx >= 0 {
+		searchFrom = factsIdx
+	}
+	if rel := generatedIncrementalNoteAt(t.Body[searchFrom:tail]); rel >= 0 {
+		idx := searchFrom + rel
+		t.Body = t.Body[:idx] + t.Body[tail:]
 	}
 	t.Tags = slices.DeleteFunc(t.Tags, func(tag string) bool {
 		return strings.HasPrefix(tag, "path-trigger-since:")
@@ -578,6 +604,7 @@ func reviewFindingsBody(tmpl model.Template, task model.Task, ref model.PullRequ
 		task.ID, task.Title, branch, ref, ref, task.ID)
 	b.WriteString("\n\n" + reviewFindingsTestingAndCINote)
 	b.WriteString("\n\n" + reviewHumanReviewNote)
+	b.WriteString("\n\n" + changeUnderReviewSection(task, true))
 	return b.String()
 }
 

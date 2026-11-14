@@ -1200,6 +1200,7 @@ func securityReviewBody(tmpl model.Template, task model.Task, ref model.PullRequ
 		"any fix to it.\n\n",
 		task.ID, task.Title, task.BranchName(), ref, ref)
 	b.WriteString(matchList(matches, known))
+	b.WriteString("\n" + changeUnderReviewSection(task, true) + "\n")
 	return b.String()
 }
 
