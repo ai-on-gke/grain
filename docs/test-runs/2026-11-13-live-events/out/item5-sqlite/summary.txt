@@ -1,0 +1,49 @@
+task 2 filed, approved, run now
+  after run 1: state=awaiting_reply prompts saved=2
+A: closed; comment, then a separate reopen
+  closed, 1 runs
+  running, 2 runs
+  after run 2: state=awaiting_reply prompts saved=6
+B: closed; comment with reopen: true
+  running, 3 runs
+  after run 3: state=awaiting_reply prompts saved=10
+C: closed; bare reopen, no new comment
+  awaiting_reply, 3 runs
+  awaiting_reply, 3 runs
+marker occurrences per saved prompt (file: A B):
+  2-1.txt: 0 0
+  2-2.txt: 0 0
+  2-3.txt: 1 0
+  2-4.txt: 1 0
+  2-5.txt: 0 0
+  2-6.txt: 1 0
+  2-7.txt: 1 1
+  2-8.txt: 1 1
+  2-9.txt: 0 0
+  2-10.txt: 1 1
+task events:
+  5 task.state  -> proposed
+  6 task.state proposed -> queued
+  7 task.comment  -> queued
+  8 task.state queued -> running
+  9 task.state running -> queued
+  10 task.comment  -> queued
+  11 task.state queued -> awaiting_reply
+  12 task.state awaiting_reply -> closed
+  13 task.comment  -> closed
+  14 task.state closed -> awaiting_reply
+  15 task.state awaiting_reply -> queued
+  16 task.state queued -> running
+  17 task.state running -> queued
+  18 task.comment  -> queued
+  19 task.state queued -> awaiting_reply
+  20 task.state awaiting_reply -> closed
+  21 task.comment  -> closed
+  22 task.state closed -> awaiting_reply
+  23 task.state awaiting_reply -> queued
+  24 task.state queued -> running
+  25 task.state running -> queued
+  26 task.comment  -> queued
+  27 task.state queued -> awaiting_reply
+  28 task.state awaiting_reply -> closed
+  29 task.state closed -> awaiting_reply

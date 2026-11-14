@@ -25,7 +25,8 @@ import (
 
 // A CI job is judged as a CI job of its repository: a capability the
 // catalogue keeps off that repository is refused before it is minted,
-// and grain-ci, which every job carries, is never judged.
+// and grain#ci, which every job carries, is never judged -- not even by a
+// catalogue entry left under its retired name.
 func TestCheckCIJobCatalogue(t *testing.T) {
 	cat := &model.CapabilityCatalogue{
 		Servers: []model.CatalogueServer{
@@ -38,11 +39,11 @@ func TestCheckCIJobCatalogue(t *testing.T) {
 			grainci.LegacyName: {Enabled: new(bool)},
 		},
 	}
-	ok := ci.SandboxRequest{Repo: "acme/app", Capabilities: []string{grainci.Grant, grainci.LegacyName, "registry-push"}}
+	ok := ci.SandboxRequest{Repo: "acme/app", Capabilities: []string{grainci.Grant, model.RegistryPushRef + "={}"}}
 	if err := daemon.CheckCIJobCatalogue(cat, ok); err != nil {
 		t.Fatalf("admitted job refused: %v", err)
 	}
-	other := ci.SandboxRequest{Repo: "acme/other", Capabilities: []string{"registry-push"}}
+	other := ci.SandboxRequest{Repo: "acme/other", Capabilities: []string{model.RegistryPushRef + "={}"}}
 	if err := daemon.CheckCIJobCatalogue(cat, other); err == nil {
 		t.Fatal("a job on a repository the catalogue keeps the capability off was admitted")
 	}

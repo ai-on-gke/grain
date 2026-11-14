@@ -91,6 +91,16 @@
   outline-offset: -1px;
 }
 
+.sheet-body input[aria-invalid="true"] {
+  border-color: var(--md-sys-color-error);
+}
+
+.nt-field-error {
+  color: var(--md-sys-color-error);
+  font-size: 12px;
+  line-height: 16px;
+}
+
 .check-row {
   display: flex;
   align-items: center;

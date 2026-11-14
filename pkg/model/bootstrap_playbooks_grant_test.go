@@ -67,8 +67,9 @@ func TestIsBootstrapPlaybooksGrant(t *testing.T) {
 	skill := SkillCapabilityServerID + "#skill"
 	cmSkill := ConfigMapCapabilityServerID + "#skill"
 	for grant, want := range map[string]bool{
-		"bootstrap-playbooks":   true,
-		"BOOTSTRAP-PLAYBOOKS":   true,
+		// The retired bare name is no longer an alias for the map.
+		"bootstrap-playbooks":   false,
+		"BOOTSTRAP-PLAYBOOKS":   false,
 		BootstrapPlaybooksGrant: true,
 		strings.ToUpper("https://") + strings.TrimPrefix(BootstrapPlaybooksGrant, "https://"): true,
 		ConfigMapCapabilityServerID + `={"config_maps":["bootstrap"]}`:                        true,
@@ -264,7 +265,7 @@ func TestCapabilityPolicyDenyConfigMapCoversBootstrapSkillAndUnensuredServers(t 
 	}
 }
 
-func TestDangerousAndTemplateGrantsExpandLegacyCapabilities(t *testing.T) {
+func TestDangerousAndTemplateGrantsDoNotExpandRetiredCapabilities(t *testing.T) {
 	const testSrv = "https://acme.example/capabilities/host-script"
 	protocol.NotePersonGrantedArgs(testSrv, map[string]*protocol.MethodInfo{
 		"host-script": {
@@ -287,8 +288,13 @@ func TestDangerousAndTemplateGrantsExpandLegacyCapabilities(t *testing.T) {
 	})
 	defer restore()
 
-	if !IsDangerousGrant("local-scripts:guarded") || !IsPersonOnlyGrant("local-scripts:guarded") {
-		t.Error("runtime-expanded person-granted capability was not classified as dangerous/person-only")
+	// A runtime expansion upgrades what an import brings in
+	// (RetiredGrantsBecame); the retired name is not an alias for it.
+	if got := RetiredGrantsBecame("local-scripts:guarded"); !slices.Equal(got, []string{testSrv + `#host-script={"script":"guarded-wipe"}`}) {
+		t.Errorf("RetiredGrantsBecame(local-scripts:guarded) = %v, want its host-script grant", got)
+	}
+	if got := CanonicalLegacyGrants("local-scripts:guarded"); !slices.Equal(got, []string{"local-scripts:guarded"}) {
+		t.Errorf("CanonicalLegacyGrants(local-scripts:guarded) = %v, want it unchanged", got)
 	}
 	if IsDangerousGrant("local-scripts:safe") {
 		t.Error("non-person-granted runtime expansion was classified as dangerous")
@@ -296,8 +302,8 @@ func TestDangerousAndTemplateGrantsExpandLegacyCapabilities(t *testing.T) {
 
 	acting := Task{Grants: []Grant{{Capability: BootstrapPlaybooksGrant}}}
 	bootTmpl := Template{ID: "t-boot", Grants: []Grant{{Capability: "bootstrap-playbooks"}}}
-	if err := TemplateWithinTask(acting, bootTmpl); err != nil {
-		t.Errorf("TemplateWithinTask(acting with canonical bootstrap, template with legacy alias) = %v, want nil", err)
+	if err := TemplateWithinTask(acting, bootTmpl); err == nil {
+		t.Error("TemplateWithinTask(acting with canonical bootstrap, template with the retired bare name) = nil, want refusal: it is no longer an alias")
 	}
 	if err := TemplateWithinTask(Task{}, bootTmpl); err == nil {
 		t.Error("TemplateWithinTask(empty acting, template with bootstrap-playbooks) = nil, want refusal")

@@ -329,31 +329,33 @@ func TestCheckCapabilityGrants(t *testing.T) {
 	if !out[3].Unchecked {
 		t.Errorf("a grant of an unattached server: %+v", out[3])
 	}
-	if out[4].Recorded != model.GCPKeySandboxAgentGrant || out[4].Error != "" || !slices.Equal(out[4].AliasOf, []string{model.GCPKeySandboxAgentGrant}) {
-		t.Errorf("retired gcp-key alias: %+v", out[4])
-	}
-	if out[5].Recorded != model.GitHubReadIssuesGrant || out[5].Error != "" || !slices.Equal(out[5].AliasOf, []string{model.GitHubReadIssuesGrant}) {
-		t.Errorf("retired read-issues alias: %+v", out[5])
-	}
-	if out[6].Error != "" || !slices.Equal(out[6].AliasOf, model.SelfDebugGrants()) {
-		t.Errorf("retired self-debug multi-grant alias: %+v", out[6])
+	for i, name := range []string{"gcp-key", "read-issues", "self-debug"} {
+		if out[4+i].Error == "" || len(out[4+i].AliasOf) != 0 {
+			t.Errorf("retired bare %s should be refused, not read as an alias: %+v", name, out[4+i])
+		}
 	}
 }
 
 func TestReadIssuesInputAliasRecordsGitHubReadIssuesGrant(t *testing.T) {
 	_, client := grantTestServer(t)
 	ctx := context.Background()
-	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title:        "with legacy read-issues alias",
+	if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:        "with retired read-issues",
 		Capabilities: &[]string{"read-issues"},
+	}); err == nil {
+		t.Fatal("CreateTask accepted the retired bare read-issues")
+	}
+	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:        "with github#read-issues",
+		Capabilities: &[]string{model.GitHubReadIssuesGrant},
 	})
 	if err != nil {
-		t.Fatalf("CreateTask with read-issues alias: %v", err)
+		t.Fatalf("CreateTask with github#read-issues: %v", err)
 	}
 	if len(withoutDefaultCIRead(task.Capabilities)) != 1 || withoutDefaultCIRead(task.Capabilities)[0] != model.GitHubReadIssuesGrant {
 		t.Fatalf("CreateTask capabilities = %v, want [%s]", task.Capabilities, model.GitHubReadIssuesGrant)
 	}
-	if err := client.SetCapability(ctx, task.ID, "read-issues", false); err != nil {
+	if err := client.SetCapability(ctx, task.ID, model.GitHubReadIssuesGrant, false); err != nil {
 		t.Fatalf("detaching via read-issues alias: %v", err)
 	}
 	afterDetach, err := client.GetTask(ctx, task.ID)
@@ -363,7 +365,7 @@ func TestReadIssuesInputAliasRecordsGitHubReadIssuesGrant(t *testing.T) {
 	if len(withoutDefaultCIRead(afterDetach.Capabilities)) != 0 {
 		t.Fatalf("after detach via alias: %v, want empty", afterDetach.Capabilities)
 	}
-	if err := client.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
+	if err := client.SetCapability(ctx, task.ID, model.GitHubReadIssuesGrant, true); err != nil {
 		t.Fatalf("attaching via read-issues alias: %v", err)
 	}
 	afterAttach, err := client.GetTask(ctx, task.ID)

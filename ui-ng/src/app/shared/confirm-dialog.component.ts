@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
   afterNextRender,
   computed,
+  inject,
   input,
   output,
   signal,
@@ -70,7 +73,7 @@ export function bypassConfirm(
   selector: "g-confirm-dialog",
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  styleUrl: "./work-surface.css",
+  styleUrls: ["./work-surface.css", "./surface-controls.css"],
   template: `
     @let c = request();
     <div class="modal-backdrop">
@@ -82,7 +85,6 @@ export function bypassConfirm(
         aria-labelledby="confirm-title"
         aria-describedby="confirm-body"
         data-testid="confirm-dialog"
-        (keydown.escape)="cancel($event)"
         (keydown.tab)="onTab($event)"
         (keydown.shift.tab)="onTab($event)"
       >
@@ -172,7 +174,17 @@ export class ConfirmDialogComponent {
       ? (document.activeElement as HTMLElement | null)
       : null;
 
+  private readonly doc = inject(DOCUMENT);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly onDocKeydown = (ev: KeyboardEvent): void => {
+    if (ev.key === "Escape") this.cancel(ev);
+  };
+
   constructor() {
+    this.doc.addEventListener("keydown", this.onDocKeydown, true);
+    this.destroyRef.onDestroy(() =>
+      this.doc.removeEventListener("keydown", this.onDocKeydown, true),
+    );
     // Destructive actions focus Cancel so a hurried Enter does not commit.
     // Otherwise focus goes to the second tick when present, or Accept.
     afterNextRender(() =>

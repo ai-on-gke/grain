@@ -344,12 +344,12 @@ Under this design:
 ### 4.2 Writable Config Repo Checkout for the Director
 
 Today in `pkg/orchestrator/checkout.go`:
-- `prepareDirectorState` runs only when `id == model.DirectorSessionID && task.Target == nil`, checks `task.Reads` for `grain/config`, clones `http://127.0.0.1:9728/grain/config.git` into `/home/debian/grain-state`, and disables push via `git -C 'grain-state' remote set-url --push origin grain-read-only`.
+- `prepareDirectorStateWithReuse` runs only when `id == model.DirectorSessionID && task.Target == nil`, checks `task.Reads` for `grain/config`, clones `http://127.0.0.1:9728/grain/config.git` into `/home/debian/grain-state`, and disables push via `git -C 'grain-state' remote set-url --push origin grain-read-only`.
 - Meanwhile, `grain_config.console_sessions` already declares `{"Owner": "grain", "Name": "config"}` in `writes` for `director`, and `pkg/gitproxy/local.go` already serves `grain/config.git` over `git http-backend` with `receiveHardening` (`receive.denyCurrentBranch=refuse`, `receive.fsckObjects=true`).
 
 We update the checkout and gitproxy layers as follows:
 
-1. **`pkg/orchestrator/checkout.go` (`prepareDirectorState` and `directorStateSection`):**
+1. **`pkg/orchestrator/checkout.go` (`prepareDirectorStateWithReuse` and `directorStateSection`):**
    - If a session or task has `grain/config` in `task.Writes` (as `director` does by default), clone `grain/config` into `/home/debian/grain-state` **with push enabled** (do not set `pushurl` to `grain-read-only`), and configure the sandbox's git author identity on the clone.
    - If `grain/config` is only in `task.Reads`, keep `remote set-url --push origin grain-read-only`.
    - Update `directorStateSection` in `pkg/orchestrator/checkout.go` so the director's system prompt explains the workflow:
@@ -836,7 +836,7 @@ Each slice below is a self-contained, reviewable pull request in dependency orde
 
 ### Slice 5: Writable Director Checkout of `grain/config` and In-Session Inline Approval (`propose_config_change`)
 - **Scope:**
-  - Update `pkg/orchestrator/checkout.go` (`prepareDirectorState`, `directorStateSection`) and `pkg/gitproxy/{authorize,refupdates}.go` so sessions with `grain/config` in `Writes` receive a writable clone at `/home/debian/grain-state` and may push branches under `refs/heads/grain/config/<session-id>/*` while `refs/heads/main` remains protected.
+  - Update `pkg/orchestrator/checkout.go` (`prepareDirectorStateWithReuse`, `directorStateSection`) and `pkg/gitproxy/{authorize,refupdates}.go` so sessions with `grain/config` in `Writes` receive a writable clone at `/home/debian/grain-state` and may push branches under `refs/heads/grain/config/<session-id>/*` while `refs/heads/main` remains protected.
   - Add the `propose_config_change` MCP tool in `pkg/mcpserver`, storing `PendingConfigChange` (pinned to `headSha`, with unified diff and validation report from Slice 3) on the task/session observation and parking the turn.
   - Add human-only endpoints `POST /api/tasks/{id}/config-change/approve` and `POST /api/tasks/{id}/config-change/reject` in `pkg/ui/task_config_change.go` (rejecting agent bearer tokens, verifying `headSha`, merging via `StateRepoPullRequestClient`, triggering immediate `stateManager.Sync`, and waking the session).
   - Build `ui/src/components/detail/PendingConfigChange.jsx` using `DiffView.jsx` (`react-diff-view`) and wire it into `TaskChat.jsx` and `DetailOverlay.jsx`.
