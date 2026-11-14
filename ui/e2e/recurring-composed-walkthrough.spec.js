@@ -353,12 +353,27 @@ test.describe("Recurring and Composed Work Automation UI Walkthrough", () => {
     await chooseOption(suiteSchedRepo.first(), "acme/widgets");
     await page.locator('input[name="base"]').first().fill("main");
 
-    // Recurrence: Weekly on Monday at 07:00
-    await page.getByLabel("Repeat").click();
-    await page
-      .getByRole("option", { name: /Weekly, on a day and time/i })
-      .click();
-    await page.getByLabel("Day of week").click();
+    // Recurrence: Weekly on Monday at 07:00. The repo picker's listbox
+    // can still be closing when Repeat is clicked on a loaded runner, so
+    // wait for it to close and retry the pick until the weekly fields
+    // show rather than assuming the first click landed.
+    await expect(suiteSchedRepo.first()).not.toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    const dayOfWeek = page.getByLabel("Day of week");
+    await expect(async () => {
+      if (!(await dayOfWeek.isVisible())) {
+        if ((await page.getByRole("listbox").count()) === 0) {
+          await page.getByLabel("Repeat").click();
+        }
+        await page
+          .getByRole("option", { name: /Weekly, on a day and time/i })
+          .click({ timeout: 5_000 });
+      }
+      await expect(dayOfWeek).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 30_000 });
+    await dayOfWeek.click();
     await page.getByRole("option", { name: /Monday/i }).click();
     await page.locator('input[name="timeOfDay"]').fill("07:00");
 

@@ -1,0 +1,4 @@
+name: Plan review
+title: "Plan review {{pr}}"
+body: |
+  Check plan docs on {{pr}}.

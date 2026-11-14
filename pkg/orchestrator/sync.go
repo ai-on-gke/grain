@@ -1699,6 +1699,9 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		}
 		forced = nil
 	}
+	if forced != nil {
+		forced.keepsCI = forcedMergeKeepsCI(task, forced.headSHA)
+	}
 	forcing := forced != nil && !settled && health != model.PrConflicted
 	// A red that is wholly a shared fault grain attributed to this head,
 	// and that has since gone green on the base, is re-run rather than
@@ -1803,8 +1806,16 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			return err
 		}
 		if !decision.ok {
+			waitState := mergeStateWaitingQueue
+			if forced != nil && forced.keepsCI && health != model.PrClean {
+				if health == model.PrFailing {
+					waitState = mergeStateRepairNeeded
+				} else {
+					waitState = mergeStateWaitingCI
+				}
+			}
 			if err := setMergeQueueState(ctx, store, e.obs, task.ID,
-				queueStatus{state: mergeStateWaitingQueue, note: decision.why}, now); err != nil {
+				queueStatus{state: waitState, note: decision.why}, now); err != nil {
 				return err
 			}
 			// Nothing behind it merges past it either: what is holding

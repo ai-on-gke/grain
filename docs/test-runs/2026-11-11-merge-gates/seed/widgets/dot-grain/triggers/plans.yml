@@ -1,0 +1,6 @@
+on: pull_request
+paths: ["docs/**"]
+template: planner
+gate: true
+human: on-findings
+auto-approve: true

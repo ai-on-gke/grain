@@ -2044,6 +2044,30 @@ func (s *Store) MergeQueueStates(ctx context.Context) (map[string]MergeQueueActi
 	return out, err
 }
 
+// CIStatuses reads every open task's grain CI status in one query, for
+// list views that compute each row's merge gates (ui.Client.ListTasks)
+// without reading each task's whole observation. Only the fields a gate
+// reads are filled in.
+func (s *Store) CIStatuses(ctx context.Context) (map[string]CIStatus, error) {
+	out := map[string]CIStatus{}
+	err := each(ctx, s.db,
+		"SELECT `task_id`,`ci_run_id`,`ci_commit`,`ci_conclusion`,`ci_detail`,`ci_finished_at` "+
+			"FROM `task_observation` "+
+			"WHERE `ci_run_id` IS NOT NULL AND `ci_run_id` != '' AND `closed_at` IS NULL", nil,
+		func(rows *sql.Rows) error {
+			var id, runID string
+			var commit, conclusion, detail sql.NullString
+			var finished sql.NullTime
+			if err := rows.Scan(&id, &runID, &commit, &conclusion, &detail, &finished); err != nil {
+				return err
+			}
+			out[id] = CIStatus{RunID: runID, Commit: commit.String, Conclusion: conclusion.String,
+				Detail: detail.String, FinishedAt: timePtr(finished)}
+			return nil
+		})
+	return out, err
+}
+
 // MergeQueueRepairing reads every task whose automatic repair is in flight.
 func (s *Store) MergeQueueRepairing(ctx context.Context) (map[string]bool, error) {
 	out := map[string]bool{}
@@ -5504,6 +5528,32 @@ func (s *Store) GitScope(ctx context.Context, sandbox string) (target *RepoRef, 
 		}
 	}
 
+	// A review filed to post findings only (LinkReviewCommentsOnly) may
+	// fetch its target repository to read the change, never push to it:
+	// moving target into reads lets the git proxy serve fetches and refuse
+	// pushes at the receive-pack advertisement with ReadOnlyPushReason.
+	if target != nil {
+		var commentsOnly int
+		if err := s.db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM `task_link` WHERE `task_id` = ? AND `kind` = ?",
+			taskID, string(LinkReviewCommentsOnly)).Scan(&commentsOnly); err != nil {
+			return nil, nil, nil, fmt.Errorf("reading whether task %s is a comments-only review: %w", taskID, err)
+		}
+		if commentsOnly > 0 {
+			hasRead := false
+			for _, r := range reads {
+				if r.Same(*target) {
+					hasRead = true
+					break
+				}
+			}
+			if !hasRead {
+				reads = append(reads, *target)
+			}
+			target = nil
+		}
+	}
+
 	return target, reads, writes, nil
 }
 
@@ -5523,6 +5573,15 @@ func (s *Store) GitPushBranch(ctx context.Context, sandbox string) (branch strin
 	err = s.db.QueryRowContext(ctx, "SELECT `branch` FROM `task` WHERE `id` = ?", taskID).Scan(&stored)
 	if err != nil {
 		return "", false, fmt.Errorf("reading branch of task %s: %w", taskID, err)
+	}
+	var commentsOnly int
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM `task_link` WHERE `task_id` = ? AND `kind` = ?",
+		taskID, string(LinkReviewCommentsOnly)).Scan(&commentsOnly); err != nil {
+		return "", false, fmt.Errorf("reading whether task %s is a comments-only review: %w", taskID, err)
+	}
+	if commentsOnly > 0 {
+		return "", false, nil
 	}
 	// A review working on the reviewed change's own branch
 	// (LinkPushesReviewedBranch) may push it only while it is open: one
@@ -5647,7 +5706,7 @@ func (s *Store) TaskCIRef(ctx context.Context, id string) (repo, branch string, 
 // live run on sandbox. live is false, with a nil error, when no run is live on
 // sandbox right now.
 func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scope NamespaceScope, live bool, err error) {
-	runID, taskID, _, live, err := s.liveRunIDAndTarget(ctx, sandbox)
+	runID, taskID, pinned, live, err := s.liveRunIDAndTarget(ctx, sandbox)
 	if err != nil || !live {
 		return NamespaceScope{}, false, err
 	}
@@ -5689,6 +5748,18 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 	if target != nil {
 		taskRepo = target.String()
 		addRepo(taskRepo)
+	} else if pinned.Valid {
+		if pinned.Ref.Owner != "" {
+			taskRepo = pinned.Ref.String()
+			addRepo(taskRepo)
+		}
+	} else {
+		var tOwner, tName sql.NullString
+		if err := s.db.QueryRowContext(ctx,
+			"SELECT `target_owner`, `target_name` FROM `task` WHERE `id` = ?", taskID).Scan(&tOwner, &tName); err == nil && tOwner.Valid {
+			taskRepo = RepoFromStored(tOwner.String, tName.String).String()
+			addRepo(taskRepo)
+		}
 	}
 	for _, r := range reads {
 		addRepo(r.String())

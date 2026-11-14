@@ -92,6 +92,11 @@ type forcedMerge struct {
 	// strength of an override given before it existed is the hole
 	// bwsalmon/grain#2399 describes.
 	headSHA string
+	// keepsCI is set when the gate override recorded for headSHA
+	// (model.LinkGateOverride) names gates but not CI: a forced merge
+	// skips only the gates it names, so this one still waits for the
+	// head's checks to pass (forcedMergeKeepsCI).
+	keepsCI bool
 }
 
 // movedSince is whether the branch has a head other than the one the
@@ -142,6 +147,10 @@ func mayMerge(r mergeRequest) mergeDecision {
 		if !r.clean {
 			return mergeDecision{why: "it does not merge cleanly into " + r.branch +
 				", which no override can change: the conflict has to be resolved on the branch"}
+		}
+		if r.forced.keepsCI && !r.greenHead {
+			return mergeDecision{why: "the override from " + r.forced.by + " did not name ci, " +
+				"so it still waits for this change's own checks to pass"}
 		}
 		return mergeDecision{ok: true, arm: mergeArmForced,
 			why: "forced by " + r.forced.by + ": " + r.forced.reason}
