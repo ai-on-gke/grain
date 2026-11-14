@@ -558,6 +558,7 @@ and the forge is not asked.
 | `GET /api/ci/runs/{id}` | With an Actions id (`gha:<owner>:<name>:<run id>`, for example `gha:ai-on-gke:grain:123`): the run with its jobs and their steps, each with its conclusion. Logs are not included. |
 | `GET /api/ci/runs/{id}/log?job=<name or id>&tail=<lines>` | One Actions job's log. With no `job`, the first job that failed, or the only job. It is capped at 256 KiB (`ci.MaxStepOutput`, the same cap as a grain CI step's output), and the end is kept. The answer gives `job`, `jobId`, `url`, the full size in `bytes`, and `truncated`. |
 | `GET /api/ci/runs/{id}/artifacts` | The Actions run's artifacts, names and sizes only. Downloading one (`.../artifacts/{job}/{name}`) answers 501. An Actions artifact is a zip behind a redirect, sometimes gigabytes, and grain does not fetch it for you; get it from the run's page. |
+| `POST /api/ci/runs/{id}/rerun` | (`ci:write`) Re-runs an Actions run (`gha:...`) on GitHub as its next attempt, with no commit pushed: its failed and cancelled jobs by default, every job with `{"all": true}`, or one job with `{"jobs": ["<name or id>"]}`. No run at one commit is re-run more than 3 times (`ui.MaxActionsRerunsPerHead`), grain's automatic runner-fault re-runs included. |
 
 ### A task's own CI: the default `api:ci-read`
 
@@ -583,9 +584,13 @@ run's own CI reads answer for its GitHub Actions runs
 | `grain ls/read ci://<owner>/<name>/...` | the namespace's `ci://` tree |
 
 `grain ci test-history <test>` reads the same runs. `grain ci wait` and
-`grain pr open` work without the grant. `grain ci run-job` and `grain ci
-retrigger` drive grain CI only, and are not offered on a GitHub-CI
-repository.
+`grain pr open` work without the grant, and on a `ci_mode: github`
+repository so do `grain ci retrigger` and `grain ci run-job`: they
+re-run the GitHub Actions runs at the head of the task's own pull
+request (`--all` every job; `--jobs` or `grain ci run-job <job>` one
+job) without pushing a commit, up to 3 re-runs per run at one commit
+(`ui.MaxActionsRerunsPerHead`, automatic runner-fault re-runs included).
+Re-running any other run needs `ci:write` (`POST /api/ci/runs/{id}/rerun`).
 
 **The trade-off.** The grant is read-only (`ci:read` alone: runs, jobs,
 logs and artifact lists, with no `ci:write`, tasks, merges or memory). It
@@ -796,8 +801,8 @@ Actions job's log when given a `gha:` run id. `grain ci wait` and
     only a person may grant); or one setting `keep_running` or an
     `admission` above `standard` (`bypass` or `durable`, which replaced the
     `priority-dispatch` and `durable` grants), whoever filed it, or asking
-    for a capability, write target, read or priority its own proposer
-    doesn't hold.
+    for a capability, write target, read, priority or sandbox shape its
+    own proposer doesn't hold.
 
   The refusal is a 403 naming the chain or the holds. Once a task is
   approved, `run-now` still jumps it ahead of the queue under
@@ -1153,7 +1158,7 @@ Two other routes look like they do this, but don't:
 | Route | What it does |
 |---|---|
 | `POST /api/tasks/{id}/messages` | The caller's own chat with the person watching its own task; parks that task. Refused on any other task. |
-| `POST /api/tasks/{id}/comments` | A note on the target's conversation. It lifts any question the target is parked on, as a reply does, and leaves a second, audit note naming the call. |
+| `POST /api/tasks/{id}/comments` | A comment on the target's conversation, plus an audit note naming the call. An agent's plain comment is recorded as its own and does **not** lift a question the target is parked on (`commentDelivery: "awaiting_person"`). Only `{"relay": true}` (or `grain task message <id> --relay` in a sandbox), from a console session acting on behalf of a verified person whose own role may reply on that task, writes the comment as `<person> via <session>` and wakes `awaiting_reply` as that person's reply. |
 
 ## External agents
 

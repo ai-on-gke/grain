@@ -44,7 +44,7 @@ sudo GRAIN_IMAGE=docker.io/grainai/grain ./scripts/setup.sh
 
 ### 3. Kubernetes (`deploy/kubernetes`)
 
-- **Needs:** A Kubernetes cluster with `ReadWriteOnce` storage and `kubectl` (plus a `NetworkPolicy`-capable CNI for `network: none` tasks, or KVM nodes for VM sandboxes).
+- **Needs:** A Kubernetes cluster with `ReadWriteOnce` storage, `kubectl`, and a `NetworkPolicy`-capable CNI (`grain.yaml` fences open-network sandbox pods off the metadata server and cluster, and `-k8s-network-policy` is required for `network: none` tasks and external capability grants; KVM nodes for VM sandboxes).
 
 ```bash
 # Edit the CHANGEME values in deploy/kubernetes/grain.yaml first
