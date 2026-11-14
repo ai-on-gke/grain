@@ -20,6 +20,21 @@ import {
   type UrlMatchResult,
   UrlSegment,
 } from "@angular/router";
+import { settingsLeaveGuard } from "./settings/settings-leave.guard";
+
+// LEGACY_SETTINGS_LINKS are the classic UI's admin and system pages that
+// moved into Settings: [old path, section]. (/next/ Settings has no card
+// anchors yet, so the classic #credentials card is not named.)
+const LEGACY_SETTINGS_LINKS: readonly (readonly [string, string])[] = [
+  ["admin", "general"],
+  ["admin/workflow", "tasks"],
+  ["admin/executors", "hostds"],
+  ["system/executors", "hostds"],
+  ["admin/integrations", "capabilities"],
+  ["system/integrations", "capabilities"],
+  ["admin/upgrade", "upgrade"],
+  ["system/upgrade", "upgrade"],
+];
 
 function workstreamMultiSegmentMatcher(
   segments: UrlSegment[],
@@ -184,6 +199,14 @@ export const routes: Routes = [
     loadComponent: () =>
       import("./fleet/fleet-page.component").then((m) => m.FleetPageComponent),
   },
+  // Settings' old addresses (the classic /admin/* and /system/* pages
+  // that became Settings sections) land on the section that replaced
+  // them rather than on the Inbox.
+  ...LEGACY_SETTINGS_LINKS.map(([path, section]) => ({
+    path,
+    pathMatch: "full" as const,
+    redirectTo: () => inject(Router).createUrlTree(["/settings", section]),
+  })),
   { path: "system", redirectTo: "fleet", pathMatch: "full" },
   {
     path: "system/:tab",
@@ -203,17 +226,23 @@ export const routes: Routes = [
   },
   { path: "memory", redirectTo: "context" },
   { path: "config", redirectTo: "settings/config-repo", pathMatch: "full" },
+  // `/settings` and `/settings/<section>` are one route, so moving between
+  // sections keeps the page -- and the unsaved draft it holds -- rather
+  // than building a fresh one; settingsLeaveGuard asks before a draft is
+  // dropped by leaving Settings.
   {
-    path: "settings",
+    matcher: (s) =>
+      (s.length === 1 || s.length === 2) && s[0].path === "settings"
+        ? {
+            consumed: s,
+            posParams: (s.length === 2 ? { section: s[1] } : {}) as Record<
+              string,
+              UrlSegment
+            >,
+          }
+        : null,
     title: "Settings · grain",
-    loadComponent: () =>
-      import("./settings/settings-page.component").then(
-        (m) => m.SettingsPageComponent,
-      ),
-  },
-  {
-    path: "settings/:section",
-    title: "Settings · grain",
+    canDeactivate: [settingsLeaveGuard],
     loadComponent: () =>
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,

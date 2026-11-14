@@ -77,6 +77,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "anthropic",
           "openai",
           "effort",
+          "reasoning",
           "rotation",
           "budget",
         ],
@@ -328,6 +329,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "banner",
           "lock",
           "timezone",
+          "time zone",
         ],
       },
       {
