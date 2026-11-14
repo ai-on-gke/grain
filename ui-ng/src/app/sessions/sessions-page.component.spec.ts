@@ -387,6 +387,28 @@ describe("SessionsPageComponent", () => {
     expect(q(f, '[data-testid="apply-now-banner"]')).toBeNull();
   });
 
+  it("saves Reads all on the session, not the deployment's settings", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    (
+      q(f, '[data-testid="session-settings-toggle"]') as HTMLButtonElement
+    ).click();
+    await f.whenStable();
+    const box = q(f, '[data-testid="session-reads-all"]') as HTMLInputElement;
+    box.checked = !box.checked;
+    box.dispatchEvent(new Event("change"));
+    await settle(f);
+    expect(
+      api.calls.find(
+        (c) =>
+          c.method === "PUT" &&
+          c.route === "PUT /api/console-sessions/{id}" &&
+          (c.body as { readsAll?: boolean })?.readsAll === box.checked,
+      ),
+    ).toBeTruthy();
+    expect(api.calls.some((c) => c.route === "POST /api/settings")).toBe(false);
+  });
+
   it("edits API-scope grants and model in the session settings drawer, with no team field", async () => {
     const api = new FakeApi();
     const f = await render(api);

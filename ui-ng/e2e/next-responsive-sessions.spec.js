@@ -22,6 +22,9 @@
 //  2. Sessions still offered and printed a team ("Team: default").
 //  3. A failed sessions read showed the error and "No sessions yet."
 //     together.
+//  4. Reads all in a session's settings was sent to the deployment's
+//     settings and never saved on the session.
+//  5. Customize navigation did not reach the browser's other open tabs.
 
 import { test, expect } from "./fixtures.js";
 
@@ -76,7 +79,7 @@ test("Agents still selects its first agent beside the list on a desktop", async 
 });
 
 test(
-  "Sessions shows and asks for no team",
+  "Sessions shows and asks for no team, and saves Reads all on the session",
   { tag: ["@phone"] },
   async ({ page }) => {
     await page.goto("/next/sessions");
@@ -101,6 +104,22 @@ test(
     await expect(panel).toBeVisible();
     await expect(panel).not.toContainText(/\bteam\b/i);
     await expect(page.getByTestId("session-team-input")).toHaveCount(0);
+
+    // Reads all is saved on the session: it stays as set across a reload.
+    const readsAll = page.getByTestId("session-reads-all");
+    const was = await readsAll.isChecked();
+    const saved = page.waitForResponse(
+      (r) =>
+        r.request().method() === "PUT" &&
+        r.url().includes("/api/console-sessions/"),
+    );
+    await readsAll.click();
+    expect((await saved).ok()).toBe(true);
+    await page.reload();
+    await page.getByTestId("session-settings-toggle").click();
+    await expect(page.getByTestId("session-reads-all")).toBeChecked({
+      checked: !was,
+    });
   },
 );
 

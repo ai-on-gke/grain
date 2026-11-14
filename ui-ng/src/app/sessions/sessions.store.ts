@@ -695,7 +695,11 @@ export class SessionsStore {
         delete p.tasksApproved;
         if (Object.keys(p).length === 0) return;
       }
-      if (!sessionObj?.taskId || p.readsAll !== undefined) {
+      // Reads all is the session's own row (PUT /api/console-sessions/{id}
+      // takes readsAll). It used to go to POST /api/settings, the
+      // deployment's settings, which ignored it, so the box ticked and
+      // then un-ticked itself on the next read.
+      if (!sessionObj?.taskId) {
         await this.api.post("POST /api/settings", undefined, p);
       } else {
         await this.api.put("PUT /api/console-sessions/{id}", { id }, p);
