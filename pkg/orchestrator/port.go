@@ -747,7 +747,7 @@ func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref
 	// the port at dispatch for good (catalogueHold: "not granted to an
 	// ad-hoc task"); it is dropped here instead, with a note, so the port
 	// runs without the template's authority.
-	grants, droppedGrants, err := portCatalogueGrants(ctx, store, repo, grants)
+	grants, droppedGrants, err := portCatalogueGrants(ctx, store, repo, source.TemplateID, grants)
 	if err != nil {
 		return model.Task{}, fmt.Errorf("orchestrator: judging the port of %s against the capability catalogue: %w", ref, err)
 	}
@@ -855,13 +855,21 @@ func portBody(source model.Task, ref model.PullRequestRef, detail github.PullReq
 	return b.String()
 }
 
-// portCatalogueGrants is grants less every one the capability catalogue
-// refuses a port of repo -- judged as the ad-hoc task a port is, with no
-// TemplateID -- and, for each dropped, the grant and why. A deployment
-// with no catalogue keeps every grant.
-func portCatalogueGrants(ctx context.Context, store *model.Store, repo model.RepoRef,
+// portCatalogueGrants is grants less every one that settings/capabilities.yml
+// admits only because of the source's template: refused to the port, judged as
+// the ad-hoc task it is (no TemplateID), yet admitted to the same repository
+// filed from sourceTemplate. For each dropped it returns the grant and why.
+// A grant refused for any other reason -- disabled, wrong repository, wrong
+// kind -- is kept, so dispatch still holds the port on it (catalogueHold)
+// exactly as it would hold the source: this drops nothing a person did not
+// already scope to that template. A deployment with no catalogue, or a source
+// filed from no template, keeps every grant.
+func portCatalogueGrants(ctx context.Context, store *model.Store, repo model.RepoRef, sourceTemplate string,
 	grants []model.Grant) (kept []model.Grant, dropped []string, err error) {
 
+	if strings.TrimSpace(sourceTemplate) == "" {
+		return grants, nil, nil
+	}
 	cfg, err := store.GetConfig(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -870,14 +878,27 @@ func portCatalogueGrants(ctx context.Context, store *model.Store, repo model.Rep
 		return grants, nil, nil
 	}
 	cat := cfg.CapabilityPolicy.Catalogue
+	templateName := ""
+	if tmpl, err := store.GetTemplate(ctx, sourceTemplate); err != nil {
+		return nil, nil, err
+	} else if tmpl != nil {
+		templateName = tmpl.Name
+	}
 	for _, g := range grants {
 		r := repo
-		gc := model.GrantContext{Repo: &r, Kind: model.CatalogueKindTask, Grants: []string{g.Capability}}
-		if _, err := cat.ValidateGrants(gc); err != nil {
-			dropped = append(dropped, fmt.Sprintf("`%s` (%v)", g.Capability, err))
+		asPort := model.GrantContext{Repo: &r, Kind: model.CatalogueKindTask, Grants: []string{g.Capability}}
+		_, portErr := cat.ValidateGrants(asPort)
+		if portErr == nil {
+			kept = append(kept, g)
 			continue
 		}
-		kept = append(kept, g)
+		asSource := asPort
+		asSource.TemplateID, asSource.TemplateName = sourceTemplate, templateName
+		if _, err := cat.ValidateGrants(asSource); err != nil {
+			kept = append(kept, g)
+			continue
+		}
+		dropped = append(dropped, fmt.Sprintf("`%s` (%v)", g.Capability, portErr))
 	}
 	return kept, dropped, nil
 }

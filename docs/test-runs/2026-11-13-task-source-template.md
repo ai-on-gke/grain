@@ -101,9 +101,9 @@ The results are identical on both stores.
 - The port stayed `queued`, and so did its run-now.
 - The authority boundary held, since the port never got the grant. But every port of such a task was stuck.
 
-**Fix:** `newPortTask` now judges each copied grant against the catalogue as the ad-hoc task a port is (`portCatalogueGrants`). It drops the refused ones and names them in the port's body. Every other grant is kept, and a deployment with no catalogue is unaffected.
+**Fix:** `newPortTask` now judges each copied grant twice (`portCatalogueGrants`): once as the ad-hoc task a port is, and once as if filed from the source's template. It drops a grant only when the catalogue refuses the first and admits the second, which means the template's restriction is the only reason, and names it in the port's body. A grant refused for any other reason (disabled, a repository or kind restriction) stays on the port, so dispatch still holds the port on it, as it would hold the source. A deployment with no catalogue, or a source filed from no template, is unaffected. This narrowing answers security review [task 5747](/tasks/5747).
 
-**Regression test:** `TestAPortDropsAGrantRestrictedToItsSourcesTemplate` (`pkg/orchestrator/port_template_grant_test.go`). It fails without the fix with the same refusal.
+**Regression tests:** `TestAPortKeepsAGrantTheCatalogueRefusesForAnotherReason`, and `TestAPortDropsAGrantRestrictedToItsSourcesTemplate` (`pkg/orchestrator/port_template_grant_test.go`). It fails without the fix with the same refusal.
 
 ## Item 3: `/next/`
 

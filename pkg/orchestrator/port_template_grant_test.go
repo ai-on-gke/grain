@@ -84,3 +84,44 @@ func TestAPortDropsAGrantRestrictedToItsSourcesTemplate(t *testing.T) {
 		t.Errorf("the catalogue still refuses the port, which would hold it at dispatch: %v", err)
 	}
 }
+
+// Only a grant the catalogue admits because of the source's template is
+// dropped. One it refuses for another reason -- here a repository
+// restriction the source's template does not lift -- stays on the port, so
+// dispatch holds the port on it exactly as it would hold the source, rather
+// than the port quietly running without something a person scoped elsewhere.
+func TestAPortKeepsAGrantTheCatalogueRefusesForAnotherReason(t *testing.T) {
+	store, ctx := openStore(t)
+	sim, client, repo := pairedSim(t, ctx, store, "main", "candidate")
+	const issues = "https://grain.dev/capabilities/github#read-issues={}"
+	if err := store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		cfg.CapabilityPolicy.Catalogue = &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+			"read-issues": {Restrictions: &model.CapabilityRestrictions{Repos: model.Patterns{"acme/elsewhere"}}},
+		}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutTemplate(ctx, model.Template{ID: "release-note", Name: "release-note", Title: "Release note", Body: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	task, branch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
+	task.Grants = []model.Grant{{Capability: issues, Via: model.GrantByLabel}}
+	task.TemplateID = "release-note"
+	if err := store.PutTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	mergeQueued(t, ctx, store, sim, client, task, branch)
+
+	ports := portsOf(t, ctx, store, task.ID)
+	if len(ports) != 1 {
+		t.Fatalf("filed %d ports, want 1", len(ports))
+	}
+	if !slices.ContainsFunc(ports[0].Grants, func(g model.Grant) bool { return g.Capability == issues }) {
+		t.Errorf("port grants = %+v, want read-issues kept: its refusal is not the template's", ports[0].Grants)
+	}
+	if strings.Contains(ports[0].Body, "filed this port without") {
+		t.Errorf("port body says a grant was dropped:\n%s", ports[0].Body)
+	}
+}
