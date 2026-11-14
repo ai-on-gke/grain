@@ -39,7 +39,16 @@ export interface ConfirmRequest {
   scope?: Scope;
   // Gerund phrase for multi-repo/owner confirm tick (defaults to "approving work").
   actionVerb?: string;
+  // reason asks for a reason before the accept button turns on; the
+  // dialog writes what was typed into value, which run reads.
+  reason?: ConfirmReason;
   run: () => Promise<unknown>;
+}
+
+export interface ConfirmReason {
+  label: string;
+  placeholder?: string;
+  value: string;
 }
 
 // ConfirmDialogComponent asks before a call is made. A batch shows its
@@ -109,6 +118,19 @@ export function bypassConfirm(
             </label>
           }
         }
+        @if (c.reason; as r) {
+          <label class="confirm-reason">
+            <span class="confirm-reason-label">{{ r.label }}</span>
+            <textarea
+              #reasonBox
+              rows="2"
+              data-testid="confirm-reason"
+              [attr.placeholder]="r.placeholder || null"
+              [value]="r.value"
+              (input)="onReason($event)"
+            ></textarea>
+          </label>
+        }
         <div class="action-btn-group modal-actions">
           <button
             #cancelBtn
@@ -126,7 +148,7 @@ export function bypassConfirm(
               c.destructive ? 'btn-primary is-destructive' : 'btn-primary'
             "
             data-testid="confirm-accept"
-            [disabled]="needsTick() && !ticked()"
+            [disabled]="(needsTick() && !ticked()) || needsReason()"
             (click)="close(true)"
           >
             {{ c.accept }}
@@ -142,6 +164,10 @@ export class ConfirmDialogComponent {
   readonly done = output<boolean>();
 
   protected readonly ticked = signal(false);
+  private readonly reasonText = signal("");
+  protected readonly needsReason = computed(
+    () => !!this.request().reason && !this.reasonText().trim(),
+  );
   protected readonly lines = computed(() => {
     const s = this.request().scope;
     return s ? scopeLines(s) : [];
@@ -169,6 +195,8 @@ export class ConfirmDialogComponent {
     viewChild<ElementRef<HTMLButtonElement>>("acceptBtn");
   private readonly scopeCheck =
     viewChild<ElementRef<HTMLInputElement>>("scopeCheck");
+  private readonly reasonBox =
+    viewChild<ElementRef<HTMLTextAreaElement>>("reasonBox");
   private readonly returnFocus =
     typeof document !== "undefined"
       ? (document.activeElement as HTMLElement | null)
@@ -187,10 +215,14 @@ export class ConfirmDialogComponent {
     );
     // Destructive actions focus Cancel so a hurried Enter does not commit.
     // Otherwise focus goes to the second tick when present, or Accept.
+    // A reason box takes focus first: nothing can be accepted before it
+    // is filled, so Enter cannot commit by accident.
     afterNextRender(() =>
-      (this.request().destructive
-        ? this.cancelBtn()
-        : (this.scopeCheck() ?? this.acceptBtn())
+      (
+        this.reasonBox() ??
+        (this.request().destructive
+          ? this.cancelBtn()
+          : (this.scopeCheck() ?? this.acceptBtn()))
       )?.nativeElement.focus(),
     );
   }
@@ -215,6 +247,13 @@ export class ConfirmDialogComponent {
       kev.preventDefault();
       first.focus();
     }
+  }
+
+  protected onReason(ev: Event): void {
+    const v = (ev.target as HTMLTextAreaElement).value;
+    this.reasonText.set(v);
+    const r = this.request().reason;
+    if (r) r.value = v;
   }
 
   protected close(ok: boolean): void {
