@@ -54,7 +54,6 @@ func withExecutor(cfg Config, where whererun.Detection, socketDirExists func(str
 
 // captureDaemonLog collects the daemon log for one test and forgets which
 // stored host settings have already been warned about, on both sides.
-// captureDaemonLog points the package logger at a buffer for the test.
 // The buffer is locked: a goroutine an earlier test started (a hostd
 // notifier, say) may still log while this test reads it.
 func captureDaemonLog(t *testing.T) *lockedBuffer {
