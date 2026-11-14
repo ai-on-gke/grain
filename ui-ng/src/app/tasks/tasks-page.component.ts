@@ -51,7 +51,9 @@ import {
   PriorityChipComponent,
   priorityTone,
 } from "../shared/priority-chip.component";
+import { summarizeDispatchStatus } from "../shared/dispatch-status";
 import { scopeOf } from "../shared/scope";
+import { boardLabels } from "./board-labels";
 import { DEFAULT_RATIO } from "../shared/split";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
@@ -134,6 +136,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "../inbox/inbox-queue.css",
     "../inbox/inbox-inspector.css",
     "./tasks-page.component.css",
@@ -209,15 +212,25 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                           type="button"
                           class="board-apply-btn"
                           [attr.data-testid]="'board-apply-' + b.id"
+                          [attr.aria-label]="
+                            boardLabel(b) === b.name ? null : boardLabel(b)
+                          "
                           (click)="applyBoard(b)"
                         >
                           {{ b.name }}
+                          @if (b.folder) {
+                            <span
+                              class="board-folder muted"
+                              aria-hidden="true"
+                              >{{ b.folder }}</span
+                            >
+                          }
                         </button>
                         @if (canWriteBoards()) {
                           <button
                             type="button"
                             class="board-del-btn"
-                            [attr.aria-label]="'Delete board ' + b.name"
+                            [attr.aria-label]="'Delete board ' + boardLabel(b)"
                             [attr.data-testid]="'board-delete-' + b.id"
                             (click)="removeBoard(b, $event)"
                           >
@@ -509,6 +522,23 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                       >
                     }
                   </div>
+                  @if (dispatchPause(); as dp) {
+                    <div
+                      class="banner"
+                      [class.banner-error]="dp.tone === 'error'"
+                      [class.banner-warn]="dp.tone === 'warn'"
+                      role="status"
+                      data-testid="backlog-dispatch-notice"
+                    >
+                      <strong>{{ dp.headline }}</strong>
+                      @if (dp.resetText) {
+                        <span class="tabular"> · {{ dp.resetText }}</span>
+                      }
+                      @if (dp.subline) {
+                        <span> — {{ dp.subline }}</span>
+                      }
+                    </div>
+                  }
                   @if (sort() !== "run") {
                     <p class="muted list-hint">
                       Moving is off in this order.
@@ -1547,37 +1577,55 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   );
 
   protected canApproveTask(t: Task): boolean {
-    return this.access.can("POST /api/tasks/{id}/approve", t.repo || undefined);
+    return this.access.canAccessTask(
+      "POST /api/tasks/{id}/approve",
+      t.repo ?? null,
+    );
   }
   protected canEditTask(t: Task): boolean {
-    return this.access.can("PATCH /api/tasks/{id}", t.repo || undefined);
+    return this.access.canAccessTask("PATCH /api/tasks/{id}", t.repo ?? null);
   }
   protected canDeferTask(t: Task): boolean {
-    return this.access.can("POST /api/tasks/{id}/defer", t.repo || undefined);
+    return this.access.canAccessTask(
+      "POST /api/tasks/{id}/defer",
+      t.repo ?? null,
+    );
   }
   protected canCloseTask(t: Task): boolean {
-    return this.access.can("POST /api/tasks/{id}/close", t.repo || undefined);
-  }
-  protected selectedRepos(): string[] {
-    return Array.from(
-      new Set(
-        this.selectedRows()
-          .map((r) => r.repo)
-          .filter((r): r is string => !!r),
-      ),
+    return this.access.canAccessTask(
+      "POST /api/tasks/{id}/close",
+      t.repo ?? null,
     );
   }
   protected canApproveSelected(): boolean {
-    return this.access.can(
-      "POST /api/tasks/{id}/approve",
-      this.selectedRepos(),
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/approve",
+          r.repo ?? null,
+        ),
+      )
     );
   }
   protected canDeferSelected(): boolean {
-    return this.access.can("POST /api/tasks/{id}/defer", this.selectedRepos());
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask("POST /api/tasks/{id}/defer", r.repo ?? null),
+      )
+    );
   }
   protected canCloseSelected(): boolean {
-    return this.access.can("POST /api/tasks/{id}/close", this.selectedRepos());
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask("POST /api/tasks/{id}/close", r.repo ?? null),
+      )
+    );
   }
   protected readonly canReadBoards = computed(() =>
     this.access.can("GET /api/boards"),
@@ -1590,6 +1638,13 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     if (!cur) return "";
     return this.store.boards().find((b) => (b.query || "") === cur)?.name ?? "";
   });
+  protected readonly dispatchPause = computed(() =>
+    summarizeDispatchStatus(
+      this.access.rawConfig(),
+      this.access.usage(),
+      this.access.clockNow(),
+    ),
+  );
   protected readonly timelineSpan = computed(() => {
     const list = this.rows();
     const now = Date.now();
@@ -1893,7 +1948,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected canRetry(t: Task): boolean {
-    return this.access.can("POST /api/tasks/{id}/retry", t.repo || undefined);
+    return this.access.canAccessTask(
+      "POST /api/tasks/{id}/retry",
+      t.repo ?? null,
+    );
   }
 
   protected async retryTask(id: string, ev: Event): Promise<void> {
@@ -2103,12 +2161,44 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     });
   }
 
-  protected async removeBoard(b: Board, ev: Event): Promise<void> {
+  // boardLabel is the name a board's buttons are announced by: its own
+  // name, or, where another board shares it, the name and its folder
+  // (board-labels.ts).
+  protected boardLabel(b: Board): string {
+    return this.boardLabelById().get(b.id) ?? b.name;
+  }
+  private readonly boardLabelById = computed(() =>
+    boardLabels(this.store.boards()),
+  );
+
+  // removeBoard asks before deleting. A saved board is one of the
+  // deployment's own settings -- the same on every browser, for every
+  // reader -- and the × sat a few pixels from the board's own button,
+  // so one stray click deleted it for everybody with nothing to undo it
+  // (2026-11-13 saved boards walkthrough, task 5385). The menu closes
+  // and focus goes back to its Boards button first, so the dialog has a
+  // live element to hand focus back to on Cancel or Escape.
+  protected removeBoard(b: Board, ev: Event): void {
     ev.stopPropagation();
-    const ok = await this.store.deleteBoard(b.id);
-    if (ok) {
-      this.snack(`Deleted board "${b.name}"`);
-    }
+    this.openMenu.set(null);
+    this.menuTrigger = null;
+    const trigger = (): HTMLElement | null =>
+      document.querySelector<HTMLElement>('[data-testid="saved-boards-btn"]');
+    trigger()?.focus();
+    const label = this.boardLabel(b);
+    this.confirming.set({
+      title: `Delete board ${label}?`,
+      message:
+        `Delete the saved board "${label}"? Boards are shared settings, so ` +
+        `it goes for everyone on this deployment, not just this browser.`,
+      accept: "Delete board",
+      destructive: true,
+      run: async () => {
+        const ok = await this.store.deleteBoard(b.id);
+        if (ok) this.snack(`Deleted board "${label}"`);
+        setTimeout(() => trigger()?.focus());
+      },
+    });
   }
 
   // ---------- confirmations ----------

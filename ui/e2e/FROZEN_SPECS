@@ -3,8 +3,7 @@
 # TestNoNewClassicE2ESpecs fails on a spec that is not listed here.
 #
 # Do not add lines. New coverage goes to the ui-ng suite at /next/
-# (next-*.spec.js here until it moves to ui-ng/e2e/, or Go under
-# tests/uiapi); see README.md. Delete a line when its spec is deleted.
+# (ui-ng/e2e/) or Go under tests/uiapi; see README.md. Delete a line when its spec is deleted.
 access-code-walkthrough.spec.js
 access-principals-settings.spec.js
 access-request-card.spec.js

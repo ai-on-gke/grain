@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
   afterNextRender,
   computed,
+  inject,
   input,
   output,
   signal,
@@ -43,11 +46,34 @@ export interface ConfirmRequest {
 // count per repository (and per owner when there is more than one), and
 // one that spans repositories needs an explicit second tick before the
 // accept button turns on.
+// bypassConfirm is the question both /next/ pages ask before letting a
+// repository's base-branch repair PRs merge with no human: the same
+// risk the classic Repo page and Settings -> Repositories put in their
+// confirm (ui/src/components/RepoPage.jsx). Turning it off asks
+// nothing. Without it one click on a switch took the human gate off
+// (2026-11-13 repository walkthrough).
+export function bypassConfirm(
+  repo: string,
+  run: () => Promise<unknown>,
+): ConfirmRequest {
+  return {
+    title: "Let base-branch repairs merge without a human?",
+    message:
+      `Let base-branch repair PRs in ${repo} merge without a human when their CI is green? ` +
+      `While ${repo}'s base branch is red, an agent's repair pull request can then land changes to ` +
+      `.grain/workflows/** or trust-boundary code with no human sign-off before the merge. ` +
+      `Review tasks are still filed afterwards.`,
+    accept: "Turn on",
+    destructive: true,
+    run,
+  };
+}
+
 @Component({
   selector: "g-confirm-dialog",
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  styleUrl: "./work-surface.css",
+  styleUrls: ["./work-surface.css", "./surface-controls.css"],
   template: `
     @let c = request();
     <div class="modal-backdrop">
@@ -59,7 +85,6 @@ export interface ConfirmRequest {
         aria-labelledby="confirm-title"
         aria-describedby="confirm-body"
         data-testid="confirm-dialog"
-        (keydown.escape)="cancel($event)"
         (keydown.tab)="onTab($event)"
         (keydown.shift.tab)="onTab($event)"
       >
@@ -149,7 +174,17 @@ export class ConfirmDialogComponent {
       ? (document.activeElement as HTMLElement | null)
       : null;
 
+  private readonly doc = inject(DOCUMENT);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly onDocKeydown = (ev: KeyboardEvent): void => {
+    if (ev.key === "Escape") this.cancel(ev);
+  };
+
   constructor() {
+    this.doc.addEventListener("keydown", this.onDocKeydown, true);
+    this.destroyRef.onDestroy(() =>
+      this.doc.removeEventListener("keydown", this.onDocKeydown, true),
+    );
     // Destructive actions focus Cancel so a hurried Enter does not commit.
     // Otherwise focus goes to the second tick when present, or Accept.
     afterNextRender(() =>

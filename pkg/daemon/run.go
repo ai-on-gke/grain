@@ -46,6 +46,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/policy"
+	"github.com/ai-on-gke/grain/pkg/qa"
 	"github.com/ai-on-gke/grain/pkg/sandboxaddr"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -1487,6 +1488,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	if err := orchestrator.RecoverOrphanedRunsExcept(ctx, store, githubClient, time.Now().UTC(), adoptedRuns); err != nil {
 		log.Printf("grain daemon: recovering orphaned runs: %v", err)
 	}
+	// Their processes run on in a hostd that did not answer, until it is
+	// back to cancel them.
+	adopted.cancelAbandoned(ctx, store)
 	orchestrator.SyncSandboxLedger(ctx, orchestrator.Deps{
 		Store:      store,
 		Ledger:     cfg.Ledger,
@@ -1849,6 +1853,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// release-triggered automatic upgrade follows.
 			LatestRelease:      latestRelease(upgrader),
 			UpgradeDrainWindow: cfg.UpgradeDrainWindow,
+			QAProfiler:         qa.NewProfiler(qa.DefaultPerfLogPath(cfg.DataDir)),
+			// nil in every build a deployment runs (debug_clock.go).
+			ReleaseUpgradeClockOffset: DebugClockOffset,
 		},
 		MintSandboxGrant:   tokens.EnsureGrant,
 		MintSandboxToken:   tokens.EnsureToken,

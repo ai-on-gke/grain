@@ -1,0 +1,34 @@
+--- register connected entry name-walk (display name "Name Walk")
+  registered connected entry name-walk on http://127.0.0.1:4231
+  registration token written to /tmp/hub-naming/name-walk.token
+  outbound tunnel config snippet:
+    grain daemon -hub-url http://127.0.0.1:4231 -hub-entry name-walk -hub-token-file /tmp/hub-naming/name-walk.token -hub-connect \
+      -ui-require-verifier=registry -ui-hub-issuer=grain-registry -ui-hub-audience=https://name-walk.grain-user.test -ui-hub-keys-url=http://127.0.0.1:4231/.well-known/jwks.json
+--- a. start the connected daemon; first heartbeat names it
+  before any heartbeat could land: "Name Walk"
+  "Name Walk" after 0s
+  PASS
+--- b. rename the entry on the hub; the next heartbeat renames the grain
+  PATCH display_name HTTP 200
+  "Renamed Walk" after 3s
+  PASS
+--- c. the operator names it in Settings; a further hub rename leaves it alone
+  PUT /api/settings HTTP 200
+  PATCH display_name HTTP 200
+  after 70s: "Operator Name"
+  "Operator Name" after 0s
+  PASS
+  hub entry display_name: Hub Rename 3
+--- d. hosted-style default: GRAIN_DEFAULT_ENVIRONMENT_NAME
+  "Hosted Default" after 1s
+  PASS
+  "Hosted Renamed" after 1s
+  PASS
+  PUT /api/settings HTTP 200
+  "Hosted Operator" after 0s
+  PASS
+--- daemon log lines about the environment name
+  2026/11/11 20:49:03 grain daemon: environment name is now "Name Walk", as its Grain Hub entry names it (Settings overrides it)
+  2026/11/11 20:50:07 grain daemon: environment name is now "Renamed Walk", as its Grain Hub entry names it (Settings overrides it)
+  2026/11/11 20:51:18 grain daemon: environment name is now "Hosted Default", as its Grain Hub entry names it (Settings overrides it)
+  2026/11/11 20:52:20 grain daemon: environment name is now "Hosted Renamed", as its Grain Hub entry names it (Settings overrides it)

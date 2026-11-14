@@ -62,6 +62,10 @@ type CapabilityMethod struct {
 	// why the capability policy (§4.2.2) denies this method to that run;
 	// empty where it admits it, and on a listing that names no run.
 	PolicyRefusal string `json:"policyRefusal,omitempty"`
+	// AliasOf, when non-empty, names the canonical method Ref(s) this
+	// method aliases (for example api#grain/task-admin -> [api#task-admin],
+	// which pickers offer once under the unprefixed preset).
+	AliasOf []string `json:"aliasOf,omitempty"`
 	// DescriptionTruncated and ArgsTruncated say a paged call cut this
 	// row to fit an agent's tool-result budget: Description to its first
 	// pageRowDescriptionBytes bytes, and each array in Args (an enum of
@@ -115,6 +119,14 @@ func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 	for _, s := range statuses {
 		for _, m := range s.MethodDetails {
 			ref := s.ID + "#" + m.Name
+			var aliasOf []string
+			if s.ID == grainserver.APIID {
+				if unprefixed, ok := strings.CutPrefix(m.Name, model.APIScopeSetBuiltinPrefix); ok {
+					if _, isPreset := model.APIPresetNamed(unprefixed); isPreset {
+						aliasOf = []string{grainserver.APIID + "#" + unprefixed}
+					}
+				}
+			}
 			out = append(out, CapabilityMethod{
 				Ref:          ref,
 				Capability:   s.ID,
@@ -124,6 +136,7 @@ func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 				RequiresArgs: !protocol.ArgsHaveNoRequirement(m.Args),
 				Releasable:   m.Releasable,
 				Policy:       policy.Verdicts(ref, configured),
+				AliasOf:      aliasOf,
 			})
 		}
 	}
@@ -280,6 +293,8 @@ func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.
 	if check.Unchecked {
 		if err := model.CheckCapabilityGrantArgsOffline(s); err != nil {
 			check.Error, check.Fields = err.Error(), grantFieldErrors(err)
+		} else if errMsg, fields := postNormalizeGrantRefusal(s); errMsg != "" {
+			check.Error, check.Fields = errMsg, fields
 		} else {
 			check.Recorded = s
 		}
@@ -290,7 +305,12 @@ func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.
 		check.Error, check.Fields = err.Error(), grantFieldErrors(err)
 		return check
 	}
-	check.Recorded = names[0]
+	recorded := names[0]
+	if errMsg, fields := postNormalizeGrantRefusal(recorded); errMsg != "" {
+		check.Error, check.Fields = errMsg, fields
+		return check
+	}
+	check.Recorded = recorded
 	if spec, err := model.CapabilityGrantSpec(check.Recorded); err == nil {
 		check.Args = spec.With
 	}
@@ -300,6 +320,34 @@ func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.
 		check.Changed = check.Recorded != s
 	}
 	return check
+}
+
+// postNormalizeGrantRefusal refuses normalized capability references that
+// validate against their server's JSON schema yet cannot be attached as a
+// capability grant anywhere: a task's own repository target or write
+// target (repo#target, repo#write {repo, base}) and an api#* scope set
+// limited to a repository outside its reach. CI-only repo#write {repo}
+// is not refused here: the repos page's CI capabilities list grants it
+// and checks it through this same call, so it is refused for a task only
+// when the check names one (markCatalogueRefusals' CatalogueRefusal) and
+// by the task writes themselves.
+func postNormalizeGrantRefusal(grant string) (string, map[string]string) {
+	if msg, ok := taskRepoGrantRefusal(grant); ok {
+		return msg, nil
+	}
+	if g, ok, err := model.ParseAPIGrant(grant); ok {
+		if err != nil {
+			return err.Error(), nil
+		}
+		if err := g.OutsideRepoLimit(); err != nil {
+			var fields map[string]string
+			if g.Repo != "" {
+				fields = map[string]string{"repo": err.Error()}
+			}
+			return err.Error(), fields
+		}
+	}
+	return "", nil
 }
 
 // protocolCapabilityID is the capability_id a grant string names, without

@@ -286,10 +286,14 @@ describe("ContextPageComponent", () => {
     expect(root.querySelector(".ctx-split")).not.toBeNull();
     expect(root.querySelector(".inbox-split")).toBeNull();
 
-    // ReachableReposResult ({ configured: true, repos: [{ repo: "acme/web", push: false }] }) populates scopes.
+    // When targetRepos is configured, unconfigured GitHub reachable-repos ("acme/web") do not flood scopes.
     expect(
-      root.querySelector('[data-testid="scope-row-acme/web"]'),
+      root.querySelector('[data-testid="scope-row-acme/api"]'),
     ).not.toBeNull();
+    expect(root.querySelector('[data-testid="scope-row-acme/web"]')).toBeNull();
+    expect(
+      api.calls.some((c) => c.route === "GET /api/deployment/reachable-repos"),
+    ).toBe(false);
     expect(
       root.querySelector('[data-testid="memory-scope-title"]')?.textContent,
     ).toContain("This deployment");
@@ -585,5 +589,26 @@ describe("ContextPageComponent", () => {
       '<span class="ctx-tok-str">&quot;return 42 &amp; &lt;tag&gt;&quot;</span>',
     );
     expect(html).not.toContain('ctx-tok-str"><span');
+  });
+
+  it("falls back to reachable-repos only when no repositories are configured on the deployment", async () => {
+    const api = new FakeContextApi();
+    api.configBody = {
+      version: "v3.5.0-test",
+      targetRepos: [],
+      access: {
+        role: "grain/operator",
+        roles: ["grain/operator"],
+        full: true,
+        scopes: [],
+      },
+    };
+    const { root } = await setup(api);
+    expect(
+      api.calls.some((c) => c.route === "GET /api/deployment/reachable-repos"),
+    ).toBe(true);
+    expect(
+      root.querySelector('[data-testid="scope-row-acme/web"]'),
+    ).not.toBeNull();
   });
 });

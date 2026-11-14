@@ -769,13 +769,25 @@ func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref
 		CustomFields:   source.CustomFields,
 		NetworkAccess:  source.NetworkAccess,
 		AgentFramework: source.AgentFramework,
-		CreatedAt:      &now,
+		// The template the source was filed from, for reporting only: a
+		// port is the same work on another branch, so it is counted
+		// against the same template, but it is filed by grain, not from
+		// that template, and takes none of its push set.
+		SourceTemplateID: source.SourceTemplateID,
+		CreatedAt:        &now,
 	}
 	// The source's requester, not porter's approval, decides whether
 	// local policy runs it: a port of an external request needs an
 	// approval of its own.
 	model.InheritRequester(&port, source)
 	model.InheritContext(&port, source)
+	// A backport onto release/vX.Y.Z fixes a defect vX.Y.Z shipped,
+	// whatever release the source was filed against on its own branch.
+	if v, ok := model.ReleaseBranchVersion(target); ok {
+		model.SetFoundIn(&port, v)
+	} else if v := model.FoundIn(source); v != "" {
+		model.SetFoundIn(&port, v)
+	}
 	return port, nil
 }
 

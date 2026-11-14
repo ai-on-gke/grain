@@ -911,6 +911,14 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	// And once for the blockers only a person can close, which tell a
+	// queued task waiting on one apart from one waiting on dispatch
+	// (model.BlockerHoldOf): read off the list itself, plus one query
+	// for the deferrals a resume_later still holds.
+	holds, err := c.listBlockerHolds(ctx, tasks, states, pauses, goalKinds)
+	if err != nil {
+		return nil, err
+	}
 	var open, closedTasks []Task
 	for _, t := range tasks {
 		t.GoalKind = goalKinds[t.ID]
@@ -946,7 +954,8 @@ func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
 		if w, ok := grantWaits[t.ID]; ok {
 			wait = &w
 		}
-		task = c.withReasons(task, t, listObservation(mergeQueueStates[t.ID], blockedAt), wait)
+		task = c.withReasons(task, t, listObservation(mergeQueueStates[t.ID], blockedAt), wait,
+			model.HoldsOf(task.BlockedBy, holds))
 		if p, ok := pauses[t.ID]; ok {
 			task.withPause(p)
 		}
@@ -1019,8 +1028,11 @@ func (c *Client) stallNote(state model.State, times model.StateTimes, now time.T
 // for it (nil for none). The open dependencies are out's own BlockedBy,
 // which taskFrom has just resolved; an awaiting_reply task's ask is
 // out's own TurnStopped, AwaitingAccess and QuestionSummary
-// (Task.replyFacts), so the caller sets those first.
-func (c *Client) withReasons(out Task, t model.Task, obs *model.Observation, wait *model.GrantWait) Task {
+// (Task.replyFacts), so the caller sets those first. holds is which of
+// out's open dependencies only a person can close (blockerHolds), nil
+// for none.
+func (c *Client) withReasons(out Task, t model.Task, obs *model.Observation, wait *model.GrantWait,
+	holds []model.BlockerHold) Task {
 	if obs != nil && obs.MergeQueueState != "" && obs.MergeQueueReason != "" {
 		reason := Reason{Reason: obs.MergeQueueReason}
 		if c.Config.Reasons != nil {
@@ -1033,10 +1045,69 @@ func (c *Client) withReasons(out Task, t model.Task, obs *model.Observation, wai
 	if c.Config.Reasons == nil {
 		return out
 	}
-	if reason := c.Config.Reasons.TaskReason(t, out.State, obs, out.BlockedBy, wait, out.replyFacts(obs)); reason.Reason != "" {
+	if reason := c.Config.Reasons.TaskReason(t, out.State, obs, out.BlockedBy, holds, wait, out.replyFacts(obs)); reason.Reason != "" {
 		out.Reason = &reason
 	}
 	return out
+}
+
+// blockerHolds is which of a queued task's open dependencies only a
+// person can close (model.Store.BlockerHolds), nil for a task in any
+// other state or with none: what withReasons tells queued/blocked_on_person
+// from queued/blocked_on_task by, for a read of one task.
+func (c *Client) blockerHolds(ctx context.Context, task Task) ([]model.BlockerHold, error) {
+	if task.State != model.StateQueued || len(task.BlockedBy) == 0 {
+		return nil, nil
+	}
+	holds, err := c.Store.BlockerHolds(ctx, task.BlockedBy)
+	if err != nil {
+		return nil, err
+	}
+	return model.HoldsOf(task.BlockedBy, holds), nil
+}
+
+// listBlockerHolds is blockerHolds for a whole list: every task some
+// queued task in it blocks on, judged from the list's own rows, states,
+// pauses and goals, keyed by blocker. The deferrals a resume_later
+// still holds are read only when a blocker is deferred with no wake
+// time, the one case that needs them.
+func (c *Client) listBlockerHolds(ctx context.Context, tasks []model.Task, states map[string]model.State,
+	pauses map[string]model.TaskPause, goalKinds map[string]model.GoalKind) (map[string]model.BlockerHold, error) {
+	byID := make(map[string]model.Task, len(tasks))
+	for _, t := range tasks {
+		byID[t.ID] = t
+	}
+	var blockers []model.Task
+	for _, t := range tasks {
+		if states[t.ID] != model.StateQueued {
+			continue
+		}
+		for _, l := range t.Links {
+			if b, ok := byID[l.Target]; ok && l.Kind.Blocks() && states[l.Target] != model.StateClosed {
+				blockers = append(blockers, b)
+			}
+		}
+	}
+	if len(blockers) == 0 {
+		return nil, nil
+	}
+	var resumeHeld map[string]bool
+	out := map[string]model.BlockerHold{}
+	for _, b := range blockers {
+		state := states[b.ID]
+		if state == model.StateDeferred && b.DeferredUntil == nil && resumeHeld == nil {
+			var err error
+			if resumeHeld, err = c.Store.ResumeHeldTasks(ctx); err != nil {
+				return nil, err
+			}
+		}
+		_, paused := pauses[b.ID]
+		_, goal := goalKinds[b.ID]
+		if h, ok := model.BlockerHoldOf(b, state, paused, goal, resumeHeld[b.ID]); ok {
+			out[b.ID] = h
+		}
+	}
+	return out, nil
 }
 
 // replyFacts is which ask an awaiting_reply task is parked on, off what
@@ -1281,7 +1352,11 @@ func (c *Client) Task(ctx context.Context, id string) (Task, error) {
 			return Task{}, err
 		}
 	}
-	task = c.withReasons(task, *t, obs, wait)
+	holds, err := c.blockerHolds(ctx, task)
+	if err != nil {
+		return Task{}, err
+	}
+	task = c.withReasons(task, *t, obs, wait, holds)
 	if err := c.attachPause(ctx, &task); err != nil {
 		return Task{}, err
 	}
@@ -1521,8 +1596,12 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 			task.UncountedAgentReplyID = cm.ID
 		}
 	}
+	holds, err := c.blockerHolds(ctx, task)
+	if err != nil {
+		return TaskDetail{}, err
+	}
 	detail := TaskDetail{
-		Task:          c.withReasons(task, *t, obs, wait),
+		Task:          c.withReasons(task, *t, obs, wait, holds),
 		Comments:      make([]Comment, 0, len(comments)),
 		OlderComments: olderComments,
 		OlderAttempts: olderAttempts,
@@ -2222,6 +2301,11 @@ type CreateTaskRequest struct {
 	// branch it lands on, and is not ported to the repository's other
 	// paired branches.
 	NoPort bool `json:"noPort,omitempty"`
+	// FoundIn is the release this task is filed against, as a tag --
+	// vX.Y.Z or vX.Y.Z-rc.N (model.LinkFoundIn): the new-task form's
+	// "Found in" and propose_task's found_in. Left empty, grain records
+	// what the task's own title and branches say (model.DerivedFoundIn).
+	FoundIn string `json:"foundIn,omitempty"`
 	// FixesBaseBranch marks this task as fixing its own base branch while
 	// that branch is red (model.FixesBaseBranch, grain/task-3451): the
 	// "This fixes a red <base>" checkbox. It is never made to wait on the
@@ -3167,6 +3251,10 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	if err != nil {
 		return Task{}, err
 	}
+	foundIn, err := model.NormalizeFoundIn(req.FoundIn)
+	if err != nil {
+		return Task{}, validationErrorf("%v", err)
+	}
 	// Checked before the task is written and acted on after it, the way
 	// orchestrator.relayProposedTasks does the identical thing: the note
 	// for a supersede grain will not do belongs in the body a human
@@ -3615,6 +3703,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Skills:               chosenSkills,
 		ReviewTemplateID:     reviewTemplateID,
 		TemplateID:           filedFrom,
+		SourceTemplateID:     strings.TrimSpace(req.TemplateID),
 		Owner:                resolvedOwner,
 		Creator:              cmp.Or(strings.TrimSpace(req.Author), strings.TrimSpace(req.Creator)),
 		Proposer:             c.proposerForNewTask(ctx, resolvedOwner, sessionBehalf, proposedBy),
@@ -3641,6 +3730,8 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 			task.Owner = resolvedOwner
 		}
 	}
+	model.SetFoundIn(&task, foundIn)
+	model.ApplyDerivedFoundIn(&task)
 	if req.DeclineAutoMerge && !req.AutoMerge {
 		model.DeclineAutoMerge(&task, model.PrincipalString(c.requestActor(ctx).Actor))
 	}
@@ -7903,6 +7994,9 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	}
 	now := c.now()
 	if task.Approval == nil {
+		if err := ciOnlyGrantApprovalRefusal(*task); err != nil {
+			return err
+		}
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}

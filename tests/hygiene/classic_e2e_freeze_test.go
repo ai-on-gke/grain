@@ -33,9 +33,8 @@ import (
 // ui/e2e/README.md). These tests keep the freeze honest:
 //
 //   - TestNoNewClassicE2ESpecs: every classic spec under ui/e2e/ is in
-//     ui/e2e/FROZEN_SPECS, and that list only shrinks. The next-*.spec.js
-//     files drive the Angular UI at /next/ and are not classic; they are
-//     exempt until they move to ui-ng/e2e/.
+//     ui/e2e/FROZEN_SPECS, and that list only shrinks. Specs for the
+//     Angular UI at /next/ live in ui-ng/e2e/, outside this directory.
 //   - TestClassicE2EFreezeLists: every entry in ui/e2e/QUARANTINE and
 //     ui/e2e/NONGATING names a spec that exists and, for file:line, a
 //     line that starts a test(...) with a literal title -- the same thing
@@ -55,10 +54,6 @@ const frozenClassicSpecCount = 344
 // classicSpecName is what Playwright picks up as a spec under testDir
 // (its default testMatch).
 var classicSpecName = regexp.MustCompile(`\.(spec|test)\.[cm]?[jt]sx?$`)
-
-func isNextSpec(rel string) bool {
-	return !strings.Contains(rel, "/") && strings.HasPrefix(rel, "next-")
-}
 
 // readListFile returns a list file's non-comment, non-blank lines with
 // their 1-based line numbers.
@@ -115,7 +110,7 @@ func TestNoNewClassicE2ESpecs(t *testing.T) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		if classicSpecName.MatchString(rel) && !isNextSpec(rel) && !allowed[rel] {
+		if classicSpecName.MatchString(rel) && !allowed[rel] {
 			added = append(added, rel)
 		}
 		return nil
@@ -126,7 +121,7 @@ func TestNoNewClassicE2ESpecs(t *testing.T) {
 	sort.Strings(added)
 	for _, rel := range added {
 		t.Errorf("ui/e2e/%s is a new classic e2e spec. The classic suite is frozen: write it against /next/ "+
-			"(ui/e2e/next-*.spec.js, ui-ng/e2e/ once it exists) or as a Go test under tests/uiapi instead, "+
+			"(ui-ng/e2e/) or as a Go test under tests/uiapi instead, "+
 			"and do not add it to ui/e2e/FROZEN_SPECS (ui/e2e/README.md)", rel)
 	}
 }

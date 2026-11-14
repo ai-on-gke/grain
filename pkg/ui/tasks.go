@@ -185,6 +185,10 @@ type Task struct {
 	// NoPort is model.Task.NoPort: this task's change is not ported to
 	// its repository's other paired branches.
 	NoPort bool `json:"noPort,omitempty"`
+	// FoundIn is the release this task is filed against
+	// (model.LinkFoundIn), vX.Y.Z or vX.Y.Z-rc.N; "" when none is
+	// recorded.
+	FoundIn string `json:"foundIn,omitempty"`
 	// FixesBaseBranch is model.FixesBaseBranch: this task is a repair of
 	// its base branch -- grain's own, or one a person marked -- and is
 	// never made to wait on that branch's repair. GrainBaseRepair says
@@ -216,8 +220,15 @@ type Task struct {
 	// telling a reader apart from "no review".
 	ReviewTemplateID   string `json:"reviewTemplateId,omitempty"`
 	ReviewTemplateName string `json:"reviewTemplateName,omitempty"`
-	Owner              string `json:"owner"`
-	Creator            string `json:"creator,omitempty"`
+	// TemplateID is the template this task was filed from --
+	// model.Task.SourceTemplateID: a schedule's, a suite's or a path
+	// trigger's firing, a filing or a proposal naming a templateId, or a
+	// port of a task that was. Omitted for a task written from scratch,
+	// and for every task filed before grain recorded it. A record for
+	// reporting, deciding nothing about the task.
+	TemplateID string `json:"templateId,omitempty"`
+	Owner      string `json:"owner"`
+	Creator    string `json:"creator,omitempty"`
 	// FiledVia is the X-Grain-Client label of the tool that filed the
 	// task (model.Task.FiledVia), and Provenance the line it reads as
 	// ("filed from jetski/1.4 by jane@example.com"); both "" for a task
@@ -1254,6 +1265,7 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		PromptExtension:      t.PromptExtension,
 		Skills:               t.Skills.Clone(),
 		ReviewTemplateID:     t.ReviewTemplateID,
+		TemplateID:           t.SourceTemplateID,
 		ReviewTemplateName:   reviewTemplateName,
 		Owner:                cmp.Or(strings.TrimSpace(t.Owner), strings.TrimSpace(t.Creator), model.DefaultTaskOwner),
 		Creator:              t.Creator,
@@ -1388,6 +1400,9 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		}
 		if l.Kind == model.LinkPortOf {
 			out.PortOf = l.Target
+		}
+		if l.Kind == model.LinkFoundIn {
+			out.FoundIn = l.Target
 		}
 		if l.Kind == model.LinkPortedBy {
 			out.PortedBy = append(out.PortedBy, l.Target)
@@ -2220,7 +2235,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	deployment, err := s.tasks.GetTeam(r.Context(), model.DefaultTeamID)
+	deployment, err := s.tasks.getTeamWithRepoWorkflows(r.Context(), model.DefaultTeamID, repoWorkflows)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -2246,6 +2261,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	authMethod, _ := s.authMethod(r)
+	secretList := s.tasks.listSecretsBestEffort()
 	resp := configResponse{
 		Access:              accessRoleInfo(r.Context()),
 		AuthMethod:          authMethod,
@@ -2257,9 +2273,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		IdentityNotAccepted: identityNotAccepted(r, authenticated),
 		ListenPort:          requestLocalPort(r),
 		Proxied:             relayedByProxy(r),
-		Capabilities:        s.tasks.capabilitiesWithReadiness(cfg, repoConfigs),
+		Capabilities:        s.tasks.capabilitiesWithReadinessFrom(cfg, repoConfigs, secretList),
 		CapabilityMethods:   len(s.tasks.ListCapabilityMethods(r.Context())),
-		CICapabilities:      s.tasks.ciCapabilitiesWithReadiness(cfg, repoConfigs),
+		CICapabilities:      s.tasks.ciCapabilitiesWithReadinessFrom(cfg, repoConfigs, secretList),
 		RebootEnabled:       s.tasks.Config.Reboot != nil,
 		ShutdownEnabled:     s.tasks.Config.Shutdown != nil,
 		RestartEnabled:      s.tasks.Config.Restart != nil,
@@ -2462,7 +2478,47 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if call, ok := agentCallFromContext(r.Context()); ok {
 		narrowConfigForAgentCall(&resp, call)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	etagResp := resp
+	if resp.AgentPause != nil {
+		pauseCopy := *resp.AgentPause
+		pauseCopy.SecondsRemaining = 0
+		if len(pauseCopy.Pauses) > 0 {
+			entries := append([]AgentPauseEntry(nil), pauseCopy.Pauses...)
+			for i := range entries {
+				entries[i].SecondsRemaining = 0
+			}
+			pauseCopy.Pauses = entries
+		}
+		etagResp.AgentPause = &pauseCopy
+	}
+	body, err := json.Marshal(etagResp)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	body = append(body, '\n')
+	etag := etagOf(body)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("ETag", etag)
+	w.Header().Add("Vary", "Cookie")
+	w.Header().Add("Vary", "Authorization")
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if resp.AgentPause != nil {
+		body, err = json.Marshal(resp)
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
+		body = append(body, '\n')
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(body)
+	}
 }
 
 func narrowConfigForAgentCall(resp *configResponse, call agentCall) {
@@ -3486,6 +3542,14 @@ func writeClientError(w http.ResponseWriter, err error) {
 	var nf *NotFoundError
 	if errors.As(err, &nf) {
 		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	// The release approval key in Cloud KMS could not be read: KMS is
+	// upstream of this process, so 502, naming the setting to check.
+	var rak *releaseApprovalKMSError
+	if errors.As(err, &rak) {
+		writeJSON(w, http.StatusBadGateway, apierror.Withheld(http.StatusBadGateway, apierror.CodeUpstream,
+			releaseApprovalKMSMessage, err))
 		return
 	}
 	var snf *scheduleNotFoundError

@@ -15,8 +15,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  OnChanges,
-  OnInit,
+  type OnChanges,
+  type OnInit,
+  type SimpleChanges,
   ViewEncapsulation,
   inject,
   input,
@@ -191,7 +192,7 @@ interface SecretMetaRow {
               >
               <input
                 id="t-depth"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="1"
                 data-testid="input-max-autosubmit-depth"
@@ -211,7 +212,7 @@ interface SecretMetaRow {
               >
               <input
                 id="t-fanout"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="1"
                 [value]="state.val('maxAutoSubmitFanOut', 5)"
@@ -228,7 +229,7 @@ interface SecretMetaRow {
               <label class="s-label" for="t-branch">Branch name template</label>
               <input
                 id="t-branch"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 placeholder="grain/task-{id}"
                 [value]="state.val('taskBranchTemplate', '')"
@@ -243,6 +244,109 @@ interface SecretMetaRow {
             </div>
           </div>
         </div>
+
+        <div class="s-card" id="card-qa-rollout" data-testid="card-qa-rollout">
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Quality control &amp; PR rollout</h3>
+              <p class="s-card-desc">
+                Off by default. Assigns a configurable share of work-tree pull
+                requests to deterministic and semantic quality checks for live
+                single-instance A/B evaluation.
+              </p>
+            </div>
+          </div>
+
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name">Enable quality control engine</span>
+              <span class="s-hint"
+                >When off, tasks run with zero additional quality gates or stage
+                overhead.</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-qa-enabled"
+              [attr.aria-checked]="qaEnabled()"
+              [attr.title]="writeDeniedReason()"
+              [disabled]="!canWriteSettings()"
+              aria-label="Enable quality control engine"
+              (click)="toggleQAEnabled()"
+            ></button>
+          </div>
+
+          <div class="s-grid s-grid-qa">
+            <div class="s-field">
+              <span class="s-label">Quality flow package</span>
+              <g-pill-select
+                testid="pill-qa-flow"
+                ariaLabel="Quality flow package"
+                align="left"
+                [attr.title]="qaControlsDisabledReason()"
+                [options]="qaFlowOptions()"
+                [value]="qaFlowValue()"
+                [disabled]="!canEditQAControls()"
+                (valueChange)="setQAFlow($event)"
+              />
+            </div>
+
+            <div class="s-field">
+              <label class="s-label" for="t-qa-rollout">PR rollout (%)</label>
+              <input
+                id="t-qa-rollout"
+                class="s-input s-num"
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                data-testid="input-qa-rollout-pct"
+                [value]="qaRolloutInputValue()"
+                [attr.aria-invalid]="qaRolloutError() ? 'true' : null"
+                [attr.aria-describedby]="
+                  qaRolloutError() ? 't-qa-rollout-err' : null
+                "
+                [attr.title]="qaControlsDisabledReason()"
+                [disabled]="!canEditQAControls()"
+                (input)="onQARolloutInput($event)"
+                (blur)="onQARolloutBlur()"
+              />
+              @if (qaRolloutError(); as rolloutErr) {
+                <span
+                  id="t-qa-rollout-err"
+                  class="s-field-error"
+                  data-testid="error-qa-rollout-pct"
+                  >{{ rolloutErr }}</span
+                >
+              }
+            </div>
+          </div>
+
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name"
+                >Passive shadow scoring on control PRs</span
+              >
+              <span class="s-hint"
+                >Records non-blocking static check telemetry on control-arm pull
+                requests after final commit for unbiased A/B comparison.</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-qa-shadow-control"
+              [attr.aria-checked]="qaShadowOnControl()"
+              [attr.title]="qaControlsDisabledReason()"
+              [disabled]="!canEditQAControls()"
+              aria-label="Passive shadow scoring on control PRs"
+              (click)="toggleQAShadowOnControl()"
+            ></button>
+          </div>
+        </div>
       }
 
       @case ("agents") {
@@ -253,7 +357,7 @@ interface SecretMetaRow {
               <label class="s-label" for="ag-turns">Max agent turns</label>
               <input
                 id="ag-turns"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 data-testid="input-max-agent-turns"
@@ -273,7 +377,7 @@ interface SecretMetaRow {
               >
               <input
                 id="ag-caps"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 placeholder="repo:read,ci:read"
                 [value]="defaultCapsText()"
@@ -302,23 +406,23 @@ interface SecretMetaRow {
                     <th>ID / Title</th>
                     <th>Model</th>
                     <th>State</th>
-                    <th>Actions</th>
+                    <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (cs of consoleSessions(); track cs.id) {
                     <tr>
-                      <td class="tabular">
+                      <td>
                         {{ cs.title || cs.name || cs.id }}
                       </td>
-                      <td class="tabular">{{ cs.model || "default" }}</td>
+                      <td class="s-mono">{{ cs.model || "default" }}</td>
                       <td>
                         <span class="status-pill neutral">{{
                           cs.state || "idle"
                         }}</span>
                       </td>
-                      <td>
-                        <div class="s-inline">
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
                           <button
                             type="button"
                             class="btn-tonal s-btn-sm"
@@ -402,15 +506,15 @@ interface SecretMetaRow {
                     <th>Server ID</th>
                     <th>Endpoint / Command</th>
                     <th>State</th>
-                    <th>Actions</th>
+                    <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (srv of capServers(); track srv.id) {
                     @let isDisabled = Boolean(srv.config?.disabled);
                     <tr [attr.data-testid]="'cap-server-row-' + srv.id">
-                      <td class="tabular">{{ srv.id }}</td>
-                      <td class="tabular">
+                      <td class="s-mono">{{ srv.id }}</td>
+                      <td class="s-mono">
                         {{
                           srv.config?.serverUrl ||
                             srv.config?.command ||
@@ -427,8 +531,8 @@ interface SecretMetaRow {
                           {{ !isDisabled ? "enabled" : "disabled" }}
                         </span>
                       </td>
-                      <td>
-                        <div class="s-inline">
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
                           @if (!srv.inProcess) {
                             <button
                               type="button"
@@ -493,47 +597,54 @@ interface SecretMetaRow {
             </div>
           }
 
-          <div class="s-grid">
-            <div class="s-field">
-              <label class="s-label" for="cs-id">Server ID</label>
-              <input
-                id="cs-id"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-cap-server-id"
-                placeholder="jira-mcp"
-                [value]="newServerId()"
-                (input)="newServerId.set($any($event.target).value)"
-              />
+          <div class="s-subsection">
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">Add capability server</h4>
             </div>
-            <div class="s-field">
-              <label class="s-label" for="cs-url">HTTP URL or stdio cmd</label>
-              <input
-                id="cs-url"
-                class="s-input tabular"
-                type="text"
-                data-testid="input-cap-server-url"
-                placeholder="https://mcp.internal/sse"
-                [value]="newServerUrl()"
-                (input)="newServerUrl.set($any($event.target).value)"
-              />
+            <div class="s-grid">
+              <div class="s-field">
+                <label class="s-label" for="cs-id">Server ID</label>
+                <input
+                  id="cs-id"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-cap-server-id"
+                  placeholder="jira-mcp"
+                  [value]="newServerId()"
+                  (input)="newServerId.set($any($event.target).value)"
+                />
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="cs-url"
+                  >HTTP URL or stdio cmd</label
+                >
+                <input
+                  id="cs-url"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-cap-server-url"
+                  placeholder="https://mcp.internal/sse"
+                  [value]="newServerUrl()"
+                  (input)="newServerUrl.set($any($event.target).value)"
+                />
+              </div>
             </div>
-          </div>
-          <div class="s-inline">
-            <button
-              type="button"
-              class="btn-tonal"
-              data-testid="save-cap-server-btn"
-              [disabled]="
-                !newServerId().trim() ||
-                !newServerUrl().trim() ||
-                !access.can('PUT /api/capability-servers') ||
-                state.sectionLocked('capabilities')
-              "
-              (click)="saveCapServer()"
-            >
-              Save capability server
-            </button>
+            <div class="s-inline">
+              <button
+                type="button"
+                class="btn-tonal"
+                data-testid="save-cap-server-btn"
+                [disabled]="
+                  !newServerId().trim() ||
+                  !newServerUrl().trim() ||
+                  !access.can('PUT /api/capability-servers') ||
+                  state.sectionLocked('capabilities')
+                "
+                (click)="saveCapServer()"
+              >
+                Save capability server
+              </button>
+            </div>
           </div>
         </div>
 
@@ -580,13 +691,13 @@ interface SecretMetaRow {
                     <th>Effect</th>
                     <th>Repo filter</th>
                     <th>Untrusted</th>
-                    <th></th>
+                    <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (r of policyRules(); track $index; let idx = $index) {
                     <tr [attr.data-testid]="'policy-rule-row-' + idx">
-                      <td class="tabular">{{ r.capability }}</td>
+                      <td class="s-mono">{{ r.capability }}</td>
                       <td>
                         <span
                           [class]="
@@ -596,7 +707,7 @@ interface SecretMetaRow {
                           {{ r.deny ? "Deny" : "Admit" }}
                         </span>
                       </td>
-                      <td class="tabular">
+                      <td class="s-mono">
                         {{ r.repos?.join(", ") || "*" }}
                       </td>
                       <td>
@@ -606,18 +717,20 @@ interface SecretMetaRow {
                             : "Trusted only"
                         }}
                       </td>
-                      <td>
-                        <button
-                          type="button"
-                          class="btn-text s-btn-sm"
-                          [disabled]="
-                            !access.can('PUT /api/capability-policy') ||
-                            state.sectionLocked('capabilities')
-                          "
-                          (click)="removePolicyRule(idx)"
-                        >
-                          Remove
-                        </button>
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
+                          <button
+                            type="button"
+                            class="btn-text s-btn-sm"
+                            [disabled]="
+                              !access.can('PUT /api/capability-policy') ||
+                              state.sectionLocked('capabilities')
+                            "
+                            (click)="removePolicyRule(idx)"
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   }
@@ -628,7 +741,7 @@ interface SecretMetaRow {
 
           <div class="s-inline">
             <input
-              class="s-input s-input-inline tabular"
+              class="s-input s-input-inline s-mono"
               type="text"
               aria-label="Capability pattern"
               data-testid="input-policy-capability"
@@ -637,7 +750,7 @@ interface SecretMetaRow {
               (input)="newRuleCap.set($any($event.target).value)"
             />
             <input
-              class="s-input s-input-inline tabular"
+              class="s-input s-input-inline s-mono"
               type="text"
               aria-label="Repositories filter (comma-separated)"
               data-testid="input-policy-repos"
@@ -654,7 +767,7 @@ interface SecretMetaRow {
               (valueChange)="newRuleEffect.set($event)"
             />
             @if (newRuleEffect() !== "deny") {
-              <label class="s-inline" style="font-size: 12px" for="dummy">
+              <div class="s-inline">
                 <button
                   type="button"
                   class="g-switch"
@@ -664,8 +777,8 @@ interface SecretMetaRow {
                   aria-label="Allow untrusted triggers"
                   (click)="newRuleAllowUntrusted.set(!newRuleAllowUntrusted())"
                 ></button>
-                <span>Allow untrusted</span>
-              </label>
+                <span class="s-label">Allow untrusted</span>
+              </div>
             }
             <button
               type="button"
@@ -684,7 +797,7 @@ interface SecretMetaRow {
           @if (scopeSets().length > 0) {
             <div class="s-inline">
               @for (ss of scopeSets(); track ss.name) {
-                <span class="status-pill neutral tabular"
+                <span class="status-pill neutral s-mono"
                   >{{ ss.name }} ({{ ss.scopes.length }})</span
                 >
               }
@@ -692,7 +805,7 @@ interface SecretMetaRow {
           }
           <div class="s-inline">
             <input
-              class="s-input s-input-inline tabular"
+              class="s-input s-input-inline s-mono"
               type="text"
               aria-label="Scope set name"
               data-testid="input-scope-set-name"
@@ -701,7 +814,7 @@ interface SecretMetaRow {
               (input)="newScopeSetName.set($any($event.target).value)"
             />
             <input
-              class="s-input s-input-inline tabular"
+              class="s-input s-input-inline s-mono"
               type="text"
               aria-label="Scopes list"
               data-testid="input-scope-set-scopes"
@@ -730,7 +843,7 @@ interface SecretMetaRow {
             >
             <div class="s-inline">
               <input
-                class="s-input s-input-inline tabular"
+                class="s-input s-input-inline s-mono"
                 type="text"
                 aria-label="Secret name"
                 data-testid="input-secret-name"
@@ -739,7 +852,7 @@ interface SecretMetaRow {
                 (input)="secretName.set($any($event.target).value)"
               />
               <input
-                class="s-input s-input-inline tabular"
+                class="s-input s-input-inline s-mono"
                 type="text"
                 aria-label="Secret key"
                 data-testid="input-secret-key"
@@ -748,7 +861,7 @@ interface SecretMetaRow {
                 (input)="secretKey.set($any($event.target).value)"
               />
               <textarea
-                class="s-textarea s-input-inline tabular"
+                class="s-textarea s-input-inline s-mono"
                 rows="1"
                 aria-label="Secret value"
                 data-testid="input-secret-value"
@@ -827,7 +940,7 @@ interface SecretMetaRow {
             >
             <textarea
               id="mem-doc"
-              class="s-textarea tabular"
+              class="s-textarea s-mono"
               rows="6"
               data-testid="input-deployment-memory"
               [value]="memoryBody()"
@@ -841,7 +954,7 @@ interface SecretMetaRow {
             <div class="s-inline">
               <span class="s-label">Documents:</span>
               @for (doc of memoryDocs(); track doc) {
-                <span class="status-pill neutral tabular">{{ doc }}</span>
+                <span class="status-pill neutral s-mono">{{ doc }}</span>
               }
             </div>
           }
@@ -896,8 +1009,10 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     this.loadForSection();
   }
 
-  ngOnChanges(): void {
-    this.loadForSection();
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes["section"] && !changes["section"].firstChange) {
+      this.loadForSection();
+    }
   }
 
   protected canWriteSettings(): boolean {
@@ -905,6 +1020,155 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       this.access.can("POST /api/settings") &&
       !this.state.sectionLocked(this.section())
     );
+  }
+
+  protected writeDeniedReason(): string | null {
+    if (this.state.sectionLocked(this.section())) {
+      return "Managed in the config repository";
+    }
+    if (!this.access.can("POST /api/settings")) {
+      return (
+        this.access.deniedReason("POST /api/settings") ||
+        "settings:write scope required"
+      );
+    }
+    return null;
+  }
+
+  protected qaControlsDisabledReason(): string | null {
+    const writeReason = this.writeDeniedReason();
+    if (writeReason) return writeReason;
+    if (!this.qaEnabled()) {
+      return "Enable quality control engine first";
+    }
+    return null;
+  }
+
+  protected qaEnabled(): boolean {
+    return Boolean(this.state.val("qaEnabled", false));
+  }
+
+  protected canEditQAControls(): boolean {
+    return this.canWriteSettings() && this.qaEnabled();
+  }
+
+  protected qaFlowValue(): string {
+    const current = this.state.val<unknown>("qaFlowId", "golden-v1-minimal");
+    return typeof current === "string" && current.trim() !== ""
+      ? current
+      : "golden-v1-minimal";
+  }
+
+  protected qaFlowOptions(): readonly PillOption[] {
+    const serverFlows = this.state.val<unknown>("qaFlowIds", []);
+    const defaults: readonly PillOption[] = [
+      {
+        value: "golden-v1-minimal",
+        label: "golden-v1-minimal (S3 deterministic + S4 probe)",
+      },
+      {
+        value: "deterministic-s3-only",
+        label: "deterministic-s3-only (local AST & vet only)",
+      },
+      {
+        value: "repo-custom",
+        label: "repo-custom (.grain/qa-flow.yml)",
+      },
+    ];
+    if (!Array.isArray(serverFlows) || serverFlows.length === 0) {
+      return defaults;
+    }
+    const labelByValue = new Map(defaults.map((opt) => [opt.value, opt.label]));
+    return serverFlows
+      .filter((item): item is string => typeof item === "string" && item !== "")
+      .map((value) => ({
+        value,
+        label: labelByValue.get(value) ?? value,
+      }));
+  }
+
+  protected qaRolloutPercent(): number {
+    const raw = this.state.val<unknown>("qaRolloutPct", 0);
+    const num = typeof raw === "number" ? raw : Number(raw);
+    return Number.isFinite(num) ? num : 0;
+  }
+
+  protected qaRolloutInputValue(): string {
+    const raw = this.state.qaRolloutRaw();
+    if (raw && raw.epoch === this.state.discardEpoch()) {
+      return raw.text;
+    }
+    return String(this.qaRolloutPercent());
+  }
+
+  protected qaRolloutError(): string | null {
+    return this.state.fieldErrors()["qaRolloutPct"] ?? null;
+  }
+
+  protected qaShadowOnControl(): boolean {
+    return Boolean(this.state.val("qaShadowOnControl", true));
+  }
+
+  protected toggleQAEnabled(): void {
+    const nextEnabled = !this.qaEnabled();
+    this.state.setField("qaEnabled", nextEnabled);
+    if (!nextEnabled) {
+      this.state.qaRolloutRaw.set(null);
+      this.state.setFieldError("qaRolloutPct", null);
+      if (!this.state.settings()["qaEnabled"]) {
+        // Clear unsaved dependent edits when flipping back off on a deployment where QA was off.
+        const s = this.state.settings();
+        this.state.setField("qaFlowId", s["qaFlowId"] ?? "golden-v1-minimal");
+        this.state.setField("qaRolloutPct", s["qaRolloutPct"] ?? 0);
+        this.state.setField(
+          "qaShadowOnControl",
+          s["qaShadowOnControl"] ?? true,
+        );
+      }
+    }
+  }
+
+  protected setQAFlow(flowId: string): void {
+    this.state.setField("qaFlowId", flowId);
+  }
+
+  protected onQARolloutInput(ev: Event): void {
+    const target = ev.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    const raw = target.value;
+    this.state.qaRolloutRaw.set({
+      epoch: this.state.discardEpoch(),
+      text: raw,
+    });
+
+    const trimmed = raw.trim();
+    if (trimmed === "" || !/^\d+$/.test(trimmed)) {
+      this.state.setFieldError(
+        "qaRolloutPct",
+        "Enter a whole number from 0 to 100.",
+      );
+      return;
+    }
+    const parsed = Number(trimmed);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
+      this.state.setFieldError(
+        "qaRolloutPct",
+        "Rollout percentage must be between 0 and 100.",
+      );
+      return;
+    }
+    this.state.setFieldError("qaRolloutPct", null);
+    this.state.setField("qaRolloutPct", parsed);
+  }
+
+  protected onQARolloutBlur(): void {
+    if (!this.qaRolloutError()) {
+      this.state.qaRolloutRaw.set(null);
+    }
+  }
+
+  protected toggleQAShadowOnControl(): void {
+    this.state.setField("qaShadowOnControl", !this.qaShadowOnControl());
   }
 
   protected defaultCapsText(): string {

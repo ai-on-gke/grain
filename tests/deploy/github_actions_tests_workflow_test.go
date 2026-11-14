@@ -15,6 +15,7 @@
 package deploy
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -144,7 +145,7 @@ func TestGitHubActionsTestsWorkflowStructure(t *testing.T) {
 	wantOutputs := []string{
 		"go_program", "go_backend", "go_unit", "granule", "frontend", "lint", "terraform",
 		"go", "go-e2e", "go-orchestrator", "go-model", "go-unit", "postgres",
-		"run-host", "host-script-container", "ui-e2e", "installer-e2e", "installer",
+		"run-host", "host-script-container", "ui-e2e", "ui-ng-e2e", "installer-e2e", "installer",
 		"package-cache", "real-vm", "real-kubernetes",
 	}
 	for _, outKey := range wantOutputs {
@@ -218,6 +219,89 @@ func TestGitHubActionsTestsWorkflowStructure(t *testing.T) {
 		if !want.selfHosted && strings.Contains(job.If, "vars.ENABLE_SELF_HOSTED_TESTS") {
 			t.Errorf("hosted job %q if = %q, must not be gated on vars.ENABLE_SELF_HOSTED_TESTS", jobID, job.If)
 		}
+	}
+
+	// ui-ng e2e has a path filter of its own rather than a group's.
+	ngJob, exists := wf.Jobs["ui-ng-e2e"]
+	if !exists {
+		t.Error(".github/workflows/tests.yml is missing job \"ui-ng-e2e\"")
+	} else {
+		if !slices.Contains(ngJob.Needs, "changes") {
+			t.Errorf("job ui-ng-e2e needs = %v, want it to include \"changes\"", ngJob.Needs)
+		}
+		if ngJob.If != "needs.changes.outputs.ui-ng-e2e == 'true'" {
+			t.Errorf("job ui-ng-e2e if = %q, want needs.changes.outputs.ui-ng-e2e == 'true'", ngJob.If)
+		}
+	}
+}
+
+func TestGitHubCIChangesUINGE2EPaths(t *testing.T) {
+	cases := map[string]string{
+		"ui-ng/src/app/app.component.ts": "true",
+		"ui-ng/e2e/shell.spec.ts":        "true",
+		"ui-shared/e2e/demo.js":          "true",
+		"pkg/ui/server.go":               "true",
+		"pkg/demo/demo.go":               "true",
+		".github/workflows/tests.yml":    "true",
+		"Makefile":                       "true",
+		"scripts/warm-npm-cache.sh":      "true",
+		"ui/package-lock.json":           "true",
+		"ui/src/App.jsx":                 "false",
+		"ui-hub/src/App.jsx":             "false",
+		"pkg/orchestrator/foo.go":        "true",
+		"docs/design.md":                 "false",
+	}
+	for path, want := range cases {
+		outputs, _, err := runGitHubCIChanges(t, "", map[string]string{
+			"EVENT_NAME":    "pull_request",
+			"CHANGED_FILES": path,
+		})
+		if err != nil {
+			t.Fatalf("github-ci-changes.sh(%q) failed: %v", path, err)
+		}
+		if got := outputs["ui-ng-e2e"]; got != want {
+			t.Errorf("path %q: ui-ng-e2e = %q, want %q", path, got, want)
+		}
+	}
+
+	outputs, _, err := runGitHubCIChanges(t, "", map[string]string{
+		"EVENT_NAME": "workflow_dispatch",
+		"INPUT_JOBS": "ui-ng-e2e",
+	})
+	if err != nil {
+		t.Fatalf("workflow_dispatch ui-ng-e2e: %v", err)
+	}
+	if outputs["ui-ng-e2e"] != "true" || outputs["ui-e2e"] != "false" {
+		t.Errorf("workflow_dispatch ui-ng-e2e: ui-ng-e2e = %q, ui-e2e = %q; want true, false", outputs["ui-ng-e2e"], outputs["ui-e2e"])
+	}
+}
+
+// `make playwright-browsers` installs browsers out of ui/ for both suites,
+// so ui-ng/'s Playwright has to be the same release as ui/'s, or the
+// browser it looks for is not the one that was installed.
+func TestUIAndUINGPinOnePlaywright(t *testing.T) {
+	locked := func(dir string) string {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(repoRoot(t), dir, "package-lock.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var lock struct {
+			Packages map[string]struct {
+				Version string `json:"version"`
+			} `json:"packages"`
+		}
+		if err := json.Unmarshal(raw, &lock); err != nil {
+			t.Fatalf("%s/package-lock.json: %v", dir, err)
+		}
+		v := lock.Packages["node_modules/@playwright/test"].Version
+		if v == "" {
+			t.Fatalf("%s/package-lock.json locks no @playwright/test", dir)
+		}
+		return v
+	}
+	if ui, ng := locked("ui"), locked("ui-ng"); ui != ng {
+		t.Errorf("@playwright/test is %s in ui/ but %s in ui-ng/; `make playwright-browsers` installs ui/'s browsers for both, so bump them together", ui, ng)
 	}
 }
 
@@ -414,7 +498,7 @@ func TestGitHubCIChangesWorkflowDispatchAndEvents(t *testing.T) {
 	allJobKeys := []string{
 		"go", "go-e2e", "go-orchestrator", "go-model", "go-unit",
 		"granule", "postgres", "run-host", "host-script-container",
-		"frontend", "ui-e2e", "lint", "terraform", "installer-e2e", "installer",
+		"frontend", "ui-e2e", "ui-ng-e2e", "lint", "terraform", "installer-e2e", "installer",
 		"package-cache", "real-vm", "real-kubernetes",
 	}
 

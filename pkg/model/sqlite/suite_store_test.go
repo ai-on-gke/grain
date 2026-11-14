@@ -281,6 +281,15 @@ func TestCreateSuiteRunFilesOneTaskPerItemInTheFirstPass(t *testing.T) {
 	if tasks[0].TemplateName != "Smoke" || tasks[1].TemplateName != "Lint" {
 		t.Fatalf("got names %q/%q, want the resolved template names", tasks[0].TemplateName, tasks[1].TemplateName)
 	}
+	for _, ts := range tasks {
+		task, err := store.GetTask(ctx, ts.TaskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.TemplateID != ts.TemplateID || task.SourceTemplateID != ts.TemplateID {
+			t.Errorf("task %s: template %q, source template %q, want both %q", ts.TaskID, task.TemplateID, task.SourceTemplateID, ts.TemplateID)
+		}
+	}
 
 	for _, ts := range tasks {
 		if !ts.Approved {
@@ -699,6 +708,54 @@ func TestCreateScheduledSuiteRunRecordsItsSchedule(t *testing.T) {
 	}
 	if active {
 		t.Error("want no active run for sched-1 once its firing completed")
+	}
+}
+
+func TestScheduledSuiteRunCarriesGroupTagsAcrossPassesAndTracksActiveRuns(t *testing.T) {
+	t.Parallel()
+	store, _, ctx := openStore(t)
+	s := twoItemSuite()
+	s.Count = 2
+	suite := putSuite(t, ctx, store, s)
+	groupTag := model.ScheduleOverlapGroupTag(widgets, "train")
+
+	run, err := store.CreateScheduledSuiteRun(ctx, suite, widgets, "main", "sched-sweep", now, groupTag)
+	if err != nil {
+		t.Fatalf("CreateScheduledSuiteRun: %v", err)
+	}
+	for _, rt := range run.PassTasks(1) {
+		gotSched, err := store.ScheduleOfSuiteRunTask(ctx, rt.TaskID)
+		if err != nil || gotSched != "sched-sweep" {
+			t.Fatalf("ScheduleOfSuiteRunTask(%s) = %q, %v; want sched-sweep", rt.TaskID, gotSched, err)
+		}
+		closedAt := now.Add(time.Minute)
+		if err := store.ObserveField(ctx, rt.TaskID, closedAt, func(o *model.Observation) { o.ClosedAt = &closedAt }); err != nil {
+			t.Fatalf("closing %s: %v", rt.TaskID, err)
+		}
+	}
+	// Even with every pass-1 task closed, the active run still reports its group holder.
+	holders, err := store.ActiveSuiteRunSchedulesWithGroupTag(ctx, groupTag)
+	if err != nil || !slices.Equal(holders, []string{"sched-sweep"}) {
+		t.Fatalf("ActiveSuiteRunSchedulesWithGroupTag = %v, %v; want [sched-sweep]", holders, err)
+	}
+
+	next, err := store.FireNextPass(ctx, run, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("FireNextPass: %v", err)
+	}
+	for _, rt := range next.PassTasks(2) {
+		task, err := store.GetTask(ctx, rt.TaskID)
+		if err != nil || task == nil || !slices.Contains(task.Tags, groupTag) {
+			t.Fatalf("pass-2 task %s = %+v, %v; want tag %q", rt.TaskID, task, err, groupTag)
+		}
+	}
+
+	if err := store.CompleteSuiteRun(ctx, run.ID, model.SuiteRunSucceeded, "", now.Add(3*time.Minute)); err != nil {
+		t.Fatalf("CompleteSuiteRun: %v", err)
+	}
+	holders, err = store.ActiveSuiteRunSchedulesWithGroupTag(ctx, groupTag)
+	if err != nil || len(holders) != 0 {
+		t.Fatalf("ActiveSuiteRunSchedulesWithGroupTag after completion = %v, %v; want empty", holders, err)
 	}
 }
 

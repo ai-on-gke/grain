@@ -31,6 +31,11 @@ import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { errText } from "../settings/settings-state.service";
 import {
+  ConfirmDialogComponent,
+  bypassConfirm,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
+import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
@@ -106,11 +111,11 @@ interface PendingReleaseRow {
 
 @Component({
   selector: "g-repo-detail-page",
-  imports: [RouterLink, PillSelectComponent],
+  imports: [RouterLink, PillSelectComponent, ConfirmDialogComponent],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
-    "../shared/pill-select.css",
+    "../shared/surface-controls.css",
     "../settings/settings-forms.css",
     "./repo-detail.css",
   ],
@@ -380,7 +385,7 @@ interface PendingReleaseRow {
                       </h2>
                       <p class="s-card-desc">
                         Choose whether Grain runs .grain/workflows, waits for
-                        GitHub checks, or both.
+                        GitHub checks, or merges without waiting for CI.
                       </p>
                     </div>
                     <button
@@ -1145,6 +1150,9 @@ interface PendingReleaseRow {
           }
         </div>
       </div>
+      @if (confirmReq(); as req) {
+        <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+      }
     </section>
   `,
 })
@@ -1161,11 +1169,15 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   readonly tab = input<string | undefined>(undefined);
 
   protected readonly tabs = REPO_TABS;
+  // The three modes PUT .../ci-mode accepts (model.CIMode: grain,
+  // github, none). The page used to offer "both" and "off", which the
+  // server refuses with a 400, and had no option for "none", so a repo
+  // on no CI read as the first option, Grain CI (2026-11-13 repository
+  // walkthrough).
   protected readonly ciModeOptions: readonly PillOption[] = [
     { value: "grain", label: "Grain CI (.grain/workflows)" },
     { value: "github", label: "GitHub Actions checks" },
-    { value: "both", label: "Both Grain & GitHub CI" },
-    { value: "off", label: "Off" },
+    { value: "none", label: "No CI (merge without waiting)" },
   ];
 
   private readonly routeHost = signal("");
@@ -1197,6 +1209,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly mergeOnGreen = signal(false);
   protected readonly requireUpToDate = signal(false);
   protected readonly bypassHumanGates = signal(false);
+  protected readonly confirmReq = signal<ConfirmRequest | null>(null);
 
   protected readonly setupCommand = signal("");
   protected readonly promptExtension = signal("");
@@ -1359,8 +1372,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           ),
         );
       }
-      await this.loadCoreRepo();
-      await this.loadTabData();
+      await Promise.all([this.loadCoreRepo(), this.loadTabData()]);
       this.ready.set(true);
     } catch (err) {
       this.error.set(errText(err));
@@ -1370,84 +1382,93 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   private async loadCoreRepo(): Promise<void> {
     const p = this.params();
     if (!p.owner || !p.name) return;
+    const jobs: Promise<void>[] = [];
     if (this.can("GET /api/deployment/repos/{owner}/{name}/config")) {
-      try {
-        const cfg = await this.api.get<Record<string, unknown>>(
-          "GET /api/deployment/repos/{owner}/{name}/config",
-          p,
-        );
-        const eff =
-          (cfg?.["effective"] as Record<string, unknown> | undefined) ?? cfg;
-        if (eff?.["cloneUrl"] !== undefined) {
-          this.cloneUrl.set(String(eff["cloneUrl"] ?? ""));
-        }
-        if (eff?.["gitCredential"] !== undefined) {
-          this.gitCredential.set(String(eff["gitCredential"] ?? ""));
-        }
-      } catch {
-        // Non-fatal
-      }
+      jobs.push(
+        this.api
+          .get<Record<string, unknown>>(
+            "GET /api/deployment/repos/{owner}/{name}/config",
+            p,
+          )
+          .then((cfg) => {
+            const eff =
+              (cfg?.["effective"] as Record<string, unknown> | undefined) ??
+              cfg;
+            if (eff?.["cloneUrl"] !== undefined) {
+              this.cloneUrl.set(String(eff["cloneUrl"] ?? ""));
+            }
+            if (eff?.["gitCredential"] !== undefined) {
+              this.gitCredential.set(String(eff["gitCredential"] ?? ""));
+            }
+          })
+          .catch(() => undefined),
+      );
     }
     if (this.can("GET /api/repos/{owner}/{name}/settings")) {
-      try {
-        const st = await this.api.get<Record<string, unknown>>(
-          "GET /api/repos/{owner}/{name}/settings",
-          p,
-        );
-        if (st?.["ciMode"]) this.ciMode.set(String(st["ciMode"]));
-        if (st?.["mergeOnGreen"] !== undefined) {
-          this.mergeOnGreen.set(Boolean(st["mergeOnGreen"]));
-        }
-        if (st?.["requireBranchUpToDate"] !== undefined) {
-          this.requireUpToDate.set(Boolean(st["requireBranchUpToDate"]));
-        }
-        if (st?.["baseRepairBypassesHumanGates"] !== undefined) {
-          this.bypassHumanGates.set(
-            Boolean(st["baseRepairBypassesHumanGates"]),
-          );
-        }
-        if (st?.["watchDefaultBranch"] !== undefined) {
-          this.watchDefaultBranch.set(Boolean(st["watchDefaultBranch"]));
-        }
-        if (st?.["setupCommand"] !== undefined) {
-          this.setupCommand.set(String(st["setupCommand"] ?? ""));
-        }
-        if (st?.["promptExtension"] !== undefined) {
-          this.promptExtension.set(String(st["promptExtension"] ?? ""));
-        }
-        const imp = st?.["issueImport"] as
-          | {
-              enabled?: boolean;
-              label?: string;
-              repo?: string;
-              approved?: boolean;
+      jobs.push(
+        this.api
+          .get<Record<string, unknown>>(
+            "GET /api/repos/{owner}/{name}/settings",
+            p,
+          )
+          .then((st) => {
+            if (st?.["ciMode"]) this.ciMode.set(String(st["ciMode"]));
+            if (st?.["mergeOnGreen"] !== undefined) {
+              this.mergeOnGreen.set(Boolean(st["mergeOnGreen"]));
             }
-          | undefined;
-        if (imp && typeof imp === "object") {
-          this.importEnabled.set(Boolean(imp.enabled));
-          this.importLabel.set(String(imp.label ?? ""));
-          this.importSourceRepo.set(String(imp.repo ?? ""));
-          this.importApproved.set(Boolean(imp.approved));
-        }
-      } catch {
-        // Non-fatal
-      }
+            if (st?.["requireBranchUpToDate"] !== undefined) {
+              this.requireUpToDate.set(Boolean(st["requireBranchUpToDate"]));
+            }
+            if (st?.["baseRepairBypassesHumanGates"] !== undefined) {
+              this.bypassHumanGates.set(
+                Boolean(st["baseRepairBypassesHumanGates"]),
+              );
+            }
+            if (st?.["watchDefaultBranch"] !== undefined) {
+              this.watchDefaultBranch.set(Boolean(st["watchDefaultBranch"]));
+            }
+            if (st?.["setupCommand"] !== undefined) {
+              this.setupCommand.set(String(st["setupCommand"] ?? ""));
+            }
+            if (st?.["promptExtension"] !== undefined) {
+              this.promptExtension.set(String(st["promptExtension"] ?? ""));
+            }
+            const imp = st?.["issueImport"] as
+              | {
+                  enabled?: boolean;
+                  label?: string;
+                  repo?: string;
+                  approved?: boolean;
+                }
+              | undefined;
+            if (imp && typeof imp === "object") {
+              this.importEnabled.set(Boolean(imp.enabled));
+              this.importLabel.set(String(imp.label ?? ""));
+              this.importSourceRepo.set(String(imp.repo ?? ""));
+              this.importApproved.set(Boolean(imp.approved));
+            }
+          })
+          .catch(() => undefined),
+      );
     }
     if (this.access.can("GET /api/deployment/git-connections")) {
-      try {
-        const conns = await this.api.get<
-          { credential?: string; id?: string }[] | { connections?: unknown[] }
-        >("GET /api/deployment/git-connections");
-        const arr = (
-          Array.isArray(conns) ? conns : (conns?.connections ?? [])
-        ) as { credential?: string; id?: string }[];
-        this.availableGitCreds.set(
-          arr.map((c) => c.credential ?? c.id ?? "").filter(Boolean),
-        );
-      } catch {
-        // Non-fatal
-      }
+      jobs.push(
+        this.api
+          .get<
+            { credential?: string; id?: string }[] | { connections?: unknown[] }
+          >("GET /api/deployment/git-connections")
+          .then((conns) => {
+            const arr = (
+              Array.isArray(conns) ? conns : (conns?.connections ?? [])
+            ) as { credential?: string; id?: string }[];
+            this.availableGitCreds.set(
+              arr.map((c) => c.credential ?? c.id ?? "").filter(Boolean),
+            );
+          })
+          .catch(() => undefined),
+      );
     }
+    await Promise.all(jobs);
   }
 
   private async loadTabData(t: RepoTabId = this.activeTab()): Promise<void> {
@@ -1698,6 +1719,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async saveCiMode(ciMode: string): Promise<void> {
+    const previous = this.ciMode();
     this.ciMode.set(ciMode);
     try {
       await this.api.put(
@@ -1707,6 +1729,10 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       );
       this.snackbar.show(`CI mode set to ${ciMode}`);
     } catch (err) {
+      // A refused mode is not the repo's mode: put the pill back on
+      // what the server still has rather than leave it naming one it
+      // refused.
+      this.ciMode.set(previous);
       this.error.set(errText(err));
     }
   }
@@ -1887,8 +1913,25 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  protected async toggleBypassHumanGates(): Promise<void> {
+  protected async onConfirmDone(accepted: boolean): Promise<void> {
+    const req = this.confirmReq();
+    this.confirmReq.set(null);
+    if (!accepted || !req) return;
+    await req.run();
+  }
+
+  protected toggleBypassHumanGates(): void {
     const next = !this.bypassHumanGates();
+    if (next) {
+      this.confirmReq.set(
+        bypassConfirm(this.repoSlug(), () => this.saveBypassHumanGates(true)),
+      );
+      return;
+    }
+    void this.saveBypassHumanGates(false);
+  }
+
+  private async saveBypassHumanGates(next: boolean): Promise<void> {
     try {
       await this.api.put(
         "PUT /api/repos/{owner}/{name}/base-repair-bypasses-human-gates",

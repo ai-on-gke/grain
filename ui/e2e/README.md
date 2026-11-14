@@ -1,18 +1,15 @@
 # Classic UI e2e suite (frozen)
 
 This directory holds the Playwright suite for the classic React UI at
-`/`, plus the `next-*.spec.js` specs that already drive the Angular UI
-at `/next/`. The classic UI only takes fixes now (`PROMPT.md`, "Two
+`/`. The Angular UI at `/next/` has its own suite in `ui-ng/e2e/`. The classic UI only takes fixes now (`PROMPT.md`, "Two
 UIs"). Its tests are being moved to Go and to ui-ng
 (`docs/test-plans/classic-ui-e2e-migration/`). Until then the classic
 suite is **frozen**:
 
 1. **No new classic specs.** New coverage goes against `/next/`
-   (`next-*.spec.js` here, until the ui-ng suite has a home of its own)
-   or into Go under `tests/uiapi/`. `TestNoNewClassicE2ESpecs`
+   (`ui-ng/e2e/`) or into Go under `tests/uiapi/`. `TestNoNewClassicE2ESpecs`
    (`tests/hygiene/classic_e2e_freeze_test.go`) fails on any spec in
-   this directory that is not in `FROZEN_SPECS`. `next-*` specs are
-   exempt. `FROZEN_SPECS` only gets shorter: delete a line when you
+   this directory that is not in `FROZEN_SPECS`. `FROZEN_SPECS` only gets shorter: delete a line when you
    delete its spec, and never add one.
 2. **Flakes are quarantined, not fixed.** A classic test that flakes
    goes in `QUARANTINE`, with the evidence (`grain ci test-history`, the

@@ -344,6 +344,7 @@ describe("NewTaskSheetComponent", () => {
     const noPort = q<HTMLInputElement>('[data-testid="nt-no-port"]')!;
     noPort.checked = true;
     noPort.dispatchEvent(new Event("change"));
+    type('[data-testid="nt-found-in"]', "v2.5.0-rc.2");
 
     q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
     await settle(f);
@@ -360,6 +361,7 @@ describe("NewTaskSheetComponent", () => {
       networkAccess: "none",
       agentBackendId: "agy-ambient",
       noPort: true,
+      foundIn: "v2.5.0-rc.2",
       attachments: [
         {
           filename: "repro.txt",
@@ -610,5 +612,75 @@ describe("NewTaskSheetComponent", () => {
     q<HTMLButtonElement>('[data-testid="nt-reads"]')!.click();
     await settle(f);
     expect(q('[data-testid="nt-reads-opt-acme/docs"]')).toBeTruthy();
+  });
+
+  it("keeps primary target picker strictly within targetRepos when an allowlist is set", async () => {
+    const api = new FakeApi();
+    api.cfg = {
+      ...api.cfg,
+      targetRepos: ["acme/web"],
+      defaultTarget: "acme/web",
+      deployment: { targetRepos: ["acme/web"] },
+    };
+    const baseGet = api.get;
+    api.get = ((route: string, params?: unknown, query?: string) => {
+      if (route === "GET /api/deployment/reachable-repos") {
+        api.calls.push({ route });
+        return Promise.resolve({
+          available: true,
+          repos: [
+            { repo: "acme/api", push: true },
+            { repo: "acme/docs", push: false },
+          ],
+        });
+      }
+      return baseGet(route, params, query);
+    }) as typeof api.get;
+
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    q<HTMLButtonElement>('[data-testid="nt-repo"]')!.click();
+    await settle(f);
+    expect(q('[data-testid="nt-repo-opt-acme/web"]')).toBeTruthy();
+    expect(q('[data-testid="nt-repo-opt-acme/api"]')).toBeNull();
+  });
+
+  it("loads templates and branches immediately without blocking on slow reachable-repos", async () => {
+    const api = new FakeApi();
+    const baseGet = api.get;
+    api.get = ((route: string, params?: unknown, query?: string) => {
+      if (route === "GET /api/deployment/reachable-repos") {
+        api.calls.push({ route });
+        return new Promise(() => undefined);
+      }
+      if (route === "GET /api/repos/{owner}/{name}/branches") {
+        api.calls.push({ route, params, query });
+        return Promise.resolve({
+          branches: [{ name: "main" }, { name: "release/v1" }],
+        });
+      }
+      return baseGet(route, params, query);
+    }) as typeof api.get;
+
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    expect(api.calls.some((c) => c.route === "GET /api/templates")).toBe(true);
+    expect(
+      api.calls.some(
+        (c) => c.route === "GET /api/repos/{owner}/{name}/branches",
+      ),
+    ).toBe(true);
+    // Template option populated even while reachable-repos is still pending.
+    q<HTMLButtonElement>('[data-testid="nt-template"]')!.click();
+    await settle(f);
+    expect(
+      q(
+        '[data-testid="nt-template-opt-declared:template:sidthe:grain:bugfix"]',
+      ),
+    ).toBeTruthy();
   });
 });

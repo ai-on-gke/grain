@@ -49,6 +49,7 @@ import {
   readFilesAsUploads,
 } from "../shared/attachments";
 import { GrantsPickerComponent } from "../shared/grants-picker.component";
+import { hasExplicitTargetAllowlist } from "../shared/instance-repos";
 import {
   type PillOption,
   PillSelectComponent,
@@ -111,7 +112,10 @@ const FRAMEWORKS: readonly PillOption[] = [
     DirectorShaperComponent,
   ],
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["./new-task-sheet.component.css"],
+  styleUrls: [
+    "./new-task-sheet.component.css",
+    "../shared/surface-controls.css",
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "(document:keydown.escape)": "onEscape($event)",
@@ -983,6 +987,34 @@ const FRAMEWORKS: readonly PillOption[] = [
             />
           </div>
         }
+        @case ("foundIn") {
+          <label class="field">
+            <span>{{ f.label || "Found in release" }}</span>
+            <input
+              #foundInInput
+              type="text"
+              data-testid="nt-found-in"
+              placeholder="v2.5.0-rc.2"
+              autocomplete="off"
+              spellcheck="false"
+              [attr.aria-invalid]="error()?.field === 'foundIn' ? 'true' : null"
+              [attr.aria-describedby]="
+                error()?.field === 'foundIn' ? 'nt-found-in-error' : null
+              "
+              [value]="draft().foundIn"
+              (input)="set('foundIn', val($event))"
+            />
+            @if (error()?.field === "foundIn") {
+              <small
+                id="nt-found-in-error"
+                class="nt-field-error"
+                role="alert"
+                data-testid="nt-found-in-error"
+                >{{ error()!.message }}</small
+              >
+            }
+          </label>
+        }
         @case ("promptExtension") {
           <label class="field">
             <span>{{ f.label || "Extra instructions for the agent" }}</span>
@@ -1055,6 +1087,8 @@ export class NewTaskSheetComponent {
     viewChild<ElementRef<HTMLInputElement>>("titleInput");
   private readonly branchInput =
     viewChild<ElementRef<HTMLInputElement>>("branchInput");
+  private readonly foundInInput =
+    viewChild<ElementRef<HTMLInputElement>>("foundInInput");
 
   private readonly knownTasks = computed(() => {
     const byId = new Map<string, Task>();
@@ -1105,9 +1139,15 @@ export class NewTaskSheetComponent {
   });
 
   protected readonly repos = computed(() => {
-    const base = targetableRepos(this.config(), this.inbox.tasks());
-    // Target pickers offer only repos the deployment can push to
-    // (pkg/gitproxy/reach.go ReachableRepo.Push); reads use every reachable repo.
+    const cfg = this.config();
+    const base = targetableRepos(cfg, this.inbox.tasks());
+    // Match classic NewTaskOverlay.jsx: when the deployment has an explicit
+    // targetRepos allowlist, filing against any off-list repo is refused by
+    // the server, so never merge GitHub-wide reachablePushRepos into target
+    // or write pickers. Only offer reachablePushRepos when no allowlist is set.
+    if (hasExplicitTargetAllowlist(cfg)) {
+      return base;
+    }
     const extra = this.reachablePushRepos();
     const seen = new Set(base.map((r) => r.toLowerCase()));
     const merged = [...base];
@@ -1189,13 +1229,22 @@ export class NewTaskSheetComponent {
 
   protected readonly shown = computed(() => this.byVisibility("shown"));
   protected readonly capsFields = computed(() => {
-    if (!this.access.can("POST /api/tasks", this.repoForAccess())) return [];
+    if (
+      !this.access.canAccessTask(
+        "POST /api/tasks",
+        this.repoForAccess() ?? null,
+      )
+    )
+      return [];
     return this.byVisibility("more").filter((id) =>
       NewTaskSheetComponent.CAPS_SECTION_IDS.has(id),
     );
   });
   protected readonly more = computed(() => {
-    const hidden = !this.access.can("POST /api/tasks", this.repoForAccess())
+    const hidden = !this.access.canAccessTask(
+      "POST /api/tasks",
+      this.repoForAccess() ?? null,
+    )
       ? new Set(["model", "sandboxCpus"])
       : new Set();
     return this.byVisibility("more").filter(
@@ -1253,10 +1302,10 @@ export class NewTaskSheetComponent {
     if (tmpl && repo && fromTemplateStem(repo, tmpl)) {
       return (
         this.access.can("POST /api/tasks/from-template", repo) ||
-        this.access.can("POST /api/tasks", repo)
+        this.access.canAccessTask("POST /api/tasks", repo)
       );
     }
-    return this.access.can("POST /api/tasks", repo);
+    return this.access.canAccessTask("POST /api/tasks", repo ?? null);
   });
 
   protected readonly deniedReason = computed(() => {
@@ -1266,7 +1315,7 @@ export class NewTaskSheetComponent {
       if (this.access.can("POST /api/tasks/from-template", repo)) return null;
       return this.access.deniedReason("POST /api/tasks/from-template", repo);
     }
-    return this.access.deniedReason("POST /api/tasks", repo);
+    return this.access.deniedReasonForTask("POST /api/tasks", repo ?? null);
   });
 
   protected readonly canAskDirector = computed(
@@ -1325,42 +1374,41 @@ export class NewTaskSheetComponent {
     }
 
     const canGet = typeof this.api.get === "function";
-    const [tmplRes, reachRes] = await Promise.allSettled([
-      canGet && this.access.can("GET /api/templates")
-        ? this.api.get<Template[] | { templates?: Template[] }>(
-            "GET /api/templates",
-          )
-        : Promise.resolve([]),
-      canGet && this.access.can("GET /api/deployment/reachable-repos")
-        ? this.api.get<string[] | { repos?: string[] }>(
-            "GET /api/deployment/reachable-repos",
-          )
-        : Promise.resolve([]),
-    ]);
-
-    if (gen !== this.generation || !this.svc.isOpen()) return;
-    if (tmplRes.status === "fulfilled") {
-      const v = tmplRes.value;
-      const list = Array.isArray(v) ? v : (v?.templates ?? []);
-      this.templates.set(list);
-    }
-    if (reachRes.status === "fulfilled") {
-      const v = reachRes.value as {
-        repos?: Array<{ repo: string; push?: boolean } | string>;
-      };
-      const list = Array.isArray(v) ? v : (v?.repos ?? []);
-      if (Array.isArray(list)) {
-        this.reachableRepos.set(
-          list.map((x) => (typeof x === "string" ? x : x.repo)),
-        );
-        this.reachablePushRepos.set(
-          list
-            .filter((x) => typeof x === "string" || x.push)
-            .map((x) => (typeof x === "string" ? x : x.repo)),
-        );
-      }
-    }
     void this.loadBranchesFor(this.draft().repo);
+    if (canGet && this.access.can("GET /api/templates")) {
+      void this.api
+        .get<Template[] | { templates?: Template[] }>("GET /api/templates")
+        .then((v) => {
+          if (gen !== this.generation || !this.svc.isOpen()) return;
+          const list = Array.isArray(v) ? v : (v?.templates ?? []);
+          this.templates.set(list);
+        })
+        .catch(() => undefined);
+    }
+    if (canGet && this.access.can("GET /api/deployment/reachable-repos")) {
+      void this.api
+        .get<string[] | { repos?: string[] }>(
+          "GET /api/deployment/reachable-repos",
+        )
+        .then((v) => {
+          if (gen !== this.generation || !this.svc.isOpen()) return;
+          const obj = v as {
+            repos?: Array<{ repo: string; push?: boolean } | string>;
+          };
+          const list = Array.isArray(obj) ? obj : (obj?.repos ?? []);
+          if (Array.isArray(list)) {
+            this.reachableRepos.set(
+              list.map((x) => (typeof x === "string" ? x : x.repo)),
+            );
+            this.reachablePushRepos.set(
+              list
+                .filter((x) => typeof x === "string" || x.push)
+                .map((x) => (typeof x === "string" ? x : x.repo)),
+            );
+          }
+        })
+        .catch(() => undefined);
+    }
   }
 
   private async loadBranchesFor(repo: string): Promise<void> {
@@ -1687,10 +1735,17 @@ export class NewTaskSheetComponent {
     const problem = validate(d, this.fields(), tmpl, tvals);
     if (problem) {
       this.error.set(problem);
-      (problem.field === "title"
-        ? this.titleInput()
-        : this.branchInput()
-      )?.nativeElement.focus();
+      if (problem.field === "foundIn") {
+        if (this.fields().foundIn.visibility === "more") {
+          this.moreOpen.set(true);
+        }
+        queueMicrotask(() => this.foundInInput()?.nativeElement.focus());
+      } else {
+        (problem.field === "title"
+          ? this.titleInput()
+          : this.branchInput()
+        )?.nativeElement.focus();
+      }
       return;
     }
     this.busy.set(true);
@@ -1717,6 +1772,7 @@ export class NewTaskSheetComponent {
         "autoMerge",
         "noPort",
         "fixesBaseBranch",
+        "foundIn",
         "model",
         "agentFramework",
         "agentBackendId",
@@ -1743,7 +1799,7 @@ export class NewTaskSheetComponent {
         OVERRIDE_KEYS.some((k) => differs(d[k], fresh[k]));
 
       const canOnlyPostFromTemplate =
-        !this.access.can("POST /api/tasks", effectiveRepo) &&
+        !this.access.canAccessTask("POST /api/tasks", effectiveRepo || null) &&
         this.access.can("POST /api/tasks/from-template", effectiveRepo);
       if (
         tmpl &&
@@ -1785,9 +1841,14 @@ export class NewTaskSheetComponent {
       this.svc.close();
       this.announce(created, d.approved, !!d.workstream);
     } catch (err) {
+      const msg = errorText(err);
+      const isFoundIn = /found[- ]in|release tag/i.test(msg);
+      if (isFoundIn && this.fields().foundIn.visibility === "more") {
+        this.moreOpen.set(true);
+      }
       this.error.set({
-        field: "title",
-        message: `The task was not filed: ${errorText(err)}`,
+        field: isFoundIn ? "foundIn" : "form",
+        message: `The task was not filed: ${msg}`,
       });
     } finally {
       this.busy.set(false);

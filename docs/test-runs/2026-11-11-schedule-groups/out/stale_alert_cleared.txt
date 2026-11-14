@@ -1,0 +1,8 @@
+ok   /system/health desktop light: no alert
+ok   /ci desktop light: no alert
+ok   /system/health desktop dark: no alert
+ok   /ci desktop dark: no alert
+ok   /system/health phone light: no alert
+ok   /ci phone light: no alert
+ok   /system/health phone dark: no alert
+ok   /ci phone dark: no alert

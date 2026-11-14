@@ -19,7 +19,8 @@ import type {
   Template,
 } from "../api/models";
 
-// All 22 builtin fields from ui/src/newTaskForm.js.
+// The builtin fields of ui/src/newTaskForm.js, plus foundIn, which only
+// this form offers.
 export type FieldId =
   | "title"
   | "description"
@@ -33,6 +34,7 @@ export type FieldId =
   | "autoMerge"
   | "noPort"
   | "fixesBaseBranch"
+  | "foundIn"
   | "grants"
   | "model"
   | "dependsOn"
@@ -91,6 +93,7 @@ const BUILTIN: Record<FieldId, { visibility: Visibility; order: number }> = {
   writes: { visibility: "more", order: 165 },
   noPort: { visibility: "more", order: 175 },
   fixesBaseBranch: { visibility: "more", order: 180 },
+  foundIn: { visibility: "more", order: 185 },
   agentBackendId: { visibility: "more", order: 200 },
   networkAccess: { visibility: "more", order: 210 },
   nothingNeededAction: { visibility: "more", order: 220 },
@@ -353,6 +356,9 @@ export interface NewTaskDraft {
   autoMerge: boolean;
   noPort: boolean;
   fixesBaseBranch: boolean;
+  // The release a bug is found in (model.LinkFoundIn): vX.Y.Z or
+  // vX.Y.Z-rc.N, "" for none. The server checks it.
+  foundIn: string;
   capabilities: string[] | null; // null = use deployment defaults unless edited
   model: string;
   agentFramework: string;
@@ -405,6 +411,7 @@ export function emptyDraft(
     autoMerge: !!f.autoMerge.default,
     noPort: !!f.noPort.default,
     fixesBaseBranch: !!f.fixesBaseBranch.default,
+    foundIn: String(f.foundIn.default ?? ""),
     capabilities: null,
     model: String(f.model.default ?? ""),
     agentFramework: "",
@@ -451,6 +458,7 @@ export function buildPayload(
     autoMerge: d.autoMerge,
     ...(d.noPort ? { noPort: true } : {}),
     ...(d.fixesBaseBranch && !none ? { fixesBaseBranch: true } : {}),
+    ...(d.foundIn.trim() ? { foundIn: d.foundIn.trim() } : {}),
     model: d.model,
     ...(d.agentFramework ? { agentFramework: d.agentFramework } : {}),
     ...(d.agentBackendId ? { agentBackendId: d.agentBackendId } : {}),
@@ -485,9 +493,11 @@ export function buildPayload(
 }
 
 export interface Problem {
-  field: "title" | "newBranchName" | "templateField";
+  field: "title" | "newBranchName" | "templateField" | "foundIn" | "form";
   message: string;
 }
+
+const FOUND_IN_TAG_RE = /^v?\d+\.\d+\.\d+(?:-rc\.\d+)?$/;
 
 export function validate(
   d: NewTaskDraft,
@@ -517,6 +527,17 @@ export function validate(
     return {
       field: "newBranchName",
       message: "Name the new branch, or untick the new-branch box.",
+    };
+  }
+  const foundInShown = !fields || fields.foundIn.visibility !== "hidden";
+  if (
+    foundInShown &&
+    d.foundIn.trim() &&
+    !FOUND_IN_TAG_RE.test(d.foundIn.trim())
+  ) {
+    return {
+      field: "foundIn",
+      message: "Use a release tag such as v3.6.0 or v3.6.0-rc.2.",
     };
   }
   return null;

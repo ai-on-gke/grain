@@ -294,12 +294,28 @@ export function mergeQueueStalled(t: Task): boolean {
   return t.state !== "closed" && !!t.mergeQueueState && !!t.mergeQueueStalledAt;
 }
 
+// mergeBlocked is a pull request the merge queue has stopped driving, or
+// one a person's review holds. awaiting_submit counts as well as
+// completed: a change that is not auto-merge reads awaiting_submit even
+// after the queue spent its repairs on it and gave up, and once somebody
+// has approved it no Submit item lists it either -- task 4525 sat out of
+// the Inbox for seventeen hours that way.
 export function mergeBlocked(t: Task): boolean {
   return (
-    t.state === "completed" &&
+    (t.state === "completed" || t.state === "awaiting_submit") &&
     !!t.pullRequest &&
     (!!t.mergeQueueBlockedAt || !!t.humanReviewHold?.length)
   );
+}
+
+// approvedButGated is an approved awaiting_submit change that a merge
+// gate other than approval still blocks: approval has been given, so
+// awaitsHumanSubmit no longer lists it, but it is not going to merge
+// until somebody deals with the red or stuck gate.
+export function approvedButGated(t: Task, listOnly = false): boolean {
+  if (t.state !== "awaiting_submit" || !t.humanApprovedBy) return false;
+  const s = gateSummary(t, listOnly);
+  return s.failing.length > 0 || s.needed.length > 0;
 }
 
 const INBOX_STATES = [
@@ -649,6 +665,17 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     }
     return e;
   }
+  if (approvedButGated(t, listOnly)) {
+    const s = gateSummary(t, listOnly);
+    const names = s.failing.length ? s.failing : s.needed;
+    const e = taskEntry(t, "merge-blocked", "merge-blocked");
+    e.pillLabel = s.failing.length ? "Gate failing" : "Gate blocked";
+    e.pillTone = "error";
+    e.summary = `Approved, but ${names.join(", ")} ${names.length === 1 ? "is" : "are"} ${s.failing.length ? "failing" : "still needed"}.`;
+    e.rationale =
+      "Approval has been given; this merges once the gate passes. Fix it, retry it, or close a stale review holding it.";
+    return e;
+  }
   if (awaitsGitHubApproval(t)) {
     const e = taskEntry(t, "github-approval", "github-approval");
     e.pillLabel = "GitHub approval";
@@ -731,12 +758,22 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
 
 export function classifyNotification(n: Notification): InboxEntry {
   const release = pendingReleaseOf(n);
+  const taskId =
+    n.taskId || n.investigationTaskId || n.clearsWhen?.task || null;
+  const title = n.title || n.subject || "Notification";
+  const ref = release
+    ? release.version
+    : n.title && n.subject && n.subject !== n.title
+      ? n.subject
+      : taskId
+        ? `#${taskId}`
+        : n.subject || n.family || "alert";
   const base: InboxEntry = {
     key: `notification:${n.id}`,
     kind: release ? "release" : "notification",
     groupId: release ? "release" : "notification",
-    ref: release ? release.version : n.subject,
-    title: release ? `${release.version} is ready to promote` : n.subject,
+    ref,
+    title: release ? `${release.version} is ready to promote` : title,
     repo: n.repo || release?.repo || "",
     owner: "",
     summary: release ? pendingReleaseSentence(n) : notificationSentence(n),
@@ -748,14 +785,12 @@ export function classifyNotification(n: Notification): InboxEntry {
           ? "Warning"
           : "Alert",
     pillTone: release ? "blast" : n.severity === "critical" ? "error" : "blast",
-    at: n.raisedAt || null,
+    at: n.lastRaisedAt || n.raisedAt || null,
     rationale: release
       ? "Promoting tags the release, moves latest onto it and publishes its images."
       : "An alert stays open until somebody acknowledges or clears it.",
-    taskId: n.investigationTaskId || null,
-    taskLink: n.investigationTaskId
-      ? `/task/${encodeURIComponent(n.investigationTaskId)}`
-      : null,
+    taskId,
+    taskLink: taskId ? `/task/${encodeURIComponent(taskId)}` : null,
     externalLink: null,
     notification: n,
     release: release ?? undefined,

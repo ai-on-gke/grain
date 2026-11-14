@@ -3329,6 +3329,9 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 	if err != nil {
 		return unprepared(err)
 	}
+	if _, err := resolveTaskQAAssignment(ctx, store, cfg, task, d.RunID, cfg.now()); err != nil {
+		return unprepared(err)
+	}
 
 	// Before the agent's first turn: a run whose sandbox never got its repo
 	// has nothing to do. Capability placements are applied just below before
@@ -5236,6 +5239,14 @@ func classifyRunEndArms(ctx context.Context, store *model.Store, cfg Config, tas
 		// strike. Interrupted, as a daemon restart is, so the task is
 		// queued again and its next attempt runs on the hostd that
 		// replaces this one.
+		outcome = model.InterruptedOutcome
+		detail = runErr.Error() + partialWorkSuffix(result)
+		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)
+	case runErr != nil && errors.Is(runErr, agent.ErrHostdStopped):
+		// The host agent running the CLI stopped, restarted or crashed
+		// while the run was going, with no drain in progress: nothing
+		// about the task earned a strike. Interrupted, as a drain or
+		// daemon restart is, so the task is queued again.
 		outcome = model.InterruptedOutcome
 		detail = runErr.Error() + partialWorkSuffix(result)
 		runErr = fmt.Errorf("orchestrator: running %s: %w", runID, runErr)

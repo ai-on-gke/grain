@@ -16,7 +16,9 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"log"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -151,6 +153,12 @@ func applyDiscovery(b *model.AgentBackend, r discoveryResult, now time.Time) boo
 // does not guess a name for it (model.AgentBackend.HasModels). A custom command cannot be asked and is left alone. It
 // reports how many connections' records it changed.
 func (c *Client) AdvertiseDiscoveredModels(ctx context.Context) (int, error) {
+	return c.advertiseDiscovered(ctx, "")
+}
+
+// advertiseDiscovered is AdvertiseDiscoveredModels for every discovering
+// connection, or -- with only set -- for that one connection alone.
+func (c *Client) advertiseDiscovered(ctx context.Context, only string) (int, error) {
 	c.modelDiscoveryMu.Lock()
 	defer c.modelDiscoveryMu.Unlock()
 	cfg, err := c.Store.GetConfig(ctx)
@@ -163,7 +171,7 @@ func (c *Client) AdvertiseDiscoveredModels(ctx context.Context) (int, error) {
 	}
 	results := map[string]discoveryResult{}
 	for _, b := range cfg.AgentBackends {
-		if !b.DiscoversModels() {
+		if !b.DiscoversModels() || (only != "" && b.ID != only) {
 			continue
 		}
 		lister := c.modelListerFor(b.Framework)
@@ -183,32 +191,113 @@ func (c *Client) AdvertiseDiscoveredModels(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	// Read again before writing: listing can take a while, and an edit
-	// saved meanwhile -- a list typed in by hand above all -- wins.
-	cfg, err = c.Store.GetConfig(ctx)
-	if err != nil || cfg == nil {
-		return 0, err
-	}
-	updated := *cfg
-	updated.AgentBackends = slices.Clone(cfg.AgentBackends)
+	// saved meanwhile -- a list typed in by hand above all -- wins. The
+	// read and the write are one transaction (Store.UpdateConfig): this
+	// writes the whole settings row, so a read-then-PutConfig here put
+	// back whatever the row said before any save that landed between
+	// the two -- a repo POST /api/repos had just added to the target
+	// list among them, which this pass, run at every daemon start, lost.
 	now := time.Now().UTC()
 	changed := 0
-	for i := range updated.AgentBackends {
-		b := &updated.AgentBackends[i]
-		r, ok := results[b.ID]
-		if !ok || !b.DiscoversModels() {
-			continue
+	err = c.Store.UpdateConfig(ctx, func(cfg *model.Config) error {
+		changed = 0
+		for i := range cfg.AgentBackends {
+			b := &cfg.AgentBackends[i]
+			r, ok := results[b.ID]
+			if !ok || !b.DiscoversModels() {
+				continue
+			}
+			if applyDiscovery(b, r, now) {
+				changed++
+			}
 		}
-		if applyDiscovery(b, r, now) {
-			changed++
+		if changed == 0 {
+			return errDiscoveryUnchanged
 		}
-	}
-	if changed == 0 {
+		return nil
+	})
+	if errors.Is(err, errDiscoveryUnchanged) {
 		return 0, nil
 	}
-	if err := c.Store.PutConfig(ctx, updated); err != nil {
+	if err != nil {
 		return 0, err
 	}
 	return changed, nil
+}
+
+// errDiscoveryUnchanged is how AdvertiseDiscoveredModels' mutate leaves
+// the settings row unwritten when no connection's record changed.
+var errDiscoveryUnchanged = errors.New("no discovered model list changed")
+
+// RefreshDiscoveredModelsResponse is
+// POST /api/deployment/agent-backends/{backendId}/discover's body: the
+// connection as stored after its provider was asked, whether there was a
+// lister to ask at all, and why the list could not be refreshed when it
+// could not.
+type RefreshDiscoveredModelsResponse struct {
+	Backend model.AgentBackend `json:"backend"`
+	// Asked is false when this deployment has no lister for the
+	// connection's framework (a UI not colocated with the daemon, `grain
+	// demo`): nothing was asked and nothing was written.
+	Asked bool `json:"asked"`
+	// Error is the provider's failure (Discovered.Error) after asking, or
+	// why nothing could be asked.
+	Error string `json:"error,omitempty"`
+}
+
+// RefreshDiscoveredModels asks backendID's provider which models it
+// serves now, the same pass RunModelDiscovery makes every
+// ModelDiscoveryInterval, for that one connection and without waiting
+// for the tick -- so a person who just enabled a model on their provider
+// sees it in the pickers at once. Like that pass it writes only the
+// connection's Discovered cache, never anything a person configured.
+func (c *Client) RefreshDiscoveredModels(ctx context.Context, backendID string) (RefreshDiscoveredModelsResponse, error) {
+	backendID = strings.TrimSpace(backendID)
+	find := func() (model.AgentBackend, error) {
+		cfg, err := c.Store.GetConfig(ctx)
+		if err != nil {
+			return model.AgentBackend{}, err
+		}
+		if cfg != nil {
+			for _, b := range cfg.AgentBackends {
+				if b.ID == backendID {
+					return b, nil
+				}
+			}
+		}
+		return model.AgentBackend{}, &NotFoundError{ID: backendID, message: "no connection " + backendID}
+	}
+	b, err := find()
+	if err != nil {
+		return RefreshDiscoveredModelsResponse{}, err
+	}
+	if !b.DiscoversModels() {
+		return RefreshDiscoveredModelsResponse{}, validationErrorf(
+			"connection %q runs framework %q, whose provider cannot be asked which models it serves; list them on the connection instead",
+			b.ID, b.Framework)
+	}
+	if c.modelListerFor(b.Framework) == nil {
+		return RefreshDiscoveredModelsResponse{Backend: b,
+			Error: "this deployment cannot ask " + model.NormalizeAgentFrameworkName(b.Framework) + " providers which models they serve"}, nil
+	}
+	if _, err := c.advertiseDiscovered(ctx, b.ID); err != nil {
+		return RefreshDiscoveredModelsResponse{}, err
+	}
+	if b, err = find(); err != nil {
+		return RefreshDiscoveredModelsResponse{}, err
+	}
+	resp := RefreshDiscoveredModelsResponse{Backend: b, Asked: true}
+	if b.Discovered != nil {
+		resp.Error = b.Discovered.Error
+	}
+	return resp, nil
+}
+
+// handleRefreshDiscoveredModels is
+// POST /api/deployment/agent-backends/{backendId}/discover.
+func (s *Server) handleRefreshDiscoveredModels(w http.ResponseWriter, r *http.Request) {
+	resp, err := s.tasks.RefreshDiscoveredModels(r.Context(), r.PathValue("backendId"))
+	writeDeploymentResult(w, resp, err)
 }
 
 // carryDiscovered copies each connection's stored Discovered list onto

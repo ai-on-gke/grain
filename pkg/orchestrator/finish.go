@@ -381,7 +381,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// (model.SuspendRequested, recorded as parked), which no failure
 	// streak counts and which the next attempt's prompt reads to say what
 	// it waited on (parkedResumeSection).
-	if susp, ok, err := requestedSuspension(ctx, store, task.ID, result); err != nil {
+	if susp, ok, err := requestedSuspension(ctx, store, task, result); err != nil {
 		return err
 	} else if ok {
 		susp.RunID, susp.CreatedAt = runID, now
@@ -1726,6 +1726,12 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 	// a refusal that is only a log line leaves the person reading the
 	// runner's task one recommendation short with no word why.
 	var refusedTuning []refusedTuningProposal
+	// Proposals filed with something admission refused or lowered, said
+	// on task's own conversation once the batch is through
+	// (noteProposalAdmissionChanges): the note on each proposal reaches
+	// whoever opens it, but the run that asked has ended and its tool
+	// call only said "Recorded".
+	var changedProposals []proposalAdmissionChange
 
 	// The capability catalogue (settings/capabilities.yml), read once:
 	// each proposal is judged against it below, as ui.CreateTask judges
@@ -1914,6 +1920,11 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// The template's sandbox shape (model.Template.Sandbox), filled
 		// into each dimension the proposal leaves unstated below.
 		var tmplSandbox model.SandboxShape
+		// The template the proposal was composed from, recorded for
+		// reporting (model.Task.SourceTemplateID) and never as
+		// TemplateID: a run cannot hand a template's push set or
+		// template-restricted grants on to work it files.
+		var sourceTemplate string
 		if tmplID != "" {
 			tmpl, err := store.GetTemplate(ctx, tmplID)
 			if err != nil {
@@ -1925,6 +1936,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					targetRef = *target
 				}
 				comp := model.ComposeTemplateTask(*tmpl, fieldValues, targetRef, base, false)
+				sourceTemplate = tmpl.ID
 				if title == "" {
 					title = comp.Title
 				}
@@ -2009,6 +2021,13 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// dropped here, as a non-string entry always was, since the
 		// live propose_task call already refused it.
 		capabilities, _ := model.CapabilityEntries(p["capabilities"])
+		var ciReads []model.RepoRef
+		// What admission changed about this proposal -- a CI capability
+		// refused or turned into reads, a sandbox shape lowered -- said
+		// again on the proposer's own conversation once the batch is
+		// through (noteProposalAdmissionChanges), where the run that
+		// asked for it and the person watching that task read it.
+		var admissionChanges []string
 		for _, cap := range capabilities {
 			cap = strings.TrimSpace(cap)
 			if aliasAdm, isLegacyAdm := model.LegacyAdmissionAlias(cap); isLegacyAdm {
@@ -2039,6 +2058,26 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			// matching ui.Client.creationGrants so a relayed proposal stores
 			// the exact same grant set as its live twin.
 			for _, expanded := range expandProposalGrant(cap) {
+				// A CI capability (model.TaskGrantCIOnlyRefusal) is
+				// refused here, as ui.CreateTask refuses the identical
+				// call filed live, rather than filed onto a task every
+				// dispatch of which would then refuse it (task 4532). A
+				// repository read is the one with a task equivalent, and
+				// is filed as that reads entry -- for UngrantedReads below
+				// to judge like any other -- rather than dropped.
+				if why := model.TaskGrantCIOnlyRefusal(expanded); why != "" {
+					if repo, ok := model.RepoReadTarget(expanded); ok {
+						ciReads = append(ciReads, repo)
+						body += ciReadGrantAsReadsNote(cap, repo)
+						admissionChanges = append(admissionChanges, fmt.Sprintf(
+							"`%s` is a CI capability, so it was filed with `reads: [%q]` instead", cap, repo.String()))
+					} else {
+						body += ciOnlyGrantRefusedNote(cap, why)
+						admissionChanges = append(admissionChanges, fmt.Sprintf(
+							"`%s` is a CI capability, not a task grant, so it was filed without it", cap))
+					}
+					continue
+				}
 				found := false
 				for _, g := range grants {
 					if g.Capability == expanded {
@@ -2127,6 +2166,8 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// A dimension the proposal states keeps its value and the
 		// template fills the rest, one at a time, as ui.Client.fromTemplate
 		// does for a filing through the API.
+		templateFilledShape := (cpus == 0 && tmplSandbox.CPUs != 0) ||
+			(memoryMB == 0 && tmplSandbox.MemoryMB != 0) || (diskGB == 0 && tmplSandbox.DiskGB != 0)
 		if cpus == 0 {
 			cpus = tmplSandbox.CPUs
 		}
@@ -2135,6 +2176,21 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		}
 		if diskGB == 0 {
 			diskGB = tmplSandbox.DiskGB
+		}
+		// Held to the deployment's maximum, as the live call is
+		// (ui.Client.refuseSandboxShapeAboveMax). That call refuses with a
+		// 400 the agent reads; this run has ended, so the shape is clamped
+		// and the body says so, rather than filing a task nobody can
+		// approve. A shape above the proposer's own is held for a person
+		// below (model.ProposalSandboxShapeAbove), as filed live.
+		shape, shapeNote := clampProposalSandboxShape(ctx, store,
+			model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB}, templateFilledShape)
+		cpus, memoryMB, diskGB = shape.CPUs, shape.MemoryMB, shape.DiskGB
+		body += shapeNote
+		if shapeNote != "" {
+			admissionChanges = append(admissionChanges, fmt.Sprintf(
+				"its sandbox is above this deployment's maximum, so it was filed at %s",
+				model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB}.Describe()))
 		}
 		// A proposal chooses a model (model.Task.Model) and, separately, may
 		// pin a connection; the store's own migration and dispatch read a
@@ -2178,12 +2234,25 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			return fmt.Errorf("orchestrator: placing proposed task %q in the backlog: %w", title, err)
 		}
 		reads := proposedReads(p, target)
+		for _, repo := range ciReads {
+			if (target == nil || !repo.Same(*target)) && !slices.ContainsFunc(reads, repo.Same) {
+				reads = append(reads, repo)
+			}
+		}
 		writes := proposedWrites(p, target, base)
 		reviewTemplateID, reviewTemplateNote, err := proposedReviewTemplate(ctx, store, task, p, target)
 		if err != nil {
 			return fmt.Errorf("orchestrator: resolving review template for proposed task %q: %w", title, err)
 		}
 		body += reviewTemplateNote
+		// The release this proposal is filed against (model.LinkFoundIn).
+		// A value that is no release version is dropped with a note
+		// rather than refusing the proposal, the way network_access is.
+		statedFoundIn, _ := p["found_in"].(string)
+		foundIn, foundInErr := model.NormalizeFoundIn(statedFoundIn)
+		if foundInErr != nil {
+			body += fmt.Sprintf("\n\n_grain could not record the release this proposal is found in (%q): want a tag such as v2.5.0 or v2.5.0-rc.2._", strings.TrimSpace(statedFoundIn))
+		}
 		proposal := model.Task{
 			ID:     id,
 			Intent: model.IntentImplement,
@@ -2223,11 +2292,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Reads:            reads,
 			Writes:           writes,
 			ReviewTemplateID: reviewTemplateID,
+			SourceTemplateID: sourceTemplate,
 			Tags:             []string{key},
 			Links:            links,
 			CreatedAt:        &now,
 			OrderKey:         orderKey,
 		}
+		model.SetFoundIn(&proposal, foundIn)
+		model.ApplyDerivedFoundIn(&proposal)
 		// The proposing task's root requester's work, as ui.CreateTask
 		// records the identical call filed live.
 		model.InheritRequester(&proposal, task)
@@ -2567,6 +2639,10 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if err := store.PutTask(ctx, proposal); err != nil {
 			return fmt.Errorf("orchestrator: filing proposed task %q: %w", title, err)
 		}
+		if len(admissionChanges) > 0 {
+			changedProposals = append(changedProposals, proposalAdmissionChange{
+				id: proposal.ID, title: title, changes: admissionChanges})
+		}
 		if goal != nil {
 			if err := store.SetTaskGoal(ctx, proposal.ID, *goal,
 				model.PrincipalString(model.Principal{Kind: model.PrincipalAgent, ID: task.ID}), now); err != nil {
@@ -2609,7 +2685,54 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			}
 		}
 	}
+	if err := noteProposalAdmissionChanges(ctx, store, task, changedProposals, now); err != nil {
+		return err
+	}
 	return noteRefusedTuningProposals(ctx, store, task, refusedTuning, now)
+}
+
+// proposalAdmissionChange is one proposal relayProposedTasks filed with
+// something its run asked for refused or lowered: changes are what
+// admission did, one line each.
+type proposalAdmissionChange struct {
+	id      string
+	title   string
+	changes []string
+}
+
+// noteProposalAdmissionChanges posts one comment on task naming each
+// proposal it filed with a CI capability refused (or turned into reads)
+// or a sandbox shape lowered to the deployment's maximum. Each proposal's
+// own body says so already, but the run that proposed it has ended and
+// its propose_task call answered only "Recorded": this is where that run,
+// on its next turn, and the person watching its task hear about it.
+// Nothing is posted when nothing was changed.
+func noteProposalAdmissionChanges(ctx context.Context, store *model.Store, task model.Task,
+	changed []proposalAdmissionChange, now time.Time) error {
+
+	if len(changed) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	if len(changed) == 1 {
+		b.WriteString("grain filed 1 proposal from this run without something it asked for:\n")
+	} else {
+		fmt.Fprintf(&b, "grain filed %d proposals from this run without something they asked for:\n", len(changed))
+	}
+	for _, c := range changed {
+		fmt.Fprintf(&b, "\n- task %s %q: %s.", c.id, c.title, strings.Join(c.changes, "; "))
+	}
+	b.WriteString("\n\nEach proposal's description says why. An operator can raise sandboxShapeLimits in settings; " +
+		"a CI capability is declared in the repository's CI workflow, not on a task.")
+	if _, err := store.AddComment(ctx, model.Comment{
+		TaskID:    task.ID,
+		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
+		Body:      b.String(),
+		CreatedAt: now,
+	}); err != nil {
+		return fmt.Errorf("orchestrator: noting proposals filed with admission changes on %s: %w", task.ID, err)
+	}
+	return nil
 }
 
 // refusedTuningProposal is one propose_task call of the tuning runner that
@@ -3280,6 +3403,50 @@ func droppedCustomFieldNote(dropped []string) string {
 		"which named no field this deployment declares or no value the declaration allows. "+
 		"Nothing was recorded for them -- set them by hand if they matter.",
 		"`"+strings.Join(dropped, "`, `")+"`")
+}
+
+// clampProposalSandboxShape holds asked, a relayed proposal's sandbox
+// shape, to this deployment's maximum (model.SandboxShapeLimits.Max with
+// grain's defaults filled in): a dimension above it is lowered to it, and
+// a negative one is dropped to "not stated". The note, "" when nothing
+// changed, is what the proposal's body says about it. A settings row that
+// cannot be read is grain's default maximum, never no maximum.
+//
+// fromTemplate says the proposal's template filled at least one dimension
+// (its `sandbox:`), so the note does not put the template's size down to
+// the run alone.
+func clampProposalSandboxShape(ctx context.Context, store *model.Store, asked model.SandboxShape, fromTemplate bool) (model.SandboxShape, string) {
+	var limits model.SandboxShapeLimits
+	if cfg, err := store.GetConfig(ctx); err == nil && cfg != nil {
+		limits = cfg.SandboxShapeLimits
+	}
+	ceiling := limits.ResolvedMax()
+	out := asked
+	var changed []string
+	clamp := func(name string, v *int, limit int) {
+		switch {
+		case *v < 0:
+			changed = append(changed, fmt.Sprintf("%s %d (dropped)", name, *v))
+			*v = 0
+		case *v > limit:
+			changed = append(changed, fmt.Sprintf("%s %d (lowered to %d)", name, *v, limit))
+			*v = limit
+		}
+	}
+	clamp("sandbox_cpus", &out.CPUs, ceiling.CPUs)
+	clamp("sandbox_memory_mb", &out.MemoryMB, ceiling.MemoryMB)
+	clamp("sandbox_disk_gb", &out.DiskGB, ceiling.DiskGB)
+	if len(changed) == 0 {
+		return out, ""
+	}
+	asker := "the run that proposed this asked for"
+	if fromTemplate {
+		asker = "this proposal, with its template's `sandbox:` filled in, asks for"
+	}
+	return out, fmt.Sprintf("\n\n---\n\ngrain: %s a sandbox this deployment "+
+		"does not give any task (most it allows: %s), so it was filed at what the deployment allows: %s. "+
+		"An operator can raise sandboxShapeLimits in settings if the work needs more.",
+		asker, ceiling.Describe(), strings.Join(changed, ", "))
 }
 
 // droppedNetworkAccessNote is what a human approving the proposal reads
@@ -4284,8 +4451,13 @@ func emptyBranchDetail(empty *noCommitsError) string {
 // call replaces what an earlier one asked for. Its detail keeps the
 // words a park always had (model.ParkedDetail, ParkedUntilDetail), which
 // the next prompt reads back, for the two forms that are parks.
-func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
+//
+// task is the task as the run was dispatched with it, before any park it
+// made: parkLinks checks the run's word on which links its parks wrote
+// against the links that were already there.
+func requestedSuspension(ctx context.Context, store *model.Store, task model.Task,
 	result *agent.Result) (model.Suspension, bool, error) {
+	taskID := task.ID
 	susp := model.Suspension{Kind: model.SuspendRequested}
 	targets, err := parkedOn(ctx, store, taskID, result)
 	if err != nil {
@@ -4297,7 +4469,8 @@ func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
 		if reason = strings.TrimSpace(reason); reason != "" {
 			susp.Detail += ": " + reason
 		}
-		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged || parkedUntilMerged(result)}.JSON()
+		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged || parkedUntilMerged(result),
+			Links: parkLinks(result, targets, task.Links)}.JSON()
 		return susp, true, nil
 	}
 	if until, ok := parkedUntil(result); ok {
@@ -4388,6 +4561,50 @@ func parkedUntilMerged(result *agent.Result) bool {
 	return merged
 }
 
+// parkLinks is the targets, of those a run parked on, whose depends-on
+// links its parks wrote rather than found already declared
+// (model.ResumeOn.Links), as each park's result says the daemon took it
+// (mcp.ResumeLaterTaken). A run may park more than once, and only the
+// first park on a target writes its link, so these are gathered over
+// every park the run made.
+//
+// The tool results are the run's own transcript, so they are not taken
+// on their word: the resumption deletes every link named here, and a
+// result that named one the task already had before the run (before)
+// would strip a declared dependency. Those are dropped, whatever the
+// result says.
+func parkLinks(result *agent.Result, targets []string, before []model.Link) []string {
+	if result == nil {
+		return nil
+	}
+	var links []string
+	for _, c := range result.ToolCalls {
+		if c.IsError || (c.Name != "resume_later" && c.Name != "wait_for_task") {
+			continue
+		}
+		taken, ok := mcp.ResumeLaterTaken(c.Text)
+		if !ok {
+			continue
+		}
+		for _, id := range taken.Links {
+			if slices.Contains(targets, id) && !slices.Contains(links, id) && !dependsOnBefore(before, id) {
+				links = append(links, id)
+			}
+		}
+	}
+	return links
+}
+
+// dependsOnBefore reports whether links has a depends-on link to id.
+func dependsOnBefore(links []model.Link, id string) bool {
+	for _, l := range links {
+		if l.Kind == model.LinkDependsOn && l.Target == id {
+			return true
+		}
+	}
+	return false
+}
+
 // parkedOn is the tasks a run parked its task on through wait_for_task,
 // or resume_later's task form, or nil if it did not park.
 //
@@ -4436,6 +4653,23 @@ func parkedOn(ctx context.Context, store *model.Store, taskID string, result *ag
 		}
 	}
 	return parked, nil
+}
+
+// ciReadGrantAsReadsNote is the line added to a proposal whose grant was
+// a CI job's read access to repo (repo-read:<repo>), filed as the reads
+// entry a task reads another repository through instead.
+func ciReadGrantAsReadsNote(grant string, repo model.RepoRef) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for `%s`, a CI capability that no task "+
+		"run is handed, so it was filed with `reads: [%q]` instead -- a task's own read access to %s.",
+		grant, repo.String(), repo)
+}
+
+// ciOnlyGrantRefusedNote is the line added to a proposal whose grant was
+// a CI capability with no task equivalent (model.TaskGrantCIOnlyRefusal),
+// dropped for it with grain's own reason.
+func ciOnlyGrantRefusedNote(grant, why string) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for `%s`, so it was filed without that "+
+		"grant: %s", grant, why)
 }
 
 // reviewOfGrantRefusedNote is the line added to a proposal whose grant

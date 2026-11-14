@@ -1,0 +1,121 @@
+== actions
+1794543651.954471629 raise N1 warning (task 2)
+1794543652.331016060 raise N1 again, same severity (no event expected)
+1794543652.675634617 raise N1 at critical (re-raise)
+1794543653.016895881 ack N1
+flaky dropped after id 8
+1794543653.377800250 ack N1 again (no event expected)
+1794543653.729979236 clear N1
+1794543654.083431183 raise N2 repo acme/secret (viewer must not see)
+1794543654.426430985 raise N3 deployment-wide (viewer must not see)
+flaky reconnected with Last-Event-ID: 8
+1794543655.286956735 host-script A1 requested
+1794543655.691078529 A1 approved
+1794543656.038300743 host-script A2 requested
+1794543656.422360002 A2 denied
+1794543656.783210799 host-script A3 requested
+1794543657.155715303 A3 expired by its caller (/expire)
+1794543657.502193382 host-script A4 requested, 2 s deadline
+1794543660.882740843 A4 past its deadline: a task-page read (GET /api/tasks/2)
+1794543661.238900781 A4 caller gives up (/expire)
+A4 as the caller sees it: {"id":"lsa-4","status":"expired"}
+1794543661.605521979 burst: 40 concurrent raises
+== admin (55 events, 0 duplicate ids)
+6	notification.raised	2	warning			acme/widgets	alice@example.com
+7	notification.raised	2	critical			acme/widgets	alice@example.com
+8	notification.acked	2	critical			acme/widgets	alice@example.com
+9	notification.cleared	2	critical			acme/widgets	alice@example.com
+10	notification.raised	3	warning			acme/secret	alice@example.com
+11	notification.raised	4	critical			-	alice@example.com
+12	local_script.pending			lsa-1		acme/widgets	alice@example.com
+13	local_script.answered			lsa-1	approved	acme/widgets	alice@example.com
+14	task.comment					acme/widgets	alice@example.com
+15	local_script.pending			lsa-2		acme/widgets	alice@example.com
+16	local_script.answered			lsa-2	denied	acme/widgets	alice@example.com
+17	task.comment					acme/widgets	alice@example.com
+18	local_script.pending			lsa-3		acme/widgets	alice@example.com
+19	local_script.answered			lsa-3	expired	acme/widgets	alice@example.com
+20	local_script.pending			lsa-4		acme/widgets	alice@example.com
+21	notification.raised	5	warning			acme/widgets	alice@example.com
+22	notification.raised	6	warning			acme/widgets	alice@example.com
+23	notification.raised	7	warning			acme/widgets	alice@example.com
+24	notification.raised	8	warning			acme/widgets	alice@example.com
+25	notification.raised	9	warning			acme/widgets	alice@example.com
+26	notification.raised	10	warning			acme/widgets	alice@example.com
+27	notification.raised	11	warning			acme/widgets	alice@example.com
+28	notification.raised	12	warning			acme/widgets	alice@example.com
+29	notification.raised	13	warning			acme/widgets	alice@example.com
+30	notification.raised	14	warning			acme/widgets	alice@example.com
+31	notification.raised	15	warning			acme/widgets	alice@example.com
+32	notification.raised	16	warning			acme/widgets	alice@example.com
+33	notification.raised	17	warning			acme/widgets	alice@example.com
+34	notification.raised	18	warning			acme/widgets	alice@example.com
+35	notification.raised	19	warning			acme/widgets	alice@example.com
+== viewer (53 events, 0 duplicate ids)
+6	notification.raised	2	warning			acme/widgets	alice@example.com
+7	notification.raised	2	critical			acme/widgets	alice@example.com
+8	notification.acked	2	critical			acme/widgets	alice@example.com
+9	notification.cleared	2	critical			acme/widgets	alice@example.com
+12	local_script.pending			lsa-1		acme/widgets	alice@example.com
+13	local_script.answered			lsa-1	approved	acme/widgets	alice@example.com
+14	task.comment					acme/widgets	alice@example.com
+15	local_script.pending			lsa-2		acme/widgets	alice@example.com
+16	local_script.answered			lsa-2	denied	acme/widgets	alice@example.com
+17	task.comment					acme/widgets	alice@example.com
+18	local_script.pending			lsa-3		acme/widgets	alice@example.com
+19	local_script.answered			lsa-3	expired	acme/widgets	alice@example.com
+20	local_script.pending			lsa-4		acme/widgets	alice@example.com
+21	notification.raised	5	warning			acme/widgets	alice@example.com
+22	notification.raised	6	warning			acme/widgets	alice@example.com
+23	notification.raised	7	warning			acme/widgets	alice@example.com
+24	notification.raised	8	warning			acme/widgets	alice@example.com
+25	notification.raised	9	warning			acme/widgets	alice@example.com
+26	notification.raised	10	warning			acme/widgets	alice@example.com
+27	notification.raised	11	warning			acme/widgets	alice@example.com
+28	notification.raised	12	warning			acme/widgets	alice@example.com
+29	notification.raised	13	warning			acme/widgets	alice@example.com
+30	notification.raised	14	warning			acme/widgets	alice@example.com
+31	notification.raised	15	warning			acme/widgets	alice@example.com
+32	notification.raised	16	warning			acme/widgets	alice@example.com
+33	notification.raised	17	warning			acme/widgets	alice@example.com
+34	notification.raised	18	warning			acme/widgets	alice@example.com
+35	notification.raised	19	warning			acme/widgets	alice@example.com
+36	notification.raised	20	warning			acme/widgets	alice@example.com
+37	notification.raised	21	warning			acme/widgets	alice@example.com
+== flaky (55 events, 0 duplicate ids)
+6	notification.raised	2	warning			acme/widgets	alice@example.com
+7	notification.raised	2	critical			acme/widgets	alice@example.com
+8	notification.acked	2	critical			acme/widgets	alice@example.com
+9	notification.cleared	2	critical			acme/widgets	alice@example.com
+10	notification.raised	3	warning			acme/secret	alice@example.com
+11	notification.raised	4	critical			-	alice@example.com
+12	local_script.pending			lsa-1		acme/widgets	alice@example.com
+13	local_script.answered			lsa-1	approved	acme/widgets	alice@example.com
+14	task.comment					acme/widgets	alice@example.com
+15	local_script.pending			lsa-2		acme/widgets	alice@example.com
+16	local_script.answered			lsa-2	denied	acme/widgets	alice@example.com
+17	task.comment					acme/widgets	alice@example.com
+18	local_script.pending			lsa-3		acme/widgets	alice@example.com
+19	local_script.answered			lsa-3	expired	acme/widgets	alice@example.com
+20	local_script.pending			lsa-4		acme/widgets	alice@example.com
+21	notification.raised	5	warning			acme/widgets	alice@example.com
+22	notification.raised	6	warning			acme/widgets	alice@example.com
+23	notification.raised	7	warning			acme/widgets	alice@example.com
+24	notification.raised	8	warning			acme/widgets	alice@example.com
+25	notification.raised	9	warning			acme/widgets	alice@example.com
+26	notification.raised	10	warning			acme/widgets	alice@example.com
+27	notification.raised	11	warning			acme/widgets	alice@example.com
+28	notification.raised	12	warning			acme/widgets	alice@example.com
+29	notification.raised	13	warning			acme/widgets	alice@example.com
+30	notification.raised	14	warning			acme/widgets	alice@example.com
+31	notification.raised	15	warning			acme/widgets	alice@example.com
+32	notification.raised	16	warning			acme/widgets	alice@example.com
+33	notification.raised	17	warning			acme/widgets	alice@example.com
+34	notification.raised	18	warning			acme/widgets	alice@example.com
+35	notification.raised	19	warning			acme/widgets	alice@example.com
+== admin ids strictly increasing: yes
+== burst: store has 45 raised; admin saw 44; flaky saw 44
+== admin vs store ids after the stream opened (diff empty = nothing lost):
+(none)
+== flaky vs admin ids (diff empty = reconnect lost and duplicated nothing):
+(none)

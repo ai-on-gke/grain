@@ -1938,4 +1938,50 @@ test.describe("Saved Boards and Visualizations Walkthrough", () => {
     );
     await expect(metricsKeep).toBeVisible();
   });
+
+  // 2026-11-13 walkthrough (task 4727): re-sorting a dashboard from the
+  // toolbar offered "Keep" on its state counts panel, whose counts no
+  // sort can change. The list beside it draws the sort, so it still
+  // offers Keep.
+  test("6g. A re-sorted dashboard does not offer Keep on its state counts panel", async ({
+    page,
+  }) => {
+    const dash = await seedOne(page, "/api/boards", {
+      name: `WT Sorted Dash ${Date.now()}`,
+      folder: "",
+      kind: "panels",
+      description: "",
+      query: "f=repo:any:acme/widgets",
+      panels: [
+        { kind: "states", title: "Counts", width: "half", orderKey: 1000 },
+        { kind: "list", title: "Queue", width: "half", orderKey: 2000 },
+      ],
+    });
+    seededBoards.push(dash.id);
+    const listKeep = page.getByRole("button", {
+      name: "Keep this narrowing on “Queue”",
+    });
+    const countsKeep = page.getByRole("button", {
+      name: "Keep this narrowing on “Counts”",
+    });
+
+    await page.goto(`/boards/${dash.id}`);
+    await expect(page.getByRole("heading", { name: "Counts" })).toBeVisible();
+    await expect(listKeep).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Backlog order" }).click();
+    await page
+      .getByRole("group", { name: "Sort" })
+      .getByRole("button", { name: /Sort by/ })
+      .click();
+    await page.getByRole("menuitem", { name: /^created$/i }).click();
+    await expect(page).toHaveURL(/sort=created/);
+    await expect(page).toHaveURL(/f=repo:any:acme\/widgets/);
+    await expect(listKeep).toBeVisible();
+    await expect(countsKeep).toHaveCount(0);
+
+    // A narrowing that changes what is counted still offers it.
+    await page.goto(`/boards/${dash.id}?f=repo:any:acme/widgets&q=retry`);
+    await expect(countsKeep).toBeVisible();
+  });
 });

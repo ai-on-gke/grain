@@ -1247,3 +1247,28 @@ func TestVMLifecycle_MemoryLimitAndOOMScoreAdj(t *testing.T) {
 		t.Errorf("saved MemoryLimitMB/OOMScoreAdj = %d/%d, want 8704/500", saved.MemoryLimitMB, saved.OOMScoreAdj)
 	}
 }
+
+func TestVMDelete_RemovalAlreadyInProgressClearsSavedState(t *testing.T) {
+	withFakeDocker(t)
+	stateDir := createDockerVM(t, "web")
+	if _, err := vmspec.Load(stateDir, "web"); err != nil {
+		t.Fatalf("saved state missing before delete: %v", err)
+	}
+
+	calls := callLog(t)
+	t.Setenv("FAKEDOCKER_RM_IN_PROGRESS", "1")
+
+	stdout, stderr, err := runVMArgs(t, "delete", "web", "--state-dir", stateDir)
+	if err != nil {
+		t.Fatalf("delete error = %v, stderr = %s", err, stderr)
+	}
+	if !strings.Contains(stdout, `deleted VM "web"`) {
+		t.Errorf("stdout = %q, want confirmation of deleted VM", stdout)
+	}
+	if _, err := vmspec.Load(stateDir, "web"); !os.IsNotExist(err) {
+		t.Errorf("saved state after delete: err = %v, want os.IsNotExist", err)
+	}
+	if n := countCalls(calls(), "inspect"); n < 2 {
+		t.Errorf("delete polled docker inspect %d times, want >= 2 (until container is gone):\n%v", n, calls())
+	}
+}

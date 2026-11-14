@@ -67,3 +67,59 @@ func TestTaskCreationCapabilityPermissions(t *testing.T) {
 		t.Fatalf("expected SetCapability CI rejection, got %v", err)
 	}
 }
+
+// A CI read of another repository (repo-read:<repo>) is refused when a
+// task is filed or proposed with it, naming the reads entry a task reads
+// that repository through instead, rather than accepted and refused by
+// every dispatch after (task 4532).
+func TestTaskCreationRefusesCIRepoReadNamingReads(t *testing.T) {
+	t.Parallel()
+	c, _, ctx := testClient(t)
+	parent, err := c.CreateTask(ctx, ui.CreateTaskRequest{Title: "release sync", Creator: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps := []string{"repo-read:acme/lib"}
+	for name, req := range map[string]ui.CreateTaskRequest{
+		"filed":    {Title: "pin core", Creator: "alice", Capabilities: &caps},
+		"proposed": {Title: "pin core", Creator: "alice", Capabilities: &caps, ProposedBy: parent.ID},
+	} {
+		_, err := c.CreateTask(ctx, req)
+		if err == nil || !strings.Contains(err.Error(), "is a CI capability, not a task grant") ||
+			!strings.Contains(err.Error(), `reads: ["acme/lib"]`) {
+			t.Errorf("%s with repo-read:acme/lib: err = %v, want a CI-capability refusal naming reads", name, err)
+		}
+	}
+	if err := c.SetCapability(ctx, parent.ID, "repo-read:acme/lib", true); err == nil ||
+		!strings.Contains(err.Error(), `reads: ["acme/lib"]`) {
+		t.Errorf("SetCapability repo-read:acme/lib: err = %v, want a CI-capability refusal naming reads", err)
+	}
+}
+
+// A task already holding a CI capability -- filed before filing refused
+// one -- is refused approval, naming the grant and its task equivalent,
+// rather than queued for every dispatch to refuse (task 4532).
+func TestApproveRefusesATaskHoldingACIOnlyCapability(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	held := model.Task{ID: "41", Title: "pin core", Body: "b",
+		Grants: []model.Grant{{Capability: "repo-read:acme/lib", Via: model.GrantByLabel}}}
+	if err := store.PutTask(ctx, held); err != nil {
+		t.Fatal(err)
+	}
+	err := c.Approve(ctx, held.ID)
+	if err == nil || !strings.Contains(err.Error(), "is a CI capability, not a task grant") ||
+		!strings.Contains(err.Error(), `reads: ["acme/lib"]`) {
+		t.Fatalf("Approve with repo-read:acme/lib: err = %v, want a CI-capability refusal naming reads", err)
+	}
+	if err := c.RunNow(ctx, held.ID); err == nil || !strings.Contains(err.Error(), "is a CI capability, not a task grant") {
+		t.Fatalf("RunNow with repo-read:acme/lib: err = %v, want a CI-capability refusal", err)
+	}
+	got, err := store.GetTask(ctx, held.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Approval != nil {
+		t.Errorf("task approved holding a CI capability: %+v", got.Approval)
+	}
+}

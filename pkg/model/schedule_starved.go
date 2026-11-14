@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -72,6 +73,21 @@ type StarvedScheduleFiring struct {
 	// Notified is a first raise of the schedule's FamilyScheduleStarved
 	// notification.
 	Notified bool
+	// HeldBy is the other schedule in the overlap group whose firing
+	// filed the task (ScheduleSkip.HeldByScheduleID), empty when the task
+	// is the schedule's own previous firing; Group is that group.
+	HeldBy, Group string
+}
+
+// blocker says whose firing the starved task came from, after "#<id> from".
+func (f StarvedScheduleFiring) blocker() string {
+	if f.HeldBy == "" {
+		return "its previous firing"
+	}
+	if f.Group == "" {
+		return fmt.Sprintf("schedule %s's firing", f.HeldBy)
+	}
+	return fmt.Sprintf("schedule %s's firing in overlap group %q", f.HeldBy, f.Group)
 }
 
 // Raised reports whether the task's priority was raised.
@@ -125,6 +141,9 @@ func (s *Store) EscalateStarvedScheduleBlocker(ctx context.Context, sched Schedu
 		return StarvedScheduleFiring{}, err
 	}
 	out := StarvedScheduleFiring{TaskID: k.TaskID, HeldFor: now.Sub(k.Occurrence), Occurrences: occurrences}
+	if k.HeldByScheduleID != "" && k.HeldByScheduleID != sched.ID {
+		out.HeldBy, out.Group = k.HeldByScheduleID, strings.TrimSpace(sched.OverlapGroup)
+	}
 	if err := s.UpdateTask(ctx, k.TaskID, func(t *Task) error {
 		out.From, out.To = t.Priority, t.Priority
 		if top > t.Priority {
@@ -186,8 +205,8 @@ func scheduleName(sched Schedule) string {
 
 // StarvedScheduleTitle is the FamilyScheduleStarved notification's title.
 func StarvedScheduleTitle(sched Schedule, f StarvedScheduleFiring) string {
-	return fmt.Sprintf("Schedule %q has not fired for %s: #%s from its previous firing has never started",
-		scheduleName(sched), f.HeldFor.Round(time.Minute), f.TaskID)
+	return fmt.Sprintf("Schedule %q has not fired for %s: #%s from %s has never started",
+		scheduleName(sched), f.HeldFor.Round(time.Minute), f.TaskID, f.blocker())
 }
 
 // StarvedScheduleComment is what EscalateStarvedScheduleBlocker writes on
@@ -198,11 +217,11 @@ func StarvedScheduleComment(sched Schedule, f StarvedScheduleFiring) string {
 		raised = fmt.Sprintf("Grain raised its priority from %d to %d, the highest any other queued task has, "+
 			"so it is dispatched next at that priority.", f.From, f.To)
 	}
-	return fmt.Sprintf("Schedule %q (%s) is set to overlap: skip, and this task, from its previous firing, "+
+	return fmt.Sprintf("Schedule %q (%s) is set to overlap: skip, and this task, from %s, "+
 		"has been queued without ever starting while %d of its occurrences came due (%s since the first). "+
 		"Every one of them is held until this task closes. %s\n\n"+
 		"A schedule whose task cannot get a worker stops for as long as it waits, so this task is kept "+
 		"and raised rather than replaced by a new firing at the back of the queue. If it should not run "+
 		"at all, close it and the schedule fires again on its next cycle.",
-		scheduleName(sched), sched.ID, f.Occurrences, f.HeldFor.Round(time.Minute), raised)
+		scheduleName(sched), sched.ID, f.blocker(), f.Occurrences, f.HeldFor.Round(time.Minute), raised)
 }

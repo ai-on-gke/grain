@@ -676,7 +676,57 @@ import "strconv"
 // `release_candidate` and `qualification_run` to StoredOwner, for the
 // repositories a target repo places on another host (migrateReleaseOwners,
 // grain/task-4489).
-const SchemaVersion = 145
+// 146 adds `grain_config`.`qa` (model.Config.QA): the deployment-wide quality
+// control engine and single-instance PR rollout configuration, stored as JSON
+// and defaulting to empty (engine off).
+const SchemaVersion = 146
+
+const taskQAAssignmentTable = `CREATE TABLE IF NOT EXISTS ` + "`task_qa_assignment`" + ` (
+  ` + "`root_origin`" + `           TEXT     NOT NULL,
+  ` + "`epoch`" + `                 INTEGER  NOT NULL DEFAULT 1,
+  ` + "`regime_id`" + `             INTEGER  NOT NULL DEFAULT 1,
+  ` + "`arm`" + `                   TEXT     NOT NULL,
+  ` + "`flow_id`" + `               TEXT     NOT NULL,
+  ` + "`rollout_pct_at_assign`" + ` INTEGER  NOT NULL DEFAULT 0,
+  ` + "`complexity_tier`" + `       TEXT     NOT NULL DEFAULT 'medium',
+  ` + "`assigned_at`" + `           DATETIME NOT NULL,
+  PRIMARY KEY (` + "`root_origin`" + `, ` + "`epoch`" + `)
+)`
+
+const taskQACheckRunTable = `CREATE TABLE IF NOT EXISTS ` + "`task_qa_check_run`" + ` (
+  ` + "`id`" + `          INTEGER  PRIMARY KEY AUTOINCREMENT,
+  ` + "`task_id`" + `     TEXT     NOT NULL,
+  ` + "`run_id`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`commit_sha`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`stage`" + `       TEXT     NOT NULL,
+  ` + "`check_id`" + `    TEXT     NOT NULL,
+  ` + "`arm`" + `         TEXT     NOT NULL DEFAULT 'control',
+  ` + "`shadow`" + `      INTEGER  NOT NULL DEFAULT 0,
+  ` + "`verdict`" + `     TEXT     NOT NULL,
+  ` + "`duration_ms`" + ` INTEGER  NOT NULL DEFAULT 0,
+  ` + "`tokens_in`" + `   INTEGER  NOT NULL DEFAULT 0,
+  ` + "`tokens_out`" + `  INTEGER  NOT NULL DEFAULT 0,
+  ` + "`alloc_bytes`" + ` INTEGER  NOT NULL DEFAULT 0,
+  ` + "`detail_json`" + ` TEXT     NOT NULL DEFAULT '',
+  ` + "`created_at`" + `  DATETIME NOT NULL
+)`
+
+const taskQAFindingTable = `CREATE TABLE IF NOT EXISTS ` + "`task_qa_finding`" + ` (
+  ` + "`id`" + `           INTEGER  PRIMARY KEY AUTOINCREMENT,
+  ` + "`check_run_id`" + ` INTEGER  NOT NULL,
+  ` + "`task_id`" + `      TEXT     NOT NULL,
+  ` + "`stage`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`rule_id`" + `      TEXT     NOT NULL,
+  ` + "`severity`" + `     TEXT     NOT NULL,
+  ` + "`file_path`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`line`" + `         INTEGER  NOT NULL DEFAULT 0,
+  ` + "`summary`" + `      TEXT     NOT NULL,
+  ` + "`evidence`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`human_vote`" + `   INTEGER  NOT NULL DEFAULT 0,
+  ` + "`voted_by`" + `     TEXT     NOT NULL DEFAULT '',
+  ` + "`voted_at`" + `     DATETIME NULL,
+  ` + "`created_at`" + `   DATETIME NOT NULL
+)`
 
 // allowedPrincipalTable is the `allowed_principal` table: one row per
 // `user:<email>`, `group:<email>`, `serviceAccount:<email>` or
@@ -1178,6 +1228,18 @@ var Tables = []string{
 	// the other task_* rows. Needs no SchemaVersion bump, for task_write's
 	// own reason: an older store reads back as no task having a template.
 	`CREATE TABLE IF NOT EXISTS ` + "`task_filed_template`" + ` (
+  ` + "`task_id`" + `     TEXT NOT NULL,
+  ` + "`template_id`" + ` TEXT NOT NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`,
+
+	// The template a task's content was filed from, for reporting alone
+	// (Task.SourceTemplateID, grain/task-5273): task_filed_template's
+	// rows, and besides them an agent's proposal naming a template and a
+	// port of a task filed from one. Nothing reads it to decide what a
+	// task may do. Needs no SchemaVersion bump, for task_filed_template's
+	// own reason: an older store reads back as no task recording one.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_source_template`" + ` (
   ` + "`task_id`" + `     TEXT NOT NULL,
   ` + "`template_id`" + ` TEXT NOT NULL,
   PRIMARY KEY (` + "`task_id`" + `)
@@ -2740,6 +2802,7 @@ var Tables = []string{
   ` + "`hub_environment_name`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`sandbox_shape_limits`" + `         TEXT    NOT NULL DEFAULT '',
   ` + "`auto_upgrade_min_interval_hours`" + ` INTEGER NOT NULL DEFAULT 6,
+  ` + "`qa`" + `                            TEXT    NOT NULL DEFAULT '',
   PRIMARY KEY (` + "`id`" + `)
 )`,
 
@@ -4528,6 +4591,14 @@ var Tables = []string{
 	// Non-secret catalogue of names and keys stored in Google Cloud Secret
 	// Manager (-secrets-backend=secretmanager).
 	secretEntriesTable,
+
+	// Sticky per-tree QA rollout assignments, per-run check verdicts, and
+	// individual QA findings (model.QAAssignment, model.QACheckRun, model.QAFinding).
+	taskQAAssignmentTable,
+	taskQACheckRunTable,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_qa_check_run_task`" + ` ON ` + "`task_qa_check_run`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
+	taskQAFindingTable,
+	`CREATE INDEX IF NOT EXISTS ` + "`task_qa_finding_task`" + ` ON ` + "`task_qa_finding`" + ` (` + "`task_id`" + `, ` + "`id`" + `)`,
 }
 
 // Views is the derivations, each a (name, DDL) pair so Init can drop and
