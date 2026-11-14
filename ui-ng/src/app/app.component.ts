@@ -54,10 +54,12 @@ import { KeyboardService } from "./services/keyboard.service";
 import { NavConfigService } from "./services/nav-config.service";
 import { SnackbarService } from "./services/snackbar.service";
 import { TaskFeedStore } from "./services/task-feed.service";
+import { ConnectionStatus } from "./services/connection.service";
 import { ThemeService } from "./services/theme.service";
 import { ViewFilter } from "./services/view-filter.service";
 import { CHLADNI_ROSETTE_PATH, MARK_SHEET_32_URL } from "./shared/brand-mark";
 import {
+  effectiveDisplayTimeZone,
   summarizeDispatchStatus,
   type UsagePauseInput,
 } from "./shared/dispatch-status";
@@ -72,6 +74,9 @@ import { SnackbarComponent } from "./shell/snackbar.component";
 
 // Material-style 24px outline paths, drawn for this app.
 const ICONS: Record<string, string> = {
+  // cloud_off: the daemon is not answering (the disconnected banner).
+  cloudOff:
+    "M19.35 10.04A7.49 7.49 0 0 0 12 4c-1.48 0-2.85.43-4.01 1.17l1.46 1.46A5.497 5.497 0 0 1 17.5 11.5v.5H19a3 3 0 0 1 3 3c0 1.13-.64 2.11-1.56 2.62l1.45 1.45A4.97 4.97 0 0 0 24 15c0-2.64-2.05-4.78-4.65-4.96zM3 5.27l2.75 2.74C2.56 8.15 0 10.77 0 14c0 3.31 2.69 6 6 6h11.73l2 2L21 20.73 4.27 4 3 5.27zM7.73 10l8 8H6c-2.21 0-4-1.79-4-4s1.79-4 4-4h1.73z",
   inbox:
     "M19 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 12h-4a3 3 0 0 1-6 0H5V5h14v10z",
   workstreams:
@@ -173,6 +178,14 @@ export class DeferErrorDirective implements OnInit {
     "(document:keydown)": "onGlobalKey($event)",
   },
   template: `
+    @if (disconnectedText(); as text) {
+      <div class="conn-banner" role="status" data-testid="disconnected-banner">
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+          <path [attr.d]="icons['cloudOff']" fill="currentColor" />
+        </svg>
+        <span>{{ text }}</span>
+      </div>
+    }
     <div class="app-shell">
       <nav
         class="nav-rail"
@@ -959,6 +972,27 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly access = inject(AccessService);
   protected readonly filter = inject(ViewFilter);
   protected readonly feed = inject(TaskFeedStore);
+  private readonly connection = inject(ConnectionStatus);
+
+  // The standing banner for a daemon that is not answering at all
+  // (ConnectionStatus): when it stopped, in the deployment's time zone,
+  // and that the page keeps retrying and recovers on its own.
+  protected readonly disconnectedText = computed(() => {
+    const d = this.connection.disconnection();
+    if (!d) return "";
+    let at = "";
+    try {
+      at = new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZone: effectiveDisplayTimeZone(this.access.rawConfig()?.timeZone),
+      }).format(new Date(d.since));
+    } catch {
+      at = "";
+    }
+    return `${d.reason} Unreachable${at ? ` since ${at}` : ""} — retrying automatically; this page will pick back up on its own once it answers again.`;
+  });
   protected readonly navConfig = inject(NavConfigService);
   protected readonly help = inject(HelpService);
   protected readonly keyboard = inject(KeyboardService);

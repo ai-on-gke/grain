@@ -1827,6 +1827,20 @@ export class FleetPageComponent implements OnInit {
     }
   }
 
+  // refreshShellConfig re-reads /api/config into AccessService after a
+  // pause or resume here, so the shell's dispatch banner and live pill --
+  // which read the pause from that config -- change with the click instead
+  // of on the shell's next one-minute poll.
+  private async refreshShellConfig(): Promise<void> {
+    if (!this.access.can("GET /api/config")) return;
+    try {
+      const cfg = await this.api.config();
+      if (cfg) this.access.setConfig(cfg);
+    } catch {
+      // The shell's own poll catches up.
+    }
+  }
+
   private async ensureTabLoaded(t: FleetTab, force = false): Promise<void> {
     if (!force && this.loadedTabs.has(t)) {
       if (t === "logs" && this.selectedLogSource() && !this.logLines().length) {
@@ -2207,6 +2221,7 @@ export class FleetPageComponent implements OnInit {
       this.pipelinePause.set(res?.pause ?? { paused: true });
       this.pauseReasonDraft.set("");
       this.snackbar.show("Pipeline paused.");
+      void this.refreshShellConfig();
     } catch (err) {
       this.snackbar.show(errorText(err));
     } finally {
@@ -2223,6 +2238,7 @@ export class FleetPageComponent implements OnInit {
       );
       this.pipelinePause.set(res?.pause ?? { paused: false });
       this.snackbar.show("Pipeline resumed.");
+      void this.refreshShellConfig();
     } catch (err) {
       this.snackbar.show(errorText(err));
     } finally {
