@@ -200,6 +200,40 @@ body {
   background: var(--md-sys-color-surface);
 }
 
+/* The disconnected banner (AppComponent, ConnectionStatus) stands above the
+   rail and the page rather than over them: while it is up the root becomes a
+   column and the shell takes what is left of the viewport. */
+g-root:has(> .conn-banner) {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+g-root:has(> .conn-banner) > .app-shell {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+}
+
+.conn-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  line-height: 1.4;
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  border-bottom: 1px solid var(--md-sys-color-warning);
+  z-index: 30;
+}
+
+.conn-banner svg {
+  flex: none;
+}
+
 .nav-rail {
   grid-area: rail;
   display: flex;

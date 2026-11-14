@@ -242,3 +242,120 @@ test("Re-run failed follows to the run it starts", async ({ page }) => {
     }),
   ]);
 });
+
+// What the 2026-11-14 deployment-operations walkthrough found under /next/
+// (docs/test-runs/2026-11-14-deployment-operations.md): nothing said the
+// deployment had stopped answering, and a pipeline pause or resume on Fleet
+// left the shell's dispatch banner stale until its next one-minute poll.
+
+test("the disconnected banner stands above the shell on a failed or held connection and clears on its own", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.goto("fleet");
+  await expect(page.locator("#fleet-panel-sandboxes")).toBeVisible();
+  const banner = page.getByTestId("disconnected-banner");
+  await expect(banner).toHaveCount(0);
+
+  // Every request refused: the connection failed.
+  await page.route("**/api/**", (r) => r.abort());
+  try {
+    await expect(banner).toBeVisible({ timeout: 30_000 });
+    await expect(banner).toHaveAttribute("role", "status");
+    await expect(banner).toContainText(
+      "This deployment cannot be reached: the connection to it failed.",
+    );
+    await expect(banner).toContainText("retrying automatically");
+    const b = await banner.boundingBox();
+    const top = await page.locator(".top-bar").boundingBox();
+    const rail = await page.locator(".nav-rail").boundingBox();
+    const bottom = await page.locator(".bottom-bar").boundingBox();
+    const vh = page.viewportSize().height;
+    expect(b.y).toBe(0);
+    expect(top.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+    expect(rail.y).toBeGreaterThanOrEqual(b.y + b.height - 0.5);
+    expect(bottom.y + bottom.height).toBeLessThanOrEqual(vh + 0.5);
+  } finally {
+    await page.unroute("**/api/**");
+  }
+  await expect(banner).toHaveCount(0, { timeout: 30_000 });
+
+  // Requests accepted and never answered: held without an answer.
+  const held = [];
+  await page.route("**/api/**", (r) => {
+    held.push(r);
+  });
+  try {
+    await expect(banner).toContainText(
+      "it accepted the connection but sent no answer within 10 seconds",
+      { timeout: 45_000 },
+    );
+  } finally {
+    await page.unroute("**/api/**");
+    for (const r of held) await r.abort().catch(() => {});
+  }
+  await expect(banner).toHaveCount(0, { timeout: 30_000 });
+  await expect(page).toHaveURL(/\/next\/fleet$/);
+});
+
+test("pausing and resuming the pipeline on Fleet updates the shell's dispatch banner at once", async ({
+  page,
+}) => {
+  await page.goto("fleet?tab=controls");
+  const banner = page.getByTestId("global-dispatch-banner");
+  await expect(page.getByTestId("pipeline-pause-btn")).toBeVisible();
+  await expect(banner).toHaveCount(0);
+  await page.getByTestId("pipeline-pause-btn").click();
+  try {
+    await expect(page.getByTestId("pipeline-pause-state")).toContainText(
+      "Paused",
+    );
+    // Well inside the shell's one-minute poll.
+    await expect(banner).toContainText("Pipeline paused", { timeout: 5_000 });
+  } finally {
+    await page.getByRole("button", { name: /Resume pipeline/ }).click();
+  }
+  await expect(page.getByTestId("pipeline-pause-state")).toContainText(
+    "Dispatching",
+  );
+  await expect(banner).toHaveCount(0, { timeout: 5_000 });
+});
+
+test("Settings -> Caches asks before flushing either cache", async ({
+  page,
+}) => {
+  const flushes = [];
+  // Never flush a real cache: the flush POSTs are answered here.
+  await page.route(/\/api\/(package|actions)-cache\/flush$/, (r) => {
+    flushes.push(new URL(r.request().url()).pathname);
+    return r.fulfill({ json: { entries: 0, bytes: 0, cache: [] } });
+  });
+  await page.goto("settings/caches");
+  for (const [testId, title, path] of [
+    [
+      "flush-package-cache-btn",
+      "Flush package proxy cache?",
+      "/api/package-cache/flush",
+    ],
+    [
+      "flush-actions-cache-btn",
+      "Flush GitHub Actions cache?",
+      "/api/actions-cache/flush",
+    ],
+  ]) {
+    await page.getByTestId(testId).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText(title);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(flushes).toEqual([]);
+
+    await page.getByTestId(testId).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Flush cache" })
+      .click();
+    await expect.poll(() => flushes).toEqual([path]);
+    flushes.length = 0;
+  }
+});

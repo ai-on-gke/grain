@@ -167,7 +167,16 @@ do not pull in an icon font.
   (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
   `Details (N)` breakdown, paired with status on the topbar live pill and
   contextual queue/settings notices formatted in the configured or local
-  timezone with relative countdowns.
+  timezone with relative countdowns. A page that changes the pause itself
+  (Fleet → Pauses & Controls) re-reads `/api/config` into `AccessService`
+  so the banner follows the click rather than the next poll.
+- **Disconnected banner:** the one standing banner above the whole shell
+  (`services/connection.service.ts`). It is raised when requests fail to
+  connect, when a gateway answers 502/503/504, or when a polled read goes
+  10 s unanswered. It says when the outage began, in the deployment's time
+  zone, and clears itself on the first answer. It sits in flow above the
+  rail and top bar, never over them (`g-root:has(> .conn-banner)` becomes a
+  column), is `role="status"`, and has no close button.
 
 ### Destinations fill the stage
 
