@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -147,6 +148,15 @@ func SyncHumanReviewHolds(ctx context.Context, store *model.Store, now time.Time
 		}
 		m := findingsAwaitReason.FindStringSubmatch(linkTarget(*task, model.LinkAutoMergeAwaitsPerson))
 		if m == nil {
+			continue
+		}
+		// A person accepted that review's security findings: the mark
+		// stays while other findings still hold the change, and must not
+		// bring back the hold the acceptance cleared. A re-run of the
+		// review that finds more records them again, and is held again.
+		if model.ReviewFindingsAccepted(*task, model.GateSecurityReview, m[1]) &&
+			!slices.ContainsFunc(model.ReviewFindingsForGate(*task, model.GateSecurityReview),
+				func(r model.ReviewFindingsRecord) bool { return r.ReviewTask == m[1] }) {
 			continue
 		}
 		raiseFindingsReview(ctx, store, model.Task{ID: m[1]}, task.ID, "", now)

@@ -20,7 +20,7 @@ The binary **MUST** register exactly the commands below. The guard compares this
 
 | Kind | Commands |
 |---|---|
-| Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume`, `inbox`, `wait`, `logs` |
+| Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `accept-findings`, `force-merge`, `run-now`, `pause`, `resume`, `inbox`, `wait`, `logs` |
 | Task CLI: deployment | `config`, `settings`, `qa …`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|role|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
 | Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete` |
 | Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
@@ -301,9 +301,23 @@ _No flags._
 
 **Pinned by:** `pkg/cli/comment_flag_order_test.go`: `TestCommentRefusesAFlagWrittenAfterTheTaskID`; `pkg/cli/args_test.go`: `TestCommentStillTakesItsBodyAsWords`.
 
+### 3.7a `grain accept-findings -gate <gate> <id> <reason…>` {#CLI-112}
+
+Calls `POST /api/tasks/{id}/accept-findings`. A person accepts one review's findings on one merge gate (`security-review`, `review`, or `trigger:<name>`) as they are, so the change merges without fixing them. It clears that review's findings and questions on that gate and nothing else: CI, the other gates, approvers a trigger names and security holds still apply. It is recorded with the reason on the task, its timeline and the pull request. `-review <task>` names the review when several have findings on the gate. `-head <sha>` pins the head the findings were read at, and the request is refused if the pull request has moved since. **Scope:** person (`tasks:write`, unlimited role); an agent is refused.
+
+<!-- BEGIN GENERATED FLAGS: grain accept-findings -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-gate` | string |  |  | the gate whose findings you accept: security-review, review, or trigger:<name> |
+| `-head` | string |  |  | the head commit you read the findings at; refused if the pull request has moved since |
+| `-review` | string |  |  | the review task whose findings you accept; needed only when several have findings on the gate |
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/ui/accept_findings_test.go`: `TestAcceptFindingsRefusesAnAgent`.
+
 ### 3.7 `grain force-merge <id> <reason…>` {#CLI-28}
 
-Calls `POST /api/tasks/{id}/force-merge` with the reason. It overrides the merge queue, is recorded on the task and the pull request, and is refused when the branch does not merge cleanly. `-head <sha>` pins the reviewed commit, and the override is withdrawn if anything else is pushed first. **Scope:** person. No agent-facing tool can force a merge.
+Calls `POST /api/tasks/{id}/force-merge` with the reason. It overrides the merge queue and every gate it names -- to merge over one review's findings and nothing else, use `grain accept-findings` (§3.7a) -- is recorded on the task and the pull request, and is refused when the branch does not merge cleanly. `-head <sha>` pins the reviewed commit, and the override is withdrawn if anything else is pushed first. **Scope:** person. No agent-facing tool can force a merge.
 
 <!-- BEGIN GENERATED FLAGS: grain force-merge -->
 | Flag | Type | Default | Env | Description |

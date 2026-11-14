@@ -121,6 +121,21 @@ func taskHeldForHumanReview(t *testing.T, client *ui.Client, _ sender) string {
 	return id
 }
 
+// taskWithReviewFindings is a task whose pull request review r1 left
+// findings on: what POST /api/tasks/{id}/accept-findings acts on.
+func taskWithReviewFindings(t *testing.T, client *ui.Client, send sender) string {
+	t.Helper()
+	id := taskWithPullRequest(t, client, send)
+	if err := client.Store.UpdateTask(context.Background(), id, func(tk *model.Task) error {
+		model.AddReviewFindings(tk, model.ReviewFindingsRecord{Gate: model.GateSecurityReview, ReviewTask: "r1",
+			Summary: "review left findings", At: baseTime})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 // taskWithPullRequest is a task whose pull request the merge queue has
 // given up on: what retry-merge and force-merge act on.
 func taskWithPullRequest(t *testing.T, client *ui.Client, _ sender) string {
@@ -509,6 +524,11 @@ var attributedRoutes = map[string]attributedRoute{
 	"POST /api/tasks/{id}/submit": {
 		setup:    taskWithPullRequest,
 		recorded: noted(model.TaskEventSubmitted),
+	},
+	"POST /api/tasks/{id}/accept-findings": {
+		setup:    taskWithReviewFindings,
+		body:     `{"gate":"security-review","reviewTask":"r1","reason":"out of scope; follow-up filed"}`,
+		recorded: noted(model.TaskEventReviewFindingsAccepted),
 	},
 	"POST /api/tasks/{id}/human-review/release": {
 		setup:    taskHeldForHumanReview,

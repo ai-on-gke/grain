@@ -19,6 +19,7 @@ package orchestrator_test
 // a clean re-review, a later push -- releases a hold a reviewer raised.
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -179,5 +180,61 @@ func TestSyncHumanReviewHoldsMigratesExistingHolds(t *testing.T) {
 	rs := model.HumanReviewReasons(reloaded(t, ctx, store, findings.ID))
 	if len(rs) != 1 || rs[0].Source != model.HumanReviewSecurityFindings || rs[0].ReviewTask != "r9" {
 		t.Errorf("findings task reasons = %+v, want one from review r9", rs)
+	}
+}
+
+// A person who accepted a review's security findings is not overruled by
+// the reconcile: while the same review's code-review findings still hold
+// the change, its "left findings" mark stays, and that mark must not
+// bring back the security-findings hold the acceptance cleared.
+func TestSyncHumanReviewHoldsLeavesAcceptedSecurityFindings(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	task := filedTask(t, ctx, store, "a1", repo)
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.AutoMerge = false
+		t.Links = append(t.Links, model.Link{Kind: model.LinkFixes, Target: "acme/widgets#9"},
+			model.Link{Kind: model.LinkSecurityReviewTask, Target: "r9"},
+			model.Link{Kind: model.LinkAutoMergeAwaitsPerson, Target: "review r9 left findings"})
+		model.AddReviewFindings(t, model.ReviewFindingsRecord{Gate: model.GateSecurityReview, ReviewTask: "r9",
+			Summary: "security review left findings", At: baseTime})
+		model.AddReviewFindings(t, model.ReviewFindingsRecord{Gate: "trigger:every-pr", ReviewTask: "r9",
+			Summary: "every-pr review left findings", At: baseTime})
+		if !model.AcceptReviewFindings(t, model.ReviewFindingsAcceptance{Gate: model.GateSecurityReview,
+			ReviewTask: "r9", Reason: "out of scope", By: "alice", At: baseTime}) {
+			return fmt.Errorf("nothing accepted")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	completeReview(t, ctx, store, task.ID)
+	if err := orchestrator.SyncHumanReviewHolds(ctx, store, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got := reloaded(t, ctx, store, task.ID)
+	if rs := model.HumanReviewReasons(got); len(rs) != 0 {
+		t.Errorf("the reconcile brought back an accepted security-findings hold: %+v", rs)
+	}
+	for _, g := range model.ComputeMergeGates(got, nil, nil) {
+		if g.ID == model.GateSecurityReview && g.State == model.GateStateFindings {
+			t.Errorf("security-review gate = findings after its findings were accepted: %+v", g)
+		}
+	}
+
+	// The same review, re-run, leaves findings again: the backstop raises.
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		model.AddReviewFindings(t, model.ReviewFindingsRecord{Gate: model.GateSecurityReview, ReviewTask: "r9",
+			Summary: "still unsafe", At: baseTime.Add(2 * time.Hour)})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.SyncHumanReviewHolds(ctx, store, baseTime.Add(3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if rs := model.HumanReviewReasons(reloaded(t, ctx, store, task.ID)); len(rs) != 1 || rs[0].ReviewTask != "r9" {
+		t.Errorf("reasons after the re-run's findings = %+v, want one from review r9", rs)
 	}
 }

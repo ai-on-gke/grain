@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { Fragment } from "react";
-import { Alert, Box, Typography } from "@mui/material";
+import { Alert, Box, Button, Typography } from "@mui/material";
 import TaskLink from "./detail/TaskLink.jsx";
 
 // deriveMergeGates returns t.mergeGates when populated by the server, or
@@ -328,9 +328,15 @@ function gateToneColor(state) {
   }
 }
 
+// onAcceptFindings, when given, offers "Accept findings…" beside each gate
+// held on a review's findings the server marks acceptable (MergeGate's
+// `acceptable`; AcceptFindingsDialog): the owner's decision to merge over
+// them as they are, without overriding anything else. A gate held by a
+// review that could not be filed has no review's findings to accept.
 export default function MergeGatesList({
   t,
   onOpenTask,
+  onAcceptFindings,
   compact = false,
   testId,
 }) {
@@ -460,19 +466,49 @@ export default function MergeGatesList({
             >
               {formatGateStatus(g)}
             </Box>
-            {g.tasks?.length > 0 && (
+            {(g.tasks?.length > 0 ||
+              (onAcceptFindings && g.state === "findings" && g.acceptable)) && (
               <Box
                 component="span"
-                sx={{ color: "text.secondary", fontSize: "0.75rem" }}
+                sx={{
+                  display: "inline-flex",
+                  alignItems: "baseline",
+                  flexWrap: "wrap",
+                  gap: 0.75,
+                  color: "text.secondary",
+                  fontSize: "0.75rem",
+                }}
               >
-                {g.tasks.map((id, idx) => (
-                  <Fragment key={id}>
-                    {idx > 0 ? ", " : ""}
-                    <TaskLink id={id} onOpenTask={onOpenTask}>
-                      task {id}
-                    </TaskLink>
-                  </Fragment>
-                ))}
+                {g.tasks?.length > 0 && (
+                  <span>
+                    {g.tasks.map((id, idx) => (
+                      <Fragment key={id}>
+                        {idx > 0 ? ", " : ""}
+                        <TaskLink id={id} onOpenTask={onOpenTask}>
+                          task {id}
+                        </TaskLink>
+                      </Fragment>
+                    ))}
+                  </span>
+                )}
+                {onAcceptFindings && g.state === "findings" && g.acceptable && (
+                  <Button
+                    size="small"
+                    variant="text"
+                    data-testid={`accept-findings-${g.name}`}
+                    title="Merge over this review's findings as they are, with a reason. Clears this gate's findings only: CI, the other gates and approvals still apply."
+                    onClick={() => onAcceptFindings(g)}
+                    sx={{
+                      minWidth: 0,
+                      p: "0 4px",
+                      fontSize: "0.75rem",
+                      lineHeight: 1.5,
+                      textTransform: "none",
+                    }}
+                  >
+                    Accept findings…
+                  </Button>
+                )}
               </Box>
             )}
           </Box>

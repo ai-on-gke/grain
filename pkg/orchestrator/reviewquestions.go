@@ -206,8 +206,12 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 	body := fmt.Sprintf(
 		"The owner answered the open questions from review task %s, so this task is back in the "+
 			"queue: the next run carries out that decision -- fix what was decided, %s, "+
-			"and leave nothing it could have fixed as a comment. %s",
-		questions.ReviewTaskID, publish, then)
+			"and leave nothing it could have fixed as a comment. %s "+
+			"Findings the owner decided to merge as they are need nothing pushed, and resolving their "+
+			"threads does not clear them: only the owner's own **Accept findings** on the merge-gates "+
+			"panel (`grain accept-findings -gate <gate> %s <reason>`) does, so ask them to press it "+
+			"(ask_question). Do not recommend Force merge for this: it overrides every gate.",
+		questions.ReviewTaskID, publish, then, task.ID)
 	log.Printf("orchestrator: %s's owner answered the questions from review %s; redispatching it",
 		task.ID, questions.ReviewTaskID)
 	return reviewComment(ctx, store, task.ID, body, now)
