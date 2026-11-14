@@ -35,6 +35,7 @@ body: |
     - `pkg/trustboundary` classification and the security hold
       (`pkg/orchestrator/securityhold.go`);
     - path containment (`pkg/safepath` and its callers).
+  - List any file changed in the last day that `trustboundary.Classify` leaves unclassified but that handles auth, grants, secrets or release publishing.
   - If the day's changes touch none of these, say so explicitly and keep
     the report short: the commit list, "no trust-boundary surface
     touched", and why.

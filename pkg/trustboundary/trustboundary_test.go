@@ -266,6 +266,20 @@ var knownBoundaryFiles = []string{
 	"scripts/granule/", "scripts/release-patch.sh",
 	"scripts/grain-instance-init.sh", "scripts/bake-gce-release-image.sh",
 	"pkg/hostinit/", "pkg/installtrack/",
+	"pkg/ghwebhook/", "pkg/sandboxaccess/", "pkg/actionscache/",
+	"pkg/agent/credcheck/", "pkg/attest/", "pkg/releaseapproval/",
+	"pkg/agentd/release/", "scripts/build-agentd.sh",
+	"scripts/checkpost-report.sh", "scripts/migrate-local-to-gke.sh",
+	"pkg/ui/deployment_routes.go", "pkg/ui/tasks_from_template.go",
+	"pkg/ui/agent_cross_task.go", "pkg/ui/api_fs.go",
+	"pkg/ui/pull_requests_api.go", "pkg/ui/sandbox_cli_actions.go",
+	"pkg/ui/refs.go", "pkg/ui/repo_reach.go",
+	"pkg/model/canonical_grant_migration.go", "pkg/model/ref_push.go",
+	"pkg/model/declaration_acceptance.go", "pkg/model/proposal_seeding.go",
+	"pkg/ui/capability_catalogue.go", "pkg/ui/capability_grants.go",
+	"pkg/ui/capability_policy.go", "pkg/ui/secrets.go", "pkg/ui/task_secret.go",
+	"pkg/daemon/ca_store.go", "pkg/daemon/loose_credentials.go",
+	"pkg/daemon/mcpserver.go",
 }
 
 // Entries ending in "/" are directories: every .go file under them, as it
@@ -424,8 +438,8 @@ func TestNewAuthorizationFilesAreClassified(t *testing.T) {
 // workflows run or source. v25 classified none of them, so a change to any
 // merged itself.
 func TestCLIInstallerAndReleaseHelpersAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/ui/cli_install.sh":               "setup-scripts",
@@ -528,6 +542,9 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 		// scripts/granule/ and the patch-release branch/tag script.
 		"scripts/granule/build-granule-image.sh", "scripts/granule/guest-inputs.sh",
 		"scripts/granule/README.md", "scripts/release-patch.sh",
+		// v29: the standalone grain-agentd builder and signed release manifest package.
+		"scripts/build-agentd.sh", "pkg/agentd/release/release.go",
+		"pkg/agentd/release/cmd/grain-agentd-sign/main.go",
 	}
 	for _, p := range reviewed {
 		got := Classify([]string{p})
@@ -559,8 +576,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
@@ -609,8 +626,8 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 // reference/policy, catalogue and template-grant admission files in
 // pkg/model/ classify under capabilities-secrets.
 func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for _, p := range []string{
 		"pkg/playbooks/playbooks.go",
@@ -645,8 +662,8 @@ func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
 // bearer token model and lifecycle handlers classify under auth-routes, while
 // the provenance-only X-Grain-Client / FiledVia helpers stay unclassified.
 func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for _, p := range []string{
 		"pkg/model/owner_trust.go",
@@ -706,8 +723,8 @@ func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
 // (credential-proxy). v21 classified none of them, so a change to any merged
 // itself.
 func TestHubFrontDoorIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/webauth/iap.go":           "auth-routes",
@@ -739,8 +756,8 @@ func TestHubFrontDoorIsClassified(t *testing.T) {
 // left out -- the human-review hold an agent may raise but never release,
 // the director's Tier 3 floor, and agent on-behalf-of attribution.
 func TestWebauthAndHubIdentityFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/webauth/iap.go":             "auth-routes",
@@ -795,8 +812,8 @@ func TestWebauthAndHubIdentityFilesAreClassified(t *testing.T) {
 // touching only it merged with no security review. auto_submit.go
 // (EscalatedCapabilities) is the same shape.
 func TestCanonicalGrantIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for _, p := range []string{"pkg/model/canonical_grant.go", "pkg/model/auto_submit.go"} {
 		matches := Classify([]string{p})
@@ -828,8 +845,8 @@ func TestCanonicalGrantIsClassified(t *testing.T) {
 // (read by pkg/webauth/, pkg/daemon/ and pkg/hub/) and kept
 // cmd/grain-registry/ as a compatibility shim binary for one release.
 func TestHubRenameShimAndEnvFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/hubenv/hubenv.go":       "auth-routes",
@@ -849,8 +866,8 @@ func TestHubRenameShimAndEnvFilesAreClassified(t *testing.T) {
 // initialization (pkg/hostinit/) and install-track image repository selection
 // (pkg/installtrack/).
 func TestGranuleReleasePatchGCEInitHostinitAndInstalltrackAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	cases := map[string]string{
 		// scripts/granule/ prefix (real files + synthetic child to pin prefix matching)
@@ -910,6 +927,73 @@ func TestGranuleReleasePatchGCEInitHostinitAndInstalltrackAreClassified(t *testi
 			if got := categoryIDs(Classify([]string{file})); !reflect.DeepEqual(got, []string{spec.want}) {
 				t.Errorf("%s is defined in %s, Classify = %v, want [%s]", name, file, got, spec.want)
 			}
+		}
+	}
+}
+
+func TestV29HygieneSweepFilesAreClassified(t *testing.T) {
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
+	}
+	for p, want := range map[string]string{
+		"pkg/ghwebhook/server.go":                          "auth-routes",
+		"pkg/ghwebhook/sign.go":                            "auth-routes",
+		"pkg/ui/deployment_routes.go":                      "auth-routes",
+		"pkg/ui/tasks_from_template.go":                    "auth-routes",
+		"pkg/ui/agent_cross_task.go":                       "auth-routes",
+		"pkg/ui/api_fs.go":                                 "auth-routes",
+		"pkg/ui/pull_requests_api.go":                      "auth-routes",
+		"pkg/ui/sandbox_cli_actions.go":                    "auth-routes",
+		"pkg/ui/refs.go":                                   "auth-routes",
+		"pkg/ui/repo_reach.go":                             "auth-routes",
+		"pkg/model/canonical_grant_migration.go":           "capabilities-secrets",
+		"pkg/model/capability.go":                          "capabilities-secrets",
+		"pkg/model/ci_read_default.go":                     "capabilities-secrets",
+		"pkg/model/console_session.go":                     "capabilities-secrets",
+		"pkg/model/console_session_reach.go":               "capabilities-secrets",
+		"pkg/model/declaration_acceptance.go":              "capabilities-secrets",
+		"pkg/model/external_ref.go":                        "capabilities-secrets",
+		"pkg/model/hold_for_approval.go":                   "capabilities-secrets",
+		"pkg/model/priority_dispatch.go":                   "capabilities-secrets",
+		"pkg/model/proposal_seeding.go":                    "capabilities-secrets",
+		"pkg/model/ref_push.go":                            "capabilities-secrets",
+		"pkg/model/scratch_fixture.go":                     "capabilities-secrets",
+		"pkg/ui/capability_catalogue.go":                   "capabilities-secrets",
+		"pkg/ui/capability_grants.go":                      "capabilities-secrets",
+		"pkg/ui/capability_policy.go":                      "capabilities-secrets",
+		"pkg/ui/capability_status.go":                      "capabilities-secrets",
+		"pkg/ui/capability_servers_figma.go":               "capabilities-secrets",
+		"pkg/ui/change_submit.go":                          "capabilities-secrets",
+		"pkg/ui/console_sessions.go":                       "capabilities-secrets",
+		"pkg/ui/secrets.go":                                "capabilities-secrets",
+		"pkg/ui/task_secret.go":                            "capabilities-secrets",
+		"pkg/daemon/ca_store.go":                           "capabilities-secrets",
+		"pkg/daemon/loose_credentials.go":                  "capabilities-secrets",
+		"pkg/daemon/secretsrepo.go":                        "capabilities-secrets",
+		"pkg/daemon/statemanager.go":                       "capabilities-secrets",
+		"pkg/daemon/staterepo.go":                          "capabilities-secrets",
+		"pkg/sandboxaccess/acceptor.go":                    "exec-sandbox",
+		"pkg/sandboxaccess/ca.go":                          "exec-sandbox",
+		"pkg/daemon/mcpserver.go":                          "exec-sandbox",
+		"pkg/actionscache/server.go":                       "credential-proxy",
+		"pkg/agent/credcheck/credcheck.go":                 "credential-proxy",
+		"pkg/daemon/hub.go":                                "credential-proxy",
+		"pkg/attest/dsse.go":                               "merge-gate",
+		"scripts/checkpost-report.sh":                      "merge-gate",
+		"pkg/releaseapproval/keystore.go":                  "release-promotion",
+		"pkg/releaseapproval/kms.go":                       "release-promotion",
+		"pkg/agentd/release/release.go":                    "release-machinery",
+		"pkg/agentd/release/cmd/grain-agentd-sign/main.go": "release-machinery",
+		"scripts/build-agentd.sh":                          "release-machinery",
+		"scripts/migrate-local-to-gke.sh":                  "setup-scripts",
+	} {
+		if got := categoryIDs(Classify([]string{p})); !reflect.DeepEqual(got, []string{want}) {
+			t.Errorf("Classify(%q) = %v, want [%s]", p, got, want)
+		}
+	}
+	for _, p := range []string{"pkg/releaseapproval/keystore.go", "pkg/releaseapproval/kms.go"} {
+		if !RequiresHuman(Classify([]string{p})) {
+			t.Errorf("%s must require a human Submit under release-promotion", p)
 		}
 	}
 }

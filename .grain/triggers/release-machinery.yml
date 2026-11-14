@@ -12,6 +12,7 @@
 on: pull_request
 paths:
   - scripts/granule/**
+  - pkg/agentd/release/**
   - scripts/release-images.sh
   - scripts/release-notes.sh
   - scripts/candidate-gate.sh
@@ -25,6 +26,7 @@ paths:
   - scripts/release-train-actions.sh
   - scripts/release-assets.sh
   - scripts/build-cli.sh
+  - scripts/build-agentd.sh
   - .github/workflows/rc-qualification.yml
   - .grain/workflows/release.yml
   - .github/workflows/release.yml
