@@ -230,18 +230,20 @@ export function buildTreeRows(
   stream: Workstream,
   opts: {
     hideDone?: boolean;
+    autoFoldDone?: boolean;
     collapsedIds?: ReadonlySet<string>;
     selectedId?: string | null;
   } = {},
-): { rows: TreeRow[]; hiddenDoneCount: number } {
+): { rows: TreeRow[]; hiddenDoneCount: number; foldedDoneCount: number } {
   const rawChildren = buildRawChildrenMap(stream);
   const keepMemo = new Map<string, boolean>();
   const hiddenIds = new Set<string>();
+  const autoFoldIds = new Set<string>();
 
-  if (opts.hideDone) {
+  if (opts.hideDone || opts.autoFoldDone) {
     for (const n of stream.nodes) {
+      if (n.id === stream.root.id) continue;
       if (
-        n.id !== stream.root.id &&
         !hasUndoneInSubtree(
           n.id,
           rawChildren,
@@ -250,7 +252,14 @@ export function buildTreeRows(
           keepMemo,
         )
       ) {
-        hiddenIds.add(n.id);
+        if (opts.hideDone) {
+          hiddenIds.add(n.id);
+        } else if (
+          opts.autoFoldDone &&
+          (rawChildren.get(n.id)?.length ?? 0) === 0
+        ) {
+          autoFoldIds.add(n.id);
+        }
       }
     }
   }
@@ -265,7 +274,7 @@ export function buildTreeRows(
     isLast: boolean,
   ): void {
     const visibleKids = (rawChildren.get(node.id) ?? []).filter(
-      (k) => !hiddenIds.has(k.id),
+      (k) => !hiddenIds.has(k.id) && !autoFoldIds.has(k.id),
     );
     rows.push({
       id: node.id,
@@ -285,7 +294,11 @@ export function buildTreeRows(
   }
 
   walk(stream.root, 0, [], true);
-  return { rows, hiddenDoneCount: hiddenIds.size };
+  return {
+    rows,
+    hiddenDoneCount: hiddenIds.size,
+    foldedDoneCount: autoFoldIds.size,
+  };
 }
 
 interface InternalTreeItem {

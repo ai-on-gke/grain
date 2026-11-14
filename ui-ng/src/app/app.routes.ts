@@ -18,8 +18,22 @@ import {
   Router,
   type Routes,
   type UrlMatchResult,
-  type UrlSegment,
+  UrlSegment,
 } from "@angular/router";
+
+function workstreamMultiSegmentMatcher(
+  segments: UrlSegment[],
+): UrlMatchResult | null {
+  if (segments.length < 3 || segments[0]?.path !== "workstreams") return null;
+  const fullKey = segments
+    .slice(1)
+    .map((s) => s.path)
+    .join("/");
+  return {
+    consumed: segments,
+    posParams: { key: new UrlSegment(fullKey, {}) },
+  };
+}
 
 // Where the classic UI's System tabs (/system/<tab>) and its older
 // addresses live in this app: a bookmark or a link pasted out of the
@@ -84,6 +98,14 @@ export const routes: Routes = [
   },
   {
     path: "workstreams/:key",
+    title: "Workstream · grain",
+    loadComponent: () =>
+      import("./workstreams/workstreams-page.component").then(
+        (m) => m.WorkstreamsPageComponent,
+      ),
+  },
+  {
+    matcher: workstreamMultiSegmentMatcher,
     title: "Workstream · grain",
     loadComponent: () =>
       import("./workstreams/workstreams-page.component").then(

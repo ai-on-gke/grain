@@ -252,6 +252,7 @@ var routeDocs = map[string]string{
 	"POST /api/deployment/git-connections/check":                           "Check a git connection works, without saving it. To check an unsaved connection, leave credential empty and give what the editor would: type (pat with value, app with app, or ambient with nothing else) and host. To check a saved connection instead, name it in credential and give no value: credential is only ever a saved credential's name, never a type.",
 	"PUT /api/deployment/agent-backends/{backendId}":                       "Create or replace one of the deployment's model connections.",
 	"DELETE /api/deployment/agent-backends/{backendId}":                    "Delete one of the deployment's model connections.",
+	"POST /api/deployment/agent-backends/{backendId}/discover":             "Ask a model connection's provider which models it serves now, and keep the answer as the connection's discovered list.",
 	"PUT /api/deployment/repos/{owner}/{name}/config":                      "Set a repository's deployment-level configuration: only the fields given are changed.",
 	"PUT /api/deployment/repos/{owner}/{name}/git-connection":              "Set which git connection a repository is reached through.",
 	"POST /api/deployment/broadcast":                                       "Post a comment to every active task (running_only: only those with a run in flight).",
@@ -617,9 +618,11 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/memory/documents": listQueryDocs("name, repo or summary", listPageLarge, map[string]string{
 		"repo": "Only this repository's (owner/name) documents; given empty, only the deployment's own.",
 	}),
-	"GET /api/repos/{owner}/{name}/branches":        listQueryDocs("name", listPageMedium, nil),
-	"GET /api/repos/{owner}/{name}/github-branches": listQueryDocs("name", listPageMedium, nil),
-	"GET /api/repos/{owner}/{name}/releases":        listQueryDocs("name or branch", listPageLarge, nil),
+	"GET /api/repos/{owner}/{name}/branches": listQueryDocs("name", listPageMedium, nil),
+	"GET /api/repos/{owner}/{name}/github-branches": listQueryDocs("name", listPageMedium, map[string]string{
+		"refresh": "Set to 1 to drop any cached branch listing and re-read from the host.",
+	}),
+	"GET /api/repos/{owner}/{name}/releases": listQueryDocs("name or branch", listPageLarge, nil),
 	"GET /api/suite-runs": listQueryDocs("suite name or id", listPageSmall, map[string]string{
 		"repo":   "Only this repository's (owner/name) runs.",
 		"fields": "full for every task of each run: a paged row otherwise carries its first 3 (taskCount and tasksTruncated say so).",

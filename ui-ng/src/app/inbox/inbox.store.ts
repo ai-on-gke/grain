@@ -31,6 +31,7 @@ import type {
   TaskDetail,
 } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { BranchRefsService } from "../services/branch-refs.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { versionLabel } from "../api/version";
 import { ViewFilter } from "../services/view-filter.service";
@@ -76,7 +77,7 @@ export const DIFF_PREVIEW_HUNKS = 6;
 const DIFF_TTL_MS = 60000;
 
 export function wantsDiff(e: InboxEntry | null): boolean {
-  if (!e?.taskId) return false;
+  if (!e?.taskId || Boolean(e.task?.prMergedAt)) return false;
   if (DIFF_KINDS.has(e.kind) || !!e.task?.pullRequest) return true;
   if (e.kind === "proposal") return !!e.repo;
   return false;
@@ -112,6 +113,7 @@ export class InboxStore implements OnDestroy {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
   private readonly access = inject(AccessService);
+  private readonly branchRefs = inject(BranchRefsService);
   private readonly feed = inject(TaskFeedStore);
   private readonly zone = inject(NgZone);
 
@@ -136,6 +138,8 @@ export class InboxStore implements OnDestroy {
   // reader may not read it).
   readonly diffs = signal<Record<string, DiffPreview | null>>({});
   private readonly diffAt = new Map<string, number>();
+  private readonly diffVersions = new Map<string, string>();
+  private readonly diffInFlight = new Map<string, Promise<void>>();
 
   // liveEntries is the queue as the server last said it is. entries is
   // what the list shows: the same, except that while the person has a
@@ -290,15 +294,67 @@ export class InboxStore implements OnDestroy {
   private queuedRefresh: Promise<void> | null = null;
   private eventSub: { unsubscribe(): void } | null = null;
   private started = false;
+  private shellBackground = false;
+  private pageWaiters = 0;
+  private readonly summaryInFlight = new Set<string>();
+  private readonly summaryUpdatedAt = new Map<string, string>();
+  private readonly fullDetailLoaded = new Set<string>();
+  private readonly onVisibility = (): void => {
+    if (
+      this.started &&
+      typeof document !== "undefined" &&
+      document.visibilityState === "visible"
+    ) {
+      this.scheduleRefresh();
+    }
+  };
 
   constructor() {
     this.feed.onBeforeChange(() => this.remember());
   }
 
-  start(): void {
+  retainPage(): void {
+    const wasActive = this.isInspectorActive();
+    this.pageWaiters++;
+    if (!wasActive && this.loaded()) {
+      void this.hydrateActiveInspector();
+    }
+  }
+
+  releasePage(): void {
+    if (this.pageWaiters > 0) this.pageWaiters--;
+    if (!this.isInspectorActive()) {
+      this.stopSelectedTranscript();
+    }
+  }
+
+  private isInspectorActive(): boolean {
+    return this.pageWaiters > 0 || !this.shellBackground;
+  }
+
+  private async hydrateActiveInspector(): Promise<void> {
+    await Promise.all([
+      this.ensureDetail(),
+      this.ensureQueueDetails(),
+      this.ensureDiff(),
+    ]);
+    if (this.isInspectorActive()) {
+      this.syncSelectedTranscript();
+    }
+  }
+
+  start(shellOnly = false): void {
+    if (shellOnly && this.pageWaiters === 0) {
+      this.shellBackground = true;
+    } else if (!shellOnly) {
+      this.shellBackground = false;
+    }
     if (!this.started) {
       this.started = true;
       this.feed.start(false);
+      if (typeof document !== "undefined") {
+        document.addEventListener("visibilitychange", this.onVisibility);
+      }
     }
     void this.refresh();
     if (!this.eventSub) {
@@ -308,10 +364,14 @@ export class InboxStore implements OnDestroy {
     }
     if (!this.timer) {
       this.zone.runOutsideAngular(() => {
-        this.timer = setInterval(
-          () => this.zone.run(() => void this.refresh()),
-          POLL_MS,
-        );
+        this.timer = setInterval(() => {
+          if (
+            typeof document === "undefined" ||
+            document.visibilityState !== "hidden"
+          ) {
+            this.zone.run(() => void this.refresh());
+          }
+        }, POLL_MS);
       });
     }
   }
@@ -320,7 +380,15 @@ export class InboxStore implements OnDestroy {
     if (this.started) {
       this.started = false;
       this.feed.stop(false);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", this.onVisibility);
+      }
     }
+    this.shellBackground = false;
+    this.pageWaiters = 0;
+    this.fullDetailLoaded.clear();
+    this.summaryInFlight.clear();
+    this.summaryUpdatedAt.clear();
     this.stopSelectedTranscript();
     if (this.debounce) {
       clearTimeout(this.debounce);
@@ -399,30 +467,78 @@ export class InboxStore implements OnDestroy {
     if (scripts.status === "fulfilled") this.localScripts.set(scripts.value);
     this.loaded.set(true);
     this.trackIndex();
-    await Promise.all([
-      this.ensureDetail(),
-      this.ensureQueueDetails(),
-      this.ensureDiff(),
-    ]);
-    this.syncSelectedTranscript();
+    if (this.isInspectorActive()) {
+      await this.hydrateActiveInspector();
+    } else {
+      this.stopSelectedTranscript();
+    }
   }
 
   // ensureDiff reads the selected change's diff preview, unless one read
-  // in the last DIFF_TTL_MS is already held.
+  // in the last DIFF_TTL_MS for the same task version is already held (or a
+  // branch check proves the branch is absent).
   async ensureDiff(): Promise<void> {
     const e = this.selected();
     if (!wantsDiff(e) || e?.gone) return;
     const id = e!.taskId as string;
+    const inflight = this.diffInFlight.get(id);
+    if (inflight) return inflight;
+    const versionKey = `${id}:${e?.task?.updatedAt ?? ""}`;
     const at = this.diffAt.get(id);
-    if (at !== undefined && Date.now() - at < DIFF_TTL_MS) return;
-    this.diffAt.set(id, Date.now());
-    let preview: DiffPreview | null = null;
-    if (this.access.can("GET /api/tasks/{id}/diff-preview", e!.repo)) {
-      preview = await this.api
-        .diffPreview(id, DIFF_PREVIEW_HUNKS)
-        .catch(() => null);
+    if (
+      at !== undefined &&
+      Date.now() - at < DIFF_TTL_MS &&
+      this.diffVersions.get(id) === versionKey &&
+      id in this.diffs()
+    ) {
+      return;
     }
-    this.diffs.update((m) => ({ ...m, [id]: preview }));
+    const job = (async () => {
+      this.diffAt.set(id, Date.now());
+      this.diffVersions.set(id, versionKey);
+      let preview: DiffPreview | null = null;
+      const branch =
+        e?.task?.branch ||
+        (this.selected()?.taskId === id
+          ? this.selectedDetail()?.branch
+          : undefined);
+      const isProposal =
+        e?.kind === "proposal" || e?.task?.state === "proposed";
+      const hasExplicitRef = Boolean(
+        branch || e?.task?.pullRequest || e?.task?.changelists?.length,
+      );
+      if (isProposal && !hasExplicitRef) {
+        this.diffs.update((m) => ({ ...m, [id]: null }));
+        return;
+      }
+      const branchOk =
+        e?.repo && branch
+          ? await this.branchRefs.hasBranch(e.repo, branch)
+          : null;
+      const skipUncheckedProposal =
+        isProposal &&
+        !e?.task?.pullRequest &&
+        !e?.task?.changelists?.length &&
+        branchOk === null &&
+        this.access.rawConfig()?.gitCredentialsConfigured === false;
+      if (
+        branchOk !== false &&
+        !skipUncheckedProposal &&
+        this.access.canAccessTask(
+          "GET /api/tasks/{id}/diff-preview",
+          e!.repo || null,
+        )
+      ) {
+        preview = await this.api
+          .diffPreview(id, DIFF_PREVIEW_HUNKS)
+          .catch(() => null);
+      }
+      this.diffs.update((m) => ({ ...m, [id]: preview }));
+    })().finally(() => {
+      this.diffInFlight.delete(id);
+    });
+    this.diffInFlight.set(id, job);
+    return job;
   }
 
   private remember(): void {
@@ -456,6 +572,9 @@ export class InboxStore implements OnDestroy {
     }
     for (const id of this.answered.keys()) {
       if (!keepTasks.has(id)) this.answered.delete(id);
+    }
+    for (const id of this.summaryUpdatedAt.keys()) {
+      if (!keepTasks.has(id)) this.summaryUpdatedAt.delete(id);
     }
   }
 
@@ -508,26 +627,92 @@ export class InboxStore implements OnDestroy {
   }
 
   private async ensureQueueDetails(): Promise<void> {
+    if (!this.isInspectorActive()) return;
     const cached = this.details();
-    const ids = new Set<string>();
+    const selectedId = this.selected()?.taskId;
+    const targets: { id: string; updatedAt: string }[] = [];
+    const seen = new Set<string>();
     for (const e of this.liveEntries()) {
-      if (!e.taskId || this.detailInFlight.has(e.taskId)) continue;
-      if (e.kind === "stopped" && !cached[e.taskId]) ids.add(e.taskId);
-      else if (
+      if (
+        !e.taskId ||
+        e.taskId === selectedId ||
+        seen.has(e.taskId) ||
+        this.detailInFlight.has(e.taskId) ||
+        this.summaryInFlight.has(e.taskId)
+      ) {
+        continue;
+      }
+      const needSummary =
+        (e.kind === "stopped" && !cached[e.taskId]) ||
         e.kind === "submit" ||
         e.kind === "review" ||
-        e.kind === "base-repair"
+        e.kind === "base-repair";
+      if (!needSummary) continue;
+      const prev = cached[e.taskId];
+      const entryUpdatedAt = e.task?.updatedAt ?? "";
+      if (
+        prev &&
+        (this.summaryUpdatedAt.get(e.taskId) === entryUpdatedAt ||
+          (this.fullDetailLoaded.has(e.taskId) &&
+            prev.updatedAt === entryUpdatedAt))
       ) {
-        ids.add(e.taskId);
+        continue;
       }
+      seen.add(e.taskId);
+      targets.push({ id: e.taskId, updatedAt: entryUpdatedAt });
+      if (targets.length >= 20) break;
     }
-    await Promise.all([...ids].slice(0, 20).map((id) => this.readDetail(id)));
+    if (targets.length === 0) return;
+    const concurrency = Math.min(4, targets.length);
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < targets.length) {
+        const t = targets[cursor++];
+        if (t) await this.readSummary(t.id, t.updatedAt);
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, worker));
+  }
+
+  private canReadTask(id: string): boolean {
+    const entry = this.liveEntries().find((x) => x.taskId === id);
+    return !(
+      entry?.task &&
+      !this.access.canAccessTask("GET /api/tasks/{id}", entry.task.repo ?? "")
+    );
+  }
+
+  private async readSummary(id: string, expectedUpdatedAt = ""): Promise<void> {
+    if (!this.canReadTask(id)) return;
+    this.summaryInFlight.add(id);
+    try {
+      const d =
+        typeof this.api.taskSummary === "function"
+          ? await this.api.taskSummary(id)
+          : await this.api.task(id);
+      if (
+        this.fullDetailLoaded.has(id) ||
+        this.detailInFlight.has(id) ||
+        this.selected()?.taskId === id
+      ) {
+        return;
+      }
+      this.summaryUpdatedAt.set(id, expectedUpdatedAt || d.updatedAt || "");
+      this.details.update((m) => ({ ...m, [id]: d }));
+    } catch {
+      // The row still shows its summary; the inspector says less.
+    } finally {
+      this.summaryInFlight.delete(id);
+    }
   }
 
   private async readDetail(id: string): Promise<void> {
+    if (!this.canReadTask(id)) return;
     this.detailInFlight.add(id);
     try {
       const d = await this.api.task(id);
+      this.fullDetailLoaded.add(id);
+      this.summaryUpdatedAt.set(id, d.updatedAt ?? "");
       this.details.update((m) => ({ ...m, [id]: d }));
     } catch {
       // The row still shows its summary; the inspector says less.
@@ -544,7 +729,11 @@ export class InboxStore implements OnDestroy {
       this.stopSelectedTranscript();
       return;
     }
-    if (!force && this.details()[e.taskId]) {
+    if (
+      !force &&
+      this.details()[e.taskId] &&
+      this.fullDetailLoaded.has(e.taskId)
+    ) {
       this.syncSelectedTranscript();
       return;
     }
@@ -579,7 +768,10 @@ export class InboxStore implements OnDestroy {
     }
     const repo = e?.repo || d?.repo || undefined;
     if (
-      !this.access.can("GET /api/tasks/{id}/attempts/{number}/transcript", repo)
+      !this.access.canAccessTask(
+        "GET /api/tasks/{id}/attempts/{number}/transcript",
+        repo ?? null,
+      )
     ) {
       this.stopSelectedTranscript();
       return;
@@ -613,7 +805,13 @@ export class InboxStore implements OnDestroy {
     attemptNo: number,
     key: string,
   ): Promise<void> {
-    if (typeof this.api.get !== "function") return;
+    if (
+      typeof this.api.get !== "function" ||
+      !this.isInspectorActive() ||
+      (typeof document !== "undefined" && document.visibilityState === "hidden")
+    ) {
+      return;
+    }
     try {
       const r = await this.api.get<{ transcript?: string }>(
         "GET /api/tasks/{id}/attempts/{number}/transcript",
@@ -737,7 +935,7 @@ export class InboxStore implements OnDestroy {
         this.actionError.set(action.blocked);
         return false;
       }
-      if (!this.access.can(action.route, action.repo)) {
+      if (!this.canAct(action.route, action.repo)) {
         this.actionError.set("No permission for this action.");
         return false;
       }
@@ -754,6 +952,18 @@ export class InboxStore implements OnDestroy {
     } finally {
       this.busy.set(null);
     }
+  }
+
+  private canAct(route: RouteKey, repo?: string | null): boolean {
+    return route.includes("/api/tasks/")
+      ? this.access.canAccessTask(route, repo ?? null)
+      : this.access.can(route, repo || undefined);
+  }
+
+  private deniedAct(route: RouteKey, repo?: string | null): string {
+    return route.includes("/api/tasks/")
+      ? this.access.deniedReasonForTask(route, repo ?? null)
+      : this.access.deniedReason(route, repo || undefined);
   }
 
   private noteAnswered(a: InboxAction): void {
@@ -790,7 +1000,7 @@ export class InboxStore implements OnDestroy {
         .map((e) => ({ e, a: e.actions.find((x) => x.id === actionId) }))
         .filter(
           (t): t is { e: InboxEntry; a: InboxAction } =>
-            !!t.a && !t.a.blocked && this.access.can(t.a.route, t.a.repo),
+            !!t.a && !t.a.blocked && this.canAct(t.a.route, t.a.repo),
         );
       // Each call is its own promise, so one that throws at once still
       // leaves the others to finish.
@@ -939,8 +1149,18 @@ export class InboxStore implements OnDestroy {
         return { ok: false, woke: false };
       }
       const repo = fresh.repo || undefined;
-      if (!this.access.can("POST /api/tasks/{id}/comments", repo)) {
-        this.actionError.set("No permission to comment on this task.");
+      if (
+        !this.access.canAccessTask(
+          "POST /api/tasks/{id}/comments",
+          repo ?? null,
+        )
+      ) {
+        this.actionError.set(
+          this.access.deniedReasonForTask(
+            "POST /api/tasks/{id}/comments",
+            repo ?? null,
+          ) || "No permission to comment on this task.",
+        );
         return { ok: false, woke: false };
       }
 
@@ -953,11 +1173,16 @@ export class InboxStore implements OnDestroy {
         }
         if (
           fresh.state === "closed" &&
-          !this.access.can("POST /api/tasks/{id}/reopen", repo)
+          !this.access.canAccessTask(
+            "POST /api/tasks/{id}/reopen",
+            repo ?? null,
+          )
         ) {
           this.actionError.set(
-            this.access.deniedReason("POST /api/tasks/{id}/reopen", repo) ||
-              "No permission to reopen this task.",
+            this.access.deniedReasonForTask(
+              "POST /api/tasks/{id}/reopen",
+              repo ?? null,
+            ) || "No permission to reopen this task.",
           );
           return { ok: false, woke: false };
         }
@@ -967,17 +1192,22 @@ export class InboxStore implements OnDestroy {
           fresh.state !== "queued" &&
           fresh.state !== "awaiting_reply"
         ) {
-          const canRunNow = this.access.can(
+          const canRunNow = this.access.canAccessTask(
             "POST /api/tasks/{id}/run-now",
-            repo,
+            repo ?? null,
           );
           const canRetry =
             fresh.state === "failed" &&
-            this.access.can("POST /api/tasks/{id}/retry", repo);
+            this.access.canAccessTask(
+              "POST /api/tasks/{id}/retry",
+              repo ?? null,
+            );
           if (!canRunNow && !canRetry) {
             this.actionError.set(
-              this.access.deniedReason("POST /api/tasks/{id}/run-now", repo) ||
-                "No permission to wake the agent on this task.",
+              this.access.deniedReasonForTask(
+                "POST /api/tasks/{id}/run-now",
+                repo ?? null,
+              ) || "No permission to wake the agent on this task.",
             );
             return { ok: false, woke: false };
           }
@@ -1010,14 +1240,19 @@ export class InboxStore implements OnDestroy {
           (fresh.state === "awaiting_reply" ? "queued" : fresh.state);
         if (postState === "queued" || postState === "running") {
           woke = true;
-        } else if (this.access.can("POST /api/tasks/{id}/run-now", repo)) {
+        } else if (
+          this.access.canAccessTask(
+            "POST /api/tasks/{id}/run-now",
+            repo ?? null,
+          )
+        ) {
           await this.api.post("POST /api/tasks/{id}/run-now", { id: taskId });
           woke = true;
         } else if (
           (postState === "failed" ||
             fresh.turnStopped ||
             fresh.reason?.reason === "awaiting_reply/stopped") &&
-          this.access.can("POST /api/tasks/{id}/retry", repo)
+          this.access.canAccessTask("POST /api/tasks/{id}/retry", repo ?? null)
         ) {
           await this.api.post("POST /api/tasks/{id}/retry", { id: taskId });
           woke = true;

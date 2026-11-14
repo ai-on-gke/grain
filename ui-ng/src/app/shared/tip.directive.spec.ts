@@ -115,4 +115,20 @@ describe("TipDirective", () => {
     second.blur();
     expect(second.getAttribute("aria-describedby")).toBe("help-ci");
   });
+
+  it("hides immediately on pointerdown/click and dismissActiveTooltip()", async () => {
+    vi.useFakeTimers();
+    button.dispatchEvent(new MouseEvent("mouseenter"));
+    vi.advanceTimersByTime(TIP_DELAY_MS);
+    expect(tip()?.hidden).toBe(false);
+
+    button.dispatchEvent(new Event("pointerdown"));
+    expect(tip()?.hidden).toBe(true);
+
+    const mod = await import("./tip.directive");
+    second.focus();
+    expect(tip()?.hidden).toBe(false);
+    mod.dismissActiveTooltip();
+    expect(tip()?.hidden).toBe(true);
+  });
 });

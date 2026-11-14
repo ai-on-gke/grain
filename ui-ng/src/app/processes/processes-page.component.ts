@@ -137,7 +137,7 @@ type SuitesPaneView = "suites" | "runs";
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
-    "../shared/pill-select.css",
+    "../shared/surface-controls.css",
     "../inbox/inbox-queue.css",
     "../ci/ci-list.css",
     "./processes-list.css",
