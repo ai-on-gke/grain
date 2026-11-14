@@ -259,6 +259,24 @@ describe("new task form", () => {
     expect(
       fromTemplateStem("sidthe/grain", { ...repoTmpl, system: true }),
     ).toBe("");
+    // The id model.RepoDeclaredID actually writes.
+    expect(
+      fromTemplateStem("acme/widgets", {
+        ...repoTmpl,
+        id: "repo:template:acme:widgets:release-note",
+        declaredIn: undefined,
+      }),
+    ).toBe("release-note");
+    // A deployment template is not a repository stem: filing it through
+    // /api/tasks/from-template answered 404 (task-source-template walk, F2).
+    expect(
+      fromTemplateStem("acme/widgets", {
+        id: "template-1",
+        name: "deploy-walk",
+        title: "Deployment walk task",
+        description: "",
+      }),
+    ).toBe("");
   });
 
   it("says what stops filing, including required template fields", () => {

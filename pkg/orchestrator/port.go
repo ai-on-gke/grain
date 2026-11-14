@@ -741,15 +741,31 @@ func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref
 	if !grainci.Granted(grants) {
 		grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByGrain})
 	}
+	// A port records its source's template for reporting only and carries
+	// no TemplateID, so a grant settings/capabilities.yml restricts to that
+	// template (templates: [...]) is not the port's to hold. Kept, it held
+	// the port at dispatch for good (catalogueHold: "not granted to an
+	// ad-hoc task"); it is dropped here instead, with a note, so the port
+	// runs without the template's authority.
+	grants, droppedGrants, err := portCatalogueGrants(ctx, store, repo, source.TemplateID, grants)
+	if err != nil {
+		return model.Task{}, fmt.Errorf("orchestrator: judging the port of %s against the capability catalogue: %w", ref, err)
+	}
 	title := source.Title
 	if title == "" {
 		title = detail.Title
+	}
+	body := portBody(source, ref, detail, target, "")
+	if len(droppedGrants) > 0 {
+		body += fmt.Sprintf("\n\n_grain filed this port without what settings/capabilities.yml refuses it -- a port is "+
+			"filed by grain, not from task %s's template, so it holds none of that template's authority: %s._",
+			source.ID, strings.Join(droppedGrants, "; "))
 	}
 	port := model.Task{
 		ID:     id,
 		Intent: model.IntentImplement,
 		Title:  fmt.Sprintf("Port %s to %s: %s", ref, target, title),
-		Body:   portBody(source, ref, detail, target, ""),
+		Body:   body,
 		Origin: model.Origin{
 			Attribution: model.Attribution{Actor: porter},
 			Reason:      model.ReasonDirect,
@@ -837,4 +853,52 @@ func portBody(source model.Task, ref model.PullRequestRef, detail github.PullReq
 		}
 	}
 	return b.String()
+}
+
+// portCatalogueGrants is grants less every one that settings/capabilities.yml
+// admits only because of the source's template: refused to the port, judged as
+// the ad-hoc task it is (no TemplateID), yet admitted to the same repository
+// filed from sourceTemplate. For each dropped it returns the grant and why.
+// A grant refused for any other reason -- disabled, wrong repository, wrong
+// kind -- is kept, so dispatch still holds the port on it (catalogueHold)
+// exactly as it would hold the source: this drops nothing a person did not
+// already scope to that template. A deployment with no catalogue, or a source
+// filed from no template, keeps every grant.
+func portCatalogueGrants(ctx context.Context, store *model.Store, repo model.RepoRef, sourceTemplate string,
+	grants []model.Grant) (kept []model.Grant, dropped []string, err error) {
+
+	if strings.TrimSpace(sourceTemplate) == "" {
+		return grants, nil, nil
+	}
+	cfg, err := store.GetConfig(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if cfg == nil || cfg.CapabilityPolicy.Catalogue == nil {
+		return grants, nil, nil
+	}
+	cat := cfg.CapabilityPolicy.Catalogue
+	templateName := ""
+	if tmpl, err := store.GetTemplate(ctx, sourceTemplate); err != nil {
+		return nil, nil, err
+	} else if tmpl != nil {
+		templateName = tmpl.Name
+	}
+	for _, g := range grants {
+		r := repo
+		asPort := model.GrantContext{Repo: &r, Kind: model.CatalogueKindTask, Grants: []string{g.Capability}}
+		_, portErr := cat.ValidateGrants(asPort)
+		if portErr == nil {
+			kept = append(kept, g)
+			continue
+		}
+		asSource := asPort
+		asSource.TemplateID, asSource.TemplateName = sourceTemplate, templateName
+		if _, err := cat.ValidateGrants(asSource); err != nil {
+			kept = append(kept, g)
+			continue
+		}
+		dropped = append(dropped, fmt.Sprintf("`%s` (%v)", g.Capability, portErr))
+	}
+	return kept, dropped, nil
 }
