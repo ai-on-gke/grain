@@ -257,14 +257,8 @@ const defaultSecretKey = secrets.AgentCredentialKey
 var capabilityDisplayNames = withModelProxyDisplayNames(map[string]string{
 	"gcp-key":                    "GCP key",
 	"gemini-key":                 "Gemini key",
-	"github-sandbox":             "GitHub sandbox",
-	"bootstrap-playbooks":        "Bootstrap playbooks",
 	model.GrainCIGrant:           "grain CI",
 	model.GrainCICapability:      "grain CI",
-	"registry-push":              "Registry push",
-	"package-publish":            "Package publish",
-	"image-signing":              "Image signing",
-	"read-issues":                "Read issues",
 	model.GitHubReadIssuesGrant:  "Read issues",
 	model.GitHubSandboxRepoGrant: "GitHub sandbox",
 })
@@ -698,7 +692,7 @@ func (c *Client) capabilityStatusesWithSecrets(cfg model.Config, repoConfigs []m
 			// onto (model.CanonicalLegacyGrant), which is what a task or
 			// a repository's CI capabilities are granted now.
 			ID:          canonical,
-			Name:        capabilityDisplayName(spec.Name),
+			Name:        capabilityDisplayName(canonical),
 			Description: spec.Description,
 			Grantable:   grantable,
 			CIOnly:      spec.CIOnly,

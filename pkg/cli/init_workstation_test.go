@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -219,6 +220,7 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 	// (such as operator config maps or secret maps on config-map#config-map).
 	for _, c := range []string{
 		"api:deployment:write",
+		model.GrainCIRef + `={"repo":"acme/widgets"}`,
 		"repo-write:acme/widgets",
 		model.ConfigMapRef,
 		model.ConfigMapRef + "={}",
@@ -231,6 +233,33 @@ func TestTheStarterPolicyFailsClosed(t *testing.T) {
 		if err := p.Check(model.Task{Target: widgets, Creator: "me@example.com", Grants: []model.Grant{{Capability: c}}}, model.NetworkNone); err == nil {
 			t.Errorf("the Director's grants let %s through", c)
 		}
+	}
+	// A policy an older init wrote keeps admitting the Director chat,
+	// since a re-run keeps that file: grain#ci, self-debug and the api
+	// scopes it names by their retired spellings, and the rest by
+	// reference alone, without arguments.
+	olderAllow := []string{"grain-ci", "self-debug", "api:deployment:read", "api:ci-read",
+		model.GrainJournalRef, model.GrainHealthRef, model.BootstrapPlaybooksGrant}
+	for _, c := range model.DirectorPolicyCapabilities() {
+		if ref := model.CapabilityGrantRef(c); strings.HasPrefix(ref, model.APIRef("")) &&
+			!slices.Contains([]string{model.APIRef("self-debug"), model.APIRef("deployment:read"), model.APIRef("ci-read")}, ref) {
+			olderAllow = append(olderAllow, ref)
+		}
+	}
+	older, err := policy.Parse([]byte("repos: [\"acme/widgets\", \"grain/config\"]\n" +
+		"local_requesters: [\"me@example.com\"]\n" +
+		"capabilities:\n  allow: [" + yamlQuoteAll(olderAllow) + "]\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := older.Check(directorChat, model.NetworkNone); err != nil {
+		t.Errorf("a policy in the retired spellings refused the Director chat: %v", err)
+	}
+	if err := older.Check(ownWithCI, model.NetworkNone); err != nil {
+		t.Errorf("a policy naming grain-ci refused grain#ci: %v", err)
+	}
+	if strings.Contains(text, `"`+grainci.LegacyName+`"`) {
+		t.Errorf("the starter policy still names grain#ci by its retired name:\n%s", text)
 	}
 	if !strings.Contains(text, "The Director chat's own grants") {
 		t.Errorf("the starter policy does not say which grants are the Director's:\n%s", text)
