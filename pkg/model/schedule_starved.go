@@ -107,13 +107,25 @@ func ScheduleStarved(occurrence, now time.Time, occurrences int) bool {
 // a run, and has been holding the schedule past ScheduleStarvedAfter or
 // ScheduleStarvedOccurrences.
 //
+// The open task may be a task schedule's previous firing
+// (SuppressedByOpenTask) or a workflow schedule's review
+// (SuppressedByOpenReview). A review that has never started is not one a
+// person is reading -- it never got a worker -- so workflowReviewHold
+// would otherwise hold the schedule for days in silence (grain/task-5445:
+// a daily workflow's review sat queued for 30h at priority 5). A review
+// that has run, or finished into awaiting_reply for somebody to read, is
+// left alone by the queued and never-run checks below.
+//
 // Every cycle may call it: the priority only ever rises, the comment is
 // written only when it does, and the notification is raised only while
 // none is open for the schedule.
 func (s *Store) EscalateStarvedScheduleBlocker(ctx context.Context, sched Schedule, k ScheduleSkip,
 	now time.Time, loc *time.Location) (StarvedScheduleFiring, error) {
 
-	if k.Outcome != ScheduleSkipHeld || k.Reason != SuppressedByOpenTask || k.TaskID == "" {
+	if k.Outcome != ScheduleSkipHeld || k.TaskID == "" {
+		return StarvedScheduleFiring{}, nil
+	}
+	if k.Reason != SuppressedByOpenTask && k.Reason != SuppressedByOpenReview {
 		return StarvedScheduleFiring{}, nil
 	}
 	occurrences := 1 + foldedOccurrences(sched, now, loc)

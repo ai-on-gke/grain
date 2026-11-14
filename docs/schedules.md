@@ -1777,6 +1777,14 @@ skipped, so no release candidate was cut that day, and nothing said why.
   priority does not fix. A running task, or one waiting on a person,
   holds the schedule exactly as before. The person-wait case already
   gets `NoteHeldScheduleOnBlocker`'s note.
+- **Workflow reviews too (grain/task-5445).** A workflow schedule held by
+  its previous firing's review (`SuppressedByOpenReview`) is escalated
+  under the same rule. A review that is still `queued` with no run never
+  got a worker, so no person is reading it, and `workflowReviewHold`
+  would otherwise hold the schedule silently for up to three cadences
+  (72h for a daily workflow). A review that has started, or finished into
+  `awaiting_reply` for somebody to read, still holds the schedule as
+  before.
 - **What.** Every cycle that skips an occurrence passes its skip to
   `Store.EscalateStarvedScheduleBlocker`. Once the occurrence is starved:
   - The task's priority is raised to the highest priority of any other
