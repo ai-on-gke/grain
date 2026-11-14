@@ -18,7 +18,11 @@ import { provideRouter, withComponentInputBinding } from "@angular/router";
 import { RouterTestingHarness } from "@angular/router/testing";
 import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
-import { RepoDetailPageComponent } from "./repo-detail-page.component";
+import {
+  RepoDetailPageComponent,
+  importOutcomeText,
+  releaseActionReasons,
+} from "./repo-detail-page.component";
 
 interface RepoCall {
   method: string;
@@ -77,11 +81,18 @@ class FakeRepoApi {
       });
     }
     if (key === "GET /api/repos/{owner}/{name}/releases") {
-      return Promise.resolve([{ name: "v1.2", status: "open" }]);
+      return Promise.resolve([
+        { name: "v1.2", status: "active", prodBranch: "v1.2" },
+      ]);
     }
     if (key === "GET /api/repos/{owner}/{name}/releases/{release}/candidates") {
       return Promise.resolve([
-        { id: "rc-1", version: "v1.2.0-rc1", status: "qualifying" },
+        {
+          id: "rc-1",
+          version: "v1.2.0-rc1",
+          branch: "v1.2.rc.1",
+          status: "active",
+        },
       ]);
     }
     return Promise.resolve({});
@@ -231,23 +242,30 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       ),
     ).toBe(true);
 
-    // Cut & promote RC + approve qualification
-    el.querySelector<HTMLButtonElement>('[data-testid="cut-rc-v1.2"]')!.click();
+    // Cut RC is off while the newest candidate is active, and says why
+    // (the classic pane's rule); Promote RC asks before it moves the
+    // prod branch.
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-testid="cut-rc-v1.2"]')!
+        .disabled,
+    ).toBe(true);
+    expect(
+      el.querySelector('[data-testid="release-action-reasons"]')?.textContent,
+    ).toContain("v1.2.rc.1 is active: a new RC is cut once it is promoted.");
     el.querySelector<HTMLButtonElement>(
       '[data-testid="promote-rc-v1.2"]',
     )!.click();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Promote v1.2.rc.1 to v1.2?");
+    expect(api.calls.some((c) => c.key.endsWith("/candidates/promote"))).toBe(
+      false,
+    );
     el.querySelector<HTMLButtonElement>(
-      '[data-testid="approve-qualification-rc-1"]',
+      '[data-testid="confirm-accept"]',
     )!.click();
     await new Promise((r) => setTimeout(r, 10));
-
-    expect(
-      api.calls.some(
-        (c) =>
-          c.key ===
-          "POST /api/repos/{owner}/{name}/releases/{release}/candidates",
-      ),
-    ).toBe(true);
     expect(
       api.calls.some(
         (c) =>
@@ -255,6 +273,11 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
           "POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote",
       ),
     ).toBe(true);
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="approve-qualification-rc-1"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
     expect(
       api.calls.some(
         (c) =>
@@ -263,6 +286,85 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       ),
     ).toBe(true);
   });
+
+  // 2026-11-14 repository walkthrough: Import issues now said "triggered"
+  // whatever the pass did, and Cut/Promote gave no reason when off.
+  it("words an import pass the way the classic page does", () => {
+    expect(
+      importOutcomeText(
+        {
+          source: "acme/nosuch",
+          open: 0,
+          imported: [],
+          skipped: 0,
+          error: "GitHub answered 404",
+        },
+        "acme/platform",
+      ),
+    ).toEqual({
+      error: true,
+      text: "Could not read the open issues on acme/nosuch: GitHub answered 404",
+    });
+    expect(
+      importOutcomeText(
+        { source: "acme/platform", open: 2, imported: ["7"], skipped: 1 },
+        "acme/platform",
+      ),
+    ).toEqual({
+      error: false,
+      text: "Read 2 open issues on acme/platform: imported 1, 1 already imported.",
+    });
+    expect(
+      importOutcomeText(
+        {
+          source: "acme/platform",
+          open: 1,
+          imported: [],
+          skipped: 0,
+          error: "boom",
+        },
+        "acme/platform",
+      ).text,
+    ).toBe(
+      "Read 1 open issue on acme/platform: imported 0, 0 already imported. Some could not be imported: boom",
+    );
+  });
+
+  it("says why Cut RC and Promote RC are off", () => {
+    const rel = { name: "1.0", status: "active" };
+    expect(
+      releaseActionReasons(rel, { branch: "1.0.rc.1", status: "active" }, true),
+    ).toEqual({
+      cut: "1.0.rc.1 is active: a new RC is cut once it is promoted.",
+      promote: null,
+    });
+    expect(releaseActionReasons(rel, undefined, true)).toEqual({
+      cut: null,
+      promote: "No candidate to promote yet: cut one first.",
+    });
+    expect(
+      releaseActionReasons(
+        rel,
+        { branch: "1.0.rc.1", status: "promoted" },
+        true,
+      ),
+    ).toEqual({
+      cut: null,
+      promote: "1.0.rc.1 is already promoted: a candidate is promoted once.",
+    });
+    expect(releaseActionReasons(rel, undefined, false)).toEqual({
+      cut: null,
+      promote: null,
+    });
+    expect(
+      releaseActionReasons(
+        { name: "2.0", status: "provisioning", latestBranch: "2.0.latest" },
+        undefined,
+        false,
+      ).cut,
+    ).toContain("still provisioning");
+  });
+
   // 2026-11-13 repository walkthrough: the CI mode pill offered "both"
   // and "off", which PUT .../ci-mode refuses, and had no "none", so a
   // repository on no CI read as Grain CI.
