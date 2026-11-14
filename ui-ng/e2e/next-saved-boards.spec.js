@@ -156,6 +156,25 @@ test("the Timeline view runs a still-open task's bar up to now", async ({
   const bar = await row.locator(".timeline-bar").boundingBox();
   // The bar reaches the right-hand ("now") edge of its track.
   expect(bar.x + bar.width).toBeGreaterThan(track.x + track.width - 2);
+
+  // So does one filed a moment ago, whose minimum-width bar used to be
+  // pushed 2% short of the edge.
+  const res = await page.request.post("/api/tasks", {
+    data: { title: "E2E fresh proposal", repo: open.repo || "acme/widgets" },
+  });
+  expect(res.ok(), `POST /api/tasks: ${res.status()}`).toBe(true);
+  const fresh = await res.json();
+  try {
+    await page.reload();
+    const freshRow = page.getByTestId(`row-${fresh.id}`);
+    await expect(freshRow).toBeVisible();
+    const ft = await freshRow.locator(".timeline-track").boundingBox();
+    const fb = await freshRow.locator(".timeline-bar").boundingBox();
+    expect(fb.x + fb.width).toBeGreaterThan(ft.x + ft.width - 2);
+    expect(fb.x).toBeGreaterThanOrEqual(ft.x - 1);
+  } finally {
+    await page.request.delete(`/api/tasks/${fresh.id}`).catch(() => {});
+  }
 });
 
 test("a board saved from the Timeline view opens on the Timeline again", async ({

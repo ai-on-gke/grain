@@ -330,6 +330,10 @@ This is new ground (section 3).
   with neither time recorded falls back to `updatedAt`, then
   `createdAt`. This matches the classic gantt (`ui/src/gantt.js`
   `spanOf`).
+- **Edge case:** a bar's minimum width is 4%. A task filed moments ago
+  had its left edge capped at 94%, so even with the fix its bar ended at
+  98%, short of "now". A bar that the minimum width would push past the
+  right edge now slides left, so it ends at the edge.
 
 ### 3.2 A board saved from the `/next/` Timeline came back as the list
 
@@ -352,12 +356,16 @@ This is new ground (section 3).
   board with no view.
 - **e2e tests** in `ui-ng/e2e/next-saved-boards.spec.js`:
   - `the Timeline view runs a still-open task's bar up to now` asserts
-    with bounding boxes that the bar reaches the track's right edge.
+    with bounding boxes that the bar reaches the track's right edge. It
+    checks both an old open proposal and one filed during the test.
   - `a board saved from the Timeline view opens on the Timeline again`
     asserts the posted query, then applies the board and a plain list
     board.
 - **Checked against the unfixed source:** with the source fix reverted
-  and the spec kept, both e2e cases failed.
+  and the spec kept, both e2e cases failed. The just-filed step was
+  added after that check and was not re-run against the unfixed source.
+  By arithmetic, the old 94% + 4% cap ends that bar at 98%, which the
+  2px tolerance rejects.
 
 ## 4. Follow-ups
 
@@ -373,6 +381,13 @@ already proposed by task 5385.
 | `cd ui-ng && npx playwright test e2e/next-saved-boards.spec.js --project=desktop -g Timeline` (fix reverted) | 2 failed, as expected |
 | `cd ui-ng && npx playwright test e2e/next-saved-boards.spec.js --project=desktop --project=phone` | 5 passed |
 | `cd ui-ng && npx playwright test e2e/next-full-system.spec.js e2e/next-saved-boards.spec.js e2e/next-task-interactions.spec.js` | 14 passed |
+| `cd ui-ng && npx playwright test` (the whole suite) | 64 passed |
+
+On the first push, CI's `ui-ng e2e` failed only
+`prod-heavy-polish.spec.ts:470` in the desktop project. It expected 12
+quota alerts in `usage-warnings-banner` and found 2. The same test
+passed in the phone and dark projects of that run, and in the local
+full-suite run. This change does not touch that page.
 
 ### Screenshots
 

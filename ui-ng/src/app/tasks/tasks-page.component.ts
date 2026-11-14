@@ -1673,10 +1673,14 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       const eRaw = timelineEndMs(t, maxMs);
       const s = Number.isFinite(sRaw) ? Math.max(minMs, sRaw) : minMs;
       const e = Number.isFinite(eRaw) ? Math.max(s, eRaw) : maxMs;
-      const leftPct = Math.min(94, Math.max(0, ((s - minMs) / span) * 100));
-      const widthPct = Math.max(
-        4,
-        Math.min(100 - leftPct, ((e - s) / span) * 100),
+      // A bar is at least 4% wide so a short one stays visible. Where
+      // that minimum would push it past the right-hand edge, it slides
+      // left rather than being cut, so a task filed a moment ago and
+      // still open still ends at "now".
+      const widthPct = Math.min(100, Math.max(4, ((e - s) / span) * 100));
+      const leftPct = Math.min(
+        100 - widthPct,
+        Math.max(0, ((s - minMs) / span) * 100),
       );
       return {
         task: t,
