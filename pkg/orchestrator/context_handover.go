@@ -39,7 +39,7 @@ const (
 const contextHandoverPrompt = "[grain] This conversation has run out of context and this run is being " +
 	"stopped. The next run on this task starts a fresh session from the task's conversation and " +
 	"your handover, and nothing else from this session reaches it. Write this task's handover " +
-	"now (write_handover): what you were doing, what is done and pushed, what is left, and " +
+	"now (`grain handover write --file <path>`): what you were doing, what is done and pushed, what is left, and " +
 	"anything decided or ruled out. Then stop: take no other action.\n"
 
 // lastTurnForHandover gives a run whose context was exhausted one last
@@ -76,7 +76,7 @@ func lastTurnForHandover(ctx context.Context, store *model.Store, cfg Config, fr
 // handover (design/design/durable-tasks.design.md#DT-15).
 const requiredHandoverPrompt = "[grain] This durable task is about to rest, and this run has not written " +
 	"or confirmed its handover. The next run on this task starts from the task's conversation and " +
-	"your handover. Write the handover now (write_handover): what you were doing, what is done and " +
+	"your handover. Write the handover now (`grain handover write --file <path>`): what you were doing, what is done and " +
 	"pushed, what is left, and anything decided or ruled out. If the current handover is still " +
 	"true, write it again unchanged to confirm it. Then stop: take no other action.\n"
 

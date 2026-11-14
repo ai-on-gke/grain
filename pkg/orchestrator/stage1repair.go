@@ -306,6 +306,16 @@ func fileOrUpdateRepair(ctx context.Context, store *model.Store, kind repairKind
 		return "", fmt.Errorf("orchestrator: ordering the %s repair: %w", kind.what, err)
 	}
 	repo := run.Repo
+	// The repair gets the CI grant every other filing path gives a task on
+	// repo (defaultRepoGrants): grain#ci where grain CI gates it, and the
+	// default api:ci-read@<repo> where GitHub Actions does and the
+	// capability policy permits it. Without it the repair cannot run the
+	// `grain ci log` its own body points it at, and parks asking a person
+	// for a grant every other task already holds.
+	grants, err := defaultRepoGrants(ctx, store, repo)
+	if err != nil {
+		return "", fmt.Errorf("orchestrator: granting the %s repair of %s: %w", kind.what, repo, err)
+	}
 	task := model.Task{
 		ID:     id,
 		Intent: model.IntentImplement,
@@ -321,8 +331,15 @@ func fileOrUpdateRepair(ctx context.Context, store *model.Store, kind repairKind
 		Binding:    model.BindingDirective,
 		Priority:   kind.priority,
 		Tags:       []string{kind.tag},
+		Grants:     grants,
 		CreatedAt:  &now,
 		OrderKey:   orderKey,
+	}
+	if rcTagPattern.MatchString(run.Ref) {
+		// Red on a release candidate: the repair is a defect that
+		// candidate shipped (model.LinkFoundIn). A red default branch is
+		// against no release yet.
+		model.SetFoundIn(&task, run.Ref)
 	}
 	if err := store.PutTask(ctx, task); err != nil {
 		return "", fmt.Errorf("orchestrator: filing the %s repair of %s: %w", kind.what, repo, err)

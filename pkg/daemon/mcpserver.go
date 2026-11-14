@@ -185,7 +185,7 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 	if err != nil {
 		return mcp.TaskRecord{}, err
 	}
-	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, AuthorLabel: detail.AuthorLabel, Provenance: detail.Provenance, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
+	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, AuthorLabel: detail.AuthorLabel, Provenance: detail.Provenance, Base: detail.Base, FoundIn: detail.Task.FoundIn, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
 	for _, a := range detail.Attempts {
 		record.Attempts = append(record.Attempts, mcp.TaskAttempt{Number: a.Number, StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, Outcome: a.Outcome, Detail: a.Detail, PromptBytes: a.PromptBytes, PromptTokens: a.PromptTokens, Model: a.Model, AgentFramework: a.AgentFramework})
 	}
@@ -1482,13 +1482,12 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // served by the run's agent framework -- agent/antigravity's pre-tool
 // hook, say -- rather than by any tool of this process.
 var servedGrants = []string{
-	grainserver.LegacySelfDebug, grainserver.SourceRef, grainserver.SourceGrant,
-	grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant,
-	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
-	grainserver.LegacyReadIssues, grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
-	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
+	grainserver.SourceRef, grainserver.SourceGrant,
+	grainserver.JournalRef, grainserver.JournalGrant,
+	grainserver.CIRef, grainserver.CIGrant, grainserver.HealthRef, grainserver.HealthGrant,
+	grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
-	selfrepair.CapabilityName, grainserver.HostExecRef, grainserver.HostExecGrant,
+	grainserver.HostExecRef, grainserver.HostExecGrant,
 }
 
 func warnUnknownGrants(grants GrantNames) {
@@ -1501,10 +1500,7 @@ func warnUnknownGrants(grants GrantNames) {
 			continue
 		}
 		if model.IsBootstrapPlaybooksGrant(name) {
-			continue // the bootstrap map, or its retired bare alias: src://playbooks and `grain playbooks` read it
-		}
-		if model.APIAliasPreset(name) != "" {
-			continue // bare alias for an api preset (served by grain-controller on POST /api/mcp)
+			continue // the bootstrap map: src://playbooks and `grain playbooks` read it
 		}
 		if !slices.Contains(served, name) {
 			fmt.Fprintf(os.Stderr,
@@ -1898,6 +1894,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		Title: p.Title, Description: p.Body, Repo: repo, NoRepo: p.NoRepo, ChangeTarget: p.ChangeTarget, Base: base, Priority: priority, AutoMerge: auto,
 		DeclineAutoMerge: p.AutoMerge != nil && !*p.AutoMerge,
 		TemplateID:       p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
+		FoundIn:   p.FoundIn,
 		DependsOn: deps, CustomFields: fields, Supersedes: supersedes,
 		Reads: p.Reads, Designs: p.Designs, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,
 		ProposedBy: f.parent, ProposalKey: key, Capabilities: caps,
@@ -2080,7 +2077,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	fs.Var(&grants, "grant",
 		"name of a capability grant this run's task holds, whose tools this server should serve; "+
 			"repeat the flag for each. \"https://grain.dev/capabilities/api#self-debug\" (the tasks:read and "+
-			"deployment:read scopes; the retired \"self-debug\" and \"api:self-debug\" read as it) serves the four "+
+			"deployment:read scopes; formerly \"self-debug\") serves the four "+
 			"task readers, read_pipeline_changes and read_grain_metrics over -server; "+
 			"\"https://grain.dev/capabilities/grain#journal\" (formerly \"grain-log\") serves read_grain_log over this host's journal, "+
 			"redacted with -grain-secrets-dir. Passed "+
@@ -2552,8 +2549,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	}
 	// The task readers, read_pipeline_changes and read_grain_metrics are
 	// what self-debug opened over the daemon's REST API, and are its
-	// api:self-debug preset's now (tasks:read and deployment:read; the
-	// retired bare self-debug still reads as that preset). A run is told
+	// api:self-debug preset's now (tasks:read and deployment:read). A run is told
 	// the preset by the orchestrator's runGrants, beside grain#source.
 	if selfDebugAPI := model.APIGrantsOf(grants); selfDebugAPI.Allows("tasks:read", "") && selfDebugAPI.Allows("deployment:read", "") {
 		var reader mcp.TaskReader

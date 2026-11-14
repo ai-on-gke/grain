@@ -85,7 +85,12 @@ daemon with it, because of the `Requires=` dependency.
 
 `grain backup`, `grain health`, `grain state …` and the rest of the CLI work
 the same on either store. `setup.sh`'s schema-upgrade step (`grain state
-prepare-upgrade`) runs against the local server when that is the store.
+prepare-upgrade`) runs against the local server when that is the store. When a
+schema change rebuilds a PostgreSQL store from `$GRAIN_DATA_DIR/schema-upgrade`
+(after archiving the previous tables into `<schema>_schemaN_<time>`), grain
+advances every PostgreSQL serial sequence past the imported rows' maximum IDs,
+and each daemon start checks serial sequences against `MAX(col)` defensively
+and resynchronizes any sequence that has fallen behind.
 
 ## Upgrading the PostgreSQL image
 
@@ -170,6 +175,11 @@ use one of these:
 
   A disk snapshot of the data disk taken while both are stopped works the
   same way.
+
+Take one of these before an upgrade if you may want to go back. A newer
+build migrates the store in place and keeps no copy, and an older build
+refuses a store at a newer schema. See [Downgrading to an earlier
+build](host-setup.md#downgrading-to-an-earlier-build).
 
 To restore a cold copy, stop the daemon, put the data directory back in
 place and re-run `setup.sh`. The installer finds the password and the cluster and keeps

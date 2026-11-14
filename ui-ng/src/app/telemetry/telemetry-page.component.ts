@@ -31,14 +31,20 @@ import { SnackbarService } from "../services/snackbar.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { ViewFilter } from "../services/view-filter.service";
 import { errorText } from "../sessions/session-helpers";
-import { ActorChipComponent } from "../shared/actor-chip.component";
+import {
+  ActorChipComponent,
+  normalizeActorKind,
+} from "../shared/actor-chip.component";
+import {
+  effectiveDisplayTimeZone,
+  formatNoticeText,
+} from "../shared/dispatch-status";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import {
   type ClusterStats,
   type MetricsReport,
   type MetricsWindow,
-  type ReleaseNote,
   type TokenBudget,
   type UsageResponse,
   buildAlphabeticalContributors,
@@ -67,7 +73,11 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
   selector: "g-telemetry-page",
   imports: [RouterLink, TipDirective, StatusIconComponent, ActorChipComponent],
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["../shared/ops-surface.css", "./telemetry-page.component.css"],
+  styleUrls: [
+    "../shared/surface-controls.css",
+    "../shared/ops-surface.css",
+    "./telemetry-page.component.css",
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "(document:click)": "onDocClick($event)",
@@ -768,10 +778,7 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                       </tr>
                     </thead>
                     <tbody>
-                      @for (
-                        tpl of report()?.agents?.templates ?? [];
-                        track tpl.templateId
-                      ) {
+                      @for (tpl of visibleTemplates(); track tpl.templateId) {
                         <tr>
                           <td class="tabular">{{ tpl.templateId }}</td>
                           <td class="tabular">{{ tpl.wakes }}</td>
@@ -786,6 +793,23 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                     </tbody>
                   </table>
                 </div>
+                @if ((report()?.agents?.templates?.length ?? 0) > 8) {
+                  <div class="tel-more-row">
+                    <button
+                      type="button"
+                      class="tel-more-btn"
+                      data-testid="templates-show-all"
+                      (click)="showAllTemplates.set(!showAllTemplates())"
+                    >
+                      {{
+                        showAllTemplates()
+                          ? "Show top 8"
+                          : "Show all " +
+                            (report()?.agents?.templates?.length ?? 0)
+                      }}
+                    </button>
+                  </div>
+                }
               }
             </article>
 
@@ -906,10 +930,50 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
             </div>
 
             @if (usage(); as u) {
-              @for (w of u.warnings ?? []; track w) {
-                <p class="banner banner-error" style="margin: 0" role="status">
-                  {{ w }}
-                </p>
+              @if (usageNotices(); as notices) {
+                @if (notices.total > 0) {
+                  <div
+                    [class]="
+                      notices.hasError
+                        ? 'banner banner-error tel-notices-banner'
+                        : 'banner banner-warn tel-notices-banner'
+                    "
+                    role="status"
+                    data-testid="usage-warnings-banner"
+                  >
+                    <div class="tel-notices-head">
+                      <strong>
+                        {{
+                          notices.hasError
+                            ? "Model quota alerts"
+                            : "Model quota advisories"
+                        }}
+                        ({{ notices.total }})
+                      </strong>
+                      @if (notices.total > 2) {
+                        <button
+                          type="button"
+                          class="tel-more-btn"
+                          data-testid="usage-warnings-toggle"
+                          (click)="
+                            showAllUsageNotices.set(!showAllUsageNotices())
+                          "
+                        >
+                          {{
+                            showAllUsageNotices()
+                              ? "Show fewer"
+                              : "Show all " + notices.total + " notices"
+                          }}
+                        </button>
+                      }
+                    </div>
+                    <ul class="tel-notices-list">
+                      @for (n of notices.items; track n.text) {
+                        <li>{{ n.text }}</li>
+                      }
+                    </ul>
+                  </div>
+                }
               }
               <div class="ops-kpi-grid">
                 <div class="ops-kpi-card">
@@ -1130,7 +1194,7 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                     </thead>
                     <tbody>
                       @for (
-                        s of u.scopes;
+                        s of visibleScopes();
                         track s.connection + ":" + (s.model || "*")
                       ) {
                         <tr>
@@ -1198,6 +1262,22 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                     </tbody>
                   </table>
                 </div>
+                @if (u.scopes.length > 8) {
+                  <div class="tel-more-row">
+                    <button
+                      type="button"
+                      class="tel-more-btn"
+                      data-testid="scopes-show-all"
+                      (click)="showAllScopes.set(!showAllScopes())"
+                    >
+                      {{
+                        showAllScopes()
+                          ? "Show top 8"
+                          : "Show all " + u.scopes.length
+                      }}
+                    </button>
+                  </div>
+                }
               }
             } @else {
               <p class="muted" style="margin: 0">
@@ -1276,41 +1356,89 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                 <div>
                   <h3 class="section-title">Active Workstream Directions</h3>
                   <ul class="tel-dir-list">
-                    @for (dir of cs.directions ?? []; track dir.taskId) {
+                    @for (dir of visibleDirections(); track dir.taskId) {
                       <li class="tel-dir-item">
-                        <span>
+                        <span class="tel-dir-main">
                           <a
                             class="row-title"
                             [routerLink]="['/task', dir.taskId]"
+                            [title]="
+                              '#' +
+                              dir.taskId +
+                              ' ' +
+                              (dir.title || 'Workstream root')
+                            "
                             >#{{ dir.taskId }}
                             {{ dir.title || "Workstream root" }}</a
                           >
                           @if (dir.repo) {
-                            <span class="muted tabular"> · {{ dir.repo }}</span>
+                            <span class="muted tabular tel-dir-repo">
+                              · {{ dir.repo }}</span
+                            >
                           }
                         </span>
-                        <span class="tabular muted">
+                        <span class="tabular muted tel-dir-metrics">
                           {{ dir.pullRequestsMerged }} merged ·
                           {{ dir.tasksCompleted }} completed
                         </span>
                       </li>
                     }
                   </ul>
+                  @if ((cs.directions?.length ?? 0) > 8) {
+                    <div class="tel-more-row">
+                      <button
+                        type="button"
+                        class="tel-more-btn"
+                        data-testid="directions-show-all"
+                        (click)="showAllDirections.set(!showAllDirections())"
+                      >
+                        {{
+                          showAllDirections()
+                            ? "Show top 8"
+                            : "Show all " + (cs.directions?.length ?? 0)
+                        }}
+                      </button>
+                    </div>
+                  }
                 </div>
               }
             }
 
             <div>
-              <h3 class="section-title">
-                Contributors &amp; Actors (Alphabetical A–Z)
-              </h3>
+              <div class="tel-section-head">
+                <h3 class="section-title">
+                  Contributors &amp; Actors (Alphabetical A–Z)
+                </h3>
+                <div
+                  class="segmented"
+                  role="group"
+                  aria-label="Filter contributors"
+                >
+                  <button
+                    type="button"
+                    data-testid="actors-filter-all"
+                    [attr.aria-pressed]="actorsFilter() === 'all'"
+                    (click)="actorsFilter.set('all')"
+                  >
+                    All ({{ unfilteredActors().length }})
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="actors-filter-people"
+                    [attr.aria-pressed]="actorsFilter() === 'people'"
+                    (click)="actorsFilter.set('people')"
+                  >
+                    People ({{ peopleActorCount() }})
+                  </button>
+                </div>
+              </div>
               @if (alphabeticalActors().length === 0) {
                 <p class="muted" style="margin: 0">
                   No contributor records in the current view.
                 </p>
               } @else {
                 <div class="tel-space-grid" data-testid="space-actors-grid">
-                  @for (actor of alphabeticalActors(); track actor.id) {
+                  @for (actor of visibleActors(); track actor.id) {
                     <div class="tel-space-card" data-testid="space-actor-row">
                       <g-actor-chip [label]="actor.label" [kind]="actor.kind" />
                       <div class="tel-space-meta tabular">
@@ -1325,15 +1453,38 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                           >
                         }
                         @if (actor.activeTasks > 0) {
-                          <span>{{ actor.activeTasks }} open tasks</span>
+                          <span
+                            >{{ actor.activeTasks }} open
+                            {{
+                              actor.activeTasks === 1 ? "task" : "tasks"
+                            }}</span
+                          >
                         }
                         @if (actor.repos.length > 0) {
-                          <span>{{ actor.repos.join(", ") }}</span>
+                          <span [title]="actor.repos.join(', ')">{{
+                            formatActorRepos(actor.repos)
+                          }}</span>
                         }
                       </div>
                     </div>
                   }
                 </div>
+                @if (alphabeticalActors().length > 12) {
+                  <div class="tel-more-row">
+                    <button
+                      type="button"
+                      class="tel-more-btn"
+                      data-testid="actors-show-all"
+                      (click)="showAllActors.set(!showAllActors())"
+                    >
+                      {{
+                        showAllActors()
+                          ? "Show top 12"
+                          : "Show all " + alphabeticalActors().length
+                      }}
+                    </button>
+                  </div>
+                }
               }
             </div>
           </article>
@@ -1380,9 +1531,14 @@ export class TelemetryPageComponent implements OnInit {
   protected readonly report = signal<MetricsReport | null>(null);
   protected readonly usage = signal<UsageResponse | null>(null);
   protected readonly clusterStats = signal<ClusterStats | null>(null);
-  protected readonly releaseNotes = signal<ReleaseNote[]>([]);
   protected readonly configRepos = signal<string[]>([]);
   protected readonly knownConnections = signal<string[]>([]);
+  protected readonly showAllUsageNotices = signal(false);
+  protected readonly showAllScopes = signal(false);
+  protected readonly showAllTemplates = signal(false);
+  protected readonly showAllDirections = signal(false);
+  protected readonly showAllActors = signal(false);
+  protected readonly actorsFilter = signal<"all" | "people">("all");
 
   protected readonly editingUsage = signal(false);
   protected readonly savingUsage = signal(false);
@@ -1458,19 +1614,83 @@ export class TelemetryPageComponent implements OnInit {
     return list.filter((r) => this.access.can("GET /api/metrics", r));
   });
 
+  protected readonly unfilteredActors = computed(() =>
+    buildAlphabeticalContributors(this.clusterStats(), this.feed.tasks()),
+  );
+
+  protected readonly peopleActorCount = computed(
+    () =>
+      this.unfilteredActors().filter(
+        (a) => normalizeActorKind(a.kind, a.label) === "human",
+      ).length,
+  );
+
   protected readonly alphabeticalActors = computed(() => {
     const q = this.viewFilter.query().trim().toLowerCase();
-    const all = buildAlphabeticalContributors(
-      this.clusterStats(),
-      this.feed.tasks(),
-    );
-    if (!q) return all;
-    return all.filter(
+    const onlyPeople = this.actorsFilter() === "people";
+    const base = onlyPeople
+      ? this.unfilteredActors().filter(
+          (a) => normalizeActorKind(a.kind, a.label) === "human",
+        )
+      : this.unfilteredActors();
+    if (!q) return base;
+    return base.filter(
       (a) =>
         a.label.toLowerCase().includes(q) ||
         a.repos.some((r) => r.toLowerCase().includes(q)),
     );
   });
+
+  protected readonly visibleActors = computed(() => {
+    const list = this.alphabeticalActors();
+    return this.showAllActors() ? list : list.slice(0, 12);
+  });
+
+  protected readonly visibleTemplates = computed(() => {
+    const list = this.report()?.agents?.templates ?? [];
+    return this.showAllTemplates() ? list : list.slice(0, 8);
+  });
+
+  protected readonly visibleScopes = computed(() => {
+    const list = this.usage()?.scopes ?? [];
+    return this.showAllScopes() ? list : list.slice(0, 8);
+  });
+
+  protected readonly visibleDirections = computed(() => {
+    const list = this.clusterStats()?.directions ?? [];
+    return this.showAllDirections() ? list : list.slice(0, 8);
+  });
+
+  protected readonly usageNotices = computed(() => {
+    const u = this.usage();
+    if (!u) return { total: 0, hasError: false, items: [] };
+    const tz = effectiveDisplayTimeZone(this.access.rawConfig()?.timeZone);
+    const nowMs = this.access.clockNow();
+    const seen = new Set<string>();
+    const items: { text: string; level: "error" | "warn" }[] = [];
+    for (const raw of u.warnings ?? []) {
+      const text = formatNoticeText(raw, nowMs, tz).trim();
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      items.push({ text, level: "error" });
+    }
+    for (const raw of u.advisories ?? []) {
+      const text = formatNoticeText(raw, nowMs, tz).trim();
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      items.push({ text, level: "warn" });
+    }
+    return {
+      total: items.length,
+      hasError: items.some((x) => x.level === "error"),
+      items: this.showAllUsageNotices() ? items : items.slice(0, 2),
+    };
+  });
+
+  protected formatActorRepos(repos: readonly string[]): string {
+    if (repos.length <= 2) return repos.join(", ");
+    return `${repos.slice(0, 2).join(", ")} +${repos.length - 2}`;
+  }
 
   protected readonly authorOptions = computed<string[]>(() =>
     buildAlphabeticalContributors(this.clusterStats(), this.feed.tasks()).map(
@@ -1691,6 +1911,7 @@ export class TelemetryPageComponent implements OnInit {
     try {
       const u = await this.api.get<UsageResponse>("GET /api/usage");
       this.usage.set(u);
+      this.access.setUsage(u);
     } catch {
       // Optional section when usage store is empty/unwired.
     }
@@ -1701,18 +1922,12 @@ export class TelemetryPageComponent implements OnInit {
     const params = new URLSearchParams();
     if (this.spacePeriod()) params.set("period", this.spacePeriod());
     try {
-      const [stats, notes] = await Promise.all([
-        this.api.get<ClusterStats>(
-          "GET /api/release-notes/stats",
-          undefined,
-          params.toString(),
-        ),
-        this.api
-          .get<ReleaseNote[]>("GET /api/release-notes")
-          .catch(() => [] as ReleaseNote[]),
-      ]);
+      const stats = await this.api.get<ClusterStats>(
+        "GET /api/release-notes/stats",
+        undefined,
+        params.toString(),
+      );
       this.clusterStats.set(stats);
-      this.releaseNotes.set(Array.isArray(notes) ? notes : []);
     } catch {
       // Optional section when release-notes scope is restricted.
     }
@@ -1925,6 +2140,7 @@ export class TelemetryPageComponent implements OnInit {
         },
       );
       this.usage.set(updated);
+      this.access.setUsage(updated);
       this.editingUsage.set(false);
       this.snackbar.show("Saved token budget and concurrency settings.");
     } catch (err) {

@@ -271,14 +271,14 @@ func TestGCPKeyMigrationFidelity(t *testing.T) {
 		return ps, nil
 	}
 
-	// Rewritten task grants and one-release alias grants normalize identically.
+	// Rewritten task grants and what an import rewrites the retired names to normalize identically.
 	migratedGrants, err := model.CapabilityGrants(gotTask.Grants, lookup)
 	if err != nil {
 		t.Fatalf("normalizing migrated task grants %v: %v", gotTask.Grants, err)
 	}
 	aliasGrants, err := model.CapabilityGrants([]model.Grant{
-		{Capability: model.CanonicalLegacyGrant("gcp-key"), Via: model.GrantByLabel},
-		{Capability: model.CanonicalLegacyGrant("gcp-key:deploy"), Via: model.GrantByLabel},
+		{Capability: model.RetiredGrantsBecame("gcp-key")[0], Via: model.GrantByLabel},
+		{Capability: model.RetiredGrantsBecame("gcp-key:deploy")[0], Via: model.GrantByLabel},
 	}, lookup)
 	if err != nil {
 		t.Fatalf("normalizing alias grants: %v", err)

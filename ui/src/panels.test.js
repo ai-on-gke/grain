@@ -324,6 +324,34 @@ describe("panelUsesNarrowing", () => {
     }
   });
 
+  // 2026-11-13 saved-boards walkthrough (task 4727): a dashboard only
+  // re-sorted (`?sort=created:desc`) offered "Keep" on its state counts
+  // panel, whose counts no sort can change. The list and the timeline
+  // draw rows in the sort's order, so they still offer it.
+  it("is false of the state counts panel for a narrowing that only sorts", () => {
+    const baseline = q("f=repo:any:acme/widgets");
+    expect(panelUsesNarrowing({ kind: "states" }, q("sort=created:desc"))).toBe(
+      false,
+    );
+    expect(
+      panelUsesNarrowing(
+        { kind: "states" },
+        q("f=repo:any:acme/widgets&sort=created:desc"),
+        baseline,
+      ),
+    ).toBe(false);
+    expect(
+      panelUsesNarrowing(
+        { kind: "states" },
+        q("f=repo:any:acme/widgets&q=retry&sort=created:desc"),
+        baseline,
+      ),
+    ).toBe(true);
+    for (const kind of ["list", "gantt"]) {
+      expect(panelUsesNarrowing({ kind }, q("sort=created:desc"))).toBe(true);
+    }
+  });
+
   // The throughput panel reads a query as a scope rather than as a
   // filter (grain/task-317), so it is the one kind where the answer
   // depends on what the narrowing says: three things reach the report

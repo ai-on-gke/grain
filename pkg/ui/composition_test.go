@@ -569,7 +569,7 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 	draft, err := c.DraftScheduleComposition(ctx, ui.CreateScheduleRequest{
 		Title:        "Weekly Dependency & Vulnerability Audit",
 		Repo:         "acme/widgets",
-		Capabilities: []string{"read-issues"},
+		Capabilities: []string{model.GitHubReadIssuesGrant},
 	})
 	if err != nil {
 		t.Fatalf("composing draft schedule: %v", err)
@@ -598,7 +598,7 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
 		Name:         "Audit",
 		Title:        "Audit",
-		Capabilities: []string{"gcp-key"},
+		Capabilities: []string{model.GCPKeySandboxAgentGrant},
 	})
 	tmplComp, err := c.TemplateComposition(ctx, tmpl.ID, "acme/widgets", "main", nil, true)
 	if err != nil {
@@ -737,11 +737,11 @@ func TestDraftScheduleCompositionKeepsAScheduleCapabilitiesBesideItsTemplates(t 
 	t.Parallel()
 	c, _, ctx := testClient(t)
 	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
-		Name: "Audit", Title: "Audit", Capabilities: []string{"gcp-key"},
+		Name: "Audit", Title: "Audit", Capabilities: []string{model.GCPKeySandboxAgentGrant},
 	})
 	req := ui.CreateScheduleRequest{
 		TemplateID: tmpl.ID, Repo: "acme/widgets", Base: "main",
-		Capabilities: []string{"read-issues"},
+		Capabilities: []string{model.GitHubReadIssuesGrant},
 	}
 	draft, err := c.DraftScheduleComposition(ctx, req)
 	if err != nil {

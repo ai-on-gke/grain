@@ -354,7 +354,7 @@ func TestTaskReasonReadsALocalPolicyHoldOffItsWait(t *testing.T) {
 		t.Fatalf("GrantWaitOf after a policy hold = %+v, %v; want the local-policy wait", wait, err)
 	}
 	const file = "/home/someone/.config/grain/grain_policy.yml"
-	got := TaskReason(task, model.StateQueued, nil, nil, wait, model.ReplyFacts{}, file, "")
+	got := TaskReason(task, model.StateQueued, nil, nil, nil, wait, model.ReplyFacts{}, file, "")
 	if got.Reason != taskReasonLocalPolicy || got.Class != string(livenessAwaitingExternal) || got.Control != "" {
 		t.Errorf("TaskReason(queued, policy wait) = %+v, want %s, awaiting an external answer, with no control",
 			got, taskReasonLocalPolicy)
@@ -364,7 +364,7 @@ func TestTaskReasonReadsALocalPolicyHoldOffItsWait(t *testing.T) {
 			t.Errorf("TaskReason(queued, policy wait).Resource = %q, want it to name %q", got.Resource, want)
 		}
 	}
-	if got := TaskReason(task, model.StateQueued, nil, nil, wait, model.ReplyFacts{}, "", ""); !strings.Contains(got.Resource, "-policy") {
+	if got := TaskReason(task, model.StateQueued, nil, nil, nil, wait, model.ReplyFacts{}, "", ""); !strings.Contains(got.Resource, "-policy") {
 		t.Errorf("TaskReason with no -policy file = %q, want it to point at the -policy flag", got.Resource)
 	}
 
@@ -381,7 +381,7 @@ func TestTaskReasonReadsALocalPolicyHoldOffItsWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := TaskReason(task, model.StateQueued, nil, nil, wait, model.ReplyFacts{}, file, "").Reason; got != taskReasonReady {
+	if got := TaskReason(task, model.StateQueued, nil, nil, nil, wait, model.ReplyFacts{}, file, "").Reason; got != taskReasonReady {
 		t.Errorf("TaskReason once policy allows the task = %q, want %q", got, taskReasonReady)
 	}
 }

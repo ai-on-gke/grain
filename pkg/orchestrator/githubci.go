@@ -375,9 +375,13 @@ func annotateGitHubSharedFaults(ctx context.Context, deps Deps, now time.Time) e
 			errs = append(errs, err)
 			continue
 		}
+		// Noted already when the same sentence was said about this same
+		// commit: a new commit failing the same way is a new verdict, and
+		// its marker is what rerunSharedFaultRed reads back.
+		marker := sharedFaultMarker(run.Commit, sharedFaultJobs(run, faults))
 		alreadyNoted := false
 		for _, c := range comments {
-			if strings.Contains(c.Body, shared) {
+			if strings.Contains(c.Body, shared) && strings.Contains(c.Body, sharedFaultMarkerPrefix(run.Commit)) {
 				alreadyNoted = true
 				break
 			}
@@ -386,10 +390,10 @@ func annotateGitHubSharedFaults(ctx context.Context, deps Deps, now time.Time) e
 			continue
 		}
 		commit := shortSHA(run.Commit)
-		taskBody := fmt.Sprintf("GitHub CI failure at `%s`.\n\n%s", commit, shared)
+		taskBody := fmt.Sprintf(sharedFaultCommentLead+"%s`.\n\n%s\n\n%s", commit, shared, marker)
 		if _, err := deps.Store.AddComment(ctx, model.Comment{
 			TaskID:    task.ID,
-			Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
+			Author:    model.Attribution{Actor: sharedFaultAnnotator},
 			Body:      taskBody,
 			CreatedAt: now,
 		}); err != nil {

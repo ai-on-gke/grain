@@ -1323,6 +1323,16 @@ func fill(t *testing.T, ctx context.Context, store *model.Store, db *sql.DB) {
 			[]any{1, time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC), "-ui-allowed-principals", `["domain:example.com"]`}},
 		{"INSERT INTO `secret_entries` (`secret_name`, `key`, `sm_secret`, `version`, `updated_at`) VALUES (?, ?, ?, ?, ?)",
 			[]any{"gemini-api-key", "value", "grain-inst-alice-gemini-api-key", "2", time.Date(2026, 11, 5, 10, 0, 0, 0, time.UTC)}},
+		{"INSERT INTO `task_qa_assignment` (`root_origin`, `epoch`, `regime_id`, `arm`, `flow_id`, `rollout_pct_at_assign`, `complexity_tier`, `assigned_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			[]any{"task:a1b2", 1, 2, "treatment", "golden-v1-minimal", 50, "high", time.Date(2026, 11, 12, 18, 0, 0, 0, time.UTC)}},
+		{"INSERT INTO `task_qa_check_run` (`id`, `task_id`, `run_id`, `commit_sha`, `stage`, `check_id`, `arm`, `shadow`, `verdict`, `duration_ms`, `tokens_in`, `tokens_out`, `alloc_bytes`, `detail_json`, `created_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			[]any{1, "a1b2", "run-1", "0123456789abcdef0123456789abcdef01234567", "S3", "hollow-test-ast", "treatment", 0, "fail", 125, 0, 0, 65536, `{"files":1}`, time.Date(2026, 11, 12, 18, 1, 0, 0, time.UTC)}},
+		{"INSERT INTO `task_qa_check_run` (`id`, `task_id`, `run_id`, `commit_sha`, `stage`, `check_id`, `arm`, `shadow`, `verdict`, `duration_ms`, `tokens_in`, `tokens_out`, `alloc_bytes`, `detail_json`, `created_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			[]any{2, "c3d4", "run-2", "89abcdef0123456789abcdef0123456789abcdef", "shadow", "hollow-test-ast", "control", 1, "pass", 84, 0, 0, 32768, `{"files":2}`, time.Date(2026, 11, 12, 18, 2, 0, 0, time.UTC)}},
+		{"INSERT INTO `task_qa_finding` (`id`, `check_run_id`, `task_id`, `stage`, `rule_id`, `severity`, `file_path`, `line`, `summary`, `evidence`, `human_vote`, `voted_by`, `voted_at`, `created_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			[]any{1, 1, "a1b2", "S3", "go-test-zero-assertions", "blocker", "calc/calc_test.go", 18, awkward, "func TestAdd(t *testing.T) {}", 1, "alice@example.com", time.Date(2026, 11, 12, 18, 5, 0, 0, time.UTC), time.Date(2026, 11, 12, 18, 1, 0, 0, time.UTC)}},
+		{"INSERT INTO `task_qa_finding` (`id`, `check_run_id`, `task_id`, `stage`, `rule_id`, `severity`, `file_path`, `line`, `summary`, `evidence`, `human_vote`, `voted_by`, `voted_at`, `created_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			[]any{2, 2, "c3d4", "shadow", "diff-hygiene", "info", "README.md", 3, "Trailing note", "", 0, "", nil, time.Date(2026, 11, 12, 18, 2, 0, 0, time.UTC)}},
 	} {
 		if _, err := db.ExecContext(ctx, stmt.sql, stmt.args...); err != nil {
 			t.Fatalf("writing %s: %v", stmt.sql, err)

@@ -1,0 +1,31 @@
+=== real entry: state=running status=offline health=ok
+  bar: Last updated 08:54:23 PM · refreshing every 20s
+Refresh now
+=== settled poll rate (45s)
+  polls 2, gaps [20]s
+=== transitional (fixture: state=replacing over the real answer)
+  bar: Last updated 08:55:20 PM · refreshing every 4s while replacing
+Refresh now
+  polls 3, gaps [4,4]s
+  settled again: Last updated 08:55:24 PM · refreshing every 20s
+Refresh now
+=== hidden-tab pause (document.hidden overridden + visibilitychange)
+  polls while hidden for 45s: 0; within 1.5s of showing: 1
+=== edit preservation
+  PATCH display_name on the hub -> 200
+  input keeps: "My local edit"
+  hint: Updated on the server to "Renamed on the server" while you were editing; saving will overwrite it.
+  untouched Purpose took the server's: "Purpose set elsewhere"
+  "Discard my edits" shown: true
+  after Discard: "Renamed on the server", hint 0
+  edit equal to the server's new value: hint 0, Discard 0
+=== failed poll marks the bar only
+  bar: Last updated 08:56:14 PM · refreshing every 20s
+· last refresh failed, showing earlier data
+Refresh now
+  failed marker: 1, alert banners: 0, entry heading still shown: true
+  next good poll clears it: marker 0
+  layout 1440x900 light: {"scrollW":1440,"clientW":1440,"bar":[60,1380]}
+  layout 1440x900 dark: {"scrollW":1440,"clientW":1440,"bar":[60,1380]}
+  layout 390x844 light: {"scrollW":390,"clientW":390,"bar":[12,378]}
+  layout 390x844 dark: {"scrollW":390,"clientW":390,"bar":[12,378]}

@@ -337,7 +337,7 @@ type smBackend struct {
 // non-secret Catalogue. As with Open, configuration errors are retained on the
 // returned Store and reported on Check, List, Resolve, Set, Has, and Delete*.
 func OpenSecretManager(cfg SecretManagerConfig) *Store {
-	s := &Store{backend: BackendSecretManager}
+	s := &Store{backend: BackendSecretManager, keys: &keyCache{}}
 	if cfg.Catalogue == nil {
 		s.openErr = errors.New("secrets: Secret Manager backend requires a non-nil Catalogue")
 		return s

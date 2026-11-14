@@ -46,12 +46,58 @@ export interface AgentBackendOption {
   team?: string;
 }
 
+export interface AgentPauseEntry {
+  connection?: string;
+  connectionName?: string;
+  model?: string;
+  labels?: string[];
+  escalated?: string;
+  team?: string;
+  framework?: string;
+  until?: string;
+  reason?: string;
+  secondsRemaining?: number;
+  canLift?: boolean;
+}
+
+export interface AgentPauseStatus {
+  paused: boolean;
+  until?: string;
+  reason?: string;
+  secondsRemaining?: number;
+  pauses?: AgentPauseEntry[];
+}
+
+export interface PipelinePauseStatus {
+  paused: boolean;
+  since?: string;
+  reason?: string;
+  byKind?: string;
+  byId?: string;
+  bySource?: string;
+  byLabel?: string;
+  untilTask?: string;
+  runNowPasses?: boolean;
+  cancelledUpgrade?: string;
+}
+
+export interface DispatchCondition {
+  name?: string;
+  error?: string;
+  since?: string;
+  remedy?: string;
+  held?: boolean | string;
+  check?: boolean | string;
+}
+
 export interface GrainConfig {
   access?: AccessInfo | null;
   viewerOwner?: string;
   actor?: string;
   // The build stamp (api/version.ts); a string on older servers.
   version?: string | Record<string, unknown>;
+  configRepo?: string;
+  gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
   capabilities?: CapabilityOption[];
   defaultCapabilities?: string[];
@@ -61,6 +107,12 @@ export interface GrainConfig {
   models?: string[];
   defaultModel?: string;
   customFields?: CustomFieldDeclaration[];
+  agentPause?: AgentPauseStatus | null;
+  pipelinePause?: PipelinePauseStatus | null;
+  dispatchBlocked?: DispatchCondition[] | null;
+  reconcilerDown?: boolean;
+  timeZone?: string;
+  deployment?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -169,6 +221,8 @@ export interface Task {
   reviewers?: string[];
   reviewTemplateId?: string;
   reviewTemplateName?: string;
+  // The template the task was filed from, absent for one written from scratch.
+  templateId?: string;
   sandboxCpus?: number;
   sandboxMemoryMb?: number;
   sandboxDiskGb?: number;
@@ -179,6 +233,8 @@ export interface Task {
   nothingNeededAction?: string;
   promptExtension?: string;
   noPort?: boolean;
+  // The release this task is filed against (vX.Y.Z or vX.Y.Z-rc.N).
+  foundIn?: string;
   keepRunning?: boolean;
   hosting?: string;
   paused?: TaskPaused | null;
@@ -256,6 +312,10 @@ export interface Task {
   // Why the task is where it is (orchestrator liveness reason), e.g.
   // {reason: "awaiting_reply/stopped", class: "awaiting a person"}.
   reason?: { reason: string; class?: string; control?: string };
+  // The merge queue's own sub-case for this task's pull request, when it
+  // is on the queue; its control (Retry merge on merge_failed) stands in
+  // when the task's own sub-case names none.
+  mergeQueueReason?: { reason: string; class?: string; control?: string };
 }
 
 export type MergeGateState =
@@ -590,6 +650,11 @@ export interface ConsoleSessionList {
 export interface Notification {
   id: number;
   subject: string;
+  title?: string;
+  taskId?: string;
+  lastRaisedAt?: string;
+  ackedBy?: string;
+  clearsWhen?: { kind?: string; task?: string };
   family?: string;
   severity?: string;
   body?: string;

@@ -379,7 +379,9 @@ type Exit struct {
 	// held its output open, and hostd stopped waiting for that (the same
 	// bound agent.LocalHost puts on a local CLI).
 	WaitDelay bool `json:"wait_delay,omitempty"`
-	// Error is set when the process could not be started or waited for.
+	// Error is set when the process could not be started or waited for,
+	// and says why a Draining exit happened when hostd itself stopped or
+	// crashed while it ran (a drain reaching drain_cap leaves it empty).
 	Error string `json:"error,omitempty"`
 	// FinishedAt is when it ended. With Code and Error it is the same
 	// exit.json a run host's spool ends with (runhost.Exit).

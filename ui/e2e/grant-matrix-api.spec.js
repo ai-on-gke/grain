@@ -23,6 +23,7 @@ import {
   knownAPIGap,
   listCapabilityMethods,
   policyFor,
+  refusedOnlyForTasks,
   SURFACES,
 } from "./grantMatrix.js";
 
@@ -52,11 +53,10 @@ async function heldOf(request, id, ref) {
   );
 }
 
-async function check(request, ref, args) {
+async function check(request, ref, args, subject = null) {
+  const grants = [args ? { capability: ref, with: args } : { capability: ref }];
   const res = await request.post("/api/capability-grants/check", {
-    data: {
-      grants: [args ? { capability: ref, with: args } : { capability: ref }],
-    },
+    data: subject ? { grants, subject } : { grants },
   });
   expect(res.ok(), await res.text()).toBeTruthy();
   return (await res.json())[0];
@@ -120,12 +120,31 @@ test("every method and argument variant is granted, round-trips and is removed t
       }));
       results.push(...cells);
       const [cCheck, cAttach, cPatch] = cells;
-      // A grant grain refuses on every task may be refused by check
-      // too, as long as it says the same thing the writes do: then the
-      // form and the save agree.
+      // A grant grain refuses on every task must be refused by check
+      // too, with the same reason the writes give: then the form and the
+      // save agree. One the repos page's CI capabilities list grants is
+      // refused only when the check names a task.
       const checkRefused = Boolean(checked.error || !checked.recorded);
-      if (checkRefused && refusal && refusal.test(checked.error || "")) {
-        cCheck.outcome = "refused";
+      if (refusal && !checkRefused && refusedOnlyForTasks(ref, variant)) {
+        const forTask = await check(request, ref, args, { repo: "" });
+        if (!refusal.test(forTask.catalogueRefusal || ""))
+          fail(
+            cCheck,
+            `check for a task does not say ${refusal}: ${forTask.catalogueRefusal}`,
+          );
+        else cCheck.outcome = "refused";
+      } else if (refusal) {
+        if (!checkRefused)
+          fail(
+            cCheck,
+            `check passed ${JSON.stringify(args)}: ${checked.recorded}`,
+          );
+        else if (!refusal.test(checked.error || ""))
+          fail(
+            cCheck,
+            `check refusal does not say ${refusal}: ${checked.error}`,
+          );
+        else cCheck.outcome = "refused";
       } else if (checkRefused) {
         fail(cCheck, `check refused a valid set: ${checked.error}`);
         continue;

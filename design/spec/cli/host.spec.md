@@ -20,10 +20,10 @@ The binary **MUST** register exactly the commands below. The guard compares this
 
 | Kind | Commands |
 |---|---|
-| Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume`, `inbox`, `wait`, `logs` |
-| Task CLI: deployment | `config`, `settings`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|role|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
-| Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete` |
-| Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
+| Task CLI: tasks | `list`, `get`/`show`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `compact`, `brief`, `rollover`, `pause`, `resume`, `inbox`, `wait`, `logs` |
+| Task CLI: deployment | `config`, `settings`, `qa …`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `host …`, `hub …`, `access list\|allow\|role\|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject\|rollback`, `upgrade …`, `metrics`, `failures`, `usage`, `health`, `ci …`, `merge-queue`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status\|submit`, `declarations check` |
+| Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete`, `skill install\|status`, `mcp` |
+| Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `host`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `db check`, `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
 | Modes: hooks forked by a run | `agy-tool-hook`, `claude-stop-hook`, `codex-detached` |
@@ -848,6 +848,39 @@ _No flags._
 
 **Pinned by:** *untested*.
 
+### 4.9a `grain qa` {#CLI-112}
+
+Inspects or updates the deployment-wide quality control engine and single-instance pull-request rollout configuration (`GET /api/settings` and `POST /api/settings`, matching `Settings -> Tasks`).
+
+- `qa` or `qa status` reads `GET /api/settings` and prints whether quality control is off or enabled alongside the active flow package, rollout percentage, passive control-arm shadow scoring flag, experiment epoch, and regime ID.
+- `qa enable [-flow id] [-rollout pct] [-shadow-control=bool] [-epoch n]` enables quality control via `POST /api/settings`. Only flags explicitly passed are overwritten; when enabling an unconfigured deployment (`0%` rollout) without `-rollout`, the rollout defaults to `30%`.
+- `qa disable` sets `qaEnabled` to `false` via `POST /api/settings`, leaving the stored flow, rollout percentage, shadow-control flag, and epoch intact.
+
+**Scope:** `settings:read` (`status`), `settings:write` (`enable`, `disable`).
+
+<!-- BEGIN GENERATED FLAGS: grain qa -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa status -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa enable -->
+| Flag | Type | Default | Env | Description |
+|---|---|---|---|---|
+| `-epoch` | int |  |  | experiment epoch (>=1) to re-randomize sticky work-tree assignments |
+| `-flow` | string |  |  | quality flow package (golden-v1-minimal, deterministic-s3-only, repo-custom) |
+| `-rollout` | int | `30` |  | percentage of work-tree PRs assigned to treatment (0..100); defaults to 30 when unconfigured |
+| `-shadow-control` | bool | `true` |  | run passive shadow checks on control-arm PRs |
+<!-- END GENERATED FLAGS -->
+
+<!-- BEGIN GENERATED FLAGS: grain qa disable -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/qa_test.go`: `TestQACommandStatusEnableDisableAndFlagPreservation`.
+
 ### 4.10 `grain release approve|reject|rollback vX.Y.Z` {#CLI-39}
 
 `approve` and `reject` call `POST /api/repos/{owner}/{name}/pending-releases/{version}/approve` or `…/reject` (`DecideRelease`). `rollback` calls `POST /api/releases/{version}/rollback` (`RollbackRelease`), passing `-to` (`vA.B.C`) and `-reason` when given; `-bad` is an alias for the positional `vX.Y.Z`. `-repo` defaults to grain's own source repository (`ai-on-gke/grain`). On a repository that publishes from GitHub Actions (`ci_mode: github`) the answer is a signed dispatch of `.github/workflows/promote-release.yml`, and the command prints the dispatch instead of a grain CI run.
@@ -961,7 +994,7 @@ _No flags._
 - `metrics [-window 7d | -since t -until t] [-repo R]… [-author A]…` calls `GET /api/metrics`. It prints throughput, latency, prompt sizes and sandbox cost, and says what it was scoped to. An impossible span is refused before the daemon is asked.
 - `failures [-window 7d] [-suspect]` calls `GET /api/unmatched-failures` and prints what runs said when they failed for a reason grain could not name.
 - `usage` calls `GET /api/usage` and prints token usage per connection and model: used in the window, the limit (configured, or learned from a provider's refusal and marked `~`), what is left, the next reset, the burn rate and the workers the remainder sustains, then the deployment rollup, the advisory estimate and warnings for default-list models about to run out. `-mode`, `-min-workers`, `-retention-days`, `-budget` (repeatable, replacing every budget) and `-clear-budgets` change the settings with `PUT /api/usage/settings` first. `-json` prints the whole response.
-- `health` calls `GET /api/sandboxes` and prints its `counters`: each section a layer built on grain registered with `ui.RegisterHealthCounters`, sorted by key. They are in-process counts since the daemon started. `-json` prints the whole response.
+- `health` calls `GET /api/sandboxes` and prints its `counters`: each section a layer built on grain registered with `ui.RegisterHealthCounters`, sorted by key. They are in-process counts since the daemon started. `-json` prints the whole response. Before them it prints a `FAILING:` section for each failing check -- dispatch blocked, capability servers out of use, schedules with no run in more than twice their cadence, repository declarations not read in full -- and `WARNING:`/`ALERT:` sections for the rest. It exits `1` whenever a `FAILING` check is present, text or `-json` (on stderr `grain: health: failing: <checks>` in text mode; nothing extra under `-json`), and `0` when there are only warnings or nothing at all, so a monitoring script reads the verdict from the status. A `set -e` script that only wants the report writes `grain health || true`.
 
 <!-- BEGIN GENERATED FLAGS: grain metrics -->
 | Flag | Type | Default | Env | Description |
@@ -995,7 +1028,7 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/metrics_test.go`: `TestPrintMetricsSaysWhatItWasScopedTo`, `TestRunCLIMetricsScopesTheReport`, `TestRunCLIMetricsTakesAnAbsoluteSpan`, `TestCmdMetricsRejectsAnImpossibleSpanBeforeAsking`; `pkg/cli/failures_test.go`: `TestPrintFailures`, `TestPrintFailuresJSON`; `pkg/cli/health_test.go`: `TestGrainHealthShowsRegisteredCountersUntilUnregistered`; `pkg/cli/usage_cmd_test.go`: `TestParseBudget`, `TestGrainUsageShowsAndSets`.
+**Pinned by:** `pkg/cli/metrics_test.go`: `TestPrintMetricsSaysWhatItWasScopedTo`, `TestRunCLIMetricsScopesTheReport`, `TestRunCLIMetricsTakesAnAbsoluteSpan`, `TestCmdMetricsRejectsAnImpossibleSpanBeforeAsking`; `pkg/cli/failures_test.go`: `TestPrintFailures`, `TestPrintFailuresJSON`; `pkg/cli/health_test.go`: `TestGrainHealthShowsRegisteredCountersUntilUnregistered`, `TestGrainHealthExitsOneWhenACheckIsFailing`; `pkg/cli/usage_cmd_test.go`: `TestParseBudget`, `TestGrainUsageShowsAndSets`.
 
 ### 4.12 `grain ci …` {#CLI-62}
 
@@ -2126,7 +2159,7 @@ Speaks MCP over stdin/stdout against the sandbox tools. A running daemon forks i
 | `-grain-secrets-dir` | string |  |  | directory holding this deployment's own secrets (cmd/grain's secretsDir: -data-dir/secrets), read on this host so that read_grain_log can redact those values out of the journal before returning any of it. Only used with -grant https://grain.dev/capabilities/grain#journal, and never served to a run -- what it buys is the ability to recognize a credential in a log line and remove it. Unset, or unreadable, read_grain_log refuses every call rather than answering with an unredacted journal. |
 | `-grain-src-dir` | string |  |  | directory holding grain's own source, read-only (pkg/cli/daemon.go's sourceDir: the copy baked into the deployment image, or -upgrade-src-dir's checkout). |
 | `-grain-state-dir` | string |  |  | controller-local synchronized deployment state repository; only used with -grant https://grain.dev/capabilities/grain#health |
-| `-grant` | value |  |  | name of a capability grant this run's task holds, whose tools this server should serve; repeat the flag for each. "https://grain.dev/capabilities/api#self-debug" (the tasks:read and deployment:read scopes; the retired "self-debug" and "api:self-debug" read as it) serves the four task readers, read_pipeline_changes and read_grain_metrics over -server; "https://grain.dev/capabilities/grain#journal" (formerly "grain-log") serves read_grain_log over this host's journal, redacted with -grain-secrets-dir. Passed by a Framework from the grants on the run's own task (agent.RunConfig.Grants, agent.GrantArgs). |
+| `-grant` | value |  |  | name of a capability grant this run's task holds, whose tools this server should serve; repeat the flag for each. "https://grain.dev/capabilities/api#self-debug" (the tasks:read and deployment:read scopes; formerly "self-debug") serves the four task readers, read_pipeline_changes and read_grain_metrics over -server; "https://grain.dev/capabilities/grain#journal" (formerly "grain-log") serves read_grain_log over this host's journal, redacted with -grain-secrets-dir. Passed by a Framework from the grants on the run's own task (agent.RunConfig.Grants, agent.GrantArgs). |
 | `-granule-vm` | string |  |  | name of a granule-managed VM (bwsalmon/granule) to run the sandbox tools against over SSH, instead of a local directory (mutually exclusive with -sandbox-root) |
 | `-interactive` | bool |  |  | this run's task is a live chat somebody is sitting with (model.Task.Interactive, passed on by the Framework that forked this process -- agent.InteractiveArgs). With -server/-task it adds the chat tool: the run says something in the task's own conversation and blocks until a person answers, inside one tool call. It is gated because the tool promises somebody is there: on a background run every call would stand still for an hour before finding out nobody was. |
 | `-k8s-granule` | value |  |  | reach -k8s-pod's guest VM through granule exec -- over 'kubectl exec' |
@@ -2261,10 +2294,13 @@ _No flags._
 
 These edit a colocated deployment's files on disk, or the host itself, rather than calling the API. The exceptions are `sync` and `init`, which also talk to a daemon. `-data-dir` resolution is [#CLI-5](cli.spec.md#CLI-5).
 
-### 6.1 `grain access-code [-data-dir DIR] [show|rotate]` {#CLI-41}
+### 6.1 `grain access-code [-data-dir DIR] [show|rotate|mode [on|recovery|off]]` {#CLI-41}
 
 - `show` (the default) prints the access code: the daemon's one credential, also used as the CLI's bearer token.
 - `rotate` replaces the code, prints the new one, and ends every UI session and bearer use of the old one within a second. It refuses when there is no existing installation.
+- `mode [on|recovery|off]` reads or writes `DIR/access-code-mode` beside `local-api-token` and never prints the code:
+  - with no mode argument, prints the current mode (`on` when the file is absent; `off` when the file holds any unrecognised value);
+  - with `on`, `recovery` or `off`, checks that `local-api-token` exists, writes the mode file (`0600`) and prints the mode (plus a stderr note on `recovery` and `off`). The daemon re-reads the file within a second: `on` accepts the code everywhere configured, `recovery` holds the code to access and settings routes (raising an Inbox notification on use) once a verified full-role person on the allowlist can sign in, and `off` refuses the code everywhere except a run's own `grain mcpserver` plumbing (`X-Grain-Acting-Task`).
 
 The code is read from `DIR/local-api-token`, else `$GRAIN_LOCAL_API_TOKEN_FILE`, else `local-api-token` in `$GRAIN_DATA_DIR` or cli.env's. Flags (hand-written usage): `-data-dir` (string).
 
@@ -2280,7 +2316,11 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/accesscode_test.go`: `TestAccessCodeShowsAndRotatesTheCode`, `TestAccessCodeRotateNeedsAnExistingInstallation`.
+<!-- BEGIN GENERATED FLAGS: grain access-code mode -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/accesscode_test.go`: `TestAccessCodeShowsAndRotatesTheCode`, `TestAccessCodeRotateNeedsAnExistingInstallation`, `TestAccessCodeModeSetsTheModeWithoutPrintingTheCode`.
 
 ### 6.2 `grain secrets -data-dir DIR <command>` {#CLI-51}
 

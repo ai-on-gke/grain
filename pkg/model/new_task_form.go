@@ -42,7 +42,7 @@ const (
 // accepted as an alias of grants.
 var NewTaskFormFieldIDs = []string{
 	"title", "description", "attachments", "customFields", "repo", "newBranch", "base",
-	"writes", "reads", "autoMerge", "noPort", "fixesBaseBranch", "grants", "legacyCapabilities",
+	"writes", "reads", "autoMerge", "noPort", "fixesBaseBranch", "foundIn", "grants", "legacyCapabilities",
 	"admission", "hosting", "model", "dependsOn", "agentBackendId", "networkAccess", "nothingNeededAction",
 	"reviewTemplateId", "promptExtension", "sandboxShape", "approved", "atFront",
 }

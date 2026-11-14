@@ -1207,4 +1207,152 @@ describe("GrantsPicker", () => {
       within(readOnlyLine).queryByRole("button", { name: /remove/i }),
     ).toBeNull();
   });
+
+  it("searches grain/<preset> aliases onto their preset row, flags held dangerous aliases, and draws a one-value repo#credential select", async () => {
+    const repoCredential = {
+      ref: "https://grain.dev/capabilities/repo#credential",
+      capability: "https://grain.dev/capabilities/repo",
+      method: "credential",
+      description: "Named GitHub credential",
+      requiresArgs: true,
+      args: {
+        type: "object",
+        additionalProperties: false,
+        required: ["credential"],
+        properties: {
+          credential: {
+            type: "string",
+            enum: ["default"],
+            description: "Named GitHub credential",
+          },
+        },
+      },
+    };
+    api.mockImplementation(async (path) => {
+      if (path.startsWith("/api/capability-methods")) return [repoCredential];
+      if (path === "/api/capability-grants/check") return [];
+      throw new Error(`unexpected ${path}`);
+    });
+    const config = {
+      capabilityMethods: 1,
+      capabilities: [
+        {
+          id: "api:deployment-ops",
+          preset: true,
+          dangerous: true,
+          scopes: ["deployment:read", "deployment:upgrade"],
+          summary: "Upgrade and restart",
+          description: "Upgrade and restart",
+        },
+        {
+          id: "api:grain/viewer",
+          preset: true,
+          dangerous: false,
+          scopes: ["tasks:read", "ci:read"],
+          summary: "Read everything",
+          description: "Read everything",
+        },
+      ],
+    };
+    const onSubmit = vi.fn().mockResolvedValue();
+    const onRemove = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={["https://grain.dev/capabilities/api#grain/deployment-ops"]}
+        config={config}
+        onApiChange={vi.fn()}
+        onSubmit={onSubmit}
+        onRemove={onRemove}
+      />,
+    );
+
+    const heldSection = await screen.findByLabelText(
+      "api#grain/deployment-ops (dangerous)",
+    );
+    expect(within(heldSection).getByText(/Dangerous/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    const search = screen.getByRole("textbox", { name: "Search grants" });
+    await user.type(search, "grain/deployment-ops");
+    const presetRow = screen.getByRole("menuitemcheckbox", {
+      name: "deployment-ops",
+    });
+    expect(presetRow).toHaveAttribute("aria-checked", "true");
+
+    await user.clear(search);
+    await user.type(search, "repo#credential");
+    await user.click(
+      await screen.findByRole("menuitem", { name: /repo server › credential/ }),
+    );
+    const select = await screen.findByLabelText(/^credential/);
+    await user.click(select);
+    await user.click(screen.getByRole("option", { name: "default" }));
+    await waitFor(
+      () =>
+        expect(onSubmit).toHaveBeenCalledWith(
+          {
+            capability: "https://grain.dev/capabilities/repo#credential",
+            with: { credential: "default" },
+          },
+          null,
+        ),
+      { timeout: 2000 },
+    );
+  });
+
+  it("does not fold a grain/<name> row of its own onto a deployment set of the same name", async () => {
+    api.mockImplementation(async (path) => {
+      if (path.startsWith("/api/capability-methods")) return [];
+      if (path === "/api/capability-grants/check") return [];
+      throw new Error(`unexpected ${path}`);
+    });
+    const config = {
+      capabilityMethods: 0,
+      capabilities: [
+        {
+          id: "api:grain/operator",
+          preset: true,
+          dangerous: true,
+          scopes: ["tasks:admin"],
+          summary: "Operate grain",
+          description: "Operate grain",
+        },
+        {
+          id: "api:operator",
+          preset: true,
+          dangerous: false,
+          scopes: ["tasks:read"],
+          summary: "The deployment's own operator set",
+          description: "The deployment's own operator set",
+        },
+      ],
+    };
+    const onRemove = vi.fn().mockResolvedValue();
+    const user = userEvent.setup();
+    render(
+      <GrantsPicker
+        grants={["https://grain.dev/capabilities/api#grain/operator"]}
+        config={config}
+        onApiChange={vi.fn()}
+        onSubmit={vi.fn().mockResolvedValue()}
+        onRemove={onRemove}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Add grant…" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Search grants" }),
+      "operator",
+    );
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "grain/operator" }),
+    ).toHaveAttribute("aria-checked", "true");
+    const deploymentRow = screen.getByRole("menuitemcheckbox", {
+      name: "operator",
+    });
+    expect(deploymentRow).toHaveAttribute("aria-checked", "false");
+    await user.click(deploymentRow);
+    expect(onRemove).not.toHaveBeenCalled();
+  });
 });

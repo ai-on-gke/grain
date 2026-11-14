@@ -25,6 +25,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/granule"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/sysstat"
 )
 
 // SandboxHealth is one live sandbox's status, as HostSandboxes' and
@@ -76,9 +77,21 @@ type SandboxHealth struct {
 	Error string
 	// LoadAverage is the sandbox's own "/proc/loadavg" 1/5/15-minute
 	// figures, space-joined verbatim, or empty when this backend has no
-	// way to read it (HostSandboxes: nothing separates its own usage from
-	// the host daemon's, which ui.Config.HostStats already reports).
+	// way to read it (HostSandboxes: a directory has no /proc/loadavg of
+	// its own; CPUCores below is its reading instead).
 	LoadAverage string
+	// CPUCores is how many CPUs the run's own processes kept busy,
+	// averaged over CPUWindow -- 1.5 is one and a half cores' worth.
+	// Only HostSandboxes sets it: a host-directory run shares the host's
+	// /proc with everything else, so the load average says nothing about
+	// it, but its processes are told apart by working directory
+	// (sysstat.ProcessTreeCPU). Nil when there is no reading: another
+	// backend, a platform without /proc, or no process found for the run.
+	CPUCores *float64
+	// CPUWindow is the span CPUCores is averaged over: the time since
+	// the previous sweep sampled this sandbox, or the short settle a
+	// sandbox seen for the first time is sampled across.
+	CPUWindow time.Duration
 	// MemoryUsedMB and MemoryTotalMB are the sandbox's own memory, read
 	// the same way ui.HostPressure's are for the daemon's host -- 0/0
 	// when unavailable.
@@ -267,27 +280,176 @@ func (h *HostSandboxes) AgentSandboxCount() int {
 // Health implements the same shape GranuleSandboxes.Health does: one entry
 // per sandbox currently held by a live run, in name order. A
 // HostSandboxes directory has no isolation from the host daemon runs on
-// (this package's own doc comment), so there is no separate CPU/memory
-// reading to give it beyond "yes, its directory exists" -- a deployment
-// running HostSandboxes gets its host-wide pressure from
-// ui.Config.HostStats instead, which is exactly the number a starved
-// sandbox would actually be contending over.
+// (this package's own doc comment), so it has no load average, memory or
+// disk of its own -- a deployment running HostSandboxes gets its
+// host-wide pressure from ui.Config.HostStats, which is the number a
+// starved sandbox would actually be contending over. What it does have
+// is processes: CPUCores is the CPU its own process tree used since the
+// previous sweep (sampleCPU).
 func (h *HostSandboxes) Health(ctx context.Context) []SandboxHealth {
 	h.mu.Lock()
 	names := make([]string, 0, len(h.live))
 	sandboxes := make(map[string]*hostSandbox, len(h.live))
+	roots := make(map[string]string, len(h.live))
 	for name, sb := range h.live {
 		names = append(names, name)
 		sandboxes[name] = sb
+		roots[name] = sb.root
 	}
 	h.mu.Unlock()
 	sort.Strings(names)
 
+	cpu := h.cpu.sample(roots)
 	out := make([]SandboxHealth, 0, len(names))
 	for _, name := range names {
 		sb := sandboxes[name]
-		out = append(out, SandboxHealth{Sandbox: name, Kind: sandboxKind(name), Backend: "host", Name: sb.root, Ready: true, StartedAt: sb.startedAt})
+		entry := SandboxHealth{Sandbox: name, Kind: sandboxKind(name), Backend: "host", Name: sb.root, Ready: true, StartedAt: sb.startedAt}
+		if r, ok := cpu[name]; ok {
+			cores := r.cores
+			entry.CPUCores, entry.CPUWindow = &cores, r.window
+		}
+		out = append(out, entry)
 	}
+	return out
+}
+
+// Bounds on hostCPUSampler's window. A previous sample younger than
+// cpuMinWindow is too short to divide by (USER_HZ ticks are 10 ms), so
+// the last reading is repeated instead; one older than cpuMaxAge says
+// nothing about now, so the sandbox is sampled afresh across
+// cpuSettle, the same kind of short in-call wait sysstat.Read spends on
+// the host's own utilization.
+const (
+	cpuMinWindow = time.Second
+	cpuMaxAge    = 2 * time.Minute
+	cpuSettle    = 250 * time.Millisecond
+)
+
+type cpuReading struct {
+	cores  float64
+	window time.Duration
+}
+
+type cpuSample struct {
+	at    time.Time
+	total time.Duration
+	last  *cpuReading
+}
+
+// hostCPUSampler turns sysstat.ProcessTreeCPU's cumulative CPU times
+// into a rate per sandbox, keeping the previous sweep's totals. Its
+// zero value is ready; read, now and sleep are swapped by tests.
+type hostCPUSampler struct {
+	mu        sync.Mutex
+	prev      map[string]cpuSample
+	swept     map[string]bool
+	lastSweep time.Time
+	read      func(map[string]string) (map[string]time.Duration, error)
+	now       func() time.Time
+	sleep     func(time.Duration)
+}
+
+func (c *hostCPUSampler) sample(roots map[string]string) map[string]cpuReading {
+	if len(roots) == 0 {
+		return nil
+	}
+	read, now, sleep := c.read, c.now, c.sleep
+	if read == nil {
+		read = sysstat.ProcessTreeCPU
+	}
+	if now == nil {
+		now = time.Now
+	}
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	at := now()
+	if c.swept != nil {
+		if age := at.Sub(c.lastSweep); age >= 0 && age < cpuMinWindow {
+			allSwept := true
+			for name := range roots {
+				if !c.swept[name] {
+					allSwept = false
+					break
+				}
+			}
+			if allSwept {
+				out := make(map[string]cpuReading, len(c.prev))
+				for name := range roots {
+					if p, ok := c.prev[name]; ok && p.last != nil {
+						out[name] = *p.last
+					}
+				}
+				return out
+			}
+		}
+	}
+
+	totals, err := read(roots)
+	if err != nil {
+		// No /proc (darwin, windows): no reading for any sandbox,
+		// rather than a made-up zero.
+		c.prev = nil
+		c.swept = nil
+		c.lastSweep = time.Time{}
+		return nil
+	}
+	out := make(map[string]cpuReading, len(totals))
+	next := make(map[string]cpuSample, len(totals))
+	var fresh []string
+	for name, total := range totals {
+		p, ok := c.prev[name]
+		window := at.Sub(p.at)
+		switch {
+		case !ok || window > cpuMaxAge || total < p.total:
+			// Never seen, stale, or part of the tree was reaped
+			// outside it (its time left with it): start over.
+			fresh = append(fresh, name)
+		case window < cpuMinWindow:
+			next[name] = p
+			if p.last != nil {
+				out[name] = *p.last
+			} else {
+				fresh = append(fresh, name)
+			}
+		default:
+			r := cpuReading{cores: (total - p.total).Seconds() / window.Seconds(), window: window}
+			out[name] = r
+			next[name] = cpuSample{at: at, total: total, last: &r}
+		}
+	}
+	if len(fresh) > 0 {
+		sleep(cpuSettle)
+		at2 := now()
+		again, err := read(roots)
+		if err == nil {
+			window := at2.Sub(at)
+			for _, name := range fresh {
+				t2, ok := again[name]
+				if !ok || window <= 0 {
+					continue
+				}
+				delta := t2 - totals[name]
+				if delta < 0 {
+					delta = 0
+				}
+				r := cpuReading{cores: delta.Seconds() / window.Seconds(), window: window}
+				out[name] = r
+				next[name] = cpuSample{at: at2, total: t2, last: &r}
+			}
+		}
+		at = at2
+	}
+	swept := make(map[string]bool, len(roots))
+	for name := range roots {
+		swept[name] = true
+	}
+	c.prev = next
+	c.swept = swept
+	c.lastSweep = at
 	return out
 }
 

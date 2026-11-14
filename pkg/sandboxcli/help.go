@@ -375,6 +375,8 @@ const sandboxTaskListHelp = "grain task list [--state <s>[,<s>...]] [--repo <own
 	"                [--kind <k>] [--changed-since <30m|24h|7d|time>] [--stalled] [--limit N] [--json]\n\n" +
 	"The tasks this run may read (its own, or every task with https://grain.dev/capabilities/api#self-debug or https://grain.dev/capabilities/api#tasks:read), one line each:\n" +
 	"id, state, repo, title, then \"(stopped by operator)\" or \"(stalled)\" and \"blocked on <ids>\" where they apply.\n" +
+	"A task blocked on one only a person can close (failed, proposed, asking, awaiting Submit, paused,\n" +
+	"deferred with no wake time) reads \"blocked on <ids>, which needs a person\" and counts as --stalled.\n" +
 	"Oldest first by filing; --limit (default 50) keeps the newest. The count, and how many\n" +
 	"were left out, go to stderr. --state may be repeated or comma-separated (proposed, queued,\n" +
 	"running, awaiting_reply, failed, awaiting_submit, completed, closed); --kind is one of\n" +
