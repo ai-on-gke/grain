@@ -1091,6 +1091,10 @@ func LoadConfig(ctx context.Context, store *model.Store, flagCfg Config) (Config
 			// `grain connections import` ran before this first start:
 			// keep what it recorded (model.Config.ConnectionsOnly).
 			seed = seed.WithConnectionsOf(*stored)
+			// ...and the name a Grain Hub gave it a moment ago, in
+			// adoptDefaultEnvironmentName, which ran before this first
+			// load and wrote a row holding only that name.
+			seed = seed.WithHubEnvironmentNameOf(*stored)
 		}
 		if err := store.PutConfig(ctx, seed); err != nil {
 			return Config{}, fmt.Errorf("seeding stored configuration from flags: %w", err)

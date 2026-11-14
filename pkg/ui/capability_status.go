@@ -360,11 +360,6 @@ func ciOnlyCapability(name string) bool {
 	if rule, ok := model.CIGrantRuleFor(name); ok && rule.IsCIOnly() {
 		return true
 	}
-	for _, spec := range capabilityCatalog() {
-		if spec.Name == name {
-			return spec.CIOnly
-		}
-	}
 	return false
 }
 
@@ -538,13 +533,17 @@ func capabilitySecretsFor(requires []string, list []secrets.SecretInfo) []Capabi
 // and inventing "not ready" for one would be a worse answer than saying
 // nothing.
 func (c *Client) capabilitiesWithReadiness(cfg *model.Config, repoConfigs []model.RepoConfig) []Capability {
+	return c.capabilitiesWithReadinessFrom(cfg, repoConfigs, c.listSecretsBestEffort())
+}
+
+func (c *Client) capabilitiesWithReadinessFrom(cfg *model.Config, repoConfigs []model.RepoConfig, secretList []secrets.SecretInfo) []Capability {
 	var deployment model.Config
 	if cfg != nil {
 		deployment = *cfg
 	}
 	rows := c.pickerCapabilities()
 	byID := make(map[string]CapabilityStatus, len(rows))
-	for _, s := range c.capabilityStatuses(deployment, repoConfigs) {
+	for _, s := range c.capabilityStatusesWithSecrets(deployment, repoConfigs, secretList) {
 		byID[capabilityStatusKey(s.ID)] = s
 	}
 	out := make([]Capability, 0, len(rows))
@@ -573,11 +572,15 @@ func (c *Client) capabilitiesWithReadiness(cfg *model.Config, repoConfigs []mode
 // (including CI-only capabilities like package-publish and registry-push),
 // annotated with readiness for this deployment.
 func (c *Client) ciCapabilitiesWithReadiness(cfg *model.Config, repoConfigs []model.RepoConfig) []Capability {
+	return c.ciCapabilitiesWithReadinessFrom(cfg, repoConfigs, c.listSecretsBestEffort())
+}
+
+func (c *Client) ciCapabilitiesWithReadinessFrom(cfg *model.Config, repoConfigs []model.RepoConfig, secretList []secrets.SecretInfo) []Capability {
 	var deployment model.Config
 	if cfg != nil {
 		deployment = *cfg
 	}
-	statuses := c.capabilityStatuses(deployment, repoConfigs)
+	statuses := c.capabilityStatusesWithSecrets(deployment, repoConfigs, secretList)
 	byID := make(map[string]CapabilityStatus, len(statuses))
 	for _, s := range statuses {
 		byID[capabilityStatusKey(s.ID)] = s
@@ -625,7 +628,22 @@ func capabilityStatusKey(id string) string {
 // that adds defaults of its own (Store.ListRepoConfigs), c.Config.Secrets,
 // this Client's own secrets store, if any, and c.Config.Capabilities, the
 // picker listing that decides Grantable.
+func (c *Client) listSecretsBestEffort() []secrets.SecretInfo {
+	if c == nil || c.Config.Secrets == nil {
+		return nil
+	}
+	list, err := c.Config.Secrets.List()
+	if err != nil {
+		return nil
+	}
+	return list
+}
+
 func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoConfig) []CapabilityStatus {
+	return c.capabilityStatusesWithSecrets(cfg, repoConfigs, c.listSecretsBestEffort())
+}
+
+func (c *Client) capabilityStatusesWithSecrets(cfg model.Config, repoConfigs []model.RepoConfig, secretList []secrets.SecretInfo) []CapabilityStatus {
 	// Inverted once, here, rather than rescanned per capability: the
 	// listing is one row per capability and the answer each row needs is
 	// "which repos name me".
@@ -638,17 +656,6 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 				continue
 			}
 			reposByCapability[key] = append(reposByCapability[key], repo)
-		}
-	}
-	var secretList []secrets.SecretInfo
-	if c.Config.Secrets != nil {
-		// Best-effort: a listing error here would only ever be a store
-		// this Client could not open, which GetSettings/UpdateSettings
-		// have no other reason to fail on -- reported as "nothing known
-		// to be missing" rather than surfaced as an error this endpoint
-		// never returned before.
-		if list, err := c.Config.Secrets.List(); err == nil {
-			secretList = list
 		}
 	}
 
@@ -671,19 +678,16 @@ func (c *Client) capabilityStatuses(cfg model.Config, repoConfigs []model.RepoCo
 	buildDefaults := capability.DefaultOn()
 	out := make([]CapabilityStatus, 0, len(catalog))
 	for _, spec := range catalog {
-		canonical := model.CanonicalLegacyGrant(spec.Name)
-		key := capabilityStatusKey(spec.Name)
-		_, grantable := c.capabilityByID(spec.Name)
-		if !grantable && !spec.CIOnly {
-			grantable = slices.ContainsFunc(picker, func(cap Capability) bool {
-				return capabilityStatusKey(cap.ID) == key
-			})
-		}
+		canonical := model.RetiredGrantsBecame(spec.Name)[0]
+		key := capabilityStatusKey(canonical)
+		grantable := !spec.CIOnly && slices.ContainsFunc(picker, func(cap Capability) bool {
+			return capabilityStatusKey(cap.ID) == key
+		})
 		defaultRepos := slices.Clone(reposByCapability[key])
 		slices.Sort(defaultRepos)
 		status := CapabilityStatus{
 			// Named as the grant the provider's bare name was retired
-			// onto (model.CanonicalLegacyGrant), which is what a task or
+			// onto (model.RetiredGrantsBecame), which is what a task or
 			// a repository's CI capabilities are granted now.
 			ID:          canonical,
 			Name:        capabilityDisplayName(spec.Name),

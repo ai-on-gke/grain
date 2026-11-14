@@ -330,7 +330,7 @@ func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testin
 	srv := ui.NewServer(ui.Config{
 		Actor: ui.DefaultActor("alice"),
 		Capabilities: append(ui.OfferedCapabilities(), ui.Capability{
-			ID:   "github-sandbox",
+			ID:   model.GitHubSandboxRepoGrant,
 			Name: "GitHub sandbox",
 		}),
 		Secrets: sec,
@@ -348,7 +348,7 @@ func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testin
 	}
 	// Nothing is configured on this deployment: no App secret pasted, so
 	// github-sandbox, which needs them, is not ready and says so.
-	sandbox, ok := byID["github-sandbox"]
+	sandbox, ok := byID[model.GitHubSandboxRepoGrant]
 	if !ok {
 		t.Fatalf("github-sandbox is missing from %v", resp.Capabilities)
 	}
@@ -374,7 +374,7 @@ func TestConsoleSessionCapabilitiesSayWhichOnesThisDeploymentCanHonour(t *testin
 	for _, capability := range resp.Capabilities {
 		byID[capability.ID] = capability
 	}
-	readySandbox, ok := byID["github-sandbox"]
+	readySandbox, ok := byID[model.GitHubSandboxRepoGrant]
 	if !ok {
 		t.Fatalf("github-sandbox is missing from %v", resp.Capabilities)
 	}
@@ -1147,7 +1147,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 
 	// 1. Edit active session via PATCH /api/tasks/{id} (including dangerous scopes, reads, writes, model, network_access).
 	patchBody := `{
-		"capabilities": ["read-issues", "api:tasks:admin", "api:release-manager", "https://grain.dev/capabilities/host-script#host-script={\"script\":\"cluster-autoscaler\"}"],
+		"capabilities": ["` + model.GitHubReadIssuesGrant + `", "api:tasks:admin", "api:release-manager", "https://grain.dev/capabilities/host-script#host-script={\"script\":\"cluster-autoscaler\"}"],
 		"reads": ["acme/docs"],
 		"writes": [{"repo": "acme/widgets", "base": "main"}],
 		"model": "claude-opus-4",
@@ -1190,7 +1190,7 @@ func TestActiveConsoleSessionEditableWhenStateRepoConfigured(t *testing.T) {
 
 	// 3. Edit active session via PUT /api/console-sessions/director directly when StateRepo is configured.
 	putBody := `{
-		"capabilities": ["read-issues", "self-repair", "api:tasks:admin"],
+		"capabilities": ["` + model.GitHubReadIssuesGrant + `", "` + model.GrainHostExecGrant + `", "api:tasks:admin"],
 		"model": "claude-sonnet-4",
 		"networkAccess": "open",
 		"tasksApproved": true

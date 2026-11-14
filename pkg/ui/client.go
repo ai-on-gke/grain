@@ -657,27 +657,11 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 			return capability, true
 		}
 	}
-	if name, ok := model.GCPKeyName(id); ok && name != "" {
-		return Capability{
-			ID:   id,
-			Name: "GCP key (" + name + ", retired spelling)",
-			Description: "Read as https://grain.dev/capabilities/gcp#gcp-key with {permission_set: " + name + "}: mint a " +
-				"short-lived GCP service-account key for this task and place it in its sandbox",
-		}, true
-	}
 	// An agent API grant (agent_api.go), a repo-limited one included:
 	// the scopes and presets are offered rows of their own, but
 	// api:<scope>@<repo> is spelled per repository and so only here.
 	if row, ok := apiCapability(id); ok {
 		return row, true
-	}
-	if name, ok := localScriptsName(id); ok {
-		return Capability{
-			ID:   id,
-			Name: "Local scripts (" + name + ", retired spelling)",
-			Description: "Read as the host-script grants (https://grain.dev/capabilities/host-script#host-script) serving the " +
-				"scripts of the " + name + " local-scripts declaration on the node host (docs/local-scripts.md); never granted to a scheduled run",
-		}, true
 	}
 	return Capability{}, false
 }
@@ -3703,6 +3687,7 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		Skills:               chosenSkills,
 		ReviewTemplateID:     reviewTemplateID,
 		TemplateID:           filedFrom,
+		SourceTemplateID:     strings.TrimSpace(req.TemplateID),
 		Owner:                resolvedOwner,
 		Creator:              cmp.Or(strings.TrimSpace(req.Author), strings.TrimSpace(req.Creator)),
 		Proposer:             c.proposerForNewTask(ctx, resolvedOwner, sessionBehalf, proposedBy),
@@ -7993,6 +7978,9 @@ func (c *Client) RunNow(ctx context.Context, id string) error {
 	}
 	now := c.now()
 	if task.Approval == nil {
+		if err := ciOnlyGrantApprovalRefusal(*task); err != nil {
+			return err
+		}
 		if err := c.agentMayApprove(ctx, *task); err != nil {
 			return err
 		}

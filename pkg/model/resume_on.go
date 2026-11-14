@@ -103,8 +103,9 @@ func parseGitHubTargetRunID(defaultRepo, target string) (repo string, runID int6
 func (s *Store) heldResumes(ctx context.Context, taskID string) ([]heldResume, error) {
 	query := "SELECT `su`.`task_id`, `su`.`resume_on`, `t`.`deferred_at` FROM `task_suspension` AS `su` " +
 		"JOIN `task` AS `t` ON `t`.`id` = `su`.`task_id` " +
+		"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` " +
 		"JOIN `task_run` AS `r` ON `r`.`id` = `su`.`run_id` " +
-		"WHERE `su`.`resumed_at` IS NULL AND `su`.`resume_on` IS NOT NULL AND `su`.`resume_on` <> '' " +
+		"WHERE `o`.`closed_at` IS NULL AND `su`.`resumed_at` IS NULL AND `su`.`resume_on` IS NOT NULL AND `su`.`resume_on` <> '' " +
 		"AND `r`.`finished_at` IS NOT NULL " +
 		"AND `t`.`deferred_at` IS NOT NULL AND `t`.`deferred_at` >= `r`.`started_at` " +
 		"AND `t`.`deferred_at` <= `su`.`created_at`"
@@ -163,8 +164,7 @@ func (s *Store) TaskCIMode(ctx context.Context, task Task) (repo RepoRef, branch
 	} else {
 		mode = CIModeGitHub
 		for _, capName := range eff.DefaultCapabilities {
-			c := strings.TrimSpace(capName)
-			if c == "grain-ci" || strings.HasPrefix(c, "https://grain.dev/capabilities/ci#grain-ci") {
+			if IsGrainCIGrant(capName) {
 				mode = CIModeGrain
 				break
 			}
@@ -280,8 +280,9 @@ func (s *Store) recoveredCIHolds(ctx context.Context, seen map[string]bool) ([]H
 	var order []string
 	err := each(ctx, s.db,
 		"SELECT `t`.`id`, `t`.`deferred_at`, `c`.`body`, `c`.`created_at` FROM `task` AS `t` "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` "+
 			"JOIN `task_comment` AS `c` ON `c`.`task_id` = `t`.`id` "+
-			"WHERE `t`.`deferred_at` IS NOT NULL AND `t`.`deferred_until` IS NULL "+
+			"WHERE `o`.`closed_at` IS NULL AND `t`.`deferred_at` IS NOT NULL AND `t`.`deferred_until` IS NULL "+
 			"AND `c`.`body` LIKE ? ORDER BY `c`.`created_at`, `c`.`id`",
 		[]any{resumeLaterCommentPrefix + "%"},
 		func(rows *sql.Rows) error {

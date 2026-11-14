@@ -52,6 +52,15 @@
 //     (2) rather than 1. It is what tells dockervm that the boot is done
 //     and the workload is what is outstanding. The fallback probe's own
 //     "test -e" answers it the way that guest would too, with a 1.
+//   - FAKEDOCKER_RM_IN_PROGRESS makes "rm" fail that many times with
+//     Docker's "removal of container <name> is already in progress"
+//     message (counting "rm" lines in FAKEDOCKER_LOG); -1 fails every
+//     one, and keep-forever mode leaves "inspect" reporting the container
+//     present so timeouts can be tested. For N > 0, once "rm" (or "stop")
+//     has reported removal in progress for a container, the first
+//     "inspect" still sees it and subsequent "inspect" calls report "No
+//     such object" so polling waits are exercised end-to-end.
+//   - FAKEDOCKER_STOP_IN_PROGRESS does the same for "stop" calls.
 //
 // An "exec" call copies its stdin to stdout, so tests can assert that a
 // session's stdin actually reaches the guest command.
@@ -89,14 +98,29 @@ func main() {
 	}
 
 	switch args[0] {
-	case "stop", "rm":
-		if missing(args[len(args)-1]) {
-			fmt.Fprintf(os.Stderr, "Error response from daemon: No such container: %s\n", args[len(args)-1])
+	case "stop":
+		name := args[len(args)-1]
+		if n, _ := strconv.Atoi(os.Getenv("FAKEDOCKER_STOP_IN_PROGRESS")); n < 0 || (n > 0 && verbCalls(logPath, "stop") <= n) {
+			fmt.Fprintf(os.Stderr, "Error response from daemon: removal of container %s is already in progress\n", name)
+			os.Exit(1)
+		}
+		if missing(name) {
+			fmt.Fprintf(os.Stderr, "Error response from daemon: No such container: %s\n", name)
+			os.Exit(1)
+		}
+	case "rm":
+		name := args[len(args)-1]
+		if n, _ := strconv.Atoi(os.Getenv("FAKEDOCKER_RM_IN_PROGRESS")); n < 0 || (n > 0 && verbCalls(logPath, "rm") <= n) {
+			fmt.Fprintf(os.Stderr, "Error response from daemon: removal of container %s is already in progress\n", name)
+			os.Exit(1)
+		}
+		if missing(name) {
+			fmt.Fprintf(os.Stderr, "Error response from daemon: No such container: %s\n", name)
 			os.Exit(1)
 		}
 	case "inspect":
 		name := args[len(args)-1]
-		if missing(name) {
+		if missing(name) || removedAfterInProgress(logPath, name) {
 			fmt.Fprintf(os.Stderr, "Error response from daemon: No such object: %s\n", name)
 			os.Exit(1)
 		}
@@ -256,6 +280,74 @@ func execCalls(logPath, suffix string) int {
 		n++
 	}
 	return n
+}
+
+// verbCalls counts invocations of verb ("rm", "stop", ...) recorded in the
+// log so far, this one included.
+func verbCalls(logPath, verb string) int {
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return 0
+	}
+	prefix := verb + "\x1f"
+	n := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == verb || strings.HasPrefix(line, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
+// removedAfterInProgress reports whether name had a finite in-progress
+// removal on "rm" or "stop" earlier in logPath and has now been polled more
+// than once by "inspect", standing in for the other caller's removal
+// completing while this caller polls.
+func removedAfterInProgress(logPath, name string) bool {
+	rmN, _ := strconv.Atoi(os.Getenv("FAKEDOCKER_RM_IN_PROGRESS"))
+	stopN, _ := strconv.Atoi(os.Getenv("FAKEDOCKER_STOP_IN_PROGRESS"))
+	if rmN < 0 || stopN < 0 || (rmN <= 0 && stopN <= 0) {
+		return false
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return false
+	}
+	rmCount, stopCount := 0, 0
+	removing := false
+	inspects := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\x1f")
+		switch parts[0] {
+		case "rm":
+			rmCount++
+			if parts[len(parts)-1] == name && rmN > 0 && rmCount <= rmN {
+				removing = true
+				inspects = 0
+			}
+		case "stop":
+			stopCount++
+			if parts[len(parts)-1] == name && stopN > 0 && stopCount <= stopN {
+				removing = true
+				inspects = 0
+			}
+		case "run":
+			for i := 1; i+1 < len(parts); i++ {
+				if parts[i] == "--name" && parts[i+1] == name {
+					removing = false
+					inspects = 0
+				}
+			}
+		case "inspect":
+			if parts[len(parts)-1] == name && removing {
+				inspects++
+			}
+		}
+	}
+	return removing && inspects >= 2
 }
 
 func envOr(key, fallback string) string {

@@ -3,3 +3,5 @@ node_modules
 out-tsc
 package-lock.json
 src/app/api/generated-routes.ts
+test-results
+playwright-report

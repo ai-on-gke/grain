@@ -81,7 +81,7 @@ body: |
     not file duplicates. If one exists, name it in the report instead of
     filing again.
   - Otherwise file one `propose_task` per finding, with
-    `repo: bwsalmon/grain`, `branch: main`, and a title
+    `repo: "ai-on-gke/grain"`, `branch: main`, and a title
     `fix(security): ...`. Leave `model` and `agent_framework` unset so it
     runs on the default rotation. Its body must give:
     - the exact files, functions and lines;

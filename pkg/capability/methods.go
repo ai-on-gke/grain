@@ -68,8 +68,9 @@ type Method struct {
 	// such as the provider it retires: model.CanonicalLegacyGrant rewrites
 	// each to Grant wherever a grant is recorded, and the bare name keeps
 	// granting what Grant does wherever nothing rewrote it (a repository's
-	// .grain, an older grain/config, a capability policy entry). The store
-	// migration rewriting rows already stored is core's (pkg/model).
+	// .grain, an older grain/config, a capability policy entry) for as
+	// long as the build registers it. The store migration rewriting rows
+	// already stored is core's (pkg/model).
 	Aliases []string
 	// CI, when set, is the rule that decides which CI jobs the method is
 	// handed to (model.CIGrantRule): it is CI-only, and given to a job

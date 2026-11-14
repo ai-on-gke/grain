@@ -473,7 +473,7 @@ starts before the one it builds on has merged.
            worker's `grain demo` is started with an access code
            (`-access-code-file` in its temp directory, so it is
            single-tenant already) and signs in once through `POST
-           /api/auth/access-code`; `ui/e2e/fixtures.js` overrides
+           /api/auth/access-code`; `ui-shared/e2e/demo.js` overrides
            Playwright's `storageState`, so every page, `request` and
            context a spec opens carries the session cookie whatever its
            `extraHTTPHeaders`, and `accessCode` is there for a caller
@@ -538,7 +538,7 @@ starts before the one it builds on has merged.
            start a server of their own (`realdaemon.js`, the Director,
            console and defaults fixture servers, and the specs that spawn
            a daemon or demo) now serve one access code made for the whole
-           run (`ui/e2e/accesscode.js`, `GRAIN_E2E_ACCESS_CODE`), so the
+           run (`ui-shared/e2e/accesscode.js`, `GRAIN_E2E_ACCESS_CODE`), so the
            session a worker signs in for holds on all of them;
            `ignored-identity-header` and `loopback-trust-banner` are
            deleted, and so are the member half of `host-sandboxes-alert` and

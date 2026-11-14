@@ -78,7 +78,6 @@ func TestCapabilityCatalogueDisabledReason(t *testing.T) {
 		{"https://capabilities.internal/off-alias#do={}", "server https://capabilities.internal/off is disabled"},
 		{"api:memory", "capability api:memory is disabled in settings/capabilities.yml"},
 		{"api:grain/memory", "capability api:grain/memory is disabled in settings/capabilities.yml"},
-		{"memory", "capability api:memory is disabled in settings/capabilities.yml"},
 		{"api:ops/triage", "capability api:ops/triage is disabled in settings/capabilities.yml"},
 	}
 	for _, tc := range disabledCases {
@@ -97,6 +96,8 @@ func TestCapabilityCatalogueDisabledReason(t *testing.T) {
 	notDisabled := []string{
 		"",
 		"release-gate-read",
+		// A retired bare name is no alias for its preset any longer.
+		"memory",
 		"ci-only-active",
 		`https://capabilities.internal/restricted#run={"env":"prod"}`,
 		`https://capabilities.internal/restricted#unlisted={}`,

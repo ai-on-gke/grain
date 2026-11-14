@@ -598,3 +598,43 @@ func TestAStdioServersStderrIsHandedOverInScrubbedLines(t *testing.T) {
 		t.Errorf("stderr of %q = %q, want %q", gotID, w.writes, want)
 	}
 }
+
+// TestABuiltinThatExitsAtStartIsFailedNotNeedsConfig: the git built-in
+// bound the git proxy's own 9728 and exited before it answered
+// initialize. Every built-in comes up unconfigured, so that is not one
+// waiting to be configured: it is failed, with the stderr that says why,
+// which is what puts it in `grain health`. A built-in refused for want
+// of a secret before anybody configured it is still needs-config.
+func TestABuiltinThatExitsAtStartIsFailedNotNeedsConfig(t *testing.T) {
+	const git = "https://grain.dev/capabilities/git"
+	const unset = "https://grain.dev/capabilities/unset"
+	const onHost = "https://grain.dev/capabilities/on-host"
+	attach := func(ctx context.Context, id string, cfg protocol.ServerConfig, _ protocol.SecretLookup, opts protocol.DialOptions) (*protocol.Server, error) {
+		switch id {
+		case git, onHost:
+			fmt.Fprintln(opts.Stderr, "grain capability: git: listen tcp 127.0.0.1:9728: bind: address already in use")
+			return nil, fmt.Errorf("capability server %s: initialize: mcp: %w: %w", id, protocol.ErrClosedOutput, io.EOF)
+		}
+		return nil, fmt.Errorf("capability server %s: secret GIT_TOKEN is not set", id)
+	}
+	r := New(Options{Attach: attach, Logf: func(string, ...any) {}})
+	t.Cleanup(r.Close)
+	r.Sync(context.Background(), map[string]protocol.ServerConfig{
+		git:    {Command: "grain", Args: []string{"capability", "git"}, Builtin: "git"},
+		unset:  {Command: "grain", Args: []string{"capability", "unset"}, Builtin: "unset"},
+		onHost: {Command: "grain-git", Run: protocol.RunHost, Builtin: "git"},
+	})
+	byID := map[string]Status{}
+	for _, s := range r.Statuses() {
+		byID[s.ID] = s
+	}
+	if s := byID[git]; s.State != Failed || !strings.Contains(s.Error, "address already in use") {
+		t.Errorf("a built-in that exited at start = %+v, want failed with its stderr in the error", s)
+	}
+	if s := byID[unset]; s.State != NeedsConfig {
+		t.Errorf("a built-in missing a secret = %+v, want needs-config", s)
+	}
+	if s := byID[onHost]; s.State != NeedsConfig {
+		t.Errorf("a run: host built-in that exited = %+v, want needs-config, retried on its host as before", s)
+	}
+}

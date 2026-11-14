@@ -1,0 +1,2 @@
+declarations on for acme/widgets
+daemon 32727 on 127.0.0.1:4500, relsim on 127.0.0.1:4510, kmsfake on 127.0.0.1:4520

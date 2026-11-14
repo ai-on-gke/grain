@@ -123,7 +123,18 @@ const ANNOTATIONS = new Set([
   "x-grain-enum-labels",
 ]);
 const KIND_KEYWORDS = {
-  choice: ["enum", "const", "type"],
+  choice: [
+    "enum",
+    "const",
+    "type",
+    "pattern",
+    "minLength",
+    "maxLength",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+  ],
   boolean: ["type"],
   string: ["type", "pattern", "minLength", "maxLength"],
   number: [

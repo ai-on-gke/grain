@@ -15,6 +15,7 @@
 package model
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -712,7 +713,7 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		}
 	}
 
-	for _, table := range []string{"task_read", "task_write", "task_filed_template", "task_grant", "task_link", "task_tag", "task_custom_field"} {
+	for _, table := range []string{"task_read", "task_write", "task_filed_template", "task_source_template", "task_grant", "task_link", "task_tag", "task_custom_field"} {
 		if _, err := tx.ExecContext(ctx,
 			"DELETE FROM `"+table+"` WHERE `task_id` = ?", t.ID); err != nil {
 			return err
@@ -729,6 +730,13 @@ func putTask(ctx context.Context, tx *sql.Tx, t Task) error {
 		if _, err := tx.ExecContext(ctx,
 			"INSERT INTO `task_write` (`task_id`, `owner`, `name`, `base`) VALUES (?,?,?,?)",
 			t.ID, w.Repo.StoredOwner(), w.Repo.Name, w.Base); err != nil {
+			return err
+		}
+	}
+	if source := cmp.Or(t.SourceTemplateID, t.TemplateID); source != "" {
+		if _, err := tx.ExecContext(ctx,
+			"INSERT INTO `task_source_template` (`task_id`, `template_id`) VALUES (?,?)",
+			t.ID, source); err != nil {
 			return err
 		}
 	}
@@ -2089,6 +2097,14 @@ func hydrate(ctx context.Context, q querier, t *Task) error {
 		}); err != nil {
 		return err
 	}
+	if err := each(ctx, q,
+		"SELECT `template_id` FROM `task_source_template` WHERE `task_id` = ?",
+		t.ID, func(rows *sql.Rows) error {
+			return rows.Scan(&t.SourceTemplateID)
+		}); err != nil {
+		return err
+	}
+	t.SourceTemplateID = cmp.Or(t.SourceTemplateID, t.TemplateID)
 	grants, err := grantsOf(ctx, q, t.ID)
 	if err != nil {
 		return err
@@ -5708,14 +5724,10 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		name := strings.TrimSpace(g.Capability)
 		grantNames = append(grantNames, name)
 		switch name {
-		case "grain-log", GrainJournalRef, GrainJournalGrant:
+		case GrainJournalRef, GrainJournalGrant:
 			mayReadGrainLog = true
-		case "deployment-health", GrainHealthRef, GrainHealthGrant:
+		case GrainHealthRef, GrainHealthGrant:
 			mayReadHealth = true
-		case "read-issues":
-			mayReadIssues = true
-		case "db-read", "db-write":
-			mayReadDB = true
 		}
 		if IsBootstrapPlaybooksGrant(name) {
 			mayReadPlaybooks = true
@@ -5726,14 +5738,12 @@ func (s *Store) SandboxNamespaceScope(ctx context.Context, sandbox string) (scop
 		if IsGrainSQLGrant(name) {
 			mayReadDB = true
 		}
-		// grain#source (or the retired bare self-debug): grain's own
-		// source, and -- for the reason pkg/mcp/ci_repo_scope.go gives --
-		// every repository's CI and the whole of config://. The task
-		// records, metrics, pipeline and health self-debug also opened
-		// are its api:self-debug preset's, below (a bare self-debug is
-		// still read as that preset, apiAliasCapabilities); memory,
-		// issues and SQL each keep a grant of their own, as their MCP
-		// tools do.
+		// grain#source: grain's own source, and -- for the reason
+		// pkg/mcp/ci_repo_scope.go gives -- every repository's CI and the
+		// whole of config://. The task records, metrics, pipeline and
+		// health self-debug also opened are its api:self-debug preset's,
+		// below; memory, issues and SQL each keep a grant of their own, as
+		// their MCP tools do.
 		if IsGrainSourceGrant(name) {
 			mayReadCI = true
 			mayReadAllCI = true

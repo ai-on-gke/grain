@@ -116,6 +116,7 @@ var notSettings = []string{
 	"task_read",
 	"task_write",
 	"task_filed_template",
+	"task_source_template",
 	"task_grant",
 	"task_link",
 	"task_tag",

@@ -125,7 +125,7 @@ func TestResolveMemoryIndexesDocumentsForARunThatCanReadThem(t *testing.T) {
 		}
 	}
 
-	for _, capName := range []string{"api:memory", "api:memory:read", "memory"} {
+	for _, capName := range []string{"api:memory", "api:memory:read"} {
 		granted := model.Task{ID: "t1", Target: &repo,
 			Grants: []model.Grant{{Capability: capName}}}
 		got, err := resolveMemory(ctx, store, granted, time.Now().UTC())

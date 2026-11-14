@@ -576,6 +576,9 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 			return nil, err
 		}
 		if err := c.prepareRequest(ctx, req); err != nil {
+			if ctx.Err() != nil {
+				return nil, contextDoneError(ctx, c.BaseURL, err)
+			}
 			var own contextTokenError
 			if errors.As(err, &own) {
 				return nil, own.err // already says what it is about
@@ -585,7 +588,12 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 		resp, err := c.redirectClient().Do(req)
 		var failure error
 		switch {
-		case err != nil && retryableError(method, err) && ctx.Err() == nil:
+		case err != nil && ctx.Err() != nil:
+			// The caller's context ran out during the attempt. What the
+			// transport returned then -- a dial timeout, a refused
+			// connection -- need not wrap ctx.Err(), so say it does.
+			return nil, contextDoneError(ctx, c.BaseURL, err)
+		case err != nil && retryableError(method, err):
 			failure = err
 		case err != nil:
 			return nil, fmt.Errorf("reaching grain server at %s: %w", c.BaseURL, err)
@@ -610,13 +618,32 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 		select {
 		case <-time.After(sleep):
 		case <-ctx.Done():
-			return nil, fmt.Errorf("reaching grain server at %s: %w (while waiting out: %v)", c.BaseURL, ctx.Err(), failure)
+			return nil, contextDoneError(ctx, c.BaseURL, failure)
+		}
+		if ctx.Err() != nil {
+			// The wait and the context ended together and select took
+			// the timer: do not start an attempt that cannot run.
+			return nil, contextDoneError(ctx, c.BaseURL, failure)
 		}
 		wait *= 2
 		if policy.Max > 0 && wait > policy.Max {
 			wait = policy.Max
 		}
 	}
+}
+
+// contextDoneError is what send returns once ctx is done, whatever the
+// last attempt's error was: one that wraps ctx.Err(), so a caller's
+// errors.Is(err, context.DeadlineExceeded) holds however the deadline
+// landed, with last kept in the message.
+func contextDoneError(ctx context.Context, baseURL string, last error) error {
+	switch {
+	case last == nil:
+		return fmt.Errorf("reaching grain server at %s: %w", baseURL, ctx.Err())
+	case errors.Is(last, ctx.Err()):
+		return fmt.Errorf("reaching grain server at %s: %w", baseURL, last)
+	}
+	return fmt.Errorf("reaching grain server at %s: %w (while waiting out: %v)", baseURL, ctx.Err(), last)
 }
 
 // RoundTrip sends req the way every call of this client is sent:

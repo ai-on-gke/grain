@@ -1,0 +1,4 @@
+WARNING: target repositories missing their git host:
+  acme/widgets: this entry resolves to 127.0.0.1:4260; did you mean github.com/acme/widgets?
+  acme/other: this entry resolves to 127.0.0.1:4260; did you mean github.com/acme/other?
+
