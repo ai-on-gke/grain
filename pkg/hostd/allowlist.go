@@ -49,6 +49,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -122,6 +123,70 @@ type Allowlist struct {
 	// built-in login table so existing allowlists keep working; an empty
 	// map ("logins: {}") lends none.
 	Logins map[string]string `yaml:"logins"`
+	// Update is the owner's policy for `grain-agentd update`
+	// (FeatureSelfUpdate); absent is mode offer with no pin. Only a host
+	// agent that lists FeatureSelfUpdate reads it, and an older one
+	// refuses the key, so add it only once the host runs such a build.
+	Update UpdatePolicy `yaml:"update"`
+}
+
+// The update: modes (UpdatePolicy.Mode).
+const (
+	// UpdateOff refuses every update: the owner updates by reinstalling.
+	UpdateOff = "off"
+	// UpdateOffer, the default, has the controller show an available
+	// release, and the owner run `grain-agentd update` to take it.
+	UpdateOffer = "offer"
+	// UpdateAuto is reserved for the controller asking for the update
+	// itself (design/design/agentd-stable-contract.design.md, "The safety
+	// valve"). Not implemented: it behaves as offer.
+	UpdateAuto = "auto"
+)
+
+// UpdatePolicy is the allowlist's update: section. The controller can
+// never write it: it lives in the host-owned allowlist.
+//
+//	update:
+//	  mode: offer     # off | offer | auto (auto: not yet implemented)
+//	  pin: v3.*       # optional: never leave this range
+type UpdatePolicy struct {
+	// Mode is UpdateOff, UpdateOffer (the default when empty) or
+	// UpdateAuto.
+	Mode string `yaml:"mode"`
+	// Pin is a version or a glob over versions (path.Match: "v3.*",
+	// "v3.4.?") an update must match. A pin naming one exact version
+	// is also the only way to move to an older release.
+	Pin string `yaml:"pin"`
+}
+
+// EffectiveMode is p.Mode, or UpdateOffer when unset.
+func (p UpdatePolicy) EffectiveMode() string {
+	if p.Mode == "" {
+		return UpdateOffer
+	}
+	return p.Mode
+}
+
+// Allows reports whether version is inside p's pin (any version, with
+// no pin).
+func (p UpdatePolicy) Allows(version string) bool {
+	if p.Pin == "" {
+		return true
+	}
+	ok, err := path.Match(p.Pin, version)
+	return err == nil && ok
+}
+
+func (p UpdatePolicy) validate() error {
+	switch p.Mode {
+	case "", UpdateOff, UpdateOffer, UpdateAuto:
+	default:
+		return fmt.Errorf("hostd allowlist: update.mode %q: want off, offer or auto", p.Mode)
+	}
+	if _, err := path.Match(p.Pin, ""); err != nil || strings.ContainsAny(p.Pin, "/ \t\n") {
+		return fmt.Errorf("hostd allowlist: update.pin %q is not a version or a version glob like v3.*", p.Pin)
+	}
+	return nil
 }
 
 // DefaultDrainCap is the allowlist's drain_cap when it sets none.
@@ -218,6 +283,9 @@ func ParseAllowlist(data []byte) (*Allowlist, error) {
 		if k == "" || strings.ContainsAny(k+v, ",= ") {
 			return nil, fmt.Errorf("hostd allowlist: label %q=%q: keys and values may not be empty or hold ',', '=' or spaces", k, v)
 		}
+	}
+	if err := a.Update.validate(); err != nil {
+		return nil, err
 	}
 	for name, p := range a.Logins {
 		if !validName(name) {
