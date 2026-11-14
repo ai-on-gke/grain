@@ -843,7 +843,11 @@ function BranchPicker({
             key={key}
             {...rest}
             data-value={option.name}
-            style={{ ...rest.style, alignItems: "flex-start", flexWrap: "wrap" }}
+            style={{
+              ...rest.style,
+              alignItems: "flex-start",
+              flexWrap: "wrap",
+            }}
           >
             <Box component="span" sx={{ fontFamily: "monospace" }}>
               <HighlightedText text={option.name} ranges={option.ranges} />
@@ -1825,11 +1829,10 @@ export default function UpgradePanel({
             <ModeDescription mode={status.mode} /> One upgrade at a time; each
             step below reports itself as it goes. A release that advances the
             database schema is carried across automatically; schema downgrades
-            are refused. The queue is
-            held for the duration &mdash; the banner will say this deployment is
-            paused, and the restart, or the upgrade failing, lifts it &mdash;
-            since a run started now would only be discarded by the restart this
-            ends in.
+            are refused. The queue is held for the duration &mdash; the banner
+            will say this deployment is paused, and the restart, or the upgrade
+            failing, lifts it &mdash; since a run started now would only be
+            discarded by the restart this ends in.
           </Typography>
           {/* The same fallback the externally managed branch above
               draws: a daemon that cannot read its image ref file (or an

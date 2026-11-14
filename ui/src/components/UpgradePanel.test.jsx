@@ -2620,7 +2620,9 @@ describe("Switching edition on UpgradePanel", () => {
 
     // Picking an allowed target clears the refusal and re-enables Upgrade.
     await user.click(within(list).getByRole("option", { name: /^main/ }));
-    expect(screen.queryByTestId("upgrade-target-refused")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("upgrade-target-refused"),
+    ).not.toBeInTheDocument();
     expect(submitBtn).not.toBeDisabled();
   });
 });
