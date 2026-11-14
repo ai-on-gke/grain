@@ -343,7 +343,7 @@ function formatBytes(bytes: number): string {
                 class="btn-tonal s-btn-sm"
                 data-testid="flush-package-cache-btn"
                 [disabled]="!access.can('POST /api/package-cache/flush')"
-                (click)="flushPackageCache()"
+                (click)="confirmFlushPackageCache()"
               >
                 Flush proxy cache
               </button>
@@ -352,7 +352,7 @@ function formatBytes(bytes: number): string {
                 class="btn-tonal s-btn-sm"
                 data-testid="flush-actions-cache-btn"
                 [disabled]="!access.can('POST /api/actions-cache/flush')"
-                (click)="flushActionsCache()"
+                (click)="confirmFlushActionsCache()"
               >
                 Flush Actions cache
               </button>
@@ -1085,6 +1085,30 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     } catch (err) {
       this.state.recordError(err);
     }
+  }
+
+  // Flushing empties a cache every sandbox shares, so it asks first, with
+  // the same wording as Fleet -> Pauses & Controls' flush buttons.
+  protected confirmFlushPackageCache(): void {
+    this.confirmRequest.set({
+      title: "Flush package proxy cache?",
+      message:
+        "Deletes all cached packages across apt, npm, PyPI, Go, and Docker on this controller. Active runs remain safe and fetch from upstream on cache miss.",
+      accept: "Flush cache",
+      destructive: true,
+      run: () => this.flushPackageCache(),
+    });
+  }
+
+  protected confirmFlushActionsCache(): void {
+    this.confirmRequest.set({
+      title: "Flush GitHub Actions cache?",
+      message:
+        "Empties cached CI build archives across all repositories on this controller.",
+      accept: "Flush cache",
+      destructive: true,
+      run: () => this.flushActionsCache(),
+    });
   }
 
   protected async flushPackageCache(): Promise<void> {

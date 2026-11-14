@@ -320,3 +320,42 @@ test("pausing and resuming the pipeline on Fleet updates the shell's dispatch ba
   );
   await expect(banner).toHaveCount(0, { timeout: 5_000 });
 });
+
+test("Settings -> Caches asks before flushing either cache", async ({
+  page,
+}) => {
+  const flushes = [];
+  // Never flush a real cache: the flush POSTs are answered here.
+  await page.route(/\/api\/(package|actions)-cache\/flush$/, (r) => {
+    flushes.push(new URL(r.request().url()).pathname);
+    return r.fulfill({ json: { entries: 0, bytes: 0, cache: [] } });
+  });
+  await page.goto("settings/caches");
+  for (const [testId, title, path] of [
+    [
+      "flush-package-cache-btn",
+      "Flush package proxy cache?",
+      "/api/package-cache/flush",
+    ],
+    [
+      "flush-actions-cache-btn",
+      "Flush GitHub Actions cache?",
+      "/api/actions-cache/flush",
+    ],
+  ]) {
+    await page.getByTestId(testId).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText(title);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(flushes).toEqual([]);
+
+    await page.getByTestId(testId).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Flush cache" })
+      .click();
+    await expect.poll(() => flushes).toEqual([path]);
+    flushes.length = 0;
+  }
+});
