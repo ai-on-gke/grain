@@ -43,8 +43,12 @@ This sync carries PRs #255–#256 on top of `1e60085`:
   to stop finding the container, so `granule vm delete` racing another
   delete of the same VM clears the saved state instead of failing
   (gke-labs/granule#256). grain's `granule.Command.Delete` dropped the
-  retry loop it carried for this (grain task 4395) and is a plain
-  pass-through again.
+  30×2 s retry loop it carried for this (grain task 4395); until upstream
+  granule's case-sensitive `isNotFound` (`"No such object"`) is updated for
+  Docker 28+/29's lowercase `error: no such object:` `docker inspect` output
+  (grain task 5486), `Command.Delete` and `Command.Create` re-run `granule vm`
+  once when `waitRemoved` trips on that terminal `docker inspect` after the
+  container has already vanished.
 - granule's own `.grain/` gains a gating `pr-review` trigger and template
   (gke-labs/granule#255); it only applies to granule's repository.
 

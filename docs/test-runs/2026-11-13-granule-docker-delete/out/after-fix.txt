@@ -1,0 +1,93 @@
+=== Building vendored granule CLI and scratch test image ===
+built vendored granule CLI at /tmp/granule-docker-walkthrough-4050647859/granule
+built local test image grain-walkthrough-granule-delete:local (sha256:b0d0ba24bfd5ce566a63d9dae17420ec064e957309c0772f33becca236b1d045)
+
+--- CASE 2a-simultaneous: two concurrent Command.Delete calls (simultaneous entry) ---
+caller[0]: dur=3.339s err=<nil>
+caller[1]: dur=3.696s err=<nil>
+passthrough docker log:
+cmd=[docker stop -t 1 granule-vm-wt5486-2a-sim] rc=0 stderr=[]
+cmd=[docker stop -t 1 granule-vm-wt5486-2a-sim] rc=0 stderr=[]
+cmd=[docker rm -f granule-vm-wt5486-2a-sim] rc=1 stderr=[Error response from daemon: removal of container granule-vm-wt5486-2a-sim is already in progress]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2a-sim] rc=0 stderr=[]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2a-sim] rc=0 stderr=[]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2a-sim] rc=0 stderr=[]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2a-sim] rc=0 stderr=[]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2a-sim] rc=0 stderr=[]
+cmd=[docker rm -f granule-vm-wt5486-2a-sim] rc=0 stderr=[]
+cmd=[docker rm -f granule-vm-wt5486-2a-sim-netns] rc=0 stderr=[]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2a-sim] rc=1 stderr=[error: no such object: granule-vm-wt5486-2a-sim]
+cmd=[docker stop -t 40 granule-vm-wt5486-2a-sim] rc=1 stderr=[Error response from daemon: No such container: granule-vm-wt5486-2a-sim]
+cmd=[docker rm -f granule-vm-wt5486-2a-sim] rc=0 stderr=[]
+cmd=[docker rm -f granule-vm-wt5486-2a-sim-netns] rc=0 stderr=[]
+post-delete docker inspect granule-vm-wt5486-2a-sim: rc=1 status="" stderr="error: no such object: granule-vm-wt5486-2a-sim"
+post-delete stateDir entries: [] (granule.Exists=false)
+RESULT: PASS (5.499s)
+
+--- CASE 2a-removing: Command.Delete entering while another Command.Delete has container in removing state ---
+observed real dockerd status="removing" on granule-vm-wt5486-2a-rem; launching second Command.Delete
+caller[1] (initiator): dur=641ms err=<nil>
+caller[2] (racer):     dur=621ms err=<nil>
+passthrough docker log:
+cmd=[docker stop -t 1 granule-vm-wt5486-2a-rem] rc=0 stderr=[]
+cmd=[docker stop -t 1 granule-vm-wt5486-2a-rem] rc=0 stderr=[]
+cmd=[docker rm -f granule-vm-wt5486-2a-rem] rc=1 stderr=[Error response from daemon: removal of container granule-vm-wt5486-2a-rem is already in progress]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2a-rem] rc=0 stderr=[]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2a-rem] rc=0 stderr=[]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2a-rem] rc=0 stderr=[]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2a-rem] rc=0 stderr=[]
+cmd=[docker rm -f granule-vm-wt5486-2a-rem] rc=0 stderr=[]
+cmd=[docker rm -f granule-vm-wt5486-2a-rem-netns] rc=0 stderr=[]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2a-rem] rc=1 stderr=[error: no such object: granule-vm-wt5486-2a-rem]
+cmd=[docker stop -t 40 granule-vm-wt5486-2a-rem] rc=1 stderr=[Error response from daemon: No such container: granule-vm-wt5486-2a-rem]
+cmd=[docker rm -f granule-vm-wt5486-2a-rem] rc=0 stderr=[]
+cmd=[docker rm -f granule-vm-wt5486-2a-rem-netns] rc=0 stderr=[]
+post-delete docker inspect granule-vm-wt5486-2a-rem: rc=1 status="" stderr="error: no such object: granule-vm-wt5486-2a-rem"
+post-delete stateDir entries: [] (granule.Exists=false)
+RESULT: PASS (5.56s)
+
+--- CASE 2b: direct docker rm -f racing Command.Delete (orphan-sweep vs run-release) ---
+observed real dockerd status="removing" on granule-vm-wt5486-2b-race; launching granule.Command.Delete
+direct docker rm -f:   dur=2.092s err=<nil> stderr=""
+granule.Command.Delete: dur=424ms err=<nil>
+passthrough docker log:
+cmd=[docker stop -t 1 granule-vm-wt5486-2b-race] rc=0 stderr=[]
+cmd=[docker rm -f granule-vm-wt5486-2b-race] rc=1 stderr=[Error response from daemon: removal of container granule-vm-wt5486-2b-race is already in progress]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2b-race] rc=0 stderr=[]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2b-race] rc=0 stderr=[]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2b-race] rc=0 stderr=[]
+cmd=[docker inspect -f {{.State.Running}} granule-vm-wt5486-2b-race] rc=1 stderr=[error: no such object: granule-vm-wt5486-2b-race]
+cmd=[docker stop -t 1 granule-vm-wt5486-2b-race] rc=1 stderr=[Error response from daemon: No such container: granule-vm-wt5486-2b-race]
+cmd=[docker rm -f granule-vm-wt5486-2b-race] rc=0 stderr=[]
+cmd=[docker rm -f granule-vm-wt5486-2b-race-netns] rc=0 stderr=[]
+post-delete docker inspect granule-vm-wt5486-2b-race: rc=1 status="" stderr="error: no such object: granule-vm-wt5486-2b-race"
+post-delete stateDir entries: [] (granule.Exists=false)
+RESULT: PASS (3.536s)
+
+--- CASE 2c: concurrent granule.RemoveContainers calls racing docker rm -f ---
+observed real dockerd status="removing" on granule-vm-wt5486-2c-rm; launching 4 concurrent RemoveContainers calls
+direct docker rm -f (waiting caller): dur=2.114s err=<nil>
+RemoveContainers[0]: dur=79ms err=<nil>
+RemoveContainers[1]: dur=75ms err=<nil>
+RemoveContainers[2]: dur=80ms err=<nil>
+RemoveContainers[3]: dur=51ms err=<nil>
+post-delete docker inspect granule-vm-wt5486-2c-rm: rc=1 status="" stderr="error: no such object: granule-vm-wt5486-2c-rm"
+post-delete stateDir entries: [] (granule.Exists=false)
+RESULT: PASS (3.396s)
+
+--- CASE 3a: short ctx timeout on Command.Delete during real dockerd in-progress removal, then uncancelled cleanup ---
+short Command.Delete (80ms): dur=81ms err=granule: vm delete wt5486-3a-timeout: context deadline exceeded (signal: killed) (isDeadlineExceeded=true)
+immediately after timeout: container inspect rc=0 status="removing", savedStateExists=true
+follow-up uncancelled Command.Delete: dur=389ms err=<nil> (bg docker rm err=<nil>)
+post-delete docker inspect granule-vm-wt5486-3a-timeout: rc=1 status="" stderr="error: no such object: granule-vm-wt5486-3a-timeout"
+post-delete stateDir entries: [] (granule.Exists=false)
+RESULT: PASS (3.731s)
+
+--- CASE 3b: short ctx timeout on Command.Delete via passthrough docker shim while container stays running, then uncancelled cleanup ---
+shim short Command.Delete (80ms): dur=82ms err=granule: vm delete wt5486-3b-shim: context deadline exceeded (signal: killed) (isDeadlineExceeded=true), savedStateExists=true
+shim follow-up Command.Delete: err=<nil>
+post-delete docker inspect granule-vm-wt5486-3b-shim: rc=1 status="" stderr="error: no such object: granule-vm-wt5486-3b-shim"
+post-delete stateDir entries: [] (granule.Exists=false)
+RESULT: PASS (3.344s)
+
+SUMMARY: ALL CASES PASSED
