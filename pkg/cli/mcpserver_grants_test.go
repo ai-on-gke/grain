@@ -32,6 +32,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/daemon"
 
 	"github.com/ai-on-gke/grain/pkg/mcp"
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
@@ -47,7 +48,7 @@ func toolNames(tools []mcp.Tool) []string {
 // A task holding multiple grants at once gets every set.
 func TestGrantedToolsServesEveryGrantsTools(t *testing.T) {
 	t.Parallel()
-	names := toolNames(daemon.GrantedDaemonTools(daemon.GrantNames{"grain-log", "deployment-health"}, "", secretsDirWithAKey(t), "/state", "1", nil))
+	names := toolNames(daemon.GrantedDaemonTools(daemon.GrantNames{model.GrainJournalGrant, model.GrainHealthGrant}, "", secretsDirWithAKey(t), "/state", "1", nil))
 	for _, want := range []string{
 		"read_grain_log",
 		"read_deployment_health", "read_deployment_state",
@@ -69,13 +70,13 @@ func TestGrantedToolsServesNothingWithoutAGrant(t *testing.T) {
 
 func TestDeploymentDiagnosticsRequireTheirOwnGrant(t *testing.T) {
 	t.Parallel()
-	without := toolNames(daemon.GrantedDaemonTools(daemon.GrantNames{"self-debug", "grain-log"}, "/src", secretsDirWithAKey(t), "/state", "1", nil))
+	without := toolNames(daemon.GrantedDaemonTools(daemon.GrantNames{model.GrainSourceGrant, model.GrainJournalGrant}, "/src", secretsDirWithAKey(t), "/state", "1", nil))
 	for _, name := range []string{"read_deployment_health", "read_deployment_state"} {
 		if slices.Contains(without, name) {
 			t.Errorf("tools without deployment-health = %v, unexpectedly contains %s", without, name)
 		}
 	}
-	with := toolNames(daemon.GrantedDaemonTools(daemon.GrantNames{"deployment-health"}, "", secretsDirWithAKey(t), "/state", "1", nil))
+	with := toolNames(daemon.GrantedDaemonTools(daemon.GrantNames{model.GrainHealthGrant}, "", secretsDirWithAKey(t), "/state", "1", nil))
 	for _, name := range []string{"read_deployment_health", "read_deployment_state"} {
 		if !slices.Contains(with, name) {
 			t.Errorf("deployment-health tools = %v, want %s", with, name)
@@ -91,11 +92,11 @@ func TestDeploymentDiagnosticsRequireTheirOwnGrant(t *testing.T) {
 func TestGrantedToolsKeepsTheJournalOutOfASelfDebugRun(t *testing.T) {
 	t.Parallel()
 	dir := secretsDirWithAKey(t)
-	names := toolNames(grantedTools(daemon.GrantNames{"self-debug"}, "/src", dir, "1"))
+	names := toolNames(grantedTools(daemon.GrantNames{model.GrainSourceGrant}, "/src", dir, "1"))
 	if slices.Contains(names, "read_grain_log") {
 		t.Errorf("grantedTools = %v, want no journal tool for a task holding only self-debug", names)
 	}
-	names = toolNames(grantedTools(daemon.GrantNames{"grain-log"}, "/src", dir, "1"))
+	names = toolNames(grantedTools(daemon.GrantNames{model.GrainJournalGrant}, "/src", dir, "1"))
 	if !slices.Contains(names, "read_grain_log") {
 		t.Errorf("grantedTools = %v, want read_grain_log for a task holding grain-log", names)
 	}
@@ -110,7 +111,7 @@ func TestGrantedToolsKeepsTheJournalOutOfASelfDebugRun(t *testing.T) {
 // context or a sandbox's network.
 func TestTheJournalToolRefusesWithNothingToRedactWith(t *testing.T) {
 	t.Parallel()
-	tools := grantedTools(daemon.GrantNames{"grain-log"}, "", "", "1")
+	tools := grantedTools(daemon.GrantNames{model.GrainJournalGrant}, "", "", "1")
 	if len(tools) != 1 || tools[0].Name != "read_grain_log" {
 		t.Fatalf("grantedTools = %v, want the journal tool present", toolNames(tools))
 	}
@@ -199,10 +200,10 @@ func TestTheGrantFlagCollectsEveryName(t *testing.T) {
 	var grants daemon.GrantNames
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.Var(&grants, "grant", "")
-	if err := fs.Parse([]string{"-grant", "self-debug", "-grant", "read-issues"}); err != nil {
+	if err := fs.Parse([]string{"-grant", model.GrainSourceGrant, "-grant", "read-issues"}); err != nil {
 		t.Fatal(err)
 	}
-	if want := (daemon.GrantNames{"self-debug", "read-issues"}); !slices.Equal(grants, want) {
+	if want := (daemon.GrantNames{model.GrainSourceGrant, "read-issues"}); !slices.Equal(grants, want) {
 		t.Fatalf("-grant collected %v, want %v", grants, want)
 	}
 	if !grants.Has("read-issues") || grants.Has("self-repair") {

@@ -59,7 +59,7 @@ func TestGrainCIIsNotOfferedAndIsRefusedByName(t *testing.T) {
 	// capability reference, which every picker otherwise takes as
 	// grantable (ui.Client.capabilityByID), so the canonical name is
 	// the one a hand-attached grant would arrive as.
-	for _, name := range []string{grainci.Grant, model.GrainCIRef, grainci.LegacyName} {
+	for _, name := range []string{grainci.Grant, model.GrainCIRef} {
 		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
 			DefaultCapabilities: &[]string{name},
 		}); !refusesAsGrainCI(err) {
@@ -205,7 +205,7 @@ func TestDeclaredTemplateWithCIReadOrLegacyGrainCIFilesOnGitHubModeRepo(t *testi
 	}
 	declared, err := repodecl.Load(fstest.MapFS{
 		".grain/templates/release-train.yml": {Data: trainYAML},
-		".grain/templates/legacy-ci.yml":     {Data: []byte("title: Legacy CI reader\ncapabilities: [grain-ci]\nbody: read CI\n")},
+		".grain/templates/grain-ci-ref.yml":  {Data: []byte("title: grain#ci reader\ncapabilities: [\"https://grain.dev/capabilities/grain#ci\"]\nbody: read CI\n")},
 	}, repo)
 	if err != nil {
 		t.Fatalf("repodecl.Load: %v", err)
@@ -215,7 +215,7 @@ func TestDeclaredTemplateWithCIReadOrLegacyGrainCIFilesOnGitHubModeRepo(t *testi
 		t.Fatalf("SyncRepoDeclarations: %v", err)
 	}
 	wantCap := model.APIGrantString("ci-read", repo.String())
-	for _, stem := range []string{"release-train", "legacy-ci"} {
+	for _, stem := range []string{"release-train", "grain-ci-ref"} {
 		tmplID := model.RepoDeclaredID(model.DeclaredTemplate, repo, stem)
 		task, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 			TemplateID: tmplID,

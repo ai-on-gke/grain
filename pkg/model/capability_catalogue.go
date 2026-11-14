@@ -389,8 +389,6 @@ func (c *CapabilityCatalogue) inProcessDisabled(g string) (string, bool) {
 				return reason, true
 			}
 		}
-	} else if preset := APIAliasPreset(trimmed); preset != "" {
-		return c.apiScopesDisabled(APIGrantPrefix + preset)
 	} else if trimmed == ReleaseGateReadCapability {
 		return c.apiScopesDisabled(APIGrantPrefix + ReleaseGateReadCapability)
 	}
@@ -586,7 +584,7 @@ func presetLookupKeys(what string) []string {
 // 1-to-1 retired in-process capability (such as "memory" -> "memory"), or
 // false when name is not a retired in-process capability replaced by a preset.
 func RetiredInProcessPreset(name string) (string, bool) {
-	to, ok := legacyGrantReplacements[strings.TrimSpace(name)]
+	to, ok := retiredGrantReplacements[strings.TrimSpace(name)]
 	if !ok {
 		return "", false
 	}
@@ -624,7 +622,7 @@ func retiredInProcessNames(g string) []string {
 			grant = RecordedCapabilityGrant(pg)
 		}
 	}
-	for legacy, to := range allLegacyGrantReplacements() {
+	for legacy, to := range allRetiredGrantReplacements() {
 		if StoredGrantSpelling(to) == grant {
 			out = append(out, legacy)
 			continue
@@ -641,7 +639,7 @@ func retiredInProcessNames(g string) []string {
 			}
 		}
 	}
-	for legacy, tos := range legacyGrantMultiReplacements {
+	for legacy, tos := range retiredGrantMultiReplacements {
 		if slices.ContainsFunc(tos, func(t string) bool { return StoredGrantSpelling(t) == grant }) {
 			out = append(out, legacy)
 		}
@@ -754,12 +752,6 @@ func (c *CapabilityCatalogue) judgeInProcess(g string, gc GrantContext) (bool, e
 			}
 			person = person || p
 		}
-	} else if preset := APIAliasPreset(trimmed); preset != "" {
-		p, err := c.judgeAPIScopes(APIGrantPrefix+preset, gc)
-		if err != nil {
-			return false, err
-		}
-		person = person || p
 	} else if trimmed == ReleaseGateReadCapability {
 		p, err := c.judgeAPIScopes(APIGrantPrefix+ReleaseGateReadCapability, gc)
 		if err != nil {

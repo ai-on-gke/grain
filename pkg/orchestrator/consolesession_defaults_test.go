@@ -229,7 +229,7 @@ func TestConsoleSessionTaskCapabilityEditsSurviveDaemonRestart(t *testing.T) {
 	postCapability(`{"id":"https://grain.dev/capabilities/grain#source={}","attach":false}`)
 	// Attached by its retired bare id, which is recorded as the
 	// grain#host-exec grant it became.
-	postCapability(`{"id":"self-repair","attach":true}`)
+	postCapability(`{"grant":"` + model.GrainHostExecGrant + `","attach":true}`)
 
 	edited, err := store.GetTask(ctx, director.ID)
 	if err != nil {
@@ -357,7 +357,7 @@ func TestConsoleSessionTaskEditWithoutSnapshotHonoursDeclarationChanges(t *testi
 		cfg.ConsoleSessions = []model.ConsoleSession{{
 			ID:            model.DirectorSessionID,
 			Title:         "Director",
-			Capabilities:  []string{model.GrainSourceGrant, "self-repair"},
+			Capabilities:  []string{model.GrainSourceGrant, model.GrainHostExecGrant},
 			NetworkAccess: model.NetworkOpen,
 			KeepRunning:   true,
 		}}

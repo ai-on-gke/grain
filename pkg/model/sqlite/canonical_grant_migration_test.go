@@ -292,7 +292,7 @@ func TestSyncRepoDeclarationsStoresCanonicalGrantReferences(t *testing.T) {
 				Target: &declaring,
 				Grants: []model.Grant{
 					{Capability: "api:ci-read@acme/widgets", Via: ".grain/templates/nightly.yml"},
-					{Capability: "self-debug", Via: ".grain/templates/nightly.yml"},
+					{Capability: model.GrainSourceGrant, Via: ".grain/templates/nightly.yml"},
 					{Capability: "api:self-debug", Via: ".grain/templates/nightly.yml"},
 				},
 			},

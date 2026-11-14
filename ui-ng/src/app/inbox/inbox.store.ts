@@ -118,6 +118,10 @@ export class InboxStore implements OnDestroy {
   private readonly zone = inject(NgZone);
 
   readonly tasks = this.feed.tasks;
+  // tasksRead is whether the task list has been read even once. Until it
+  // has, the queue holds only what came from elsewhere (alerts, staged
+  // releases, host-script calls), so it must not claim nothing is waiting.
+  readonly tasksRead = this.feed.loaded;
   readonly notifications = signal<Notification[]>([]);
   readonly localScripts = signal<LocalScriptApproval[]>([]);
   readonly loaded = signal(false);

@@ -32,10 +32,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/authfix"
 	"github.com/ai-on-gke/grain/pkg/capability"
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
@@ -4695,10 +4692,9 @@ func prepareCapabilityPromptWithSkills(ctx context.Context, cc model.CapabilityC
 // serves no MCP tool at all may be read by the run's agent framework
 // instead (agent/antigravity's host-tool grants).
 var toolGrants = []string{
-	grainserver.LegacySelfDebug, grainserver.SourceRef, grainserver.SourceGrant, model.APIGrantPrefix + "self-debug", selfDebugAPIGrant, grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant,
-	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
-	grainserver.LegacyReadIssues, grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
-	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
+	grainserver.SourceRef, grainserver.SourceGrant, model.APIGrantPrefix + "self-debug", selfDebugAPIGrant, grainserver.JournalRef, grainserver.JournalGrant,
+	grainserver.CIRef, grainserver.CIGrant, grainserver.HealthRef, grainserver.HealthGrant,
+	grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
 }
 

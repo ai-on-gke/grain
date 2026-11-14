@@ -142,19 +142,19 @@ func TestRefusesContradictoryCICapabilitiesAndPolicy(t *testing.T) {
 			name:      "PUT /api/repos/{owner}/{name}/ci-capabilities",
 			method:    http.MethodPut,
 			path:      "/api/repos/acme/widgets/ci-capabilities",
-			grantBody: `{"ciCapabilities":["image-signing"]}`,
+			grantBody: `{"ciCapabilities":["https://grain.dev/capabilities/release#image-signing={}"]}`,
 		},
 		{
 			name:      "PUT /api/repos/{owner}/{name}/settings",
 			method:    http.MethodPut,
 			path:      "/api/repos/acme/widgets/settings",
-			grantBody: `{"ciCapabilities":["image-signing"]}`,
+			grantBody: `{"ciCapabilities":["https://grain.dev/capabilities/release#image-signing={}"]}`,
 		},
 		{
 			name:      "PUT /api/deployment/repos/{owner}/{name}/config",
 			method:    http.MethodPut,
 			path:      "/api/deployment/repos/acme/widgets/config",
-			grantBody: `{"ciCapabilities":["image-signing"]}`,
+			grantBody: `{"ciCapabilities":["https://grain.dev/capabilities/release#image-signing={}"]}`,
 		},
 	}
 
@@ -202,7 +202,7 @@ func TestRefusesContradictoryCICapabilitiesAndPolicy(t *testing.T) {
 			Policy: model.CapabilityPolicy{
 				Catalogue: &model.CapabilityCatalogue{
 					Defaults: model.CatalogueDefaults{
-						CI: []string{model.CanonicalLegacyGrant("image-signing")},
+						CI: []string{model.ImageSigningRef + "={}"},
 					},
 					InProcess: map[string]model.CatalogueInProcess{
 						"image-signing": {Enabled: &f},
@@ -248,28 +248,28 @@ func TestRefusesContradictoryTaskDefaultsAndPolicy(t *testing.T) {
 			name:          "PUT /api/repos/{owner}/{name}/capabilities",
 			method:        http.MethodPut,
 			path:          "/api/repos/acme/widgets/capabilities",
-			grantBody:     `{"defaultCapabilities":["memory"]}`,
+			grantBody:     `{"defaultCapabilities":["api:memory"]}`,
 			wantRefusalAt: "defaults.repos[acme/widgets].task",
 		},
 		{
 			name:          "PUT /api/repos/{owner}/{name}/settings",
 			method:        http.MethodPut,
 			path:          "/api/repos/acme/widgets/settings",
-			grantBody:     `{"defaultCapabilities":["memory"]}`,
+			grantBody:     `{"defaultCapabilities":["api:memory"]}`,
 			wantRefusalAt: "defaults.repos[acme/widgets].task",
 		},
 		{
 			name:          "PUT /api/deployment/repos/{owner}/{name}/config",
 			method:        http.MethodPut,
 			path:          "/api/deployment/repos/acme/widgets/config",
-			grantBody:     `{"defaultCapabilities":["memory"]}`,
+			grantBody:     `{"defaultCapabilities":["api:memory"]}`,
 			wantRefusalAt: "defaults.repos[acme/widgets].task",
 		},
 		{
 			name:          "PUT /api/settings",
 			method:        http.MethodPut,
 			path:          "/api/settings",
-			grantBody:     `{"defaultCapabilities":["memory"]}`,
+			grantBody:     `{"defaultCapabilities":["api:memory"]}`,
 			wantRefusalAt: "defaults.task",
 		},
 	}
@@ -316,7 +316,7 @@ func TestRefusesContradictoryTaskDefaultsAndPolicy(t *testing.T) {
 		if resp := doRecorded(t, srv, http.MethodPut, "/api/capability-policy", disableMemoryPolicy); resp.Code() != http.StatusOK {
 			t.Fatalf("saving policy first: %d %s", resp.Code(), resp.BodyString())
 		}
-		resp := doRecorded(t, srv, http.MethodPost, "/api/settings/plan", `{"defaultCapabilities":["memory"]}`)
+		resp := doRecorded(t, srv, http.MethodPost, "/api/settings/plan", `{"defaultCapabilities":["api:memory"]}`)
 		assertBadRequestOnField(t, resp, "defaultCapabilities",
 			"defaults.task",
 			"api:memory",

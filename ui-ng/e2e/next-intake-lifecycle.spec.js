@@ -182,7 +182,7 @@ test("offers a stuck task's own control on its Inbox row, and the row leaves onc
   // Each sub-case names its own control.
   for (const [t, id, label] of [
     [queued, "run-now", "Run now"],
-    [running, "cancel", "Cancel"],
+    [running, "cancel", "Cancel task"],
     [deferred, "undefer", "Undefer"],
   ]) {
     if (!t) continue;

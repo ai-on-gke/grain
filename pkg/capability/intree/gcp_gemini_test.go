@@ -213,7 +213,7 @@ func TestGeminiKeyLegacyGrantFidelity(t *testing.T) {
 	var placed []protocol.Placement
 	var prompts []string
 	for i, grant := range []string{"gemini-key", model.GCPGeminiKeyGrant} {
-		canonical := model.CanonicalLegacyGrant(grant)
+		canonical := model.RetiredGrantsBecame(grant)[0]
 		if canonical != model.GCPGeminiKeyGrant {
 			t.Fatalf("%q is granted as %q, want %q", grant, canonical, model.GCPGeminiKeyGrant)
 		}

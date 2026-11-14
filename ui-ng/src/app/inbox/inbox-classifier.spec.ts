@@ -197,6 +197,51 @@ describe("inbox classifier", () => {
     ).toBeNull();
   });
 
+  it("offers a stuck task the control its sub-case names, and none where it names none", () => {
+    const control = (over: Partial<Task>) =>
+      classifyTask(task({ stall: "stuck", ...over }))?.actions.map((a) => [
+        a.id,
+        a.route,
+      ]);
+    expect(
+      control({
+        state: "queued",
+        reason: { reason: "queued/ready", control: "Run now" },
+      }),
+    ).toEqual([["run-now", "POST /api/tasks/{id}/run-now"]]);
+    expect(
+      control({
+        state: "running",
+        reason: { reason: "running/live_run", control: "Cancel" },
+      }),
+    ).toEqual([["cancel", "POST /api/tasks/{id}/close"]]);
+    expect(
+      control({
+        state: "deferred",
+        reason: { reason: "deferred/wake_time", control: "Undefer" },
+      }),
+    ).toEqual([["undefer", "POST /api/tasks/{id}/undefer"]]);
+    expect(
+      control({
+        state: "queued",
+        reason: { reason: "queued/ready" },
+        mergeQueueReason: { reason: "merge_failed", control: "Retry merge" },
+      }),
+    ).toEqual([["retry-merge", "POST /api/tasks/{id}/retry-merge"]]);
+    expect(
+      control({ state: "running", reason: { reason: "running/live_run" } }),
+    ).toEqual([]);
+    const cancel = classifyTask(
+      task({
+        stall: "stuck",
+        state: "running",
+        reason: { reason: "r", control: "Cancel" },
+      }),
+    )?.actions[0];
+    expect(cancel?.confirm).toContain("Cancel #1?");
+    expect(cancel?.destructive).toBe(true);
+  });
+
   it("offers acknowledge, investigate and clear on an alert", () => {
     const e = classifyNotification({
       id: 3,
@@ -242,34 +287,6 @@ describe("inbox classifier", () => {
     expect(hs?.summary).toBe("deploy.sh --prod");
     expect(hs?.taskLink).toBe("/task/2");
     expect(hs?.externalLink).toBeNull();
-  });
-
-  it("offers the control a stuck task's sub-case names, and none where there is none", () => {
-    const stuck = (state: string, control?: string) =>
-      classifyTask(
-        task({
-          state: state as Task["state"],
-          stall: "this has stood here for longer than it should",
-          reason: { reason: `${state}/x`, ...(control ? { control } : {}) },
-        }),
-      );
-    const ids = (state: string, control?: string) =>
-      stuck(state, control)?.actions.map((a) => `${a.id}:${a.route}`);
-    expect(stuck("queued", "Run now")?.groupId).toBe("stalled");
-    expect(ids("queued", "Run now")).toEqual([
-      "run-now:POST /api/tasks/{id}/run-now",
-    ]);
-    expect(ids("deferred", "Undefer")).toEqual([
-      "undefer:POST /api/tasks/{id}/undefer",
-    ]);
-    expect(ids("completed", "Retry merge")).toEqual([
-      "retry-merge:POST /api/tasks/{id}/retry-merge",
-    ]);
-    const cancel = stuck("running", "Cancel")?.actions[0];
-    expect(cancel?.route).toBe("POST /api/tasks/{id}/close");
-    expect(cancel?.confirm).toContain("can be reopened");
-    expect(cancel?.destructive).toBe(true);
-    expect(ids("completed")).toEqual([]);
   });
 
   it("reads production notification title, taskId, clearsWhen.task, and lastRaisedAt", () => {

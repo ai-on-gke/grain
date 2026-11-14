@@ -72,9 +72,10 @@ upgrade's hold.
 (`tasks:read`, `tasks:write`, `dispatch:read`, `dispatch:write`;
 [agent-api.md](agent-api.md)), granted per task or per standing session
 (the director's capability pane). The bare name it had as an in-process
-capability is an alias for the preset, and is recorded as
-`api:dispatch-control` wherever it is granted; schema migration 68
-rewrote the grants already stored. A run holding it reaches these
+capability was an alias for one release and is no longer accepted;
+schema migration 68 rewrote the grants already stored, and importing an
+older `grain/config` export upgrades it to `api:dispatch-control`. A run
+holding it reaches these
 routes as `{agent, <task id>}`: the `dispatch:write` ones through the
 `grain-controller` MCP server's `grain_invoke` (route tools
 `api_pause_pipeline`, `api_resume_pipeline`, `api_run_now`;

@@ -106,8 +106,11 @@ func TestAttachingATokenCapabilityOverridesTheSandboxCredential(t *testing.T) {
 	c, store, ctx := withTokenCapabilities(t, "release-bot", "docs-bot")
 	task := create(t, c, ctx)
 
-	if err := c.SetCapability(ctx, task.ID, "github-credential:release-bot", true); err != nil {
-		t.Fatalf("attaching the legacy token alias: %v", err)
+	if err := c.SetCapability(ctx, task.ID, "github-credential:release-bot", true); err == nil {
+		t.Fatal("attaching the retired github-credential:<name> spelling was accepted")
+	}
+	if err := c.SetCapability(ctx, task.ID, model.RepoCredentialGrant("release-bot"), true); err != nil {
+		t.Fatalf("attaching repo#credential: %v", err)
 	}
 	if err := store.StartRun(ctx, model.Run{
 		ID: "r1", TaskID: task.ID, Sandbox: "sandbox-0", Attempt: 1, StartedAt: baseTime,
@@ -131,7 +134,7 @@ func TestAttachingATokenCapabilityOverridesTheSandboxCredential(t *testing.T) {
 	// Detaching puts the sandbox back on its team's own credential --
 	// and, for a team with none, on nothing at all: there is no
 	// deployment ladder for a team's work to fall back to (grain/task-1592).
-	if err := c.SetCapability(ctx, task.ID, "github-credential:release-bot", false); err != nil {
+	if err := c.SetCapability(ctx, task.ID, model.RepoCredentialGrant("release-bot"), false); err != nil {
 		t.Fatalf("detaching the token capability: %v", err)
 	}
 	if _, ok, err := store.GitCredentialOverride(ctx, "sandbox-0", "bwsalmon", "grain"); !errors.Is(err, model.ErrNoTeamGitCredential) || ok {
@@ -162,7 +165,7 @@ func TestANamedTokenCanBeADeploymentDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rawDefaults := []string{"github-credential:release-bot"}
+	rawDefaults := []string{model.RepoCredentialGrant("release-bot")}
 	wantGrant := model.RepoCredentialGrant("release-bot")
 	got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &rawDefaults})
 	if err != nil {

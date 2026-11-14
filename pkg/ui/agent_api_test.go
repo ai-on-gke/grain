@@ -187,7 +187,7 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 	// granted, with a reason -- is the power to attach grants, not to
 	// attach ones its own task lacks or dangerous ones, under any of the
 	// keys POST /api/tasks/{id}/capabilities takes a grant by.
-	seedAPITask(t, client, "3", "acme/widgets", "api:capabilities:admin", "api:tasks:read", "gcp-key")
+	seedAPITask(t, client, "3", "acme/widgets", "api:capabilities:admin", "api:tasks:read", model.GCPKeySandboxAgentGrant)
 	for _, body := range []string{
 		`{"id":"api:deployment:upgrade","attach":true}`,
 		`{"grant":"api:secrets:write","attach":true}`,
@@ -230,7 +230,7 @@ func TestAgentAPICannotEscalate(t *testing.T) {
 	for _, body := range []string{
 		`{"id":"api:tasks:read","attach":true}`,
 		`{"grant":"api:tasks:read@acme/widgets","attach":true}`,
-		`{"id":"gcp-key","attach":true}`,
+		`{"grant":"https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"sandbox-agent\",\"primary\":true}","attach":true}`,
 	} {
 		if code, resp := asAgent(t, srv, "3", http.MethodPost, "/api/tasks/2/capabilities", body, "testing"); code != http.StatusOK {
 			t.Errorf("POST /api/tasks/2/capabilities with %s, a grant the agent holds, answered %d: %s", body, code, resp)
@@ -964,7 +964,7 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	cfg.PollInterval = 30_000_000_000
 	cfg.GitHubHost = "github.com"
 	cfg.TargetRepos = []string{"acme/widgets", "git.forge.example/experimental/ggrain"}
-	cfg.DefaultCapabilities = []string{"github-sandbox", "gcp-key"}
+	cfg.DefaultCapabilities = []string{model.GitHubSandboxRepoGrant, model.GCPKeySandboxAgentGrant}
 	if err := client.Store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -972,15 +972,15 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
-		CICapabilities:      []string{"github-sandbox", "gcp-key", "package-publish"},
-		DefaultCapabilities: []string{"github-sandbox", "gcp-key"},
+		CICapabilities:      []string{model.GitHubSandboxRepoGrant, model.GCPKeySandboxAgentGrant, model.PackagePublishRef + "={}"},
+		DefaultCapabilities: []string{model.GitHubSandboxRepoGrant, model.GCPKeySandboxAgentGrant},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	ggrain := model.RepoRef{Host: "git.forge.example", Owner: "experimental", Name: "ggrain"}
 	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:           ggrain,
-		CICapabilities: []string{"package-publish", "github-sandbox", "gcp-key"},
+		CICapabilities: []string{model.PackagePublishRef + "={}", model.GitHubSandboxRepoGrant, model.GCPKeySandboxAgentGrant},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -993,7 +993,7 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	// 1. Narrowing ciCapabilities via PUT /api/repos/{owner}/{name}/settings
 	// succeeds even though gemini-key and CI-only package-publish remain.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/settings",
-		`{"ciCapabilities":["github-sandbox","package-publish"]}`, "remove gcp-key"); code != http.StatusOK {
+		`{"ciCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}","https://grain.dev/capabilities/release#package-publish={}"]}`, "remove gcp-key"); code != http.StatusOK {
 		t.Fatalf("PUT /api/repos/acme/widgets/settings narrowing ciCapabilities: %d %s", code, resp)
 	}
 	rc, err := client.Store.GetRepoConfig(ctx, widgets)
@@ -1003,7 +1003,7 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 
 	// 2. Adding back gcp-key (which is no longer stored and not held by task 1) is refused.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/settings",
-		`{"ciCapabilities":["github-sandbox","package-publish","gcp-key"]}`, "re-add gcp-key"); code != http.StatusForbidden ||
+		`{"ciCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}","https://grain.dev/capabilities/release#package-publish={}","https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"sandbox-agent\",\"primary\":true}"]}`, "re-add gcp-key"); code != http.StatusForbidden ||
 		!strings.Contains(resp, "gcp-key") {
 		t.Fatalf("re-adding unheld gcp-key: got %d %s, want 403 naming gcp-key", code, resp)
 	}
@@ -1011,29 +1011,29 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 	// 3. Narrowing defaultCapabilities via PUT /api/repos/{owner}/{name}/settings,
 	// PUT /api/repos/{owner}/{name}/capabilities, and PUT /api/deployment/repos/{owner}/{name}/config.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/settings",
-		`{"defaultCapabilities":["github-sandbox"]}`, "remove gcp-key from defaultCapabilities"); code != http.StatusOK {
+		`{"defaultCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}"]}`, "remove gcp-key from defaultCapabilities"); code != http.StatusOK {
 		t.Fatalf("PUT /api/repos/acme/widgets/settings narrowing defaultCapabilities: %d %s", code, resp)
 	}
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/capabilities",
-		`{"defaultCapabilities":["github-sandbox"]}`, "keep gemini-key"); code != http.StatusOK {
+		`{"defaultCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}"]}`, "keep gemini-key"); code != http.StatusOK {
 		t.Fatalf("PUT /api/repos/acme/widgets/capabilities keeping stored gemini-key: %d %s", code, resp)
 	}
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/deployment/repos/acme/widgets/config",
-		`{"ciCapabilities":["package-publish"],"defaultCapabilities":[]}`, "narrow via deployment config"); code != http.StatusOK {
+		`{"ciCapabilities":["https://grain.dev/capabilities/release#package-publish={}"],"defaultCapabilities":[]}`, "narrow via deployment config"); code != http.StatusOK {
 		t.Fatalf("PUT /api/deployment/repos/acme/widgets/config narrowing lists: %d %s", code, resp)
 	}
 
 	// 4. Cross-field escalation is refused: package-publish is stored in
 	// ciCapabilities, not defaultCapabilities, so putting it in defaultCapabilities is refused.
 	if code, _ := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/settings",
-		`{"defaultCapabilities":["package-publish"]}`, "cross-field"); code != http.StatusForbidden {
+		`{"defaultCapabilities":["https://grain.dev/capabilities/release#package-publish={}"]}`, "cross-field"); code != http.StatusForbidden {
 		t.Fatalf("copying ciCapabilities entry into defaultCapabilities answered %d, want 403", code)
 	}
 
 	// 5. Host-qualified repo via PUT /api/repos/{owner}/{name}/ci-capabilities and /settings.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut,
 		"/api/repos/git.forge.example%2Fexperimental/ggrain/ci-capabilities",
-		`{"ciCapabilities":["package-publish","github-sandbox"]}`, "remove gcp-key"); code != http.StatusOK {
+		`{"ciCapabilities":["https://grain.dev/capabilities/release#package-publish={}","https://grain.dev/capabilities/github#sandbox-repo={}"]}`, "remove gcp-key"); code != http.StatusOK {
 		t.Fatalf("PUT host-qualified /ci-capabilities narrowing: %d %s", code, resp)
 	}
 	rcGgrain, err := client.Store.GetRepoConfig(ctx, ggrain)
@@ -1043,11 +1043,11 @@ func TestAgentAPICanNarrowExistingCapabilityLists(t *testing.T) {
 
 	// 6. Deployment-wide defaultCapabilities via PUT /api/settings.
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/settings",
-		`{"defaultCapabilities":["github-sandbox"]}`, "remove gcp-key from deployment defaults"); code != http.StatusOK {
+		`{"defaultCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}"]}`, "remove gcp-key from deployment defaults"); code != http.StatusOK {
 		t.Fatalf("PUT /api/settings narrowing defaultCapabilities: %d %s", code, resp)
 	}
 	if code, _ := asAgent(t, srv, "1", http.MethodPut, "/api/settings",
-		`{"defaultCapabilities":["github-sandbox","gcp-key"]}`, "re-add gcp-key"); code != http.StatusForbidden {
+		`{"defaultCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}","https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"sandbox-agent\",\"primary\":true}"]}`, "re-add gcp-key"); code != http.StatusForbidden {
 		t.Fatalf("PUT /api/settings re-adding unheld gcp-key answered %d, want 403", code)
 	}
 }
@@ -1170,7 +1170,7 @@ func TestSandboxCLIChannelAllowsNonDangerousScopesAndRefusesDangerousAndEscalati
 
 	// SandboxAPIRoutes includes PUT /api/memory/documents when holding "memory",
 	// includes granted non-dangerous API routes, and excludes model-only routes.
-	memRoutes := ui.SandboxAPIRoutes([]string{"memory"}, "")
+	memRoutes := ui.SandboxAPIRoutes([]string{"api:memory"}, "")
 	hasDocWrite := false
 	for _, r := range memRoutes {
 		if r.Pattern == "PUT /api/memory/documents" {
@@ -1264,7 +1264,7 @@ func TestAgentAPIReleasesWriteDoesNotWriteReleaseNotes(t *testing.T) {
 // names nobody is recorded as the acting run itself.
 func TestAgentReleaseNoteWriteIsAttributedToTheAgent(t *testing.T) {
 	srv, client := testServer(t)
-	seedAPITask(t, client, "1", "acme/widgets", "release-notes")
+	seedAPITask(t, client, "1", "acme/widgets", "api:release-notes")
 	spoofed := `{"period":"2026-W43","title":"t","text":"x","author":"alice@example.com","authorKind":"human"}`
 	if code, resp := asSandboxAgent(t, srv, "1", "run-1", http.MethodPut, "/api/release-notes", spoofed, ""); code != http.StatusForbidden {
 		t.Errorf("an agent naming a person as the release notes' author: %d %s, want 403", code, resp)
@@ -1326,7 +1326,7 @@ func TestAgentAPIGrainCIReadsCIOfTheTasksRepositories(t *testing.T) {
 	if err := client.Store.PutTask(context.Background(), model.Task{
 		ID: "1", Intent: model.IntentImplement, Title: "task 1", Target: &target,
 		Reads:  []model.RepoRef{{Owner: "acme", Name: "library"}},
-		Grants: []model.Grant{{Capability: "grain-ci", Via: model.GrantByLabel}},
+		Grants: []model.Grant{{Capability: model.GrainCIGrant, Via: model.GrantByLabel}},
 	}); err != nil {
 		t.Fatal(err)
 	}

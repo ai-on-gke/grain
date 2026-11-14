@@ -1042,6 +1042,16 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
               Defer
             </button>
           }
+          @if (current() === "deferred" && canUndeferSelected()) {
+            <button
+              type="button"
+              class="btn-text"
+              data-testid="batch-undefer"
+              (click)="undefer(selected())"
+            >
+              Bring back
+            </button>
+          }
           @if (current() === "closed") {
             <button type="button" class="btn-text" (click)="reopen(selected())">
               Reopen
@@ -1622,6 +1632,18 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       rows.length > 0 &&
       rows.every((r) =>
         this.access.canAccessTask("POST /api/tasks/{id}/defer", r.repo ?? null),
+      )
+    );
+  }
+  protected canUndeferSelected(): boolean {
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/undefer",
+          r.repo ?? null,
+        ),
       )
     );
   }
