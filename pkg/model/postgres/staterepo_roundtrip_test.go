@@ -18,12 +18,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
@@ -276,5 +278,92 @@ func TestStateRepoImportResyncsPostgresSequences(t *testing.T) {
 		Items: []model.SuiteItem{{TemplateID: tplID}}, CreatedAt: now,
 	}); err != nil {
 		t.Fatalf("PutSuite after ImportTables failed (suite_item sequence not synced): %v", err)
+	}
+}
+
+// TestSyncSequencesRespectsWriteFence verifies that SyncSequences called on a
+// *sql.DB runs its sequence advancement inside a read-write transaction so
+// FenceWrites refuses stale writers with ErrWriteFenced instead of mutating
+// sequences after single-writer lease loss.
+func TestSyncSequencesRespectsWriteFence(t *testing.T) {
+	cfg, adminDB := newLockTestSchema(t)
+	ctx := context.Background()
+
+	lockA, err := postgres.AcquireWriterLock(ctx, cfg, postgres.WriterLockOptions{
+		WaitTimeout:       -1,
+		KeepAliveInterval: time.Hour,
+		ReacquireWindow:   -1,
+		ApplicationName:   "grain-test-seq-fence-a",
+		Logf:              t.Logf,
+	})
+	if err != nil {
+		t.Fatalf("AcquireWriterLock(A): %v", err)
+	}
+	defer lockA.Close()
+
+	dbA, err := postgres.Open(cfg)
+	if err != nil {
+		t.Fatalf("Open(A): %v", err)
+	}
+	defer dbA.Close()
+	if _, err := dbA.ExecContext(ctx, "CREATE TABLE `seq_fence_probe` (`id` INTEGER PRIMARY KEY AUTOINCREMENT, `label` TEXT)"); err != nil {
+		t.Fatalf("creating probe table: %v", err)
+	}
+	if _, err := dbA.ExecContext(ctx, "CREATE VIEW `seq_fence_view` AS SELECT `id`, `label` FROM `seq_fence_probe`"); err != nil {
+		t.Fatalf("creating probe view: %v", err)
+	}
+	if _, err := dbA.ExecContext(ctx, "INSERT INTO `seq_fence_probe` (`id`, `label`) VALUES (25, 'explicit')"); err != nil {
+		t.Fatalf("inserting explicit id row: %v", err)
+	}
+	if err := postgres.FenceWrites(dbA, lockA); err != nil {
+		t.Fatalf("FenceWrites(A): %v", err)
+	}
+
+	// Terminate A's lease session and acquire B's lease before A calls SyncSequences.
+	if _, err := adminDB.ExecContext(ctx, `SELECT pg_terminate_backend($1)`, int64(lockA.BackendPID())); err != nil {
+		t.Fatalf("terminating A's lock session: %v", err)
+	}
+	var lockB *postgres.WriterLock
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		lockB, err = postgres.AcquireWriterLock(ctx, cfg, postgres.WriterLockOptions{
+			WaitTimeout: -1, KeepAliveInterval: -1, ApplicationName: "grain-test-seq-fence-b", Logf: t.Logf,
+		})
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, postgres.ErrWriterLockHeld) || time.Now().After(deadline) {
+			t.Fatalf("AcquireWriterLock(B): %v", err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	defer lockB.Close()
+
+	if _, err := postgres.SyncSequences(ctx, dbA); !errors.Is(err, postgres.ErrWriteFenced) {
+		t.Fatalf("SyncSequences on fenced stale pool = %v, want ErrWriteFenced", err)
+	}
+
+	dbB, err := postgres.Open(cfg)
+	if err != nil {
+		t.Fatalf("Open(B): %v", err)
+	}
+	defer dbB.Close()
+	if err := postgres.FenceWrites(dbB, lockB); err != nil {
+		t.Fatalf("FenceWrites(B): %v", err)
+	}
+	var isCalled bool
+	var lastVal int64
+	if err := dbB.QueryRowContext(ctx, `SELECT last_value::bigint, is_called FROM seq_fence_probe_id_seq`).Scan(&lastVal, &isCalled); err != nil {
+		t.Fatalf("reading sequence state after refused sync: %v", err)
+	}
+	if isCalled || lastVal != 1 {
+		t.Fatalf("stale fenced pool mutated sequence: last_value=%d is_called=%v, want 1/false", lastVal, isCalled)
+	}
+	synced, err := postgres.SyncSequences(ctx, dbB)
+	if err != nil {
+		t.Fatalf("SyncSequences(B): %v", err)
+	}
+	if len(synced) != 1 || synced[0].Table != "seq_fence_probe" || synced[0].MaxID != 25 {
+		t.Fatalf("SyncSequences(B) = %+v, want seq_fence_probe synced to 25", synced)
 	}
 }

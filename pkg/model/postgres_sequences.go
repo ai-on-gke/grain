@@ -18,7 +18,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -37,6 +36,19 @@ type PostgresSequenceSync struct {
 type PostgresQueryExecer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+type postgresTxBeginner interface {
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
+type postgresSerialColumn struct {
+	tableSchema string
+	tableName   string
+	columnName  string
+	seqName     string
+	seqSchema   string
+	seqRel      string
 }
 
 // IsPostgresDB reports whether db uses Grain's PostgreSQL driver adapter
@@ -58,42 +70,88 @@ func IsPostgresDB(db *sql.DB) bool {
 //
 // Sequences already ahead of MAX(column) (for example after top rows were
 // deleted or after a high-water floor was seeded) and sequences on empty
-// tables are left untouched so IDs are never rewound.
+// tables are left untouched so IDs are never rewound. When q can begin a
+// transaction (*sql.DB or *sql.Conn) and a behind sequence is detected, the
+// re-check and setval run inside a read-write transaction so Grain's
+// PostgreSQL single-writer fence and advisory writer lock are enforced.
 func SyncPostgresSequences(ctx context.Context, q PostgresQueryExecer) ([]PostgresSequenceSync, error) {
-	type serialColumn struct {
-		tableSchema string
-		tableName   string
-		columnName  string
-		seqName     string
-		seqSchema   string
-		seqRel      string
+	cols, err := listPostgresSerialColumns(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	behind, err := findBehindPostgresSequences(ctx, q, cols)
+	if err != nil || len(behind) == 0 {
+		return nil, err
 	}
 
+	if tb, ok := q.(postgresTxBeginner); ok {
+		tx, err := tb.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("synchronizing postgres sequences: beginning transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		cols, err = listPostgresSerialColumns(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		behind, err = findBehindPostgresSequences(ctx, tx, cols)
+		if err != nil {
+			return nil, err
+		}
+		if len(behind) == 0 {
+			if err := tx.Commit(); err != nil {
+				return nil, fmt.Errorf("synchronizing postgres sequences: committing transaction: %w", err)
+			}
+			return nil, nil
+		}
+		if err := advancePostgresSequences(ctx, tx, behind); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("synchronizing postgres sequences: committing transaction: %w", err)
+		}
+		return behind, nil
+	}
+
+	if err := advancePostgresSequences(ctx, q, behind); err != nil {
+		return nil, err
+	}
+	return behind, nil
+}
+
+func listPostgresSerialColumns(ctx context.Context, q PostgresQueryExecer) ([]postgresSerialColumn, error) {
 	const listSerialsSQL = `
 SELECT
-  c.table_schema::text,
-  c.table_name::text,
-  c.column_name::text,
+  tn.nspname::text,
+  tc.relname::text,
+  a.attname::text,
   seq.seq_name::text,
   sn.nspname::text,
   sc.relname::text
-FROM information_schema.columns c
+FROM pg_class tc
+JOIN pg_namespace tn ON tn.oid = tc.relnamespace
+JOIN pg_attribute a ON a.attrelid = tc.oid
+  AND a.attnum > 0
+  AND NOT a.attisdropped
 CROSS JOIN LATERAL (
-  SELECT pg_get_serial_sequence(format('%I.%I', c.table_schema, c.table_name), c.column_name) AS seq_name
+  SELECT pg_get_serial_sequence(format('%I.%I', tn.nspname, tc.relname), a.attname) AS seq_name
 ) seq
-JOIN pg_class sc ON sc.oid = seq.seq_name::regclass
+JOIN pg_class sc ON sc.oid = seq.seq_name::regclass AND sc.relkind = 'S'
 JOIN pg_namespace sn ON sn.oid = sc.relnamespace
-WHERE c.table_schema = CURRENT_SCHEMA()
+WHERE tn.nspname = CURRENT_SCHEMA()
+  AND tc.relkind IN ('r', 'p')
+  AND NOT tc.relispartition
   AND seq.seq_name IS NOT NULL
-ORDER BY c.table_name, c.column_name`
+ORDER BY tc.relname, a.attname`
 
 	rows, err := q.QueryContext(ctx, listSerialsSQL)
 	if err != nil {
 		return nil, fmt.Errorf("synchronizing postgres sequences: listing serial columns: %w", err)
 	}
-	var cols []serialColumn
+	var cols []postgresSerialColumn
 	for rows.Next() {
-		var sc serialColumn
+		var sc postgresSerialColumn
 		if err := rows.Scan(&sc.tableSchema, &sc.tableName, &sc.columnName, &sc.seqName, &sc.seqSchema, &sc.seqRel); err != nil {
 			_ = rows.Close()
 			return nil, fmt.Errorf("synchronizing postgres sequences: scanning serial column: %w", err)
@@ -107,6 +165,10 @@ ORDER BY c.table_name, c.column_name`
 	if err := rows.Close(); err != nil {
 		return nil, fmt.Errorf("synchronizing postgres sequences: closing serial column rows: %w", err)
 	}
+	return cols, nil
+}
+
+func findBehindPostgresSequences(ctx context.Context, q PostgresQueryExecer, cols []postgresSerialColumn) ([]PostgresSequenceSync, error) {
 	if len(cols) == 0 {
 		return nil, nil
 	}
@@ -168,32 +230,28 @@ ORDER BY c.table_name, c.column_name`
 	if err := crows.Close(); err != nil {
 		return nil, fmt.Errorf("synchronizing postgres sequences: closing sequence check rows: %w", err)
 	}
-	if len(behind) == 0 {
-		return nil, nil
-	}
+	return behind, nil
+}
 
-	var setSQL strings.Builder
+func advancePostgresSequences(ctx context.Context, q PostgresQueryExecer, behind []PostgresSequenceSync) error {
+	var (
+		setSQL strings.Builder
+		args   = make([]any, 0, len(behind)*2)
+	)
 	setSQL.WriteString("SELECT ")
 	for i, b := range behind {
 		if i > 0 {
 			setSQL.WriteString(", ")
 		}
-		setSQL.WriteString("setval(")
-		setSQL.WriteString(quotePGLiteral(b.Sequence))
-		setSQL.WriteString(", ")
-		setSQL.WriteString(strconv.FormatInt(b.MaxID, 10))
-		setSQL.WriteString(", true)")
+		fmt.Fprintf(&setSQL, "setval($%d::regclass, $%d::bigint, true)", i*2+1, i*2+2)
+		args = append(args, b.Sequence, b.MaxID)
 	}
-	if _, err := q.ExecContext(ctx, setSQL.String()); err != nil {
-		return nil, fmt.Errorf("synchronizing postgres sequences: %w", err)
+	if _, err := q.ExecContext(ctx, setSQL.String(), args...); err != nil {
+		return fmt.Errorf("synchronizing postgres sequences: %w", err)
 	}
-	return behind, nil
+	return nil
 }
 
 func quotePGIdent(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
-}
-
-func quotePGLiteral(s string) string {
-	return `'` + strings.ReplaceAll(s, `'`, `''`) + `'`
 }
