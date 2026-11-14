@@ -243,4 +243,29 @@ describe("inbox classifier", () => {
     expect(hs?.taskLink).toBe("/task/2");
     expect(hs?.externalLink).toBeNull();
   });
+
+  it("reads production notification title, taskId, clearsWhen.task, and lastRaisedAt", () => {
+    const e = classifyNotification({
+      id: 42,
+      subject: "base-branch-red:acme/web",
+      title: "main is failing merge verification",
+      taskId: "310",
+      severity: "critical",
+      lastRaisedAt: "2026-11-13T10:00:00Z",
+      raisedAt: "2026-11-12T08:00:00Z",
+    });
+    expect(e.title).toBe("main is failing merge verification");
+    expect(e.ref).toBe("base-branch-red:acme/web");
+    expect(e.taskId).toBe("310");
+    expect(e.taskLink).toBe("/task/310");
+    expect(e.at).toBe("2026-11-13T10:00:00Z");
+
+    const cleared = classifyNotification({
+      id: 43,
+      subject: "ci-stalled",
+      clearsWhen: { kind: "task-closed", task: "412" },
+    });
+    expect(cleared.taskId).toBe("412");
+    expect(cleared.taskLink).toBe("/task/412");
+  });
 });

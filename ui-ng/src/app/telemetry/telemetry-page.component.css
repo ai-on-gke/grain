@@ -206,11 +206,110 @@ g-telemetry-page {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 4px 10px;
+  padding: 6px 10px;
   border-radius: var(--md-sys-shape-corner-small);
   background: var(--md-sys-color-surface-container-low);
   font-size: 13px;
+}
+
+.tel-dir-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1 1 260px;
+  gap: 4px;
+}
+
+.tel-dir-item .row-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tel-dir-repo,
+.tel-dir-metrics {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.tel-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.tel-section-head .section-title {
+  margin: 0;
+}
+
+.tel-notices-banner {
+  margin: 0;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tel-notices-banner.banner-warn {
+  background: color-mix(in srgb, var(--md-sys-color-warning) 14%, transparent);
+  color: var(--md-sys-color-on-surface);
+  border: 1px solid
+    color-mix(in srgb, var(--md-sys-color-warning) 45%, transparent);
+}
+
+.tel-notices-banner.banner-error {
+  border: 1px solid
+    color-mix(in srgb, var(--md-sys-color-error) 35%, transparent);
+}
+
+.tel-notices-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.tel-notices-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.tel-more-row {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 8px;
+}
+
+.tel-more-btn {
+  min-height: 32px;
+  padding: 4px 12px;
+  border-radius: var(--md-sys-shape-corner-full);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-primary);
+  font: 500 12px/16px var(--grain-font-body);
+  cursor: pointer;
+}
+
+.tel-more-btn:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.tel-more-btn:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
 }
 
 /* Throughput chart: time axis, hover band and a hover card. */
@@ -299,4 +398,13 @@ g-telemetry-page {
 
 :root[data-theme="dark"] .tel-tip {
   background: var(--md-sys-color-surface-container-high);
+}
+
+.actor-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 12px;
 }

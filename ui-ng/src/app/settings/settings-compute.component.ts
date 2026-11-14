@@ -15,8 +15,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  OnChanges,
-  OnInit,
+  type OnChanges,
+  type OnInit,
+  type SimpleChanges,
   ViewEncapsulation,
   computed,
   inject,
@@ -43,6 +44,10 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import {
+  type UsagePauseInput,
+  summarizeDispatchStatus,
+} from "../shared/dispatch-status";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -219,6 +224,23 @@ function formatRefreshedAt(iso?: string): string {
   template: `
     @switch (section()) {
       @case ("models") {
+        @if (modelsDispatchStatus(); as dp) {
+          <div
+            class="s-banner"
+            [class.error]="dp.tone === 'error'"
+            [class.warn]="dp.tone === 'warn'"
+            role="status"
+            data-testid="models-quota-banner"
+          >
+            <strong>{{ dp.headline }}</strong>
+            @if (dp.resetText) {
+              <span class="s-num"> · {{ dp.resetText }}</span>
+            }
+            @if (dp.subline) {
+              <span> — {{ dp.subline }}</span>
+            }
+          </div>
+        }
         <div class="s-card" data-testid="card-model-defaults">
           <div class="s-card-head">
             <div>
@@ -261,17 +283,13 @@ function formatRefreshedAt(iso?: string): string {
             </span>
             @if (fallbackModels().length > 0) {
               <ol class="mp-chain" aria-label="Fallback models, in order">
-                @for (
-                  m of fallbackModels();
-                  track m;
-                  let i = $index, first = $first, last = $last
-                ) {
+                @for (m of fallbackModels(); track m) {
                   <li
                     class="mp-chain-row"
-                    [attr.data-testid]="'fallback-row-' + i"
+                    [attr.data-testid]="'fallback-row-' + $index"
                   >
                     <span class="mp-chain-pos" aria-hidden="true">{{
-                      i + 1
+                      $index + 1
                     }}</span>
                     <span class="mp-chain-model">{{ m }}</span>
                     @if (modelNote(m)) {
@@ -282,9 +300,9 @@ function formatRefreshedAt(iso?: string): string {
                         type="button"
                         class="btn-text s-btn-sm"
                         [attr.aria-label]="'Move ' + m + ' up'"
-                        [attr.data-testid]="'fallback-up-' + i"
-                        [disabled]="first || !canEditChain()"
-                        (click)="moveFallback(i, -1)"
+                        [attr.data-testid]="'fallback-up-' + $index"
+                        [disabled]="$first || !canEditChain()"
+                        (click)="moveFallback(m, -1)"
                       >
                         Up
                       </button>
@@ -292,9 +310,9 @@ function formatRefreshedAt(iso?: string): string {
                         type="button"
                         class="btn-text s-btn-sm"
                         [attr.aria-label]="'Move ' + m + ' down'"
-                        [attr.data-testid]="'fallback-down-' + i"
-                        [disabled]="last || !canEditChain()"
-                        (click)="moveFallback(i, 1)"
+                        [attr.data-testid]="'fallback-down-' + $index"
+                        [disabled]="$last || !canEditChain()"
+                        (click)="moveFallback(m, 1)"
                       >
                         Down
                       </button>
@@ -302,9 +320,9 @@ function formatRefreshedAt(iso?: string): string {
                         type="button"
                         class="btn-text s-btn-sm"
                         [attr.aria-label]="'Remove ' + m"
-                        [attr.data-testid]="'fallback-remove-' + i"
+                        [attr.data-testid]="'fallback-remove-' + $index"
                         [disabled]="!canEditChain()"
-                        (click)="removeFallback(i)"
+                        (click)="removeFallback(m)"
                       >
                         Remove
                       </button>
@@ -2006,6 +2024,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly newBudgetTokens = signal("");
   protected readonly newBudgetWindow = signal("24h");
   protected readonly usageSummary = signal("");
+  protected readonly usageSnapshot = signal<UsagePauseInput | null>(null);
+  protected readonly modelsDispatchStatus = computed(() =>
+    summarizeDispatchStatus(
+      this.access.rawConfig(),
+      this.usageSnapshot() ?? this.access.usage(),
+      this.access.clockNow(),
+      undefined,
+      { modelQuotaOnly: true },
+    ),
+  );
 
   protected readonly persistentSandboxes = signal<
     { name: string; state?: string }[]
@@ -2060,8 +2088,10 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     this.loadForSection();
   }
 
-  ngOnChanges(): void {
-    this.loadForSection();
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes["section"] && !changes["section"].firstChange) {
+      this.loadForSection();
+    }
   }
 
   protected canWriteSettings(): boolean {
@@ -2120,16 +2150,20 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     this.setModelChain([...chain, m]);
   }
 
-  protected moveFallback(idx: number, delta: -1 | 1): void {
+  protected moveFallback(model: string, delta: -1 | 1): void {
     const fb = [...this.fallbackModels()];
+    const idx = fb.findIndex((x) => x.toLowerCase() === model.toLowerCase());
+    if (idx < 0) return;
     const to = idx + delta;
     if (to < 0 || to >= fb.length) return;
     [fb[idx], fb[to]] = [fb[to], fb[idx]];
     this.setModelChain([this.modelChain()[0], ...fb]);
   }
 
-  protected removeFallback(idx: number): void {
-    const fb = this.fallbackModels().filter((_, i) => i !== idx);
+  protected removeFallback(model: string): void {
+    const fb = this.fallbackModels().filter(
+      (x) => x.toLowerCase() !== model.toLowerCase(),
+    );
     this.setModelChain([this.modelChain()[0], ...fb]);
   }
 
@@ -2231,6 +2265,9 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
           .get<Record<string, unknown>>("GET /api/usage")
           .then((u) => {
             if (!u) return;
+            const parsed = u as unknown as UsagePauseInput;
+            this.usageSnapshot.set(parsed);
+            this.access.setUsage(parsed);
             this.applyUsageSettings(
               u["settings"] as UsageSettingsDto | undefined,
             );
