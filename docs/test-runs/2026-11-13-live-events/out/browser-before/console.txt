@@ -1,0 +1,96 @@
+inbox walk 1440-light ...
+inbox walk 1440-dark ...
+inbox walk 390-light ...
+inbox walk 390-dark ...
+seeding 3000 comments on task 3 ...
+== inbox 1440-light
+    285 ms  reads=4  notification raised (warning)
+   null ms  reads=-  viewer sees the widgets notification
+    315 ms  reads=4  notification re-raised (critical)
+    266 ms  reads=3  notification acked (list re-read)
+    285 ms  reads=3  notification cleared
+    264 ms  reads=3  acme/secret notification raised
+    281 ms  reads=3  deployment-wide notification raised
+    277 ms  reads=4  host-script pending (deploy)
+    284 ms  reads=4  approved
+    279 ms  reads=3  host-script pending (rollback)
+    283 ms  reads=4  denied
+    278 ms  reads=4  host-script pending (migrate)
+    278 ms  reads=3  caller /expire
+    283 ms  reads=3  host-script pending (slow, 2 s deadline)
+    288 ms  reads=4  sweep expiry (a task read sweeps it)
+== inbox 1440-dark
+    310 ms  reads=4  notification raised (warning)
+   null ms  reads=-  viewer sees the widgets notification
+    416 ms  reads=4  notification re-raised (critical)
+    283 ms  reads=3  notification acked (list re-read)
+    276 ms  reads=3  notification cleared
+    278 ms  reads=3  acme/secret notification raised
+    280 ms  reads=3  deployment-wide notification raised
+    317 ms  reads=4  host-script pending (deploy)
+    285 ms  reads=4  approved
+    276 ms  reads=3  host-script pending (rollback)
+    279 ms  reads=5  denied
+    265 ms  reads=3  host-script pending (migrate)
+    285 ms  reads=3  caller /expire
+    279 ms  reads=3  host-script pending (slow, 2 s deadline)
+    288 ms  reads=4  sweep expiry (a task read sweeps it)
+== inbox 390-light
+    350 ms  reads=4  notification raised (warning)
+   null ms  reads=-  viewer sees the widgets notification
+    311 ms  reads=4  notification re-raised (critical)
+    286 ms  reads=3  notification acked (list re-read)
+    285 ms  reads=3  notification cleared
+    283 ms  reads=3  acme/secret notification raised
+    291 ms  reads=3  deployment-wide notification raised
+    292 ms  reads=4  host-script pending (deploy)
+    290 ms  reads=4  approved
+    289 ms  reads=3  host-script pending (rollback)
+    291 ms  reads=5  denied
+    291 ms  reads=3  host-script pending (migrate)
+    284 ms  reads=3  caller /expire
+    284 ms  reads=3  host-script pending (slow, 2 s deadline)
+    288 ms  reads=4  sweep expiry (a task read sweeps it)
+== inbox 390-dark
+    315 ms  reads=4  notification raised (warning)
+   null ms  reads=-  viewer sees the widgets notification
+    295 ms  reads=4  notification re-raised (critical)
+    284 ms  reads=3  notification acked (list re-read)
+    257 ms  reads=3  notification cleared
+    286 ms  reads=3  acme/secret notification raised
+    286 ms  reads=3  deployment-wide notification raised
+    292 ms  reads=4  host-script pending (deploy)
+    258 ms  reads=4  approved
+    286 ms  reads=3  host-script pending (rollback)
+    262 ms  reads=4  denied
+    289 ms  reads=4  host-script pending (migrate)
+    286 ms  reads=3  caller /expire
+    290 ms  reads=3  host-script pending (slow, 2 s deadline)
+    290 ms  reads=4  sweep expiry (a task read sweeps it)
+== next-task: 10 comment reads, renders , highlighted=false inView=false focused=false scrollAfter=0 30007 ms url=/next/task/3#comment=19
+== next-tasks-redirect: 10 comment reads, renders , highlighted=false inView=false focused=false scrollAfter=0 30027 ms url=/next/task/3#comment=19
+== next-in-page-hash: 9 comment reads, renders , highlighted=false inView=false focused=false scrollAfter=0 30095 ms url=/next/task/3#comment=29
+== classic-tasks: 7 comment reads, renders 50->3000, highlighted=true inView=true focused=true scrollAfter=0 6661 ms url=/tasks/3#comment=19
+FAILURES:
+- 1440-light: viewer saw the acme/widgets notification in null ms
+- 1440-light: viewer page drew 403s: 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list
+- 1440-dark: viewer saw the acme/widgets notification in null ms
+- 1440-dark: viewer page drew 403s: 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list
+- 390-light: viewer saw the acme/widgets notification in null ms
+- 390-light: viewer page drew 403s: 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list
+- 390-dark: viewer saw the acme/widgets notification in null ms
+- 390-dark: viewer page drew 403s: 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list, 403 /api/notifications?open=1&fields=list
+- next-task: 10 comment-page requests (want <= 6)
+- next-task: comment 19 never highlighted
+- next-task: comment 19 not in view
+- next-tasks-redirect: 10 comment-page requests (want <= 6)
+- next-tasks-redirect: comment 19 never highlighted
+- next-tasks-redirect: comment 19 not in view
+- next-in-page-hash: 9 comment-page requests (want <= 6)
+- next-in-page-hash: comment 29 never highlighted
+- next-in-page-hash: comment 29 not in view
+- classic-tasks: 7 comment-page requests (want <= 6)
+- next-task: thread rendered 0 times ()
+- next-task: linked comment not focused
+- next-tasks-redirect: thread rendered 0 times ()
+- next-tasks-redirect: linked comment not focused

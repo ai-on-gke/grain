@@ -1,0 +1,768 @@
+{
+  "inbox": [
+    {
+      "label": "1440-light",
+      "steps": [
+        {
+          "name": "notification raised (warning)",
+          "key": "notification:2",
+          "ms": 287,
+          "reads": 4,
+          "readPaths": [
+            "/api/config",
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "viewer sees the widgets notification",
+          "key": "notification:2",
+          "ms": 2
+        },
+        {
+          "name": "notification re-raised (critical)",
+          "key": "notification:2",
+          "ms": 283,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "notification acked (list re-read)",
+          "key": "notification:2",
+          "ms": 259,
+          "reads": 3
+        },
+        {
+          "name": "notification cleared",
+          "key": "notification:2",
+          "ms": 281,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "acme/secret notification raised",
+          "key": "notification:3",
+          "ms": 283,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "deployment-wide notification raised",
+          "key": "notification:4",
+          "ms": 283,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (deploy)",
+          "key": "local-script:2:lsa-1",
+          "ms": 285,
+          "reads": 4,
+          "readPaths": [
+            "/api/config",
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "approved",
+          "key": "local-script:2:lsa-1",
+          "ms": 277,
+          "reads": 4,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (rollback)",
+          "key": "local-script:2:lsa-2",
+          "ms": 278,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "denied",
+          "key": "local-script:2:lsa-2",
+          "ms": 256,
+          "reads": 4,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (migrate)",
+          "key": "local-script:2:lsa-3",
+          "ms": 282,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "caller /expire",
+          "key": "local-script:2:lsa-3",
+          "ms": 276,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (slow, 2 s deadline)",
+          "key": "local-script:2:lsa-4",
+          "ms": 288,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "sweep expiry (a task read sweeps it)",
+          "key": "local-script:2:lsa-4",
+          "ms": 280,
+          "reads": 5,
+          "readPaths": [
+            "/api/config",
+            "/api/usage",
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        }
+      ],
+      "viewerForbidden": [],
+      "adminErrors": [],
+      "leaked": []
+    },
+    {
+      "label": "1440-dark",
+      "steps": [
+        {
+          "name": "notification raised (warning)",
+          "key": "notification:5",
+          "ms": 313,
+          "reads": 4,
+          "readPaths": [
+            "/api/config",
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "viewer sees the widgets notification",
+          "key": "notification:5",
+          "ms": 2
+        },
+        {
+          "name": "notification re-raised (critical)",
+          "key": "notification:5",
+          "ms": 288,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "notification acked (list re-read)",
+          "key": "notification:5",
+          "ms": 285,
+          "reads": 3
+        },
+        {
+          "name": "notification cleared",
+          "key": "notification:5",
+          "ms": 284,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "acme/secret notification raised",
+          "key": "notification:6",
+          "ms": 282,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "deployment-wide notification raised",
+          "key": "notification:7",
+          "ms": 276,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (deploy)",
+          "key": "local-script:2:lsa-5",
+          "ms": 283,
+          "reads": 4,
+          "readPaths": [
+            "/api/config",
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "approved",
+          "key": "local-script:2:lsa-5",
+          "ms": 276,
+          "reads": 4,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (rollback)",
+          "key": "local-script:2:lsa-6",
+          "ms": 276,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "denied",
+          "key": "local-script:2:lsa-6",
+          "ms": 280,
+          "reads": 4,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (migrate)",
+          "key": "local-script:2:lsa-7",
+          "ms": 306,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "caller /expire",
+          "key": "local-script:2:lsa-7",
+          "ms": 285,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (slow, 2 s deadline)",
+          "key": "local-script:2:lsa-8",
+          "ms": 289,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "sweep expiry (a task read sweeps it)",
+          "key": "local-script:2:lsa-8",
+          "ms": 287,
+          "reads": 5,
+          "readPaths": [
+            "/api/config",
+            "/api/usage",
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        }
+      ],
+      "viewerForbidden": [],
+      "adminErrors": [],
+      "leaked": []
+    },
+    {
+      "label": "390-light",
+      "steps": [
+        {
+          "name": "notification raised (warning)",
+          "key": "notification:8",
+          "ms": 290,
+          "reads": 4,
+          "readPaths": [
+            "/api/config",
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "viewer sees the widgets notification",
+          "key": "notification:8",
+          "ms": 5
+        },
+        {
+          "name": "notification re-raised (critical)",
+          "key": "notification:8",
+          "ms": 286,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "notification acked (list re-read)",
+          "key": "notification:8",
+          "ms": 284,
+          "reads": 3
+        },
+        {
+          "name": "notification cleared",
+          "key": "notification:8",
+          "ms": 286,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "acme/secret notification raised",
+          "key": "notification:9",
+          "ms": 265,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "deployment-wide notification raised",
+          "key": "notification:10",
+          "ms": 264,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (deploy)",
+          "key": "local-script:2:lsa-9",
+          "ms": 293,
+          "reads": 4,
+          "readPaths": [
+            "/api/config",
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "approved",
+          "key": "local-script:2:lsa-9",
+          "ms": 266,
+          "reads": 4,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (rollback)",
+          "key": "local-script:2:lsa-10",
+          "ms": 284,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "denied",
+          "key": "local-script:2:lsa-10",
+          "ms": 289,
+          "reads": 4,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (migrate)",
+          "key": "local-script:2:lsa-11",
+          "ms": 288,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "caller /expire",
+          "key": "local-script:2:lsa-11",
+          "ms": 358,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (slow, 2 s deadline)",
+          "key": "local-script:2:lsa-12",
+          "ms": 292,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "sweep expiry (a task read sweeps it)",
+          "key": "local-script:2:lsa-12",
+          "ms": 278,
+          "reads": 5,
+          "readPaths": [
+            "/api/config",
+            "/api/usage",
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        }
+      ],
+      "viewerForbidden": [],
+      "adminErrors": [],
+      "leaked": []
+    },
+    {
+      "label": "390-dark",
+      "steps": [
+        {
+          "name": "notification raised (warning)",
+          "key": "notification:11",
+          "ms": 357,
+          "reads": 4,
+          "readPaths": [
+            "/api/config",
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "viewer sees the widgets notification",
+          "key": "notification:11",
+          "ms": 5
+        },
+        {
+          "name": "notification re-raised (critical)",
+          "key": "notification:11",
+          "ms": 295,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "notification acked (list re-read)",
+          "key": "notification:11",
+          "ms": 287,
+          "reads": 3
+        },
+        {
+          "name": "notification cleared",
+          "key": "notification:11",
+          "ms": 281,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "acme/secret notification raised",
+          "key": "notification:12",
+          "ms": 292,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "deployment-wide notification raised",
+          "key": "notification:13",
+          "ms": 291,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (deploy)",
+          "key": "local-script:2:lsa-13",
+          "ms": 326,
+          "reads": 4,
+          "readPaths": [
+            "/api/config",
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "approved",
+          "key": "local-script:2:lsa-13",
+          "ms": 267,
+          "reads": 4,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (rollback)",
+          "key": "local-script:2:lsa-14",
+          "ms": 262,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "denied",
+          "key": "local-script:2:lsa-14",
+          "ms": 283,
+          "reads": 4,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (migrate)",
+          "key": "local-script:2:lsa-15",
+          "ms": 286,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "caller /expire",
+          "key": "local-script:2:lsa-15",
+          "ms": 285,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "host-script pending (slow, 2 s deadline)",
+          "key": "local-script:2:lsa-16",
+          "ms": 284,
+          "reads": 3,
+          "readPaths": [
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        },
+        {
+          "name": "sweep expiry (a task read sweeps it)",
+          "key": "local-script:2:lsa-16",
+          "ms": 284,
+          "reads": 5,
+          "readPaths": [
+            "/api/config",
+            "/api/usage",
+            "/api/tasks",
+            "/api/notifications",
+            "/api/local-script-approvals"
+          ]
+        }
+      ],
+      "viewerForbidden": [],
+      "adminErrors": [],
+      "leaked": []
+    }
+  ],
+  "deepLinks": [
+    {
+      "name": "next-task",
+      "ms": 1520,
+      "commentRequests": 6,
+      "pagingRequests": 5,
+      "requests": [
+        "?comments_limit=500&attempts_limit=20",
+        "?comments_limit=500&comments_before=2510&attempts_limit=1",
+        "?comments_limit=500&comments_before=2010&attempts_limit=1",
+        "?comments_limit=500&comments_before=1510&attempts_limit=1",
+        "?comments_limit=500&comments_before=1010&attempts_limit=1",
+        "?comments_limit=500&comments_before=510&attempts_limit=1"
+      ],
+      "renders": [
+        3000
+      ],
+      "url": "/next/task/3#comment=19",
+      "highlighted": true,
+      "inView": true,
+      "focused": true,
+      "scrollAfterReveal": 0
+    },
+    {
+      "name": "next-tasks-redirect",
+      "ms": 1811,
+      "commentRequests": 6,
+      "pagingRequests": 5,
+      "requests": [
+        "?comments_limit=500&attempts_limit=20",
+        "?comments_limit=500&comments_before=2510&attempts_limit=1",
+        "?comments_limit=500&comments_before=2010&attempts_limit=1",
+        "?comments_limit=500&comments_before=1510&attempts_limit=1",
+        "?comments_limit=500&comments_before=1010&attempts_limit=1",
+        "?comments_limit=500&comments_before=510&attempts_limit=1"
+      ],
+      "renders": [
+        3000
+      ],
+      "url": "/next/task/3#comment=19",
+      "highlighted": true,
+      "inView": true,
+      "focused": true,
+      "scrollAfterReveal": 0
+    },
+    {
+      "name": "next-in-page-hash",
+      "ms": 1977,
+      "commentRequests": 6,
+      "pagingRequests": 6,
+      "requests": [
+        "?comments_limit=500&comments_before=2910&attempts_limit=1",
+        "?comments_limit=500&comments_before=2410&attempts_limit=1",
+        "?comments_limit=500&comments_before=1910&attempts_limit=1",
+        "?comments_limit=500&comments_before=1410&attempts_limit=1",
+        "?comments_limit=500&comments_before=910&attempts_limit=1",
+        "?comments_limit=500&comments_before=410&attempts_limit=1"
+      ],
+      "renders": [
+        100,
+        3000
+      ],
+      "url": "/next/task/3#comment=29",
+      "highlighted": true,
+      "inView": true,
+      "focused": true,
+      "scrollAfterReveal": 0
+    },
+    {
+      "name": "classic-tasks",
+      "ms": 7057,
+      "commentRequests": 7,
+      "pagingRequests": 6,
+      "requests": [
+        "?comments_limit=50&attempts_limit=20",
+        "?comments_limit=500&comments_before=2960&attempts_limit=1",
+        "?comments_limit=500&comments_before=2460&attempts_limit=1",
+        "?comments_limit=500&comments_before=1960&attempts_limit=1",
+        "?comments_limit=500&comments_before=1460&attempts_limit=1",
+        "?comments_limit=500&comments_before=960&attempts_limit=1",
+        "?comments_limit=500&comments_before=460&attempts_limit=1"
+      ],
+      "renders": [
+        50,
+        3000
+      ],
+      "url": "/tasks/3#comment=19",
+      "highlighted": true,
+      "inView": true,
+      "focused": true,
+      "scrollAfterReveal": 0
+    }
+  ],
+  "comments": {
+    "task": "3",
+    "total": 3000,
+    "tenth": 19,
+    "twentieth": 29
+  },
+  "failures": []
+}
