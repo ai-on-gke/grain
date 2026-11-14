@@ -646,4 +646,41 @@ describe("NewTaskSheetComponent", () => {
     expect(q('[data-testid="nt-repo-opt-acme/web"]')).toBeTruthy();
     expect(q('[data-testid="nt-repo-opt-acme/api"]')).toBeNull();
   });
+
+  it("loads templates and branches immediately without blocking on slow reachable-repos", async () => {
+    const api = new FakeApi();
+    const baseGet = api.get;
+    api.get = ((route: string, params?: unknown, query?: string) => {
+      if (route === "GET /api/deployment/reachable-repos") {
+        api.calls.push({ route });
+        return new Promise(() => undefined);
+      }
+      if (route === "GET /api/repos/{owner}/{name}/branches") {
+        api.calls.push({ route, params, query });
+        return Promise.resolve({
+          branches: [{ name: "main" }, { name: "release/v1" }],
+        });
+      }
+      return baseGet(route, params, query);
+    }) as typeof api.get;
+
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    expect(api.calls.some((c) => c.route === "GET /api/templates")).toBe(true);
+    expect(
+      api.calls.some(
+        (c) => c.route === "GET /api/repos/{owner}/{name}/branches",
+      ),
+    ).toBe(true);
+    // Template option populated even while reachable-repos is still pending.
+    q<HTMLButtonElement>('[data-testid="nt-template"]')!.click();
+    await settle(f);
+    expect(
+      q(
+        '[data-testid="nt-template-opt-declared:template:sidthe:grain:bugfix"]',
+      ),
+    ).toBeTruthy();
+  });
 });

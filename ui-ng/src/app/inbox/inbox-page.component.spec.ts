@@ -207,10 +207,78 @@ describe("InboxPageComponent", () => {
       "first 1 of 9",
     );
 
-    // A proposal is not about a change yet: no diff is read for it.
+    // A repo-less proposal is not about a change yet: no diff is read for it.
     store.select("task:9:proposal");
     await f.whenStable();
     expect(api.diffReads).not.toContain("9");
+    expect(q(f, '[data-testid="inspector-diff"]')).toBeNull();
+
+    // A repository-scoped awaiting_submit decision without an external PR URL
+    // previews its diff and links to the task's Changes tab.
+    api.taskList = [
+      ...api.taskList,
+      {
+        id: "14",
+        title: "Branch ready without PR link",
+        state: "awaiting_submit",
+        repo: "acme/widgets",
+        branch: "grain/task-14",
+      },
+      {
+        id: "15",
+        title: "Proposed no branch",
+        state: "proposed",
+        repo: "acme/widgets",
+      },
+    ];
+    api.diffs["14"] = {
+      repo: "acme/widgets",
+      base: "main",
+      head: "grain/task-14",
+      totalFiles: 12,
+      totalHunks: 18,
+      truncated: true,
+      files: [
+        {
+          path: "pkg/proposal.go",
+          status: "added",
+          additions: 2,
+          deletions: 0,
+          hunks: [
+            {
+              header: "@@ -0,0 +1,2 @@",
+              lines: [
+                { kind: "add", text: "package proposal" },
+                { kind: "add", text: "const Ready = true" },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    await store.refresh();
+    store.applyUpdates();
+    store.select("task:14:submit");
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r));
+    await f.whenStable();
+    expect(api.diffReads).toContain("14");
+    expect(q(f, '[data-testid="inspector-diff"]')?.textContent).toContain(
+      "pkg/proposal.go",
+    );
+    const truncLink = q(
+      f,
+      '[data-testid="diff-truncated"] a',
+    ) as HTMLAnchorElement | null;
+    expect(truncLink?.textContent).toContain("See the full diff");
+    expect(truncLink?.getAttribute("href")).toContain("/task/14");
+
+    // A proposal with no pushed branch skips diffPreview cleanly without 404s or an empty diff pane.
+    store.select("task:15:proposal");
+    await f.whenStable();
+    await new Promise((r) => setTimeout(r));
+    await f.whenStable();
+    expect(api.diffReads).not.toContain("15");
     expect(q(f, '[data-testid="inspector-diff"]')).toBeNull();
   });
 

@@ -1,0 +1,31 @@
+== build and sign with a throwaway key
+generated key_id 6d61ba86f295d5f9
+  private: /tmp/s9-agentd/throwaway.key (keep outside the controller)
+  public:  /tmp/s9-agentd/throwaway.pub
+wrote /tmp/s9-agentd/dist/grain-agentd-linux-amd64.manifest.json (sha256 fa761b2db833c42022b10016b7c4dba2dd4f0db9aaa8fcedfcfe99dc7a9c7e4c, signed=true)
+wrote /tmp/s9-agentd/dist/grain-agentd-linux-arm64.manifest.json (sha256 3b90cdef3e41cbf60074d0f97f741af573986508eaf7480f3e0009e72d75c001, signed=true)
+{"version":"v0.0.0-walkthrough","platform":"linux/amd64","size":23374083,"signed":true}
+{"version":"v0.0.0-walkthrough","platform":"linux/arm64","size":21892824,"signed":true}
+== the controller serves each platform's signed binary
+linux/amd64: manifest HTTP 200, binary HTTP 200
+  host verify (throwaway key): verified /tmp/s9-agentd/host/amd64.manifest.json (grain-agentd-linux-amd64 v0.0.0-walkthrough, signer key_id 6d61ba86f295d5f9)
+  host verify (the repository's own key): grain-agentd-sign verify: manifest signed by key 6d61ba86f295d5f9, not pinned key 400c13f9474e924f (and carries no key rotation)
+linux/arm64: manifest HTTP 200, binary HTTP 200
+  host verify (throwaway key): verified /tmp/s9-agentd/host/arm64.manifest.json (grain-agentd-linux-arm64 v0.0.0-walkthrough, signer key_id 6d61ba86f295d5f9)
+  host verify (the repository's own key): grain-agentd-sign verify: manifest signed by key 6d61ba86f295d5f9, not pinned key 400c13f9474e924f (and carries no key rotation)
+  host verify: arm64's binary against amd64's manifest: grain-agentd-sign verify: grain-agentd-linux-amd64 has size 21892824, manifest says 23374083
+== another platform's binary in amd64's place
+linux/amd64: manifest HTTP 404, binary HTTP 404
+== a tampered amd64 binary (same size, one byte changed)
+linux/amd64: manifest HTTP 404, binary HTTP 404
+  host verify of the tampered file: grain-agentd-sign verify: grain-agentd-linux-amd64 has sha256 30d508d4a7d4faa6d3286039e59354fef03f68b6eb7504bb1cdfb9b6f9d0f064, manifest says fa761b2db833c42022b10016b7c4dba2dd4f0db9aaa8fcedfcfe99dc7a9c7e4c
+== the original back
+linux/amd64: manifest HTTP 200, binary HTTP 200
+== enroll a host with the downloaded linux/amd64 binary
+install: exit 1 (grain-agentd install: starting GitHub device sign-in for host enrollment: requesting device code from http://127.0.0.1:9/login/device/code: Post "http://127.0.0.1:9/login/device/code": dial tcp 127.0.0.1:9: connect: connection refused)
+  ==> wrote /tmp/s9-agentd/hosthome/.config/grain/agentd-release.pub (key 6d61ba86f295d5f9)
+  grain-agentd install: starting GitHub device sign-in for host enrollment: requesting device code from http://127.0.0.1:9/login/device/code: Post "http://127.0.0.1:9/login/device/code": dial tcp 127.0.0.1:9: connect: connection refused
+  hosts the daemon knows: [{"name":"local","platform":null}]
+  pinned key on the host: key_id: 6d61ba86f295d5f9
+  host verify with its pinned key: verified /tmp/s9-agentd/host/amd64.manifest.json (grain-agentd-linux-amd64 v0.0.0-walkthrough, signer key_id 6d61ba86f295d5f9)
+  host verify of the other platform's binary: grain-agentd-sign verify: grain-agentd-linux-amd64 has size 21892824, manifest says 23374083

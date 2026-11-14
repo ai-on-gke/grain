@@ -787,6 +787,9 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 			if err != nil {
 				return nil, err
 			}
+			if f.shape == shapeGrants {
+				node = withRepoGrants(node, repoGrantEntries(k, id, companions))
+			}
 			if node == nil {
 				continue
 			}
@@ -810,6 +813,67 @@ func declEntry(k declKind, row map[string]any, companions map[string][]map[strin
 		out.Content = append(out.Content, key(name), node)
 	}
 	return out, nil
+}
+
+// repoGrantEntries is an entry's reads:/writes: spelt as the task-level
+// repository grants they are -- …/repo#read {repo} for each read row,
+// …/repo#write {repo, base} for each write row -- which the export writes
+// under grants: as well (unified-grants §3). The import projects them back
+// into the read and write tables (projectedRepoRow), where each is the row
+// reads:/writes: already names. A row whose repository is anything but a
+// plain owner/name on the default host is left to reads:/writes: alone.
+func repoGrantEntries(k declKind, id string, companions map[string][]map[string]any) []*yaml.Node {
+	var out []*yaml.Node
+	for _, f := range k.fields {
+		if f.shape != shapeRepos && f.shape != shapeWrites {
+			continue
+		}
+		for _, row := range mine(companions[f.table], k.parent, id) {
+			repo, ok := plainRepo(row)
+			if !ok {
+				continue
+			}
+			if f.shape == shapeRepos {
+				out = append(out, str(model.TaskRepoReadGrant(repo).Key()))
+				continue
+			}
+			base, ok := textOf(row["base"])
+			if !ok {
+				continue
+			}
+			out = append(out, str(model.TaskRepoWriteGrant(model.WriteTarget{Repo: repo, Base: base}).Key()))
+		}
+	}
+	return out
+}
+
+// plainRepo is a read or write row's repository when its owner and name
+// are a plain owner/name that parses back to exactly the columns it came
+// from, so the grant's {repo} projects back into the same row.
+func plainRepo(row map[string]any) (model.RepoRef, bool) {
+	owner, ownerOK := textOf(row["owner"])
+	name, nameOK := textOf(row["name"])
+	if !ownerOK || !nameOK || owner == "" || name == "" || strings.Contains(owner, "/") || strings.Contains(name, "/") {
+		return model.RepoRef{}, false
+	}
+	repo, err := model.ParseRepo(owner + "/" + name)
+	if err != nil || repo.OffDefaultHost() != "" || repo.Owner != owner || repo.Name != name {
+		return model.RepoRef{}, false
+	}
+	return repo, true
+}
+
+// withRepoGrants is the grants: list node with entries appended after the
+// entry's own grant rows, or a new list of them when it has none.
+func withRepoGrants(node *yaml.Node, entries []*yaml.Node) *yaml.Node {
+	if len(entries) == 0 {
+		return node
+	}
+	if node == nil {
+		node = &yaml.Node{Kind: yaml.SequenceNode}
+	}
+	node.Content = append(node.Content, entries...)
+	return node
 }
 
 // hasColumn reports whether row was read from a table that has f's

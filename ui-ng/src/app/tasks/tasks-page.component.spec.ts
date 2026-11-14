@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { ApplicationRef } from "@angular/core";
 import { TestBed, type ComponentFixture } from "@angular/core/testing";
-import { Router, provideRouter } from "@angular/router";
+import { Router, provideRouter, type Routes } from "@angular/router";
 import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
@@ -128,11 +129,12 @@ class FakeApi {
 async function render(
   api: FakeApi,
   tab?: string,
+  routes: Routes = [{ path: "**", children: [] }],
 ): Promise<ComponentFixture<TasksPageComponent>> {
   TestBed.configureTestingModule({
     imports: [TasksPageComponent],
     providers: [
-      provideRouter([{ path: "**", children: [] }]),
+      provideRouter(routes),
       { provide: GrainApi, useValue: api },
       { provide: GrainEvents, useValue: { events: () => NEVER } },
     ],
@@ -1036,9 +1038,29 @@ describe("TasksPageComponent", () => {
       await settle(f);
       q<HTMLButtonElement>(f, '[data-testid="board-delete-b1"]')!.click();
       await settle(f);
+      // Deleting a shared board asks first; Cancel deletes nothing.
+      expect(q(f, '[data-testid="saved-boards-menu"]')).toBeNull();
+      expect(q(f, '[data-testid="confirm-dialog"]')?.textContent).toContain(
+        "Delete board All Triage?",
+      );
+      q<HTMLButtonElement>(f, '[data-testid="confirm-cancel"]')!.click();
+      await settle(f);
+      expect(
+        TestBed.inject(TasksStore)
+          .boards()
+          .map((b) => b.name),
+      ).toEqual(["All Triage"]);
+      q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="board-delete-b1"]')!.click();
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="confirm-accept"]')!.click();
+      await settle(f);
       expect(TestBed.inject(TasksStore).boards()).toEqual([]);
 
       // Opening one menu closes sibling <g-pill-select> / <g-priority-chip> / Saved Boards menus
+      q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+      await settle(f);
       expect(q(f, '[data-testid="saved-boards-menu"]')).not.toBeNull();
       q<HTMLButtonElement>(f, '[data-testid="tasks-group"]')!.click();
       await settle(f);
@@ -1114,6 +1136,43 @@ describe("TasksPageComponent", () => {
     expect(q(f, '[data-testid="row-1"]')).not.toBeNull();
     expect(q(f, '[data-testid="row-2"]')).not.toBeNull();
     expect(TestBed.inject(Router).url).not.toContain("q=");
+  });
+
+  it("applies a saved board's tab, repo and q together, with the real router", async () => {
+    // Applying a board used to set the Filter this view box first, which
+    // started the box's own ?q= write-back while the board's navigation
+    // was in flight; that superseded it and kept only q (PR #1484 review).
+    const api = new FakeApi();
+    api.boards = [
+      {
+        id: "b9",
+        name: "Web retries",
+        kind: "list",
+        query: "tab=all&q=retry&repo=acme%2Fweb",
+      },
+    ];
+    // A guard that takes a moment keeps the board's navigation in flight
+    // while change detection runs, as a lazy route or a slow resolver can.
+    const slow = () =>
+      new Promise<boolean>((r) => setTimeout(() => r(true), 30));
+    const f = await render(api, "backlog", [
+      { path: "**", children: [], canActivate: [slow] },
+    ]);
+    await TestBed.inject(TasksStore).loadBoards();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="board-apply-b9"]')!.click();
+    // Change detection can run while the board's navigation is still in
+    // flight; it must not start a second navigation that supersedes it.
+    TestBed.inject(ApplicationRef).tick();
+    await new Promise((r) => setTimeout(r, 100));
+    await settle(f);
+    const url = TestBed.inject(Router).url;
+    expect(url).toContain("/tasks");
+    expect(url).toContain("tab=all");
+    expect(url).toContain("q=retry");
+    expect(url).toContain("repo=acme");
   });
 
   it("says the task list could not be read when the feed failed before the page opened", async () => {

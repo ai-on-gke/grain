@@ -36,7 +36,7 @@ import { SnackbarService } from "../services/snackbar.service";
 @Component({
   selector: "g-account-popover",
   encapsulation: ViewEncapsulation.None,
-  styleUrl: "./shell-overlays.css",
+  styleUrls: ["./shell-overlays.css", "../shared/surface-controls.css"],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "(document:click)": "onDocClick($event)",

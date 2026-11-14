@@ -925,11 +925,12 @@ var timedRoutes = map[string]bool{
 	"GET /api/config":   true,
 	"GET /api/settings": true,
 	"PUT /api/settings": true,
-	"PUT /api/deployment/agent-backends/{backendId}":    true,
-	"DELETE /api/deployment/agent-backends/{backendId}": true,
-	"GET /api/agent-models":                             true,
-	"PUT /api/agent-backends/{id}/credential":           true,
-	"DELETE /api/agent-backends/{id}/credential":        true,
+	"PUT /api/deployment/agent-backends/{backendId}":           true,
+	"DELETE /api/deployment/agent-backends/{backendId}":        true,
+	"POST /api/deployment/agent-backends/{backendId}/discover": true,
+	"GET /api/agent-models":                                    true,
+	"PUT /api/agent-backends/{id}/credential":                  true,
+	"DELETE /api/agent-backends/{id}/credential":               true,
 }
 
 const slowRequestThreshold = time.Second

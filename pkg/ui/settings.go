@@ -1070,7 +1070,8 @@ var ciStorageDefaults = func() ciStorageBoundDefaults {
 
 func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs []model.RepoConfig) Settings {
 	cfg, unrunnable := c.runnableSettings(cfg)
-	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
+	secretList := c.listSecretsBestEffort()
+	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSetFrom(secretList)
 	sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &cfg, repoConfigs)
 	mirror := c.sandboxImageMirrorFor(cfg, granuleImgDefault)
 	effectiveGranule := c.k8sGranuleImageForWarn(cfg, granuleImgDefault, mirror)
@@ -1222,7 +1223,7 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		QARegimeID:                         cfg.QA.RegimeIDOrDefault(),
 		TaskBranchTemplate:                 cfg.TaskBranchTemplate,
 		DeploymentID:                       cfg.DeploymentID,
-		Capabilities:                       c.capabilityStatuses(cfg, repoConfigs),
+		Capabilities:                       c.capabilityStatusesWithSecrets(cfg, repoConfigs, secretList),
 		DefaultCapabilities:                cfg.DefaultCapabilities,
 		ApprovedByDefault:                  cfg.ApprovedByDefault,
 		AutoMergeByDefault:                 cfg.AutoMergeByDefault,
@@ -1409,7 +1410,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 		return Settings{}, err
 	}
 	if cfg == nil {
-		geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
+		secretList := c.listSecretsBestEffort()
+		geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSetFrom(secretList)
 		def := capability.NewDeploymentConfig()
 		sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &def, repoConfigs)
 		sandboxWarn, granuleWarn := c.resolveK8sImageWarnings(
@@ -1470,7 +1472,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			K8sPriorityClassInteractiveDefault: model.DefaultK8sPriorityClassInteractive,
 			K8sPriorityClassAgentDefault:       model.DefaultK8sPriorityClassAgent,
 			K8sPriorityClassCIDefault:          model.DefaultK8sPriorityClassCI,
-			Capabilities:                       c.capabilityStatuses(model.Config{DefaultCapabilities: def.DefaultCapabilities}, repoConfigs),
+			Capabilities:                       c.capabilityStatusesWithSecrets(model.Config{DefaultCapabilities: def.DefaultCapabilities}, repoConfigs, secretList),
 			DefaultCapabilities:                def.DefaultCapabilities,
 			AgentKeysEnabled:                   c.Config.Secrets != nil,
 			GeminiAPIKeySet:                    geminiKeySet,

@@ -16,6 +16,7 @@ import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
   NgZone,
   type OnDestroy,
@@ -29,7 +30,7 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
-import { Router, RouterLink } from "@angular/router";
+import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import type {
   AttachmentUpload,
@@ -43,6 +44,7 @@ import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { summarizeDispatchStatus } from "../shared/dispatch-status";
 import { isHuman } from "../sessions/session-helpers";
 
 import { ConversationComponent } from "../shared/conversation/conversation.component";
@@ -134,6 +136,7 @@ export function duration(from?: string, to?: string): string {
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "./task-detail.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
@@ -238,14 +241,25 @@ export function duration(from?: string, to?: string): string {
               </span>
             }
           </div>
-          <h1
-            class="view-headline task-title"
-            id="task-title"
-            tabindex="-1"
-            #heading
-          >
-            <span class="muted">#{{ t.id }}</span> {{ t.title }}
-          </h1>
+          @if (pane()) {
+            <h2
+              class="view-headline task-title"
+              id="task-title"
+              tabindex="-1"
+              #heading
+            >
+              <span class="muted">#{{ t.id }}</span> {{ t.title }}
+            </h2>
+          } @else {
+            <h1
+              class="view-headline task-title"
+              id="task-title"
+              tabindex="-1"
+              #heading
+            >
+              <span class="muted">#{{ t.id }}</span> {{ t.title }}
+            </h1>
+          }
           <div class="task-actions" role="group" aria-label="Task actions">
             @if (
               (t.state === "proposed" ||
@@ -262,7 +276,12 @@ export function duration(from?: string, to?: string): string {
                 Approve
               </button>
             }
-            @if (t.state === "awaiting_reply" && !parked() && !isStopped()) {
+            @if (
+              t.state === "awaiting_reply" &&
+              !parked() &&
+              !isStopped() &&
+              can("POST /api/tasks/{id}/comments")
+            ) {
               <button
                 type="button"
                 class="btn-primary"
@@ -592,21 +611,16 @@ export function duration(from?: string, to?: string): string {
         }
 
         <!-- Inline Pending Approval / Gate Panels -->
-
-        @if (store.actionError(); as err) {
+        @if (queuedPauseNotice(); as qpn) {
           <p
-            class="banner banner-error"
-            role="alert"
-            data-testid="task-action-error"
+            class="banner banner-info"
+            role="status"
+            data-testid="task-dispatch-paused"
           >
-            {{ err }}
-            <button
-              type="button"
-              class="btn-text"
-              (click)="store.actionError.set(null)"
-            >
-              Dismiss
-            </button>
+            {{ qpn.headline }}
+            @if (qpn.resetText) {
+              · {{ qpn.resetText }}
+            }
           </p>
         }
         <g-task-gates-bar
@@ -672,6 +686,7 @@ export function duration(from?: string, to?: string): string {
                   [routerLink]="[]"
                   [queryParams]="tabQuery(tab.id)"
                   queryParamsHandling="merge"
+                  [preserveFragment]="!!pane()"
                   [attr.aria-current]="
                     current() === tab.id ? (pane() ? 'true' : 'page') : null
                   "
@@ -1253,9 +1268,14 @@ export class TaskDetailComponent implements OnDestroy {
 
   readonly id = input.required<string>();
   readonly tab = input<string>();
-  // pane is the Tasks right-hand pane: narrower, Details as a tab, its
-  // tab kept in ?pane=, links to other tasks select them in the pane.
+  // pane is a list | detail right-hand pane (Tasks, Agents, Workstreams):
+  // narrower, Details as a tab, its tab kept in ?pane=, links to other
+  // tasks select them in the pane.
   readonly pane = input(false);
+  // routePane is ?pane= as the router has it. The tab strip writes it, so
+  // the pane reads it back itself: a host that does not also bind [tab]
+  // (Agents, Workstreams) still switches tabs.
+  private readonly routePane = signal<string | undefined>(undefined);
   readonly closable = input(true);
   readonly from = input<string>();
   readonly back = input<BackLink | null>(null);
@@ -1321,7 +1341,9 @@ export class TaskDetailComponent implements OnDestroy {
     return id ? (this.wsStore.taskToStream().get(id) ?? null) : null;
   });
   protected readonly current = computed<TaskTab>(() => {
-    const v = this.tab();
+    const rp =
+      this.pane() && isTab(this.routePane()) ? this.routePane() : undefined;
+    const v = rp ?? this.tab();
     if (
       v === "details" &&
       !this.pane() &&
@@ -1469,6 +1491,15 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     return t ? submitBlock(t) : "";
   });
+  protected readonly queuedPauseNotice = computed(() =>
+    this.t()?.state === "queued"
+      ? summarizeDispatchStatus(
+          this.access.rawConfig(),
+          this.access.usage(),
+          this.access.clockNow(),
+        )
+      : null,
+  );
 
   protected actorLabel(c: Comment): string {
     if (c.authorKind === "automation" && c.author === "console-session") {
@@ -1510,6 +1541,10 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   constructor() {
+    const paneSub = inject(ActivatedRoute).queryParamMap.subscribe((q) =>
+      this.routePane.set(q.get("pane") ?? undefined),
+    );
+    inject(DestroyRef).onDestroy(() => paneSub.unsubscribe());
     effect(() => {
       const id = this.id();
       untracked(() => {
@@ -1567,11 +1602,11 @@ export class TaskDetailComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
-    this.store.close();
+    this.store.close(this.id());
   }
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
-    return this.access.can(route, this.t()?.repo || undefined);
+    return this.access.canAccessTask(route, this.t()?.repo ?? null);
   }
 
   protected val(ev: Event): string {
@@ -1682,6 +1717,7 @@ export class TaskDetailComponent implements OnDestroy {
       .navigate([], {
         queryParams: this.tabQuery("conversation"),
         queryParamsHandling: "merge",
+        ...(this.pane() ? { preserveFragment: true } : {}),
       })
       .then(() => setTimeout(() => this.composer()?.nativeElement.focus()));
   }

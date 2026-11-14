@@ -268,4 +268,57 @@ describe("WorkstreamDetailComponent", () => {
     );
     expect(modeSpy).toHaveBeenCalledWith("list");
   });
+
+  it("renders workstream goal inside the inspector as a 1-line plain-text preview that expands into Markdown", () => {
+    const { fixture } = setup([
+      t("100", {
+        title: "Markdown stream",
+        state: "running",
+        description: [
+          "Summary line before sections.",
+          "",
+          "## Deliverables",
+          "- Check [upstream docs](https://example.com) and `code_token`.",
+          "- Preserve snake_case_identifier cleanly.",
+        ].join("\n"),
+      }),
+      t("101", {
+        title: "Child step",
+        state: "queued",
+        origin: "task:100",
+        generatedFrom: "100",
+      }),
+    ]);
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.querySelector(".ws-dhead [data-testid='ws-goal']")).toBeNull();
+    const inspector = el.querySelector('[data-testid="ws-inspector"]')!;
+    const toggle = inspector.querySelector<HTMLButtonElement>(
+      '[data-testid="ws-goal-toggle"]',
+    )!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.textContent?.trim()).toBe("Workstream goal");
+
+    const preview = inspector.querySelector('[data-testid="ws-goal"]')!;
+    expect(preview.classList.contains("ws-goal-preview")).toBe(true);
+    expect(preview.textContent).not.toContain("##");
+    expect(preview.textContent).toContain("Summary line before sections.");
+    expect(preview.textContent).toContain("upstream docs");
+    expect(preview.textContent).toContain("code_token");
+    expect(preview.textContent).toContain("snake_case_identifier");
+
+    toggle.click();
+    fixture.detectChanges();
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.textContent?.trim()).toBe("Hide goal");
+    const panel = inspector.querySelector('[data-testid="ws-goal"]')!;
+    expect(panel.classList.contains("ws-goal-panel")).toBe(true);
+    expect(panel.querySelector("h2")?.textContent).toContain("Deliverables");
+    expect(panel.querySelectorAll("ul li").length).toBe(2);
+    expect(panel.querySelector("code")?.textContent).toBe("code_token");
+    expect(panel.querySelector("a")?.getAttribute("href")).toBe(
+      "https://example.com/",
+    );
+  });
 });
