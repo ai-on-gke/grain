@@ -1538,9 +1538,7 @@ function formatRefreshedAt(iso?: string): string {
         <div class="s-card" data-testid="card-hostds-list">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">
-                Registered workstation hosts
-              </h3>
+              <h3 class="s-card-title">Registered workstation hosts</h3>
               <p class="s-card-desc">
                 grain-agentd daemons paired with this controller for local CLI
                 tokens and workstation execution.
