@@ -436,7 +436,8 @@ Implemented with this document.
    request touching `protocol.go`, `features.go`, the allowlist schema,
    stage, spool, dial-out, enrollment, logins, the session mux, this
    document or the compatibility test is a contract change, gated for a
-   person and grain's security review.
+   person and `.grain/templates/agentd-contract-review.yml` (alongside
+   grain's security review on the classified paths).
 
 ## The safety valve: agentd self-update
 

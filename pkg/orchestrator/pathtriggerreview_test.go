@@ -192,6 +192,10 @@ func TestANewPushFilesAnIncrementalReviewOfTheDelta(t *testing.T) {
 	if !strings.Contains(delta, "`config/secrets/staging.yml`") || strings.Contains(delta, "`config/secrets/prod.yml`") {
 		t.Errorf("the incremental review lists the wrong files:\n%s", delta)
 	}
+	if !strings.Contains(delta, "Do not re-review the rest of the change") ||
+		!strings.Contains(delta, "check the callers of anything those commits changed") {
+		t.Errorf("the incremental review does not scope caller tracing to the new commits:\n%s", delta)
+	}
 	if review.DeferredUntil == nil || !review.DeferredUntil.After(at) {
 		t.Errorf("the re-review was not debounced: deferred until %v", review.DeferredUntil)
 	}
@@ -238,6 +242,9 @@ func TestATriggerReviewOpensNoPullRequestUnlessAskedForFixes(t *testing.T) {
 	}
 	if !strings.Contains(review.Body, "Do not commit, push or open a pull request") {
 		t.Errorf("the review is not told to post findings only:\n%s", review.Body)
+	}
+	if strings.Contains(review.Body, "Commit and push those fixes") {
+		t.Errorf("findings-only review still carries the stacked push paragraph:\n%s", review.Body)
 	}
 	if _, err := orchestrator.OpenPullRequestForTask(ctx, store, client, review); err == nil ||
 		!strings.Contains(err.Error(), "post findings") {

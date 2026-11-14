@@ -539,7 +539,8 @@ func incrementalNote(since, head string, delta []string) string {
 	}
 	b.WriteString("Also check that every finding the earlier review left on the pull request has been addressed; " +
 		"for any finding that still stands (and you do not fix yourself), record it again with add_review_comment " +
-		"-- a closing note alone does not hold the change. Do not re-review the rest of the change.\n")
+		"-- a closing note alone does not hold the change. Do not re-review the rest of the change, " +
+		"but do check the callers of anything those commits changed, wherever they are.\n")
 	return b.String()
 }
 

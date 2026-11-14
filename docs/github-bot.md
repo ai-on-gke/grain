@@ -74,8 +74,11 @@ The daemon enforces this order. The agent does not decide it.
    files a **security review** when the author is not a collaborator, when the
    change touches a trust-boundary path (`pkg/trustboundary`: `.grain/`,
    workflows, capabilities and so on), or when grain cannot read the file list.
-   The shepherd's first run depends on these reviews, so it starts once they
-   finish.
+   That external security review uses grain's findings-only security checklist
+   (`model.ExternalSecurityReviewBody`: the trust-boundary criteria plus
+   correctness bugs noticed in passing, recorded via `add_review_comment`
+   without pushing to the branch under review). The shepherd's first run
+   depends on these reviews, so it starts once they finish.
 2. The merge queue refuses the pull request until every review filed for its
    **current head** has passed (`takeover-cleared`, read by the queue's review
    hold). A review passes when it finished with no findings, or when it left
