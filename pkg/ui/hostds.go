@@ -30,6 +30,9 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
+
+	"golang.org/x/mod/semver"
 
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
@@ -65,6 +68,40 @@ type HostdView struct {
 	// using env: ["*"] and ~/-relative paths only when the host advertises
 	// FeatureEnvOpen.
 	AllowlistSnippet string `json:"allowlistSnippet,omitempty"`
+	// Update is a newer signed grain-agentd release this host's owner can
+	// take with `grain-agentd update`; nil when there is none, and always
+	// for a host that does not list hostd.FeatureSelfUpdate (a
+	// root-installed `grain host` never does).
+	Update *HostUpdate `json:"update,omitempty"`
+}
+
+// HostUpdate is an update Settings -> Hosts offers a host.
+type HostUpdate struct {
+	// Build is what the host runs, Available the release it can take.
+	Build     string `json:"build"`
+	Available string `json:"available"`
+	// Command is what the host's owner runs on it to take Available.
+	Command string `json:"command"`
+}
+
+// hostUpdateFor is the update to offer the host st describes, given
+// latest: the signed grain-agentd release this controller serves for a
+// platform. Only a connected, agents-only host that lists
+// FeatureSelfUpdate, whose update.mode is not off, is offered anything,
+// and only a release newer than its build and inside its update.pin.
+func hostUpdateFor(st *hostd.RemoteStatus, latest func(platform string) (string, bool)) *HostUpdate {
+	if st == nil || !st.Connected || !st.AgentsOnly || st.Platform == "" ||
+		!slices.Contains(st.Features, hostd.FeatureSelfUpdate) || st.UpdateMode == hostd.UpdateOff {
+		return nil
+	}
+	v, ok := latest(st.Platform)
+	if !ok || !semver.IsValid(v) || !semver.IsValid(st.Build) || semver.Compare(v, st.Build) <= 0 {
+		return nil
+	}
+	if !(hostd.UpdatePolicy{Pin: st.UpdatePin}).Allows(v) {
+		return nil
+	}
+	return &HostUpdate{Build: st.Build, Available: v, Command: "grain-agentd update -version " + v}
 }
 
 // HostCLISnippet renders a clis: allowlist entry snippet in Settings for
@@ -382,10 +419,35 @@ func (s *Server) handleListHostds(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	s.offerHostUpdates(r.Context(), out)
 	out = filterList(out, func(h HostdView) bool {
 		return list.matches(h.Name, h.Owner)
 	})
 	writeListBy(w, out, list, func(h HostdView) string { return h.Name })
+}
+
+// offerHostUpdates fills in each connected host's Update from the signed
+// grain-agentd release this controller serves for its platform.
+func (s *Server) offerHostUpdates(ctx context.Context, views []HostdView) {
+	known := map[string]string{}
+	latest := func(platform string) (string, bool) {
+		if v, ok := known[platform]; ok {
+			return v, v != ""
+		}
+		rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		entry, ok := s.resolveAgentdRelease(rctx, platform)
+		// The host refuses an unsigned release, so none is offered.
+		if !ok || entry.manifest.Signature == "" {
+			known[platform] = ""
+			return "", false
+		}
+		known[platform] = entry.manifest.Version
+		return entry.manifest.Version, true
+	}
+	for i := range views {
+		views[i].Update = hostUpdateFor(views[i].Connection, latest)
+	}
 }
 
 func (s *Server) handleCreateHostd(w http.ResponseWriter, r *http.Request) {

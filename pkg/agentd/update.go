@@ -67,7 +67,7 @@ import (
 
 // UpdateConfirmWindow is how long a new build has, from its first start,
 // to answer the controller's hello before it is rolled back.
-const UpdateConfirmWindow = 5 * time.Minute
+var UpdateConfirmWindow = 5 * time.Minute
 
 const (
 	maxUpdateManifestBytes = 1 << 20
@@ -234,7 +234,7 @@ func (u *updater) run(ctx context.Context, want, server, iapAudience, from strin
 	}
 	u.step("release %s for %s, signed by key %s", m.Version, m.Platform, release.KeyID(signer))
 
-	running := version.Get().Release
+	running := u.installedBuild(ctx)
 	if err := checkUpdateVersion(running, m.Version, want, policy); err != nil {
 		if errors.Is(err, errUpToDate) {
 			u.step("already on %s", running)
@@ -310,6 +310,18 @@ func (u *updater) run(ctx context.Context, want, server, iapAudience, from strin
 		u.step("note: %v; a new build that cannot start is not rolled back without it", err)
 	}
 	return nil
+}
+
+// installedBuild is the build ~/.local/bin/grain-agentd runs -- which the
+// binary running update need not be, when the owner runs a newer one --
+// or this binary's own when there is none.
+func (u *updater) installedBuild(ctx context.Context) string {
+	if out, err := runStaged(ctx, u.p.Bin, "-build"); err == nil {
+		if v := strings.TrimSpace(string(out)); v != "" {
+			return v
+		}
+	}
+	return version.Get().Release
 }
 
 // source is the manifest and a func fetching the binary, from -from or
@@ -629,7 +641,11 @@ func (u *updater) cutover(ctx context.Context, socket string) error {
 	c := hostd.Client{Socket: socket, Build: version.Get().Release}
 	hctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	h, err := c.Hello(hctx)
+	_, err := os.Stat(socket)
+	var h hostd.Hello
+	if err == nil {
+		h, err = c.Hello(hctx)
+	}
 	if err != nil {
 		u.step("no host agent answers on %s (%v); start the new build with: systemctl --user restart %s", socket, err, UnitName)
 		return nil
