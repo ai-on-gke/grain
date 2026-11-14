@@ -148,6 +148,7 @@ var routeDocs = map[string]string{
 	"POST /api/tasks/{id}/notes":                                           "Leave a note for your parent's or a child's agent (message_task): it never parks that task, reaches its live run, and wakes it if it is a resting durable task. Any other task needs https://grain.dev/capabilities/api#task-admin.",
 	"POST /api/notifications":                                              "Raise an operator notification, or bump the open one with the same subject; it never parks anybody.",
 	"POST /api/notifications/{id}/clear":                                   "Clear an operator notification.",
+	"POST /api/notifications/clear":                                        "Clear many operator notifications at once (subject prefix, severity, olderThan, ids; none is every open one), with a reason; a run clears only its own task's. dryRun counts without clearing. Answers how many it cleared and how many are expected back.",
 	"POST /api/tasks/{id}/wait-on":                                         "Make a task wait for the tasks in ids to close; park true ends its run and resumes it when they have.",
 	"POST /api/tasks/{id}/park-until":                                      "Park a task until a time (until, RFC 3339), when it is queued again.",
 	"POST /api/tasks/{id}/resume-later":                                    "Stop a task's run and queue it again when a condition is met (when: tasks, at, ci, message).",

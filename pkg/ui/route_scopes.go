@@ -131,6 +131,7 @@ var routeScopes = map[string]APIScope{
 	"POST /api/tasks/{id}/notify":                                          "internal",
 	"POST /api/notifications":                                              "notifications:write",
 	"GET /api/notifications":                                               "tasks:read",
+	"POST /api/notifications/clear":                                        "notifications:write",
 	"POST /api/notifications/{id}/ack":                                     "internal",
 	"POST /api/notifications/{id}/clear":                                   "notifications:write",
 	"POST /api/notifications/{id}/investigate":                             "internal",

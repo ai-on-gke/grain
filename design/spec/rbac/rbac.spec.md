@@ -251,6 +251,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/notifications` | `notifications:write` | `writer` | Raises notification in `/inbox`. |
 | `POST /api/notifications/{id}/ack` | `internal` | `writer` | Human acknowledgement of inbox notification. |
 | `POST /api/notifications/{id}/clear` | `notifications:write` | `writer` | Clears notification. |
+| `POST /api/notifications/clear` | `notifications:write` | `writer` | Clears every open notification a filter matches, with a reason; one audit entry per call. A run clears only its own task's. |
 | `POST /api/notifications/{id}/investigate` | `internal` | `writer` | Files investigation task from notification. |
 | `PUT /api/tasks/{id}/secret` | `secrets:write` | `admin` | Writes secret value requested by `request_secret` into secret store. |
 | `POST /api/tasks/{id}/force-merge` | `merge:force` | `admin` | Bypasses CI/review merge gates. |

@@ -180,6 +180,7 @@ var routeAuthorization = map[string]authLevel{
 	"POST /api/tasks/{id}/notify":                                   trusted,
 	"POST /api/notifications":                                       trusted,
 	"GET /api/notifications":                                        trusted,
+	"POST /api/notifications/clear":                                 trusted,
 	"POST /api/notifications/{id}/ack":                              trusted,
 	"POST /api/notifications/{id}/clear":                            trusted,
 	"POST /api/notifications/{id}/investigate":                      trusted,

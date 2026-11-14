@@ -265,6 +265,7 @@ export const ROUTE_SCOPES = {
   "POST /api/hostds/{name}/rotate": "capabilities:admin",
   "POST /api/mcp": "signed-in",
   "POST /api/notifications": "notifications:write",
+  "POST /api/notifications/clear": "notifications:write",
   "POST /api/notifications/{id}/ack": "notifications:write",
   "POST /api/notifications/{id}/clear": "notifications:write",
   "POST /api/notifications/{id}/investigate": "tasks:write",

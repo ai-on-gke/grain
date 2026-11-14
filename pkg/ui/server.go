@@ -496,6 +496,7 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/notify", s.handleAgentNotify)
 	s.route("POST /api/notifications", s.handleRaiseNotification)
 	s.route("GET /api/notifications", s.handleListNotifications)
+	s.route("POST /api/notifications/clear", s.handleClearNotifications)
 	s.route("POST /api/notifications/{id}/ack", s.handleAckNotification)
 	s.route("POST /api/notifications/{id}/clear", s.handleClearNotification)
 	s.route("POST /api/notifications/{id}/investigate", s.handleInvestigateNotification)

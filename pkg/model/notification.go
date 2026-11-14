@@ -301,6 +301,33 @@ const (
 	FamilyCapabilityServerDown = "capability.server-down"
 )
 
+// levelTriggeredFamilies are the families a reconciler finds again on
+// every cycle while their condition holds and raises again when no
+// instance is open (orchestrator's ensurePipelineNotification). Clearing
+// one only clears the instance: the next cycle raises a new one if the
+// condition still holds. Credential notices (pkg/change's
+// credentials-expired.*) are not among them -- they are raised once,
+// when a provider is first blocked, and are not raised again until the
+// block lifts and recurs.
+var levelTriggeredFamilies = map[string]bool{
+	FamilyNotPublishing:        true,
+	FamilyReleaseNotStarting:   true,
+	FamilyRCFailed:             true,
+	FamilyReleaseInfraStalled:  true,
+	FamilyMergeStalled:         true,
+	FamilyMergeNeedsPerson:     true,
+	FamilyCIWakeStalled:        true,
+	FamilyNightlyRedUnattended: true,
+	FamilyBaseRedUnattended:    true,
+	FamilyBaseNoVerdict:        true,
+	FamilyReleaseLoopIdle:      true,
+	"pipeline.task-stalled":    true,
+}
+
+// LevelTriggeredFamily reports whether family is raised again after a
+// clear for as long as its condition holds (levelTriggeredFamilies).
+func LevelTriggeredFamily(family string) bool { return levelTriggeredFamilies[family] }
+
 // ReleasePendingActions are the actions a FamilyReleasePending
 // notification offers: the UI's Approve and Reject buttons, which call
 // the person-only pending-releases routes.
