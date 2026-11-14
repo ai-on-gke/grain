@@ -143,7 +143,7 @@ COALESCE(`t`.`approved_at`, `t`.`created_at`),
 
 3.1.2. Three automated pipeline creation paths in `pkg/orchestrator` assign fixed or inherited priorities above `DefaultTaskPriority` (`5`):
 
-- **Automated gating reviews (`pkg/orchestrator/review.go` `newReview`, `pkg/orchestrator/securityhold_inplace.go`, `pkg/orchestrator/clreviews.go`, gating pull-request triggers in `pkg/orchestrator/pathtrigger.go`; `pkg/model/review_priority.go`, `docs/declarations.md`):** Every automated gating review — default attached reviews, in-place security reviews, CL reviews, gating `.grain/triggers` pull-request reviews, and re-reviews after pushes — MUST be filed with `atFront: true` at `model.ReviewPriority(gated)`:
+- **Automated gating reviews (`pkg/orchestrator/review.go` `newReview`, `pkg/orchestrator/securityhold_inplace.go`, `pkg/orchestrator/clreviews.go`, gating pull-request trigger reviews in `pkg/orchestrator/pathtriggerreview.go` (`buildPullRequestReview`); `pkg/model/review_priority.go`, `docs/declarations.md`):** Every automated gating review — default attached reviews, in-place security reviews, CL reviews, gating `.grain/triggers` pull-request reviews, and re-reviews after pushes — MUST be filed with `atFront: true` at `model.ReviewPriority(gated)`:
   ```go
   const ReviewPriorityFloor = 7
 
@@ -326,7 +326,7 @@ This specification was verified directly against:
 - `pkg/model/migrations.go` (migration 73), `pkg/model/schema.go`, `pkg/model/store.go` (`putTask`, `putTemplate`, `scanTemplate`, `taskQueueOrderSQL`, `fixesBaseBranchOrderSQL`, `ListTasks`, `Ready*`, `OrderKeyForNewTask`, `Reorder`)
 - `pkg/model/hold_for_approval.go` (`proposerPriorityCeiling`, `PersonOnlyProposalSettings`)
 - `pkg/dispatch/dispatch.go` (`Cycle`)
-- `pkg/orchestrator/sync.go` (`queueOrder`, `showQueueAtFrontOfBacklog`), `pkg/orchestrator/finish.go` (`relayProposedTasks`), `pkg/orchestrator/review.go` (`newReview`), `pkg/orchestrator/stage1repair.go` (`Stage1RepairPriority`, `fileOrUpdateStage1Repair`, `fileOrUpdateRepair`), `pkg/orchestrator/githubbaserepair.go` (`GitHubBaseRepairPriority`, `fileOrUpdateGitHubBaseRepair`), `pkg/orchestrator/releasequalification.go` (`CreateSuiteRunWith` at `PriorityReleaseGate`), and other task-filing sites across `pkg/orchestrator/*.go`
+- `pkg/orchestrator/sync.go` (`queueOrder`, `showQueueAtFrontOfBacklog`), `pkg/orchestrator/finish.go` (`relayProposedTasks`), `pkg/orchestrator/review.go` (`newReview`), `pkg/orchestrator/pathtriggerreview.go` (`buildPullRequestReview`), `pkg/orchestrator/stage1repair.go` (`Stage1RepairPriority`, `fileOrUpdateStage1Repair`, `fileOrUpdateRepair`), `pkg/orchestrator/githubbaserepair.go` (`GitHubBaseRepairPriority`, `fileOrUpdateGitHubBaseRepair`), `pkg/orchestrator/releasequalification.go` (`CreateSuiteRunWith` at `PriorityReleaseGate`), and other task-filing sites across `pkg/orchestrator/*.go`
 - `pkg/ui/client.go`, `pkg/ui/tasks.go`, `pkg/ui/templates.go`, `pkg/ui/agent_api_gate.go`, `pkg/ui/agent_api_tools.go`, `pkg/ui/sandbox_cli_actions.go`
 - `pkg/repodecl/parse.go`, `pkg/declschema/declschema.go`, `pkg/staterepo/decl.go`
 - `pkg/cli/taskcmd.go`, `pkg/cli/taskattributes.go`, `pkg/cli/taskprint.go`, `pkg/sandboxcli/task.go`, `pkg/mcp/mock_tools.go`, `pkg/mcp/task_views.go`, `pkg/mcp/task_list_cli.go`
