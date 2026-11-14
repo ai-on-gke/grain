@@ -60,7 +60,7 @@ func changeUnderReviewSection(task model.Task, pullRequest bool) string {
 	if designs := reviewedTaskDesigns(task); len(designs) > 0 {
 		quoted := make([]string, len(designs))
 		for i, d := range designs {
-			quoted[i] = "`" + d + "`"
+			quoted[i] = markdownInlineCode(d)
 		}
 		fmt.Fprintf(&b, "- **Linked designs:** %s -- read each linked design or specification and check that the change conforms to it; flag anywhere the change departs from it.\n",
 			strings.Join(quoted, ", "))
@@ -71,8 +71,9 @@ func changeUnderReviewSection(task model.Task, pullRequest bool) string {
 		if baseRef == "" {
 			baseRef = "<base>"
 		}
-		fmt.Fprintf(&b, "- **CI:** Read the head's check results first (`grain pr open`, or `grain ci checks <sha>`, `grain ci list` and `grain ci log` via this review's CI-read grant), and compare any red check with the base branch (`grain pr status --ref %s` or `grain ci list --ref %s`) before blaming this change; do not wait or block on CI.\n",
-			baseRef, baseRef)
+		fmt.Fprintf(&b, "- **CI:** Read the head's check results first (`grain pr open`, or `grain ci checks <sha>`, `grain ci list` and `grain ci log` via this review's CI-read grant), and compare any red check with the base branch (%s or %s) before blaming this change; do not wait or block on CI.\n",
+			markdownInlineCode("grain pr status --ref "+baseRef),
+			markdownInlineCode("grain ci list --ref "+baseRef))
 	} else {
 		b.WriteString("- **CI:** Read the snapshot's presubmit check results first (`pull_request_status`), and compare any red check with the base before blaming this change; do not wait or block on presubmit.\n")
 	}
@@ -137,6 +138,7 @@ func hasRuleBeforeGrainNotice(s string) bool {
 }
 
 func truncateReviewBrief(brief string, maxBytes int) (string, bool) {
+	brief = strings.ToValidUTF8(brief, "\uFFFD")
 	if len(brief) <= maxBytes {
 		return brief, false
 	}
@@ -153,6 +155,19 @@ func markdownFenceFor(text string) string {
 		fence += "`"
 	}
 	return fence
+}
+
+func markdownInlineCode(s string) string {
+	s = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
+	ticks := "`"
+	for strings.Contains(s, ticks) {
+		ticks += "`"
+	}
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") ||
+		(len(ticks) > 1 && (strings.HasPrefix(s, " ") || strings.HasSuffix(s, " "))) {
+		return ticks + " " + s + " " + ticks
+	}
+	return ticks + s + ticks
 }
 
 func reviewedTaskDesigns(task model.Task) []string {
