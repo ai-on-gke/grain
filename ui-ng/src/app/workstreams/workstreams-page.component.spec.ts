@@ -598,9 +598,9 @@ describe("Workstreams detail embedded task pane", () => {
     await settle();
     expect(TestBed.inject(Router).url).toContain("pane=runs");
     expect(current()).toBe("task-tab-runs");
-    expect(detail().querySelector(".task-tab-body h2")!.textContent).toBe(
-      "Runs",
-    );
+    expect(
+      detail().querySelector(".task-tab-body h2")!.textContent!.trim(),
+    ).toBe("Runs");
   });
 
   it("initializes embedded task pane tab from ?pane= on cold load and preserves #fragment in workstream URLs", async () => {

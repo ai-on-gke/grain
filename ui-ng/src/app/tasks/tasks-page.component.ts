@@ -369,7 +369,8 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
           @for (g of store.baseBranchGates(); track g.repo + ":" + g.branch) {
             <span>
               <span class="mono">{{ g.repo }}</span
-              >{{ g.branch ? " (" + g.branch + ")" : "" }} —
+              >{{ g.branch ? " (" + g.branch + ")" : "" }}
+              —
               {{ g.detail || g.runDetail || g.reason }}
             </span>
           }

@@ -312,6 +312,8 @@ describe("TaskPageComponent", () => {
     const f = await render(new FakeApi());
     const root = f.nativeElement as HTMLElement;
     expect(q(f, "#task-title")!.textContent).toContain("#7");
+    // On its own page the title is the page's h1.
+    expect(q(f, "#task-title")!.tagName).toBe("H1");
     expect(q(f, '[data-testid="task-state"]')!.textContent).toContain("Asked");
     expect(q(f, '[data-testid="act-reply"]')).toBeTruthy();
     expect(q(f, '[data-testid="act-approve"]')).toBeNull();

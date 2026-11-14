@@ -59,4 +59,10 @@ test("the primary destinations are reachable by name from the Inbox", async ({
   await expect(
     page.getByRole("heading", { level: 1, name: "Tasks", exact: true }),
   ).toBeVisible();
+  // The split selects a task; its title is an h2 under the page's h1,
+  // so the page still has exactly one h1.
+  await expect(
+    page.getByRole("heading", { level: 2, name: /^#\d+ / }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
 });

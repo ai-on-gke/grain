@@ -990,9 +990,9 @@ type SuitesPaneView = "suites" | "runs";
                       @for (f of t.fields ?? []; track f.name) {
                         <li class="proc-kv-item">
                           <div>
-                            <code class="tabular"
-                              >{{ "{{" + f.name + "}}" }}</code
-                            >
+                            <code class="tabular">{{
+                              placeholder(f.name)
+                            }}</code>
                             @if (f.label) {
                               <span> · {{ f.label }}</span>
                             }
@@ -2189,7 +2189,7 @@ type SuitesPaneView = "suites" | "runs";
             <div class="tmpl-field-editor-list">
               @for (f of tDraftFields(); track f.name) {
                 <div class="tmpl-field-editor-row">
-                  <code class="tabular">{{ "{{" + f.name + "}}" }}</code>
+                  <code class="tabular">{{ placeholder(f.name) }}</code>
                   <input
                     type="text"
                     placeholder="Label (optional)"
@@ -2599,6 +2599,12 @@ type SuitesPaneView = "suites" | "runs";
   `,
 })
 export class ProcessesPageComponent implements OnInit, OnDestroy {
+  // placeholder spells a template field as it is written in a brief,
+  // {{name}}. Built here rather than in the template: prettier cannot
+  // format a "{{" string literal inside an interpolation and mangles it.
+  protected placeholder(name: string): string {
+    return "{{" + name + "}}";
+  }
   readonly tab = input<string | undefined>(undefined);
   readonly new = input<string | undefined>(undefined);
   readonly launch = input<string | undefined>(undefined);

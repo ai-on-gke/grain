@@ -918,7 +918,9 @@ describe("AgentsPageComponent selection and inspector", () => {
     await settle(harness);
     expect(router.url).toContain("pane=runs");
     expect(current()).toBe("task-tab-runs");
-    expect(pane().querySelector(".task-tab-body h2")!.textContent).toBe("Runs");
+    expect(pane().querySelector(".task-tab-body h2")!.textContent!.trim()).toBe(
+      "Runs",
+    );
 
     pane()
       .querySelector<HTMLElement>('[data-testid="task-tab-details"]')!

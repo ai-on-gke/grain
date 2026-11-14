@@ -60,7 +60,11 @@ const REVIEW_CATEGORIES = [
             aria-labelledby="gate-secret-h"
           >
             <div class="gate-card-head">
-              <h2 id="gate-secret-h" class="gate-card-title">
+              <h2
+                [attr.aria-level]="pane() ? 3 : null"
+                id="gate-secret-h"
+                class="gate-card-title"
+              >
                 Waiting for a secret: <code>{{ sec.name }}</code>
               </h2>
               @if (sec.set) {
@@ -122,7 +126,11 @@ const REVIEW_CATEGORIES = [
             aria-labelledby="gate-access-h"
           >
             <div class="gate-card-head">
-              <h2 id="gate-access-h" class="gate-card-title">
+              <h2
+                [attr.aria-level]="pane() ? 3 : null"
+                id="gate-access-h"
+                class="gate-card-title"
+              >
                 Waiting for an access grant: {{ pa.summary }}
               </h2>
               @if (can("GET /api/tasks/{id}")) {
@@ -249,7 +257,11 @@ const REVIEW_CATEGORIES = [
             aria-labelledby="gate-config-h"
           >
             <div class="gate-card-head">
-              <h2 id="gate-config-h" class="gate-card-title">
+              <h2
+                [attr.aria-level]="pane() ? 3 : null"
+                id="gate-config-h"
+                class="gate-card-title"
+              >
                 Waiting for configuration change: {{ cc.summary }}
               </h2>
               <span class="mono muted"
@@ -357,7 +369,7 @@ const REVIEW_CATEGORIES = [
             aria-label="Pending local script approval"
           >
             <div class="gate-card-head">
-              <h2 class="gate-card-title">
+              <h2 [attr.aria-level]="pane() ? 3 : null" class="gate-card-title">
                 Local script approval: <code>{{ lsa.tool || lsa.script }}</code>
               </h2>
               <span class="status-pill reply">Pending</span>
@@ -412,7 +424,11 @@ const REVIEW_CATEGORIES = [
             aria-labelledby="gate-hr-h"
           >
             <div class="gate-card-head">
-              <h2 id="gate-hr-h" class="gate-card-title">
+              <h2
+                [attr.aria-level]="pane() ? 3 : null"
+                id="gate-hr-h"
+                class="gate-card-title"
+              >
                 Held for human review
               </h2>
               @if (
@@ -455,6 +471,10 @@ export class TaskGatesBarComponent {
   private readonly snackbar = inject(SnackbarService);
 
   readonly task = input.required<TaskDetail>();
+  // pane is set when the task detail sits inside another page (the
+  // Tasks split): its title is an h2 there, so these headings step down
+  // one level with it (aria-level 3, and 4 below them).
+  readonly pane = input(false);
   readonly acted = output<void>();
   readonly replyInWordsChange = output<boolean>();
 

@@ -237,7 +237,13 @@ import { TaskStore } from "./task.store";
         data-testid="task-ci-section"
       >
         <div class="ci-card-head">
-          <h3 id="task-ci-h" class="section-title">CI checks &amp; runs</h3>
+          <h3
+            [attr.aria-level]="pane() ? 4 : null"
+            id="task-ci-h"
+            class="section-title"
+          >
+            CI checks &amp; runs
+          </h3>
           <div class="changes-toolbar">
             @if (can("POST /api/ci/runs") && (task().repo || task().branch)) {
               <button
@@ -424,7 +430,11 @@ import { TaskStore } from "./task.store";
       >
         <div class="ci-card-head">
           <div>
-            <h3 id="task-diff-h" class="section-title">
+            <h3
+              [attr.aria-level]="pane() ? 4 : null"
+              id="task-diff-h"
+              class="section-title"
+            >
               {{ fullDiffLoaded() ? "Full branch diff" : "Diff preview" }}
             </h3>
             @if (diffSummary(); as sum) {
@@ -475,6 +485,10 @@ export class TaskChangesTabComponent {
   private readonly zone = inject(NgZone);
 
   readonly task = input.required<TaskDetail>();
+  // pane is set when the task detail sits inside another page (the
+  // Tasks split): its title is an h2 there, so these headings step down
+  // one level with it (aria-level 3, and 4 below them).
+  readonly pane = input(false);
   readonly prUrl = input<string | null>(null);
   readonly prLabel = input<string>("");
   readonly acted = output<void>();
