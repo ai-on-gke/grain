@@ -221,3 +221,23 @@ test("release actions ask first, say why Cut RC is off, and a refused name is re
     await expect(name).not.toHaveAttribute("aria-invalid", "true");
   }
 });
+
+test("a deep link to a later tab keeps that tab in view on a phone", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const tab of ["releases", "branches"]) {
+    await page.goto(`${R}/${tab}`);
+    const btn = page.getByTestId(`repo-tab-${tab}`);
+    await expect(btn).toHaveAttribute("aria-current", "page");
+    await expect
+      .poll(async () => {
+        const b = await btn.boundingBox();
+        return b.x >= 0 && b.x + b.width <= 390;
+      })
+      .toBe(true);
+  }
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+});

@@ -19,7 +19,9 @@ import {
   OnDestroy,
   OnInit,
   ViewEncapsulation,
+  afterRenderEffect,
   computed,
+  ElementRef,
   inject,
   input,
   signal,
@@ -1449,6 +1451,19 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly newReleaseError = signal<string | null>(null);
 
   private subs: Subscription[] = [];
+  private readonly hostEl = inject(ElementRef<HTMLElement>);
+
+  // On a phone the tab bar scrolls sideways, and a deep link or reload
+  // on a later tab (/releases) left the selected tab off screen
+  // (2026-11-14 repository walkthrough). Bring it into view whenever the
+  // tab changes.
+  private readonly keepActiveTabInView = afterRenderEffect(() => {
+    this.activeTab();
+    const btn = (this.hostEl.nativeElement as HTMLElement).querySelector(
+      ".repo-tab-btn.is-active",
+    ) as HTMLElement | null;
+    btn?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  });
 
   private readonly normalizedRouteParts = computed(() => {
     const rawHost = this.routeHost() || this.host() || "";
