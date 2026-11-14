@@ -407,7 +407,7 @@ func Delete(ctx context.Context, stateDir, name string) error {
 // Create runs "granule vm create" through c.
 func (c Command) Create(ctx context.Context, stateDir, name string, extraArgs ...string) error {
 	var err error
-	for range 3 {
+	for range 2 { // the first call, then at most one re-run
 		err = c.vm(ctx, "create", stateDir, name, extraArgs...)
 		if err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), "removing stale ") || !inspectMissedRemoval(err) {
 			return err
@@ -429,7 +429,7 @@ func (c Command) Create(ctx context.Context, stateDir, name string, extraArgs ..
 // before ctx ends, is an error.
 func (c Command) Delete(ctx context.Context, stateDir, name string) error {
 	var err error
-	for range 3 {
+	for range 2 { // the first call, then at most one re-run
 		err = c.vm(ctx, "delete", stateDir, name)
 		if err == nil || ctx.Err() != nil || !inspectMissedRemoval(err) {
 			return err
