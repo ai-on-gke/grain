@@ -1002,7 +1002,13 @@ describe("TasksPageComponent", () => {
       expect(who.getAttribute("aria-label")).toContain("narrows by author");
       q<HTMLButtonElement>(f, '[data-testid="board-apply-tri"]')!.click();
       expect(nav).toHaveBeenCalledWith(["/tasks"], {
-        queryParams: { tab: null, group: null, q: null, repo: null },
+        queryParams: {
+          tab: null,
+          group: null,
+          q: null,
+          repo: null,
+          view: null,
+        },
         replaceUrl: false,
       });
 
@@ -1111,7 +1117,13 @@ describe("TasksPageComponent", () => {
       await settle(f);
       q<HTMLButtonElement>(f, '[data-testid="board-apply-b1"]')!.click();
       expect(nav).toHaveBeenCalledWith(["/tasks"], {
-        queryParams: { tab: "all", group: null, q: null, repo: null },
+        queryParams: {
+          tab: "all",
+          group: null,
+          q: null,
+          repo: null,
+          view: null,
+        },
         replaceUrl: false,
       });
 

@@ -88,6 +88,7 @@ import {
   priorityOf,
   sorted,
   stateLabel,
+  timelineEndMs,
 } from "./task-view";
 import { type Undo, TasksStore } from "./tasks.store";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
@@ -1769,18 +1770,17 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     const { minMs, maxMs, span } = this.timelineSpan();
     return this.rows().map((t) => {
       const sRaw = Date.parse(t.startedAt || t.createdAt || "");
-      const eRaw =
-        t.state === "running"
-          ? maxMs
-          : Date.parse(
-              t.endedAt || t.closedAt || t.updatedAt || t.createdAt || "",
-            );
+      const eRaw = timelineEndMs(t, maxMs);
       const s = Number.isFinite(sRaw) ? Math.max(minMs, sRaw) : minMs;
       const e = Number.isFinite(eRaw) ? Math.max(s, eRaw) : maxMs;
-      const leftPct = Math.min(94, Math.max(0, ((s - minMs) / span) * 100));
-      const widthPct = Math.max(
-        4,
-        Math.min(100 - leftPct, ((e - s) / span) * 100),
+      // A bar is at least 4% wide so a short one stays visible. Where
+      // that minimum would push it past the right-hand edge, it slides
+      // left rather than being cut, so a task filed a moment ago and
+      // still open still ends at "now".
+      const widthPct = Math.min(100, Math.max(4, ((e - s) / span) * 100));
+      const leftPct = Math.min(
+        100 - widthPct,
+        Math.max(0, ((s - minMs) / span) * 100),
       );
       return {
         task: t,
@@ -1874,6 +1874,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
           if (this.tab()) p.set("tab", this.tab()!);
           if (this.group()) p.set("group", this.group()!);
           if (this.repo()) p.set("repo", this.repo()!);
+          if (this.view()) p.set("view", this.view()!);
           if (fVal !== undefined) {
             for (const x of Array.isArray(fVal) ? fVal : [fVal])
               p.append("f", x);
@@ -2303,6 +2304,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       q: this.filter.query().trim(),
       repo: (this.repo() || "").trim(),
       group: this.groupBy(),
+      view: this.viewMode(),
     };
   }
 
@@ -2363,12 +2365,14 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     // box (see the constructor). Setting the box here as well started the
     // box's own ?q= write-back while this navigation was still in flight,
     // which superseded it and dropped the board's tab, group and repo.
+    this.localViewMode.set(v.view);
     void this.router.navigate(["/tasks"], {
       queryParams: {
         tab: v.tab === "backlog" ? null : v.tab,
         group: v.group === "none" ? null : v.group,
         q: v.q || null,
         repo: v.repo || null,
+        view: v.view === "list" ? null : v.view,
       },
       replaceUrl,
     });

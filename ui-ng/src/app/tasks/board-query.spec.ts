@@ -26,6 +26,7 @@ const view = (v: Partial<BoardView>): BoardView => ({
   q: "",
   repo: "",
   group: "none",
+  view: "list",
   ...v,
 });
 const board = (kind: string, query?: string): Board => ({
@@ -42,6 +43,15 @@ describe("boardQueryForView", () => {
     );
     expect(boardQueryForView(view({}))).toBe("f=state:any:queued");
     expect(boardQueryForView(view({ tab: "all" }))).toBe("f=state:none:closed");
+  });
+
+  it("keeps the Timeline view, which classic ignores", () => {
+    const v = view({ tab: "asked", view: "timeline" });
+    expect(boardQueryForView(v)).toBe(
+      "f=state:any:awaiting_reply|failed&view=timeline",
+    );
+    expect(viewForQuery(boardQueryForView(v))).toEqual({ view: v });
+    expect(viewForQuery("tab=asked&view=timeline")).toEqual({ view: v });
   });
 
   it("writes the repository as a repo condition and keeps the grouping", () => {

@@ -202,6 +202,7 @@ func clReviewTaskBody(tmpl model.Template, task model.Task, target string, snaps
 			"targeted test only when needed to confirm or refute a specific finding, and say which "+
 			"tests you ran in your closing note (`comment_on_issue`).",
 		task.ID, task.Title, target, snapshot, target, task.ID, snapshot)
+	b.WriteString("\n\n" + changeUnderReviewSection(task, false))
 	return b.String()
 }
 

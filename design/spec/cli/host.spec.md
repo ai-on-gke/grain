@@ -20,10 +20,10 @@ The binary **MUST** register exactly the commands below. The guard compares this
 
 | Kind | Commands |
 |---|---|
-| Task CLI: tasks | `list`, `get`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `pause`, `resume`, `inbox`, `wait`, `logs` |
-| Task CLI: deployment | `config`, `settings`, `qa …`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `hostds …`, `access list|allow|role|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject`, `metrics`, `failures`, `ci …`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status`, `declarations check` |
-| Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete` |
-| Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `hostd`, `host-script`, `capability <server>` |
+| Task CLI: tasks | `list`, `get`/`show`, `create`, `update`, `approve`, `withdraw`, `defer`, `undefer`, `capability`, `comment`, `reply`, `close`/`delete`, `reopen`, `retry`, `retry-merge`, `force-merge`, `run-now`, `compact`, `brief`, `rollover`, `pause`, `resume`, `inbox`, `wait`, `logs` |
+| Task CLI: deployment | `config`, `settings`, `qa …`, `sandbox-budget`, `sandbox probe`, `repo …`, `gcp-key …`, `capability-servers …`, `host …`, `hub …`, `access list\|allow\|role\|deny`, `git-ambient`, `git-connections`, `git-login`, `default-model`, `broadcast`/`notify`, `release approve\|reject\|rollback`, `upgrade …`, `metrics`, `failures`, `usage`, `health`, `ci …`, `merge-queue`, `fs ls\|cat\|read\|grep`, `pr adopt\|review\|status\|submit`, `declarations check` |
+| Task CLI: sign-in | `login`, `logout`, `whoami`, `context list\|use\|show\|delete`, `skill install\|status`, `mcp` |
+| Modes: services | `daemon`, `demo`, `mcpserver`, `runhost exec`, `host`, `host-script`, `capability <server>` |
 | Modes: local administration | `access-code`, `secrets`, `connections import`, `state`, `backup`, `export`, `import`, `repo-case`, `upgrade-postgres` (= `upgrade-sqlite-to-postgres`, `db upgrade-postgres`), `db check`, `controller bootstrap-github-app`, `setup gcp`, `init`, `init workstation`, `sync` |
 | Modes: build information | `version`, `schema-version`, `release-notes`, `sandbox-image`, `container-sandbox-image`, `k8s-sandbox-image`, `image` |
 | Modes: hooks forked by a run | `agy-tool-hook`, `claude-stop-hook`, `codex-detached` |
@@ -2294,10 +2294,13 @@ _No flags._
 
 These edit a colocated deployment's files on disk, or the host itself, rather than calling the API. The exceptions are `sync` and `init`, which also talk to a daemon. `-data-dir` resolution is [#CLI-5](cli.spec.md#CLI-5).
 
-### 6.1 `grain access-code [-data-dir DIR] [show|rotate]` {#CLI-41}
+### 6.1 `grain access-code [-data-dir DIR] [show|rotate|mode [on|recovery|off]]` {#CLI-41}
 
 - `show` (the default) prints the access code: the daemon's one credential, also used as the CLI's bearer token.
 - `rotate` replaces the code, prints the new one, and ends every UI session and bearer use of the old one within a second. It refuses when there is no existing installation.
+- `mode [on|recovery|off]` reads or writes `DIR/access-code-mode` beside `local-api-token` and never prints the code:
+  - with no mode argument, prints the current mode (`on` when the file is absent; `off` when the file holds any unrecognised value);
+  - with `on`, `recovery` or `off`, checks that `local-api-token` exists, writes the mode file (`0600`) and prints the mode (plus a stderr note on `recovery` and `off`). The daemon re-reads the file within a second: `on` accepts the code everywhere configured, `recovery` holds the code to access and settings routes (raising an Inbox notification on use) once a verified full-role person on the allowlist can sign in, and `off` refuses the code everywhere except a run's own `grain mcpserver` plumbing (`X-Grain-Acting-Task`).
 
 The code is read from `DIR/local-api-token`, else `$GRAIN_LOCAL_API_TOKEN_FILE`, else `local-api-token` in `$GRAIN_DATA_DIR` or cli.env's. Flags (hand-written usage): `-data-dir` (string).
 
@@ -2313,7 +2316,11 @@ _No flags._
 _No flags._
 <!-- END GENERATED FLAGS -->
 
-**Pinned by:** `pkg/cli/accesscode_test.go`: `TestAccessCodeShowsAndRotatesTheCode`, `TestAccessCodeRotateNeedsAnExistingInstallation`.
+<!-- BEGIN GENERATED FLAGS: grain access-code mode -->
+_No flags._
+<!-- END GENERATED FLAGS -->
+
+**Pinned by:** `pkg/cli/accesscode_test.go`: `TestAccessCodeShowsAndRotatesTheCode`, `TestAccessCodeRotateNeedsAnExistingInstallation`, `TestAccessCodeModeSetsTheModeWithoutPrintingTheCode`.
 
 ### 6.2 `grain secrets -data-dir DIR <command>` {#CLI-51}
 

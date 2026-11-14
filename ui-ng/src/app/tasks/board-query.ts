@@ -38,13 +38,15 @@ import { type TabId, TABS, isTabId } from "./task-view";
 // silently wider than the board.
 
 // BoardView is the part of /next/tasks' address a board carries.
-// group is presentation only: classic ignores the key, and it is kept
-// so a board saved grouped reopens grouped here.
+// group and view are presentation only: classic ignores both keys, and
+// they are kept so a board saved grouped, or from the Timeline, reopens
+// that way here.
 export interface BoardView {
   tab: TabId;
   q: string;
   repo: string;
   group: "none" | "workstream" | "repo";
+  view: "list" | "timeline";
 }
 
 export type BoardPlan =
@@ -160,6 +162,7 @@ export function boardQueryForView(v: BoardView): string {
   const repo = v.repo.trim();
   if (repo) p.append("f", `repo:any:${escapeValue(repo)}`);
   if (v.group !== "none") p.set("group", v.group);
+  if (v.view !== "list") p.set("view", v.view);
   // The separators back as themselves, as classic writes them: this is
   // a string people read in tables/board.json and in the address bar.
   return p
@@ -184,6 +187,7 @@ export function viewForQuery(
     q: (p.get("q") || "").trim(),
     repo: (p.get("repo") || "").trim(),
     group: "none",
+    view: p.get("view") === "timeline" ? "timeline" : "list",
   };
   const g = p.get("group");
   if (g === "workstream" || g === "repo") view.group = g;
@@ -257,6 +261,7 @@ export function sameView(a: BoardView, b: BoardView): boolean {
     a.tab === b.tab &&
     a.q === b.q &&
     a.repo.toLowerCase() === b.repo.toLowerCase() &&
-    a.group === b.group
+    a.group === b.group &&
+    a.view === b.view
   );
 }
