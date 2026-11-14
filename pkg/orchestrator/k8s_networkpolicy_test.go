@@ -432,6 +432,26 @@ func TestBundledEgressPolicySelectsEveryOpenSandboxOfItsBackend(t *testing.T) {
 	}
 }
 
+// TestEgressPolicyFencesTheUpgradesThrowawayPods: a self-upgrade runs
+// the candidate image in pods labelled k8s.UpgradeComponent rather than
+// k8s.SandboxValue, so the sandbox sweep leaves them alone (task 4618).
+// That label must not also take them out from under the egress fence
+// they had as sandboxes -- in networkpolicy.yaml or in either bundled
+// copy.
+func TestEgressPolicyFencesTheUpgradesThrowawayPods(t *testing.T) {
+	t.Parallel()
+	upgradePod := map[string]string{
+		k8s.ManagedByLabel: k8s.ManagedByValue,
+		k8s.SandboxLabel:   k8s.UpgradeComponent,
+		k8s.InstanceLabel:  "deployment-1",
+	}
+	for _, file := range append([]string{"networkpolicy.yaml"}, bundledEgressManifests...) {
+		if got := selectingPolicies(t, loadNetworkPoliciesFrom(t, file), upgradePod); !slices.Equal(got, []string{"grain-sandbox-egress"}) {
+			t.Errorf("%s: an upgrade's check pod is selected by %v, want only grain-sandbox-egress", file, got)
+		}
+	}
+}
+
 // TestK8sBackendsAreUnfencedUntilNetworkPolicyIsEnforced: without
 // -k8s-network-policy nothing grain can rely on keeps an open-network pod
 // off the metadata server or a capability server's in-cluster control

@@ -102,6 +102,22 @@ func TestManifestLabelsAPodWithItsInstance(t *testing.T) {
 	}
 }
 
+func TestManifestComponentKeepsAPodOutOfTheSandboxSweep(t *testing.T) {
+	labels := func(opts PodOptions) map[string]any {
+		opts.Image = "example/grain:main"
+		pod := decodeManifest(t, Client{}, "grain-upgrade-ask", PodShape{CPUs: 1, MemoryMB: 512, DiskGB: 10}, opts)
+		return pod["metadata"].(map[string]any)["labels"].(map[string]any)
+	}
+	got := labels(PodOptions{Component: "upgrade", Labels: map[string]string{SandboxLabel: SandboxValue}})
+	if got[SandboxLabel] != "upgrade" || got[ManagedByLabel] != ManagedByValue {
+		t.Errorf("labels = %v, want component upgrade (not %s, which ListSandboxes selects and the sweep deletes) "+
+			"and still managed by grain", got, SandboxValue)
+	}
+	if got := labels(PodOptions{})[SandboxLabel]; got != SandboxValue {
+		t.Errorf("label %s = %v with no component, want %s", SandboxLabel, got, SandboxValue)
+	}
+}
+
 func TestListSandboxesSelectsItsInstanceAndUnlabelledPods(t *testing.T) {
 	// A script of its own rather than fakeKubectl's: the two calls share
 	// a verb, and are told apart by their selectors.

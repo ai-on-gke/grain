@@ -93,6 +93,14 @@ const (
 	SandboxValue = "sandbox"
 )
 
+// UpgradeComponent is the SandboxLabel value (PodOptions.Component) of
+// the throwaway pods a self-upgrade runs a candidate image in. It keeps
+// them out of the sandbox sweep and nothing else: deploy/kubernetes'
+// grain-sandbox-egress selects it beside SandboxValue, so those pods
+// stay as fenced off the metadata server and the cluster as they were
+// when they were labelled sandboxes.
+const UpgradeComponent = "upgrade"
+
 // InstanceLabel marks a pod with the grain deployment that created it
 // (Client.Instance): the deployment's effective id, the same
 // {deployment} its task branches are named by
@@ -237,6 +245,14 @@ type PodOptions struct {
 	// (ManagedByLabel, SandboxLabel), which cannot be overridden --
 	// reaping depends on them.
 	Labels map[string]string
+	// Component is SandboxLabel's value, SandboxValue when empty. A pod
+	// that is not a run's sandbox -- an upgrade's throwaway check pod --
+	// names its own, because every pod labelled SandboxValue that the
+	// sandbox backend is not holding is an orphan to its sweep
+	// (ListSandboxes), and the sweep runs on every reconcile tick: a
+	// pod some other part of the daemon created under that label is
+	// deleted out from under it.
+	Component string
 	// NodeSelector, when set, pins sandbox pods to a subset of nodes --
 	// e.g. a node pool sized for build workloads, or one with nested
 	// virtualization available.
@@ -429,6 +445,9 @@ func (c Client) Manifest(name string, shape PodShape, opts PodOptions) ([]byte, 
 	}
 	labels[ManagedByLabel] = ManagedByValue
 	labels[SandboxLabel] = SandboxValue
+	if opts.Component != "" {
+		labels[SandboxLabel] = opts.Component
+	}
 	if c.Instance != "" {
 		labels[InstanceLabel] = c.Instance
 	}
