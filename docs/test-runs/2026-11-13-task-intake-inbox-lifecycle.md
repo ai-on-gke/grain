@@ -287,6 +287,17 @@ flags above):
 5. File any task and open `/next/task/<id>` within a minute. It reads
    "Filed now ago".
 
+**Follow-up from review (2026-11-14, merge-queue repair run).** The PR
+review (task 5518) found that fix 2 made applying a saved board that
+carries a `q` drop the board's tab, group and repo. `applyBoard()` still
+set the Filter box itself before navigating, so the box's `?q=`
+write-back started a second navigation while the board's was in flight
+and superseded it. Reproduced in a unit test that goes through the real
+router, with a slow guard holding the navigation in flight: the page
+landed on `/?q=retry` instead of `/tasks?tab=all&q=retry&repo=acme%2Fweb`.
+Fix: `applyBoard()` lets the navigation carry `q`, and `?q=` fills the box
+as it does for any link. The same run merged `main` into the branch.
+
 ## Gaps on `/next/` (not fixed here; proposed as follow-ups)
 
 These exist on the classic pages and are missing from their `/next/`
