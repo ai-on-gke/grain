@@ -120,3 +120,53 @@ test("a stuck row offers the control its sub-case names, and leaves the group on
   expect(stateOf("Rotate the staging signing keys")).toBe("queued");
   expect(stateOf("Backfill the audit log retention job")).toBe("queued");
 });
+
+test("the Deferred tab's selection bar brings several tasks back at once", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  const call = async (method, path, body) => {
+    const res = await fetch(`${demoServer}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessCode}`,
+        "Content-Type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    expect(res.ok, `${method} ${path}: ${res.status}`).toBe(true);
+    const text = await res.text();
+    return text ? JSON.parse(text) : null;
+  };
+  const ids = [];
+  for (const n of [1, 2]) {
+    const t = await call("POST", "/api/tasks", {
+      title: `Deferred batch ${n} ${Date.now()}`,
+      approved: true,
+    });
+    await call("POST", `/api/tasks/${t.id}/defer`, { deferredUntil: "" });
+    ids.push(t.id);
+  }
+  try {
+    await page.goto("/next/tasks?tab=deferred");
+    for (const id of ids) {
+      await page.getByLabel(`Select #${id}`, { exact: true }).check();
+    }
+    const bar = page.getByTestId("batch-bar");
+    await expect(bar).toContainText("2 selected");
+    await bar.getByTestId("batch-undefer").click();
+    for (const id of ids) {
+      await expect(page.getByTestId(`row-${id}`)).toHaveCount(0);
+      expect((await call("GET", `/api/tasks/${id}`)).state).toBe("queued");
+    }
+    await expect(bar).toHaveCount(0);
+  } finally {
+    for (const id of ids) {
+      await fetch(`${demoServer}/api/tasks/${id}/close`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessCode}` },
+      }).catch(() => {});
+    }
+  }
+});
