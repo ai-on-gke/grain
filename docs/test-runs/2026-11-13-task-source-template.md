@@ -131,6 +131,8 @@ Three tasks were filed through the New-task sheet, each opened with `c`:
 
 **Regression test:** a unit test in `new-task-form.spec.ts`.
 
+**Superseded on `main`:** `77fd0e13e` ("fix(ui-ng): file stored templates, …") fixed the same defect independently while this PR was open. The merge of `main` into this branch takes `main`'s `fromTemplateStem` and its unit test, which cover the same `template-<n>` case and the `repo:template:` spelling.
+
 ## Store tests
 
 `GRAIN_REQUIRE_POSTGRES=1 go test ./pkg/model/... ./pkg/staterepo ./pkg/ports/... ./tests/hygiene/...` passed. That includes `pkg/model/postgres` against the local PostgreSQL 15. `go test ./pkg/orchestrator` and the `pkg/ui` `templateId` tests also passed.

@@ -316,21 +316,22 @@ export function hasHistory(tasks: readonly Task[], repo: string): boolean {
 
 // Extracts a repository template stem suitable for POST /api/tasks/from-template
 // (pkg/ui/tasks_from_template.go FromTemplateStem), or "" when the template
-// must be launched through POST /api/tasks { templateId }.
+// must be launched through POST /api/tasks { templateId }. Only a template
+// the repository declares (an id under model.RepoDeclaredPrefix,
+// "repo:template:<owner>:<name>:<stem>", or one carrying declaredIn) has a
+// stem: from-template reads the repository's own declarations, so a stored
+// template ("template-3", made in Settings or POST /api/templates) sent
+// there is answered 404 "no template repo:template:...".
 export function fromTemplateStem(repo: string, tmpl: Template): string {
   if (!repo || repo === NO_REPO || tmpl.system) return "";
   const id = tmpl.id.trim();
   if (!id) return "";
   const [owner, name] = repo.trim().toLowerCase().split("/");
   if (!owner || !name) return "";
-  // model.RepoDeclaredID spells a repository's own template
-  // "repo:template:<owner>:<name>:<stem>"; "declared:" is an older spelling.
-  for (const kind of ["repo", "declared"]) {
-    const prefix = `${kind}:template:${owner}:${name}:`;
-    if (id.toLowerCase().startsWith(prefix)) {
-      const stem = id.slice(prefix.length);
-      if (stem && !/[:/\\]/.test(stem) && !stem.startsWith(".")) return stem;
-    }
+  const prefix = `repo:template:${owner}:${name}:`;
+  if (id.toLowerCase().startsWith(prefix)) {
+    const stem = id.slice(prefix.length);
+    if (stem && !/[:/\\]/.test(stem) && !stem.startsWith(".")) return stem;
   }
   if (tmpl.declaredIn?.repo) {
     if (tmpl.declaredIn.repo.toLowerCase() !== repo.trim().toLowerCase()) {
@@ -340,10 +341,6 @@ export function fromTemplateStem(repo: string, tmpl: Template): string {
     const stem = lastColon >= 0 ? id.slice(lastColon + 1) : id;
     if (stem && !/[:/\\]/.test(stem) && !stem.startsWith(".")) return stem;
   }
-  // A deployment's own template (template-1, ...) is not one of the
-  // repository's .grain/templates: POST /api/tasks/from-template would look
-  // up repo:template:<owner>:<name>:template-1 and answer 404, so it is
-  // filed through POST /api/tasks { templateId } instead.
   return "";
 }
 

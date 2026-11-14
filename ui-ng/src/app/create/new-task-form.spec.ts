@@ -259,22 +259,23 @@ describe("new task form", () => {
     expect(
       fromTemplateStem("sidthe/grain", { ...repoTmpl, system: true }),
     ).toBe("");
-    // The id model.RepoDeclaredID actually writes.
+    // The server's own declared id, with no declaredIn beside it.
     expect(
-      fromTemplateStem("acme/widgets", {
+      fromTemplateStem("sidthe/grain", {
         ...repoTmpl,
-        id: "repo:template:acme:widgets:release-note",
+        id: "repo:template:sidthe:grain:triage",
         declaredIn: undefined,
       }),
-    ).toBe("release-note");
-    // A deployment template is not a repository stem: filing it through
-    // /api/tasks/from-template answered 404 (task-source-template walk, F2).
+    ).toBe("triage");
+    // A stored template (POST /api/templates) is not the repository's:
+    // it files through POST /api/tasks { templateId }, never from-template.
     expect(
-      fromTemplateStem("acme/widgets", {
-        id: "template-1",
-        name: "deploy-walk",
-        title: "Deployment walk task",
+      fromTemplateStem("sidthe/grain", {
+        id: "template-3",
+        name: "Urgent fix",
+        title: "Urgent: ",
         description: "",
+        priority: 8,
       }),
     ).toBe("");
   });
