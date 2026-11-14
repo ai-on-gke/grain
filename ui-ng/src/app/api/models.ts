@@ -144,6 +144,39 @@ export interface HumanReviewView {
   at?: string;
 }
 
+// ApprovalView is one rule a change waits on a named approver's Submit
+// for (pkg/ui/approvals.go): a sensitive trigger with `human: required`,
+// or grain's own guard over the repository's triggers.
+export interface ApprovalView {
+  rule: string;
+  source?: string;
+  approvers?: string[];
+  approvedBy?: string;
+}
+
+// PolicyRequirement is one line of a change's effective merge policy
+// and the rules that caused it (model.PolicyRequirement).
+export interface PolicyRequirement {
+  Field: string;
+  Value: string;
+  From?: string[];
+}
+
+// EffectiveMergePolicy is what the repository's merge rules
+// (.grain/merge-rules.yml) require of a change's head
+// (model.EffectiveMergePolicy); its fields keep their Go names.
+export interface EffectiveMergePolicy {
+  Head?: string;
+  Rules?: string;
+  Mode?: string;
+  GrainJobs?: string[];
+  GrainFullSuite?: boolean;
+  GitHubChecks?: string[];
+  GitHubAllChecks?: boolean;
+  Matched?: string[];
+  Requirements?: PolicyRequirement[];
+}
+
 export interface TaskPaused {
   at: string;
   by: string;
@@ -201,6 +234,16 @@ export interface Task {
   reviewFindings?: unknown[];
   humanApprovedBy?: string;
   humanReviewHold?: HumanReviewView[];
+  // Holds the repository's own rules put on the change (pkg/ui/tasks.go):
+  // the strictest `human` setting of the gating triggers holding it and
+  // the review each filed ("<trigger>=<task>"), a security hold, the
+  // approvals it still owes, and what its merge rules require.
+  pathTriggerHold?: string;
+  pathTriggerTasks?: string[];
+  securityHold?: string;
+  approvals?: ApprovalView[];
+  repoRules?: string;
+  mergePolicy?: EffectiveMergePolicy;
   autoMerge?: boolean;
   pullRequest?: PullRequestRef | string | null;
   prClosedAt?: string;

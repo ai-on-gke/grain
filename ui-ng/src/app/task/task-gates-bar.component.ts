@@ -24,6 +24,7 @@ import {
   signal,
   untracked,
 } from "@angular/core";
+import { RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import type {
   AccessRequestItem,
@@ -43,9 +44,20 @@ const REVIEW_CATEGORIES = [
   { value: "breaking-change", label: "Breaking change" },
 ] as const;
 
+// mergeRuleSource names the rules a merge requirement came from, as
+// classic's MergePolicy does: rule ids, or "defaults" / "repository
+// setting" as they are.
+export function mergeRuleSource(from?: string[]): string {
+  return (from ?? [])
+    .map((f) =>
+      f === "defaults" || f === "repository setting" ? f : `rule ${f}`,
+    )
+    .join(", ");
+}
+
 @Component({
   selector: "g-task-gates-bar",
-  imports: [DiffViewerComponent],
+  imports: [DiffViewerComponent, RouterLink],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./task-gates-bar.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -443,7 +455,147 @@ const REVIEW_CATEGORIES = [
           </section>
         }
 
-        <!-- 6. Request Human Review (for review tasks) -->
+        <!-- 6. Path-trigger hold and owed approvals (pathtriggerhold.go,
+             approvals.go): the repository's gating triggers holding this
+             change, the review each filed, and who may release it. -->
+        @if (showPathTriggerHold()) {
+          <section
+            class="gate-card"
+            data-testid="path-trigger-hold"
+            aria-labelledby="gate-pt-h"
+          >
+            <div class="gate-card-head">
+              <h2 id="gate-pt-h" class="gate-card-title">
+                {{
+                  task().pathTriggerHold
+                    ? "Held by this repository's gating triggers"
+                    : "Waiting for a named approver"
+                }}
+              </h2>
+              @if (task().pathTriggerHold; as human) {
+                <span class="status-pill proposal">human: {{ human }}</span>
+              }
+            </div>
+            <p class="muted" style="margin: 0">
+              {{
+                task().pathTriggerHold === "required"
+                  ? "This change touches paths a person must release: it merges only after an approver's Submit."
+                  : "This change touches paths its repository's triggers gate: it merges once their reviews pass."
+              }}
+            </p>
+            <ul class="gate-access-list">
+              @for (pt of pathTriggers(); track pt.entry) {
+                <li class="gate-access-row" data-testid="path-trigger-row">
+                  <code>.grain/triggers/{{ pt.trigger }}.yml</code>
+                  @if (pt.task) {
+                    <a
+                      data-testid="path-trigger-review-link"
+                      [routerLink]="linkTo(pt.task)"
+                      [queryParams]="linkQuery(pt.task)"
+                      >Review task #{{ pt.task }}</a
+                    >
+                  }
+                </li>
+              }
+              @for (a of task().approvals ?? []; track a.rule) {
+                <li class="gate-access-row" data-testid="approval-rule">
+                  <code>{{ a.rule }}</code>
+                  @if (a.source) {
+                    <span class="muted">{{ a.source }}</span>
+                  }
+                  @if (a.approvedBy) {
+                    <span class="status-pill healthy"
+                      >approved by {{ a.approvedBy }}</span
+                    >
+                  } @else {
+                    <span
+                      >Waiting for
+                      {{
+                        (a.approvers ?? []).join(" or ") || "an approver"
+                      }}</span
+                    >
+                  }
+                </li>
+              }
+            </ul>
+            @if (task().repoRules; as rules) {
+              <p class="muted" style="margin: 0">
+                Decided under <code>{{ rules }}</code>
+              </p>
+            }
+          </section>
+        }
+
+        <!-- 7. Security hold (orchestrator's securityhold.go) -->
+        @if (showSecurityHold()) {
+          <section
+            class="gate-card"
+            data-testid="security-hold"
+            aria-labelledby="gate-sec-h"
+          >
+            <div class="gate-card-head">
+              <h2 id="gate-sec-h" class="gate-card-title">
+                {{
+                  task().securityHold
+                    ? "Security hold: " + task().securityHold
+                    : "Touches grain's trust boundary"
+                }}
+              </h2>
+            </div>
+            <p class="muted" style="margin: 0">
+              {{
+                task().securityHold
+                  ? "All gates must pass before it merges. Submit records your approval and merges it once the security review and CI pass."
+                  : "It will not merge automatically: read its security review, then Submit."
+              }}
+            </p>
+            @if (task().securityReviewTask; as rt) {
+              <a
+                data-testid="security-review-link"
+                [routerLink]="linkTo(rt)"
+                [queryParams]="linkQuery(rt)"
+                >Security review: task #{{ rt }}</a
+              >
+            }
+          </section>
+        }
+
+        <!-- 8. Merge policy: what .grain/merge-rules.yml requires of this
+             head, one line per requirement with the rule behind it. -->
+        @if (mergeRequirements().length) {
+          <section
+            class="gate-card"
+            data-testid="merge-policy"
+            aria-labelledby="gate-mp-h"
+          >
+            <div class="gate-card-head">
+              <h2 id="gate-mp-h" class="gate-card-title">
+                Merge rules
+                @if (task().mergePolicy?.Matched?.length) {
+                  <span class="muted"
+                    >· matched
+                    {{ task().mergePolicy!.Matched!.join(", ") }}</span
+                  >
+                }
+              </h2>
+              @if (task().mergePolicy?.Head; as head) {
+                <code class="muted">{{ head.slice(0, 12) }}</code>
+              }
+            </div>
+            <ul class="gate-access-list">
+              @for (r of mergeRequirements(); track r.key) {
+                <li class="gate-access-row" data-testid="merge-requirement">
+                  <code>{{ r.text }}</code>
+                  @if (r.from) {
+                    <span class="muted">from {{ r.from }}</span>
+                  }
+                </li>
+              }
+            </ul>
+          </section>
+        }
+
+        <!-- 9. Request Human Review (for review tasks) -->
       </div>
     }
   `,
@@ -455,6 +607,9 @@ export class TaskGatesBarComponent {
   private readonly snackbar = inject(SnackbarService);
 
   readonly task = input.required<TaskDetail>();
+  // In the Inbox pane a task link swaps the pane (?task=) rather than
+  // leaving for the full page, as task-detail's own links do.
+  readonly pane = input(false);
   readonly acted = output<void>();
   readonly replyInWordsChange = output<boolean>();
 
@@ -507,9 +662,79 @@ export class TaskGatesBarComponent {
     ),
   );
 
+  // A hold the repository's rules put on an open change; Submit (or the
+  // reviews passing) ends it, so a closed or auto-merging task shows none.
+  private readonly holdable = computed(() => {
+    const t = this.task();
+    return t.state !== "closed" && !t.autoMerge;
+  });
+
+  protected readonly showPathTriggerHold = computed(() => {
+    const t = this.task();
+    return (
+      this.holdable() &&
+      !!(t.pathTriggerHold || t.pathTriggerTasks?.length || t.approvals?.length)
+    );
+  });
+
+  protected readonly showSecurityHold = computed(() => {
+    const t = this.task();
+    return this.holdable() && !!(t.securityHold || t.securityReviewTask);
+  });
+
+  // pathTriggerTasks entries are "<trigger>=<task>" (pkg/ui/tasks.go).
+  protected readonly pathTriggers = computed(() =>
+    (this.task().pathTriggerTasks ?? []).map((entry) => {
+      const at = entry.indexOf("=");
+      return at < 0
+        ? { entry, trigger: entry, task: "" }
+        : {
+            entry,
+            trigger: entry.slice(0, at),
+            task: entry.slice(at + 1),
+          };
+    }),
+  );
+
+  protected readonly mergeRequirements = computed(() => {
+    const t = this.task();
+    const p = t.mergePolicy;
+    if (!p || t.state === "closed" || !p.Requirements?.length) return [];
+    const rows = p.Requirements.map((r) => ({
+      key: `${r.Field}=${r.Value}`,
+      text: `${r.Field}: ${r.Value}`,
+      from: mergeRuleSource(r.From),
+    }));
+    const mode = p.Mode ?? "";
+    if (p.GrainJobs?.length && !p.GrainFullSuite && /grain|both/.test(mode)) {
+      const text = `grain CI is narrowed to ${p.GrainJobs.join(", ")}`;
+      rows.push({ key: text, text, from: "" });
+    }
+    if (
+      p.GitHubChecks?.length &&
+      !p.GitHubAllChecks &&
+      /github|both/.test(mode)
+    ) {
+      const text = `GitHub CI is narrowed to ${p.GitHubChecks.join(", ")}`;
+      rows.push({ key: text, text, from: "" });
+    }
+    return rows;
+  });
+
+  protected linkTo(id: string): unknown[] {
+    return this.pane() ? [] : ["/task", id];
+  }
+
+  protected linkQuery(id: string): Record<string, string> | null {
+    return this.pane() ? { task: id } : null;
+  }
+
   protected readonly hasAnyGate = computed(() => {
     const t = this.task();
     return !!(
+      this.showPathTriggerHold() ||
+      this.showSecurityHold() ||
+      this.mergeRequirements().length ||
       t.pendingSecret ||
       t.pendingAccess ||
       t.pendingConfigChange ||
