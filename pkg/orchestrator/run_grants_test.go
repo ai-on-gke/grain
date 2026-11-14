@@ -31,10 +31,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/capability/capabilitytest"
-	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
-	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
-	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -131,9 +128,9 @@ func runWithGrants(t *testing.T, grants []model.Grant, sourceDir string) ([]stri
 
 func TestRunCycleTellsASelfDebugTaskItHoldsTheGrant(t *testing.T) {
 	t.Parallel()
-	grants := []model.Grant{{Capability: "self-debug", Via: model.GrantByLabel}}
+	grants := []model.Grant{{Capability: model.GrainSourceGrant, Via: model.GrantByLabel}}
 	held, sourceDir := runWithGrants(t, grants, "/usr/local/share/grain/src")
-	if !slices.Contains(held, "self-debug") {
+	if !slices.Contains(held, model.GrainSourceGrant) {
 		t.Errorf("RunConfig.Grants = %v, want the self-debug grant among them", held)
 	}
 	if sourceDir != "/usr/local/share/grain/src" {
@@ -302,9 +299,9 @@ func TestRunCycleMaterializesBootstrapPlaybooksOnHostSandboxes(t *testing.T) {
 // Grain CI, but the identically named GitHub tool remains registered.
 func TestRunCycleTellsAGrainCITaskItHoldsTheGrant(t *testing.T) {
 	t.Parallel()
-	grants := []model.Grant{{Capability: "grain-ci", Via: model.GrantByLabel}}
+	grants := []model.Grant{{Capability: grainci.Grant, Via: model.GrantByLabel}}
 	held, _ := runWithGrants(t, grants, "/usr/local/share/grain/src")
-	if !slices.Contains(held, "grain-ci") {
+	if !slices.Contains(held, grainci.Grant) {
 		t.Errorf("RunConfig.Grants = %v, want the grain-ci grant among them", held)
 	}
 }
@@ -312,14 +309,14 @@ func TestRunCycleTellsAGrainCITaskItHoldsTheGrant(t *testing.T) {
 func TestRunCycleTellsADBAccessTaskItHoldsTheGrant(t *testing.T) {
 	t.Parallel()
 	grants := []model.Grant{
-		{Capability: "db-read", Via: model.GrantByLabel},
-		{Capability: "db-write", Via: model.GrantByLabel},
+		{Capability: model.GrainSQLReadGrant, Via: model.GrantByLabel},
+		{Capability: model.GrainSQLWriteGrant, Via: model.GrantByLabel},
 	}
 	held, _ := runWithGrants(t, grants, "/usr/local/share/grain/src")
-	if !slices.Contains(held, "db-read") {
+	if !slices.Contains(held, model.GrainSQLReadGrant) {
 		t.Errorf("RunConfig.Grants = %v, want the db-read grant among them", held)
 	}
-	if !slices.Contains(held, "db-write") {
+	if !slices.Contains(held, model.GrainSQLWriteGrant) {
 		t.Errorf("RunConfig.Grants = %v, want the db-write grant among them", held)
 	}
 }
@@ -336,12 +333,12 @@ func TestRunCycleTellsADeploymentHealthTaskItHoldsTheGrant(t *testing.T) {
 	}
 }
 
-// github#read-issues (and its retired read-issues alias) is a tool-only grant.
+// github#read-issues is a tool-only grant.
 // It must reach the subprocess Framework's Grants so the forked mcpserver
 // starts with -grant and registers the list_issues and read_issue tools.
 func TestRunCycleTellsAReadIssuesTaskItHoldsTheGrant(t *testing.T) {
 	t.Parallel()
-	for _, grant := range []string{model.GitHubReadIssuesGrant, grainserver.LegacyReadIssues} {
+	for _, grant := range []string{model.GitHubReadIssuesGrant} {
 		grants := []model.Grant{{Capability: grant, Via: model.GrantByLabel}}
 		held, _ := runWithGrants(t, grants, "/usr/local/share/grain/src")
 		if !slices.Contains(held, grant) {
@@ -357,18 +354,14 @@ func TestRunCycleTellsAReadIssuesTaskItHoldsTheGrant(t *testing.T) {
 func TestRunCycleForwardsAllKnownToolGrants(t *testing.T) {
 	t.Parallel()
 	allToolGrants := []string{
-		model.SelfDebugCapability,
 		model.GrainSourceGrant,
 		model.APIGrantPrefix + "self-debug",
 		model.APIRef("self-debug"),
-		grainlog.CapabilityName,
 		model.GrainJournalGrant,
-		deploymenthealth.CapabilityName,
 		model.GrainHealthGrant,
 		model.GrainSQLReadGrant,
 		model.GrainSQLWriteGrant,
 		grainci.Grant,
-		grainserver.LegacyReadIssues,
 		model.GitHubReadIssuesGrant,
 	}
 
@@ -389,10 +382,10 @@ func TestRunCycleCarriesEveryToolGrantATaskHolds(t *testing.T) {
 	t.Parallel()
 	grants := []model.Grant{
 		{Capability: model.GitHubReadIssuesGrant, Via: model.GrantByLabel},
-		{Capability: "self-debug", Via: model.GrantByLabel},
+		{Capability: model.GrainSourceGrant, Via: model.GrantByLabel},
 	}
 	held, _ := runWithGrants(t, grants, "/usr/local/share/grain/src")
-	for _, want := range []string{"self-debug", model.GitHubReadIssuesGrant} {
+	for _, want := range []string{model.GrainSourceGrant, model.GitHubReadIssuesGrant} {
 		if !slices.Contains(held, want) {
 			t.Errorf("RunConfig.Grants = %v, want %s among them", held, want)
 		}

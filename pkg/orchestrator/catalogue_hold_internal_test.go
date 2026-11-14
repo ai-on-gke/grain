@@ -159,14 +159,14 @@ func TestRelayedProposalHoldsARequiresPersonGrant(t *testing.T) {
 		}
 		source := externalSource("7")
 		source.Base = ""
-		source.Grants = []model.Grant{{Capability: "self-debug", Via: model.GrantByLabel}}
+		source.Grants = []model.Grant{{Capability: "api:self-debug", Via: model.GrantByLabel}, {Capability: model.GrainSourceGrant, Via: model.GrantByLabel}}
 		if err := store.PutTask(ctx, source); err != nil {
 			t.Fatal(err)
 		}
 		result := &agent.Result{ToolCalls: []agent.ToolCall{{
 			Name: "propose_task",
 			Arguments: map[string]any{"title": "Follow up", "body": "And then this.",
-				"capabilities": []any{"self-debug"}},
+				"capabilities": []any{"api:self-debug", model.GrainSourceGrant}},
 		}}}
 		if err := relayProposedTasks(ctx, store, nil, nil, source, result, now); err != nil {
 			t.Fatal(err)

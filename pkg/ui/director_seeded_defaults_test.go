@@ -43,7 +43,7 @@ func seededSessionClient(t *testing.T, id string, tasksApproved bool) (*ui.Clien
 		t.Fatal(err)
 	}
 	session, err := client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "Session", Interactive: true, Capabilities: &[]string{"self-debug"},
+		Title: "Session", Interactive: true, Capabilities: &[]string{"api:self-debug", model.GrainSourceGrant},
 	})
 	if err != nil {
 		t.Fatal(err)

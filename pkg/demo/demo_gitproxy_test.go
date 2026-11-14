@@ -79,12 +79,14 @@ func TestDemoGitProxyServesNamespaceAndSandboxCLI(t *testing.T) {
 		Target:    &repo,
 		CreatedAt: &now,
 		Grants: []model.Grant{
-			{Capability: model.SelfDebugCapability, Via: model.GrantByLabel},
-			{Capability: "grain-ci", Via: model.GrantByGrain},
-			{Capability: "deployment-health", Via: model.GrantByLabel},
-			{Capability: "grain-log", Via: model.GrantByLabel},
-			{Capability: "read-issues", Via: model.GrantByLabel},
-			{Capability: "db-read", Via: model.GrantByLabel},
+			{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
+			{Capability: model.GrainSourceGrant, Via: model.GrantByLabel},
+			{Capability: model.GrainCIGrant, Via: model.GrantByGrain},
+			{Capability: model.APIRef("deployment:read"), Via: model.GrantByLabel},
+			{Capability: model.GrainHealthGrant, Via: model.GrantByLabel},
+			{Capability: model.GrainJournalGrant, Via: model.GrantByLabel},
+			{Capability: model.GitHubReadIssuesGrant, Via: model.GrantByLabel},
+			{Capability: model.GrainSQLReadGrant, Via: model.GrantByLabel},
 		},
 	}
 	if err := store.PutTask(ctx, task); err != nil {

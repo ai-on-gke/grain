@@ -113,9 +113,9 @@ func TestModelProxyMigrationFidelity(t *testing.T) {
 		for _, own := range []string{vendor.Name + "-own", "other-framework-conn", ""} {
 			t.Run(vendor.Name+"/"+own, func(t *testing.T) {
 				legacyName := CapabilityName(vendor)
-				rewritten := model.CanonicalLegacyGrant(legacyName)
+				rewritten := model.RetiredGrantsBecame(legacyName)[0]
 				if rewritten != model.ModelProxyGrant(vendor.Name) {
-					t.Fatalf("%s is aliased to %q, want %q", legacyName, rewritten, model.ModelProxyGrant(vendor.Name))
+					t.Fatalf("%s is rewritten to %q, want %q", legacyName, rewritten, model.ModelProxyGrant(vendor.Name))
 				}
 
 				legacy := New(vendor, endpoints[vendor.Name])

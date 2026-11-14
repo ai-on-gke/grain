@@ -262,7 +262,9 @@ test("dispatch-control over POST /api/mcp, and the pages that show it", async ({
       data: {
         title: `Asks for gcp-key ${stamp}`,
         description: "x",
-        capabilities: ["gcp-key"],
+        capabilities: [
+          'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"sandbox-agent","primary":true}',
+        ],
       },
     }),
     "create escalating proposal",

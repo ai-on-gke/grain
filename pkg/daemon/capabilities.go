@@ -219,12 +219,9 @@ func grantTools(srcDir, secretsDir string, secretStore *secrets.Store) map[strin
 		// Built per run rather than once here, so that a secret set
 		// since this process started is redacted by the next run that
 		// reads the journal rather than by the next restart.
-		grainlog.CapabilityName: func(_ *model.Store, taskID string) []mcp.Tool {
-			return grainlog.Tools(grainlog.Config{
-				TaskID:   taskID,
-				Redactor: grainLogRedactorFor(secretsDir, secretStore),
-			})
-		},
+		// Keyed by grain#journal alone: the retired bare grain-log is
+		// no longer an alias, so a task still holding it is given no
+		// journal tools.
 		grainserver.JournalGrant: func(_ *model.Store, taskID string) []mcp.Tool {
 			return grainlog.Tools(grainlog.Config{
 				TaskID:   taskID,

@@ -360,11 +360,6 @@ func ciOnlyCapability(name string) bool {
 	if rule, ok := model.CIGrantRuleFor(name); ok && rule.IsCIOnly() {
 		return true
 	}
-	for _, spec := range capabilityCatalog() {
-		if spec.Name == name {
-			return spec.CIOnly
-		}
-	}
 	return false
 }
 
@@ -683,19 +678,16 @@ func (c *Client) capabilityStatusesWithSecrets(cfg model.Config, repoConfigs []m
 	buildDefaults := capability.DefaultOn()
 	out := make([]CapabilityStatus, 0, len(catalog))
 	for _, spec := range catalog {
-		canonical := model.CanonicalLegacyGrant(spec.Name)
-		key := capabilityStatusKey(spec.Name)
-		_, grantable := c.capabilityByID(spec.Name)
-		if !grantable && !spec.CIOnly {
-			grantable = slices.ContainsFunc(picker, func(cap Capability) bool {
-				return capabilityStatusKey(cap.ID) == key
-			})
-		}
+		canonical := model.RetiredGrantsBecame(spec.Name)[0]
+		key := capabilityStatusKey(canonical)
+		grantable := !spec.CIOnly && slices.ContainsFunc(picker, func(cap Capability) bool {
+			return capabilityStatusKey(cap.ID) == key
+		})
 		defaultRepos := slices.Clone(reposByCapability[key])
 		slices.Sort(defaultRepos)
 		status := CapabilityStatus{
 			// Named as the grant the provider's bare name was retired
-			// onto (model.CanonicalLegacyGrant), which is what a task or
+			// onto (model.RetiredGrantsBecame), which is what a task or
 			// a repository's CI capabilities are granted now.
 			ID:          canonical,
 			Name:        capabilityDisplayName(spec.Name),

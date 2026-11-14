@@ -29,11 +29,14 @@ func TestGrantAlreadyStoredMatchesBareSandboxRepo(t *testing.T) {
 	for _, name := range []string{
 		model.GitHubSandboxRepoRef,
 		"https://grain.dev/capabilities/GitHub#sandbox-repo",
-		"github-sandbox",
 	} {
 		if !grantAlreadyStored(stored, name, nil) {
 			t.Errorf("grantAlreadyStored(%v, %q) = false, want true", stored, name)
 		}
+	}
+	// The retired bare github-sandbox name is no longer an alias.
+	if grantAlreadyStored(stored, "github-sandbox", nil) {
+		t.Error("grantAlreadyStored matched retired bare github-sandbox")
 	}
 	if !grantAlreadyStored([]string{model.GitHubSandboxRepoRef}, model.GitHubSandboxRepoGrant, nil) {
 		t.Error("a bare stored row does not hold the recorded grant")

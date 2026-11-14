@@ -61,7 +61,7 @@ test("grain-ci: not in the repo page's picker, and naming it is refused with the
   // is refused, and the refusal names the switch rather than calling a
   // capability this build ships "unknown".
   let res = await context.request.put("/api/repos/acme/widgets/capabilities", {
-    data: { defaultCapabilities: ["grain-ci"] },
+    data: { defaultCapabilities: ["https://grain.dev/capabilities/grain#ci"] },
   });
   expect(res.status()).toBe(400);
   let { error } = await res.json();

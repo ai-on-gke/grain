@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import { useCallback, useContext, useState } from "react";
-import { Alert } from "@mui/material";
 import CapabilityServersPanel from "../CapabilityServersPanel.jsx";
 import CapabilityPolicyEditor from "../CapabilityPolicyEditor.jsx";
 import ApiScopeSetsPanel from "../ApiScopeSetsPanel.jsx";
@@ -55,95 +54,6 @@ export default function CapabilitiesSection({
   }, [onSaved]);
   return (
     <>
-      <Alert
-        severity="info"
-        data-testid="gcp-key-deprecation-notice"
-        sx={{ mb: 2 }}
-      >
-        Deprecated: bare <code>gcp-key</code> and{" "}
-        <code>gcp-key:&lt;name&gt;</code> in-process grants were retired onto{" "}
-        <code>https://grain.dev/capabilities/gcp#gcp-key</code> permission sets.
-        They remain readable as aliases for one release; update{" "}
-        <code>.grain</code> declarations and external configs to{" "}
-        <code>gcp#gcp-key</code>.
-      </Alert>
-      <Alert
-        severity="info"
-        data-testid="model-proxy-deprecation-notice"
-        sx={{ mb: 2 }}
-      >
-        Deprecated: the in-process <code>claude-proxy</code>,{" "}
-        <code>openai-proxy</code> and <code>gemini-proxy</code> grants were
-        retired onto{" "}
-        <code>
-          https://grain.dev/capabilities/model-proxy#model-proxy {"{vendor}"}
-        </code>
-        , which forwards with the same team connection. They remain readable as
-        aliases for one release; update <code>.grain</code> declarations and
-        external configs to <code>model-proxy#model-proxy</code>.
-      </Alert>
-      <Alert
-        severity="info"
-        data-testid="gemini-key-deprecation-notice"
-        sx={{ mb: 2 }}
-      >
-        Deprecated: the in-process <code>gemini-key</code> grant was retired
-        onto <code>https://grain.dev/capabilities/gcp#gemini-key</code>, which
-        mints with the same <code>gcp-key-minter</code> secret. It remains
-        readable as an alias for one release; update <code>.grain</code>{" "}
-        declarations and external configs to <code>gcp#gemini-key</code>.
-      </Alert>
-      <Alert
-        severity="info"
-        data-testid="release-deprecation-notice"
-        sx={{ mb: 2, overflowWrap: "anywhere" }}
-      >
-        Deprecated: the in-process <code>image-signing</code>,{" "}
-        <code>registry-push</code> and <code>package-publish</code> grants were
-        retired onto the in-process{" "}
-        <code>https://grain.dev/capabilities/release</code> server&apos;s
-        methods of the same names, which place the same files on the same CI
-        events. They remain readable as aliases for one release; update{" "}
-        <code>.grain</code> declarations, repository CI capabilities and
-        external configs to <code>release#&lt;method&gt;</code>.
-      </Alert>
-      <Alert
-        severity="info"
-        data-testid="grain-ci-deprecation-notice"
-        sx={{ mb: 2, overflowWrap: "anywhere" }}
-      >
-        Deprecated: the in-process <code>grain-ci</code> grant was retired onto{" "}
-        <code>https://grain.dev/capabilities/grain#ci</code>, which a
-        repository&apos;s CI Mode still grants. It remains readable as an alias
-        for one release; update <code>.grain</code> declarations and external
-        configs to <code>grain#ci</code>.
-      </Alert>
-      <Alert
-        severity="info"
-        data-testid="bootstrap-playbooks-deprecation-notice"
-        sx={{ mb: 2, overflowWrap: "anywhere" }}
-      >
-        Deprecated: the in-process <code>bootstrap-playbooks</code> grant was
-        retired onto{" "}
-        <code>https://grain.dev/capabilities/config-map#config-map</code>{" "}
-        <code>{'{"config_maps":["bootstrap"]}'}</code>, which places the same
-        embedded runbooks in <code>/home/debian/.config-map/bootstrap</code>. It
-        remains readable as an alias for one release; update <code>.grain</code>{" "}
-        declarations and external configs to <code>config-map#config-map</code>.
-      </Alert>
-      <Alert
-        severity="info"
-        data-testid="github-sandbox-deprecation-notice"
-        sx={{ mb: 2, overflowWrap: "anywhere" }}
-      >
-        Deprecated: the in-process <code>github-sandbox</code> grant was retired
-        onto <code>https://grain.dev/capabilities/github#sandbox-repo</code>,
-        which mints ephemeral repositories with the same{" "}
-        <code>github-app/app-id</code> and <code>github-app/private-key</code>{" "}
-        secrets. It remains readable as an alias for one release; update{" "}
-        <code>.grain</code> declarations, repository CI capabilities and
-        external configs to <code>github#sandbox-repo</code>.
-      </Alert>
       {/* The servers panel draws its own read-only form (readOnly), and
           keeps its list clickable so one server's page can still be
           opened; the card's disabled fieldset would stop that too. */}

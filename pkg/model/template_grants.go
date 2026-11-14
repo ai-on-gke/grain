@@ -106,16 +106,13 @@ func ReviewTemplateRefusedNote(proposer, asked, fallback string, why error) stri
 }
 
 // IsDangerousGrant reports whether name is a dangerous grant that only a person
-// may grant: any dangerous api grant (including bare preset aliases), a retired
+// may grant: any dangerous api grant, a retired
 // dangerous capability (db-write, self-repair), or a capability-server reference whose
 // method or arguments require a person (protocol.GrantByPerson).
 func IsDangerousGrant(name string) bool {
 	s := strings.TrimSpace(StoredGrantSpelling(name))
 	if s == "db-write" || s == "self-repair" {
 		return true
-	}
-	if preset, ok := apiAliasCapabilities[s]; ok {
-		s = APIGrantPrefix + preset
 	}
 	if IsDangerousAPIGrant(s) {
 		return true
