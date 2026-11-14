@@ -238,3 +238,55 @@ func TestAgentAPIRefusesClearingAWiderSiblingsGoal(t *testing.T) {
 		t.Errorf("DELETE goal of an equal-grant sibling = %d %s, want 200", code, body)
 	}
 }
+
+// TestAgentAPIRefusesHaltingAWiderSibling pins the 2026-11-11
+// caller-identity walkthrough's item 6: a narrower agent could close,
+// stop, pause, defer, suspend or unapprove a wider sibling. The halting
+// routes ride the cross-task rail; the agent's own proposals and children
+// stay its to halt, but a child may not halt its wider parent.
+func TestAgentAPIRefusesHaltingAWiderSibling(t *testing.T) {
+	srv, client := testServer(t)
+	seedAPITask(t, client, "501", "acme/widgets", "api:tasks:write")
+	seedAPITask(t, client, "502", "acme/widgets", "api:tasks:write", "api:tasks:admin")
+	seedAPITask(t, client, "500", "acme/widgets", "api:tasks:write", "api:tasks:admin")
+	mutateTask(t, client, "501", func(task *model.Task) {
+		task.Links = append(task.Links, model.Link{Kind: model.LinkChildOf, Target: "500"})
+	})
+
+	routes := []struct{ path, body, verb string }{
+		{"close", `{}`, "close"},
+		{"stop", `{}`, "stop"},
+		{"pause", `{}`, "pause"},
+		{"defer", `{}`, "defer"},
+		{"resume-later", `{"reason":"x","when":{"at":"1h"}}`, "suspend"},
+		{"withdraw-approval", `{}`, "withdraw approval of"},
+	}
+	for _, target := range []string{"502", "500"} {
+		for _, tc := range routes {
+			path := "/api/tasks/" + target + "/" + tc.path
+			code, body := asAgent(t, srv, "501", http.MethodPost, path, tc.body, "testing")
+			if code != http.StatusForbidden || !strings.Contains(body, "cannot "+tc.verb+" task "+target) ||
+				!strings.Contains(body, "grant api:tasks:admin") {
+				t.Errorf("POST %s by a narrower sibling or child = %d %s, want 403 naming the grant it lacks", path, code, body)
+			}
+		}
+	}
+	if obs, err := client.Store.GetObservation(context.Background(), "502"); err != nil {
+		t.Fatal(err)
+	} else if obs != nil && obs.ClosedAt != nil {
+		t.Errorf("wider task was closed at %v", obs.ClosedAt)
+	}
+
+	// The wider task's parent, and an equal-grant sibling, may still close it.
+	seedAPITask(t, client, "503", "acme/widgets", "api:tasks:write", "api:tasks:admin")
+	mutateTask(t, client, "503", func(task *model.Task) {
+		task.Links = append(task.Links, model.Link{Kind: model.LinkChildOf, Target: "501"})
+	})
+	if code, body := asAgent(t, srv, "501", http.MethodPost, "/api/tasks/503/close", `{}`, "testing"); code != http.StatusOK {
+		t.Errorf("close of the agent's own wider child = %d %s, want 200", code, body)
+	}
+	seedAPITask(t, client, "504", "acme/widgets", "api:tasks:write")
+	if code, body := asAgent(t, srv, "501", http.MethodPost, "/api/tasks/504/close", `{}`, "testing"); code != http.StatusOK {
+		t.Errorf("close of an equal-grant sibling = %d %s, want 200", code, body)
+	}
+}

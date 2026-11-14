@@ -27,7 +27,8 @@ import (
 // task's prompt or send its run back to work: editing its description or
 // promptExtension, setting its brief or handover (brief, compact),
 // rolling it over into a successor that carries its grants (rollover),
-// re-queuing it, or speaking in its conversation. An
+// re-queuing it, or speaking in its conversation -- and the halting
+// routes (agentHaltingRoutes) that close it or stop its work. An
 // agent holding api:tasks:write (or dispatch:write) on a repository may
 // call them on another task there only when that task's grants are
 // within the agent's own task's (agentCrossTaskRail) -- otherwise a
@@ -54,6 +55,30 @@ var agentSteeringRoutes = map[string]string{
 	"POST /api/tasks/{id}/rollover": "roll over",
 	agentMessagesRoute:              "message the agent of",
 	taskNotesRoute:                  "leave a note for",
+
+	"POST /api/tasks/{id}/close":             "close",
+	"POST /api/tasks/{id}/stop":              "stop",
+	"POST /api/tasks/{id}/pause":             "pause",
+	"POST /api/tasks/{id}/defer":             "defer",
+	"POST /api/tasks/{id}/resume-later":      "suspend",
+	"POST /api/tasks/{id}/withdraw-approval": "withdraw approval of",
+}
+
+// agentHaltingRoutes are the agentSteeringRoutes that close a task or stop
+// its work: ending its run, pausing or deferring it, holding it on a
+// resume condition the caller picks, or taking it back out of the queue.
+// None of them lends the caller the target's grants, but each lets a
+// less-privileged run close or stall more-privileged work a person
+// approved (2026-11-11 caller-identity walkthrough, item 6), so they ride
+// the same rail -- except from the target's parent (childOf): a director
+// has to be able to stop the children it runs.
+var agentHaltingRoutes = map[string]bool{
+	"POST /api/tasks/{id}/close":             true,
+	"POST /api/tasks/{id}/stop":              true,
+	"POST /api/tasks/{id}/pause":             true,
+	"POST /api/tasks/{id}/defer":             true,
+	"POST /api/tasks/{id}/resume-later":      true,
+	"POST /api/tasks/{id}/withdraw-approval": true,
 }
 
 // agentCrossTaskRail refuses an agent steering (agentSteeringRoutes)
@@ -69,7 +94,9 @@ var agentSteeringRoutes = map[string]string{
 //     back to it. Those are delivered marked as untrusted agent input
 //     (untrustedAgentInputNotice) whenever the sender's grants are
 //     narrower than the recipient's, and never park, re-queue (beyond a
-//     resting durable task's wake) or answer a pending question.
+//     resting durable task's wake) or answer a pending question;
+//   - a halting route (agentHaltingRoutes) called by the target's parent
+//     (childOf) -- one way only: a child may not halt its wider parent.
 //
 // Plain comments, replies and agent-messages to any other wider task are
 // refused: a comment is delivered to the live run like a person's
@@ -102,11 +129,23 @@ func (s *Server) agentCrossTaskRail(ctx context.Context, acting *model.Task, pat
 	if (pattern == agentMessagesRoute || pattern == taskNotesRoute) && related(acting, task) {
 		return nil
 	}
+	if agentHaltingRoutes[pattern] && childOf(task, acting.ID) {
+		return nil
+	}
 	return fmt.Errorf("task %s cannot %s task %s: task %s carries %s, which task %s does not hold. "+
-		"An agent may only edit, re-queue or message another task whose grants, reads, writes and network "+
-		"access are within its own task's (its own proposals and its parent or children excepted); "+
+		"An agent may only edit, re-queue, message, halt or close another task whose grants, reads, writes and "+
+		"network access are within its own task's (its own proposals and its parent or children excepted); "+
 		"ask a person to act on task %s instead (docs/agent-api.md)",
 		acting.ID, verb, task.ID, task.ID, why, acting.ID, task.ID)
+}
+
+// childOf reports whether task is a child of parent: filed by it
+// (LinkProposedBy) or spawned under it (LinkChildOf).
+func childOf(task *model.Task, parent string) bool {
+	return slices.ContainsFunc(task.Links, func(l model.Link) bool {
+		return (l.Kind == model.LinkProposedBy || l.Kind == model.LinkChildOf) &&
+			model.NormalizeTaskID(l.Target) == parent
+	})
 }
 
 // agentTaskWithin reports what task carries that acting does not: a grant
