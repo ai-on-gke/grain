@@ -56,7 +56,10 @@ import {
 } from "../shared/pill-select.component";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { CreateTaskService } from "./create-task.service";
+import { forkHeadHelp, parseForkHead } from "../shared/fork-head";
+import { PRIORITY_REFUSAL, taskPriority } from "../shared/task-priority";
 import {
+  DEFAULT_PRIORITY,
   type FieldId,
   NO_REPO,
   type NewTaskDraft,
@@ -65,11 +68,14 @@ import {
   defaultCapabilitiesForRepo,
   directorMessage,
   emptyDraft,
+  forkHeadProblem,
   fromTemplateStem,
   hasHistory,
   lastBaseForRepo,
+  priorityProblem,
   resolveFields,
   targetableRepos,
+  templatePriority,
   validate,
 } from "./new-task-form";
 
@@ -333,6 +339,80 @@ const FRAMEWORKS: readonly PillOption[] = [
                         [ngTemplateOutletContext]="{ $implicit: id }"
                       />
                     }
+                    <!-- Task priority, Owner, Keep running and Admission:
+                         not configurable in settings/new-task-form.yml,
+                         as on the classic form. -->
+                    <label class="field">
+                      <span>Task priority</span>
+                      <input
+                        #priorityInput
+                        type="number"
+                        min="1"
+                        step="1"
+                        inputmode="numeric"
+                        autocomplete="off"
+                        data-testid="nt-priority"
+                        aria-describedby="nt-priority-help"
+                        [attr.aria-invalid]="priorityBad() ? 'true' : null"
+                        [value]="draft().priority"
+                        (input)="set('priority', val($event))"
+                      />
+                      <small
+                        id="nt-priority-help"
+                        data-testid="nt-priority-help"
+                        [class.muted]="!priorityBad()"
+                        [class.nt-field-error]="priorityBad()"
+                        [attr.role]="priorityBad() ? 'alert' : null"
+                        >{{ priorityHelp() }}</small
+                      >
+                    </label>
+                    <label class="field">
+                      <span>Owner</span>
+                      <input
+                        type="text"
+                        data-testid="nt-owner"
+                        placeholder="Defaults to you"
+                        autocomplete="off"
+                        spellcheck="false"
+                        aria-describedby="nt-owner-help"
+                        [value]="draft().owner"
+                        (input)="set('owner', val($event))"
+                      />
+                      <small id="nt-owner-help" class="muted"
+                        >The account responsible for this task.</small
+                      >
+                    </label>
+                    <label class="check-row">
+                      <input
+                        type="checkbox"
+                        data-testid="nt-keep-running"
+                        aria-describedby="nt-keep-running-help"
+                        [checked]="draft().keepRunning"
+                        (change)="set('keepRunning', checked($event))"
+                      />
+                      <span>Keep running</span>
+                    </label>
+                    <small id="nt-keep-running-help" class="muted nt-check-help"
+                      >Restart the task as soon as its run exits, instead of
+                      completing or parking it.</small
+                    >
+                    <div class="field">
+                      <span id="nt-admission-label">Admission</span>
+                      <g-pill-select
+                        [options]="admissionOptions"
+                        [value]="draft().admission || 'standard'"
+                        ariaLabel="Admission"
+                        align="left"
+                        testid="nt-admission"
+                        (valueChange)="
+                          set('admission', $event === 'standard' ? '' : $event)
+                        "
+                      />
+                      <small class="muted" data-testid="nt-admission-help">{{
+                        admissionHelp()
+                      }}</small>
+                    </div>
+
                     <!-- Reviewers & Auto-approve proposals -->
                     <div class="field">
                       <span>Reviewers (optional)</span>
@@ -490,7 +570,8 @@ const FRAMEWORKS: readonly PillOption[] = [
                   type="submit"
                   class="btn-primary"
                   data-testid="new-task-submit"
-                  [disabled]="busy() || !canFile()"
+                  [disabled]="busy() || !canFile() || !!submitBlocker()"
+                  [attr.title]="submitBlocker()?.message ?? null"
                 >
                   {{
                     draft().workstream
@@ -629,12 +710,38 @@ const FRAMEWORKS: readonly PillOption[] = [
                 draft().newBranch ? "Create it from" : f.label || "Base branch"
               }}</span>
               <input
+                #baseInput
                 type="text"
                 data-testid="nt-base"
                 placeholder="The repository's default branch"
+                spellcheck="false"
+                [attr.aria-invalid]="forkHeadError() ? 'true' : null"
+                [attr.aria-describedby]="
+                  forkHeadError()
+                    ? 'nt-base-error'
+                    : forkHeadNote()
+                      ? 'nt-base-help'
+                      : null
+                "
                 [value]="draft().base"
                 (input)="set('base', val($event))"
               />
+              @if (forkHeadError(); as msg) {
+                <small
+                  id="nt-base-error"
+                  class="nt-field-error"
+                  role="alert"
+                  data-testid="nt-base-error"
+                  >{{ msg }}</small
+                >
+              } @else if (forkHeadNote()) {
+                <small
+                  id="nt-base-help"
+                  class="muted"
+                  data-testid="nt-base-help"
+                  >{{ forkHeadNote() }}</small
+                >
+              }
             </label>
             @if (repoBranches().length) {
               <div class="nt-inline-row" aria-label="Known branches">
@@ -1073,7 +1180,7 @@ export class NewTaskSheetComponent {
       description: d.description,
       repo: d.repo === NO_REPO ? "" : d.repo,
       base: d.base,
-      priority: 5,
+      priority: taskPriority(d.priority) || DEFAULT_PRIORITY,
       model: d.model,
       dependsOn: d.dependsOn,
     };
@@ -1089,6 +1196,61 @@ export class NewTaskSheetComponent {
     viewChild<ElementRef<HTMLInputElement>>("branchInput");
   private readonly foundInInput =
     viewChild<ElementRef<HTMLInputElement>>("foundInInput");
+  private readonly priorityInput =
+    viewChild<ElementRef<HTMLInputElement>>("priorityInput");
+  private readonly baseInput =
+    viewChild<ElementRef<HTMLInputElement>>("baseInput");
+
+  protected readonly admissionOptions: readonly PillOption[] = [
+    { value: "standard", label: "Standard" },
+    { value: "bypass", label: "Bypass queue" },
+    { value: "durable", label: "Durable" },
+  ];
+
+  // The task pane's own wording for each admission value
+  // (ui/src/components/AdmissionField.jsx).
+  protected readonly admissionHelp = computed(
+    () =>
+      ({
+        standard: "Queued with ordinary work, under the worker limit.",
+        bypass:
+          "Admitted past the worker and merger limits and a pipeline pause; still charged to the sandbox budget.",
+        durable:
+          "Bypass queue, plus no wall-clock deadline: suspended when idle and counted under the durable limit.",
+      })[this.draft().admission || "standard"] ?? "",
+  );
+
+  protected readonly priorityBad = computed(
+    () => !!priorityProblem(this.draft()),
+  );
+  protected readonly priorityHelp = computed(() => {
+    if (this.priorityBad()) return PRIORITY_REFUSAL;
+    const tp = this.selectedTemplate()?.priority;
+    return tp
+      ? `default ${tp}, from the template; higher numbers run first`
+      : "default 5; higher numbers run first";
+  });
+
+  // What the Base branch box holds, read as a fork head label: an error
+  // for a malformed one, a note saying what a well-formed one means.
+  protected readonly forkHeadError = computed(
+    () => forkHeadProblem(this.draft(), this.fields())?.message ?? "",
+  );
+  protected readonly forkHeadNote = computed(() => {
+    const d = this.draft();
+    if (d.repo === NO_REPO || d.newBranch) return "";
+    const fh = parseForkHead(d.base);
+    if (!fh || "error" in fh) return "";
+    return forkHeadHelp(fh, d.repo || this.defaultTarget());
+  });
+
+  // What holds Create disabled while the form is filled in: a malformed
+  // fork head or Task priority, which the server would only refuse.
+  protected readonly submitBlocker = computed(
+    () =>
+      forkHeadProblem(this.draft(), this.fields()) ??
+      priorityProblem(this.draft()),
+  );
 
   private readonly knownTasks = computed(() => {
     const byId = new Map<string, Task>();
@@ -1443,6 +1605,9 @@ export class NewTaskSheetComponent {
     const tmpl = this.templates().find((t) => t.id === id);
     if (!tmpl) {
       this.templateValues.set({});
+      if (!this.edited.has("priority")) {
+        this.draft.update((d) => ({ ...d, priority: templatePriority(null) }));
+      }
       return;
     }
     const vals: Record<string, string> = {};
@@ -1450,6 +1615,10 @@ export class NewTaskSheetComponent {
       vals[f.name] = f.default ?? "";
     }
     this.templateValues.set(vals);
+    // Task priority follows the picked template until it is edited.
+    if (!this.edited.has("priority")) {
+      this.draft.update((d) => ({ ...d, priority: templatePriority(tmpl) }));
+    }
     if (tmpl.repo) {
       this.pickRepo(tmpl.repo);
     } else if (tmpl.declaredIn?.repo && !this.draft().repo) {
@@ -1740,6 +1909,11 @@ export class NewTaskSheetComponent {
           this.moreOpen.set(true);
         }
         queueMicrotask(() => this.foundInInput()?.nativeElement.focus());
+      } else if (problem.field === "priority") {
+        this.moreOpen.set(true);
+        queueMicrotask(() => this.priorityInput()?.nativeElement.focus());
+      } else if (problem.field === "base") {
+        this.baseInput()?.nativeElement.focus();
       } else {
         (problem.field === "title"
           ? this.titleInput()
@@ -1789,6 +1963,9 @@ export class NewTaskSheetComponent {
         "parentId",
         "autoApproveProposals",
         "customFields",
+        "owner",
+        "keepRunning",
+        "admission",
       ];
       const hasExtraTaskOverrides =
         d.attachments.length > 0 ||
@@ -1796,6 +1973,8 @@ export class NewTaskSheetComponent {
         d.reads.length > 0 ||
         d.writes.length > 0 ||
         d.capabilities !== null ||
+        (d.priority.trim() !== "" &&
+          d.priority.trim() !== templatePriority(tmpl)) ||
         OVERRIDE_KEYS.some((k) => differs(d[k], fresh[k]));
 
       const canOnlyPostFromTemplate =
@@ -1958,6 +2137,9 @@ export class NewTaskSheetComponent {
       ...(patch.repo !== undefined ? { repo: patch.repo || NO_REPO } : {}),
       ...(patch.base !== undefined ? { base: patch.base } : {}),
       ...(patch.model !== undefined ? { model: patch.model } : {}),
+      ...(patch.priority !== undefined
+        ? { priority: String(patch.priority) }
+        : {}),
       ...(patch.dependsOn !== undefined ? { dependsOn: patch.dependsOn } : {}),
     }));
     if (patch.title !== undefined) this.edited.add("title");
@@ -1965,6 +2147,7 @@ export class NewTaskSheetComponent {
     if (patch.repo !== undefined) this.edited.add("repo");
     if (patch.base !== undefined) this.edited.add("base");
     if (patch.model !== undefined) this.edited.add("model");
+    if (patch.priority !== undefined) this.edited.add("priority");
     if (patch.dependsOn !== undefined) this.edited.add("dependsOn");
     this.snackbar.show("Applied Director suggestions to form");
   }

@@ -683,4 +683,129 @@ describe("NewTaskSheetComponent", () => {
       ),
     ).toBeTruthy();
   });
+
+  it("files Task priority, Owner, Keep running and Admission from More options", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+    type('[data-testid="nt-title"]', "Priority parity");
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    expect(q<HTMLInputElement>('[data-testid="nt-priority"]')!.value).toBe("5");
+
+    const submit = q<HTMLButtonElement>('[data-testid="new-task-submit"]')!;
+    for (const bad of ["0", "-1", "2.5"]) {
+      type('[data-testid="nt-priority"]', bad);
+      await settle(f);
+      expect(submit.disabled).toBe(true);
+      expect(q('[data-testid="nt-priority-help"]')!.textContent).toBe(
+        "a whole number, 1 or more; default 5, higher numbers run first",
+      );
+      expect(
+        q('[data-testid="nt-priority"]')!.getAttribute("aria-invalid"),
+      ).toBe("true");
+    }
+
+    type('[data-testid="nt-priority"]', "1e3");
+    type('[data-testid="nt-owner"]', "alice@example.com");
+    const keep = q<HTMLInputElement>('[data-testid="nt-keep-running"]')!;
+    keep.checked = true;
+    keep.dispatchEvent(new Event("change"));
+    await pickPill(f, "nt-admission", "bypass");
+    await settle(f);
+    expect(q('[data-testid="nt-admission-help"]')!.textContent).toContain(
+      "Admitted past the worker and merger limits",
+    );
+    expect(submit.disabled).toBe(false);
+    submit.click();
+    await settle(f);
+
+    const post = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(post?.body).toMatchObject({
+      title: "Priority parity",
+      priority: 1000,
+      owner: "alice@example.com",
+      keepRunning: true,
+      admission: "bypass",
+    });
+  });
+
+  it("holds Create while Base branch is a malformed fork head, and explains a well-formed one", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    await open(f);
+    type('[data-testid="nt-title"]', "Fork head");
+    const submit = q<HTMLButtonElement>('[data-testid="new-task-submit"]')!;
+
+    for (const bad of ["  :nope", "bad:label:here"]) {
+      type('[data-testid="nt-base"]', bad);
+      await settle(f);
+      expect(submit.disabled).toBe(true);
+      expect(q('[data-testid="nt-base-error"]')!.textContent).toContain(
+        "fork head",
+      );
+      expect(q('[data-testid="nt-base"]')!.getAttribute("aria-invalid")).toBe(
+        "true",
+      );
+    }
+    expect(q('[data-testid="nt-base-error"]')!.textContent).toBe(
+      `"bad:label:here" has more than one ':': a fork head is <owner>:<branch>`,
+    );
+
+    type('[data-testid="nt-base"]', "octo:fix-login");
+    await settle(f);
+    expect(q('[data-testid="nt-base-error"]')).toBeNull();
+    expect(q('[data-testid="nt-base-help"]')!.textContent).toBe(
+      "GitHub fork head: branch fix-login on octo's fork. grain files this task against the open pull request on sidthe/grain it heads.",
+    );
+    expect(submit.disabled).toBe(false);
+
+    // Cutting a new branch from it is not a fork head at all.
+    type('[data-testid="nt-base"]', "bad:label:here");
+    const nb = q<HTMLInputElement>('[data-testid="nt-new-branch"]')!;
+    nb.checked = true;
+    nb.dispatchEvent(new Event("change"));
+    await settle(f);
+    expect(q('[data-testid="nt-base-error"]')).toBeNull();
+  });
+
+  it("keeps a template's priority on Task priority until it is edited", async () => {
+    const api = new FakeApi();
+    api.templates = [{ ...api.templates[0], priority: 8 }];
+    const f = await render(api);
+    await open(f);
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    await pickPill(f, "nt-template", "declared:template:sidthe:grain:bugfix");
+    await settle(f);
+    const box = () => q<HTMLInputElement>('[data-testid="nt-priority"]')!;
+    expect(box().value).toBe("8");
+    expect(q('[data-testid="nt-priority-help"]')!.textContent).toBe(
+      "default 8, from the template; higher numbers run first",
+    );
+    await pickPill(f, "nt-template", "");
+    await settle(f);
+    expect(box().value).toBe("5");
+
+    type('[data-testid="nt-priority"]', "3");
+    await pickPill(f, "nt-template", "declared:template:sidthe:grain:bugfix");
+    await settle(f);
+    expect(box().value).toBe("3");
+
+    // A priority other than the template's own cannot go through
+    // from-template, which takes none: it files through POST /api/tasks.
+    type('[data-testid="nt-tfield-area"]', "auth");
+    await settle(f);
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/from-template"),
+    ).toBeUndefined();
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks")?.body,
+    ).toMatchObject({
+      templateId: "declared:template:sidthe:grain:bugfix",
+      priority: 3,
+    });
+  });
 });
