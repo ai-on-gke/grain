@@ -371,6 +371,27 @@ a.settings-mobile-back {
   height: 36px;
 }
 
+.settings-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.s-skel-line {
+  height: 14px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.s-skel-title {
+  width: 34%;
+  height: 18px;
+}
+
+.s-skel-short {
+  width: 62%;
+}
+
 @media (max-width: 767px) {
   .settings-shell {
     grid-template-columns: 1fr;

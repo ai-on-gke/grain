@@ -115,7 +115,7 @@ interface PendingReleaseRow {
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
-    "../shared/pill-select.css",
+    "../shared/surface-controls.css",
     "../settings/settings-forms.css",
     "./repo-detail.css",
   ],
@@ -1372,8 +1372,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           ),
         );
       }
-      await this.loadCoreRepo();
-      await this.loadTabData();
+      await Promise.all([this.loadCoreRepo(), this.loadTabData()]);
       this.ready.set(true);
     } catch (err) {
       this.error.set(errText(err));
@@ -1383,84 +1382,93 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   private async loadCoreRepo(): Promise<void> {
     const p = this.params();
     if (!p.owner || !p.name) return;
+    const jobs: Promise<void>[] = [];
     if (this.can("GET /api/deployment/repos/{owner}/{name}/config")) {
-      try {
-        const cfg = await this.api.get<Record<string, unknown>>(
-          "GET /api/deployment/repos/{owner}/{name}/config",
-          p,
-        );
-        const eff =
-          (cfg?.["effective"] as Record<string, unknown> | undefined) ?? cfg;
-        if (eff?.["cloneUrl"] !== undefined) {
-          this.cloneUrl.set(String(eff["cloneUrl"] ?? ""));
-        }
-        if (eff?.["gitCredential"] !== undefined) {
-          this.gitCredential.set(String(eff["gitCredential"] ?? ""));
-        }
-      } catch {
-        // Non-fatal
-      }
+      jobs.push(
+        this.api
+          .get<Record<string, unknown>>(
+            "GET /api/deployment/repos/{owner}/{name}/config",
+            p,
+          )
+          .then((cfg) => {
+            const eff =
+              (cfg?.["effective"] as Record<string, unknown> | undefined) ??
+              cfg;
+            if (eff?.["cloneUrl"] !== undefined) {
+              this.cloneUrl.set(String(eff["cloneUrl"] ?? ""));
+            }
+            if (eff?.["gitCredential"] !== undefined) {
+              this.gitCredential.set(String(eff["gitCredential"] ?? ""));
+            }
+          })
+          .catch(() => undefined),
+      );
     }
     if (this.can("GET /api/repos/{owner}/{name}/settings")) {
-      try {
-        const st = await this.api.get<Record<string, unknown>>(
-          "GET /api/repos/{owner}/{name}/settings",
-          p,
-        );
-        if (st?.["ciMode"]) this.ciMode.set(String(st["ciMode"]));
-        if (st?.["mergeOnGreen"] !== undefined) {
-          this.mergeOnGreen.set(Boolean(st["mergeOnGreen"]));
-        }
-        if (st?.["requireBranchUpToDate"] !== undefined) {
-          this.requireUpToDate.set(Boolean(st["requireBranchUpToDate"]));
-        }
-        if (st?.["baseRepairBypassesHumanGates"] !== undefined) {
-          this.bypassHumanGates.set(
-            Boolean(st["baseRepairBypassesHumanGates"]),
-          );
-        }
-        if (st?.["watchDefaultBranch"] !== undefined) {
-          this.watchDefaultBranch.set(Boolean(st["watchDefaultBranch"]));
-        }
-        if (st?.["setupCommand"] !== undefined) {
-          this.setupCommand.set(String(st["setupCommand"] ?? ""));
-        }
-        if (st?.["promptExtension"] !== undefined) {
-          this.promptExtension.set(String(st["promptExtension"] ?? ""));
-        }
-        const imp = st?.["issueImport"] as
-          | {
-              enabled?: boolean;
-              label?: string;
-              repo?: string;
-              approved?: boolean;
+      jobs.push(
+        this.api
+          .get<Record<string, unknown>>(
+            "GET /api/repos/{owner}/{name}/settings",
+            p,
+          )
+          .then((st) => {
+            if (st?.["ciMode"]) this.ciMode.set(String(st["ciMode"]));
+            if (st?.["mergeOnGreen"] !== undefined) {
+              this.mergeOnGreen.set(Boolean(st["mergeOnGreen"]));
             }
-          | undefined;
-        if (imp && typeof imp === "object") {
-          this.importEnabled.set(Boolean(imp.enabled));
-          this.importLabel.set(String(imp.label ?? ""));
-          this.importSourceRepo.set(String(imp.repo ?? ""));
-          this.importApproved.set(Boolean(imp.approved));
-        }
-      } catch {
-        // Non-fatal
-      }
+            if (st?.["requireBranchUpToDate"] !== undefined) {
+              this.requireUpToDate.set(Boolean(st["requireBranchUpToDate"]));
+            }
+            if (st?.["baseRepairBypassesHumanGates"] !== undefined) {
+              this.bypassHumanGates.set(
+                Boolean(st["baseRepairBypassesHumanGates"]),
+              );
+            }
+            if (st?.["watchDefaultBranch"] !== undefined) {
+              this.watchDefaultBranch.set(Boolean(st["watchDefaultBranch"]));
+            }
+            if (st?.["setupCommand"] !== undefined) {
+              this.setupCommand.set(String(st["setupCommand"] ?? ""));
+            }
+            if (st?.["promptExtension"] !== undefined) {
+              this.promptExtension.set(String(st["promptExtension"] ?? ""));
+            }
+            const imp = st?.["issueImport"] as
+              | {
+                  enabled?: boolean;
+                  label?: string;
+                  repo?: string;
+                  approved?: boolean;
+                }
+              | undefined;
+            if (imp && typeof imp === "object") {
+              this.importEnabled.set(Boolean(imp.enabled));
+              this.importLabel.set(String(imp.label ?? ""));
+              this.importSourceRepo.set(String(imp.repo ?? ""));
+              this.importApproved.set(Boolean(imp.approved));
+            }
+          })
+          .catch(() => undefined),
+      );
     }
     if (this.access.can("GET /api/deployment/git-connections")) {
-      try {
-        const conns = await this.api.get<
-          { credential?: string; id?: string }[] | { connections?: unknown[] }
-        >("GET /api/deployment/git-connections");
-        const arr = (
-          Array.isArray(conns) ? conns : (conns?.connections ?? [])
-        ) as { credential?: string; id?: string }[];
-        this.availableGitCreds.set(
-          arr.map((c) => c.credential ?? c.id ?? "").filter(Boolean),
-        );
-      } catch {
-        // Non-fatal
-      }
+      jobs.push(
+        this.api
+          .get<
+            { credential?: string; id?: string }[] | { connections?: unknown[] }
+          >("GET /api/deployment/git-connections")
+          .then((conns) => {
+            const arr = (
+              Array.isArray(conns) ? conns : (conns?.connections ?? [])
+            ) as { credential?: string; id?: string }[];
+            this.availableGitCreds.set(
+              arr.map((c) => c.credential ?? c.id ?? "").filter(Boolean),
+            );
+          })
+          .catch(() => undefined),
+      );
     }
+    await Promise.all(jobs);
   }
 
   private async loadTabData(t: RepoTabId = this.activeTab()): Promise<void> {

@@ -31,7 +31,7 @@ import { HelpService } from "./services/help.service";
 import { SnackbarService } from "./services/snackbar.service";
 import { TaskFeedStore } from "./services/task-feed.service";
 import { ThemeService } from "./services/theme.service";
-import { CHLADNI_ROSETTE_PATH } from "./shared/brand-mark";
+import { CHLADNI_ROSETTE_PATH, MARK_SHEET_32_URL } from "./shared/brand-mark";
 import { AccountPopoverComponent } from "./shell/account-popover.component";
 import { DESTINATIONS, SETTINGS } from "./shell/nav";
 
@@ -54,10 +54,14 @@ class FakeShellApi {
   };
   logoutRedirect = "/signed-out";
   logoutCalls = 0;
+  usageBody: unknown = { warnings: [], scopes: [] };
 
   config = () => Promise.resolve(this.configBody);
   tasks = () => Promise.resolve(this.tasksList);
-  get = () => Promise.resolve({ sessions: [] });
+  get = (route?: string) =>
+    route === "GET /api/usage"
+      ? Promise.resolve(this.usageBody)
+      : Promise.resolve({ sessions: [] });
   getIfChanged = (route: string) => {
     if (route === "GET /api/tasks") {
       return Promise.resolve({
@@ -156,18 +160,49 @@ describe("AppComponent shell", () => {
   });
 
   it("switches the brand mark to the animated sprite sheet when agents are running", async () => {
-    const api = new FakeShellApi();
-    const { fixture: f } = await render(api);
-    expect(
-      el(f).querySelector('[data-testid="brand-mark-animated"]'),
-    ).toBeNull();
+    const probes: { src: string; onerror: (() => void) | null }[] = [];
+    const origImage = window.Image;
+    class StubImage {
+      onerror: (() => void) | null = null;
+      private _src = "";
+      constructor() {
+        probes.push(this);
+      }
+      get src(): string {
+        return this._src;
+      }
+      set src(v: string) {
+        this._src = v;
+      }
+    }
+    window.Image = StubImage as unknown as typeof Image;
+    try {
+      const api = new FakeShellApi();
+      const { fixture: f } = await render(api);
+      expect(MARK_SHEET_32_URL.startsWith("/next/")).toBe(true);
+      expect(probes.length).toBe(0);
+      expect(
+        el(f).querySelector('[data-testid="brand-mark-animated"]'),
+      ).toBeNull();
 
-    api.tasksList = [{ id: "11", title: "Build UI", state: "running" }];
-    await TestBed.inject(TaskFeedStore).refresh();
-    await f.whenStable();
-    expect(
-      el(f).querySelector('[data-testid="brand-mark-animated"]'),
-    ).not.toBeNull();
+      api.tasksList = [{ id: "11", title: "Build UI", state: "running" }];
+      await TestBed.inject(TaskFeedStore).refresh();
+      await f.whenStable();
+      expect(probes.length).toBe(1);
+      expect(probes[0].src).toBe(MARK_SHEET_32_URL);
+      expect(
+        el(f).querySelector('[data-testid="brand-mark-animated"]'),
+      ).not.toBeNull();
+
+      probes[0].onerror?.();
+      f.detectChanges();
+      expect(
+        el(f).querySelector('[data-testid="brand-mark-animated"]'),
+      ).toBeNull();
+      expect(el(f).querySelector(".brand-mark-svg")).not.toBeNull();
+    } finally {
+      window.Image = origImage;
+    }
   });
 
   it("routes built pages (including Settings) inside the app and omits Classic UI escape links", async () => {
@@ -685,5 +720,104 @@ describe("AppComponent shell", () => {
     );
     await f.whenStable();
     expect(ctx.isOpen()).toBe(false);
+  });
+
+  it("renders global dispatch banner, live-pill pause indicator, and Next up pause note on agentPause", async () => {
+    const api = new FakeShellApi();
+    const resetIso = new Date(Date.now() + 90 * 60_000).toISOString();
+    api.configBody = {
+      ...api.configBody,
+      timeZone: "America/Los_Angeles",
+      agentPause: {
+        paused: true,
+        until: resetIso,
+        reason: "HTTP 429 quota exceeded",
+        pauses: [
+          {
+            connection: "antigravity",
+            connectionName: "Antigravity",
+            team: "core",
+            until: resetIso,
+            reason: "HTTP 429 quota exceeded",
+            secondsRemaining: 5400,
+            canLift: true,
+          },
+        ],
+      },
+    };
+    const { fixture: f } = await render(api);
+
+    const banner = el(f).querySelector(
+      '[data-testid="global-dispatch-banner"]',
+    );
+    expect(banner).toBeTruthy();
+    expect(banner?.classList.contains("is-error")).toBe(true);
+    expect(banner?.textContent).toContain("Antigravity development paused");
+    expect(banner?.textContent).toContain("in ");
+
+    const livePill = el(f).querySelector('[data-testid="live-pill"]');
+    expect(livePill?.classList.contains("is-paused-error")).toBe(true);
+    expect(livePill?.textContent).toContain("Quota paused");
+
+    el(f)
+      .querySelector<HTMLButtonElement>('[data-testid="next-up-caret"]')!
+      .click();
+    await f.whenStable();
+    const note = el(f).querySelector('[data-testid="next-up-paused-note"]');
+    expect(note?.textContent).toContain("Antigravity development paused");
+  });
+
+  it("surfaces exhausted usage quotas and toggles Details (N) breakdown", async () => {
+    const api = new FakeShellApi();
+    const resetA = new Date(Date.now() + 60 * 60_000).toISOString();
+    const resetB = new Date(Date.now() + 120 * 60_000).toISOString();
+    api.configBody = {
+      ...api.configBody,
+      timeZone: "America/Los_Angeles",
+    };
+    api.usageBody = {
+      warnings: [
+        "default model opus-5.5 on antigravity is paused until 20:00 UTC; work falls back to nothing — it is the last model on the default list",
+      ],
+      scopes: [
+        {
+          connection: "antigravity",
+          connectionName: "Antigravity",
+          model: "opus-5.5",
+          pausedUntil: resetA,
+        },
+        {
+          connection: "claude",
+          connectionName: "Claude",
+          model: "opus-4.5",
+          pausedUntil: resetB,
+        },
+      ],
+    };
+    const { fixture: f } = await render(api);
+
+    const banner = el(f).querySelector(
+      '[data-testid="global-dispatch-banner"]',
+    );
+    expect(banner).toBeTruthy();
+    expect(banner?.classList.contains("is-error")).toBe(true);
+    expect(banner?.textContent).toContain("no fallback models left");
+
+    const toggle = el(f).querySelector<HTMLButtonElement>(
+      '[data-testid="dispatch-banner-toggle"]',
+    )!;
+    expect(toggle.textContent?.trim()).toMatch(/^Details \(\d+\)$/);
+    expect(
+      el(f).querySelector('[data-testid="dispatch-banner-details"]'),
+    ).toBeNull();
+
+    toggle.click();
+    await f.whenStable();
+    const details = el(f).querySelector(
+      '[data-testid="dispatch-banner-details"]',
+    );
+    expect(details).toBeTruthy();
+    expect(details?.textContent).toContain("Antigravity · opus-5.5");
+    expect(details?.textContent).toContain("Claude · opus-4.5");
   });
 });

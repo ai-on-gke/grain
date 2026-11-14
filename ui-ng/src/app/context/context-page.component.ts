@@ -94,6 +94,7 @@ type ReachableReposPayload =
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "../shared/ops-surface.css",
     "./context-page.component.css",
   ],

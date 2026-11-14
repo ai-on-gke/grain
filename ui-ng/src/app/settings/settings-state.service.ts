@@ -69,13 +69,23 @@ export function errText(err: unknown): string {
   return String(err ?? "Request failed");
 }
 
-@Injectable()
+export interface ReachableReposState {
+  repos: { repo: string; push: boolean }[];
+  errors: string[];
+  hostMismatches: string[];
+  reason: string;
+}
+
+const REACHABLE_REPOS_TTL_MS = 60_000;
+
+@Injectable({ providedIn: "root" })
 export class SettingsStateService {
   private readonly api = inject(GrainApi);
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
 
   readonly config = signal<GrainConfig | null>(null);
+  readonly initialized = signal(false);
   readonly settings = signal<Record<string, unknown>>({});
   readonly deployment = signal<Record<string, unknown>>({});
   readonly draft = signal<Record<string, unknown>>({});
@@ -89,6 +99,12 @@ export class SettingsStateService {
   readonly error = signal<string | null>(null);
   readonly planPreview = signal<SettingsPlanRow[] | null>(null);
   readonly refusedChanges = signal<ConfigFileChange[]>([]);
+
+  private reachableCache: { at: number; data: ReachableReposState } | null =
+    null;
+  private reachableInflight: Promise<ReachableReposState> | null = null;
+  readonly reachableEpoch = signal(0);
+  readonly qaRolloutRaw = signal<{ epoch: number; text: string } | null>(null);
 
   recordError(err: unknown): void {
     const changes = extractRefusedChanges(err);
@@ -205,21 +221,122 @@ export class SettingsStateService {
     this.draft.set({});
     this.deployDraft.set({});
     this.fieldErrors.set({});
+    this.qaRolloutRaw.set(null);
     this.discardEpoch.update((n) => n + 1);
     this.planPreview.set(null);
     this.error.set(null);
   }
 
-  async loadCore(): Promise<void> {
-    this.loading.set(true);
+  invalidateReachableRepos(): void {
+    this.reachableCache = null;
+    this.reachableInflight = null;
+    this.reachableEpoch.update((n) => n + 1);
+  }
+
+  async fetchReachableRepos(force = false): Promise<ReachableReposState> {
+    if (
+      !force &&
+      this.reachableCache &&
+      Date.now() - this.reachableCache.at < REACHABLE_REPOS_TTL_MS
+    ) {
+      return this.reachableCache.data;
+    }
+    if (!force && this.reachableInflight) {
+      return this.reachableInflight;
+    }
+    const epoch = this.reachableEpoch();
+    const req = this.api
+      .get<
+        | unknown[]
+        | {
+            repos?: unknown[];
+            errors?: string[];
+            hostMismatches?: string[];
+            reason?: string;
+          }
+      >("GET /api/deployment/reachable-repos")
+      .then((res) => {
+        const rawList = Array.isArray(res) ? res : (res?.repos ?? []);
+        const parsed: { repo: string; push: boolean }[] = [];
+        const seen = new Set<string>();
+        for (const item of rawList) {
+          let slug = "";
+          let push = true;
+          if (typeof item === "string") {
+            slug = item.trim();
+          } else if (item && typeof item === "object" && "repo" in item) {
+            const obj = item as { repo?: unknown; push?: unknown };
+            slug = typeof obj.repo === "string" ? obj.repo.trim() : "";
+            if (typeof obj.push === "boolean") push = obj.push;
+          }
+          if (slug && !seen.has(slug)) {
+            seen.add(slug);
+            parsed.push({ repo: slug, push });
+          }
+        }
+        parsed.sort((a, b) => a.repo.localeCompare(b.repo));
+        const data: ReachableReposState = {
+          repos: parsed,
+          errors: !Array.isArray(res) ? (res?.errors ?? []) : [],
+          hostMismatches: !Array.isArray(res)
+            ? (res?.hostMismatches ?? [])
+            : [],
+          reason: !Array.isArray(res) ? (res?.reason ?? "") : "",
+        };
+        if (this.reachableEpoch() === epoch) {
+          this.reachableCache = { at: Date.now(), data };
+        }
+        return data;
+      })
+      .finally(() => {
+        if (this.reachableInflight === req) {
+          this.reachableInflight = null;
+        }
+      });
+    this.reachableInflight = req;
+    return req;
+  }
+
+  async loadCore(background = false): Promise<void> {
+    if (!background) {
+      this.loading.set(true);
+    }
     this.error.set(null);
     try {
-      const cfg = await this.api.config();
-      if (cfg) {
+      const seedFromConfig = (cfg: GrainConfig | null | undefined) => {
+        if (!cfg) return;
         this.config.set(cfg);
         this.access.setConfig(cfg);
+        const dep = (cfg as Record<string, unknown>)["deployment"];
+        if (
+          dep &&
+          typeof dep === "object" &&
+          !Array.isArray(dep) &&
+          Object.keys(this.deployment()).length === 0
+        ) {
+          this.deployment.set(dep as Record<string, unknown>);
+        }
+      };
+
+      const hasSeededConfig =
+        this.access.configLoaded() && this.access.rawConfig() !== null;
+      let configTask: Promise<void> | null = null;
+      if (hasSeededConfig) {
+        seedFromConfig(this.access.rawConfig());
+        configTask = this.api.config().then(seedFromConfig);
+      } else {
+        const cfg = await this.api.config();
+        seedFromConfig(cfg);
       }
+
       const tasks: Promise<void>[] = [];
+      if (configTask) {
+        tasks.push(
+          configTask.catch((err) => {
+            if (!this.config()) throw err;
+          }),
+        );
+      }
       if (this.access.can("GET /api/settings")) {
         tasks.push(
           this.api
@@ -237,10 +354,15 @@ export class SettingsStateService {
         );
       }
       await Promise.all(tasks);
+      if (this.config() !== null) {
+        this.initialized.set(true);
+      }
     } catch (err) {
       this.error.set(errText(err));
     } finally {
-      this.loading.set(false);
+      if (!background) {
+        this.loading.set(false);
+      }
     }
   }
 
@@ -287,6 +409,7 @@ export class SettingsStateService {
           this.settings.set(saved);
         }
         this.draft.set({});
+        this.qaRolloutRaw.set(null);
       }
       const depPayload = this.deployDraft();
       if (Object.keys(depPayload).length > 0) {
