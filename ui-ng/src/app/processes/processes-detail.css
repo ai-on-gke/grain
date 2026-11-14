@@ -220,3 +220,10 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* An action's error, shown inside the dialog that caused it (the page's
+   own banner is behind the dialog's scrim). */
+.dialog-error {
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
