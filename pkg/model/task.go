@@ -3080,6 +3080,12 @@ type Comment struct {
 	// FiledVia is the sanitized X-Grain-Client label of the tool the
 	// comment was posted from, as Task.FiledVia is the task's.
 	FiledVia string
+	// Note marks a run's comment_on_issue note, whose Summary
+	// (Store.NoteSummary) names a report rather than a question: GET
+	// /api/events records it as task.comment, not task.question
+	// (design/design/integration-events.design.md §3.2). Only read as the
+	// comment is written; it is not stored.
+	Note bool
 }
 
 // Attachment is one file carried alongside a task -- bwsalmon/agents#522's

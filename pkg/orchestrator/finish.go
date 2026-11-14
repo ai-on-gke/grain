@@ -252,7 +252,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 		// summary of what anybody has to do.
 		summary, _ := firstToolCallArg(result, "comment_on_issue", "summary")
 		summary = model.NormalizeQuestionSummary(summary)
-		if _, err := relayQuestion(ctx, store, task, withDroppedAttachments(comment, dropped), summary, attachments, now); err != nil {
+		if _, err := relayNote(ctx, store, task, withDroppedAttachments(comment, dropped), summary, attachments, now); err != nil {
 			return fmt.Errorf("orchestrator: posting comment for %s: %w", task.ID, err)
 		}
 		checkAndRecordStewardReportText(ctx, store, task, runID, comment, result, now)
@@ -1387,6 +1387,20 @@ func relayCommentWithAttachments(ctx context.Context, store *model.Store, task m
 // ordinary comment.
 func relayQuestion(ctx context.Context, store *model.Store, task model.Task,
 	body, summary string, attachments []mcp.ResponseAttachment, now time.Time) (int64, error) {
+	return relayAgentComment(ctx, store, task, body, summary, false, attachments, now)
+}
+
+// relayNote is relayQuestion for a comment_on_issue note: summary is the
+// note's own one line (Store.NoteSummary), and the comment is marked
+// model.Comment.Note so GET /api/events records it as task.comment
+// rather than as a question nobody asked.
+func relayNote(ctx context.Context, store *model.Store, task model.Task,
+	body, summary string, attachments []mcp.ResponseAttachment, now time.Time) (int64, error) {
+	return relayAgentComment(ctx, store, task, body, summary, true, attachments, now)
+}
+
+func relayAgentComment(ctx context.Context, store *model.Store, task model.Task,
+	body, summary string, note bool, attachments []mcp.ResponseAttachment, now time.Time) (int64, error) {
 
 	now, err := answeringTime(ctx, store, task.ID, now)
 	if err != nil {
@@ -1401,6 +1415,7 @@ func relayQuestion(ctx context.Context, store *model.Store, task model.Task,
 		},
 		Body:      body,
 		Summary:   summary,
+		Note:      note,
 		CreatedAt: now,
 	})
 	if err != nil {
