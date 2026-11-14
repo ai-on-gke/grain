@@ -16,6 +16,7 @@ package granule
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,6 +24,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -520,8 +522,12 @@ func TestDeleteReportsARemovalThatNeverSettles(t *testing.T) {
 	state := writeSavedState(t, stateDir, "g-1")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := c.Delete(ctx, stateDir, "g-1"); err == nil {
+	err := c.Delete(ctx, stateDir, "g-1")
+	if err == nil {
 		t.Fatal("Delete of a removal that never settled succeeded")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Delete error = %v, want errors.Is(..., context.DeadlineExceeded)", err)
 	}
 	if _, err := os.Stat(state); err != nil {
 		t.Errorf("the VM's saved state went with a removal that never finished (stat: %v)", err)
@@ -550,5 +556,302 @@ func TestDeleteReportsAnyOtherDockerFailure(t *testing.T) {
 	data, _ := os.ReadFile(argvLog)
 	if got := strings.Count(string(data), "\n"); got != 1 {
 		t.Errorf("docker ran %d times, want the one failed stop and no retry:\n%s", got, data)
+	}
+}
+
+// Docker 28+/29 changed `docker inspect`'s missing-object stderr from
+// "Error: No such object: <name>" to lowercase "error: no such object: <name>".
+// Until upstream gke-labs/granule's case-sensitive isNotFound is updated and
+// re-vendored, vendored granule ccdbc4b fails on the final poll of waitRemoved
+// right as the container disappears and before vmspec.Delete clears the state
+// file. Delete finishes clearing state with one follow-up call.
+func TestDeleteFinishesWhenDocker29InspectPrintsLowercaseNoSuchObject(t *testing.T) {
+	c := Command{buildGranuleCLI(t)}
+	argvLog := filepath.Join(t.TempDir(), "docker-argv")
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "inspect-count")
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$*" >> %[1]q
+n=$(cat %[2]q 2>/dev/null || echo 0)
+case "$1" in
+stop)
+  if [ "$n" -gt 2 ]; then
+    echo "Error response from daemon: No such container: $4" >&2
+    exit 1
+  fi
+  exit 0 ;;
+rm)
+  name="$3"
+  case "$name" in
+  *-netns)
+    exit 0 ;;
+  esac
+  if [ "$n" -gt 2 ]; then
+    exit 0
+  fi
+  echo "Error response from daemon: removal of container $name is already in progress" >&2
+  exit 1 ;;
+inspect)
+  name=$(eval echo "\${$#}")
+  n=$((n + 1))
+  echo "$n" > %[2]q
+  if [ "$n" -le 2 ]; then
+    echo false
+    exit 0
+  fi
+  echo "error: no such object: $name" >&2
+  exit 1 ;;
+esac
+echo "unexpected docker $*" >&2
+exit 2
+`, argvLog, counter)
+	dockerPath := filepath.Join(dir, "docker")
+	if err := os.WriteFile(dockerPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GRANULE_DOCKER", dockerPath)
+
+	stateDir := t.TempDir()
+	state := writeSavedState(t, stateDir, "g-1")
+	if err := c.Delete(context.Background(), stateDir, "g-1"); err != nil {
+		t.Fatalf("Delete against Docker 29 lowercase inspect error: %v", err)
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Errorf("the VM's saved state survived the delete (stat: %v)", err)
+	}
+	data, _ := os.ReadFile(argvLog)
+	if got := strings.Count(string(data), "inspect "); got != 3 {
+		t.Errorf("docker inspect ran %d times, want 3:\n%s", got, data)
+	}
+}
+
+func TestCreateFinishesWhenDocker29StaleCleanupPrintsLowercaseNoSuchObject(t *testing.T) {
+	c := stubGranuleWithStatefulExit(t,
+		"granule: removing stale VM container granule-vm-g-1: docker inspect -f {{.State.Running}} granule-vm-g-1: exit status 1: error: no such object: granule-vm-g-1",
+		"started granule-vm-g-1")
+	if err := c.Create(context.Background(), t.TempDir(), "g-1"); err != nil {
+		t.Fatalf("Create after stale-container lowercase no-such-object: %v", err)
+	}
+}
+
+func stubGranuleWithStatefulExit(t *testing.T, firstErr, secondOut string) Command {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell stub only")
+	}
+	dir, err := os.MkdirTemp("", "granule-stateful-stub-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	marker := filepath.Join(dir, "called")
+	path := filepath.Join(dir, "granule-stub")
+	script := fmt.Sprintf("#!/bin/sh\nif [ ! -f %q ]; then\n  touch %q\n  printf '%%s\\n' %q >&2\n  exit 1\nfi\nprintf '%%s\\n' %q\nexit 0\n",
+		marker, marker, firstErr, secondOut)
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return Command{path}
+}
+
+func TestRemoveContainersHandlesCaseInsensitiveErrorsAndCancellation(t *testing.T) {
+	writeFakeDockerOutput(t, filepath.Join(t.TempDir(), "argv"), "",
+		"error response from daemon: removal of container granule-vm-g-1 is already in progress\n"+
+			"error response from daemon: no such container: granule-vm-g-1-netns\n", 1)
+	if err := RemoveContainers(context.Background(), "g-1"); err != nil {
+		t.Fatalf("RemoveContainers on lowercase stderr: %v", err)
+	}
+
+	// A cancelled context must not be swallowed as success even if stderr only
+	// printed "No such container" before SIGKILL landed.
+	if runtime.GOOS != "windows" {
+		dir := t.TempDir()
+		script := "#!/bin/sh\necho 'Error response from daemon: No such container: granule-vm-g-1-netns' >&2\nexec sleep 5\n"
+		if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		err := RemoveContainers(ctx, "g-1")
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("RemoveContainers on expired ctx = %v, want context.DeadlineExceeded", err)
+		}
+	}
+}
+
+// Exercises Command.Delete and RemoveContainers against a real Docker daemon
+// when one is reachable, covering the Docker 29 concurrent teardown race that
+// fakedocker missed.
+func TestRealDockerConcurrentDeleteSettlement(t *testing.T) {
+	if testing.Short() || runtime.GOOS != "linux" {
+		t.Skip("skipping real-Docker concurrent delete test")
+	}
+	realDocker, err := exec.LookPath("docker")
+	if err != nil {
+		t.Skip("docker binary not on PATH")
+	}
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer checkCancel()
+	if err := exec.CommandContext(checkCtx, realDocker, "info").Run(); err != nil {
+		t.Skipf("docker daemon unavailable: %v", err)
+	}
+
+	c := Command{buildGranuleCLI(t)}
+	suffix := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	imgTag := "grain-granule-del-test:" + suffix
+
+	imgDir := t.TempDir()
+	initSrc := filepath.Join(imgDir, "init.go")
+	const src = `package main
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+)
+func main() {
+	_ = os.MkdirAll("/work", 0o755)
+	buf := make([]byte, 4096)
+	for i := 0; i < 6000; i++ {
+		d := filepath.Join("/work", fmt.Sprintf("d%02d", i%64))
+		if i < 64 {
+			_ = os.MkdirAll(d, 0o755)
+		}
+		_ = os.WriteFile(filepath.Join(d, fmt.Sprintf("f%05d", i)), buf, 0o644)
+	}
+	fmt.Println("READY")
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+`
+	if err := os.WriteFile(initSrc, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	initBin := filepath.Join(imgDir, "init")
+	buildCmd := exec.Command("go", "build", "-o", initBin, initSrc)
+	buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	if out, err := buildCmd.CombinedOutput(); err != nil {
+		t.Fatalf("compiling scratch init: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(filepath.Join(imgDir, "Dockerfile"), []byte("FROM scratch\nCOPY init /init\nENTRYPOINT [\"/init\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(realDocker, "build", "-q", "-t", imgTag, imgDir).CombinedOutput(); err != nil {
+		t.Fatalf("docker build: %v\n%s", err, out)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command(realDocker, "rmi", "-f", imgTag).Run()
+	})
+
+	startContainer := func(t *testing.T, vmName string) string {
+		t.Helper()
+		pod := PodName(vmName)
+		t.Cleanup(func() {
+			_ = exec.Command(realDocker, "rm", "-f", pod, pod+"-netns").Run()
+		})
+		out, err := exec.Command(realDocker, "run", "-d", "--name", pod, "--label", VMLabel+"="+vmName, imgTag).CombinedOutput()
+		if err != nil {
+			t.Fatalf("docker run %s: %v\n%s", pod, err, out)
+		}
+		deadline := time.Now().Add(20 * time.Second)
+		for time.Now().Before(deadline) {
+			logs, _ := exec.Command(realDocker, "logs", pod).CombinedOutput()
+			if strings.Contains(string(logs), "READY") {
+				return pod
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		t.Fatalf("container %s never logged READY", pod)
+		return ""
+	}
+
+	waitRemoving := func(t *testing.T, pod string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			out, err := exec.Command(realDocker, "inspect", "-f", "{{.State.Status}}", pod).Output()
+			if err != nil {
+				t.Fatalf("container %s vanished before 'removing' state was seen: %v", pod, err)
+			}
+			if strings.TrimSpace(string(out)) == "removing" {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %s to enter 'removing' state", pod)
+	}
+
+	// 1. Direct `docker rm -f` racing `Command.Delete` + short ctx timeout check.
+	vm1 := "rt1-" + suffix
+	pod1 := startContainer(t, vm1)
+	stateDir1 := t.TempDir()
+	statePath1 := filepath.Join(stateDir1, vm1+".json")
+	if err := os.WriteFile(statePath1, []byte(`{"name":"`+vm1+`","terminationGracePeriodSeconds":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rmDone := make(chan error, 1)
+	go func() {
+		rmDone <- exec.Command(realDocker, "rm", "-f", pod1).Run()
+	}()
+	waitRemoving(t, pod1)
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer shortCancel()
+	shortErr := c.Delete(shortCtx, stateDir1, vm1)
+	if !errors.Is(shortErr, context.DeadlineExceeded) {
+		t.Fatalf("short Delete = %v, want context.DeadlineExceeded", shortErr)
+	}
+	if !Exists(stateDir1, vm1) {
+		t.Fatal("saved state wiped despite short Delete timing out")
+	}
+
+	if err := c.Delete(context.Background(), stateDir1, vm1); err != nil {
+		t.Fatalf("racing Delete after timeout: %v", err)
+	}
+	if err := <-rmDone; err != nil {
+		t.Fatalf("direct docker rm -f: %v", err)
+	}
+	if Exists(stateDir1, vm1) {
+		t.Fatal("saved state survived completed Delete")
+	}
+	if err := exec.Command(realDocker, "inspect", pod1).Run(); err == nil {
+		t.Fatalf("container %s still exists after Delete", pod1)
+	}
+
+	// 2. Two concurrent Command.Delete calls + concurrent RemoveContainers.
+	vm2 := "rt2-" + suffix
+	pod2 := startContainer(t, vm2)
+	stateDir2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stateDir2, vm2+".json"), []byte(`{"name":"`+vm2+`","terminationGracePeriodSeconds":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, 3)
+	for i := range 2 {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			errs[idx] = c.Delete(context.Background(), stateDir2, vm2)
+		}(i)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		errs[2] = RemoveContainers(context.Background(), vm2)
+	}()
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent teardown caller %d failed: %v", i, err)
+		}
+	}
+	if Exists(stateDir2, vm2) {
+		t.Fatal("saved state survived concurrent Command.Delete")
+	}
+	if err := exec.Command(realDocker, "inspect", pod2).Run(); err == nil {
+		t.Fatalf("container %s still exists after concurrent teardown", pod2)
 	}
 }
