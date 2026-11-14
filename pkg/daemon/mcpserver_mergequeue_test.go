@@ -28,6 +28,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -158,5 +159,26 @@ func TestDaemonMergeQueuePlainGitHost(t *testing.T) {
 	}
 	if lookups != 1 {
 		t.Errorf("lookups = %d, want 1", lookups)
+	}
+}
+
+// A task that closed while it still carried a merge-queue state is
+// history, not a queued pull request: the report leaves it out, as the
+// web UI does, while an open task in the same state stays.
+func TestDaemonMergeQueueSkipsClosedTasks(t *testing.T) {
+	tasks := []ui.Task{
+		{ID: "1", Repo: "o/r", State: model.StateClosed, MergeQueueState: "merge_failed"},
+		{ID: "2", Repo: "o/r", State: model.StateAwaitingSubmit, MergeQueueState: "merge_failed"},
+	}
+	q := daemonMergeQueue{
+		client:        mergeQueueDaemon(t, tasks, nil),
+		defaultBranch: func(string, string) (string, error) { return "main", nil },
+	}
+	report, err := q.QueryMergeQueue(context.Background(), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.QueuedPRs) != 1 || report.QueuedPRs[0].TaskID != "2" {
+		t.Fatalf("queued = %+v, want only awaiting-submit task 2", report.QueuedPRs)
 	}
 }
