@@ -488,6 +488,11 @@ type Upgrader struct {
 	// notes, the recent previews by branch (releasenotes.go).
 	notesMu sync.Mutex
 	notes   map[string]releaseNotesEntry
+
+	// schemaCacheMu guards schemaCache, which remembers target schema
+	// versions learned by registry metadata checks or schemaStep.
+	schemaCacheMu sync.Mutex
+	schemaCache   map[string]targetSchemaCacheEntry
 }
 
 // New builds an Upgrader. It does not validate cfg -- Start reports
@@ -661,7 +666,13 @@ func (u *Upgrader) ValidateBranch(branch string) (string, error) {
 	if err := u.checkBranch(branch); err != nil {
 		return branch, err
 	}
-	return branch, u.checkConfiguredEdition()
+	if err := u.checkConfiguredEdition(); err != nil {
+		return branch, err
+	}
+	if err := u.CheckTargetSchema(context.Background(), branch, ""); err != nil {
+		return branch, err
+	}
+	return branch, nil
 }
 
 // Start validates branch and, if no upgrade started by this same
@@ -683,6 +694,10 @@ func (u *Upgrader) Start(branch string) error {
 	// deployment's own edition: crossing editions is only ever done on
 	// purpose, through StartImageWith's SwitchEdition (edition.go).
 	if err := u.checkConfiguredEdition(); err != nil {
+		log.Printf("upgrade: refusing an upgrade to %q: %v", branch, err)
+		return err
+	}
+	if err := u.CheckTargetSchema(context.Background(), branch, ""); err != nil {
 		log.Printf("upgrade: refusing an upgrade to %q: %v", branch, err)
 		return err
 	}
@@ -1878,6 +1893,31 @@ func (r binaryRunner) rehearse(ctx context.Context, p *progress, dir string, arg
 	ctx, cancel := context.WithTimeout(ctx, schemaCheckTimeout)
 	defer cancel()
 	return runLogged(ctx, p, stepSchema, "", append([]string{r.u.cfg.InstallPath}, args...))
+}
+
+func (r binaryRunner) targetRef() string { return "" }
+
+func (r binaryRunner) stamp(ctx context.Context, p *progress) BuildStamp {
+	var stamp BuildStamp
+	if r.u.cfg.InstallPath != "" {
+		if info, err := version.ReadFile(r.u.cfg.InstallPath); err == nil {
+			if !info.Unversioned {
+				stamp.Release = info.Release
+			}
+			stamp.Commit = info.Revision
+		}
+	}
+	if stamp.Release == "" && stamp.Commit == "" {
+		if out, err := r.ask(ctx, p, []string{"version", "--json"}); err == nil {
+			stamp = parseBuildStampJSON(out)
+		}
+	}
+	if stamp.Commit == "" && r.u.cfg.SrcDir != "" {
+		if rev, err := r.u.headRevision(ctx); err == nil {
+			stamp.Commit = rev
+		}
+	}
+	return stamp
 }
 
 // ReadStatus reads a StatusFile back as it stands, for a reader that is

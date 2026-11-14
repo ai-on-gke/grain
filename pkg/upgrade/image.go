@@ -836,6 +836,31 @@ func (r imageRunner) ask(ctx context.Context, p *progress, args []string) (strin
 	return runAsked(ctx, p, stepSchema, imageRunTimeout, r.run(nil, args))
 }
 
+func (r imageRunner) targetRef() string { return r.ref }
+
+func (r imageRunner) stamp(ctx context.Context, p *progress) BuildStamp {
+	var stamp BuildStamp
+	if out, err := r.ask(ctx, p, []string{"version", "--json"}); err == nil {
+		stamp = parseBuildStampJSON(out)
+	}
+	if (stamp.Release == "" || stamp.Commit == "") && r.ref != "" && len(r.u.cfg.Image.RunCmd) == 0 {
+		if out, err := runAsked(ctx, p, stepSchema, imageInspectTimeout, []string{
+			"docker", "image", "inspect", "--format",
+			`{{index .Config.Labels "org.opencontainers.image.version"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}`,
+			r.ref,
+		}); err == nil {
+			ver, rev, _ := strings.Cut(strings.TrimSpace(out), "|")
+			if stamp.Release == "" {
+				stamp.Release = strings.TrimSpace(ver)
+			}
+			if stamp.Commit == "" {
+				stamp.Commit = strings.TrimSpace(rev)
+			}
+		}
+	}
+	return stamp
+}
+
 // rehearse gives the container one directory of this host's filesystem,
 // read-only, at the path it already has out here.
 //

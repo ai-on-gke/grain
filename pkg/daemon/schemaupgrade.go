@@ -57,6 +57,10 @@ const SchemaUpgradeManifest = "upgrade.json"
 // stops and says which of the two ways out to take.
 const schemaUpgradeMaxAge = 7 * 24 * time.Hour
 
+// ErrSchemaDowngradeRefused is returned when the upgrade flow tries to write
+// a schema-upgrade note whose target schema is lower than the source schema.
+var ErrSchemaDowngradeRefused = errors.New("refusing to write a schema-upgrade note that downgrades the store")
+
 // schemaUpgrade is upgrade.json: what the outgoing build knew, for the
 // incoming one to check against what it knows.
 type schemaUpgrade struct {
@@ -67,6 +71,11 @@ type schemaUpgrade struct {
 	// build whose own SchemaVersion is not this is not the build the note
 	// was written for, and does nothing with it.
 	To int `json:"to"`
+	// OperatorDowngrade is set only by an explicit offline operator CLI
+	// downgrade (`grain db downgrade -to <n>`). Without it, a start whose
+	// store is newer than the build (model.ErrSchemaTooNew) refuses to
+	// downgrade even if an upgrade.json note is present.
+	OperatorDowngrade bool `json:"operatorDowngrade,omitempty"`
 	// Branch is what the upgrade was onto, and Build the stamp of the
 	// process that wrote this. Neither is read by anything: they are for
 	// whoever finds the directory and wants to know which upgrade left
@@ -105,6 +114,27 @@ type schemaUpgrade struct {
 // attempt on it under the name of cleaning up after itself. So the
 // cleanup below is armed only once the ground is known to be clear.
 func WriteSchemaUpgrade(ctx context.Context, dataDir string, db *sql.DB, branch string, from, to int) (_ string, err error) {
+	if to < from {
+		return "", fmt.Errorf("%w: store is at schema %d and target is %d (for deliberate disaster recovery on the host, stop the daemon and run `grain db downgrade -to %d -data-dir %s`)",
+			ErrSchemaDowngradeRefused, from, to, to, dataDir)
+	}
+	return writeSchemaMigrationNote(ctx, dataDir, db, branch, from, to, false)
+}
+
+// WriteSchemaDowngrade writes an operator-authored downgrade note for
+// `grain db downgrade -to <to>`, allowing the next start of a build at schema
+// `to` (< `from`) to archive the newer store and rebuild at `to`.
+func WriteSchemaDowngrade(ctx context.Context, dataDir string, db *sql.DB, from, to int) (string, error) {
+	if to >= from {
+		return "", fmt.Errorf("target schema %d is not lower than the store's current schema %d", to, from)
+	}
+	if err := staterepo.Migratable(from, to); err != nil {
+		return "", err
+	}
+	return writeSchemaMigrationNote(ctx, dataDir, db, "grain db downgrade", from, to, true)
+}
+
+func writeSchemaMigrationNote(ctx context.Context, dataDir string, db *sql.DB, branch string, from, to int, operatorDowngrade bool) (_ string, err error) {
 	dir := SchemaUpgradeDir(dataDir)
 	if err := os.RemoveAll(dir); err != nil {
 		return "", fmt.Errorf("clearing %s: %w", dir, err)
@@ -137,12 +167,13 @@ func WriteSchemaUpgrade(ctx context.Context, dataDir string, db *sql.DB, branch 
 		return "", err
 	}
 	note := schemaUpgrade{
-		From:       from,
-		To:         to,
-		Branch:     branch,
-		WrittenAt:  time.Now().UTC(),
-		Build:      version.Get().Revision,
-		LoadedHead: staterepo.ReadLoadedHead(ctx, StateRepoDir(dataDir)),
+		From:              from,
+		To:                to,
+		OperatorDowngrade: operatorDowngrade,
+		Branch:            branch,
+		WrittenAt:         time.Now().UTC(),
+		Build:             version.Get().Revision,
+		LoadedHead:        staterepo.ReadLoadedHead(ctx, StateRepoDir(dataDir)),
 	}
 	data, err := json.MarshalIndent(note, "", "  ")
 	if err != nil {
@@ -372,6 +403,11 @@ func openStoreForSchemaUpgrade(ctx context.Context, driver, dsn, dataDir string)
 			"and the store is at %d, so the rows in it are not the rows that note describes",
 			err, filepath.Join(SchemaUpgradeDir(dataDir), SchemaUpgradeManifest), note.From, found)
 	}
+	if (errors.Is(err, model.ErrSchemaTooNew) || found > model.SchemaVersion) && !note.OperatorDowngrade {
+		return nil, nil, storeMigration{}, fmt.Errorf("%w -- %s is not an operator-authored downgrade note (`grain db downgrade -to %d -data-dir %s`), "+
+			"and schema downgrades are never performed without explicit operator authorization on the host",
+			err, filepath.Join(SchemaUpgradeDir(dataDir), SchemaUpgradeManifest), model.SchemaVersion, dataDir)
+	}
 
 	archived, err := archiveStore(ctx, driver, dsn, dataDir, found)
 	if err != nil {
@@ -561,10 +597,63 @@ func PrepareStoreSchemaUpgrade(ctx context.Context, dataDir, branch string) (int
 	if found == model.SchemaVersion {
 		return found, "", nil
 	}
+	if model.SchemaVersion < found {
+		return found, "", fmt.Errorf("%w: store in %s is at schema %d and this build knows %d; schema downgrades are refused (for deliberate disaster recovery on the host, stop the daemon and run `grain db downgrade -to %d -data-dir %s`)",
+			model.ErrSchemaTooNew, where, found, model.SchemaVersion, model.SchemaVersion, dataDir)
+	}
 	if err := staterepo.Migratable(found, model.SchemaVersion); err != nil {
 		return found, "", err
 	}
 	dir, err := WriteSchemaUpgrade(ctx, dataDir, db, branch, found, model.SchemaVersion)
+	if err != nil {
+		return found, "", err
+	}
+	return found, dir, nil
+}
+
+// PrepareStoreSchemaDowngrade prepares an offline operator-authored downgrade
+// note (`grain db downgrade -to <to>`) from the store in dataDir to target
+// schema `to`. The caller must ensure no daemon is attached to dataDir.
+func PrepareStoreSchemaDowngrade(ctx context.Context, dataDir string, to int) (int, string, error) {
+	if to < model.BaselineSchemaVersion {
+		return 0, "", fmt.Errorf("target schema %d is below the minimum supported schema %d", to, model.BaselineSchemaVersion)
+	}
+	driver, dsn, err := ResolveDatabase(dataDir)
+	if err != nil {
+		return 0, "", err
+	}
+	where := "the postgres database"
+	if driver != "postgres" {
+		storeDir := dsn
+		if storeDir == "" {
+			storeDir = filepath.Join(dataDir, "store")
+		}
+		if _, err := os.Stat(storeDir); errors.Is(err, os.ErrNotExist) {
+			return 0, "", ErrNoStore
+		} else if err != nil {
+			return 0, "", err
+		}
+		where = storeDir
+	}
+	db, err := openRawDB(driver, dsn, dataDir)
+	if err != nil {
+		return 0, "", fmt.Errorf("opening the store in %s: %w", where, err)
+	}
+	defer db.Close()
+	if err := RefuseWhileDaemonAttached(ctx, "grain db downgrade", "", db, driver == "postgres"); err != nil {
+		return 0, "", err
+	}
+	found, err := model.New(db).SchemaVersion(ctx)
+	if err != nil {
+		return 0, "", fmt.Errorf("reading the schema the store in %s is stamped with: %w", where, err)
+	}
+	if found == 0 {
+		return 0, "", ErrNoStore
+	}
+	if to >= found {
+		return found, "", fmt.Errorf("target schema %d must be lower than the store's current schema %d", to, found)
+	}
+	dir, err := WriteSchemaDowngrade(ctx, dataDir, db, found, to)
 	if err != nil {
 		return found, "", err
 	}

@@ -525,3 +525,232 @@ func TestAQuestionTheBuildNeverAnswersReportsTheBound(t *testing.T) {
 		t.Errorf("error = %q, want it to name the bound that stopped the command", err)
 	}
 }
+
+func fakeVersionedImage(dir, schema, release, revision string) []string {
+	logFile := filepath.Join(dir, "image-runs")
+	script := `printf '%s\n' "$*" >> ` + logFile + `
+case "$*" in
+*schema-version*) echo ` + schema + `;;
+*"version --json"*) printf '{"release":"%s","revision":"%s"}\n' ` + shellQuote(release) + ` ` + shellQuote(revision) + `;;
+*"state check -migrate"*) exit 0;;
+esac`
+	return []string{"sh", "-c", script, "sh"}
+}
+
+// The 2026-11-13 incident: a deployment on main (schema 144) upgraded onto a
+// stale :latest image (schema 143). Any target whose schema is lower than the
+// running store must fail at the schema step without exporting rows, rewriting
+// image.env, or restarting, naming both builds, both schemas, and the stale
+// channel warning.
+func TestAnUpgradeRefusesASchemaDowngradeOnAChannelAndOnAPinnedVersion(t *testing.T) {
+	t.Run("stale channel image", func(t *testing.T) {
+		dir := t.TempDir()
+		refFile := filepath.Join(dir, "image.env")
+		restartMarker := filepath.Join(dir, "restarted")
+		prepare := &recordedPrepare{}
+
+		const previous = "GRAIN_IMAGE=docker.io/grainai/grain:main@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n"
+		if err := os.WriteFile(refFile, []byte(previous), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		var notified int
+		var notifiedBranch string
+		var notifiedFrom, notifiedTo int
+		var notifiedErr error
+		sc := prepare.config(t, 144)
+		sc.RunningBuild = func() BuildStamp {
+			return BuildStamp{Release: "v3.5.0-dev.31+fdd8b8d", Commit: "fdd8b8d1111111"}
+		}
+		sc.OnDowngradeRefused = func(branch string, runningSchema, targetSchema int, err error) {
+			notified++
+			notifiedBranch = branch
+			notifiedFrom = runningSchema
+			notifiedTo = targetSchema
+			notifiedErr = err
+		}
+
+		u := newUpgrader(t, Config{
+			Image: &ImageConfig{
+				Repository: "docker.io/grainai/grain",
+				RefFile:    refFile,
+				PullCmd:    []string{"true"},
+				RunCmd:     fakeVersionedImage(dir, "143", "v3.4.0", "cefb15f2222222"),
+			},
+			ListTags: func(context.Context, string) ([]string, error) {
+				return []string{"latest", "main"}, nil
+			},
+			HealthCheckArgs: []string{"schema-version"},
+			Schema:          sc,
+			RestartCmd:      []string{"sh", "-c", "touch " + restartMarker},
+			StatusFile:      filepath.Join(dir, "upgrade-status.json"),
+		})
+		if err := u.Start("latest"); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		status := waitForPhase(t, u, PhaseFailed)
+
+		if got := prepare.read().calls; got != 0 {
+			t.Errorf("Prepare called %d time(s), want 0 (nothing exported on a downgrade)", got)
+		}
+		if got := readFile(t, refFile); got != previous {
+			t.Errorf("ref file = %q, want unchanged %q", got, previous)
+		}
+		if _, err := os.Stat(restartMarker); err == nil {
+			t.Error("daemon was restarted despite schema downgrade refusal")
+		}
+		if got := stepByName(t, status, stepSchema).State; got != StepFailed {
+			t.Errorf("schema step state = %q, want %q", got, StepFailed)
+		}
+		if notified != 1 || notifiedBranch != "latest" || notifiedFrom != 144 || notifiedTo != 143 || !errors.Is(notifiedErr, ErrSchemaDowngrade) {
+			t.Errorf("OnDowngradeRefused = (%d, %q, %d->%d, %v), want (1, \"latest\", 144->143, ErrSchemaDowngrade)",
+				notified, notifiedBranch, notifiedFrom, notifiedTo, notifiedErr)
+		}
+		for _, want := range []string{
+			`channel "latest"`,
+			"v3.4.0 (commit cefb15f)",
+			"schema 143",
+			"schema 144",
+			"v3.5.0-dev.31+fdd8b8d (commit fdd8b8d)",
+			"probably stale or unpublished",
+		} {
+			if !strings.Contains(status.Detail, want) {
+				t.Errorf("status.Detail = %q, missing %q", status.Detail, want)
+			}
+		}
+
+		// Once learned, Targets and Start reject "latest" before even starting.
+		targets := u.Targets(context.Background())
+		var latestTarget *Target
+		for i := range targets.Targets {
+			if targets.Targets[i].Name == "latest" {
+				latestTarget = &targets.Targets[i]
+				break
+			}
+		}
+		if latestTarget == nil || latestTarget.Allowed || !strings.Contains(latestTarget.Reason, "schema 143") {
+			t.Errorf("Targets latest after failed downgrade = %+v, want Allowed=false naming schema 143", latestTarget)
+		}
+		if err := u.Start("latest"); !errors.Is(err, ErrSchemaDowngrade) {
+			t.Errorf("second Start(\"latest\") = %v, want ErrSchemaDowngrade", err)
+		}
+	})
+
+	t.Run("pinned older tag at schema step", func(t *testing.T) {
+		dir := t.TempDir()
+		refFile := filepath.Join(dir, "image.env")
+		prepare := &recordedPrepare{}
+		const previous = "GRAIN_IMAGE=docker.io/grainai/grain:main@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n"
+		if err := os.WriteFile(refFile, []byte(previous), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sc := prepare.config(t, 20)
+		sc.RunningBuild = func() BuildStamp {
+			return BuildStamp{Release: "v1.9.0", Commit: "fdd8b8d1111111"}
+		}
+		u := newUpgrader(t, Config{
+			Image: &ImageConfig{
+				Repository: "docker.io/grainai/grain",
+				RefFile:    refFile,
+				PullCmd:    []string{"true"},
+				RunCmd:     fakeVersionedImage(dir, "19", "v1.8.0", "cefb15f2222222"),
+			},
+			HealthCheckArgs: []string{"schema-version"},
+			Schema:          sc,
+			StatusFile:      filepath.Join(dir, "upgrade-status.json"),
+		})
+		if err := u.Start("v1.8.0"); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		status := waitForPhase(t, u, PhaseFailed)
+		if got := prepare.read().calls; got != 0 {
+			t.Errorf("Prepare called %d time(s), want 0", got)
+		}
+		if got := readFile(t, refFile); got != previous {
+			t.Errorf("ref file = %q, want %q", got, previous)
+		}
+		if !strings.Contains(status.Detail, `tag "v1.8.0"`) || strings.Contains(status.Detail, "probably stale") {
+			t.Errorf("pinned tag refusal detail = %q, want tag wording without stale-channel note", status.Detail)
+		}
+	})
+}
+
+func TestKubernetesAndSourcePipelinesRefuseSchemaDowngrade(t *testing.T) {
+	t.Run("source pipeline rolls back installed binary", func(t *testing.T) {
+		_, checkout := newFixtureRepo(t, "older-branch")
+		dir := t.TempDir()
+		installPath := filepath.Join(dir, "grain")
+		const previous = "#!/bin/sh\necho 144\n"
+		if err := os.WriteFile(installPath, []byte(previous), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		prepare := &recordedPrepare{}
+		sc := prepare.config(t, 144)
+		sc.RunningBuild = func() BuildStamp { return BuildStamp{Release: "v3.7.0", Commit: "fdd8b8d"} }
+
+		built := "#!/bin/sh\ncase \"$*\" in *\"version --json\"*) echo '{\"release\":\"v3.6.0\",\"revision\":\"cefb15f\"}';; *) echo 143;; esac\n"
+		u := newUpgrader(t, Config{
+			SrcDir: checkout,
+			BuildCmd: []string{"sh", "-c",
+				"mkdir -p bin && printf '%s' " + shellQuote(built) + " > bin/grain && chmod +x bin/grain"},
+			BuiltBinary:     filepath.Join(checkout, "bin", "grain"),
+			InstallPath:     installPath,
+			AllowedBranches: []string{"**"},
+			HealthCheckArgs: []string{"schema-version"},
+			Schema:          sc,
+			StatusFile:      filepath.Join(dir, "upgrade-status.json"),
+		})
+		if err := u.Start("older-branch"); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		status := waitForPhase(t, u, PhaseFailed)
+		if got := readFile(t, installPath); got != previous {
+			t.Errorf("installed binary = %q, want previous restored", got)
+		}
+		if got := prepare.read().calls; got != 0 {
+			t.Errorf("Prepare called %d time(s), want 0", got)
+		}
+		if !strings.Contains(status.Detail, "schema 143") || !strings.Contains(status.Detail, "schema 144") {
+			t.Errorf("status.Detail = %q, want both schemas named", status.Detail)
+		}
+	})
+
+	t.Run("kubernetes pipeline does not flush or repoint deployment", func(t *testing.T) {
+		dir := t.TempDir()
+		prepare := &recordedPrepare{}
+		sc := prepare.config(t, 144)
+		sc.CheckArgs = nil
+		sc.RunningBuild = func() BuildStamp { return BuildStamp{Release: "v3.7.0", Commit: "fdd8b8d"} }
+
+		kubectl, calls, _ := fakeKubectl(t, kubeSucceeded, "143")
+		flushed := 0
+		u := newUpgrader(t, Config{
+			Kube: &KubeConfig{
+				Repository: "example/grain",
+				Deployment: "grain",
+				Namespace:  "grain",
+				Kubectl:    kubectl,
+			},
+			HealthCheckArgs: []string{"schema-version"},
+			Schema:          sc,
+			Flush:           func(context.Context) (func(), error) { flushed++; return func() {}, nil },
+			StatusFile:      filepath.Join(dir, "upgrade-status.json"),
+		})
+		if err := u.Start("latest"); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		status := waitForPhase(t, u, PhaseFailed)
+		if got := prepare.read().calls; got != 0 {
+			t.Errorf("Prepare called %d time(s), want 0", got)
+		}
+		if flushed != 0 {
+			t.Errorf("Flush called %d time(s) on a refused Kubernetes downgrade, want 0", flushed)
+		}
+		if strings.Contains(calls(), "set image") {
+			t.Errorf("kubectl set image ran despite schema downgrade:\n%s", calls())
+		}
+		if !strings.Contains(status.Detail, "schema 143") || !strings.Contains(status.Detail, "probably stale or unpublished") {
+			t.Errorf("status.Detail = %q, want schema 143 and stale channel message", status.Detail)
+		}
+	})
+}

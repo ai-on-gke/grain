@@ -320,16 +320,19 @@ func raiseUpgradeFailed(ctx context.Context, deps Deps, key, target string, stat
 	return err
 }
 
-// clearUpgradeFailed clears every open FamilyUpgradeFailed: an upgrade
-// has since succeeded, so the deployment is past whatever broke.
+// clearUpgradeFailed clears every open FamilyUpgradeFailed and
+// FamilyUpgradeSchemaDowngrade: an upgrade has since succeeded, so the
+// deployment is past whatever broke.
 func clearUpgradeFailed(ctx context.Context, deps Deps) error {
-	open, err := deps.Store.ListNotifications(ctx, model.NotificationFilter{Open: true, Family: model.FamilyUpgradeFailed})
-	if err != nil {
-		return fmt.Errorf("orchestrator: %w", err)
-	}
-	for _, n := range open {
-		if err := clearPipelineNotification(ctx, deps.Store, n.Subject, autoUpgradeNotifier); err != nil {
-			return fmt.Errorf("orchestrator: clearing %s: %w", n.Subject, err)
+	for _, family := range []string{model.FamilyUpgradeFailed, model.FamilyUpgradeSchemaDowngrade} {
+		open, err := deps.Store.ListNotifications(ctx, model.NotificationFilter{Open: true, Family: family})
+		if err != nil {
+			return fmt.Errorf("orchestrator: %w", err)
+		}
+		for _, n := range open {
+			if err := clearPipelineNotification(ctx, deps.Store, n.Subject, autoUpgradeNotifier); err != nil {
+				return fmt.Errorf("orchestrator: clearing %s: %w", n.Subject, err)
+			}
 		}
 	}
 	return nil

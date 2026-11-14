@@ -293,6 +293,11 @@ const (
 	// cleared by orchestrator's automatic upgrades: the next one that
 	// succeeds clears every open instance.
 	FamilyUpgradeFailed = "upgrade.failed"
+	// FamilyUpgradeSchemaDowngrade is raised whenever an upgrade attempt
+	// (manual, scheduled, or automatic) is refused because the target build
+	// has a lower schema version than the running store, "<target>".
+	// Cleared when a subsequent upgrade succeeds.
+	FamilyUpgradeSchemaDowngrade = "upgrade.schema-downgrade"
 	// FamilyCapabilityServerDown is a capability server that fell out of
 	// use -- attached, then failed or needs-config, or refusing the config
 	// it was saved with -- "<capability_id>". Raised and cleared by the

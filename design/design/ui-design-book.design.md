@@ -289,7 +289,7 @@ it rather than copy it.
 
 | Component | File | Use |
 |---|---|---|
-| Pill select | `shared/pill-select.component.ts` | every single-choice dropdown (no native `<select>`) |
+| Pill select | `shared/pill-select.component.ts` | every single-choice dropdown (no native `<select>`); options may carry `disabled` and a `reason` sublabel (never dimmed with `opacity`) |
 | Model picker | `shared/model-picker.component.ts` (+ `shared/model-catalog.ts`) | every model choice: searchable, grouped by connection, keeps and flags a value no connection advertises, optional *Refresh models* |
 | Priority chip | `shared/priority-chip.component.ts` | named priority levels with grain's number |
 | Actor chip | `shared/actor-chip.component.ts` | who did something, shape-coded, "on behalf of" |

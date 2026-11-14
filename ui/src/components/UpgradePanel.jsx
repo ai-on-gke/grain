@@ -515,7 +515,12 @@ function nextRCVersion(running) {
   return `${m[1]}${Number(m[2]) + 1}${m[3]}`;
 }
 
-function DiscardedRCAlert({ discardedRc, onSelectBranch, disabled }) {
+function DiscardedRCAlert({
+  discardedRc,
+  onSelectBranch,
+  disabled,
+  latestDisallowedReason,
+}) {
   if (!discardedRc?.running) return null;
   const { running, latest, replacementRc } = discardedRc;
   const latestLabel = latest ? `latest (${latest})` : "latest";
@@ -555,6 +560,9 @@ function DiscardedRCAlert({ discardedRc, onSelectBranch, disabled }) {
           </>
         )}
       </Box>
+      {latestDisallowedReason && (
+        <Box sx={{ mt: 0.75 }}>{latestDisallowedReason}</Box>
+      )}
       <Stack
         direction="row"
         spacing={1}
@@ -576,7 +584,7 @@ function DiscardedRCAlert({ discardedRc, onSelectBranch, disabled }) {
           color="inherit"
           size="small"
           variant={replacementRc ? "text" : "outlined"}
-          disabled={disabled}
+          disabled={disabled || Boolean(latestDisallowedReason)}
           onClick={() => onSelectBranch("latest")}
         >
           {`Move to ${latestLabel}`}
@@ -637,7 +645,12 @@ function UpgradeNotices({ notices }) {
 // that carries the fix, once one is published, or back to latest. Back is
 // only safe when the schema has not changed between the two, which is why
 // the deployment never makes that move by itself.
-function RetractedReleaseAlert({ retractedRelease, onSelectBranch, disabled }) {
+function RetractedReleaseAlert({
+  retractedRelease,
+  onSelectBranch,
+  disabled,
+  latestDisallowedReason,
+}) {
   if (!retractedRelease?.running) return null;
   const { running, latest, newer } = retractedRelease;
   const latestLabel = latest ? `latest (${latest})` : "latest";
@@ -665,11 +678,14 @@ function RetractedReleaseAlert({ retractedRelease, onSelectBranch, disabled }) {
           </>
         ) : null}{" "}
         is only safe if the database schema has not changed since then &mdash;
-        an older release may not read a schema {running} migrated to.
+        schema downgrades are refused.
         {newer
           ? " Upgrading forward is the safe move."
-          : " If it has changed, wait for the fix-forward release instead."}
+          : " If the schema has advanced, wait for the fix-forward release instead."}
       </Box>
+      {latestDisallowedReason && (
+        <Box sx={{ mt: 0.75 }}>{latestDisallowedReason}</Box>
+      )}
       <Stack
         direction="row"
         spacing={1}
@@ -691,7 +707,7 @@ function RetractedReleaseAlert({ retractedRelease, onSelectBranch, disabled }) {
           color="inherit"
           size="small"
           variant={newer ? "text" : "outlined"}
-          disabled={disabled}
+          disabled={disabled || Boolean(latestDisallowedReason)}
           onClick={() => onSelectBranch("latest")}
         >
           {`Move back to ${latestLabel}`}
@@ -731,7 +747,7 @@ function BranchPicker({
   const [open, setOpen] = useState(false);
   const fetched = useRef(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (fetched.current) return;
     fetched.current = true;
     setLoading(true);
@@ -752,7 +768,11 @@ function BranchPicker({
     } finally {
       setLoading(false);
     }
-  };
+  }, [onTargetsLoaded]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const options = targets?.targets || [];
   const allowed = targets?.allowedBranches || [];
@@ -816,10 +836,19 @@ function BranchPicker({
       renderOption={(props, option) => {
         const { key, ...rest } = props;
         const note = !option.allowed
-          ? "not allowed on this deployment"
+          ? option.reason || "not allowed on this deployment"
           : CHANNEL_NOTES[option.name];
         return (
-          <li key={key} {...rest} data-value={option.name}>
+          <li
+            key={key}
+            {...rest}
+            data-value={option.name}
+            style={{
+              ...rest.style,
+              alignItems: "flex-start",
+              flexWrap: "wrap",
+            }}
+          >
             <Box component="span" sx={{ fontFamily: "monospace" }}>
               <HighlightedText text={option.name} ranges={option.ranges} />
             </Box>
@@ -828,7 +857,7 @@ function BranchPicker({
                 component="span"
                 variant="body2"
                 color="text.secondary"
-                sx={{ ml: 1 }}
+                sx={{ ml: 1, whiteSpace: "normal", overflowWrap: "anywhere" }}
               >
                 — {note}
               </Typography>
@@ -1744,6 +1773,17 @@ export default function UpgradePanel({
   const progress = upgradeProgress(status.steps);
   const unchangedTarget =
     unchangedBranch || (!running && status.unchanged ? status.branch : "");
+  const targetItems = targetsData?.targets || [];
+  const selectedTarget = targetItems.find((t) => t.name === branch.trim());
+  const selectedDisallowedReason =
+    !image.trim() && selectedTarget && !selectedTarget.allowed
+      ? selectedTarget.reason || "not allowed on this deployment"
+      : "";
+  const latestTarget = targetItems.find((t) => t.name === "latest");
+  const latestDisallowedReason =
+    latestTarget && !latestTarget.allowed
+      ? latestTarget.reason || "latest is not allowed on this deployment"
+      : "";
   const selfUpgradeDisabled = Boolean(
     status.selfUpgradeDisabled || config?.selfUpgradeDisabled,
   );
@@ -1787,16 +1827,12 @@ export default function UpgradePanel({
             sx={{ mt: -1, mb: 2 }}
           >
             <ModeDescription mode={status.mode} /> One upgrade at a time; each
-            step below reports itself as it goes. A release that changes the
-            database schema is carried across rather than refused: this
-            deployment&rsquo;s rows are written out, the arriving build is asked
-            to import them before anything cuts over, and it rebuilds the store
-            from them at its first start &mdash; keeping the old one, moved
-            aside, for whatever the new schema has nowhere to put. The queue is
-            held for the duration &mdash; the banner will say this deployment is
-            paused, and the restart, or the upgrade failing, lifts it &mdash;
-            since a run started now would only be discarded by the restart this
-            ends in.
+            step below reports itself as it goes. A release that advances the
+            database schema is carried across automatically; schema downgrades
+            are refused. The queue is held for the duration &mdash; the banner
+            will say this deployment is paused, and the restart, or the upgrade
+            failing, lifts it &mdash; since a run started now would only be
+            discarded by the restart this ends in.
           </Typography>
           {/* The same fallback the externally managed branch above
               draws: a daemon that cannot read its image ref file (or an
@@ -1814,6 +1850,7 @@ export default function UpgradePanel({
           <DiscardedRCAlert
             discardedRc={status.discardedRc || targetsData?.discardedRc}
             disabled={running}
+            latestDisallowedReason={latestDisallowedReason}
             onSelectBranch={(next) => {
               setBranch(next);
               setUnchangedBranch("");
@@ -1825,6 +1862,7 @@ export default function UpgradePanel({
               status.retractedRelease || targetsData?.retractedRelease
             }
             disabled={running}
+            latestDisallowedReason={latestDisallowedReason}
             onSelectBranch={(next) => {
               setBranch(next);
               setUnchangedBranch("");
@@ -1897,6 +1935,16 @@ export default function UpgradePanel({
               }
               disabled={running}
             />
+            {selectedDisallowedReason && (
+              <Alert
+                severity="error"
+                className="upgrade-target-refused"
+                data-testid="upgrade-target-refused"
+                sx={{ mt: 1, overflowWrap: "anywhere" }}
+              >
+                {selectedDisallowedReason}
+              </Alert>
+            )}
             <ImageChooser
               status={status}
               branch={branch}
@@ -1949,7 +1997,11 @@ export default function UpgradePanel({
               <Button
                 type="submit"
                 variant="contained"
-                disabled={running || Boolean(status.cancelBlockedReason)}
+                disabled={
+                  running ||
+                  Boolean(status.cancelBlockedReason) ||
+                  Boolean(selectedDisallowedReason)
+                }
               >
                 {running || status.cancelBlockedReason
                   ? "Upgrading…"

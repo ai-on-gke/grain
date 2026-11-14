@@ -777,6 +777,8 @@ LABEL org.opencontainers.image.revision="${GIT_REVISION}"
 # (and `latest`'s digest) alone when it does.
 ARG RELEASE=
 LABEL org.opencontainers.image.version="${RELEASE}"
+ARG SCHEMA_VERSION=
+LABEL io.grain.schema-version="${SCHEMA_VERSION}"
 
 # No USER of its own. The unit scripts/setup.sh writes always passes
 # --user with the host's own grain uid:gid, because everything this

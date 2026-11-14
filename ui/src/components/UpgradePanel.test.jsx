@@ -2563,4 +2563,66 @@ describe("Switching edition on UpgradePanel", () => {
       ),
     );
   });
+
+  it("greys out schema-downgrade targets, shows the refusal reason, and disables Upgrade when selected", async () => {
+    const downgradeReason =
+      'refusing schema downgrade on channel "latest" (docker.io/grainai/grain:latest): target build v3.6.0 (commit cefb15f) is at schema 143, which is older than the running store at schema 146 on v3.7.0-dev.31+fdd8b8d (commit fdd8b8d); schema downgrades are never allowed through upgrade. Channel "latest"\'s image is older than what is running, so the channel\'s image is probably stale or unpublished';
+    fetchUpgradeTargets.mockResolvedValueOnce({
+      default: "latest",
+      allowedBranches: ["main", "latest", "v*"],
+      targets: [
+        {
+          name: "latest",
+          kind: "channel",
+          allowed: false,
+          schema: 143,
+          reason: downgradeReason,
+        },
+        {
+          name: "main",
+          kind: "channel",
+          allowed: true,
+          schema: 146,
+        },
+        {
+          name: "v3.6.0",
+          kind: "version",
+          allowed: false,
+          schema: 143,
+          reason:
+            'refusing schema downgrade on tag "v3.6.0": target build v3.6.0 is at schema 143, older than schema 146',
+        },
+      ],
+    });
+    api.mockResolvedValueOnce({
+      enabled: true,
+      mode: "image",
+      channel: "latest",
+      phase: "",
+    });
+    const user = userEvent.setup();
+    render(<UpgradePanel showError={() => {}} />);
+
+    // Default channel "latest" is a schema downgrade: inline refusal alert is shown and submit is disabled.
+    const alert = await screen.findByTestId("upgrade-target-refused");
+    expect(alert).toHaveTextContent(/probably stale or unpublished/);
+    const submitBtn = screen.getByRole("button", { name: "Upgrade" });
+    expect(submitBtn).toBeDisabled();
+
+    // Opening the dropdown shows downgrade targets greyed out with their reason.
+    await user.click(screen.getByLabelText(/Branch/));
+    const list = await screen.findByRole("listbox");
+    const latestOpt = within(list).getByRole("option", { name: /latest/ });
+    expect(latestOpt).toHaveAttribute("aria-disabled", "true");
+    expect(latestOpt).toHaveTextContent(/probably stale or unpublished/);
+    const v360Opt = within(list).getByRole("option", { name: /^v3\.6\.0/ });
+    expect(v360Opt).toHaveAttribute("aria-disabled", "true");
+
+    // Picking an allowed target clears the refusal and re-enables Upgrade.
+    await user.click(within(list).getByRole("option", { name: /^main/ }));
+    expect(
+      screen.queryByTestId("upgrade-target-refused"),
+    ).not.toBeInTheDocument();
+    expect(submitBtn).not.toBeDisabled();
+  });
 });

@@ -54,6 +54,9 @@ interface UpgradeTargetRow {
   name?: string;
   branch?: string;
   kind?: string;
+  allowed?: boolean;
+  reason?: string;
+  schema?: number;
   ref?: string;
   version?: string;
   commit?: string;
@@ -704,6 +707,25 @@ function formatBytes(bytes: number): string {
             </div>
           }
 
+          @if (failedUpgradeDetail()) {
+            <div
+              class="s-banner error"
+              role="alert"
+              data-testid="failed-upgrade-banner"
+              style="overflow-wrap: anywhere"
+            >
+              <span
+                ><strong
+                  >Last upgrade{{
+                    failedUpgradeBranch() ? " to " + failedUpgradeBranch() : ""
+                  }}
+                  failed:</strong
+                >
+                {{ failedUpgradeDetail() }}</span
+              >
+            </div>
+          }
+
           @if (upgradeControllable()) {
             <div class="s-grid">
               <div class="s-field">
@@ -730,6 +752,17 @@ function formatBytes(bytes: number): string {
                 />
               </div>
             </div>
+
+            @if (selectedTargetRefusal(); as refusal) {
+              <div
+                class="s-banner error"
+                role="alert"
+                data-testid="upgrade-target-refusal"
+                style="overflow-wrap: anywhere"
+              >
+                <span>{{ refusal }}</span>
+              </div>
+            }
 
             <div class="s-toggle-row">
               <div class="s-toggle-copy">
@@ -758,7 +791,9 @@ function formatBytes(bytes: number): string {
                 class="btn-primary"
                 data-testid="start-upgrade-btn"
                 [disabled]="
-                  !selectedUpgradeBranch() || !access.can('POST /api/upgrade')
+                  !selectedUpgradeBranch() ||
+                  Boolean(selectedTargetRefusal()) ||
+                  !access.can('POST /api/upgrade')
                 "
                 (click)="confirmStartUpgrade()"
               >
@@ -893,9 +928,20 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   );
   protected readonly activeUpgradeState = signal("");
   protected readonly upgradeCancellable = signal(false);
+  protected readonly failedUpgradeBranch = signal("");
+  protected readonly failedUpgradeDetail = signal("");
   protected readonly scheduledUpgradeBranch = signal("");
   protected readonly upgradeTargets = signal<UpgradeTargetRow[]>([]);
   protected readonly selectedUpgradeBranch = signal("latest");
+  protected readonly selectedTargetRefusal = computed(() => {
+    const cur = this.selectedUpgradeBranch().trim();
+    if (!cur) return "";
+    const row = this.upgradeTargets().find(
+      (r) => (r.name || r.branch || "") === cur,
+    );
+    if (!row || row.allowed !== false) return "";
+    return row.reason || "Not allowed on this deployment";
+  });
   protected readonly afterTasksFinish = signal(true);
   protected readonly releaseNotesText = signal("");
   protected readonly dbBackendLabel = signal("");
@@ -909,13 +955,22 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       ];
     }
     return t
-      .map((row) => {
+      .map((row): PillOption | null => {
         const val = row.name || row.branch || "";
         if (!val) return null;
         const extra = row.version || row.ref;
+        const disabled = row.allowed === false;
+        let label = extra && extra !== val ? `${val} (${extra})` : val;
+        if (typeof row.schema === "number" && row.schema > 0) {
+          label += ` · schema ${row.schema}`;
+        }
         return {
           value: val,
-          label: extra && extra !== val ? `${val} (${extra})` : val,
+          label,
+          disabled,
+          reason: disabled
+            ? row.reason || "Not allowed on this deployment"
+            : undefined,
         };
       })
       .filter((x): x is PillOption => x !== null);
@@ -1204,8 +1259,23 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     ]);
     if (cancellable || (phase && !terminalPhases.has(phase.toLowerCase()))) {
       this.activeUpgradeState.set(phase || "running");
+      this.failedUpgradeBranch.set("");
+      this.failedUpgradeDetail.set("");
     } else {
       this.activeUpgradeState.set("");
+      if (phase.toLowerCase() === "failed") {
+        this.failedUpgradeBranch.set(
+          typeof u["branch"] === "string" ? u["branch"] : "",
+        );
+        this.failedUpgradeDetail.set(
+          typeof u["detail"] === "string" && u["detail"].trim()
+            ? u["detail"].trim()
+            : "Upgrade failed",
+        );
+      } else {
+        this.failedUpgradeBranch.set("");
+        this.failedUpgradeDetail.set("");
+      }
     }
   }
 
@@ -1236,7 +1306,12 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
           "latest";
         this.upgradeTargets.set(list);
         this.selectedUpgradeBranch.set(def);
-        void this.loadReleaseNotes(def);
+        const defRow = list.find((r) => (r.name || r.branch || "") === def);
+        if (!defRow || defRow.allowed !== false) {
+          void this.loadReleaseNotes(def);
+        } else {
+          this.releaseNotesText.set("");
+        }
       } catch {
         // Non-fatal
       }
@@ -1306,7 +1381,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   // first, as the classic Upgrade pane's confirm() does.
   protected confirmStartUpgrade(): void {
     const branch = this.selectedUpgradeBranch();
-    if (!branch) return;
+    if (!branch || this.selectedTargetRefusal()) return;
     const drain = this.afterTasksFinish();
     this.confirmRequest.set({
       title: `Upgrade grain to ${branch}?`,

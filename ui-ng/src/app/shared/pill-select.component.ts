@@ -32,6 +32,8 @@ export interface PillOption {
   value: string;
   label: string;
   toneClass?: string;
+  disabled?: boolean;
+  reason?: string;
 }
 
 let nextPillSelectId = 0;
@@ -94,11 +96,14 @@ let nextPillSelectId = 0;
               <button
                 type="button"
                 role="option"
+                [disabled]="!!opt.disabled"
+                [class.is-disabled]="!!opt.disabled"
+                [attr.aria-disabled]="opt.disabled ? 'true' : null"
                 [attr.aria-selected]="active"
                 [attr.data-testid]="
                   testid() ? testid() + '-opt-' + opt.value : null
                 "
-                (click)="choose(opt.value, $event)"
+                (click)="choose(opt, $event)"
               >
                 @if (opt.toneClass) {
                   <span
@@ -106,7 +111,12 @@ let nextPillSelectId = 0;
                     aria-hidden="true"
                   ></span>
                 }
-                <span class="pill-opt-label">{{ opt.label }}</span>
+                <span class="pill-opt-copy">
+                  <span class="pill-opt-label">{{ opt.label }}</span>
+                  @if (opt.reason) {
+                    <span class="pill-opt-reason">{{ opt.reason }}</span>
+                  }
+                </span>
                 @if (active) {
                   <svg
                     class="pill-check"
@@ -210,10 +220,11 @@ export class PillSelectComponent implements OnDestroy {
     }
   }
 
-  protected choose(val: string, ev: Event): void {
+  protected choose(opt: PillOption, ev: Event): void {
     ev.stopPropagation();
+    if (opt.disabled) return;
     this.close(true);
-    this.valueChange.emit(val);
+    this.valueChange.emit(opt.value);
   }
 
   protected onDocClick(ev: Event): void {
@@ -267,6 +278,10 @@ export class PillSelectComponent implements OnDestroy {
 
   private optionButtons(): HTMLButtonElement[] {
     const m = this.menuEl()?.nativeElement;
-    return m ? Array.from(m.querySelectorAll<HTMLButtonElement>("button")) : [];
+    return m
+      ? Array.from(
+          m.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
+        )
+      : [];
   }
 }

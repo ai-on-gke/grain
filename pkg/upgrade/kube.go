@@ -405,23 +405,33 @@ func (u *Upgrader) stageKube(ctx context.Context, p *progress, branch string) (s
 	} else {
 		p.skip(stepPriorityClasses, "this deployment's sandbox pods name no PriorityClass")
 	}
-	// Every run in a run host lets go, its spool cursor written, before
-	// the rollout this staging ends in (Config.Flush, upgrade.go's
-	// flush): the restart has no command here, so this is the last
-	// moment before it that this process is sure to have. Ahead of the
-	// rows' export, so that the cursors the flush writes are in it on an
-	// upgrade that migrates.
-	resume := u.kubeFlush(ctx, p, client, ref)
-	if err := ctx.Err(); err != nil {
-		resume()
+	// Flush runs in run hosts only once we know the schema step is not a
+	// refused downgrade: on a forward schema migration beforePrepare flushes
+	// ahead of the rows' export so the spool cursors land in it, and on an
+	// unchanged schema we flush right after schemaStep before the rollout.
+	var resume func()
+	flushed := false
+	flushOnce := func() error {
+		if !flushed {
+			resume = u.kubeFlush(ctx, p, client, ref)
+			flushed = true
+		}
+		return ctx.Err()
+	}
+	migrating, schemaPrepared, err := u.schemaStepWith(ctx, p, branch, kubeRunner{u: u, ref: ref, security: security}, flushOnce)
+	if err != nil {
+		if resume != nil {
+			resume()
+		}
 		return "", err
 	}
-	// Last before the cut-over, for the reason stageImage puts it there:
-	// the shorter the gap between exporting this deployment's rows and
-	// stopping the process still writing them, the less of it is lost.
-	migrating, schemaPrepared, err := u.schemaStep(ctx, p, branch, kubeRunner{u: u, ref: ref, security: security})
-	if err != nil {
-		resume()
+	if err := flushOnce(); err != nil {
+		if schemaPrepared {
+			u.discardSchemaUpgrade()
+		}
+		if resume != nil {
+			resume()
+		}
 		return "", err
 	}
 	detail += migrating
@@ -745,6 +755,32 @@ func (r kubeRunner) name() string {
 		return r.pod
 	}
 	return kubeAskPod
+}
+
+func (r kubeRunner) targetRef() string { return r.ref }
+
+func (r kubeRunner) stamp(ctx context.Context, p *progress) BuildStamp {
+	var stamp BuildStamp
+	if r.ref != "" {
+		lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		if labels, err := registryImageLabels(lctx, r.ref); err == nil {
+			stamp.Release = labels.Version
+			stamp.Commit = labels.Revision
+		}
+		cancel()
+	}
+	if stamp.Release == "" || stamp.Commit == "" {
+		if out, err := r.ask(ctx, p, []string{"version", "--json"}); err == nil {
+			got := parseBuildStampJSON(out)
+			if stamp.Release == "" {
+				stamp.Release = got.Release
+			}
+			if stamp.Commit == "" {
+				stamp.Commit = got.Commit
+			}
+		}
+	}
+	return stamp
 }
 
 // kubeAskPod is the name of the pod ask runs in -- separate from
