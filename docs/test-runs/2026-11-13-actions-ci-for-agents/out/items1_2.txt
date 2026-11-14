@@ -1,0 +1,75 @@
+task A=2 branch=grain/e66b2d5b/task-2-task-a-retrigger head=8952aadcaa084bb84f2c5d9345688dc37347d59a pr=acme/widgets#9000
+task B=3 branch=grain/e66b2d5b/task-3-task-b-someone-else head=d8e705b6a119e16626e7db83dad32d0e0b790241 pr=acme/widgets#9001
+== item 1: in-sandbox retrigger, --all, run-job and refusals (task 2)
+--- run_command isError=false
+exit=0
+local head before: 8952aadcaa084bb84f2c5d9345688dc37347d59a
+--- run_command isError=false
+exit=0
+Re-ran GitHub Actions on acme/widgets at 8952aadcaa08:
+  gha:acme:widgets:9101 (Tests): its failed jobs -- attempt 2 of at most 4 at this head
+No commit was pushed: the pull request's head, approvals and reviews are unchanged.
+Each run at a commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault included; past that, the failure is the change's to fix.
+Wait for it with: grain ci wait
+--- run_command isError=false
+exit=0
+Re-ran GitHub Actions on acme/widgets at 8952aadcaa08:
+  gha:acme:widgets:9101 (Tests): every job -- attempt 2 of at most 4 at this head
+No commit was pushed: the pull request's head, approvals and reviews are unchanged.
+Each run at a commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault included; past that, the failure is the change's to fix.
+Wait for it with: grain ci wait
+--- run_command isError=false
+exit=0
+Re-ran GitHub Actions on acme/widgets at 8952aadcaa08:
+  gha:acme:widgets:9101 (Tests): go -- attempt 2 of at most 4 at this head
+No commit was pushed: the pull request's head, approvals and reviews are unchanged.
+Each run at a commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault included; past that, the failure is the change's to fix.
+Wait for it with: grain ci wait
+To keep waiting in this run:  grain ci wait --resume my-branch
+To suspend and free the VM:   call resume_later with when: {"ci": "my-branch"}
+run-job exit=0
+--- run_command isError=false
+exit=0
+Re-ran GitHub Actions on acme/widgets at 8952aadcaa08:
+  gha:acme:widgets:9101 (Tests): go, lint -- attempt 2 of at most 4 at this head
+No commit was pushed: the pull request's head, approvals and reviews are unchanged.
+Each run at a commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault included; past that, the failure is the change's to fix.
+Wait for it with: grain ci wait
+--- run_command isError=false
+exit=0
+Re-ran GitHub Actions on acme/widgets at 8952aadcaa08:
+  gha:acme:widgets:9101 (Tests): go, lint, docs -- attempt 2 of at most 4 at this head
+No commit was pushed: the pull request's head, approvals and reviews are unchanged.
+Each run at a commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault included; past that, the failure is the change's to fix.
+Wait for it with: grain ci wait
+--- run_command isError=true
+exit=1
+grain: bad request: cannot re-run go, docs together in gha:acme:widgets:9101 (Tests): GitHub Actions re-runs one job (grain ci run-job <job>), all failed jobs (grain ci retrigger), or every job (grain ci retrigger --all) of a workflow run at once
+--- run_command isError=true
+exit=1
+grain: bad request: no job "nosuch" in the GitHub Actions runs at 8952aadcaa08 (their jobs: go, lint, docs)
+--- run_command isError=true
+exit=1
+grain: forbidden: d8e705b6a119e16626e7db83dad32d0e0b790241 is not the head of task 2's pull request (8952aadcaa08): a run re-runs only its own pull request's checks, at its head
+--- run_command isError=false
+exit=0
+grain: {"error":"task 2 holds no api grant for scope ci:write, which POST /api/ci/runs/{id}/rerun needs: ask a person to grant api:ci:write or a preset that includes it (docs/agent-api.md)"}
+--- run_command isError=false
+exit=0
+local head after: 8952aadcaa084bb84f2c5d9345688dc37347d59a
+--- resume_later isError=false
+Parked. This task is queued again once 2026-11-13T05:11:54Z has passed; the next run's prompt says this one was suspended, and why. This ends your run: stop here and take no further actions.
+resume_on: {"at":"2026-11-13T05:11:54.064429133Z"}
+-- simulator re-run log (run 9101 is A's, 9201 is B's; job ids are run*1000+index: go=0 lint=1 docs=2):
+{"rerunFailedJobs":[9101,9101],"rerunJobs":[9101000],"rerunRuns":[9101,9101]}
+PR #9000 head before=8952aadcaa084bb84f2c5d9345688dc37347d59a after=8952aadcaa084bb84f2c5d9345688dc37347d59a bare=8952aadcaa084bb84f2c5d9345688dc37347d59a
+PR #9001 (task B) re-runs asked: 0
+== item 2: host grain ci retrigger gha:acme:widgets:9101
+Re-ran GitHub Actions on acme/widgets at 8952aadcaa08:
+  gha:acme:widgets:9101 (Tests): its failed jobs -- attempt 3 of at most 4 at this head
+No commit was pushed: the pull request's head, approvals and reviews are unchanged.
+Each run at a commit is re-run at most 3 times, grain's own automatic re-runs of a runner fault included; past that, the failure is the change's to fix.
+wait for it with "grain ci wait gha:acme:widgets:9101"
+printed wait line: grain ci wait gha:acme:widgets:9101
+grain CI passed: run gha:acme:widgets:9101 on acme/widgets grain/e66b2d5b/task-2-task-a-retrigger at 8952aadcaa08 (waited 15s): go, lint, docs
+wait exit=0 after 15s

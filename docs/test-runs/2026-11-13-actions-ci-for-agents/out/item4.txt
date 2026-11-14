@@ -1,0 +1,15 @@
+task 2 never came to rest (state completed)
+task 3 never came to rest (state completed)
+task D=2 pr=acme/widgets#9000 head=ffc514dd679fbd0b944d14064f263d52b977fb9e
+task C=3 pr=acme/widgets#9001 head=7729862846a76a1358ca5dbdb07124821fec6cb2
+== both PRs go red: D on the runner's DNS, C on a test
+simulator re-runs: {"rerunFailedJobs":[8101],"rerunJobs":null,"rerunRuns":null}
+{"id":"2","state":"completed","attempts":1,"mergeQueueState":"waiting_ci","mergeQueueNote":"waiting on checks that have not finished (`Tests / go`, `Tests / ui e2e`)","repairs":null}
+{"id":"3","state":"completed","attempts":2,"mergeQueueState":"waiting_ci","mergeQueueNote":"waiting on no check reported against it at all","repairs":null}
+D comments: ["done"]
+C comments: ["done","acme/widgets#9001 its checks are failing (`Tests / go`, `Tests / ui e2e`), so the merge queue has sent this task back to an agent. Work on `grain/7a194dcf/task-","done"]
+2026/11/13 04:35:22 orchestrator: acme/widgets#9000 at ffc514dd679f failed on the runner rather than the tree (go ("temporary failure resolving"), ui e2e ("temporary failure resolving")): re-ran the failed jobs (automatic re-run 1 of 2), no repair counted
+== the outage clears: D's re-run (attempt 2) goes green
+{"id":"2","state":"closed","attempts":1,"mergeQueueState":null,"mergeQueueNote":null,"repairs":null}
+{"state":"closed","merged":true,"mergeable":true,"mergeable_state":null,"head":"ffc514dd679f"}
+PR #9000 merged=true

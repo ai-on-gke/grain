@@ -1,0 +1,10 @@
+task 2 never came to rest (state completed)
+task 3 never came to rest (state completed)
+task D=2 pr=acme/widgets#9000 head=f9e94db1246b10311deec71793114532ee4aaabb
+task C=3 pr=acme/widgets#9001 head=bc29d34c14b2447d19f39ef9180e77418a510cf2
+== both PRs go red: D on the runner's DNS, C on a test
+simulator re-runs: {"rerunFailedJobs":null,"rerunJobs":null,"rerunRuns":null}
+{"id":"2","state":"completed","attempts":2,"mergeQueueState":"waiting_ci","mergeQueueNote":"waiting on no check reported against it at all for 1m","repairs":null}
+{"id":"3","state":"completed","attempts":2,"mergeQueueState":"waiting_ci","mergeQueueNote":"waiting on no check reported against it at all for 1m","repairs":null}
+D comments: ["done","acme/widgets#9000 its checks are failing (`Tests / go`, `Tests / ui e2e`), so the merge queue has sent this task back to an agent. Work on `grain/31c02fdd/task-","done"]
+C comments: ["done","acme/widgets#9001 its checks are failing (`Tests / go`, `Tests / ui e2e`), so the merge queue has sent this task back to an agent. Work on `grain/31c02fdd/task-","done"]

@@ -1,0 +1,28 @@
+== a red tests.yml run on main (run 7001)
+[{"id":"2","title":"Fix the red tests.yml on main at a509088e5fec","state":"running","priority":9}]
+repair task 2: Fix the red tests.yml on main at a509088e5fec priority=9 state=running
+--- body head:
+`tests.yml` is red on `main`, the default branch of acme/widgets. It is the workflow that gates merges, and a release train cuts only from a commit it passed, so nothing releases until it is green again. Find why and fix it on `main`: a regression two merges made together, a flaky test, or the workflow itself. Leave anything you cannot fix as a precise report.
+
+This task closes itself when the next `Tests` run on `main` is fully green (goal `nightly-green`); a cancelled run counts neither way. Further red runs are appended to it as comments while it is open.
+
+`main` (`Tests`, run 7001 attempt 1, push) concluded **failure** on `main` at commit `a509088e5fec75fae49620900aaece3a377fc9f2`.
+
+Run: https://github.example/acme/widgets/actions/runs/7001
+
+- **go** (failure), step `go test`: https://github.example/acme/widgets/actions/runs/7001/job/7001000
+
+  ```
+--- FAIL: TestWidgets (0.01s)
+FAIL
+
+== a second red run (7002) while the repair is open
+repairs now: [{"id":"2","title":"Fix the red tests.yml on main at a509088e5fec","state":"deferred","priority":9}]
+comments on 2: [{"by":"grain","body":"grain: this task's run parked it until 2026-11-13T05:16:45Z. It goes back in the queue once that time has passed; Undefe"},{"by":"github-base-repair","body":"`main` is still red. Another failing run:\n\n`main` (`Tests`, run 7002 attempt 1, push) concluded **failure** on `main` at"}]
+== an unchanged poll costs only 304s
+[{"path":"/repos/acme/widgets/actions/runs?branch=main&status=completed&per_page=50","status":304,"n":40},{"path":"/repos/acme/widgets/actions/runs?status=completed&per_page=50","status":304,"n":40}]
+non-304 /actions/runs list reads during the idle window: 0
+default-branch reads (GET /repos/acme/widgets): 0
+== a green run (7003) closes the loop
+repairs now: [{"id":"2","title":"Fix the red tests.yml on main at a509088e5fec","state":"closed","priority":9}]
+{"state":"closed","outcome":null,"closing":"Closed (goal-met): this task's goal (nightly-green) is met -- `Tests` run 7003 on `main` (a509088e5fec) is green."}
