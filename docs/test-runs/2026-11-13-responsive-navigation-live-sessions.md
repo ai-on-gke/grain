@@ -367,3 +367,273 @@ They are attached to the task's closing note, not committed.
 - `/next/`'s New session dialog and session list still say "Visible to
   team" and "Team: default". The classic shell has no teams. The Angular
   UI's session teams are its own, and they were left alone here.
+
+---
+
+# Second run — 2026-11-13, task 5391 (`/next/` first)
+
+- **Date:** 2026-11-13, 14:11–15:00 UTC, one run.
+- **Task:** task 5391, branch
+  `grain/098073e4/task-5391-walk-through-responsive`, base `main`.
+- **Commit tested:** `e69d34223` ("Merge pull request #1478"), build stamp
+  `v0.0.0-20261113…-e69d34223…`. The fixes below were rebuilt on top of it
+  (`fe0a1b857`, `79db6d021`) and walked again over a fresh store each time.
+- **Why a second run:** the morning run (task 4733, above) walked the
+  classic shell in depth and swept `/next/` for layout only. This run
+  follows the "Two UIs" rule the other way round: every step ran on its
+  `/next/` page first, and on the classic page only where `/next/` has
+  none yet.
+- **Result:** three faults found in `/next/`, all three fixed here with
+  `ui-ng/e2e` coverage (Bugs 3–5). Two gaps where `/next/` lacks what
+  the classic shell has were filed as follow-ups, not built here. The
+  classic pages walked here passed.
+
+## Environment
+
+- Same sandbox image as the morning run: Debian, `linux/amd64`, Go
+  1.26.10, Node.js v20.19.0, Playwright 1.62.1 (from
+  `ui-ng/package-lock.json`). Headless Chromium and WebKit with
+  `PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright`, timezone UTC.
+- Built with `npm ci && npm run build` in `ui/` and `ui-ng/`, then
+  `go build -o /var/tmp/grain ./cmd/grain` (rebuilt after each fix).
+- Server: `grain demo -addr 127.0.0.1:8420 -open=false -access-code-file
+  <file> -observability -staging -config-change -host-mode-install
+  -merge-rules -mechanical-port`, with `TMPDIR` set to a fresh scratch
+  directory, so every start used a new throwaway embedded SQLite store.
+- There was no `/home/debian/.gemini-api-key`, so no model was called.
+  Sessions were answered by the demo's built-in fake agent, and `LOOK=1`
+  could not describe screenshots. This sandbox's file reader shows a PNG
+  as bytes, so layout was asserted from live DOM geometry instead:
+  `getBoundingClientRect` on every visible control, `scrollWidth`
+  against `innerWidth`, and `window.scrollY`. Contrast was checked with
+  `@axe-core/playwright`.
+- **How it was driven:** throwaway Node scripts in `/var/tmp/walk`,
+  outside the checkout, using `playwright` from `ui-ng/node_modules`.
+  - Each context signs in through `POST /api/auth/access-code` as
+    `alice@example.com`, then acts only through visible controls.
+  - Every page logged uncaught errors, console errors, failed requests,
+    `/api/` responses of 400 or more, and every native dialog.
+  - The REST API was used only to file one interactive task
+    (`POST /api/tasks {"interactive": true}`, task 27) and to read back
+    what a gesture had persisted.
+
+### Viewports
+
+| Name         | Size      | Context                         |
+| ------------ | --------- | ------------------------------- |
+| Desktop      | 1440×900  | fine pointer, keyboard          |
+| Laptop       | 1024×768  | fine pointer                    |
+| Tablet       | 820×1180  | `hasTouch`                      |
+| Phone        | 390×844   | `hasTouch`, `isMobile`          |
+| Short phone  | 390×664   | `hasTouch` (Send reachability)  |
+| Small phone  | 320×568   | `hasTouch`                      |
+| Live resize  | 1440→390→844×390→1440 | one page, Inbox     |
+
+## Stubs
+
+The server, store, built frontends, browsers and gestures were real
+throughout. Only these were intercepted, each with a `page.route` on one
+page:
+
+1. **A failed sessions read.** `GET /api/console-sessions` answered `500`
+   with body `boom` on a cold load of `/next/sessions`.
+2. **A viewer role.** `GET /api/config`'s `access` was rewritten to
+   `grain/viewer` with read-only scopes (`tasks:read`, `sessions:read`,
+   `deployment:read`, and in the walkthrough every `GET` scope in
+   `generated-routes.ts` ending `:read`). This tests only what the UI
+   offers. `tests/security`'s route matrix covers what the server
+   refuses.
+3. **A hung, then refused, daemon.** Every `/api/**` request was held
+   for 60 s for 25 s of wall time, then aborted with
+   `connectionrefused` for 15 s, then let through again with no reload.
+
+## What was walked, and on which UI
+
+| Step | UI | Outcome |
+| ---- | -- | ------- |
+| Rail / compact bar to every destination (Inbox, Workstreams, Tasks, Agents, Sessions, Processes, CI, Telemetry, Context, Fleet), all five sizes | `/next/` | pass, Chromium and WebKit |
+| All 20 Settings sections, by their links | `/next/` | pass |
+| Fleet tabs (Sandboxes, Host Daemons, Pauses & Controls, Daemon Logs) | `/next/` (System → Fleet) | pass |
+| Repo page `acme/widgets` and its tabs (Overview, CI & Workflows, Releases) | `/next/` | pass |
+| Task list → task panel, Back, Forward, hard reload | `/next/` | pass (the list opens a task as `?task=<id>`) |
+| New task sheet: open, Escape | `/next/` | pass |
+| Old `/t/<team>/…` links | both | classic pass; `/next/` **Bug 3** |
+| Deep links `/next/tasks/3`, `/next/director`, `/next/system`, `/next/metrics` | `/next/` | pass (redirect to `task/3`, `sessions/director`, `fleet`, `telemetry`) |
+| Sessions: load error, New session (focus, Escape, focus return), first message, markdown table, back-to-back sends, reload, settings panel, Fresh chat, Delete (decline, then confirm), deep link to a deleted session | `/next/` | pass, except **Bug 4** |
+| Interactive task chat: send, Pause, reload, Resume | `/next/` | pass, persisted |
+| Viewer role across the shell, Sessions and a task | `/next/` | **Bug 5** |
+| Contrast (axe), 8 pages × light/dark × desktop/phone | `/next/` | 0 serious or critical |
+| Keyboard: Tab order, rail More and New menus, Escape, outside click | `/next/` | pass |
+| Phone More sheet: on screen, Escape, outside tap, no background scroll | `/next/` | pass |
+| Reduced motion: running animations on the Director while sending | `/next/` | none |
+| Hung / refused daemon | `/next/` | follow-up (gap) |
+| Boards and a board | classic only | pass |
+| `[` collapse, persisted across reload, ignored while typing | classic only | pass |
+| Phone drawer: modal, closes on navigation, build stamp on screen | classic only | pass |
+
+**Steps with no `/next/` page yet:** Boards and their visualizations; the
+classic rail's pinned items, Customize pinned items, Staging list and
+`UserTile`; the `[` collapse shortcut; the phone drawer; the disconnected
+banner, host-mode install notice and stale-tasks row (see follow-up A).
+`/next/`'s "New board" item in the create menu leads to `/next/tasks?newBoard=1`.
+
+### Details
+
+- **Rail and compact bar.** At ≥820 px the rail's items are direct, with
+  More (`aria-expanded`) holding Customize navigation. At 390 and 320 the
+  compact bar holds Inbox, Tasks and Sessions, and the More sheet holds
+  the rest. Every click landed on the destination's own `h1`. No page
+  overflowed sideways and no visible control sat past either edge, at
+  any size, in either engine. The More sheet measured 0..390 × 16..788
+  at 390×844.
+- **Live resize.** On one Inbox page, resizing 1440 → 390 swapped the
+  rail for the compact bar. 844×390 and back to 1440 kept the page
+  inside the screen.
+- **Keyboard.** Tab from the top reaches the brand mark, New task, New,
+  every rail item, More, Settings, then the header (Next up, live pill,
+  Director, filter, theme, help, account), then the page. Escape on the
+  rail's More and New menus closes them and returns focus to their
+  button. An outside click closes More.
+- **Sessions.**
+  - With `/api/console-sessions` failing, `/next/sessions` shows "Sessions
+    could not be read: …" rather than an empty list.
+  - New session focuses Name. Escape closes it and returns focus to New
+    session. Start session is on screen at 390×664 (617..657 of 664).
+  - The first message appeared in the chat 190 ms after Start session.
+  - A markdown table rendered as a table. Two sends in quick succession
+    both showed at once, and both were there after a reload.
+  - Settings shows Model ("Deployment default (gemini-2.5-pro)"), Network
+    access, Keep running, Tasks approved, Reads all and the API grants.
+    Escape closes it and returns focus to its toggle.
+  - Start a fresh chat on the Director offers a handover and a clean
+    start. A clean start emptied the chat, which stayed empty after a
+    reload.
+  - Delete: Escape declines and returns focus to Delete. Confirm deletes
+    and goes to `/next/sessions`. A deep link to the deleted session
+    shows the list on desktop, and "That session does not exist. Back to
+    sessions" on a phone. Neither shows another session's chat.
+- **Interactive task chat (task 27).** A message showed at once. Pause →
+  `paused` set on the server. After a reload Resume was offered, and
+  Resume cleared it. Same at 390.
+- **Classic.** Boards opened from the rail (`/boards`, four boards) and a
+  board (`/boards/board-1`) with no overflow. `[` collapsed the rail. That
+  survived a reload, and a `[` typed into search went into the field.
+  On a phone the drawer is a dialog and closes when a link is taken. The
+  build stamp's bottom is at 830 of 844.
+- **Console and network.** No uncaught errors. The only failed requests
+  were the stubs, and the classic task page's
+  `GET /api/repos/acme/widgets/github-branches` 404. That is expected:
+  the demo has no GitHub.
+
+## Bug 3 — an old `/next/t/<team>/…` link opened Inbox (fixed)
+
+**Reproduction:** open `/next/t/default/tasks`,
+`/next/t/default/task/3?tab=chat` or `/next/t/default/settings/access`.
+Each lands on `/next/inbox`, through the `**` catch-all. The classic UI
+opens `/tasks`, `/tasks/3` and `/settings/access` for the same links
+(`ui/src/paths.js`).
+
+**Fix:** a `teamPrefixMatcher` route in `ui-ng/src/app/app.routes.ts`. It
+redirects `/t/<team>/<rest>` to `/<rest>` and keeps the query and
+fragment. A bare `/t/<team>` goes to Inbox. Checked after the fix in
+Chromium and WebKit, at all five sizes.
+
+## Bug 4 — a new session left focus on `<body>` (fixed)
+
+**Reproduction:** on `/next/sessions` press New session, type a name and
+press Start session. The chat opens, but `document.activeElement` is
+`<body>` at 50, 300, 1000 and 3000 ms. The next keystroke goes nowhere.
+This happens at 1440×900 and 390×664.
+
+**Cause:** `/sessions` and `/sessions/:id` are separate routes, so the
+navigation in `create()` builds a new page. `create()` then focused the
+composer of the old page, which had already been destroyed. A trace of
+`focusin` events shows no focus at all after the dialog closed.
+
+**Fix:** `create()` passes `{ grainFocusComposer: true }` as navigation
+state. The new page reads it in its constructor, and an effect focuses
+the composer as soon as it renders, for up to 15 s. After the fix, focus
+is on the composer by 300 ms.
+
+## Bug 5 — viewers were offered create controls and a task composer (fixed)
+
+**Reproduction:** as a role without write scopes (stub 2):
+
+- `/next/` showed the rail's New task button and New menu (all seven
+  items) at ≥820 px, and the phone's New task button at 390 and 320;
+- the `c` shortcut opened the New task sheet;
+- every task page offered the composer and Attach file.
+
+Each of these ends in a call the server refuses. `/next/sessions`
+already hid New session and its composer for the same role.
+
+**Fix:**
+
+- **Shell (superseded on merge).** This branch first hid the shell's
+  create controls from a viewer. While it was in CI, `main` gained
+  `1f3f18bed` ("fix /next/ walkthrough defects"), which gates the same
+  controls a different way: it disables them and gives the reason in
+  their tooltip. That also follows the design book's "Role-aware" rule.
+  The merge took `main`'s `app.component.ts`, so this branch no longer
+  changes the shell.
+- **Task composer (kept).** `task-detail.component.ts` hides the
+  composer when `POST /api/tasks/{id}/comments` is denied, and shows the
+  access service's sentence in its place: "Your role grain/viewer does
+  not hold tasks:write, which this needs." At 390 that note measures
+  13..377. `main` had not changed this.
+
+Before the merge, the walkthrough as a viewer found no write control
+visible on any of the eight pages, at 1440 or 390. After the merge, the
+New task buttons are present but disabled, and `c` does nothing. An
+operator's controls are unchanged.
+
+## Regression coverage
+
+New `ui-ng/e2e/next-shell-session-walkthrough.spec.js`, run with
+`make test-e2e-ng`:
+
+- `/next/t/<team>/…` opens the team-less page, keeping the query;
+- a new session focuses its composer at 1440 and at 390×664, typing
+  goes into it, and Send is on screen;
+- as a viewer at 1440, New task is disabled, `c` opens nothing, and a
+  task shows the denial note instead of a composer;
+- as a viewer at 390, the note fits the screen and no composer shows;
+- an operator still has the composer, and New task is enabled.
+
+The `/t/` and focus cases were reproduced on the base build by hand, as
+above. With the fixes, the new spec passes together with
+`shell.spec.ts`, `next-full-system.spec.js` (all four sizes and themes,
+and contrast), `next-dialog-fits-phone.spec.js`,
+`next-sessions-canvas.spec.js`, `next-task-interactions.spec.js` and
+`next-inbox.spec.js`. The unit tests for `app.component`, `task/` and
+`sessions/` pass too (`vitest`, 123 tests).
+
+## Follow-ups filed
+
+- **A. `/next/` says nothing while the daemon hangs.** With every
+  `/api/**` request held, `/next/tasks` kept showing "2 agents running"
+  and gave no notice for 25 s. Refused connections did raise inline
+  errors ("The task list could not be read: Failed to fetch…"), and they
+  cleared without a reload once the server answered again. `/next/` has
+  no counterpart to the classic disconnected banner, host-mode install
+  notice or stale-tasks row.
+- **B. `/next/`'s New session dialog.** It has no model picker and no
+  Pin to sidebar, both of which the classic dialog has. It still asks
+  for "Visible to team (optional)", and session rows still show a team,
+  though the product no longer has teams. Its load error also shows the
+  raw parse error ("Unexpected token 'b', "boom" is not valid JSON")
+  rather than the HTTP status.
+
+## Not covered, and why
+
+- **Live model streams:** there was no Gemini key. The fake agent's
+  answers and the optimistic bubbles were exercised, not incremental
+  streaming.
+- **Classic flows the morning run covered in depth** were not repeated
+  here, apart from Boards, `[` and the drawer: pinned items, Customize,
+  Staging, the alerts panel, approval cards, stale-tab conflict, Adopt
+  shipped defaults.
+- **`/next/` Start a fresh chat with handover:** the Director offered
+  both choices ("with summary handover" and "clean"), and the clean
+  start was taken: the chat log went from 1108 to 212 characters, and
+  stayed that way after a reload. The handover path was not taken.

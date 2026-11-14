@@ -330,7 +330,13 @@ Rules:
   Every shortcut is listed in Help. Shortcuts never fire while typing
   (`isTypingTarget`).
 - **URLs.** Every view, tab and selection that a person might share has a
-  URL (`?tab=`, `?task=`, `?pane=`). Back works.
+  URL (`?tab=`, `?task=`, `?pane=`). Back works. A link saved before the
+  single-tenant reset (`/t/<team>/…`) opens the page it names, without the
+  team (`teamPrefixMatcher` in `app.routes.ts`).
+- **Focus follows the action.** Opening something new (a session, a
+  dialog) puts focus where the next keystroke belongs, and closing it
+  hands focus back to what opened it, even when the action crosses a
+  route and builds a new page.
 - **Role-aware.** An action the person cannot take is hidden, or shown
   disabled with the reason. It is never shown enabled only to fail.
 - **Safety.**

@@ -79,6 +79,10 @@ export function clock(iso: string | undefined, now = new Date()): string {
 // SessionsPageComponent is Sessions (spec D-8) with zero Classic fallbacks:
 // standing conversations on the left, live "Apply now" banner on run-fixed
 // edits, per-method/API grants & team/model settings, and file attachments.
+// Navigation state create() sets so the opened session focuses its
+// composer once it renders.
+const FOCUS_COMPOSER = "grainFocusComposer";
+
 @Component({
   selector: "g-sessions-page",
   imports: [
@@ -860,6 +864,9 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly newMessage = signal("");
   protected readonly newAttachments = signal<AttachmentUpload[]>([]);
   protected readonly confirmDelete = signal(false);
+  // Set by create(): focus the composer as soon as the new session's
+  // composer renders.
+  private readonly focusComposerPending = signal(false);
   protected readonly canvasOpen = signal(false);
   protected readonly canvasTab = signal<CanvasTab | null>(null);
   protected readonly canvasArtifactId = signal<string | null>(null);
@@ -988,6 +995,13 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   private lastSession = "";
 
   constructor() {
+    // /sessions and /sessions/:id are separate routes, so create()'s
+    // navigation builds a new instance of this page: the flag it set on
+    // the old one travels as navigation state instead.
+    if (this.router.getCurrentNavigation?.()?.extras.state?.[FOCUS_COMPOSER]) {
+      this.focusComposerPending.set(true);
+      setTimeout(() => this.focusComposerPending.set(false), 15000);
+    }
     effect(() => {
       const id = this.id() || DIRECTOR_ID;
       untracked(() => {
@@ -995,6 +1009,14 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
         this.freshOpen.set(false);
         this.settingsOpen.set(false);
         this.confirmDelete.set(false);
+      });
+    });
+    effect(() => {
+      const el = this.composer();
+      if (!el || !this.focusComposerPending()) return;
+      untracked(() => {
+        this.focusComposerPending.set(false);
+        setTimeout(() => el.nativeElement.focus());
       });
     });
     effect(() => {
@@ -1193,11 +1215,20 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     });
     if (id) {
       this.newOpen.set(false);
-      await this.router.navigate(["/sessions", id]);
+      await this.router.navigate(["/sessions", id], {
+        state: { [FOCUS_COMPOSER]: true },
+      });
       this.snackbar.show("Session started");
+      // A new session's composer only renders once its task exists,
+      // which is usually a refresh after this navigation. Ask for the
+      // composer to take focus when it appears (the effect in the
+      // constructor), and hold focus on the chat title until then so it
+      // is not left on <body> where the dialog was.
+      this.focusComposerPending.set(true);
       setTimeout(() =>
         (this.composer() ?? this.chatTitle())?.nativeElement.focus(),
       );
+      setTimeout(() => this.focusComposerPending.set(false), 15000);
     }
   }
 
