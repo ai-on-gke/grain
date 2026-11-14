@@ -693,3 +693,28 @@ func TestGetSandboxHealthSweepSurvivesTheCallerThatStartedIt(t *testing.T) {
 		t.Errorf("probed the guests %d times, want the one sweep both callers shared", n)
 	}
 }
+
+func TestGetSandboxHealthCarriesStoreSwitchWithoutSandboxPool(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	since := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
+	client.Config.StoreSwitch = func() *ui.StoreSwitch {
+		return &ui.StoreSwitch{
+			Since:    since,
+			Opened:   "sqlite (/data/store)",
+			Selected: "postgres (127.0.0.1:5432/grain)",
+			Message:  "the store this daemon writes to is no longer the one db-config.json selects",
+		}
+	}
+	rec := getSandboxes(context.Background(), t, srv)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/sandboxes status = %d, want 200", rec.Code)
+	}
+	got := decode[ui.SandboxHealthResponse](t, rec)
+	if got.Enabled {
+		t.Fatalf("Enabled = true, want false when no sandbox/host/daemon reader is wired")
+	}
+	if got.Daemon == nil || got.Daemon.StoreSwitch == nil || got.Daemon.StoreSwitch.Selected != "postgres (127.0.0.1:5432/grain)" {
+		t.Fatalf("Daemon = %+v, want StoreSwitch carried even when Enabled is false", got.Daemon)
+	}
+}

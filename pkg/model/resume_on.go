@@ -103,12 +103,13 @@ func parseGitHubTargetRunID(defaultRepo, target string) (repo string, runID int6
 func (s *Store) heldResumes(ctx context.Context, taskID string) ([]heldResume, error) {
 	query := "SELECT `su`.`task_id`, `su`.`resume_on`, `t`.`deferred_at` FROM `task_suspension` AS `su` " +
 		"JOIN `task` AS `t` ON `t`.`id` = `su`.`task_id` " +
+		"JOIN `task_state` AS `st` ON `st`.`task_id` = `t`.`id` " +
 		"JOIN `task_run` AS `r` ON `r`.`id` = `su`.`run_id` " +
-		"WHERE `su`.`resumed_at` IS NULL AND `su`.`resume_on` IS NOT NULL AND `su`.`resume_on` <> '' " +
+		"WHERE `st`.`state` = ? AND `su`.`resumed_at` IS NULL AND `su`.`resume_on` IS NOT NULL AND `su`.`resume_on` <> '' " +
 		"AND `r`.`finished_at` IS NOT NULL " +
 		"AND `t`.`deferred_at` IS NOT NULL AND `t`.`deferred_at` >= `r`.`started_at` " +
 		"AND `t`.`deferred_at` <= `su`.`created_at`"
-	var args []any
+	args := []any{string(StateDeferred)}
 	if taskID != "" {
 		query += " AND `su`.`task_id` = ?"
 		args = append(args, taskID)
@@ -262,10 +263,11 @@ func (s *Store) recoveredCIHolds(ctx context.Context, seen map[string]bool) ([]H
 	var cands []candidate
 	err := each(ctx, s.db,
 		"SELECT `t`.`id`, `t`.`deferred_at`, `c`.`body`, `c`.`created_at` FROM `task` AS `t` "+
+			"JOIN `task_state` AS `st` ON `st`.`task_id` = `t`.`id` "+
 			"JOIN `task_comment` AS `c` ON `c`.`task_id` = `t`.`id` "+
-			"WHERE `t`.`deferred_at` IS NOT NULL AND `t`.`deferred_until` IS NULL "+
+			"WHERE `st`.`state` = ? AND `t`.`deferred_at` IS NOT NULL AND `t`.`deferred_until` IS NULL "+
 			"AND `c`.`body` LIKE ?",
-		[]any{resumeLaterCommentPrefix + "%"},
+		[]any{string(StateDeferred), resumeLaterCommentPrefix + "%"},
 		func(rows *sql.Rows) error {
 			var c candidate
 			if err := rows.Scan(&c.taskID, &c.since, &c.body, &c.at); err != nil {
