@@ -71,6 +71,14 @@ func loadTaskContext(ctx context.Context, store *model.Store, task model.Task, h
 		if age, err := store.TaskHandoverAge(ctx, task.ID); err == nil {
 			history.HandoverAge = age
 		}
+		// A console session is refused rollover (model.RolloverRefusal):
+		// it rolls over by being closed and refiled, which is its own
+		// call to make between turns, so it is told it is due instead.
+		if _, ok := model.ConsoleSessionIDOf(task); ok {
+			if rec, err := store.TaskRolloverRecord(ctx, task.ID); err == nil {
+				history.RolloverDue = rec.PastLimit(time.Now())
+			}
+		}
 	}
 }
 
@@ -196,6 +204,15 @@ func contextUpkeepSection(task model.Task, history History, promptBytes int) str
 		fmt.Fprintf(&b, "[grain] This task's handover is stale: %d run(s) and %d comment(s) since it was "+
 			"written or last confirmed. Before you finish, replace it (`grain handover write --file <path>`) or, if it is "+
 			"still true, write it again unchanged to confirm it.\n", age.Runs, age.Comments)
+	}
+	if history.RolloverDue != "" {
+		fmt.Fprintf(&b, "[grain] This console session is past a durable task's record limit: it has %s. "+
+			"A session does not roll over to a successor task the way other durable tasks do; it rolls "+
+			"over by being closed, and grain files it again the next cycle carrying its handover. When "+
+			"this conversation next rests -- nothing in flight, nobody waiting on a reply -- write a "+
+			"fresh handover (`grain handover write --file <path>`) and say in your reply that the "+
+			"session is due to be closed and refiled, so whoever runs it can close it "+
+			"(design/design/durable-tasks.design.md#DT-15).\n", history.RolloverDue)
 	}
 	return b.String()
 }
