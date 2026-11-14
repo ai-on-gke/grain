@@ -23,7 +23,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -63,7 +62,7 @@ func TestTaskDBQueryWithReadGrant(t *testing.T) {
 		ID:    "t-read",
 		Title: "Read DB Task",
 		Grants: []model.Grant{
-			{Capability: dbaccess.CapabilityDBRead, Via: model.GrantByLabel},
+			{Capability: model.GrainSQLReadGrant, Via: model.GrantByLabel},
 		},
 	}
 	if err := store.PutTask(ctx, task); err != nil {
@@ -97,7 +96,7 @@ func TestTaskDBQueryRejectsMutatingQueryWithReadGrant(t *testing.T) {
 		ID:    "t-read-only",
 		Title: "Read Only Task",
 		Grants: []model.Grant{
-			{Capability: dbaccess.CapabilityDBRead, Via: model.GrantByLabel},
+			{Capability: model.GrainSQLReadGrant, Via: model.GrantByLabel},
 		},
 	}
 	if err := store.PutTask(ctx, task); err != nil {
@@ -129,7 +128,7 @@ func TestTaskDBQueryReadGrantCannotWrite(t *testing.T) {
 		ID:    "t-read-bypass",
 		Title: "original",
 		Grants: []model.Grant{
-			{Capability: dbaccess.CapabilityDBRead, Via: model.GrantByLabel},
+			{Capability: model.GrainSQLReadGrant, Via: model.GrantByLabel},
 		},
 	}
 	if err := store.PutTask(ctx, task); err != nil {
@@ -194,7 +193,7 @@ func TestTaskDBExecWithWriteGrant(t *testing.T) {
 		ID:    "t-write",
 		Title: "Write DB Task",
 		Grants: []model.Grant{
-			{Capability: dbaccess.CapabilityDBWrite, Via: model.GrantByLabel},
+			{Capability: model.GrainSQLWriteGrant, Via: model.GrantByLabel},
 		},
 	}
 	if err := store.PutTask(ctx, task); err != nil {
@@ -237,7 +236,7 @@ func TestTaskDBExecForbiddenWithReadOnlyGrant(t *testing.T) {
 		ID:    "t-read-only-exec",
 		Title: "Read Only Exec Task",
 		Grants: []model.Grant{
-			{Capability: dbaccess.CapabilityDBRead, Via: model.GrantByLabel},
+			{Capability: model.GrainSQLReadGrant, Via: model.GrantByLabel},
 		},
 	}
 	if err := store.PutTask(ctx, task); err != nil {
@@ -263,7 +262,7 @@ func TestHTTPClientTaskDBRoundTrip(t *testing.T) {
 		ID:    "t-http",
 		Title: "HTTP Roundtrip Task",
 		Grants: []model.Grant{
-			{Capability: dbaccess.CapabilityDBWrite, Via: model.GrantByLabel},
+			{Capability: model.GrainSQLWriteGrant, Via: model.GrantByLabel},
 		},
 	}
 	if err := store.PutTask(ctx, task); err != nil {
@@ -330,8 +329,8 @@ func postDB(t *testing.T, srv *ui.Server, user, path, body string) *httptest.Res
 func TestTaskDBRefusesTaskWithoutLiveRun(t *testing.T) {
 	t.Parallel()
 	srv, store, ctx := setupTestDBServer(t)
-	putDBTask(t, store, ctx, "t-idle", "", dbaccess.CapabilityDBWrite, false)
-	putDBTask(t, store, ctx, "t-closed", "", dbaccess.CapabilityDBWrite, true)
+	putDBTask(t, store, ctx, "t-idle", "", model.GrainSQLWriteGrant, false)
+	putDBTask(t, store, ctx, "t-closed", "", model.GrainSQLWriteGrant, true)
 	if rec := postDB(t, srv, "", "/api/tasks/t-closed/db/query", `{"query": "SELECT 1"}`); rec.Code != http.StatusOK {
 		t.Fatalf("query on running task: %d %s", rec.Code, rec.Body)
 	}
@@ -354,7 +353,7 @@ func TestTaskDBRefusesTaskWithoutLiveRun(t *testing.T) {
 func TestTaskDBQueryTruncatesLargeResults(t *testing.T) {
 	t.Parallel()
 	srv, store, ctx := setupTestDBServer(t)
-	putDBTask(t, store, ctx, "t-big", "", dbaccess.CapabilityDBRead, true)
+	putDBTask(t, store, ctx, "t-big", "", model.GrainSQLReadGrant, true)
 
 	query := func(limit int) ui.TaskDBQueryResponse {
 		t.Helper()

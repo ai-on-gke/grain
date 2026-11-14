@@ -63,8 +63,8 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 	// capability reference (without ={}) to exercise capabilityStatusKey on
 	// capabilitiesWithReadiness as well as ciCapabilitiesWithReadiness.
 	client.Config.Capabilities = append(ui.OfferedCapabilities(),
-		ui.Capability{ID: "github-sandbox", Name: "GitHub sandbox"},
 		ui.Capability{ID: model.GitHubSandboxRepoRef, Name: "GitHub sandbox repo"},
+		ui.Capability{ID: model.GitHubSandboxRepoGrant, Name: "GitHub sandbox"},
 	)
 
 	rec := do(t, srv, http.MethodGet, "/api/config", "")
@@ -76,7 +76,7 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 		CICapabilities []ui.Capability `json:"ciCapabilities"`
 	}](t, rec)
 
-	for _, id := range []string{"github-sandbox", model.GitHubSandboxRepoRef} {
+	for _, id := range []string{model.GitHubSandboxRepoRef, model.GitHubSandboxRepoGrant} {
 		sandbox := pickerRow(t, cfg.Capabilities, id)
 		if sandbox.Ready == nil {
 			t.Fatalf("%s: Ready is nil -- the picker was told nothing about readiness", id)
@@ -118,7 +118,7 @@ func TestConfigPickerReportsACapabilityThisDeploymentCannotHonour(t *testing.T) 
 	if readyCISandbox.Ready == nil || !*readyCISandbox.Ready || len(readyCISandbox.Needs) != 0 {
 		t.Errorf("%s after secrets set: Ready = %v, Needs = %v, want ready with none", model.GitHubSandboxRepoGrant, readyCISandbox.Ready, readyCISandbox.Needs)
 	}
-	for _, id := range []string{"github-sandbox", model.GitHubSandboxRepoRef} {
+	for _, id := range []string{model.GitHubSandboxRepoRef, model.GitHubSandboxRepoGrant} {
 		readySandbox := pickerRow(t, cfg.Capabilities, id)
 		if readySandbox.Ready == nil || !*readySandbox.Ready {
 			t.Errorf("%s after secrets set: Ready = %v, want true", id, readySandbox.Ready)
@@ -156,9 +156,9 @@ func TestCapabilitiesListsEveryKnownCapabilityOnAFreshStore(t *testing.T) {
 	// never the retired name itself.
 	want := []string{
 		model.GitHubSandboxRepoGrant,
-		model.CanonicalLegacyGrant("image-signing"),
-		model.CanonicalLegacyGrant("package-publish"),
-		model.CanonicalLegacyGrant("registry-push"),
+		model.ImageSigningRef + "={}",
+		model.PackagePublishRef + "={}",
+		model.RegistryPushRef + "={}",
 	}
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("capability ids = %v, want %v", ids, want)
@@ -172,8 +172,8 @@ func TestCapabilitiesSelfDebugAndSelfRepairAreAlwaysReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"registry-push", "package-publish"} {
-		status := capabilityStatus(t, got.Capabilities, model.CanonicalLegacyGrant(id))
+	for _, id := range []string{model.RegistryPushRef + "={}", model.PackagePublishRef + "={}"} {
+		status := capabilityStatus(t, got.Capabilities, id)
 		if !status.Ready {
 			t.Fatalf("%s: Ready = false, want true (status: %+v)", id, status)
 		}
@@ -310,7 +310,7 @@ func TestCapabilitiesReportWhereEachRequiredSecretIsWritten(t *testing.T) {
 // list happens to hold today.
 func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 	t.Parallel()
-	for _, rowID := range []string{"github-sandbox", model.GitHubSandboxRepoRef, model.GitHubSandboxRepoGrant} {
+	for _, rowID := range []string{model.GitHubSandboxRepoRef, model.GitHubSandboxRepoGrant} {
 		c, _, ctx := testClient(t)
 		c.Config.Capabilities = []ui.Capability{
 			{ID: rowID, Name: "GitHub sandbox"},
@@ -321,10 +321,10 @@ func TestCapabilityStatusReportsWhetherATaskCanBeGrantedIt(t *testing.T) {
 			t.Fatal(err)
 		}
 		for id, want := range map[string]bool{
-			"github-sandbox": true,
-			"registry-push":  false,
+			model.GitHubSandboxRepoGrant:  true,
+			model.RegistryPushRef + "={}": false,
 		} {
-			if status := capabilityStatus(t, got.Capabilities, model.CanonicalLegacyGrant(id)); status.Grantable != want {
+			if status := capabilityStatus(t, got.Capabilities, id); status.Grantable != want {
 				t.Errorf("picker row %q, %s: Grantable = %t, want %t (status: %+v)", rowID, id, status.Grantable, want, status)
 			}
 		}

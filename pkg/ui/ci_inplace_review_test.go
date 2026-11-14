@@ -34,7 +34,7 @@ func putReviewedAndReview(t *testing.T, store *model.Store, inPlace bool) {
 	t.Helper()
 	ctx := context.Background()
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
-	grants := []model.Grant{{Capability: "grain-ci"}}
+	grants := []model.Grant{{Capability: model.GrainCIGrant}}
 	if err := store.PutTask(ctx, model.Task{
 		ID: "7", Intent: model.IntentImplement, Title: "change it", Target: &repo, Grants: grants,
 	}); err != nil {

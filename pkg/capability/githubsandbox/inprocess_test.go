@@ -66,8 +66,8 @@ func TestSandboxRepoMigrationFidelity(t *testing.T) {
 	newClient := newFakeAppClient("grain-bot")
 	SetCurrent(testProvider(newClient))
 	spec := MethodSpec()
-	if got := model.CanonicalLegacyGrant("github-sandbox"); got != model.GitHubSandboxRepoGrant {
-		t.Fatalf("github-sandbox is an alias for %q, want %q", got, model.GitHubSandboxRepoGrant)
+	if got := model.RetiredGrantsBecame("github-sandbox")[0]; got != model.GitHubSandboxRepoGrant {
+		t.Fatalf("github-sandbox is rewritten to %q, want %q", got, model.GitHubSandboxRepoGrant)
 	}
 
 	mintCreds := testCredentials()

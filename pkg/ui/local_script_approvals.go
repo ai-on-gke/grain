@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -396,8 +395,8 @@ type localScriptApprovalRequest struct {
 	Deadline       time.Time `json:"deadline"`
 }
 
-// localScriptStdinPreviewMax is localexec.StdinPreviewMax, restated for
-// the same reason as localScriptsNamePattern.
+// localScriptStdinPreviewMax is localexec.StdinPreviewMax, restated
+// without importing pkg/localexec into pkg/ui.
 const localScriptStdinPreviewMax = 4096
 
 // localScriptMaxWait bounds a request's deadline: a script's timeout is
@@ -466,9 +465,6 @@ func (s *Server) handleRequestLocalScriptApproval(w http.ResponseWriter, r *http
 
 func localScriptsGranted(t model.Task) bool {
 	for _, g := range t.Grants {
-		if _, ok := localScriptsName(g.Capability); ok {
-			return true
-		}
 		if strings.HasSuffix(model.CapabilityGrantRef(g.Capability), "#host-script") {
 			return true
 		}
@@ -533,20 +529,6 @@ func (s *Server) authenticateApprovalCallback(w http.ResponseWriter, r *http.Req
 		return "", false
 	}
 	return taskID, true
-}
-
-// localScriptsNamePattern matches localscripts.Name without importing
-// pkg/capability/localscripts into pkg/ui.
-var localScriptsNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
-
-// localScriptsName is the declaration a local-scripts:<name> capability
-// names.
-func localScriptsName(id string) (string, bool) {
-	name, ok := strings.CutPrefix(id, "local-scripts:")
-	if !ok || !localScriptsNamePattern.MatchString(name) {
-		return "", false
-	}
-	return name, true
 }
 
 // handleWaitLocalScriptApproval answers once the approval is answered,

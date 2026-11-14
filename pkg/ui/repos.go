@@ -1853,19 +1853,17 @@ func (c *Client) ciCapabilityIDs() []string {
 		if !spec.SupportsCI() {
 			continue
 		}
-		_, offered := c.capabilityByID(spec.Name)
-		if !offered {
-			_, offered = c.capabilityByID(model.CanonicalLegacyGrant(spec.Name))
-		}
+		canonical := model.RetiredGrantsBecame(spec.Name)[0]
+		_, offered := c.capabilityByID(canonical)
 		if offered || spec.CIOnly {
 			// A provider retired onto a method with a CI rule (the
-			// release server's) is offered as the grant it became,
-			// which is what its stored rows were rewritten to.
-			if _, ok := model.CIGrantRuleFor(spec.Name); ok {
-				ids = append(ids, model.CanonicalCIGrant(spec.Name))
+			// release server's, github#sandbox-repo) is offered as the
+			// grant it became, which is what its stored rows were rewritten to.
+			if _, ok := model.CIGrantRuleFor(canonical); ok {
+				ids = append(ids, model.CanonicalCIGrant(canonical))
 				continue
 			}
-			ids = append(ids, spec.Name)
+			ids = append(ids, canonical)
 		}
 	}
 	return ids
@@ -1912,7 +1910,7 @@ func (c *Client) cleanRepoCICapabilities(ctx context.Context, repo model.RepoRef
 			canonicalID = model.RepoReadCapability(target)
 		} else if target, ok := model.RepoWriteTarget(id); ok {
 			canonicalID = model.RepoWriteCapability(target)
-		} else if model.IsCapabilityRef(id) || id == "gcp-key" || strings.HasPrefix(id, "gcp-key:") {
+		} else if model.IsCapabilityRef(id) {
 			// A capability server method, with its with: arguments: a
 			// CI job's grant admission mints it through its server
 			// (daemon.CiGrantReservations), so the repo may grant it

@@ -140,8 +140,8 @@ func TestGrantedReadsATasksOwnGrants(t *testing.T) {
 	if !grainci.Granted([]model.Grant{{Capability: "self-debug"}, {Capability: grainci.Grant}}) {
 		t.Error("a task holding grain#ci holds it")
 	}
-	if !grainci.Granted([]model.Grant{{Capability: grainci.LegacyName}}) {
-		t.Error("a task holding the retired bare grain-ci holds it")
+	if grainci.Granted([]model.Grant{{Capability: grainci.LegacyName}}) {
+		t.Error("a task holding only the retired bare grain-ci does not hold it: the name is no alias any longer")
 	}
 	if !grainci.Granted([]model.Grant{{Capability: model.GrainCIRef}}) {
 		t.Error("a task holding the bare grain#ci reference holds it")

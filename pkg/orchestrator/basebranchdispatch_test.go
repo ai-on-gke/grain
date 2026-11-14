@@ -451,7 +451,7 @@ func releasesOffNamingNothing(t *testing.T, ctx context.Context, store *model.St
 	t.Helper()
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo: repo, CIMode: model.CIModeGrain,
-		CICapabilities: []string{packagepublish.CapabilityName},
+		CICapabilities: []string{model.PackagePublishRef + "={}"},
 		Work:           model.ItemOwnership(model.ReleaseItem, model.OwnershipOff),
 	}); err != nil {
 		t.Fatal(err)
@@ -504,7 +504,7 @@ func TestTheGuestCacheDefaultDoesNothingWhileReleasesArePublishing(t *testing.T)
 	runner := newFakeCI()
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo: repo, CIMode: model.CIModeGrain,
-		CICapabilities: []string{packagepublish.CapabilityName},
+		CICapabilities: []string{model.PackagePublishRef + "={}"},
 	}); err != nil {
 		t.Fatal(err)
 	}
