@@ -116,11 +116,6 @@ func DeclaredItemScopes(item string) []APIScope {
 	if g, ok, err := ParseAPIGrant(item); ok && err == nil && len(g.Scopes) > 0 {
 		return slices.Clone(g.Scopes)
 	}
-	if preset, ok := apiAliasCapabilities[strings.TrimSpace(item)]; ok {
-		if g, ok, err := ParseAPIGrant(APIGrantPrefix + preset); ok && err == nil && len(g.Scopes) > 0 {
-			return slices.Clone(g.Scopes)
-		}
-	}
 	return []APIScope{"capabilities:admin"}
 }
 

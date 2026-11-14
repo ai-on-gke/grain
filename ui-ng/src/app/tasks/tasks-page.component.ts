@@ -36,6 +36,7 @@ import {
   type BoardPlan,
   type BoardView,
   LEGACY_FILTER_ATTRS,
+  NO_REPO,
   boardKindLabel,
   boardQueryForView,
   planForBoard,
@@ -998,9 +999,13 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                 (closed)="closePane()"
                 (expand)="openFull(id)"
               />
-            } @else {
+            } @else if (store.loaded()) {
               <div class="empty-state" data-testid="tasks-pane-empty">
                 <p>Nothing in this tab — switch tabs or create a task</p>
+              </div>
+            } @else if (store.loadError()) {
+              <div class="empty-state" data-testid="tasks-pane-unread">
+                <p>Tasks could not be read yet.</p>
               </div>
             }
           </section>
@@ -1090,6 +1095,16 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
           ) {
             <button type="button" class="btn-text" (click)="defer(selected())">
               Defer
+            </button>
+          }
+          @if (current() === "deferred" && canUndeferSelected()) {
+            <button
+              type="button"
+              class="btn-text"
+              data-testid="batch-undefer"
+              (click)="undefer(selected())"
+            >
+              Bring back
             </button>
           }
           @if (current() === "closed") {
@@ -1536,8 +1551,11 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     return isTabId(t) ? t : "backlog";
   });
 
+  // The top bar's "Filter this view" box is what narrows the list; ?q=
+  // only seeds it (see the constructor), so what the box shows is always
+  // what the list is filtered by.
   private readonly query = computed(() =>
-    (this.q() || this.filter.query()).trim().toLowerCase(),
+    this.filter.query().trim().toLowerCase(),
   );
   private matches(t: Task): boolean {
     const r = (this.repo() || "").trim().toLowerCase();
@@ -1680,6 +1698,18 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       )
     );
   }
+  protected canUndeferSelected(): boolean {
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/undefer",
+          r.repo ?? null,
+        ),
+      )
+    );
+  }
   protected canCloseSelected(): boolean {
     const rows = this.selectedRows();
     return (
@@ -1769,6 +1799,36 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   constructor() {
     afterNextRender(() => this.sp.attach());
+    // ?q= (a shared link, a saved board, Back and Forward) fills the
+    // "Filter this view" box, and what is typed there goes back into ?q=,
+    // so a reload or a copied link keeps the filter and the box never
+    // shows something other than what narrows the list.
+    // While one of this page's own ?q= writes is in flight, the ?q= it
+    // passes through is an echo of what was typed, possibly already
+    // overtaken by the next keystroke, so it must not refill the box.
+    let writingQ = 0;
+    effect(() => {
+      const q = this.q() ?? "";
+      untracked(() => {
+        if (writingQ === 0 && q !== this.filter.query()) {
+          this.filter.query.set(q);
+        }
+      });
+    });
+    effect(() => {
+      const typed = this.filter.query();
+      untracked(() => {
+        if (typed === (this.q() ?? "")) return;
+        writingQ++;
+        void this.router
+          .navigate([], {
+            queryParams: { q: typed || null },
+            queryParamsHandling: "merge",
+            replaceUrl: true,
+          })
+          .finally(() => writingQ--);
+      });
+    });
     // Where the selected task sits in this tab, so j/k and Next item
     // carry on from there after it leaves.
     effect(() => {
@@ -1800,7 +1860,8 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       const fVal = this.f();
       const qm = this.queryParamMap();
       const classicKeys = ["f", "sort", ...LEGACY_FILTER_ATTRS] as const;
-      const fromRoute = !!qm && classicKeys.some((k) => qm.has(k));
+      const noRepo = qm?.get("repo")?.trim() === NO_REPO;
+      const fromRoute = !!qm && (noRepo || classicKeys.some((k) => qm.has(k)));
       if (fVal === undefined && !fromRoute) return;
       untracked(() => {
         const p = new URLSearchParams();
@@ -1825,6 +1886,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
         } else {
           const cleared: Record<string, null> = {};
           for (const k of classicKeys) cleared[k] = null;
+          if (noRepo) cleared["repo"] = null;
           void this.router.navigate([], {
             queryParams: cleared,
             queryParamsHandling: "merge",
@@ -2238,7 +2300,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   private currentView(): BoardView {
     return {
       tab: this.current(),
-      q: (this.q() || this.filter.query()).trim(),
+      q: this.filter.query().trim(),
       repo: (this.repo() || "").trim(),
       group: this.groupBy(),
     };
@@ -2297,7 +2359,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   private openView(v: BoardView, replaceUrl = false): void {
-    this.filter.query.set(v.q);
+    // The navigation carries q, and ?q= then fills the "Filter this view"
+    // box (see the constructor). Setting the box here as well started the
+    // box's own ?q= write-back while this navigation was still in flight,
+    // which superseded it and dropped the board's tab, group and repo.
     void this.router.navigate(["/tasks"], {
       queryParams: {
         tab: v.tab === "backlog" ? null : v.tab,

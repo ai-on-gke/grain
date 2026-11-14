@@ -113,6 +113,29 @@ describe("viewForQuery", () => {
       expect("why" in viewForQuery(q), q).toBe(true);
     }
   });
+
+  it("gives each repo clause it refuses its own reason", () => {
+    for (const [q, why] of [
+      ["f=repo:any:a/b|c/d", "it names more than one repository"],
+      ["f=repo:none:a/b", "it leaves repositories out"],
+      ["f=repo:any:__none__", "it lists tasks with no repository"],
+      ["repo=__none__", "it lists tasks with no repository"],
+      ["f=repo:any:", "it lists tasks with no repository"],
+      ["f=repo:any:%20", "it lists tasks with no repository"],
+      ["repo=a/b&f=repo:any:c/d", "it names more than one repository"],
+    ]) {
+      expect(viewForQuery(q), q).toEqual({ why });
+    }
+  });
+
+  it("trims a repo value and compares repo names without case", () => {
+    expect(viewForQuery("f=repo:any:%20o/n%20")).toEqual({
+      view: view({ tab: "all", repo: "o/n" }),
+    });
+    expect(viewForQuery("repo=Acme/Widgets&f=repo:any:acme/widgets")).toEqual({
+      view: view({ tab: "all", repo: "acme/widgets" }),
+    });
+  });
 });
 
 describe("planForBoard", () => {

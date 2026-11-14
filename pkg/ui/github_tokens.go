@@ -247,8 +247,11 @@ func (c *Client) gitHubTokens(ctx context.Context) []gitHubTokenInfo {
 }
 
 func matchesNamedGitCredentialGrant(grant, name string) bool {
-	cred, ok := model.GitCredentialName(grant)
-	return ok && cred == name
+	if cred, ok := model.GitCredentialName(grant); ok {
+		return cred == name
+	}
+	cred, ok := model.LegacyGitCredentialName(grant)
+	return ok && cred == name && model.ValidGitCredentialName(cred)
 }
 
 // gitCredentialGrantHolders lists everything in the store holding a capability

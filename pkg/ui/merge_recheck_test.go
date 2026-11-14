@@ -31,8 +31,8 @@ func TestSetRepoSettingsAppliesCapabilitiesAndUnfixableChecks(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
 
-	defaultCaps := []string{"gcp-key", "gcp-key"}
-	ciCaps := []string{"github-sandbox", "package-publish", "package-publish", "repo-read:acme/tools"}
+	defaultCaps := []string{model.GCPKeySandboxAgentGrant, model.GCPKeySandboxAgentGrant}
+	ciCaps := []string{model.GitHubSandboxRepoGrant, model.PackagePublishRef + "={}", model.PackagePublishRef + "={}", "repo-read:acme/tools"}
 	unfixable := []string{" cla/google ", "CLA/Google", "license/check"}
 
 	got, err := c.SetRepoSettings(ctx, "acme/widgets", ui.SetRepoSettingsRequest{
@@ -54,7 +54,7 @@ func TestSetRepoSettingsAppliesCapabilitiesAndUnfixableChecks(t *testing.T) {
 	}
 
 	// Narrowing ciCapabilities via SetRepoSettings keeps other fields intact.
-	narrowCI := []string{"github-sandbox", "package-publish"}
+	narrowCI := []string{model.GitHubSandboxRepoGrant, model.PackagePublishRef + "={}"}
 	got, err = c.SetRepoSettings(ctx, "acme/widgets", ui.SetRepoSettingsRequest{
 		CICapabilities: &narrowCI,
 	})

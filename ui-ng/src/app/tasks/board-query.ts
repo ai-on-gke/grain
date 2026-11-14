@@ -89,6 +89,11 @@ interface Condition {
 
 // classic's LEGACY_FILTERS (ui/src/paths.js) aside from repo, which
 // /next/tasks reads itself: older links gave each attribute its own key.
+// NO_REPO is the value classic's repo attribute writes for "tasks with
+// no target repo" (NONE in ui/src/taskAttributes.js); /next/tasks has
+// no way to show only those, so a board naming it opens on classic.
+export const NO_REPO = "__none__";
+
 export const LEGACY_FILTER_ATTRS = [
   "base",
   "capability",
@@ -182,6 +187,9 @@ export function viewForQuery(
   };
   const g = p.get("group");
   if (g === "workstream" || g === "repo") view.group = g;
+  if (view.repo === NO_REPO) {
+    return { why: "it lists tasks with no repository" };
+  }
   const legacyTab = p.get("tab");
   if (isTabId(legacyTab)) view.tab = legacyTab;
   // A condition on state wins over a legacy tab= beside it; two of them
@@ -205,11 +213,19 @@ export function viewForQuery(
       }
       view.tab = tab;
       stated = true;
-    } else if (c.attr === "repo" && c.op === "any" && c.values.length === 1) {
-      if (view.repo && view.repo !== c.values[0]) {
+    } else if (c.attr === "repo") {
+      if (c.op !== "any") return { why: "it leaves repositories out" };
+      if (c.values.length > 1) {
         return { why: "it names more than one repository" };
       }
-      view.repo = c.values[0];
+      const repo = (c.values[0] ?? "").trim();
+      if (!repo || repo === NO_REPO) {
+        return { why: "it lists tasks with no repository" };
+      }
+      if (view.repo && view.repo.toLowerCase() !== repo.toLowerCase()) {
+        return { why: "it names more than one repository" };
+      }
+      view.repo = repo;
     } else {
       return { why: `it narrows by ${c.attr}, which /next/ cannot filter on` };
     }

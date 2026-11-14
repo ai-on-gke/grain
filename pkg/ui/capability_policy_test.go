@@ -16,9 +16,10 @@ package ui_test
 
 import (
 	"context"
-	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/capability/intree"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
