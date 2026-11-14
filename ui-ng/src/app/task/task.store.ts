@@ -121,7 +121,8 @@ export class TaskStore {
     }
   }
 
-  close(): void {
+  close(expectedId?: string): void {
+    if (expectedId !== undefined && this.id() !== expectedId) return;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.eventSub?.unsubscribe();

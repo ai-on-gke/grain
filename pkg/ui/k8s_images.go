@@ -195,14 +195,27 @@ type cachedManifestResult struct {
 	expiresAt time.Time
 }
 
-var manifestCheckCache sync.Map // map[string]cachedManifestResult
+type manifestCheckFlight struct {
+	done chan struct{}
+	err  error
+}
 
-const manifestCheckTTL = 5 * time.Minute
+var (
+	manifestCheckCache     sync.Map // map[string]cachedManifestResult
+	manifestCheckFlightsMu sync.Mutex
+	manifestCheckFlights   = map[string]*manifestCheckFlight{}
+)
+
+const (
+	manifestCheckTTL     = 5 * time.Minute
+	registryTokenTimeout = 1 * time.Second
+)
 
 // CheckImageManifest performs a cheap OCI/Docker Registry v2 manifest HEAD
 // check for imageRef. It supports anonymous Bearer token exchange (e.g. GHCR),
 // sends this host's Google access token to Artifact Registry and GCR
-// (registryauth.TokenFor), and caches results in memory for 5 minutes.
+// (registryauth.TokenFor), caches results in memory for 5 minutes, and
+// coalesces concurrent checks for the same image reference.
 func CheckImageManifest(ctx context.Context, imageRef string) error {
 	imageRef = strings.TrimSpace(imageRef)
 	if imageRef == "" {
@@ -215,11 +228,47 @@ func CheckImageManifest(ctx context.Context, imageRef string) error {
 			return entry.err
 		}
 	}
-	err := checkImageManifestUncached(ctx, imageRef)
-	manifestCheckCache.Store(imageRef, cachedManifestResult{
-		err:       err,
-		expiresAt: now.Add(manifestCheckTTL),
-	})
+	manifestCheckFlightsMu.Lock()
+	if cached, ok := manifestCheckCache.Load(imageRef); ok {
+		entry := cached.(cachedManifestResult)
+		if time.Now().Before(entry.expiresAt) {
+			manifestCheckFlightsMu.Unlock()
+			return entry.err
+		}
+	}
+	if flight, ok := manifestCheckFlights[imageRef]; ok {
+		manifestCheckFlightsMu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		manifestCheckFlightsMu.Unlock()
+		return err
+	}
+	flight := &manifestCheckFlight{done: make(chan struct{})}
+	manifestCheckFlights[imageRef] = flight
+	manifestCheckFlightsMu.Unlock()
+
+	err := errors.New("image manifest check aborted")
+	defer func() {
+		if !errors.Is(err, context.Canceled) {
+			manifestCheckCache.Store(imageRef, cachedManifestResult{
+				err:       err,
+				expiresAt: time.Now().Add(manifestCheckTTL),
+			})
+		}
+		manifestCheckFlightsMu.Lock()
+		flight.err = err
+		close(flight.done)
+		delete(manifestCheckFlights, imageRef)
+		manifestCheckFlightsMu.Unlock()
+	}()
+
+	err = checkImageManifestUncached(context.WithoutCancel(ctx), imageRef)
 	return err
 }
 
@@ -228,11 +277,11 @@ func checkImageManifestUncached(ctx context.Context, imageRef string) error {
 	if err != nil {
 		return err
 	}
-	// Resolved before the probe's own deadline: a token lookup can take
-	// longer than the HEAD it is for, and is cached for later probes.
-	googleToken := registryauth.TokenFor(ctx, host)
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
+	tokCtx, tokCancel := context.WithTimeout(ctx, registryTokenTimeout)
+	googleToken := registryauth.TokenFor(tokCtx, host)
+	tokCancel()
 
 	client := &http.Client{Timeout: 2 * time.Second, Transport: registryTransport}
 	scheme := "https"

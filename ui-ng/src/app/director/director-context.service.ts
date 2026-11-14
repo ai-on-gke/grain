@@ -127,19 +127,43 @@ export function contextKindLabel(
   }
 }
 
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 export function parseRouteContext(url: string): DirectorSelection | null {
-  const clean = url.split("?")[0].split("#")[0];
+  const qIdx = url.indexOf("?");
+  const beforeQuery = qIdx >= 0 ? url.slice(0, qIdx) : url;
+  const afterQuery = qIdx >= 0 ? url.slice(qIdx + 1) : "";
+  const mWsSlash = /^\/workstreams\/(.+)$/.exec(beforeQuery);
+  if (mWsSlash) {
+    return { kind: "workstream", id: safeDecode(mWsSlash[1]) };
+  }
+  const mWsHash = /^\/workstreams#(.+)$/.exec(beforeQuery);
+  if (mWsHash) {
+    return { kind: "workstream", id: safeDecode(mWsHash[1]) };
+  }
+  if (beforeQuery === "/workstreams") {
+    const hIdx = afterQuery.indexOf("#");
+    if (hIdx >= 0 && hIdx + 1 < afterQuery.length) {
+      return {
+        kind: "workstream",
+        id: safeDecode(afterQuery.slice(hIdx + 1)),
+      };
+    }
+  }
+  const clean = beforeQuery.split("#")[0];
   const mTask = /^\/task\/([^/]+)/.exec(clean);
   if (mTask) {
-    return { kind: "task", id: decodeURIComponent(mTask[1]) };
-  }
-  const mWs = /^\/workstreams\/(.+)$/.exec(clean);
-  if (mWs) {
-    return { kind: "workstream", id: decodeURIComponent(mWs[1]) };
+    return { kind: "task", id: safeDecode(mTask[1]) };
   }
   const mRepo = /^\/repos\/([^/]+\/[^/]+)/.exec(clean);
   if (mRepo) {
-    return { kind: "repo", id: decodeURIComponent(mRepo[1]) };
+    return { kind: "repo", id: safeDecode(mRepo[1]) };
   }
   return null;
 }
