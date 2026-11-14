@@ -68,7 +68,9 @@ import {
   buildSuiteRunPasses,
   describeSuiteMode,
   formatCadence,
+  formatRunAt,
   isEventTrigger,
+  scheduleNextRunLabel,
   scheduleStatusBadge,
   suiteRunBadge,
   templateSourceBadge,
@@ -358,6 +360,11 @@ type SuitesPaneView = "suites" | "runs";
                             <span class="tabular">· {{ s.repo }}</span>
                           }
                           <span>· overlap: {{ s.overlap || "skip" }}</span>
+                          <span
+                            class="tabular"
+                            [attr.data-testid]="'sched-next-' + s.id"
+                            >· next: {{ nextRunOf(s) }}</span
+                          >
                         </div>
                       </button>
                     </li>
@@ -787,11 +794,13 @@ type SuitesPaneView = "suites" | "runs";
                     <span
                       >Overlap: <strong>{{ s.overlap || "skip" }}</strong></span
                     >
-                    @if (s.nextRunAt) {
-                      <span class="tabular">Next: {{ s.nextRunAt }}</span>
-                    }
+                    <span class="tabular" data-testid="sched-detail-next"
+                      >Next: {{ nextRunOf(s) }}</span
+                    >
                     @if (s.lastRunAt) {
-                      <span class="tabular">Last: {{ s.lastRunAt }}</span>
+                      <span class="tabular" data-testid="sched-detail-last"
+                        >Last: {{ runAtOf(s.lastRunAt) }}</span
+                      >
                     }
                   </div>
 
@@ -1346,7 +1355,7 @@ type SuitesPaneView = "suites" | "runs";
                     }
                     @if (status?.checkedAt) {
                       <span class="tabular"
-                        >Checked: {{ status!.checkedAt }}</span
+                        >Checked: {{ runAtOf(status!.checkedAt) }}</span
                       >
                     }
                   </div>
@@ -1948,6 +1957,15 @@ type SuitesPaneView = "suites" | "runs";
           }
         }
 
+        @if (store.actionError(); as err) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2092,6 +2110,15 @@ type SuitesPaneView = "suites" | "runs";
           }
         }
 
+        @if (store.actionError(); as err) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           <button type="button" class="btn-text" (click)="closeLaunchDialog()">
             Cancel
@@ -2247,6 +2274,15 @@ type SuitesPaneView = "suites" | "runs";
           ></button>
           <span>Auto-merge passing pull requests</span>
         </div>
+        @if (store.actionError(); as err) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2407,6 +2443,15 @@ type SuitesPaneView = "suites" | "runs";
           </div>
         }
 
+        @if (store.actionError(); as err) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2497,6 +2542,15 @@ type SuitesPaneView = "suites" | "runs";
             (input)="runSuiteBase.set($any($event.target).value)"
           />
         </label>
+        @if (store.actionError(); as err) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2556,6 +2610,15 @@ type SuitesPaneView = "suites" | "runs";
             (input)="wfEditorText.set($any($event.target).value)"
           ></textarea>
         </label>
+        @if (store.actionError(); as err) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="dialog-error"
+          >
+            {{ err }}
+          </p>
+        }
         <div class="dialog-actions">
           @if (wfEditorOriginalPath() && canEditWorkflow()) {
             <button
@@ -2600,6 +2663,10 @@ type SuitesPaneView = "suites" | "runs";
 })
 export class ProcessesPageComponent implements OnInit, OnDestroy {
   readonly tab = input<string | undefined>(undefined);
+  // Path parameters of /processes/<tab>/<id> and
+  // /processes/suites/runs/<runId> (app.routes.ts).
+  readonly id = input<string | undefined>(undefined);
+  readonly runId = input<string | undefined>(undefined);
   readonly new = input<string | undefined>(undefined);
   readonly launch = input<string | undefined>(undefined);
   readonly launchTemplate = input<string | undefined>(undefined);
@@ -2884,6 +2951,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   });
 
   private handledDeepLinkKey = "";
+  private handledItemLinkKey = "";
 
   constructor() {
     afterNextRender(() => this.sp.attach());
@@ -2921,6 +2989,47 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           repos[0]
         ) {
           this.selectDeclRepo(repos[0], false);
+        }
+      });
+    });
+
+    // Select the item a deep link names, once its list has loaded. An id
+    // nothing matches leaves the auto-selection above to pick the top row.
+    effect(() => {
+      const loaded = this.store.loaded();
+      const tab = this.activeTab();
+      const id = this.id();
+      const runId = Number(this.runId());
+      const key = `${tab}:${id ?? ""}:${this.runId() ?? ""}`;
+      // Read the lists so a deep link that arrives before its row (the
+      // store loads lists one by one) is applied when the row turns up.
+      const scheds = this.store.schedules();
+      const tmpls = this.store.templates();
+      const suites = this.store.suites();
+      const runs = this.store.suiteRuns();
+      untracked(() => {
+        if (!loaded || key === this.handledItemLinkKey) return;
+        if (tab === "suites" && Number.isInteger(runId) && runId > 0) {
+          if (!runs.some((r) => r.id === runId)) return;
+          this.handledItemLinkKey = key;
+          this.suitesView.set("runs");
+          this.selectedSuiteId.set(null);
+          this.selectSuiteRun(runId, true);
+          return;
+        }
+        if (!id) return;
+        if (tab === "schedules" && scheds.some((s) => s.id === id)) {
+          this.handledItemLinkKey = key;
+          this.schedFilter.set("all");
+          this.selectSchedule(id, true);
+        } else if (tab === "templates" && tmpls.some((t) => t.id === id)) {
+          this.handledItemLinkKey = key;
+          this.tmplFilter.set("all");
+          this.selectTemplate(id, true);
+        } else if (tab === "suites" && suites.some((s) => s.id === id)) {
+          this.handledItemLinkKey = key;
+          this.suitesView.set("suites");
+          this.selectSuite(id, true);
         }
       });
     });
@@ -3004,6 +3113,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected schedBadge = scheduleStatusBadge;
   protected tmplBadge = templateSourceBadge;
   protected cadenceOf = formatCadence;
+  protected nextRunOf = scheduleNextRunLabel;
+  protected runAtOf = formatRunAt;
   protected isTrigger = isEventTrigger;
   protected suiteModeOf = describeSuiteMode;
   protected runBadgeOf = suiteRunBadge;
@@ -3263,6 +3374,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected openScheduleDialog(existing: Schedule | null): void {
+    // A dialog shows the page's action error in its own footer (the page
+    // banner sits behind the scrim), so an error left from earlier must
+    // not greet the next dialog.
+    this.store.actionError.set(null);
     this.openPicker.set(null);
     this.editingSchedule.set(existing);
     this.draftSchedComposition.set(null);
@@ -3506,6 +3621,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   // --- Template actions & dialogs ---
 
   protected openLaunchTemplateDialog(t: Template | null): void {
+    this.store.actionError.set(null);
     this.openPicker.set(null);
     const chosen = t ?? this.store.templates()[0] ?? null;
     this.launchTemplateId.set(chosen?.id ?? "");
@@ -3561,6 +3677,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected openTemplateDialog(existing: Template | null): void {
+    this.store.actionError.set(null);
     this.editingTemplate.set(existing);
     if (existing) {
       this.tDraftName.set(existing.name);
@@ -3693,6 +3810,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   // --- Suite & Suite Run actions ---
 
   protected openSuiteDialog(existing: Suite | null): void {
+    this.store.actionError.set(null);
     this.editingSuite.set(existing);
     this.draftSuiteComposition.set(null);
     if (existing) {
@@ -3804,6 +3922,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected openRunSuiteDialog(st: Suite | null): void {
+    this.store.actionError.set(null);
     this.openPicker.set(null);
     const chosen = st ?? this.store.suites()[0] ?? null;
     this.runSuiteId.set(chosen?.id ?? "");
@@ -3886,6 +4005,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected openWorkflowEditor(repo: string, wf: RepoWorkflow | null): void {
+    this.store.actionError.set(null);
     this.wfEditorRepo.set(repo);
     this.wfEditorOriginalPath.set(wf?.path ?? "");
     this.wfEditorPath.set(wf?.path ?? ".grain/workflows/ci.yml");

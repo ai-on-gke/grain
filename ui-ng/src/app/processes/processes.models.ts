@@ -472,6 +472,30 @@ export function scheduleStatusBadge(s: Schedule): {
   return { label: "Enabled", tone: "healthy", iconKind: "healthy" };
 }
 
+// formatRunAt renders a schedule's nextRunAt/lastRunAt for people: the
+// server sends RFC 3339 with nanoseconds ("2026-11-14T12:06:23.868Z"),
+// which is unreadable in a meta row. An unparsable value is shown as
+// given rather than as "Invalid Date".
+export function formatRunAt(iso: string | undefined | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+// scheduleNextRunLabel is what a schedule's "Next" says. A paused
+// schedule fires nothing, and a suppressed one (an off-target git_ref
+// watch, say) carries a far-future placeholder nextRunAt, so neither
+// shows that timestamp as if a run were due.
+export function scheduleNextRunLabel(s: Schedule): string {
+  if (!s.enabled) return "paused";
+  if (s.suppressed) return "suppressed";
+  return formatRunAt(s.nextRunAt);
+}
+
 export function templateSourceBadge(t: Template): {
   label: string;
   tone: "proposal" | "reply" | "neutral";
