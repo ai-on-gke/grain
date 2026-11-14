@@ -26,7 +26,6 @@ board.spec.js
 boards-timeline-reports-batch-inputs-walkthrough.spec.js
 boards.spec.js
 boards_workflows.spec.js
-bootstrap-playbooks-deprecation-notice.spec.js
 built-in-template.spec.js
 bulk-edit-task-priority.spec.js
 candidate-keyboard-walkthrough.spec.js
@@ -124,11 +123,10 @@ form-search-selects.spec.js
 gantt.spec.js
 gchat-settings.spec.js
 gcp-permission-sets.spec.js
-gemini-key-deprecation-notice.spec.js
 git-connection-refusal-banner.spec.js
 git-connections-multihost-walkthrough.spec.js
 github-budget-panel.spec.js
-github-sandbox-deprecation-notice.spec.js
+github-server-card.spec.js
 goal-section-layout.spec.js
 grain_ci_grantable_walkthrough.spec.js
 grant-chips.spec.js
@@ -185,7 +183,6 @@ merge-queue-waiting-states.spec.js
 merge-rules-walkthrough.spec.js
 metrics-github-ci.spec.js
 model-picker-search.spec.js
-model-proxy-deprecation-notice.spec.js
 model-source-pause-walkthrough.spec.js
 multi-branch.spec.js
 multi-search-select-layout.spec.js

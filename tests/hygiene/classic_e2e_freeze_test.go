@@ -45,11 +45,12 @@ import (
 const classicE2EDir = "ui/e2e"
 
 // frozenClassicSpecCount is how many classic specs FROZEN_SPECS held when
-// the suite was frozen (task 5099, with comment-deep-link-long-thread.spec.js,
-// which landed on main as it froze). The list may get shorter as pages
+// the suite was frozen (task 5099, with comment-deep-link-long-thread.spec.js
+// and github-server-card.spec.js, which landed on main as it froze, and
+// without the four *-deprecation-notice specs main deleted then). The list may get shorter as pages
 // retire; it may not get longer. Lower this when you delete specs, never
 // raise it.
-const frozenClassicSpecCount = 344
+const frozenClassicSpecCount = 341
 
 // classicSpecName is what Playwright picks up as a spec under testDir
 // (its default testMatch).
