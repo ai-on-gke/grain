@@ -73,7 +73,7 @@ func TestAnUnreadableKMSReleaseApprovalKeyIsNamedInA502(t *testing.T) {
 	if got["code"] != apierror.CodeUpstream || !strings.Contains(got["error"], "-release-approval-kms-key") {
 		t.Fatalf("answer = %v; want code %s and an error naming -release-approval-kms-key", got, apierror.CodeUpstream)
 	}
-	if strings.Contains(got["error"], "denied") || strings.Contains(got["error"], "403") {
+	if leaksKMSAnswer(got["error"]) {
 		t.Fatalf("answer %q carries KMS's own answer; want it only in the log", got["error"])
 	}
 }
@@ -157,11 +157,22 @@ func TestAKMSReleaseApprovalKeyThatCannotSignAfterPublicKeyCacheIsNamedInA502(t 
 		if got["code"] != apierror.CodeUpstream || !strings.Contains(got["error"], "-release-approval-kms-key") {
 			t.Fatalf("POST %s answer = %v; want code %s and an error naming -release-approval-kms-key", tc.path, got, apierror.CodeUpstream)
 		}
-		if strings.Contains(got["error"], "denied") || strings.Contains(got["error"], "403") {
+		if leaksKMSAnswer(got["error"]) {
 			t.Fatalf("POST %s answer %q carries KMS's own answer; want it only in the log", tc.path, got["error"])
 		}
 	}
 	if forge.dispatches != 0 {
 		t.Fatalf("dispatched %d workflows after KMS refused signing, want 0", forge.dispatches)
 	}
+}
+
+// leaksKMSAnswer reports whether an API answer carries KMS's own response.
+// The answer ends with a random hex log reference ("(ref 7bd403ca3aa3)"),
+// which can itself contain "403", so only the text before it is checked.
+func leaksKMSAnswer(answer string) bool {
+	if i := strings.LastIndex(answer, "(ref "); i >= 0 {
+		answer = answer[:i]
+	}
+	return strings.Contains(answer, "denied") || strings.Contains(answer, "403") ||
+		strings.Contains(answer, "cloudkms.")
 }
