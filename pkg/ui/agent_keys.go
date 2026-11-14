@@ -89,15 +89,18 @@ type agentKeysResponse struct {
 // served by a pane that loads and says "not set" than by one that does
 // not load.
 func (c *Client) agentKeysSet() (gemini, claude, openai, codexAuth bool) {
+	secretList := c.listSecretsBestEffort()
+	return c.agentKeysSetFrom(secretList)
+}
+
+func (c *Client) agentKeysSetFrom(list []secrets.SecretInfo) (gemini, claude, openai, codexAuth bool) {
 	if c.Config.Secrets != nil {
-		if list, err := c.Config.Secrets.List(); err == nil {
-			resolvable := func(secret string) bool {
-				return len(missingSecretsFor([]string{secret}, list)) == 0
-			}
-			gemini = resolvable(secrets.GeminiAPIKeySecret)
-			claude = resolvable(secrets.ClaudeOAuthTokenSecret)
-			openai = resolvable(secrets.OpenAIAPIKeySecret)
+		resolvable := func(secret string) bool {
+			return len(missingSecretsFor([]string{secret}, list)) == 0
 		}
+		gemini = resolvable(secrets.GeminiAPIKeySecret)
+		claude = resolvable(secrets.ClaudeOAuthTokenSecret)
+		openai = resolvable(secrets.OpenAIAPIKeySecret)
 	}
 	if c.Config.CodexAuthFile != "" && codex.ValidateAuthFile(c.Config.CodexAuthFile) == nil {
 		codexAuth = true

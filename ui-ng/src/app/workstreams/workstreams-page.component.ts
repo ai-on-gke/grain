@@ -27,7 +27,8 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
-import { Router } from "@angular/router";
+import { toSignal } from "@angular/core/rxjs-interop";
+import { ActivatedRoute, Router } from "@angular/router";
 import { CreateTaskService } from "../create/create-task.service";
 import { NO_REPO } from "../create/new-task-form";
 import { AccessService } from "../services/access.service";
@@ -38,6 +39,7 @@ import {
   PillSelectComponent,
   type PillOption,
 } from "../shared/pill-select.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import { WorkstreamDetailComponent } from "./workstream-detail.component";
 import { type LayoutMode, thumbLayout } from "./workstream-layout";
@@ -49,6 +51,7 @@ import {
   type StreamState,
   type SystemKind,
   type Workstream,
+  compactProgressText,
   filterWorkstreams,
   lastActivityLabel,
   matchesWorkstreamNonScope,
@@ -118,12 +121,40 @@ function saveView(v: WsView): void {
   }
 }
 
+function decodeFragmentKey(frag: string | null): string | null {
+  if (!frag) return null;
+  let decoded = frag;
+  try {
+    decoded = decodeURIComponent(frag);
+  } catch {
+    decoded = frag;
+  }
+  if (
+    decoded.startsWith("task:") ||
+    decoded.startsWith("director:") ||
+    decoded.includes("#") ||
+    decoded.includes("/")
+  ) {
+    return decoded;
+  }
+  return null;
+}
+
 @Component({
   selector: "g-workstreams-page",
-  imports: [TipDirective, WorkstreamDetailComponent, PillSelectComponent],
+  imports: [
+    TipDirective,
+    WorkstreamDetailComponent,
+    PillSelectComponent,
+    StatusIconComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["./workstreams-page.css", "./workstreams-shared.css"],
+  styleUrls: [
+    "../shared/surface-controls.css",
+    "./workstreams-page.css",
+    "./workstreams-shared.css",
+  ],
   host: {
     "(document:keydown)": "onKey($event)",
   },
@@ -133,6 +164,7 @@ function saveView(v: WsView): void {
         <g-workstream-detail
           [stream]="s"
           [nodeId]="node() || null"
+          [pane]="pane()"
           [mode]="activeMode()"
           [hideDone]="hideDoneBool()"
           [allDeps]="allDepsBool()"
@@ -423,27 +455,40 @@ function saveView(v: WsView): void {
                 <div style="display:flex;gap:6px;flex-wrap:wrap">
                   @if (s.counts.person) {
                     <span class="ws-chip-warn"
-                      >{{ s.counts.person }} needs a person</span
+                      ><g-status-icon tone="warn" kind="warn" />{{
+                        s.counts.person
+                      }}
+                      needs a person</span
                     >
                   }
                   @if (s.planning) {
-                    <span class="ws-chip-run">Planning</span>
+                    <span class="ws-chip-run"
+                      ><g-status-icon tone="info" kind="info" />Planning</span
+                    >
                   }
                   @if (s.counts.blocked) {
                     <span class="ws-chip-err"
-                      >{{ s.counts.blocked }} blocked</span
+                      ><g-status-icon tone="error" kind="error" />{{
+                        s.counts.blocked
+                      }}
+                      blocked</span
                     >
                   }
                   @if (s.counts.failed) {
                     <span class="ws-chip-err"
-                      >{{ s.counts.failed }} failed</span
+                      ><g-status-icon tone="error" kind="error" />{{
+                        s.counts.failed
+                      }}
+                      failed</span
                     >
                   }
                   @if (s.state === "done") {
-                    <span class="ws-chip-done">Done</span>
+                    <span class="ws-chip-done"
+                      ><g-status-icon tone="healthy" kind="done" />Done</span
+                    >
                   }
                 </div>
-                <div>
+                <div class="ws-pcell" [attr.title]="progText(s)">
                   <div
                     class="ws-bar"
                     role="img"
@@ -545,11 +590,15 @@ function saveView(v: WsView): void {
                         >
                       }
                       @if (s.repos.length) {
-                        <span class="mono">{{ reposText(s) }}</span>
+                        <span
+                          class="mono"
+                          [attr.title]="s.repos.map(shortRepo).join(', ')"
+                          >{{ reposText(s) }}</span
+                        >
                       }
                     </div>
                   </div>
-                  <div>
+                  <div class="ws-pcell" [attr.title]="progText(s)">
                     <div
                       class="ws-bar"
                       role="img"
@@ -593,31 +642,47 @@ function saveView(v: WsView): void {
                       }
                     </div>
                     <div class="ws-ptext">
-                      <span>{{ progText(s) }}</span>
+                      <span>{{ compactProg(s) }}</span>
                       <span class="mono">{{ s.counts.percent }}%</span>
                     </div>
                   </div>
-                  <div style="display:flex;gap:6px;flex-wrap:wrap">
+                  <div
+                    class="ws-pills"
+                    style="display:flex;gap:6px;flex-wrap:wrap"
+                  >
                     @if (s.counts.person) {
                       <span class="ws-chip-warn"
-                        >{{ s.counts.person }} needs a person</span
+                        ><g-status-icon tone="warn" kind="warn" />{{
+                          s.counts.person
+                        }}
+                        needs a person</span
                       >
                     }
                     @if (s.planning) {
-                      <span class="ws-chip-run">Planning</span>
+                      <span class="ws-chip-run"
+                        ><g-status-icon tone="info" kind="info" />Planning</span
+                      >
                     }
                     @if (s.counts.blocked) {
                       <span class="ws-chip-err"
-                        >{{ s.counts.blocked }} blocked</span
+                        ><g-status-icon tone="error" kind="error" />{{
+                          s.counts.blocked
+                        }}
+                        blocked</span
                       >
                     }
                     @if (s.counts.failed) {
                       <span class="ws-chip-err"
-                        >{{ s.counts.failed }} failed</span
+                        ><g-status-icon tone="error" kind="error" />{{
+                          s.counts.failed
+                        }}
+                        failed</span
                       >
                     }
                     @if (s.state === "done") {
-                      <span class="ws-chip-done">Done</span>
+                      <span class="ws-chip-done"
+                        ><g-status-icon tone="healthy" kind="done" />Done</span
+                      >
                     }
                   </div>
                   <div class="ws-agents muted" style="font-size:12px">
@@ -681,6 +746,10 @@ export class WorkstreamsPageComponent implements OnInit, OnDestroy {
   private readonly access = inject(AccessService);
   private readonly createTask = inject(CreateTaskService);
   private readonly router = inject(Router);
+  private readonly route = inject(ActivatedRoute);
+  private readonly fragment = toSignal(this.route.fragment, {
+    initialValue: null,
+  });
   private readonly keyboard = inject(KeyboardService);
   protected readonly viewFilter = inject(ViewFilter);
   private readonly host = inject(ElementRef) as ElementRef<HTMLElement>;
@@ -696,6 +765,7 @@ export class WorkstreamsPageComponent implements OnInit, OnDestroy {
   readonly sort = input<string>();
   readonly q = input<string>();
   readonly node = input<string>();
+  readonly pane = input<string>();
   readonly mode = input<string>();
   readonly hideDone = input<string>();
   readonly allDeps = input<string>();
@@ -709,9 +779,15 @@ export class WorkstreamsPageComponent implements OnInit, OnDestroy {
   protected readonly systemKinds = SYSTEM_KINDS;
   protected readonly sortOptions = SORT_OPTIONS;
 
-  protected readonly activeKey = computed(
-    () => this.key() || this.ws() || null,
-  );
+  protected readonly activeKey = computed(() => {
+    const raw = this.key() || this.ws() || null;
+    const frag = this.fragment();
+    if (!raw) return decodeFragmentKey(frag);
+    if (frag && /^\d+$/.test(frag) && !raw.includes("#")) {
+      return `${raw}#${frag}`;
+    }
+    return raw;
+  });
   protected readonly activeView = computed<WsView>(() => {
     const v = this.view();
     if (v === "cards" || v === "list") return v;
@@ -881,6 +957,7 @@ export class WorkstreamsPageComponent implements OnInit, OnDestroy {
     void this.router.navigate([], {
       queryParams: next,
       queryParamsHandling: "merge",
+      ...(this.fragment() ? { preserveFragment: true } : {}),
       replaceUrl: true,
     });
   }
@@ -897,6 +974,7 @@ export class WorkstreamsPageComponent implements OnInit, OnDestroy {
       queryParams: {
         ws: null,
         node: null,
+        pane: null,
         mode: null,
         hideDone: null,
         allDeps: null,
@@ -961,14 +1039,24 @@ export class WorkstreamsPageComponent implements OnInit, OnDestroy {
     return progressSummaryText(s);
   }
 
+  protected compactProg(s: Workstream): string {
+    return compactProgressText(s);
+  }
+
+  protected shortRepo(r: string): string {
+    return repoShort(r);
+  }
+
   protected lastText(s: Workstream): string {
     return lastActivityLabel(s);
   }
 
   protected reposText(s: Workstream): string {
     if (!s.repos.length) return "No repo";
-    const first = repoShort(s.repos[0]);
-    return s.repos.length > 1 ? `${first} +${s.repos.length - 1}` : first;
+    const shown = s.repos.slice(0, 2).map((r) => repoShort(r));
+    return s.repos.length > 2
+      ? `${shown.join(", ")} +${s.repos.length - 2}`
+      : shown.join(", ");
   }
 
   protected thumbOf(s: Workstream) {

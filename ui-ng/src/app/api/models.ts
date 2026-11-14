@@ -46,6 +46,50 @@ export interface AgentBackendOption {
   team?: string;
 }
 
+export interface AgentPauseEntry {
+  connection?: string;
+  connectionName?: string;
+  model?: string;
+  labels?: string[];
+  escalated?: string;
+  team?: string;
+  framework?: string;
+  until?: string;
+  reason?: string;
+  secondsRemaining?: number;
+  canLift?: boolean;
+}
+
+export interface AgentPauseStatus {
+  paused: boolean;
+  until?: string;
+  reason?: string;
+  secondsRemaining?: number;
+  pauses?: AgentPauseEntry[];
+}
+
+export interface PipelinePauseStatus {
+  paused: boolean;
+  since?: string;
+  reason?: string;
+  byKind?: string;
+  byId?: string;
+  bySource?: string;
+  byLabel?: string;
+  untilTask?: string;
+  runNowPasses?: boolean;
+  cancelledUpgrade?: string;
+}
+
+export interface DispatchCondition {
+  name?: string;
+  error?: string;
+  since?: string;
+  remedy?: string;
+  held?: boolean | string;
+  check?: boolean | string;
+}
+
 export interface GrainConfig {
   access?: AccessInfo | null;
   viewerOwner?: string;
@@ -61,6 +105,12 @@ export interface GrainConfig {
   models?: string[];
   defaultModel?: string;
   customFields?: CustomFieldDeclaration[];
+  agentPause?: AgentPauseStatus | null;
+  pipelinePause?: PipelinePauseStatus | null;
+  dispatchBlocked?: DispatchCondition[] | null;
+  reconcilerDown?: boolean;
+  timeZone?: string;
+  deployment?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -594,6 +644,11 @@ export interface ConsoleSessionList {
 export interface Notification {
   id: number;
   subject: string;
+  title?: string;
+  taskId?: string;
+  lastRaisedAt?: string;
+  ackedBy?: string;
+  clearsWhen?: { kind?: string; task?: string };
   family?: string;
   severity?: string;
   body?: string;

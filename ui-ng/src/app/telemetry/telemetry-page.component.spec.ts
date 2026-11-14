@@ -710,4 +710,221 @@ describe("TelemetryPageComponent", () => {
     );
     expect(names).toEqual(["Alice", "Maya", "Zane"]);
   });
+
+  it("groups usage notices in configured TZ, progressively discloses heavy lists, filters People, caps repos, and skips full GET /api/release-notes", async () => {
+    const api = new FakeTelemetryApi();
+    api.configBody = {
+      ...api.configBody,
+      timeZone: "America/Los_Angeles",
+    };
+    api.tasksList = [];
+    api.reportBody = {
+      ...api.reportBody,
+      agents: {
+        templates: Array.from({ length: 10 }, (_, i) => ({
+          templateId: `tpl-${String(i + 1).padStart(2, "0")}`,
+          wakes: 10 + i,
+          calls: 100 + i,
+          bytes: 1024,
+          callsP50: 4,
+          callsP95: 9,
+          report: {
+            wakes: 10 + i,
+            claims: 20,
+            uncited: 0,
+            unread: 0,
+            mismatched: 0,
+            uncitedRate: 0,
+            unreadRate: 0,
+            mismatchRate: 0,
+          },
+        })),
+      },
+    };
+    api.usageBody = {
+      ...api.usageBody,
+      warnings: [
+        "default model gemini-2.5 is paused until 07:54 UTC; fallback active",
+        "secondary model is paused until 09:06 UTC",
+        "third model quota exhausted until 11:30 UTC",
+      ],
+      advisories: ["burn rate approaching 5h ceiling"],
+      scopes: Array.from({ length: 10 }, (_, i) => ({
+        connection: `conn-${i + 1}`,
+        connectionName: `Connection ${i + 1}`,
+        model: `model-${i + 1}`,
+        runs: 5 + i,
+        inputTokens: 1000,
+        outputTokens: 500,
+        cacheReadTokens: 200,
+        cacheWriteTokens: 100,
+        used: 1000 * (i + 1),
+        window: "5h",
+        limit: 50_000,
+        limitSource: "configured",
+        burnPerHour: 200,
+      })),
+    };
+    api.clusterStatsBody = {
+      ...api.clusterStatsBody,
+      directions: Array.from({ length: 10 }, (_, i) => ({
+        taskId: String(200 + i),
+        title: `Direction ${i + 1} with a very long milestone title`,
+        author:
+          i === 0
+            ? "Zelda"
+            : i === 1
+              ? "Amber"
+              : `User ${String.fromCharCode(67 + (i % 6))}`,
+        authorKind: "human",
+        repo: i % 2 === 0 ? "acme/api" : "acme/web",
+        tasksCompleted: 3,
+        tasksFiled: 4,
+        tasksSpawned: 2,
+        pullRequestsMerged: 2,
+        linesAdded: 100,
+        linesDeleted: 20,
+        runs: 3,
+        runsSucceeded: 3,
+        agentHours: 1.5,
+      })),
+    };
+    const peopleAndBots = [
+      { id: "zeta-bot", name: "Zeta Bot", kind: "agent", repos: ["acme/z"] },
+      {
+        id: "alice",
+        name: "Alice",
+        kind: "human",
+        repos: ["acme/delta", "acme/alpha", "acme/charlie", "acme/beta"],
+      },
+      {
+        id: "ci-runner",
+        name: "CI Runner",
+        kind: "service",
+        repos: ["acme/api"],
+      },
+      { id: "grain-auto", name: "Grain", kind: "grain", repos: ["acme/web"] },
+      ...Array.from({ length: 11 }, (_, i) => ({
+        id: `dev-${String(i + 1).padStart(2, "0")}`,
+        name: `Dev ${String(i + 1).padStart(2, "0")}`,
+        kind: "human",
+        repos: ["acme/core"],
+      })),
+    ];
+    api.tasksList = peopleAndBots.flatMap((a, idx) =>
+      a.repos.map((repo, rIdx) => ({
+        id: String(500 + idx * 10 + rIdx),
+        title: `Task for ${a.name}`,
+        state: "running",
+        repo,
+        author: a.id,
+        authorLabel: a.name,
+        authorKind: a.kind,
+      })),
+    );
+
+    const { fixture, root } = await setup(api);
+
+    // 1. Redundant GET /api/release-notes is never called; stats endpoint is called, and AccessService holds usage.
+    expect(api.calls.some((c) => c.route === "GET /api/release-notes")).toBe(
+      false,
+    );
+    expect(
+      api.calls.some((c) => c.route === "GET /api/release-notes/stats"),
+    ).toBe(true);
+    expect(TestBed.inject(AccessService).usage()?.scopes.length).toBe(10);
+
+    // 2. Grouped quota banner collapses 4 notices to 2 initially and formats 07:54 UTC to local/configured timezone.
+    const noticeBanner = root.querySelector(
+      '[data-testid="usage-warnings-banner"]',
+    )!;
+    expect(noticeBanner.textContent).toContain("Model quota alerts (4)");
+    expect(noticeBanner.querySelectorAll("li").length).toBe(2);
+    expect(noticeBanner.textContent).toContain("[07:54 UTC]");
+    expect(noticeBanner.textContent).toMatch(/PST|PDT|UTC|in\s/);
+
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="usage-warnings-toggle"]',
+      )!
+      .click();
+    await settle(fixture);
+    expect(noticeBanner.querySelectorAll("li").length).toBe(4);
+    expect(noticeBanner.textContent).toContain(
+      "burn rate approaching 5h ceiling",
+    );
+
+    // 3. Progressive disclosure: templates (8 -> 10), scopes (8 -> 10), directions (8 -> 10).
+    expect(
+      root.querySelectorAll('[data-testid="card-outcomes"] tbody tr').length,
+    ).toBe(8);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="templates-show-all"]')!
+      .click();
+    await settle(fixture);
+    expect(
+      root.querySelectorAll('[data-testid="card-outcomes"] tbody tr').length,
+    ).toBe(10);
+
+    expect(
+      root.querySelectorAll('[data-testid="usage-scopes-table"] tbody tr')
+        .length,
+    ).toBe(8);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="scopes-show-all"]')!
+      .click();
+    await settle(fixture);
+    expect(
+      root.querySelectorAll('[data-testid="usage-scopes-table"] tbody tr')
+        .length,
+    ).toBe(10);
+
+    expect(root.querySelectorAll(".tel-dir-item").length).toBe(8);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="directions-show-all"]')!
+      .click();
+    await settle(fixture);
+    expect(root.querySelectorAll(".tel-dir-item").length).toBe(10);
+
+    // 4. SPACE actors: 12 shown by default in alphabetical order, Alice caps 4 repos to 2 + '+2', expands all, filters People.
+    let actorRows = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-testid="space-actor-row"]'),
+    );
+    expect(actorRows.length).toBe(12);
+    expect(actorRows[0].querySelector(".actor-name")?.textContent?.trim()).toBe(
+      "Alice",
+    );
+    expect(actorRows[0].textContent).toContain("acme/alpha, acme/beta +2");
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="actors-show-all"]')!
+      .click();
+    await settle(fixture);
+    actorRows = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-testid="space-actor-row"]'),
+    );
+    expect(actorRows.length).toBeGreaterThan(12);
+    const expandedNames = actorRows.map(
+      (r) => r.querySelector(".actor-name")?.textContent?.trim() ?? "",
+    );
+    expect(expandedNames).toContain("Zeta Bot");
+    const sortedNames = [...expandedNames].sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" }),
+    );
+    expect(expandedNames).toEqual(sortedNames);
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="actors-filter-people"]')!
+      .click();
+    await settle(fixture);
+    const peopleNames = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        '[data-testid="space-actor-row"] .actor-name',
+      ),
+    ).map((el) => el.textContent?.trim() ?? "");
+    expect(peopleNames).not.toContain("Zeta Bot");
+    expect(peopleNames).not.toContain("CI Runner");
+    expect(peopleNames).not.toContain("Grain");
+    expect(peopleNames).toContain("Alice");
+  });
 });

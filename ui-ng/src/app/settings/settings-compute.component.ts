@@ -15,8 +15,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  OnChanges,
-  OnInit,
+  type OnChanges,
+  type OnInit,
+  type SimpleChanges,
   ViewEncapsulation,
   computed,
   inject,
@@ -43,6 +44,10 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import {
+  type UsagePauseInput,
+  summarizeDispatchStatus,
+} from "../shared/dispatch-status";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -219,6 +224,23 @@ function formatRefreshedAt(iso?: string): string {
   template: `
     @switch (section()) {
       @case ("models") {
+        @if (modelsDispatchStatus(); as dp) {
+          <div
+            class="s-banner"
+            [class.error]="dp.tone === 'error'"
+            [class.warn]="dp.tone === 'warn'"
+            role="status"
+            data-testid="models-quota-banner"
+          >
+            <strong>{{ dp.headline }}</strong>
+            @if (dp.resetText) {
+              <span class="s-num"> · {{ dp.resetText }}</span>
+            }
+            @if (dp.subline) {
+              <span> — {{ dp.subline }}</span>
+            }
+          </div>
+        }
         <div class="s-card" data-testid="card-model-defaults">
           <div class="s-card-head">
             <div>
@@ -2006,6 +2028,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly newBudgetTokens = signal("");
   protected readonly newBudgetWindow = signal("24h");
   protected readonly usageSummary = signal("");
+  protected readonly usageSnapshot = signal<UsagePauseInput | null>(null);
+  protected readonly modelsDispatchStatus = computed(() =>
+    summarizeDispatchStatus(
+      this.access.rawConfig(),
+      this.usageSnapshot() ?? this.access.usage(),
+      this.access.clockNow(),
+      undefined,
+      { modelQuotaOnly: true },
+    ),
+  );
 
   protected readonly persistentSandboxes = signal<
     { name: string; state?: string }[]
@@ -2060,8 +2092,10 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     this.loadForSection();
   }
 
-  ngOnChanges(): void {
-    this.loadForSection();
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes["section"] && !changes["section"].firstChange) {
+      this.loadForSection();
+    }
   }
 
   protected canWriteSettings(): boolean {
@@ -2231,6 +2265,9 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
           .get<Record<string, unknown>>("GET /api/usage")
           .then((u) => {
             if (!u) return;
+            const parsed = u as unknown as UsagePauseInput;
+            this.usageSnapshot.set(parsed);
+            this.access.setUsage(parsed);
             this.applyUsageSettings(
               u["settings"] as UsageSettingsDto | undefined,
             );
