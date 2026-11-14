@@ -299,7 +299,7 @@ var Migrations = []Migration{
 	{
 		Version:     56,
 		Description: "record GitHub Actions jobs and check runs alongside grain CI",
-		Statements:  []string{gitHubCIJobTable},
+		Statements:  []string{schema56GitHubCIJobTable},
 	},
 	{
 		Version:     57,
@@ -1065,7 +1065,46 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `qa` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version: 147,
+		Description: "add github_ci_job.event and head_repo, the triggering event and head repository of a job's " +
+			"workflow run, so pull request and fork runs stay out of the default-branch readings (grain/task-4846)",
+		Statements: []string{
+			"ALTER TABLE `github_ci_job` ADD COLUMN `event` TEXT NOT NULL DEFAULT ''",
+			"ALTER TABLE `github_ci_job` ADD COLUMN `head_repo` TEXT NOT NULL DEFAULT ''",
+		},
+	},
 }
+
+// schema56GitHubCIJobTable is github_ci_job as schema 56 created it, frozen
+// so migration 56 followed by migration 147's ALTER TABLE runs cleanly from
+// any earlier baseline.
+const schema56GitHubCIJobTable = `CREATE TABLE IF NOT EXISTS ` + "`github_ci_job`" + ` (
+  ` + "`repo`" + `          TEXT     NOT NULL,
+  ` + "`check_run_id`" + `  INTEGER  NOT NULL,
+  ` + "`source`" + `        TEXT     NOT NULL DEFAULT 'github',
+  ` + "`app`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`ref`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`commit_sha`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`workflow`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`run_id`" + `        INTEGER  NOT NULL DEFAULT 0,
+  ` + "`run_attempt`" + `   INTEGER  NOT NULL DEFAULT 0,
+  ` + "`job_name`" + `      TEXT     NOT NULL DEFAULT '',
+  ` + "`conclusion`" + `    TEXT     NOT NULL DEFAULT '',
+  ` + "`started_at`" + `    DATETIME NULL,
+  ` + "`completed_at`" + `  DATETIME NULL,
+  ` + "`failing_step`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`run_url`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`job_url`" + `       TEXT     NOT NULL DEFAULT '',
+  ` + "`output`" + `        TEXT     NOT NULL DEFAULT '',
+  ` + "`failure_tail`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`tail_source`" + `   TEXT     NOT NULL DEFAULT '',
+  ` + "`tail_fetched`" + `  INTEGER  NOT NULL DEFAULT 0,
+  ` + "`via`" + `           TEXT     NOT NULL DEFAULT '',
+  ` + "`recorded_at`" + `   DATETIME NOT NULL,
+  ` + "`updated_at`" + `    DATETIME NOT NULL,
+  PRIMARY KEY (` + "`repo`" + `, ` + "`check_run_id`" + `)
+)`
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99
 // created it, frozen so migration 99 followed by migration 139's ALTER TABLE

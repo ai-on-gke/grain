@@ -111,6 +111,7 @@ func gitHubCIJobFromEvent(repo model.RepoRef, ev ghwebhook.Event, now time.Time)
 		FailingStep: ev.FailingStep,
 		JobURL:      ev.HTMLURL,
 		Output:      ev.CheckOutput,
+		HeadRepo:    ev.HeadRepo,
 		Via:         "webhook",
 		UpdatedAt:   now,
 	}
@@ -769,6 +770,17 @@ func isGitHubBranchWorkflowEvent(event string) bool {
 	}
 }
 
+// gitHubCIJobOnBranch reports whether a recorded job is known to belong to
+// a branch run of repo itself: its workflow run's event is a branch event
+// and its head repository, where the row names one, is repo. A row whose
+// event is unknown -- one a workflow_job or check_run delivery wrote that no
+// concluded workflow run has stamped (ensureGitHubWorkflowRunJobs) -- is not,
+// because a pull request's job from a fork whose own branch is called main
+// records the same ref as the default branch's.
+func gitHubCIJobOnBranch(repo model.RepoRef, j model.GitHubCIJob) bool {
+	return isGitHubBranchWorkflowEvent(j.Event) && !isGitHubWorkflowRunForeignHead(repo, j.HeadRepo)
+}
+
 // handleConcludedGitHubWorkflowRun deduplicates a concluded workflow run by
 // (repo, run_id, attempt), ensures its jobs and failure tails are recorded in
 // github_ci_job, fires any matching github_workflow_run schedules, checks
@@ -850,6 +862,8 @@ func ensureGitHubWorkflowRunJobs(ctx context.Context, deps Deps, run ConcludedGi
 				RunURL:      run.HTMLURL,
 				JobURL:      gj.HTMLURL,
 				Via:         run.Via,
+				Event:       run.Event,
+				HeadRepo:    run.HeadRepo,
 				UpdatedAt:   now,
 			}
 			if j.RunURL == "" && j.JobURL != "" {
@@ -901,11 +915,30 @@ func ensureGitHubWorkflowRunJobs(ctx context.Context, deps Deps, run ConcludedGi
 			RunURL:      run.HTMLURL,
 			JobURL:      run.HTMLURL,
 			Via:         run.Via,
+			Event:       run.Event,
+			HeadRepo:    run.HeadRepo,
 			UpdatedAt:   now,
 		}
 		_ = deps.Store.PutGitHubCIJob(ctx, synth)
 		jobs = []model.GitHubCIJob{synth}
 	} else {
+		// Rows only a workflow_job or check_run delivery wrote (no job
+		// listing to read above) do not know the run's event or head
+		// repository; this run says, and it is a branch run of the
+		// repository itself, which is what lets the default-branch readings
+		// count them (gitHubCIJobOnBranch).
+		for i := range jobs {
+			if jobs[i].Event != "" && (jobs[i].HeadRepo != "" || run.HeadRepo == "") {
+				continue
+			}
+			stamp := model.GitHubCIJob{Repo: jobs[i].Repo, CheckRunID: jobs[i].CheckRunID,
+				Event: run.Event, HeadRepo: run.HeadRepo, UpdatedAt: now}
+			if err := deps.Store.PutGitHubCIJob(ctx, stamp); err != nil {
+				return nil, err
+			}
+			jobs[i].Event = firstNonEmpty(jobs[i].Event, run.Event)
+			jobs[i].HeadRepo = firstNonEmpty(jobs[i].HeadRepo, run.HeadRepo)
+		}
 		tailer, hasTailer := deps.Client.(github.JobLogTailer)
 		if hasTailer && deps.Client != nil && !gitHubCIBudgetLow(now) {
 			for i := range jobs {

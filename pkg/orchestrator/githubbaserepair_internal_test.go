@@ -36,15 +36,25 @@ func onGitHubActions(t *testing.T, ctx context.Context, store *model.Store, repo
 	return Deps{Store: store, Client: &branchClient{}}
 }
 
-// testsRun is a concluded tests.yml run on ref, its jobs recorded the way
-// ensureGitHubWorkflowRunJobs records them.
+// testsRun is a concluded tests.yml run pushed to ref, its jobs recorded the
+// way ensureGitHubWorkflowRunJobs records them.
 func testsRun(t *testing.T, ctx context.Context, store *model.Store, repo model.RepoRef, id int64, ref,
 	conclusion string, at time.Time, jobs map[string]string) (ConcludedGitHubWorkflowRun, []model.GitHubCIJob) {
 
 	t.Helper()
+	return testsRunFrom(t, ctx, store, repo, id, ref, "push", "", conclusion, at, jobs)
+}
+
+// testsRunFrom is testsRun for a run event triggered from headRepo ("" for
+// the repository itself): a pull request's, or a fork's, its job rows
+// carrying both the way a stamped row would.
+func testsRunFrom(t *testing.T, ctx context.Context, store *model.Store, repo model.RepoRef, id int64, ref,
+	event, headRepo, conclusion string, at time.Time, jobs map[string]string) (ConcludedGitHubWorkflowRun, []model.GitHubCIJob) {
+
+	t.Helper()
 	run := ConcludedGitHubWorkflowRun{
 		Repo: repo, WorkflowName: "Tests", WorkflowPath: ".github/workflows/tests.yml", RunID: id, Attempt: 1,
-		Conclusion: conclusion, HeadSHA: fmt.Sprintf("%040x", id), Ref: ref, Event: "push",
+		Conclusion: conclusion, HeadSHA: fmt.Sprintf("%040x", id), Ref: ref, Event: event, HeadRepo: headRepo,
 		HTMLURL:     fmt.Sprintf("https://github.example/acme/widgets/actions/runs/%d", id),
 		CompletedAt: &at,
 	}
@@ -55,7 +65,7 @@ func testsRun(t *testing.T, ctx context.Context, store *model.Store, repo model.
 		j := model.GitHubCIJob{
 			Repo: repo.String(), CheckRunID: id*100 + n, Source: model.GitHubCISource, App: model.GitHubActionsApp,
 			Ref: ref, Commit: run.HeadSHA, Workflow: "Tests", RunID: id, RunAttempt: 1, JobName: name,
-			Conclusion: c, CompletedAt: &at, RunURL: run.HTMLURL, UpdatedAt: at,
+			Conclusion: c, CompletedAt: &at, RunURL: run.HTMLURL, Event: run.Event, HeadRepo: run.HeadRepo, UpdatedAt: at,
 		}
 		if j.Failed() {
 			j.FailingStep, j.FailureTail = "go test", "--- FAIL: TestOnlyBuildersNameTheCIService ("+name+")"
@@ -345,10 +355,8 @@ func TestADefaultBranchRepairIgnoresPullRequestAndForkRuns(t *testing.T) {
 	deps := onGitHubActions(t, ctx, store, repo)
 	now := time.Date(2026, 11, 11, 18, 0, 0, 0, time.UTC)
 
-	pr, prJobs := testsRun(t, ctx, store, repo, 20, "main", "failure", now, map[string]string{"go unit": "failure"})
-	pr.Event = "pull_request"
-	fork, forkJobs := testsRun(t, ctx, store, repo, 21, "main", "failure", now, map[string]string{"go unit": "failure"})
-	fork.HeadRepo = "mallory/widgets"
+	pr, prJobs := testsRunFrom(t, ctx, store, repo, 20, "main", "pull_request", "", "failure", now, map[string]string{"go unit": "failure"})
+	fork, forkJobs := testsRunFrom(t, ctx, store, repo, 21, "main", "push", "mallory/widgets", "failure", now, map[string]string{"go unit": "failure"})
 	for _, r := range []struct {
 		run  ConcludedGitHubWorkflowRun
 		jobs []model.GitHubCIJob
@@ -377,8 +385,7 @@ func TestADefaultBranchRepairIgnoresPullRequestAndForkRuns(t *testing.T) {
 		t.Fatalf("repair %s has no goal (%v)", ids[0], err)
 	}
 	later := now.Add(time.Hour)
-	forkGreen, forkGreenJobs := testsRun(t, ctx, store, repo, 23, "main", "success", later, map[string]string{"go unit": "success"})
-	forkGreen.Event, forkGreen.HeadRepo = "pull_request", "mallory/widgets"
+	forkGreen, forkGreenJobs := testsRunFrom(t, ctx, store, repo, 23, "main", "pull_request", "mallory/widgets", "success", later, map[string]string{"go unit": "success"})
 	if err := handleGitHubBaseVerdict(ctx, deps, forkGreen, forkGreenJobs, later); err != nil {
 		t.Fatal(err)
 	}
@@ -492,8 +499,7 @@ func TestARunningDefaultBranchRepairClosesAfterPauseGraceEvenWithForkRuns(t *tes
 		t.Fatalf("ResumesSinceProgress after fruitless run = %+v (%v), want 1", g, err)
 	}
 	forkRedAt := run1At.Add(3 * time.Minute)
-	forkRed, _ := testsRun(t, ctx, store, repo, 51, "main", "failure", forkRedAt, map[string]string{"lint": "failure"})
-	forkRed.Event, forkRed.HeadRepo = "pull_request", "mallory/widgets"
+	testsRunFrom(t, ctx, store, repo, 51, "main", "pull_request", "mallory/widgets", "failure", forkRedAt, map[string]string{"lint": "failure"})
 	if err := reconcileTaskGoals(ctx, deps, forkRedAt); err != nil {
 		t.Fatal(err)
 	}
@@ -530,8 +536,7 @@ func TestARunningDefaultBranchRepairClosesAfterPauseGraceEvenWithForkRuns(t *tes
 	// During PauseGracePeriod a fork's red PR on "main" lands and reconcileTaskGoals ticks:
 	// MetAt must stay set and the live run must not be cancelled yet.
 	midGrace := greenAt.Add(model.PauseGracePeriod / 2)
-	forkDuringGrace, _ := testsRun(t, ctx, store, repo, 54, "main", "failure", midGrace, map[string]string{"go unit": "failure"})
-	forkDuringGrace.Event, forkDuringGrace.HeadRepo = "pull_request", "mallory/widgets"
+	testsRunFrom(t, ctx, store, repo, 54, "main", "pull_request", "mallory/widgets", "failure", midGrace, map[string]string{"go unit": "failure"})
 	if err := reconcileTaskGoals(ctx, deps, midGrace); err != nil {
 		t.Fatal(err)
 	}
@@ -658,5 +663,44 @@ func TestPollingReadsTheDefaultBranchOnceAnHour(t *testing.T) {
 	}
 	if client.repoCalls != 2 {
 		t.Fatalf("a poll an hour later read the default branch %d times in all, want 2", client.repoCalls)
+	}
+}
+
+// A fork's green pull request opened from its own main records job rows on
+// "main" too, and a workflow_job delivery alone does not say which run event
+// it came from. Neither is a finished verdict on the default branch, so
+// neither clears pipeline.base-no-verdict while main's own runs keep being
+// cancelled.
+func TestAForkPullRequestOnMainIsNoDefaultBranchVerdict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	deps := onGitHubActions(t, ctx, store, repo)
+	start := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	subject := gitHubBaseNoVerdictSubject(repo)
+
+	testsRun(t, ctx, store, repo, 40, "main", "success", start, map[string]string{"go unit": "success"})
+	for i := range 8 {
+		at := start.Add(time.Duration(i+1) * 50 * time.Minute)
+		testsRun(t, ctx, store, repo, int64(41+i), "main", "cancelled", at,
+			map[string]string{"go unit": "cancelled", "lint": "success"})
+	}
+	late := start.Add(6*time.Hour + 50*time.Minute)
+	testsRunFrom(t, ctx, store, repo, 60, "main", "pull_request", "mallory/widgets", "success", late,
+		map[string]string{"go unit": "success"})
+	webhookOnly := model.GitHubCIJob{
+		Repo: repo.String(), CheckRunID: 6101, App: model.GitHubActionsApp, Ref: "main", Workflow: "Tests",
+		RunID: 61, RunAttempt: 1, JobName: "go unit", Conclusion: "success", CompletedAt: &late, UpdatedAt: late,
+	}
+	if err := store.PutGitHubCIJob(ctx, webhookOnly); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := reconcileGitHubBaseRepairs(ctx, deps, start.Add(7*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := store.OpenNotification(ctx, subject); err != nil || n == nil {
+		t.Fatalf("a fork's green pull request on main kept %s from being raised (%v)", subject, err)
 	}
 }

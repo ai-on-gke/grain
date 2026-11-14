@@ -87,7 +87,18 @@ type GitHubCIJob struct {
 	// is asked for once rather than every cycle.
 	TailFetched bool `json:"tailFetched,omitempty"`
 	// Via is how grain learned of this result: "webhook" or "poll".
-	Via        string    `json:"via,omitempty"`
+	Via string `json:"via,omitempty"`
+	// Event is the event that triggered the job's workflow run (push,
+	// pull_request, schedule, ...), and HeadRepo the repository its head
+	// came from (owner/name), where the report that brought the job said.
+	// Neither a workflow_job nor a check_run delivery names the event, so
+	// a row has one only once grain has read the concluded workflow run
+	// itself; a pull request's job, including one from a fork whose own
+	// branch is called main, carries a Ref that names a branch of the
+	// repository without being on it, and these are how a reader of the
+	// default branch's verdicts tells the two apart.
+	Event      string    `json:"event,omitempty"`
+	HeadRepo   string    `json:"headRepo,omitempty"`
 	RecordedAt time.Time `json:"recordedAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
@@ -201,6 +212,8 @@ func mergeGitHubCIJob(prev *GitHubCIJob, j GitHubCIJob) GitHubCIJob {
 	str(&out.JobURL, j.JobURL)
 	str(&out.Output, j.Output)
 	str(&out.Via, j.Via)
+	str(&out.Event, j.Event)
+	str(&out.HeadRepo, j.HeadRepo)
 	if j.RunID != 0 {
 		out.RunID = j.RunID
 	}
@@ -288,7 +301,8 @@ func clampGitHubCIText(s string) string {
 
 const gitHubCIJobColumns = "`repo`,`check_run_id`,`source`,`app`,`ref`,`commit_sha`,`workflow`,`run_id`," +
 	"`run_attempt`,`job_name`,`conclusion`,`started_at`,`completed_at`,`failing_step`,`run_url`," +
-	"`job_url`,`output`,`failure_tail`,`tail_source`,`tail_fetched`,`via`,`recorded_at`,`updated_at`"
+	"`job_url`,`output`,`failure_tail`,`tail_source`,`tail_fetched`,`via`,`recorded_at`,`updated_at`," +
+	"`event`,`head_repo`"
 
 func putGitHubCIJob(ctx context.Context, tx *sql.Tx, j GitHubCIJob) error {
 	var started, completed any
@@ -299,11 +313,11 @@ func putGitHubCIJob(ctx context.Context, tx *sql.Tx, j GitHubCIJob) error {
 		completed = j.CompletedAt.UTC()
 	}
 	_, err := tx.ExecContext(ctx,
-		"REPLACE INTO `github_ci_job` ("+gitHubCIJobColumns+") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		"REPLACE INTO `github_ci_job` ("+gitHubCIJobColumns+") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		j.Repo, j.CheckRunID, j.Source, j.App, j.Ref, j.Commit, j.Workflow, j.RunID,
 		j.RunAttempt, j.JobName, j.Conclusion, started, completed, j.FailingStep, j.RunURL,
 		j.JobURL, j.Output, j.FailureTail, j.TailSource, j.TailFetched, j.Via,
-		j.RecordedAt.UTC(), j.UpdatedAt.UTC())
+		j.RecordedAt.UTC(), j.UpdatedAt.UTC(), j.Event, j.HeadRepo)
 	return err
 }
 
@@ -313,7 +327,7 @@ func scanGitHubCIJob(scan func(...any) error) (GitHubCIJob, error) {
 	if err := scan(&j.Repo, &j.CheckRunID, &j.Source, &j.App, &j.Ref, &j.Commit, &j.Workflow, &j.RunID,
 		&j.RunAttempt, &j.JobName, &j.Conclusion, &started, &completed, &j.FailingStep, &j.RunURL,
 		&j.JobURL, &j.Output, &j.FailureTail, &j.TailSource, &j.TailFetched, &j.Via,
-		&j.RecordedAt, &j.UpdatedAt); err != nil {
+		&j.RecordedAt, &j.UpdatedAt, &j.Event, &j.HeadRepo); err != nil {
 		return GitHubCIJob{}, err
 	}
 	j.StartedAt = nullableTime(started)

@@ -393,7 +393,10 @@ func gitHubBaseVerdicts(ctx context.Context, store *model.Store, repo model.Repo
 	}
 	byRun := map[int64][]model.GitHubCIJob{}
 	for _, j := range jobs {
-		if j.RunID != 0 && isGitHubGatingWorkflow(j.Workflow, "") {
+		// A pull request's run of the gating workflow from a fork whose own
+		// branch is called main records ref "main" too; it is no verdict on
+		// the default branch (gitHubCIJobOnBranch).
+		if j.RunID != 0 && isGitHubGatingWorkflow(j.Workflow, "") && gitHubCIJobOnBranch(repo, j) {
 			byRun[j.RunID] = append(byRun[j.RunID], j)
 		}
 	}
