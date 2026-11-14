@@ -158,3 +158,123 @@ func editJSONRows(t *testing.T, path string, edit func(map[string]any)) {
 		t.Fatal(err)
 	}
 }
+
+// TestStateRepoImportResyncsPostgresSequences verifies that staterepo.Import
+// and staterepo.ImportTables advance PostgreSQL serial sequences past imported
+// explicit IDs directly inside importInto, without relying on a later daemon
+// restart.
+func TestStateRepoImportResyncsPostgresSequences(t *testing.T) {
+	postgrestest.SkipUnlessAvailable(t)
+	ctx := context.Background()
+	srcStore, srcDB := postgrestest.Open(t)
+	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+	by := model.Principal{Kind: model.PrincipalHuman, ID: "operator@example.com"}
+
+	var lastTaskID string
+	for range 3 {
+		id, err := srcStore.NewTaskID(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lastTaskID = id
+		if err := srcStore.PutTask(ctx, model.Task{ID: id, Title: "Task " + id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	maxCommentID, err := srcStore.AddComment(ctx, model.Comment{
+		TaskID: lastTaskID, Author: model.Attribution{Actor: by}, Body: "comment", CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxEventID, err := srcStore.RecordTaskEvent(ctx, model.TaskEvent{
+		TaskID: lastTaskID, Kind: model.TaskEventSubmitted, At: now, By: by,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxAuditID, err := srcStore.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+		At: now, By: by, Surface: "settings", Summary: "audit",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tplID, err := srcStore.NewTemplateID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srcStore.PutTemplate(ctx, model.Template{
+		ID: tplID, Name: "tpl-seq", Title: "Tpl", Body: "Run.", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	suiteID, err := srcStore.NewSuiteID(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srcStore.PutSuite(ctx, model.Suite{
+		ID: suiteID, Name: "suite-seq", Mode: model.SuiteCount, Count: 1,
+		Items: []model.SuiteItem{{TemplateID: tplID}, {TemplateID: tplID}}, CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	dumpDir := t.TempDir()
+	if err := staterepo.Export(ctx, srcDB, dumpDir); err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if err := staterepo.WriteSchemaVersion(dumpDir, model.SchemaVersion); err != nil {
+		t.Fatalf("WriteSchemaVersion: %v", err)
+	}
+
+	// 1. Full staterepo.Import into a fresh Postgres store.
+	dstStore, dstDB := postgrestest.Open(t)
+	if err := staterepo.Import(ctx, dstDB, dumpDir); err != nil {
+		t.Fatalf("staterepo.Import: %v", err)
+	}
+	newTaskID, err := dstStore.NewTaskID(ctx)
+	if err != nil || newTaskID <= lastTaskID {
+		t.Fatalf("NewTaskID after Import = (%q, %v), want > %q", newTaskID, err, lastTaskID)
+	}
+	if cid, err := dstStore.AddComment(ctx, model.Comment{
+		TaskID: lastTaskID, Author: model.Attribution{Actor: by}, Body: "next", CreatedAt: now,
+	}); err != nil || cid <= maxCommentID {
+		t.Fatalf("AddComment after Import = (%d, %v), want > %d", cid, err, maxCommentID)
+	}
+	if eid, err := dstStore.RecordTaskEvent(ctx, model.TaskEvent{
+		TaskID: lastTaskID, Kind: model.TaskEventRetried, At: now, By: by,
+	}); err != nil || eid <= maxEventID {
+		t.Fatalf("RecordTaskEvent after Import = (%d, %v), want > %d", eid, err, maxEventID)
+	}
+	if aid, err := dstStore.RecordConfigAudit(ctx, model.ConfigAuditEntry{
+		At: now, By: by, Surface: "settings", Summary: "next",
+	}); err != nil || aid <= maxAuditID {
+		t.Fatalf("RecordConfigAudit after Import = (%d, %v), want > %d", aid, err, maxAuditID)
+	}
+
+	// 2. Partial staterepo.ImportTables(SettingsTables) into another fresh Postgres store.
+	cfgDir := t.TempDir()
+	if err := staterepo.ExportConfig(ctx, srcDB, cfgDir); err != nil {
+		t.Fatalf("ExportConfig: %v", err)
+	}
+	if err := staterepo.WriteSchemaVersion(cfgDir, model.SchemaVersion); err != nil {
+		t.Fatalf("WriteSchemaVersion cfgDir: %v", err)
+	}
+	settingsStore, settingsDB := postgrestest.Open(t)
+	if err := staterepo.ImportTables(ctx, settingsDB, cfgDir, staterepo.SettingsTables); err != nil {
+		t.Fatalf("staterepo.ImportTables: %v", err)
+	}
+	if nextTplID, err := settingsStore.NewTemplateID(ctx); err != nil || nextTplID == tplID {
+		t.Fatalf("NewTemplateID after ImportTables = (%q, %v), collided with %q", nextTplID, err, tplID)
+	}
+	nextSuiteID, err := settingsStore.NewSuiteID(ctx)
+	if err != nil || nextSuiteID == suiteID {
+		t.Fatalf("NewSuiteID after ImportTables = (%q, %v), collided with %q", nextSuiteID, err, suiteID)
+	}
+	if err := settingsStore.PutSuite(ctx, model.Suite{
+		ID: nextSuiteID, Name: "suite-seq-2", Mode: model.SuiteCount, Count: 1,
+		Items: []model.SuiteItem{{TemplateID: tplID}}, CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("PutSuite after ImportTables failed (suite_item sequence not synced): %v", err)
+	}
+}

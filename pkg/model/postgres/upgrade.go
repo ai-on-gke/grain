@@ -337,7 +337,7 @@ func UpgradeFromSQLite(ctx context.Context, sqliteDB *sql.DB, pgCfg Config, migr
 			return nil, fmt.Errorf("importing data into postgres database: %w", err)
 		}
 
-		if err := syncPostgresSequences(ctx, pgDB); err != nil {
+		if _, err := SyncSequences(ctx, pgDB); err != nil {
 			return nil, err
 		}
 	}
@@ -369,25 +369,16 @@ func UpgradeFromSQLite(ctx context.Context, sqliteDB *sql.DB, pgCfg Config, migr
 	}, nil
 }
 
-func syncPostgresSequences(ctx context.Context, db *sql.DB) error {
-	syncSQL := `
-DO $$
-DECLARE
-    r RECORD;
-BEGIN
-    FOR r IN (
-        SELECT c.table_schema, c.table_name, c.column_name, 
-               pg_get_serial_sequence(format('%I.%I', c.table_schema, c.table_name), c.column_name) AS seq_name
-        FROM information_schema.columns c
-        WHERE c.table_schema = CURRENT_SCHEMA()
-          AND pg_get_serial_sequence(format('%I.%I', c.table_schema, c.table_name), c.column_name) IS NOT NULL
-    ) LOOP
-        EXECUTE format('SELECT setval(%L, COALESCE((SELECT MAX(%I) FROM %I.%I), 1), (SELECT COUNT(*) > 0 FROM %I.%I))', 
-                       r.seq_name, r.column_name, r.table_schema, r.table_name, r.table_schema, r.table_name);
-    END LOOP;
-END $$;`
-	if _, err := db.ExecContext(ctx, syncSQL); err != nil {
-		return fmt.Errorf("synchronizing postgres sequences: %w", err)
-	}
-	return nil
+// SequenceSync records one PostgreSQL serial sequence that was behind its
+// column's maximum value and was advanced to match it.
+type SequenceSync = model.PostgresSequenceSync
+
+// SyncSequences inspects every serial or identity sequence in db's current
+// schema against MAX(column), advances any sequence whose next value would be
+// at or below MAX(column), and returns the sequences it advanced.
+//
+// SQLite AUTOINCREMENT follows explicit IDs automatically and needs no
+// equivalent call.
+func SyncSequences(ctx context.Context, db *sql.DB) ([]SequenceSync, error) {
+	return model.SyncPostgresSequences(ctx, db)
 }

@@ -409,8 +409,17 @@ func importSchemaUpgrade(ctx context.Context, dataDir string, db *sql.DB, note s
 		return fmt.Errorf("migrating the dump in %s from schema %d to %d: %w",
 			dir, note.From, model.SchemaVersion, err)
 	}
+	// staterepo.ImportMigrated advances PostgreSQL serial sequences past any
+	// explicit IDs it inserts (SQLite AUTOINCREMENT follows explicit IDs on its
+	// own); postgres.SyncSequences runs defensively here as well so any rows
+	// imported onto PostgreSQL leave no sequence behind MAX(col).
 	if err := staterepo.ImportMigrated(ctx, db, from); err != nil {
 		return fmt.Errorf("importing %s into a fresh store at schema %d: %w", from, model.SchemaVersion, err)
+	}
+	if model.IsPostgresDB(db) {
+		if _, err := postgres.SyncSequences(ctx, db); err != nil {
+			return fmt.Errorf("synchronizing postgres sequences after importing %s: %w", from, err)
+		}
 	}
 	store := model.New(db)
 	// Init ran on the empty store before these rows arrived, so the

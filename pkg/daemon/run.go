@@ -331,6 +331,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if fatalStateRepoLoad(loadErr) {
 		return fmt.Errorf("loading the config repository: %w", loadErr)
 	}
+	if cfg.DbDriver == "postgres" {
+		syncBehindPostgresSequences(ctx, db)
+	}
 	// Init asked the startup guard (model.Store.CheckSingleTenant) of the
 	// store as it was opened. The load above can bring a multi-tenant
 	// deployment's rows into it, from its state repository, so the same
