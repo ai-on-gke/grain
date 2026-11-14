@@ -560,24 +560,33 @@ export function buildAlphabeticalContributors(
     const clean = (id || label || "").trim();
     if (!clean) return null;
     const key = clean.toLowerCase();
+    const fallbackKind =
+      key.startsWith("system:") || key.startsWith("repo:")
+        ? "service"
+        : key === "grain"
+          ? "grain"
+          : "human";
+    const resolvedKind = kind || fallbackKind;
     let row = byKey.get(key);
     if (!row) {
       row = {
         id: clean,
         label: (label || clean).trim(),
-        kind: kind || "human",
+        kind: resolvedKind,
         repos: new Set<string>(),
         workstreams: 0,
         activeTasks: 0,
       };
       byKey.set(key, row);
+    } else if (kind && kind !== "human" && row.kind === "human") {
+      row.kind = kind;
     }
     return row;
   };
 
   for (const d of stats?.directions ?? []) {
     if (!d.author) continue;
-    const row = touch(d.author, d.author, d.authorKind || "human");
+    const row = touch(d.author, d.author, d.authorKind || "");
     if (row) {
       row.workstreams += 1;
       if (d.repo) row.repos.add(d.repo);
@@ -587,7 +596,7 @@ export function buildAlphabeticalContributors(
   for (const t of tasks) {
     const who = t.owner || t.author || t.creator || "";
     const label = t.authorLabel || who;
-    const kind = t.authorKind || "human";
+    const kind = t.authorKind || "";
     const row = touch(who, label, kind);
     if (row) {
       if (t.state !== "closed" && !t.merged) {

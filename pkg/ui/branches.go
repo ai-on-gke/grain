@@ -494,6 +494,9 @@ func (s *Server) handleListGitHubBranches(w http.ResponseWriter, r *http.Request
 		writeClientError(w, err)
 		return
 	}
+	if r.URL.Query().Get("refresh") == "1" {
+		s.tasks.forgetGitHubBranches(repo, 0)
+	}
 	names, err := s.tasks.ListGitHubBranches(r.Context(), repo)
 	if err != nil {
 		status := http.StatusBadGateway

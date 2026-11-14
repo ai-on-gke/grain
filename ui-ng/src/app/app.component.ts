@@ -38,7 +38,9 @@ import {
   RouterLinkActive,
   RouterOutlet,
 } from "@angular/router";
-import { GrainApi } from "./api/grain-api.service";
+import { type RouteKey } from "./api/generated-routes";
+import { GrainApi, routeScope } from "./api/grain-api.service";
+import { GrainEvents } from "./api/grain-events.service";
 import { CreateTaskService } from "./create/create-task.service";
 import type { NewTaskDraft } from "./create/new-task-form";
 import { NewTaskSheetComponent } from "./create/new-task-sheet.component";
@@ -55,11 +57,16 @@ import { TaskFeedStore } from "./services/task-feed.service";
 import { ThemeService } from "./services/theme.service";
 import { ViewFilter } from "./services/view-filter.service";
 import { CHLADNI_ROSETTE_PATH, MARK_SHEET_32_URL } from "./shared/brand-mark";
-import { TipDirective } from "./shared/tip.directive";
+import {
+  summarizeDispatchStatus,
+  type UsagePauseInput,
+} from "./shared/dispatch-status";
+import { TipDirective, dismissActiveTooltip } from "./shared/tip.directive";
 import { AccountPopoverComponent } from "./shell/account-popover.component";
 import { CustomizeNavDialogComponent } from "./shell/customize-nav-dialog.component";
 import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
+import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
 import { NextUpComponent } from "./shell/next-up.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
 
@@ -108,6 +115,7 @@ type CreateItem =
       label: string;
       sub: string;
       tip: string;
+      gate?: RouteKey;
       testid?: string;
       prefill?: Partial<NewTaskDraft>;
     }
@@ -117,6 +125,7 @@ type CreateItem =
       label: string;
       sub: string;
       tip: string;
+      gate?: RouteKey;
       route: string;
       query?: Record<string, unknown>;
     }
@@ -126,6 +135,7 @@ type CreateItem =
       label: string;
       sub: string;
       tip: string;
+      gate?: RouteKey;
       href: string;
     };
 
@@ -150,6 +160,7 @@ export class DeferErrorDirective implements OnInit {
     SnackbarComponent,
     NewTaskSheetComponent,
     NextUpComponent,
+    DispatchBannerComponent,
     HelpDialogComponent,
     AccountPopoverComponent,
     CustomizeNavDialogComponent,
@@ -206,7 +217,12 @@ export class DeferErrorDirective implements OnInit {
           data-testid="rail-new-task"
           aria-label="New task"
           aria-keyshortcuts="c"
-          gTip="New task (c): describe the work and Grain files it."
+          [disabled]="!canCreateTask()"
+          [gTip]="
+            canCreateTask()
+              ? 'New task (c): describe the work and Grain files it.'
+              : access.deniedReason('POST /api/tasks')
+          "
           gTipPlacement="right"
           (click)="openNewTask($event)"
         >
@@ -477,20 +493,31 @@ export class DeferErrorDirective implements OnInit {
           <g-next-up />
           <a
             class="live-pill tabular"
-            [class.is-idle]="feed.runningCount() === 0"
+            [class.is-idle]="feed.runningCount() === 0 && !dispatchBanner()"
+            [class.is-paused-warn]="dispatchBanner()?.tone === 'warn'"
+            [class.is-paused-error]="dispatchBanner()?.tone === 'error'"
             routerLink="/agents"
             data-testid="live-pill"
             [gTip]="livePillTip()"
           >
             <span
               class="live-dot"
-              [class.is-idle]="feed.runningCount() === 0"
+              [class.is-idle]="feed.runningCount() === 0 && !dispatchBanner()"
               aria-hidden="true"
             ></span>
-            <span class="live-pill-text"
-              >{{ feed.runningCount() }}
-              {{ feed.runningCount() === 1 ? "agent" : "agents" }} running</span
-            >
+            @if (dispatchBanner(); as db) {
+              <span class="live-pill-text">{{
+                feed.runningCount() > 0
+                  ? feed.runningCount() + " running · " + db.shortLabel
+                  : db.shortLabel
+              }}</span>
+            } @else {
+              <span class="live-pill-text"
+                >{{ feed.runningCount() }}
+                {{ feed.runningCount() === 1 ? "agent" : "agents" }}
+                running</span
+              >
+            }
           </a>
           <button
             #directorBtn
@@ -519,7 +546,12 @@ export class DeferErrorDirective implements OnInit {
               <span class="live-dot" aria-hidden="true"></span>
             }
           </button>
-          <label class="search-box">
+          <form
+            class="search-box"
+            role="search"
+            autocomplete="off"
+            (submit)="$event.preventDefault()"
+          >
             <span class="search-icon" aria-hidden="true">
               <svg width="18" height="18" viewBox="0 0 24 24">
                 <path [attr.d]="icons['search']" fill="currentColor" />
@@ -529,6 +561,12 @@ export class DeferErrorDirective implements OnInit {
               #searchInput
               class="search-input"
               type="search"
+              name="grain-view-filter"
+              autocomplete="off"
+              spellcheck="false"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              data-form-type="other"
               placeholder="Filter this view"
               aria-label="Filter this view"
               data-testid="view-filter"
@@ -543,7 +581,7 @@ export class DeferErrorDirective implements OnInit {
                 >/</span
               >
             }
-          </label>
+          </form>
           <button
             type="button"
             class="icon-btn"
@@ -601,6 +639,11 @@ export class DeferErrorDirective implements OnInit {
           id="main"
           [attr.inert]="modalOpen() ? '' : null"
         >
+          @defer (when dispatchBanner()) {
+            @if (dispatchBanner(); as db) {
+              <g-dispatch-banner [banner]="db" />
+            }
+          }
           <router-outlet />
         </main>
         @defer (when directorCtx.isOpen()) {
@@ -616,8 +659,14 @@ export class DeferErrorDirective implements OnInit {
 
       <footer class="bottom-bar" [attr.inert]="modalOpen() ? '' : null">
         <span class="bottom-left">
-          <span class="muted bottom-version" [attr.title]="version()"
-            >grain{{ version() ? " " + version() : "" }}</span
+          <a
+            class="muted bottom-version"
+            routerLink="/settings/upgrade"
+            data-testid="build-stamp"
+            [attr.title]="
+              'Running ' + (version() || 'grain') + ' · Settings → Upgrade'
+            "
+            >grain{{ version() ? " " + version() : "" }}</a
           >
           <span class="bottom-sep" aria-hidden="true">·</span>
           <a
@@ -658,6 +707,12 @@ export class DeferErrorDirective implements OnInit {
           class="phone-fab"
           data-testid="phone-new-task"
           aria-label="New task"
+          [disabled]="!canCreateTask()"
+          [gTip]="
+            canCreateTask()
+              ? 'New task'
+              : access.deniedReason('POST /api/tasks')
+          "
           (click)="openNewTask($event)"
         >
           <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
@@ -779,90 +834,77 @@ export class DeferErrorDirective implements OnInit {
         </nav>
       }
 
+      <ng-template #createBody let-item let-rich="rich">
+        @if (rich) {
+          <svg
+            class="cm-icon"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path [attr.d]="icons[item.icon]" fill="currentColor" />
+          </svg>
+          <span class="cm-copy">
+            <span class="cm-title">{{ item.label }}</span>
+            <span class="cm-sub">{{ item.sub }}</span>
+          </span>
+        } @else {
+          {{ item.label }}
+        }
+      </ng-template>
+
       <ng-template #createEntry let-item let-cls="cls" let-rich="rich">
-        @switch (item.kind) {
-          @case ("task") {
-            <button
-              type="button"
-              [class]="cls"
-              [attr.data-testid]="item.testid ?? 'create-new-task'"
-              [gTip]="item.tip"
-              gTipPlacement="right"
-              (click)="openNewTask($event, item.prefill)"
-            >
-              @if (rich) {
-                <svg
-                  class="cm-icon"
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path [attr.d]="icons[item.icon]" fill="currentColor" />
-                </svg>
-                <span class="cm-copy">
-                  <span class="cm-title">{{ item.label }}</span>
-                  <span class="cm-sub">{{ item.sub }}</span>
-                </span>
-              } @else {
-                {{ item.label }}
-              }
-            </button>
-          }
-          @case ("route") {
-            <a
-              [class]="cls"
-              [routerLink]="item.route"
-              [queryParams]="item.query"
-              [gTip]="item.tip"
-              gTipPlacement="right"
-              (click)="closeMenus()"
-            >
-              @if (rich) {
-                <svg
-                  class="cm-icon"
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path [attr.d]="icons[item.icon]" fill="currentColor" />
-                </svg>
-                <span class="cm-copy">
-                  <span class="cm-title">{{ item.label }}</span>
-                  <span class="cm-sub">{{ item.sub }}</span>
-                </span>
-              } @else {
-                {{ item.label }}
-              }
-            </a>
-          }
-          @default {
-            <a
-              [class]="cls"
-              [href]="item.href"
-              [gTip]="item.tip"
-              gTipPlacement="right"
-            >
-              @if (rich) {
-                <svg
-                  class="cm-icon"
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  aria-hidden="true"
-                >
-                  <path [attr.d]="icons[item.icon]" fill="currentColor" />
-                </svg>
-                <span class="cm-copy">
-                  <span class="cm-title">{{ item.label }}</span>
-                  <span class="cm-sub">{{ item.sub }}</span>
-                </span>
-              } @else {
-                {{ item.label }}
-              }
-            </a>
-          }
+        @let allowed = canCreateItem(item);
+        @if (item.kind === "task" || !allowed) {
+          <button
+            type="button"
+            [class]="cls"
+            [disabled]="!allowed"
+            [attr.data-testid]="
+              item.kind === 'task' ? (item.testid ?? 'create-new-task') : null
+            "
+            [gTip]="allowed ? item.tip : access.deniedReason(item.gate!)"
+            gTipPlacement="right"
+            (click)="allowed && openNewTask($event, item.prefill)"
+          >
+            <ng-container
+              *ngTemplateOutlet="
+                createBody;
+                context: { $implicit: item, rich: rich }
+              "
+            />
+          </button>
+        } @else if (item.kind === "route") {
+          <a
+            [class]="cls"
+            [routerLink]="item.route"
+            [queryParams]="item.query"
+            [gTip]="item.tip"
+            gTipPlacement="right"
+            (click)="closeMenus()"
+          >
+            <ng-container
+              *ngTemplateOutlet="
+                createBody;
+                context: { $implicit: item, rich: rich }
+              "
+            />
+          </a>
+        } @else {
+          <a
+            [class]="cls"
+            [href]="item.href"
+            [gTip]="item.tip"
+            gTipPlacement="right"
+          >
+            <ng-container
+              *ngTemplateOutlet="
+                createBody;
+                context: { $implicit: item, rich: rich }
+              "
+            />
+          </a>
         }
       </ng-template>
 
@@ -926,10 +968,12 @@ export class AppComponent implements OnInit, OnDestroy {
   private readonly sessionsRef = signal<SessionsStore | null>(null);
   private destroyed = false;
   private readonly api = inject(GrainApi);
+  private readonly events = inject(GrainEvents);
   private readonly router = inject(Router);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
   private readonly injector = inject(Injector);
+  private readonly usageStatus = signal<UsagePauseInput | null>(null);
 
   protected readonly icons = ICONS;
   protected readonly rosettePath = CHLADNI_ROSETTE_PATH;
@@ -943,6 +987,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "addTask",
       label: "New task",
       sub: "Describe work for an agent to run",
+      gate: "POST /api/tasks",
       tip: "Describe a piece of work for an agent to do.",
     },
     {
@@ -950,6 +995,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "workstreams",
       label: "Start a workstream",
       sub: "Break a goal into connected tasks",
+      gate: "POST /api/tasks",
       testid: "create-start-workstream",
       tip: "State a goal; an agent plans it and proposes tasks into one stream.",
       prefill: { workstream: true, origin: "" },
@@ -959,6 +1005,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "sessions",
       label: "New session",
       sub: "Start a standing chat with an agent",
+      gate: "POST /api/console-sessions",
       route: "/sessions",
       query: { new: 1 },
       tip: "Start a standing conversation with an agent.",
@@ -968,6 +1015,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "processes",
       label: "Task from template",
       sub: "File from a saved process template",
+      gate: "POST /api/tasks/from-template",
       route: "/processes/templates",
       query: { launch: 1 },
       tip: "File a task from a saved deployment or repository template.",
@@ -977,6 +1025,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "ci",
       label: "Run a suite",
       sub: "Launch a multi-pass template suite",
+      gate: "POST /api/suite-runs",
       route: "/processes/suites",
       query: { run: 1 },
       tip: "Run a set of templates together against a repository and branch.",
@@ -986,6 +1035,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "processes",
       label: "New schedule",
       sub: "Automate recurring tasks or triggers",
+      gate: "POST /api/schedules",
       route: "/processes/schedules",
       query: { new: 1 },
       tip: "Create a recurring schedule or event trigger.",
@@ -995,6 +1045,7 @@ export class AppComponent implements OnInit, OnDestroy {
       icon: "tasks",
       label: "New board",
       sub: "Create a saved task view",
+      gate: "POST /api/boards",
       route: "/tasks",
       query: { newBoard: 1 },
       tip: "Save a filtered view of tasks as a reusable board.",
@@ -1002,6 +1053,11 @@ export class AppComponent implements OnInit, OnDestroy {
   ];
 
   protected readonly createTask = inject(CreateTaskService);
+  protected readonly canCreateTask = computed(
+    () =>
+      this.access.can("POST /api/tasks") ||
+      this.access.can("POST /api/tasks/from-template"),
+  );
   protected readonly onSessions = signal(false);
   protected readonly version = computed(() => this.inboxRef()?.version() ?? "");
   protected readonly inboxCount = computed(
@@ -1034,11 +1090,24 @@ export class AppComponent implements OnInit, OnDestroy {
       !this.spriteFailed(),
   );
 
+  protected readonly dispatchBanner = computed(() =>
+    summarizeDispatchStatus(
+      this.access.rawConfig(),
+      this.usageStatus(),
+      this.access.clockNow(),
+    ),
+  );
+
   protected readonly livePillTip = computed(() => {
     const n = this.feed.runningCount();
-    return n > 0
-      ? `${n} active agent ${n === 1 ? "run" : "runs"}. Open Live Agents.`
-      : "No agents running right now. Open Live Agents.";
+    const base =
+      n > 0
+        ? `${n} active agent ${n === 1 ? "run" : "runs"}. Open Live Agents.`
+        : "No agents running right now. Open Live Agents.";
+    const db = this.dispatchBanner();
+    return db
+      ? `${base} · ${db.headline}${db.resetText ? ` (${db.resetText})` : ""}`
+      : base;
   });
 
   protected readonly avatarTip = computed(() => {
@@ -1071,6 +1140,19 @@ export class AppComponent implements OnInit, OnDestroy {
 
   private unregister: (() => void)[] = [];
   private navSub: { unsubscribe(): void } | null = null;
+  private dispatchEventSub: { unsubscribe(): void } | null = null;
+  private dispatchPollTimer: ReturnType<typeof setInterval> | null = null;
+  private dispatchTickTimer: ReturnType<typeof setInterval> | null = null;
+  private lastConfigAt = 0;
+  private lastUsageAt = 0;
+  private dispatchReading = false;
+  private spriteProbed = false;
+  private readonly onVisibilityChange = (): void => {
+    if (this.doc.visibilityState === "visible") {
+      this.access.tickClock();
+      void this.refreshDispatchStatus(Date.now() - this.lastUsageAt >= 10_000);
+    }
+  };
   private motionMql: MediaQueryList | null = null;
   private readonly onMotionChange = (e: MediaQueryListEvent): void => {
     this.zone.run(() => this.prefersReducedMotion.set(e.matches));
@@ -1093,7 +1175,28 @@ export class AppComponent implements OnInit, OnDestroy {
       this.prefersReducedMotion.set(this.motionMql.matches);
       this.motionMql.addEventListener?.("change", this.onMotionChange);
     }
-    this.probeBrandSprite();
+    effect(
+      () => {
+        if (
+          this.feed.runningCount() > 0 &&
+          !this.prefersReducedMotion() &&
+          !this.spriteProbed
+        ) {
+          this.spriteProbed = true;
+          this.probeBrandSprite();
+        }
+      },
+      { injector: this.injector },
+    );
+
+    if (!this.access.configLoaded() && typeof this.api.config === "function") {
+      void this.api
+        .config()
+        .then((c) => {
+          if (c && !this.access.configLoaded()) this.access.setConfig(c);
+        })
+        .catch(() => undefined);
+    }
 
     if (typeof this.api.whoami === "function") {
       void this.api
@@ -1107,6 +1210,7 @@ export class AppComponent implements OnInit, OnDestroy {
     const r = (key: string, description: string, run: () => void) =>
       this.unregister.push(this.keyboard.register({ key, description, run }));
     r("c", "New task", () => {
+      if (!this.canCreateTask()) return;
       this.closeMenus();
       this.createTask.open();
     });
@@ -1130,7 +1234,7 @@ export class AppComponent implements OnInit, OnDestroy {
     r(",", "Open Settings", () => this.open(SETTINGS));
     r("t", "Switch light and dark", () => this.theme.toggle());
     r("d", "Toggle Director drawer", () =>
-      this.directorCtx.toggle(this.directorBtn()?.nativeElement),
+      this.directorCtx.toggle(this.activeOpener()),
     );
 
     // Keep number keys 1..9 synchronized with the user's visible rail order.
@@ -1158,7 +1262,7 @@ export class AppComponent implements OnInit, OnDestroy {
       runInInjectionContext(this.injector, () => {
         const s = inject(InboxStore);
         this.inboxRef.set(s);
-        s.start();
+        s.start(true);
       });
     });
 
@@ -1171,8 +1275,15 @@ export class AppComponent implements OnInit, OnDestroy {
     });
 
     this.directorCtx.setRoute(this.router.url);
+    void this.refreshDispatchStatus(true);
+    this.dispatchEventSub = this.events.events().subscribe(() => {
+      if (Date.now() - this.lastConfigAt >= 10_000) {
+        void this.refreshDispatchStatus(true);
+      }
+    });
     this.navSub = this.router.events.subscribe((e) => {
       if (e instanceof NavigationStart) {
+        dismissActiveTooltip();
         this.closeMenus();
         this.accountOpen.set(false);
       }
@@ -1182,15 +1293,57 @@ export class AppComponent implements OnInit, OnDestroy {
         this.onSessions.set(
           url.startsWith("/sessions") || url.startsWith("/task/"),
         );
+        if (Date.now() - this.lastConfigAt >= 5_000) {
+          void this.refreshDispatchStatus(false);
+        }
       }
     });
 
     this.zone.runOutsideAngular(() => {
+      this.doc.addEventListener("visibilitychange", this.onVisibilityChange);
+      this.dispatchPollTimer = setInterval(() => {
+        if (this.doc.visibilityState !== "hidden") {
+          this.zone.run(() => void this.refreshDispatchStatus(false));
+        }
+      }, 60_000);
+      this.dispatchTickTimer = setInterval(() => {
+        if (this.doc.visibilityState !== "hidden" && this.dispatchBanner()) {
+          this.zone.run(() => this.access.tickClock());
+        }
+      }, 30_000);
       this.doc.defaultView?.addEventListener("resize", this.onViewportChange);
       this.doc
         .querySelector(".nav-rail")
         ?.addEventListener("scroll", this.onViewportChange);
     });
+  }
+
+  private async refreshDispatchStatus(forceUsage: boolean): Promise<void> {
+    if (this.destroyed || this.dispatchReading) return;
+    this.dispatchReading = true;
+    const now = Date.now();
+    this.lastConfigAt = now;
+    try {
+      const cfg = await this.api.config().catch(() => null);
+      if (cfg) this.access.setConfig(cfg);
+      if (
+        (forceUsage || now - this.lastUsageAt >= 60_000) &&
+        typeof this.api.get === "function" &&
+        this.access.canGlobalScope(routeScope("GET /api/usage"))
+      ) {
+        this.lastUsageAt = now;
+        const usage = await this.api
+          .get<UsagePauseInput>("GET /api/usage")
+          .catch(() => null);
+        if (usage && ("warnings" in usage || "scopes" in usage)) {
+          this.usageStatus.set(usage);
+          this.access.setUsage(usage);
+        }
+      }
+      this.access.tickClock();
+    } finally {
+      this.dispatchReading = false;
+    }
   }
 
   ngOnDestroy(): void {
@@ -1200,6 +1353,10 @@ export class AppComponent implements OnInit, OnDestroy {
     this.inboxRef()?.stop();
     this.unregister.forEach((u) => u());
     this.navSub?.unsubscribe();
+    this.dispatchEventSub?.unsubscribe();
+    if (this.dispatchPollTimer) clearInterval(this.dispatchPollTimer);
+    if (this.dispatchTickTimer) clearInterval(this.dispatchTickTimer);
+    this.doc.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.motionMql?.removeEventListener?.("change", this.onMotionChange);
     this.doc.defaultView?.removeEventListener("resize", this.onViewportChange);
     this.doc
@@ -1219,7 +1376,25 @@ export class AppComponent implements OnInit, OnDestroy {
     });
   }
 
+  protected canCreateItem(item: CreateItem): boolean {
+    if (item.kind === "task") return this.canCreateTask();
+    return item.gate ? this.access.can(item.gate) : true;
+  }
+
+  private activeOpener(): HTMLElement | null {
+    const active = this.doc.activeElement;
+    if (
+      active instanceof HTMLElement &&
+      active !== this.doc.body &&
+      !active.closest('[data-testid="director-drawer"]')
+    ) {
+      return active;
+    }
+    return this.directorBtn()?.nativeElement ?? null;
+  }
+
   protected openNewTask(ev: Event, prefill: Partial<NewTaskDraft> = {}): void {
+    if (!this.canCreateTask()) return;
     const opener = this.moreOpen()
       ? this.moreBtn()?.nativeElement
       : this.createOpen()
@@ -1262,7 +1437,7 @@ export class AppComponent implements OnInit, OnDestroy {
     if (!isAltD && !isCtrlShiftD) return;
     ev.preventDefault();
     this.closeMenus();
-    this.directorCtx.toggle(this.directorBtn()?.nativeElement);
+    this.directorCtx.toggle(this.activeOpener());
   }
 
   protected onDeferError(

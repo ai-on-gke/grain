@@ -16,41 +16,53 @@
 .s-card {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px 20px;
+  gap: 24px;
+  padding: 24px;
   border-radius: var(--md-sys-shape-corner-large);
   border: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-lowest);
 }
 
+@media (max-width: 599px) {
+  .s-card {
+    gap: 16px;
+    padding: 18px 16px;
+  }
+}
+
 .s-card-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
   flex-wrap: wrap;
+}
+
+.s-card-head > :first-child {
+  flex: 1 1 320px;
+  min-width: 0;
 }
 
 .s-card-title {
   margin: 0;
   font-family: var(--grain-font-display);
-  font-size: 15px;
-  line-height: 22px;
+  font-size: 16px;
+  line-height: 24px;
   font-weight: 600;
   color: var(--md-sys-color-on-surface);
 }
 
 .s-card-desc {
-  margin: 0;
-  font-size: 13px;
-  line-height: 19px;
+  margin: 4px 0 0;
+  font-size: 14px;
+  line-height: 20px;
   color: var(--md-sys-color-on-surface-variant);
 }
 
 .s-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px 20px;
 }
 
 .s-grid.s-grid-qa {
@@ -66,15 +78,15 @@
 .s-field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
   min-width: 0;
 }
 
 .s-label {
-  font-size: 12px;
-  line-height: 16px;
+  font-size: 13px;
+  line-height: 18px;
   font-weight: 500;
-  color: var(--md-sys-color-on-surface-variant);
+  color: var(--md-sys-color-on-surface);
 }
 
 .s-input,
@@ -86,11 +98,21 @@
   background: var(--md-sys-color-surface);
   color: var(--md-sys-color-on-surface);
   font-family: var(--grain-font-body);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.s-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.s-mono {
+  font-family: var(--grain-font-mono);
   font-size: 13px;
 }
 
 .s-input {
-  height: 38px;
+  height: 40px;
   padding: 0 12px;
 }
 
@@ -99,8 +121,8 @@
 }
 
 .s-field-error {
-  font-size: 12px;
-  line-height: 16px;
+  font-size: 12.5px;
+  line-height: 18px;
   color: var(--md-sys-color-error);
 }
 
@@ -113,16 +135,16 @@
 .s-field > g-pill-select .pill-select-btn {
   width: 100%;
   min-width: 0;
-  height: 38px;
+  height: 40px;
   padding: 0 12px;
   justify-content: space-between;
   border-radius: var(--md-sys-shape-corner-small);
   border: 1px solid var(--md-sys-color-outline);
   background: var(--md-sys-color-surface);
   color: var(--md-sys-color-on-surface);
-  font-family: var(--grain-font-mono);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
+  font-family: var(--grain-font-body);
+  font-size: 14px;
+  line-height: 20px;
 }
 
 .s-field > g-pill-select .pill-select-label {
@@ -153,15 +175,14 @@
 
 .s-input-inline {
   flex: 1 1 200px;
-  max-width: 260px;
+  max-width: 300px;
   min-width: 0;
 }
 
 .s-textarea {
-  min-height: 84px;
-  padding: 8px 12px;
+  min-height: 88px;
+  padding: 10px 12px;
   resize: vertical;
-  line-height: 19px;
 }
 
 .s-input:disabled,
@@ -173,9 +194,10 @@
   color: var(--md-sys-color-on-surface-variant);
 }
 
-.s-hint {
-  font-size: 12px;
-  line-height: 16px;
+.s-hint,
+.s-caption {
+  font-size: 13px;
+  line-height: 18px;
   color: var(--md-sys-color-on-surface-variant);
 }
 
@@ -190,8 +212,9 @@
 .s-inline {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
+  margin: 0;
 }
 
 .s-toggle-row {
@@ -199,7 +222,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 8px 0;
+  padding: 12px 0;
   border-top: 1px solid var(--md-sys-color-outline-variant);
 }
 
@@ -211,12 +234,13 @@
 .s-toggle-copy {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
 }
 
 .s-toggle-name {
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 20px;
   font-weight: 500;
   color: var(--md-sys-color-on-surface);
 }
@@ -230,24 +254,27 @@
 .s-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 20px;
 }
 
 .s-table th,
 .s-table td {
-  padding: 9px 12px;
+  padding: 12px 14px;
   text-align: left;
   border-bottom: 1px solid var(--md-sys-color-outline-variant);
   vertical-align: middle;
 }
 
 .s-table th {
-  font-size: 11px;
+  font-size: 11.5px;
+  line-height: 16px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--md-sys-color-on-surface-variant);
   background: var(--md-sys-color-surface-container-low);
+  white-space: nowrap;
 }
 
 .s-table tr:last-child td {
@@ -261,18 +288,16 @@
   background: var(--md-sys-color-surface-container);
   color: var(--md-sys-color-on-surface);
   font-family: var(--grain-font-mono);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 12.5px;
+  line-height: 19px;
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-/* A key fingerprint in a table cell: one unbroken 50-character token, so
-   it wraps anywhere rather than widening its column. */
 .s-fingerprint {
   font-family: var(--grain-font-mono);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 18px;
   overflow-wrap: anywhere;
   min-width: 16ch;
@@ -287,7 +312,8 @@
   flex-wrap: wrap;
   padding: 12px 16px;
   border-radius: var(--md-sys-shape-corner-medium);
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 20px;
 }
 
 .s-banner.readonly {
@@ -311,13 +337,13 @@
 }
 
 .s-plan-panel {
-  padding: 16px 20px;
+  padding: 18px 22px;
   border-radius: var(--md-sys-shape-corner-large);
   border: 1px solid var(--md-sys-color-primary);
   background: var(--md-sys-color-surface-container-low);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .s-btn-danger {
@@ -327,13 +353,27 @@
   border: 1px solid var(--md-sys-color-error);
   background: var(--md-sys-color-error-container);
   color: var(--md-sys-color-on-error-container);
+  font-family: var(--grain-font-body);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
 }
 
 .s-btn-sm {
-  min-height: 32px;
+  height: 36px;
+  min-height: 36px;
   padding: 0 12px;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  font-family: var(--grain-font-body);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.s-inline > .s-btn-sm,
+.s-inline > g-pill-select .pill-select-btn {
+  height: 40px;
+  min-height: 40px;
 }
