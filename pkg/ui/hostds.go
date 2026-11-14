@@ -225,7 +225,8 @@ func (c *Client) ListHostds(ctx context.Context) ([]HostdView, error) {
 			if c.Config.LocalHostdLogins != nil {
 				v.Logins, v.LoginsKnown = c.Config.LocalHostdLogins(ctx)
 			}
-			v.Features = slices.Clone(hostd.Features)
+			// local is a root-installed host: it never self-updates.
+			v.Features = slices.DeleteFunc(slices.Clone(hostd.Features), func(f hostd.Feature) bool { return f == hostd.FeatureSelfUpdate })
 			v.AllowlistSnippet = HostCLISnippet(model.AgentFrameworkClaude, hostd.ThisHello(""))
 		}
 		v.State = hostdState(h, v.Connection)

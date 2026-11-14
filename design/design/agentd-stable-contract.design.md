@@ -536,7 +536,11 @@ Filed as separate tasks, each after this one lands:
    the env list from the agentd binary.
 5. **Signed per-platform agentd release binaries** -- prerequisite for 6.
 6. **`grain-agentd update`** -- the owner-run self-update above, feature
-   `self_update`.
+   `self_update`. Built (`pkg/agentd/update.go`, docs/grain-agentd.md
+   "Updating it"): steps 3-7, with `offer` shown per host on Settings ->
+   Hosts. `auto` stays unimplemented until the freeze fails by the
+   criterion above. The rolled-back host does not yet report the failure to
+   the controller; it is recorded in `~/.local/lib/grain-agentd/update-failed`.
 
 ## Appendix: the generated contract
 
