@@ -134,7 +134,7 @@ refused without it. The reason is written to the controller log
   (`model.DirectorForbiddenAPIScopes`) to a run of that kind, in every
   spelling `model.GrantAPIScopes` reads: `api:<scope>`, `api:<preset>`
   or a scope set expanding to one (`api:grain/operator`), either narrowed
-  with `@owner/name`, a preset alias or retired name, and the canonical
+  with `@owner/name`, a registered alias, and the canonical
   `…/api#<scope-or-preset>` reference. `CapabilityCatalogue.ValidateGrants`
   and `Refusals` apply it before the operator's
   `settings/capabilities.yml` rules and on a nil catalogue too, so an

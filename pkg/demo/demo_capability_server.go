@@ -372,12 +372,18 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 		}},
 	})
 	if err != nil {
+		_ = os.RemoveAll(hostScriptDir)
 		return nil, err
 	}
 	hostScriptEntry, err := serveDemoCapability(ctx, hostScript.CapabilityServer)
 	if err != nil {
+		_ = os.RemoveAll(hostScriptDir)
 		return nil, err
 	}
+	go func() {
+		<-ctx.Done()
+		_ = os.RemoveAll(hostScriptDir)
+	}()
 	hostScriptEntry.Builtin = "host-script"
 	hostScriptEntry.Config = map[string]any{"scripts": []any{map[string]any{
 		"name":        "ops",

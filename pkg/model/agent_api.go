@@ -848,8 +848,9 @@ func RetiredGrantsBecame(name string) []string {
 // RetiredGrantNames is every retired bare capability name
 // RetiredGrantsBecame rewrites, in no particular order.
 func RetiredGrantNames() []string {
-	names := make([]string, 0, len(retiredGrantReplacements)+len(retiredGrantMultiReplacements))
-	for name := range retiredGrantReplacements {
+	all := allRetiredGrantReplacements()
+	names := make([]string, 0, len(all)+len(retiredGrantMultiReplacements))
+	for name := range all {
 		names = append(names, name)
 	}
 	for name := range retiredGrantMultiReplacements {

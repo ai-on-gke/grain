@@ -65,11 +65,10 @@ const apiCapabilityServerID = "https://grain.dev/capabilities/api"
 
 // GrantAPIScopes is every api scope grant g reaches anywhere, sorted, in
 // whatever spelling it is written: api:<scope> or api:<preset>, either
-// narrowed with @owner/name, a deployment's declared scope set, an older
-// capability that is now an alias for a preset (self-upgrade), a retired
-// name rewritten to an api grant, or the canonical …/api#<scope-or-preset>
-// reference. Nil for a grant that reaches no api scope, including an api
-// grant that does not parse.
+// narrowed with @owner/name, a deployment's declared scope set, a registered
+// alias rewritten to an api grant (CanonicalLegacyGrants), or the canonical
+// …/api#<scope-or-preset> reference. Nil for a grant that reaches no api
+// scope, including an api grant that does not parse.
 func GrantAPIScopes(g string) []APIScope {
 	g = strings.TrimSpace(g)
 	if rest, ok := strings.CutPrefix(g, apiCapabilityServerID+"#"); ok {
