@@ -24,6 +24,7 @@ import {
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task } from "../api/models";
+import { ConnectionService } from "./connection.service";
 
 export const FAST_POLL_MS = 3000;
 export const IDLE_POLL_MS = 15000;
@@ -55,6 +56,7 @@ export class TaskFeedStore implements OnDestroy {
   private readonly events = inject(GrainEvents);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
+  private readonly connection = inject(ConnectionService);
 
   readonly tasks = signal<Task[]>([]);
   readonly loaded = signal(false);
@@ -242,6 +244,11 @@ export class TaskFeedStore implements OnDestroy {
       let body: Task[];
       let changed: boolean;
       if (typeof this.api.getIfChanged === "function") {
+        // Not bounded: a large task list may take a while to arrive,
+        // and cutting it off would leave the feed empty for good. A
+        // deployment that never answers is caught by the shell's bounded
+        // config heartbeat (ShellStatusStore); this read reports only
+        // dropped connections and gateway errors.
         const r = await this.api.getIfChanged<Task[]>("GET /api/tasks");
         body = Array.isArray(r?.body) ? r.body : [];
         changed = !!r?.changed;
@@ -262,8 +269,10 @@ export class TaskFeedStore implements OnDestroy {
       this.lastError.set(null);
       this.loadError.set(null);
       this.loaded.set(true);
+      this.connection.note("feed");
       return true;
     } catch (err) {
+      this.connection.note("feed", err);
       this.lastError.set(err);
       this.loadError.set(extractError(err));
       this.now.set(Date.now());

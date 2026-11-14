@@ -68,6 +68,9 @@ import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
 import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
 import { NextUpComponent } from "./shell/next-up.component";
+import { AlertsButtonComponent } from "./shell/alerts-button.component";
+import { DisconnectedBannerComponent } from "./shell/disconnected-banner.component";
+import { ShellStatusStore } from "./services/shell-status.store";
 import { SnackbarComponent } from "./shell/snackbar.component";
 
 // Material-style 24px outline paths, drawn for this app.
@@ -165,6 +168,8 @@ export class DeferErrorDirective implements OnInit {
     AccountPopoverComponent,
     CustomizeNavDialogComponent,
     DirectorDrawerComponent,
+    AlertsButtonComponent,
+    DisconnectedBannerComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
@@ -173,6 +178,10 @@ export class DeferErrorDirective implements OnInit {
     "(document:keydown)": "onGlobalKey($event)",
   },
   template: `
+    <!-- Above the rail and the page, never over them: the deployment
+      cannot be reached (shell/disconnected-banner.component.ts). g-root
+      stacks it over .app-shell (styles.css). -->
+    <g-disconnected-banner />
     <div class="app-shell">
       <nav
         class="nav-rail"
@@ -582,6 +591,12 @@ export class DeferErrorDirective implements OnInit {
               >
             }
           </form>
+          <!-- Loaded on idle: the alert rules stay out of the initial bundle. -->
+          @defer (on idle) {
+            <g-alerts-button />
+          } @placeholder {
+            <span class="alerts-placeholder" aria-hidden="true"></span>
+          }
           <button
             type="button"
             class="icon-btn"
@@ -964,6 +979,7 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly keyboard = inject(KeyboardService);
   protected readonly directorCtx = inject(DirectorContextService);
   private readonly snackbar = inject(SnackbarService);
+  private readonly shellStatus = inject(ShellStatusStore);
   private readonly inboxRef = signal<InboxStore | null>(null);
   private readonly sessionsRef = signal<SessionsStore | null>(null);
   private destroyed = false;
@@ -1257,6 +1273,8 @@ export class AppComponent implements OnInit, OnDestroy {
     // footer telemetry; load InboxStore lazily so inbox-classifier stays out
     // of the initial shell bundle.
     this.feed.start(false);
+    // The shell's heartbeat: the disconnected banner and the alerts bell.
+    this.shellStatus.start();
     void import("./inbox/inbox.store").then(({ InboxStore }) => {
       if (this.destroyed) return;
       runInInjectionContext(this.injector, () => {
@@ -1350,6 +1368,7 @@ export class AppComponent implements OnInit, OnDestroy {
     this.destroyed = true;
     this.help.attached.set(false);
     this.feed.stop(false);
+    this.shellStatus.stop();
     this.inboxRef()?.stop();
     this.unregister.forEach((u) => u());
     this.navSub?.unsubscribe();
