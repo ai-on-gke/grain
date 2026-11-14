@@ -268,7 +268,7 @@ Settings → Executors and its executor tokens were removed with remote executor
 
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
-| Git connections `gitConnections` (metadata) and default `gitCredential` | Yes — Git; `POST /api/deployment/git-connections`, `DELETE …/{cred}`, `PUT /api/deployment` | Yes — `tables/grain_config.json` (`git_connections`, `git_credential`) | Locked (S·u / G) / read-only | Yes | `connections:write`. Token stored write-only under Credentials. Refused before the token is stored. |
+| Git connections `gitConnections` (metadata) and default `gitCredential` | Yes — Git; `POST /api/deployment/git-connections`, `DELETE …/{cred}`, `PUT /api/deployment` | Yes — `tables/grain_config.json` (`git_connections`, `git_credential`) | Locked (S·u / G) / read-only | Yes | `connections:write`. Token stored write-only under Credentials. Refused before the token is stored. Optional `merge_credential` has no UI control (set via `PUT /api/deployment`, `grain connections import`, or `tables/grain_config.json`; preserved when replacing a connection). |
 | Per-repo connection binding | Yes — Git → repositories; `PUT /api/deployment/repos/{owner}/{name}/git-connection` | Yes — `tables/repo_config.json` (`git_credential`) | Locked (S·u) / read-only | Yes | |
 | Connection check, ambient sources | Action — `POST /api/deployment/git-connections/check`, `GET /api/git-ambient-sources` | No — action | Unlocked (Action) | No | |
 | Commit identity `agentGitName`, `agentGitEmail` | No — API only (`PUT /api/deployment`) | Yes — `tables/grain_config.json` | Locked (G) | Yes | Agents → Commit identity shows the defaults. |
@@ -300,6 +300,7 @@ Every per-repo setter goes through `putRepoConfig` (class **S** on `repo_config`
 | Setting / entity | UI (unlocked) | Config repo | Locked: server / UI | External | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `approvedByDefault`, `autoMergeByDefault`, `newestFirst`, `maxAutoSubmitDepth`, `maxAutoSubmitFanOut` | Yes — Tasks; `PUT /api/settings` | Yes — `tables/grain_config.json` | Locked (G) / read-only | Yes | |
+| `qaEnabled`, `qaFlowId`, `qaRolloutPct`, `qaShadowOnControl`, `qaEpoch` | Yes (`/next/settings/tasks#card-qa-rollout` for the first four) / No (`qaEpoch`, API / `grain qa` only); `PUT` / `POST /api/settings`, `grain qa` | Yes — `tables/grain_config.json` (`qa`) | Locked (G) / read-only (`/next/settings/tasks`) | Yes | Non-bootstrap. Validated on decode by `DecodeQAConfig` (`grain state check`); `qaEpoch` is monotonic; `qaRegimeId` is read-only. |
 | Deployment default capabilities `defaultCapabilities` | Yes — Tasks → Task defaults; `PUT /api/settings` | Yes — `settings/capabilities.yml` (over `grain_config.default_capabilities`) | Locked (G) / read-only | Yes | Agent grant-escalation checked. |
 | Custom fields | No — Tasks → Task fields is display-only | Yes — `tables/custom_field.json` | Locked (no route) / display | — | Task *values* are task data, not settings. |
 
