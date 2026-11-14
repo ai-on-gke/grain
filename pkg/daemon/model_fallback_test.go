@@ -136,3 +136,50 @@ func TestExplicitChoicesDoNotFallBackAcrossFrameworks(t *testing.T) {
 		t.Errorf("Availability(connection agy) = %q, want it waiting, pinned", reason)
 	}
 }
+
+// The symbolic judgement model resolves to the strongest offered model and
+// falls through the ranking (and down to the rotation) rather than pinning.
+func TestJudgementModelFallsBackAcrossOfferedModelsAndRotation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	agy := model.AgentBackend{
+		ID:        "agy",
+		Framework: model.AgentFrameworkAntigravity,
+		AuthMode:  model.AntigravityAuthAmbient,
+		CLIPath:   "/bin/true",
+		Models:    []string{"opus-5.5-high", "gemini-x"},
+	}
+	cl := model.AgentBackend{
+		ID:        "claude",
+		Framework: model.AgentFrameworkClaude,
+		AuthMode:  model.AntigravityAuthAmbient,
+		CLIPath:   "/bin/true",
+		Models:    []string{"claude-opus-5-5"},
+	}
+	pool := providerDefaultPool(t, "gemini-x", agy, cl)
+	pool.Pause = &orchestrator.Pause{}
+	now := time.Now()
+
+	choice := orchestrator.AgentChoice{Model: model.JudgementModelName}
+
+	// 1. With nothing paused, resolves to the top ranked judgement model (claude-opus-5-5).
+	buildChecked(t, pool, choice, "claude-opus-5-5", model.AgentFrameworkClaude)
+
+	// 2. Pause claude-opus-5-5: falls through to next ranked model (opus-5.5-high).
+	pool.Pause.Begin(now, orchestrator.PauseScope{Connection: "claude", Model: "claude-opus-5-5", Team: model.DefaultTeamID},
+		&agent.UsageLimitError{ResetAt: now.Add(time.Hour)})
+	buildChecked(t, pool, choice, "opus-5.5-high", model.AgentFrameworkAntigravity)
+
+	// 3. Pause opus-5.5-high as well: falls through to the rotation default (gemini-x).
+	pool.Pause.Begin(now, orchestrator.PauseScope{Connection: "agy", Model: "opus-5.5-high", Team: model.DefaultTeamID},
+		&agent.UsageLimitError{ResetAt: now.Add(time.Hour)})
+	buildChecked(t, pool, choice, "gemini-x", model.AgentFrameworkAntigravity)
+
+	// 4. Availability never says pinned: when everything is paused, reports wait reasons without pinning.
+	pool.Pause.Begin(now, orchestrator.PauseScope{Connection: "agy", Model: "gemini-x", Team: model.DefaultTeamID},
+		&agent.UsageLimitError{ResetAt: now.Add(time.Hour)})
+	reason := pool.Availability(ctx, choice)
+	if strings.Contains(reason, "does not fall back") {
+		t.Errorf("Availability for judgement model reported un-fallbackable pin: %q", reason)
+	}
+}

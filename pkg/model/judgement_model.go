@@ -71,17 +71,25 @@ func IsJudgementModel(model string) bool {
 	return strings.EqualFold(strings.TrimSpace(model), JudgementModelName)
 }
 
-// ResolveJudgementModel is the concrete model JudgementModelName stands
-// for on a deployment configured as cfg, with backends its connections
-// (disabled ones are skipped): cfg.JudgementModel whenever it is set --
-// the deployment's own word, which a task then runs on or waits for like
-// any model it chose -- and otherwise the first model of
-// JudgementModelRanking a connection advertises, in that connection's own
-// spelling. ok is false when neither answers -- the caller runs the task
-// on the rotation and raises JudgementModelUnresolvedSubject.
-func ResolveJudgementModel(cfg Config, backends []AgentBackend) (model string, ok bool) {
+// ResolveJudgementModels returns the ordered list of candidate models
+// JudgementModelName resolves to on a deployment configured as cfg, with backends
+// its connections (disabled ones are skipped).
+//
+// When cfg.JudgementModel is set, it is preferred first. Following it (or if unset),
+// every distinct model in JudgementModelRanking that an enabled connection advertises
+// is returned in rank order.
+func ResolveJudgementModels(cfg Config, backends []AgentBackend) []string {
+	var models []string
+	seen := make(map[string]bool)
+	add := func(m string) {
+		m = strings.TrimSpace(m)
+		if m != "" && !IsJudgementModel(m) && !seen[m] {
+			seen[m] = true
+			models = append(models, m)
+		}
+	}
 	if want := strings.TrimSpace(cfg.JudgementModel); want != "" && !IsJudgementModel(want) {
-		return want, true
+		add(want)
 	}
 	var offered []string
 	for _, b := range backends {
@@ -93,9 +101,25 @@ func ResolveJudgementModel(cfg Config, backends []AgentBackend) (model string, o
 	for _, rank := range JudgementModelRanking {
 		for _, m := range offered {
 			if judgementKey(m) == rank {
-				return m, true
+				add(m)
 			}
 		}
+	}
+	return models
+}
+
+// ResolveJudgementModel is the concrete model JudgementModelName stands
+// for on a deployment configured as cfg, with backends its connections
+// (disabled ones are skipped): cfg.JudgementModel whenever it is set --
+// the deployment's own word, which a task then runs on or waits for like
+// any model it chose -- and otherwise the first model of
+// JudgementModelRanking a connection advertises, in that connection's own
+// spelling. ok is false when neither answers -- the caller runs the task
+// on the rotation and raises JudgementModelUnresolvedSubject.
+func ResolveJudgementModel(cfg Config, backends []AgentBackend) (model string, ok bool) {
+	models := ResolveJudgementModels(cfg, backends)
+	if len(models) > 0 {
+		return models[0], true
 	}
 	return "", false
 }

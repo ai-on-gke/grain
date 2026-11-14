@@ -342,17 +342,22 @@ func (p *AgentPool) resolve(ctx context.Context, live Config, choice orchestrato
 	// strongest model its connections offer. Nothing resolving it is a
 	// task that chose no model -- it runs on the rotation, and
 	// orchestrator's reconcileJudgementModel tells somebody.
-	if model.IsJudgementModel(req.model) {
+	isJudgement := model.IsJudgementModel(req.model)
+	if isJudgement {
 		req.model = ""
 		if p.Store != nil {
 			if stored, err := p.Store.GetConfig(ctx); err == nil && stored != nil {
-				if m, ok := model.ResolveJudgementModel(*stored, live.AgentBackends); ok {
-					req.model = m
+				if jm := model.ResolveJudgementModels(*stored, live.AgentBackends); len(jm) > 0 {
+					req.models = jm
+					req.model = jm[0]
+					// Symbolic judgement models do not pin to a single concrete model;
+					// they fall through the ranked judgement models (and down to the rotation)
+					// when higher-ranked models are paused, cooling off, or busy.
+					req.pinnedModel = false
 				}
 			}
 		}
-	}
-	if req.model != "" {
+	} else if req.model != "" {
 		req.models = []string{req.model}
 		req.pinnedModel = true
 	}
@@ -402,6 +407,29 @@ func (p *AgentPool) resolve(ctx context.Context, live Config, choice orchestrato
 				// The models this task's latest runs failed over off
 				// (orchestrator.AgentChoice.AvoidModels) are tried last,
 				// so it resumes on the next model of its rotation.
+				req.models = avoidLast(req.models, choice.AvoidModels)
+				if len(req.models) > 0 {
+					req.model = req.models[0]
+				}
+			} else if isJudgement && backendID == "" {
+				// Judgement models: ensure framework routing for each ranked model,
+				// and append default models as final fallback if all judgement models are unavailable.
+				if !explicitFramework {
+					if req.modelFrameworks == nil {
+						req.modelFrameworks = map[string]string{}
+					}
+					for _, m := range req.models {
+						req.modelFrameworks[m] = defaultModelFramework(live.AgentBackends, req.team, m, framework)
+					}
+				}
+				for _, m := range settings.DefaultModels() {
+					if !slices.Contains(req.models, m) {
+						req.models = append(req.models, m)
+						if !explicitFramework {
+							req.modelFrameworks[m] = defaultModelFramework(live.AgentBackends, req.team, m, framework)
+						}
+					}
+				}
 				req.models = avoidLast(req.models, choice.AvoidModels)
 				if len(req.models) > 0 {
 					req.model = req.models[0]
