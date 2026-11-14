@@ -35,6 +35,7 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { formatTimestamp } from "../shared/display-time";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -694,7 +695,11 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                 <tbody>
                   @for (ev of filteredAuditEvents(); track ev.id) {
                     <tr data-testid="audit-row">
-                      <td class="s-num">{{ ev.at }}</td>
+                      <td class="s-num">
+                        <time [attr.datetime]="ev.at" [title]="ev.at">{{
+                          formatTimestamp(ev.at)
+                        }}</time>
+                      </td>
                       <td>
                         <span class="status-pill neutral">{{ ev.kind }}</span>
                       </td>
@@ -720,6 +725,7 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
   protected readonly api = inject(GrainApi);
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
+  protected readonly formatTimestamp = formatTimestamp;
   private readonly snackbar = inject(SnackbarService);
 
   readonly section = input.required<SettingsSectionId>();
@@ -848,12 +854,22 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
         } else {
           this.principals.set(p?.entries ?? p?.principals ?? p?.items ?? []);
           if (Array.isArray(p?.roles) && p.roles.length > 0) {
-            this.roleOptions.set(
-              p.roles.map((r) => ({
-                value: r.name,
-                label: r.description ? `${r.name} — ${r.description}` : r.name,
-              })),
-            );
+            const opts = p.roles.map((r) => ({
+              value: r.name,
+              label: r.description ? `${r.name} — ${r.description}` : r.name,
+            }));
+            this.roleOptions.set(opts);
+            // The picker shows its first option for a value it does not
+            // offer, so a role the server does not serve (the built-in
+            // fallback's grain/developer) would be shown as one role and
+            // sent as another, which the server refuses. Start from one
+            // it serves -- read-only when it has that.
+            if (!opts.some((o) => o.value === this.newPrincipalRole())) {
+              this.newPrincipalRole.set(
+                opts.find((o) => o.value === "grain/viewer")?.value ??
+                  opts[0].value,
+              );
+            }
           }
         }
       } catch {

@@ -26,9 +26,15 @@ import {
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
+import { ViewFilter } from "../services/view-filter.service";
+import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
 import { SettingsCodeComponent } from "./settings-code.component";
 import { SettingsComputeComponent } from "./settings-compute.component";
 import { SettingsInstanceComponent } from "./settings-instance.component";
+import type { SettingsLeaveCheck } from "./settings-leave.guard";
 import {
   CONFIG_REPO_SECTION_PATHS,
   DEFAULT_SETTINGS_SECTION,
@@ -52,6 +58,7 @@ import { SettingsWorkComponent } from "./settings-work.component";
     SettingsWorkComponent,
     SettingsSecurityComponent,
     SettingsInstanceComponent,
+    ConfirmDialogComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -62,6 +69,9 @@ import { SettingsWorkComponent } from "./settings-work.component";
     "./settings-forms.css",
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: {
+    "(window:beforeunload)": "onBeforeUnload($event)",
+  },
   template: `
     <section
       class="view-panel is-active"
@@ -121,7 +131,8 @@ import { SettingsWorkComponent } from "./settings-work.component";
                 aria-label="Filter settings"
                 data-testid="settings-filter-input"
                 [value]="filterQuery()"
-                (input)="filterQuery.set($any($event.target).value)"
+                (input)="viewFilter.query.set($any($event.target).value)"
+                (keydown.escape)="viewFilter.query.set('')"
               />
             </form>
           </div>
@@ -404,10 +415,18 @@ import { SettingsWorkComponent } from "./settings-work.component";
         </div>
       </div>
     </section>
+    @if (leaveRequest(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onLeaveDone($event)" />
+    }
   `,
 })
-export class SettingsPageComponent implements OnInit, OnDestroy {
+export class SettingsPageComponent
+  implements OnInit, OnDestroy, SettingsLeaveCheck
+{
   protected readonly access = inject(AccessService);
+  // The drawer's filter and the top bar's "Filter this view" box (which
+  // `/` focuses) are one query, so either narrows the section list.
+  protected readonly viewFilter = inject(ViewFilter);
   protected readonly state = inject(SettingsStateService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
@@ -415,7 +434,7 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   readonly section = input<string | undefined>(undefined);
   readonly path = input<string | undefined>(undefined);
 
-  protected readonly filterQuery = signal("");
+  protected readonly filterQuery = computed(() => this.viewFilter.query());
   protected readonly ready = signal(false);
   private readonly routeSection = signal<string | null>(null);
   private readonly routeFilePath = signal<string>("");
@@ -453,6 +472,7 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   );
 
   ngOnInit(): void {
+    this.viewFilter.query.set("");
     this.subs.push(
       this.route.paramMap.subscribe((pm) => {
         this.routeSection.set(pm.get("section"));
@@ -475,11 +495,69 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.subs.forEach((s) => s.unsubscribe());
+    this.viewFilter.query.set("");
+  }
+
+  // unsavedWorkLostBy names what a move to nextUrl would throw away: the
+  // save bar's draft survives a move between sections (the page stays),
+  // but not leaving Settings; a card with its own Save (Memory) loses its
+  // edit on any move.
+  unsavedWorkLostBy(nextUrl: string): string | null {
+    const path = nextUrl.split(/[?#]/)[0];
+    const staying = /^\/settings(\/|$)/.test(path);
+    const lost = Object.values(this.state.editedCards());
+    if (!staying && this.state.isDirty()) {
+      const n = this.state.dirtyCount();
+      lost.unshift(`${n} unsaved setting ${n === 1 ? "change" : "changes"}`);
+    }
+    if (lost.length === 0) return null;
+    return lost.join(" and ");
+  }
+
+  // leaveRequest is the open "Discard …?" dialog, and resolveLeave the
+  // guard's answer waiting on it.
+  protected readonly leaveRequest = signal<ConfirmRequest | null>(null);
+  private resolveLeave: ((ok: boolean) => void) | null = null;
+
+  confirmLeave(lost: string): Promise<boolean> {
+    // A second move while the dialog is open answers the first as "stay".
+    this.resolveLeave?.(false);
+    return new Promise<boolean>((resolve) => {
+      this.resolveLeave = resolve;
+      this.leaveRequest.set({
+        title: `Discard ${lost}?`,
+        message:
+          "Leaving now throws it away. Stay to save it first (the save bar, or the card's own Save).",
+        accept: "Discard",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+  }
+
+  protected onLeaveDone(accepted: boolean): void {
+    this.leaveRequest.set(null);
+    const resolve = this.resolveLeave;
+    this.resolveLeave = null;
+    resolve?.(accepted);
+  }
+
+  // forgetUnsavedCards drops the card edits a confirmed move threw away,
+  // so they do not ask again on the way out of Settings.
+  forgetUnsavedCards(): void {
+    this.state.editedCards.set({});
+  }
+
+  protected onBeforeUnload(ev: BeforeUnloadEvent): void {
+    if (this.unsavedWorkLostBy("/") === null) return;
+    ev.preventDefault();
+    ev.returnValue = "";
   }
 
   protected selectSection(id: SettingsSectionId, ev: Event): void {
     ev.preventDefault();
-    this.routeSection.set(id);
+    // The section follows the route (paramMap), not the click, so a move
+    // the leave prompt cancels leaves the current section on screen.
     void this.router.navigate(["/settings", id]);
   }
 
