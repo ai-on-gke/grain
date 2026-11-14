@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -166,13 +167,17 @@ func TestAKMSReleaseApprovalKeyThatCannotSignAfterPublicKeyCacheIsNamedInA502(t 
 	}
 }
 
+// trailingLogRef is the random hex log reference apierror appends to an
+// answer (" (ref 7bd403ca3aa3)"), anchored to the end so nothing else in
+// the answer can be mistaken for it.
+var trailingLogRef = regexp.MustCompile(`\s*\(ref [0-9a-f]+\)$`)
+
 // leaksKMSAnswer reports whether an API answer carries KMS's own response.
-// The answer ends with a random hex log reference ("(ref 7bd403ca3aa3)"),
-// which can itself contain "403", so only the text before it is checked.
+// The answer ends with a random hex log reference, which can itself
+// contain "403", so only that exact trailing reference is dropped before
+// the rest of the answer is checked.
 func leaksKMSAnswer(answer string) bool {
-	if i := strings.LastIndex(answer, "(ref "); i >= 0 {
-		answer = answer[:i]
-	}
+	answer = trailingLogRef.ReplaceAllString(answer, "")
 	return strings.Contains(answer, "denied") || strings.Contains(answer, "403") ||
 		strings.Contains(answer, "cloudkms.")
 }
