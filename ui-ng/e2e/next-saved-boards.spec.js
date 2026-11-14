@@ -283,6 +283,15 @@ test("a view saved on /next/ is stored in the board grammar and a board-grammar 
     await expect(
       page.getByRole("button", { name: "Open classic" }),
     ).toBeVisible();
+
+    // Classic's "no repo" value has no /next/ equivalent: it is cleared,
+    // not shown as a literal __none__ chip that hides every task.
+    await page.goto("tasks?repo=__none__");
+    await expect(page).not.toHaveURL(/__none__/);
+    await expect(
+      page.getByText(/classic task list:.*no repository/),
+    ).toBeVisible();
+    await expect(page.getByText("__none__")).toHaveCount(0);
   } finally {
     if (id) await page.request.delete(`/api/boards/${id}`).catch(() => {});
   }
