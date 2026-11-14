@@ -347,7 +347,7 @@ func TestCheckAccessRequestHonorsTemplateAndSessionCatalogueContext(t *testing.T
 	}
 
 	adhoc := create(t, c, ctx)
-	if _, err := c.CheckAccessRequest(ctx, adhoc.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "read-issues"}}); err == nil {
+	if _, err := c.CheckAccessRequest(ctx, adhoc.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: model.GitHubReadIssuesRef}}); err == nil {
 		t.Fatal("ad-hoc task admitted template-restricted capability in CheckAccessRequest")
 	}
 
@@ -359,7 +359,7 @@ func TestCheckAccessRequestHonorsTemplateAndSessionCatalogueContext(t *testing.T
 	if err := store.PutTask(ctx, fromTemplate); err != nil {
 		t.Fatal(err)
 	}
-	views, err := c.CheckAccessRequest(ctx, fromTemplate.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "read-issues"}})
+	views, err := c.CheckAccessRequest(ctx, fromTemplate.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: model.GitHubReadIssuesRef}})
 	if err != nil {
 		t.Fatalf("template task CheckAccessRequest: %v", err)
 	}
@@ -376,12 +376,12 @@ func TestCheckAccessRequestHonorsTemplateAndSessionCatalogueContext(t *testing.T
 	if err := store.PutTask(ctx, sessionTask); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.CheckAccessRequest(ctx, sessionTask.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "github-sandbox"}}); err != nil {
+	if _, err := c.CheckAccessRequest(ctx, sessionTask.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: model.GitHubSandboxRepoRef}}); err != nil {
 		t.Fatalf("session task CheckAccessRequest for session-restricted capability: %v", err)
 	}
 	// The same session-only capability stays refused to an ordinary task:
 	// judging in the task's own context must not admit it everywhere.
-	if _, err := c.CheckAccessRequest(ctx, adhoc.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: "github-sandbox"}}); err == nil {
+	if _, err := c.CheckAccessRequest(ctx, adhoc.ID, []model.AccessRequestItem{{Kind: model.AccessGrant, Capability: model.GitHubSandboxRepoRef}}); err == nil {
 		t.Fatal("ad-hoc task admitted session-restricted capability in CheckAccessRequest")
 	}
 }
@@ -418,7 +418,7 @@ func TestCheckAccessRequestRefusesGrainCIOnAGitHubModeRepo(t *testing.T) {
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{Repo: model.RepoRef{Owner: "acme", Name: "widgets"}, CIMode: model.CIModeGitHub}); err != nil {
 		t.Fatal(err)
 	}
-	for _, item := range []model.AccessRequestItem{grainCIItem(), {Kind: model.AccessGrant, Capability: model.GrainCICapability}} {
+	for _, item := range []model.AccessRequestItem{grainCIItem(), {Kind: model.AccessGrant, Capability: model.GrainCIGrant}} {
 		_, err := c.CheckAccessRequest(ctx, task.ID, []model.AccessRequestItem{item})
 		var invalid *ui.ValidationError
 		if !errors.As(err, &invalid) {

@@ -56,17 +56,23 @@ func grantRows(t *testing.T, ctx context.Context, db *sql.DB, table, owner strin
 // scopes, on the model's and the sandbox's channel alike, are equally
 // dangerous, and hold the same names other than the renamed ones -- the
 // fidelity design/design/unified-grants.design.md §3 asks of every migrated row.
+// A retired name in before is read as what it granted when it was stored,
+// the grant(s) it became (retiredAs): grain no longer reads it as an alias.
 func sameGrantMeaning(t *testing.T, what string, before, after []string) {
 	t.Helper()
+	var meant []string
+	for _, name := range before {
+		meant = append(meant, retiredAs(name)...)
+	}
 	for _, s := range model.APIScopes() {
-		if b, a := model.APIGrantsOf(before).Allows(s.Scope, ""), model.APIGrantsOf(after).Allows(s.Scope, ""); b != a {
+		if b, a := model.APIGrantsOf(meant).Allows(s.Scope, ""), model.APIGrantsOf(after).Allows(s.Scope, ""); b != a {
 			t.Errorf("%s: %s granted %v before the migration and %v after (%v -> %v)", what, s.Scope, b, a, before, after)
 		}
-		if b, a := model.SandboxAPIGrantsOf(before).Allows(s.Scope, ""), model.SandboxAPIGrantsOf(after).Allows(s.Scope, ""); b != a {
+		if b, a := model.SandboxAPIGrantsOf(meant).Allows(s.Scope, ""), model.SandboxAPIGrantsOf(after).Allows(s.Scope, ""); b != a {
 			t.Errorf("%s: %s reached the sandbox %v before the migration and %v after", what, s.Scope, b, a)
 		}
 	}
-	if b, a := slices.ContainsFunc(before, model.IsDangerousGrant), slices.ContainsFunc(after, model.IsDangerousGrant); b != a {
+	if b, a := slices.ContainsFunc(meant, model.IsDangerousGrant), slices.ContainsFunc(after, model.IsDangerousGrant); b != a {
 		t.Errorf("%s: dangerous %v before the migration and %v after", what, b, a)
 	}
 	for _, name := range before {
@@ -139,14 +145,14 @@ var retiredGrants = []struct {
 
 // retiredAs is what a store migration rewrote name to: retiredGrants'
 // entry for it, which covers the names only a build outside core makes an
-// alias, or else model.CanonicalLegacyGrants.
+// alias, or else model.RetiredGrantsBecame.
 func retiredAs(name string) []string {
 	for _, r := range retiredGrants {
 		if r.legacy == name {
 			return r.to
 		}
 	}
-	return model.CanonicalLegacyGrants(name)
+	return model.RetiredGrantsBecame(name)
 }
 
 // Each retiring migration rewrites every stored grant of its capability

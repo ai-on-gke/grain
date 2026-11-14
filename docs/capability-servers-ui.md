@@ -223,7 +223,7 @@ a task setting (`gcp-key` onto `…/gcp#gcp-key`, the model proxies onto
 `api:self-debug` preset plus `…/grain#source`, `read-issues` onto
 `…/github#read-issues`, `github-sandbox` onto `…/github#sandbox-repo`, and so
 on -- [unified-grants.design.md §4](../design/design/unified-grants.design.md#4-retiring-the-in-process-capabilities)),
-its bare name kept as a one-release alias, and the tab went with them. What
+its bare name kept as an alias for one release (since dropped), and the tab went with them. What
 was still useful on it is the **Deployment credentials** card at the foot of
 this page: the GitHub host, the GCP project and service accounts migrated
 `gcp-key` and `gemini-key` pools were seeded from, and every stored secret —

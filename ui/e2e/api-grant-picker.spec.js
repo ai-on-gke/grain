@@ -164,8 +164,9 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
   page,
   request,
 }) => {
-  // 1. Verify self-debug alias and api:self-debug preset resolution via HTTP gate
-  for (const cap of ["self-debug", "api:self-debug"]) {
+  // 1. Verify api:self-debug preset resolution via HTTP gate (the retired bare
+  // self-debug is no alias any longer)
+  for (const cap of ["api:self-debug"]) {
     const t = await fileTask(request, [cap]);
     const headers = { "X-Grain-Acting-Task": String(t.id) };
 

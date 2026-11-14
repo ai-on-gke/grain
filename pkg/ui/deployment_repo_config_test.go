@@ -86,7 +86,7 @@ func TestDeploymentRepoConfigWritesRepoConfig(t *testing.T) {
 	setReq := `{
 		"setupCommand": "npm run custom-setup",
 		"promptExtension": "team-specific prompt",
-		"defaultCapabilities": ["github-sandbox", "api:tasks:read"],
+		"defaultCapabilities": ["` + model.GitHubSandboxRepoGrant + `", "api:tasks:read"],
 		"ciCapabilities": ["repo-read:acme/widgets"],
 		"ciMode": "grain",
 		"repairTemplateId": "template-123",
@@ -199,7 +199,7 @@ func TestDeploymentRepoConfigRefusesUnknownAndInvalidCapabilities(t *testing.T) 
 	}
 
 	// 2. defaultCapabilities refuses hand-attached grain-ci
-	grainCIDefault := []string{"grain-ci"}
+	grainCIDefault := []string{model.GrainCIGrant}
 	_, err = client.SetDeploymentRepoConfig(ctx, "acme/tools", ui.SetDeploymentRepoConfigRequest{DefaultCapabilities: &grainCIDefault})
 	if err == nil {
 		t.Fatal("SetDeploymentRepoConfig accepted grain-ci as default capability")
@@ -209,7 +209,7 @@ func TestDeploymentRepoConfigRefusesUnknownAndInvalidCapabilities(t *testing.T) 
 	}
 
 	// 3. defaultCapabilities refuses CI-only capability (e.g. registry-push)
-	ciOnlyDefault := []string{"registry-push"}
+	ciOnlyDefault := []string{model.RegistryPushRef + "={}"}
 	_, err = client.SetDeploymentRepoConfig(ctx, "acme/tools", ui.SetDeploymentRepoConfigRequest{DefaultCapabilities: &ciOnlyDefault})
 	if err == nil {
 		t.Fatal("SetDeploymentRepoConfig accepted CI-only capability in defaultCapabilities")
@@ -258,7 +258,7 @@ func TestDeploymentRepoConfigRefusesUnknownAndInvalidCapabilities(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	keepStoredDefaults := []string{"legacy-default-cap", "github-sandbox"}
+	keepStoredDefaults := []string{"legacy-default-cap", model.GitHubSandboxRepoGrant}
 	resp, err = client.SetDeploymentRepoConfig(ctx, "acme/tools", ui.SetDeploymentRepoConfigRequest{DefaultCapabilities: &keepStoredDefaults})
 	if err != nil {
 		t.Fatalf("SetDeploymentRepoConfig keeping legacy default: %v", err)

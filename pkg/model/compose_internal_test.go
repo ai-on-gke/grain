@@ -167,7 +167,7 @@ func TestApplyGrainCIGrantKeepsCIReadForARequestedGrainCI(t *testing.T) {
 	tmpl := Template{
 		ID:     "tmpl-train",
 		Name:   "Release train",
-		Grants: []Grant{{Capability: "grain-ci", Via: GrantByLabel}, {Capability: "self-debug", Via: GrantByLabel}},
+		Grants: []Grant{{Capability: GrainCIGrant, Via: GrantByLabel}, {Capability: "self-debug", Via: GrantByLabel}},
 	}
 	id := tmpl.ID
 	sched := Schedule{ID: "sched-train", Title: "Release train", Target: repo, TemplateID: &id,
@@ -182,7 +182,7 @@ func TestApplyGrainCIGrantKeepsCIReadForARequestedGrainCI(t *testing.T) {
 	if len(comp.GrantSources) != 2 || comp.GrantSources[1] != comp.GrantSources[0] || comp.GrantSources[1] == "" {
 		t.Errorf("GrantSources = %v, want the ci-read grant credited to the declaring layer", comp.GrantSources)
 	}
-	if tmpl.Grants[0].Capability != "grain-ci" || len(tmpl.Grants) != 2 {
+	if tmpl.Grants[0].Capability != GrainCIGrant || len(tmpl.Grants) != 2 {
 		t.Errorf("template's own grants were rewritten: %+v", tmpl.Grants)
 	}
 
@@ -193,7 +193,7 @@ func TestApplyGrainCIGrantKeepsCIReadForARequestedGrainCI(t *testing.T) {
 		t.Errorf("second apply: Grants = %+v, want no duplicate", comp.Grants)
 	}
 	held := ComposeScheduleTask(Schedule{ID: "s", Title: "t", Target: repo, Grants: []Grant{
-		{Capability: "grain-ci", Via: GrantByLabel}, {Capability: "api:ci-read@acme/widgets", Via: GrantByLabel},
+		{Capability: GrainCIGrant, Via: GrantByLabel}, {Capability: "api:ci-read@acme/widgets", Via: GrantByLabel},
 	}}, nil)
 	applyGrainCIGrant(&held, false)
 	if len(held.Grants) != 1 || held.Grants[0].Capability != "api:ci-read@acme/widgets" || held.Grants[0].Via != GrantByLabel {
@@ -211,7 +211,7 @@ func TestApplyGrainCIGrantKeepsCIReadForARequestedGrainCI(t *testing.T) {
 	}
 
 	// With no target there is no repository to scope the read to.
-	untargeted := Composition{Grants: []Grant{{Capability: "grain-ci", Via: GrantByLabel}}}
+	untargeted := Composition{Grants: []Grant{{Capability: GrainCIGrant, Via: GrantByLabel}}}
 	applyGrainCIGrant(&untargeted, false)
 	if len(untargeted.Grants) != 0 {
 		t.Errorf("untargeted.Grants = %+v, want none", untargeted.Grants)

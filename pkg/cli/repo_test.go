@@ -468,7 +468,7 @@ func TestRunCLIDispatchesTheRepoFamily(t *testing.T) {
 	for _, args := range [][]string{
 		{"-server", server, "repo", "list"},
 		{"-server", server, "repo", "add", "acme/widgets"},
-		{"-server", server, "repo", "capabilities", "-set", "self-debug", "acme/widgets"},
+		{"-server", server, "repo", "capabilities", "-set", "api:self-debug", "acme/widgets"},
 		{"-server", server, "repo", "capabilities", "acme/widgets"},
 		{"-server", server, "repo", "prompt-extension", "-set", "Read db/README.md first.", "acme/widgets"},
 		{"-server", server, "repo", "prompt-extension", "acme/widgets"},

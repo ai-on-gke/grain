@@ -43,7 +43,7 @@ func TestCacheFillingJobsIncludeTheOneGrainAddsForItself(t *testing.T) {
 	// Releases off and nothing named: the state pressing one button
 	// leaves behind, and the branch warm has to know about it too.
 	if err := store.PutRepoConfig(t.Context(), model.RepoConfig{
-		Repo: repo, CICapabilities: []string{model.CapabilityPackagePublish},
+		Repo: repo, CICapabilities: []string{model.PackagePublishRef + "={}"},
 		Work: model.ItemOwnership(model.ReleaseItem, model.OwnershipOff),
 	}); err != nil {
 		t.Fatal(err)

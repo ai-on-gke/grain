@@ -26,15 +26,15 @@ import (
 // 124 rewrote repo_config.ci_capabilities' github-sandbox rows to
 // github#sandbox-repo={}, while a workflow's declaration (or the list
 // itself, edited by hand) may spell it bare or with the server ID in
-// another case. Every spelling is the recorded grant, so the declaration
-// still matches the list and the job's pass still carries it.
+// another case. Every such spelling is the recorded grant, so the
+// declaration still matches the list and the job's pass still carries it.
+// The retired bare github-sandbox is not one of them any longer.
 func TestCIGrantSpellingsMatchTheRecordedSandboxRepoGrant(t *testing.T) {
 	for _, spelling := range []string{
 		model.GitHubSandboxRepoGrant,
 		model.GitHubSandboxRepoRef,
 		" " + model.GitHubSandboxRepoRef + " ",
 		"https://grain.dev/capabilities/GitHub#sandbox-repo",
-		"github-sandbox",
 	} {
 		if got := model.CanonicalCIGrant(spelling); got != model.GitHubSandboxRepoGrant {
 			t.Errorf("CanonicalCIGrant(%q) = %q, want %q", spelling, got, model.GitHubSandboxRepoGrant)
@@ -46,6 +46,12 @@ func TestCIGrantSpellingsMatchTheRecordedSandboxRepoGrant(t *testing.T) {
 		if len(refs) != 1 || refs[0].Capability != model.GitHubSandboxRepoGrant {
 			t.Errorf("ciCapabilityRefs(%q) = %+v, want [%s]", spelling, refs, model.GitHubSandboxRepoGrant)
 		}
+	}
+	if got := model.CanonicalCIGrant("github-sandbox"); got != "github-sandbox" {
+		t.Errorf("CanonicalCIGrant(github-sandbox) = %q, want it unchanged: the retired name is no alias any longer", got)
+	}
+	if refs := ciCapabilityRefs([]string{"github-sandbox"}, ci.EventPush, false, false); len(refs) != 0 {
+		t.Errorf("ciCapabilityRefs(github-sandbox) = %+v, want none", refs)
 	}
 	// Not event-gated: a withheld run (which withholds only event-gated
 	// grants) still carries it.

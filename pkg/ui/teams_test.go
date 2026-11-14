@@ -137,8 +137,12 @@ func actingAs(ctx context.Context, user string) context.Context {
 // run may broadcast; a run holding neither is refused.
 func TestTeamBroadcastIsTheTeamsBroadcastScope(t *testing.T) {
 	client, store, ctx := testClient(t)
+	if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "Retired", Approved: true, NoRepo: true,
+		Capabilities: &[]string{"team-broadcast"}}); err == nil {
+		t.Fatal("CreateTask accepted the retired bare team-broadcast")
+	}
 	sender, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "Announcer", Approved: true, NoRepo: true,
-		Capabilities: &[]string{"team-broadcast"}})
+		Capabilities: &[]string{"api:team-broadcast"}})
 	if err != nil {
 		t.Fatalf("CreateTask naming team-broadcast: %v", err)
 	}

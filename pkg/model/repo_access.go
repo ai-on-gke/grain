@@ -29,10 +29,9 @@ import (
 
 // GitPushAnyRefCapability is the retired bare name of GitPushAnyRefGrant:
 // the grant that lets a task's run push any ref of the repositories it
-// may write, not only its own task branch (Store.GitPushAnyRef). It is
-// still read as that grant wherever it was not rewritten (a repository's
-// own .grain declaration, an older grain/config); schema migration 85
-// rewrote the stored rows.
+// may write, not only its own task branch (Store.GitPushAnyRef). Schema
+// migration 85 rewrote the stored rows, and an import rewrites an older
+// grain/config (RetiredGrantsBecame); nothing else reads it as the grant.
 const GitPushAnyRefCapability = "git-push-any-ref"
 
 // RepoCapabilityServerID is the canonical capability_id of the in-process
@@ -54,16 +53,12 @@ var gitPushAnyRefRefs = []string{"refs/heads/*", "refs/tags/*"}
 
 // IsGitPushAnyRefGrant reports whether grant lifts the git proxy's
 // one-branch push rule: GitPushAnyRefGrant, recorded or as a grant
-// string with its arguments in any order, or the retired bare
-// git-push-any-ref. A repo#write grant naming fewer refs, or without
+// string with its arguments in any order. A repo#write grant naming fewer refs, or without
 // force, is not it: the proxy does not honour narrower task-level refs
 // (design/design/unified-grants.design.md Q3), so it opens nothing rather than
 // everything.
 func IsGitPushAnyRefGrant(grant string) bool {
 	s := strings.TrimSpace(grant)
-	if s == GitPushAnyRefCapability {
-		return true
-	}
 	if !IsCapabilityRef(s) {
 		return false
 	}
