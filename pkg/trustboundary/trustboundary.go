@@ -87,9 +87,10 @@ type Category struct {
 // v29 adds the classic ui e2e freeze lists to ci-suppressions (security
 // review of task 5099): ui/e2e/QUARANTINE and ui/e2e/NONGATING take the
 // tests they name out of the gating `ui e2e` job (playwright.config.js's
-// grepInvert), and ui/e2e/frozen.js turns those lists into that filter, so
-// an edit to any of them suppresses failures the way .grain/quarantine.yml
-// does.
+// grepInvert), ui/e2e/frozen.js turns those lists into that filter, and
+// ui/playwright.config.js applies it (and could drop tests from the gate
+// on its own, through grepInvert, testIgnore or testMatch), so an edit to
+// any of them suppresses failures the way .grain/quarantine.yml does.
 //
 // v28 adds the six sibling surfaces the post-merge security review of v26
 // found unclassified across scripts/ and pkg/ (task 3926, finding 3.1 of
@@ -550,7 +551,9 @@ var Categories = []Category{
 		files: []string{".grain/quarantine.yml", ".grain/quarantine.yaml", "scripts/github-ci-changes.sh",
 			// The classic ui e2e freeze (ui/e2e/README.md): what these
 			// lists name, frozen.js removes from the gating `ui e2e` job.
-			"ui/e2e/QUARANTINE", "ui/e2e/NONGATING", "ui/e2e/frozen.js"},
+			"ui/e2e/QUARANTINE", "ui/e2e/NONGATING", "ui/e2e/frozen.js",
+			// ...and the config that applies them to the gating lane.
+			"ui/playwright.config.js"},
 	},
 	{
 		ID: "path-triggers",
