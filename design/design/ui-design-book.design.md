@@ -131,7 +131,7 @@ do not pull in an icon font.
 
 ```
 ┌──────┬──────────────────────────────────────────────────────────────┐
-│ mark │ Grain        [Next up #54 … ▾] [○ 0 agents running] [/] ? ◐ AE│  56px top bar
+│ mark │ Grain     [Next up #54 … ▾] [○ 0 agents running] [/] 🔔 ◐ ? AE│  56px top bar
 │ [ + ]│──────────────────────────────────────────────────────────────│
 │ New ▾│                                                              │
 │ Inbox│                     destination                              │
@@ -162,6 +162,28 @@ do not pull in an icon font.
   `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
   its query kept (`app.routes.ts`), rather than falling through to the
   Inbox.
+- **Disconnected banner:** when the shared pollers stop getting answers
+  (`services/connection.service.ts`: the shell's `GET /api/config`
+  heartbeat, each read bounded at 10 seconds, and the task feed), a
+  `role="status"` warning strip appears at y=0, above the rail and the
+  top bar. It pushes the shell down; it never covers the rail. It says
+  whether the connection failed or was accepted with no answer, and since
+  when (a clock time, not a ticking age, because it is a live region). It
+  clears on the first good answer, with no reload and no close button.
+  While a modal is open, the same sentence is mirrored as a strip first
+  inside the topmost `aria-modal` dialog. A fixed overlay anchored under
+  the top bar adds `var(--grain-banner-height, 0px)` to its `top`.
+- **Alerts bell:** the top bar's bell (`shell/alerts-button.component.ts`)
+  counts the deployment's standing alerts (`shell/alerts.ts`, the same set
+  and wording as the classic `ui/src/alerts.js`). These are: reconcile loop
+  stopped, store switched, config-repo sync failing, host sandboxes,
+  usage-limit pauses, pipeline pause or manual mode, setup steps left and
+  red base branches. The badge takes the worst severity's colour, and each
+  row repeats the severity in words with its status shape. Every row
+  links to the `/next/` page that fixes it, and leaves on the next poll
+  after its cause does. "See all in Fleet" stands in for the classic
+  System → Health. The bell loads on idle, so the alert rules stay out of
+  the initial bundle.
 - **Dispatch & quota alerts:** when dispatch is paused or model quotas are
   exhausted (`shared/dispatch-status.ts`), a lazy `@defer`-loaded global banner
   (`shell/dispatch-banner.component.ts`) mounts below the top bar with a

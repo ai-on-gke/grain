@@ -32,6 +32,12 @@ import { demoFixtures } from "../../ui-shared/e2e/demo.js";
 //   Angular's ErrorHandler logs one ("ERROR ..." on the console). A spec
 //   that provokes one on purpose says so with an "allows-page-error"
 //   annotation; the collected errors are the fixture's value either way.
+// - quietRoutes: removes every page.route handler at the end of a test,
+//   ignoring the errors of handlers still running. The shell polls
+//   /api/config as its heartbeat (services/shell-status.store.ts), so a
+//   handler that does `await route.fetch()` is usually mid-request when the
+//   test ends; without this its "Response has been disposed" lands on the
+//   worker's next test.
 
 type AxeOptions = {
   // CSS selectors to leave out of the scan.
@@ -44,6 +50,7 @@ type AxeOptions = {
 type Fixtures = {
   axe: (options?: AxeOptions) => Promise<Result[]>;
   pageErrors: string[];
+  quietRoutes: void;
 };
 
 type WorkerFixtures = {
@@ -97,6 +104,13 @@ export const test = base.extend<Fixtures, WorkerFixtures>({
             "consequence rather than its own failure",
         ).toEqual([]);
       }
+    },
+    { auto: true },
+  ],
+  quietRoutes: [
+    async ({ page }, use) => {
+      await use();
+      await page.unrouteAll({ behavior: "ignoreErrors" });
     },
     { auto: true },
   ],

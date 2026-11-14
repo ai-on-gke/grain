@@ -44,7 +44,7 @@ g-sessions-page {
   }
   .sessions-split.has-canvas g-session-canvas {
     position: fixed;
-    top: var(--grain-topbar-height);
+    top: calc(var(--grain-banner-height, 0px) + var(--grain-topbar-height));
     right: 0;
     bottom: var(--grain-bottombar-height);
     width: min(520px, 100vw);
