@@ -174,10 +174,14 @@ func (c *Client) operatorID() string {
 	return strings.TrimSpace(c.Config.Actor.ID)
 }
 
-// trustedRequestSource is how singleTenantTrusted admitted r: by the
-// access code (as a bearer token or an access session), as an in-process
+// trustedRequestSource is how singleTenantTrusted admitted r: by a run's
+// own credential, by the access code (as a bearer token or an access session), as an in-process
 // request (no RemoteAddr), or otherwise as a loopback break-glass caller.
 func trustedRequestSource(r *http.Request) model.AuthSource {
+	if _, ok := runCredentialFromContext(r.Context()); ok {
+		// A run's own grain mcpserver: grain itself.
+		return model.SourceInternal
+	}
 	cfg, _ := IAPConfigFromContext(r.Context())
 	if presentsAccessCode(r, cfg) {
 		return model.SourceAccessCode

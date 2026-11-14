@@ -3724,7 +3724,28 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		if grainserver.HasHealth(grants) {
 			grainStateDir = cfg.GrainStateDir
 		}
-		capabilityMCPServers, controllerEP, err := wireControllerMCP(ctx, cfg, store, task)
+		// The run's own credential, which its mcpserver and its
+		// grain-controller proxy present instead of the access code: it
+		// says which task and run they speak for, and stops working once
+		// this run has finished (ui.MintRunCredential).
+		var runCredential string
+		if cfg.MintRunCredential != nil {
+			if runCredential, err = cfg.MintRunCredential(task.ID, d.RunID); err != nil {
+				return unprepared(fmt.Errorf("minting the run's credential: %w", err))
+			}
+		}
+		// On a confined host sandbox it is kept out of every file the
+		// agent's own commands could read (hideRunCredential).
+		runCredentialFile, sandboxHide, removeRunCredential, err := hideRunCredential(runCredential, cfg.sandboxHide)
+		if err != nil {
+			return unprepared(err)
+		}
+		defer removeRunCredential()
+		mcpRunCredential := runCredential
+		if runCredentialFile != "" {
+			mcpRunCredential = ""
+		}
+		capabilityMCPServers, controllerEP, err := wireControllerMCP(ctx, cfg, store, task, runCredential)
 		if err != nil {
 			return unprepared(fmt.Errorf("serving grain-controller MCP: %w", err))
 		}
@@ -3856,8 +3877,10 @@ func RunDispatch(ctx context.Context, store *model.Store, framework agent.Framew
 		}
 		runCfg := agent.RunConfig{
 			Prompt: prompt, SuspendedPrompt: suspendedPrompt, Tools: runTools, SandboxRoot: sandboxRoot, GranuleVM: granuleVM, Container: container, K8sPod: cfg.sandboxPod,
-			SandboxEnvFile: cfg.sandboxEnvFile,
-			SandboxHide:    cfg.sandboxHide,
+			SandboxEnvFile:    cfg.sandboxEnvFile,
+			SandboxHide:       sandboxHide,
+			RunCredential:     mcpRunCredential,
+			RunCredentialFile: runCredentialFile,
 			// The MCP servers this run's capability grants expose, each
 			// registered beside grain-sandbox (§5.2.4).
 			CapabilityMCPServers: capabilityMCPServers,

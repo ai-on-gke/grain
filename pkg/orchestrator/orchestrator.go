@@ -450,7 +450,17 @@ type Config struct {
 	// X-Grain-Acting-Task: <taskID> so built-in sessions and tasks reach
 	// grain-controller through the same CapabilityMCPServer loopback relay
 	// external capability servers use. Nil attaches none.
-	ControllerMCP func(taskID string) (*protocol.Proxy, error)
+	//
+	// credential is the run's own credential (MintRunCredential), which
+	// the proxy presents in place of the access code; "" where none was
+	// minted.
+	ControllerMCP func(taskID, credential string) (*protocol.Proxy, error)
+	// MintRunCredential issues the credential a run's `grain mcpserver`
+	// (and its grain-controller proxy) reaches the daemon with, bound to
+	// taskID and runID and good while that run is live
+	// (ui.MintRunCredential, docs/access-code.md). Nil mints none, and
+	// those calls carry the access code as they always have.
+	MintRunCredential func(taskID, runID string) (string, error)
 	// Credentials resolves the named credentials a capability provider
 	// asks for by name, e.g. gcpkey's minter service account.
 	Credentials model.CredentialResolver

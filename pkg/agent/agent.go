@@ -62,6 +62,19 @@ type RunConfig struct {
 	// credentials and an argv is readable by every user on the host
 	// (GSA1-12).
 	SandboxEnvFile string
+	// RunCredential is the credential this run's `grain mcpserver`
+	// reaches the daemon with (orchestrator.Config.MintRunCredential): a
+	// Framework hands it to that process in its environment as
+	// mcp.RunCredentialEnv (RunCredentialEnv), never on its argv. "" for
+	// none.
+	RunCredential string
+	// RunCredentialFile, set instead of RunCredential for a host-directory
+	// sandbox, is a 0600 file holding the credential in a directory
+	// SandboxHide hides from run_command (orchestrator's
+	// hideRunCredential): there every file a Framework writes is readable
+	// from the sandbox, so the credential is in none of them.
+	// SandboxEnvArgs passes it as -run-credential-file.
+	RunCredentialFile string
 	// SandboxHide is the paths the run_command of a SandboxRoot sandbox
 	// must not reach (mcp.NewHostSandboxTools): a single-tenant daemon's
 	// data directory, which holds its access code. SandboxEnvArgs turns
@@ -759,6 +772,9 @@ func SandboxEnvArgs(cfg RunConfig) []string {
 	for _, p := range cfg.SandboxHide {
 		args = append(args, "-sandbox-hide", p)
 	}
+	if cfg.RunCredentialFile != "" {
+		args = append(args, "-run-credential-file", cfg.RunCredentialFile)
+	}
 	return args
 }
 
@@ -1000,4 +1016,10 @@ func (p KubePod) MCPServerArgs() []string {
 		args = append(args, "-k8s-granule")
 	}
 	return args
+}
+
+// RunCredentialEnv is RunConfig.RunCredential as the environment entry a
+// Framework starts its `grain mcpserver` with, nil for none.
+func RunCredentialEnv(cfg RunConfig) []string {
+	return mcp.RunCredentialEnvEntry(cfg.RunCredential)
 }

@@ -574,12 +574,20 @@ func operatorEnv() []string {
 // Each capability MCP server is registered beside it under its own name,
 // as the Streamable HTTP server grain's proxy is (§5.2.4).
 func mcpConfigJSON(grainBinaryPath string, mcpArgs []string, servers ...agent.CapabilityMCPServer) ([]byte, error) {
-	all := map[string]any{
-		mcpServerName: map[string]any{
-			"command": grainBinaryPath,
-			"args":    mcpArgs,
-		},
+	return mcpConfigJSONEnv(grainBinaryPath, mcpArgs, nil, servers...)
+}
+
+// mcpConfigJSONEnv is mcpConfigJSON with env set on the forked mcpserver
+// (mcp.ServerEnvMap): the run's credential, kept off its argv.
+func mcpConfigJSONEnv(grainBinaryPath string, mcpArgs []string, env map[string]string, servers ...agent.CapabilityMCPServer) ([]byte, error) {
+	sandbox := map[string]any{
+		"command": grainBinaryPath,
+		"args":    mcpArgs,
 	}
+	if len(env) > 0 {
+		sandbox["env"] = env
+	}
+	all := map[string]any{mcpServerName: sandbox}
 	for _, s := range servers {
 		all[s.Name] = map[string]any{"type": "http", "url": s.URL}
 	}
@@ -768,6 +776,9 @@ func (f *Framework) Run(ctx context.Context, cfg agent.RunConfig) (*agent.Result
 	if err != nil {
 		return nil, err
 	}
+	// The run's credential reaches the mcpserver in its environment,
+	// whichever way it is started (mcp.WithServerEnv).
+	ctx = mcp.WithServerEnv(ctx, agent.RunCredentialEnv(cfg)...)
 	if f.grainBinaryPath == "" {
 		return nil, fmt.Errorf("claude: grainBinaryPath is required")
 	}

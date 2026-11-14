@@ -227,12 +227,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			LocalAPIToken:         s.localAPITokenNow(),
 			AccessSessionLifetime: s.tasks.Config.AccessSessionLifetime,
 		}
-		if s.accessCodeModeNow() == AccessCodeOff && strings.TrimSpace(r.Header.Get(ActingTaskHeader)) == "" {
+		if s.accessCodeModeNow() == AccessCodeOff {
 			// Off: no code is accepted, so every check of it -- the gate,
-			// the sign-in, a session cookie -- refuses alike. A run's own
-			// plumbing (ActingTaskHeader, held to its task's grants) still
-			// reaches the daemon with it until runs carry a credential of
-			// their own (docs/access-code.md).
+			// the sign-in, a session cookie -- refuses alike, a run's own
+			// requests included: those carry their run's credential
+			// instead (run_credential.go, docs/access-code.md).
 			iapCfg.LocalAPIToken = ""
 		}
 		if tunnelReq {
@@ -274,6 +273,12 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(model.WithEventActor(callCtx, RequestActor(callCtx)))
 		s.mux.ServeHTTP(w, r)
 		return
+	}
+	if tok, ok := presentedRunCredential(r); ok && !tunnelReq && externalTokenFromContext(r.Context()) == nil {
+		var admitted bool
+		if r, admitted = s.authenticateRunCredential(w, r, tok); !admitted {
+			return
+		}
 	}
 	if externalTokenFromContext(r.Context()) == nil && presentsExternalAgentToken(r) {
 		tok, release, ok := s.authenticateExternalAgent(w, r)

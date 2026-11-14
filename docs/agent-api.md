@@ -28,9 +28,12 @@ is nothing else to write.
 | Route table as tools (names, descriptions, schemas) | `pkg/ui/agent_api_tools.go` (`AgentAPIRoutes`) |
 | The controller MCP server | `pkg/ui/mcp_endpoint.go` (`POST /api/mcp`), attached to a run by `orchestrator.wireControllerMCP` |
 
-A call through `grain-controller` reaches the daemon with
-`X-Grain-Acting-Task: <task id>` (and `X-Grain-Acting-Reason` when it has
-one); `grain_invoke` then dispatches the route in-process with those
+A call through `grain-controller` reaches the daemon with the run's own
+credential and `X-Grain-Acting-Task: <task id>` (and
+`X-Grain-Acting-Reason` when it has one). The credential is what makes
+the header believed: it must name the credential's own task, and a
+request the access code alone admitted may not name one
+([access-code.md](access-code.md#runs-carry-their-own-credential)). `grain_invoke` then dispatches the route in-process with those
 same headers. The daemon's gate then:
 
 1. looks up the acting task's api grants;
@@ -1069,7 +1072,8 @@ Who the caller is decides what `grain_explore_scope` shows and
 
 - A run or session of a task holding any `api:*` grant has
   `grain-controller` attached beside `grain-sandbox` (one capability
-  MCP server among the others), with the daemon's own credential and
+  MCP server among the others), with the run's own credential
+  ([access-code.md](access-code.md#runs-carry-their-own-credential)) and
   `X-Grain-Acting-Task: <task id>` added on the daemon's side, so it
   reaches exactly the routes its grants allow -- read from the store on
   every call, so a grant added while it runs takes effect at once.
@@ -1093,8 +1097,11 @@ Who the caller is decides what `grain_explore_scope` shows and
   mode it reaches only access and settings routes, and with the code
   off it is refused
   ([access-code.md](access-code.md#bootstrap-and-recovery-only-grain-access-code-mode)).
-  Runs are unaffected: their requests carry `X-Grain-Acting-Task` and
-  are held to their task's grants in every mode.
+  The access code never acts for a task: an `X-Grain-Acting-Task`
+  request admitted by the code alone is refused, because the code does
+  not say which task its holder is. Runs are unaffected in every mode,
+  because they carry their own run credential, which pins
+  `X-Grain-Acting-Task` to the run's task and holds them to its grants.
 
 Every `grain_invoke` re-enters the route table through the same gate
 the REST call would, so the attribution, audit row and rails are the

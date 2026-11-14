@@ -46,6 +46,10 @@ const DetachedSubcommand = "codex-detached"
 type detachedMCPSpec struct {
 	Args       []string `json:"args"`
 	BaseConfig string   `json:"base_config"`
+	// RunCredential is the run's credential (agent.RunConfig.RunCredential),
+	// which the wrapper hands the mcpserver in its environment: the file
+	// is 0600, an argv is not.
+	RunCredential string `json:"run_credential,omitempty"`
 }
 
 // detachedGrainBinary is the grain the wrapper starts `grain mcpserver`
@@ -150,7 +154,7 @@ func startDetachedMCP(ctx context.Context, home string) (func(), error) {
 			defer os.Setenv(name, v)
 		}
 	}
-	endpoint, err := mcp.StartCommandHTTP(ctx, grainBin, spec.Args)
+	endpoint, err := mcp.StartCommandHTTP(mcp.WithServerEnv(ctx, mcp.RunCredentialEnvEntry(spec.RunCredential)...), grainBin, spec.Args)
 	if err != nil {
 		return nil, err
 	}
