@@ -57,46 +57,61 @@ func deferOnResumeLaterCI(t *testing.T, ctx context.Context, store *model.Store,
 // outranked the repair's RetryRequestedAt, so the repair never ran and the
 // queue gave up on it as never finished. The send-back has to take the
 // task off its resume_later; a deferral a person made is theirs to lift.
+// Both repairs the queue asks for are covered: requeueForRepair's, and the
+// overlap re-check's (sendRecheckFailureBack), which the first version of
+// this fix missed.
 func TestAMergeQueueRepairTakesATaskOffItsResumeLater(t *testing.T) {
 	t.Parallel()
 	for _, how := range []string{"resume_later", "a person"} {
-		how := how
-		t.Run(how, func(t *testing.T) {
-			t.Parallel()
-			store, ctx := openTestStore(t)
-			repo := model.RepoRef{Owner: "acme", Name: "widgets"}
-			human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
-			task := model.Task{ID: "q", Intent: model.IntentImplement, Title: "t", Body: "b",
-				Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
-				Approval: &model.Attribution{Actor: human}, Target: &repo, Binding: model.BindingDirective}
-			if err := store.PutTask(ctx, task); err != nil {
-				t.Fatal(err)
-			}
-			at := time.Date(2026, 11, 11, 23, 17, 43, 0, time.UTC)
-			if how == "resume_later" {
-				deferOnResumeLaterCI(t, ctx, store, task.ID, at)
-			} else if err := store.SetDeferred(ctx, task.ID, &at, nil, at); err != nil {
-				t.Fatal(err)
-			}
+		for _, repair := range []string{"requeueForRepair", "sendRecheckFailureBack"} {
+			how, repair := how, repair
+			t.Run(how+"/"+repair, func(t *testing.T) {
+				t.Parallel()
+				store, ctx := openTestStore(t)
+				repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+				human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
+				task := model.Task{ID: "q", Intent: model.IntentImplement, Title: "t", Body: "b",
+					Origin:   model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+					Approval: &model.Attribution{Actor: human}, Target: &repo, Binding: model.BindingDirective}
+				if err := store.PutTask(ctx, task); err != nil {
+					t.Fatal(err)
+				}
+				at := time.Date(2026, 11, 11, 23, 17, 43, 0, time.UTC)
+				if how == "resume_later" {
+					deferOnResumeLaterCI(t, ctx, store, task.ID, at)
+				} else if err := store.SetDeferred(ctx, task.ID, &at, nil, at); err != nil {
+					t.Fatal(err)
+				}
 
-			now := at.Add(time.Hour)
-			ref := model.PullRequestRef{Repo: repo, Number: 1265}
-			if err := requeueForRepair(ctx, store, task, ref, github.PullRequestDetail{HeadRef: task.BranchName()},
-				model.PrConflicted, nil, grainCIVerdict{}, buildEvidence{}, refreshOutcome(0), false, forge.Reds{}, "",
-				repairAttempt{n: 1, max: 2}, now); err != nil {
-				t.Fatal(err)
-			}
-			state, err := store.State(ctx, task.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := model.StateQueued
-			if how == "a person" {
-				want = model.StateDeferred
-			}
-			if state != want {
-				t.Fatalf("after the repair's send-back the task is %q, want %q", state, want)
-			}
-		})
+				now := at.Add(time.Hour)
+				switch repair {
+				case "requeueForRepair":
+					ref := model.PullRequestRef{Repo: repo, Number: 1265}
+					if err := requeueForRepair(ctx, store, task, ref, github.PullRequestDetail{HeadRef: task.BranchName()},
+						model.PrConflicted, nil, grainCIVerdict{}, buildEvidence{}, refreshOutcome(0), false, forge.Reds{}, "",
+						repairAttempt{n: 1, max: 2}, now); err != nil {
+						t.Fatal(err)
+					}
+				case "sendRecheckFailureBack":
+					row := model.MergeBatch{Repo: repo, Branch: "main", TaskID: task.ID, BaseCommit: "b4se",
+						Ref: "refs/heads/grain/merge-queue/q", Conclusion: "failure", Detail: "failure: go unit"}
+					m := model.MergeBatchMember{TaskID: task.ID, Number: 1265, HeadSHA: "h3ad"}
+					if err := sendRecheckFailureBack(ctx, Deps{Store: store}, row, m, now); err != nil {
+						t.Fatal(err)
+					}
+				}
+				state, err := store.State(ctx, task.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := model.StateQueued
+				if how == "a person" {
+					want = model.StateDeferred
+				}
+				if state != want {
+					t.Fatalf("after %s's send-back the task is %q, want %q", repair, state, want)
+				}
+			})
+		}
 	}
 }
