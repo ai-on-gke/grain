@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import type { DispatchCondition } from "../api/models";
+export type { DispatchCondition };
+
 export type FleetTab = "sandboxes" | "hostds" | "controls" | "logs";
 
 export interface SandboxSnapshot {
@@ -98,15 +101,6 @@ export interface DaemonHealth {
   error?: string;
   unknownFlags?: string[];
   logCommand?: string;
-}
-
-export interface DispatchCondition {
-  name?: string;
-  error?: string;
-  since?: string;
-  remedy?: string;
-  held?: boolean | string;
-  check?: boolean | string;
 }
 
 export interface PersistentSandboxEvent {

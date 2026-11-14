@@ -416,7 +416,10 @@ export class WorkstreamsStore implements OnDestroy {
   approvePreview(stream: Workstream): StreamBatchPreview {
     const nodes = [...stream.proposedNodes]
       .filter((n) =>
-        this.access.can("POST /api/tasks/{id}/approve", n.task.repo),
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/approve",
+          n.task.repo ?? null,
+        ),
       )
       .sort((a, b) => Number(a.id) - Number(b.id) || a.id.localeCompare(b.id));
     return {
@@ -436,7 +439,10 @@ export class WorkstreamsStore implements OnDestroy {
     const nodes = pool.filter(
       (n) =>
         (n.task.state === "proposed" || n.task.state === "queued") &&
-        this.access.can("POST /api/tasks/{id}/defer", n.task.repo),
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/defer",
+          n.task.repo ?? null,
+        ),
     );
     return {
       nodes,
@@ -454,7 +460,10 @@ export class WorkstreamsStore implements OnDestroy {
     const nodes = pool.filter(
       (n) =>
         n.glyph === "deferred" &&
-        this.access.can("POST /api/tasks/{id}/undefer", n.task.repo),
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/undefer",
+          n.task.repo ?? null,
+        ),
     );
     return {
       nodes,

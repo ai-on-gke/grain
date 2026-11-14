@@ -33,6 +33,10 @@ import { ViewFilter } from "../services/view-filter.service";
 import { errorText } from "../sessions/session-helpers";
 import { ActorChipComponent } from "../shared/actor-chip.component";
 import {
+  effectiveDisplayTimeZone,
+  formatLocalReset,
+} from "../shared/dispatch-status";
+import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
@@ -94,6 +98,7 @@ const PERSISTENT_ACTIONS: readonly {
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "../shared/ops-surface.css",
     "./fleet-page.component.css",
   ],
@@ -1186,8 +1191,13 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                               p.reason || "provider rate/usage limit"
                             }}</span>
                             <span
-                              >Resets in
-                              {{ Math.ceil(p.secondsRemaining / 60) }}m</span
+                              >Resets
+                              {{
+                                fmtReset(p.until, p.secondsRemaining) ||
+                                  "in " +
+                                    Math.ceil(p.secondsRemaining / 60) +
+                                    "m"
+                              }}</span
                             >
                           </div>
                         </div>
@@ -1541,9 +1551,17 @@ export class FleetPageComponent implements OnInit {
   protected readonly fmtBytes = formatBytes;
   protected readonly fmtMB = formatMB;
   protected readonly fmtAge = formatRelativeAge;
+  protected readonly fmtReset = (until?: string, sec?: number): string =>
+    formatLocalReset(
+      until,
+      sec,
+      this.access.clockNow(),
+      effectiveDisplayTimeZone(this.access.rawConfig()?.timeZone),
+    );
   protected readonly taskIdOf = extractTaskIdFromSandbox;
 
   protected readonly tab = signal<FleetTab>("sandboxes");
+  private readonly loadedTabs = new Set<FleetTab>();
   protected readonly loading = signal(false);
   protected readonly loadError = signal<string | null>(null);
   protected readonly confirmReq = signal<ConfirmRequest | null>(null);
@@ -1785,13 +1803,7 @@ export class FleetPageComponent implements OnInit {
           t === "hostds" || t === "controls" || t === "logs" ? t : "sandboxes";
         if (next === this.tab()) return;
         this.tab.set(next);
-        if (
-          next === "logs" &&
-          this.selectedLogSource() &&
-          !this.logLines().length
-        ) {
-          void this.loadLogLines();
-        }
+        void this.ensureTabLoaded(next);
       });
     void this.bootstrap();
   }
@@ -1815,17 +1827,46 @@ export class FleetPageComponent implements OnInit {
     }
   }
 
+  private async ensureTabLoaded(t: FleetTab, force = false): Promise<void> {
+    if (!force && this.loadedTabs.has(t)) {
+      if (t === "logs" && this.selectedLogSource() && !this.logLines().length) {
+        await this.loadLogLines();
+      }
+      return;
+    }
+    this.loadedTabs.add(t);
+    if (t === "controls") {
+      await this.loadControls();
+    } else if (t === "logs") {
+      await this.loadLogSources();
+    } else if (t === "hostds") {
+      await this.loadHostds();
+    } else {
+      await Promise.all([this.loadSandboxes(), this.loadPersistentSandboxes()]);
+    }
+  }
+
   async refreshAll(): Promise<void> {
     this.loading.set(true);
     this.loadError.set(null);
+    const active = this.tab();
+    if (active !== "controls") this.loadedTabs.delete("controls");
+    if (active !== "logs") this.loadedTabs.delete("logs");
     try {
-      await Promise.all([
+      const jobs: Promise<void>[] = [
         this.loadSandboxes(),
         this.loadPersistentSandboxes(),
         this.loadHostds(),
-        this.loadControls(),
-        this.loadLogSources(),
-      ]);
+      ];
+      this.loadedTabs.add("sandboxes");
+      this.loadedTabs.add("hostds");
+      if (active === "controls" || active === "logs") {
+        this.loadedTabs.add(active);
+        jobs.push(
+          active === "controls" ? this.loadControls() : this.loadLogSources(),
+        );
+      }
+      await Promise.all(jobs);
     } finally {
       this.loading.set(false);
     }
@@ -1951,9 +1992,7 @@ export class FleetPageComponent implements OnInit {
       queryParams: { tab: t === "sandboxes" ? null : t },
       queryParamsHandling: "merge",
     });
-    if (t === "logs" && this.selectedLogSource() && !this.logLines().length) {
-      void this.loadLogLines();
-    }
+    void this.ensureTabLoaded(t);
   }
 
   protected onTabKeydown(ev: KeyboardEvent, current: FleetTab): void {
