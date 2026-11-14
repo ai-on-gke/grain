@@ -1538,9 +1538,7 @@ function formatRefreshedAt(iso?: string): string {
         <div class="s-card" data-testid="card-hostds-list">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">
-                Registered workstation hosts (hostds)
-              </h3>
+              <h3 class="s-card-title">Registered workstation hosts</h3>
               <p class="s-card-desc">
                 grain-agentd daemons paired with this controller for local CLI
                 tokens and workstation execution.
@@ -1563,10 +1561,10 @@ function formatRefreshedAt(iso?: string): string {
               {{ access.deniedReason("GET /api/hostds") }}
             </div>
           } @else if (hostds().length === 0) {
-            <p class="s-card-desc">No hostds registered yet.</p>
+            <p class="s-card-desc">No hosts registered yet.</p>
           } @else {
             <div class="s-table-wrap">
-              <table class="s-table" aria-label="Registered hostds">
+              <table class="s-table" aria-label="Registered hosts">
                 <thead>
                   <tr>
                     <th>Name</th>
@@ -1665,7 +1663,7 @@ function formatRefreshedAt(iso?: string): string {
             </div>
             <div class="s-grid">
               <div class="s-field">
-                <label class="s-label" for="hd-name">New hostd name</label>
+                <label class="s-label" for="hd-name">New host name</label>
                 <input
                   id="hd-name"
                   class="s-input s-mono"
@@ -1703,7 +1701,7 @@ function formatRefreshedAt(iso?: string): string {
                 "
                 (click)="createHostd()"
               >
-                Register hostd
+                Register host
               </button>
             </div>
           </div>
@@ -2793,7 +2791,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       });
       this.newHostdName.set("");
       this.newHostdLabels.set("");
-      const msg = this.formatIssuedHostdSecret(`Hostd token (${name})`, res);
+      const msg = this.formatIssuedHostdSecret(`Host token (${name})`, res);
       if (msg) this.mintedHostdToken.set(msg);
       await this.loadHostds();
       this.snackbar.show(`Registered hostd ${name}`);

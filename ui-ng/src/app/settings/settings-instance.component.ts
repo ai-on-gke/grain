@@ -461,13 +461,19 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="text"
                 data-testid="input-poll-interval"
-                placeholder="30s"
-                [value]="state.val('pollInterval', '30s')"
+                [placeholder]="state.val('pollIntervalDefault', '10s')"
+                [value]="state.val('pollInterval', '')"
                 [disabled]="!canWriteSettings()"
+                aria-describedby="e-poll-hint"
                 (input)="
                   state.setField('pollInterval', $any($event.target).value)
                 "
               />
+              <span class="s-hint" id="e-poll-hint"
+                >Go duration, e.g. 10s. Blank uses grain's default ({{
+                  state.val("pollIntervalDefault", "10s")
+                }}).</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="e-workers">Max worker agents</label>
@@ -477,15 +483,16 @@ function formatBytes(bytes: number): string {
                 type="number"
                 min="1"
                 data-testid="input-max-workers"
-                [value]="state.val('maxWorkers', 4)"
+                placeholder="10"
+                [value]="state.val('maxWorkers', 10)"
                 [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField(
-                    'maxWorkers',
-                    Number($any($event.target).value)
-                  )
-                "
+                aria-describedby="e-workers-hint"
+                (input)="setIntOrDefault('maxWorkers', $event, 10)"
               />
+              <span class="s-hint" id="e-workers-hint"
+                >Ordinary tasks dispatched at once (10 by default; blank
+                resets).</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="e-mpr"
@@ -496,15 +503,17 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="number"
                 min="1"
-                [value]="state.val('maxMergesPerRepo', 1)"
+                placeholder="5"
+                data-testid="input-max-merges-per-repo"
+                [value]="state.val('maxMergesPerRepo', 5)"
                 [disabled]="!canWriteSettings()"
-                (input)="
-                  state.setField(
-                    'maxMergesPerRepo',
-                    Number($any($event.target).value)
-                  )
-                "
+                aria-describedby="e-mpr-hint"
+                (input)="setIntOrDefault('maxMergesPerRepo', $event, 5)"
               />
+              <span class="s-hint" id="e-mpr-hint"
+                >Ready pull requests merged into each branch per queue cycle (5
+                by default; blank resets).</span
+              >
             </div>
           </div>
 
@@ -806,6 +815,14 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected readonly Boolean = Boolean;
 
   protected readonly confirmRequest = signal<ConfirmRequest | null>(null);
+
+  // A cleared count box is grain's own default, as on the classic Engine
+  // pane, rather than Number("") = 0, which the server refuses ("must be
+  // at least 1") and which left no way back to the default.
+  protected setIntOrDefault(key: string, ev: Event, dflt: number): void {
+    const raw = String((ev.target as HTMLInputElement).value).trim();
+    this.state.setField(key, raw === "" ? dflt : Number(raw));
+  }
 
   protected readonly themeModes: readonly {
     value: ThemeMode;

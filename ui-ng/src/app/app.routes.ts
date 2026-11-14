@@ -50,6 +50,9 @@ const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
   caches: ["/settings/caches"],
   metrics: ["/telemetry"],
   upgrade: ["/settings/upgrade"],
+  // The classic System -> Integrations tab became Deployment credentials
+  // at the foot of Settings -> Capabilities.
+  integrations: ["/settings/capabilities"],
 };
 
 // legacy redirects to the page SYSTEM_TABS names for `tab`, keeping the
@@ -190,6 +193,7 @@ export const routes: Routes = [
     redirectTo: (route) => legacy(String(route.params["tab"]))(route),
   },
   { path: "admin/logs", redirectTo: legacy("logs") },
+  { path: "admin/integrations", redirectTo: legacy("integrations") },
   { path: "sandboxes", redirectTo: legacy("sandboxes"), pathMatch: "full" },
   { path: "caches", redirectTo: legacy("caches"), pathMatch: "full" },
   { path: "staging", redirectTo: "fleet" },

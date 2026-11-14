@@ -27,6 +27,10 @@ import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
+import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
@@ -95,7 +99,7 @@ interface SecretMetaRow {
 
 @Component({
   selector: "g-settings-work",
-  imports: [PillSelectComponent],
+  imports: [PillSelectComponent, ConfirmDialogComponent],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -577,7 +581,7 @@ interface SecretMetaRow {
                                   'POST /api/capability-servers/remove'
                                 ) || state.sectionLocked('capabilities')
                               "
-                              (click)="removeCapServer(srv.id)"
+                              (click)="confirmRemoveCapServer(srv.id)"
                             >
                               Remove
                             </button>
@@ -861,8 +865,12 @@ interface SecretMetaRow {
                 (input)="secretKey.set($any($event.target).value)"
               />
               <textarea
-                class="s-textarea s-input-inline s-mono"
+                class="s-textarea s-input-inline s-mono s-masked"
                 rows="1"
+                autocomplete="off"
+                spellcheck="false"
+                data-lpignore="true"
+                data-1p-ignore="true"
                 aria-label="Secret value"
                 data-testid="input-secret-value"
                 placeholder="Secret value or PEM…"
@@ -877,6 +885,7 @@ interface SecretMetaRow {
                   !secretName().trim() ||
                   !secretKey().trim() ||
                   secretVal().length === 0 ||
+                  !secretsEnabled() ||
                   !access.can('PUT /api/secrets/{secret}/{key}')
                 "
                 (click)="putSecret()"
@@ -886,6 +895,12 @@ interface SecretMetaRow {
             </div>
           </div>
 
+          @if (!secretsEnabled()) {
+            <span class="s-hint" data-testid="secrets-store-disabled"
+              >This server has no secret store configured, so nothing can be
+              stored here yet.</span
+            >
+          }
           @if (!access.can("POST /api/secrets/redact")) {
             <span class="s-hint" data-testid="secrets-redact-restricted">{{
               access.deniedReason("POST /api/secrets/redact")
@@ -961,6 +976,9 @@ interface SecretMetaRow {
         </div>
       }
     }
+    @if (confirmReq(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+    }
   `,
 })
 export class SettingsWorkComponent implements OnInit, OnChanges {
@@ -998,6 +1016,10 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly newScopeSetScopes = signal("");
 
   protected readonly secretsList = signal<SecretMetaRow[]>([]);
+  // GET /api/secrets says enabled: false when the server has no secret
+  // store; a PUT then 404s, so the form says so instead of offering it.
+  protected readonly secretsEnabled = signal(true);
+  protected readonly confirmReq = signal<ConfirmRequest | null>(null);
   protected readonly secretName = signal("");
   protected readonly secretKey = signal("value");
   protected readonly secretVal = signal("");
@@ -1282,9 +1304,10 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     if (this.access.can("GET /api/secrets")) {
       try {
         const sec = await this.api.get<
-          SecretMetaRow[] | { secrets?: SecretMetaRow[] }
+          SecretMetaRow[] | { secrets?: SecretMetaRow[]; enabled?: boolean }
         >("GET /api/secrets");
         this.secretsList.set(Array.isArray(sec) ? sec : (sec?.secrets ?? []));
+        this.secretsEnabled.set(Array.isArray(sec) || sec?.enabled !== false);
       } catch {
         // Non-fatal
       }
@@ -1334,6 +1357,30 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       this.capTestNotice.set(
         `${id}: ${res?.detail || (res?.ok === false ? "failed" : "reachable")}`,
       );
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  // Remove asks first, as Delete does on Hosts and Remove does on Git:
+  // the server's configuration and its own secrets go with it.
+  protected confirmRemoveCapServer(id: string): void {
+    this.confirmReq.set({
+      title: `Remove capability server ${id}?`,
+      message:
+        "Its configuration and the secrets stored for it are deleted. Tasks that hold grants on it can no longer use them until it is added again.",
+      accept: "Remove server",
+      destructive: true,
+      run: () => this.removeCapServer(id),
+    });
+  }
+
+  protected async onConfirmDone(accepted: boolean): Promise<void> {
+    const req = this.confirmReq();
+    this.confirmReq.set(null);
+    if (!accepted || !req) return;
+    try {
+      await req.run();
     } catch (err) {
       this.state.recordError(err);
     }
