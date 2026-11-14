@@ -628,7 +628,7 @@ func (c *Client) checkAccessChange(ctx context.Context, ch accessChange) error {
 		return validationErrorf("%s: give a reason to %s (--reason, or the reason field)", ch.entry, describeAccessChange(ch))
 	}
 	if caller == nil {
-		return nil
+		return c.checkAccessCodeSelfRemoval(ctx, ch)
 	}
 	if err := checkSelfAccessEscalation(ctx, caller, ch); err != nil {
 		return err
@@ -707,6 +707,43 @@ func checkSelfAccessConfirm(ctx context.Context, caller *accessRole, ch accessCh
 		return nil
 	}
 	return forbiddenCodeErrorf("confirm_self", "%s %s: confirm that you want to %s, which narrows your own access (confirmSelf, or --confirm-self)", ch.entry, how, describeAccessChange(ch))
+}
+
+// checkAccessCodeSelfRemoval asks an access-code session to confirm before
+// it removes the user: entry for the email it signed in as. The access code
+// may make any change, but it signs in only as a name the allowlist admits
+// (accessNameAllowed), so removing that entry turns the same email away at
+// its next sign-in with the code -- Settings -> Access removed it without a
+// word (docs/test-runs/2026-11-13-user-system-settings.md, F2). The refusal
+// is the confirm_self one both UIs and `grain access deny --confirm-self`
+// already answer. Removing the last user: or group: entry asks nothing
+// here: an allowlist naming nobody lets the code sign in as any email, and
+// Settings -> Access already warns about removing the last entry.
+func (c *Client) checkAccessCodeSelfRemoval(ctx context.Context, ch accessChange) error {
+	if ch.role != "" || ch.confirmSelf {
+		return nil
+	}
+	name := accessCodeNameFromContext(ctx)
+	if name == "" || !strings.EqualFold(ch.entry, "user:"+name) {
+		return nil
+	}
+	entries, err := c.Store.ListAllowedPrincipals(ctx)
+	if err != nil {
+		return err
+	}
+	othersNamed := false
+	for _, e := range entries {
+		if !strings.EqualFold(e.Entry, ch.entry) && (strings.HasPrefix(e.Entry, "user:") || strings.HasPrefix(e.Entry, "group:")) {
+			othersNamed = true
+			break
+		}
+	}
+	if !othersNamed {
+		return nil
+	}
+	return forbiddenCodeErrorf("confirm_self", "%s is the email this access-code session signed in as: confirm that you want to remove it, "+
+		"which narrows your own access -- signing in with the access code as %s is refused while the allowlist names other people (confirmSelf, or --confirm-self)",
+		ch.entry, name)
 }
 
 // checkLastFullAdmin refuses removing or narrowing the only user: or

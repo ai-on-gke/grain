@@ -273,3 +273,90 @@ func TestAccessHistoryListsAccessCodeWrites(t *testing.T) {
 		t.Errorf("GET /api/access/history = %s, want alice's code-session write beside the role changes", body)
 	}
 }
+
+// A POST held to a :read scope only reads, so a code session's grants
+// check -- Settings -> Tasks and New task send one on every open -- is not
+// recorded as a configuration change beside the session's real writes
+// (docs/test-runs/2026-11-13-user-system-settings.md, F1).
+func TestAccessCodeReadOnlyPostIsNotAConfigurationChange(t *testing.T) {
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+
+	cookie := signInWithCode(t, srv, "alice@example.com")
+	headers := map[string]string{"Cookie": cookie.String(), "Content-Type": "application/json"}
+	rec := serveFrom(srv, networkAddr, http.MethodPost, "/api/capability-grants/check", `{"grants":[]}`, headers)
+	if rec.Code/100 != 2 {
+		t.Fatalf("POST /api/capability-grants/check with alice's session: %d %s", rec.Code, rec.Body)
+	}
+	rec = serveFrom(srv, networkAddr, http.MethodDelete, "/api/pipeline-pause", "", headers)
+	if rec.Code/100 != 2 {
+		t.Fatalf("DELETE /api/pipeline-pause with alice's session: %d %s", rec.Code, rec.Body)
+	}
+	rec = serveFrom(srv, networkAddr, http.MethodGet, "/api/access/history", "", headers)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/access/history: %d %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "/api/capability-grants/check") {
+		t.Errorf("GET /api/access/history = %s, want no row for a read-only grants check", body)
+	}
+	if !strings.Contains(body, "DELETE /api/pipeline-pause by alice@example.com") {
+		t.Errorf("GET /api/access/history = %s, want alice's real write still recorded", body)
+	}
+}
+
+// An access-code session removing the user: entry for the email it signed
+// in as is asked to confirm first (confirm_self, which both UIs answer):
+// the code signs in only as a listed name, so the removal turns that email
+// away at its next sign-in. Other entries go as before.
+func TestAccessCodeSessionConfirmsRemovingItsOwnEntry(t *testing.T) {
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+
+	cookie := signInWithCode(t, srv, "alice@example.com")
+	headers := map[string]string{"Cookie": cookie.String(), "Content-Type": "application/json"}
+	for _, entry := range []string{"user:alice@example.com", "user:bob@example.com", "user:carol@example.com"} {
+		rec := serveFrom(srv, networkAddr, http.MethodPost, "/api/access/principals",
+			`{"entry":"`+entry+`","role":"grain/viewer"}`, headers)
+		if rec.Code/100 != 2 {
+			t.Fatalf("POST /api/access/principals %s: %d %s", entry, rec.Code, rec.Body)
+		}
+	}
+	rec := serveFrom(srv, networkAddr, http.MethodDelete, "/api/access/principals/user:bob@example.com", "", headers)
+	if rec.Code/100 != 2 {
+		t.Fatalf("DELETE user:bob@example.com: %d %s, want it removed without a confirmation", rec.Code, rec.Body)
+	}
+	rec = serveFrom(srv, networkAddr, http.MethodDelete, "/api/access/principals/user:alice@example.com", "", headers)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "confirm_self") {
+		t.Fatalf("DELETE user:alice@example.com from alice's code session: %d %s, want 403 confirm_self", rec.Code, rec.Body)
+	}
+	rec = serveFrom(srv, networkAddr, http.MethodDelete, "/api/access/principals/user:alice@example.com?confirmSelf=1", "", headers)
+	if rec.Code/100 != 2 {
+		t.Fatalf("DELETE user:alice@example.com?confirmSelf=1: %d %s, want it removed once confirmed", rec.Code, rec.Body)
+	}
+}
+
+// Removing the session's own entry when it is the last person on the
+// allowlist asks nothing: an allowlist naming nobody lets the access code
+// sign in as any email, so nothing is narrowed.
+func TestAccessCodeSessionRemovesItsOwnLastEntryWithoutConfirming(t *testing.T) {
+	srv, client := testServer(t)
+	storeSettingsRow(t, client)
+	ui.SetAccessCodeForTest(srv, testAccessCode)
+
+	cookie := signInWithCode(t, srv, "alice@example.com")
+	headers := map[string]string{"Cookie": cookie.String(), "Content-Type": "application/json"}
+	for _, entry := range []string{"user:alice@example.com", "serviceAccount:bot@demo-project.iam.gserviceaccount.com"} {
+		rec := serveFrom(srv, networkAddr, http.MethodPost, "/api/access/principals",
+			`{"entry":"`+entry+`","role":"grain/viewer","reason":"test"}`, headers)
+		if rec.Code/100 != 2 {
+			t.Fatalf("POST /api/access/principals %s: %d %s", entry, rec.Code, rec.Body)
+		}
+	}
+	rec := serveFrom(srv, networkAddr, http.MethodDelete, "/api/access/principals/user:alice@example.com", "", headers)
+	if rec.Code/100 != 2 {
+		t.Fatalf("DELETE user:alice@example.com, the last person listed: %d %s, want it removed without a confirmation", rec.Code, rec.Body)
+	}
+}

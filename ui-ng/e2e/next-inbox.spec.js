@@ -211,6 +211,22 @@ test("offers a viewer nothing it cannot do, and axe passes in light and dark", a
 
     await page.getByTestId("theme-toggle").click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    // The pointer still rests on the toggle after the click, so its gTip
+    // tooltip opens 400ms later; scan the page itself, not that hover
+    // state, by moving the pointer onto plain text first.
+    await page.getByTestId("rbac-denied").hover();
+    await expect(page.locator("#g-tip")).toBeHidden();
+    // The theme flip runs colour transitions (styles.css); axe sampling a
+    // button mid-transition reads a half-dark contrast and fails
+    // (ui-ng e2e on PR #1456, passing on the run before and locally), so
+    // let every transition finish first.
+    await page.waitForFunction(() =>
+      document
+        .getAnimations()
+        .every(
+          (a) => !(a instanceof CSSTransition) || a.playState !== "running",
+        ),
+    );
     const dark = await new AxeBuilder({ page }).analyze();
     expect(dark.violations).toEqual([]);
   } finally {
