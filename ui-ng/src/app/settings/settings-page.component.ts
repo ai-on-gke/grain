@@ -15,6 +15,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  HostListener,
   OnDestroy,
   OnInit,
   ViewEncapsulation,
@@ -26,6 +27,7 @@ import {
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
+import { KeyboardService } from "../services/keyboard.service";
 import { SettingsCodeComponent } from "./settings-code.component";
 import { SettingsComputeComponent } from "./settings-compute.component";
 import { SettingsInstanceComponent } from "./settings-instance.component";
@@ -42,6 +44,26 @@ import {
 import { SettingsSecurityComponent } from "./settings-security.component";
 import { SettingsStateService } from "./settings-state.service";
 import { SettingsWorkComponent } from "./settings-work.component";
+
+// CARD_ANCHORS are the #fragments older links and the classic UI use for
+// a card, mapped to the card that holds the same settings here. Any other
+// fragment is looked up as an element id, then as data-testid="card-<it>".
+const CARD_ANCHORS: Readonly<Record<string, string>> = {
+  usage: "card-token-budget",
+  "external-agents": "card-external-agent-tokens",
+  credentials: "card-scope-sets-secrets",
+  "other-secrets": "card-scope-sets-secrets",
+};
+
+// LEGACY_SECTION_FRAGMENTS are the cards an old section address meant:
+// /settings/credentials was the Deployment credentials card and
+// /settings/secrets its other secrets.
+const LEGACY_SECTION_FRAGMENTS: Readonly<Record<string, string>> = {
+  credentials: "credentials",
+  integrations: "credentials",
+  "legacy-capabilities": "credentials",
+  secrets: "other-secrets",
+};
 
 @Component({
   selector: "g-settings-page",
@@ -421,6 +443,9 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   private readonly routeFilePath = signal<string>("");
 
   private subs: Subscription[] = [];
+  private readonly keyboard = inject(KeyboardService);
+  private unregisterSlash: (() => void) | null = null;
+  private scrollTimer: ReturnType<typeof setTimeout> | null = null;
 
   protected readonly hasExplicitSection = computed(() => {
     const raw = this.routeSection() ?? this.section();
@@ -460,7 +485,43 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
       this.route.queryParamMap.subscribe((qm) => {
         this.routeFilePath.set(qm.get("path") ?? "");
       }),
+      this.route.fragment.subscribe((frag) => {
+        const raw = String(this.route.snapshot.paramMap.get("section") ?? "")
+          .trim()
+          .toLowerCase();
+        const legacy = LEGACY_SECTION_FRAGMENTS[raw];
+        if (!frag && legacy) {
+          // An old section address: show the card it meant, under the
+          // section's own address.
+          const section = resolveSettingsSection(raw);
+          void this.router.navigate(["/settings", section], {
+            fragment: legacy,
+            replaceUrl: true,
+          });
+          return;
+        }
+        if (frag) this.scrollToCard(frag);
+      }),
     );
+    // "/" on Settings is the Filter settings box, not the header's
+    // "Filter this view", which filters nothing here.
+    this.unregisterSlash = this.keyboard.register({
+      key: "/",
+      description: "Filter settings",
+      run: () => {
+        const input = document.querySelector<HTMLInputElement>(
+          '[data-testid="settings-filter-input"]',
+        );
+        if (input && input.offsetParent !== null) {
+          input.focus();
+          input.select();
+        } else {
+          document
+            .querySelector<HTMLInputElement>('[data-testid="view-filter"]')
+            ?.focus();
+        }
+      },
+    });
     if (this.state.initialized() && this.state.config() !== null) {
       this.ready.set(true);
       void this.state.loadCore(true);
@@ -475,6 +536,39 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.subs.forEach((s) => s.unsubscribe());
+    this.unregisterSlash?.();
+    if (this.scrollTimer) clearTimeout(this.scrollTimer);
+  }
+
+  // A reload or closing the tab drops the unsaved draft, which lives
+  // only in this tab's memory, so the browser asks first. Moving between
+  // pages inside the app keeps the draft (SettingsStateService is a root
+  // service) and the Save bar is still there on the way back.
+  @HostListener("window:beforeunload", ["$event"])
+  protected onBeforeUnload(ev: BeforeUnloadEvent): void {
+    if (!this.state.isDirty()) return;
+    ev.preventDefault();
+    ev.returnValue = "";
+  }
+
+  // scrollToCard brings the card a #fragment names into view once the
+  // section has rendered it, retrying while the section loads, and aligns
+  // it to its heading.
+  private scrollToCard(frag: string, attempt = 0): void {
+    if (this.scrollTimer) clearTimeout(this.scrollTimer);
+    const testid = CARD_ANCHORS[frag] ?? `card-${frag}`;
+    const el =
+      document.getElementById(frag) ??
+      document.querySelector<HTMLElement>(`[data-testid="${testid}"]`);
+    if (el && this.ready()) {
+      el.scrollIntoView({ block: "start" });
+      return;
+    }
+    if (attempt >= 40) return;
+    this.scrollTimer = setTimeout(
+      () => this.scrollToCard(frag, attempt + 1),
+      100,
+    );
   }
 
   protected selectSection(id: SettingsSectionId, ev: Event): void {

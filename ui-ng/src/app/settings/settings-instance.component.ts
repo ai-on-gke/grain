@@ -953,9 +953,32 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     return this.doc.defaultView?.location?.origin || "http://localhost:8080";
   }
 
+  // cliSnippet is what a workstation runs to install the grain CLI, sign
+  // in and add the agent skills -- the classic Settings -> CLI lines
+  // (ui/src/components/settings/CLISection.jsx). The installer is
+  // /cli/install.sh (pkg/ui/cli_install.go), never /api/hostd/install.sh:
+  // that one installs a host, wants root and a registered name, and is
+  // no way to get the CLI onto a laptop.
   protected cliSnippet(): string {
     const origin = this.serverOrigin();
-    return `curl -fsSL ${origin}/api/hostd/install.sh | sh\ngrain login ${origin}`;
+    let host = "";
+    try {
+      host = new URL(origin).hostname;
+    } catch {
+      // An origin that is not a URL names no host; the slug is "default".
+    }
+    // The context name `grain login` gives a deployment when --name is
+    // left out (pkg/cli/login.go contextSlug).
+    const slug =
+      host
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "default";
+    return [
+      `curl -fsSL ${origin}/cli/install.sh | sh`,
+      `grain login ${origin} --name ${slug} --issue-token --scope-set grain/external-dev --expires 30d`,
+      `grain skill install --jetski   # or --claude, --codex, --gemini`,
+    ].join("\n");
   }
 
   private loadForSection(): void {

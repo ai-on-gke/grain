@@ -27,6 +27,7 @@ import {
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { formatStamp } from "../shared/dispatch-status";
 import {
   ConfirmDialogComponent,
   type ConfirmRequest,
@@ -694,7 +695,9 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                 <tbody>
                   @for (ev of filteredAuditEvents(); track ev.id) {
                     <tr data-testid="audit-row">
-                      <td class="s-num">{{ ev.at }}</td>
+                      <td class="s-num">
+                        <time [attr.datetime]="ev.at">{{ stamp(ev.at) }}</time>
+                      </td>
                       <td>
                         <span class="status-pill neutral">{{ ev.kind }}</span>
                       </td>
@@ -761,6 +764,13 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
   protected readonly newGcpKeyMinter = signal("");
 
   protected readonly auditEvents = signal<AuditEventRow[]>([]);
+
+  // stamp is an audit entry's time in the display time zone, read again
+  // on every clock tick so a Preferences change shows at once.
+  protected stamp(at: string): string {
+    this.access.clockNow();
+    return formatStamp(at, this.state.config()?.timeZone);
+  }
   protected readonly auditFilterText = signal("");
   protected readonly auditKindFilter = signal("all");
   protected readonly auditTimeFilter = signal("all");
@@ -854,6 +864,15 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
                 label: r.description ? `${r.name} — ${r.description}` : r.name,
               })),
             );
+            // The Grant access picker starts on a role this deployment
+            // has -- the read-only one when it can -- rather than a
+            // built-in name the server would refuse.
+            const names = p.roles.map((r) => r.name);
+            if (!names.includes(this.newPrincipalRole())) {
+              this.newPrincipalRole.set(
+                names.includes("grain/viewer") ? "grain/viewer" : names[0],
+              );
+            }
           }
         }
       } catch {
@@ -902,9 +921,22 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
     }
   }
 
+  // isSelfPrincipal is whether entry names the signed-in person: the
+  // allowlist writes people as "user:<email>", so the prefixes are
+  // dropped before comparing.
   private isSelfPrincipal(entry: string): boolean {
-    const viewer = this.access.viewer().trim().toLowerCase();
-    return Boolean(viewer && entry.trim().toLowerCase() === viewer);
+    // The viewer can also carry how they signed in
+    // ("access-code:alice@example.com", GET /api/whoami).
+    const viewer = this.access
+      .viewer()
+      .trim()
+      .toLowerCase()
+      .replace(/^(access-code|user):/, "");
+    const who = entry
+      .trim()
+      .toLowerCase()
+      .replace(/^user:/, "");
+    return Boolean(viewer && who === viewer);
   }
 
   private isSelfConfirmRefusal(err: unknown): boolean {
@@ -975,12 +1007,28 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
     });
   }
 
+  // removePrincipal always asks first: removing an entry takes access
+  // away from whoever it names, at once. Removing your own entry, or the
+  // last one, says so in the question.
   protected async removePrincipal(entry: string): Promise<void> {
     const reason = this.newPrincipalReason().trim();
     if (this.isSelfPrincipal(entry)) {
       this.promptSelfRemoveConfirm(entry, reason);
       return;
     }
+    const last = this.principals().length <= 1;
+    this.confirmRequest.set({
+      title: `Remove ${entry}?`,
+      message: last
+        ? `"${entry}" is the last allowed entry. Removing it leaves only the access code able to sign in.`
+        : `Removing "${entry}" revokes its access to this deployment immediately.`,
+      accept: "Remove",
+      destructive: true,
+      run: () => this.deletePrincipal(entry, reason),
+    });
+  }
+
+  private async deletePrincipal(entry: string, reason: string): Promise<void> {
     const q = reason ? `reason=${encodeURIComponent(reason)}` : undefined;
     try {
       await this.api.delete(

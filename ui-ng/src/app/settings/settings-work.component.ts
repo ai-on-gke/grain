@@ -198,13 +198,31 @@ interface SecretMetaRow {
                 data-testid="input-max-autosubmit-depth"
                 [value]="state.val('maxAutoSubmitDepth', 3)"
                 [disabled]="!canWriteSettings()"
+                [attr.aria-invalid]="
+                  state.fieldErrors()['maxAutoSubmitDepth'] ? true : null
+                "
+                [attr.aria-describedby]="
+                  state.fieldErrors()['maxAutoSubmitDepth']
+                    ? 't-depth-err'
+                    : null
+                "
                 (input)="
-                  state.setField(
+                  setCount(
                     'maxAutoSubmitDepth',
-                    Number($any($event.target).value)
+                    1,
+                    'Max unreviewed follow-up depth',
+                    $event
                   )
                 "
               />
+              @if (state.fieldErrors()["maxAutoSubmitDepth"]; as countErr) {
+                <span
+                  id="t-depth-err"
+                  class="s-field-error"
+                  [attr.data-testid]="'error-t-depth-err'"
+                  >{{ countErr }}</span
+                >
+              }
             </div>
             <div class="s-field">
               <label class="s-label" for="t-fanout"
@@ -217,13 +235,31 @@ interface SecretMetaRow {
                 min="1"
                 [value]="state.val('maxAutoSubmitFanOut', 5)"
                 [disabled]="!canWriteSettings()"
+                [attr.aria-invalid]="
+                  state.fieldErrors()['maxAutoSubmitFanOut'] ? true : null
+                "
+                [attr.aria-describedby]="
+                  state.fieldErrors()['maxAutoSubmitFanOut']
+                    ? 't-fanout-err'
+                    : null
+                "
                 (input)="
-                  state.setField(
+                  setCount(
                     'maxAutoSubmitFanOut',
-                    Number($any($event.target).value)
+                    1,
+                    'Max unreviewed follow-ups per task',
+                    $event
                   )
                 "
               />
+              @if (state.fieldErrors()["maxAutoSubmitFanOut"]; as countErr) {
+                <span
+                  id="t-fanout-err"
+                  class="s-field-error"
+                  [attr.data-testid]="'error-t-fanout-err'"
+                  >{{ countErr }}</span
+                >
+              }
             </div>
             <div class="s-field">
               <label class="s-label" for="t-branch">Branch name template</label>
@@ -363,13 +399,24 @@ interface SecretMetaRow {
                 data-testid="input-max-agent-turns"
                 [value]="state.val('maxAgentTurns', 40)"
                 [disabled]="!canWriteSettings()"
+                [attr.aria-invalid]="
+                  state.fieldErrors()['maxAgentTurns'] ? true : null
+                "
+                [attr.aria-describedby]="
+                  state.fieldErrors()['maxAgentTurns'] ? 'ag-turns-err' : null
+                "
                 (input)="
-                  state.setField(
-                    'maxAgentTurns',
-                    Number($any($event.target).value)
-                  )
+                  setCount('maxAgentTurns', 0, 'Max agent turns', $event)
                 "
               />
+              @if (state.fieldErrors()["maxAgentTurns"]; as countErr) {
+                <span
+                  id="ag-turns-err"
+                  class="s-field-error"
+                  [attr.data-testid]="'error-ag-turns-err'"
+                  >{{ countErr }}</span
+                >
+              }
             </div>
             <div class="s-field">
               <label class="s-label" for="ag-caps"
@@ -1128,6 +1175,24 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
+  // setCount stages a whole-number setting, refusing a value under min
+  // by the field's own label before anything is sent (the server would
+  // refuse it too, naming the JSON key instead), and clearing the refusal
+  // once the box holds a good value again.
+  protected setCount(key: string, min: number, label: string, ev: Event): void {
+    const raw = String((ev.target as HTMLInputElement | null)?.value ?? "");
+    const n = Number(raw.trim());
+    if (raw.trim() === "" || !Number.isInteger(n) || n < min) {
+      this.state.setFieldError(
+        key,
+        `${label} must be a whole number of at least ${min}.`,
+      );
+      return;
+    }
+    this.state.setFieldError(key, null);
+    this.state.setField(key, n);
+  }
+
   protected setQAFlow(flowId: string): void {
     this.state.setField("qaFlowId", flowId);
   }
@@ -1478,8 +1543,12 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
+  // saveMemory saves both boxes the Memory card shows: the deployment
+  // memory document and, when it was edited, the standing instructions
+  // (a setting, which Save memory used to leave unsaved).
   protected async saveMemory(): Promise<void> {
     try {
+      await this.state.saveFields(["promptExtension"]);
       await this.api.put("PUT /api/memory", undefined, {
         text: this.memoryBody(),
       });
