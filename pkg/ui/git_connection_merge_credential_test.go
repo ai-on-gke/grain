@@ -15,6 +15,7 @@
 package ui_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -55,5 +56,45 @@ func TestReplacingAGitConnectionKeepsItsMergeCredential(t *testing.T) {
 	}
 	if got.MergeCredential != "grain-merge" {
 		t.Errorf("merge credential after replace = %q, want grain-merge kept", got.MergeCredential)
+	}
+}
+
+// GET /api/deployment/git-connections says which credential each
+// connection merges with. The 2026-11-13 merge-and-reviews walkthrough
+// (docs/test-runs/2026-11-13-merge-and-reviews.md, F1) found the route
+// dropped it: a merge credential `grain connections import` recorded was
+// in the store and used for every merge, and nothing an operator could
+// read said so.
+func TestGitConnectionsListSaysWhichCredentialMerges(t *testing.T) {
+	r := newLifecycleRig(t)
+	if err := r.store.UpdateConfig(r.ctx, func(c *model.Config) error {
+		c.GitConnections = []model.TeamGitConnection{
+			{Credential: "push-bot", MergeCredential: "grain-merge"},
+			{Credential: "other", Scope: "acme/other"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, out := r.call(http.MethodGet, "/api/deployment/git-connections", "")
+	if code != http.StatusOK {
+		t.Fatalf("list: %d %s", code, out)
+	}
+	var got []struct {
+		Credential      string `json:"credential"`
+		MergeCredential string `json:"mergeCredential"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("decoding %s: %v", out, err)
+	}
+	merges := map[string]string{}
+	for _, c := range got {
+		merges[c.Credential] = c.MergeCredential
+	}
+	if merges["push-bot"] != "grain-merge" {
+		t.Errorf("push-bot's mergeCredential = %q, want grain-merge (%s)", merges["push-bot"], out)
+	}
+	if v, ok := merges["other"]; !ok || v != "" {
+		t.Errorf("other's mergeCredential = %q (listed %v), want empty", v, ok)
 	}
 }
