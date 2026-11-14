@@ -113,7 +113,7 @@ func TestRepoDefaultsSurviveEachOthersSaves(t *testing.T) {
 	if _, err := c.SetRepoPromptExtension(ctx, "acme/widgets", "Migrations live in db/."); err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"gcp-key"})
+	got, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{model.GCPKeySandboxAgentGrant})
 	if err != nil {
 		t.Fatal(err)
 	}

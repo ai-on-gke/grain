@@ -129,7 +129,7 @@ func TestGCPKeyDefaultNameAndDescription(t *testing.T) {
 // deployment has no key of that name, and filed once it has one.
 func TestFilingGCPKeyChecksTheDeploymentsKeys(t *testing.T) {
 	client, store, ctx := testClient(t)
-	caps := &[]string{"gcp-key:deploy"}
+	caps := &[]string{model.GCPKeyServerGrant("deploy")}
 	_, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "deploy", Capabilities: caps})
 	if err == nil || !strings.Contains(err.Error(), "this deployment has not configured") {
 		t.Fatalf("filing with a key nobody configured: err = %v, want the deployment's missing-key refusal", err)

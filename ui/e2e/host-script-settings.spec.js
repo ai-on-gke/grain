@@ -194,7 +194,12 @@ test("defines a host script, tests it with an argv, and grants it on a task", as
     await chooseOption(page.getByLabel(/^Repos/), "none");
     const grants = page.getByTestId("new-task-grants");
     await grants.getByRole("button", { name: "Add grant…" }).click();
-    await page.getByRole("menuitem", { name: /host-script/ }).click();
+    // By this server's own method: grain demo attaches the in-tree
+    // host-script server too, whose host-script row would also match a
+    // name-only locator.
+    await page
+      .locator(`[role="menuitem"][data-method="${ID}#host-script"]`)
+      .click();
     // The method is a section inline; picking the script saves it.
     const section = grants.locator(
       `[data-method="${ID}#host-script"] .grant-section`,

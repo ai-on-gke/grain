@@ -42,7 +42,7 @@ const ourGuest = "ghcr.io/acme/widgets/guest:latest"
 func releasesOff() model.RepoConfig {
 	return model.RepoConfig{
 		Repo:           guestPublisher,
-		CICapabilities: []string{model.CapabilityPackagePublish},
+		CICapabilities: []string{model.PackagePublishRef + "={}"},
 		Work:           model.ItemOwnership(model.ReleaseItem, model.OwnershipOff),
 	}
 }

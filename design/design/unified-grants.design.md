@@ -321,8 +321,12 @@ the rows not marked **done**:
 `capability.RegisterProvider` seam and the Settings → Legacy capabilities
 tab are removed; the tab's GitHub host, GCP settings and secrets are the
 Deployment credentials card on Settings → Capabilities. The bare names
-remain one-release aliases (no promoted release contains every
-conversion yet). The task forms' empty Legacy capabilities checklist
+stayed aliases for one release; once v3.3.0 carried every conversion
+they were dropped (task 3621): `model.CanonicalLegacyGrant(s)` now
+rewrites only an alias a build outside core registers, and the
+migration-only copy of the table (`model.RetiredGrantsBecame`) serves
+the state-repository import and a catalogue still naming a retired
+capability. Every migration that rewrites them stays. The task forms' empty Legacy capabilities checklist
 is removed too (PR #985).
 
 | In-process id | Becomes (proposed) | Kind of change |

@@ -57,8 +57,8 @@ func TestCIJobsAreJudgedAgainstTheLocalPolicy(t *testing.T) {
 			caps: []string{"repo-write:acme/tools"}, refuse: `forbids capability "repo-write:acme/tools"`},
 		{name: "allow list refuses the rest", policy: base + "capabilities: {allow: [\"repo-read:*\"]}\n",
 			caps: []string{"repo-read:acme/tools", "package-publish"}, refuse: `does not allow capability "package-publish"`},
-		{name: "implicit grain-ci is not judged", policy: base + "capabilities: {allow: [gcp-key]}\n",
-			caps: []string{"grain-ci", "gcp-key"}},
+		{name: "implicit grain#ci is not judged", policy: base + "capabilities: {allow: [gcp-key]}\n",
+			caps: []string{model.GrainCIGrant, "gcp-key"}},
 		{name: "network none refuses open CI sandboxes", policy: base + "network: [none]\n", refuse: `network access "open"`},
 		{name: "network open allowed", policy: base + "network: [open]\n"},
 	} {

@@ -281,8 +281,8 @@ func TestGrantsIsCapabilitiesUnifiedSpelling(t *testing.T) {
 			"grants:\n" +
 			"  - capability: https://grain.dev/capabilities/repo#read\n    with: {repo: acme/docs}\n" +
 			"  - capability: https://grain.dev/capabilities/repo#write\n    with: {repo: acme/site}\n",
-		".grain/schedules/it.yml": "template: nightly\ncapabilities: [\"package-publish\", \"grain-ci\", \"api:tasks:read\", \"https://grain.dev/capabilities/api#tasks:read\"]\n" +
-			"grants: [\"package-publish\", \"api:ci-read@" + repo.String() + "\", \"gcp-key:deploy\"]\nevery:\n  hours: 6\n",
+		".grain/schedules/it.yml": "template: nightly\ncapabilities: [\"https://grain.dev/capabilities/release#package-publish\", \"https://grain.dev/capabilities/grain#ci\", \"api:tasks:read\", \"https://grain.dev/capabilities/api#tasks:read\"]\n" +
+			"grants: [\"https://grain.dev/capabilities/release#package-publish\", \"api:ci-read@" + repo.String() + "\", \"https://grain.dev/capabilities/gcp#gcp-key={\\\"permission_set\\\":\\\"deploy\\\"}\"]\nevery:\n  hours: 6\n",
 	})
 	tmpl := declared.Templates[0].Template
 	if want := []model.RepoRef{{Owner: "acme", Name: "docs"}}; !slices.EqualFunc(tmpl.Reads, want, model.RepoRef.Same) {
@@ -296,7 +296,7 @@ func TestGrantsIsCapabilitiesUnifiedSpelling(t *testing.T) {
 	for _, g := range sched.Grants {
 		got = append(got, g.Capability)
 	}
-	if want := []string{"package-publish", model.APIGrantString("ci-read", repo.String()), "api:tasks:read", "gcp-key:deploy"}; !slices.Equal(got, want) {
+	if want := []string{"https://grain.dev/capabilities/release#package-publish", model.APIGrantString("ci-read", repo.String()), "api:tasks:read", `https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deploy"}`}; !slices.Equal(got, want) {
 		t.Errorf("schedule Grants = %v, want %v", got, want)
 	}
 
@@ -993,7 +993,7 @@ func TestDeclaredHostingAndLegacyCapabilityAlias(t *testing.T) {
 // ci_mode: github repository and refused by CreateTask.
 func TestDeclaredGrainCICapabilityMapsToRepoScopedCIRead(t *testing.T) {
 	want := model.APIGrantString("ci-read", repo.String())
-	for _, entry := range []string{"grain-ci", model.GrainCIRef, model.GrainCIGrant} {
+	for _, entry := range []string{model.GrainCIRef, model.GrainCIGrant} {
 		declared := load(t, map[string]string{
 			".grain/templates/train.yml": "title: Run train\ncapabilities:\n  - '" + entry + "'\n",
 			".grain/schedules/train.yml": "template: train\nevery:\n  minutes: 20\ncapabilities:\n  - '" + entry + "'\n",
@@ -1006,6 +1006,15 @@ func TestDeclaredGrainCICapabilityMapsToRepoScopedCIRead(t *testing.T) {
 			declared.Schedules[0].Schedule.Grants[0].Capability != want {
 			t.Errorf("schedule(%q) grants = %+v, want [{Capability:%s}]", entry, declared.Schedules[0].Schedule.Grants, want)
 		}
+	}
+
+	// The retired bare grain-ci is no longer rewritten to the CI read.
+	bare := load(t, map[string]string{
+		".grain/templates/train.yml": "title: Run train\ncapabilities:\n  - 'grain-ci'\n",
+	})
+	if len(bare.Templates) != 1 || len(bare.Templates[0].Template.Grants) != 1 ||
+		bare.Templates[0].Template.Grants[0].Capability != "grain-ci" {
+		t.Errorf("bare grain-ci grants = %+v, want unrewritten [grain-ci]", bare.Templates[0].Template.Grants)
 	}
 
 	// Malformed capability-reference JSON is still rejected at parse time.
