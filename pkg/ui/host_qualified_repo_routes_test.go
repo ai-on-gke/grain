@@ -62,7 +62,7 @@ func TestHostQualifiedRepoRoutesKeepTheHost(t *testing.T) {
 		t.Errorf("GET /github-branches read the host as the owner: %d %s", rec.Code, rec.Body)
 	}
 
-	rec = do(t, srv, http.MethodPut, depotRoot+"/ci-capabilities", `{"ciCapabilities":["gcp-key"]}`)
+	rec = do(t, srv, http.MethodPut, depotRoot+"/ci-capabilities", `{"ciCapabilities":["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"sandbox-agent\",\"primary\":true}"]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("PUT /ci-capabilities: %d %s", rec.Code, rec.Body)
 	}
@@ -113,7 +113,7 @@ func TestHTTPClientRoutesAHostQualifiedRepo(t *testing.T) {
 	hc := serverAccessClient(srv, ts.URL)
 	ctx := context.Background()
 
-	if _, err := hc.SetRepoCICapabilities(ctx, depotRepo, []string{"gcp-key"}); err != nil {
+	if _, err := hc.SetRepoCICapabilities(ctx, depotRepo, []string{model.GCPKeySandboxAgentGrant}); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := c.Store.GetRepoConfig(ctx, depotRef)
