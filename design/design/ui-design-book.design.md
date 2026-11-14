@@ -339,6 +339,15 @@ Rules:
   - The composer is locked to its target task.
   - Batch actions name their scope (repos, owners) in the confirmation.
   - Undo for reversible actions.
+  - An action that moves a branch, opens a pull request on someone's
+    behalf or drops a record (promote, merge back, delete) asks first in
+    the confirm dialog, naming what it touches.
+  - A form that waits for a Save button asks before its edits are
+    dropped, whether by a tab switch, a link, the rail or browser Back
+    (a `canDeactivate` guard plus the page's own tab bar). Discard puts
+    back the saved values.
+  - A refused value is reported beside its field (`aria-invalid`) and
+    clears on the next edit, not in a page-wide banner.
 - **Live, quietly.** Server-sent events update lists in place. Never steal
   focus or scroll position on an update; hold an update while the person is
   interacting with the row.
