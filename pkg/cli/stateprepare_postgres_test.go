@@ -122,7 +122,7 @@ func TestPrepareUpgradeCarriesAPostgresStoreAcrossASchemaChange(t *testing.T) {
 
 	ctx, uiAddr, stop = runDaemon(t)
 	defer stop()
-	client = ui.NewHTTPClient("http://" + uiAddr)
+	client = accessCodeClient("http://" + uiAddr)
 	waitForUI(t, ctx, client)
 	task, err := client.Task(ctx, created.ID)
 	if err != nil {
@@ -130,6 +130,15 @@ func TestPrepareUpgradeCarriesAPostgresStoreAcrossASchemaChange(t *testing.T) {
 	}
 	if task.Title != "Filed on Postgres before the schema change" {
 		t.Errorf("the task came back as %q", task.Title)
+	}
+	createdAfter, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "Filed on Postgres after the schema change", Repo: "owner/payments-api",
+	})
+	if err != nil {
+		t.Fatalf("filing a task after the schema-change import failed: %v", err)
+	}
+	if createdAfter.ID == created.ID {
+		t.Fatalf("task filed after the schema change reused id %s", created.ID)
 	}
 
 	// The old tables are kept, rows and all, beside the new store.

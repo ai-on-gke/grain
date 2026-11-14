@@ -247,6 +247,8 @@ type adaptedDriver struct {
 	fence *writeFence
 }
 
+func (d *adaptedDriver) IsPostgresDriver() bool { return true }
+
 func (d *adaptedDriver) Open(name string) (driver.Conn, error) {
 	conn, err := d.inner.Open(name)
 	if err != nil {

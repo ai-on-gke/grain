@@ -228,10 +228,30 @@ func openStore(driver, dsn, dataDir string) (*model.Store, *sql.DB, int, error) 
 		migratedFrom = before
 		log.Printf("grain: migrated the store in place from schema %d to %d", before, model.SchemaVersion)
 	}
+	if driver == "postgres" {
+		syncBehindPostgresSequences(ctx, db)
+	}
 	sweepOrphanedSettingsRows(ctx, store)
 	liftMisdirectedQuestions(ctx, store)
 	logRemovedCustomConnections(ctx, store)
 	return store, db, migratedFrom, nil
+}
+
+// syncBehindPostgresSequences checks every PostgreSQL serial sequence against
+// MAX(col) on store open and advances any sequence that is behind, logging
+// each one so an explicit-id write path that forgot to move its sequence is
+// caught before the daemon allocates IDs. SQLite AUTOINCREMENT tracks explicit
+// IDs automatically and needs no startup check.
+func syncBehindPostgresSequences(ctx context.Context, db *sql.DB) {
+	synced, err := postgres.SyncSequences(ctx, db)
+	if err != nil {
+		log.Printf("grain: checking PostgreSQL id sequences on startup: %v", err)
+		return
+	}
+	for _, s := range synced {
+		log.Printf("grain: PostgreSQL sequence %s for %s.%s was behind (next=%d, max=%d); resynced to %d",
+			s.Sequence, s.Table, s.Column, s.NextWas, s.MaxID, s.MaxID)
+	}
 }
 
 // logRemovedCustomConnections names, once per store open, every custom
