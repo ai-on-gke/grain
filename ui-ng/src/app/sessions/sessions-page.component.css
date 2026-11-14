@@ -1,6 +1,10 @@
 /* Sessions page layout (spec D-8, < 5.5 kB). Attached via ViewEncapsulation.None
  * on SessionsPageComponent so initial shell bundle stays lean. */
 
+g-sessions-page {
+  display: contents;
+}
+
 .sessions-split {
   display: grid;
   grid-template-columns: minmax(260px, 320px) 1fr;

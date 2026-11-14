@@ -162,6 +162,12 @@ do not pull in an icon font.
   `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
   its query kept (`app.routes.ts`), rather than falling through to the
   Inbox.
+- **Dispatch & quota alerts:** when dispatch is paused or model quotas are
+  exhausted (`shared/dispatch-status.ts`), a lazy `@defer`-loaded global banner
+  (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
+  `Details (N)` breakdown, paired with status on the topbar live pill and
+  contextual queue/settings notices formatted in the configured or local
+  timezone with relative countdowns.
 
 ### Destinations fill the stage
 
@@ -213,6 +219,18 @@ Three columns: tree (≈21%), graph (flexible, minimum 280px), and task detail
 (`clamp(440px, 40%, 580px)`). The detail column gets room first; the graph
 takes what is left. Below 1280px it becomes two panes.
 
+- **Heavy-data progressive disclosure:** Workstreams list rows summarize
+  progress cleanly (`N/M done`, full counts in tooltip), cap repository lists
+  at two plus `+N`, keep the detail header free of async description text (`0px`
+  height shift when root task details load) by rendering the workstream goal
+  inside the right-hand inspector's `In this stream` section as a 1-line
+  plain-text preview with a toggle into a bounded (`max-height: 240px`)
+  Markdown view, fold completed leaves above 40 nodes by default, and clip SVG
+  node labels to node bounds. Telemetry groups quota notices into one collapsible banner, slices
+  heavy sections initially (`8` scopes/templates/directions, `12` contributors
+  with `All | People` filter and `2 +K` repos), and always keeps contributors
+  alphabetical (`A–Z`).
+
 ### The conversation
 
 One component, `shared/conversation/` (`g-conversation`), is the thread and
@@ -236,12 +254,28 @@ inspector and Task Detail. Sessions shares its message styles.
 ### Settings
 
 Settings uses a 280px grouped section drawer beside flat `.s-card` forms capped
-at 1180px. Single-choice pickers use `<g-pill-select>`, booleans use `.g-switch`
+at 1180px, stacked with 24px vertical rhythm (`g-settings-*` flex hosts) and
+24px internal padding. Inputs, descriptions, table cells and `<g-pill-select>`
+controls use the proportional 14/20 body stack (`.s-num` aligns numeric figures
+without switching prose or human names to monospace; `.s-mono` is reserved for
+technical slugs, model IDs and paths). Tables keep row actions on one right-aligned
+line (`.s-row-actions`), separate any below-table creation/edit form with a
+`.s-subsection` divider, and collapse per-connection password inputs behind an
+on-demand `Credential` row. Search filters live inside `<form role="search"
+autocomplete="off">` and secret inputs carry `autocomplete="new-password"` inside
+`<form autocomplete="off">` so browser password managers never autofill emails
+into search bars. Single-choice pickers use `<g-pill-select>`; a model is always chosen
+with `<g-model-picker>` over what the connections advertise, never typed into a
+text field. Ordered lists (the fallback models) are rows with Up / Down /
+Remove buttons and an add picker that excludes what is already listed. Booleans use `.g-switch`
 (`role="switch"`), and edits stage into `.settings-save-bar` (`Discard` /
 `Save changes` with a `POST /api/settings/plan` diff preview). Opt-in workflow
 controls (such as quality control PR rollout in `Settings -> Tasks`) live inside
 their section's `.s-card` with dependent fields disabled while off — never as
-persistent topbar or bottombar status badges.
+persistent topbar or bottombar status badges. Root-persistent `SettingsStateService`
+shows `.s-card` skeletons on cold load, opens warm Settings revisits immediately
+while refreshing in the background, guards child `ngOnChanges` on non-first
+`section` changes, and caches slow `reachable-repos` lookups for 60s.
 
 ### Breakpoints
 
@@ -256,6 +290,7 @@ it rather than copy it.
 | Component | File | Use |
 |---|---|---|
 | Pill select | `shared/pill-select.component.ts` | every single-choice dropdown (no native `<select>`) |
+| Model picker | `shared/model-picker.component.ts` (+ `shared/model-catalog.ts`) | every model choice: searchable, grouped by connection, keeps and flags a value no connection advertises, optional *Refresh models* |
 | Priority chip | `shared/priority-chip.component.ts` | named priority levels with grain's number |
 | Actor chip | `shared/actor-chip.component.ts` | who did something, shape-coded, "on behalf of" |
 | Status icon | `shared/status-icon.component.ts` | the shape inside every status pill |
@@ -396,6 +431,11 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
   small; use `@defer` for overlays.
 - Each component stylesheet under 8 kB. Do not re-import shared CSS in a
   parent that a child component already loads; it duplicates the bytes.
+- Request efficiency: coalesce concurrent identical GET/conditional reads,
+  serve `GET /api/config` and Inbox summary hydrations with ETag `If-None-Match`
+  and bounded worker pools (`<= 4`), throttle hidden-tab or unmounted-page
+  polling, load inactive Fleet tabs lazily, and never block primary pickers on
+  slow `reachable-repos` discovery.
 - No new runtime dependency without a reason written in the pull request.
 
 ## 10. How to test a UI change

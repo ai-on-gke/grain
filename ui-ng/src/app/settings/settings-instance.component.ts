@@ -16,8 +16,9 @@ import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
-  OnChanges,
-  OnInit,
+  type OnChanges,
+  type OnInit,
+  type SimpleChanges,
   ViewEncapsulation,
   computed,
   inject,
@@ -105,7 +106,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="g-dep-id">Deployment ID</label>
               <input
                 id="g-dep-id"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 [value]="state.val('deploymentId', '')"
                 [disabled]="!canWriteSettings()"
@@ -411,7 +412,7 @@ function formatBytes(bytes: number): string {
               >
               <input
                 id="c-pkg-gb"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 [value]="state.val('packageCacheSizeGb', 20)"
@@ -430,7 +431,7 @@ function formatBytes(bytes: number): string {
               >
               <input
                 id="c-act-gb"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 [value]="state.val('actionsCacheSizeGb', 20)"
@@ -457,7 +458,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="e-poll">Poll interval</label>
               <input
                 id="e-poll"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="text"
                 data-testid="input-poll-interval"
                 placeholder="30s"
@@ -472,7 +473,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="e-workers">Max worker agents</label>
               <input
                 id="e-workers"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="1"
                 data-testid="input-max-workers"
@@ -492,7 +493,7 @@ function formatBytes(bytes: number): string {
               >
               <input
                 id="e-mpr"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="1"
                 [value]="state.val('maxMergesPerRepo', 1)"
@@ -543,7 +544,7 @@ function formatBytes(bytes: number): string {
             </div>
             <div class="s-inline">
               <span
-                class="status-pill neutral tabular"
+                class="status-pill neutral s-mono"
                 data-testid="registry-status-pill"
               >
                 {{ registryStateLabel() }}
@@ -565,7 +566,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="reg-url">Hub URL</label>
               <input
                 id="reg-url"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 data-testid="input-hub-url"
                 placeholder="https://hub.grain.internal"
@@ -578,7 +579,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="reg-entry">Entry name</label>
               <input
                 id="reg-entry"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 data-testid="input-hub-entry"
                 placeholder="dco-core"
@@ -625,7 +626,7 @@ function formatBytes(bytes: number): string {
               </p>
             </div>
             <span
-              class="status-pill healthy tabular"
+              class="status-pill healthy s-mono"
               data-testid="current-daemon-version"
             >
               {{ currentVersion() }}
@@ -764,7 +765,7 @@ function formatBytes(bytes: number): string {
                 Start upgrade
               </button>
               @if (dbBackendLabel()) {
-                <span class="s-hint tabular"
+                <span class="s-hint s-num"
                   >Database: {{ dbBackendLabel() }}</span
                 >
               }
@@ -776,7 +777,7 @@ function formatBytes(bytes: number): string {
               }}</pre>
             }
           } @else if (dbBackendLabel()) {
-            <span class="s-hint tabular" data-testid="upgrade-database"
+            <span class="s-hint s-num" data-testid="upgrade-database"
               >Database: {{ dbBackendLabel() }}</span
             >
           }
@@ -924,8 +925,10 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     this.loadForSection();
   }
 
-  ngOnChanges(): void {
-    this.loadForSection();
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes["section"] && !changes["section"].firstChange) {
+      this.loadForSection();
+    }
   }
 
   protected canWriteSettings(): boolean {
@@ -943,6 +946,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected setTimeZone(tz: string): void {
     this.timeZone.set(tz);
     writeStorage(TZ_STORAGE_KEY, tz === "local" ? null : tz);
+    this.access.tickClock();
   }
 
   protected serverOrigin(): string {

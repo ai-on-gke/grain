@@ -259,6 +259,62 @@ func TestConfigCarriesThePauseForTheBanner(t *testing.T) {
 	}
 }
 
+func TestConfigETagIgnoresVolatilePauseSecondsRemaining(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	now := baseTime
+	client.Now = func() time.Time { return now }
+	pause := pauseOf(baseTime.Add(90*time.Minute), "claude: usage limit reached")
+	client.Config.AgentPause = pause
+
+	rec1 := do(t, srv, http.MethodGet, "/api/config", "")
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first GET /api/config = %d %s", rec1.Code, rec1.Body.String())
+	}
+	if got := rec1.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("GET /api/config Cache-Control = %q, want no-store", got)
+	}
+	etag1 := rec1.Header().Get("ETag")
+	if etag1 == "" {
+		t.Fatal("missing ETag on paused GET /api/config")
+	}
+
+	// Advancing the clock changes secondsRemaining while the pause deadline is unchanged:
+	// conditional polls must still return 304 instead of re-sending 30 KB every tick.
+	now = baseTime.Add(15 * time.Minute)
+	req304 := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req304.Header.Set("If-None-Match", etag1)
+	rec304 := httptest.NewRecorder()
+	srv.ServeHTTP(rec304, req304)
+	if rec304.Code != http.StatusNotModified {
+		t.Fatalf("conditional GET /api/config after clock tick = %d, want 304", rec304.Code)
+	}
+
+	// An unconditional read still carries the fresh countdown.
+	recFresh := do(t, srv, http.MethodGet, "/api/config", "")
+	gotFresh := decode[struct {
+		AgentPause *struct {
+			SecondsRemaining float64 `json:"secondsRemaining"`
+		} `json:"agentPause"`
+	}](t, recFresh)
+	if gotFresh.AgentPause == nil || gotFresh.AgentPause.SecondsRemaining != (75*time.Minute).Seconds() {
+		t.Fatalf("fresh agentPause = %+v, want 75m remaining", gotFresh.AgentPause)
+	}
+
+	// Changing the pause deadline must invalidate the ETag and serve 200.
+	pause.pauses[0].Until = baseTime.Add(120 * time.Minute)
+	req200 := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req200.Header.Set("If-None-Match", etag1)
+	rec200 := httptest.NewRecorder()
+	srv.ServeHTTP(rec200, req200)
+	if rec200.Code != http.StatusOK {
+		t.Fatalf("GET /api/config after pause extension = %d, want 200", rec200.Code)
+	}
+	if etag2 := rec200.Header().Get("ETag"); etag2 == "" || etag2 == etag1 {
+		t.Errorf("ETag after pause extension = %q (was %q), want distinct ETag", etag2, etag1)
+	}
+}
+
 // HTTPClient's own half of the same two routes (grain/task-182): what
 // `grain pause` and `grain pause -lift` call, over a real round trip.
 // The distinction worth proving here is the one an operator acts on --
