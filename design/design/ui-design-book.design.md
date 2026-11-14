@@ -277,6 +277,21 @@ shows `.s-card` skeletons on cold load, opens warm Settings revisits immediately
 while refreshing in the background, guards child `ngOnChanges` on non-first
 `section` changes, and caches slow `reachable-repos` lookups for 60s.
 
+- **A setting has one home.** A setting shown in a second place is shown
+  there read-only, with a link to the section that sets it. For example,
+  Settings → Upgrade shows the post-upgrade check and links to
+  `/settings/general#upgrade-check`.
+- **A long or open-ended choice is a searchable combobox,** not a pill
+  select. A list a person types into, or one that also takes free text
+  (Settings → Upgrade's branch), is an `<input role="combobox">` with a
+  grouped `role="listbox"` beneath it. It filters as you type, works with
+  ↑/↓/Enter/Escape, and lists entries that cannot be picked with
+  `aria-disabled` and the reason beside them.
+- **Release notes and other Markdown from the server go through
+  `[gMarkdown]`,** never a `<pre>`. A breaking change gets a warning above
+  the notes, a tag on its version, and a mention in the confirmation
+  before the action it affects.
+
 ### Breakpoints
 
 `< 600px` phone, `600–839px` compact, `840–1279px` medium, `≥ 1280px`

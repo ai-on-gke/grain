@@ -45,7 +45,9 @@ test("Settings -> Upgrade says Not available, names the running build and reads 
   }
   await expect(card.getByTestId("start-upgrade-btn")).toHaveCount(0);
   await expect(card.getByTestId("select-upgrade-target")).toHaveCount(0);
-  await expect(card.getByTestId("upgrade-database")).toContainText("Database:");
+  await expect(card.getByTestId("upgrade-database")).toContainText(
+    "This deployment runs on",
+  );
   expect(targetReads).toEqual([]);
 
   // The notice sits inside the card, under its heading.

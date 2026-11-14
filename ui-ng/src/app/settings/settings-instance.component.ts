@@ -26,7 +26,6 @@ import {
   signal,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
-import { type VersionInfo, versionLabel } from "../api/version";
 import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
 import { NavConfigService } from "../services/nav-config.service";
@@ -47,24 +46,10 @@ import {
 } from "../shared/pill-select.component";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService } from "./settings-state.service";
+import { SettingsUpgradeComponent } from "./settings-upgrade.component";
+import { UPGRADE_CHECK_HELP, UPGRADE_CHECK_LABELS } from "./upgrade-view";
 
 const TZ_STORAGE_KEY = "grain.timeZone";
-
-interface UpgradeTargetRow {
-  name?: string;
-  branch?: string;
-  kind?: string;
-  ref?: string;
-  version?: string;
-  commit?: string;
-}
-
-interface ReleaseNotePreviewItem {
-  version?: string;
-  title?: string;
-  body?: string;
-  text?: string;
-}
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
@@ -78,7 +63,11 @@ function formatBytes(bytes: number): string {
 
 @Component({
   selector: "g-settings-instance",
-  imports: [PillSelectComponent, ConfirmDialogComponent],
+  imports: [
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    SettingsUpgradeComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -150,6 +139,57 @@ function formatBytes(bytes: number): string {
                 state.setField(
                   'settingsLocked',
                   !state.val('settingsLocked', false)
+                )
+              "
+            ></button>
+          </div>
+        </div>
+
+        <div class="s-card" id="upgrade-check" data-testid="card-upgrade-check">
+          <h3 class="s-card-title">After an upgrade</h3>
+          <p class="s-card-desc">
+            Whether grain files a task to check that the deployment an upgrade
+            brought up actually works, and whether the queue waits for it.
+          </p>
+          <div class="s-field">
+            <span class="s-label">Check the upgrade</span>
+            <g-pill-select
+              testid="select-upgrade-check-mode"
+              ariaLabel="Check the upgrade"
+              align="left"
+              [options]="upgradeCheckOptions"
+              [value]="upgradeCheckMode()"
+              [disabled]="!canWriteSettings()"
+              (valueChange)="state.setField('upgradeCheckMode', $event)"
+            />
+            <span class="s-hint">{{ upgradeCheckHelp() }}</span>
+          </div>
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name"
+                >Hold the queue until the check is done</span
+              >
+              <span class="s-hint"
+                >Off (default): the check runs at the head of the queue with
+                everything else still going. On: nothing else is picked up until
+                it finishes; runs in flight are left alone, and the hold is
+                given up after six hours.</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-upgrade-check-pauses"
+              aria-label="Hold the queue until the upgrade check is done"
+              [attr.aria-checked]="
+                Boolean(state.val('upgradeCheckPausesPipeline', false))
+              "
+              [disabled]="!canWriteSettings() || upgradeCheckMode() === 'off'"
+              (click)="
+                state.setField(
+                  'upgradeCheckPausesPipeline',
+                  !state.val('upgradeCheckPausesPipeline', false)
                 )
               "
             ></button>
@@ -616,172 +656,7 @@ function formatBytes(bytes: number): string {
       }
 
       @case ("upgrade") {
-        <div class="s-card" data-testid="card-upgrade">
-          <div class="s-card-head">
-            <div>
-              <h3 class="s-card-title">Daemon version &amp; live upgrade</h3>
-              <p class="s-card-desc">
-                Inspect target channels, release notes, and roll forward or
-                cancel active upgrades.
-              </p>
-            </div>
-            <span
-              class="status-pill healthy s-mono"
-              data-testid="current-daemon-version"
-            >
-              {{ currentVersion() }}
-            </span>
-          </div>
-
-          @if (selfUpgradeDisabled()) {
-            <div
-              class="s-banner readonly"
-              role="status"
-              data-testid="upgrade-externally-managed"
-            >
-              <span
-                >In-VM self-upgrade is disabled on this deployment; upgrades and
-                instance lifecycle are managed externally.</span
-              >
-              @if (managementUrl(); as href) {
-                <a
-                  class="s-btn-sm"
-                  data-testid="upgrade-management-link"
-                  [href]="href"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  >Manage instance</a
-                >
-              }
-            </div>
-          } @else if (upgradeUnavailable()) {
-            <div
-              class="s-banner readonly"
-              role="status"
-              data-testid="upgrade-unavailable"
-            >
-              <span
-                >Not available: this deployment was started with neither
-                -upgrade-image nor -upgrade-src-dir configured, so there is
-                nothing here that can cut it over to another branch.</span
-              >
-            </div>
-          }
-
-          @if (scheduledUpgradeBranch()) {
-            <div class="s-banner warn" data-testid="scheduled-upgrade-banner">
-              <span
-                >Upgrade scheduled (waiting for running tasks):
-                {{ scheduledUpgradeBranch() }}</span
-              >
-              <button
-                type="button"
-                class="s-btn-danger s-btn-sm"
-                data-testid="cancel-scheduled-upgrade-btn"
-                [disabled]="!access.can('DELETE /api/upgrade/scheduled')"
-                (click)="cancelScheduledUpgrade()"
-              >
-                Cancel scheduled upgrade
-              </button>
-            </div>
-          }
-
-          @if (activeUpgradeState()) {
-            <div class="s-banner warn" data-testid="active-upgrade-banner">
-              <span>Upgrade in progress: {{ activeUpgradeState() }}</span>
-              <button
-                type="button"
-                class="s-btn-danger s-btn-sm"
-                data-testid="cancel-upgrade-btn"
-                [disabled]="
-                  !upgradeCancellable() ||
-                  !access.can('DELETE /api/upgrade/scheduled')
-                "
-                (click)="cancelUpgrade()"
-              >
-                Cancel upgrade
-              </button>
-            </div>
-          }
-
-          @if (upgradeControllable()) {
-            <div class="s-grid">
-              <div class="s-field">
-                <span class="s-label">Target channel / branch</span>
-                <g-pill-select
-                  testid="select-upgrade-target"
-                  ariaLabel="Upgrade target branch"
-                  align="left"
-                  [options]="upgradeTargetOptions()"
-                  [value]="selectedUpgradeBranch()"
-                  (valueChange)="onSelectUpgradeBranch($event)"
-                />
-              </div>
-              <div class="s-field">
-                <span class="s-label">Post-upgrade check mode</span>
-                <g-pill-select
-                  testid="select-upgrade-check-mode"
-                  ariaLabel="Post-upgrade check mode"
-                  align="left"
-                  [options]="upgradeCheckOptions"
-                  [value]="state.val('upgradeCheckMode', 'auto')"
-                  [disabled]="!canWriteSettings()"
-                  (valueChange)="state.setField('upgradeCheckMode', $event)"
-                />
-              </div>
-            </div>
-
-            <div class="s-toggle-row">
-              <div class="s-toggle-copy">
-                <span class="s-toggle-name"
-                  >Drain running tasks before restarting</span
-                >
-                <span class="s-hint"
-                  >Waits for active agent turns to finish cleanly before
-                  switching binaries.</span
-                >
-              </div>
-              <button
-                type="button"
-                class="g-switch"
-                role="switch"
-                data-testid="switch-upgrade-drain"
-                [attr.aria-checked]="afterTasksFinish()"
-                aria-label="Drain running tasks before restarting"
-                (click)="afterTasksFinish.set(!afterTasksFinish())"
-              ></button>
-            </div>
-
-            <div class="s-inline">
-              <button
-                type="button"
-                class="btn-primary"
-                data-testid="start-upgrade-btn"
-                [disabled]="
-                  !selectedUpgradeBranch() || !access.can('POST /api/upgrade')
-                "
-                (click)="confirmStartUpgrade()"
-              >
-                Start upgrade
-              </button>
-              @if (dbBackendLabel()) {
-                <span class="s-hint s-num"
-                  >Database: {{ dbBackendLabel() }}</span
-                >
-              }
-            </div>
-
-            @if (releaseNotesText()) {
-              <pre class="s-code" data-testid="upgrade-release-notes">{{
-                releaseNotesText()
-              }}</pre>
-            }
-          } @else if (dbBackendLabel()) {
-            <span class="s-hint s-num" data-testid="upgrade-database"
-              >Database: {{ dbBackendLabel() }}</span
-            >
-          }
-        </div>
+        <g-settings-upgrade />
       }
     }
 
@@ -854,12 +729,6 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     { value: "oidc", label: "Workload OIDC" },
   ];
 
-  protected readonly upgradeCheckOptions: readonly PillOption[] = [
-    { value: "off", label: "Off" },
-    { value: "approve", label: "File unapproved check" },
-    { value: "auto", label: "File & queue check" },
-  ];
-
   protected readonly timeZone = signal(readStorage(TZ_STORAGE_KEY) || "local");
   protected readonly broadcastMessage = signal("");
   protected readonly broadcastRunningOnly = signal(false);
@@ -872,54 +741,17 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected readonly registryStateLabel = signal("Not configured");
 
-  // What the daemon reports it runs (GET /api/upgrade's `running`), else
-  // the build stamp GET /api/config carries -- an object on current
-  // servers, so it is read through versionLabel rather than as a string.
-  private readonly upgradeRunningLabel = signal("");
-  protected readonly currentVersion = computed(
-    () =>
-      this.upgradeRunningLabel() ||
-      runningVersionLabel(this.state.config()?.version) ||
-      "unknown",
+  // The post-upgrade check is set here, on General, as in the classic
+  // Settings; Settings -> Upgrade shows it read-only with a link back.
+  protected readonly upgradeCheckOptions: readonly PillOption[] = (
+    ["off", "approve", "auto"] as const
+  ).map((m) => ({ value: m, label: UPGRADE_CHECK_LABELS[m] }));
+  protected readonly upgradeCheckMode = computed(() =>
+    String(this.state.val("upgradeCheckMode", "auto")),
   );
-  // GET /api/upgrade's `enabled: false`: no upgrader is configured
-  // (neither -upgrade-image nor -upgrade-src-dir), so there are no targets
-  // to read and nothing Start upgrade could do.
-  protected readonly upgradeUnavailable = signal(false);
-  protected readonly selfUpgradeDisabled = signal(false);
-  protected readonly managementUrl = signal("");
-  protected readonly upgradeControllable = computed(
-    () => !this.upgradeUnavailable() && !this.selfUpgradeDisabled(),
+  protected readonly upgradeCheckHelp = computed(
+    () => UPGRADE_CHECK_HELP[this.upgradeCheckMode()] ?? "",
   );
-  protected readonly activeUpgradeState = signal("");
-  protected readonly upgradeCancellable = signal(false);
-  protected readonly scheduledUpgradeBranch = signal("");
-  protected readonly upgradeTargets = signal<UpgradeTargetRow[]>([]);
-  protected readonly selectedUpgradeBranch = signal("latest");
-  protected readonly afterTasksFinish = signal(true);
-  protected readonly releaseNotesText = signal("");
-  protected readonly dbBackendLabel = signal("");
-
-  protected upgradeTargetOptions(): PillOption[] {
-    const t = this.upgradeTargets();
-    if (t.length === 0) {
-      return [
-        { value: "latest", label: "latest" },
-        { value: "main", label: "main" },
-      ];
-    }
-    return t
-      .map((row) => {
-        const val = row.name || row.branch || "";
-        if (!val) return null;
-        const extra = row.version || row.ref;
-        return {
-          value: val,
-          label: extra && extra !== val ? `${val} (${extra})` : val,
-        };
-      })
-      .filter((x): x is PillOption => x !== null);
-  }
 
   ngOnInit(): void {
     this.loadForSection();
@@ -1012,8 +844,6 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       }
     } else if (sec === "registry") {
       void this.loadRegistry();
-    } else if (sec === "upgrade") {
-      void this.loadUpgrade();
     }
   }
 
@@ -1161,240 +991,8 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       this.state.recordError(err);
     }
   }
-
-  private applyUpgradeStatus(
-    u: Record<string, unknown> | null | undefined,
-  ): void {
-    if (!u) return;
-    const running = u["running"] as
-      | { release?: string; ref?: string; commit?: string; image?: string }
-      | undefined;
-    const ver =
-      running?.release ||
-      running?.ref ||
-      (typeof u["currentVersion"] === "string" ? u["currentVersion"] : "") ||
-      (typeof u["version"] === "string" ? u["version"] : "") ||
-      (running?.commit ? running.commit.slice(0, 7) : "");
-    this.upgradeRunningLabel.set(ver);
-    this.selfUpgradeDisabled.set(u["selfUpgradeDisabled"] === true);
-    this.upgradeUnavailable.set(u["enabled"] === false);
-    this.managementUrl.set(safeManagementUrl(u["managementUrl"]));
-
-    const scheduled = u["scheduled"] as
-      { branch?: string; requestedBy?: string } | undefined | null;
-    this.scheduledUpgradeBranch.set(
-      scheduled ? String(scheduled.branch || "latest") : "",
-    );
-
-    const phase = typeof u["phase"] === "string" ? u["phase"] : "";
-    const cancellable = Boolean(u["cancellable"]);
-    this.upgradeCancellable.set(cancellable);
-    const terminalPhases = new Set([
-      "",
-      "idle",
-      "none",
-      "done",
-      "succeeded",
-      "complete",
-      "completed",
-      "failed",
-      "error",
-      "cancelled",
-      "canceled",
-    ]);
-    if (cancellable || (phase && !terminalPhases.has(phase.toLowerCase()))) {
-      this.activeUpgradeState.set(phase || "running");
-    } else {
-      this.activeUpgradeState.set("");
-    }
-  }
-
-  private async loadUpgrade(): Promise<void> {
-    if (this.access.can("GET /api/upgrade")) {
-      try {
-        const u =
-          await this.api.get<Record<string, unknown>>("GET /api/upgrade");
-        this.applyUpgradeStatus(u);
-      } catch {
-        // Non-fatal
-      }
-    }
-    if (
-      this.upgradeControllable() &&
-      this.access.can("GET /api/upgrade/targets")
-    ) {
-      try {
-        const t = await this.api.get<
-          | UpgradeTargetRow[]
-          | { targets?: UpgradeTargetRow[]; default?: string }
-        >("GET /api/upgrade/targets");
-        const list = Array.isArray(t) ? t : (t?.targets ?? []);
-        const def =
-          (!Array.isArray(t) && typeof t?.default === "string" && t.default) ||
-          list[0]?.name ||
-          list[0]?.branch ||
-          "latest";
-        this.upgradeTargets.set(list);
-        this.selectedUpgradeBranch.set(def);
-        void this.loadReleaseNotes(def);
-      } catch {
-        // Non-fatal
-      }
-    }
-    if (this.access.can("GET /api/database")) {
-      try {
-        const db =
-          await this.api.get<Record<string, unknown>>("GET /api/database");
-        if (db?.["driver"] || db?.["backend"]) {
-          this.dbBackendLabel.set(String(db["driver"] ?? db["backend"]));
-        }
-      } catch {
-        // Non-fatal
-      }
-    }
-  }
-
-  protected onSelectUpgradeBranch(branch: string): void {
-    this.selectedUpgradeBranch.set(branch);
-    void this.loadReleaseNotes(branch);
-  }
-
-  private formatReleaseNotesPreview(raw: unknown): string {
-    if (typeof raw === "string") return raw;
-    if (!raw || typeof raw !== "object") return "";
-    const rec = raw as {
-      notes?: ReleaseNotePreviewItem[] | string;
-      message?: string;
-      markdown?: string;
-    };
-    const parts: string[] = [];
-    if (typeof rec.message === "string" && rec.message.trim()) {
-      parts.push(rec.message.trim());
-    }
-    if (typeof rec.notes === "string" && rec.notes.trim()) {
-      parts.push(rec.notes.trim());
-    } else if (Array.isArray(rec.notes)) {
-      for (const n of rec.notes) {
-        if (!n || typeof n !== "object") continue;
-        const head = [n.version, n.title].filter(Boolean).join(" — ");
-        const body = (n.body ?? n.text ?? "").trim();
-        if (head && body) parts.push(`## ${head}\n${body}`);
-        else if (head) parts.push(`## ${head}`);
-        else if (body) parts.push(body);
-      }
-    } else if (typeof rec.markdown === "string" && rec.markdown.trim()) {
-      parts.push(rec.markdown.trim());
-    }
-    return parts.join("\n\n");
-  }
-
-  private async loadReleaseNotes(branch: string): Promise<void> {
-    if (!this.access.can("GET /api/upgrade/release-notes")) return;
-    try {
-      const r = await this.api.get<unknown>(
-        "GET /api/upgrade/release-notes",
-        undefined,
-        `branch=${encodeURIComponent(branch)}`,
-      );
-      this.releaseNotesText.set(this.formatReleaseNotesPreview(r));
-    } catch {
-      // Non-fatal
-    }
-  }
-
-  // Starting an upgrade restarts grain onto another build, so it asks
-  // first, as the classic Upgrade pane's confirm() does.
-  protected confirmStartUpgrade(): void {
-    const branch = this.selectedUpgradeBranch();
-    if (!branch) return;
-    const drain = this.afterTasksFinish();
-    this.confirmRequest.set({
-      title: `Upgrade grain to ${branch}?`,
-      message: drain
-        ? `Grain waits for running tasks to finish, then restarts onto ${branch}.`
-        : `Grain restarts onto ${branch} now, interrupting agent runs in flight.`,
-      accept: drain ? "Schedule upgrade" : "Upgrade now",
-      destructive: !drain,
-      run: () => this.startUpgrade(),
-    });
-  }
-
-  protected async startUpgrade(): Promise<void> {
-    try {
-      const res = await this.api.post<Record<string, unknown>>(
-        "POST /api/upgrade",
-        undefined,
-        {
-          branch: this.selectedUpgradeBranch(),
-          afterTasksFinish: this.afterTasksFinish(),
-        },
-      );
-      if (res && typeof res === "object") {
-        this.applyUpgradeStatus(res);
-      }
-      if (this.afterTasksFinish() && !this.scheduledUpgradeBranch()) {
-        this.scheduledUpgradeBranch.set(this.selectedUpgradeBranch());
-      } else if (!this.afterTasksFinish() && !this.activeUpgradeState()) {
-        this.activeUpgradeState.set("starting");
-        this.upgradeCancellable.set(true);
-      }
-      this.snackbar.show(
-        this.afterTasksFinish()
-          ? `Scheduled upgrade to ${this.selectedUpgradeBranch()}`
-          : `Started upgrade to ${this.selectedUpgradeBranch()}`,
-      );
-    } catch (err) {
-      this.state.recordError(err);
-    }
-  }
-
-  protected async cancelScheduledUpgrade(): Promise<void> {
-    try {
-      await this.api.delete("DELETE /api/upgrade/scheduled");
-      this.scheduledUpgradeBranch.set("");
-      this.snackbar.show("Cancelled scheduled upgrade");
-    } catch (err) {
-      this.state.recordError(err);
-    }
-  }
-
-  protected async cancelUpgrade(): Promise<void> {
-    try {
-      await this.api.delete(
-        "DELETE /api/upgrade/scheduled",
-        undefined,
-        undefined,
-        "reason=operator_cancelled",
-      );
-      this.activeUpgradeState.set("");
-      this.upgradeCancellable.set(false);
-      this.snackbar.show("Cancelled active upgrade");
-    } catch (err) {
-      this.state.recordError(err);
-    }
-  }
-}
-
-// runningVersionLabel names the build GET /api/config's `version` stamp
-// describes the way the classic pane's "Now running" does: the release,
-// or the short commit when the build carries no real release
-// (`unversioned`, a Go pseudo-version).
-export function runningVersionLabel(v: unknown): string {
-  if (v && typeof v === "object") {
-    const info = v as VersionInfo;
-    if (info.unversioned && info.commit) return info.commit.slice(0, 7);
-  }
-  return versionLabel(v);
 }
 
 // safeManagementUrl keeps only an absolute http(s) link, as the classic
 // ExternallyManagedUpgradeNotice does.
-export function safeManagementUrl(raw: unknown): string {
-  if (typeof raw !== "string" || !raw) return "";
-  try {
-    const u = new URL(raw);
-    return u.protocol === "https:" || u.protocol === "http:" ? u.href : "";
-  } catch {
-    return "";
-  }
-}
+export { safeHttpUrl as safeManagementUrl } from "./upgrade-view";
