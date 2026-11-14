@@ -161,7 +161,9 @@ do not pull in an icon font.
 - **Old addresses:** a classic address that has a page here (`/system/<tab>`,
   `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
   its query kept (`app.routes.ts`), rather than falling through to the
-  Inbox.
+  Inbox. System → Health is Fleet's Health tab (`/fleet?tab=health`), and
+  System → Power is the Host Power card on Pauses & Controls
+  (`/fleet?tab=controls#fleet-power`).
 - **Dispatch & quota alerts:** when dispatch is paused or model quotas are
   exhausted (`shared/dispatch-status.ts`), a lazy `@defer`-loaded global banner
   (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
@@ -334,6 +336,11 @@ Rules:
 - **Role-aware.** An action the person cannot take is hidden, or shown
   disabled with the reason. It is never shown enabled only to fail.
 - **Safety.**
+  - A control that takes the deployment or its host down (Restart daemon,
+    Reboot host, Shut down host) is disabled with its reason when
+    `/api/config` says the deployment has no command for it, asks first,
+    and reports any answer from the server as a failure. Only a dropped
+    connection counts as it happening.
   - Selection is pinned: if the selected item leaves the list, say so; do
     not jump to another item.
   - The composer is locked to its target task.

@@ -134,3 +134,23 @@ g-fleet-page {
   color: var(--md-sys-color-primary);
   border-bottom-color: var(--md-sys-color-primary);
 }
+
+/* Host Power card: one row per action, its hint beside its button. */
+.fleet-power-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.fleet-power-hint {
+  flex: 1 1 240px;
+  margin: 0;
+}
+
+.fleet-power-off {
+  display: block;
+  margin-top: 2px;
+  font-style: italic;
+}

@@ -1,0 +1,221 @@
+/* Fleet → Health (fleet-health.component.ts). Classes are prefixed fh-:
+   the page uses ViewEncapsulation.None, so every class here is global. */
+
+.fh-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.fh-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+:root[data-theme="dark"]
+  .fh-note:not(.is-info):not(.is-warning):not(.is-critical) {
+  background: var(--md-sys-color-surface-container);
+}
+
+.fh-note.is-info {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.fh-note.is-warning {
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+}
+
+.fh-note.is-critical {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+
+.fh-note-title,
+.fh-alert-title,
+.fh-sub-title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.fh-note-body,
+.fh-impact {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.fh-impact {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 12px;
+}
+
+.fh-note .fh-impact {
+  color: inherit;
+}
+
+.fh-action {
+  align-self: flex-start;
+  color: inherit;
+}
+
+.fh-link {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.fh-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+}
+
+.fh-pre,
+.fh-mono {
+  font-family: var(--grain-font-mono);
+  font-size: 12px;
+}
+
+.fh-pre {
+  margin: 4px 0 0;
+  padding: 8px;
+  border-radius: var(--md-sys-shape-corner-xs);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.fh-empty {
+  margin: 0;
+  font-size: 13px;
+}
+
+.fh-alerts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fh-alert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 14px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-left: 4px solid var(--md-sys-color-secondary);
+  background: var(--md-sys-color-surface);
+  min-width: 0;
+}
+
+:root[data-theme="dark"] .fh-alert {
+  background: var(--md-sys-color-surface-container);
+}
+
+.fh-alert.is-warning {
+  border-left-color: var(--md-sys-color-warning);
+}
+
+.fh-alert.is-critical {
+  border-left-color: var(--md-sys-color-error);
+}
+
+.fh-alert-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 320px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fh-alert-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.fh-sev {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.fh-scope {
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.fh-alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.fh-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fh-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: 12px;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.fh-chip.is-critical {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+
+.fh-adjust {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 8px;
+  border-left: 2px solid var(--md-sys-color-outline-variant);
+}
+
+.fh-num,
+.ops-table th.fh-num,
+.ops-table td.fh-num {
+  text-align: right;
+}
+
+.fh-break {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+  .fh-wide {
+    display: none;
+  }
+}
