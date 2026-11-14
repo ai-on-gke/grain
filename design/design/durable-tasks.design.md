@@ -1118,7 +1118,7 @@ for the reason under "Routes and scopes"). As built:
   task view carries `rolledOverFrom` / `rolledOverTo`. A wait on the
   predecessor reports outcome `rolled_over` and `rolledOverTo`.
 - The successor takes the predecessor's links except its own lineage
-  (continues, supersedes, superseded-by, reverted-by, ported-by and the
+  (continues, supersedes, superseded-by, reverted-by, blamed-by, ported-by and the
   rollover pair). Its change links (the pull request or changelist) and
   its goal *move*; tags (which bind a schedule's standing task) are
   copied, and with the predecessor closed only the successor answers to

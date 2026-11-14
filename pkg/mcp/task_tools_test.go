@@ -690,6 +690,23 @@ func TestReadGrainTaskTranscriptIsCapped(t *testing.T) {
 	}
 }
 
+// A repair's blame is said on both tasks' records (grain task read), so a
+// reader sees which merge a fix-forward repaired without the task JSON.
+func TestTaskRecordSaysWhatItBlamesAndWhatBlamedIt(t *testing.T) {
+	now := at("2026-11-02T19:15:00Z")
+	repair := TaskRecord{TaskSummary: TaskSummary{ID: "20", State: "closed"}, Blames: []string{"10"}}
+	if got, want := renderTaskRecord(repair, now), "Blames: task 10 (the merge this repair repaired)\n"; !strings.Contains(got, want) {
+		t.Fatalf("record:\n%s\nwant a line %q", got, want)
+	}
+	culprit := TaskRecord{TaskSummary: TaskSummary{ID: "10", State: "closed"}, BlamedBy: []string{"20", "30"}}
+	if got, want := renderTaskRecord(culprit, now), "Blamed by: task 20, task 30 (the repairs of this task's merge)\n"; !strings.Contains(got, want) {
+		t.Fatalf("record:\n%s\nwant a line %q", got, want)
+	}
+	if got := renderTaskRecord(TaskRecord{TaskSummary: TaskSummary{ID: "11"}}, now); strings.Contains(got, "Blame") {
+		t.Fatalf("record:\n%s\nwant no blame line on a task with none", got)
+	}
+}
+
 // A pull request that settled is said on its own line, merged or closed,
 // because a task closed before its pull request merged has no other
 // place in the record that says the change landed (task 2350).

@@ -1540,6 +1540,18 @@ const (
 	// Provenance and lineage only, never blocks dispatch.
 	LinkReverts    LinkKind = "reverts"
 	LinkRevertedBy LinkKind = "reverted-by"
+	// LinkBlames records, on a repair -- a base-branch repair, a Stage 1
+	// repair or an [rc-blocker <tag>] task -- the merged task whose change
+	// it repaired (-> the culprit's ID), and LinkBlamedBy is the same fact
+	// written on the culprit (-> the repair's ID). LinkReverts' shape for
+	// a repair that fixed forward rather than reverting: it is what lets a
+	// report count a change failure against the merge that caused it
+	// rather than leave it unattributed. Written when the repair merges and
+	// its own evidence names the merge (orchestrator's repairblame.go).
+	// Provenance only, never blocks dispatch; a repair may blame more
+	// than one merge when its commits name more than one.
+	LinkBlames   LinkKind = "blames"
+	LinkBlamedBy LinkKind = "blamed-by"
 	// LinkPortOf records that this task was filed to port another task's
 	// merged change onto a paired branch (-> the source task's ID), and
 	// LinkPortedBy is the same fact written on the source (-> the port's

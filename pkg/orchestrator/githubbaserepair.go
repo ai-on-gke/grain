@@ -291,6 +291,9 @@ func fileOrUpdateGitHubBaseRepair(ctx context.Context, store *model.Store, run C
 			"releases until it is green again. Find why and fix it on `" + branch + "`: a regression two merges " +
 			"made together, a flaky test, or the workflow itself. Leave anything you cannot fix as a precise " +
 			"report.\n\n" +
+			"When you find the merge that broke it, name it on your fix's commit message with a `Fixes-commit: <sha>` " +
+			"trailer (the commit on `" + branch + "` that broke it) or a `Blames: task <id>` trailer (the task " +
+			"that merged it), so grain records which change failed.\n\n" +
 			"This task closes itself when the next `" + run.WorkflowName + "` run on `" + branch + "` is fully " +
 			"green (goal `nightly-green`); a cancelled run counts neither way. Further red runs are appended to " +
 			"it as comments while it is open.",

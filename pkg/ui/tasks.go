@@ -373,6 +373,12 @@ type Task struct {
 	// model.LinkReverts and model.LinkRevertedBy.
 	Reverts    string `json:"reverts,omitempty"`
 	RevertedBy string `json:"revertedBy,omitempty"`
+	// Blames is the IDs of the merged tasks this repair repaired, and
+	// BlamedBy the IDs of the repairs that blamed this task's merge --
+	// model.LinkBlames and model.LinkBlamedBy. What a change failure
+	// rate counts a repair that fixed forward against.
+	Blames   []string `json:"blames,omitempty"`
+	BlamedBy []string `json:"blamedBy,omitempty"`
 	// PortOf is the ID of the task whose merged change this one ports
 	// onto a paired branch, and PortedBy the IDs of the ports filed for
 	// this one -- model.LinkPortOf and model.LinkPortedBy.
@@ -1397,6 +1403,12 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		}
 		if l.Kind == model.LinkRevertedBy {
 			out.RevertedBy = l.Target
+		}
+		if l.Kind == model.LinkBlames {
+			out.Blames = append(out.Blames, l.Target)
+		}
+		if l.Kind == model.LinkBlamedBy {
+			out.BlamedBy = append(out.BlamedBy, l.Target)
 		}
 		if l.Kind == model.LinkPortOf {
 			out.PortOf = l.Target
