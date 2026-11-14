@@ -741,15 +741,31 @@ func newPortTask(ctx context.Context, store *model.Store, source model.Task, ref
 	if !grainci.Granted(grants) {
 		grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByGrain})
 	}
+	// A port records its source's template for reporting only and carries
+	// no TemplateID, so a grant settings/capabilities.yml restricts to that
+	// template (templates: [...]) is not the port's to hold. Kept, it held
+	// the port at dispatch for good (catalogueHold: "not granted to an
+	// ad-hoc task"); it is dropped here instead, with a note, so the port
+	// runs without the template's authority.
+	grants, droppedGrants, err := portCatalogueGrants(ctx, store, repo, grants)
+	if err != nil {
+		return model.Task{}, fmt.Errorf("orchestrator: judging the port of %s against the capability catalogue: %w", ref, err)
+	}
 	title := source.Title
 	if title == "" {
 		title = detail.Title
+	}
+	body := portBody(source, ref, detail, target, "")
+	if len(droppedGrants) > 0 {
+		body += fmt.Sprintf("\n\n_grain filed this port without what settings/capabilities.yml refuses it -- a port is "+
+			"filed by grain, not from task %s's template, so it holds none of that template's authority: %s._",
+			source.ID, strings.Join(droppedGrants, "; "))
 	}
 	port := model.Task{
 		ID:     id,
 		Intent: model.IntentImplement,
 		Title:  fmt.Sprintf("Port %s to %s: %s", ref, target, title),
-		Body:   portBody(source, ref, detail, target, ""),
+		Body:   body,
 		Origin: model.Origin{
 			Attribution: model.Attribution{Actor: porter},
 			Reason:      model.ReasonDirect,
@@ -837,4 +853,31 @@ func portBody(source model.Task, ref model.PullRequestRef, detail github.PullReq
 		}
 	}
 	return b.String()
+}
+
+// portCatalogueGrants is grants less every one the capability catalogue
+// refuses a port of repo -- judged as the ad-hoc task a port is, with no
+// TemplateID -- and, for each dropped, the grant and why. A deployment
+// with no catalogue keeps every grant.
+func portCatalogueGrants(ctx context.Context, store *model.Store, repo model.RepoRef,
+	grants []model.Grant) (kept []model.Grant, dropped []string, err error) {
+
+	cfg, err := store.GetConfig(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if cfg == nil || cfg.CapabilityPolicy.Catalogue == nil {
+		return grants, nil, nil
+	}
+	cat := cfg.CapabilityPolicy.Catalogue
+	for _, g := range grants {
+		r := repo
+		gc := model.GrantContext{Repo: &r, Kind: model.CatalogueKindTask, Grants: []string{g.Capability}}
+		if _, err := cat.ValidateGrants(gc); err != nil {
+			dropped = append(dropped, fmt.Sprintf("`%s` (%v)", g.Capability, err))
+			continue
+		}
+		kept = append(kept, g)
+	}
+	return kept, dropped, nil
 }
