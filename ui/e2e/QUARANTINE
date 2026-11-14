@@ -4,3 +4,15 @@
 # `<file>.spec.js` or `<file>.spec.js:<line of its test( call>` per line,
 # with why after a `#`. A quarantined test is not fixed; it is deleted
 # when its classic page retires.
+#
+# Seeded 2026-11-14 from CI history (task 5099). `grain ci test-history`
+# found no failure of any spec in the plan's "Riskiest specs" table
+# (docs/test-plans/classic-ui-e2e-migration/README.md) in the runs grain
+# holds, so none of those is quarantined. These two are the only classic
+# tests that failed more than once in the gating `ui e2e` job's recorded
+# failures (10 failed runs, 2026-11-13 01:07 .. 16:23 UTC). Both fail the
+# same way, on pull requests that don't touch schedules: after picking a
+# Repeat option, the field that option reveals never shows and the click
+# on it times out at 120s.
+recurring-composed-walkthrough.spec.js:289  # waits on "Day of week" after Repeat=Weekly; gha run 43335438249 (task-4517 branch)
+recurring-composed-walkthrough.spec.js:818  # waits on "Time zone" after Repeat=Daily; gha run 43453847141 (task-5143 branch)
