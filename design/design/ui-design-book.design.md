@@ -297,7 +297,7 @@ it rather than copy it.
 | Conversation | `shared/conversation/` | thread + composer (section 3) |
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
-| Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
+| Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope, and a required reason (`reason`) where the action is audited, such as the Inbox's Clear all |
 | Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
