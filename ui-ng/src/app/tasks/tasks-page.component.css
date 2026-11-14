@@ -262,6 +262,14 @@ g-tasks-page {
   color: var(--md-sys-color-inverse-primary);
 }
 
+.pickup-bar .btn-text:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--md-sys-color-inverse-on-surface) 12%,
+    var(--md-sys-color-inverse-surface)
+  );
+}
+
 .load-more {
   margin: 12px 20px;
 }

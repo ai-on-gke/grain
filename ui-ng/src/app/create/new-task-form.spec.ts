@@ -300,6 +300,36 @@ describe("new task form", () => {
       },
     });
     expect(validate({ ...d, title: "t", newBranch: true }, hidden)).toBeNull();
+
+    // Missing repository when the deployment has no defaultTarget:
+    const noDefaultCfg: GrainConfig = { access: null };
+    const noRepoChosen = emptyDraft(noDefaultCfg, tasks, { title: "t" });
+    expect(validate(noRepoChosen, undefined, null, {}, noDefaultCfg)).toEqual({
+      field: "repo",
+      message: "Pick a repository, or choose No repository.",
+    });
+    const disallowNoRepo = resolveFields({
+      access: null,
+      newTaskForm: {
+        default: { fields: { repo: { allow_no_repo: false } } },
+      },
+    });
+    expect(
+      validate(noRepoChosen, disallowNoRepo, null, {}, noDefaultCfg),
+    ).toEqual({
+      field: "repo",
+      message: "Pick a repository.",
+    });
+    expect(
+      validate(
+        { ...noRepoChosen, repo: NO_REPO },
+        undefined,
+        null,
+        {},
+        noDefaultCfg,
+      ),
+    ).toBeNull();
+    expect(validate(noRepoChosen, undefined, null, {}, config)).toBeNull();
   });
 
   it("phrases the draft as a request to the Director", () => {

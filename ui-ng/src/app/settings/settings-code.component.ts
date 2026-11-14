@@ -1402,12 +1402,16 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected async checkReposPlan(): Promise<void> {
     try {
       const res = await this.api.post<{
-        targetReposStranded?: unknown[];
+        targetReposStranded?: Array<{ tasks?: unknown[] }>;
       }>("POST /api/repos/plan", undefined, { targetRepos: this.repos() });
-      const n = res?.targetReposStranded?.length ?? 0;
+      const n = (res?.targetReposStranded ?? []).reduce(
+        (sum, entry) =>
+          sum + (Array.isArray(entry?.tasks) ? entry.tasks.length : 1),
+        0,
+      );
       this.reposPlanNotice.set(
         n > 0
-          ? `${n} open task(s) would be stranded by current repository list.`
+          ? `${n} open ${n === 1 ? "task" : "tasks"} would be stranded by current repository list.`
           : "All open tasks match active target repositories (0 stranded).",
       );
     } catch (err) {
@@ -1437,14 +1441,24 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       const plan = await this.api.post<{
         tasks?: string[];
         schedules?: string[];
+        targetReposStranded?: Array<{
+          tasks?: string[];
+          schedules?: string[];
+        }>;
       }>("POST /api/repos/plan", undefined, {
         targetRepos: this.repos().filter((r) => r !== repo),
       });
+      const fromStranded = (plan?.targetReposStranded ?? []).reduce(
+        (sum, entry) =>
+          sum + (entry?.tasks?.length ?? 0) + (entry?.schedules?.length ?? 0),
+        0,
+      );
       const stranded =
+        fromStranded ||
         (plan?.tasks?.length || 0) + (plan?.schedules?.length || 0);
       let msg = "";
       if (stranded > 0)
-        msg += `Warning: This will strand ${stranded} tasks/schedules.\n`;
+        msg += `Warning: This will strand ${stranded} ${stranded === 1 ? "task or schedule" : "tasks or schedules"}.\n`;
       msg += `Warning: Per-repo settings (setup command, prompt, grants) will be deleted.`;
       this.reposPlanNotice.set(msg);
       // Update the request with the new message

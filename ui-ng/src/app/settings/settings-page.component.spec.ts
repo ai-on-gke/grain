@@ -1096,4 +1096,89 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         .length,
     ).toBe(1);
   });
+
+  it("pluralizes Broadcast delivery and counts stranded open tasks across repositories on Check stranded tasks", async () => {
+    const api = new FakeSettingsApi();
+    let broadcastDelivered = 1;
+    let strandedEntries: Array<{ repo: string; tasks: string[] }> = [
+      { repo: "acme/legacy", tasks: ["101"] },
+    ];
+    const basePost = api.post;
+    api.post = (key, params, body, query) => {
+      if (key === "POST /api/deployment/broadcast") {
+        api.calls.push({ method: "POST", key, params, body, query });
+        return Promise.resolve({ delivered_count: broadcastDelivered });
+      }
+      if (key === "POST /api/repos/plan") {
+        api.calls.push({ method: "POST", key, params, body, query });
+        return Promise.resolve({ targetReposStranded: strandedEntries });
+      }
+      return basePost(key, params, body, query);
+    };
+
+    const { el, harness } = await mountSettings("/settings/general", api);
+    const { SnackbarService } = await import("../services/snackbar.service");
+    const snackbar = TestBed.inject(SnackbarService);
+
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-broadcast-message"]',
+      )!,
+      "Pause merges",
+    );
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="send-broadcast-btn"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(snackbar.current()?.message).toBe("Broadcast delivered to 1 task");
+
+    broadcastDelivered = 3;
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-broadcast-message"]',
+      )!,
+      "Resume merges",
+    );
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="send-broadcast-btn"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(snackbar.current()?.message).toBe("Broadcast delivered to 3 tasks");
+
+    await harness.navigateByUrl("/settings/repositories");
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="check-repos-plan-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      el
+        .querySelector('[data-testid="repos-plan-notice"]')
+        ?.textContent?.trim(),
+    ).toBe("1 open task would be stranded by current repository list.");
+
+    strandedEntries = [{ repo: "acme/legacy", tasks: ["101", "102"] }];
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="check-repos-plan-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      el
+        .querySelector('[data-testid="repos-plan-notice"]')
+        ?.textContent?.trim(),
+    ).toBe("2 open tasks would be stranded by current repository list.");
+  });
 });

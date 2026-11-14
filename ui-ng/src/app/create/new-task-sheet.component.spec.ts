@@ -512,6 +512,61 @@ describe("NewTaskSheetComponent", () => {
     expect(
       q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.disabled,
     ).toBe(true);
+
+    // Ctrl+Enter must also respect !canFile() instead of bypassing the disabled submit button.
+    type('[data-testid="nt-title"]', "Attempt forbidden Ctrl+Enter");
+    q<HTMLInputElement>('[data-testid="nt-title"]')!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await settle(f);
+    expect(api.calls.filter((c) => c.route === "POST /api/tasks")).toHaveLength(
+      0,
+    );
+  });
+
+  it("validates a missing repository inline without claiming a deployment default target when none is configured", async () => {
+    const api = new FakeApi();
+    delete api.cfg["defaultTarget"];
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    const repoBtn = q<HTMLButtonElement>('[data-testid="nt-repo"]')!;
+    expect(repoBtn.textContent).toContain("Select a repository…");
+    expect(repoBtn.textContent).not.toContain("Deployment default target");
+
+    type('[data-testid="nt-title"]', "Check repo validation");
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    expect(q('[data-testid="new-task-error"]')?.textContent).toContain(
+      "Pick a repository, or choose No repository.",
+    );
+    expect(repoBtn.classList.contains("is-invalid")).toBe(true);
+    expect(repoBtn.getAttribute("aria-describedby")).toBe("new-task-error");
+    expect(document.activeElement).toBe(repoBtn);
+    expect(api.calls.filter((c) => c.route === "POST /api/tasks")).toHaveLength(
+      0,
+    );
+
+    await pickPill(f, "nt-repo", "__none__");
+    await settle(f);
+    expect(q('[data-testid="new-task-error"]')).toBeNull();
+    expect(repoBtn.classList.contains("is-invalid")).toBe(false);
+
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+    const created = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(created?.body).toMatchObject({
+      title: "Check repo validation",
+      repo: "",
+      noRepo: true,
+    });
   });
 
   it("opens in Start a workstream mode, records the started root, and opens Workstreams", async () => {
