@@ -2498,7 +2498,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	body = append(body, '\n')
 	etag := etagOf(body)
-	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("ETag", etag)
 	w.Header().Add("Vary", "Cookie")
 	w.Header().Add("Vary", "Authorization")

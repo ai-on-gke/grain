@@ -146,6 +146,14 @@ export class BranchRefsService {
     force = false,
   ): Promise<ReadonlySet<string> | null> {
     if (typeof this.api.get !== "function") return null;
+    const cfg = this.access.rawConfig();
+    if (
+      cfg &&
+      cfg.gitCredentialsConfigured === false &&
+      repo !== cfg.configRepo
+    ) {
+      return null;
+    }
     const { owner, name } = splitRepo(repo);
     if (!owner || !name) return null;
 

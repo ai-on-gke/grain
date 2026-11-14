@@ -96,6 +96,8 @@ export interface GrainConfig {
   actor?: string;
   // The build stamp (api/version.ts); a string on older servers.
   version?: string | Record<string, unknown>;
+  configRepo?: string;
+  gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
   capabilities?: CapabilityOption[];
   defaultCapabilities?: string[];

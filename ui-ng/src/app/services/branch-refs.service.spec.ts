@@ -123,4 +123,18 @@ describe("BranchRefsService", () => {
     expect(await svc.hasBranch("acme/api", "main")).toBeNull();
     expect(api.calls).toHaveLength(0);
   });
+
+  it("skips github-branches when gitCredentialsConfigured is false outside configRepo", async () => {
+    const { svc, api, access } = setup();
+    access.setConfig({
+      configRepo: "grain/config",
+      gitCredentialsConfigured: false,
+      access: { role: "admin", roles: ["admin"], full: true, scopes: [] },
+    });
+    expect(await svc.hasBranch("acme/api", "main")).toBeNull();
+    expect(api.calls).toHaveLength(0);
+
+    expect(await svc.hasBranch("grain/config", "main")).toBe(true);
+    expect(api.calls).toHaveLength(1);
+  });
 });

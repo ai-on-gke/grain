@@ -150,7 +150,7 @@ describe("GrainApi.getIfChanged", () => {
     await delP;
   });
 
-  it("coalesces concurrent get and getIfChanged calls, uses ETag on config(), and invalidates on mutations", async () => {
+  it("coalesces concurrent get and getIfChanged calls, caches config() briefly without ETag, and invalidates on mutations", async () => {
     // Concurrent get() shares one HTTP request.
     const [g1, g2] = [
       api.get<{ ok: boolean }>("GET /api/settings"),
@@ -161,17 +161,17 @@ describe("GrainApi.getIfChanged", () => {
     expect(await g1).toEqual({ ok: true });
     expect(await g2).toEqual({ ok: true });
 
-    // config() uses ETag 304 and shares concurrent calls; POST /api/settings evicts /api/config cache.
+    // config() shares concurrent calls and short-TTL cached reads without sending If-None-Match;
+    // POST /api/settings evicts the /api/config cache immediately.
     const [c1, c2] = [api.config(), api.config()];
     const cfg1 = http.expectOne("/api/config");
-    cfg1.flush({ version: "v1" }, { headers: { ETag: '"cfg-1"' } });
+    expect(cfg1.request.headers.has("If-None-Match")).toBe(false);
+    cfg1.flush({ version: "v1" });
     expect(await c1).toEqual({ version: "v1" });
     expect(await c2).toEqual({ version: "v1" });
 
     const c3 = api.config();
-    const cfg2 = http.expectOne("/api/config");
-    expect(cfg2.request.headers.get("If-None-Match")).toBe('"cfg-1"');
-    cfg2.flush(null, { status: 304, statusText: "Not Modified" });
+    http.expectNone("/api/config");
     expect(await c3).toEqual({ version: "v1" });
 
     const save = api.post("POST /api/settings", undefined, { maxWorkers: 2 });

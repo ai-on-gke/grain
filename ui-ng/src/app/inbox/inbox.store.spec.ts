@@ -124,7 +124,7 @@ describe("InboxStore", () => {
     }
   });
 
-  it("skips diffPreview on proposals, merged PRs, missing remote branches, and memoizes 404s", async () => {
+  it("previews pushed-branch proposals, skips unpushed proposals, merged PRs, and missing branches, and memoizes 404s", async () => {
     localStorage.clear();
     expect(
       wantsDiff({
@@ -146,10 +146,10 @@ describe("InboxStore", () => {
         task: { id: "1", title: "P", state: "proposed", repo: "acme/web" },
         actions: [],
       }),
-    ).toBe(false);
+    ).toBe(true);
 
     const api = new FakeApi();
-    api.branches["acme/web"] = ["main"];
+    api.branches["acme/web"] = ["main", "grain/task-13"];
     api.tasksList = [
       {
         id: "10",
@@ -178,6 +178,22 @@ describe("InboxStore", () => {
         pullRequest: "acme/web#12",
         updatedAt: "2026-11-13T00:00:00Z",
       },
+      {
+        id: "13",
+        title: "Pushed proposal",
+        state: "proposed",
+        repo: "acme/web",
+        branch: "grain/task-13",
+        updatedAt: "2026-11-13T00:00:00Z",
+      },
+      {
+        id: "14",
+        title: "Unpushed proposal",
+        state: "proposed",
+        repo: "acme/web",
+        branch: "grain/task-14",
+        updatedAt: "2026-11-13T00:00:00Z",
+      },
     ];
     TestBed.configureTestingModule({
       providers: [{ provide: GrainApi, useValue: api }],
@@ -193,12 +209,23 @@ describe("InboxStore", () => {
     expect(api.diffCalls).toBe(0);
     expect(store.diffs()["11"]).toBeNull();
 
+    // Unpushed proposal #14 skips diffPreview when remote branch is absent.
+    store.select("task:14:proposal");
+    await store.ensureDiff();
+    expect(api.diffCalls).toBe(0);
+    expect(store.diffs()["14"]).toBeNull();
+
+    // Pushed proposal #13 invokes diffPreview because its branch is present remotely.
+    store.select("task:13:proposal");
+    await store.ensureDiff();
+    expect(api.diffCalls).toBe(1);
+
     // Task #12 has present branch -> tries once, catches error, memoizes null for same version.
     store.select("task:12:submit");
     await store.ensureDiff();
-    expect(api.diffCalls).toBe(1);
+    expect(api.diffCalls).toBe(2);
     await store.ensureDiff();
-    expect(api.diffCalls).toBe(1);
+    expect(api.diffCalls).toBe(2);
   });
 
   it("skips repo-less task detail hydration when tasks:read has repoLimits", async () => {

@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type {
-  AgentPauseEntry,
-  DispatchCondition,
-  GrainConfig,
-} from "../api/models";
+import type { AgentPauseEntry, GrainConfig } from "../api/models";
 
 export interface UsagePauseScope {
   connection?: string;
@@ -184,10 +180,6 @@ function pauseEntryLabel(p: AgentPauseEntry): string {
   return conn;
 }
 
-function condLabel(d: DispatchCondition): string {
-  return d.name || "Dispatch blocked";
-}
-
 function configuredDefaultModels(
   cfg: GrainConfig | null | undefined,
 ): string[] {
@@ -242,17 +234,14 @@ export function summarizeDispatchStatus(
   const blocked = opts?.modelQuotaOnly ? [] : (cfg?.dispatchBlocked ?? []);
   for (const d of blocked) {
     bump("error");
+    const label = d.name || "Dispatch blocked";
     const reason = d.error || String(d.check ?? "") || "Precondition failed";
+    const msg = [reason, d.remedy].filter(Boolean).join(" — ");
     const held = d.held ? `held ${d.held}` : "";
-    details.push({
-      label: condLabel(d),
-      reason: [reason, d.remedy].filter(Boolean).join(" — "),
-      resetText: held,
-      tone: "error",
-    });
+    details.push({ label, reason: msg, resetText: held, tone: "error" });
     if (!primaryHeadline) {
-      primaryHeadline = `Automated development paused: ${condLabel(d)}`;
-      primarySubline = [reason, d.remedy].filter(Boolean).join(" — ");
+      primaryHeadline = `Automated development paused: ${label}`;
+      primarySubline = msg;
       primaryReset = held;
       shortLabel = "Dispatch blocked";
     }
@@ -268,10 +257,11 @@ export function summarizeDispatchStatus(
     const sub = pipe.runNowPasses
       ? `${reason} — scheduled work is held (manual Run now still starts)`
       : `${reason} — all new runs are held`;
+    const until = pipe.untilTask ? `until #${pipe.untilTask}` : "";
     details.push({
       label: "Pipeline",
       reason: sub,
-      resetText: pipe.untilTask ? `until #${pipe.untilTask}` : "",
+      resetText: until,
       tone,
     });
     if (!primaryHeadline) {
@@ -279,7 +269,7 @@ export function summarizeDispatchStatus(
         ? "Pipeline paused (manual Run now allowed)"
         : "Pipeline paused — development runs are held";
       primarySubline = reason;
-      primaryReset = pipe.untilTask ? `until #${pipe.untilTask}` : "";
+      primaryReset = until;
       shortLabel = "Pipeline paused";
     }
   }

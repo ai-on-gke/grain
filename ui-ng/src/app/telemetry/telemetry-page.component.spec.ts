@@ -803,6 +803,12 @@ describe("TelemetryPageComponent", () => {
         kind: "service",
         repos: ["acme/api"],
       },
+      {
+        id: "system:nightly-bot",
+        name: "system:nightly-bot",
+        kind: "",
+        repos: ["acme/api"],
+      },
       { id: "grain-auto", name: "Grain", kind: "grain", repos: ["acme/web"] },
       ...Array.from({ length: 11 }, (_, i) => ({
         id: `dev-${String(i + 1).padStart(2, "0")}`,
@@ -924,6 +930,7 @@ describe("TelemetryPageComponent", () => {
     ).map((el) => el.textContent?.trim() ?? "");
     expect(peopleNames).not.toContain("Zeta Bot");
     expect(peopleNames).not.toContain("CI Runner");
+    expect(peopleNames).not.toContain("system:nightly-bot");
     expect(peopleNames).not.toContain("Grain");
     expect(peopleNames).toContain("Alice");
   });

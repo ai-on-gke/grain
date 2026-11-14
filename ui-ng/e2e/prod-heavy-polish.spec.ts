@@ -548,12 +548,22 @@ test("heavy Telemetry progressive disclosure stays <2400px tall with grouped quo
   expect(
     await page.getByTestId("usage-warnings-banner").locator("li").count(),
   ).toBe(12);
-  await page.getByTestId("actors-filter-people").click();
+  const peopleBtn = page.getByTestId("actors-filter-people");
+  await peopleBtn.click();
+  await expect(peopleBtn).toHaveAttribute("aria-pressed", "true");
+  await expect
+    .poll(async () => {
+      const names = await page
+        .getByTestId("space-actor-row")
+        .locator(".actor-name")
+        .allTextContents();
+      return names.length > 0 && names.every((n) => !n.startsWith("system:"));
+    })
+    .toBe(true);
   const peopleNames = await page
     .getByTestId("space-actor-row")
     .locator(".actor-name")
     .allTextContents();
-  expect(peopleNames.every((n) => !n.startsWith("system:"))).toBe(true);
   const sortedPeople = [...peopleNames].sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: "base" }),
   );

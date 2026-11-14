@@ -271,6 +271,9 @@ func TestConfigETagIgnoresVolatilePauseSecondsRemaining(t *testing.T) {
 	if rec1.Code != http.StatusOK {
 		t.Fatalf("first GET /api/config = %d %s", rec1.Code, rec1.Body.String())
 	}
+	if got := rec1.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("GET /api/config Cache-Control = %q, want no-store", got)
+	}
 	etag1 := rec1.Header().Get("ETag")
 	if etag1 == "" {
 		t.Fatal("missing ETag on paused GET /api/config")

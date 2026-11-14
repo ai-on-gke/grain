@@ -360,8 +360,8 @@ func TestConfigETagAnd304AndVariesOnChange(t *testing.T) {
 	if etag1 == "" {
 		t.Fatal("GET /api/config omitted ETag header")
 	}
-	if got := rec1.Header().Get("Cache-Control"); got != "no-cache" {
-		t.Errorf("Cache-Control = %q, want no-cache", got)
+	if got := rec1.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
 	}
 	vary := strings.Join(rec1.Header().Values("Vary"), ", ")
 	if !strings.Contains(vary, "Cookie") || !strings.Contains(vary, "Authorization") {

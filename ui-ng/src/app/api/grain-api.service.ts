@@ -95,6 +95,7 @@ export class GrainApi {
   private readonly inflightCond = new Map<string, Promise<Fresh<unknown>>>();
   private readonly urlEpochs = new Map<string, number>();
   private condEpoch = 0;
+  private configCache: { exp: number; body: GrainConfig } | null = null;
 
   get<T>(key: RouteKey, params?: RouteParams, query?: string): Promise<T> {
     const url = routePath(key, params) + (query ? `?${query}` : "");
@@ -185,10 +186,12 @@ export class GrainApi {
       this.etags.clear();
       this.inflightCond.clear();
       this.inflightGet.clear();
+      this.configCache = null;
       return;
     }
     const matches = (k: string) =>
       k === prefix || k.startsWith(`${prefix}?`) || k.startsWith(`${prefix}/`);
+    if (matches("/api/config")) this.configCache = null;
     this.urlEpochs.set(prefix, (this.urlEpochs.get(prefix) ?? 0) + 1);
     for (const map of [this.etags, this.inflightCond, this.inflightGet]) {
       for (const k of map.keys()) {
@@ -226,24 +229,16 @@ export class GrainApi {
   private invalidateAfterMutation(url: string): void {
     const path = url.split("?")[0] ?? url;
     if (
-      path.startsWith("/api/settings") ||
-      path.startsWith("/api/deployment") ||
-      path.startsWith("/api/pause") ||
-      path.startsWith("/api/pipeline-pause") ||
-      path.startsWith("/api/repos") ||
-      path.startsWith("/api/auth") ||
-      path.startsWith("/api/agent-keys") ||
-      path.startsWith("/api/github-tokens") ||
-      path.startsWith("/api/usage/settings")
+      path.startsWith("/api/") &&
+      /^(settings|deployment|pause|pipeline-pause|repos|auth|agent-keys|github-tokens|usage\/settings)/.test(
+        path.slice(5),
+      )
     ) {
       this.clearConditionalCache("/api/config");
     }
     if (path.startsWith("/api/tasks/")) {
-      const rest = path.slice("/api/tasks/".length);
-      const taskId = rest.split("/")[0];
-      if (taskId) {
-        this.clearConditionalCache(`/api/tasks/${taskId}`);
-      }
+      const taskId = path.slice(11).split("/")[0];
+      if (taskId) this.clearConditionalCache(`/api/tasks/${taskId}`);
     }
   }
 
@@ -284,9 +279,16 @@ export class GrainApi {
   }
 
   config(): Promise<GrainConfig> {
-    return this.getIfChanged<GrainConfig>("GET /api/config").then(
-      (r) => r.body,
-    );
+    if (this.configCache && Date.now() < this.configCache.exp) {
+      return Promise.resolve(this.configCache.body);
+    }
+    const epoch = this.condEpoch + (this.urlEpochs.get("/api/config") ?? 0);
+    return this.get<GrainConfig>("GET /api/config").then((body) => {
+      if (this.condEpoch + (this.urlEpochs.get("/api/config") ?? 0) === epoch) {
+        this.configCache = { exp: Date.now() + 2_000, body };
+      }
+      return body;
+    });
   }
 
   tasks(): Promise<Task[]> {

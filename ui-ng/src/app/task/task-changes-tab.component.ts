@@ -549,7 +549,7 @@ export class TaskChangesTabComponent {
       t.repo &&
       parts.length === 2 &&
       t.branch &&
-      t.state !== "proposed" &&
+      (t.state !== "proposed" || this.branchPresent() === true) &&
       this.branchPresent() !== false &&
       this.can("GET /api/repos/{owner}/{name}/compare")
     );
@@ -649,10 +649,11 @@ export class TaskChangesTabComponent {
   private async loadInitial(id: string): Promise<void> {
     const t0 = this.task();
     let skipDiff: string | null = null;
-    if (t0.state === "proposed") {
-      skipDiff = "Proposals do not have a branch diff yet.";
-    } else if (!t0.branch && !t0.changelists?.length && !t0.pullRequest) {
-      skipDiff = "No branch associated with this task yet.";
+    if (!t0.branch && !t0.changelists?.length && !t0.pullRequest) {
+      skipDiff =
+        t0.state === "proposed"
+          ? "Proposals do not have a branch diff yet."
+          : "No branch associated with this task yet.";
     } else if (t0.repo && t0.branch) {
       const present = await this.branchRefs.hasBranch(t0.repo, t0.branch);
       if (this.task().id !== id) return;
@@ -660,10 +661,21 @@ export class TaskChangesTabComponent {
       if (present === false) {
         skipDiff = t0.prMergedAt
           ? "Pull request merged; branch is no longer present."
-          : "Branch is no longer present on the remote.";
+          : t0.state === "proposed"
+            ? "Proposals do not have a branch diff yet."
+            : "Branch is no longer present on the remote.";
+      } else if (
+        t0.state === "proposed" &&
+        present !== true &&
+        !t0.pullRequest &&
+        !t0.changelists?.length
+      ) {
+        skipDiff = "Proposals do not have a branch diff yet.";
       } else if (present === null && t0.prMergedAt) {
         skipDiff = "Pull request already merged.";
       }
+    } else if (t0.state === "proposed") {
+      skipDiff = "Proposals do not have a branch diff yet.";
     } else if (t0.prMergedAt) {
       skipDiff = "Pull request already merged.";
     }

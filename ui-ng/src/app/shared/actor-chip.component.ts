@@ -32,7 +32,14 @@ export function normalizeActorKind(
   const l = (label || "").trim().toLowerCase();
   if (k === "automation" || k === "grain" || l === "grain") return "grain";
   if (k === "agent") return "agent";
-  if (k === "service") return "service";
+  if (
+    k === "service" ||
+    k === "system" ||
+    l.startsWith("system:") ||
+    l.startsWith("repo:")
+  ) {
+    return "service";
+  }
   return "human";
 }
 

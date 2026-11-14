@@ -77,11 +77,10 @@ export const DIFF_PREVIEW_HUNKS = 6;
 const DIFF_TTL_MS = 60000;
 
 export function wantsDiff(e: InboxEntry | null): boolean {
-  if (!e?.taskId) return false;
-  if (e.task?.state === "proposed" || Boolean(e.task?.prMergedAt)) {
-    return false;
-  }
-  return DIFF_KINDS.has(e.kind) || !!e.task?.pullRequest;
+  if (!e?.taskId || Boolean(e.task?.prMergedAt)) return false;
+  if (DIFF_KINDS.has(e.kind) || !!e.task?.pullRequest) return true;
+  if (e.kind === "proposal") return !!e.repo;
+  return false;
 }
 
 function loadSeen(): Set<string> {
@@ -498,13 +497,33 @@ export class InboxStore implements OnDestroy {
       this.diffAt.set(id, Date.now());
       this.diffVersions.set(id, versionKey);
       let preview: DiffPreview | null = null;
-      const branch = e?.task?.branch;
+      const branch =
+        e?.task?.branch ||
+        (this.selected()?.taskId === id
+          ? this.selectedDetail()?.branch
+          : undefined);
+      const isProposal =
+        e?.kind === "proposal" || e?.task?.state === "proposed";
+      const hasExplicitRef = Boolean(
+        branch || e?.task?.pullRequest || e?.task?.changelists?.length,
+      );
+      if (isProposal && !hasExplicitRef) {
+        this.diffs.update((m) => ({ ...m, [id]: null }));
+        return;
+      }
       const branchOk =
         e?.repo && branch
           ? await this.branchRefs.hasBranch(e.repo, branch)
           : null;
+      const skipUncheckedProposal =
+        isProposal &&
+        !e?.task?.pullRequest &&
+        !e?.task?.changelists?.length &&
+        branchOk === null &&
+        this.access.rawConfig()?.gitCredentialsConfigured === false;
       if (
         branchOk !== false &&
+        !skipUncheckedProposal &&
         this.access.canAccessTask(
           "GET /api/tasks/{id}/diff-preview",
           e!.repo || null,

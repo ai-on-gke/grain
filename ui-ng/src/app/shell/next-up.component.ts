@@ -33,7 +33,7 @@ import {
   levelOf,
   nextUp,
   priorityOf,
-} from "../tasks/task-view";
+} from "../tasks/task-queue-helpers";
 
 const SHOWN = 7;
 
