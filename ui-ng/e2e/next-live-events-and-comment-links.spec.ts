@@ -58,7 +58,11 @@ test("/next/inbox shows, updates and clears notification and host-script rows fr
     title: `live inbox e2e ${stamp}`,
     body: "e2e",
     repo: "acme/widgets",
-    capabilities: ["local-scripts:e2e-live"],
+    // The demo attaches a host-script server with an "ops" script, as the
+    // classic local-scripts approval spec files it.
+    capabilities: [
+      'https://grain.dev/capabilities/host-script#host-script={"script":"ops"}',
+    ],
   });
   const L = `/api/tasks/${task.id}/local-script-approvals`;
   let noteId: number | null = null;
