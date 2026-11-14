@@ -206,3 +206,26 @@ test("a reload with unsaved settings asks first", async ({ page }) => {
   expect(asked).toBe("beforeunload");
   await page.getByRole("button", { name: "Discard" }).click();
 });
+
+test("Save memory saves the standing instructions too, and the next open reads them back", async ({
+  page,
+}) => {
+  await page.goto("/next/settings/memory");
+  const box = page.getByTestId("input-prompt-extension");
+  await expect(box).toBeEnabled();
+  const before = await box.inputValue();
+  const edited = before ? `${before}\nWalkthrough note.` : "Walkthrough note.";
+  try {
+    await box.fill(edited);
+    await page.getByTestId("save-memory-btn").click();
+    await expect(page.getByTestId("settings-save-btn")).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByTestId("input-prompt-extension")).toHaveValue(
+      edited,
+    );
+  } finally {
+    await page.request.post("/api/settings", {
+      data: { promptExtension: before },
+    });
+  }
+});

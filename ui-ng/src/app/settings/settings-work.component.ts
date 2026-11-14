@@ -1543,8 +1543,12 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
+  // saveMemory saves both boxes the Memory card shows: the deployment
+  // memory document and, when it was edited, the standing instructions
+  // (a setting, which Save memory used to leave unsaved).
   protected async saveMemory(): Promise<void> {
     try {
+      await this.state.saveFields(["promptExtension"]);
       await this.api.put("PUT /api/memory", undefined, {
         text: this.memoryBody(),
       });

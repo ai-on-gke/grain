@@ -390,6 +390,27 @@ export class SettingsStateService {
     }
   }
 
+  // saveFields saves just these drafted settings, for a card with a Save
+  // button of its own (Memory's Save memory), leaving every other draft
+  // for the section Save bar. It throws what the server refused.
+  async saveFields(keys: readonly string[]): Promise<void> {
+    const draft = this.draft();
+    const payload: Record<string, unknown> = {};
+    for (const k of keys) if (k in draft) payload[k] = draft[k];
+    if (Object.keys(payload).length === 0) return;
+    const saved = await this.api.post<Record<string, unknown>>(
+      "POST /api/settings",
+      undefined,
+      payload,
+    );
+    if (saved && typeof saved === "object") this.settings.set(saved);
+    this.draft.update((prev) => {
+      const next = { ...prev };
+      for (const k of keys) delete next[k];
+      return next;
+    });
+  }
+
   async saveChanges(): Promise<void> {
     if (!this.isDirty() || this.hasFieldErrors()) return;
     this.saving.set(true);
