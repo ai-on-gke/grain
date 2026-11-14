@@ -67,7 +67,29 @@ function legacy(tab: string): RedirectFunction {
 // (angular.json) however many pages move over. A path this app does not
 // have yet goes to the Inbox; the shell's links take the reader to the
 // classic UI for everything else.
+// teamLinkMatcher takes an old team-scoped link, /t/<team>/<rest>, from
+// before grain dropped teams. It hands on <rest> so the link opens the
+// same page without the team (as the classic UI does) rather than falling
+// through to the catch-all and landing on Inbox.
+function teamLinkMatcher(segments: UrlSegment[]): UrlMatchResult | null {
+  if (segments.length < 2 || segments[0]?.path !== "t") return null;
+  const rest = segments
+    .slice(2)
+    .map((s) => s.path)
+    .join("/");
+  return {
+    consumed: segments,
+    posParams: { rest: new UrlSegment(rest, {}) },
+  };
+}
+
+const teamLinkRedirect: RedirectFunction = ({ params, queryParams }) =>
+  inject(Router).createUrlTree(["/" + (params["rest"] || "inbox")], {
+    queryParams,
+  });
+
 export const routes: Routes = [
+  { matcher: teamLinkMatcher, redirectTo: teamLinkRedirect },
   { path: "", pathMatch: "full", redirectTo: "inbox" },
   {
     path: "inbox",

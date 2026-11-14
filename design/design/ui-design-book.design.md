@@ -196,6 +196,11 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   arrows, Enter collapses, double-click resets) and a "Hide list" toggle.
   The choice is remembered per surface.
 - The detail pane is always there on desktop; it is not a modal.
+- **Never open the sheet unasked.** Below 1080px (and on a short landscape
+  screen) the pane becomes a fixed sheet over the list and the top bar, so
+  a surface may pre-select its first item only where the pane sits beside
+  the list; on a tablet the list shows first and a tap opens the sheet
+  (`next-responsive-sessions.spec.js` checks Agents at 820px and 1024px).
 - **The selected item looks selected.** Whatever the list is drawn as —
   queue rows, table rows, cards — the item the pane shows carries
   `surface-container` with a 3px `primary` leading bar (`inset 3px 0 0`),

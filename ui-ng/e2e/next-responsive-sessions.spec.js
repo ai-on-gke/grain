@@ -177,3 +177,16 @@ test("Customize navigation updates another open tab", async ({ page }) => {
   await expect(other.getByTestId("rail-hidden-count")).toHaveText("1");
   await other.close();
 });
+
+// An old team-scoped link opens its team-less page, query included,
+// rather than falling through to Inbox.
+test("an old /t/<team>/ link opens its page without the team", async ({
+  page,
+}) => {
+  await page.goto("/next/t/acme/tasks?q=retry");
+  await expect(page).toHaveURL(/\/next\/tasks\?q=retry$/);
+  await page.goto("/next/t/acme/repos/acme/widgets/ci");
+  await expect(page).toHaveURL(/\/next\/repos\/acme\/widgets\/ci$/);
+  await page.goto("/next/t/acme");
+  await expect(page).toHaveURL(/\/next\/inbox$/);
+});
