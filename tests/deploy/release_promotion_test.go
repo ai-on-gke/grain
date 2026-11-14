@@ -849,3 +849,47 @@ func TestReleaseReviewAndWatchdogHoldReadOnlyTaskAndSuiteScopes(t *testing.T) {
 		}
 	}
 }
+
+// release-tags.yml publishes the images of the tags the train's grain task
+// pushes with RELEASE_IMAGES=off: rc, pending and discard-rc, on those tag
+// pushes alone. It never runs promote or retract and never names latest,
+// so it cannot move a :vX.Y.Z or :latest image (§0.3).
+func TestReleaseTagsPublishesTheTrainsTagsAndNeverPromotes(t *testing.T) {
+	text := stripComments(read(t, ".github", "workflows", "release-tags.yml"))
+	on := upTo(t, text, "permissions:")
+	for _, tag := range []string{`- "v*-rc.*"`, `- "v*-pending"`, `- "v*-discarded"`} {
+		contains(t, on, tag)
+	}
+	for _, bad := range []string{"workflow_dispatch", "schedule:", "pull_request", "workflow_run", "branches:", "release:"} {
+		if strings.Contains(on, bad) {
+			t.Errorf("release-tags.yml runs on %s; it publishes on the train's tag pushes alone", bad)
+		}
+	}
+	for _, mode := range []string{`release-images.sh rc "$ARG"`, `release-images.sh pending "$ARG"`, `release-images.sh discard-rc "$ARG"`} {
+		contains(t, text, mode)
+	}
+	if got := strings.Count(text, "release-images.sh"); got != 3 {
+		t.Errorf("release-tags.yml runs release-images.sh %d times; want exactly its rc, pending and discard-rc modes", got)
+	}
+	for _, bad := range []string{"promote", "retract", "discard-pending", "latest", "--dry-run"} {
+		absent(t, strings.ReplaceAll(text, "runs-on: ubuntu-latest", ""), bad)
+	}
+	// v*-rc.* matches vX.Y.Z-rc.N-discarded too, so -discarded is asked first.
+	discarded := strings.Index(text, `-discarded$ ]]`)
+	rc := strings.Index(text, `-rc\.$num$ ]]`)
+	if discarded < 0 || rc < 0 || discarded > rc {
+		t.Errorf("release-tags.yml does not tell a -discarded tag (at %d) from an rc (at %d) before it decides", discarded, rc)
+	}
+	// rc and pending publish only for a commit main or its release branch has.
+	contains(t, text, `git merge-base --is-ancestor "$commit" "$ref"`)
+	for _, step := range strings.Split(text, "- name: ")[1:] {
+		name := strings.SplitN(step, "\n", 2)[0]
+		switch name {
+		case "Checkout", "Decide what the tag publishes":
+			continue
+		}
+		if !strings.Contains(step, "if: steps.mode.outputs.mode != 'none'") {
+			t.Errorf("release-tags.yml step %q runs for a tag that is none of the train's", name)
+		}
+	}
+}
