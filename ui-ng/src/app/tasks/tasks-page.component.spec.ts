@@ -1001,6 +1001,37 @@ describe("TasksPageComponent", () => {
         queryParams: { tab: null, group: null, q: null, repo: null },
         replaceUrl: false,
       });
+
+      f.componentRef.setInput("tab", undefined);
+      await settle(f);
+      q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+      await settle(f);
+      expect(
+        q(f, '[data-testid="board-apply-tri"]')!.getAttribute("aria-current"),
+      ).toBe("true");
+    });
+
+    it("explains a classic ?f= or ?sort= link it cannot show and offers Open classic", async () => {
+      const api = new FakeApi();
+      const f = await render(api);
+      const router = TestBed.inject(Router);
+      const snacks = TestBed.inject(SnackbarService);
+
+      await router.navigate(["/tasks"], {
+        queryParams: { f: "author:any:alice" },
+      });
+      await settle(f);
+      expect(snacks.current()?.message).toContain("narrows by author");
+      expect(snacks.current()?.action?.label).toBe("Open classic");
+      expect(router.url).not.toContain("f=");
+
+      await router.navigate(["/tasks"], {
+        queryParams: { sort: "created:desc" },
+      });
+      await settle(f);
+      expect(snacks.current()?.message).toContain("sorted by created:desc");
+      expect(snacks.current()?.action?.label).toBe("Open classic");
+      expect(router.url).not.toContain("sort=");
     });
 
     it("renders Repair badge, broken-base banner, inline Retry on failed tasks, Saved Boards CRUD, and Timeline view", async () => {

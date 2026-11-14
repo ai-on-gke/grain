@@ -209,15 +209,30 @@ test("the Boards menu opens a classic board on its tab and sends a Kanban board 
       );
     }
     await expectMenuLaidOut(page, kanban.id);
-    // The tag sits inside the row, after the name, on one line.
+    await expect(page.getByTestId(`board-apply-${asked.id}`)).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    // The tag sits inside the row, after the name, on one line, and
+    // aligns in a right-hand column across classic board rows.
     const tag = await page
       .getByTestId(`board-classic-${kanban.id}`)
+      .boundingBox();
+    const reportTag = await page
+      .getByTestId(`board-classic-${report.id}`)
       .boundingBox();
     const row = await page
       .getByTestId(`board-apply-${kanban.id}`)
       .boundingBox();
+    const askedRow = await page
+      .getByTestId(`board-apply-${asked.id}`)
+      .boundingBox();
     expect(tag.x + tag.width).toBeLessThanOrEqual(row.x + row.width);
     expect(tag.height).toBeLessThan(row.height);
+    expect(
+      Math.abs(tag.x + tag.width - (reportTag.x + reportTag.width)),
+    ).toBeLessThanOrEqual(1);
+    expect(Math.abs(row.height - askedRow.height)).toBeLessThanOrEqual(2);
     expect(await axe()).toEqual([]);
     await menu.getByRole("link", { name: /^E2E Flow,/ }).click();
     await expect(page).toHaveURL(new RegExp(`/boards/${kanban.id}$`));
@@ -257,6 +272,17 @@ test("a view saved on /next/ is stored in the board grammar and a board-grammar 
       "aria-current",
       "page",
     );
+
+    // One naming an attribute this page cannot filter on clears the
+    // unapplied parameter, says why, and offers the classic task list.
+    await page.goto("tasks?f=author:any:alice");
+    await expect(page).not.toHaveURL(/[?&]f=/);
+    await expect(
+      page.getByText(/This link only opens on the classic task list:.*author/),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Open classic" }),
+    ).toBeVisible();
   } finally {
     if (id) await page.request.delete(`/api/boards/${id}`).catch(() => {});
   }

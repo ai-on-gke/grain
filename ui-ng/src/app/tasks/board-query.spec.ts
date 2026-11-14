@@ -92,12 +92,20 @@ describe("viewForQuery", () => {
     ).toBe(true);
   });
 
+  it("ignores classic's retired interactive exclusion and manual sort", () => {
+    expect(
+      viewForQuery("sort=manual&f=state:any:queued&f=kind:none:interactive"),
+    ).toEqual({ view: view({ tab: "backlog" }) });
+  });
+
   it("refuses what this page cannot show exactly", () => {
     for (const q of [
       "sort=created:desc",
       "f=none",
       "f=state:any:queued|running",
       "f=author:any:alice",
+      "author=alice&f=state:any:queued",
+      "base=main",
       "f=repo:any:a/b|c/d",
       "f=created:within:7",
       "f=bogus",

@@ -215,9 +215,12 @@
    filter on) is a link to the classic page, drawn like its neighbours
    and tagged with where it goes (board-query.ts). */
 .boards-menu.pop-menu .boards-menu-row a.board-apply-btn {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
+  gap: 8px;
   color: var(--md-sys-color-on-surface);
+  font: inherit;
   font-size: 13px;
   text-decoration: none;
 }
@@ -241,12 +244,13 @@
 
 .boards-menu.pop-menu .boards-menu-row .board-classic-tag {
   flex-shrink: 0;
-  margin-left: 6px;
+  margin-left: auto;
   padding: 1px 6px;
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: 999px;
   color: var(--md-sys-color-on-surface-variant);
   font-size: 11px;
+  line-height: 16px;
 }
 
 .boards-menu.pop-menu .boards-menu-row .board-del-btn {

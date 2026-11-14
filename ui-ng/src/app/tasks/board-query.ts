@@ -87,6 +87,29 @@ interface Condition {
   values: string[];
 }
 
+// classic's LEGACY_FILTERS (ui/src/paths.js) aside from repo, which
+// /next/tasks reads itself: older links gave each attribute its own key.
+export const LEGACY_FILTER_ATTRS = [
+  "base",
+  "capability",
+  "author",
+  "origin",
+  "kind",
+  "autoMerge",
+] as const;
+
+// isLegacyInteractive is classic's isLegacyInteractiveClause
+// (ui/src/taskFilters.js): interactive tasks are never in a task list now
+// (task-view.ts isWork), so a stored condition leaving them out is a no-op.
+function isLegacyInteractive(c: Condition): boolean {
+  return (
+    c.attr === "kind" &&
+    c.op === "none" &&
+    c.values.length === 1 &&
+    c.values[0] === "interactive"
+  );
+}
+
 // conditionOf is classic's conditionFromQuery (ui/src/taskFilters.js).
 function conditionOf(raw: string): Condition | null {
   const first = raw.indexOf(":");
@@ -164,8 +187,9 @@ export function viewForQuery(
   // A condition on state wins over a legacy tab= beside it; two of them
   // narrow to their intersection, which no tab is.
   let stated = false;
-  if (p.get("sort")) {
-    return { why: `it is sorted by ${p.get("sort")}` };
+  const sort = p.get("sort");
+  if (sort && sort !== "manual") {
+    return { why: `it is sorted by ${sort}` };
   }
   for (const raw of p.getAll("f")) {
     if (raw === "none") {
@@ -173,6 +197,7 @@ export function viewForQuery(
     }
     const c = conditionOf(raw);
     if (!c) return { why: `its condition "${raw}" is not one /next/ reads` };
+    if (isLegacyInteractive(c)) continue;
     if (c.attr === "state") {
       const tab = tabForState(c);
       if (!tab || stated) {
@@ -187,6 +212,11 @@ export function viewForQuery(
       view.repo = c.values[0];
     } else {
       return { why: `it narrows by ${c.attr}, which /next/ cannot filter on` };
+    }
+  }
+  for (const attr of LEGACY_FILTER_ATTRS) {
+    if (p.get(attr)) {
+      return { why: `it narrows by ${attr}, which /next/ cannot filter on` };
     }
   }
   return { view };

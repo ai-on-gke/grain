@@ -29,11 +29,13 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
-import { Router, RouterLink } from "@angular/router";
+import { toSignal } from "@angular/core/rxjs-interop";
+import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Board, Task } from "../api/models";
 import {
   type BoardPlan,
   type BoardView,
+  LEGACY_FILTER_ATTRS,
   boardKindLabel,
   boardQueryForView,
   planForBoard,
@@ -223,6 +225,9 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                               type="button"
                               class="board-apply-btn"
                               [attr.data-testid]="'board-apply-' + b.id"
+                              [attr.aria-current]="
+                                activeBoard()?.id === b.id ? 'true' : null
+                              "
                               [attr.aria-label]="
                                 boardLabel(b) === b.name ? null : boardLabel(b)
                               "
@@ -1433,9 +1438,13 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   readonly q = input<string>();
   readonly view = input<string>();
   readonly newBoard = input<string>();
-  // ?f= is a condition in the saved-board grammar (board-query.ts): a
-  // link copied off a classic list or a board's own query.
+  // ?f= and the route's queryParamMap (?sort= and classic's legacy keys)
+  // are in the saved-board grammar (board-query.ts): a link copied off a
+  // classic list or a board's own query.
   readonly f = input<string | string[]>();
+  private readonly queryParamMap = toSignal(
+    inject(ActivatedRoute).queryParamMap,
+  );
 
   protected readonly groupOptions = GROUP_OPTIONS;
   protected readonly batchPriorityOptions = BATCH_PRIORITY_OPTIONS;
@@ -1686,16 +1695,19 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly canWriteBoards = computed(() =>
     this.access.can("POST /api/boards"),
   );
-  protected readonly activeBoardName = computed(() => {
+  protected readonly activeBoard = computed(() => {
     const cur = this.currentView();
     const plans = this.boardPlans();
     return (
       this.store.boards().find((b) => {
         const plan = plans.get(b.id);
         return plan?.open === "here" && sameView(plan.view, cur);
-      })?.name ?? ""
+      }) ?? null
     );
   });
+  protected readonly activeBoardName = computed(
+    () => this.activeBoard()?.name ?? "",
+  );
   protected readonly dispatchPause = computed(() =>
     summarizeDispatchStatus(
       this.access.rawConfig(),
@@ -1785,19 +1797,49 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     // says why this page cannot show it, rather than sitting on Backlog
     // as though nothing had been asked.
     effect(() => {
-      if (this.f() === undefined) return;
+      const fVal = this.f();
+      const qm = this.queryParamMap();
+      const classicKeys = ["f", "sort", ...LEGACY_FILTER_ATTRS] as const;
+      const fromRoute = !!qm && classicKeys.some((k) => qm.has(k));
+      if (fVal === undefined && !fromRoute) return;
       untracked(() => {
-        const qp = this.router.parseUrl(this.router.url).queryParams;
         const p = new URLSearchParams();
-        for (const [k, v] of Object.entries(qp)) {
-          for (const x of Array.isArray(v) ? v : [v]) p.append(k, String(x));
+        if (fromRoute && qm) {
+          for (const k of qm.keys) {
+            for (const x of qm.getAll(k)) p.append(k, x);
+          }
+        } else {
+          if (this.q()) p.set("q", this.q()!);
+          if (this.tab()) p.set("tab", this.tab()!);
+          if (this.group()) p.set("group", this.group()!);
+          if (this.repo()) p.set("repo", this.repo()!);
+          if (fVal !== undefined) {
+            for (const x of Array.isArray(fVal) ? fVal : [fVal])
+              p.append("f", x);
+          }
         }
-        const read = viewForQuery(p.toString());
-        if ("view" in read) this.openView(read.view, true);
-        else
-          this.snack(
+        const rawQuery = p.toString();
+        const read = viewForQuery(rawQuery);
+        if ("view" in read) {
+          this.openView(read.view, true);
+        } else {
+          const cleared: Record<string, null> = {};
+          for (const k of classicKeys) cleared[k] = null;
+          void this.router.navigate([], {
+            queryParams: cleared,
+            queryParamsHandling: "merge",
+            replaceUrl: true,
+          });
+          this.snackbar.show(
             `This link only opens on the classic task list: ${read.why}.`,
+            {
+              label: "Open classic",
+              run: () => {
+                this.doc.defaultView?.location.assign(`/?${rawQuery}`);
+              },
+            },
           );
+        }
       });
     });
     // ?newBoard=1 from the shell's Create menu opens the Save Board bar.
