@@ -460,13 +460,13 @@ export function duration(from?: string, to?: string): string {
                     data-testid="defer-until-submit"
                     [disabled]="!deferWakeAt() || store.isBusy('defer', t.id)"
                   >
-                    Defer
+                    Defer until
                   </button>
                   <button
                     type="button"
                     class="btn-text"
                     data-testid="defer-until-cancel"
-                    (click)="closeDeferUntil()"
+                    (click)="closeDeferUntil(true)"
                   >
                     Cancel
                   </button>
@@ -2098,11 +2098,20 @@ export class TaskDetailComponent implements OnDestroy {
   protected openDeferUntil(): void {
     this.deferDate.set("");
     this.deferUntilOpen.set(true);
+    // The picker replaces the button that opened it, so focus follows.
+    setTimeout(() => this.doc.getElementById("defer-until-date")?.focus());
   }
 
-  protected closeDeferUntil(): void {
+  protected closeDeferUntil(refocus = false): void {
     this.deferUntilOpen.set(false);
     this.deferDate.set("");
+    if (refocus) {
+      setTimeout(() =>
+        this.doc
+          .querySelector<HTMLElement>('[data-testid="act-defer-until"]')
+          ?.focus(),
+      );
+    }
   }
 
   protected wakeTime(iso: string): string {

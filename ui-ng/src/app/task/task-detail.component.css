@@ -289,8 +289,9 @@ g-task-page {
 }
 
 .defer-until-date {
-  min-height: 32px;
-  padding: 4px 8px;
+  box-sizing: border-box;
+  height: 40px;
+  padding: 0 8px;
   border-radius: var(--md-sys-shape-corner-small);
   border: 1px solid var(--md-sys-color-outline);
   background: var(--md-sys-color-surface-container-lowest);
@@ -301,6 +302,5 @@ g-task-page {
 }
 
 .defer-until-hint {
-  flex-basis: 100%;
   font-size: 12px;
 }
