@@ -42,14 +42,19 @@
 
 /* A #comment=<id> link lands on its comment: the thread scrolls it to the
    middle and tints it with the primary container for a few seconds, so the
-   eye finds it in a long thread; focus shows the usual ring. */
+   eye finds it in a long thread; focus shows the usual ring. The tint is
+   on at once and fades out when it ends. */
+.msg {
+  transition:
+    background-color 600ms ease,
+    border-color 600ms ease;
+}
+
 .msg.comment-highlight {
   background: var(--md-sys-color-primary-container);
   border-color: var(--md-sys-color-primary);
   color: var(--md-sys-color-on-primary-container);
-  transition:
-    background-color 600ms ease,
-    border-color 600ms ease;
+  transition: none;
 }
 
 .msg.comment-highlight .msg-meta {
@@ -63,7 +68,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .msg.comment-highlight {
+  .msg {
     transition: none;
   }
 }
