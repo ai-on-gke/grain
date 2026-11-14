@@ -34,7 +34,9 @@ import (
 //
 //   - secrets/github/<name>.token, .app.json and .ssh.json, into
 //     github-credential-<name> (gitproxy.CredentialSet.MigrateFilesToStore),
-//     each renamed to <file>.migrated once the store reads it back. With
+//     each renamed to <file>.migrated once the store reads it back, and
+//     each copy deleted on the next start that finds the store holding
+//     it (DeleteMigratedCopies; deleteMigratedCopies for the rest). With
 //     GRAIN_GITHUB_CREDENTIALS=files the move is reversed instead
 //     (RestoreFilesFromStore), which is what a downgrade runs first;
 //   - -hub-token-file, into registry-registration-token, when that secret
@@ -66,6 +68,7 @@ func MoveLooseCredentialsIntoStore(cfg Config, store *secrets.Store) {
 		}
 		return
 	}
+	deleteMigratedCopies(cfg.DataDir, store)
 	if fileStore := repoTokenSecrets(cfg.DataDir); fileStore != nil {
 		for _, name := range repoTokenNames {
 			importRepoTokenFile(fileStore, cfg.DataDir, name)
@@ -98,8 +101,71 @@ func moveGitCredentialsIntoStore(dataDir string) {
 	if !set.InStore() {
 		return
 	}
+	// The copies an earlier start left go first, so a file moved by this
+	// start keeps its copy until the next one.
+	if _, err := set.DeleteMigratedCopies(); err != nil {
+		log.Printf("grain: some plaintext rollback copies of git credentials are still under %s: %v", dir, err)
+	}
 	if _, err := set.MigrateFilesToStore(); err != nil {
 		log.Printf("grain: some git credentials are still plaintext files under %s: %v", dir, err)
+	}
+}
+
+// deleteMigratedCopies deletes the <file>.migrated rollback copies an
+// earlier start's moves left in dataDir, each once the store it was moved
+// into holds its value (gitproxy.RetireMigratedCopy), and warns about each
+// one whose value the store does not hold. It runs before this start's
+// moves, so a file moved now keeps its copy until the next start. The git
+// credentials' copies are moveGitCredentialsIntoStore's.
+//
+//   - sandbox-access-ca.pem and package-cache-ca.pem, against store (the
+//     CA bundles' store, cfg.caSecrets);
+//   - secrets/state-repo-token and secrets-repo-token, against the file
+//     store in <data-dir>/secrets;
+//   - secrets/relay/token, against store;
+//   - release-approval-key.pem, against the file store.
+func deleteMigratedCopies(dataDir string, store *secrets.Store) {
+	if dataDir == "" {
+		return
+	}
+	retire := func(path string, s *secrets.Store, secret, key string, trim bool) {
+		var same func(a, b []byte) bool
+		if trim {
+			same = func(a, b []byte) bool { return strings.TrimSpace(string(a)) == strings.TrimSpace(string(b)) }
+		}
+		_, _ = gitproxy.RetireMigratedCopy(path+gitproxy.MigratedSuffix, secret+"/"+key, storedValue(s, secret, key), same)
+	}
+	for secret, file := range map[string]string{
+		SandboxAccessCASecretName: "sandbox-access-ca.pem",
+		PackageCacheCASecretName:  "package-cache-ca.pem",
+	} {
+		retire(filepath.Join(dataDir, file), store, secret, caBundleKey, false)
+	}
+	retire(filepath.Join(SecretsDir(dataDir), "relay", "token"), store, "relay", "token", true)
+	fileStore := repoTokenSecrets(dataDir)
+	for _, name := range repoTokenNames {
+		retire(filepath.Join(SecretsDir(dataDir), name), fileStore, name, repoTokenKey, true)
+	}
+	retire(filepath.Join(dataDir, releaseapproval.KeyFile), fileStore, releaseapproval.KeySecret, releaseapproval.KeySecretKey, false)
+}
+
+// storedValue reads secret/key from store, ok false when it holds none (or
+// there is no store). It reads the store's backing file or Secret Manager
+// on every call, which is what makes it a check on the value.
+func storedValue(store *secrets.Store, secret, key string) func() ([]byte, bool, error) {
+	return func() ([]byte, bool, error) {
+		if store == nil {
+			return nil, false, nil
+		}
+		has, err := store.Has(secret, key)
+		if err != nil || !has {
+			return nil, false, err
+		}
+		v, err := store.Resolve(context.Background(), secret+"/"+key)
+		if err != nil {
+			return nil, false, err
+		}
+		return []byte(v), true, nil
 	}
 }
 
