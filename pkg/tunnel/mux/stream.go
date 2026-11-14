@@ -146,6 +146,14 @@ func (s *Stream) Read(b []byte) (n int, err error) {
 			if timer != nil {
 				timer.Stop()
 			}
+			// Data that arrived before the session ended is still the
+			// caller's: hand it over before reporting the close.
+			s.mu.Lock()
+			pending := len(s.buf) > 0
+			s.mu.Unlock()
+			if pending {
+				continue
+			}
 			return 0, s.mux.getCloseErr()
 		}
 	}
@@ -243,6 +251,14 @@ func (s *Stream) reserveSend(want int, dl *time.Time) (int, error) {
 		case <-s.mux.Done():
 			if timer != nil {
 				timer.Stop()
+			}
+			// Data that arrived before the session ended is still the
+			// caller's: hand it over before reporting the close.
+			s.mu.Lock()
+			pending := len(s.buf) > 0
+			s.mu.Unlock()
+			if pending {
+				continue
 			}
 			return 0, s.mux.getCloseErr()
 		}
@@ -383,6 +399,11 @@ func (s *Stream) receiveReset() {
 	})
 }
 
+// closeWithError ends the stream because its session ended. Unlike a reset,
+// it keeps the data already received so Read returns it before err: a peer
+// that writes a response and then closes the session (as the daemon does when
+// it drains a rotated hub tunnel) must not lose the bytes this side has not
+// read yet.
 func (s *Stream) closeWithError(err error) {
 	if err == nil {
 		err = ErrStreamClosed
@@ -393,7 +414,6 @@ func (s *Stream) closeWithError(err error) {
 		s.writeClosed = true
 		s.readClosed = true
 		s.closeErr = err
-		s.dropBufLocked()
 		s.mu.Unlock()
 
 		close(s.done)
