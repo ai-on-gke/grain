@@ -283,7 +283,10 @@ exit 0
 	}
 	// --pull=never: the image was just pulled and pinned, so a run that
 	// cannot find it locally must fail rather than fetch it implicitly.
-	if !strings.Contains(argv, "run --rm --pull=never "+pinned+" schema-version") {
+	// --label=grain.upgrade-check=…: what a cancel finds the check's
+	// container by (upgrade.removeCheckContainers).
+	if !strings.Contains(argv, "run --rm --pull=never --label=grain.upgrade-check=") ||
+		!strings.Contains(argv, " "+pinned+" schema-version") {
 		t.Errorf("the pulled image was never health-checked; docker was asked:\n%s", argv)
 	}
 	waitForPath(t, restartMarker, "the restart that brings the new image up")

@@ -262,6 +262,7 @@ case "$1" in
       case "$1" in
         --rm) shift ;;
         --pull=never) has_pull_never=1; shift ;;
+        --label=*) shift ;;
         --volume) shift 2 ;;
         *)
           ref="$1"; shift
