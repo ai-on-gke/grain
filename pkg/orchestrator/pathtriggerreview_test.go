@@ -133,6 +133,57 @@ func TestDistinctReviewTemplatesFileOneReviewEach(t *testing.T) {
 	}
 }
 
+// A review sensitive triggers with no template of their own file is a
+// targeted review, titled after every trigger it serves in name order and
+// shown on the change as the Targeted review gate; a template's title is
+// the review's, with {{task_title}} and {{pr}} filled in, and its gate is
+// the Code review. A template with no title keeps reviewTaskTitle's
+// default.
+func TestTriggerReviewsAreTitledCodeAndTargetedReviews(t *testing.T) {
+	t.Parallel()
+	sensitive := func(name string, paths ...string) model.PathTrigger {
+		tr := gateTrigger(name, model.TriggerHumanOnFindings, paths...)
+		tr.Template, tr.Sensitive = model.SecurityReviewTemplateID, true
+		return tr
+	}
+	code := gateTrigger("every-pr", model.TriggerHumanOnFindings, "**")
+	code.Template = templateID("code")
+	untitled := gateTrigger("docs", model.TriggerHumanOnFindings, "docs")
+	untitled.Template = templateID("untitled")
+	ctx, store, _, _, task := finishGated(t, []model.PathTrigger{
+		sensitive("release-machinery", "release"),
+		sensitive("grain-declarations", "decl"),
+		code, untitled,
+	}, "release/build.sh", "decl/a.yml", "docs/a.md")
+
+	got := reloaded(t, ctx, store, task.ID)
+	ref := linkOf(got, model.LinkFixes)
+	titles := map[string]bool{}
+	for _, id := range distinctGatingIDs(got) {
+		titles[reloaded(t, ctx, store, id).Title] = true
+	}
+	for _, want := range []string{
+		"Targeted review (grain-declarations, release-machinery): " + got.Title,
+		"Code review: " + got.Title + " (" + ref + ")",
+		"Review: " + got.Title,
+	} {
+		if !titles[want] {
+			t.Errorf("no review titled %q among %v", want, titles)
+		}
+	}
+
+	gates := map[string]model.MergeGate{}
+	for _, g := range model.ComputeMergeGates(got, nil, nil) {
+		gates[g.ID] = g
+	}
+	if g, ok := gates[model.GateTargetedReview]; !ok || g.Label != "Targeted review" || g.State != model.GateStateRunning {
+		t.Errorf("targeted review gate = %+v (present %v), want a running \"Targeted review\"", g, ok)
+	}
+	if g, ok := gates[model.GateReview]; !ok || g.Label != "Code review" || g.State != model.GateStateRunning {
+		t.Errorf("code review gate = %+v (present %v), want a running \"Code review\"", g, ok)
+	}
+}
+
 // Judging a head that already has its review files nothing more.
 func TestReJudgingTheSameHeadDoesNotRefileItsReview(t *testing.T) {
 	t.Parallel()

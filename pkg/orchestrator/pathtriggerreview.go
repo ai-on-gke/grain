@@ -420,6 +420,7 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, client gith
 		"paths":   strings.Join(paths, "\n"),
 		"group":   "",
 		"pr":      ref.String(), "head_sha": headSHA, "base_sha": matches[0].rule.Commit,
+		"task_title": reviewSubjectTitle(task),
 	}
 	facts := reviewFacts(ref, headSHA, matches, settings) +
 		earlierReviewsSection(ctx, store, client, &task, ref, headSHA, "", supersedingID) +
@@ -466,7 +467,7 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, client gith
 			"You are reviewing task %s (%q), whose work is on `%s` and proposed in %s. "+
 				"Your checkout is that branch itself: diff it against %s's base to see the change, and push "+
 				"any fix to it.\n", task.ID, task.Title, task.BranchName(), ref, ref) + facts
-		review, err = newReview(ctx, store, task, filled, securityReviewTitle(task), body, true, now)
+		review, err = newReview(ctx, store, task, filled, targetedReviewTitle(task, triggerNames(matches)), body, true, now)
 	case settings.fixes:
 		review, err = newReview(ctx, store, task, filled, reviewTaskTitle(filled, task),
 			reviewTaskBody(filled, task, ref, task.BranchName())+facts, false, now)

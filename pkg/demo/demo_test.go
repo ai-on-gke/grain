@@ -896,7 +896,7 @@ func TestSensitiveHoldDemoSeedsWithGitHubSim(t *testing.T) {
 		switch tasks[i].Title {
 		case "Charge in cents":
 			held = &tasks[i]
-		case "Security review: Charge in cents":
+		case "Targeted review (payments): Charge in cents":
 			review = &tasks[i]
 		}
 	}

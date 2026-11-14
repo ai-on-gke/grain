@@ -822,8 +822,9 @@ the template's title and body, and the same facts appended to the body.
 opens or updates the pull request, and again whenever the merge queue
 finds its head at a commit it has not judged, against the pull request's
 files (its diff from the merge base). Variables: `{{trigger}}`,
-`{{paths}}`, `{{group}}`, `{{pr}}`, `{{head_sha}}` and `{{base_sha}}`
-(the base commit the rule was read at). Without `gate`, the task is an
+`{{paths}}`, `{{group}}`, `{{pr}}`, `{{head_sha}}`, `{{base_sha}}`
+(the base commit the rule was read at) and `{{task_title}}` (the title of
+the task whose change it is, or its ID when it has none). Without `gate`, the task is an
 ordinary one in the repository. With `gate: true` it is a review of the
 change (see "Gating reviews" below), the change's auto-merge is withdrawn,
 and the change and its pull request say which trigger demanded what. The hold is
@@ -860,6 +861,23 @@ review):
 - **Idempotent.** The review carries a `path-trigger-review:<pr>:<kind>`
   tag and a `path-trigger-head:<sha>` tag; judging a head that already has
   its review files nothing.
+
+**What a review is called.** A gating review takes its template's title
+when the template has one: this repository's `every-pr` trigger files
+`pr-review`, titled `Code review: {{task_title}} ({{pr}})`. A sensitive
+trigger with no `template:` files a *targeted review*, titled
+`Targeted review (<trigger>): <task title>`, with every trigger it serves
+listed in name order (`Targeted review (grain-declarations,
+release-machinery): ...`). A template with no title of its own files
+`Review: <task title>`.
+The trust-boundary hold's own review is the *security review*, `Security
+review: <task title>`, and when it already covers what a sensitive
+trigger matched it serves that trigger too, under its own title. The
+change's merge gates use the same names: **Security review** (the
+trust-boundary hold, `security-review`), **Code review** (a configured
+review and every gating trigger that names a template, `review`) and
+**Targeted review** (template-less sensitive triggers, `targeted-review`).
+`--override-gates=review` still covers a targeted review gate.
 
 **Reviews post findings.** A gating review posts what it finds on the
 pull request (`add_review_comment`, which also puts it to the reviewed

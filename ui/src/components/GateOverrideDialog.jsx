@@ -30,6 +30,7 @@ import {
   deriveMergeGates,
   formatGateStatus,
   overrideReviewButtonLabel,
+  REVIEW_GATES,
   unsatisfiedReviewGates,
 } from "./MergeGatesList.jsx";
 
@@ -68,7 +69,7 @@ export default function GateOverrideDialog({ open, onClose, t, onSubmit }) {
     (g) =>
       g.state !== "passed" &&
       g.state !== "overridden" &&
-      (g.name === "security-review" || g.name === "review" || g.name === "ci"),
+      (REVIEW_GATES.includes(g.name) || g.name === "ci"),
   );
   const overrideGateNames = reviewSkipped.map((g) => g.name);
   const expectedPR = pullRequestNumber(t.pullRequest);
