@@ -454,6 +454,56 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # A release a person approved is tagged here, by this workflow's own
+      # token, so publish-release.yml never runs on it (a GITHUB_TOKEN push
+      # starts no workflow, and publish-release.yml publishes only the
+      # train's own tags). Its GitHub Release, with the notes
+      # scripts/release-notes.sh writes, is therefore made here, the same
+      # way publish-release.yml makes one, and before release-assets.sh,
+      # which then puts its assets on this release rather than creating a
+      # bare one.
+      - name: Write the release notes and the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run || github.ref != 'refs/heads/main' }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${RELEASE_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "promote-release: version must be vX.Y.Z, not ${RELEASE_VERSION@Q}" >&2
+            exit 1
+          fi
+          if gh release view "${RELEASE_VERSION}" >/dev/null 2>&1; then
+            echo "promote-release: ${RELEASE_VERSION} already has a GitHub Release"
+            exit 0
+          fi
+          if ! git rev-parse -q --verify "refs/tags/${RELEASE_VERSION}" >/dev/null; then
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "promote-release: dry run: ${RELEASE_VERSION} is not tagged, so there is no GitHub Release to write"
+              exit 0
+            fi
+            echo "promote-release: ${RELEASE_VERSION} is not tagged after approve" >&2
+            exit 1
+          fi
+          prev="$(git tag -l 'v[0-9]*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V |
+            awk -v v="${RELEASE_VERSION}" '$0 == v { exit } { p = $0 } END { print p }')"
+          if [ -z "$prev" ]; then
+            prev="$(git rev-list --max-parents=0 "${RELEASE_VERSION}" | tail -n 1)"
+          fi
+          bash ./scripts/release-notes.sh write --notes "${RUNNER_TEMP}/notes.md" --body "${RUNNER_TEMP}/body.md" \
+            "${RELEASE_VERSION}" "$prev" "${RELEASE_VERSION}"
+          latest=false
+          if [ "$(git rev-parse -q --verify 'refs/tags/latest^{commit}' || true)" = "$(git rev-parse "${RELEASE_VERSION}^{commit}")" ]; then
+            latest=true
+          fi
+          if [ "${DRY_RUN}" = "true" ]; then
+            echo "promote-release: dry run: would create the GitHub Release ${RELEASE_VERSION} (latest=${latest}) from:"
+            head -n 20 "${RUNNER_TEMP}/body.md"
+            exit 0
+          fi
+          gh release create "${RELEASE_VERSION}" --verify-tag --title "${RELEASE_VERSION}" \
+            --notes-file "${RUNNER_TEMP}/body.md" --latest="$latest"
+
       - name: Publish the promoted release's assets
         env:
           GITHUB_TOKEN: ${{ github.token }}
