@@ -280,7 +280,10 @@ export function ago(iso: string | undefined, now = Date.now()): string {
   return `${Math.round(h / 24)}d`;
 }
 
-// FINISHED_STATES are the states a task's work has stopped in for good.
+// FINISHED_STATES are the states a task's work has stopped in. "failed"
+// is not closed -- a person may still retry it (pkg/model StateFailed)
+// -- but nothing runs it until they do, so its bar ends where its last
+// run did rather than growing towards now as though work were going on.
 const FINISHED_STATES = new Set(["completed", "closed", "failed"]);
 
 // timelineEndMs is where a task's bar on the Timeline view ends, in
