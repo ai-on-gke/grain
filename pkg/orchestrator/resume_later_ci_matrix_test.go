@@ -341,3 +341,69 @@ func TestResumeLaterCIBackstopIsConfigurable(t *testing.T) {
 		})
 	}
 }
+
+// The backstop covers every task deferred with no wake time whose latest
+// resume_later comment names CI, however its suspension row reads: one a
+// later run marked resumed while the deferral stayed, and one that holds
+// some other condition only. Neither may leave the task deferred past the
+// backstop, with nothing waking it (tasks 4014, 4187, 4523, 4526).
+func TestResumeLaterCIBackstopSeesTheWaitHoweverItsSuspensionReads(t *testing.T) {
+	t.Parallel()
+	for _, shape := range []string{"resumed by a later run", "holding a message only"} {
+		shape := shape
+		t.Run(shape, func(t *testing.T) {
+			t.Parallel()
+			f := newCIWakeFixture(t, model.CIModeGitHub)
+			task := filedTask(t, f.ctx, f.store, "s", f.repo)
+			pushBranch(t, f.sim.BareRepo, task.BranchName())
+			head, _ := f.gh.GetBranchHead("acme", "widgets", task.BranchName())
+			f.actionsRun(7601, task.BranchName(), head.SHA, "in_progress", "", baseTime.Add(30*time.Second))
+
+			switch shape {
+			case "resumed by a later run":
+				parkTaskWithResumeLater(t, f.ctx, f.store, f.gh, f.ui, task, "s-1", map[string]any{"ci": "my-branch"}, baseTime)
+				// A run that started while the task stayed deferred: its
+				// start marks the suspension resumed, and it ends without
+				// touching the deferral.
+				if err := f.store.StartRun(f.ctx, model.Run{ID: "s-2", TaskID: task.ID, Sandbox: "s", Attempt: 2,
+					StartedAt: baseTime.Add(3 * time.Minute)}, model.Limits{}); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.store.FinishRun(f.ctx, "s-2", baseTime.Add(4*time.Minute), "failed", "it broke"); err != nil {
+					t.Fatal(err)
+				}
+			case "holding a message only":
+				if err := f.store.StartRun(f.ctx, model.Run{ID: "s-1", TaskID: task.ID, Sandbox: "s", Attempt: 1,
+					StartedAt: baseTime}, model.Limits{}); err != nil {
+					t.Fatal(err)
+				}
+				at := baseTime.Add(time.Minute)
+				if err := f.store.SetDeferred(f.ctx, task.ID, &at, nil, at); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.store.HoldResumeOn(f.ctx, task.ID, model.ResumeOn{Message: true}, at); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.store.AddComment(f.ctx, model.Comment{TaskID: task.ID,
+					Author: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
+					Body: "grain: this task's run stopped with resume_later. It goes back in the queue once " +
+						"CI (my-branch) has a verdict; Undefer releases it sooner.",
+					CreatedAt: at}); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.store.FinishRun(f.ctx, "s-1", baseTime.Add(2*time.Minute), "succeeded", ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.wantState(t, task.ID, model.StateDeferred, "after the wait was taken")
+			held, err := f.store.HeldCIResumes(f.ctx)
+			if err != nil || len(held) != 1 || held[0].TaskID != task.ID || held[0].TargetCI != model.ResumeOnMyBranch {
+				t.Fatalf("HeldCIResumes = %+v, %v; want task %s held on my-branch", held, err, task.ID)
+			}
+			f.wake(t, baseTime.Add(5*time.Minute))
+			f.wantState(t, task.ID, model.StateDeferred, "while CI is running")
+			f.wake(t, baseTime.Add(time.Minute+orchestrator.DefaultCIWakeStallBound+time.Minute))
+			f.wantState(t, task.ID, model.StateQueued, "past the backstop")
+		})
+	}
+}

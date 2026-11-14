@@ -3821,9 +3821,12 @@ func requeueForRepair(ctx context.Context, store *model.Store,
 		return err
 	}
 
-	return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+	if err := observeField(ctx, store, task.ID, now, func(o *model.Observation) {
 		markRepairAsked(o, now, attempt.baseTip, attempt.failures, attempt.why)
-	})
+	}); err != nil {
+		return err
+	}
+	return sendBackFromResumeLater(ctx, store, task.ID, "the merge queue's repair", now)
 }
 
 // repairAttempt is which automatic repair requeueForRepair is asking for
