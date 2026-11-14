@@ -273,10 +273,10 @@ func TestInteractiveProposalIsImmediatelyVisibleAndIdempotent(t *testing.T) {
 func TestProposalIsFiledWithDefaultCapabilitiesNotItsParents(t *testing.T) {
 	t.Parallel()
 	client, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "gcp-key")
+	putDefaultCapabilities(t, ctx, store, model.GCPKeySandboxAgentGrant)
 	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "the whole job", Approved: true,
-		Capabilities: &[]string{"gcp-key", "self-repair"},
+		Capabilities: &[]string{model.GCPKeySandboxAgentGrant, model.GrainHostExecGrant},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -307,7 +307,7 @@ func TestProposalIsFiledWithDefaultCapabilitiesNotItsParents(t *testing.T) {
 	// A proposal requesting capabilities receives defaults + requested capabilities.
 	custom, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "custom proposal", ProposedBy: parent.ID,
-		Capabilities: &[]string{"self-repair"},
+		Capabilities: &[]string{model.GrainHostExecGrant},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -320,10 +320,10 @@ func TestProposalIsFiledWithDefaultCapabilitiesNotItsParents(t *testing.T) {
 func TestAutoSubmittedProposalInheritanceAndCapabilities(t *testing.T) {
 	t.Parallel()
 	client, store, ctx := testClient(t)
-	putDefaultCapabilities(t, ctx, store, "gcp-key")
+	putDefaultCapabilities(t, ctx, store, model.GCPKeySandboxAgentGrant)
 	parent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "trusted to merge unread", Approved: true, AutoMerge: true,
-		Capabilities: &[]string{"gcp-key", "self-repair"},
+		Capabilities: &[]string{model.GCPKeySandboxAgentGrant, model.GrainHostExecGrant},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +343,7 @@ func TestAutoSubmittedProposalInheritanceAndCapabilities(t *testing.T) {
 	// Proposal asking for capability NOT granted to parent (e.g. self-upgrade, canonicalized to api:self-upgrade) cannot auto-submit -> Proposed.
 	escalated, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "escalated proposal", ProposedBy: parent.ID, AutoMerge: true,
-		Capabilities: &[]string{"self-upgrade"},
+		Capabilities: &[]string{"api:self-upgrade"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -364,14 +364,14 @@ func TestAutoSubmittedProposalInheritanceAndCapabilities(t *testing.T) {
 	// a person and must not inherit auto-merge.
 	upgradeParent, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "upgrade parent", Approved: true, AutoMerge: true,
-		Capabilities: &[]string{"self-upgrade"},
+		Capabilities: &[]string{"api:self-upgrade"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	heldPersonOnly, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "upgrade child", ProposedBy: upgradeParent.ID, AutoMerge: true,
-		Capabilities: &[]string{"self-upgrade"},
+		Capabilities: &[]string{"api:self-upgrade"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -399,7 +399,7 @@ func TestSessionProposalAskingForACapabilityItsSessionLacksWaitsForAPerson(t *te
 		t.Fatal(err)
 	}
 	session, err := client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title: "Director", Interactive: true, Capabilities: &[]string{"self-debug"},
+		Title: "Director", Interactive: true, Capabilities: &[]string{"api:self-debug", model.GrainSourceGrant},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -412,7 +412,7 @@ func TestSessionProposalAskingForACapabilityItsSessionLacksWaitsForAPerson(t *te
 
 	held, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "needs what the session has", Description: "d",
-		ProposedBy: session.ID, Capabilities: &[]string{"self-debug"},
+		ProposedBy: session.ID, Capabilities: &[]string{"api:self-debug", model.GrainSourceGrant},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -423,7 +423,7 @@ func TestSessionProposalAskingForACapabilityItsSessionLacksWaitsForAPerson(t *te
 
 	filed, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "needs self-repair", Description: "d",
-		ProposedBy: session.ID, Capabilities: &[]string{"self-repair"},
+		ProposedBy: session.ID, Capabilities: &[]string{model.GrainHostExecGrant},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -447,7 +447,7 @@ func TestSessionProposalAskingForACapabilityItsSessionLacksWaitsForAPerson(t *te
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                repo,
-		DefaultCapabilities: []string{"self-upgrade"},
+		DefaultCapabilities: []string{model.APIRef("self-upgrade")},
 	}); err != nil {
 		t.Fatal(err)
 	}

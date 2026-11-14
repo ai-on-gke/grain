@@ -156,11 +156,13 @@ At every start, before the capability servers start, the daemon
   rewritten to its declaration's host-script grants (`Store.RewriteRetiredGrants`).
   This covers task, template and schedule grants, default and CI
   capabilities, and console sessions.
-- **Keeps the old name working.** `local-scripts:<name>` stays an alias
-  for the same grants wherever it is still written
-  (`model.SetRuntimeGrantExpansions`), and grants expanded from
-  `local-scripts:<name>` remain withheld from scheduled runs and refused
-  to CI jobs (`localscripts.MigratedFrom`).
+- **Upgrades an older export.** A grain/config export still naming
+  `local-scripts:<name>` imports as the same grants
+  (`model.SetRuntimeGrantExpansions`, read by `model.RetiredGrantsBecame`),
+  and grants expanded from `local-scripts:<name>` remain withheld from
+  scheduled runs and refused to CI jobs (`localscripts.MigratedFrom`).
+  Anywhere else the old name was an alias for one release, and is not
+  any longer.
 
 The `pkg/capability/intree` fidelity test runs one declaration (including
 `approve: true` and stdin) both ways. Both give the same stdout, stderr,

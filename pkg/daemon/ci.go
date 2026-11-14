@@ -1195,8 +1195,8 @@ func ciWithheldCapabilityNotes(reg *model.CapabilityRegistry, event ci.Event, tr
 		}
 		// A reference whose in-process server holds its own event rule --
 		// the release server's three methods, which migration 101 rewrote
-		// image-signing, registry-push and package-publish to, and the
-		// bare names aliased to them -- is withheld by that rule
+		// image-signing, registry-push and package-publish to -- is
+		// withheld by that rule
 		// (ciCapabilityRefs), and says so as the retired provider did.
 		// Without this a push job declaring release#package-publish ran
 		// with no files and no word why
@@ -1445,6 +1445,11 @@ func ResolveCICapabilities(ctx context.Context, reg *model.CapabilityRegistry, c
 			continue
 		}
 		if !ok {
+			// A retired name no provider will ever answer to again is
+			// refused, naming what it became, rather than waited on.
+			if to := model.RetiredGrantsBecame(id); len(to) != 1 || to[0] != id {
+				return cc, nil, fmt.Errorf("CI capability %q is refused: it was retired, and is declared now as %s", id, strings.Join(to, ", "))
+			}
 			return cc, nil, &model.ResourceExhaustedError{
 				Capability: id,
 				Err:        fmt.Errorf("CI capability %q has no provider configured", id),

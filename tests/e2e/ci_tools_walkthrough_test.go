@@ -322,7 +322,7 @@ func (w *ciWorld) task(id string) model.Task {
 		Approval: &model.Attribution{Actor: actor},
 		Target:   &repo,
 		Binding:  model.BindingDirective,
-		Grants:   []model.Grant{{Capability: "grain-ci"}},
+		Grants:   []model.Grant{{Capability: model.GrainCIGrant}},
 		Links:    []model.Link{{Kind: model.LinkMergePolicy, Target: `{"NoFlakeRecheck":true}`}},
 	}
 	if err := w.store.PutTask(w.ctx, task); err != nil {
@@ -369,7 +369,7 @@ func (w *ciWorld) push(branch, content string) string {
 // calls its tools through.
 func (w *ciWorld) agent(taskID string, workspace string) *mcpProcess {
 	return startMCPServer(w.t, w.bin, "-sandbox-root", workspace, "-server", w.daemonURL,
-		"-task", taskID, "-grant", "grain-ci", "-pr-repo", "acme/widgets")
+		"-task", taskID, "-grant", model.GrainCIGrant, "-pr-repo", "acme/widgets")
 }
 
 func callTool(t *testing.T, p *mcpProcess, name string, args map[string]any) (string, bool) {

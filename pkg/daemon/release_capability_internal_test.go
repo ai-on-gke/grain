@@ -172,9 +172,9 @@ func TestReleaseServerMigrationFidelity(t *testing.T) {
 		release.Configure(packagepublish.Config{Credentials: ladder})
 		reg := releaseLegacyRegistry(ladder)
 		for _, name := range []string{"image-signing", "registry-push", "package-publish"} {
-			rewritten := model.CanonicalLegacyGrant(name)
+			rewritten := model.RetiredGrantsBecame(name)[0]
 			if !strings.HasPrefix(rewritten, model.ReleaseCapabilityServerID+"#"+name) {
-				t.Fatalf("%s is aliased to %q, want the release server's #%s", name, rewritten, name)
+				t.Fatalf("%s is rewritten to %q, want the release server's #%s", name, rewritten, name)
 			}
 			for _, e := range releaseTestEvents {
 				t.Run(fmt.Sprintf("%s/%s/trusted=%v/broken=%v", name, e.event, e.trusted, broken), func(t *testing.T) {
@@ -187,11 +187,11 @@ func TestReleaseServerMigrationFidelity(t *testing.T) {
 						t.Errorf("placements differ:\nlegacy:    %q\nrewritten: %q", oldFiles, newFiles)
 					}
 					// A bare name the migration did not reach (a
-					// repository's .grain, an older grain/config) is read
-					// as the reference and gets the same.
-					bareFiles, bareRefused := releaseRewrittenOutcome(t, creds, &model.Config{DeploymentID: "dep1"}, e.event, e.trusted, name)
-					if bareRefused != newRefused || strings.Join(bareFiles, "\n") != strings.Join(newFiles, "\n") {
-						t.Errorf("the alias %s got %q (refused %v), want %q (refused %v)", name, bareFiles, bareRefused, newFiles, newRefused)
+					// repository's .grain) is no alias any longer: the
+					// job is refused, naming what to declare instead,
+					// rather than left waiting for a provider.
+					if bareFiles, bareRefused := releaseRewrittenOutcome(t, creds, &model.Config{DeploymentID: "dep1"}, e.event, e.trusted, name); !bareRefused {
+						t.Errorf("the retired %s got %q, want the job refused", name, bareFiles)
 					}
 				})
 			}
