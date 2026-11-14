@@ -1027,7 +1027,13 @@ describe("TasksPageComponent", () => {
       await settle(f);
       q<HTMLButtonElement>(f, '[data-testid="board-apply-b1"]')!.click();
       expect(nav).toHaveBeenCalledWith(["/tasks"], {
-        queryParams: { tab: "all", group: null, q: null, repo: null },
+        queryParams: {
+          tab: "all",
+          group: null,
+          q: null,
+          repo: null,
+          view: null,
+        },
       });
 
       q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();

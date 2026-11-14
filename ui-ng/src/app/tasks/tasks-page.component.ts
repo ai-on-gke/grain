@@ -76,6 +76,7 @@ import {
   priorityOf,
   sorted,
   stateLabel,
+  timelineEndMs,
 } from "./task-view";
 import { type Undo, TasksStore } from "./tasks.store";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
@@ -1669,12 +1670,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     const { minMs, maxMs, span } = this.timelineSpan();
     return this.rows().map((t) => {
       const sRaw = Date.parse(t.startedAt || t.createdAt || "");
-      const eRaw =
-        t.state === "running"
-          ? maxMs
-          : Date.parse(
-              t.endedAt || t.closedAt || t.updatedAt || t.createdAt || "",
-            );
+      const eRaw = timelineEndMs(t, maxMs);
       const s = Number.isFinite(sRaw) ? Math.max(minMs, sRaw) : minMs;
       const e = Number.isFinite(eRaw) ? Math.max(s, eRaw) : maxMs;
       const leftPct = Math.min(94, Math.max(0, ((s - minMs) / span) * 100));
@@ -2120,6 +2116,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     if (q) p.set("q", q);
     const repo = (this.repo() || "").trim();
     if (repo) p.set("repo", repo);
+    // The Timeline view is part of what the reader is looking at, so a
+    // board saved from it opens on it again (2026-11-14 saved boards
+    // walkthrough: it used to come back as the list).
+    if (this.viewMode() !== "list") p.set("view", this.viewMode());
     return p.toString();
   }
 
@@ -2151,12 +2151,14 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     const p = new URLSearchParams(b.query || "");
     const nextQ = p.get("q") || "";
     this.filter.query.set(nextQ);
+    this.localViewMode.set(p.get("view") === "timeline" ? "timeline" : "list");
     void this.router.navigate(["/tasks"], {
       queryParams: {
         tab: p.get("tab") || null,
         group: p.get("group") || null,
         q: nextQ || null,
         repo: p.get("repo") || null,
+        view: p.get("view") === "timeline" ? "timeline" : null,
       },
     });
   }

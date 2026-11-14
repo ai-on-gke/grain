@@ -132,3 +132,78 @@ test("the Boards menu opens on the screen at phone width @phone", async ({
     await page.request.delete(`/api/boards/${b.id}`).catch(() => {});
   }
 });
+
+// The Timeline view on /next/tasks drew a task that was still open --
+// waiting, asking, held as a proposal -- as a bar ending where it was
+// filed, a 4% blip that read as finished, while the classic gantt draws
+// the same task "still open" up to now. And a board saved from the
+// Timeline view came back as the list, because the board's query never
+// said which view it was (2026-11-14 saved boards walkthrough,
+// docs/test-runs/2026-11-14-saved-boards-and-visualizations.md).
+test("the Timeline view runs a still-open task's bar up to now", async ({
+  page,
+}) => {
+  const tasks = await (await page.request.get("/api/tasks")).json();
+  const open = tasks.find(
+    (t) => t.state === "proposed" && !t.endedAt && !t.closedAt,
+  );
+  expect(open, "a still-open proposal in the demo store").toBeTruthy();
+
+  await page.goto("tasks?tab=proposed&view=timeline");
+  const row = page.getByTestId(`row-${open.id}`);
+  await expect(row).toBeVisible();
+  const track = await row.locator(".timeline-track").boundingBox();
+  const bar = await row.locator(".timeline-bar").boundingBox();
+  // The bar reaches the right-hand ("now") edge of its track.
+  expect(bar.x + bar.width).toBeGreaterThan(track.x + track.width - 2);
+});
+
+test("a board saved from the Timeline view opens on the Timeline again", async ({
+  page,
+}) => {
+  const name = "E2E Timeline board";
+  const plainName = "E2E Plain list board";
+  try {
+    await page.goto("tasks?tab=asked&view=timeline");
+    await expect(page.getByTestId("tasks-timeline")).toBeVisible();
+    const trigger = page.getByTestId("saved-boards-btn");
+    await trigger.click();
+    await page.getByTestId("board-save-open").click();
+    await page.getByTestId("board-name-input").fill(name);
+    const posted = page.waitForRequest(
+      (r) => r.method() === "POST" && r.url().endsWith("/api/boards"),
+    );
+    await page.getByTestId("board-save-submit").click();
+    const body = (await posted).postDataJSON();
+    expect(new URLSearchParams(body.query).get("view")).toBe("timeline");
+    expect(new URLSearchParams(body.query).get("tab")).toBe("asked");
+
+    // Back on the plain list, applying the board brings the Timeline back.
+    await page.getByTestId("tasks-view-list").click();
+    await expect(page.getByTestId("tasks-timeline")).toBeHidden();
+    const boards = await (await page.request.get("/api/boards")).json();
+    const saved = boards.find((b) => b.name === name);
+    await trigger.click();
+    await page.getByTestId(`board-apply-${saved.id}`).click();
+    await expect(page).toHaveURL(/[?&]view=timeline/);
+    await expect(page.getByTestId("tasks-timeline")).toBeVisible();
+
+    // And a board with no view of its own puts the list back.
+    const res = await page.request.post("/api/boards", {
+      data: { name: plainName, kind: "list", query: "tab=asked" },
+    });
+    expect(res.ok()).toBe(true);
+    const plain = await res.json();
+    await page.reload();
+    await expect(page.getByTestId("tasks-timeline")).toBeVisible();
+    await trigger.click();
+    await page.getByTestId(`board-apply-${plain.id}`).click();
+    await expect(page.getByTestId("tasks-timeline")).toBeHidden();
+    await expect(page).not.toHaveURL(/[?&]view=/);
+  } finally {
+    const boards = await (await page.request.get("/api/boards")).json();
+    for (const b of boards.filter((b) => [name, plainName].includes(b.name))) {
+      await page.request.delete(`/api/boards/${b.id}`).catch(() => {});
+    }
+  }
+});
