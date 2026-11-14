@@ -937,7 +937,7 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                           <input
                             type="text"
                             class="ops-input tabular"
-                            aria-label="New hostd name"
+                            aria-label="New host name"
                             [attr.data-testid]="'hostd-rename-input-' + h.name"
                             [value]="renameDraft()"
                             (input)="renameDraft.set($any($event.target).value)"

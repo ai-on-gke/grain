@@ -188,3 +188,26 @@ test("classic Integrations links land on Settings -> Capabilities", async ({
     await expect(page.getByTestId("card-capability-servers")).toBeVisible();
   }
 });
+
+test("the new Git kind choice and Engine hints stay inside their cards at phone width @phone", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const inside = async (cardId, innerSel) => {
+    const card = await page.getByTestId(cardId).boundingBox();
+    const inner = await page.locator(innerSel).first().boundingBox();
+    expect(card).not.toBeNull();
+    expect(inner).not.toBeNull();
+    expect(inner.x).toBeGreaterThanOrEqual(card.x - 1);
+    expect(inner.x + inner.width).toBeLessThanOrEqual(card.x + card.width + 1);
+    const overflow = await page
+      .getByTestId(cardId)
+      .evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+  };
+  await page.goto("/next/settings/git");
+  await inside("card-git-connections", '[data-testid="select-git-conn-kind"]');
+  await page.goto("/next/settings/engine");
+  await inside("card-engine", "#e-mpr-hint");
+  await inside("card-engine", "#e-poll-hint");
+});

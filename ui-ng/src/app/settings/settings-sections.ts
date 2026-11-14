@@ -105,7 +105,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
         id: "hostds",
         label: "Hosts",
         subtitle:
-          "Registered workstation hostds, grain-agentd pairing, enrollment codes, and pending join requests.",
+          "Registered workstation hosts, grain-agentd pairing, enrollment codes, and pending join requests.",
         keywords: [
           "host",
           "hosts",
