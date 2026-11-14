@@ -315,6 +315,10 @@ func TestExternalPRReviewSubmitsBotReviewAndUpdatesCheckRun(t *testing.T) {
 	if reviewTask.Base != "feat/human-pr" {
 		t.Errorf("review base = %q, want feat/human-pr", reviewTask.Base)
 	}
+	// It records the head it was filed to read, as every review kind does.
+	if got := model.ReviewedHead(reviewTask); got != detail.HeadSHA {
+		t.Errorf("reviewed head = %q, want the pull request's head %s", got, detail.HeadSHA)
+	}
 
 	// Simulate the review run finishing with an inline finding.
 	result := toolResult(
@@ -327,6 +331,11 @@ func TestExternalPRReviewSubmitsBotReviewAndUpdatesCheckRun(t *testing.T) {
 
 	if len(sim.Reviews) != 1 {
 		t.Fatalf("posted reviews = %+v, want 1 submitted review", sim.Reviews)
+	}
+	if v, ok := model.ReviewVerdictOf(reloaded(t, ctx, store, reviewTask.ID)); !ok ||
+		v.Verdict != model.VerdictFindings || v.FindingCount != 1 || v.Categories[0] != model.FindingOther ||
+		v.FixesPushed || v.Head != detail.HeadSHA {
+		t.Errorf("verdict = %+v (recorded %v), want one uncategorized finding at %s", v, ok, detail.HeadSHA)
 	}
 	if sim.Reviews[0].Event != "COMMENT" {
 		t.Errorf("review Event = %q, want COMMENT (submitted, not invisible PENDING draft)", sim.Reviews[0].Event)

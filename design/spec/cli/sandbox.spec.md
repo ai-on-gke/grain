@@ -327,7 +327,7 @@ Usage: `grain ci retrigger [--jobs j1,j2 | --all] [--commit <sha>] [--workflow <
 | `pr reply <body \| --file f>` | `POST /cli/pr/reply {"body", "comment_id"?}` |
 | `pr resolve` | `POST /cli/pr/resolve {"thread_id"?, "comment_id"?}`. Missing both: `grain pr resolve: missing --thread-id <id> or --comment-id <id>: name the thread`, status 2 |
 | `pr threads [--unresolved]` | `GET /cli/pr/threads[?unresolved=1]`: every review thread on the task's own pull request -- thread ID, first comment ID, author, path:line, resolved/outdated, body and replies -- or only the unresolved ones (outdated included). Needs no CI grant |
-| `pr review-comment <body \| --file f>` | `POST /cli/pr/review-comment {"body", "path"?, "line"?}`. Given one of `--path`/`--line` without the other: `give both --path and --line to attach a comment to a line, or neither for a general remark` |
+| `pr review-comment <body \| --file f>` | `POST /cli/pr/review-comment {"body", "path"?, "line"?, "category"?}`. Given one of `--path`/`--line` without the other: `give both --path and --line to attach a comment to a line, or neither for a general remark`. `--category` is one of `correctness`, `tests`, `security`, `compatibility`, `other` (the default), counted in the review's recorded verdict |
 
 `--file -` reads stdin. `--comment-id` and `--line` must be positive: `--<flag> must be a positive integer`. A missing body gets `missing <body> (or --file)`, status 2.
 
@@ -380,13 +380,14 @@ Usage: `grain pr threads [--unresolved]`
 <!-- END GENERATED FLAGS -->
 
 <!-- BEGIN GENERATED FLAGS: grain pr review-comment -->
-Usage: `grain pr review-comment <body|--file f> [--path <file> --line <N>]`
+Usage: `grain pr review-comment <body|--file f> [--path <file> --line <N>] [--category <c>]`
 
 | Flag | Type |
 |---|---|
 | `--file` | string |
 | `--path` | string |
 | `--line` | string |
+| `--category` | string |
 <!-- END GENERATED FLAGS -->
 
 **Pinned by:** `pkg/sandboxcli/actions_test.go`: `TestStage3SandboxCLICommands`; `pkg/sandboxcli/sandboxcli_test.go`: `TestSandboxCLIReadsOtherTasksCI`.

@@ -75,6 +75,9 @@ func putSecurityReview(ctx context.Context, store *model.Store, task model.Task,
 	return putSecurityReviewAt(ctx, store, task, ref, "", "", tmpl, title, body, now)
 }
 
+// putSecurityReviewAt is putSecurityReview for a review of headSHA, the
+// head it was filed to read (recorded as model.LinkReviewedHead and its
+// review-head tag), reading only what changed since since when that is set.
 func putSecurityReviewAt(ctx context.Context, store *model.Store, task model.Task, ref model.PullRequestRef,
 	headSHA, since string, tmpl model.Template, title, body string, now time.Time) (model.Task, error) {
 	reviewTask, err := newReview(ctx, store, task, tmpl, title, body, true, now)
@@ -85,6 +88,7 @@ func putSecurityReviewAt(ctx context.Context, store *model.Store, task model.Tas
 		reviewTask.Links = append(reviewTask.Links,
 			model.Link{Kind: model.LinkReviewsPullRequest, Target: ref.String()})
 	}
+	model.SetReviewedHead(&reviewTask, headSHA)
 	reviewTask.Tags = addReviewHeadTag(reviewTask.Tags, headSHA)
 	if since != "" {
 		reviewTask.Tags = append(reviewTask.Tags, reviewSinceTag(since))

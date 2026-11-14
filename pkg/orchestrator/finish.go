@@ -308,6 +308,11 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if err != nil {
 		return err
 	}
+	// A review that parked on a question has reached its verdict: the
+	// question. One parked for a secret or for access has not finished.
+	if question, asked := firstToolCallArg(result, "ask_question", "question"); parked && asked && strings.TrimSpace(question) != "" {
+		recordReviewVerdict(ctx, store, client, task, proxyResult, runID, true, false, now)
+	}
 	if parked {
 		// A person who spoke while the run was asking -- during its final,
 		// turn-ending ask_question or request_secret, which consumes no
@@ -425,6 +430,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			return err
 		}
 	}
+	recordReviewVerdict(ctx, store, client, task, proxyResult, runID, false, pushedInPlace, now)
 	staleBranch := false
 	if hasNothingNeeded && !inPlace {
 		staleBranch, err = branchUnmovedSinceWithStore(ctx, store, client, task, preRunBranchSHA)
