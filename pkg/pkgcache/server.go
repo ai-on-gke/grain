@@ -134,6 +134,13 @@ type Config struct {
 	// Credentials is the GitHub credential ladder (gitproxy.CredentialSet),
 	// used to auto-authenticate OCI registry operations (such as ghcr.io).
 	Credentials RegistryCredentials
+	// RepoScope decides which repositories Credentials may be spent on
+	// for the sandbox a request came from (scope.go): a GHCR token, or a
+	// manifest or blob fetched with one, is only ever obtained with the
+	// deployment's credential for a repository the calling sandbox may
+	// already read. Nil spends Credentials for nobody -- private GHCR
+	// images are then pulled only with a credential the sandbox brings.
+	RepoScope RepoScope
 	// AllowRegistryPush lets Credentials authenticate writes to an
 	// upstream registry -- pushes, and token requests for any action
 	// beyond pull -- on a sandbox's behalf. Off, which is what
@@ -236,6 +243,7 @@ type Config struct {
 type Server struct {
 	cache             Store
 	credentials       RegistryCredentials
+	repoScope         RepoScope
 	allowPush         bool
 	restricted        *ClientSet
 	jobTokens         *JobTokenSet
@@ -262,11 +270,13 @@ type Server struct {
 	// client itself.
 	dockerClient *http.Client
 	ghcrClient   *http.Client
-	ghcrAuth     *dockerAuth
-	gcrClient    *http.Client
-	ociClients   map[string]*http.Client
-	ociClientsMu sync.Mutex
-	logf         func(format string, args ...any)
+	// ghcrAnonClient is ghcrClient without the deployment credential.
+	ghcrAnonClient *http.Client
+	ghcrAuth       *dockerAuth
+	gcrClient      *http.Client
+	ociClients     map[string]*http.Client
+	ociClientsMu   sync.Mutex
+	logf           func(format string, args ...any)
 	// fetches coalesces concurrent misses on one object, so that ten
 	// sandboxes starting the same job fetch it once between them
 	// (coalesce.go).
@@ -278,6 +288,7 @@ func NewServer(cfg Config) *Server {
 	s := &Server{
 		cache:             cfg.Cache,
 		credentials:       cfg.Credentials,
+		repoScope:         cfg.RepoScope,
 		allowPush:         cfg.AllowRegistryPush,
 		restricted:        cfg.Restricted,
 		jobTokens:         cfg.JobTokens,
@@ -315,6 +326,9 @@ func NewServer(cfg Config) *Server {
 	}
 	s.dockerClient, _ = newDockerClient(s.client, s.dockerRegistry(), s.credentials)
 	s.ghcrClient, s.ghcrAuth = newDockerClient(s.client, s.ghcrRegistry(), s.credentials)
+	// The same registry with no credential behind it, for every request
+	// whose sandbox may not spend the deployment's (mayUseCredentials).
+	s.ghcrAnonClient, _ = newDockerClient(s.client, s.ghcrRegistry(), nil)
 	s.gcrClient, _ = newDockerClient(s.client, s.gcrRegistry(), s.credentials)
 	return s
 }

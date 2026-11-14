@@ -1058,6 +1058,82 @@ func (k *GranuleSandboxes) restrictGuestDNS(ctx context.Context, vmName string) 
 	return nil
 }
 
+// SandboxClientRegistry is the part of the package cache
+// (pkgcache.ClientNames) that maps the address a sandbox's requests
+// arrive from to the sandbox's name.
+type SandboxClientRegistry interface {
+	RegisterClient(ip net.IP, sandbox string)
+	ReleaseClient(ip net.IP, sandbox string)
+}
+
+// registerGuestClient tells cfg.SandboxClients which addresses vmName's
+// traffic arrives from, under the name its sandbox was acquired as --
+// the one model.Store.GitScope knows it by. Failing to is logged rather
+// than fatal: an address nobody registered names no sandbox, so the
+// package cache spends no credential for it, which is the safe way for
+// this to fail.
+func (k *GranuleSandboxes) registerGuestClient(ctx context.Context, vmName string, addr netip.Addr) {
+	if k.cfg.SandboxClients == nil {
+		return
+	}
+	lookup := k.guestIPs
+	if lookup == nil {
+		lookup = func(ctx context.Context, vmName string) ([]net.IP, error) {
+			nets, err := hostGuestNetworks(ctx, granule.PodName(vmName))
+			if err != nil {
+				return nil, err
+			}
+			ips := make([]net.IP, 0, len(nets))
+			for _, n := range nets {
+				ips = append(ips, n.IP)
+			}
+			return ips, nil
+		}
+	}
+	ips, err := lookup(ctx, vmName)
+	if err != nil || len(ips) == 0 {
+		if !addr.IsValid() {
+			log.Printf("orchestrator: granule VM %q: could not find the addresses its traffic arrives from (%v) -- "+
+				"the package cache will not authenticate private registry pulls for it", vmName, err)
+			return
+		}
+		ips = nil
+	}
+	if addr.IsValid() {
+		ips = append(ips, net.IP(addr.Unmap().AsSlice()))
+	}
+	sandbox := strings.TrimPrefix(vmName, VMNamePrefix)
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.clientRegistered == nil {
+		k.clientRegistered = map[string][]net.IP{}
+	}
+	for _, old := range k.clientRegistered[vmName] {
+		k.cfg.SandboxClients.ReleaseClient(old, sandbox)
+	}
+	for _, ip := range ips {
+		k.cfg.SandboxClients.RegisterClient(ip, sandbox)
+	}
+	k.clientRegistered[vmName] = ips
+}
+
+// releaseGuestClient undoes registerGuestClient for vmName, if it was done.
+func (k *GranuleSandboxes) releaseGuestClient(vmName string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	ips, ok := k.clientRegistered[vmName]
+	if !ok {
+		return
+	}
+	delete(k.clientRegistered, vmName)
+	if k.cfg.SandboxClients != nil {
+		sandbox := strings.TrimPrefix(vmName, VMNamePrefix)
+		for _, ip := range ips {
+			k.cfg.SandboxClients.ReleaseClient(ip, sandbox)
+		}
+	}
+}
+
 // releaseGuestDNS undoes restrictGuestDNS for vmName, if it was done.
 func (k *GranuleSandboxes) releaseGuestDNS(vmName string) {
 	k.mu.Lock()
@@ -1078,6 +1154,7 @@ func (k *GranuleSandboxes) releaseGuestDNS(vmName string) {
 // given granule VM, and its restriction at the sandbox resolver.
 func (k *GranuleSandboxes) cleanupGranuleHostIsolation(ctx context.Context, vmName string) {
 	k.releaseGuestDNS(vmName)
+	k.releaseGuestClient(vmName)
 
 	nftLock.Lock()
 	defer nftLock.Unlock()

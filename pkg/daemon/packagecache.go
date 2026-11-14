@@ -358,6 +358,7 @@ func startPackageCacheFrom(cfg Config, fabric Fabric, upstreams packageCacheUpst
 	handler := pkgcache.NewServer(pkgcache.Config{
 		Cache:             cache,
 		Credentials:       credentials,
+		RepoScope:         cfg.packageCacheScope,
 		Restricted:        restricted,
 		JobTokens:         jobTokens,
 		SplitGoCacheTrust: true,

@@ -95,6 +95,7 @@ func TestDockerAuthEndpointAutoAuth(t *testing.T) {
 		Client:       upstreamClient,
 		GHCRRegistry: "http://ghcr.io",
 		Credentials:  creds,
+		RepoScope:    everyRepo,
 	})
 
 	proxyServer := httptest.NewUnstartedServer(srv)
@@ -278,6 +279,7 @@ func TestDockerDirectWriteNoPrematureAuth(t *testing.T) {
 		Client:       upstreamClient,
 		GHCRRegistry: "http://ghcr.io",
 		Credentials:  creds,
+		RepoScope:    everyRepo,
 	})
 
 	proxyServer := httptest.NewUnstartedServer(srv)
@@ -372,6 +374,7 @@ func TestDockerAutoAuthUncoveredRepo(t *testing.T) {
 		Client:       upstreamClient,
 		GHCRRegistry: "http://ghcr.io",
 		Credentials:  creds,
+		RepoScope:    everyRepo,
 	})
 
 	proxyServer := httptest.NewUnstartedServer(srv)
@@ -545,6 +548,7 @@ func TestDockerPushAutoAuthFullE2E(t *testing.T) {
 		Client:            upstreamClient,
 		GHCRRegistry:      "http://ghcr.io",
 		Credentials:       creds,
+		RepoScope:         everyRepo,
 		AllowRegistryPush: true,
 	})
 
@@ -728,6 +732,7 @@ func TestDockerPushGHCRForbiddenChallenge(t *testing.T) {
 		Client:            upstreamClient,
 		GHCRRegistry:      "http://ghcr.io",
 		Credentials:       creds,
+		RepoScope:         everyRepo,
 		AllowRegistryPush: true,
 	})
 
@@ -863,6 +868,7 @@ func TestDockerAutoAuthNeverMintsPushWithoutOptIn(t *testing.T) {
 	srv, _ := newTestServer(t, Config{
 		GHCRRegistry: upstreamServer.URL,
 		Credentials:  creds,
+		RepoScope:    everyRepo,
 	})
 	proxy := httptest.NewServer(srv)
 	defer proxy.Close()
@@ -945,3 +951,9 @@ func TestDockerPullOnlyScope(t *testing.T) {
 		}
 	}
 }
+
+// everyRepo is a RepoScope that lets every caller spend the deployment's
+// credential on every repository: the tests above exercise what is done
+// with the credential once it may be spent, and scope_test.go exercises
+// when it may.
+var everyRepo = RepoScopeFunc(func(*http.Request, string, string) bool { return true })
