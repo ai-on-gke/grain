@@ -1,0 +1,16 @@
+=== [baseline-24d0eba1 / store=sqlite] ===
+  rows before:     task=1,task_run=0,task_comment=1,task_link=0,task_observation=1
+  rows after:      task=6,task_run=5,task_comment=5,task_link=0,task_observation=6
+  pg tuples pre:   n/a (sqlite)
+  pg tuples post:  n/a (sqlite)
+  cycles.commits:  {"n":17,"min":1,"p50":1,"p90":10,"p99":15,"max":15,"mean":4.705882352941177,"total":80}
+=== [head / store=sqlite] ===
+  rows before:     task=1,task_run=0,task_comment=1,task_link=0,task_observation=1
+  rows after:      task=6,task_run=5,task_comment=5,task_link=0,task_observation=6
+  pg tuples pre:   n/a (sqlite)
+  pg tuples post:  n/a (sqlite)
+  cycles.commits:  {"n":17,"min":1,"p50":2,"p90":10,"p99":15,"max":15,"mean":5.529411764705882,"total":94}
+  grain_config.qa: ''
+  task_qa_* rows:  assignment=0 check_run=0 finding=0
+  perf JSONL:      absent (verified)
+  /api/settings:   {"qaEnabled":false,"qaFlowId":"golden-v1-minimal","qaRolloutPct":0,"qaShadowOnControl":true,"qaEpoch":1,"qaRegimeId":1}
