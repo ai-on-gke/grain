@@ -89,6 +89,38 @@ export class NavConfigService {
   readonly dialogOpen = signal(false);
   private opener: HTMLElement | null = null;
 
+  constructor() {
+    // Customize navigation in another tab of this browser writes the same
+    // keys; the browser tells every other tab with a storage event, so
+    // their rails follow without a reload (as the classic sidebar does).
+    if (typeof window !== "undefined") {
+      window.addEventListener("storage", (e: StorageEvent) =>
+        this.onStorage(e),
+      );
+    }
+  }
+
+  // onStorage applies another tab's saved order or hidden set. A null key
+  // is localStorage.clear(), which resets both.
+  onStorage(e: Pick<StorageEvent, "key">): void {
+    if (
+      e.key === null ||
+      e.key === SIDEBAR_ORDER_KEY ||
+      e.key === LEGACY_NAV_ORDER_KEY
+    ) {
+      this._order.set(
+        parseNavOrder(
+          readStorage(SIDEBAR_ORDER_KEY) ?? readStorage(LEGACY_NAV_ORDER_KEY),
+        ),
+      );
+    }
+    if (e.key === null || e.key === SIDEBAR_HIDDEN_KEY) {
+      this._hidden.set(
+        new Set(parseNavHidden(readStorage(SIDEBAR_HIDDEN_KEY))),
+      );
+    }
+  }
+
   openDialog(opener?: HTMLElement | null): void {
     this.opener = opener ?? null;
     this.dialogOpen.set(true);

@@ -135,3 +135,26 @@ test(
     await expect(page.getByTestId("session-director")).toBeVisible();
   },
 );
+
+// Customize navigation in one tab applies to the browser's other open
+// tabs at once (a storage event), not only after they reload.
+test("Customize navigation updates another open tab", async ({ page }) => {
+  const other = await page.context().newPage();
+  await page.goto("/next/inbox");
+  await other.goto("/next/inbox");
+  await expect(other.getByTestId("rail-ci")).toBeVisible();
+
+  await page.getByTestId("rail-more").click();
+  await page.getByTestId("rail-customize-nav").click();
+  const dialog = page.getByRole("dialog", { name: "Customize navigation" });
+  await expect(dialog).toBeVisible();
+  const ci = dialog.getByRole("switch", { name: "Show CI on the rail" });
+  await ci.click();
+  await expect(ci).toHaveAttribute("aria-checked", "false");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByTestId("rail-ci")).toHaveCount(0);
+
+  await expect(other.getByTestId("rail-ci")).toHaveCount(0);
+  await expect(other.getByTestId("rail-hidden-count")).toHaveText("1");
+  await other.close();
+});
