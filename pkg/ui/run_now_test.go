@@ -445,7 +445,7 @@ func TestRunNowByAnAgentDoesNotApproveAnEscalation(t *testing.T) {
 	requester := create(t, c, ctx)
 	agentCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: requester.ID})
 
-	caps := []string{"self-debug"}
+	caps := []string{"api:self-debug", model.GrainSourceGrant}
 	escalated, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "needs a grant", Description: "for a person", Capabilities: &caps,
 	})
@@ -734,7 +734,7 @@ func TestRunNowByAnAgentDoesNotApproveADangerousAPIGrantItHolds(t *testing.T) {
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                repo,
-		DefaultCapabilities: []string{"self-upgrade"},
+		DefaultCapabilities: []string{model.APIRef("self-upgrade")},
 	}); err != nil {
 		t.Fatal(err)
 	}

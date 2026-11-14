@@ -22,6 +22,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -350,6 +351,47 @@ func configureCapabilityServerDemo(ctx context.Context, stored *model.Config, lo
 	}
 	configMapEntry.Builtin = "config-map"
 	stored.MCPServers[intree.CanonicalID("config-map")] = configMapEntry
+
+	// And the host-script server, with one harmless "ops" script: the
+	// local-script approval pages need a task that holds a host-script
+	// grant, and since the retired local-scripts:<name> spelling stopped
+	// being read as one, that grant has to name a server this deployment
+	// attaches.
+	hostScriptDir, err := os.MkdirTemp("", "grain-demo-host-script-")
+	if err != nil {
+		return nil, err
+	}
+	hostScript, err := intree.NewHostScript(intree.HostScriptConfig{
+		DataDir: hostScriptDir,
+		Listen:  "127.0.0.1:0",
+		Scripts: []intree.HostScript{{
+			Name:        "ops",
+			Description: "Demo operations script; echoes its arguments",
+			Script:      "echo \"$@\"\n",
+			Timeout:     time.Minute,
+		}},
+	})
+	if err != nil {
+		_ = os.RemoveAll(hostScriptDir)
+		return nil, err
+	}
+	hostScriptEntry, err := serveDemoCapability(ctx, hostScript.CapabilityServer)
+	if err != nil {
+		_ = os.RemoveAll(hostScriptDir)
+		return nil, err
+	}
+	go func() {
+		<-ctx.Done()
+		_ = os.RemoveAll(hostScriptDir)
+	}()
+	hostScriptEntry.Builtin = "host-script"
+	hostScriptEntry.Config = map[string]any{"scripts": []any{map[string]any{
+		"name":        "ops",
+		"description": "Demo operations script; echoes its arguments",
+		"script":      "echo \"$@\"\n",
+		"timeout":     60,
+	}}}
+	stored.MCPServers[intree.CanonicalID("host-script")] = hostScriptEntry
 	opts := servers.Options{Secrets: lookup, Hostd: hostdClient}
 	if identity != nil {
 		opts.Identity = servers.StoreIdentity(identity, nil)

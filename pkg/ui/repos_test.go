@@ -115,7 +115,7 @@ func TestSetRepoDefaultCapabilitiesStoresAndReportsAllThreeSets(t *testing.T) {
 	c, store, ctx := testClient(t)
 	putDefaultCapabilities(t, ctx, store, model.GitHubSandboxRepoGrant)
 
-	got, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"gcp-key"})
+	got, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{model.GCPKeySandboxAgentGrant})
 	if err != nil {
 		t.Fatalf("setting a repo's default capabilities: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestSetRepoDefaultCapabilitiesStoresAndReportsAllThreeSets(t *testing.T) {
 func TestSetRepoDefaultCapabilitiesToNoneClearsTheRepo(t *testing.T) {
 	t.Parallel()
 	c, store, ctx := testClient(t)
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"gcp-key"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{model.GCPKeySandboxAgentGrant}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", nil); err != nil {
@@ -190,11 +190,11 @@ func TestSetRepoDefaultCapabilitiesValidates(t *testing.T) {
 			t.Fatalf("error = %v, want a *ui.ValidationError", err)
 		}
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "not-a-repo", []string{"gcp-key"}); err == nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "not-a-repo", []string{model.GCPKeySandboxAgentGrant}); err == nil {
 		t.Fatal("setting defaults on a malformed repo: want a validation error, got nil")
 	}
 
-	got, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"gcp-key", "gcp-key"})
+	got, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{model.GCPKeySandboxAgentGrant, model.GCPKeySandboxAgentGrant})
 	if err != nil {
 		t.Fatalf("setting a duplicated id: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestRepoCapabilitiesGetAndPut(t *testing.T) {
 	srv, _ := testServer(t)
 
 	rec := do(t, srv, http.MethodPut, "/api/repos/acme/widgets/capabilities",
-		`{"defaultCapabilities":["gcp-key"]}`)
+		`{"defaultCapabilities":["https://grain.dev/capabilities/gcp#gcp-key={\"permission_set\":\"sandbox-agent\",\"primary\":true}"]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("put status = %d, want 200: %s", rec.Code, rec.Body)
 	}
@@ -301,7 +301,7 @@ func TestRemoveTargetRepoCleansUpRepoAndDropsFromList(t *testing.T) {
 	}
 
 	// Add defaults, prompt extension to gke-labs/granule
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "gke-labs/granule", []string{"self-debug"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "gke-labs/granule", []string{"api:self-debug"}); err != nil {
 		t.Fatalf("SetRepoDefaultCapabilities: %v", err)
 	}
 	if _, err := c.SetRepoPromptExtension(ctx, "gke-labs/granule", "Custom prompt"); err != nil {

@@ -46,51 +46,17 @@ vi.mock("../ApiScopeSetsPanel.jsx", () => ({
   },
 }));
 
-// Every in-process provider the 2026-11-04 range retired keeps its bare
-// name as a one-release alias, and Settings -> Capabilities says so for
-// each (docs/test-plans/2026-11-04.md §8). The release server's three
-// methods and grain#ci had no notice
-// (docs/test-runs/2026-11-04-capabilities.md, F3).
+// The in-process providers the 2026-11-04 range retired kept their bare
+// names as aliases for one release, and Settings -> Capabilities said so.
+// Every promoted release since v3.3.0 carries each conversion, so the
+// aliases and their notices are gone.
 describe("CapabilitiesSection deprecation notices", () => {
-  it.each([
-    ["gcp-key-deprecation-notice", ["gcp-key", "gcp#gcp-key"]],
-    [
-      "model-proxy-deprecation-notice",
-      ["claude-proxy", "model-proxy#model-proxy"],
-    ],
-    ["gemini-key-deprecation-notice", ["gemini-key", "gcp#gemini-key"]],
-    [
-      "release-deprecation-notice",
-      [
-        "image-signing",
-        "registry-push",
-        "package-publish",
-        "https://grain.dev/capabilities/release",
-        "release#<method>",
-      ],
-    ],
-    [
-      "grain-ci-deprecation-notice",
-      ["grain-ci", "https://grain.dev/capabilities/grain#ci"],
-    ],
-    [
-      "bootstrap-playbooks-deprecation-notice",
-      ["bootstrap-playbooks", "config-map#config-map"],
-    ],
-    [
-      "github-sandbox-deprecation-notice",
-      [
-        "github-sandbox",
-        "https://grain.dev/capabilities/github#sandbox-repo",
-        "github#sandbox-repo",
-      ],
-    ],
-  ])("shows %s", (testId, texts) => {
-    render(<CapabilitiesSection />);
-    const notice = screen.getByTestId(testId);
-    expect(notice.textContent).toMatch(/^Deprecated:/);
-    expect(notice.textContent).toMatch(/alias(es)? for one release/);
-    for (const text of texts) expect(notice.textContent).toContain(text);
+  it("shows none", () => {
+    const { container } = render(<CapabilitiesSection />);
+    expect(
+      container.querySelector('[data-testid$="-deprecation-notice"]'),
+    ).toBeNull();
+    expect(container.textContent).not.toMatch(/alias(es)? for one release/);
   });
 });
 

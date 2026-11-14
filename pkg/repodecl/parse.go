@@ -623,7 +623,7 @@ func parseCapabilities(f file, repo model.RepoRef, caps []string) ([]model.RepoR
 				write = true
 			}
 		case model.IsGrainCIGrant(c):
-			// grain#ci (and its retired grain-ci alias) is the merge-gate grant
+			// grain#ci is the merge-gate grant
 			// a repository's CI Mode attaches automatically -- never a hand-held
 			// task capability: applyGrainCIGrant strips it on a ci_mode: github
 			// repository, and CreateTask refuses it when copied from a template.

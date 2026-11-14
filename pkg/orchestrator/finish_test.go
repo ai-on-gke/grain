@@ -2865,7 +2865,7 @@ func TestProcessResultFilesProposedTaskWithDeclarativeParametersAndTemplates(t *
 				"agent_framework":   "claude",
 				"reads":             []any{"acme/docs"},
 				"writes":            []any{map[string]any{"repo": "acme/backend", "base": "staging"}},
-				"capabilities":      []any{"grain-ci"},
+				"capabilities":      []any{model.GrainCIGrant},
 			},
 		},
 	)
@@ -2924,7 +2924,7 @@ func TestProcessResultFilesProposedTaskWithDeclarativeParametersAndTemplates(t *
 	// grain-ci is the target repository's CI Mode to grant, and a
 	// no_repo proposal has none: naming it is passed over.
 	for _, g := range proposal.Grants {
-		if g.Capability == "grain-ci" {
+		if model.IsGrainCIGrant(g.Capability) {
 			t.Errorf("grants = %+v, want no grain-ci grant on a no_repo proposal", proposal.Grants)
 		}
 	}

@@ -240,7 +240,7 @@ func TestPutMemoryTakesItsAuthorFromTheRequest(t *testing.T) {
 	ctx := context.Background()
 	if err := client.Store.PutTask(ctx, model.Task{
 		ID: "a1b2", Intent: model.IntentImplement, Title: "remember things",
-		Grants: []model.Grant{{Capability: "memory"}},
+		Grants: []model.Grant{{Capability: "api:memory"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
