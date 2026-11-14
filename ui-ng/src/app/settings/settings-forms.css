@@ -377,3 +377,9 @@
   height: 40px;
   min-height: 40px;
 }
+
+/* A secret's value is masked as it is typed (a textarea, so a PEM keeps
+   its newlines), the way the GitHub token field's type="password" is. */
+.s-masked {
+  -webkit-text-security: disc;
+}

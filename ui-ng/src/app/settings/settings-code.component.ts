@@ -462,7 +462,8 @@ interface StateRepoEntryDto {
                                 'DELETE /api/deployment/git-connections/{cred}'
                               ) || state.sectionLocked('git')
                             "
-                            (click)="deleteGitConnection(cred)"
+                            [attr.data-testid]="'remove-git-conn-' + cred"
+                            (click)="confirmDeleteGitConnection(cred, c.host)"
                           >
                             Remove
                           </button>
@@ -508,6 +509,17 @@ interface StateRepoEntryDto {
                 />
               </div>
               <div class="s-field">
+                <span class="s-label">Host kind</span>
+                <g-pill-select
+                  testid="select-git-conn-kind"
+                  ariaLabel="Git host kind"
+                  align="left"
+                  [options]="gitKindOptions"
+                  [value]="newGitKind()"
+                  (valueChange)="setGitKind($event)"
+                />
+              </div>
+              <div class="s-field">
                 <label class="s-label" for="gc-scope">Scope (optional)</label>
                 <input
                   id="gc-scope"
@@ -542,7 +554,7 @@ interface StateRepoEntryDto {
                     testid="select-git-conn-type"
                     ariaLabel="Git auth type"
                     align="left"
-                    [options]="gitTypeOptions"
+                    [options]="gitTypeChoices()"
                     [value]="newGitType()"
                     (valueChange)="newGitType.set($event)"
                   />
@@ -1076,6 +1088,29 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     { value: "existing", label: "Link stored credential" },
   ];
 
+  // What the host is: a GitHub (github.com or Enterprise Server, with
+  // the REST API) or a plain git host (git only). Sent as the request's
+  // kind -- left out, the server reads every host as GitHub -- and a
+  // GitHub App is offered only for a GitHub host, as the classic form
+  // does and the server insists.
+  protected readonly gitKindOptions: readonly PillOption[] = [
+    { value: "github", label: "GitHub" },
+    { value: "git", label: "Plain git host" },
+  ];
+  protected readonly newGitKind = signal<"github" | "git">("github");
+  protected readonly gitTypeChoices = computed<readonly PillOption[]>(() =>
+    this.newGitKind() === "git"
+      ? this.gitTypeOptions.filter((o) => o.value !== "app")
+      : this.gitTypeOptions,
+  );
+
+  protected setGitKind(kind: string): void {
+    this.newGitKind.set(kind === "git" ? "git" : "github");
+    if (kind === "git" && this.newGitType() === "app") {
+      this.newGitType.set("pat");
+    }
+  }
+
   protected readonly gitTypeOptions: readonly PillOption[] = [
     { value: "pat", label: "Personal access token (pat)" },
     { value: "ssh", label: "SSH private key (ssh)" },
@@ -1543,6 +1578,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       payload = {
         credential: "",
         host,
+        kind: this.newGitKind(),
         type,
         ...(scope ? { scope } : {}),
       };
@@ -1607,6 +1643,18 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     } catch (err) {
       this.state.error.set(errText(err));
     }
+  }
+
+  // Remove asks first: the connection is how tasks reach that host, and
+  // its credential goes with it.
+  protected confirmDeleteGitConnection(cred: string, host?: string): void {
+    this.confirmReq.set({
+      title: `Remove Git connection ${cred}?`,
+      message: `Tasks stop cloning and pushing through it${host ? ` on ${host}` : ""} at once, and its stored credential is deleted.`,
+      accept: "Remove connection",
+      destructive: true,
+      run: () => this.deleteGitConnection(cred),
+    });
   }
 
   protected async deleteGitConnection(cred: string): Promise<void> {
