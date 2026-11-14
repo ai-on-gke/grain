@@ -54,11 +54,21 @@ for (const viewport of [
   test(`a findings-blocked gate offers Accept findings at ${viewport.width}px`, async ({
     page,
   }) => {
+    // The page polls this route. Under load one poll's response can be
+    // disposed before it is read ("Response has been disposed"), and a
+    // throw here fails the test: answer that poll with the last patched
+    // body instead, so the findings never drop out of the panel mid-test
+    // (access-request-card.spec.js lets it through unfaked, which would).
+    let last = null;
     await page.route(/\/api\/tasks\/5(\?.*)?$/, async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
-      const response = await route.fetch();
-      const json = await response.json();
-      await route.fulfill({ response, json: { ...json, ...FINDINGS } });
+      try {
+        const response = await route.fetch();
+        last = { ...(await response.json()), ...FINDINGS };
+      } catch {
+        if (!last) return route.fallback().catch(() => {});
+      }
+      await route.fulfill({ status: 200, json: last }).catch(() => {});
     });
     let posted = null;
     await page.route("**/api/tasks/5/accept-findings", async (route) => {
