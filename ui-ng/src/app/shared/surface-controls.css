@@ -163,6 +163,14 @@
   color: var(--md-sys-color-inverse-primary);
 }
 
+.batch-bar .btn-text:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--md-sys-color-inverse-on-surface) 12%,
+    var(--md-sys-color-inverse-surface)
+  );
+}
+
 /* ---------- Shared dialogs & switches ---------- */
 .btn-text.danger {
   color: var(--md-sys-color-error);

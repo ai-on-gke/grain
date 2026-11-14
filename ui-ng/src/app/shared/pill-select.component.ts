@@ -54,9 +54,11 @@ let nextPillSelectId = 0;
         class="pill-select-btn"
         [class.is-open]="open()"
         [class.is-inverse]="inverse()"
+        [class.is-invalid]="invalid()"
         [disabled]="disabled()"
         [attr.data-testid]="testid() || null"
         [attr.aria-label]="resolvedAriaLabel()"
+        [attr.aria-describedby]="describedBy() || null"
         [attr.aria-expanded]="open()"
         [attr.aria-controls]="open() ? menuId() : null"
         aria-haspopup="listbox"
@@ -144,8 +146,14 @@ export class PillSelectComponent implements OnDestroy {
   readonly align = input<"left" | "right">("right");
   readonly openUp = input<boolean>(false);
   readonly inverse = input<boolean>(false);
+  readonly invalid = input<boolean>(false);
+  readonly describedBy = input<string>("");
 
   readonly valueChange = output<string>();
+
+  focus(): void {
+    this.btnEl()?.nativeElement.focus();
+  }
 
   protected readonly open = signal(false);
   protected readonly menuId = computed(() =>

@@ -84,6 +84,7 @@ export class TasksStore implements OnDestroy {
   readonly loaded = computed(() => this.ownLoaded() || this.feed.loaded());
   readonly loadError = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
+  readonly lastLanded = signal<readonly string[]>([]);
   readonly busy = signal<ReadonlySet<string>>(new Set());
 
   readonly work = computed(() => this.live().filter(isWork));
@@ -430,14 +431,19 @@ export class TasksStore implements OnDestroy {
     const failed = await this.fanOut("priority", ids, (id) =>
       this.api.patch("PATCH /api/tasks/{id}", { id }, { priority }),
     );
+    const landed = this.lastLanded();
     return {
       failed,
       undo: {
         label: "Undo",
         run: async () => {
           await Promise.all(
-            [...before].map(([id, p]) =>
-              this.api.patch("PATCH /api/tasks/{id}", { id }, { priority: p }),
+            landed.map((id) =>
+              this.api.patch(
+                "PATCH /api/tasks/{id}",
+                { id },
+                { priority: before.get(id) },
+              ),
             ),
           );
           await this.refresh();
@@ -591,7 +597,12 @@ export class TasksStore implements OnDestroy {
   ): Promise<number> {
     this.mark(key, true);
     this.actionError.set(null);
-    const results = await Promise.allSettled(ids.map(call));
+    this.lastLanded.set([]);
+    const results = await Promise.allSettled(
+      ids.map((id) => Promise.resolve().then(() => call(id))),
+    );
+    const landed = ids.filter((_, i) => results[i].status === "fulfilled");
+    this.lastLanded.set(landed);
     const failures = results.filter(
       (r): r is PromiseRejectedResult => r.status === "rejected",
     );
@@ -599,7 +610,7 @@ export class TasksStore implements OnDestroy {
       this.actionError.set(
         ids.length === 1
           ? errorText(failures[0].reason)
-          : `${failures.length} of ${ids.length} did not go through: ${errorText(failures[0].reason)}`,
+          : `${failures.length} of ${ids.length} ${ids.length === 1 ? "task" : "tasks"} failed: ${errorText(failures[0].reason)}`,
       );
     }
     await this.refresh();

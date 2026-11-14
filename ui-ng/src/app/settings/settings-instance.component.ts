@@ -1057,7 +1057,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       const n = res?.delivered_count;
       this.snackbar.show(
         typeof n === "number"
-          ? `Broadcast delivered to ${n} task(s)`
+          ? `Broadcast delivered to ${n} ${n === 1 ? "task" : "tasks"}`
           : "Broadcast delivered to active tasks",
       );
     } catch (err) {

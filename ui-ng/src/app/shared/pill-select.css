@@ -28,13 +28,21 @@ g-priority-chip {
     background-color 140ms var(--md-sys-motion-effects),
     border-color 140ms var(--md-sys-motion-effects);
 }
-:root[data-theme="dark"] .pill-select-btn {
+@media (prefers-reduced-motion: reduce) {
+  .pill-select-btn {
+    transition: none;
+  }
+}
+:root[data-theme="dark"] .pill-select-btn:not(.is-inverse) {
   background: var(--md-sys-color-surface-container);
 }
 .pill-select-btn:hover:not(:disabled),
 .pill-select-btn.is-open {
   background: var(--md-sys-color-surface-container-high);
   border-color: var(--md-sys-color-outline);
+}
+.pill-select-btn.is-invalid {
+  border-color: var(--md-sys-color-error);
 }
 .pill-select-btn.is-inverse {
   background: color-mix(

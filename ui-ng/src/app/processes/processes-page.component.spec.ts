@@ -862,6 +862,9 @@ describe("ProcessesPageComponent (D-9)", () => {
     expect(
       closeCalls.map((c) => (c.params as { id: string }).id).sort(),
     ).toEqual(["401", "402"]);
+    expect(TestBed.inject(SnackbarService).current()?.message).toBe(
+      "Closed 2 active suite tasks.",
+    );
     expect(api.calls.some((c) => c.route === "POST /api/tasks/{id}/stop")).toBe(
       false,
     );
