@@ -59,15 +59,6 @@ g-workstream-detail {
   color: var(--md-sys-color-on-surface-variant);
 }
 
-.ws-goal {
-  margin: 6px 0 0;
-  font-size: 13px;
-  line-height: 18px;
-  color: var(--md-sys-color-on-surface-variant);
-  max-width: 108ch;
-  white-space: pre-wrap;
-}
-
 .ws-dprog {
   display: grid;
   grid-template-columns: minmax(220px, 400px) minmax(0, 1fr);

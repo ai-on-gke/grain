@@ -1,0 +1,230 @@
+/* g-model-picker (shared/model-picker.component.ts): a pill trigger and a
+   searchable, connection-grouped listbox. Same tokens as g-pill-select. */
+g-model-picker {
+  display: inline-flex;
+  min-width: 0;
+}
+.mp-wrap {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  width: 100%;
+}
+.mp-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 10px 0 14px;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font: 400 14px/20px var(--grain-font-body);
+  text-align: left;
+  cursor: pointer;
+}
+:root[data-theme="dark"] .mp-trigger {
+  background: var(--md-sys-color-surface-container);
+}
+.mp-trigger:hover:not(:disabled),
+.mp-trigger.is-open {
+  background: var(--md-sys-color-surface-container-high);
+}
+.mp-trigger:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+.mp-trigger:disabled {
+  cursor: default;
+  border-color: var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.mp-trigger-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--grain-font-mono, monospace);
+  font-size: 13.5px;
+}
+.mp-trigger-label.mp-placeholder {
+  font-family: var(--grain-font-body);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.mp-flag {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  font: 500 11px/16px var(--grain-font-body);
+  white-space: nowrap;
+}
+.mp-chevron {
+  flex: none;
+  color: var(--md-sys-color-on-surface-variant);
+  transition: transform 150ms var(--md-sys-motion-spatial);
+}
+.mp-trigger.is-open .mp-chevron {
+  transform: rotate(180deg);
+}
+.mp-panel {
+  position: absolute;
+  z-index: 45;
+  top: calc(100% + 4px);
+  left: 0;
+  width: max(100%, 280px);
+  max-width: min(440px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  box-shadow: var(--md-sys-elevation-dialog);
+}
+:root[data-theme="dark"] .mp-panel {
+  background: var(--md-sys-color-surface-container);
+}
+.mp-panel.mp-up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+.mp-search.s-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.mp-list {
+  max-height: min(320px, calc(100dvh - 160px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.mp-group + .mp-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+.mp-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px 2px;
+  font: 600 11px/16px var(--grain-font-body);
+  color: var(--md-sys-color-on-surface-variant);
+}
+.mp-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp-group-note {
+  font-weight: 400;
+  white-space: nowrap;
+}
+.mp-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  font: 400 13.5px/20px var(--grain-font-mono, monospace);
+  cursor: pointer;
+}
+.mp-option.is-active,
+.mp-option:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+.mp-option.is-active {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+.mp-option-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mp-check {
+  flex: none;
+  color: var(--md-sys-color-primary);
+}
+.mp-empty {
+  margin: 0;
+  padding: 10px;
+  color: var(--md-sys-color-on-surface-variant);
+  font: 400 12.5px/18px var(--grain-font-body);
+}
+.mp-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+.mp-foot-note {
+  min-width: 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font: 400 11.5px/16px var(--grain-font-body);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mp-chevron {
+    transition: none;
+  }
+}
+/* Ordered model lists (Settings → Models fallback models). */
+.s-field > g-model-picker {
+  width: 100%;
+}
+g-model-picker.mp-inline {
+  width: min(320px, 100%);
+}
+.mp-fallbacks {
+  margin-top: 16px;
+}
+.mp-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 8px;
+  padding: 0;
+  list-style: none;
+}
+.mp-chain-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 40px;
+  padding: 2px 4px 2px 10px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-small);
+}
+.mp-chain-pos {
+  flex: none;
+  min-width: 18px;
+  color: var(--md-sys-color-on-surface-variant);
+  font: 500 12px/16px var(--grain-font-body);
+  font-variant-numeric: tabular-nums;
+}
+.mp-chain-model {
+  flex: 1 1 12em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font: 400 13.5px/20px var(--grain-font-mono, monospace);
+}
+.mp-chain-actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}

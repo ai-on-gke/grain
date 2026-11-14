@@ -166,6 +166,9 @@ describe("FleetHealthComponent", () => {
       "Deployment paused",
     ]);
     expect(alerts[0].textContent).toContain("git proxy: address in use");
+    expect(alerts[0].querySelector("a")?.getAttribute("href")).toBe(
+      "/fleet?tab=controls#fleet-power",
+    );
     expect(alerts[1].querySelector("a")?.getAttribute("href")).toBe(
       "/fleet?tab=controls",
     );

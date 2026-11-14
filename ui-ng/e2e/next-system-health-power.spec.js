@@ -57,6 +57,10 @@ test("classic System → Health and → Power land on their /next/ view", async 
   await expect(
     page.getByRole("heading", { name: "Alerts", exact: true }),
   ).toBeVisible();
+  await page.setViewportSize({ width: 2048, height: 1100 });
+  const wideBox = await page.locator("#fleet-panel-health").boundingBox();
+  expect(wideBox.width).toBeGreaterThan(1900);
+  await page.setViewportSize({ width: 1440, height: 900 });
 
   await page.goto("system/power");
   await expect(page).toHaveURL(/\/next\/fleet\?tab=controls#fleet-power$/);
@@ -133,11 +137,25 @@ test("Health shows the settings, budget and alerts the classic tab shows @phone 
   await expect(page.getByTestId("health-github-polls")).toContainText(
     "1 of 4 tracked PRs backed off",
   );
+  const spentAlign = await page
+    .getByTestId("health-github-callers")
+    .getByRole("columnheader", { name: "Spent" })
+    .evaluate((el) => getComputedStyle(el).textAlign);
+  expect(spentAlign).toBe("right");
 
   const alert = page
     .getByTestId("health-alert")
     .filter({ hasText: "Deployment paused" });
   await expect(alert).toContainText("maintenance window");
+  const borderMatchesWarning = await alert.evaluate((el) => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--md-sys-color-warning)";
+    document.body.appendChild(probe);
+    const want = getComputedStyle(probe).color;
+    probe.remove();
+    return getComputedStyle(el).borderLeftColor === want;
+  });
+  expect(borderMatchesWarning).toBe(true);
   await alert.getByRole("link", { name: "Pauses & Controls" }).click();
   await expect(page).toHaveURL(/\/next\/fleet\?tab=controls$/);
   await page.goBack();

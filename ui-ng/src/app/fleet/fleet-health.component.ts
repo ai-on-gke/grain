@@ -26,6 +26,7 @@ import { RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { settingLabel } from "../settings/settings-sections";
+import { effectiveDisplayTimeZone } from "../shared/dispatch-status";
 import {
   collectHealthAlerts,
   githubBudgetView,
@@ -230,6 +231,7 @@ export const HEALTH_REFRESH_MS = 10000;
                         class="btn-text"
                         [routerLink]="l.path"
                         [queryParams]="l.query ?? null"
+                        [fragment]="l.fragment"
                         >{{ l.label }}</a
                       >
                     }
@@ -455,8 +457,16 @@ export class FleetHealthComponent implements OnInit, OnDestroy {
     this.access.deniedReason("GET /api/sandboxes"),
   );
 
+  private readonly timeZone = computed(() =>
+    effectiveDisplayTimeZone(
+      String(
+        this.config()?.["timeZone"] ?? this.access.rawConfig()?.timeZone ?? "",
+      ),
+    ),
+  );
+
   protected readonly alerts = computed(() =>
-    collectHealthAlerts(this.config()),
+    collectHealthAlerts(this.config(), this.timeZone()),
   );
   protected readonly configRepoReset = computed(
     () => !!this.config()?.["stateRepoResetNotice"],
@@ -464,9 +474,10 @@ export class FleetHealthComponent implements OnInit, OnDestroy {
   protected readonly installNotice = computed(() => {
     const n = this.config()?.["installNotice"] as Obj | null | undefined;
     if (!n) return null;
-    const msg = String(n["message"] ?? "");
+    const msg = String(n["message"] ?? "").trim();
+    const ended = msg && !/[.!?]$/.test(msg) ? `${msg}.` : msg;
     return {
-      message: msg ? `${msg[0].toUpperCase()}${msg.slice(1)}.` : "",
+      message: ended ? `${ended[0].toUpperCase()}${ended.slice(1)}` : "",
       command: String(n["command"] ?? ""),
       clis: (Array.isArray(n["affectedClis"]) ? n["affectedClis"] : []).map(
         String,
@@ -516,7 +527,7 @@ export class FleetHealthComponent implements OnInit, OnDestroy {
     }),
   );
   protected readonly overcommit = computed(() =>
-    overcommitView(this.settings()),
+    overcommitView(this.settings(), this.timeZone()),
   );
   protected readonly budget = computed(() => githubBudgetView(this.github()));
   protected readonly counters = computed(() =>
@@ -539,6 +550,14 @@ export class FleetHealthComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.live = false;
     if (this.timer) clearTimeout(this.timer);
+  }
+
+  async refresh(): Promise<void> {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    await Promise.all([this.loadOnce(), this.tick()]);
   }
 
   private async loadOnce(): Promise<void> {

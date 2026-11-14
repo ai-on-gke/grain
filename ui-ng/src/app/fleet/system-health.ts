@@ -22,11 +22,12 @@ import type { SettingsSectionId } from "../settings/settings-sections";
 export type HealthSeverity = "critical" | "warning" | "info";
 
 // HealthLink is where an alert's button goes: a /next/ path and, for
-// Fleet, the ?tab= that shows it.
+// Fleet, the ?tab= and #fragment that show it.
 export interface HealthLink {
   label: string;
   path: string;
   query?: Record<string, string>;
+  fragment?: string;
 }
 
 export interface HealthAlert {
@@ -45,6 +46,7 @@ const POWER_LINK: HealthLink = {
   label: "Power",
   path: "/fleet",
   query: { tab: "controls" },
+  fragment: "fleet-power",
 };
 const CONFIG_REPO_LINK: HealthLink = {
   label: "Config repo",
@@ -70,31 +72,46 @@ function sentence(s: string): string {
   return t && !/[.!?]$/.test(t) ? `${t}.` : t;
 }
 
-// moment is an RFC 3339 time as a date and clock time in the reader's
-// locale, or the text as sent when it does not parse.
-export function moment(at: string): string {
+// moment is an RFC 3339 time as a date and clock time in timeZone (or the
+// reader's locale when unset), or the text as sent when it does not parse.
+export function moment(at: string, timeZone?: string): string {
   const t = Date.parse(at);
   if (!at || !Number.isFinite(t)) return at;
-  return new Date(t).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
+  try {
+    return new Date(t).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+      ...(timeZone ? { timeZone } : {}),
+    });
+  } catch {
+    return new Date(t).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+  }
 }
 
 function capitalise(s: string): string {
   return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
+function pauseConnectionLabel(key: string): string {
+  const at = key.indexOf("@hostd/");
+  if (at < 0) return key;
+  return `${key.slice(0, at)} on host ${key.slice(at + "@hostd/".length)}`;
+}
+
 // pauseSentence is one usage-limit pause in words (classic pauseMessage,
-// with its instant as the server sent it).
-function pauseSentence(entry: Cfg): string {
-  const until = moment(str(entry["until"]));
+// with its instant in the deployment's or reader's timezone).
+function pauseSentence(entry: Cfg, timeZone?: string): string {
+  const until = moment(str(entry["until"]), timeZone);
   const when = until || "the provider's window resets";
   const reason = entry["reason"] ? ` — ${str(entry["reason"])}` : "";
   const connection = str(entry["connection"]);
-  const name = str(entry["connectionName"]) || connection;
+  const name = str(entry["connectionName"]) || pauseConnectionLabel(connection);
   const model = str(entry["model"]);
   const framework = str(entry["framework"]);
+  const escalated = str(entry["escalated"]);
   if (connection && model)
     return `${model} on ${name} paused until ${when} — usage limit; the connection's other models keep dispatching.${reason}`;
   const subject = connection
@@ -102,6 +119,8 @@ function pauseSentence(entry: Cfg): string {
     : framework
       ? `this deployment's ${framework} runs`
       : "";
+  if (connection && escalated)
+    return `Agent usage limit reached: nothing is being dispatched onto ${subject}, on any model, until ${when} (${escalated}).${reason}`;
   const what = subject
     ? `nothing is being dispatched onto ${subject}`
     : "nothing is being dispatched";
@@ -118,7 +137,10 @@ const RANK: Record<HealthSeverity, number> = {
 // rows the classic alerts bell lists (ui/src/alerts.js collectAlerts),
 // worst first. Each carries the link its classic row carried; a Resume
 // button there is a link to Pauses & Controls here, where resuming is.
-export function collectHealthAlerts(config: Cfg | null): HealthAlert[] {
+export function collectHealthAlerts(
+  config: Cfg | null,
+  timeZone?: string,
+): HealthAlert[] {
   if (!config) return [];
   const out: HealthAlert[] = [];
 
@@ -161,7 +183,7 @@ export function collectHealthAlerts(config: Cfg | null): HealthAlert[] {
   if (sync) {
     const external = Boolean(sync["external"]);
     const repo = str(sync["repo"]);
-    const since = moment(str(sync["since"])) || "an unknown time";
+    const since = moment(str(sync["since"]), timeZone) || "an unknown time";
     out.push({
       id: "state-sync-failing",
       severity: "critical",
@@ -216,9 +238,9 @@ export function collectHealthAlerts(config: Cfg | null): HealthAlert[] {
           : framework
             ? `Usage limit reached (${framework})`
             : "Usage limit reached",
-        sentence: pauseSentence(entry),
+        sentence: pauseSentence(entry, timeZone),
         scope: connection
-          ? `Connection ${str(entry["connectionName"]) || connection}`
+          ? `Connection ${str(entry["connectionName"]) || pauseConnectionLabel(connection)}`
           : "Deployment",
         impact: "Runs in flight on it were cancelled; queued work waits.",
         links,
@@ -228,7 +250,7 @@ export function collectHealthAlerts(config: Cfg | null): HealthAlert[] {
 
   const pipeline = obj(config["pipelinePause"]);
   if (pipeline?.["paused"]) {
-    const since = moment(str(pipeline["since"]));
+    const since = moment(str(pipeline["since"]), timeZone);
     const reason = str(pipeline["reason"]);
     const untilTask = pipeline["untilTask"];
     out.push({
@@ -335,6 +357,7 @@ export const SETTING_SECTIONS: Readonly<Record<string, SettingsSectionId>> = {
   gcpProject: "capabilities",
   gcpServiceAccountEmail: "capabilities",
   gcpServiceAccountCount: "capabilities",
+  hub: "registry",
   registryUrl: "registry",
   registryEntry: "registry",
   registryAuthMode: "registry",
@@ -344,12 +367,20 @@ export const SETTING_SECTIONS: Readonly<Record<string, SettingsSectionId>> = {
   registryPurpose: "registry",
   registryListed: "registry",
   defaultModel: "models",
+  modelSettings: "models",
+  agentBackends: "models",
   approvedByDefault: "tasks",
   autoMergeByDefault: "tasks",
   defaultCapabilities: "tasks",
   newestFirst: "tasks",
   maxAutoSubmitDepth: "tasks",
   maxAutoSubmitFanOut: "tasks",
+  qaEnabled: "tasks",
+  qaFlowId: "tasks",
+  qaRolloutPct: "tasks",
+  qaShadowOnControl: "tasks",
+  qaEpoch: "tasks",
+  qaRegimeId: "tasks",
 };
 
 // settingHref is a field's place in Settings, /settings/<section>#<id>,
@@ -466,7 +497,10 @@ export interface OvercommitView {
 // overcommitView is the live sandbox overcommit line, from /api/settings'
 // sandboxCommitment.budget (and its overcommit); null when the daemon
 // reports none (classic SandboxOvercommitStatus).
-export function overcommitView(settings: Cfg | null): OvercommitView | null {
+export function overcommitView(
+  settings: Cfg | null,
+  timeZone?: string,
+): OvercommitView | null {
   const budget = obj(obj(settings?.["sandboxCommitment"])?.["budget"]);
   const oc = obj(budget?.["overcommit"]) || obj(settings?.["overcommit"]);
   const cpu = oc?.["cpuOvercommit"] ?? budget?.["cpuOvercommit"];
@@ -489,7 +523,7 @@ export function overcommitView(settings: Cfg | null): OvercommitView | null {
     (a) =>
       `${a["dimension"] === "cpu" ? "CPU" : str(a["dimension"]) || "ratio"} ${fixed(a["from"])}× → ${fixed(a["to"])}×` +
       (a["reason"] ? ` — ${str(a["reason"])}` : "") +
-      (a["at"] ? ` (${moment(str(a["at"]))})` : ""),
+      (a["at"] ? ` (${moment(str(a["at"]), timeZone)})` : ""),
   );
   return {
     mode,

@@ -758,12 +758,22 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
 
 export function classifyNotification(n: Notification): InboxEntry {
   const release = pendingReleaseOf(n);
+  const taskId =
+    n.taskId || n.investigationTaskId || n.clearsWhen?.task || null;
+  const title = n.title || n.subject || "Notification";
+  const ref = release
+    ? release.version
+    : n.title && n.subject && n.subject !== n.title
+      ? n.subject
+      : taskId
+        ? `#${taskId}`
+        : n.subject || n.family || "alert";
   const base: InboxEntry = {
     key: `notification:${n.id}`,
     kind: release ? "release" : "notification",
     groupId: release ? "release" : "notification",
-    ref: release ? release.version : n.subject,
-    title: release ? `${release.version} is ready to promote` : n.subject,
+    ref,
+    title: release ? `${release.version} is ready to promote` : title,
     repo: n.repo || release?.repo || "",
     owner: "",
     summary: release ? pendingReleaseSentence(n) : notificationSentence(n),
@@ -775,14 +785,12 @@ export function classifyNotification(n: Notification): InboxEntry {
           ? "Warning"
           : "Alert",
     pillTone: release ? "blast" : n.severity === "critical" ? "error" : "blast",
-    at: n.raisedAt || null,
+    at: n.lastRaisedAt || n.raisedAt || null,
     rationale: release
       ? "Promoting tags the release, moves latest onto it and publishes its images."
       : "An alert stays open until somebody acknowledges or clears it.",
-    taskId: n.investigationTaskId || null,
-    taskLink: n.investigationTaskId
-      ? `/task/${encodeURIComponent(n.investigationTaskId)}`
-      : null,
+    taskId,
+    taskLink: taskId ? `/task/${encodeURIComponent(taskId)}` : null,
     externalLink: null,
     notification: n,
     release: release ?? undefined,
