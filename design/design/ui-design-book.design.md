@@ -348,6 +348,13 @@ Rules:
     back the saved values.
   - A refused value is reported beside its field (`aria-invalid`) and
     clears on the next edit, not in a page-wide banner.
+  - A value the server would refuse is refused as it is typed, in the
+    server's own words (a malformed fork head in Base branch, a Task
+    priority that is not a whole number from 1 up), and the submit button
+    stays disabled until it is fixed. When the field at fault sits in a
+    collapsed section, the reason is said beside the button too, with a
+    control that opens the section and focuses the field
+    (`create/new-task-sheet.component.ts`).
 - **Live, quietly.** Server-sent events update lists in place. Never steal
   focus or scroll position on an update; hold an update while the person is
   interacting with the row.

@@ -473,6 +473,19 @@ const FRAMEWORKS: readonly PillOption[] = [
             </div>
 
             <div class="sheet-foot">
+              @if (hiddenBlocker(); as why) {
+                <p class="nt-foot-blocker" data-testid="nt-submit-blocker">
+                  {{ why }}
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="nt-submit-blocker-show"
+                    (click)="showBlocker()"
+                  >
+                    Show
+                  </button>
+                </p>
+              }
               <div class="sheet-switches">
                 @if (fields().approved.visibility !== "hidden") {
                   <div class="switch-row">
@@ -1244,6 +1257,19 @@ export class NewTaskSheetComponent {
     return forkHeadHelp(fh, d.repo || this.defaultTarget());
   });
 
+  // The reason Create is held, said in the foot when the field at fault
+  // is tucked into a collapsed More options, where its own message cannot
+  // be seen (design book, section 5).
+  protected readonly hiddenBlocker = computed(() => {
+    const p = this.submitBlocker();
+    return p?.field === "priority" && !this.moreOpen() ? p.message : "";
+  });
+
+  protected showBlocker(): void {
+    this.moreOpen.set(true);
+    setTimeout(() => this.priorityInput()?.nativeElement.focus());
+  }
+
   // What holds Create disabled while the form is filled in: a malformed
   // fork head or Task priority, which the server would only refuse.
   protected readonly submitBlocker = computed(
@@ -1911,7 +1937,7 @@ export class NewTaskSheetComponent {
         queueMicrotask(() => this.foundInInput()?.nativeElement.focus());
       } else if (problem.field === "priority") {
         this.moreOpen.set(true);
-        queueMicrotask(() => this.priorityInput()?.nativeElement.focus());
+        setTimeout(() => this.priorityInput()?.nativeElement.focus());
       } else if (problem.field === "base") {
         this.baseInput()?.nativeElement.focus();
       } else {

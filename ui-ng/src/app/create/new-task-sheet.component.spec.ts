@@ -706,6 +706,19 @@ describe("NewTaskSheetComponent", () => {
       ).toBe("true");
     }
 
+    // Collapsed, More options cannot show its own message: the foot does.
+    expect(q('[data-testid="nt-submit-blocker"]')).toBeNull();
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    expect(q('[data-testid="nt-priority"]')).toBeNull();
+    expect(q('[data-testid="nt-submit-blocker"]')!.textContent).toContain(
+      "Fix the task priority",
+    );
+    q<HTMLButtonElement>('[data-testid="nt-submit-blocker-show"]')!.click();
+    await settle(f);
+    expect(document.activeElement).toBe(q('[data-testid="nt-priority"]'));
+    expect(q('[data-testid="nt-submit-blocker"]')).toBeNull();
+
     type('[data-testid="nt-priority"]', "1e3");
     type('[data-testid="nt-owner"]', "alice@example.com");
     const keep = q<HTMLInputElement>('[data-testid="nt-keep-running"]')!;
