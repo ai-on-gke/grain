@@ -50,6 +50,11 @@ class FakeSettingsApi {
     cancellable: true,
   };
 
+  upgradeTargetsBody: unknown = [
+    { branch: "stable", version: "v3.7.0" },
+    { branch: "main", version: "v3.8.0-rc1" },
+  ];
+
   settingsBody: Record<string, unknown> = {
     environmentName: "Staging",
     pollInterval: "30s",
@@ -124,10 +129,7 @@ class FakeSettingsApi {
       return Promise.resolve(this.upgradeBody);
     }
     if (key === "GET /api/upgrade/targets") {
-      return Promise.resolve([
-        { branch: "stable", version: "v3.7.0" },
-        { branch: "main", version: "v3.8.0-rc1" },
-      ]);
+      return Promise.resolve(this.upgradeTargetsBody);
     }
     if (key === "GET /api/upgrade/release-notes") {
       return Promise.resolve("## v3.7.0\n- Faster microVM boot");
@@ -1095,5 +1097,78 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       api.calls.filter((c) => c.key === "GET /api/deployment/reachable-repos")
         .length,
     ).toBe(1);
+  });
+
+  it("greys out schema-downgrade targets, shows refusal reasons and failed upgrade details, and disables Start upgrade", async () => {
+    const api = new FakeSettingsApi();
+    const staleReason =
+      'refusing schema downgrade on channel "latest" (docker.io/grainai/grain:latest): target build v3.6.0 (commit cefb15f) is at schema 143, which is older than the running store at schema 146 on v3.7.0-dev.31+fdd8b8d (commit fdd8b8d); schema downgrades are never allowed through upgrade. Channel "latest"\'s image is older than what is running, so the channel\'s image is probably stale or unpublished';
+    api.upgradeBody = {
+      enabled: true,
+      mode: "image",
+      branch: "latest",
+      phase: "failed",
+      detail: staleReason,
+      running: { release: "v3.7.0-dev.31+fdd8b8d", commit: "fdd8b8d123456" },
+    };
+    api.upgradeTargetsBody = {
+      default: "latest",
+      targets: [
+        {
+          name: "latest",
+          kind: "channel",
+          allowed: false,
+          schema: 143,
+          reason: staleReason,
+        },
+        {
+          name: "main",
+          kind: "channel",
+          allowed: true,
+          schema: 146,
+        },
+      ],
+    };
+
+    const { el, harness } = await mountSettings("/settings/upgrade", api);
+    expect(
+      el.querySelector('[data-testid="failed-upgrade-banner"]')?.textContent,
+    ).toContain("probably stale or unpublished");
+    expect(
+      el.querySelector('[data-testid="upgrade-target-refusal"]')?.textContent,
+    ).toContain("schema 143");
+
+    const startBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="start-upgrade-btn"]',
+    )!;
+    expect(startBtn.disabled).toBe(true);
+
+    // Open target dropdown: latest is disabled and shows its refusal reason; main is enabled.
+    const selectBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-upgrade-target"]',
+    )!;
+    selectBtn.click();
+    harness.fixture.detectChanges();
+    await harness.fixture.whenStable();
+
+    const latestOpt = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-upgrade-target-opt-latest"]',
+    )!;
+    expect(latestOpt.disabled).toBe(true);
+    expect(latestOpt.getAttribute("aria-disabled")).toBe("true");
+    expect(latestOpt.textContent).toContain("probably stale or unpublished");
+
+    const mainOpt = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-upgrade-target-opt-main"]',
+    )!;
+    expect(mainOpt.disabled).toBe(false);
+    mainOpt.click();
+    harness.fixture.detectChanges();
+    await harness.fixture.whenStable();
+
+    expect(
+      el.querySelector('[data-testid="upgrade-target-refusal"]'),
+    ).toBeNull();
+    expect(startBtn.disabled).toBe(false);
   });
 });

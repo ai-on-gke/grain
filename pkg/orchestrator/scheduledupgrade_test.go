@@ -27,6 +27,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // upgrades records what a cycle asked to be upgraded onto, standing in
@@ -412,5 +413,30 @@ func TestAScheduledUpgradeProceedsAfterDrainWindowElapses(t *testing.T) {
 	}
 	if len(up.started) != 1 || up.started[0] != "main" {
 		t.Fatalf("started %v, want upgrade to proceed after drain window elapsed", up.started)
+	}
+}
+
+func TestScheduledUpgradeDropsRefusedSchemaDowngradeAndReopensQueue(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	now := time.Now().UTC()
+
+	schedule(t, store, "latest", now)
+	deps := orchestrator.Deps{
+		Store: store,
+		Config: orchestrator.Config{
+			StartUpgrade: func(branch string) error {
+				return upgrade.ErrSchemaDowngrade
+			},
+		},
+	}
+	if err := orchestrator.RunCycle(ctx, deps, now.Add(time.Second)); err != nil {
+		t.Fatalf("cycle: %v", err)
+	}
+	if got := scheduledUpgrade(t, store); got != nil {
+		t.Errorf("refused schema-downgrade schedule remained queued: %+v", got)
+	}
+	if pause := pauseNow(t, store); pause != nil {
+		t.Errorf("queue stayed paused after refusing schema downgrade: %+v", pause)
 	}
 }

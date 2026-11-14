@@ -1042,3 +1042,123 @@ func TestCancelCurrentUpgradeRouteAuditAndConflict(t *testing.T) {
 	_ = os.WriteFile(releaseRestart, []byte("1"), 0o644)
 	<-up.Done()
 }
+
+func TestUpgradeAPIRejectsSchemaDowngradeTargets(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image.env")
+	const runningRef = "GRAIN_IMAGE=docker.io/grainai/grain:main@sha256:1111111111111111111111111111111111111111111111111111111111111111\n"
+	if err := os.WriteFile(refFile, []byte(runningRef), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	statusFile := filepath.Join(dir, "upgrade-status.json")
+	prevPinned := "docker.io/grainai/grain:v3.6.0@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	if err := os.WriteFile(statusFile, []byte(`{"phase":"ok","branch":"main","previousImage":"`+prevPinned+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	up := upgrade.New(upgrade.Config{
+		Image: &upgrade.ImageConfig{
+			Repository: "docker.io/grainai/grain",
+			RefFile:    refFile,
+		},
+		StatusFile: statusFile,
+		ListTags: func(context.Context, string) ([]string, error) {
+			return []string{"latest", "candidate", "main", "v3.7.0", "v3.6.0"}, nil
+		},
+		Schema: &upgrade.SchemaConfig{
+			Version:     146,
+			VersionArgs: []string{"schema-version"},
+			RunningBuild: func() upgrade.BuildStamp {
+				return upgrade.BuildStamp{Release: "v3.7.0-dev.31+fdd8b8d", Commit: "fdd8b8d"}
+			},
+			TargetBuild: func(_ context.Context, target string) (upgrade.TargetBuildInfo, bool) {
+				switch target {
+				case "latest":
+					return upgrade.TargetBuildInfo{
+						Schema: 143,
+						Build:  upgrade.BuildStamp{Release: "v3.6.0", Commit: "cefb15f"},
+						Ref:    "docker.io/grainai/grain:latest",
+					}, true
+				case "candidate", "main":
+					return upgrade.TargetBuildInfo{
+						Schema: 146,
+						Build:  upgrade.BuildStamp{Release: "v3.7.0-dev.31+fdd8b8d", Commit: "fdd8b8d"},
+						Ref:    "docker.io/grainai/grain:" + target,
+					}, true
+				case prevPinned:
+					return upgrade.TargetBuildInfo{
+						Schema: 143,
+						Build:  upgrade.BuildStamp{Release: "v3.6.0", Commit: "cefb15f"},
+						Ref:    prevPinned,
+					}, true
+				}
+				return upgrade.TargetBuildInfo{}, false
+			},
+		},
+	})
+	srv := testServerWithUpgrader(t, up)
+
+	// 1. GET /api/upgrade/targets marks stale "latest" and older-schema "v3.6.0" allowed:false with reason.
+	targetsRec := do(t, srv, http.MethodGet, "/api/upgrade/targets", "")
+	if targetsRec.Code != http.StatusOK {
+		t.Fatalf("GET /api/upgrade/targets = %d: %s", targetsRec.Code, targetsRec.Body)
+	}
+	got := decode[upgrade.Targets](t, targetsRec)
+	byName := map[string]upgrade.Target{}
+	for _, tgt := range got.Targets {
+		byName[tgt.Name] = tgt
+	}
+	if byName["latest"].Allowed || !strings.Contains(byName["latest"].Reason, "probably stale or unpublished") {
+		t.Errorf("target latest = %+v, want Allowed=false with stale channel reason", byName["latest"])
+	}
+	if byName["v3.6.0"].Allowed || !strings.Contains(byName["v3.6.0"].Reason, "schema 143") {
+		t.Errorf("target v3.6.0 = %+v, want Allowed=false naming schema 143", byName["v3.6.0"])
+	}
+	if !byName["v3.7.0"].Allowed || !byName["main"].Allowed {
+		t.Errorf("same-schema targets disallowed unexpectedly: v3.7.0=%+v main=%+v", byName["v3.7.0"], byName["main"])
+	}
+
+	// 2. POST /api/upgrade rejects immediate channel downgrade, version downgrade, scheduled downgrade, and rollback downgrade.
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "stale channel immediate",
+			body: `{"branch":"latest"}`,
+			want: "probably stale or unpublished",
+		},
+		{
+			name: "pinned version immediate",
+			body: `{"branch":"v3.6.0"}`,
+			want: "schema 143",
+		},
+		{
+			name: "scheduled downgrade",
+			body: `{"branch":"latest","afterTasksFinish":true}`,
+			want: "schema downgrades are never allowed",
+		},
+		{
+			name: "explicit image tag downgrade",
+			body: `{"image":"docker.io/grainai/grain:v3.6.0"}`,
+			want: "schema 143",
+		},
+		{
+			name: "rollback across schema bump",
+			body: `{"rollback":true}`,
+			want: "schema 143",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(t, srv, http.MethodPost, "/api/upgrade", tc.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("POST /api/upgrade %s = %d %s, want 400", tc.body, rec.Code, rec.Body)
+			}
+			if !strings.Contains(rec.Body.String(), tc.want) {
+				t.Errorf("POST /api/upgrade %s body = %q, want substring %q", tc.body, rec.Body, tc.want)
+			}
+		})
+	}
+}

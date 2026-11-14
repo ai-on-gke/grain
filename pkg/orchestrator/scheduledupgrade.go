@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -236,6 +237,15 @@ func startScheduledUpgrade(ctx context.Context, deps Deps, scheduled model.Sched
 		}
 	}
 	if err := deps.Config.StartUpgrade(scheduled.Branch); err != nil {
+		if errors.Is(err, upgrade.ErrSchemaDowngrade) {
+			log.Printf("orchestrator: %s, and the scheduled upgrade to %s was refused as a schema downgrade (%v) -- dropping the schedule",
+				why, scheduled.Branch, err)
+			if ours {
+				_, _ = deps.Store.ClearPipelinePauseTakenBy(ctx, UpgradePrincipal)
+				_, _ = deps.Store.ClearPipelinePauseTakenBy(ctx, scheduledUpgradePrincipal)
+			}
+			return nil
+		}
 		log.Printf("orchestrator: %s, but the upgrade to %s could not be started (%v) "+
 			"-- it stays scheduled and will be tried again", why, scheduled.Branch, err)
 		if rerr := deps.Store.SetScheduledUpgrade(ctx, scheduled); rerr != nil {

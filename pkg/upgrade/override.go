@@ -27,6 +27,7 @@ package upgrade
 // installed from, never an arbitrary one.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -270,6 +271,9 @@ func (u *Upgrader) validateImage(branch, image string, opts ImageOptions) (strin
 			ref = o.Repository
 		}
 		ref += "@" + o.Digest
+	}
+	if err := u.CheckTargetSchema(context.Background(), branch, ref); err != nil {
+		return "", "", nil, err
 	}
 	return branch, ref, sw, nil
 }

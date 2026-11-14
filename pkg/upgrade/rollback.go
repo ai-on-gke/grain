@@ -88,6 +88,10 @@ func (u *Upgrader) StartRollback() error {
 		log.Printf("upgrade: refusing a rollback: %v", err)
 		return fmt.Errorf("the recorded previous commit: %w", err)
 	}
+	if err := u.CheckTargetSchema(context.Background(), oid, ""); err != nil {
+		log.Printf("upgrade: refusing a rollback: %v", err)
+		return err
+	}
 	// The commit stands in for a branch in Status and the steps' log
 	// lines; it is never handed to anything that would look it up as one.
 	return u.startWithOptions(oid, "", nil, true, oid)

@@ -172,8 +172,11 @@ use one of these:
   same way.
 
 Take one of these before an upgrade if you may want to go back. A newer
-build migrates the store in place and keeps no copy, and an older build
-refuses a store at a newer schema. See [Downgrading to an earlier
+build migrates the store in place and keeps no copy, an older build refuses
+a store at a newer schema unless an operator explicitly prepares an offline
+disaster-recovery downgrade on the host (`grain db downgrade -to <M>`), and
+the upgrade flow always refuses any target build whose schema version is
+lower than the running store. See [Downgrading to an earlier
 build](host-setup.md#downgrading-to-an-earlier-build).
 
 To restore a cold copy, stop the daemon, put the data directory back in

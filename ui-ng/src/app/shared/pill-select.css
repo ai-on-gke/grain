@@ -94,7 +94,9 @@ g-priority-chip {
   top: calc(100% + 4px);
   right: 0;
   min-width: 196px;
+  max-width: min(520px, calc(100vw - 32px));
   max-height: min(320px, calc(100dvh - 48px));
+  box-sizing: border-box;
   overflow-y: auto;
   overscroll-behavior: contain;
   margin: 0;
@@ -133,20 +135,39 @@ g-priority-chip {
   cursor: pointer;
   white-space: nowrap;
 }
-.pop-menu.pill-select-menu li > button:hover,
-.pop-menu.pill-select-menu li > button[aria-selected="true"],
-.pop-menu.pill-select-menu li > button[aria-current="true"] {
+.pop-menu.pill-select-menu li > button:hover:not(:disabled),
+.pop-menu.pill-select-menu li > button[aria-selected="true"]:not(:disabled),
+.pop-menu.pill-select-menu li > button[aria-current="true"]:not(:disabled) {
   background: var(--md-sys-color-surface-container-high);
+}
+.pop-menu.pill-select-menu li > button:disabled,
+.pop-menu.pill-select-menu li > button.is-disabled {
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: not-allowed;
 }
 .pop-menu.pill-select-menu li > button:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: -2px;
 }
-.pill-opt-label {
+.pill-opt-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   flex: 1;
+  min-width: 0;
+}
+.pill-opt-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.pill-opt-reason {
+  font-size: 11.5px;
+  line-height: 16px;
+  font-weight: 400;
+  color: var(--md-sys-color-on-surface-variant);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .pill-check {
   color: var(--md-sys-color-primary);
