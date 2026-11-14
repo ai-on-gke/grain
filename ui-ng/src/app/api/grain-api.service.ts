@@ -193,14 +193,17 @@ export class GrainApi {
     const url = routePath(key, params) + (query ? `?${query}` : "");
     const epoch = this.condEpoch;
     const urlEpoch = this.urlEpochs.get(url) ?? 0;
-    if (opts?.timeoutMs) return this.fetchIfChanged<T>(url, epoch, urlEpoch, opts);
+    if (opts?.timeoutMs)
+      return this.fetchIfChanged<T>(url, epoch, urlEpoch, opts);
     const pending = this.inflightCond.get(url);
     if (pending) return pending as Promise<Fresh<T>>;
-    const req = this.fetchIfChanged<T>(url, epoch, urlEpoch, opts).finally(() => {
-      if (this.inflightCond.get(url) === req) {
-        this.inflightCond.delete(url);
-      }
-    });
+    const req = this.fetchIfChanged<T>(url, epoch, urlEpoch, opts).finally(
+      () => {
+        if (this.inflightCond.get(url) === req) {
+          this.inflightCond.delete(url);
+        }
+      },
+    );
     this.inflightCond.set(url, req);
     return req;
   }
@@ -350,7 +353,12 @@ export class GrainApi {
       return Promise.resolve(this.configCache.body);
     }
     const epoch = this.condEpoch + (this.urlEpochs.get("/api/config") ?? 0);
-    return this.get<GrainConfig>("GET /api/config", undefined, undefined, opts).then((body) => {
+    return this.get<GrainConfig>(
+      "GET /api/config",
+      undefined,
+      undefined,
+      opts,
+    ).then((body) => {
       if (this.condEpoch + (this.urlEpochs.get("/api/config") ?? 0) === epoch) {
         this.configCache = { exp: Date.now() + 2_000, body };
       }
