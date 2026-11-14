@@ -23,7 +23,9 @@ import {
 } from "@angular/core";
 import { RouterLink } from "@angular/router";
 import type { Task } from "../api/models";
+import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
+import { summarizeDispatchStatus } from "../shared/dispatch-status";
 import {
   isBlocked,
   isWork,
@@ -31,7 +33,7 @@ import {
   levelOf,
   nextUp,
   priorityOf,
-} from "../tasks/task-view";
+} from "../tasks/task-queue-helpers";
 
 const SHOWN = 7;
 
@@ -139,6 +141,17 @@ const SHOWN = 7;
               {{ feed.runningCount() }} running</span
             >
           </div>
+          @if (dispatchPaused(); as dp) {
+            <p
+              class="banner banner-info next-up-note"
+              data-testid="next-up-paused-note"
+            >
+              {{ dp.headline }}
+              @if (dp.resetText) {
+                · {{ dp.resetText }}
+              }
+            </p>
+          }
           @if (backlog().length === 0) {
             <p class="muted next-up-note" data-testid="next-up-empty-note">
               Nothing is waiting to run. Approved tasks appear here in the order
@@ -187,8 +200,17 @@ const SHOWN = 7;
 })
 export class NextUpComponent {
   protected readonly feed = inject(TaskFeedStore);
+  private readonly access = inject(AccessService);
   protected readonly open = signal(false);
   private readonly caret = viewChild<ElementRef<HTMLButtonElement>>("caret");
+
+  protected readonly dispatchPaused = computed(() =>
+    summarizeDispatchStatus(
+      this.access.rawConfig(),
+      this.access.usage(),
+      this.access.clockNow(),
+    ),
+  );
 
   // The shared feed's open task list is in server backlog order already.
   protected readonly backlog = computed(() =>

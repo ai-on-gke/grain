@@ -235,7 +235,7 @@ The cost is that a superseded commit has no `docker.io/grainai/*:sha-<short>` im
 
 ## Mapping Grain CI Capabilities to GitHub Actions
 
-On grain CI these are methods of the in-process release server (`https://grain.dev/capabilities/release#package-publish`, `#image-signing`, `#registry-push`; the bare names are one-release aliases, see [ci-capabilities.md](ci-capabilities.md)). The names below are those grain CI capabilities; GitHub Actions has no capability grants and maps each to secrets and permissions instead.
+On grain CI these are methods of the in-process release server (`https://grain.dev/capabilities/release#package-publish`, `#image-signing`, `#registry-push`; the retired bare names are no longer accepted, see [ci-capabilities.md](ci-capabilities.md)). The names below are those grain CI capabilities; GitHub Actions has no capability grants and maps each to secrets and permissions instead.
 
 1. **`release#package-publish`**:
    - Mapped via `scripts/configure-dockerhub-auth.sh` to `PACKAGE_PUBLISH_REGISTRY` (default `docker.io`), `PACKAGE_PUBLISH_USERNAME` (from `vars.DOCKERHUB_USERNAME`, default `grainai`), and `PACKAGE_PUBLISH_TOKEN` (from `secrets.DOCKER_PAT`). Missing `DOCKER_PAT` or a failed `docker login` fails fast before any build or push step runs.

@@ -41,8 +41,8 @@ func TestEventGatedReleaseReferencesAreNotedWhenWithheld(t *testing.T) {
 	}{
 		{name: "push", event: ci.EventPush, ids: []string{publish},
 			want: []string{"capability " + publish + " is withheld on push runs (released only to release, workflow_dispatch, and grain's scheduled runs)"}},
-		{name: "the bare alias on a pull request", event: ci.EventPullRequest, ids: []string{"package-publish"},
-			want: []string{"capability package-publish is withheld on pull_request runs"}},
+		{name: "package-publish on a pull request", event: ci.EventPullRequest, ids: []string{publish},
+			want: []string{"capability " + publish + " is withheld on pull_request runs"}},
 		{name: "image-signing on workflow_dispatch", event: ci.EventManual, ids: []string{signing},
 			want: []string{"capability " + signing + " is withheld on workflow_dispatch runs (released only to release runs)"}},
 		{name: "workflow_dispatch admits package-publish", event: ci.EventManual, ids: []string{publish}},

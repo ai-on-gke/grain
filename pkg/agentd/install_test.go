@@ -132,6 +132,9 @@ func TestInstall(t *testing.T) {
 	if !strings.Contains(string(unit), "\nRestart=always\n") || strings.Contains(string(unit), "Restart=on-failure") {
 		t.Errorf("unit does not restart a drained grain-agentd (want Restart=always):\n%s", unit)
 	}
+	if !strings.Contains(string(unit), "\nKillMode=mixed\n") {
+		t.Errorf("unit lacks KillMode=mixed:\n%s", unit)
+	}
 	// Started, and lingering enabled.
 	want := []string{
 		"systemctl --user daemon-reload",

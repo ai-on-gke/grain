@@ -95,6 +95,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
+    "../shared/surface-controls.css",
     "./sessions-page.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",

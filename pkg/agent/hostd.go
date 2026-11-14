@@ -102,10 +102,19 @@ func (h HostdHost) binary() string {
 
 // ErrHostdDraining is HostdHost.Run's error, wrapped, for a start grain
 // hostd refused because it is draining for its own upgrade
-// (hostd.IsDraining). Nothing ran, and nothing about the task earned it:
-// the run goes back to the queue without a strike, and the next attempt
-// starts on the hostd that replaces this one.
+// (hostd.IsDraining), or a running CLI cancelled when an explicit drain
+// reached drain_cap. Nothing about the task earned it: the run goes back
+// to the queue without a strike, and the next attempt starts on the hostd
+// that replaces this one.
 var ErrHostdDraining = errors.New("the host agent is updating (draining for its own upgrade); the run goes back to the queue")
+
+// ErrHostdStopped is HostdHost.Run's (and runhost.Hostd.Attach's) error,
+// wrapped, for a running CLI whose Exit has Draining set because the host
+// agent itself stopped, restarted or crashed while the run was going
+// (hostd.Exit.Stopped), with no drain in progress. Nothing about the task
+// earned it: the run ends as interrupted, without a strike, and goes back
+// to the queue.
+var ErrHostdStopped = errors.New("the host agent stopped or restarted while the run was going; the run goes back to the queue")
 
 // ErrHostdLost is HostdHost.Run's error, wrapped, for a CLI whose grain
 // hostd dropped mid-run and did not reconnect within the reattach
@@ -121,13 +130,14 @@ var ErrHostdLost = errors.New("the host agent disconnected mid-run and did not r
 var ErrHostdWaiting = errors.New("waiting for the host agent to reconnect")
 
 // IsHostdStop reports whether err is a grain hostd infrastructure stop
-// (ErrHostdDraining or ErrHostdLost): a start hostd refused because it is
-// draining for its own upgrade, or a mid-run disconnect that did not
-// reconnect within the reattach timeout. Neither is a CLI crash or a
-// refused resume flag, so a framework retry loop stops at once and hands
-// err back for the run to return to the queue without a strike.
+// (ErrHostdDraining, ErrHostdStopped or ErrHostdLost): a start hostd
+// refused because it is draining for its own upgrade, a host agent stop or
+// crash while the CLI ran, or a mid-run disconnect that did not reconnect
+// within the reattach timeout. None is a CLI crash or a refused resume
+// flag, so a framework retry loop stops at once and hands err back for the
+// run to return to the queue without a strike.
 func IsHostdStop(err error) bool {
-	return errors.Is(err, ErrHostdDraining) || errors.Is(err, ErrHostdLost)
+	return errors.Is(err, ErrHostdDraining) || errors.Is(err, ErrHostdStopped) || errors.Is(err, ErrHostdLost)
 }
 
 // Run implements Host with the same contract as LocalHost.Run: stdout is
@@ -157,6 +167,9 @@ func (h HostdHost) Run(ctx context.Context, c Command, tee io.Writer) (string, e
 		Env:  c.Env,
 		Dir:  dir,
 	}, strings.NewReader(c.Stdin), out, &stderr)
+	if err == nil && exit.Stopped() {
+		return stdout.String(), fmt.Errorf("%w: %s", ErrHostdStopped, exit.String())
+	}
 	if hostd.IsDraining(err) || exit.Draining {
 		if err == nil {
 			err = errors.New(exit.String())

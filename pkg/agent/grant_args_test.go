@@ -27,9 +27,9 @@ import (
 // source is.
 func TestGrantArgsCarriesTheGrantAndTheSourceDir(t *testing.T) {
 	args := agent.GrantArgs(agent.RunConfig{
-		Grants: []string{"self-debug"}, GrainSourceDir: "/usr/local/share/grain/src",
+		Grants: []string{model.GrainSourceGrant}, GrainSourceDir: "/usr/local/share/grain/src",
 	})
-	want := []string{"-grant", "self-debug", "-grain-src-dir", "/usr/local/share/grain/src"}
+	want := []string{"-grant", model.GrainSourceGrant, "-grain-src-dir", "/usr/local/share/grain/src"}
 	if !slices.Equal(args, want) {
 		t.Fatalf("GrantArgs = %v, want %v", args, want)
 	}
@@ -39,8 +39,8 @@ func TestGrantArgsCarriesTheGrantAndTheSourceDir(t *testing.T) {
 // half of the capability, so the grant is passed on its own rather than
 // with an empty directory beside it.
 func TestGrantArgsOmitsAnAbsentSourceDir(t *testing.T) {
-	args := agent.GrantArgs(agent.RunConfig{Grants: []string{"self-debug"}})
-	if want := []string{"-grant", "self-debug"}; !slices.Equal(args, want) {
+	args := agent.GrantArgs(agent.RunConfig{Grants: []string{model.GrainSourceGrant}})
+	if want := []string{"-grant", model.GrainSourceGrant}; !slices.Equal(args, want) {
 		t.Fatalf("GrantArgs = %v, want %v", args, want)
 	}
 }
@@ -51,12 +51,12 @@ func TestGrantArgsOmitsAnAbsentSourceDir(t *testing.T) {
 // beside it, not at the end of the list.
 func TestGrantArgsCarriesEveryGrant(t *testing.T) {
 	args := agent.GrantArgs(agent.RunConfig{
-		Grants:         []string{"self-debug", "read-issues"},
+		Grants:         []string{model.GrainSourceGrant, model.GitHubReadIssuesGrant},
 		GrainSourceDir: "/usr/local/share/grain/src",
 	})
 	want := []string{
-		"-grant", "self-debug", "-grain-src-dir", "/usr/local/share/grain/src",
-		"-grant", "read-issues",
+		"-grant", model.GrainSourceGrant, "-grain-src-dir", "/usr/local/share/grain/src",
+		"-grant", model.GitHubReadIssuesGrant,
 	}
 	if !slices.Equal(args, want) {
 		t.Fatalf("GrantArgs = %v, want %v", args, want)
@@ -68,9 +68,9 @@ func TestGrantArgsCarriesEveryGrant(t *testing.T) {
 // was never granted a way to read it.
 func TestGrantArgsWithholdsTheSourceDirFromAnotherGrant(t *testing.T) {
 	args := agent.GrantArgs(agent.RunConfig{
-		Grants: []string{"read-issues"}, GrainSourceDir: "/usr/local/share/grain/src",
+		Grants: []string{model.GitHubReadIssuesGrant}, GrainSourceDir: "/usr/local/share/grain/src",
 	})
-	if want := []string{"-grant", "read-issues"}; !slices.Equal(args, want) {
+	if want := []string{"-grant", model.GitHubReadIssuesGrant}; !slices.Equal(args, want) {
 		t.Fatalf("GrantArgs = %v, want %v", args, want)
 	}
 }
@@ -91,9 +91,9 @@ func TestGrantArgsIsNothingWithoutAGrant(t *testing.T) {
 // which grant a directory belongs to.
 func TestGrantArgsCarriesTheSecretsDirWithTheLogGrant(t *testing.T) {
 	args := agent.GrantArgs(agent.RunConfig{
-		Grants: []string{"grain-log"}, GrainSecretsDir: "/var/lib/grain/data/secrets",
+		Grants: []string{model.GrainJournalGrant}, GrainSecretsDir: "/var/lib/grain/data/secrets",
 	})
-	want := []string{"-grant", "grain-log", "-grain-secrets-dir", "/var/lib/grain/data/secrets"}
+	want := []string{"-grant", model.GrainJournalGrant, "-grain-secrets-dir", "/var/lib/grain/data/secrets"}
 	if !slices.Equal(args, want) {
 		t.Fatalf("GrantArgs = %v, want %v", args, want)
 	}
@@ -105,11 +105,11 @@ func TestGrantArgsCarriesTheSecretsDirWithTheLogGrant(t *testing.T) {
 // where this host keeps its credentials travels with it.
 func TestGrantArgsWithholdsTheSecretsDirFromAnotherGrant(t *testing.T) {
 	args := agent.GrantArgs(agent.RunConfig{
-		Grants:          []string{"self-debug"},
+		Grants:          []string{model.GrainSourceGrant},
 		GrainSourceDir:  "/usr/local/share/grain/src",
 		GrainSecretsDir: "/var/lib/grain/data/secrets",
 	})
-	want := []string{"-grant", "self-debug", "-grain-src-dir", "/usr/local/share/grain/src"}
+	want := []string{"-grant", model.GrainSourceGrant, "-grain-src-dir", "/usr/local/share/grain/src"}
 	if !slices.Equal(args, want) {
 		t.Fatalf("GrantArgs = %v, want %v", args, want)
 	}
@@ -120,13 +120,13 @@ func TestGrantArgsWithholdsTheSecretsDirFromAnotherGrant(t *testing.T) {
 // grant.
 func TestGrantArgsCarriesBothSelfDebugAndTheLogGrant(t *testing.T) {
 	args := agent.GrantArgs(agent.RunConfig{
-		Grants:          []string{"self-debug", "grain-log"},
+		Grants:          []string{model.GrainSourceGrant, model.GrainJournalGrant},
 		GrainSourceDir:  "/usr/local/share/grain/src",
 		GrainSecretsDir: "/var/lib/grain/data/secrets",
 	})
 	want := []string{
-		"-grant", "self-debug", "-grain-src-dir", "/usr/local/share/grain/src",
-		"-grant", "grain-log", "-grain-secrets-dir", "/var/lib/grain/data/secrets",
+		"-grant", model.GrainSourceGrant, "-grain-src-dir", "/usr/local/share/grain/src",
+		"-grant", model.GrainJournalGrant, "-grain-secrets-dir", "/var/lib/grain/data/secrets",
 	}
 	if !slices.Equal(args, want) {
 		t.Fatalf("GrantArgs = %v, want %v", args, want)
@@ -139,7 +139,7 @@ func TestGrantArgsCarriesBothSelfDebugAndTheLogGrant(t *testing.T) {
 // unrelated grain-log grant made a deliberately narrowed Director refuse all
 // diagnostic reads even though deployment-health itself was granted.
 func TestGrantArgsCarriesStateAndSecretsWithDeploymentHealth(t *testing.T) {
-	for _, grant := range []string{"deployment-health", model.GrainHealthGrant} {
+	for _, grant := range []string{model.GrainHealthGrant} {
 		args := agent.GrantArgs(agent.RunConfig{
 			Grants:          []string{grant},
 			GrainStateDir:   "/var/lib/grain/data/state-repo",
@@ -159,10 +159,10 @@ func TestGrantArgsCarriesStateAndSecretsWithDeploymentHealth(t *testing.T) {
 // A durable judgement task's wake tells its mcpserver to count the tool
 // budget; every other run's arguments are unchanged.
 func TestGrantArgsCarriesTheToolBudget(t *testing.T) {
-	if args := agent.GrantArgs(agent.RunConfig{Grants: []string{"self-debug"}, ToolBudget: true}); !slices.Contains(args, "-tool-budget") {
+	if args := agent.GrantArgs(agent.RunConfig{Grants: []string{model.GrainSourceGrant}, ToolBudget: true}); !slices.Contains(args, "-tool-budget") {
 		t.Errorf("GrantArgs = %v, want -tool-budget", args)
 	}
-	if args := agent.GrantArgs(agent.RunConfig{Grants: []string{"self-debug"}}); slices.Contains(args, "-tool-budget") {
+	if args := agent.GrantArgs(agent.RunConfig{Grants: []string{model.GrainSourceGrant}}); slices.Contains(args, "-tool-budget") {
 		t.Errorf("GrantArgs = %v, want no -tool-budget", args)
 	}
 	steward := agent.RunConfig{ToolBudget: true, ToolBudgetPipelineCursor: true}

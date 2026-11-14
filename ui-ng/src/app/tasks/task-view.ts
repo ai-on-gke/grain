@@ -13,6 +13,27 @@
 // limitations under the License.
 
 import type { Task } from "../api/models";
+import {
+  LEVELS,
+  type Level,
+  isBlocked,
+  isWork,
+  jumpsQueue,
+  levelOf,
+  nextUp,
+  priorityOf,
+} from "./task-queue-helpers";
+
+export {
+  LEVELS,
+  type Level,
+  isBlocked,
+  isWork,
+  jumpsQueue,
+  levelOf,
+  nextUp,
+  priorityOf,
+};
 
 // ---------- Tabs (spec D-6, D-28) ----------
 
@@ -95,19 +116,6 @@ export function isTabId(v: unknown): v is TabId {
   return TABS.some((t) => t.id === v);
 }
 
-// isBlocked is a queued task that cannot start yet: it waits on a
-// dependency that has not closed (the server's blocked flag, or an open
-// state in dependsOnStates). Such a task is not "ready to run".
-export function isBlocked(t: Task): boolean {
-  if (t.blocked) return true;
-  return Object.values(t.dependsOnStates ?? {}).some((s) => s !== "closed");
-}
-
-// Standing session tasks are conversations, not work in a list.
-export function isWork(t: Task): boolean {
-  return !t.consoleSession && !t.interactive;
-}
-
 export function inTab(t: Task, tab: TabId): boolean {
   if (tab === "all") return t.state !== "closed";
   return TABS.find((x) => x.id === tab)!.states.includes(t.state);
@@ -129,48 +137,7 @@ export function stateLabel(state: string): string {
   return STATE_LABELS[state] ?? state.replace(/_/g, " ");
 }
 
-// ---------- Priority (named levels) ----------
-
-export interface Level {
-  name: string;
-  value: number; // what Set priority writes
-  arrow: "up" | "flat" | "down";
-}
-
-// Grain's number reads backwards for anyone used to "P0 is highest", so
-// it shows as a named level with its number and an arrow, never colour
-// alone: Urgent 9, High 7-8, Normal 5-6 (5 is the default), Low 3-4,
-// Lowest 1-2.
-export const LEVELS: readonly Level[] = [
-  { name: "Urgent", value: 9, arrow: "up" },
-  { name: "High", value: 8, arrow: "up" },
-  { name: "Normal", value: 5, arrow: "flat" },
-  { name: "Low", value: 3, arrow: "down" },
-  { name: "Lowest", value: 1, arrow: "down" },
-];
-
-export function priorityOf(t: Task): number {
-  return typeof t.priority === "number" && t.priority > 0 ? t.priority : 5;
-}
-
-export function levelOf(p: number): Level {
-  if (p >= 9) return LEVELS[0];
-  if (p >= 7) return LEVELS[1];
-  if (p >= 5) return LEVELS[2];
-  if (p >= 3) return LEVELS[3];
-  return LEVELS[4];
-}
-
 // ---------- Run order (D-28) ----------
-
-// Admission bypass or durable lets a task start past worker limits
-// (model.Admission). It is not part of the queue order itself
-// (taskQueueOrderSQL: priority, base-branch repairs, order_key, FIFO), so
-// such a task stays in its priority band with a badge.
-export function jumpsQueue(t: Task): boolean {
-  const a = (t as Task & { admission?: string }).admission;
-  return a === "bypass" || a === "durable";
-}
 
 export interface Band {
   key: string; // the priority number
@@ -301,14 +268,6 @@ export function placement(
   };
 }
 
-// nextUp is the task a free worker takes next: tasks admitted past
-// worker limits are dispatched in an earlier pass, then the rest in
-// queue order; a task waiting on a dependency is skipped.
-export function nextUp(backlog: readonly Task[]): Task | null {
-  const ready = backlog.filter((t) => !isBlocked(t));
-  return ready.find(jumpsQueue) ?? ready[0] ?? null;
-}
-
 // ago is a short relative time ("4m", "3h", "2d").
 export function ago(iso: string | undefined, now = Date.now()): string {
   if (!iso) return "";
@@ -319,4 +278,27 @@ export function ago(iso: string | undefined, now = Date.now()): string {
   const h = Math.round(m / 60);
   if (h < 48) return `${h}h`;
   return `${Math.round(h / 24)}d`;
+}
+
+// FINISHED_STATES are the states a task's work has stopped in. "failed"
+// is not closed -- a person may still retry it (pkg/model StateFailed)
+// -- but nothing runs it until they do, so its bar ends where its last
+// run did rather than growing towards now as though work were going on.
+const FINISHED_STATES = new Set(["completed", "closed", "failed"]);
+
+// timelineEndMs is where a task's bar on the Timeline view ends, in
+// epoch milliseconds: when its work ended (endedAt, else closedAt), or
+// `now` while it is still open. A task waiting in the backlog, asking
+// a question or held as a proposal has not ended, so its bar runs to
+// the right-hand edge the way the classic gantt's "still open after"
+// does. It used to stop where the task was filed, drawing a task that
+// had been waiting for hours as a 4% blip that looked finished
+// (2026-11-14 saved boards walkthrough). A finished task with neither
+// time recorded falls back to its last update, then its filing.
+export function timelineEndMs(t: Task, now: number): number {
+  if (t.state === "running") return now;
+  const ended = Date.parse(t.endedAt || t.closedAt || "");
+  if (Number.isFinite(ended)) return ended;
+  if (!FINISHED_STATES.has(t.state)) return now;
+  return Date.parse(t.updatedAt || t.createdAt || "");
 }
