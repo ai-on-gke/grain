@@ -1071,9 +1071,10 @@ func AutoSubmits(child, parent Task) bool {
 		LandsWhereGranted(child, parent)
 }
 
-// GitCredentialCapabilityPrefix is the retired one-release alias prefix for a
-// per-task git credential override (now RepoCredentialGrant on the in-process
-// repo server, https://grain.dev/capabilities/repo#credential).
+// GitCredentialCapabilityPrefix is the retired bare prefix for a per-task git
+// credential override (now RepoCredentialGrant on the in-process repo server,
+// https://grain.dev/capabilities/repo#credential; schema migration 120 rewrote
+// stored rows and RetiredGrantsBecame upgrades older exports).
 const GitCredentialCapabilityPrefix = "github-credential:"
 
 // GitCredentialCapability is the canonical capability grant standing for "use
@@ -1090,14 +1091,11 @@ func LegacyGitCredentialName(capability string) (name string, ok bool) {
 	return name, ok && name != ""
 }
 
-// GitCredentialName returns the credential name a git credential override grant
-// selects -- canonical RepoCredentialGrant or the one-release legacy
-// github-credential:<name> prefix -- and false for any other capability string.
+// GitCredentialName returns the credential name a canonical RepoCredentialGrant
+// git credential override grant selects, and false for any other capability
+// string. The retired github-credential:<name> spelling is no longer an alias.
 func GitCredentialName(capability string) (name string, ok bool) {
-	if name, ok := ParseRepoCredentialGrant(capability); ok {
-		return name, true
-	}
-	return LegacyGitCredentialName(capability)
+	return ParseRepoCredentialGrant(capability)
 }
 
 // ReleaseGateReadCapability is the CI capability a release workflow's job
@@ -1183,14 +1181,13 @@ func GCPKeyGrant(name string) Grant {
 }
 
 // ErrConflictingGitCredentials is returned when a task holds more than one
-// distinct git credential override grant (repo#credential or legacy
-// github-credential:<name>).
+// distinct git credential override grant (repo#credential).
 var ErrConflictingGitCredentials = errors.New("task holds conflicting git credential grants")
 
-// GitCredentialOverride returns the credential name a repo#credential (or
-// legacy github-credential:<name>) grant among grants selects, if any. If
-// grants hold more than one distinct git credential override, it returns
-// ErrConflictingGitCredentials rather than picking a winner silently.
+// GitCredentialOverride returns the credential name a repo#credential grant
+// among grants selects, if any. If grants hold more than one distinct git
+// credential override, it returns ErrConflictingGitCredentials rather than
+// picking a winner silently.
 func GitCredentialOverride(grants []Grant) (name string, ok bool, err error) {
 	for _, g := range grants {
 		n, isOverride := GitCredentialName(g.Capability)

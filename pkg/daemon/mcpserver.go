@@ -2077,7 +2077,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	fs.Var(&grants, "grant",
 		"name of a capability grant this run's task holds, whose tools this server should serve; "+
 			"repeat the flag for each. \"https://grain.dev/capabilities/api#self-debug\" (the tasks:read and "+
-			"deployment:read scopes; the retired \"self-debug\" and \"api:self-debug\" read as it) serves the four "+
+			"deployment:read scopes; formerly \"self-debug\") serves the four "+
 			"task readers, read_pipeline_changes and read_grain_metrics over -server; "+
 			"\"https://grain.dev/capabilities/grain#journal\" (formerly \"grain-log\") serves read_grain_log over this host's journal, "+
 			"redacted with -grain-secrets-dir. Passed "+

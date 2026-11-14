@@ -39,8 +39,8 @@ func TestGitCredentialOverrideFindsCanonicalAndLegacyGrant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GitCredentialOverride legacy: %v", err)
 	}
-	if !ok || name != "release-bot" {
-		t.Errorf("legacy name=%q ok=%v, want %q true", name, ok, "release-bot")
+	if ok || name != "" {
+		t.Errorf("retired github-credential:<name> selected %q (ok=%v), want ignored", name, ok)
 	}
 }
 
@@ -58,15 +58,15 @@ func TestGitCredentialOverrideIsAbsentWithNoGrants(t *testing.T) {
 }
 
 func TestGitCredentialOverrideRefusesConflictingGrants(t *testing.T) {
-	for _, grants := range [][]Grant{
-		{GitCredentialGrant("bot-two"), GitCredentialGrant("release-bot")},
-		{{Capability: "github-credential:bot-two", Via: GrantByLabel}, GitCredentialGrant("release-bot")},
-		{{Capability: "github-credential:bot-two", Via: GrantByLabel}, {Capability: "github-credential:release-bot", Via: GrantByLabel}},
-	} {
-		_, _, err := GitCredentialOverride(grants)
-		if !errors.Is(err, ErrConflictingGitCredentials) {
-			t.Errorf("GitCredentialOverride(%v) = %v, want ErrConflictingGitCredentials", grants, err)
-		}
+	grants := []Grant{GitCredentialGrant("bot-two"), GitCredentialGrant("release-bot")}
+	if _, _, err := GitCredentialOverride(grants); !errors.Is(err, ErrConflictingGitCredentials) {
+		t.Errorf("GitCredentialOverride(%v) = %v, want ErrConflictingGitCredentials", grants, err)
+	}
+	// A retired github-credential:<name> spelling is ignored rather than
+	// competing with a canonical repo#credential grant.
+	mixed := []Grant{{Capability: "github-credential:bot-two", Via: GrantByLabel}, GitCredentialGrant("release-bot")}
+	if name, ok, err := GitCredentialOverride(mixed); err != nil || !ok || name != "release-bot" {
+		t.Errorf("GitCredentialOverride(mixed) = (%q, %v, %v), want (\"release-bot\", true, nil)", name, ok, err)
 	}
 }
 
@@ -79,8 +79,11 @@ func TestGitCredentialCapabilityRoundTrips(t *testing.T) {
 	if name, ok := GitCredentialName(id); !ok || name != "release-bot" {
 		t.Errorf("GitCredentialName(%q) = %q, %v, want %q true", id, name, ok, "release-bot")
 	}
-	if name, ok := GitCredentialName("github-credential:release-bot"); !ok || name != "release-bot" {
-		t.Errorf("GitCredentialName(legacy) = %q, %v, want %q true", name, ok, "release-bot")
+	if name, ok := GitCredentialName("github-credential:release-bot"); ok || name != "" {
+		t.Errorf("GitCredentialName(retired) = %q, %v, want \"\" false", name, ok)
+	}
+	if name, ok := LegacyGitCredentialName("github-credential:release-bot"); !ok || name != "release-bot" {
+		t.Errorf("LegacyGitCredentialName = %q, %v, want %q true", name, ok, "release-bot")
 	}
 	if got := CanonicalLegacyGrant("github-credential:release-bot"); got != "github-credential:release-bot" {
 		t.Errorf("CanonicalLegacyGrant(github-credential:release-bot) = %q, want it unchanged: the retired name is no longer an alias", got)
