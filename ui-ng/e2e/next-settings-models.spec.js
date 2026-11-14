@@ -143,7 +143,12 @@ test.describe("Settings → Models default and fallback models", () => {
       "claude-sonnet-5",
     );
     // Move it to the top of the fallbacks, drop the retired one.
+    // One move at a time: the second click must land on the re-indexed row,
+    // not on whichever row held index 1 before the first move rendered.
     await card.getByTestId("fallback-up-2").click();
+    await expect(card.getByTestId("fallback-row-1")).toContainText(
+      "claude-sonnet-5",
+    );
     await card.getByTestId("fallback-up-1").click();
     await expect(card.getByTestId("fallback-row-0")).toContainText(
       "claude-sonnet-5",
@@ -153,12 +158,13 @@ test.describe("Settings → Models default and fallback models", () => {
 
     await page.getByTestId("settings-save-btn").click();
     await expect(page.getByTestId("settings-save-bar")).toBeHidden();
-    const dep = await (await request.get("/api/deployment")).json();
-    expect(dep.defaultModels).toEqual([
-      "gemini-2.5-pro",
-      "claude-sonnet-5",
-      "claude-opus-5",
-    ]);
+    // Polled: the save bar hides as the request leaves, not once the
+    // deployment answers with what it stored.
+    const savedModels = async () =>
+      (await (await request.get("/api/deployment")).json()).defaultModels;
+    await expect
+      .poll(savedModels)
+      .toEqual(["gemini-2.5-pro", "claude-sonnet-5", "claude-opus-5"]);
 
     // Promoting a fallback to default takes it out of the fallbacks.
     await card.getByTestId("picker-default-model").click();
@@ -172,8 +178,9 @@ test.describe("Settings → Models default and fallback models", () => {
     await expect(card.locator('[data-testid^="fallback-row-"]')).toHaveCount(1);
     await page.getByTestId("settings-save-btn").click();
     await expect(page.getByTestId("settings-save-bar")).toBeHidden();
-    const after = await (await request.get("/api/deployment")).json();
-    expect(after.defaultModels).toEqual(["claude-opus-5", "claude-sonnet-5"]);
+    await expect
+      .poll(savedModels)
+      .toEqual(["claude-opus-5", "claude-sonnet-5"]);
   });
 });
 
