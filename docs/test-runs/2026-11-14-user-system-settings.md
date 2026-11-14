@@ -38,9 +38,9 @@
 The server, store, frontend, browser and gestures were all real. Only one
 route was intercepted:
 
-| Route                                             | Why                                                                                                   |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `POST /api/settings` → one `503 {"error":"stubbed outage"}` | To see the save-failure banner and a retry. The next press went to the real server.          |
+| Route                                                       | Why                                                                                 |
+| ----------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `POST /api/settings` → one `503 {"error":"stubbed outage"}` | To see the save-failure banner and a retry. The next press went to the real server. |
 
 The GitHub, identity, upgrade, model-provider and config-repo boundaries
 were not stubbed. The demo's simulator covered what the walk reached, and
@@ -84,7 +84,7 @@ the identity/IAP and config-repo pull-request flows were not reached (see
   settings** while Settings is open, and the header box again once you
   leave (checked on Inbox).
 - `budget` lists Models and Agents. `zzzqqq` says `No settings sections
-  match "zzzqqq".` Escape clears the box and restores all five groups.
+match "zzzqqq".` Escape clears the box and restores all five groups.
 - `max agent turns`, a visible field label, matched nothing. Fixed by
   adding field-label keywords to Agents, General and CLI. The `/next/`
   filter lists **sections**, not fields, so it does not focus a field or
@@ -164,6 +164,7 @@ the identity/IAP and config-repo pull-request flows were not reached (see
   ```
 
   This matches the classic card (`ui/src/components/settings/CLISection.jsx`).
+
 - **Bug 9 (fixed):** Audit printed raw RFC 3339 nanosecond stamps
   (`2026-11-14T12:02:32.239456035Z`). It now prints them in the display
   time zone ("Nov 14, 2026, 12:19:29 PM UTC", and "07:19:29 AM EST" with
@@ -301,8 +302,8 @@ are proposed as a follow-up:
 ## Tests run
 
 - `npx playwright test e2e/next-settings-walkthrough.spec.js
-  e2e/next-qa-settings.spec.js e2e/next-settings-models.spec.js
-  e2e/next-settings-repos.spec.js --project=desktop`: all pass.
+e2e/next-qa-settings.spec.js e2e/next-settings-models.spec.js
+e2e/next-settings-repos.spec.js --project=desktop`: all pass.
 - `npx playwright test e2e/next-full-system.spec.js`: 5 passed.
 - `npm run lint`, `npm test` (49 files, 447 tests) and
   `npx prettier --check src e2e` in `ui-ng/`: all pass.
