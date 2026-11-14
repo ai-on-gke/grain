@@ -270,7 +270,12 @@ const ONE_KEY = new Set(["approve"]);
           <div class="queue-list">
             @if (store.loaded() && store.groups().length === 0) {
               <div class="empty-state" data-testid="next-inbox-empty">
-                @if (store.entries().length === 0) {
+                @if (!store.tasksRead()) {
+                  <p data-testid="next-inbox-unread">
+                    Tasks could not be read, so this queue cannot say yet what
+                    is waiting on you. It tries again on its own.
+                  </p>
+                } @else if (store.entries().length === 0) {
                   <p>
                     Nothing is waiting on you. Every task is running, waiting on
                     grain, or done.
@@ -1307,6 +1312,11 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       ? this.store.scopedDecisions().length
       : this.store.decisions().length;
     if (!this.store.loaded()) return "Inbox";
+    // A task list never read is not an empty one: say only what is known.
+    if (!this.store.tasksRead()) {
+      if (n === 0) return "Inbox";
+      return `At least ${n} ${n === 1 ? "decision" : "decisions"} waiting on you`;
+    }
     if (n === 0) return "Nothing waiting on you";
     return `${n} ${n === 1 ? "decision" : "decisions"} waiting on you`;
   });
