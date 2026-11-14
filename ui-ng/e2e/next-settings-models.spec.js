@@ -142,8 +142,16 @@ test.describe("Settings → Models default and fallback models", () => {
     await expect(card.getByTestId("fallback-row-2")).toContainText(
       "claude-sonnet-5",
     );
-    // Move it to the top of the fallbacks, drop the retired one.
+    // Move it to the top of the fallbacks, drop the retired one. The
+    // buttons are named by row index and the rows are keyed by model, so
+    // wait for each move to render before clicking the next index: a
+    // click that lands before Angular re-renders hits the row that *was*
+    // at that index (here retired-model-1, which moves back down and
+    // undoes the first move).
     await card.getByTestId("fallback-up-2").click();
+    await expect(card.getByTestId("fallback-row-1")).toContainText(
+      "claude-sonnet-5",
+    );
     await card.getByTestId("fallback-up-1").click();
     await expect(card.getByTestId("fallback-row-0")).toContainText(
       "claude-sonnet-5",
