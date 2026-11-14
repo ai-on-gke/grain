@@ -391,6 +391,7 @@ var routeBodies = map[string]any{
 	"POST /api/tasks/{id}/brief":                                        BriefRequest{},
 	"POST /api/tasks/{id}/human-review":                                 HumanReviewRequestBody{},
 	"POST /api/notifications":                                           RaiseNotificationRequest{},
+	"POST /api/notifications/clear":                                     ClearNotificationsRequest{},
 	"POST /api/tasks/{id}/wait-on":                                      waitOnRequest{},
 	"POST /api/tasks/{id}/park-until":                                   parkUntilRequest{},
 	"POST /api/tasks/{id}/resume-later":                                 resumeLaterRequest{},
