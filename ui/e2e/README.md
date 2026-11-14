@@ -53,3 +53,8 @@ it, quarantine the file. `TestClassicE2EFreezeLists` checks every entry
 in `go unit`: the spec exists, the line starts a `test(`, the title is
 literal, and nothing is listed twice. When a quarantined test moves to
 another line, its entry has to move with it.
+
+`QUARANTINE`, `NONGATING` and `frozen.js` sit on grain's trust boundary
+(`ci-suppressions` in `pkg/trustboundary`), like `.grain/quarantine.yml`:
+they decide which failures the gate ignores, so a pull request that edits
+them gets a security review and waits for a person to press Submit.
