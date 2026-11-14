@@ -18,6 +18,7 @@ import {
   TIP_DELAY_MS,
   TIP_ID,
   TIP_LEAVE_MS,
+  TIP_REGION_ID,
   TipDirective,
 } from "./tip.directive";
 
@@ -36,6 +37,7 @@ describe("TipDirective", () => {
   let button: HTMLButtonElement;
   let second: HTMLButtonElement;
   beforeEach(() => {
+    document.getElementById(TIP_REGION_ID)?.remove();
     document.getElementById(TIP_ID)?.remove();
     TestBed.configureTestingModule({ imports: [HostComponent] });
     const fixture = TestBed.createComponent(HostComponent);
@@ -58,6 +60,21 @@ describe("TipDirective", () => {
     button.blur();
     expect(tip()?.hidden).toBe(true);
     expect(button.hasAttribute("aria-describedby")).toBe(false);
+  });
+
+  // A tip bare in <body> is content outside every landmark (axe
+  // "region"), which failed the Inbox's dark axe pass when the theme
+  // toggle's tip appeared mid-scan.
+  it("shows inside a labelled region landmark that hides with it", () => {
+    button.focus();
+    const region = tip()?.parentElement;
+    expect(region?.id).toBe(TIP_REGION_ID);
+    expect(region?.getAttribute("role")).toBe("region");
+    expect(region?.getAttribute("aria-label")).toBe("Tooltip");
+    expect(region?.parentElement).toBe(document.body);
+    expect(region?.hidden).toBe(false);
+    button.blur();
+    expect(region?.hidden).toBe(true);
   });
 
   it("waits 400 ms on hover and hides on Escape", () => {

@@ -14,6 +14,7 @@
 
 import { inject } from "@angular/core";
 import {
+  type CanDeactivateFn,
   type RedirectFunction,
   Router,
   type Routes,
@@ -62,6 +63,13 @@ function legacy(tab: string): RedirectFunction {
     });
   };
 }
+
+// confirmLeaveGuard lets a page with unsaved edits ask before the router
+// takes the reader away (the repository page's confirmLeave). Duck-typed
+// so the guard does not pull a lazy page's code into the shell bundle.
+const confirmLeaveGuard: CanDeactivateFn<{
+  confirmLeave?: () => boolean | Promise<boolean>;
+}> = (c) => c?.confirmLeave?.() ?? true;
 
 // Every page is lazy, so the shell's own bundle stays inside the budget
 // (angular.json) however many pages move over. A path this app does not
@@ -228,6 +236,7 @@ export const routes: Routes = [
           }
         : null,
     title: "Repository · grain",
+    canDeactivate: [confirmLeaveGuard],
     loadComponent: () =>
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
@@ -236,6 +245,7 @@ export const routes: Routes = [
   {
     path: "repos/:owner/:name",
     title: "Repository · grain",
+    canDeactivate: [confirmLeaveGuard],
     loadComponent: () =>
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
@@ -244,6 +254,7 @@ export const routes: Routes = [
   {
     path: "repos/:owner/:name/:tab",
     title: "Repository · grain",
+    canDeactivate: [confirmLeaveGuard],
     loadComponent: () =>
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
@@ -252,6 +263,7 @@ export const routes: Routes = [
   {
     path: "repos/:host/:owner/:name",
     title: "Repository · grain",
+    canDeactivate: [confirmLeaveGuard],
     loadComponent: () =>
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
@@ -260,6 +272,7 @@ export const routes: Routes = [
   {
     path: "repos/:host/:owner/:name/:tab",
     title: "Repository · grain",
+    canDeactivate: [confirmLeaveGuard],
     loadComponent: () =>
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,

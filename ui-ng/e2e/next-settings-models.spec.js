@@ -144,6 +144,13 @@ test.describe("Settings → Models default and fallback models", () => {
     );
     // Move it to the top of the fallbacks, drop the retired one.
     await card.getByTestId("fallback-up-2").click();
+    // Rows are tracked by model, so a moved row keeps its element and only
+    // its data-testid is rebound on the next render: wait for that before
+    // clicking by index, or "fallback-up-1" can still name the row that
+    // was there before and move the wrong model.
+    await expect(card.getByTestId("fallback-row-1")).toContainText(
+      "claude-sonnet-5",
+    );
     await card.getByTestId("fallback-up-1").click();
     await expect(card.getByTestId("fallback-row-0")).toContainText(
       "claude-sonnet-5",
