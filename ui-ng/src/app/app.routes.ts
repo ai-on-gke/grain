@@ -40,7 +40,7 @@ function workstreamMultiSegmentMatcher(
 // classic UI lands on the page that has the same content rather than
 // falling through to the Inbox. Each entry is the path and, for Fleet,
 // the ?tab= that shows it.
-const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
+const SYSTEM_TABS: Record<string, readonly [string, string?, string?]> = {
   health: ["/fleet"],
   sandboxes: ["/fleet"],
   top: ["/fleet"],
@@ -50,15 +50,22 @@ const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
   caches: ["/settings/caches"],
   metrics: ["/telemetry"],
   upgrade: ["/settings/upgrade"],
+  // Settings pages the classic UI kept under System and Admin: hosts
+  // (once "executors") and the deployment credentials (once
+  // "integrations"), whose third element is the card to scroll to.
+  executors: ["/settings/hostds"],
+  integrations: ["/settings/capabilities", undefined, "credentials"],
+  workflow: ["/settings/tasks"],
 };
 
 // legacy redirects to the page SYSTEM_TABS names for `tab`, keeping the
 // query the old link carried (a /system/metrics?repo=... narrowing, say).
 function legacy(tab: string): RedirectFunction {
   return ({ queryParams }) => {
-    const [path, fleetTab] = SYSTEM_TABS[tab] ?? ["/fleet"];
+    const [path, fleetTab, fragment] = SYSTEM_TABS[tab] ?? ["/fleet"];
     return inject(Router).createUrlTree([path], {
       queryParams: fleetTab ? { ...queryParams, tab: fleetTab } : queryParams,
+      ...(fragment ? { fragment } : {}),
     });
   };
 }
@@ -190,6 +197,13 @@ export const routes: Routes = [
     redirectTo: (route) => legacy(String(route.params["tab"]))(route),
   },
   { path: "admin/logs", redirectTo: legacy("logs") },
+  // The classic Admin page's addresses: /admin was General, and each
+  // /admin/<tab> the page SYSTEM_TABS names for it.
+  { path: "admin", redirectTo: "settings/general", pathMatch: "full" },
+  {
+    path: "admin/:tab",
+    redirectTo: (route) => legacy(String(route.params["tab"]))(route),
+  },
   { path: "sandboxes", redirectTo: legacy("sandboxes"), pathMatch: "full" },
   { path: "caches", redirectTo: legacy("caches"), pathMatch: "full" },
   { path: "staging", redirectTo: "fleet" },
@@ -203,6 +217,29 @@ export const routes: Routes = [
   },
   { path: "memory", redirectTo: "context" },
   { path: "config", redirectTo: "settings/config-repo", pathMatch: "full" },
+  // The classic Config Repo Browser's /settings/config-repo/<file> is
+  // the file viewer's ?path=<file> here.
+  {
+    matcher: (s) =>
+      s.length > 2 && s[0].path === "settings" && s[1].path === "config-repo"
+        ? {
+            consumed: s,
+            posParams: {
+              file: new UrlSegment(
+                s
+                  .slice(2)
+                  .map((x) => x.path)
+                  .join("/"),
+                {},
+              ),
+            },
+          }
+        : null,
+    redirectTo: ({ params }) =>
+      inject(Router).createUrlTree(["/settings", "config-repo"], {
+        queryParams: { path: String(params["file"] ?? "") },
+      }),
+  },
   {
     path: "settings",
     title: "Settings · grain",

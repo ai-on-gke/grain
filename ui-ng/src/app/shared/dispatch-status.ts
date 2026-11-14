@@ -106,6 +106,29 @@ export function parseResetMs(
   return null;
 }
 
+// formatStamp prints an absolute server timestamp (RFC 3339, nanoseconds
+// and all) in the display time zone -- Preferences' choice, else the
+// deployment's, else the browser's -- as "Nov 14, 2026, 12:02:32 UTC".
+// A value that does not parse is returned as it came.
+export function formatStamp(at: string, preferredTz?: string | null): string {
+  const ms = Date.parse(at);
+  if (!at || Number.isNaN(ms)) return at;
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone: effectiveDisplayTimeZone(preferredTz),
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    }).format(new Date(ms));
+  } catch {
+    return at;
+  }
+}
+
 export function formatLocalReset(
   until?: string,
   secondsRemaining?: number,
