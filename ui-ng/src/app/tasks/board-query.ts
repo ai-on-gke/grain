@@ -173,11 +173,18 @@ export function boardQueryForView(v: BoardView): string {
     .replace(/%2C/g, ",");
 }
 
+// OLD_NEXT_KEYS are the only keys /next/ wrote before it spoke this
+// grammar. It left tab= out of a board saved on Backlog, so a query
+// made of these keys alone, with no tab=, was saved on Backlog.
+const OLD_NEXT_KEYS = new Set(["tab", "q", "repo", "group", "view"]);
+
 // viewForQuery reads a board-grammar query (or a /next/tasks address)
 // into a view, or says why /next/tasks cannot show it. A query with no
 // condition on state opens on All, the nearest tab to classic's default
-// list. The keys /next/ wrote before it spoke this grammar (tab=,
-// repo=) are still read, so boards saved then keep opening as saved.
+// list, as an empty query does. The keys /next/ wrote before it spoke
+// this grammar (tab=, repo=, ...) are still read, and a query of those
+// keys alone with no tab= opens on Backlog, where /next/ saved it, so
+// boards saved then keep opening as saved.
 export function viewForQuery(
   query: string,
 ): { view: BoardView } | { why: string } {
@@ -195,7 +202,14 @@ export function viewForQuery(
     return { why: "it lists tasks with no repository" };
   }
   const legacyTab = p.get("tab");
+  let keys = 0;
+  let onlyOldNext = true;
+  p.forEach((_, k) => {
+    keys++;
+    if (!OLD_NEXT_KEYS.has(k)) onlyOldNext = false;
+  });
   if (isTabId(legacyTab)) view.tab = legacyTab;
+  else if (keys && onlyOldNext) view.tab = "backlog";
   // A condition on state wins over a legacy tab= beside it; two of them
   // narrow to their intersection, which no tab is.
   let stated = false;

@@ -93,6 +93,23 @@ describe("viewForQuery", () => {
     });
   });
 
+  it("opens a board /next/ saved on Backlog, with no tab=, on Backlog", () => {
+    for (const [q, v] of [
+      ["repo=o/n", { repo: "o/n" }],
+      ["group=repo", { group: "repo" }],
+      ["q=flaky", { q: "flaky" }],
+      ["view=timeline", { view: "timeline" }],
+    ] as const) {
+      expect(viewForQuery(q), q).toEqual({
+        view: view({ tab: "backlog", ...v }),
+      });
+    }
+    // A board-grammar key beside them reads it as a classic board.
+    expect(viewForQuery("q=flaky&f=repo:any:o/n")).toEqual({
+      view: view({ tab: "all", q: "flaky", repo: "o/n" }),
+    });
+  });
+
   it("lets a state condition win over a legacy tab", () => {
     expect(viewForQuery("tab=running&f=state:any:queued")).toEqual({
       view: view({ tab: "backlog" }),
