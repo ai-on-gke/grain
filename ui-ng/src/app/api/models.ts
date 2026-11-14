@@ -312,6 +312,10 @@ export interface Task {
   // Why the task is where it is (orchestrator liveness reason), e.g.
   // {reason: "awaiting_reply/stopped", class: "awaiting a person"}.
   reason?: { reason: string; class?: string; control?: string };
+  // The merge queue's own sub-case for this task's pull request, when it
+  // is on the queue; its control (Retry merge on merge_failed) stands in
+  // when the task's own sub-case names none.
+  mergeQueueReason?: { reason: string; class?: string; control?: string };
 }
 
 export type MergeGateState =

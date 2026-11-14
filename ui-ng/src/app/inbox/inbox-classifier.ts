@@ -510,6 +510,58 @@ function taskAction(
   };
 }
 
+// stallControl is the button a stuck task's sub-case names (the
+// orchestrator's liveness reason's control: Run now, Cancel, Undefer or
+// Retry merge), as the classic Inbox's reasonControl offers it. The
+// merge queue's own sub-case stands in when the task's names none. A
+// sub-case naming no control a row can press offers none.
+function stallControl(t: Task): InboxAction | null {
+  for (const r of [t.reason, t.mergeQueueReason]) {
+    switch (r?.control) {
+      case "Run now":
+        return taskAction(
+          t,
+          "run-now",
+          "Run now",
+          "POST /api/tasks/{id}/run-now",
+          "primary",
+        );
+      case "Cancel":
+        // "Cancel task", not the sub-case's bare "Cancel": the confirm
+        // dialog's own dismiss button is "Cancel", and two buttons of one
+        // name side by side leave a person guessing which one stops the run.
+        return taskAction(
+          t,
+          "cancel",
+          "Cancel task",
+          "POST /api/tasks/{id}/close",
+          "tonal",
+          {
+            confirm: `Cancel #${t.id}? The run in flight is stopped and the task is closed; it can be reopened later.`,
+            destructive: true,
+          },
+        );
+      case "Undefer":
+        return taskAction(
+          t,
+          "undefer",
+          "Undefer",
+          "POST /api/tasks/{id}/undefer",
+          "primary",
+        );
+      case "Retry merge":
+        return taskAction(
+          t,
+          "retry-merge",
+          "Retry merge",
+          "POST /api/tasks/{id}/retry-merge",
+          "primary",
+        );
+    }
+  }
+  return null;
+}
+
 function taskEntry(t: Task, kind: EntryKind, groupId: string): InboxEntry {
   return {
     key: `task:${t.id}:${kind}`,
@@ -715,6 +767,8 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     e.pillTone = "blast";
     e.summary = t.stall;
     e.rationale = "Grain reads this as stuck rather than busy.";
+    const control = stallControl(t);
+    if (control) e.actions.push(control);
     return e;
   }
   if (t.state === "proposed") {
