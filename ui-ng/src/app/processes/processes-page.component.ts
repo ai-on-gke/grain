@@ -3151,6 +3151,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const defaults: Record<string, string> = {};
       for (const f of tmpl.fields ?? []) {
         if (f.default) defaults[f.name] = f.default;
+        // A required field with no default would have the server refuse
+        // the whole preview ("field is required"), leaving the pane with
+        // none; preview it with its own placeholder instead.
+        else if (f.required) defaults[f.name] = `{{${f.name}}}`;
       }
       void this.store
         .fetchTemplateComposition(

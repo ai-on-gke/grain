@@ -163,3 +163,40 @@ test("item deep links land on the item", async ({ page }) => {
   await confirm.getByRole("button", { name: "Stop suite tasks" }).click();
   await expect(confirm).toBeHidden();
 });
+
+// A template with a required input field and no default had its
+// composition preview refused by the server ("field is required"), so its
+// pane silently showed none.
+test("a template with a required field still previews its composition", async ({
+  page,
+}) => {
+  const created = await page.request.post("/api/templates", {
+    data: {
+      name: "e2e-required-field",
+      title: "Fix {{area}}",
+      description: "Please fix {{area}}.",
+      params: ["area"],
+      fields: [{ name: "area", required: true }],
+    },
+  });
+  expect(created.ok()).toBe(true);
+  const tmpl = await created.json();
+  const refused = [];
+  page.on("response", (r) => {
+    if (r.url().includes("/composition") && r.status() >= 400) {
+      refused.push(`${r.status()} ${r.url()}`);
+    }
+  });
+  try {
+    await page.goto(`/next/processes/templates/${tmpl.id}`);
+    await expect(page.getByTestId("tmpl-detail-title")).toContainText(
+      "e2e-required-field",
+    );
+    const inspector = page.getByTestId("proc-inspector");
+    await expect(inspector).toContainText("Composition preview");
+    await expect(inspector).toContainText("Fix {{area}}");
+    expect(refused).toEqual([]);
+  } finally {
+    await page.request.delete(`/api/templates/${tmpl.id}`);
+  }
+});
