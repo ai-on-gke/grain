@@ -742,10 +742,28 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   protected readonly selectedId = computed(() => {
     const fromUrl = this.task();
     if (fromUrl) return fromUrl;
-    if (this.isPhone() || !this.store.loaded()) return null;
+    // Pick the first agent only where the inspector sits beside the list.
+    // Between the phone width and 1080px (and on a short landscape
+    // screen) the inspector is a fixed sheet over the list and the top
+    // bar (inbox-inspector.css), so selecting one unasked would open that
+    // sheet on arrival and hide the page behind it.
+    if (this.isPhone() || this.inspectorIsSheet() || !this.store.loaded()) {
+      return null;
+    }
     const all = this.store.agents();
     return all.length > 0 ? all[0].task.id : null;
   });
+
+  // inspectorIsSheet mirrors the media queries in inbox-inspector.css
+  // that turn the inspector pane into an overlay sheet.
+  protected inspectorIsSheet(): boolean {
+    return (
+      typeof matchMedia === "function" &&
+      matchMedia(
+        "(max-width: 1079.95px), (max-height: 480px) and (orientation: landscape)",
+      ).matches
+    );
+  }
 
   protected isPhone(): boolean {
     return (

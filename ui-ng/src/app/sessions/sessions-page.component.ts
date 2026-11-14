@@ -78,7 +78,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
 
 // SessionsPageComponent is Sessions (spec D-8) with zero Classic fallbacks:
 // standing conversations on the left, live "Apply now" banner on run-fixed
-// edits, per-method/API grants & team/model settings, and file attachments.
+// edits, per-method/API grants & model settings, and file attachments.
 @Component({
   selector: "g-sessions-page",
   imports: [
@@ -168,11 +168,6 @@ export function clock(iso: string | undefined, now = new Date()): string {
                       }}</span
                     >
                   </span>
-                  @if (r.session.team) {
-                    <span class="muted" style="font-size: 11px"
-                      >Team: {{ r.session.team }}</span
-                    >
-                  }
                   @if (r.line) {
                     <span class="session-line">{{ r.line }}</span>
                   }
@@ -180,7 +175,12 @@ export function clock(iso: string | undefined, now = new Date()): string {
               </li>
             }
           </ul>
-          @if (store.loaded() && store.rows().length === 0) {
+          <!-- A failed read is reported by the load-error banner above;
+            saying "No sessions yet" beside it would claim the list is empty
+            when it was never read. -->
+          @if (
+            store.loaded() && !store.loadError() && store.rows().length === 0
+          ) {
             <p class="empty-state">No sessions yet.</p>
           }
         </nav>
@@ -202,13 +202,6 @@ export function clock(iso: string | undefined, now = new Date()): string {
               <h2 class="chat-title" id="chat-title" tabindex="-1" #chatTitle>
                 {{ row.session.title }}
               </h2>
-              @if (row.session.team) {
-                <span
-                  class="status-pill neutral"
-                  data-testid="session-team-pill"
-                  >{{ row.session.team }}</span
-                >
-              }
               <span
                 [class]="'status-pill ' + st.tone"
                 data-testid="chat-status"
@@ -446,27 +439,6 @@ export function clock(iso: string | undefined, now = new Date()): string {
                       "
                     />
                     <span>Reads all (read access to all repos)</span>
-                  </label>
-                  <label class="session-setting-field">
-                    <span>Visible to team / members</span>
-                    <div style="display: flex; gap: 6px">
-                      <input
-                        type="text"
-                        data-testid="session-team-input"
-                        placeholder="default (everyone allowed)"
-                        [value]="teamDraft()"
-                        (input)="teamDraft.set(inputValue($event))"
-                      />
-                      <button
-                        type="button"
-                        class="btn-tonal"
-                        data-testid="session-team-save"
-                        [disabled]="store.isBusy('settings')"
-                        (click)="saveTeam()"
-                      >
-                        Save
-                      </button>
-                    </div>
                   </label>
                 </div>
 
@@ -718,8 +690,8 @@ export function clock(iso: string | undefined, now = new Date()): string {
           <h2 id="new-session-title">New session</h2>
           <p class="muted">
             A standing conversation with its own interactive agent. It starts
-            with the deployment's default grants; customize team visibility,
-            model, or grants below.
+            with the deployment's default grants; choose its model below, and
+            change its grants from its settings once it is open.
           </p>
           <label class="field">
             <span>Name</span>
@@ -730,16 +702,6 @@ export function clock(iso: string | undefined, now = new Date()): string {
               [value]="newName()"
               (input)="newName.set(inputValue($event))"
               placeholder="For example: Release help"
-            />
-          </label>
-          <label class="field">
-            <span>Visible to team (optional)</span>
-            <input
-              type="text"
-              data-testid="new-session-team"
-              [value]="newTeam()"
-              (input)="newTeam.set(inputValue($event))"
-              placeholder="Default team"
             />
           </label>
           <div class="field">
@@ -852,10 +814,8 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly director = DIRECTOR_ID;
   protected readonly freshOpen = signal(false);
   protected readonly settingsOpen = signal(false);
-  protected readonly teamDraft = signal("");
   protected readonly newOpen = signal(false);
   protected readonly newName = signal("");
-  protected readonly newTeam = signal("");
   protected readonly newModel = signal("");
   protected readonly newMessage = signal("");
   protected readonly newAttachments = signal<AttachmentUpload[]>([]);
@@ -998,10 +958,6 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
       });
     });
     effect(() => {
-      const team = this.store.selected()?.session.team ?? "";
-      untracked(() => this.teamDraft.set(team));
-    });
-    effect(() => {
       if (!this.new()) return;
       const allowed = this.canCreate();
       untracked(() => {
@@ -1060,11 +1016,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   }
 
   protected toggleSettingsPanel(): void {
-    const next = !this.settingsOpen();
-    this.settingsOpen.set(next);
-    if (next) {
-      this.teamDraft.set(this.store.selected()?.session.team ?? "");
-    }
+    this.settingsOpen.set(!this.settingsOpen());
   }
 
   protected async saveModel(model: string): Promise<void> {
@@ -1078,15 +1030,6 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected async saveNetwork(networkAccess: string): Promise<void> {
     if (await this.store.updateSettings({ networkAccess })) {
       this.snackbar.show("Updated network access");
-    }
-  }
-
-  protected async saveTeam(): Promise<void> {
-    const team = this.teamDraft().trim();
-    if (await this.store.updateSettings({ team })) {
-      this.snackbar.show(
-        team ? `Visible to team ${team}` : "Updated team visibility",
-      );
     }
   }
 
@@ -1169,7 +1112,6 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
 
   protected openNew(): void {
     this.newName.set("");
-    this.newTeam.set("");
     this.newModel.set("");
     this.newMessage.set("");
     this.newAttachments.set([]);
@@ -1187,7 +1129,6 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     const id = await this.store.create({
       title: this.newName(),
       message: this.newMessage(),
-      team: this.newTeam(),
       model: this.newModel(),
       attachments: this.newAttachments(),
     });
