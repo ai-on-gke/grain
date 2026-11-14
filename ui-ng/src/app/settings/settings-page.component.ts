@@ -53,10 +53,10 @@ import { SettingsWorkComponent } from "./settings-work.component";
     SettingsSecurityComponent,
     SettingsInstanceComponent,
   ],
-  providers: [SettingsStateService],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "../shared/pill-select.css",
     "./settings-layout.css",
     "./settings-forms.css",
@@ -330,6 +330,18 @@ import { SettingsWorkComponent } from "./settings-work.component";
                     <g-settings-instance [section]="activeSection()" />
                   }
                 }
+              } @else if (!state.error()) {
+                <div class="settings-skeleton" data-testid="settings-skeleton">
+                  <div class="s-card">
+                    <div class="s-skel-line s-skel-title"></div>
+                    <div class="s-skel-line"></div>
+                    <div class="s-skel-line s-skel-short"></div>
+                  </div>
+                  <div class="s-card">
+                    <div class="s-skel-line s-skel-title"></div>
+                    <div class="s-skel-line"></div>
+                  </div>
+                </div>
               }
             </div>
           </div>
@@ -449,6 +461,11 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
         this.routeFilePath.set(qm.get("path") ?? "");
       }),
     );
+    if (this.state.initialized() && this.state.config() !== null) {
+      this.ready.set(true);
+      void this.state.loadCore(true);
+      return;
+    }
     void this.state.loadCore().then(() => {
       if (this.state.config() !== null) {
         this.ready.set(true);

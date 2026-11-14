@@ -336,3 +336,79 @@ func TestGetTaskPagePreservesDerivedFieldsAndCachesHead(t *testing.T) {
 		t.Errorf("Client.Task QuestionSummary = %q, want Keep the v1 flag?", one.QuestionSummary)
 	}
 }
+
+func TestConfigETagAnd304AndVariesOnChange(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	grain := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := client.Store.PutRepoWorkflows(ctx, grain, []model.RepoWorkflow{{
+		Repo: grain, Path: ".grain/workflows/ci.yml", Text: "on: [push]\n",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "ci check", Repo: grain.String()}); err != nil {
+		t.Fatal(err)
+	}
+
+	req1 := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	rec1 := httptest.NewRecorder()
+	srv.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first GET /api/config = %d %s", rec1.Code, rec1.Body.String())
+	}
+	etag1 := rec1.Header().Get("ETag")
+	if etag1 == "" {
+		t.Fatal("GET /api/config omitted ETag header")
+	}
+	if got := rec1.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	vary := strings.Join(rec1.Header().Values("Vary"), ", ")
+	if !strings.Contains(vary, "Cookie") || !strings.Contains(vary, "Authorization") {
+		t.Errorf("Vary = %q, want Cookie and Authorization", vary)
+	}
+	var cfgResp struct {
+		Deployment struct {
+			Repos []ui.TeamRepoAssociation `json:"repos"`
+		} `json:"deployment"`
+		PipelinePause *struct {
+			Paused bool `json:"paused"`
+		} `json:"pipelinePause"`
+	}
+	if err := json.Unmarshal(rec1.Body.Bytes(), &cfgResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfgResp.Deployment.Repos) != 1 || cfgResp.Deployment.Repos[0].CIMode != "Grain CI" {
+		t.Errorf("deployment.repos = %+v, want acme/widgets with Grain CI", cfgResp.Deployment.Repos)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req2.Header.Set("If-None-Match", etag1)
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusNotModified {
+		t.Errorf("conditional GET /api/config = %d, want 304", rec2.Code)
+	}
+	if rec2.Body.Len() != 0 {
+		t.Errorf("304 body len = %d, want 0", rec2.Body.Len())
+	}
+
+	// Changing pipeline pause must invalidate the ETag and serve 200.
+	if err := client.Store.SetPipelinePause(ctx, model.PipelinePause{
+		PausedAt: time.Now().UTC(),
+		Reason:   "maintenance",
+		By:       model.Principal{Kind: model.PrincipalHuman, ID: "alice"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	req3 := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req3.Header.Set("If-None-Match", etag1)
+	rec3 := httptest.NewRecorder()
+	srv.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("GET /api/config after pause = %d, want 200", rec3.Code)
+	}
+	if etag3 := rec3.Header().Get("ETag"); etag3 == "" || etag3 == etag1 {
+		t.Errorf("ETag after pause = %q (was %q), want distinct ETag", etag3, etag1)
+	}
+}

@@ -129,7 +129,9 @@ g-workstreams-page {
 .ws-row {
   position: relative;
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) 220px 150px 76px 76px;
+  grid-template-columns:
+    32px minmax(180px, 1fr) minmax(200px, 240px) minmax(148px, auto)
+    76px 64px;
   gap: 12px 14px;
   align-items: center;
   width: 100%;
@@ -286,7 +288,10 @@ g-workstreams-page {
 
 @media (max-width: 599.95px) {
   .ws-page {
-    padding: 12px 16px 88px;
+    padding: 12px 16px calc(var(--grain-bottombar-height, 92px) + 72px);
+  }
+  .ws-vsep {
+    display: none;
   }
   .ws-row {
     grid-template-columns: 28px minmax(0, 1fr);

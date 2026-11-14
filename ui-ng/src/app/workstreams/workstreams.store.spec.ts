@@ -335,4 +335,78 @@ describe("WorkstreamsStore", () => {
     expect(ws.root.task.state).toBe("completed");
     expect(ws.goal).toBe("Detailed root description");
   });
+
+  it("sets loaded immediately after open tasks resolve while closed pages continue in background", async () => {
+    api.open = [
+      mkTask("60", { state: "queued", title: "Open root" }),
+      mkTask("61", {
+        state: "running",
+        origin: "task:60",
+        generatedFrom: "60",
+      }),
+    ];
+
+    let releaseClosed!: (res: { tasks: Task[]; nextCursor?: string }) => void;
+    let markClosedCalled!: () => void;
+    const closedCalled = new Promise<void>((r) => {
+      markClosedCalled = r;
+    });
+    const origGet = api.get.getMockImplementation()!;
+    api.get.mockImplementation(
+      (route: string, params?: { id?: string }, query?: string) => {
+        if (route === "GET /api/tasks" && query?.includes("state=closed")) {
+          return new Promise((resolve) => {
+            releaseClosed = resolve;
+            markClosedCalled();
+          });
+        }
+        return origGet(route, params, query);
+      },
+    );
+
+    const pending = store.refresh(true);
+    await closedCalled;
+
+    expect(store.loaded()).toBe(true);
+    expect(store.closedLoading()).toBe(true);
+    expect(store.streams().map((s) => s.key)).toEqual(["task:60"]);
+
+    releaseClosed({
+      tasks: [mkTask("59", { state: "completed", title: "Closed root" })],
+    });
+    await pending;
+
+    expect(store.closedLoading()).toBe(false);
+    expect(store.closedTasks().map((t) => t.id)).toEqual(["59"]);
+  });
+
+  it("guards ensureRootDetail with AccessService repo permissions", async () => {
+    const readScope = routeScope("GET /api/tasks/{id}")!;
+    TestBed.inject(AccessService).setConfig({
+      viewerOwner: "alice",
+      access: {
+        full: false,
+        role: "custom",
+        scopes: [readScope],
+        repoLimits: { [readScope]: ["sidthe/allowed"] },
+      },
+    });
+    api.open = [
+      mkTask("70", { state: "queued", repo: "sidthe/denied" }),
+      mkTask("71", { state: "queued", repo: "" }),
+      mkTask("72", { state: "queued", repo: "sidthe/allowed" }),
+    ];
+
+    await store.refresh(true);
+    api.calls = [];
+
+    await store.ensureRootDetail("70");
+    await store.ensureRootDetail("71");
+    await store.ensureRootDetail("72");
+
+    const fetchedIds = api.calls
+      .filter((c) => c.route === "GET /api/tasks/{id}")
+      .map((c) => (c.params as { id: string }).id);
+    expect(fetchedIds).toEqual(["72"]);
+  });
 });

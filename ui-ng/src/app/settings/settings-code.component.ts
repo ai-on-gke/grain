@@ -15,13 +15,16 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  OnChanges,
-  OnInit,
+  type OnChanges,
+  type OnInit,
+  type SimpleChanges,
   ViewEncapsulation,
   computed,
+  effect,
   inject,
   input,
   signal,
+  untracked,
 } from "@angular/core";
 import { RouterLink } from "@angular/router";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
@@ -1155,46 +1158,20 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     return this.reachableRepos().some((r) => r.repo === slug);
   }
 
-  protected async loadReachableRepos(): Promise<void> {
-    if (this.reachableRepos().length > 0 || this.loadingReachableRepos())
+  protected async loadReachableRepos(force = false): Promise<void> {
+    if (
+      (!force && this.reachableRepos().length > 0) ||
+      this.loadingReachableRepos()
+    )
       return;
     this.loadingReachableRepos.set(true);
     try {
-      const res = await this.api.get<
-        | unknown[]
-        | {
-            repos?: unknown[];
-            errors?: string[];
-            hostMismatches?: string[];
-            reason?: string;
-          }
-      >("GET /api/deployment/reachable-repos");
-      const rawList = Array.isArray(res) ? res : (res?.repos ?? []);
-      const parsed: { repo: string; push: boolean }[] = [];
-      const seen = new Set<string>();
-      for (const item of rawList) {
-        let slug = "";
-        let push = true;
-        if (typeof item === "string") {
-          slug = item.trim();
-        } else if (item && typeof item === "object" && "repo" in item) {
-          const obj = item as { repo?: unknown; push?: unknown };
-          slug = typeof obj.repo === "string" ? obj.repo.trim() : "";
-          if (typeof obj.push === "boolean") push = obj.push;
-        }
-        if (slug && !seen.has(slug)) {
-          seen.add(slug);
-          parsed.push({ repo: slug, push });
-        }
-      }
-      parsed.sort((a, b) => a.repo.localeCompare(b.repo));
-      this.reachableRepos.set(parsed);
-      this.reachableErrors.set(!Array.isArray(res) ? (res?.errors ?? []) : []);
-      this.reachableHostMismatches.set(
-        !Array.isArray(res) ? (res?.hostMismatches ?? []) : [],
-      );
-      this.reachableReason.set(!Array.isArray(res) ? (res?.reason ?? "") : "");
-      this.reachableCount.set(parsed.length);
+      const data = await this.state.fetchReachableRepos(force);
+      this.reachableRepos.set(data.repos);
+      this.reachableErrors.set(data.errors);
+      this.reachableHostMismatches.set(data.hostMismatches);
+      this.reachableReason.set(data.reason);
+      this.reachableCount.set(data.repos.length);
     } catch (err) {
       this.state.error.set(errText(err));
     } finally {
@@ -1234,12 +1211,47 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     return t === "ambient" || t === "none";
   }
 
+  private lastReachableEpoch = this.state.reachableEpoch();
+
+  constructor() {
+    effect(() => {
+      void this.state.deployment();
+      void this.state.settings();
+      void this.state.config();
+      const epoch = this.state.reachableEpoch();
+      const sec = this.section();
+      untracked(() => {
+        if (sec !== "repositories") {
+          this.lastReachableEpoch = epoch;
+          return;
+        }
+        this.syncReposList();
+        if (
+          epoch !== this.lastReachableEpoch &&
+          this.access.can("GET /api/deployment/reachable-repos")
+        ) {
+          this.lastReachableEpoch = epoch;
+          void this.loadReachableRepos(true);
+        }
+      });
+    });
+  }
+
   ngOnInit(): void {
     this.loadForSection();
   }
 
-  ngOnChanges(): void {
-    this.loadForSection();
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes["section"] && !changes["section"].firstChange) {
+      this.loadForSection();
+    } else if (
+      changes["initialFilePath"] &&
+      !changes["initialFilePath"].firstChange &&
+      this.section() === "config-repo" &&
+      this.initialFilePath()
+    ) {
+      void this.openConfigFile(this.initialFilePath());
+    }
   }
 
   protected canWriteSettings(): boolean {
@@ -1562,6 +1574,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       this.newGitAppId.set("");
       this.newGitAppInstallId.set("");
       await this.loadGitConnections();
+      this.state.invalidateReachableRepos();
       this.snackbar.show(`Saved Git connection on ${host}`);
     } catch (err) {
       this.state.recordError(err);
@@ -1602,6 +1615,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
         cred,
       });
       await this.loadGitConnections();
+      this.state.invalidateReachableRepos();
       this.snackbar.show(`Removed ${cred}`);
     } catch (err) {
       this.state.error.set(errText(err));
@@ -1620,6 +1634,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       this.ghTokenName.set("");
       this.ghTokenValue.set("");
       await this.loadGitConnections();
+      this.state.invalidateReachableRepos();
       const nowHasDefault = this.gitConnections().some(
         (c) => c.credential === name && !c.scope,
       );

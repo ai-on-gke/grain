@@ -67,6 +67,10 @@ function setTipShown(el: HTMLElement, shown: boolean): void {
 // aria-describedby pointing at someone else's sentence.
 let owner: TipDirective | null = null;
 
+export function dismissActiveTooltip(): void {
+  owner?.hide();
+}
+
 function addToken(el: HTMLElement, attr: string, token: string): void {
   const tokens = (el.getAttribute(attr) ?? "").split(/\s+/).filter(Boolean);
   if (!tokens.includes(token)) tokens.push(token);
@@ -91,6 +95,8 @@ function removeToken(el: HTMLElement, attr: string, token: string): void {
   host: {
     "(mouseenter)": "hoverIn()",
     "(mouseleave)": "hoverOut()",
+    "(pointerdown)": "hide()",
+    "(click)": "hide()",
     "(focusin)": "focusIn()",
     "(focusout)": "hide()",
   },

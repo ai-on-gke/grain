@@ -618,9 +618,11 @@ var routeQueries = map[string]map[string]string{
 	"GET /api/memory/documents": listQueryDocs("name, repo or summary", listPageLarge, map[string]string{
 		"repo": "Only this repository's (owner/name) documents; given empty, only the deployment's own.",
 	}),
-	"GET /api/repos/{owner}/{name}/branches":        listQueryDocs("name", listPageMedium, nil),
-	"GET /api/repos/{owner}/{name}/github-branches": listQueryDocs("name", listPageMedium, nil),
-	"GET /api/repos/{owner}/{name}/releases":        listQueryDocs("name or branch", listPageLarge, nil),
+	"GET /api/repos/{owner}/{name}/branches": listQueryDocs("name", listPageMedium, nil),
+	"GET /api/repos/{owner}/{name}/github-branches": listQueryDocs("name", listPageMedium, map[string]string{
+		"refresh": "Set to 1 to drop any cached branch listing and re-read from the host.",
+	}),
+	"GET /api/repos/{owner}/{name}/releases": listQueryDocs("name or branch", listPageLarge, nil),
 	"GET /api/suite-runs": listQueryDocs("suite name or id", listPageSmall, map[string]string{
 		"repo":   "Only this repository's (owner/name) runs.",
 		"fields": "full for every task of each run: a paged row otherwise carries its first 3 (taskCount and tasksTruncated say so).",

@@ -41,6 +41,7 @@ import {
   type PillOption,
 } from "../shared/pill-select.component";
 import { StatusIconComponent } from "../shared/status-icon.component";
+import { summarizeDispatchStatus } from "../shared/dispatch-status";
 import { TipDirective } from "../shared/tip.directive";
 import {
   type Agent,
@@ -110,6 +111,7 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "../inbox/inbox-queue.css",
     "../inbox/inbox-inspector.css",
     "./agents-page.component.css",
@@ -205,6 +207,24 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
                 </span>
                 @if (cpuSummary(); as c) {
                   <span>{{ c }}</span>
+                }
+                @if (dispatchPause(); as dp) {
+                  <span
+                    class="status-pill"
+                    [class.error]="dp.tone === 'error'"
+                    [class.blast]="dp.tone === 'warn'"
+                    data-testid="agents-dispatch-notice"
+                    [gTip]="
+                      dp.headline + (dp.resetText ? ' · ' + dp.resetText : '')
+                    "
+                  >
+                    <g-status-icon
+                      [tone]="dp.tone"
+                      [kind]="dp.tone === 'error' ? 'error' : 'warn'"
+                    />
+                    {{ dp.shortLabel
+                    }}{{ dp.resetText ? " · " + dp.resetText : "" }}
+                  </span>
                 }
               }
             </div>
@@ -506,7 +526,7 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
               </div>
             }
             @if (selectedId(); as activeId) {
-              <g-task-detail [pane]="true" [id]="activeId" />
+              <g-task-detail [pane]="true" [tab]="pane()" [id]="activeId" />
             } @else {
               <div class="pane-empty">
                 <p>No agents running.</p>
@@ -873,6 +893,13 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     const n = this.counts().quiet;
     return n ? `${n} run${n === 1 ? "" : "s"} quiet` : "";
   });
+  protected readonly dispatchPause = computed(() =>
+    summarizeDispatchStatus(
+      this.access.rawConfig(),
+      this.access.usage(),
+      this.access.clockNow(),
+    ),
+  );
   protected readonly tokenTotal = computed(() =>
     this.store
       .agents()
