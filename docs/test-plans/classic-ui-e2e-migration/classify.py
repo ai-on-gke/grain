@@ -540,8 +540,19 @@ def main():
             r["reason"] = o["reason"] + " [hand-checked]"
         else:
             r["script_bucket"] = r["bucket"]
+    # ported_to is written by hand as tests are ported (README.md, "When a
+    # classic spec stops gating"), so a regeneration carries it over.
+    ported = {}
+    cp = os.path.join(OUT, "classification.csv")
+    if os.path.exists(cp):
+        for r in csv.DictReader(open(cp)):
+            if r.get("ported_to"):
+                ported[(r["file"], int(r["line"]), r["title"])] = r["ported_to"]
+    for r in rows:
+        r["ported_to"] = ported.get((r["file"], r["line"], r["title"]), "")
     fields = ["file", "line", "title", "area", "ui_ng", "bucket", "script_bucket", "reason",
-              "api_expects", "dom_expects", "api_calls", "flags", "api_paths", "go_candidates"]
+              "api_expects", "dom_expects", "api_calls", "flags", "api_paths", "go_candidates",
+              "ported_to"]
     with open(os.path.join(OUT, "classification.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
