@@ -300,7 +300,7 @@ func (c *Client) listActionsRunsCounted(ctx context.Context, repo model.RepoRef,
 	if limit <= 0 {
 		limit = ci.MaxListedRuns
 	}
-	recorded, rec := c.recordedActionsRuns(ctx, repo, filter.Since)
+	recorded, rec := c.recordedActionsRuns(ctx, repo, filter)
 	byID := map[string]ci.Run{}
 	var out []ci.Run
 	add := func(run ci.Run) {
@@ -375,9 +375,10 @@ func (c *Client) forgeActionsRuns(repo model.RepoRef, filter ci.RunFilter, limit
 			Branch:   branch,
 			Workflow: strings.TrimSpace(filter.Workflow),
 			Since:    filter.Since,
+			Until:    filter.Until,
 			Limit:    reqLimit,
 		}
-		key := fmt.Sprintf("runs|%s|%s|%s|%d|%d", repo, branch, q.Workflow, q.Since.Unix(), q.Limit)
+		key := fmt.Sprintf("runs|%s|%s|%s|%d|%d|%d", repo, branch, q.Workflow, q.Since.Unix(), q.Until.Unix(), q.Limit)
 		return cachedActions(c, key, listTTL[github.ActionsRunsPage], func() (github.ActionsRunsPage, error) {
 			if pager, ok := reader.(github.ActionsPageReader); ok {
 				return pager.ListActionsRunsPage(repo.StoredOwner(), repo.Name, q)
@@ -476,14 +477,24 @@ func actionsConclusion(status, conclusion string) ci.Conclusion {
 // recordedActionsRuns is grain's own polled record of repo's Actions
 // jobs (model.GitHubCIJob), as runs keyed by their ci:read id, and what
 // was read to make them.
-func (c *Client) recordedActionsRuns(ctx context.Context, repo model.RepoRef, since time.Time) (map[string]ci.Run, actionsRecord) {
+//
+// The filter's window and ref are asked of the store rather than of what
+// it returns: the read is bounded (recordedActionsJobsLimit), and the
+// newest jobs of every branch narrowed afterwards to one branch, or to a
+// window weeks back, would be none of them -- which is how a listing of
+// main's runs before the forge's newest 500 used to answer nothing
+// (grain/task-5274).
+func (c *Client) recordedActionsRuns(ctx context.Context, repo model.RepoRef, filter ci.RunFilter) (map[string]ci.Run, actionsRecord) {
 	out := map[string]ci.Run{}
 	var rec actionsRecord
 	if c.Store == nil {
 		rec.err = errors.New("this deployment has no store")
 		return out, rec
 	}
-	jobs, err := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{Repo: repo.String(), Since: since, Limit: 5000})
+	jobs, err := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{
+		Repo: repo.String(), Since: filter.Since, Until: filter.Until, RefContains: filter.Ref,
+		Limit: recordedActionsJobsLimit,
+	})
 	if err != nil {
 		rec.err = err
 		return out, rec
@@ -505,6 +516,10 @@ func (c *Client) recordedActionsRuns(ctx context.Context, repo model.RepoRef, si
 	}
 	return out, rec
 }
+
+// recordedActionsJobsLimit bounds one read of the recorded jobs behind
+// a listing: some three hundred runs of a twenty-job workflow.
+const recordedActionsJobsLimit = 5000
 
 // actionsRecord is what recordedActionsRuns read: how many recorded jobs,
 // how many of them it could not place in a workflow run, and why it read
@@ -924,6 +939,47 @@ func (a actionsExternalRuns) FindExternalRunsCounted(ctx context.Context, f ci.R
 		note += repair
 	}
 	return runs, matched, note
+}
+
+// FindExternalTestFailures is every run in grain's record of f.Repo's
+// Actions jobs with a failed job naming test among its FailedTests,
+// newest first, each with its failed jobs alone: what `grain ci
+// test-history` counts a test's failures over, which the record keeps for
+// weeks (the orchestrator's gitHubCIVerdictRetention), beside the newest
+// hundred runs it lists.
+func (a actionsExternalRuns) FindExternalTestFailures(ctx context.Context, f ci.RunFilter, test string) ([]ci.Run, string) {
+	repo, err := a.c.parseRepo(f.Repo)
+	if err != nil {
+		return nil, fmt.Sprintf("%q is not a repository grain can read GitHub Actions runs of: %v", f.Repo, err)
+	}
+	if refused := a.c.actionsRefusal(ctx, repo); refused != nil {
+		return nil, refused.reason
+	}
+	if a.c.Store == nil || strings.TrimSpace(test) == "" {
+		return nil, ""
+	}
+	jobs, err := a.c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{
+		Repo: repo.String(), FailedTest: strings.TrimSpace(test),
+		Since: f.Since, Until: f.Until, RefContains: f.Ref, Limit: recordedActionsJobsLimit,
+	})
+	if err != nil {
+		return nil, fmt.Sprintf("reading grain's record of %s's failed Actions jobs failed (%v)", repo, err)
+	}
+	byRun := map[int64][]model.GitHubCIJob{}
+	for _, j := range jobs {
+		if id := recordedRunID(j); id != 0 {
+			j.RunID = id
+			byRun[id] = append(byRun[id], j)
+		}
+	}
+	var out []ci.Run
+	for runID, js := range byRun {
+		if run, ok := recordedActionsRun(repo, runID, js); ok {
+			out = append(out, run)
+		}
+	}
+	sortRunsNewestFirst(out)
+	return out, ""
 }
 
 // openBaseRepairNote is what a listing of ref's runs says about repo's

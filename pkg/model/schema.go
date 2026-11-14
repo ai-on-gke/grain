@@ -679,7 +679,13 @@ import "strconv"
 // 146 adds `grain_config`.`qa` (model.Config.QA): the deployment-wide quality
 // control engine and single-instance PR rollout configuration, stored as JSON
 // and defaulting to empty (engine off).
-const SchemaVersion = 146
+// 147 adds `github_ci_job`.`failed_tests` (model.GitHubCIJob.FailedTests):
+// the failing tests a failed job's log tail names, one per line, which a
+// pruning keeps for weeks after the tail itself is gone (GitHubCIPrune),
+// backfilled from the tails already recorded; and `history_only`, set on
+// a failure a pruning keeps past its branch's passes, which the outcome
+// rates leave out (GitHubCIOutcomes).
+const SchemaVersion = 147
 
 const taskQAAssignmentTable = `CREATE TABLE IF NOT EXISTS ` + "`task_qa_assignment`" + ` (
   ` + "`root_origin`" + `           TEXT     NOT NULL,
@@ -1029,6 +1035,8 @@ const gitHubCIJobTable = `CREATE TABLE IF NOT EXISTS ` + "`github_ci_job`" + ` (
   ` + "`via`" + `           TEXT     NOT NULL DEFAULT '',
   ` + "`recorded_at`" + `   DATETIME NOT NULL,
   ` + "`updated_at`" + `    DATETIME NOT NULL,
+  ` + "`failed_tests`" + `  TEXT     NOT NULL DEFAULT '',
+  ` + "`history_only`" + `  INTEGER  NOT NULL DEFAULT 0,
   PRIMARY KEY (` + "`repo`" + `, ` + "`check_run_id`" + `)
 )`
 

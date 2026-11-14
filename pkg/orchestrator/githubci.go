@@ -66,11 +66,42 @@ const (
 	// gitHubCITailMaxAge is how old a failure may be and still have its
 	// log read: past the shared-fault window nobody will correlate it.
 	gitHubCITailMaxAge = 6 * time.Hour
-	// gitHubCIRetention is how long a recorded job is kept.
+	// gitHubCIRetention is how long a recorded job keeps everything it
+	// was recorded with: a task branch's passing jobs, and a failed job's
+	// log tail and check output. Past it, what is left is the verdict
+	// history (gitHubCIVerdictRetention).
 	gitHubCIRetention = 14 * 24 * time.Hour
+	// gitHubCIVerdictRetention is how long the verdicts of the default
+	// branch and of Stage 1 (release candidate tags), and every failed
+	// job's verdict and FailedTests, are kept. Eight weeks, so that a
+	// weekly report's four-week baseline of time to repair and of flaky
+	// tests is read from grain's own record whatever the forge's listing
+	// reaches (grain/task-5274); a few hundred bytes a job, against the
+	// 16KiB a tail can be.
+	gitHubCIVerdictRetention = 8 * 7 * 24 * time.Hour
 	// gitHubCIPruneEvery is how often retention is applied.
 	gitHubCIPruneEvery = time.Hour
 )
+
+// gitHubCIKeptRefs are the refs whose every recorded job lives as long as
+// a verdict does: "main" and "master", and the default branch the
+// workflow-run poll has read of each repository this store watches
+// (gitHubBasePollDefaultBranch), which costs no API call of its own.
+func gitHubCIKeptRefs(store *model.Store) []string {
+	refs := []string{"main", "master"}
+	seen := map[string]bool{"main": true, "master": true}
+	prefix := storeScope(store) + ":"
+	gitHubBasePollDefaults.Range(func(k, v any) bool {
+		key, _ := k.(string)
+		def, _ := v.(gitHubBasePollDefault)
+		if strings.HasPrefix(key, prefix) && def.branch != "" && !seen[def.branch] {
+			seen[def.branch] = true
+			refs = append(refs, def.branch)
+		}
+		return true
+	})
+	return refs
+}
 
 // gitHubCIBudgetLow is github.BudgetLow, a variable so a test can say the
 // budget is low without spending one.
@@ -254,7 +285,11 @@ func reconcileGitHubCITails(ctx context.Context, deps Deps, now time.Time) error
 	}
 	ledger.mu.Unlock()
 	if prune {
-		if _, err := deps.Store.PruneGitHubCIJobs(ctx, now.Add(-gitHubCIRetention)); err != nil {
+		if _, err := deps.Store.PruneGitHubCIJobs(ctx, model.GitHubCIPrune{
+			Before:   now.Add(-gitHubCIVerdictRetention),
+			Compact:  now.Add(-gitHubCIRetention),
+			KeepRefs: gitHubCIKeptRefs(deps.Store),
+		}); err != nil {
 			errs = append(errs, err)
 		}
 	}

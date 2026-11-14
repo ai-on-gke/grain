@@ -51,6 +51,12 @@ type ActionsRunsQuery struct {
 	Workflow string
 	// Since keeps runs created at or after it (?created=>=...).
 	Since time.Time
+	// Until keeps runs created before it (?created=<..., or with Since
+	// the range ?created=since..until, whose inclusive end a caller
+	// filtering by Until itself drops again). It is what lets a listing
+	// reach a window older than the newest MaxActionsRunsLimit runs:
+	// without it the forge pages from now backwards and stops there.
+	Until time.Time
 	// Limit is the maximum number of runs to return across pages, at most
 	// MaxActionsRunsLimit (500); zero is 30.
 	Limit int
@@ -181,8 +187,13 @@ func (c *RESTClient) ListActionsRunsPage(owner, repo string, q ActionsRunsQuery)
 	if b := strings.TrimSpace(q.Branch); b != "" {
 		query.Set("branch", b)
 	}
-	if !q.Since.IsZero() {
+	switch {
+	case !q.Since.IsZero() && !q.Until.IsZero():
+		query.Set("created", q.Since.UTC().Format(time.RFC3339)+".."+q.Until.UTC().Format(time.RFC3339))
+	case !q.Since.IsZero():
 		query.Set("created", ">="+q.Since.UTC().Format(time.RFC3339))
+	case !q.Until.IsZero():
+		query.Set("created", "<"+q.Until.UTC().Format(time.RFC3339))
 	}
 	for _, wf := range actionsWorkflowFileCandidates(q.Workflow) {
 		p := fmt.Sprintf("/repos/%s/%s/actions/workflows/%s/runs?%s", owner, repo, url.PathEscape(wf), query.Encode())

@@ -916,10 +916,26 @@ func (p *GitProxy) serveTestHistory(w http.ResponseWriter, r *http.Request, scop
 		return
 	}
 	page := p.findCIRuns(r.Context(), store, f, cliLimit(q, "limit", 20, 100))
-	report := ci.QueryTestHistory(page.Runs, test)
+	runs, recorded, recordedNote := page.Runs, 0, ""
+	if f.Provider == ci.ProviderGitHubActions {
+		if failures, ok := p.Namespace.ExternalCI.(ci.ExternalTestFailures); ok {
+			found, note := failures.FindExternalTestFailures(r.Context(), f, test)
+			runs, recorded = ci.WithRecordedFailures(runs, found, test)
+			recordedNote = note
+		}
+	}
+	report := ci.QueryTestHistory(runs, test)
 	report.Repo = repo
 	if page.note != "" {
 		report.Notes = append(report.Notes, "GitHub Actions: "+page.note)
+	}
+	if recorded > 0 {
+		report.Notes = append(report.Notes, fmt.Sprintf(
+			"%d further run(s) are grain's record of failed Actions jobs naming this test, kept for 8 weeks: "+
+				"failures are counted over that window, passes only over the newest runs listed", recorded))
+	}
+	if recordedNote != "" {
+		report.Notes = append(report.Notes, "GitHub Actions record: "+recordedNote)
 	}
 	if f.Provider == ci.ProviderGitHubActions && q.Get("provider") == "" {
 		grain := f

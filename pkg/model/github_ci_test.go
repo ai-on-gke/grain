@@ -85,12 +85,15 @@ func TestGitHubCIJobMergesReportsOfOneCheckRun(t *testing.T) {
 	if got.FailureTail != "--- FAIL: TestX\n" || !got.TailFetched {
 		t.Fatalf("tail lost: %+v", got)
 	}
+	if len(got.FailedTests) != 1 || got.FailedTests[0] != "TestX" {
+		t.Fatalf("failed tests = %q, want the tail's TestX", got.FailedTests)
+	}
 	// A re-run replaces the attempt's verdict and forgets its tail.
 	if err := st.PutGitHubCIJob(ctx, model.GitHubCIJob{Repo: "o/r", CheckRunID: 42, Conclusion: "success", RunAttempt: 2}); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = st.GetGitHubCIJob(ctx, "o/r", 42)
-	if got.Conclusion != "success" || got.FailureTail != "" || got.FailingStep != "" || got.TailFetched {
+	if got.Conclusion != "success" || got.FailureTail != "" || got.FailingStep != "" || got.TailFetched || len(got.FailedTests) != 0 {
 		t.Fatalf("re-run = %+v", got)
 	}
 }
@@ -109,7 +112,7 @@ func TestGitHubCIJobBoundsTextAndPrunes(t *testing.T) {
 	if len(got.Output) > model.MaxGitHubCIOutput || !strings.HasSuffix(got.Output, "the error\n") {
 		t.Fatalf("output kept %d bytes, ending %q", len(got.Output), got.Output[len(got.Output)-20:])
 	}
-	n, err := st.PruneGitHubCIJobs(ctx, old.Add(time.Hour))
+	n, err := st.PruneGitHubCIJobs(ctx, model.GitHubCIPrune{Before: old.Add(time.Hour)})
 	if err != nil || n != 1 {
 		t.Fatalf("prune = %d, %v", n, err)
 	}

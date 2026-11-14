@@ -375,6 +375,14 @@ func matchesTestName(foundName, targetName string) bool {
 	if strings.HasSuffix(found, "/"+target) || strings.HasSuffix(found, "."+target) {
 		return true
 	}
+	// A Playwright test as grain records it from a ✘ line, "spec file ›
+	// describe › title" (model.FailedTestNames): asked for by its file,
+	// by its title, or by any run of its path from either end.
+	if strings.Contains(found, " › ") {
+		if strings.HasPrefix(found, target+" › ") || strings.HasSuffix(found, " › "+target) {
+			return true
+		}
+	}
 	return false
 }
 

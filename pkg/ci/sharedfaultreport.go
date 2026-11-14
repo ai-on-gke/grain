@@ -464,7 +464,7 @@ func GitHubCIRun(jobs []model.GitHubCIJob) (Run, bool) {
 		if jobName == "" {
 			jobName = wf
 		}
-		run.Jobs = append(run.Jobs, JobRun{
+		job := JobRun{
 			JobID:      jobName,
 			Name:       jobName,
 			Conclusion: jc,
@@ -476,7 +476,17 @@ func GitHubCIRun(jobs []model.GitHubCIJob) (Run, bool) {
 				ExitCode:   exitCode,
 				Output:     output,
 			}},
-		})
+		}
+		if jc == ConclusionFailure && len(j.FailedTests) > 0 {
+			// What the tail named, kept after the tail itself is compacted
+			// away (model.GitHubCIPrune): how a test's failure weeks ago is
+			// still counted by QueryTestHistory.
+			job.FailureSummary = &FailureSummary{}
+			for _, name := range j.FailedTests {
+				job.FailureSummary.Tests = append(job.FailureSummary.Tests, TestFailure{Name: name})
+			}
+		}
+		run.Jobs = append(run.Jobs, job)
 	}
 	return run, true
 }
