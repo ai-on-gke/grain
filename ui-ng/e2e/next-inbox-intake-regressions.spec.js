@@ -84,6 +84,27 @@ test("a stuck row offers the control its sub-case names, and leaves the group on
   const row = (title) =>
     stalled.getByTestId("queue-row").filter({ hasText: title });
 
+  // A viewer sees the control, switched off: it needs tasks:write.
+  const viewerConfig = (url) => url.pathname === "/api/config";
+  await page.route(viewerConfig, async (route) => {
+    const response = await route.fetch();
+    const json = {
+      ...(await response.json()),
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: ["tasks:read"],
+      },
+    };
+    await route.fulfill({ response, json });
+  });
+  await page.reload();
+  await row("Rotate the staging signing keys").locator(".row-main").click();
+  await expect(page.getByTestId("action-undefer")).toBeDisabled();
+  await page.unroute(viewerConfig);
+  await page.reload();
+
   await row("Rotate the staging signing keys").locator(".row-main").click();
   await page.getByTestId("action-undefer").click();
   await expect(row("Rotate the staging signing keys")).toHaveCount(0);
