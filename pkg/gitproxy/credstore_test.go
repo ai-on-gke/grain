@@ -16,6 +16,8 @@ package gitproxy
 
 import (
 	"context"
+	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -328,5 +330,109 @@ func TestAnAppCredentialHeldInTheStoreIsReMintedFromItsKey(t *testing.T) {
 	}
 	if len(transport.Calls) != 2 {
 		t.Fatalf("expected two mints, got %d", len(transport.Calls))
+	}
+}
+
+// captureLog sends the standard logger to a buffer for the test, and
+// restores its previous writer afterwards.
+func captureLog(t *testing.T) *strings.Builder {
+	t.Helper()
+	var buf strings.Builder
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &buf
+}
+
+func TestARestartDeletesTheRollbackCopiesOnlyOnceTheStoreHoldsThem(t *testing.T) {
+	dir, store := storeBackedDir(t)
+	writeFile(t, filepath.Join(dir, "bot.token"), "ghp_bot\n")
+	writeFile(t, filepath.Join(dir, "deploy.ssh.json"), `{"host":"git.example.com"}`+"\n")
+	if _, err := mustLoad(t, dir).MigrateFilesToStore(); err != nil {
+		t.Fatal(err)
+	}
+	// The deploy credential's store value went away after the move (an
+	// operator edited secrets.enc by hand, say), so its copy is now the
+	// only one there is.
+	if err := store.DeleteKey(CredentialSecretName("deploy"), "ssh.json"); err != nil {
+		t.Fatal(err)
+	}
+	logs := captureLog(t)
+
+	restarted := mustLoad(t, dir)
+	deleted, err := restarted.DeleteMigratedCopies()
+	if !errors.Is(err, ErrNoStoreValue) {
+		t.Errorf("DeleteMigratedCopies error = %v, want one naming the copy with no store value", err)
+	}
+	if want := filepath.Join(dir, "bot.token"+MigratedSuffix); len(deleted) != 1 || deleted[0] != want {
+		t.Fatalf("deleted %v, want just %s", deleted, want)
+	}
+	if exists(filepath.Join(dir, "bot.token"+MigratedSuffix)) {
+		t.Error("bot's rollback copy survived although the store holds the credential")
+	}
+	if !exists(filepath.Join(dir, "deploy.ssh.json"+MigratedSuffix)) {
+		t.Fatal("deploy's rollback copy, the only copy of it, was deleted")
+	}
+	out := logs.String()
+	if n := strings.Count(out, "deleted the plaintext rollback copy "+filepath.Join(dir, "bot.token"+MigratedSuffix)); n != 1 {
+		t.Errorf("the deletion was logged %d times, want once:\n%s", n, out)
+	}
+	if !strings.Contains(out, "WARNING: keeping the plaintext rollback copy "+filepath.Join(dir, "deploy.ssh.json"+MigratedSuffix)) {
+		t.Errorf("no warning about the copy the store holds nothing for:\n%s", out)
+	}
+	cred, ok := restarted.Get("bot")
+	if !ok || cred.Token == nil || *cred.Token != "ghp_bot" {
+		t.Fatalf("Get(bot) after deleting its copy: %+v, %v", cred, ok)
+	}
+
+	// A further start has nothing left to delete, and logs no deletion.
+	logs.Reset()
+	if deleted, _ := mustLoad(t, dir).DeleteMigratedCopies(); len(deleted) != 0 {
+		t.Errorf("a third start deleted %v", deleted)
+	}
+	if strings.Contains(logs.String(), "deleted the plaintext rollback copy") {
+		t.Errorf("a third start logged a deletion again:\n%s", logs.String())
+	}
+}
+
+func TestARollbackCopyOfAChangedCredentialIsSupersededAndDeleted(t *testing.T) {
+	dir, store := storeBackedDir(t)
+	writeFile(t, filepath.Join(dir, "bot.token"+MigratedSuffix), "ghp_old\n")
+	if err := store.Set(CredentialSecretName("bot"), "token", []byte("ghp_new\n")); err != nil {
+		t.Fatal(err)
+	}
+	logs := captureLog(t)
+	deleted, err := mustLoad(t, dir).DeleteMigratedCopies()
+	if err != nil || len(deleted) != 1 {
+		t.Fatalf("deleted %v, %v", deleted, err)
+	}
+	if !strings.Contains(logs.String(), "holds a newer value") {
+		t.Errorf("the deletion did not say the copy was superseded:\n%s", logs.String())
+	}
+	if v, ok := resolve(t, store, CredentialSecretName("bot")+"/token"); !ok || v != "ghp_new\n" {
+		t.Errorf("store holds %q after deleting the copy", v)
+	}
+}
+
+func TestASetWithNoStoreDeletesNoRollbackCopies(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "bot.token"+MigratedSuffix), "ghp_bot\n")
+	if deleted, err := mustLoad(t, dir).DeleteMigratedCopies(); err != nil || len(deleted) != 0 {
+		t.Fatalf("deleted %v, %v", deleted, err)
+	}
+	if !exists(filepath.Join(dir, "bot.token"+MigratedSuffix)) {
+		t.Error("a set with no store deleted a rollback copy")
+	}
+}
+
+func TestFilesSwitchKeepsRollbackCopies(t *testing.T) {
+	dir, store := storeBackedDir(t)
+	writeFile(t, filepath.Join(dir, "bot.token"+MigratedSuffix), "ghp_bot\n")
+	if err := store.Set(CredentialSecretName("bot"), "token", []byte("ghp_bot\n")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(CredentialsInFilesEnv, "files")
+	if deleted, _ := mustLoad(t, dir).DeleteMigratedCopies(); len(deleted) != 0 {
+		t.Fatalf("with %s=files, deleted %v", CredentialsInFilesEnv, deleted)
 	}
 }

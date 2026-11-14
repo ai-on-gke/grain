@@ -39,8 +39,9 @@ import (
 const (
 	KeySecret    = "release-approval-key"
 	KeySecretKey = "key.pem"
-	// migratedSuffix matches gitproxy.MigratedSuffix: the rollback copy a
-	// moved file is kept as for one release.
+	// migratedSuffix matches gitproxy.MigratedSuffix: the copy a moved
+	// file is kept as until the daemon's next start finds the store
+	// holding it and deletes it (pkg/daemon deleteMigratedCopies).
 	migratedSuffix = ".migrated"
 	// filesEnv matches gitproxy.CredentialsInFilesEnv, the rollback switch.
 	filesEnv = "GRAIN_GITHUB_CREDENTIALS"

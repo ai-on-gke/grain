@@ -588,9 +588,16 @@ Why KMS wrap rather than the SM backend as the GCE/GKE default:
 **Key rotation, loose-file moves and the Postgres password** are each
 reversible on their own:
 - rotation keeps the retired key ([§4.1](#SKP-4-1));
-- loose-file moves rename the file to `<file>.migrated` and delete it only one
-  release later. Rolling back is a start with `GRAIN_GITHUB_CREDENTIALS=files`,
-  which writes each file back from the store. The downgrade around it is
+- loose-file moves rename the file to `<file>.migrated`. The release after the
+  move shipped (v3.5.0) and the next were cut with the copies kept; from task
+  4042 on, each start deletes every copy whose value the store verifiably
+  holds (`gitproxy.RetireMigratedCopy`), logging each deletion, and keeps and
+  warns about any copy the store holds nothing for. A copy whose credential
+  was changed after the move is superseded and deleted too. Rolling back never
+  read the copies: it is a start with `GRAIN_GITHUB_CREDENTIALS=files`, which
+  writes each file back from the store's value, so the switch and the
+  plaintext-file fallback reads stay (`setup.sh` seeding, test trees and
+  stores without a key still use them). The downgrade around it is
   [§5.1](#SKP-5-1);
 - the Postgres change keeps the old password valid until the new one is
   verified ([Phase 4](#SKP-P4)).
