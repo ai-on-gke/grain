@@ -117,8 +117,21 @@ test("production-heavy flows: zero API/console errors, quota banner, Workstreams
     // 36 closed, 4 awaiting approval (needs a person), and 4 blocked on an unapproved task.
     const wsRoot = await apiJson(demoServer, accessCode, "POST", "/api/tasks", {
       title: "Global rollout stream",
-      description:
-        "Coordinate multi-repo release verification, API contract compatibility checks, telemetry aggregation, integration smoke tests, canary rollout gating, rollback readiness audits, and staged deployment across regional workers without exceeding concurrency caps or delaying dependent downstream release trains.",
+      description: [
+        "The operator wants multi-repo rollout readiness tracked across staged worker pools.",
+        "",
+        "## Deliverables",
+        "- Verify `api/tasks` contract compatibility and RBAC repo limits.",
+        "- Aggregate weekly metrics across `acme/alpha`, `acme/beta`, `acme/gamma`, `acme/delta`, `acme/epsilon`.",
+        "- Confirm canary health gates before advancing downstream trains.",
+        "",
+        "## Acceptance checks",
+        ...Array.from(
+          { length: 24 },
+          (_, idx) =>
+            `${idx + 1}. Verify regional worker batch #${idx + 1} passes smoke tests and stays within concurrency budget.`,
+        ),
+      ].join("\n"),
       repo: "acme/alpha",
       approved: true,
     });
@@ -274,17 +287,82 @@ test("production-heavy flows: zero API/console errors, quota banner, Workstreams
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.waitForTimeout(100);
 
-    // Open Workstream detail via #fragment form to test deep link recovery.
+    // Open Workstream detail via #fragment form with simulated async lag on root detail
+    // to prove the header height shifts 0px and the goal renders collapsed in the inspector.
+    let released = false;
+    let markRequested: (() => void) | null = null;
+    const detailRequested = new Promise<void>((r) => {
+      markRequested = r;
+    });
+    let releaseDetail!: () => void;
+    const detailGate = new Promise<void>((r) => {
+      releaseDetail = r;
+    });
+    const detailPattern = (url: URL) => url.pathname === `/api/tasks/${wsId}`;
+    await page.route(detailPattern, async (route) => {
+      if (released) {
+        await route.continue();
+        return;
+      }
+      markRequested?.();
+      markRequested = null;
+      await detailGate;
+      await route.continue();
+    });
+
     await page.goto(`workstreams/#task:${wsId}`);
-    await waitPageSettled(page);
     await expect(page.getByTestId("ws-detail-title")).toContainText(
       "Global rollout stream",
     );
-    await expect(page.getByTestId("ws-goal-toggle")).toBeVisible();
+    await detailRequested;
+    const headBefore = await page.locator(".ws-dhead").boundingBox();
+    expect(headBefore).not.toBeNull();
+    await expect(page.locator(".ws-dhead [data-testid='ws-goal']")).toHaveCount(
+      0,
+    );
+
+    released = true;
+    releaseDetail();
+    const inspector = page.getByTestId("ws-inspector");
+    const goal = inspector.getByTestId("ws-goal");
+    const goalToggle = inspector.getByTestId("ws-goal-toggle");
+    await expect(goalToggle).toBeVisible();
+    await page.unroute(detailPattern);
+    await waitPageSettled(page);
+
+    const headAfter = await page.locator(".ws-dhead").boundingBox();
+    expect(
+      Math.abs(headAfter!.height - headBefore!.height),
+    ).toBeLessThanOrEqual(1);
+    await expect(page.locator(".ws-dhead [data-testid='ws-goal']")).toHaveCount(
+      0,
+    );
+    await expect(goalToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(goalToggle).toContainText("Workstream goal");
+    await expect(goal).toBeVisible();
+    await expect(goal).not.toContainText("##");
+    const collapsedGoalBox = await goal.boundingBox();
+    expect(collapsedGoalBox!.height).toBeLessThanOrEqual(30);
     await expect(page.getByTestId("ws-fold-done-toggle")).toContainText(
       "Expand all (36)",
     );
     await saveShot(page, "heavy-ws-detail-desktop-light");
+
+    await goalToggle.click();
+    await expect(goalToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(goalToggle).toContainText("Hide goal");
+    await expect(goal.locator("h2").first()).toContainText("Deliverables");
+    await expect(goal.locator("ul li").first()).toBeVisible();
+    await expect(goal.locator("code").first()).toBeVisible();
+    const expandedGoalBox = await goal.boundingBox();
+    expect(expandedGoalBox!.height).toBeGreaterThan(60);
+    expect(expandedGoalBox!.height).toBeLessThanOrEqual(245);
+    const headAfterExpand = await page.locator(".ws-dhead").boundingBox();
+    expect(
+      Math.abs(headAfterExpand!.height - headBefore!.height),
+    ).toBeLessThanOrEqual(1);
+    await saveShot(page, "heavy-ws-detail-goal-expanded-desktop-light");
+    await goalToggle.click();
 
     // Verify Tasks, Agents, Fleet, and Task Detail load with zero console/HTTP errors.
     for (const dest of ["tasks", "agents", "fleet", `task/${wsId}`]) {

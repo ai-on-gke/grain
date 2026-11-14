@@ -221,9 +221,12 @@ takes what is left. Below 1280px it becomes two panes.
 
 - **Heavy-data progressive disclosure:** Workstreams list rows summarize
   progress cleanly (`N/M done`, full counts in tooltip), cap repository lists
-  at two plus `+N`, clamp long goals to three lines with an expand toggle, fold
-  completed leaves above 40 nodes by default, and clip SVG node labels to
-  node bounds. Telemetry groups quota notices into one collapsible banner, slices
+  at two plus `+N`, keep the detail header free of async description text (`0px`
+  height shift when root task details load) by rendering the workstream goal
+  inside the right-hand inspector's `In this stream` section as a 1-line
+  plain-text preview with a toggle into a bounded (`max-height: 240px`)
+  Markdown view, fold completed leaves above 40 nodes by default, and clip SVG
+  node labels to node bounds. Telemetry groups quota notices into one collapsible banner, slices
   heavy sections initially (`8` scopes/templates/directions, `12` contributors
   with `All | People` filter and `2 +K` repos), and always keeps contributors
   alphabetical (`A–Z`).
