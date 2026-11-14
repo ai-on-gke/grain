@@ -171,7 +171,7 @@ IMAGE ?= grain:dev
 # IMAGE_HUB is the tag `make image-hub` builds; IMAGE_REGISTRY its
 # pre-rename name, honoured for a release (as is `make image-registry`).
 IMAGE_HUB ?= $(or $(IMAGE_REGISTRY),grain-hub:dev)
-.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-ng test-e2e-ng-suite test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli dist-agentd $(CMDS) $(EXTRA_CMDS)
+.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-ng test-e2e-ng-suite test-e2e-quarantined test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli dist-agentd $(CMDS) $(EXTRA_CMDS)
 
 all: vet test build
 
@@ -418,6 +418,13 @@ test-e2e-suite:
 	cd ui-hub && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e $${PLAYWRIGHT_PROJECT:+-- --project="$$PLAYWRIGHT_PROJECT"}
 
 test-e2e: frontend playwright-browsers test-e2e-suite
+
+# The tests ui/e2e/QUARANTINE and ui/e2e/NONGATING take out of
+# test-e2e-suite (ui/e2e/README.md, "The freeze"), and only those: the
+# non-gating `ui e2e (quarantined)` job runs this so a regression in them
+# still shows. With both lists empty it says so and passes.
+test-e2e-quarantined:
+	cd ui && { [ -x node_modules/.bin/playwright ] || npm ci; } && node e2e/run-frozen.mjs $${PLAYWRIGHT_PROJECT:+--project="$$PLAYWRIGHT_PROJECT"}
 
 # ui-ng/e2e: the Angular UI at /next/, driven the same way -- a `grain
 # demo` per Playwright worker, through the harness in ui-shared/e2e/ that

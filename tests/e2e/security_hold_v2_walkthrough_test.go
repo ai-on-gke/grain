@@ -154,9 +154,10 @@ func (w *holdWorld) clearedAtA(task model.Task) string {
 	// credential-proxy, task 3762; v28 only adds scripts/granule/ and
 	// scripts/release-patch.sh to release-machinery, GCE instance init/bake
 	// scripts to setup-scripts, pkg/hostinit/ to exec-sandbox and
-	// pkg/installtrack/ to upgrade-images, task 3926).
-	if trustboundary.Version != "trust-boundary/v28" {
-		w.t.Fatalf("this walkthrough is about trust-boundary/v28, the build has %s", trustboundary.Version)
+	// pkg/installtrack/ to upgrade-images, task 3926; v29 only adds the
+	// classic ui e2e freeze lists to ci-suppressions, task 5704).
+	if trustboundary.Version != "trust-boundary/v29" {
+		w.t.Fatalf("this walkthrough is about trust-boundary/v29, the build has %s", trustboundary.Version)
 	}
 	if w.merged(branch) {
 		w.t.Fatal("merged before the pull request read mergeable")

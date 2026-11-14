@@ -51,6 +51,10 @@ func TestClassifyEveryCategoryTheIssueNames(t *testing.T) {
 		".github/workflows/ci.yml":        "github-workflows",
 		".grain/baselines/go.json":        "ci-suppressions",
 		".grain/quarantine.yml":           "ci-suppressions",
+		"ui/e2e/QUARANTINE":               "ci-suppressions",
+		"ui/e2e/NONGATING":                "ci-suppressions",
+		"ui/e2e/frozen.js":                "ci-suppressions",
+		"ui/playwright.config.js":         "ci-suppressions",
 		".grain/workflows/ci.yml":         "grain-config",
 		".grain/triggers/payments.yml":    "path-triggers",
 		".grain/merge-rules.yml":          "merge-rules",
@@ -234,6 +238,7 @@ var knownBoundaryFiles = []string{
 	"pkg/ui/agent_api_tools.go", "pkg/model/agent_api.go",
 	"pkg/ui/config_refusal.go", "pkg/ui/persistent_sandboxes.go",
 	"scripts/github-ci-changes.sh",
+	"ui/e2e/QUARANTINE", "ui/e2e/NONGATING", "ui/e2e/frozen.js", "ui/playwright.config.js",
 	"pkg/policy/", "pkg/jwks/", "pkg/hostd/", "pkg/localexec/", "pkg/runhost/",
 	"pkg/k8s/", "pkg/sandboximage/", "pkg/staterepo/", "pkg/redact/",
 	"third_party/granule/pkg/agent/", "third_party/granule/pkg/execwire/",
@@ -424,8 +429,8 @@ func TestNewAuthorizationFilesAreClassified(t *testing.T) {
 // workflows run or source. v25 classified none of them, so a change to any
 // merged itself.
 func TestCLIInstallerAndReleaseHelpersAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/ui/cli_install.sh":               "setup-scripts",
@@ -559,8 +564,8 @@ func TestReleasePromotionIsNarrowedToTheApprovalPath(t *testing.T) {
 // reach, the approval-callback tokens and the daemon's UI listeners. v16
 // classified none of them, so a change to any merged itself.
 func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for _, p := range []string{
 		"pkg/ui/access_roles.go",
@@ -609,8 +614,8 @@ func TestRoleGateScopeSetsAndApprovalCallbacksAreClassified(t *testing.T) {
 // reference/policy, catalogue and template-grant admission files in
 // pkg/model/ classify under capabilities-secrets.
 func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for _, p := range []string{
 		"pkg/playbooks/playbooks.go",
@@ -645,8 +650,8 @@ func TestPlaybooksAndCapabilityAdmissionFilesAreClassified(t *testing.T) {
 // bearer token model and lifecycle handlers classify under auth-routes, while
 // the provenance-only X-Grain-Client / FiledVia helpers stay unclassified.
 func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for _, p := range []string{
 		"pkg/model/owner_trust.go",
@@ -706,8 +711,8 @@ func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
 // (credential-proxy). v21 classified none of them, so a change to any merged
 // itself.
 func TestHubFrontDoorIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/webauth/iap.go":           "auth-routes",
@@ -739,8 +744,8 @@ func TestHubFrontDoorIsClassified(t *testing.T) {
 // left out -- the human-review hold an agent may raise but never release,
 // the director's Tier 3 floor, and agent on-behalf-of attribution.
 func TestWebauthAndHubIdentityFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/webauth/iap.go":             "auth-routes",
@@ -795,8 +800,8 @@ func TestWebauthAndHubIdentityFilesAreClassified(t *testing.T) {
 // touching only it merged with no security review. auto_submit.go
 // (EscalatedCapabilities) is the same shape.
 func TestCanonicalGrantIsClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for _, p := range []string{"pkg/model/canonical_grant.go", "pkg/model/auto_submit.go"} {
 		matches := Classify([]string{p})
@@ -828,8 +833,8 @@ func TestCanonicalGrantIsClassified(t *testing.T) {
 // (read by pkg/webauth/, pkg/daemon/ and pkg/hub/) and kept
 // cmd/grain-registry/ as a compatibility shim binary for one release.
 func TestHubRenameShimAndEnvFilesAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	for p, want := range map[string]string{
 		"pkg/hubenv/hubenv.go":       "auth-routes",
@@ -849,8 +854,8 @@ func TestHubRenameShimAndEnvFilesAreClassified(t *testing.T) {
 // initialization (pkg/hostinit/) and install-track image repository selection
 // (pkg/installtrack/).
 func TestGranuleReleasePatchGCEInitHostinitAndInstalltrackAreClassified(t *testing.T) {
-	if Version != "trust-boundary/v28" {
-		t.Errorf("Version = %q, want trust-boundary/v28", Version)
+	if Version != "trust-boundary/v29" {
+		t.Errorf("Version = %q, want trust-boundary/v29", Version)
 	}
 	cases := map[string]string{
 		// scripts/granule/ prefix (real files + synthetic child to pin prefix matching)

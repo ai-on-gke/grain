@@ -43,7 +43,7 @@ import (
 
 // Version names this build's list. Bump it on any change to Categories, so
 // a hold written under an older list is recognisable as one.
-const Version = "trust-boundary/v28"
+const Version = "trust-boundary/v29"
 
 // Category is one kind of trust-boundary path.
 type Category struct {
@@ -83,6 +83,14 @@ type Category struct {
 // first category a path matches is the one it is reported under, so the
 // narrower entries come first: securityhold.go before pkg/orchestrator/ as
 // a whole, and the ".grain/" suppressions before ".grain/".
+//
+// v29 adds the classic ui e2e freeze lists to ci-suppressions (security
+// review of task 5099): ui/e2e/QUARANTINE and ui/e2e/NONGATING take the
+// tests they name out of the gating `ui e2e` job (playwright.config.js's
+// grepInvert), ui/e2e/frozen.js turns those lists into that filter, and
+// ui/playwright.config.js applies it (and could drop tests from the gate
+// on its own, through grepInvert, testIgnore or testMatch), so an edit to
+// any of them suppresses failures the way .grain/quarantine.yml does.
 //
 // v28 adds the six sibling surfaces the post-merge security review of v26
 // found unclassified across scripts/ and pkg/ (task 3926, finding 3.1 of
@@ -540,7 +548,12 @@ var Categories = []Category{
 		prefixes:      []string{".grain/baselines/"},
 		// A job the path filter skips is not a failing one, so the
 		// filter suppresses failures the same way a baseline does.
-		files: []string{".grain/quarantine.yml", ".grain/quarantine.yaml", "scripts/github-ci-changes.sh"},
+		files: []string{".grain/quarantine.yml", ".grain/quarantine.yaml", "scripts/github-ci-changes.sh",
+			// The classic ui e2e freeze (ui/e2e/README.md): what these
+			// lists name, frozen.js removes from the gating `ui e2e` job.
+			"ui/e2e/QUARANTINE", "ui/e2e/NONGATING", "ui/e2e/frozen.js",
+			// ...and the config that applies them to the gating lane.
+			"ui/playwright.config.js"},
 	},
 	{
 		ID: "path-triggers",

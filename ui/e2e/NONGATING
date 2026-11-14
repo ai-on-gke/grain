@@ -1,0 +1,6 @@
+# Classic ui e2e specs (or tests) whose server half has landed in Go
+# (tests/uiapi) and whose ui-ng half has landed in the ui-ng e2e suite,
+# so the classic copy no longer gates. They run in the non-gating
+# `ui e2e (quarantined)` job. Format and rule: README.md beside this
+# file, and docs/test-plans/classic-ui-e2e-migration ("When a classic
+# spec stops gating"). Name what replaced each entry after a `#`.
