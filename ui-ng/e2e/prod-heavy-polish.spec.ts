@@ -622,10 +622,12 @@ test("heavy Telemetry progressive disclosure stays <2400px tall with grouped quo
   await saveShot(page, "heavy-telemetry-desktop-light");
 
   // Toggle notices, People filter, and Show all.
+  // The toggle re-renders the list after the click resolves, so wait for
+  // the count rather than reading it once (a loaded runner read 2).
   await page.getByTestId("usage-warnings-toggle").click();
-  expect(
-    await page.getByTestId("usage-warnings-banner").locator("li").count(),
-  ).toBe(12);
+  await expect(
+    page.getByTestId("usage-warnings-banner").locator("li"),
+  ).toHaveCount(12);
   const peopleBtn = page.getByTestId("actors-filter-people");
   await peopleBtn.click();
   await expect(peopleBtn).toHaveAttribute("aria-pressed", "true");

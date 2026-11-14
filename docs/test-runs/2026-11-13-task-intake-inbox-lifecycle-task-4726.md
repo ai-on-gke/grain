@@ -289,3 +289,11 @@ to the `-task-4726` suffix the 2026-11-08 reports already use.
   (`--project=desktop`) passed `next-intake-walkthrough.spec.js`,
   `next-inbox-intake-regressions.spec.js` and `next-full-system.spec.js`
   over `grain demo`.
+- **CI after the merge:** `ui-ng e2e` failed once in
+  `prod-heavy-polish.spec.ts` ("heavy Telemetry progressive disclosure"),
+  which this branch does not touch. Expected 12 quota warnings, got 2.
+  The test pressed the warnings toggle and then read `locator.count()`
+  once. On a busy runner, the list had not re-rendered when it was read.
+  It passed locally, including with `--repeat-each=3`. The read is now
+  `await expect(locator).toHaveCount(12)`, which waits for the list. The
+  test's expectations are unchanged.
