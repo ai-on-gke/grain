@@ -1253,6 +1253,10 @@ func (h *HostSandboxes) IsolatesNetwork() bool { return false }
 // tasks are dispatched to it (checkUnisolated).
 func (h *HostSandboxes) Unisolated() bool { return true }
 
+// Shapeless reports that a host directory has no CPU, memory or disk of
+// its own to size (Acquire refuses every size; template_shape.go).
+func (h *HostSandboxes) Shapeless() bool { return true }
+
 // Acquire implements Sandboxes: a fresh directory under baseDir, named
 // for the run.
 //

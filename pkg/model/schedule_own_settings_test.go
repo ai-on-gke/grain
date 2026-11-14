@@ -207,6 +207,15 @@ func TestMigration144ClearsTemplateCopiesOffSchedules(t *testing.T) {
 	put(model.Schedule{ID: "inline", Body: "Sweep it.", Admission: model.AdmissionBypass,
 		Grants: []model.Grant{{Capability: "memory", Via: model.GrantByLabel}}})
 
+	// The commit nightlyRepo's declarations were last read at: an earlier
+	// build's firing wrote the template's grants over the ones its
+	// schedule files declare, and only a re-read puts those back (F4).
+	if _, err := db.ExecContext(ctx, "INSERT INTO `repo_declaration_sync` "+
+		"(`owner`, `name`, `commit`, `checked_at`, `synced_at`, `last_error`) VALUES (?, ?, ?, ?, ?, '')",
+		nightlyRepo.Owner, nightlyRepo.Name, "ed4928b26981", firstNight, firstNight); err != nil {
+		t.Fatalf("seeding the declaration sync: %v", err)
+	}
+
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -239,5 +248,14 @@ func TestMigration144ClearsTemplateCopiesOffSchedules(t *testing.T) {
 	}
 	if s := get("inline"); s.Admission != model.AdmissionBypass || !holdsGrant(s.Grants, "memory") {
 		t.Errorf("inline: admission %q, grants %+v; want it untouched", s.Admission, s.Grants)
+	}
+	// docs/test-runs/2026-11-13-schedules-templates.md, F4: the next
+	// reconcile reads every repository's declarations again.
+	sync, err := store.GetRepoDeclarationSync(ctx, nightlyRepo)
+	if err != nil || sync == nil {
+		t.Fatalf("reading the declaration sync: (%+v, %v)", sync, err)
+	}
+	if sync.Commit != "" {
+		t.Errorf("declaration sync commit = %q after migration 144, want it forgotten so the next reconcile re-reads", sync.Commit)
 	}
 }

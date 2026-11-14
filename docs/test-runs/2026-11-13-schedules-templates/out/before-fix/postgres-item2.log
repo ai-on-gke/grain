@@ -1,0 +1,76 @@
+
+=== 2a. the big schedule fires: the task carries disk-gb 60
+ id |           title            | admission | disk | state  
+----+----------------------------+-----------+------+--------
+ 7  | Build the big widget image | standard  |   60 | queued
+(1 row)
+
+
+=== 2b. filed by hand from the template
+ id |           title            | cpus | mem | disk 
+----+----------------------------+------+-----+------
+ 8  | Build the big widget image |    0 |   0 |    0
+(1 row)
+
+
+=== 2c. dispatch: resume the pipeline and read the shape each run was built with
+ task_id | run | sandbox |   outcome    
+---------+-----+---------+--------------
+ 7       | 7-1 | 7-1     | setup-failed
+(1 row)
+
+2026/11/13 04:11:21 grain daemon: sandbox budget -- 22.6 GiB of sandbox memory (30.6 GiB host less 8.0 GiB reserved, at 1.00x) and 10 vCPU (7 host vCPU less 2 reserved, at 2.00x). Every sandbox on this host shares it: every agent run (one at 0 vCPU / 0.0 GiB) and every grain CI job, charged at the shape it actually holds and only for as long as it holds it, so a job or a run whose shape does not fit waits for memory rather than the host swapping to find it. Nothing counts them
+2026/11/13 04:11:22 grain daemon: docker's data root is /var/lib/docker; reporting its disk in the host status pane
+2026/11/13 04:11:22 grain daemon: disk floor -- 52.2 GiB free of 59.0 GiB on /var/tmp/walk-sched-tmpl-postgres/data, against a floor of 5.9 GiB (10% of the volume, never less than 5.0 GiB and never more than 25% of it). Read through /var/tmp/walk-sched-tmpl-postgres/data, /var/tmp/walk-sched-tmpl-postgres/sb, /var/lib/docker. A new CI job is held and an agent dispatch deferred while free space is under it, because a sandbox's disk grows as it is written rather than being taken out of the volume when the sandbox is made. Moved in Settings -> Sandbox, and binding from the reconcile tick that reads it
+2026/11/13 04:11:22 grain daemon: grain CI is on for repos whose CI mode is "Use Grain CI" (Settings -> Repos); attaching the "https://grain.dev/capabilities/grain#ci={}" grant alone does not turn it on. How many jobs run at once is bounded by a sandbox is admitted only while 22.6 GiB of sandbox memory (30.6 GiB host less 8.0 GiB reserved, at 1.00x) and 10 vCPU (7 host vCPU less 2 reserved, at 2.00x) has room for its shape
+2026/11/13 04:11:22 grain daemon: reconciling every 1s (re-read from the store each tick). How many runs and CI jobs go at once is bounded by this deployment's sandbox budget: a sandbox is admitted only while 22.6 GiB of sandbox memory (30.6 GiB host less 8.0 GiB reserved, at 1.00x) and 10 vCPU (7 host vCPU less 2 reserved, at 2.00x) has room for its shape
+2026/11/13 04:12:00 orchestrator: run 7-1 (task 7): orchestrator: acquiring a sandbox for run 7-1: orchestrator: sandbox "7-1" asks for 0 vCPU/0 MiB/60 GiB but a host-directory sandbox has no shape of its own
+
+=== 2d. over the ceiling: disk-gb 5000
+                  commit                  |                                                                                           last_error                                                                                           
+------------------------------------------+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ ea860907f28f07e71eef27db868abdaabcf2a7c7 | reading acme/widgets's declarations: .grain/templates/big.yml: sandbox: disk-gb is 5000, and may be at most 1024                                                                              +
+                                          | .grain/schedules/big.yml: no template "big" -- a schedule fires a template this repository declares, named by file (.grain/templates/big.yml) (the declarations of ea860907f28f stay in force)
+(1 row)
+
+               id               |    sandbox    
+--------------------------------+---------------
+ repo:template:acme:widgets:big | {"diskGb":60}
+(1 row)
+
+FAILING: repository declarations not read in full:
+  acme/widgets (refused; in force: ea860907f28f):
+    reading acme/widgets's declarations: .grain/templates/big.yml: sandbox: disk-gb is 5000, and may be at most 1024
+    .grain/schedules/big.yml: no template "big" -- a schedule fires a template this repository declares, named by file (.grain/templates/big.yml) (the declarations of ea860907f28f stay in force)
+
+
+=== 2e. an unknown key: sandbox: {disk-gb: 60, gpus: 1}
+                  commit                  |                                                                                                            last_error                                                                                                            
+------------------------------------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 773be269594cf490f4c3b166787cb2df459c301c | declarations held back by this grain build: .grain/templates/big.yml: .grain/templates/big.yml: line 5: sandbox: field gpus not found -- sandbox accepts cpus, memory-mb, disk-gb (its version from ea860907f28f stays in force)
+(1 row)
+
+               id               |    sandbox    
+--------------------------------+---------------
+ repo:template:acme:widgets:big | {"diskGb":60}
+(1 row)
+
+FAILING: repository declarations not read in full:
+  acme/widgets (files held back for a newer grain; in force: 773be269594c):
+    .grain/templates/big.yml: .grain/templates/big.yml: line 5: sandbox: field gpus not found -- sandbox accepts cpus, memory-mb, disk-gb (its version from ea860907f28f stays in force)
+
+
+=== 2f. zero: disk-gb 0
+                                                                                           last_error                                                                                           
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ reading acme/widgets's declarations: .grain/templates/big.yml: sandbox: disk-gb must be a positive integer, got 0                                                                             +
+ .grain/schedules/big.yml: no template "big" -- a schedule fires a template this repository declares, named by file (.grain/templates/big.yml) (the declarations of 773be269594c stay in force)
+(1 row)
+
+
+=== 2g. restore
+ last_error 
+------------
+ 
+(1 row)
+

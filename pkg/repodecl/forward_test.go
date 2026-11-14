@@ -65,6 +65,33 @@ func TestAFileTooNewForThisParserIsHeldBackAndTheRestLoad(t *testing.T) {
 	}
 }
 
+// A held-back file's message does not repeat its path: everything that
+// shows it (the sync's error, `grain health`) writes Path in front of it,
+// and an unknown key in a template's `sandbox:` read ".grain/templates/
+// big.yml: .grain/templates/big.yml: line 5: ..."
+// (docs/test-runs/2026-11-13-schedules-templates.md, F3).
+func TestAHeldBackFilesMessageDoesNotRepeatItsPath(t *testing.T) {
+	files := map[string]string{
+		".grain/templates/big.yml":   "title: Big\nsandbox:\n  disk-gb: 60\n  gpus: 1\n",
+		".grain/schedules/train.yml": "template: big\ndaily:\n  at: \"03:30\"\nfrom-a-newer-grain: {shape: new}\n",
+	}
+	declared, err := repodecl.LoadForwardCompatible(tree(files), repo)
+	if err != nil {
+		t.Fatalf("LoadForwardCompatible: %v", err)
+	}
+	if len(declared.Refused) != 2 {
+		t.Fatalf("refused = %+v, want both files", declared.Refused)
+	}
+	for _, r := range declared.Refused {
+		if strings.Contains(r.Message, r.Path) {
+			t.Errorf("%s: message %q repeats the path", r.Path, r.Message)
+		}
+		if !strings.Contains(r.Message, "line ") {
+			t.Errorf("%s: message %q, want the decoder's own, naming the line", r.Path, r.Message)
+		}
+	}
+}
+
 // `grain declarations check` is strict: CI is where a file too new for the
 // code it runs is caught, and it must still fail there.
 func TestTheStrictLoadStillRefusesTheWholeSet(t *testing.T) {

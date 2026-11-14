@@ -1,0 +1,2 @@
+NOTICE:  database "walk_sched_tmpl" does not exist, skipping
+environment up (postgres): http://127.0.0.1:4271 (token in /var/tmp/walk-sched-tmpl-postgres/data/local-api-token)
