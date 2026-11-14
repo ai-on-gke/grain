@@ -156,3 +156,26 @@ func TestUnitExecStartBinary(t *testing.T) {
 		}
 	}
 }
+
+// Core names only its own installer; an edition with an installer of its
+// own names it through RegisterHostModeMigrateCommand, and the notice,
+// banner and Upgrade pane's refusal all follow (task 5394).
+func TestTheMigrateCommandIsCoresUnlessAnEditionRegistersOne(t *testing.T) {
+	t.Cleanup(func() { RegisterHostModeMigrateCommand("") })
+	if n := HostModeNotice(nil, nil); n.Command != "sudo ./scripts/setup.sh" {
+		t.Errorf("core's notice command is %q, want only sudo ./scripts/setup.sh", n.Command)
+	}
+
+	RegisterHostModeMigrateCommand("./example/edition-install.sh")
+	if n := HostModeNotice(nil, nil); n.Command != "./example/edition-install.sh" {
+		t.Errorf("registered notice command is %q", n.Command)
+	}
+	if got := hostModeUpgradeRefusal(imageConfig, probe(hostEnv, hostModeUnit, true)); !strings.Contains(got, "run ./example/edition-install.sh instead") {
+		t.Errorf("refusal %q does not name the registered command", got)
+	}
+
+	RegisterHostModeMigrateCommand("")
+	if n := HostModeNotice(nil, nil); n.Command != "sudo ./scripts/setup.sh" {
+		t.Errorf("after reset the notice command is %q", n.Command)
+	}
+}
