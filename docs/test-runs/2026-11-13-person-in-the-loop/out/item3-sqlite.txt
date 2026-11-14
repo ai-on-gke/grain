@@ -1,0 +1,34 @@
+task 13 never reached awaiting_reply (state queued)
+blocker proposed = 12 (proposed)
+blocker failed = 11 (queued)
+blocker asking = 13 (awaiting_reply)
+blocker paused = 14 (deferred)
+blocker timed = 16 (deferred)
+blocker deferred = 15 (deferred)
+---- before: /api/inbox stalled items
+---- before: grain task list --stalled (sandbox CLI, task 23)
+exit=0
+stdout:
+No tasks stalled.
+
+stderr:
+
+---- before: list_grain_tasks(stalled)
+{"code": -32602, "message": "unknown tool list_grain_tasks: this run does not hold the \"https://grain.dev/capabilities/api#self-debug\" capability, which is what puts that tool on a run's roster. Nothing you can do from inside this run will add it -- a human attaches it to the task. Say so if it matters to what you were asked to do."}
+== closing every blocker
+dependent proposed 17: closed
+dependent failed 18: closed
+dependent asking 19: closed
+dependent paused 20: closed
+dependent timed 21: closed
+dependent deferred 22: closed
+---- after: /api/inbox stalled items
+---- after: grain task list --stalled (sandbox CLI, task 24)
+exit=0
+stdout:
+No tasks stalled.
+
+stderr:
+
+---- after: list_grain_tasks(stalled)
+{"code": -32602, "message": "unknown tool list_grain_tasks: this run does not hold the \"https://grain.dev/capabilities/api#self-debug\" capability, which is what puts that tool on a run's roster. Nothing you can do from inside this run will add it -- a human attaches it to the task. Say so if it matters to what you were asked to do."}
