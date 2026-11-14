@@ -437,11 +437,23 @@ export class InboxStore implements OnDestroy {
     this.remember();
     const needWhoami =
       !this.access.whoami() && typeof this.api.whoami === "function";
+    const configRead = this.api.config();
+    // On a cold load the access config is not known yet, and an unknown
+    // config reads as unrestricted: settle it first so a limited reader
+    // never asks for host-script approvals it may not read (a 403).
+    if (!this.access.configLoaded()) {
+      try {
+        this.access.setConfig(await configRead);
+      } catch {
+        // Read again below; the queue still loads without it.
+      }
+    }
     const [config, feedOk, notifications, scripts, who] =
       await Promise.allSettled([
-        this.api.config(),
+        configRead,
         this.feed.refresh(),
         this.api.openNotifications(),
+        this.access.configLoaded() &&
         this.access.can("GET /api/local-script-approvals")
           ? this.api.localScriptApprovals()
           : Promise.resolve([] as LocalScriptApproval[]),

@@ -1,0 +1,41 @@
+== actions
+1794655541.709390257 run parked in container grain-sandbox-2-1
+1794655541.972391736 deploy pending as lsa-1
+1794655541.992144326 deploy approved by the operator
+1794655542.249382631 rollback pending as lsa-2
+1794655542.270260234 rollback denied by the operator
+1794655542.534370165 migrate pending as lsa-3; the caller gives up at 1.5 s
+1794655545.799512291 slow pending as lsa-4 (2 s deadline); SIGSTOP host-script server pid 35921
+1794655548.822915793 past the deadline: a task read (GET /api/tasks/2) sweeps lsa-4
+1794655549.827344697 SIGCONT: the approver's own ghsa_ /expire arrives late
+1794655555.863882272 call-deploy: deployed:--env staging exit=0 
+1794655555.870901408 call-migrate: exit=124 
+1794655555.878214141 call-rollback: grain: rollback did not run (call 2): the call was denied exit=125 
+1794655555.885064325 call-slow: grain: slow was not approved within 2s (call 4), so it did not run exit=125 
+== local_script.* on GET /api/events (id type approval script decision actorKind actor source)
+8	local_script.pending	lsa-1	deploy	-	agent	2	internal
+9	local_script.answered	lsa-1	deploy	approved	human	alice@example.com	access-code
+11	local_script.pending	lsa-2	rollback	-	agent	2	internal
+12	local_script.answered	lsa-2	rollback	denied	human	alice@example.com	access-code
+14	local_script.pending	lsa-3	migrate	-	agent	2	internal
+15	local_script.answered	lsa-3	migrate	expired	agent	2	internal
+16	local_script.pending	lsa-4	slow	-	agent	2	internal
+17	local_script.answered	lsa-4	slow	expired	automation	grain	-
+== integration_event rows (id|type|actor_kind,actor_id,actor_source)
+8|local_script.pending|agent|2|internal
+9|local_script.answered|human|alice@example.com|access-code
+11|local_script.pending|agent|2|internal
+12|local_script.answered|human|alice@example.com|access-code
+14|local_script.pending|agent|2|internal
+15|local_script.answered|agent|2|internal
+16|local_script.pending|agent|2|internal
+17|local_script.answered|automation|grain|
+== local_script.answered per approval (want 1 each):
+      1 lsa-1
+      1 lsa-2
+      1 lsa-3
+      1 lsa-4
+== every event id 1..max present: yes (18 ids)
+== admin SSE saw 8; viewer (tasks:read@acme/widgets) saw 8
+== admin vs viewer ids (diff empty = viewer missed nothing on its repo):
+(none)

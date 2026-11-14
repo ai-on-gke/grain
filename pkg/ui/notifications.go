@@ -492,12 +492,46 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 	notifications = filterList(notifications, func(n model.Notification) bool {
 		return list.matches(n.Subject, n.Title)
 	})
+	notifications = s.readableNotifications(r, notifications)
 	if strings.EqualFold(strings.TrimSpace(q.Get("fields")), "list") {
 		for i := range notifications {
 			notifications[i].Body = listNotificationBody(notifications[i])
 		}
 	}
 	writeListBy(w, notifications, list, func(n model.Notification) string { return strconv.FormatInt(n.ID, 10) })
+}
+
+// readableNotifications narrows notifications to what r's caller may
+// read under tasks:read: an unrestricted caller sees every one, while a
+// caller holding tasks:read on some repositories only (a repo-scoped RBAC
+// role, an agent, an external-agent token) sees those whose repository --
+// the notification's own, or else its task's, as GET /api/events resolves
+// notification.* events -- it may read. A deployment-wide notification
+// (no repository and no task) is not shown to such a caller.
+func (s *Server) readableNotifications(r *http.Request, in []model.Notification) []model.Notification {
+	if !taskReadScoped(r) {
+		return in
+	}
+	ctx := r.Context()
+	readable := s.taskReadable(r)
+	taskRepo := map[string]string{}
+	return filterList(in, func(n model.Notification) bool {
+		repo := strings.TrimSpace(n.Repo)
+		if repo == "" && strings.TrimSpace(n.TaskID) != "" {
+			cached, ok := taskRepo[n.TaskID]
+			if !ok {
+				if t, err := s.tasks.Task(ctx, n.TaskID); err == nil {
+					cached = t.Repo
+				}
+				taskRepo[n.TaskID] = cached
+			}
+			repo = cached
+		}
+		if repo == "" {
+			return false
+		}
+		return readable(repo)
+	})
 }
 
 // pendingReleaseFamily is the release train's "approve this release"

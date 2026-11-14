@@ -133,6 +133,17 @@ func (s *Server) taskReadable(r *http.Request) func(string) bool {
 // external-agent token, or a limited verified-identity RBAC role), leaving
 // unrestricted operator and full-role callers untouched.
 func (s *Server) taskReadableContext(r *http.Request) context.Context {
+	if !taskReadScoped(r) {
+		return r.Context()
+	}
+	return model.WithExternalRefReadable(r.Context(), s.taskReadable(r))
+}
+
+// taskReadScoped reports whether r is made by a scoped principal (an agent,
+// an external-agent token, or a limited verified-identity RBAC role) whose
+// tasks:read reach s.taskReadable(r) narrows, rather than an unrestricted
+// operator or full-role caller.
+func taskReadScoped(r *http.Request) bool {
 	ctx := r.Context()
 	_, isAgent := agentCallFromContext(ctx)
 	tok := externalTokenFromContext(ctx)
@@ -141,10 +152,7 @@ func (s *Server) taskReadableContext(r *http.Request) context.Context {
 		role = nil
 	}
 	p, hasP := PrincipalFromContext(ctx)
-	if !isAgent && tok == nil && role == nil && (!hasP || p.Kind != model.PrincipalAgent) {
-		return ctx
-	}
-	return model.WithExternalRefReadable(ctx, s.taskReadable(r))
+	return isAgent || tok != nil || role != nil || (hasP && p.Kind == model.PrincipalAgent)
 }
 
 // isRepoNarrowedTasksRead reports whether pattern's handler narrows its
@@ -156,7 +164,7 @@ func isRepoNarrowedTasksRead(pattern string, r *http.Request) bool {
 		return false
 	}
 	switch pattern {
-	case refSummaryRoute:
+	case refSummaryRoute, "GET /api/notifications":
 		return true
 	case "GET /api/tasks":
 		refs := q["externalRef"]

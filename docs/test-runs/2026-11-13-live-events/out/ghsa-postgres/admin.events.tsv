@@ -1,0 +1,8 @@
+8	local_script.pending	lsa-1	-	agent	2
+9	local_script.answered	lsa-1	approved	human	alice@example.com
+11	local_script.pending	lsa-2	-	agent	2
+12	local_script.answered	lsa-2	denied	human	alice@example.com
+14	local_script.pending	lsa-3	-	agent	2
+15	local_script.answered	lsa-3	expired	agent	2
+16	local_script.pending	lsa-4	-	agent	2
+17	local_script.answered	lsa-4	expired	automation	grain

@@ -1,0 +1,2 @@
+deployed:--env staging
+exit=0
