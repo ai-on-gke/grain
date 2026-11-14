@@ -548,6 +548,7 @@ export const SETTING_LABELS: Readonly<Record<string, string>> = {
   networkAccess: "Sandbox network",
   sessionSandboxIdleTtl: "Session sandbox idle TTL",
   sandboxOvercommit: "Overcommit mode",
+  sandboxShapeLimits: "Per-task sandbox ceilings",
   sandboxCpuOvercommit: "CPU overcommit",
   sandboxMemoryOvercommit: "Memory overcommit",
   sandboxDiskOvercommit: "Disk overcommit",

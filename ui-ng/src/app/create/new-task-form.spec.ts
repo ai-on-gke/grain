@@ -17,6 +17,9 @@ import {
   NO_REPO,
   buildPayload,
   defaultCapabilitiesForRepo,
+  describeSandboxShape,
+  isSandboxShapeRefusal,
+  sandboxShapeAbove,
   directorMessage,
   emptyDraft,
   fromTemplateStem,
@@ -339,5 +342,46 @@ describe("new task form", () => {
     );
     expect(childPayload).toMatchObject({ origin: "task:12" });
     expect(childPayload).not.toHaveProperty("autoApproveProposals");
+  });
+});
+
+describe("sandbox shape ceiling", () => {
+  it("describes only the dimensions a shape states", () => {
+    expect(
+      describeSandboxShape({ cpus: 4, memoryMb: 16384, diskGb: 100 }),
+    ).toBe("4 vCPU · 16384 MiB · 100 GiB disk");
+    expect(describeSandboxShape({ cpus: 8 })).toBe("8 vCPU");
+    expect(describeSandboxShape(null)).toBe("");
+  });
+
+  it("lists each dimension above the ceiling, never an unstated one", () => {
+    const ceiling = { cpus: 4, memoryMb: 16384, diskGb: 100 };
+    expect(
+      sandboxShapeAbove(
+        { sandboxCpus: 8, sandboxMemoryMb: 0, sandboxDiskGb: 100 },
+        ceiling,
+      ),
+    ).toEqual(["CPUs 8 (up to 4)"]);
+    expect(
+      sandboxShapeAbove(
+        { sandboxCpus: 0, sandboxMemoryMb: 32768, sandboxDiskGb: 200 },
+        ceiling,
+      ),
+    ).toEqual(["memory 32768 (up to 16384)", "disk 200 (up to 100)"]);
+    expect(
+      sandboxShapeAbove(
+        { sandboxCpus: 64, sandboxMemoryMb: 0, sandboxDiskGb: 0 },
+        null,
+      ),
+    ).toEqual([]);
+  });
+
+  it("recognises the server's shape refusals", () => {
+    expect(
+      isSandboxShapeRefusal(
+        "sandbox shape is above this deployment's maximum: sandboxCpus 64 (ceiling 32)",
+      ),
+    ).toBe(true);
+    expect(isSandboxShapeRefusal("title is required")).toBe(false);
   });
 });

@@ -377,3 +377,12 @@
   height: 40px;
   min-height: 40px;
 }
+
+.s-shape-role {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
