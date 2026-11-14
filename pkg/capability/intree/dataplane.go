@@ -36,7 +36,7 @@ func (s *Server) listen(addr string, h http.Handler) (*net.TCPAddr, error) {
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return nil, err
+		return nil, protocol.StartFailure(err)
 	}
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second}
 	go srv.Serve(ln)

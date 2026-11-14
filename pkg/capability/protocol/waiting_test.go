@@ -17,6 +17,7 @@ package protocol
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -85,4 +86,62 @@ func TestAWaitingConfigureRefusalCrossesTheWire(t *testing.T) {
 	if err := s2.ApplyConfig(ctx, nil, nil); err == nil || errors.As(err, &we) {
 		t.Errorf("plain refusal: err = %v, want an error that is not a WaitingError", err)
 	}
+}
+
+// A configure handler failing to start its runtime (StartFailure or a
+// net.Listen OpError) reaches grain over the wire as a ConfigureError for
+// which IsStartError is true, while a plain refusal is not.
+func TestAStartFailureConfigureErrorCrossesTheWire(t *testing.T) {
+	if StartFailure(nil) != nil {
+		t.Fatal("StartFailure(nil) != nil")
+	}
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+
+	ctx := context.Background()
+	check := func(name string, handler func(context.Context, map[string]any) error, wantStart bool) {
+		t.Helper()
+		srv, err := NewCapabilityServer(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv.Token = strings.Repeat("t", MinHTTPTokenBytes)
+		if err := srv.HandleConfigure(map[string]any{"type": "object", "properties": map[string]any{}}, handler); err != nil {
+			t.Fatal(err)
+		}
+		ts := httptest.NewServer(srv)
+		defer ts.Close()
+		cfg := ServerConfig{ServerURL: ts.URL, Headers: map[string]string{"Authorization": "Bearer " + srv.Token}}
+		c, err := Dial(ctx, cfg, DialOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		s, err := NewServer(ctx, "capabilities.example.com/"+name, clientCaller{c})
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = s.ApplyConfig(ctx, nil, nil)
+		var ce *ConfigureError
+		if !errors.As(err, &ce) {
+			t.Fatalf("%s: err = %v, want a ConfigureError", name, err)
+		}
+		if got := IsStartError(err); got != wantStart {
+			t.Errorf("%s: IsStartError(%v) = %v, want %v", name, err, got, wantStart)
+		}
+	}
+
+	check("explicit-start-failure", func(context.Context, map[string]any) error {
+		return StartFailure(errors.New("mkdir /readonly/data: read-only file system"))
+	}, true)
+	check("raw-listen-error", func(context.Context, map[string]any) error {
+		_, err := net.Listen("tcp", held.Addr().String())
+		return err
+	}, true)
+	check("plain-config-refusal", func(context.Context, map[string]any) error {
+		return errors.New("no such project")
+	}, false)
 }

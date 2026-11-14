@@ -255,6 +255,9 @@ func capabilityServerAlertsOnHostd(ctx context.Context, store *model.Store, host
 		if st.ConfigRefused {
 			title = fmt.Sprintf("Capability server %s refused its configuration", label)
 			body += "Its configuration was saved but the server will not run under it. "
+		} else if st.StartError != "" {
+			title = fmt.Sprintf("Capability server %s %s", label, st.StartError)
+			fix = "grain tries it again every minute, so this clears itself once the server can start and attaches; nothing in Settings needs changing."
 		} else if w := servers.WaitingLabel(st); w != "" {
 			// Nothing in Settings is wrong: the server waits on something
 			// outside grain -- a host credential to be renewed -- and is

@@ -120,8 +120,27 @@ func TestAnUnconfiguredGitHoldsNoPort(t *testing.T) {
 		t.Errorf("an unconfigured git listens on %s, want no listener", s.addr)
 	}
 	_, err = attachConfigured(t, s, map[string]any{"repos": []any{"o/r"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
-	if err == nil || !strings.Contains(err.Error(), "address already in use") {
-		t.Errorf("configuring it on a held port: %v, want the bind error", err)
+	if err == nil || !strings.Contains(err.Error(), "address already in use") || !protocol.IsStartError(err) {
+		t.Errorf("configuring it on a held port: %v (IsStartError=%v), want the bind error marked as a start failure", err, protocol.IsStartError(err))
+	}
+	// A validation error on the same server is still a configuration
+	// refusal, not a start failure.
+	_, badErr := attachConfigured(t, s, map[string]any{"repos": []any{"not a repo"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
+	if badErr == nil || protocol.IsStartError(badErr) {
+		t.Errorf("configuring it with a bad repo: %v (IsStartError=%v), want a configuration refusal", badErr, protocol.IsStartError(badErr))
+	}
+	// A malformed or non-loopback -listen address is also a configuration
+	// refusal rather than a transient runtime start failure, so Settings
+	// refuses to save it and the registry does not retry it every minute.
+	for _, badAddr := range []string{"0.0.0.0:4254", "not-host-port"} {
+		badSrv, err := newConfigurableGit(GitConfig{Listen: badAddr})
+		if err != nil {
+			t.Fatalf("newConfigurableGit(%q): %v", badAddr, err)
+		}
+		_, listenErr := attachConfigured(t, badSrv, map[string]any{"repos": []any{"o/r"}, "token": "$secret:git-token"}, map[string]string{"git-token": "t"})
+		if listenErr == nil || protocol.IsStartError(listenErr) {
+			t.Errorf("configuring with -listen %q: %v (IsStartError=%v), want a configuration refusal", badAddr, listenErr, protocol.IsStartError(listenErr))
+		}
 	}
 }
 
