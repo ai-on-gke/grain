@@ -116,6 +116,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "../inbox/inbox-queue.css",
     "./ci-list.css",
     "./ci-detail.css",
@@ -884,17 +885,29 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                                   bytesOf(ghaLog.bytes)
                                 }})</span
                               >
-                              <input
-                                type="search"
-                                class="ci-log-search"
-                                placeholder="Search log…"
-                                aria-label="Search log lines"
-                                data-testid="ci-log-search"
-                                [value]="logSearch()"
-                                (input)="
-                                  logSearch.set($any($event.target).value)
-                                "
-                              />
+                              <form
+                                role="search"
+                                autocomplete="off"
+                                style="display: contents"
+                                (submit)="$event.preventDefault()"
+                              >
+                                <input
+                                  type="search"
+                                  name="grain-ci-log-search"
+                                  autocomplete="off"
+                                  spellcheck="false"
+                                  data-lpignore="true"
+                                  data-1p-ignore="true"
+                                  class="ci-log-search"
+                                  placeholder="Search log…"
+                                  aria-label="Search log lines"
+                                  data-testid="ci-log-search"
+                                  [value]="logSearch()"
+                                  (input)="
+                                    logSearch.set($any($event.target).value)
+                                  "
+                                />
+                              </form>
                               <button
                                 type="button"
                                 class="btn-text"
@@ -980,17 +993,29 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                             >
                               <div class="ci-log-bar">
                                 <span class="tabular">{{ step.name }}</span>
-                                <input
-                                  type="search"
-                                  class="ci-log-search"
-                                  placeholder="Search log…"
-                                  aria-label="Search log lines"
-                                  data-testid="ci-log-search"
-                                  [value]="logSearch()"
-                                  (input)="
-                                    logSearch.set($any($event.target).value)
-                                  "
-                                />
+                                <form
+                                  role="search"
+                                  autocomplete="off"
+                                  style="display: contents"
+                                  (submit)="$event.preventDefault()"
+                                >
+                                  <input
+                                    type="search"
+                                    name="grain-ci-step-log-search"
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                    data-lpignore="true"
+                                    data-1p-ignore="true"
+                                    class="ci-log-search"
+                                    placeholder="Search log…"
+                                    aria-label="Search log lines"
+                                    data-testid="ci-log-search"
+                                    [value]="logSearch()"
+                                    (input)="
+                                      logSearch.set($any($event.target).value)
+                                    "
+                                  />
+                                </form>
                                 @if (isActive(run)) {
                                   <button
                                     type="button"

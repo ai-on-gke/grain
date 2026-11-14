@@ -15,6 +15,7 @@
 package model_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -350,6 +351,52 @@ func TestClusterStatsRollsUpWorkByRootDirection(t *testing.T) {
 	second := stats.Directions[1]
 	if second.TaskID != "4" || second.PullRequestsMerged != 1 || second.TasksSpawned != 0 {
 		t.Errorf("second direction = %+v, want root #4 with 1 merge and 0 spawned", second)
+	}
+}
+
+func TestClusterStatsBatchesMoreThanOneChunkOfDirectionsAndTasks(t *testing.T) {
+	store, ctx := open(t)
+	since := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	until := since.AddDate(0, 0, 7)
+	grain := model.RepoRef{Owner: "bwsalmon", Name: "grain"}
+
+	// Create 260 tasks spanning > 200 (the SQL IN chunk size): 130 roots each
+	// spawning one child via Origin.
+	for i := 0; i < 130; i++ {
+		rootID := fmt.Sprintf("r-%03d", i)
+		childID := fmt.Sprintf("c-%03d", i)
+		if err := store.PutTask(ctx, model.Task{
+			ID: rootID, Title: "root " + rootID, Target: &grain, CreatedAt: &since,
+			Origin:  model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "sam"}}},
+			Binding: model.BindingDirective,
+		}); err != nil {
+			t.Fatalf("PutTask %s: %v", rootID, err)
+		}
+		if err := store.PutTask(ctx, model.Task{
+			ID: childID, Title: "child " + childID, Target: &grain, CreatedAt: &since,
+			Origin:  model.Origin{Attribution: model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}}},
+			Links:   []model.Link{{Kind: model.LinkProposedBy, Target: rootID}},
+			Binding: model.BindingDirective,
+		}); err != nil {
+			t.Fatalf("PutTask %s: %v", childID, err)
+		}
+		merged := since.Add(time.Duration(i+1) * time.Minute)
+		if err := store.Observe(ctx, model.Observation{TaskID: childID, PrMergedAt: &merged, CompletedAt: &merged}); err != nil {
+			t.Fatalf("Observe %s: %v", childID, err)
+		}
+	}
+
+	stats, err := store.ClusterStats(ctx, since, until)
+	if err != nil {
+		t.Fatalf("ClusterStats: %v", err)
+	}
+	if len(stats.Directions) != 130 {
+		t.Fatalf("directions = %d, want 130", len(stats.Directions))
+	}
+	for _, d := range stats.Directions {
+		if d.TasksSpawned != 1 || d.PullRequestsMerged != 1 || d.Title != "root "+d.TaskID {
+			t.Fatalf("unexpected chunked direction rollup %+v", d)
+		}
 	}
 }
 

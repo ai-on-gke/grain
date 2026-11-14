@@ -51,6 +51,7 @@ import {
   PriorityChipComponent,
   priorityTone,
 } from "../shared/priority-chip.component";
+import { summarizeDispatchStatus } from "../shared/dispatch-status";
 import { scopeOf } from "../shared/scope";
 import { boardLabels } from "./board-labels";
 import { DEFAULT_RATIO } from "../shared/split";
@@ -75,6 +76,7 @@ import {
   priorityOf,
   sorted,
   stateLabel,
+  timelineEndMs,
 } from "./task-view";
 import { type Undo, TasksStore } from "./tasks.store";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
@@ -135,6 +137,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "../inbox/inbox-queue.css",
     "../inbox/inbox-inspector.css",
     "./tasks-page.component.css",
@@ -520,6 +523,23 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                       >
                     }
                   </div>
+                  @if (dispatchPause(); as dp) {
+                    <div
+                      class="banner"
+                      [class.banner-error]="dp.tone === 'error'"
+                      [class.banner-warn]="dp.tone === 'warn'"
+                      role="status"
+                      data-testid="backlog-dispatch-notice"
+                    >
+                      <strong>{{ dp.headline }}</strong>
+                      @if (dp.resetText) {
+                        <span class="tabular"> · {{ dp.resetText }}</span>
+                      }
+                      @if (dp.subline) {
+                        <span> — {{ dp.subline }}</span>
+                      }
+                    </div>
+                  }
                   @if (sort() !== "run") {
                     <p class="muted list-hint">
                       Moving is off in this order.
@@ -925,9 +945,13 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                 (closed)="closePane()"
                 (expand)="openFull(id)"
               />
-            } @else {
+            } @else if (store.loaded()) {
               <div class="empty-state" data-testid="tasks-pane-empty">
                 <p>Nothing in this tab — switch tabs or create a task</p>
+              </div>
+            } @else if (store.loadError()) {
+              <div class="empty-state" data-testid="tasks-pane-unread">
+                <p>Tasks could not be read yet.</p>
               </div>
             }
           </section>
@@ -1017,6 +1041,16 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
           ) {
             <button type="button" class="btn-text" (click)="defer(selected())">
               Defer
+            </button>
+          }
+          @if (current() === "deferred" && canUndeferSelected()) {
+            <button
+              type="button"
+              class="btn-text"
+              data-testid="batch-undefer"
+              (click)="undefer(selected())"
+            >
+              Bring back
             </button>
           }
           @if (current() === "closed") {
@@ -1455,8 +1489,11 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     return isTabId(t) ? t : "backlog";
   });
 
+  // The top bar's "Filter this view" box is what narrows the list; ?q=
+  // only seeds it (see the constructor), so what the box shows is always
+  // what the list is filtered by.
   private readonly query = computed(() =>
-    (this.q() || this.filter.query()).trim().toLowerCase(),
+    this.filter.query().trim().toLowerCase(),
   );
   private matches(t: Task): boolean {
     const r = (this.repo() || "").trim().toLowerCase();
@@ -1558,37 +1595,67 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   );
 
   protected canApproveTask(t: Task): boolean {
-    return this.access.can("POST /api/tasks/{id}/approve", t.repo || undefined);
+    return this.access.canAccessTask(
+      "POST /api/tasks/{id}/approve",
+      t.repo ?? null,
+    );
   }
   protected canEditTask(t: Task): boolean {
-    return this.access.can("PATCH /api/tasks/{id}", t.repo || undefined);
+    return this.access.canAccessTask("PATCH /api/tasks/{id}", t.repo ?? null);
   }
   protected canDeferTask(t: Task): boolean {
-    return this.access.can("POST /api/tasks/{id}/defer", t.repo || undefined);
+    return this.access.canAccessTask(
+      "POST /api/tasks/{id}/defer",
+      t.repo ?? null,
+    );
   }
   protected canCloseTask(t: Task): boolean {
-    return this.access.can("POST /api/tasks/{id}/close", t.repo || undefined);
-  }
-  protected selectedRepos(): string[] {
-    return Array.from(
-      new Set(
-        this.selectedRows()
-          .map((r) => r.repo)
-          .filter((r): r is string => !!r),
-      ),
+    return this.access.canAccessTask(
+      "POST /api/tasks/{id}/close",
+      t.repo ?? null,
     );
   }
   protected canApproveSelected(): boolean {
-    return this.access.can(
-      "POST /api/tasks/{id}/approve",
-      this.selectedRepos(),
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/approve",
+          r.repo ?? null,
+        ),
+      )
     );
   }
   protected canDeferSelected(): boolean {
-    return this.access.can("POST /api/tasks/{id}/defer", this.selectedRepos());
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask("POST /api/tasks/{id}/defer", r.repo ?? null),
+      )
+    );
+  }
+  protected canUndeferSelected(): boolean {
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/undefer",
+          r.repo ?? null,
+        ),
+      )
+    );
   }
   protected canCloseSelected(): boolean {
-    return this.access.can("POST /api/tasks/{id}/close", this.selectedRepos());
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask("POST /api/tasks/{id}/close", r.repo ?? null),
+      )
+    );
   }
   protected readonly canReadBoards = computed(() =>
     this.access.can("GET /api/boards"),
@@ -1601,6 +1668,13 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     if (!cur) return "";
     return this.store.boards().find((b) => (b.query || "") === cur)?.name ?? "";
   });
+  protected readonly dispatchPause = computed(() =>
+    summarizeDispatchStatus(
+      this.access.rawConfig(),
+      this.access.usage(),
+      this.access.clockNow(),
+    ),
+  );
   protected readonly timelineSpan = computed(() => {
     const list = this.rows();
     const now = Date.now();
@@ -1625,18 +1699,17 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     const { minMs, maxMs, span } = this.timelineSpan();
     return this.rows().map((t) => {
       const sRaw = Date.parse(t.startedAt || t.createdAt || "");
-      const eRaw =
-        t.state === "running"
-          ? maxMs
-          : Date.parse(
-              t.endedAt || t.closedAt || t.updatedAt || t.createdAt || "",
-            );
+      const eRaw = timelineEndMs(t, maxMs);
       const s = Number.isFinite(sRaw) ? Math.max(minMs, sRaw) : minMs;
       const e = Number.isFinite(eRaw) ? Math.max(s, eRaw) : maxMs;
-      const leftPct = Math.min(94, Math.max(0, ((s - minMs) / span) * 100));
-      const widthPct = Math.max(
-        4,
-        Math.min(100 - leftPct, ((e - s) / span) * 100),
+      // A bar is at least 4% wide so a short one stays visible. Where
+      // that minimum would push it past the right-hand edge, it slides
+      // left rather than being cut, so a task filed a moment ago and
+      // still open still ends at "now".
+      const widthPct = Math.min(100, Math.max(4, ((e - s) / span) * 100));
+      const leftPct = Math.min(
+        100 - widthPct,
+        Math.max(0, ((s - minMs) / span) * 100),
       );
       return {
         task: t,
@@ -1655,6 +1728,36 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   constructor() {
     afterNextRender(() => this.sp.attach());
+    // ?q= (a shared link, a saved board, Back and Forward) fills the
+    // "Filter this view" box, and what is typed there goes back into ?q=,
+    // so a reload or a copied link keeps the filter and the box never
+    // shows something other than what narrows the list.
+    // While one of this page's own ?q= writes is in flight, the ?q= it
+    // passes through is an echo of what was typed, possibly already
+    // overtaken by the next keystroke, so it must not refill the box.
+    let writingQ = 0;
+    effect(() => {
+      const q = this.q() ?? "";
+      untracked(() => {
+        if (writingQ === 0 && q !== this.filter.query()) {
+          this.filter.query.set(q);
+        }
+      });
+    });
+    effect(() => {
+      const typed = this.filter.query();
+      untracked(() => {
+        if (typed === (this.q() ?? "")) return;
+        writingQ++;
+        void this.router
+          .navigate([], {
+            queryParams: { q: typed || null },
+            queryParamsHandling: "merge",
+            replaceUrl: true,
+          })
+          .finally(() => writingQ--);
+      });
+    });
     // Where the selected task sits in this tab, so j/k and Next item
     // carry on from there after it leaves.
     effect(() => {
@@ -1904,7 +2007,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected canRetry(t: Task): boolean {
-    return this.access.can("POST /api/tasks/{id}/retry", t.repo || undefined);
+    return this.access.canAccessTask(
+      "POST /api/tasks/{id}/retry",
+      t.repo ?? null,
+    );
   }
 
   protected async retryTask(id: string, ev: Event): Promise<void> {
@@ -2069,10 +2175,14 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     const p = new URLSearchParams();
     if (this.current() !== "backlog") p.set("tab", this.current());
     if (this.groupBy() !== "none") p.set("group", this.groupBy());
-    const q = (this.q() || this.filter.query()).trim();
+    const q = this.filter.query().trim();
     if (q) p.set("q", q);
     const repo = (this.repo() || "").trim();
     if (repo) p.set("repo", repo);
+    // The Timeline view is part of what the reader is looking at, so a
+    // board saved from it opens on it again (2026-11-14 saved boards
+    // walkthrough: it used to come back as the list).
+    if (this.viewMode() !== "list") p.set("view", this.viewMode());
     return p.toString();
   }
 
@@ -2103,13 +2213,18 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     this.closeMenu(false);
     const p = new URLSearchParams(b.query || "");
     const nextQ = p.get("q") || "";
-    this.filter.query.set(nextQ);
+    // The navigation carries q, and ?q= then fills the "Filter this view"
+    // box (see the constructor). Setting the box here as well started the
+    // box's own ?q= write-back while this navigation was still in flight,
+    // which superseded it and dropped the board's tab, group and repo.
+    this.localViewMode.set(p.get("view") === "timeline" ? "timeline" : "list");
     void this.router.navigate(["/tasks"], {
       queryParams: {
         tab: p.get("tab") || null,
         group: p.get("group") || null,
         q: nextQ || null,
         repo: p.get("repo") || null,
+        view: p.get("view") === "timeline" ? "timeline" : null,
       },
     });
   }

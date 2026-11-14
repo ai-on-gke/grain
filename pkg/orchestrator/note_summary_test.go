@@ -111,6 +111,34 @@ func TestAClosingNotesSummaryReachesTheTaskRowAndTheInbox(t *testing.T) {
 			if tc.want == "" && strings.Contains(detail.NoteSummary+row.NoteSummary, "Report") {
 				t.Errorf("a note without a summary was shown by its own opening")
 			}
+
+			// GET /api/events: the note is a task.comment, never a
+			// task.question, and the awaiting_reply transition it rests
+			// the task on carries its summary.
+			events, err := store.ListIntegrationEvents(ctx, model.IntegrationEventFilter{Limit: 100})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var sawNote, sawAwaiting bool
+			for _, ev := range events {
+				if ev.TaskID != task.ID {
+					continue
+				}
+				switch {
+				case ev.Type == model.IntegrationEventTaskQuestion:
+					t.Errorf("closing note recorded as task.question: %+v", ev)
+				case ev.Type == model.IntegrationEventTaskComment && ev.CommentID == comments[0].ID:
+					sawNote = true
+				case ev.Type == model.IntegrationEventTaskState && ev.State == model.StateAwaitingReply:
+					sawAwaiting = true
+					if ev.QuestionSummary != tc.want {
+						t.Errorf("awaiting_reply questionSummary = %q, want %q", ev.QuestionSummary, tc.want)
+					}
+				}
+			}
+			if !sawNote || !sawAwaiting {
+				t.Errorf("events: task.comment for the note %v, awaiting_reply task.state %v; want both", sawNote, sawAwaiting)
+			}
 		})
 	}
 }

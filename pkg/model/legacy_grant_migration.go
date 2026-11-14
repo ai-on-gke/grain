@@ -38,7 +38,7 @@ import (
 // migrations do not change, since stores already past them will not
 // re-run them.
 //
-// renames is the migration's own copy rather than legacyGrantReplacements,
+// renames is the migration's own copy rather than retiredGrantReplacements,
 // so a later conversion adding to that table never changes what an
 // earlier migration did.
 func rewriteLegacyGrants(renames map[string]string) func(ctx context.Context, tx *sql.Tx) error {

@@ -22,7 +22,7 @@ grain repo ci-capabilities -set '' bwsalmon/grain
 ```
 
 The API is `GET` / `PUT /api/repos/{owner}/{name}/ci-capabilities`, with a PUT
-body such as `{"ciCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}"]}` (bare `"github-sandbox"` remains accepted as a one-release alias). The database
+body such as `{"ciCapabilities":["https://grain.dev/capabilities/github#sandbox-repo={}"]}` (the retired bare `"github-sandbox"` is refused as an unknown capability). The database
 stores the list in `repo_config.ci_capabilities`; existing databases migrate to
 an empty list. State/settings exports preserve it with the other repo settings.
 
@@ -53,9 +53,11 @@ Migration 97 turned each of the deployment's named GCP keys (the retired
 `image-signing`, `registry-push` and `package-publish` are methods of grain's
 in-process release server, `https://grain.dev/capabilities/release#<name>`
 (`pkg/capability/release`), since schema migration 101 rewrote the stored bare
-names to `https://grain.dev/capabilities/release#<name>={}`. The bare names
-are read as those grants for one release (a repository's `.grain`, an older
-grain/config), and the repos page's CI picker offers the methods. When each
+names to `https://grain.dev/capabilities/release#<name>={}`. An older
+grain/config is rewritten the same way on import; anywhere else the bare
+names were aliases for one release only, and a job declaring one now is
+refused, naming the method to declare instead. The repos page's CI picker
+offers the methods. When each
 one may be handed out is declared by the server in code (`model.CIGrantRule`)
 and enforced by grain before the capability policy is read, so a policy rule
 can narrow them but never widen them: a rule allowing `image-signing` on
@@ -197,8 +199,8 @@ The model proxies are retired onto grain's in-process
 (schema migration 100 rewrote stored `claude-proxy`, `openai-proxy` and
 `gemini-proxy`, `repo_config.ci_capabilities` included). It forwards with
 the run's own team connection, as the retired providers did. The bare
-names remain one-release aliases, and as references they reach only a job
-that declares them.
+names were aliases for one release and are not any longer; as references
+the methods reach only a job that declares them.
 
 ## A person accepts what only a person may grant
 

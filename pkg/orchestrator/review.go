@@ -625,6 +625,7 @@ func reviewTaskBody(tmpl model.Template, task model.Task, ref model.PullRequestR
 		task.ID, task.Title, branch, ref, branch, branch, task.ID, ref, task.ID)
 	b.WriteString("\n\n" + reviewTestingAndCINote)
 	b.WriteString("\n\n" + reviewHumanReviewNote)
+	b.WriteString("\n\n" + changeUnderReviewSection(task, true))
 	return b.String()
 }
 

@@ -75,7 +75,7 @@ test("lists the in-process grain and repo servers with their methods and holders
         title: "E2E retag the release branch",
         description: "d",
         repo: "acme/widgets",
-        capabilities: [PUSH_ANY, "read-issues"],
+        capabilities: [PUSH_ANY, READ_ISSUES],
       },
     });
     expect(task.ok()).toBeTruthy();

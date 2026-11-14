@@ -88,10 +88,10 @@ func TestMigrateLocalScriptsRewritesStoredGrants(t *testing.T) {
 	if !slices.Equal(got, wantAll) {
 		t.Fatalf("task grants %v: want %v", got, wantAll)
 	}
-	if exp := model.CanonicalLegacyGrants("local-scripts:ops"); !slices.Equal(exp, wantOps) {
+	if exp := model.RetiredGrantsBecame("local-scripts:ops"); !slices.Equal(exp, wantOps) {
 		t.Errorf("local-scripts:ops still written somewhere expands to %v, want %v", exp, wantOps)
 	}
-	if exp := model.CanonicalLegacyGrants("local-scripts:guarded"); !slices.Equal(exp, wantGuarded) {
+	if exp := model.RetiredGrantsBecame("local-scripts:guarded"); !slices.Equal(exp, wantGuarded) {
 		t.Errorf("local-scripts:guarded expands to %v, want %v", exp, wantGuarded)
 	}
 

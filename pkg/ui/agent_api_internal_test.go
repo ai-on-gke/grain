@@ -375,18 +375,20 @@ func TestAPIPresetsExpand(t *testing.T) {
 	has("api:ci-read", "ci:read")
 	has("api:deployment-ops", "deployment:upgrade", "deployment:restart", "deployment:reboot")
 	has("api:release-manager", "releases:write", "schedules:write", "ci:write", "tasks:write")
-	// The old capabilities are aliases for their presets.
-	has("self-debug", "tasks:read", "deployment:read")
 	has("api:self-debug", "tasks:read", "deployment:read")
-	has("self-upgrade", "deployment:read", "deployment:upgrade")
 	has("api:self-upgrade", "deployment:read", "deployment:upgrade")
-	has("pipeline-control", "dispatch:write")
-	has("memory", "memory:read", "memory:write")
+	has("api:pipeline-control", "dispatch:write")
 	has("api:memory", "memory:read", "memory:write")
-	has("release-notes", "release-notes:read", "release-notes:write")
 	has("api:release-notes", "release-notes:read", "release-notes:write")
-	has("test-quarantine", "tests:write")
 	has("api:test-quarantine", "tests:write")
+	// Retired bare names are no longer aliases for their presets.
+	for _, retired := range []string{"self-debug", "self-upgrade", "pipeline-control", "memory", "release-notes", "test-quarantine"} {
+		for _, s := range model.APIScopes() {
+			if APIGrantsOf([]string{retired}).Allows(s.Scope, "acme/widgets") {
+				t.Errorf("retired bare %s still grants %s", retired, s.Scope)
+			}
+		}
+	}
 	for _, p := range model.APIPresets() {
 		for _, s := range p.Scopes {
 			if _, ok := apiScopeInfo(s); !ok {
@@ -813,7 +815,7 @@ var capabilitiesAdminBodylessRoutes = map[string]bool{
 // route nor a new field can add an unscanned key silently.
 func TestCapabilitiesAdminGrantKeysAreScanned(t *testing.T) {
 	inputs := routeHandlerInputs(t)
-	held := []string{"api:capabilities:admin", "api:tasks:read", "gcp-key", "self-upgrade"}
+	held := []string{"api:capabilities:admin", "api:tasks:read", model.GCPKeySandboxAgentGrant, "api:self-upgrade"}
 	for pattern, scope := range routeScopes {
 		if scope != "capabilities:admin" {
 			continue
@@ -860,13 +862,13 @@ func TestCapabilitiesAdminGrantKeysAreScanned(t *testing.T) {
 					data, _ := json.Marshal(map[string]any{key: v, "attach": true})
 					return data
 				}
-				for _, grant := range []string{"self-debug", "api:deployment:upgrade", "api:capabilities:admin", "self-upgrade",
+				for _, grant := range []string{model.GrainSourceGrant, "api:deployment:upgrade", "api:capabilities:admin", "api:self-upgrade",
 					"api:tasks:write", "api:secrets:write@acme/widgets"} {
 					if agentGrantEscalation(held, pattern, encode(grant), nil) == nil {
 						t.Errorf("%s let an agent grant %s under %q", pattern, grant, key)
 					}
 				}
-				for _, grant := range []string{"api:tasks:read", "gcp-key"} {
+				for _, grant := range []string{"api:tasks:read", model.GCPKeySandboxAgentGrant} {
 					if err := agentGrantEscalation(held, pattern, encode(grant), nil); err != nil {
 						t.Errorf("%s refused an agent %s under %q, which it holds: %v", pattern, grant, key, err)
 					}

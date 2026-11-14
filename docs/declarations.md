@@ -64,10 +64,13 @@ custom-fields:                     # optional; this deployment's declared fields
 ```
 
 This review is the one attached to a task, and it is stacked on the task's
-branch to fix what it finds. The reviews a gating path trigger files work
-differently: one per pull request head and review template however many
-triggers match, posting findings rather than pushing fixes unless asked to,
-and re-reading only what a new push changed. See "Gating reviews" under
+branch to fix what it finds. Like every other review grain files for a task,
+its prompt includes a "The change under review" section with the reviewed
+task's brief, any linked designs, and the CI and deployment-settings checks
+described under "Gating reviews" below. The reviews a gating path trigger
+files work differently: one per pull request head and review template however
+many triggers match, posting findings rather than pushing fixes unless asked
+to, and re-reading only what a new push changed. See "Gating reviews" under
 `.grain/triggers/<name>.yml`.
 
 To review every pull request with findings only, declare a gating
@@ -602,7 +605,7 @@ ref of it (`docs/ci-capabilities.md`), and has no task branch to be held
 to.
 
 The repo server's any-ref grant, `https://grain.dev/capabilities/repo#write` with `{"force": true, "refs": ["refs/heads/*", "refs/tags/*"]}`
-(formerly the bare `git-push-any-ref`, which is still read as it), is
+(formerly the bare `git-push-any-ref`), is
 still there for ad-hoc work with no template behind it. It is a team
 grant, not an admin one: a team grants it to its own task, and the
 team's own credential still bounds every push.
@@ -872,6 +875,29 @@ second one), and a review whose triggers all say `fixes: true`, which is
 stacked on the change's branch with a pull request of its own merged back
 into it before the change can land.
 
+**What a review is given.** Every review grain files for a task -- grain's
+security review, gating path-trigger reviews (findings-only, `fixes: true`,
+and security), stacked `.grain/review.yml` reviews, and CL reviews -- appends
+a "The change under review" section to the template's body:
+
+- **The brief:** the reviewed task's own description, fenced as the owner's
+  words about the change's intent rather than instructions to the reviewer,
+  stripped of grain's own appended notices (`grain: this proposal asked for
+  …` and similar), and capped at 6 KiB with a truncation note; omitted when
+  the task has no description.
+- **Linked designs:** the task's `designs:` paths (`LinkDesign` and adopted
+  spec/design links), with one line asking the reviewer to read them, check
+  that the change conforms, and flag where it departs; omitted when none are
+  linked.
+- **CI:** one line telling the reviewer to read the head's existing check
+  results first (`grain pr open`, or `grain ci checks`, `grain ci list` and
+  `grain ci log` through the review's repo-scoped `api:ci-read` grant) and to
+  compare any red check against the base branch before blaming the change,
+  without waiting or blocking on CI.
+- **Deployment settings:** one line requiring the reviewer to state what
+  happens on a deployment that leaves a newly required environment variable,
+  repository variable or setting unset (or when a default changes).
+
 **What a review read and what it found** (grain/task-5272). Every review
 task -- a gating trigger's, grain's security review, a declared stacked
 review and an external pull request's -- carries `reviewedHead` on
@@ -880,13 +906,14 @@ declared review the reviewed branch's head when its first run started. A
 security review that pushed fixes also carries `reviewerHead`, the head it
 left. When a run of the review finishes, the task records `reviewVerdict`:
 `clean`, `findings` (it left findings, or pushed fixes of its own) or
-`questions` (it ended on `ask_question`), with `findingCount` and one
+`questions` (it ended on `ask_question` or held the change with
+`request_human_review`), with `findingCount` and one
 category per finding -- `correctness`, `tests`, `security`,
 `compatibility` or `other` -- from each `add_review_comment` call's
 `category` (`grain pr review-comment --category`; none is `other`). A run
 that suspends or parks for a secret or access records none. Reviews filed
-before this record no verdict, and only a gating trigger's carries a head
-(its `path-trigger-head` tag).
+before this record no verdict, and of those only a gating trigger's carries
+a head (its `path-trigger-head` tag).
 
 **Priority.** A gating review runs at the priority of the change it gates,
 and never below 7 (`model.ReviewPriorityFloor`). That applies to grain's
