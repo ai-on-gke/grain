@@ -37,6 +37,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,6 +47,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack/installtracktest"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -1913,6 +1915,73 @@ func TestCheckImageManifestHTTPServer(t *testing.T) {
 	}
 }
 
+func TestCheckImageManifestCanceledCallerDoesNotPoisonFlightOrCache(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var headCalls atomic.Int32
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"tok"}`))
+		case "/v2/acme/grain/k8s-sandbox/manifests/flight-cancel-test":
+			if r.Header.Get("Authorization") != "Bearer tok" {
+				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="%s/token",service="registry",scope="repository:acme/grain/k8s-sandbox:pull"`, srvURL))
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			headCalls.Add(1)
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+	ref := strings.TrimPrefix(srv.URL, "http://") + "/acme/grain/k8s-sandbox:flight-cancel-test"
+
+	// A pre-canceled context must fail immediately without caching a canceled result.
+	preCanceled, preCancel := context.WithCancel(context.Background())
+	preCancel()
+	if err := ui.CheckImageManifest(preCanceled, ref); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CheckImageManifest(preCanceled) = %v, want context.Canceled", err)
+	}
+
+	// Start caller 1 (cancels mid-flight) and caller 2 (waits on the same flight).
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	errCh1 := make(chan error, 1)
+	go func() {
+		errCh1 <- ui.CheckImageManifest(ctx1, ref)
+	}()
+	<-entered
+
+	errCh2 := make(chan error, 1)
+	go func() {
+		errCh2 <- ui.CheckImageManifest(context.Background(), ref)
+	}()
+
+	// Cancel caller 1 mid-flight, then allow the registry response to finish.
+	cancel1()
+	close(release)
+
+	if err := <-errCh2; err != nil {
+		t.Fatalf("waiter CheckImageManifest after leader cancel = %v, want nil", err)
+	}
+	if err := <-errCh1; err != nil {
+		t.Fatalf("leader CheckImageManifest with WithoutCancel = %v, want nil", err)
+	}
+	if got := headCalls.Load(); got != 1 {
+		t.Errorf("authorized manifest HEAD calls = %d, want 1", got)
+	}
+}
+
 // The 2026-11-01 walkthrough saved "not an email" as the GCP service
 // account email, which only failed when gcp-key next minted a key.
 func TestUpdateSettingsRefusesAGCPServiceAccountEmailThatIsNotOne(t *testing.T) {
@@ -1985,5 +2054,58 @@ func TestUpdateSettingsRefusesAGCPProjectThatIsNotAProjectID(t *testing.T) {
 		if ok && got.GCPProject != strings.TrimSpace(project) {
 			t.Errorf("UpdateSettings(gcpProject=%q) stored %q", project, got.GCPProject)
 		}
+	}
+}
+
+type countingCatalogue struct {
+	*secrets.MemoryCatalogue
+	listCalls atomic.Int32
+}
+
+func (c *countingCatalogue) ListSecretEntries(ctx context.Context) ([]secrets.CatalogueEntry, error) {
+	c.listCalls.Add(1)
+	return c.MemoryCatalogue.ListSecretEntries(ctx)
+}
+
+func TestSettingsAndConfigCallSecretsListOnce(t *testing.T) {
+	t.Parallel()
+	cat := &countingCatalogue{MemoryCatalogue: secrets.NewMemoryCatalogue()}
+	secStore := secrets.OpenSecretManager(secrets.SecretManagerConfig{
+		Prefix:    "projects/123456/secrets/grain-",
+		Catalogue: cat,
+		Token:     func(context.Context) (string, error) { return "tok", nil },
+	})
+	c, store, ctx := testClient(t)
+	c.Config.Secrets = secStore
+
+	// 1. GetSettings when no config row is stored yet (cfg == nil branch).
+	if _, err := c.GetSettings(ctx); err != nil {
+		t.Fatalf("GetSettings (nil config): %v", err)
+	}
+	if got := cat.listCalls.Load(); got != 1 {
+		t.Fatalf("GetSettings (nil config) called Secrets.List %d times, want 1", got)
+	}
+
+	// 2. GetSettings when a config row is stored (settingsFrom branch).
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	cat.listCalls.Store(0)
+	if _, err := c.GetSettings(ctx); err != nil {
+		t.Fatalf("GetSettings (saved config): %v", err)
+	}
+	if got := cat.listCalls.Load(); got != 1 {
+		t.Fatalf("GetSettings (saved config) called Secrets.List %d times, want 1", got)
+	}
+
+	// 3. GET /api/config (calls both capabilitiesWithReadiness and ciCapabilitiesWithReadiness).
+	srv := ui.NewServerWithClient(ui.NewClient(c.Config, store))
+	cat.listCalls.Store(0)
+	rec := do(t, srv, http.MethodGet, "/api/config", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/config: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := cat.listCalls.Load(); got != 1 {
+		t.Fatalf("GET /api/config called Secrets.List %d times, want 1", got)
 	}
 }

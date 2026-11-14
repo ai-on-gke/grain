@@ -100,6 +100,7 @@ export class WorkstreamsStore implements OnDestroy {
   readonly closedTasks = signal<Task[]>([]);
   readonly extraTasks = signal<Record<string, TaskDetail>>({});
   readonly loaded = signal(false);
+  readonly closedLoading = signal(false);
   readonly loadError = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
   readonly busy = signal<string | null>(null);
@@ -331,10 +332,13 @@ export class WorkstreamsStore implements OnDestroy {
         ? !this.closedFetchedOnce && this.hasMissingAncestor(currentOpen)
         : openChanged || !this.closedFetchedOnce || this.pollCount % 5 === 0);
     if (needClosed) {
+      this.closedLoading.set(true);
       this.lastSeenRevision = rev;
-      await this.loadClosedPages();
     }
     this.loaded.set(true);
+    if (needClosed) {
+      await this.loadClosedPages();
+    }
   }
 
   private async loadClosedPages(): Promise<void> {
@@ -344,6 +348,7 @@ export class WorkstreamsStore implements OnDestroy {
 
     const closedSince = encodeURIComponent(new Date(cutoffMs).toISOString());
 
+    this.closedLoading.set(true);
     try {
       for (let page = 0; page < MAX_CLOSED_PAGES; page++) {
         const q = `state=closed&closedSince=${closedSince}&limit=${CLOSED_PAGE_LIMIT}&cursor=${encodeURIComponent(cursor)}`;
@@ -379,12 +384,21 @@ export class WorkstreamsStore implements OnDestroy {
       }
     } catch {
       // Closed history failure is non-fatal when open tasks succeeded.
+    } finally {
+      this.closedLoading.set(false);
     }
   }
 
   async ensureRootDetail(rootId: string): Promise<void> {
     if (!rootId || rootId.includes("/") || rootId.includes("#")) return;
     if (this.extraTasks()[rootId] || this.detailInFlight.has(rootId)) return;
+    const known =
+      this.openTasks().find((t) => t.id === rootId) ??
+      this.closedTasks().find((t) => t.id === rootId);
+    const allowed = known
+      ? this.access.canAccessTask("GET /api/tasks/{id}", known.repo ?? null)
+      : this.access.can("GET /api/tasks/{id}");
+    if (!allowed) return;
     this.detailInFlight.add(rootId);
     try {
       const detail = await this.api.get<TaskDetail>(
@@ -416,7 +430,10 @@ export class WorkstreamsStore implements OnDestroy {
   approvePreview(stream: Workstream): StreamBatchPreview {
     const nodes = [...stream.proposedNodes]
       .filter((n) =>
-        this.access.can("POST /api/tasks/{id}/approve", n.task.repo),
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/approve",
+          n.task.repo ?? null,
+        ),
       )
       .sort((a, b) => Number(a.id) - Number(b.id) || a.id.localeCompare(b.id));
     return {
@@ -436,7 +453,10 @@ export class WorkstreamsStore implements OnDestroy {
     const nodes = pool.filter(
       (n) =>
         (n.task.state === "proposed" || n.task.state === "queued") &&
-        this.access.can("POST /api/tasks/{id}/defer", n.task.repo),
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/defer",
+          n.task.repo ?? null,
+        ),
     );
     return {
       nodes,
@@ -454,7 +474,10 @@ export class WorkstreamsStore implements OnDestroy {
     const nodes = pool.filter(
       (n) =>
         n.glyph === "deferred" &&
-        this.access.can("POST /api/tasks/{id}/undefer", n.task.repo),
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/undefer",
+          n.task.repo ?? null,
+        ),
     );
     return {
       nodes,

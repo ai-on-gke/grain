@@ -66,8 +66,11 @@ start admitted ──► running ──(exit)──► exited (exit.json written
 How the daemon reads an exit (`pkg/agent/hostd.go`, `runhost.Hostd.Attach`,
 `orchestrator.classifyRunEnd`):
 
-* `Refusal.Draining` or `Exit.Draining` → `agent.ErrHostdDraining` →
-  **interrupted**, no strike.
+* `Refusal.Draining` or `Exit.Draining` with `Exit.Error == ""` (`drain_cap`)
+  → `agent.ErrHostdDraining` → **interrupted**, no strike.
+* `Exit.Draining` with `Exit.Error != ""` (`Exit.Stopped`: `killStopping` or
+  `loadSpools` after a crash) → `agent.ErrHostdStopped` → **interrupted**,
+  no strike, saying the host agent stopped or restarted rather than drained.
 * The stream drops (`hostd.ErrNoExit`), or an adopted run's attach never
   reaches hostd (`hostd.ErrUnreachable`, since task 4821) → `reattach`
   for `-hostd-reattach-timeout` → `agent.ErrHostdLost` past it →

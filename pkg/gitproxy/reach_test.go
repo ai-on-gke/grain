@@ -15,6 +15,7 @@
 package gitproxy_test
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -131,5 +132,72 @@ func TestReachKeepsNonDefaultHostPrefixEvenWhenDefaultHostFieldIsEmpty(t *testin
 	}
 	if repos[0].Repo != "ghe.example.com/acme/internal" {
 		t.Errorf("Repo = %q, want ghe.example.com/acme/internal", repos[0].Repo)
+	}
+}
+
+func TestReachCoalescesConcurrentListings(t *testing.T) {
+	t.Parallel()
+	reach, _, sim, _ := reachFixture(t)
+	var wg sync.WaitGroup
+	const workers = 8
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			repos, ok, err := reach.Repos("bouncer")
+			if err != nil || !ok || len(repos) != 2 {
+				errs <- err
+				return
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Repos error: %v", err)
+		}
+	}
+	// Cache is empty on start; with singleflight coalescing, concurrent callers
+	// may trigger 1 listing (not 8). Note sim.Calls counts paginated GET calls;
+	// 1 listing of 2 repos takes 1 GET call.
+	if len(sim.Calls) != 1 {
+		t.Errorf("concurrent Repos made %d GitHub API calls, want 1", len(sim.Calls))
+	}
+}
+
+type panickingReachAPI struct {
+	github.Transport
+	panics int
+}
+
+func (p *panickingReachAPI) Request(method, path string, headers map[string]string, body []byte) (github.ApiResponse, error) {
+	if p.panics == 0 {
+		p.panics++
+		panic("boom during reachable repo list")
+	}
+	return p.Transport.Request(method, path, headers, body)
+}
+
+func TestReachPanicClearsInflightFlight(t *testing.T) {
+	t.Parallel()
+	reach, _, sim, _ := reachFixture(t)
+	reach.API = &panickingReachAPI{Transport: sim}
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		_, _, _ = reach.Repos("bouncer")
+	}()
+	if recovered == nil {
+		t.Fatal("expected initial Repos call to panic")
+	}
+
+	// The aborted flight must have been closed and removed so a retry succeeds
+	// instead of blocking forever on flight.done.
+	repos, ok, err := reach.Repos("bouncer")
+	if err != nil || !ok || len(repos) != 2 {
+		t.Fatalf("retry Repos after panic = (%d repos, ok=%v, err=%v), want 2 repos, ok=true, nil", len(repos), ok, err)
 	}
 }

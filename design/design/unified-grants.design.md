@@ -285,11 +285,16 @@ once with a fidelity test.**
   (`decodeCompanion`), so writing `#read`/`#write` there would hand its
   template tasks a CI-only grant. Writing them into `grants:` as well
   lands with that follow-up, a release after this reader.
-  *Still waiting ([Task #3882](/tasks/3882)):* when task 3882 was done,
-  no versioned release contained this reader. Merge `29192f3f8` came
-  after `v3.4.0`, so the export still writes `reads:`/`writes:` only.
-  Writing `#read`/`#write` into `grants:` as well is filed to follow the
-  first release that has it.
+  *As built ([Task #4063](/tasks/4063)):* the reader (merge `29192f3f8`)
+  shipped in `v3.5.0`. The export now writes each read row as
+  `…/repo#read {repo}` and each write row as `…/repo#write {repo, base}`
+  under `grants:`, after the entry's own grant rows
+  (`repoGrantEntries`), and still writes `reads:`/`writes:`. A row whose
+  repository is not a plain `owner/name` on the default host goes under
+  `reads:`/`writes:` only. On import the two spellings collapse into one
+  row, so export → import → export is stable
+  (`TestRepoAccessExportedAsGrantsRoundTrips`). Dropping `reads:`/`writes:`
+  from the export, a release after this, is not done yet.
 - **Repository declarations.** `.grain/templates/*.yml` and
   `.grain/schedules/*.yml` accept `grants:` beside `capabilities:`,
   `reads:`, `writes:` and `push:` indefinitely. These live in other
