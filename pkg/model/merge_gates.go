@@ -66,13 +66,18 @@ func (s MergeGateState) Satisfied() bool {
 
 // MergeGate describes one required gate on a change and its current state.
 type MergeGate struct {
-	ID          string         `json:"id"`
-	Label       string         `json:"label"`
-	State       MergeGateState `json:"state"`
-	Detail      string         `json:"detail,omitempty"`
-	ReviewTask  string         `json:"reviewTask,omitempty"`
-	ApprovedBy  string         `json:"approvedBy,omitempty"`
-	Overridable bool           `json:"overridable,omitempty"`
+	ID         string         `json:"id"`
+	Label      string         `json:"label"`
+	State      MergeGateState `json:"state"`
+	Detail     string         `json:"detail,omitempty"`
+	ReviewTask string         `json:"reviewTask,omitempty"`
+	// Tasks lists every review task the gate stands for, when it stands for
+	// more than one: the code-review gate folds every gating trigger's
+	// review (one per review template) and a configured Review: task into
+	// one gate, and ReviewTask can name only one of them.
+	Tasks       []string `json:"tasks,omitempty"`
+	ApprovedBy  string   `json:"approvedBy,omitempty"`
+	Overridable bool     `json:"overridable,omitempty"`
 }
 
 // ReviewFindingsRecord records that a required review left findings, open
@@ -227,6 +232,11 @@ type GateOverrideRecord struct {
 	By      string    `json:"by"`
 	HeadSHA string    `json:"headSha"`
 	At      time.Time `json:"at"`
+	// WithdrawnAt is set once the branch moved on from HeadSHA before the
+	// forced merge happened (orchestrator.dropMovedForcedMerge). The
+	// record stays on the task as the audit of who asked and why, but a
+	// withdrawn override skips no gate.
+	WithdrawnAt *time.Time `json:"withdrawnAt,omitempty"`
 }
 
 // Link encodes r as a LinkGateOverride link.
@@ -259,13 +269,38 @@ func GateOverrides(t Task) []GateOverrideRecord {
 	return out
 }
 
-// LatestGateOverride returns the most recent GateOverrideRecord on t, if any.
+// LatestGateOverride returns the most recent GateOverrideRecord on t, if any
+// and if it still stands: an override withdrawn because the branch moved on
+// from the commit it was for (WithdrawnAt) skips nothing, and neither does
+// any older one it replaced. GateOverrides still lists every record.
 func LatestGateOverride(t Task) (GateOverrideRecord, bool) {
 	all := GateOverrides(t)
-	if len(all) == 0 {
+	if len(all) == 0 || all[len(all)-1].WithdrawnAt != nil {
 		return GateOverrideRecord{}, false
 	}
 	return all[len(all)-1], true
+}
+
+// WithdrawGateOverride marks t's standing gate override, if any, withdrawn
+// at at, keeping it as an audit record. It reports whether it changed t.
+func WithdrawGateOverride(t *Task, at time.Time) bool {
+	for i := len(t.Links) - 1; i >= 0; i-- {
+		if t.Links[i].Kind != LinkGateOverride {
+			continue
+		}
+		r, ok := ParseGateOverrideRecord(t.Links[i].Target)
+		if !ok {
+			continue
+		}
+		if r.WithdrawnAt != nil {
+			return false
+		}
+		w := at.UTC().Truncate(time.Second)
+		r.WithdrawnAt = &w
+		t.Links[i] = r.Link()
+		return true
+	}
+	return false
 }
 
 // NormalizeOverrideGates parses and validates explicit gate names supplied via
@@ -387,7 +422,7 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 			ciGate.Detail = firstGateText(obs.CI.Detail, "waiting for checks")
 			ciGate.Overridable = true
 		}
-	case obs != nil && (obs.MergeQueueState == "repairing" || obs.MergeQueueState == "checks_unfixable" || obs.MergeQueueState == "merge_failed"):
+	case obs != nil && (obs.MergeQueueState == "repairing" || obs.MergeQueueState == "repair_needed" || obs.MergeQueueState == "repair_queued" || obs.MergeQueueState == "checks_unfixable" || obs.MergeQueueState == "merge_failed"):
 		ciGate.State = GateStateFailing
 		ciGate.Detail = firstGateText(obs.MergeQueueNote, "checks failing")
 		ciGate.Overridable = true
@@ -468,6 +503,13 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 	hasCodeQuestions := hasQuestions && (secTask == "" || q.ReviewTaskID != secTask)
 	triggerPending := false
 	var firstTriggerTask string
+	var codeTasks, pendingTasks []string
+	if reviewTask != "" {
+		codeTasks = append(codeTasks, reviewTask)
+		if isCodeReviewPending(t, reviewTask, targetStates) {
+			pendingTasks = append(pendingTasks, reviewTask)
+		}
+	}
 	for _, raw := range triggerTasks {
 		_, tid, ok := strings.Cut(raw, "=")
 		if !ok || tid == "" {
@@ -476,6 +518,9 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 		if firstTriggerTask == "" {
 			firstTriggerTask = tid
 		}
+		if !slices.Contains(codeTasks, tid) {
+			codeTasks = append(codeTasks, tid)
+		}
 		if pathTriggerHold == "" {
 			continue
 		}
@@ -483,12 +528,20 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 			triggerPending = true
 		} else if st, exists := targetStates[tid]; !exists || (st != StateClosed && st != StateCompleted) {
 			triggerPending = true
+		} else {
+			continue
+		}
+		if !slices.Contains(pendingTasks, tid) {
+			pendingTasks = append(pendingTasks, tid)
 		}
 	}
 	codeReviewTask := firstGateText(reviewTask, firstTriggerTask)
 	codePending := triggerPending || isCodeReviewPending(t, reviewTask, targetStates)
 	if t.ReviewTemplateID != "" || reviewTask != "" || len(triggerTasks) > 0 || len(codeFindings) > 0 || hasCodeQuestions {
 		g := MergeGate{ID: GateReview, Label: "Code review", ReviewTask: codeReviewTask}
+		if len(codeTasks) > 1 {
+			g.Tasks = codeTasks
+		}
 		switch {
 		case hasOv && GateOverriddenBy(GateReview, ovGates):
 			g.State = GateStateOverridden
@@ -508,7 +561,14 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 			g.Overridable = true
 		case codePending:
 			g.State = GateStateRunning
-			if g.ReviewTask != "" {
+			// Name the reviews still running, not merely the first one
+			// filed: with one per review template, that one may be done.
+			if len(pendingTasks) > 0 {
+				g.ReviewTask = pendingTasks[0]
+			}
+			if len(pendingTasks) > 1 {
+				g.Detail = "running (tasks #" + strings.Join(pendingTasks, ", #") + ")"
+			} else if g.ReviewTask != "" {
 				g.Detail = "running (task #" + g.ReviewTask + ")"
 			} else {
 				g.Detail = "queued"
@@ -516,7 +576,9 @@ func ComputeMergeGates(t Task, obs *Observation, targetStates map[string]State) 
 			g.Overridable = true
 		default:
 			g.State = GateStatePassed
-			if g.ReviewTask != "" {
+			if len(codeTasks) > 1 {
+				g.Detail = "passed (tasks #" + strings.Join(codeTasks, ", #") + ")"
+			} else if g.ReviewTask != "" {
 				g.Detail = "passed (task #" + g.ReviewTask + ")"
 			} else {
 				g.Detail = "passed"

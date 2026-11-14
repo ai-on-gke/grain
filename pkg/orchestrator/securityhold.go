@@ -436,11 +436,33 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 		isPostMergeReview(ctx, store, review, *reviewed) {
 		return nil
 	}
-	dropped := false
+	dropped, kept := false, false
 	if err := store.UpdateTask(ctx, reviewedID, func(t *model.Task) error {
-		dropped = false
+		dropped, kept = false, false
 		isSecReview := linkTarget(*t, model.LinkSecurityReviewTask) == review.ID
 		if !hasSecurityHold(*t) && !hasBrokenRulesHold(*t) && !isSecReview {
+			return nil
+		}
+		if !isSecReview {
+			// Another review's findings (a gating trigger's, a declared
+			// Review: template's) are that review's gate's, not the
+			// security review's: the security review still running keeps
+			// its hold and its own verdict, while a broken-rules marker is
+			// retired so fixing the base rules cannot hand auto-merge back
+			// over the findings (releaseFixedRulesHold). The findings are
+			// recorded on the review's own gate here, before anything else,
+			// so a clean security review finishing afterwards still cannot
+			// hand auto-merge back over them (SyncSecurityHolds checks
+			// HasReviewFindings).
+			model.AwaitPersonForAutoMerge(t, "review "+review.ID+" left findings")
+			model.AddReviewFindings(t, model.ReviewFindingsRecord{
+				Gate:       reviewGateOf(*t, review.ID, review.Tags...),
+				ReviewTask: review.ID,
+				Summary:    summary,
+				At:         now,
+			})
+			t.Links = withoutLinks(t.Links, model.LinkBrokenRulesHold)
+			kept = true
 			return nil
 		}
 		model.AwaitPersonForAutoMerge(t, "review "+review.ID+" left findings")
@@ -463,7 +485,7 @@ func dropSecurityHoldOnFindings(ctx context.Context, store *model.Store, client 
 	}); err != nil {
 		return fmt.Errorf("orchestrator: ending %s's security hold on its review's findings: %w", reviewedID, err)
 	}
-	if !dropped {
+	if !dropped || kept {
 		return nil
 	}
 	raiseFindingsReview(ctx, store, review, reviewedID, summary, now)

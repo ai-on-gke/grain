@@ -421,6 +421,12 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 				"too, ask_question the owner rather than force-pushing.",
 			task.Title, task.Body, task.Target, branch, reviewedID, branch,
 		)
+	} else if reviewCommentsOnly(task) {
+		prompt += fmt.Sprintf(
+			"%s\n\n%s\n\nWork in %s. Read the code under review and record any findings on the "+
+				"pull request; do not commit, push or open a pull request.",
+			task.Title, task.Body, task.Target,
+		)
 	} else {
 		prompt += fmt.Sprintf(
 			"%s\n\n%s\n\nWork in %s. Push your change to a new branch named %q -- "+
@@ -429,13 +435,22 @@ func BuildPrompt(task model.Task, checkoutDir, sandboxRoot string, canOpenPullRe
 		)
 	}
 	if checkoutDir != "" {
-		prompt += fmt.Sprintf(
-			"\n\nThat repo is already cloned for you at ./%s, with %q checked out and "+
-				"its remote pointing at the only address you can reach it through -- "+
-				"work in that directory rather than cloning anything yourself, and "+
-				"push with `git push origin %s`.",
-			checkoutDir, branch, branch,
-		)
+		if reviewCommentsOnly(task) {
+			prompt += fmt.Sprintf(
+				"\n\nThat repo is already cloned for you at ./%s, with %q checked out and "+
+					"its remote pointing at the only address you can reach it through -- "+
+					"work in that directory rather than cloning anything yourself.",
+				checkoutDir, branch,
+			)
+		} else {
+			prompt += fmt.Sprintf(
+				"\n\nThat repo is already cloned for you at ./%s, with %q checked out and "+
+					"its remote pointing at the only address you can reach it through -- "+
+					"work in that directory rather than cloning anything yourself, and "+
+					"push with `git push origin %s`.",
+				checkoutDir, branch, branch,
+			)
+		}
 	}
 	if task.Target != nil && history.UpstreamRepo != (model.RepoRef{}) && !history.UpstreamRepo.Same(*task.Target) {
 		prompt += fmt.Sprintf(
