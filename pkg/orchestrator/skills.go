@@ -71,20 +71,36 @@ func resolveSkillFolders(ctx context.Context, store *model.Store, deployment *mo
 	return model.ResolveSkillFolders(depCfg, repoCfg, task.Skills), nil
 }
 
+// repoSkillDiscovery is what discoverRepoSkills found: the skills to index
+// (at most intree.MaxRepoSkills), how many further SKILL.md candidates it
+// left unlisted once that cap was reached, and the folders it searched, so
+// the prompt can tell the agent that the index is not the whole set and
+// where to look for the rest.
+type repoSkillDiscovery struct {
+	Skills   []intree.SkillIndexEntry
+	Unlisted int
+	Folders  []string
+}
+
 // discoverRepoSkills finds */SKILL.md one level deep under each configured
 // folder at the task's base branch commit in prepared.Dir, rejecting symlinks
 // and escaping paths, skipping malformed SKILL.md files with a run-log note,
-// and returning at most intree.MaxRepoSkills entries.
-func discoverRepoSkills(ctx context.Context, tools []mcp.Tool, prepared checkout, task model.Task, folders []string, runID string, logf func(string, ...any)) []intree.SkillIndexEntry {
+// and returning at most intree.MaxRepoSkills entries. Once it has that many
+// it stops reading: every SKILL.md is a git show in the sandbox, and a
+// repository with thousands of skill directories would otherwise spend a
+// tool call per pair of them before the agent's first turn. Candidates it
+// did not read are counted in Unlisted (a malformed one among them is then
+// not noted).
+func discoverRepoSkills(ctx context.Context, tools []mcp.Tool, prepared checkout, task model.Task, folders []string, runID string, logf func(string, ...any)) repoSkillDiscovery {
 	if logf == nil {
 		logf = log.Printf
 	}
 	if len(folders) == 0 || prepared.Dir == "" || prepared.StateRepo || task.Target == nil {
-		return nil
+		return repoSkillDiscovery{}
 	}
 	run, ok := runCommandTool(tools)
 	if !ok {
-		return nil
+		return repoSkillDiscovery{}
 	}
 
 	var cleanFolders []string
@@ -99,13 +115,13 @@ func discoverRepoSkills(ctx context.Context, tools []mcp.Tool, prepared checkout
 		}
 	}
 	if len(cleanFolders) == 0 {
-		return nil
+		return repoSkillDiscovery{}
 	}
 
 	explicitBase := ""
 	if task.Base != "" {
 		if !gitSafe.MatchString(task.Base) {
-			return nil
+			return repoSkillDiscovery{}
 		}
 		explicitBase = task.Base
 	}
@@ -113,7 +129,7 @@ func discoverRepoSkills(ctx context.Context, tools []mcp.Tool, prepared checkout
 	listScript := buildSkillTreeListScript(prepared.Dir, explicitBase, cleanFolders)
 	res := run(ctx, map[string]any{"command": listScript})
 	if res.IsError {
-		return nil
+		return repoSkillDiscovery{}
 	}
 
 	var baseSHA string
@@ -137,12 +153,16 @@ func discoverRepoSkills(ctx context.Context, tools []mcp.Tool, prepared checkout
 		}
 	}
 	if baseSHA == "" || !gitSafe.MatchString(baseSHA) || len(candidates) == 0 {
-		return nil
+		return repoSkillDiscovery{}
 	}
 
 	var discovered []intree.SkillIndexEntry
 	capped := 0
 	for start := 0; start < len(candidates); start += skillReadBatchSize {
+		if len(discovered) >= intree.MaxRepoSkills {
+			capped += len(candidates) - start
+			break
+		}
 		end := min(start+skillReadBatchSize, len(candidates))
 		batch := candidates[start:end]
 		blobs := readSkillBlobsAtBase(ctx, run, prepared.Dir, baseSHA, batch)
@@ -174,10 +194,10 @@ func discoverRepoSkills(ctx context.Context, tools []mcp.Tool, prepared checkout
 		}
 	}
 	if capped > 0 {
-		logf("orchestrator: run %s: capped discovered repo skills at %d (skipped %d additional skill(s))",
+		logf("orchestrator: run %s: capped discovered repo skills at %d (%d more SKILL.md candidate(s) left unlisted)",
 			runID, intree.MaxRepoSkills, capped)
 	}
-	return discovered
+	return repoSkillDiscovery{Skills: discovered, Unlisted: capped, Folders: cleanFolders}
 }
 
 func isSafeRepoSkillFilePath(relPath string) bool {
@@ -311,11 +331,12 @@ func mergePromptSkills(
 	inProcessSections []string,
 	passPromptSections string,
 	materialized []model.Materialized,
-	repoSkills []intree.SkillIndexEntry,
+	discovery repoSkillDiscovery,
 	repoLabel string,
 	runID string,
 	logf func(string, ...any),
 ) (keptInProcess []string, unifiedSkillsSection string, keptPassSections string) {
+	repoSkills := discovery.Skills
 	if len(repoSkills) == 0 {
 		return inProcessSections, "", passPromptSections
 	}
@@ -374,7 +395,29 @@ func mergePromptSkills(
 		logf("orchestrator: run %s: omitted %d repo skill(s) to stay within the %d-byte skills index limit",
 			runID, omitted, intree.MaxSkillsIndexBytes)
 	}
+	merged += unlistedRepoSkillsNote(omitted+discovery.Unlisted, discovery.Folders)
 	return keptInProcess, merged, passPromptSections
+}
+
+// unlistedRepoSkillsNote is the sentence, in grain's own voice and so
+// outside the <repo-skills> block, that tells the agent the index is not
+// every skill the repository has: without it an agent handed 46 of 58
+// skills has no way to know the other 12 exist.
+func unlistedRepoSkillsNote(unlisted int, folders []string) string {
+	if unlisted <= 0 {
+		return ""
+	}
+	where := "the repository's skill folders"
+	if len(folders) > 0 {
+		quoted := make([]string, len(folders))
+		for i, f := range folders {
+			quoted[i] = f + "/"
+		}
+		where = strings.Join(quoted, ", ")
+	}
+	return fmt.Sprintf("\n%d more repository skill(s) are not listed above: the index keeps at most %d skills and %d bytes. "+
+		"Look for */SKILL.md under %s in the checkout if none of these fits.",
+		unlisted, intree.MaxRepoSkills, intree.MaxSkillsIndexBytes, where)
 }
 
 // stripCapabilitySkillBlocks finds any <capability ...> blocks in

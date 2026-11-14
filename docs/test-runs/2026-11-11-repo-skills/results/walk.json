@@ -1,0 +1,757 @@
+[
+  {
+    "scenario": "baseline",
+    "task": "2",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 22398,
+    "indexBytes": 8104,
+    "names": [
+      "claude-00",
+      "claude-01",
+      "claude-02",
+      "claude-03",
+      "claude-04",
+      "claude-05",
+      "claude-06",
+      "claude-07",
+      "claude-08",
+      "claude-09",
+      "claude-10",
+      "claude-11",
+      "claude-12",
+      "claude-13",
+      "claude-14",
+      "claude-15",
+      "claude-16",
+      "claude-17",
+      "claude-18",
+      "claude-19",
+      "claude-20",
+      "claude-21",
+      "claude-22",
+      "claude-23",
+      "claude-24",
+      "claude-25",
+      "claude-26",
+      "claude-27",
+      "claude-28",
+      "bootstrap",
+      "skill-00",
+      "skill-01",
+      "skill-02",
+      "skill-03",
+      "skill-04",
+      "skill-05",
+      "skill-06",
+      "skill-07",
+      "skill-08",
+      "skill-09",
+      "skill-10",
+      "skill-11",
+      "skill-12",
+      "skill-13",
+      "skill-14",
+      "skill-15"
+    ],
+    "sources": [
+      "repo: .claude/skills/claude-00",
+      "repo: .claude/skills/claude-01",
+      "repo: .claude/skills/claude-02",
+      "repo: .claude/skills/claude-03",
+      "repo: .claude/skills/claude-04",
+      "repo: .claude/skills/claude-05",
+      "repo: .claude/skills/claude-06",
+      "repo: .claude/skills/claude-07",
+      "repo: .claude/skills/claude-08",
+      "repo: .claude/skills/claude-09",
+      "repo: .claude/skills/claude-10",
+      "repo: .claude/skills/claude-11",
+      "repo: .claude/skills/claude-12",
+      "repo: .claude/skills/claude-13",
+      "repo: .claude/skills/claude-14",
+      "repo: .claude/skills/claude-15",
+      "repo: .claude/skills/claude-16",
+      "repo: .claude/skills/claude-17",
+      "repo: .claude/skills/claude-18",
+      "repo: .claude/skills/claude-19",
+      "repo: .claude/skills/claude-20",
+      "repo: .claude/skills/claude-21",
+      "repo: .claude/skills/claude-22",
+      "repo: .claude/skills/claude-23",
+      "repo: .claude/skills/claude-24",
+      "repo: .claude/skills/claude-25",
+      "repo: .claude/skills/claude-26",
+      "repo: .claude/skills/claude-27",
+      "repo: .claude/skills/claude-28",
+      "repo: skills/bootstrap",
+      "repo: skills/skill-00",
+      "repo: skills/skill-01",
+      "repo: skills/skill-02",
+      "repo: skills/skill-03",
+      "repo: skills/skill-04",
+      "repo: skills/skill-05",
+      "repo: skills/skill-06",
+      "repo: skills/skill-07",
+      "repo: skills/skill-08",
+      "repo: skills/skill-09",
+      "repo: skills/skill-10",
+      "repo: skills/skill-11",
+      "repo: skills/skill-12",
+      "repo: skills/skill-13",
+      "repo: skills/skill-14",
+      "repo: skills/skill-15"
+    ],
+    "runLog": [
+      "2026/11/11 21:18:03 orchestrator: run 2-1: skipping repo skill path skills/escape (symlink in base branch)",
+      "2026/11/11 21:18:03 orchestrator: run 2-1: skipping malformed repo skill .claude/skills/broken/SKILL.md: unterminated YAML front matter",
+      "2026/11/11 21:18:03 orchestrator: run 2-1: capped discovered repo skills at 50 (8 more SKILL.md candidate(s) left unlisted)",
+      "2026/11/11 21:18:03 orchestrator: run 2-1: omitted 4 repo skill(s) to stay within the 8192-byte skills index limit"
+    ],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "the prompt carries a <repo-skills> index"
+      },
+      {
+        "ok": true,
+        "what": "the index lists 46 skills (<= 50)"
+      },
+      {
+        "ok": true,
+        "what": "the index block is 8104 B (<= 8192)"
+      },
+      {
+        "ok": true,
+        "what": "the run log records the 50-skill cap (58 valid skills)"
+      },
+      {
+        "ok": true,
+        "what": "the symlink escaping the repository is rejected and logged"
+      },
+      {
+        "ok": true,
+        "what": "the escape is not in the index"
+      },
+      {
+        "ok": true,
+        "what": "the malformed SKILL.md is noted in the run log"
+      },
+      {
+        "ok": true,
+        "what": "the malformed skill is not in the index"
+      },
+      {
+        "ok": true,
+        "what": "claude-00's ~810-char description is clipped to 500 chars plus an ellipsis (501)"
+      },
+      {
+        "ok": true,
+        "what": "a SKILL.md without front matter is named after its directory"
+      },
+      {
+        "ok": true,
+        "what": "the index is framed as repository metadata"
+      },
+      {
+        "ok": true,
+        "what": "the prompt tells the agent 12 skills were left out of the index, and where to look"
+      }
+    ],
+    "unlistedNote": "12 more repository skill(s) are not listed above: the index keeps at most 50 skills and 8192 bytes. Look for */SKILL.md under .claude/skills/, .agents/skills/, .codex/skills/, .gemini/skills/, skills/ in the checkout"
+  },
+  {
+    "scenario": "bytes",
+    "task": "3",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 22278,
+    "indexBytes": 8062,
+    "names": [
+      "long-00",
+      "long-01",
+      "long-02",
+      "long-03",
+      "long-04",
+      "long-05",
+      "long-06",
+      "long-07",
+      "long-08",
+      "long-09",
+      "long-10",
+      "long-11",
+      "long-12",
+      "long-13",
+      "long-14",
+      "long-15",
+      "long-16",
+      "long-17",
+      "long-18",
+      "long-19"
+    ],
+    "sources": [
+      "repo: docs/long-skills/long-00",
+      "repo: docs/long-skills/long-01",
+      "repo: docs/long-skills/long-02",
+      "repo: docs/long-skills/long-03",
+      "repo: docs/long-skills/long-04",
+      "repo: docs/long-skills/long-05",
+      "repo: docs/long-skills/long-06",
+      "repo: docs/long-skills/long-07",
+      "repo: docs/long-skills/long-08",
+      "repo: docs/long-skills/long-09",
+      "repo: docs/long-skills/long-10",
+      "repo: docs/long-skills/long-11",
+      "repo: docs/long-skills/long-12",
+      "repo: docs/long-skills/long-13",
+      "repo: docs/long-skills/long-14",
+      "repo: docs/long-skills/long-15",
+      "repo: docs/long-skills/long-16",
+      "repo: docs/long-skills/long-17",
+      "repo: docs/long-skills/long-18",
+      "repo: docs/long-skills/long-19"
+    ],
+    "runLog": [
+      "2026/11/11 21:18:06 orchestrator: run 3-1: omitted 20 repo skill(s) to stay within the 8192-byte skills index limit"
+    ],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "a task's folders override replaces the defaults"
+      },
+      {
+        "ok": true,
+        "what": "40 long skills fit in 8062 B (<= 8192)"
+      },
+      {
+        "ok": true,
+        "what": "the byte cap is logged"
+      }
+    ]
+  },
+  {
+    "scenario": "evil",
+    "task": "4",
+    "attempt": 1,
+    "outcome": "parked",
+    "promptBytes": 18831,
+    "indexBytes": 4805,
+    "names": [
+      "bootstrap",
+      "skill-00",
+      "skill-01",
+      "skill-02",
+      "skill-03",
+      "skill-04",
+      "skill-05",
+      "skill-06",
+      "skill-07",
+      "skill-08",
+      "skill-09",
+      "skill-10",
+      "skill-11",
+      "skill-12",
+      "skill-13",
+      "skill-14",
+      "skill-15",
+      "skill-16",
+      "skill-17",
+      "skill-18",
+      "skill-19",
+      "skill-20",
+      "skill-21",
+      "skill-22",
+      "skill-23",
+      "skill-24",
+      "skill-25",
+      "skill-26",
+      "skill-27"
+    ],
+    "sources": [
+      "repo: skills/bootstrap",
+      "repo: skills/skill-00",
+      "repo: skills/skill-01",
+      "repo: skills/skill-02",
+      "repo: skills/skill-03",
+      "repo: skills/skill-04",
+      "repo: skills/skill-05",
+      "repo: skills/skill-06",
+      "repo: skills/skill-07",
+      "repo: skills/skill-08",
+      "repo: skills/skill-09",
+      "repo: skills/skill-10",
+      "repo: skills/skill-11",
+      "repo: skills/skill-12",
+      "repo: skills/skill-13",
+      "repo: skills/skill-14",
+      "repo: skills/skill-15",
+      "repo: skills/skill-16",
+      "repo: skills/skill-17",
+      "repo: skills/skill-18",
+      "repo: skills/skill-19",
+      "repo: skills/skill-20",
+      "repo: skills/skill-21",
+      "repo: skills/skill-22",
+      "repo: skills/skill-23",
+      "repo: skills/skill-24",
+      "repo: skills/skill-25",
+      "repo: skills/skill-26",
+      "repo: skills/skill-27"
+    ],
+    "runLog": [
+      "2026/11/11 21:18:08 orchestrator: run 4-1: skipping repo skill path skills/escape (symlink in base branch)"
+    ],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "attempt 1 does not list skills/evil (not yet planted)"
+      },
+      {
+        "ok": true,
+        "what": "attempt 1 pushed skills/evil/SKILL.md on its working branch grain/659d0423/task-4-skills-walkthrough-evil"
+      }
+    ],
+    "pushLog": "{\"jsonrpc\": \"2.0\", \"id\": 2, \"result\": {\"content\": [{\"text\": \"exit=0\\nstdout:\\nab89e41 plant evil skill\\ngrain/659d0423/task-4-skills-walkthrough-evil\\n\\nstderr:\\n\", \"type\": \"text\"}], \"isError\": false}}\n{\"jsonrpc\": \"2.0\", \"id\": 3, \"result\": {\"content\": [{\"text\": \"Parked. This task is queued again on the next cycle; the next run's prompt says this one was suspended, and why. This ends your run: stop here and take no further actions.\\n\\nresume_on: {}\", \"type\": \"text\"}], \"isError\": false}}\n",
+    "branch": "grain/659d0423/task-4-skills-walkthrough-evil"
+  },
+  {
+    "scenario": "evil",
+    "task": "4",
+    "attempt": 2,
+    "outcome": "failed",
+    "promptBytes": 9840,
+    "indexBytes": 4805,
+    "names": [
+      "bootstrap",
+      "skill-00",
+      "skill-01",
+      "skill-02",
+      "skill-03",
+      "skill-04",
+      "skill-05",
+      "skill-06",
+      "skill-07",
+      "skill-08",
+      "skill-09",
+      "skill-10",
+      "skill-11",
+      "skill-12",
+      "skill-13",
+      "skill-14",
+      "skill-15",
+      "skill-16",
+      "skill-17",
+      "skill-18",
+      "skill-19",
+      "skill-20",
+      "skill-21",
+      "skill-22",
+      "skill-23",
+      "skill-24",
+      "skill-25",
+      "skill-26",
+      "skill-27"
+    ],
+    "sources": [
+      "repo: skills/bootstrap",
+      "repo: skills/skill-00",
+      "repo: skills/skill-01",
+      "repo: skills/skill-02",
+      "repo: skills/skill-03",
+      "repo: skills/skill-04",
+      "repo: skills/skill-05",
+      "repo: skills/skill-06",
+      "repo: skills/skill-07",
+      "repo: skills/skill-08",
+      "repo: skills/skill-09",
+      "repo: skills/skill-10",
+      "repo: skills/skill-11",
+      "repo: skills/skill-12",
+      "repo: skills/skill-13",
+      "repo: skills/skill-14",
+      "repo: skills/skill-15",
+      "repo: skills/skill-16",
+      "repo: skills/skill-17",
+      "repo: skills/skill-18",
+      "repo: skills/skill-19",
+      "repo: skills/skill-20",
+      "repo: skills/skill-21",
+      "repo: skills/skill-22",
+      "repo: skills/skill-23",
+      "repo: skills/skill-24",
+      "repo: skills/skill-25",
+      "repo: skills/skill-26",
+      "repo: skills/skill-27"
+    ],
+    "runLog": [
+      "2026/11/11 21:18:09 orchestrator: run 4-2: skipping repo skill path skills/escape (symlink in base branch)"
+    ],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "attempt 2 (same branch) still does not list skills/evil: the index reads the base branch only"
+      }
+    ],
+    "attempt2CheckoutHasEvil": false
+  },
+  {
+    "scenario": "p1-deployment",
+    "task": "5",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 14368,
+    "indexBytes": 334,
+    "names": [
+      "from-deployment"
+    ],
+    "sources": [
+      "repo: layer/deployment/from-deployment"
+    ],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "deployment folders apply when nothing else is set"
+      }
+    ]
+  },
+  {
+    "scenario": "declared-sync",
+    "declaredSkills": {
+      "folders": [
+        "layer/declared"
+      ]
+    },
+    "checks": [
+      {
+        "ok": true,
+        "what": "repo settings report declaredSkills {'folders': ['layer/declared']}"
+      }
+    ]
+  },
+  {
+    "scenario": "p2-declared",
+    "task": "6",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 14397,
+    "indexBytes": 322,
+    "names": [
+      "from-declared"
+    ],
+    "sources": [
+      "repo: layer/declared/from-declared"
+    ],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": ".grain/settings.yml wins over the deployment"
+      }
+    ]
+  },
+  {
+    "scenario": "p3-repo",
+    "task": "7",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 14345,
+    "indexBytes": 298,
+    "names": [
+      "from-repo"
+    ],
+    "sources": [
+      "repo: layer/repo/from-repo"
+    ],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "the operator's repo setting wins over .grain/settings.yml"
+      }
+    ]
+  },
+  {
+    "scenario": "template",
+    "template": "template-1",
+    "checks": []
+  },
+  {
+    "scenario": "p4-template",
+    "task": "8",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 14397,
+    "indexBytes": 322,
+    "names": [
+      "from-template"
+    ],
+    "sources": [
+      "repo: layer/template/from-template"
+    ],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "a template's setting wins over the repo's"
+      }
+    ]
+  },
+  {
+    "scenario": "p5-task",
+    "task": "9",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 14334,
+    "indexBytes": 298,
+    "names": [
+      "from-task"
+    ],
+    "sources": [
+      "repo: layer/task/from-task"
+    ],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "the task's setting wins over the template's"
+      }
+    ]
+  },
+  {
+    "scenario": "p6-task-disabled",
+    "task": "10",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 13977,
+    "indexBytes": 0,
+    "names": [],
+    "sources": [],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "task enabled:false turns discovery off"
+      }
+    ]
+  },
+  {
+    "scenario": "p7-task-empty",
+    "task": "11",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 13971,
+    "indexBytes": 0,
+    "names": [],
+    "sources": [],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "task folders:[] turns discovery off"
+      }
+    ]
+  },
+  {
+    "scenario": "p8-tpl-plus-enabled",
+    "task": "12",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 14406,
+    "indexBytes": 323,
+    "names": [
+      "from-template"
+    ],
+    "sources": [
+      "repo: layer/template/from-template"
+    ],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "a task setting only enabled:true keeps the template's folders (field-wise, like every other layer)"
+      }
+    ],
+    "folders": [
+      "layer/template"
+    ]
+  },
+  {
+    "scenario": "p9-repo-disabled",
+    "task": "13",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 13994,
+    "indexBytes": 0,
+    "names": [],
+    "sources": [],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "repo enabled:false turns discovery off for the repo"
+      }
+    ]
+  },
+  {
+    "scenario": "p10-task-reenables",
+    "task": "14",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 14382,
+    "indexBytes": 299,
+    "names": [
+      "from-task"
+    ],
+    "sources": [
+      "repo: layer/task/from-task"
+    ],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "a task naming folders re-enables under a disabled repo"
+      }
+    ]
+  },
+  {
+    "scenario": "p11-repo-empty",
+    "task": "15",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 13995,
+    "indexBytes": 0,
+    "names": [],
+    "sources": [],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "repo folders:[] turns discovery off"
+      }
+    ]
+  },
+  {
+    "scenario": "p12-declared-disabled",
+    "task": "16",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 13984,
+    "indexBytes": 0,
+    "names": [],
+    "sources": [],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": ".grain/settings.yml enabled:false turns discovery off"
+      }
+    ]
+  },
+  {
+    "scenario": "p13-deployment-disabled",
+    "task": "17",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 13988,
+    "indexBytes": 0,
+    "names": [],
+    "sources": [],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "deployment enabled:false turns discovery off"
+      }
+    ]
+  },
+  {
+    "scenario": "p14-deployment-empty",
+    "task": "18",
+    "attempt": 1,
+    "outcome": "failed",
+    "promptBytes": 13982,
+    "indexBytes": 0,
+    "names": [],
+    "sources": [],
+    "runLog": [],
+    "checks": [
+      {
+        "ok": true,
+        "what": "the fake agent recorded the prompt"
+      },
+      {
+        "ok": true,
+        "what": "deployment folders:[] turns discovery off"
+      }
+    ]
+  }
+]
