@@ -387,7 +387,29 @@ describe("SessionsPageComponent", () => {
     expect(q(f, '[data-testid="apply-now-banner"]')).toBeNull();
   });
 
-  it("edits API-scope grants, model, and team visibility in the session settings drawer", async () => {
+  it("saves Reads all on the session, not the deployment's settings", async () => {
+    const api = new FakeApi();
+    const f = await render(api);
+    (
+      q(f, '[data-testid="session-settings-toggle"]') as HTMLButtonElement
+    ).click();
+    await f.whenStable();
+    const box = q(f, '[data-testid="session-reads-all"]') as HTMLInputElement;
+    box.checked = !box.checked;
+    box.dispatchEvent(new Event("change"));
+    await settle(f);
+    expect(
+      api.calls.find(
+        (c) =>
+          c.method === "PUT" &&
+          c.route === "PUT /api/console-sessions/{id}" &&
+          (c.body as { readsAll?: boolean })?.readsAll === box.checked,
+      ),
+    ).toBeTruthy();
+    expect(api.calls.some((c) => c.route === "POST /api/settings")).toBe(false);
+  });
+
+  it("edits API-scope grants and model in the session settings drawer, with no team field", async () => {
     const api = new FakeApi();
     const f = await render(api);
 
@@ -399,22 +421,9 @@ describe("SessionsPageComponent", () => {
     expect(drawer).toBeTruthy();
     expect(drawer.querySelectorAll("select")).toHaveLength(0);
 
-    // Save team visibility
-    const teamIn = q(
-      f,
-      '[data-testid="session-team-input"]',
-    ) as HTMLInputElement;
-    teamIn.value = "platform";
-    teamIn.dispatchEvent(new Event("input"));
-    (q(f, '[data-testid="session-team-save"]') as HTMLButtonElement).click();
-    await settle(f);
-    expect(
-      api.calls.find(
-        (c) =>
-          c.method === "PUT" &&
-          (c.body as { team?: string })?.team === "platform",
-      ),
-    ).toBeTruthy();
+    // No team: grain has none, so the drawer offers no team visibility.
+    expect(q(f, '[data-testid="session-team-input"]')).toBeNull();
+    expect(drawer.textContent).not.toMatch(/team/i);
 
     // Add API scope grant via <g-grants-picker>
     (
@@ -529,7 +538,7 @@ describe("SessionsPageComponent", () => {
     });
   });
 
-  it("starts a new session from the dialog with optional team", async () => {
+  it("starts a new session from the dialog, which asks for no team", async () => {
     const api = new FakeApi();
     const f = await render(api);
     (q(f, '[data-testid="new-session"]') as HTMLButtonElement).click();
@@ -540,15 +549,14 @@ describe("SessionsPageComponent", () => {
     const name = q(f, '[data-testid="new-session-name"]') as HTMLInputElement;
     name.value = "New one";
     name.dispatchEvent(new Event("input"));
-    const team = q(f, '[data-testid="new-session-team"]') as HTMLInputElement;
-    team.value = "sre";
-    team.dispatchEvent(new Event("input"));
+    expect(q(f, '[data-testid="new-session-team"]')).toBeNull();
+    expect(dialog.textContent).not.toMatch(/team/i);
     (q(f, '[data-testid="new-session-create"]') as HTMLButtonElement).click();
     await settle(f);
     expect(
       api.calls.find((c) => c.route === "POST /api/console-sessions"),
     ).toMatchObject({
-      body: { title: "New one", team: "sre", attachments: [] },
+      body: { title: "New one", attachments: [] },
     });
     expect(q(f, '[data-testid="new-session-dialog"]')).toBeNull();
   });
