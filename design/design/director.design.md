@@ -51,7 +51,7 @@ Turns operator goals, design documents, or triage findings into structured backl
 
 Maintains the deployment's declarative state in `grain/config` (`design/design/config-repo-settings.design.md`):
 
-- **Reading configuration vs. runtime state.** Inspects `grain/config` (`settings/*.yml`, `tables/*.json`, `memory/**`) in `/home/debian/grain-state` (`prepareDirectorState`) alongside live bootstrap and runtime settings (`/api/config`), never confusing exported configuration with task or run history in the controller database.
+- **Reading configuration vs. runtime state.** Inspects `grain/config` (`settings/*.yml`, `tables/*.json`, `memory/**`) in `/home/debian/grain-state` (`prepareDirectorStateWithReuse`) alongside live bootstrap and runtime settings (`/api/config`), never confusing exported configuration with task or run history in the controller database.
 - **Proposing validated config changes.** Authors updates to templates, schedules, suites, repo settings, standing instructions, `tables/api_scope_set.json`, and `settings/capabilities.yml` (`CatalogueKindDirector`), submitting them either as `grain/config` pull requests or inline via `propose_config_change`—which runs four-stage `staterepo` validation, pins `headSha`, and parks on an in-chat approval card.
 - **Grant cleanup.** Audits capability usage and detaches retired or over-broad capability grants across repositories, templates, schedules, and queued tasks so stale references neither block dispatch nor leak reach.
 
