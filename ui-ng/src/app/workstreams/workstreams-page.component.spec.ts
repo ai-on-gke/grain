@@ -489,19 +489,28 @@ describe("WorkstreamsPageComponent", () => {
     expect(row.querySelector(".mono")?.textContent).toContain("alpha, beta +3");
     expect(row.querySelector("g-status-icon")).not.toBeNull();
 
-    // Open heavy detail view: verify goal clamp, 4-item relationship cap, SVG clipPath, and >40 node auto-folding.
+    // Open heavy detail view: verify goal lives in inspector (never .ws-dhead) as a 1-line preview with Markdown toggle,
+    // 4-item relationship cap, SVG clipPath, and >40 node auto-folding.
     await router.navigateByUrl("/workstreams/task:700?node=700");
     await fixture.whenStable();
     fixture.detectChanges();
 
-    const goal = el.querySelector('[data-testid="ws-goal"]')!;
-    expect(goal.classList.contains("is-clamped")).toBe(true);
-    const goalToggle = el.querySelector<HTMLButtonElement>(
+    expect(el.querySelector(".ws-dhead [data-testid='ws-goal']")).toBeNull();
+    const inspector = el.querySelector('[data-testid="ws-inspector"]')!;
+    const goal = inspector.querySelector('[data-testid="ws-goal"]')!;
+    expect(goal.classList.contains("ws-goal-preview")).toBe(true);
+    const goalToggle = inspector.querySelector<HTMLButtonElement>(
       '[data-testid="ws-goal-toggle"]',
     )!;
+    expect(goalToggle.getAttribute("aria-expanded")).toBe("false");
     goalToggle.click();
     fixture.detectChanges();
-    expect(goal.classList.contains("is-clamped")).toBe(false);
+    expect(goalToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      inspector
+        .querySelector('[data-testid="ws-goal"]')!
+        .classList.contains("ws-goal-panel"),
+    ).toBe(true);
 
     // Initially folds the 38 completed leaf nodes.
     expect(

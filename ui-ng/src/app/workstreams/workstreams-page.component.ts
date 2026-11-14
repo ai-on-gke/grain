@@ -181,7 +181,7 @@ function decodeFragmentKey(frag: string | null): string | null {
           (openInbox)="goInbox($event)"
           (selectStream)="openStream($event.key, $event.nodeId)"
         />
-      } @else if (!store.loaded()) {
+      } @else if (!store.loaded() || store.closedLoading()) {
         <section class="ws-page" data-testid="ws-loading">
           <p class="empty-state">Loading workstream {{ k }}…</p>
         </section>
@@ -365,7 +365,10 @@ function decodeFragmentKey(frag: string | null): string | null {
           </div>
         }
 
-        @if (!store.loaded()) {
+        @if (
+          !store.loaded() ||
+          (filtered().visible.length === 0 && store.closedLoading())
+        ) {
           <p class="empty-state" data-testid="ws-loading">
             Reading workstreams…
           </p>
@@ -402,7 +405,11 @@ function decodeFragmentKey(frag: string | null): string | null {
           <div class="ws-cards" data-testid="ws-cards">
             @for (s of filtered().visible; track s.key) {
               @let th = thumbOf(s);
-              <article class="ws-card">
+              <article
+                class="ws-card"
+                (pointerenter)="prefetchRoot(s)"
+                (focusin)="prefetchRoot(s)"
+              >
                 <div class="ws-ctop">
                   <span [class]="markClass(s, true)" [gTip]="markTip(s)">{{
                     markText(s)
@@ -557,7 +564,11 @@ function decodeFragmentKey(frag: string | null): string | null {
                 <span class="muted tabular">{{ grp.streams.length }}</span>
               </div>
               @for (s of grp.streams; track s.key) {
-                <div class="ws-row">
+                <div
+                  class="ws-row"
+                  (pointerenter)="prefetchRoot(s)"
+                  (focusin)="prefetchRoot(s)"
+                >
                   <span [class]="markClass(s, false)" [gTip]="markTip(s)">{{
                     markText(s)
                   }}</span>
@@ -960,6 +971,10 @@ export class WorkstreamsPageComponent implements OnInit, OnDestroy {
       ...(this.fragment() ? { preserveFragment: true } : {}),
       replaceUrl: true,
     });
+  }
+
+  protected prefetchRoot(s: Workstream): void {
+    void this.store.ensureRootDetail(s.rootId);
   }
 
   protected openStream(key: string, nodeId?: string): void {

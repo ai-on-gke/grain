@@ -33,6 +33,7 @@ import { AccessService } from "../services/access.service";
 import { DirectorContextService } from "../director/director-context.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { MarkdownDirective } from "../shared/code-highlight";
 import {
   ConfirmDialogComponent,
   type ConfirmRequest,
@@ -116,13 +117,18 @@ const MODES: { id: LayoutMode; label: string }[] = [
   selector: "g-workstream-detail",
   imports: [
     TipDirective,
+    MarkdownDirective,
     ConfirmDialogComponent,
     StatusIconComponent,
     TaskDetailComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["./workstream-detail.css"],
+  styleUrls: [
+    "./workstream-detail.css",
+    "../shared/conversation.css",
+    "../shared/code-highlight.css",
+  ],
   host: {
     "(document:keydown)": "onKey($event)",
     "(window:resize)": "onWindowResize()",
@@ -242,27 +248,6 @@ const MODES: { id: LayoutMode; label: string }[] = [
             >
           }
         </div>
-
-        @if (s.goal) {
-          <p
-            class="ws-goal"
-            [class.is-clamped]="isLongGoal(s.goal) && !goalExpanded()"
-            data-testid="ws-goal"
-          >
-            {{ s.goal }}
-          </p>
-          @if (isLongGoal(s.goal)) {
-            <button
-              type="button"
-              class="btn-text ws-goal-toggle"
-              data-testid="ws-goal-toggle"
-              [attr.aria-expanded]="goalExpanded()"
-              (click)="goalExpanded.set(!goalExpanded())"
-            >
-              {{ goalExpanded() ? "Show less" : "Show more" }}
-            </button>
-          }
-        }
 
         <div class="ws-dprog">
           <div>
@@ -734,7 +719,39 @@ const MODES: { id: LayoutMode; label: string }[] = [
             aria-label="In this stream"
             data-testid="ws-in-stream"
           >
-            <h3>In this stream</h3>
+            <div class="ws-rel-head">
+              <h3>In this stream</h3>
+              @if (s.goal && s.goal.trim()) {
+                <button
+                  type="button"
+                  class="btn-text ws-goal-toggle"
+                  data-testid="ws-goal-toggle"
+                  aria-controls="ws-goal-panel"
+                  [attr.aria-expanded]="goalExpanded()"
+                  (click)="goalExpanded.set(!goalExpanded())"
+                >
+                  {{ goalExpanded() ? "Hide goal" : "Workstream goal" }}
+                </button>
+              }
+            </div>
+            @if (s.goal && s.goal.trim()) {
+              @if (goalExpanded()) {
+                <div
+                  id="ws-goal-panel"
+                  class="msg-body ws-goal-panel"
+                  data-testid="ws-goal"
+                  [gMarkdown]="s.goal"
+                ></div>
+              } @else {
+                <p
+                  id="ws-goal-panel"
+                  class="ws-goal-preview"
+                  data-testid="ws-goal"
+                >
+                  {{ goalPreview(s.goal) }}
+                </p>
+              }
+            }
             @let rel = rels();
             @if (rel.filedBy; as fb) {
               <div class="ws-rel-group">
@@ -1251,8 +1268,21 @@ export class WorkstreamDetailComponent implements OnDestroy {
     return t.length > max ? `${t.slice(0, max - 1)}…` : t;
   }
 
-  protected isLongGoal(goal: string): boolean {
-    return goal.length > 220 || goal.split("\n").length > 3;
+  protected goalPreview(goal: string): string {
+    const plain = goal
+      .replace(/\r\n?/g, "\n")
+      .replace(/```[^\n]*\n?/g, " ")
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/`([^`]*)`/g, "$1")
+      .replace(/^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+|(?:[-*_]){3,}\s*$)/gm, "")
+      .replace(
+        /\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|\*([^*]+)\*/g,
+        "$1$2$3$4",
+      )
+      .replace(/\s+/g, " ")
+      .trim();
+    return plain || goal.trim();
   }
 
   protected reposSummary(repos: readonly string[]): string {

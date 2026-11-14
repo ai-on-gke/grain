@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { TestBed } from "@angular/core/testing";
+import { vi } from "vitest";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { LocalScriptApproval, Notification, Task } from "../api/models";
@@ -304,9 +305,10 @@ describe("InboxStore", () => {
     expect(api.diffCalls).toBe(0);
 
     store.retainPage();
-    await new Promise((r) => setTimeout(r, 120));
-    expect(fullCalls).toEqual(["200"]);
-    expect(summaryCalls.length).toBe(9);
+    await vi.waitFor(() => {
+      expect(fullCalls).toEqual(["200"]);
+      expect(summaryCalls.length).toBe(9);
+    });
     expect(peak).toBeLessThanOrEqual(4);
     expect(api.diffCalls).toBe(1);
 
