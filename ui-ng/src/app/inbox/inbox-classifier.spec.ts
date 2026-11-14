@@ -156,36 +156,24 @@ describe("inbox classifier", () => {
     ).toBeNull();
   });
 
-  it("offers a stuck task the control its sub-case names, and none where it names none", () => {
-    const stuck = (state: string, control?: string) =>
-      classifyTask(
-        task({
-          id: "22",
-          state,
-          stall: "this has stood here for more than 72h",
-          reason: { reason: `${state}/x`, class: "driven", control },
-        }),
-      );
-    const only = (e: ReturnType<typeof classifyTask>) =>
-      e?.actions.map((a) => [a.label, a.route, !!a.confirm]);
-    expect(stuck("queued", "Run now")?.groupId).toBe("stalled");
-    expect(only(stuck("queued", "Run now"))).toEqual([
-      ["Run now", "POST /api/tasks/{id}/run-now", false],
-    ]);
-    expect(only(stuck("running", "Cancel"))).toEqual([
-      ["Cancel", "POST /api/tasks/{id}/close", true],
-    ]);
-    // Its dialog must not offer a "Cancel" beside the Cancel it confirms.
-    expect(stuck("running", "Cancel")?.actions[0].dismiss).toBe(
-      "Keep it running",
+  it("keeps a submittable CL's Submit out of Submit all and says it submits", () => {
+    const e = classifyTask(
+      task({
+        id: "31",
+        state: "awaiting_submit",
+        clSubmit: { canSubmit: true },
+      }),
     );
-    expect(only(stuck("deferred", "Undefer"))).toEqual([
-      ["Undefer", "POST /api/tasks/{id}/undefer", false],
-    ]);
-    expect(only(stuck("completed", "Retry merge"))).toEqual([
-      ["Retry merge", "POST /api/tasks/{id}/retry-merge", false],
-    ]);
-    expect(only(stuck("running"))).toEqual([]);
+    expect(e?.groupId).toBe("submit");
+    const submit = e?.actions.find((a) => a.label === "Submit");
+    expect(submit).toBeTruthy();
+    expect(submit?.bulk).toBeFalsy();
+    expect(submit?.blocked).toBeUndefined();
+    expect(e?.summary).toContain("Submit this CL now");
+    expect(e?.rationale).not.toContain("approval before merging");
+    // A pull request's Submit, a recorded approval, still joins it.
+    const pr = classifyTask(task({ id: "32", state: "awaiting_submit" }));
+    expect(pr?.actions.find((a) => a.label === "Submit")?.bulk).toBeTruthy();
   });
 
   it("reads a pending release, its soak, breaking changes and a failed dispatch", () => {

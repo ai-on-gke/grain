@@ -141,16 +141,6 @@ export class TasksStore implements OnDestroy {
       this.started = true;
       this.feed.start(false);
       this.feed.acquireFast();
-      // A read that failed before this page started (the shell's own
-      // feed) is not seen by the effect above, which skips it while
-      // stopped and is not woken by the same error again: say it now, or
-      // a cold failure reads as an empty list.
-      const err = this.feed.loadError();
-      if (err) {
-        this.loadError.set(
-          `The task list could not be read: ${err}. This page tries again on its own.`,
-        );
-      }
     }
     // The shell's rail reads the feed before this page starts, so a cold
     // failure may already stand -- and a retry failing the same way sets

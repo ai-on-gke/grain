@@ -15,22 +15,19 @@
 import { test, expect } from "./fixtures.js";
 
 // What the 2026-11-13 task-intake walkthrough found missing or wrong at
-// /next/ (docs/test-runs/2026-11-13-task-intake-inbox-lifecycle.md),
+// /next/ (docs/test-runs/2026-11-13-task-intake-inbox-lifecycle-task-4726.md),
 // against a real `grain demo`:
 //
 // - a changelist row's Submit follows the change system's own answer
-//   (clSubmit), not merge gates a CL never has;
-// - a stuck row offers the control its sub-case names, and Cancel asks
-//   first with a dismiss button that is not a second "Cancel";
-// - a dependency chip says on hover what it waits for and in what state;
-// - a cold GET /api/tasks failure on /next/tasks says so rather than
-//   showing an empty list.
+//   (clSubmit), not merge gates a CL never has, and reads as a CL
+//   submitted there and then rather than a pull request's approval;
+// - a dependency chip says on hover what it waits for and in what state.
 //
-// The seeded rows are only looked at, and the one dialog opened here is
-// dismissed, so the demo store is left as the other specs expect it.
-
-// The stuck rows are seeded only with -stalled-tasks.
-test.use({ demoArgs: ["-stalled-tasks"] });
+// (Stuck-row controls and a cold GET /api/tasks failure, which this
+// walkthrough also found, are covered by next-inbox-intake-regressions.)
+//
+// The seeded rows are only looked at, so the demo store is left as the
+// other specs expect it.
 
 const row = (page, text) =>
   page.getByTestId("queue-row").filter({ hasText: text });
@@ -56,10 +53,11 @@ test("CL rows offer Submit as the change system says, with its reasons", async (
   await page.goto("inbox");
   const inspector = page.getByTestId("next-inbox-inspector");
 
-  // Presubmit passed and LGTM'd: submittable.
-  await row(page, "Move the depot retry budget behind a flag")
-    .locator(".row-main")
-    .click();
+  // Presubmit passed and LGTM'd: submittable, and said to submit now.
+  const ready = row(page, "Move the depot retry budget behind a flag");
+  await expect(ready).toContainText("Submit this CL now");
+  await expect(ready).not.toContainText("Approve the pull request");
+  await ready.locator(".row-main").click();
   await expect(inspector.getByTestId("action-submit")).toBeEnabled();
 
   // Failed presubmit and changes requested: off, saying why.
@@ -74,36 +72,6 @@ test("CL rows offer Submit as the change system says, with its reasons", async (
   await expect(
     row(page, "Sync the depot retry budget with head"),
   ).toContainText("Not submittable yet: behind head: sync it.");
-});
-
-test("a stuck row offers its sub-case's control, and Cancel asks first", async ({
-  page,
-}) => {
-  await page.goto("inbox");
-  const inspector = page.getByTestId("next-inbox-inspector");
-
-  await row(page, "Backfill the audit log retention job")
-    .locator(".row-main")
-    .click();
-  await expect(inspector.getByTestId("action-run-now")).toBeVisible();
-
-  await row(page, "Rotate the staging signing keys")
-    .locator(".row-main")
-    .click();
-  await expect(inspector.getByTestId("action-undefer")).toBeVisible();
-
-  await row(page, "Regenerate the protobuf bindings")
-    .locator(".row-main")
-    .click();
-  await inspector.getByTestId("action-cancel").click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("The run in flight is stopped");
-  await expect(dialog.getByTestId("confirm-cancel")).toHaveText(
-    "Keep it running",
-  );
-  await dialog.getByTestId("confirm-cancel").click();
-  await expect(dialog).toHaveCount(0);
-  await expect(row(page, "Regenerate the protobuf bindings")).toBeVisible();
 });
 
 test("a dependency chip names the task it waits for and its state", async ({
@@ -139,23 +107,4 @@ test("a dependency chip names the task it waits for and its state", async ({
       await api(demoServer, accessCode, "POST", `/api/tasks/${t.id}/close`);
     }
   }
-});
-
-test("a cold task-list failure on /next/tasks says so, not an empty list", async ({
-  page,
-}) => {
-  await page.route(/\/api\/tasks(\?.*)?$/, (route) =>
-    route.request().method() === "GET"
-      ? route.fulfill({
-          status: 500,
-          contentType: "application/json",
-          body: '{"error":"store unavailable"}',
-        })
-      : route.continue(),
-  );
-  await page.goto("tasks");
-  await expect(page.getByRole("alert")).toContainText(
-    "The task list could not be read: store unavailable",
-  );
-  await expect(page.getByText("Nothing in this tab")).toHaveCount(0);
 });

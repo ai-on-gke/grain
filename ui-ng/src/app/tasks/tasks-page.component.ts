@@ -946,11 +946,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
               />
             } @else if (store.loaded()) {
               <div class="empty-state" data-testid="tasks-pane-empty">
-                @if (store.loadError() && !store.loaded()) {
-                  <p>No tasks to show until the list can be read</p>
-                } @else {
-                  <p>Nothing in this tab — switch tabs or create a task</p>
-                }
+                <p>Nothing in this tab — switch tabs or create a task</p>
               </div>
             } @else if (store.loadError()) {
               <div class="empty-state" data-testid="tasks-pane-unread">

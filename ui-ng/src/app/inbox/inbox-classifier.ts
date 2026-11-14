@@ -49,9 +49,6 @@ export interface InboxAction {
   variant: "primary" | "tonal" | "text";
   // confirm is asked, in a dialog, before the call is made.
   confirm?: string;
-  // dismiss labels the dialog's dismiss button where "Cancel" would read
-  // as the action itself.
-  dismiss?: string;
   // destructive marks the dialog's accept button as a warning.
   destructive?: boolean;
   // bulk is the batch bar's label when several selected rows offer it.
@@ -494,55 +491,6 @@ export function releaseConfirm(
 
 // --- entries ----------------------------------------------------------
 
-// stallControl is the button a stuck task's sub-case names
-// (t.reason.control, pkg/model's TaskReason), pressed from its row as
-// the task page's own button of the same name presses it -- the classic
-// Inbox's reasonControl (ui/src/state.js). A sub-case that names no
-// control a row can press gets none.
-function stallControl(t: Task): InboxAction | null {
-  switch (t.reason?.control) {
-    case "Run now":
-      return taskAction(
-        t,
-        "run-now",
-        "Run now",
-        "POST /api/tasks/{id}/run-now",
-        "primary",
-      );
-    case "Cancel":
-      return taskAction(
-        t,
-        "cancel",
-        "Cancel",
-        "POST /api/tasks/{id}/close",
-        "tonal",
-        {
-          confirm: `Cancel #${t.id}? The run in flight is stopped and the task is closed; it can be reopened later.`,
-          dismiss: "Keep it running",
-          destructive: true,
-        },
-      );
-    case "Undefer":
-      return taskAction(
-        t,
-        "undefer",
-        "Undefer",
-        "POST /api/tasks/{id}/undefer",
-        "primary",
-      );
-    case "Retry merge":
-      return taskAction(
-        t,
-        "retry-merge",
-        "Retry merge",
-        "POST /api/tasks/{id}/retry-merge",
-        "primary",
-      );
-    default:
-      return null;
-  }
-}
-
 function taskAction(
   t: Task,
   id: string,
@@ -718,6 +666,10 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
   }
   if (awaitsHumanSubmit(t)) {
     const review = !!t.reviewQuestions;
+    // A changelist's Submit submits it through the change system there
+    // and then, not a recorded approval, so it is pressed one row at a
+    // time and never joins "Submit all" -- as the classic Inbox keeps it.
+    const cl = !!t.clSubmit;
     const blocked = submitBlock(t, listOnly);
     const e = taskEntry(
       t,
@@ -729,10 +681,15 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     e.pillTone = review ? "blast" : red ? "error" : "healthy";
     e.summary = review
       ? "The review left questions only you can settle."
-      : blocked || "Approve the pull request; it merges once its gates pass.";
+      : blocked ||
+        (cl
+          ? "Submit this CL now: its review, presubmit and grain's reviews have all cleared."
+          : "Approve the pull request; it merges once its gates pass.");
     e.rationale = review
       ? "A fresh review clears the gate once your decision is carried out."
-      : "This repository waits for a person's approval before merging.";
+      : cl
+        ? "Submitting lands the change at once; it is not a recorded approval."
+        : "This repository waits for a person's approval before merging.";
     if (!t.humanApprovedBy) {
       e.actions.push(
         taskAction(
@@ -742,7 +699,7 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
           "POST /api/tasks/{id}/submit",
           review ? "tonal" : "primary",
           {
-            bulk: !review,
+            bulk: !review && !cl,
             ...(blocked ? { blocked } : {}),
           },
         ),

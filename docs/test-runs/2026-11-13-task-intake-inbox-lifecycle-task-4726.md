@@ -253,3 +253,39 @@ dialog and the CL row. None were committed. With no Gemini key and a file
 reader that shows PNGs as bytes, I could not look at them. The layout
 evidence is the bounding-box check in step 1.10, plus
 `next-full-system.spec.js` and the axe tests.
+
+## Merge with `main` and review follow-up (2026-11-14)
+
+Before this branch could merge, `main` landed task 5384's walkthrough of
+the same day under this report's original name,
+`2026-11-13-task-intake-inbox-lifecycle.md`. That walk fixed two of the
+same bugs on its own. Main's file keeps that name, and this report moved
+to the `-task-4726` suffix the 2026-11-08 reports already use.
+
+- **Bug 2 (stuck rows):** main's `stallControl` is kept and this branch's
+  copy is dropped. Main's version also reads the merge queue's own
+  sub-case, and it labels the accept button "Cancel task" rather than
+  renaming the dismiss button, so the `dismiss` field this branch added
+  to `ConfirmRequest` is gone too. `next-inbox-intake-regressions.spec.js`
+  on main covers this end to end, so this branch's e2e case was removed.
+- **Bug 3 (cold task-list failure):** main's `TasksStore.start()` already
+  reports a failure that stood before the page started. This branch's
+  matching store change and its pane wording were dropped. After the
+  merge, the pane wording sat inside a branch where it could never show.
+  The `tasks.store.spec.ts` unit test is kept and passes against main's
+  fix. The e2e case is dropped in favour of main's.
+- **Review 5375's open question (`gates.ts`):** once `submitBlock` let a
+  submittable CL through, its Inbox Submit joined the group's "Submit
+  all". The row also said "Approve the pull request; it merges once its
+  gates pass". For a CL, `POST /api/tasks/{id}/submit` submits through
+  the change system straight away, so the classic Inbox never batches
+  it. `classifyTask` now leaves a CL's Submit out of bulk actions and
+  gives it CL wording: "Submit this CL now: its review, presubmit and
+  grain's reviews have all cleared." It is covered by
+  `inbox-classifier.spec.ts` ("keeps a submittable CL's Submit out of
+  Submit all") and the CL case in `next-intake-walkthrough.spec.js`.
+- **Re-run after the merge:** `npx vitest run` in `ui-ng` passed (50 files,
+  456 tests), as did `eslint` and `prettier --check`. Playwright
+  (`--project=desktop`) passed `next-intake-walkthrough.spec.js`,
+  `next-inbox-intake-regressions.spec.js` and `next-full-system.spec.js`
+  over `grain demo`.

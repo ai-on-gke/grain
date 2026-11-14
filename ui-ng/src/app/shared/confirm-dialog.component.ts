@@ -33,9 +33,6 @@ export interface ConfirmRequest {
   title: string;
   message: string;
   accept: string;
-  // The dismiss button's label, "Cancel" unless the accept button is
-  // itself a Cancel (a stuck run's sub-case control).
-  dismiss?: string;
   destructive: boolean;
   // For a batch: the repositories and owners it touches, counted when
   // the button was pressed.
@@ -120,7 +117,7 @@ export function bypassConfirm(
             data-testid="confirm-cancel"
             (click)="close(false)"
           >
-            {{ request().dismiss || "Cancel" }}
+            Cancel
           </button>
           <button
             #acceptBtn
