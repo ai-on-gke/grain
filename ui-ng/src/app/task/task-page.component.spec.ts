@@ -22,7 +22,11 @@ import { CreateTaskService } from "../create/create-task.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { TaskPageComponent, backFrom, duration } from "./task-page.component";
-import { TaskStore } from "./task.store";
+import {
+  DEEP_LINK_HEAD_QUERY,
+  TaskStore,
+  parseCommentFragment,
+} from "./task.store";
 
 type Call = {
   method: string;
@@ -1274,5 +1278,169 @@ describe("duration", () => {
     );
     expect(navSpy).not.toHaveBeenCalled();
     fakeModal.remove();
+  });
+});
+
+describe("#comment=<id> deep links", () => {
+  let opened = false;
+  afterEach(() => {
+    if (opened) TestBed.inject(TaskStore).close();
+    opened = false;
+    TestBed.resetTestingModule();
+  });
+
+  // A 1,200-comment thread (ids 1..1200) served 500 at a time.
+  function threadApi(): { api: FakeApi; heads: string[]; pages: string[] } {
+    const all = Array.from({ length: 1200 }, (_, i) => ({
+      id: i + 1,
+      author: "agent",
+      authorKind: "agent" as const,
+      body: `comment ${i + 1}`,
+    }));
+    const api = new FakeApi();
+    const heads: string[] = [];
+    const pages: string[] = [];
+    api.getIfChanged = ((_r: string, _p: unknown, query?: string) => {
+      heads.push(query ?? "");
+      const limit = Number(
+        new URLSearchParams(query ?? "").get("comments_limit") ?? "100",
+      );
+      const slice = all.slice(-limit);
+      return Promise.resolve({
+        body: {
+          ...structuredClone(api.detail),
+          comments: slice,
+          olderComments: all.length - slice.length,
+        },
+        changed: true,
+      });
+    }) as unknown as FakeApi["getIfChanged"];
+    const get = api.get;
+    api.get = ((route: string, params?: { id?: string }, query?: string) => {
+      if (
+        route === "GET /api/tasks/{id}" &&
+        query?.includes("comments_before=")
+      ) {
+        pages.push(query);
+        const q = new URLSearchParams(query);
+        const before = Number(q.get("comments_before"));
+        const limit = Number(q.get("comments_limit"));
+        const idx = all.findIndex((c) => c.id === before);
+        const start = Math.max(0, idx - limit);
+        return Promise.resolve({
+          comments: all.slice(start, idx),
+          olderComments: start,
+        });
+      }
+      return get(route, params, query);
+    }) as FakeApi["get"];
+    return { api, heads, pages };
+  }
+
+  it("parses only #comment=<id> fragments", () => {
+    expect(parseCommentFragment("")).toEqual({ kind: "none" });
+    expect(parseCommentFragment("#task:7")).toEqual({ kind: "none" });
+    expect(parseCommentFragment("#comment=0")).toEqual({
+      kind: "comment",
+      id: 0,
+    });
+    expect(parseCommentFragment("comment=42")).toEqual({
+      kind: "comment",
+      id: 42,
+    });
+    expect(parseCommentFragment("#comment=bad")).toEqual({
+      kind: "invalid",
+      raw: "#comment=bad",
+    });
+  });
+
+  it("cold-loads a full page, pages back 500 at a time to the linked comment, and commits once", async () => {
+    const { api, heads, pages } = threadApi();
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const store = TestBed.inject(TaskStore);
+    opened = true;
+    const commits: number[] = [];
+    store.open("7", 10);
+    // Overlapping reads (the poll, an event) join the deep-link read.
+    const again = store.refresh();
+    await vi.waitFor(() => {
+      const n = store.detail()?.comments?.length ?? 0;
+      if (n && commits.at(-1) !== n) commits.push(n);
+      expect(n).toBe(1200);
+    });
+    await again;
+    expect(heads).toEqual([DEEP_LINK_HEAD_QUERY]);
+    expect(pages).toEqual([
+      "comments_limit=500&comments_before=701&attempts_limit=1",
+      "comments_limit=500&comments_before=201&attempts_limit=1",
+    ]);
+    expect(commits).toEqual([1200]);
+
+    // The next 100-comment poll keeps every comment shown.
+    await store.refresh();
+    expect(store.detail()?.comments?.length).toBe(1200);
+  });
+
+  it("pages an already shown thread back to a comment named by a later link", async () => {
+    const { api, pages } = threadApi();
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    const store = TestBed.inject(TaskStore);
+    opened = true;
+    store.open("7");
+    await store.refresh();
+    expect(store.detail()?.comments?.length).toBe(100);
+    expect(await store.loadOlderCommentsThrough(50)).toBe(true);
+    expect(pages).toEqual([
+      "comments_limit=500&comments_before=1101&attempts_limit=1",
+      "comments_limit=500&comments_before=601&attempts_limit=1",
+      "comments_limit=500&comments_before=101&attempts_limit=1",
+    ]);
+    expect(store.detail()?.comments?.[0].id).toBe(1);
+    expect(await store.loadOlderCommentsThrough(99999)).toBe(false);
+  });
+
+  it("switches the task page to Conversation for a #comment= link and names a bad one", async () => {
+    window.history.replaceState(null, "", "/task/7#comment=1");
+    try {
+      const f = await render(new FakeApi(), "runs");
+      opened = true;
+      await settle(f);
+      expect(
+        q(f, '[data-testid="task-tab-conversation"]')!.getAttribute(
+          "aria-current",
+        ),
+      ).toBe("page");
+      await vi.waitFor(() => {
+        f.detectChanges();
+        expect(
+          q(f, '[data-comment-id="1"]')!.classList.contains(
+            "comment-highlight",
+          ),
+        ).toBe(true);
+      });
+      const snacks = TestBed.inject(SnackbarService);
+      window.history.replaceState(null, "", "/task/7#comment=bad");
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      await settle(f);
+      expect(snacks.current()?.message).toContain("does not name a comment");
+      window.history.replaceState(null, "", "/task/7#comment=99999");
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      await settle(f);
+      expect(snacks.current()?.message).toContain(
+        "Comment 99999 is not in this task's conversation.",
+      );
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
   });
 });

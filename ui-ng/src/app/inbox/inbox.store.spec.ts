@@ -416,4 +416,35 @@ describe("InboxStore", () => {
     expect(store.actionError()).toContain("No permission");
     expect(postCalls).toEqual([]);
   });
+
+  it("settles /api/config before deciding on host-script approvals on a cold load, so a repo-scoped reader never asks for them", async () => {
+    localStorage.clear();
+    let localScriptCalls = 0;
+    const api = new FakeApi();
+    api.localScriptApprovals = () => {
+      localScriptCalls++;
+      return Promise.reject(new Error("403 Forbidden"));
+    };
+    api.config = () =>
+      Promise.resolve({
+        access: {
+          role: "viewer",
+          roles: ["viewer"],
+          full: false,
+          scopes: ["tasks:read"],
+          repoLimits: { "tasks:read": ["acme/widgets"] },
+        },
+        version: "v1",
+      } as unknown as { access: null; version: string });
+    TestBed.configureTestingModule({
+      providers: [{ provide: GrainApi, useValue: api }],
+    });
+    const access = TestBed.inject(AccessService);
+    expect(access.configLoaded()).toBe(false);
+    const store = TestBed.inject(InboxStore);
+    await store.refresh();
+    expect(access.configLoaded()).toBe(true);
+    expect(localScriptCalls).toBe(0);
+    expect(store.loadError()).toBeNull();
+  });
 });

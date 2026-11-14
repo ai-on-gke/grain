@@ -40,6 +40,34 @@
   border-style: dashed;
 }
 
+/* A #comment=<id> link lands on its comment: the thread scrolls it to the
+   middle and tints it with the primary container for a few seconds, so the
+   eye finds it in a long thread; focus shows the usual ring. */
+.msg.comment-highlight {
+  background: var(--md-sys-color-primary-container);
+  border-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary-container);
+  transition:
+    background-color 600ms ease,
+    border-color 600ms ease;
+}
+
+.msg.comment-highlight .msg-meta {
+  color: var(--md-sys-color-on-primary-container);
+}
+
+.msg:focus-visible,
+.msg.comment-highlight:focus {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg.comment-highlight {
+    transition: none;
+  }
+}
+
 .msg-meta {
   display: flex;
   align-items: center;
