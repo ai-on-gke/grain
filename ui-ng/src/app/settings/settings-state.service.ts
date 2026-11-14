@@ -167,6 +167,37 @@ export class SettingsStateService {
     return fallback;
   }
 
+  // Many numeric settings store 0 for "grain's default" and report that
+  // default beside them as `<key>Default` (sandboxCpus/sandboxCpusDefault,
+  // ciCacheMb/ciCacheMbDefault, ...). Showing the stored 0 reads as "zero
+  // vCPUs"; the box shows blank with the default as its placeholder
+  // instead, and a cleared box saves 0 again (back to the default).
+  defaultedNumber(key: string): string {
+    const v = Number(this.val<unknown>(key, 0));
+    return Number.isFinite(v) && v !== 0 ? String(v) : "";
+  }
+
+  // defaultHint is `<key>Default` as text for a placeholder, or `fallback`
+  // when the server does not report one.
+  defaultHint(key: string, fallback = ""): string {
+    const d = this.settings()[`${key}Default`];
+    return d === undefined || d === null || d === "" ? fallback : String(d);
+  }
+
+  // setNumber records a number box's text: blank is `blank` (0, the
+  // server's "default", unless the setting refuses 0 and wants grain's
+  // default spelled out), anything else its numeric value.
+  //
+  // A setting whose blank is a non-zero default (Max worker agents,
+  // Max merges per repo branch) binds `(input)` with deferBlank, so the
+  // box is not refilled under the cursor while somebody retypes it, and
+  // `(change)` without it, which fills the default in once they leave.
+  setNumber(key: string, raw: string, blank = 0, deferBlank = false): void {
+    const t = String(raw ?? "").trim();
+    if (t === "" && deferBlank) return;
+    this.setField(key, t === "" ? blank : Number(t));
+  }
+
   deployVal<T>(key: string, fallback: T): T {
     const d = this.deployDraft();
     if (key in d) return (d[key] as T) ?? fallback;

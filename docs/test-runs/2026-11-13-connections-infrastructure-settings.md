@@ -1,308 +1,288 @@
-# Connections & infrastructure settings walkthrough — 2026-11-13 (task 4731)
+# Connections & infrastructure settings walkthrough — 2026-11-13
 
-- **Date:** 2026-11-13, 02:55–03:50 UTC, one run.
-- **Task:** task 4731, branch
-  `grain/098073e4/task-4731-walk-through-settings-git`, base `main`.
-- **Commit tested:** `4ae6438f` ("Merge pull request #1435"), binary
-  `v0.0.0-20261113022244-4ae6438fdcd4`. The `/next/` fixes below were
-  checked again in the browser on a rebuild of that commit with them applied
-  (`/var/tmp/grain-fixed`, demo on a fresh store).
-- **Focus:** the 2026-11-08, 11-09 and 11-11 reports walk this area in depth
-  on classic Settings. This run walked every section in scope again on
-  current `main`, aimed its extra time at what those runs left uncovered
-  (role gating, Hub states other than `connected`, host placement with a
-  host agent beside the daemon, the connection proxy), and walked the same
-  sections in the Angular UI under `/next/settings/…`, which is now the UI
-  new work goes into.
-- **Environment:**
-  - Debian sandbox, `linux/amd64`; Go 1.26.10; Node.js v20.19.0.
-  - Playwright from `ui/package-lock.json`, headless Chromium
-    (`PLAYWRIGHT_BROWSERS_PATH=/var/cache/playwright`), timezone UTC,
-    viewport 1400×900 (phone 390×844 where stated).
-  - Built with `cd ui && npm ci && npm run build`,
-    `cd ui-ng && npm ci && npm run build`, then
-    `go build -o /var/tmp/grain ./cmd/grain`.
-  - Servers, each over a throwaway embedded SQLite store (`TMPDIR` set to a
-    fresh directory):
-    1. `grain demo -addr 127.0.0.1:8420 -open=false -github-sim -fake-ci -git-proxy -secrets-store -host-executor hostd -access-code-file <f>`, used for most steps.
-    2. `grain demo -addr 127.0.0.1:8421 -open=false -unconfigured -secrets-store …`, for the no-git-connection notices.
-    3. `grain demo -addr 127.0.0.1:8422 -open=false -github-sim -secrets-store -external-config-repo https://github.com/example/walk-config …`, for locked mode.
-    4. The fixed build on `:8425`, for re-checking the fixes.
-  - There was no `/home/debian/.gemini-api-key`, so no model was called and
-    `LOOK=1` could not describe screenshots. The file reader returns PNG
-    bytes, so layout was checked with bounding boxes and `scrollWidth`
-    instead (below).
-- **How it was driven:** throwaway Playwright scripts outside the checkout.
-  Each signs in with the access code (the cookie `POST
-/api/auth/access-code` sets, as `ui-shared/e2e/accesscode.js` does), then
-  acts only through visible controls (clicks, typing, `Tab`, `Escape`).
-  Every page recorded uncaught page errors, console errors and warnings,
-  failed requests, `/api/` responses of 400 or more (with bodies), every
-  native dialog (text, and whether it was accepted or dismissed), and every
-  non-GET `/api/` request with its body. The REST API (bearer access code)
-  was used only to read back what a gesture persisted.
-- **Console baseline:** no uncaught page error and no 5xx. Every console
-  error was the browser's line for an intended 400 refusal named below.
-  The only failed requests were `ERR_ABORTED` from navigating away.
+Settings sections that connect grain to outside systems and size the
+machines it runs on: Git, Hosts, Capabilities (with the stored-secrets
+part of Deployment credentials), Hub, Engine, CI, Sandboxes and Caches.
+Walked on the new UI at `/next/` (every one of these sections has a
+`/next/settings/<section>` page, `ui-ng/src/app/settings/settings-sections.ts`),
+in a real Chromium against a real `grain demo` server.
 
-## Stubs and intercepted routes
+## Environment
 
-The server, store, built frontends, browser and gestures were real
-throughout. Playwright `page.route` was used only where the demo cannot
-produce a state:
+| | |
+|---|---|
+| Commit tested | `e69d34223` (`main`, merge of #1478), then this branch's fixes on top; re-run after merging `main` at `6b560ee97` (#1489 reworked the settings layout, so the Git, CI and Sandboxes fixes were re-applied onto it) |
+| Server | `go build ./cmd/grain` (Go 1.26.10) → `grain demo -addr 127.0.0.1:0 -open=false -access-code-file …` over the demo's own throwaway SQLite store; from the Capabilities step on also `-secrets-store` |
+| Frontend | `make frontend` (classic `ui/` and Angular `ui-ng/` built into `pkg/ui/static*`, embedded in the binary) |
+| Browser | Playwright Chromium headless (`/var/cache/playwright/chromium-1234`), 1400×1000 for the walk, 1440×900 and 390×844 for layout checks |
+| Model key | none: `/home/debian/.gemini-api-key` is absent in this sandbox, so no Gemini-backed step (and no `LOOK=1`) ran |
+| Sign-in | `POST /api/auth/access-code` with the run's access code, session cookie handed to the browser context |
 
-| Route                                                                                                                                                                   | Why                                                                                                                                                                    |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/registry`, merged with `{enabled:false,state:"disabled"}`, `{state:"connecting"}`, `{state:"degraded",lastError}`, `{state:"error",lastError,scopeConflicts}` | The demo hub only ever reports `connected`. Used for the Not configured, Connecting, Degraded and Heartbeat error chips, the error alert and the scope-conflict alert. |
-| `GET /api/config` with `access: {role:"custom", scopes:[…]}`                                                                                                            | The access code always signs in as the owner. Used for `settings:write` only, `secrets:write` only, `capabilities:admin` only, and read-only.                          |
+Scratch walk scripts lived outside the checkout (`/home/debian/walk/*.mjs`);
+each one drove visible controls (`getByTestId`, `getByRole`, labels),
+logged every non-GET request body (secrets redacted), every HTTP ≥ 400,
+every failed request and every console error/warning, and re-read the
+page after a reload.
 
-Two local helpers, both outside the checkout:
+## Stubs
 
-- **A logging proxy** (`/var/tmp/walk/proxy.py`, `127.0.0.1:3999`). It
-  writes each connection's first line to a file and answers `502`. It
-  stood in for a git connection's HTTP proxy.
-- **A throwaway Ed25519 key** (`ssh-keygen -t ed25519 -N ""`) for the
-  SSH-key connection, with a made-up `known_hosts` line.
+No route was intercepted. Everything came from the demo's own seeded
+fakes, which stand in for outside systems the sandbox does not have:
 
-No request left the sandbox for GitHub, a hub, a cloud or Figma. A
-`github.com` connection is probed at the deployment's GitHub host, which in
-the demo is its simulated GitHub on loopback. The made-up hosts
-(`*.example.test`, `ghe.walk.invalid`) only cost a DNS lookup that fails.
+- **Capability servers** — the demo's in-process fakes on loopback
+  (`config-map`, `figma`, `gchat`, `gcp`, `git`, `host-script`, the
+  `capabilities.demo.grain.example/cloud` sample) plus grain's own
+  in-process servers. A throwaway server pointed at `http://127.0.0.1:9/mcp`
+  (nothing listens there) stood in for an unreachable one.
+- **Hosts** — the demo's seeded host rows (`local`, `build-runner`,
+  `cloudtop-alice`, revoked `old-laptop`), enrollment codes and the
+  pending request from `devbox-carol`.
+- **Hub** — the demo's seeded Hub settings and connected status.
+- **Git** — the demo's fake `default` token on `github.com`; the
+  connection check reported it refused (HTTP 401), as a fake token should.
+  Throwaway SSH (`ssh-keygen -t ed25519`) and GitHub App (`openssl genrsa`)
+  keys were generated for the run and discarded.
+- **Secrets** — the demo's `-secrets-store` throwaway directory.
 
-## Steps and outcomes
+## Results by section
 
-### 1. Git (`/settings/git`) — pass, one bug filed
+### Sandboxes (`/next/settings/sandboxes`) — bug found and fixed
 
-| #   | Step                                    | Outcome                                                                                                                                                                                                                                                                                                                       | Verdict      |
-| --- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| 1   | Plain git host, token                   | Kind `Plain git` offers PAT, SSH key, GitHub App (disabled, titled "A GitHub App needs a GitHub host: a plain git host has no App API") and ambient. Saved `git.example.test` as `kind:"git", type:"pat"`. Test says "nothing was tested … give the connection an owner/repo scope, or add a repository on git.example.test". | PASS         |
-| 2   | Plain git host, SSH key and known hosts | Fields are SSH private key, Known hosts ("Needed for any host but github.com: grain never trusts a host key on first use") and an optional API token. Saved; the API reports its fingerprint and `sshUser: git`. Test explains the same reach limit as step 1.                                                                | PASS         |
-| 3   | GitHub token with scope and proxy       | `github.com`, scope `walk-org`, proxy `http://proxy.example.test:3128`. The row reads "pat via proxy http://proxy.example.test:3128 · walk-org". Test answered from the simulated GitHub ("GitHub rejected the token"), not through the proxy: see step 6.                                                                    | PASS         |
-| 4   | GitHub App                              | App ID, Installation ID and private key fields. A key with no PEM block is refused on save with `400 gitproxy: no PEM block found in GitHub App private key`, and the form stays open with what was typed.                                                                                                                    | PASS         |
-| 5   | Persistence and Remove                  | All rows survive a reload. Remove asks "Remove the git.example.test connection grain-git-c-…? A credential stored for it is deleted with it and cannot be read back…". Dismissing sends nothing; accepting sends `DELETE` and the row is gone after a reload.                                                                 | PASS         |
-| 6   | Test through a connection's proxy       | GitHub connection `ghe.walk.invalid` with proxy `http://127.0.0.1:3999` (the logging proxy). Save sent `CONNECT ghe.walk.invalid:443` to the proxy. Test then reported `dial tcp: lookup ghe.walk.invalid … no such host`: it went direct, and the proxy logged nothing from Test. **Bug 3**, filed as a follow-up.           | FAIL → filed |
-| 7   | GitHub host pointer                     | In locked mode (server 3), Git shows "A connection's token or key is never part of the config repo: it is set write-only under Settings → Capabilities". The link opens `/settings/capabilities#credentials` with the card at y=89, below the 77px header.                                                                    | PASS         |
-| 8   | No git connection                       | Server 2: Git says "No git connections configured". New task and Repos both show "This deployment has no git connection yet … a GitHub token or GitHub App for github.com, or a token, SSH key or ambient login for another git host", linking `/settings/git`.                                                               | PASS         |
-| 9   | Refusal banner on save                  | Covered by `git-connection-refusal-banner.spec.js`, re-run green (below).                                                                                                                                                                                                                                                     | PASS         |
+Before: the Backend picker showed **Granule microVM** and Network showed
+**None (isolated)** on a demo whose settings say `container` / `open`;
+the lists were hand-written (`granule, docker, podman, kubernetes, local`;
+`none, egress, full`; overcommit `fixed, auto, off`). Each save of an
+invented value failed:
 
-"Reuse authentication from" (nameless connections staying distinguishable)
-is on the Models connection editor (`ModelBackendPage.jsx`), not Git, so it
-belongs to the settings walkthrough.
+```
+POST /api/settings {"networkAccess":"full"}      -> 400 networkAccess must be "open" or "none", or empty for "open"
+POST /api/settings {"sandboxBackend":"docker"}   -> 400 sandboxBackend must be one of container, granule, kubernetes, kubernetes-granule, host, none
+POST /api/settings {"sandboxOvercommit":{"mode":"off",…}} -> 400 sandbox overcommit mode "off": want "fixed" or "auto"
+```
 
-### 2. Hosts (`/settings/hostds`, and `/next/settings/hostds`) — two bugs fixed
+vCPUs/Memory/Disk showed a literal `0` (stored 0 means grain's default
+2 / 8192 / 30).
 
-Classic `/settings/hosts` redirects to `/settings/hostds`. The page shows
-Invite hosts (the `curl … | sh -s -- --join ghe_… --release …` snippet,
-code chips `default` and `workstations`, uses, New code, Rotate code,
-Revoke code). Pending host requests shows the verified enrollee ("Enrolled
-by carol@example.com (local user carol)"), CLIs, version and key
-fingerprint, editable Host name, labels and capacity, and Accept and Reject,
-with no pairing code. The Hosts table has `local` (co-located, Edit only),
-token rows and a revoked row (Delete only), Delete all revoked, and legacy
-token registration. The confirmations added on 11-11 are still in place;
-`hostds-delete`, `hostds-revoke-confirm`, `hostds-capacity-and-banner` and
-`hostds-settings-layout` re-run green.
+After: the pickers list `sandboxBackendOptions` and `networkAccesses`
+from `GET /api/settings` with the classic page's labels; `granule`,
+`host` and `None (control plane only)` are listed **disabled** with the
+server's reason ("needs -disable-native-sandboxes at daemon startup");
+a forced click on one leaves the menu open and nothing staged. The
+chosen backend's description shows under the picker. Kubernetes + None
++ auto + 3 vCPUs saved, read back after reload, then restored (blank
+vCPUs saved `0`, placeholder `2`). Session idle TTL and Kubernetes
+namespace placeholders now come from the server's defaults.
 
-The same section under `/next/` had not been walked:
+Not on `/next/` yet (classic only): auto-overcommit bounds, disk floor,
+the rest of the Kubernetes card (priority classes, kubectl, images,
+workspace…), the custom-image contract and mirror hints.
 
-| #   | Step                              | Outcome                                                                                                                                                                                                                                                                                                                  | Verdict      |
-| --- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------ |
-| 1   | Row actions on `local`            | Rotate, Revoke and Delete were all enabled on `local`. Each sent its request on one click, and the server answered `400 "local" is the co-located host and cannot be revoked` / `… it takes no token` / `… cannot be deleted`. **Bug 1.** `local` now offers no row actions.                                             | FAIL → fixed |
-| 2   | Revoke, Rotate, Delete and others | With native dialogs set to dismiss, Revoke, Rotate and Delete still sent `POST …/revoke`, `…/rotate` and `DELETE`: there was no confirmation at all. The handlers for Delete revoked, Rotate code, Revoke code and Reject were the same. Delete was enabled on hosts never revoked. **Bug 1.**                           | FAIL → fixed |
-| 3   | Pending request                   | The table had a "Pairing code" column showing `ZXQN-H95Y`, though the request is accepted on the verified enrollee and there is no pairing code to compare (`docs/host-placement.md`). The key fingerprint was not shown. **Bug 2.**                                                                                     | FAIL → fixed |
-| 4   | After the fix                     | Revoke opens "Revoke host cloudtop-alice?" in the shared confirm dialog, with Cancel focused. Cancel and `Escape` send nothing. Delete on the revoked `old-laptop` asks "Delete host old-laptop?", sends one `DELETE` and reports "Deleted host old-laptop." Pending shows the fingerprint in place of the pairing code. | PASS         |
+### Engine (`/next/settings/engine`) — bug found and fixed
 
-### 3. Capabilities (`/settings/capabilities`, `/settings/capabilities/<id>`) — pass
+Before: Poll interval placeholder `30s` (grain's default is `10s`);
+clearing Max worker agents or Max merges per repo branch sent `0`,
+refused with `maxWorkers must be at least 1` /
+`maxMergesPerRepo must be at least 1`; Max merges' fallback was `1`.
 
-| #   | Step                     | Outcome                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Verdict           |
-| --- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| 1   | Old link and notices     | `/settings/capability-servers` → `/settings/capabilities`. The seven deprecation notices (gcp-key, model proxies, gemini-key, release, grain-ci, bootstrap-playbooks, github-sandbox) head the page.                                                                                                                                                                                                                                                                                                                                  | PASS              |
-| 2   | Built-ins first          | 13 servers. Built-ins come first: config-map, figma, gchat, gcp, git and host-script (remote or beside grain), then api, github, grain, model-proxy, release and repo (in-process). The custom `capabilities.demo.grain.example/cloud` comes last. figma, gchat and host-script read `needs configuring`.                                                                                                                                                                                                                             | PASS              |
-| 3   | Disable / Enable         | On gchat's page, Disable sends `POST /api/capability-servers/disable`. The chip still reads `needs configuring` at +300 ms and reads `disabled` ("Turned off: grain does not connect to it…") by +3 s, with no reload. The list shows `disabled` too. Enable reads `pending` and then `needs configuring`. Built-ins never offer Remove.                                                                                                                                                                                              | PASS              |
-| 4   | host-script server       | Edit server settings → Add scripts. Name `walk-hello`, description, timeout 30, a bash body. Test lists one method `host-script` with `script` allowed `"walk-hello"`. Saving moves the chip from `needs configuring` to `attached`, and the script persists after a reload.                                                                                                                                                                                                                                                          | PASS              |
-| 5   | config-map / secret maps | A config map `walk-cm` holding `hello.txt`. Test lists the `config-map` method with `walk-cm` and `walk-cm/hello.txt` beside the built-in `bootstrap` playbooks. Saved, the page reads "Configured maps (1 config map, 0 secret maps) · walk-cm · /home/debian/.config-map/walk-cm". Remove config map then Save leaves `config_maps: []`. Secret maps sit on the same form.                                                                                                                                                          | PASS              |
-| 6   | Host placement           | Run location "host (through the host agent)" is disabled until the command is one the host agent's allowlist offers, saying why ("…has no capabilities entry for "agy" (it offers corp-search)"). With `corp-search`, the Host picker lists the default host, build-runner and cloudtop-alice (not connected), local (connected, logins antigravity and claude), and a label selector. Adding one placed on build-runner is refused by the demo process: `400 … this process does not route placed capability servers to their host`. | PASS (demo limit) |
+After: placeholders `10s` (from `pollIntervalDefault`), `10`, `5`;
+clearing all three and saving sends
+`{"maxMergesPerRepo":5,"maxWorkers":10,"pollInterval":""}` and the
+server reads back `10s / 10 / 5`. Out-of-range values (`0`, `banana`)
+are refused by the server by name in the error banner. The sandbox
+commitment note is not on `/next/`.
 
-### 4. Capability policy and API scope sets — pass
+### CI (`/next/settings/ci`) and Caches (`/next/settings/caches`) — fixed
 
-- **Policy:** Add rule → effect `Deny`, capability
-  `https://capabilities.demo.grain.example/cloud#cloud-viewer`, agent tasks
-  ticked. Save policy sends a preview and then a `PUT`, and the rule
-  persists after a reload. In New task, Add grant… lists `cloud-viewer`
-  `aria-disabled` with "the capability policy denies … (rule 1: deny …)"
-  and a link to `/settings/capabilities#capability-policy`. Removing the
-  rule and saving leaves `rules: []`. `capability-policy-pickers.spec.js`
-  covers templates, schedules, tasks and repository defaults, and re-ran
-  green.
-- **Scope sets:** New scope set `walk/throwaway` with scope `tasks:read`
-  saved to `tables/api_scope_set.json`. Edit changed its description, and
-  both persist after a reload. Remove asks "remove scope set
-  walk/throwaway? Nothing grants https://grain.dev/capabilities/api#walk/throwaway."
-  and the set is gone after a reload.
+Before: every limit showed `0`; CI capacity reserved after had
+placeholder `5m` (default `1m0s`).
 
-### 5. Deployment credentials and other secrets — pass
+After: blank boxes with the server's defaults as placeholders (CI runs
+kept 5000, job cache 256 MiB, artifacts 2048 MiB, jobs per run "no
+limit", reserve after `1m0s`, proxy and Actions caches 20 GiB). Saved
+`3 / 1200 / 512 / 4096 / 90s` and `35 / 12` GiB, reloaded and read them
+back (`90s` reads back `1m30s`), cleared them (saves `0`, reads back
+blank), and `-5` MiB was refused by name. The CI queue/history cards'
+other fields (age boost, step output, artifact per-run/file/days) are
+classic only.
 
-- Old links `/settings/credentials`, `/settings/legacy-capabilities`,
-  `/admin/integrations` and `/system/integrations` land on
-  `/settings/capabilities#credentials` with the card at y=89 (header
-  bottom 77). `/settings/secrets` lands on `#other-secrets`, at the foot of
-  the page.
-- The card has the GitHub host (needs restart), plain HTTP, GCP project,
-  legacy service-account email and count, with pointers to the `gcp`
-  server.
-- Other secrets: set `walk-throwaway/value`. The value box is
-  `type=password`, the value never appears in the DOM, the row survives a
-  reload, and delete asks "Delete the secret walk-throwaway and every key in
-  it? …" before sending `DELETE`.
-- **Role gating** (stub 2), each as its own role:
+### Git (`/next/settings/git`) — bugs found and fixed
 
-  | Scopes added to read-only | GitHub host / GCP | Secrets | Add server / policy |
-  | ------------------------- | ----------------- | ------- | ------------------- |
-  | none                      | off               | off     | off                 |
-  | `settings:write`          | ON                | off     | off                 |
-  | `secrets:write`           | off               | ON      | off                 |
-  | `capabilities:admin`      | off               | off     | ON                  |
+Before:
 
-  Each disabled group names the scope it needs ("Secrets are read-only for
-  you. Needs secrets:write, which your role custom does not grant…").
+- **Every GitHub App save failed**: the form sent
+  `"app":{"appId":123,…}`; the server's `AppCredentialInput` takes
+  strings → `400 json: cannot unmarshal number into Go struct field
+  AppCredentialInput.app.appId of type string`.
+- No host kind: a connection on `git.example.test` was stored as kind
+  `github` (the server reads an empty kind as GitHub), and GitHub App was
+  offered for any host.
+- No known-hosts field for SSH keys.
+- **Remove deleted on the first click**, no confirmation.
+- Verify connections said only "Check reported issues", dropping the
+  server's `error`.
 
-- **Locked mode** (server 3): the credential fields are disabled, and Other
-  secrets still sets and deletes.
+After: a Host kind picker (GitHub / Plain git host) is sent as `kind`;
+GitHub App is disabled with "Needs a GitHub host: a plain git host has
+no App API" for a plain host; SSH takes optional known hosts; an SSH
+key + known hosts on `git.example.test` saved as `git host / ssh`; a
+GitHub App on `ghe.example.test` saved with `"appId":"123",
+"installationId":"456"`; the table shows each connection's kind;
+Remove opens "Remove Git connection?" — Cancel keeps it, Remove deletes
+it and it stays gone after reload; Verify shows
+"github.com: GitHub rejected the token (bad credentials)…" in a warning
+banner.
 
-### 6. Hub (`/settings/registry`) — pass
+Not on `/next/` yet: per-connection Test, scope and proxy, the
+refusal banner and its clearing on save, Reuse authentication from,
+the GitHub host pointer to `Capabilities#credentials`, and the
+no-git-connection notice (New task and Repos were not re-checked here).
 
-- **Chips** (stub 1): `not configured`, `connecting` ("Waiting for first
-  heartbeat…"), `degraded` (health degraded, plus the error alert) and
-  `heartbeat error` (the alert, plus "Scope conflict reported by the hub:
-  acme/widgets (svc/) already claimed as primary by other-grain").
-- **Heartbeat now** (unstubbed) sends `POST /api/registry/heartbeat` and
-  updates Last heartbeat.
-- **Scope overrides:** the rule options are primary, secondary and exclude
-  repo. Adding `acme/widgets`, `docs/`, secondary persists after a reload
-  as `pathPrefix:"docs"`, and removing it persists `scopes: []`. That
-  remove `PUT` omits `authMode`, which the server reads as `token`
-  (`model.NormalizeHubAuthMode`), so nothing changes.
-- **Locked mode** (server 3): every field and select is `:disabled` through
-  its fieldset, and the registration token and its upload stay editable.
+### Hosts (`/next/settings/hosts` → `hostds`) — wording fixed, flows work
 
-### 7. Engine, CI, Caches and Sandboxes — pass
+The `/settings/hosts` alias resolves to the Hosts section. Create
+enrollment code `throwaway-walk` showed the one-time `--join` command;
+Revoke code asked first and marked it `revoked` (its Rotate/Revoke then
+disabled); Revoke host `build-runner` asked first; Delete (enabled only
+for revoked hosts) asked first and the host was gone after reload;
+Reject on the pending `devbox-carol` request asked first (cancelled);
+Delete revoked asked first ("One a model connection or capability
+server still names is skipped.") and removed `old-laptop`. `local` offers
+no actions.
 
-| Field                      | Outcome                                                                                                                                                                                                                                                            |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Poll interval              | Placeholder `10s`. `3s` saves and reloads. Blank saves `""` and reloads as `10s`. `banana` → "Couldn't save Poll interval … invalid duration".                                                                                                                     |
-| Max worker agents          | `7` saves. Blank saves `10`. `-3` → "must be at least 1; -3 was not saved", with no request. No placeholder, as noted on 11-11.                                                                                                                                    |
-| Max merges per repo branch | Placeholder `5`. Blank saves `5`. `0` is refused with no request.                                                                                                                                                                                                  |
-| CI runs kept               | `-5` saves: any negative means unbounded (`model.Config.CIRunHistory`).                                                                                                                                                                                            |
-| Proxy cache max size (GiB) | `-1` → "must be at least 0; -1 was not saved".                                                                                                                                                                                                                     |
-| Auto CPU minimum / maximum | `0.1` → "Auto CPU minimum must be at least 0.25". `500` as the maximum saves: there is no upper bound by design (`OvercommitSettings.Validate`).                                                                                                                   |
-| Session sandbox idle TTL   | `5x` → "unknown unit "x"".                                                                                                                                                                                                                                         |
-| Disk floor share           | `0.9` saves; the daemon caps the floor at `sandboxDiskFloorMaxShare` 0.25 of each volume.                                                                                                                                                                          |
-| Kubernetes                 | Prefilled `grain`, the sandbox-k8s and sandbox images, `/home/agent`, and the grain-interactive / grain-agent / grain-ci priority classes. `Bad_NS`, `nonsense` (node selector) and `Not A Class` are each refused by name.                                        |
-| Custom sandbox image       | Shows the contract (v2), the `FROM docker.io/grainai/sandbox-k8s-base:latest` snippet and the base image. Setting `registry.example.test/walk:1` shows Reset to default and the unverified-contract note; clearing it saves `""` and `sandboxImageDefault` stands. |
-| Backend                    | Granule, host directories and None (control plane only) are disabled with their reasons ("needs -disable-native-sandboxes at daemon startup").                                                                                                                     |
+Fixed: headings, labels, the empty state, table labels and toasts said
+`hostd` ("Registered workstation hosts (hostds)", "Register hostd",
+"Pending hostd joins"…); they now say host, as user-facing copy must.
 
-## Bugs
+Not on `/next/` yet: Rename, Edit owner/labels/capacity (and clearing a
+blanked capacity, dismissing resolved errors), New code options (expiry,
+max uses, default capacity/labels, allowed principals), editable host
+name/labels/capacity on pending requests, rekey requests, and host
+address/principal/build columns.
 
-### Bug 1: `/next/` Hosts acted on one click and offered actions `local` cannot take (fixed)
+### Capabilities (`/next/settings/capabilities`) — bugs found and fixed
 
-- **Reproduction:** open `/next/settings/hostds` on any demo, with the
-  browser set to dismiss dialogs. Revoke on `cloudtop-alice` sends `POST
-/api/hostds/cloudtop-alice/revoke` at once. Rotate, Revoke and Delete on
-  `local` are enabled and each draws a 400.
-- **Cause:** `SettingsComputeComponent`'s `rotateHostd`, `revokeHostd`,
-  `deleteHostd`, `deleteRevokedHostds`, `rotateEnrollmentCode`,
-  `revokeEnrollmentCode` and `rejectPendingHostd` called the API directly.
-  The row template rendered all three actions for every host, and Delete
-  for hosts never revoked.
-- **Fix:** each now opens the shared `g-confirm-dialog` (destructive,
-  Cancel focused) with the classic page's wording. `local` renders no row
-  actions, Delete is enabled only once a host is revoked, and Delete /
-  Delete revoked report what they deleted, the usage-limit pauses they
-  cleared and the hosts they skipped.
-- **Coverage:** `ui-ng/e2e/next-hosts-confirm.spec.js`.
+Before: every server's chip said `enabled`, including `figma`, `gchat`
+and `host-script`, which the server reports `needs-config`; Test was
+offered on in-process servers and answered
+`400 no capability server "https://grain.dev/capabilities/grain" is configured`;
+a refused probe said only "…: failed" (the page read a `detail` field
+the response does not have; it carries `ok`, `error`, `methods`).
 
-### Bug 2: `/next/` pending host requests showed a pairing code nobody compares (fixed)
+After: the chip follows `status.state` (`needs-configuring` in the
+warning tone, `disabled` when turned off); Disable/Enable on the demo
+cloud server flipped the chip without a reload; Test is offered only for
+servers with a connection; the cloud server reports
+"reachable, 2 methods" and the throwaway reports
+"failed — … dial tcp 127.0.0.1:9: connect: connection refused" in a
+warning banner. The throwaway server was added, tested, removed, and was
+gone after reload.
 
-- **Reproduction:** the seeded `devbox-carol` request in
-  `/next/settings/hostds` showed "Pairing code ZXQN-H95Y" and no
-  fingerprint.
-- **Fix:** the column is now Key fingerprint, as on the classic page. A
-  50-character fingerprint first widened its column to 415px (867px of
-  table on a phone), so it wraps in a 16–28ch mono cell (`.s-fingerprint`):
-  220px on desktop and 140px on a phone.
-- **Coverage:** the same spec asserts the enrollee and `SHA256:` are shown
-  and no pairing code is.
+Capability policy: a `Deny` rule for `…/cloud#cloud-key` on
+`acme/walk-*` previewed ("0 existing grants newly denied (1 rules)"),
+saved, read back after reload, then removed and saved again.
 
-### Bug 3: Git Test ignores a connection's proxy (filed)
+API scope sets: `walk/throwaway` (`tasks:read`) saved and read back.
+There is no Remove for a scope set on `/next/`.
 
-Step 1.6. `Client.checkGitHubCredentialForHost`
-(`pkg/ui/team_git_connections.go`) probes with
-`githubtoken.ProbeTransport(probeHost, insecure)`, which never consults
-`gitproxy.CredentialHost.Proxy`. The connection itself goes through the
-proxy, so Test judges a path the connection never uses. A host reachable
-only through its proxy reads as unreachable. The fix belongs in the probe
-transport (`pkg/capability`, a classified path), so it was proposed as a
-follow-up task with the reproduction rather than changed here.
+Stored secrets (with `-secrets-store`): `walk-throwaway/token` stored;
+the header count went to 1. Without `-secrets-store` the demo refuses
+with "this UI has no local secrets directory to write to", which is
+the demo's design. The value box is a plain textarea (visible while
+typing); the list does not name secrets and offers no replace or remove
+on `/next/`.
 
-## Layout checks (`/next/settings/hostds`, fixed build)
+Deep links — fixed: `/next/settings/capabilities#capability-policy`
+opened at the top of the page with the policy card off-screen (y=1076
+in a 1000px viewport), and old links such as `/settings/secrets` /
+`/settings/credentials` likewise. Policy, API scope sets, stored secrets
+and the Hub card now carry `id`s, the page scrolls to the fragment (or
+an old section's anchor) once the section's cards have settled, and
+`scroll-margin-top` keeps the card clear of the header.
 
-`make ui-screenshots` was run as `node ui/e2e/screenshot.mjs` with
-`BIN=` set to the base binary (`OUT=…/before`) and the fixed one
-(`…/after`, and `…/after-dialog` with `CLICK` on Revoke), at desktop and
-phone in light and dark. The PNGs could not be looked at here, so the same
-pages were measured instead, at 1400×900 and 390×844 in both colour
-schemes:
+Not on `/next/` yet: retired-grant deprecation notices,
+`/settings/capabilities/<id>` detail pages, `(i)` info popovers, the
+schema-driven configure/edit/rename form (Host placement, `gcp` key
+modes, `figma` Test/Connect), server-owned secrets, holder links,
+config-map/secret-map placements and host-process scripts, and the
+Deployment credentials card (GitHub host, GCP project, service-account
+pool). In the New task sheet's "Capabilities & repo context" picker a
+policy-denied capability showed no `denied` verdict and no link to
+`#capability-policy`.
 
-- `document.scrollWidth == clientWidth` at both widths (no page overflow).
-  The pending table scrolls inside its wrapper on a phone (591 of 314px,
-  down from 867).
-- The confirm dialog is 570×258 at x=415 on desktop and 358×278 at x=16 on
-  a phone, both inside the viewport. Focus starts on Cancel, and Cancel and
-  Revoke host share a row.
-- The `local` row is 43px tall with no buttons; the other rows keep theirs.
+### Hub (`/next/settings/registry`)
 
-## Observations, not changed
+Status chip `connected`; Heartbeat now posted `POST /api/registry/heartbeat`
+(no visible confirmation); Credential mode offers Shared bearer token /
+Workload OIDC; Entry name `acme-walk` saved, read back after reload and
+restored. The card title said "Grain Registry & Hub connection"; it now
+says "Grain Hub connection".
 
-- The demo serves its built-in capability servers over loopback HTTP with a
-  literal `Authorization: Bearer …` header (`pkg/demo/demo_capability_server.go`),
-  and the server page prints it. A real daemon starts built-ins over stdio
-  with the token in the environment, so this is demo wiring.
-- "ambient (this host's github login)" is the auth label on a plain git
-  host as well, where it means the host's git credential helper. Test
-  explains that correctly ("configure a credential helper with a login for
-  git3.example.test").
-- Couldn't save offers Retry on a 400 validation refusal (`banana`, `5x`),
-  where retrying cannot succeed.
-- The classic Hub card in `not configured` still shows Heartbeat now
-  enabled when the stub leaves a URL in place. A deployment that is truly
-  disabled has no URL, so this was only stub-deep.
-- The task names `secret-map` and `host-process` capability servers and
-  host-process "version, adopted runs and allowlist suggestions". Neither
-  server exists in this tree. Secret maps are part of `config-map`, and host
-  scripts are the `host-script` server, which reports its methods but no
-  version or adopted runs.
+Not on `/next/` yet: last heartbeat and health summary, error and
+scope-conflict alerts, advertised scopes with origin chips, OIDC
+audience, Platform, Purpose, Listed in hub directory, the
+`Registration token (grc_…)` field and the Scope overrides card.
 
-## Not covered
+## Cross-cutting checks
 
-- The needs-host warning on a placed server whose host is away: the demo
-  process refuses to save a placed server (step 3.6).
-  `hostd-placement.spec.js` covers it with stubs and re-ran green.
-- `gcp` keyless-token vs service-account-key mode and figma's Test and
-  Connect Figma: walked on 11-11, and covered by
-  `capability-server-settings.spec.js`, which re-ran green.
-- Hosts Edit, Rename and Accept with edits on classic: covered by the
-  re-run specs below, not driven by hand again.
+- Console and network: no console errors or failed requests on any of the
+  eight pages at load; the only 4xx were the server's own validation
+  refusals listed above (all gone after the fixes except deliberate
+  out-of-range probes).
+- Destructive actions: host revoke/delete, delete revoked, code revoke,
+  pending reject and (now) Git Remove all ask first. Capability server
+  Remove did not ask; it now opens "Remove capability server?" (Cancel
+  keeps the server, Remove deletes it and it stays gone after reload).
+- Keyboard: the backend picker opens with ArrowDown on the focused
+  button and lists the disabled options in order (`aria-disabled="true"`);
+  choosing one (a forced click in the walk; `choose()` returns early for
+  any activation) stages nothing.
+- Layout (programmatic, see below): no element in `main` overflows the
+  viewport at 1440 or 390 px on any of the eight pages; the backend
+  picker's menu (with two-line reason hints) and the Git type menu stay
+  inside the viewport at both widths.
 
-## Specs run
+## Screenshots
 
-- `ui-ng`: `e2e/next-hosts-confirm.spec.js` (new) and
-  `e2e/next-full-system.spec.js` — 6 passed.
-- Classic `ui`: `hostds-delete`, `hostds-revoke-confirm`,
-  `hostds-capacity-and-banner`, `hostds-settings-layout`,
-  `git-connection-refusal-banner`, `git-connections-multihost-walkthrough`,
-  `capability-in-process-servers`, `capability-info-popovers`,
-  `capability-policy-pickers`, `capability-server-settings`,
-  `hub-settings-layout`, `k8s-sandbox-settings-walkthrough`,
-  `sandbox-disk-floor-blank`, `sandbox-disk-overcommit`,
-  `custom-sandbox-image-layout`, `host-script-settings` and
-  `hostd-placement` — 35 passed.
+`ui/e2e/screenshot.mjs` shot the eight pages at desktop and phone, light
+and dark (`contact-sheet.png` attached to the task, not committed). With
+no Gemini key and no image viewer in this sandbox the PNGs could not be
+looked at here; the layout claims above rest on bounding-box checks
+instead.
+
+## Regression coverage
+
+`ui-ng/e2e/next-connections-infra-settings.spec.js` (5 tests): Sandboxes
+vocabulary/disabled backends/save+reload; Engine/CI/Caches placeholders
+and blank-to-reset; Git host kind, App IDs as strings and Remove
+confirmation; capability state chips, Test only where connectable, probe
+error, `#capability-policy` and `/settings/secrets` deep links; no
+"hostd" on Hosts.
+
+- `npx playwright test` in `ui-ng/` (all 43 tests, desktop project): pass.
+- `npx vitest run` in `ui-ng/`: 376 passed. `eslint src` and
+  `prettier --check .`: clean.
+- Classic `ui/` was not changed.
+
+## Merge with `main` (second run)
+
+`main` gained #1489 (settings layout, Git connection scope, form
+autofill isolation) while this branch waited, and the branch conflicted
+in `settings-code.component.ts` and `settings-compute.component.ts`.
+Both files were taken from `main` and this branch's fixes re-applied on
+top: Git host kind / known hosts / string App IDs / Remove confirmation /
+check error banner (alongside `main`'s new Scope field and unreachable-repo
+report), the CI default placeholders, the Sandboxes vocabulary and
+default placeholders, and the host wording. The regression spec, vitest
+(414 tests, all pass) and the full ui-ng Playwright suite (63 tests,
+all pass) were run again on the merged tree.
+
+The path-trigger review (task 5522) reported findings on the first
+version, but this run could not read them: the task holds no
+`api:tasks:read` grant and the pull request carries no review threads.
+They are not addressed by name here; the re-review on this push should
+say whether they still apply.
+
+## Follow-ups proposed
+
+The missing `/next/` parity listed under each section is filed as
+follow-up tasks rather than built here.

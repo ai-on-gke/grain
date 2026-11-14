@@ -277,6 +277,15 @@ shows `.s-card` skeletons on cold load, opens warm Settings revisits immediately
 while refreshing in the background, guards child `ngOnChanges` on non-first
 `section` changes, and caches slow `reachable-repos` lookups for 60s.
 
+A settings picker offers the server's own vocabulary (for example
+`sandboxBackendOptions` and `networkAccesses` from `GET /api/settings`), never a
+hand-written list: a choice the daemon cannot use stays listed as a `disabled`
+`PillOption` with the server's reason as its `hint`. A number whose stored `0`
+means grain's default shows blank with the server's `<key>Default` as its
+placeholder, and a cleared box saves that default again. A card a link points
+at carries an `id` (`#capability-policy`, `#other-secrets`), and the page
+scrolls to the URL's fragment once the section has rendered.
+
 ### Breakpoints
 
 `< 600px` phone, `600–839px` compact, `840–1279px` medium, `≥ 1280px`

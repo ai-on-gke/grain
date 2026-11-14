@@ -148,6 +148,17 @@ g-priority-chip {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.pill-opt-hint {
+  display: block;
+  max-width: 320px;
+  color: var(--md-sys-color-on-surface-variant);
+  font: 400 11.5px/16px var(--grain-font-body);
+  white-space: normal;
+}
+.pop-menu.pill-select-menu li > button.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
 .pill-check {
   color: var(--md-sys-color-primary);
   flex: none;
