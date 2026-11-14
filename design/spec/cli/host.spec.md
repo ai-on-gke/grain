@@ -2110,7 +2110,7 @@ Serves the task UI on localhost over a throwaway store of fake tasks (SQLite by 
 | `-merge-rules` | bool |  |  | seed acme/widgets' merge rules (the docs/declarations.md example) and two deploy/** changes the merge queue classified under them |
 | `-model-catalog` | string |  |  | host:port of an Anthropic model listing stub (GET /v1/models) on loopback: Claude connections that advertise no models are given what it lists, as a deployment's are given what Anthropic lists |
 | `-model-discovery-interval` | duration | `the deployment's 10m` |  | how often -model-catalog's discovery asks the provider again |
-| `-notifications` | bool |  |  | run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green or ttl) has come true is cleared on its own, as on a daemon's cycle |
+| `-notifications` | bool |  |  | run the reconcile loop's notification sweep every -reconcile interval (default 2s), so an open notification whose clears_when (task, base-green, ttl or suite-run) has come true is cleared on its own, as on a daemon's cycle |
 | `-observability` | bool |  |  | serve the live CI and sandbox observability demo |
 | `-open` | bool | `true` |  | open the UI in the system's default browser once it's listening |
 | `-qualification` | bool |  |  | seed a release candidate of -default-target-repo whose qualification run is waiting for approval |

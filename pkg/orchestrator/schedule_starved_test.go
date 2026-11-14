@@ -20,11 +20,13 @@ package orchestrator_test
 // and every firing behind it was skipped in silence.
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
 
 // trainSchedule is a 20-minute overlap: skip schedule, the release
@@ -191,5 +193,75 @@ func TestStartedScheduleTickIsNotStarved(t *testing.T) {
 	}
 	if n := starvedNotification(t, store, sched.ID); n != nil {
 		t.Errorf("notification for a tick that is running: %+v", n)
+	}
+}
+
+// A suite schedule held by its own suite run, whose pass has never
+// started (walkthrough finding F6): the run's task is raised, the Inbox
+// says which run, and the notification clears once the run finishes.
+func TestStarvedSuiteScheduleRaisesItsRunsTasksUntilTheRunFinishes(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	_, sched := filedSuiteSchedule(t, store, "smoke", baseTime)
+	sched.Overlap = model.OverlapSkip
+	sched.Recurrence = model.Recurrence{Kind: model.RecurrenceEveryNMinutes, EveryNMinutes: 20}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatal(err)
+	}
+	busyQueue(t, store, "busy-9", 9)
+
+	if err := runScheduleOnly(t, store, baseTime); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	runs := runsOfSchedule(t, store, sched.ID)
+	if len(runs) != 1 || len(runs[0].Tasks) != 1 {
+		t.Fatalf("suite runs = %+v, want one with one task", runs)
+	}
+	run, task := runs[0], runs[0].Tasks[0].TaskID
+
+	if err := runScheduleOnly(t, store, baseTime.Add(40*time.Minute)); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if got, _ := store.GetTask(ctx, task); got.Priority != model.DefaultTaskPriority {
+		t.Fatalf("suite task priority after 40m = %d, want it left at %d", got.Priority, model.DefaultTaskPriority)
+	}
+	if n := starvedNotification(t, store, sched.ID); n != nil {
+		t.Fatalf("notification after 40m: %+v", n)
+	}
+
+	now := baseTime.Add(60 * time.Minute)
+	if err := runScheduleOnly(t, store, now); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if got := runsOfSchedule(t, store, sched.ID); len(got) != 1 {
+		t.Fatalf("suite runs after starving = %d, want the one kept", len(got))
+	}
+	if got, _ := store.GetTask(ctx, task); got.Priority != 9 {
+		t.Errorf("starved suite task priority = %d, want 9, the highest queued", got.Priority)
+	}
+	bodies := commentBodies(t, ctx, store, task)
+	if len(bodies) != 1 || !strings.Contains(bodies[0], "from 5 to 9") ||
+		!strings.Contains(bodies[0], fmt.Sprintf("suite run %d", run.ID)) {
+		t.Errorf("comments on the suite task = %q, want one naming suite run %d raised from 5 to 9", bodies, run.ID)
+	}
+	n := starvedNotification(t, store, sched.ID)
+	if n == nil {
+		t.Fatal("no pipeline.schedule-starved notification for a schedule held an hour by a never-started suite run")
+	}
+	if n.TaskID != task || !strings.Contains(n.Title, fmt.Sprintf("suite run %d from its previous firing", run.ID)) ||
+		n.ClearsWhen == nil || n.ClearsWhen.Kind != model.ClearsOnSuiteRun {
+		t.Errorf("notification = %+v (clears %+v), want one naming suite run %d, clearing on the run", n, n.ClearsWhen, run.ID)
+	}
+
+	// Once the run is no longer active the notification clears, though
+	// none of its tasks is the one it waits on.
+	if err := store.CompleteSuiteRun(ctx, run.ID, model.SuiteRunFailed, "stopped", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.ClearMetNotifications(ctx, store, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if n := starvedNotification(t, store, sched.ID); n != nil {
+		t.Errorf("notification after the run finished = %+v, want it cleared", n)
 	}
 }
