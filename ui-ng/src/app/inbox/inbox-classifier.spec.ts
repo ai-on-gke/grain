@@ -229,6 +229,51 @@ describe("inbox classifier", () => {
     ).toBeNull();
   });
 
+  it("offers a stuck task the control its sub-case names, and none where it names none", () => {
+    const control = (over: Partial<Task>) =>
+      classifyTask(task({ stall: "stuck", ...over }))?.actions.map((a) => [
+        a.id,
+        a.route,
+      ]);
+    expect(
+      control({
+        state: "queued",
+        reason: { reason: "queued/ready", control: "Run now" },
+      }),
+    ).toEqual([["run-now", "POST /api/tasks/{id}/run-now"]]);
+    expect(
+      control({
+        state: "running",
+        reason: { reason: "running/live_run", control: "Cancel" },
+      }),
+    ).toEqual([["cancel", "POST /api/tasks/{id}/close"]]);
+    expect(
+      control({
+        state: "deferred",
+        reason: { reason: "deferred/wake_time", control: "Undefer" },
+      }),
+    ).toEqual([["undefer", "POST /api/tasks/{id}/undefer"]]);
+    expect(
+      control({
+        state: "queued",
+        reason: { reason: "queued/ready" },
+        mergeQueueReason: { reason: "merge_failed", control: "Retry merge" },
+      }),
+    ).toEqual([["retry-merge", "POST /api/tasks/{id}/retry-merge"]]);
+    expect(
+      control({ state: "running", reason: { reason: "running/live_run" } }),
+    ).toEqual([]);
+    const cancel = classifyTask(
+      task({
+        stall: "stuck",
+        state: "running",
+        reason: { reason: "r", control: "Cancel" },
+      }),
+    )?.actions[0];
+    expect(cancel?.confirm).toContain("Cancel #1?");
+    expect(cancel?.destructive).toBe(true);
+  });
+
   it("offers acknowledge, investigate and clear on an alert", () => {
     const e = classifyNotification({
       id: 3,
@@ -274,5 +319,30 @@ describe("inbox classifier", () => {
     expect(hs?.summary).toBe("deploy.sh --prod");
     expect(hs?.taskLink).toBe("/task/2");
     expect(hs?.externalLink).toBeNull();
+  });
+
+  it("reads production notification title, taskId, clearsWhen.task, and lastRaisedAt", () => {
+    const e = classifyNotification({
+      id: 42,
+      subject: "base-branch-red:acme/web",
+      title: "main is failing merge verification",
+      taskId: "310",
+      severity: "critical",
+      lastRaisedAt: "2026-11-13T10:00:00Z",
+      raisedAt: "2026-11-12T08:00:00Z",
+    });
+    expect(e.title).toBe("main is failing merge verification");
+    expect(e.ref).toBe("base-branch-red:acme/web");
+    expect(e.taskId).toBe("310");
+    expect(e.taskLink).toBe("/task/310");
+    expect(e.at).toBe("2026-11-13T10:00:00Z");
+
+    const cleared = classifyNotification({
+      id: 43,
+      subject: "ci-stalled",
+      clearsWhen: { kind: "task-closed", task: "412" },
+    });
+    expect(cleared.taskId).toBe("412");
+    expect(cleared.taskLink).toBe("/task/412");
   });
 });

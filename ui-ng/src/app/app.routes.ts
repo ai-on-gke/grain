@@ -12,7 +12,82 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import type { Routes } from "@angular/router";
+import { inject } from "@angular/core";
+import {
+  type RedirectFunction,
+  Router,
+  type Routes,
+  type UrlMatchResult,
+  UrlSegment,
+} from "@angular/router";
+
+function workstreamMultiSegmentMatcher(
+  segments: UrlSegment[],
+): UrlMatchResult | null {
+  if (segments.length < 3 || segments[0]?.path !== "workstreams") return null;
+  const fullKey = segments
+    .slice(1)
+    .map((s) => s.path)
+    .join("/");
+  return {
+    consumed: segments,
+    posParams: { key: new UrlSegment(fullKey, {}) },
+  };
+}
+
+// Where the classic UI's System tabs (/system/<tab>) and its older
+// addresses live in this app: a bookmark or a link pasted out of the
+// classic UI lands on the page that has the same content rather than
+// falling through to the Inbox. Each entry is the path and, for Fleet,
+// the ?tab= that shows it.
+const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
+  health: ["/fleet"],
+  sandboxes: ["/fleet"],
+  top: ["/fleet"],
+  logs: ["/fleet", "logs"],
+  pipeline: ["/fleet", "controls"],
+  power: ["/fleet", "controls"],
+  caches: ["/settings/caches"],
+  metrics: ["/telemetry"],
+  upgrade: ["/settings/upgrade"],
+};
+
+// legacy redirects to the page SYSTEM_TABS names for `tab`, keeping the
+// query the old link carried (a /system/metrics?repo=... narrowing, say).
+function legacy(tab: string): RedirectFunction {
+  return ({ queryParams }) => {
+    const [path, fleetTab] = SYSTEM_TABS[tab] ?? ["/fleet"];
+    return inject(Router).createUrlTree([path], {
+      queryParams: fleetTab ? { ...queryParams, tab: fleetTab } : queryParams,
+    });
+  };
+}
+
+function classicRepoSettingsMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (
+    (s.length !== 4 && s.length !== 5) ||
+    s[0]?.path !== "repos" ||
+    s[3]?.path !== "settings" ||
+    /[.:]/.test(s[1].path)
+  ) {
+    return null;
+  }
+  return {
+    consumed: s,
+    posParams: {
+      owner: s[1],
+      name: s[2],
+      ...(s[4] ? { tab: s[4] } : {}),
+    },
+  };
+}
+
+// repoLeaveGuard asks the repository page before leaving it with an
+// unsaved edit (RepoDetailPageComponent.canLeave). It is duck-typed so
+// the page stays lazy: importing the component here would pull it into
+// the shell's bundle.
+const repoLeaveGuard = (page: { canLeave?: () => Promise<boolean> } | null) =>
+  page?.canLeave ? page.canLeave() : true;
 
 // Every page is lazy, so the shell's own bundle stays inside the budget
 // (angular.json) however many pages move over. A path this app does not
@@ -36,6 +111,14 @@ export const routes: Routes = [
   },
   {
     path: "workstreams/:key",
+    title: "Workstream · grain",
+    loadComponent: () =>
+      import("./workstreams/workstreams-page.component").then(
+        (m) => m.WorkstreamsPageComponent,
+      ),
+  },
+  {
+    matcher: workstreamMultiSegmentMatcher,
     title: "Workstream · grain",
     loadComponent: () =>
       import("./workstreams/workstreams-page.component").then(
@@ -127,7 +210,14 @@ export const routes: Routes = [
     loadComponent: () =>
       import("./fleet/fleet-page.component").then((m) => m.FleetPageComponent),
   },
-  { path: "system", redirectTo: "fleet" },
+  { path: "system", redirectTo: "fleet", pathMatch: "full" },
+  {
+    path: "system/:tab",
+    redirectTo: (route) => legacy(String(route.params["tab"]))(route),
+  },
+  { path: "admin/logs", redirectTo: legacy("logs") },
+  { path: "sandboxes", redirectTo: legacy("sandboxes"), pathMatch: "full" },
+  { path: "caches", redirectTo: legacy("caches"), pathMatch: "full" },
   { path: "staging", redirectTo: "fleet" },
   {
     path: "context",
@@ -155,6 +245,20 @@ export const routes: Routes = [
         (m) => m.SettingsPageComponent,
       ),
   },
+  // The classic UI keeps a repository's tab at
+  // /repos/<owner>/<name>/settings/<tab>; pasted under /next/ that read
+  // as host "owner", owner "name", repo "settings" and loaded a repo
+  // that does not exist (2026-11-14 repository walkthrough). Send it to
+  // /repos/<owner>/<name>/<tab>, the address this app uses.
+  {
+    matcher: classicRepoSettingsMatcher,
+    redirectTo: ({ params }) => {
+      const tab = params["tab"];
+      return tab && tab !== "overview"
+        ? `/repos/${params["owner"]}/${params["name"]}/${tab}`
+        : `/repos/${params["owner"]}/${params["name"]}`;
+    },
+  },
   {
     matcher: (s) =>
       s.length === 4 && s[0].path === "repos" && /[.:]/.test(s[1].path)
@@ -168,6 +272,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:owner/:name",
@@ -176,6 +281,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:owner/:name/:tab",
@@ -184,6 +290,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:host/:owner/:name",
@@ -192,6 +299,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:host/:owner/:name/:tab",
@@ -200,6 +308,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   { path: "**", redirectTo: "inbox" },
 ];

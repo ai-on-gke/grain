@@ -16,6 +16,7 @@ import { Injectable, computed, signal } from "@angular/core";
 import type { RouteKey } from "../api/generated-routes";
 import { routeScope } from "../api/grain-api.service";
 import type { GrainConfig, WhoamiResponse } from "../api/models";
+import type { UsagePauseInput } from "../shared/dispatch-status";
 
 export function initialsFromIdentity(raw: string): string {
   const clean = (raw || "").replace(/\s*\([^)]*\)\s*/g, " ").trim();
@@ -33,6 +34,12 @@ export function initialsFromIdentity(raw: string): string {
   return w.slice(0, 2).toUpperCase();
 }
 
+function toRepoList(repo?: string | readonly string[] | null): string[] {
+  return (Array.isArray(repo) ? repo : repo ? [repo] : []).filter(
+    (x): x is string => typeof x === "string" && x.length > 0,
+  );
+}
+
 // AccessService answers "may the signed-in person make this call?" the
 // way the server will when they try: the role GET /api/config reports
 // (pkg/ui/access_roles.go's AccessRoleInfo) against the scope the route
@@ -41,8 +48,13 @@ export function initialsFromIdentity(raw: string): string {
 @Injectable({ providedIn: "root" })
 export class AccessService {
   private readonly config = signal<GrainConfig | null>(null);
+  readonly rawConfig = this.config.asReadonly();
   readonly configLoaded = signal(false);
   readonly whoami = signal<WhoamiResponse | null>(null);
+  private readonly usageState = signal<UsagePauseInput | null>(null);
+  readonly usage = this.usageState.asReadonly();
+  private readonly clock = signal(Date.now());
+  readonly clockNow = this.clock.asReadonly();
 
   readonly roleLabel = computed(() => this.config()?.access?.role ?? "");
   readonly roles = computed(() => this.config()?.access?.roles ?? []);
@@ -100,6 +112,14 @@ export class AccessService {
     this.whoami.set(who);
   }
 
+  setUsage(usage: UsagePauseInput | null): void {
+    this.usageState.set(usage);
+  }
+
+  tickClock(now = Date.now()): void {
+    this.clock.set(now);
+  }
+
   canGlobalScope(scope: string | null): boolean {
     if (!this.configLoaded() && scope === null) return false;
     const access = this.config()?.access;
@@ -111,16 +131,17 @@ export class AccessService {
     return !limit || limit.length === 0;
   }
 
-  canScope(scope: string | null, repo?: string | string[]): boolean {
+  canScope(
+    scope: string | null,
+    repo?: string | readonly string[] | null,
+  ): boolean {
     if (!this.configLoaded() && scope === null) return false;
     const access = this.config()?.access;
     if (!access || access.full) return true;
     if (scope === "signed-in") return true;
     if (scope === null) return false;
     if (!access.scopes?.includes(scope)) return false;
-    const repos = (Array.isArray(repo) ? repo : repo ? [repo] : []).filter(
-      Boolean,
-    );
+    const repos = toRepoList(repo);
     const limit = access.repoLimits?.[scope];
     if (!limit || limit.length === 0 || repos.length === 0) return true;
     const lower = limit.map((r) => r.toLowerCase());
@@ -131,19 +152,54 @@ export class AccessService {
     return this.canScope(routeScope(route), repo);
   }
 
+  // canAccessTask returns false for repo-less tasks when the caller's role is
+  // repo-restricted on the required scope (avoids firing doomed global task
+  // reads or mutations from the UI).
+  canAccessTask(
+    route: RouteKey,
+    repo?: string | readonly string[] | null,
+  ): boolean {
+    const scope = routeScope(route);
+    if (!this.canScope(scope, repo)) return false;
+    const limit = scope ? this.config()?.access?.repoLimits?.[scope] : null;
+    return !(limit?.length && toRepoList(repo).length === 0);
+  }
+
+  private roleSubject(): string {
+    const access = this.config()?.access;
+    const roles = access?.roles ?? [];
+    return `Your ${roles.length > 1 ? "roles" : "role"} ${access?.role || "none"}`;
+  }
+
   // deniedReason is the sentence a disabled control explains itself
   // with, "" when the call is allowed.
   deniedReason(route: RouteKey, repo?: string | string[]): string {
     if (this.can(route, repo)) return "";
     const scope = routeScope(route);
     const access = this.config()?.access;
-    const roles = access?.roles ?? [];
-    const who = `Your ${roles.length > 1 ? "roles" : "role"} ${access?.role || "none"}`;
+    const who = this.roleSubject();
     if (scope === null) {
       return `${who} cannot do this: it needs a role holding every scope (grain/operator).`;
     }
     const where =
       repo && access?.scopes?.includes(scope) ? " on this repository" : "";
     return `${who} does not hold ${scope}${where}, which this needs. Ask an admin for a role that includes it.`;
+  }
+
+  deniedReasonForTask(
+    route: RouteKey,
+    repo?: string | readonly string[] | null,
+  ): string {
+    if (this.canAccessTask(route, repo)) return "";
+    const scope = routeScope(route);
+    const repos = toRepoList(repo);
+    if (
+      scope &&
+      repos.length === 0 &&
+      this.config()?.access?.repoLimits?.[scope]?.length
+    ) {
+      return `${this.roleSubject()} is scoped to specific repositories for ${scope} and cannot act on tasks without a repository.`;
+    }
+    return this.deniedReason(route, repos);
   }
 }

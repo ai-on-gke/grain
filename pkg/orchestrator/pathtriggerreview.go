@@ -212,6 +212,7 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 	if prev != nil && headSHA != "" && hasTag(*prev, reviewHeadTag(headSHA)) {
 		// This head is already being reviewed: judging it again files
 		// nothing.
+		syncParallelReviewBodies(ctx, store, &task, ref, headSHA)
 		return *prev, nil
 	}
 	settings := strictestSettings(matches)
@@ -227,7 +228,11 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 		if since != "" {
 			delta, since = reviewDelta(client, ref, baseRef, since, headSHA, files, matches)
 		}
-		review, err := buildPullRequestReview(ctx, store, task, ref, headSHA, kind, matches, settings, since, delta, now)
+		supersedingID := ""
+		if prev != nil && superseding {
+			supersedingID = prev.ID
+		}
+		review, err := buildPullRequestReview(ctx, store, client, task, ref, headSHA, kind, matches, settings, since, delta, supersedingID, now)
 		if err != nil {
 			return model.Task{}, err
 		}
@@ -272,6 +277,7 @@ func filePullRequestReview(ctx context.Context, store *model.Store, client githu
 	}); err != nil {
 		return filed, fmt.Errorf("orchestrator: recording %s's %s review: %w", task.ID, kind, err)
 	}
+	syncParallelReviewBodies(ctx, store, &task, ref, headSHA)
 	return filed, nil
 }
 
@@ -404,9 +410,9 @@ func reviewDelta(client github.Client, ref model.PullRequestRef, baseRef, since,
 
 // buildPullRequestReview builds (without yet storing) the review of kind,
 // ready for fileCoalesced to add coalescing links and store atomically.
-func buildPullRequestReview(ctx context.Context, store *model.Store, task model.Task, ref model.PullRequestRef,
+func buildPullRequestReview(ctx context.Context, store *model.Store, client github.Client, task model.Task, ref model.PullRequestRef,
 	headSHA, kind string, matches []reviewMatch, settings reviewSettings, since string, delta []string,
-	now time.Time) (model.Task, error) {
+	supersedingID string, now time.Time) (model.Task, error) {
 
 	paths := unionPaths(matches)
 	vars := map[string]string{
@@ -415,7 +421,10 @@ func buildPullRequestReview(ctx context.Context, store *model.Store, task model.
 		"group":   "",
 		"pr":      ref.String(), "head_sha": headSHA, "base_sha": matches[0].rule.Commit,
 	}
-	facts := reviewFacts(ref, headSHA, matches, settings) + incrementalNote(since, headSHA, delta)
+	facts := reviewFacts(ref, headSHA, matches, settings) +
+		earlierReviewsSection(ctx, store, client, &task, ref, headSHA, "", supersedingID) +
+		incrementalNote(since, headSHA, delta) +
+		parallelReviewsSection(parallelReviewsFor(ctx, store, &task, ref, headSHA, "", supersedingID))
 
 	var tmpl *model.Template
 	if kind == model.SecurityReviewTemplateID {
@@ -538,7 +547,11 @@ func incrementalNote(since, head string, delta []string) string {
 // full review when the earlier review it depended on closed without finishing.
 func stripIncrementalReview(t *model.Task) {
 	if idx := strings.Index(t.Body, incrementalNoteHeader); idx >= 0 {
-		t.Body = t.Body[:idx]
+		if p := strings.Index(t.Body[idx:], parallelReviewsHeader); p >= 0 {
+			t.Body = t.Body[:idx] + t.Body[idx+p:]
+		} else {
+			t.Body = t.Body[:idx]
+		}
 	}
 	t.Tags = slices.DeleteFunc(t.Tags, func(tag string) bool {
 		return strings.HasPrefix(tag, "path-trigger-since:")

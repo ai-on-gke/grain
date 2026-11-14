@@ -318,7 +318,9 @@ export interface SuiteRun {
   pass: number;
   createdAt: string;
   completedAt?: string;
-  tasks: SuiteRunTask[];
+  // null on a run that has filed nothing yet (or ended before it could):
+  // the server sends Go's nil slice as JSON null, not [].
+  tasks: SuiteRunTask[] | null;
   taskCount?: number;
   tasksTruncated?: boolean;
 }

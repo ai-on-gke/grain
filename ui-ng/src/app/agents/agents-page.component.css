@@ -111,11 +111,43 @@ g-agents-page {
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: var(--md-sys-shape-corner-medium);
   background: var(--md-sys-color-surface);
-  transition: border-color 220ms var(--md-sys-motion-effects);
+  cursor: pointer;
+  transition:
+    border-color 220ms var(--md-sys-motion-effects),
+    background-color 220ms var(--md-sys-motion-effects);
 }
 
 :root[data-theme="dark"] .agent-card {
   background: var(--md-sys-color-surface-container-low);
+}
+
+.agent-card:hover {
+  background: var(--md-sys-color-surface-container-low);
+}
+
+:root[data-theme="dark"] .agent-card:hover {
+  background: var(--md-sys-color-surface-container);
+}
+
+.agent-card:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+/* Selected: the Tasks queue row's own selection, on a card -- the
+   surface-container fill and a 3px primary leading bar -- plus a primary
+   outline, unless the card is quiet and its warning border says more. */
+.agent-card.is-selected {
+  background: var(--md-sys-color-surface-container);
+  box-shadow: inset 3px 0 0 var(--md-sys-color-primary);
+}
+
+:root[data-theme="dark"] .agent-card.is-selected {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.agent-card.is-selected:not(.is-quiet) {
+  border-color: var(--md-sys-color-primary);
 }
 
 .agent-card.is-fresh {
@@ -278,6 +310,10 @@ g-agents-page {
   font-size: 11px;
 }
 
+.cpu-none {
+  font-style: italic;
+}
+
 .spark {
   overflow: visible;
   flex: none;
@@ -330,6 +366,27 @@ g-agents-page {
     var(--md-sys-color-warning, var(--md-sys-color-on-tertiary-container));
 }
 
+.agent-table tbody tr {
+  cursor: pointer;
+}
+
+.agent-table tbody tr:hover td {
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.agent-table tbody tr.is-selected td {
+  background: var(--md-sys-color-surface-container);
+}
+
+.agent-table tbody tr.is-selected:not(.is-quiet) td:first-child {
+  box-shadow: inset 3px 0 0 var(--md-sys-color-primary);
+}
+
+.agent-table tbody tr:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: -2px;
+}
+
 .agent-table a {
   color: inherit;
 }
@@ -358,6 +415,9 @@ body.agents-wall .agent-title {
 }
 
 @media (max-width: 599.95px) {
+  .agents-body {
+    padding-bottom: calc(var(--grain-bottombar-height, 92px) + 16px);
+  }
   .agent-grid {
     padding: 12px;
     grid-template-columns: minmax(0, 1fr);

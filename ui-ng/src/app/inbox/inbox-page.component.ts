@@ -135,6 +135,7 @@ const ONE_KEY = new Set(["approve"]);
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "./inbox-queue.css",
     "./inbox-inspector.css",
     "../shared/conversation.css",
@@ -269,7 +270,12 @@ const ONE_KEY = new Set(["approve"]);
           <div class="queue-list">
             @if (store.loaded() && store.groups().length === 0) {
               <div class="empty-state" data-testid="next-inbox-empty">
-                @if (store.entries().length === 0) {
+                @if (!store.tasksRead()) {
+                  <p data-testid="next-inbox-unread">
+                    Tasks could not be read, so this queue cannot say yet what
+                    is waiting on you. It tries again on its own.
+                  </p>
+                } @else if (store.entries().length === 0) {
                   <p>
                     Nothing is waiting on you. Every task is running, waiting on
                     grain, or done.
@@ -386,8 +392,10 @@ const ONE_KEY = new Set(["approve"]);
                                   >
                                 }
                                 @if (e.owner) {
-                                  <span class="row-owner muted"
-                                    >·
+                                  <span class="row-owner muted">
+                                    @if (e.repo) {
+                                      ·
+                                    }
                                     <g-actor-chip
                                       [label]="e.owner"
                                       [kind]="e.task?.authorKind"
@@ -1088,6 +1096,12 @@ const ONE_KEY = new Set(["approve"]);
                           rel="noopener noreferrer"
                           >See the whole pull request</a
                         >
+                      } @else if (sel.taskLink) {
+                        <a
+                          [routerLink]="sel.taskLink"
+                          [queryParams]="{ from: 'inbox', tab: 'changes' }"
+                          >See the full diff</a
+                        >
                       }
                     </p>
                   }
@@ -1115,9 +1129,9 @@ const ONE_KEY = new Set(["approve"]);
             "
             [attr.data-testid]="'action-' + a.id"
             [disabled]="
-              !!store.busy() || !access.can(a.route, a.repo) || !!a.blocked
+              !!store.busy() || !canAction(a.route, a.repo) || !!a.blocked
             "
-            [title]="a.blocked || access.deniedReason(a.route, a.repo)"
+            [title]="a.blocked || deniedAction(a.route, a.repo)"
             (click)="run(sel, a)"
           >
             {{ a.label }}
@@ -1298,6 +1312,11 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       ? this.store.scopedDecisions().length
       : this.store.decisions().length;
     if (!this.store.loaded()) return "Inbox";
+    // A task list never read is not an empty one: say only what is known.
+    if (!this.store.tasksRead()) {
+      if (n === 0) return "Inbox";
+      return `At least ${n} ${n === 1 ? "decision" : "decisions"} waiting on you`;
+    }
     if (n === 0) return "Nothing waiting on you";
     return `${n} ${n === 1 ? "decision" : "decisions"} waiting on you`;
   });
@@ -1331,7 +1350,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
           label: `${a.label} all`,
           allowed: 0,
         };
-        if (this.access.can(a.route, a.repo) && !a.blocked) b.allowed++;
+        if (this.canAction(a.route, a.repo) && !a.blocked) b.allowed++;
         byId.set(a.id, b);
       }
     }
@@ -1414,6 +1433,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   // The shell keeps the store running for the rail badge; opening the
   // page reads the queue at once rather than waiting for the next poll.
   ngOnInit(): void {
+    this.store.retainPage();
     this.store.applyUpdates();
     this.store.clearChecked();
     this.store.start();
@@ -1421,6 +1441,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.store.releasePage();
     if (this.respondTimer) clearTimeout(this.respondTimer);
     this.directorCtx.clearSelection("inbox");
     this.store.clearLiveTranscript();
@@ -1481,11 +1502,29 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     return "";
   }
 
+  protected canAction(
+    route: Parameters<AccessService["can"]>[0],
+    repo?: string | null,
+  ): boolean {
+    return route.includes("/api/tasks/")
+      ? this.access.canAccessTask(route, repo ?? null)
+      : this.access.can(route, repo || undefined);
+  }
+
+  protected deniedAction(
+    route: Parameters<AccessService["can"]>[0],
+    repo?: string | null,
+  ): string {
+    return route.includes("/api/tasks/")
+      ? this.access.deniedReasonForTask(route, repo ?? null)
+      : this.access.deniedReason(route, repo || undefined);
+  }
+
   protected can(
     route: Parameters<AccessService["can"]>[0],
     sel: InboxEntry,
   ): boolean {
-    return this.access.can(route, sel.repo || undefined);
+    return this.canAction(route, sel.repo || null);
   }
 
   // firstDenied explains the first thing on this item the reader's role
@@ -1498,7 +1537,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     if (sel.kind === "access") routes.unshift(this.grantRoute);
     if (sel.kind === "release") routes.unshift(this.releaseApproveRoute);
     for (const r of routes) {
-      const why = this.access.deniedReason(r, sel.repo || undefined);
+      const why = this.deniedAction(r, sel.repo || null);
       if (why) return why;
     }
     return "";
@@ -1599,7 +1638,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       .checkedEntries()
       .filter((e) =>
         e.actions.some(
-          (a) => a.id === id && !a.blocked && this.access.can(a.route, a.repo),
+          (a) => a.id === id && !a.blocked && this.canAction(a.route, a.repo),
         ),
       );
     const n = rows.length;
@@ -1740,7 +1779,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
 
   protected wakeDeniedReason(sel: InboxEntry): string {
     const repo = sel.repo || undefined;
-    const commentWhy = this.access.deniedReason(this.commentsRoute, repo);
+    const commentWhy = this.deniedAction(this.commentsRoute, repo);
     if (commentWhy) return commentWhy;
     const st = sel.task?.state ?? this.store.selectedDetail()?.state;
     if (sel.kind === "proposal" || st === "proposed") {
@@ -1748,19 +1787,19 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     }
     if (st === "closed") {
       return (
-        this.access.deniedReason("POST /api/tasks/{id}/reopen", repo) ||
+        this.deniedAction("POST /api/tasks/{id}/reopen", repo) ||
         "No permission to reopen this task."
       );
     }
     if (st === "failed") {
       return (
-        this.access.deniedReason(this.retryRoute, repo) ||
-        this.access.deniedReason(this.runNowRoute, repo) ||
+        this.deniedAction(this.retryRoute, repo) ||
+        this.deniedAction(this.runNowRoute, repo) ||
         "No permission to retry or wake this task."
       );
     }
     return (
-      this.access.deniedReason(this.runNowRoute, repo) ||
+      this.deniedAction(this.runNowRoute, repo) ||
       "No permission to wake the agent on this task."
     );
   }
@@ -1908,7 +1947,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       (e) =>
         !e.gone &&
         e.actions.some(
-          (a) => a.id === "approve" && this.access.can(a.route, a.repo),
+          (a) => a.id === "approve" && this.canAction(a.route, a.repo),
         ),
     ).length;
   }
@@ -1925,7 +1964,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       (e) =>
         !e.gone &&
         e.actions.some(
-          (a) => a.id === "approve" && this.access.can(a.route, a.repo),
+          (a) => a.id === "approve" && this.canAction(a.route, a.repo),
         ),
     );
     const keys = rows.map((e) => e.key);
@@ -2062,7 +2101,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
         sel &&
         primary &&
         !primary.blocked &&
-        this.access.can(primary.route, primary.repo)
+        this.canAction(primary.route, primary.repo)
       ) {
         if (ONE_KEY.has(primary.id) || primary.confirm) {
           this.run(sel, primary);

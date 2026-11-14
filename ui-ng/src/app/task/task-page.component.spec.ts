@@ -175,16 +175,30 @@ class FakeApi {
   };
   calls: Call[] = [];
   transcripts: string[] = [];
+  remoteBranches: string[] | null = null;
 
   getIfChanged = () =>
     Promise.resolve({ body: structuredClone(this.detail), changed: true });
-  diffPreview = () => Promise.resolve(structuredClone(this.preview));
+  diffPreview = () => {
+    this.calls.push({
+      method: "GET",
+      route: "GET /api/tasks/{id}/diff-preview",
+      params: { id: this.detail.id },
+    });
+    return Promise.resolve(structuredClone(this.preview));
+  };
   get = (
     route: string,
     params?: { id?: string; number?: string; owner?: string; name?: string },
     query?: string,
   ) => {
     this.calls.push({ method: "GET", route, params, query });
+    if (route === "GET /api/repos/{owner}/{name}/github-branches") {
+      return Promise.resolve({ branches: this.remoteBranches ?? undefined });
+    }
+    if (route === "GET /api/repos/{owner}/{name}/branches") {
+      return Promise.resolve({ branches: this.remoteBranches ?? undefined });
+    }
     if (route === "GET /api/tasks/{id}/tree") return Promise.resolve(this.tree);
     if (
       route === "GET /api/tasks/{id}" &&
@@ -699,6 +713,18 @@ describe("TaskPageComponent", () => {
     } as never);
     await settle(f);
     expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+
+    // Standalone page uses <h1> for #task-title; viewer loses Reply on awaiting_reply.
+    expect(q(f, "h1#task-title")).toBeTruthy();
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        full: false,
+        role: "grain/viewer",
+        scopes: ["tasks:read"],
+      },
+    } as never);
+    await settle(f);
+    expect(q(f, '[data-testid="act-reply"]')).toBeNull();
   });
 
   it("offers Rollover for a durable idle task but not Recreate sandbox", async () => {
@@ -1196,12 +1222,57 @@ describe("duration", () => {
     const section = q(f, "section.view-panel")!;
     expect(section.hasAttribute("inert")).toBe(true);
 
-    // Press escape
-    dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    // Press escape even with focus outside the dialog element.
+    const externalFocus = document.createElement("button");
+    document.body.appendChild(externalFocus);
+    externalFocus.focus();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+    );
     await settle(f);
+    externalFocus.remove();
 
     expect(q(f, '[data-testid="force-merge-dialog"]')).toBeNull();
     expect(section.hasAttribute("inert")).toBe(false);
     expect(document.activeElement).toBe(openBtn);
+  });
+
+  it("renders actionError once, ignores page Escape when modal is open, skips missing remote branches, and guards close(expectedId)", async () => {
+    const api = new FakeApi();
+    api.remoteBranches = ["main"]; // excludes grain/task-7
+    const f = await render(api, "changes");
+    const store = TestBed.inject(TaskStore);
+    const router = TestBed.inject(Router);
+    const navSpy = vi.spyOn(router, "navigate").mockResolvedValue(true);
+
+    // 1) actionError shows a single banner (no duplicate below gates bar).
+    store.actionError.set("Failed to run action");
+    await settle(f);
+    expect(
+      (f.nativeElement as HTMLElement).querySelectorAll(
+        '[data-testid="task-action-error"]',
+      ),
+    ).toHaveLength(1);
+
+    // 2) Skipped diffPreview & compare when branch is absent from remote.
+    expect(
+      api.calls.some((c) => c.route === "GET /api/tasks/{id}/diff-preview"),
+    ).toBe(false);
+    expect(q(f, '[data-testid="load-full-diff"]')).toBeNull();
+    expect(q(f, '[data-testid="task-diff-skipped"]')?.textContent).toContain(
+      "no longer present",
+    );
+
+    // 3) TaskStore.close(otherId) does not stop active task #7, and Escape is ignored over modal.
+    store.close("999");
+    expect(store.id()).toBe("7");
+    const fakeModal = document.createElement("div");
+    fakeModal.setAttribute("aria-modal", "true");
+    document.body.appendChild(fakeModal);
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+    );
+    expect(navSpy).not.toHaveBeenCalled();
+    fakeModal.remove();
   });
 });

@@ -157,8 +157,7 @@ func (s *Store) TaskCIMode(ctx context.Context, task Task) (repo RepoRef, branch
 	} else {
 		mode = CIModeGitHub
 		for _, capName := range eff.DefaultCapabilities {
-			c := strings.TrimSpace(capName)
-			if c == "grain-ci" || strings.HasPrefix(c, "https://grain.dev/capabilities/ci#grain-ci") {
+			if IsGrainCIGrant(capName) {
 				mode = CIModeGrain
 				break
 			}

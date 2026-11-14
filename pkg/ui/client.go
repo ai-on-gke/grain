@@ -657,27 +657,11 @@ func (c *Client) capabilityByID(id string) (Capability, bool) {
 			return capability, true
 		}
 	}
-	if name, ok := model.GCPKeyName(id); ok && name != "" {
-		return Capability{
-			ID:   id,
-			Name: "GCP key (" + name + ", retired spelling)",
-			Description: "Read as https://grain.dev/capabilities/gcp#gcp-key with {permission_set: " + name + "}: mint a " +
-				"short-lived GCP service-account key for this task and place it in its sandbox",
-		}, true
-	}
 	// An agent API grant (agent_api.go), a repo-limited one included:
 	// the scopes and presets are offered rows of their own, but
 	// api:<scope>@<repo> is spelled per repository and so only here.
 	if row, ok := apiCapability(id); ok {
 		return row, true
-	}
-	if name, ok := localScriptsName(id); ok {
-		return Capability{
-			ID:   id,
-			Name: "Local scripts (" + name + ", retired spelling)",
-			Description: "Read as the host-script grants (https://grain.dev/capabilities/host-script#host-script) serving the " +
-				"scripts of the " + name + " local-scripts declaration on the node host (docs/local-scripts.md); never granted to a scheduled run",
-		}, true
 	}
 	return Capability{}, false
 }

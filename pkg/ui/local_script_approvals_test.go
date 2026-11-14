@@ -56,7 +56,7 @@ func localScriptsClient(t *testing.T) (*ui.Client, *model.Store, context.Context
 func grantLocalScripts(t *testing.T, store *model.Store, ctx context.Context, id string) {
 	t.Helper()
 	if err := store.UpdateTask(ctx, id, func(task *model.Task) error {
-		task.Grants = append(task.Grants, model.Grant{Capability: "local-scripts:ops", Via: model.GrantByDefault})
+		task.Grants = append(task.Grants, model.Grant{Capability: `https://grain.dev/capabilities/host-script#host-script={"script":"deploy"}`, Via: model.GrantByDefault})
 		return nil
 	}); err != nil {
 		t.Fatal(err)

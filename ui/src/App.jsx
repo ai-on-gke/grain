@@ -3903,6 +3903,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       processTriggers={processTriggers}
       ciRuns={ciRuns}
       boards={boards}
+      boardsError={boardsError}
       openBoardId={openBoardId}
       onOpenBoard={openBoard}
       sessions={sessions}
