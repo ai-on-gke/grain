@@ -2025,7 +2025,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   protected async retryTask(id: string, ev: Event): Promise<void> {
     ev.stopPropagation();
-    const failed = await this.store.retry([id]);
+    const { failed } = await this.store.retry([id]);
     if (failed === 0) {
       this.snack(`Retrying #${id}`);
     }
@@ -2341,15 +2341,9 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     return list.length === 1 ? `#${list[0]}` : `${list.length} tasks`;
   }
 
-  private landedOf(ids: readonly string[], failed: number): readonly string[] {
-    const landed = this.store.lastLanded();
-    return landed.length || failed ? landed : ids;
-  }
-
   protected async approve(ids: readonly string[]): Promise<void> {
     this.closeMenu(true);
-    const failed = await this.store.approve(ids);
-    const landed = this.landedOf(ids, failed);
+    const { landed } = await this.store.approve(ids);
     if (landed.length) {
       this.uncheck(landed);
       this.snack(
@@ -2360,8 +2354,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   protected async defer(ids: readonly string[]): Promise<void> {
     this.closeMenu(true);
-    const failed = await this.store.defer(ids);
-    const landed = this.landedOf(ids, failed);
+    const { landed } = await this.store.defer(ids);
     if (landed.length) {
       this.uncheck(landed);
       this.snack(`Deferred ${this.ids(landed)}`, {
@@ -2374,8 +2367,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected async undefer(ids: readonly string[]): Promise<void> {
-    const failed = await this.store.undefer(ids);
-    const landed = this.landedOf(ids, failed);
+    const { landed } = await this.store.undefer(ids);
     if (landed.length) {
       this.uncheck(landed);
       this.snack(`Brought back ${this.ids(landed)}`, {
@@ -2407,8 +2399,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       return;
     }
     this.confirmClose.set(false);
-    const failed = await this.store.close(ids);
-    const landed = this.landedOf(ids, failed);
+    const { landed } = await this.store.close(ids);
     if (landed.length) {
       this.uncheck(landed);
       this.snack(
@@ -2426,8 +2417,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected async reopen(ids: readonly string[]): Promise<void> {
-    const failed = await this.store.reopen(ids);
-    const landed = this.landedOf(ids, failed);
+    const { landed } = await this.store.reopen(ids);
     if (landed.length) {
       this.uncheck(landed);
       this.snack(`Reopened ${this.ids(landed)}`);
@@ -2439,8 +2429,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     p: number,
   ): Promise<void> {
     this.closeMenu(true);
-    const { failed, undo } = await this.store.setPriority(ids, p);
-    const landed = this.landedOf(ids, failed);
+    const { landed, undo } = await this.store.setPriority(ids, p);
     if (landed.length) {
       this.snack(
         `Priority of ${this.ids(landed)} set to ${levelOf(p).name} ${p}`,
