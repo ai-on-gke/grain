@@ -1024,4 +1024,76 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       ),
     ).toBe(true);
   });
+
+  it("renders skeletons on cold config load, fires section fetches once per mount, and opens warm Settings synchronously across route leaves", async () => {
+    localStorage.clear();
+    const api = new FakeSettingsApi();
+    let resolveCfg!: (v: GrainConfig) => void;
+    api.config = () =>
+      new Promise<GrainConfig>((res) => {
+        resolveCfg = res;
+      });
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(
+          [
+            { path: "settings", component: SettingsPageComponent },
+            { path: "settings/:section", component: SettingsPageComponent },
+            { path: "other", children: [] },
+          ],
+          withComponentInputBinding(),
+        ),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: api },
+      ],
+    });
+    const harness = await RouterTestingHarness.create("/settings/git");
+    harness.fixture.autoDetectChanges(true);
+    await harness.fixture.whenStable();
+
+    const el = harness.fixture.nativeElement as HTMLElement;
+    expect(
+      el.querySelector('[data-testid="settings-skeleton"]'),
+    ).not.toBeNull();
+
+    // Unblock cold config and switch config() back to fast resolved response for background refreshes.
+    const cfg = structuredClone(api.configBody);
+    api.config = () => Promise.resolve(structuredClone(api.configBody));
+    resolveCfg(cfg);
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    await harness.fixture.whenStable();
+
+    expect(el.querySelector('[data-testid="settings-skeleton"]')).toBeNull();
+    // Guarded ngOnChanges prevents duplicate child loadForSection() call on initial mount.
+    expect(
+      api.calls.filter((c) => c.key === "GET /api/deployment/git-connections")
+        .length,
+    ).toBe(1);
+
+    // Visiting /settings/repositories fetches reachable-repos once.
+    await harness.navigateByUrl("/settings/repositories");
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.filter((c) => c.key === "GET /api/deployment/reachable-repos")
+        .length,
+    ).toBe(1);
+
+    // Leave Settings for another route and come back: warm open renders without skeletons and hits 60s reachable-repos cache.
+    await harness.navigateByUrl("/other");
+    await harness.navigateByUrl("/settings/repositories");
+    harness.fixture.detectChanges();
+    const warmEl = harness.fixture.nativeElement as HTMLElement;
+    expect(
+      warmEl.querySelector('[data-testid="settings-skeleton"]'),
+    ).toBeNull();
+    expect(
+      warmEl.querySelector('[data-testid="input-add-repo"]'),
+    ).not.toBeNull();
+    expect(
+      api.calls.filter((c) => c.key === "GET /api/deployment/reachable-repos")
+        .length,
+    ).toBe(1);
+  });
 });

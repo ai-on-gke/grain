@@ -21,6 +21,7 @@ import { Component, input } from "@angular/core";
 class MockTaskDetailComponent {
   readonly id = input<string>();
   readonly pane = input<boolean>();
+  readonly tab = input<string>();
 }
 
 import { TaskDetailComponent } from "../task/task-detail.component";
@@ -1010,5 +1011,14 @@ describe("AgentsPageComponent CPU", () => {
     expect(
       q(f, '[data-testid="agent-1"] [data-testid="quiet-line"]')!.textContent,
     ).toContain("CPU busy, probably building or testing");
+  });
+
+  it("forwards ?pane= to the embedded g-task-detail [tab] input", async () => {
+    const api = new FakeApi();
+    api.live = [run("123")];
+    const { harness } = await renderRouted(api, "/agents?task=123&pane=runs");
+    const el = harness.routeNativeElement as HTMLElement;
+    const current = el.querySelector("g-task-detail .task-tabs [aria-current]");
+    expect(current?.getAttribute("data-testid")).toBe("task-tab-runs");
   });
 });

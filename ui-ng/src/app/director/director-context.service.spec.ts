@@ -51,6 +51,29 @@ describe("DirectorContextService", () => {
     expect(svc.selection()).not.toBeNull();
     svc.clearSelection("task");
     expect(svc.selection()).toBeNull();
+
+    svc.setRoute("/workstreams/issue:acme/web#42?node=55");
+    expect(svc.activeContext()).toEqual({
+      kind: "workstream",
+      id: "issue:acme/web#42",
+    });
+    svc.setRoute("/workstreams/issue%3Aacme%2Fweb%2342?pane=changes");
+    expect(svc.activeContext()).toEqual({
+      kind: "workstream",
+      id: "issue:acme/web#42",
+    });
+
+    svc.setRoute("/workstreams#issue%3Aacme%2Fweb%2399");
+    expect(svc.activeContext()).toEqual({
+      kind: "workstream",
+      id: "issue:acme/web#99",
+    });
+
+    svc.setRoute("/workstreams/%E0%A4%A");
+    expect(svc.activeContext()).toEqual({
+      kind: "workstream",
+      id: "%E0%A4%A",
+    });
   });
 
   it("toggles drawer state and restores focus to opener", async () => {

@@ -15,8 +15,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  OnChanges,
-  OnInit,
+  type OnChanges,
+  type OnInit,
+  type SimpleChanges,
   ViewEncapsulation,
   inject,
   input,
@@ -1006,17 +1007,15 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   // so an edit that differs from it is one the leave prompt protects.
   private readonly memorySaved = signal("");
   protected readonly memoryDocs = signal<string[]>([]);
-  private readonly qaRolloutRaw = signal<{
-    epoch: number;
-    text: string;
-  } | null>(null);
 
   ngOnInit(): void {
     this.loadForSection();
   }
 
-  ngOnChanges(): void {
-    this.loadForSection();
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes["section"] && !changes["section"].firstChange) {
+      this.loadForSection();
+    }
   }
 
   protected canWriteSettings(): boolean {
@@ -1098,7 +1097,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   }
 
   protected qaRolloutInputValue(): string {
-    const raw = this.qaRolloutRaw();
+    const raw = this.state.qaRolloutRaw();
     if (raw && raw.epoch === this.state.discardEpoch()) {
       return raw.text;
     }
@@ -1117,7 +1116,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     const nextEnabled = !this.qaEnabled();
     this.state.setField("qaEnabled", nextEnabled);
     if (!nextEnabled) {
-      this.qaRolloutRaw.set(null);
+      this.state.qaRolloutRaw.set(null);
       this.state.setFieldError("qaRolloutPct", null);
       if (!this.state.settings()["qaEnabled"]) {
         // Clear unsaved dependent edits when flipping back off on a deployment where QA was off.
@@ -1140,7 +1139,10 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     const target = ev.target;
     if (!(target instanceof HTMLInputElement)) return;
     const raw = target.value;
-    this.qaRolloutRaw.set({ epoch: this.state.discardEpoch(), text: raw });
+    this.state.qaRolloutRaw.set({
+      epoch: this.state.discardEpoch(),
+      text: raw,
+    });
 
     const trimmed = raw.trim();
     if (trimmed === "" || !/^\d+$/.test(trimmed)) {
@@ -1164,7 +1166,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   protected onQARolloutBlur(): void {
     if (!this.qaRolloutError()) {
-      this.qaRolloutRaw.set(null);
+      this.state.qaRolloutRaw.set(null);
     }
   }
 

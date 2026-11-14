@@ -51,6 +51,7 @@ import {
   PriorityChipComponent,
   priorityTone,
 } from "../shared/priority-chip.component";
+import { summarizeDispatchStatus } from "../shared/dispatch-status";
 import { scopeOf } from "../shared/scope";
 import { boardLabels } from "./board-labels";
 import { DEFAULT_RATIO } from "../shared/split";
@@ -135,6 +136,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "../inbox/inbox-queue.css",
     "../inbox/inbox-inspector.css",
     "./tasks-page.component.css",
@@ -520,6 +522,23 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                       >
                     }
                   </div>
+                  @if (dispatchPause(); as dp) {
+                    <div
+                      class="banner"
+                      [class.banner-error]="dp.tone === 'error'"
+                      [class.banner-warn]="dp.tone === 'warn'"
+                      role="status"
+                      data-testid="backlog-dispatch-notice"
+                    >
+                      <strong>{{ dp.headline }}</strong>
+                      @if (dp.resetText) {
+                        <span class="tabular"> · {{ dp.resetText }}</span>
+                      }
+                      @if (dp.subline) {
+                        <span> — {{ dp.subline }}</span>
+                      }
+                    </div>
+                  }
                   @if (sort() !== "run") {
                     <p class="muted list-hint">
                       Moving is off in this order.
@@ -1558,37 +1577,55 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   );
 
   protected canApproveTask(t: Task): boolean {
-    return this.access.can("POST /api/tasks/{id}/approve", t.repo || undefined);
+    return this.access.canAccessTask(
+      "POST /api/tasks/{id}/approve",
+      t.repo ?? null,
+    );
   }
   protected canEditTask(t: Task): boolean {
-    return this.access.can("PATCH /api/tasks/{id}", t.repo || undefined);
+    return this.access.canAccessTask("PATCH /api/tasks/{id}", t.repo ?? null);
   }
   protected canDeferTask(t: Task): boolean {
-    return this.access.can("POST /api/tasks/{id}/defer", t.repo || undefined);
+    return this.access.canAccessTask(
+      "POST /api/tasks/{id}/defer",
+      t.repo ?? null,
+    );
   }
   protected canCloseTask(t: Task): boolean {
-    return this.access.can("POST /api/tasks/{id}/close", t.repo || undefined);
-  }
-  protected selectedRepos(): string[] {
-    return Array.from(
-      new Set(
-        this.selectedRows()
-          .map((r) => r.repo)
-          .filter((r): r is string => !!r),
-      ),
+    return this.access.canAccessTask(
+      "POST /api/tasks/{id}/close",
+      t.repo ?? null,
     );
   }
   protected canApproveSelected(): boolean {
-    return this.access.can(
-      "POST /api/tasks/{id}/approve",
-      this.selectedRepos(),
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask(
+          "POST /api/tasks/{id}/approve",
+          r.repo ?? null,
+        ),
+      )
     );
   }
   protected canDeferSelected(): boolean {
-    return this.access.can("POST /api/tasks/{id}/defer", this.selectedRepos());
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask("POST /api/tasks/{id}/defer", r.repo ?? null),
+      )
+    );
   }
   protected canCloseSelected(): boolean {
-    return this.access.can("POST /api/tasks/{id}/close", this.selectedRepos());
+    const rows = this.selectedRows();
+    return (
+      rows.length > 0 &&
+      rows.every((r) =>
+        this.access.canAccessTask("POST /api/tasks/{id}/close", r.repo ?? null),
+      )
+    );
   }
   protected readonly canReadBoards = computed(() =>
     this.access.can("GET /api/boards"),
@@ -1601,6 +1638,13 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     if (!cur) return "";
     return this.store.boards().find((b) => (b.query || "") === cur)?.name ?? "";
   });
+  protected readonly dispatchPause = computed(() =>
+    summarizeDispatchStatus(
+      this.access.rawConfig(),
+      this.access.usage(),
+      this.access.clockNow(),
+    ),
+  );
   protected readonly timelineSpan = computed(() => {
     const list = this.rows();
     const now = Date.now();
@@ -1904,7 +1948,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected canRetry(t: Task): boolean {
-    return this.access.can("POST /api/tasks/{id}/retry", t.repo || undefined);
+    return this.access.canAccessTask(
+      "POST /api/tasks/{id}/retry",
+      t.repo ?? null,
+    );
   }
 
   protected async retryTask(id: string, ev: Event): Promise<void> {

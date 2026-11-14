@@ -16,8 +16,9 @@ import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
-  OnChanges,
-  OnInit,
+  type OnChanges,
+  type OnInit,
+  type SimpleChanges,
   ViewEncapsulation,
   computed,
   inject,
@@ -1071,8 +1072,10 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     this.loadForSection();
   }
 
-  ngOnChanges(): void {
-    this.loadForSection();
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes["section"] && !changes["section"].firstChange) {
+      this.loadForSection();
+    }
   }
 
   protected canWriteSettings(): boolean {
@@ -1090,6 +1093,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected setTimeZone(tz: string): void {
     this.timeZone.set(tz);
     writeStorage(TZ_STORAGE_KEY, tz === "local" ? null : tz);
+    this.access.tickClock();
   }
 
   protected serverOrigin(): string {

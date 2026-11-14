@@ -44,6 +44,7 @@ import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { summarizeDispatchStatus } from "../shared/dispatch-status";
 import { isHuman } from "../sessions/session-helpers";
 
 import { ConversationComponent } from "../shared/conversation/conversation.component";
@@ -135,6 +136,7 @@ export function duration(from?: string, to?: string): string {
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "./task-detail.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
@@ -609,21 +611,16 @@ export function duration(from?: string, to?: string): string {
         }
 
         <!-- Inline Pending Approval / Gate Panels -->
-
-        @if (store.actionError(); as err) {
+        @if (queuedPauseNotice(); as qpn) {
           <p
-            class="banner banner-error"
-            role="alert"
-            data-testid="task-action-error"
+            class="banner banner-info"
+            role="status"
+            data-testid="task-dispatch-paused"
           >
-            {{ err }}
-            <button
-              type="button"
-              class="btn-text"
-              (click)="store.actionError.set(null)"
-            >
-              Dismiss
-            </button>
+            {{ qpn.headline }}
+            @if (qpn.resetText) {
+              · {{ qpn.resetText }}
+            }
           </p>
         }
         <g-task-gates-bar
@@ -689,6 +686,7 @@ export function duration(from?: string, to?: string): string {
                   [routerLink]="[]"
                   [queryParams]="tabQuery(tab.id)"
                   queryParamsHandling="merge"
+                  [preserveFragment]="!!pane()"
                   [attr.aria-current]="
                     current() === tab.id ? (pane() ? 'true' : 'page') : null
                   "
@@ -1336,7 +1334,9 @@ export class TaskDetailComponent implements OnDestroy {
     return id ? (this.wsStore.taskToStream().get(id) ?? null) : null;
   });
   protected readonly current = computed<TaskTab>(() => {
-    const v = (this.pane() ? this.routePane() : undefined) ?? this.tab();
+    const rp =
+      this.pane() && isTab(this.routePane()) ? this.routePane() : undefined;
+    const v = rp ?? this.tab();
     if (
       v === "details" &&
       !this.pane() &&
@@ -1484,6 +1484,15 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     return t ? submitBlock(t) : "";
   });
+  protected readonly queuedPauseNotice = computed(() =>
+    this.t()?.state === "queued"
+      ? summarizeDispatchStatus(
+          this.access.rawConfig(),
+          this.access.usage(),
+          this.access.clockNow(),
+        )
+      : null,
+  );
 
   protected actorLabel(c: Comment): string {
     if (c.authorKind === "automation" && c.author === "console-session") {
@@ -1586,11 +1595,11 @@ export class TaskDetailComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
-    this.store.close();
+    this.store.close(this.id());
   }
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
-    return this.access.can(route, this.t()?.repo || undefined);
+    return this.access.canAccessTask(route, this.t()?.repo ?? null);
   }
 
   protected val(ev: Event): string {
@@ -1701,6 +1710,7 @@ export class TaskDetailComponent implements OnDestroy {
       .navigate([], {
         queryParams: this.tabQuery("conversation"),
         queryParamsHandling: "merge",
+        ...(this.pane() ? { preserveFragment: true } : {}),
       })
       .then(() => setTimeout(() => this.composer()?.nativeElement.focus()));
   }

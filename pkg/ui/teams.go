@@ -139,14 +139,19 @@ type teamRepoSources struct {
 	states    map[string]model.State
 	templates []model.Template
 	schedules []model.Schedule
-	// workflows caches GetRepoWorkflows per repo across teams.
-	workflows map[string]bool
+	// workflows caches HasRepoWorkflows per repo across teams.
+	workflows       map[string]bool
+	workflowsLoaded bool
 }
 
 // loadTeamRepoSources reads what populateTeamReposFrom needs. A read that
 // fails leaves its part empty, as each one always has: a team's repo list
 // is a summary, not something to fail the team over.
-func (c *Client) loadTeamRepoSources(ctx context.Context) *teamRepoSources {
+func (c *Client) loadTeamRepoSources(ctx context.Context, preloadedWorkflows ...model.RepoWorkflow) *teamRepoSources {
+	return c.loadTeamRepoSourcesWith(ctx, len(preloadedWorkflows) > 0, preloadedWorkflows)
+}
+
+func (c *Client) loadTeamRepoSourcesWith(ctx context.Context, workflowsLoaded bool, preloadedWorkflows []model.RepoWorkflow) *teamRepoSources {
 	src := &teamRepoSources{workflows: map[string]bool{}}
 	if c.Store == nil {
 		return src
@@ -164,6 +169,21 @@ func (c *Client) loadTeamRepoSources(ctx context.Context) *teamRepoSources {
 	}
 	if schedules, err := c.Store.ListSchedules(ctx); err == nil {
 		src.schedules = schedules
+	}
+	if workflowsLoaded {
+		src.workflowsLoaded = true
+		for _, w := range preloadedWorkflows {
+			if repo := w.Repo.String(); repo != "" {
+				src.workflows[repo] = true
+			}
+		}
+	} else if workflows, err := c.Store.ListRepoWorkflows(ctx); err == nil {
+		src.workflowsLoaded = true
+		for _, w := range workflows {
+			if repo := w.Repo.String(); repo != "" {
+				src.workflows[repo] = true
+			}
+		}
 	}
 	return src
 }
@@ -261,7 +281,7 @@ func (c *Client) populateTeamReposFrom(ctx context.Context, src *teamRepoSources
 			parsed, err := model.ParseRepo(repoName)
 			if err == nil {
 				hasWorkflows, ok := src.workflows[repoName]
-				if !ok {
+				if !ok && !src.workflowsLoaded {
 					workflows, _ := c.Store.GetRepoWorkflows(ctx, parsed)
 					hasWorkflows = len(workflows) > 0
 					src.workflows[repoName] = hasWorkflows
@@ -309,6 +329,19 @@ func (c *Client) GetTeam(ctx context.Context, id string) (Team, error) {
 		return Team{}, err
 	}
 	c.populateTeamRepos(ctx, team)
+	return *team, nil
+}
+
+// getTeamWithRepoWorkflows builds Team using preloaded repo workflows when the
+// caller has already fetched ListRepoWorkflows (e.g. handleConfig), keeping the
+// empty-slice vs loaded distinction explicit via workflowsLoaded.
+func (c *Client) getTeamWithRepoWorkflows(ctx context.Context, id string, workflows []model.RepoWorkflow) (Team, error) {
+	team, err := c.existingTeam(ctx, id)
+	if err != nil {
+		return Team{}, err
+	}
+	src := c.loadTeamRepoSourcesWith(ctx, true, workflows)
+	c.populateTeamReposFrom(ctx, src, team)
 	return *team, nil
 }
 
