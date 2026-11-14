@@ -64,10 +64,13 @@ custom-fields:                     # optional; this deployment's declared fields
 ```
 
 This review is the one attached to a task, and it is stacked on the task's
-branch to fix what it finds. The reviews a gating path trigger files work
-differently: one per pull request head and review template however many
-triggers match, posting findings rather than pushing fixes unless asked to,
-and re-reading only what a new push changed. See "Gating reviews" under
+branch to fix what it finds. Like every other review grain files for a task,
+its prompt includes a "The change under review" section with the reviewed
+task's brief, any linked designs, and the CI and deployment-settings checks
+described under "Gating reviews" below. The reviews a gating path trigger
+files work differently: one per pull request head and review template however
+many triggers match, posting findings rather than pushing fixes unless asked
+to, and re-reading only what a new push changed. See "Gating reviews" under
 `.grain/triggers/<name>.yml`.
 
 To review every pull request with findings only, declare a gating
@@ -871,6 +874,29 @@ change's own branch (so a fix lands in the change's pull request, never a
 second one), and a review whose triggers all say `fixes: true`, which is
 stacked on the change's branch with a pull request of its own merged back
 into it before the change can land.
+
+**What a review is given.** Every review grain files for a task -- grain's
+security review, gating path-trigger reviews (findings-only, `fixes: true`,
+and security), stacked `.grain/review.yml` reviews, and CL reviews -- appends
+a "The change under review" section to the template's body:
+
+- **The brief:** the reviewed task's own description, fenced as the owner's
+  words about the change's intent rather than instructions to the reviewer,
+  stripped of grain's own appended notices (`grain: this proposal asked for
+  …` and similar), and capped at 6 KiB with a truncation note; omitted when
+  the task has no description.
+- **Linked designs:** the task's `designs:` paths (`LinkDesign` and adopted
+  spec/design links), with one line asking the reviewer to read them, check
+  that the change conforms, and flag where it departs; omitted when none are
+  linked.
+- **CI:** one line telling the reviewer to read the head's existing check
+  results first (`grain pr open`, or `grain ci checks`, `grain ci list` and
+  `grain ci log` through the review's repo-scoped `api:ci-read` grant) and to
+  compare any red check against the base branch before blaming the change,
+  without waiting or blocking on CI.
+- **Deployment settings:** one line requiring the reviewer to state what
+  happens on a deployment that leaves a newly required environment variable,
+  repository variable or setting unset (or when a default changes).
 
 **Priority.** A gating review runs at the priority of the change it gates,
 and never below 7 (`model.ReviewPriorityFloor`). That applies to grain's

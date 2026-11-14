@@ -85,7 +85,12 @@ daemon with it, because of the `Requires=` dependency.
 
 `grain backup`, `grain health`, `grain state …` and the rest of the CLI work
 the same on either store. `setup.sh`'s schema-upgrade step (`grain state
-prepare-upgrade`) runs against the local server when that is the store.
+prepare-upgrade`) runs against the local server when that is the store. When a
+schema change rebuilds a PostgreSQL store from `$GRAIN_DATA_DIR/schema-upgrade`
+(after archiving the previous tables into `<schema>_schemaN_<time>`), grain
+advances every PostgreSQL serial sequence past the imported rows' maximum IDs,
+and each daemon start checks serial sequences against `MAX(col)` defensively
+and resynchronizes any sequence that has fallen behind.
 
 ## Upgrading the PostgreSQL image
 

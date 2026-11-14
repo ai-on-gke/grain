@@ -63,6 +63,32 @@ function legacy(tab: string): RedirectFunction {
   };
 }
 
+function classicRepoSettingsMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (
+    (s.length !== 4 && s.length !== 5) ||
+    s[0]?.path !== "repos" ||
+    s[3]?.path !== "settings" ||
+    /[.:]/.test(s[1].path)
+  ) {
+    return null;
+  }
+  return {
+    consumed: s,
+    posParams: {
+      owner: s[1],
+      name: s[2],
+      ...(s[4] ? { tab: s[4] } : {}),
+    },
+  };
+}
+
+// repoLeaveGuard asks the repository page before leaving it with an
+// unsaved edit (RepoDetailPageComponent.canLeave). It is duck-typed so
+// the page stays lazy: importing the component here would pull it into
+// the shell's bundle.
+const repoLeaveGuard = (page: { canLeave?: () => Promise<boolean> } | null) =>
+  page?.canLeave ? page.canLeave() : true;
+
 // Every page is lazy, so the shell's own bundle stays inside the budget
 // (angular.json) however many pages move over. A path this app does not
 // have yet goes to the Inbox; the shell's links take the reader to the
@@ -219,6 +245,20 @@ export const routes: Routes = [
         (m) => m.SettingsPageComponent,
       ),
   },
+  // The classic UI keeps a repository's tab at
+  // /repos/<owner>/<name>/settings/<tab>; pasted under /next/ that read
+  // as host "owner", owner "name", repo "settings" and loaded a repo
+  // that does not exist (2026-11-14 repository walkthrough). Send it to
+  // /repos/<owner>/<name>/<tab>, the address this app uses.
+  {
+    matcher: classicRepoSettingsMatcher,
+    redirectTo: ({ params }) => {
+      const tab = params["tab"];
+      return tab && tab !== "overview"
+        ? `/repos/${params["owner"]}/${params["name"]}/${tab}`
+        : `/repos/${params["owner"]}/${params["name"]}`;
+    },
+  },
   {
     matcher: (s) =>
       s.length === 4 && s[0].path === "repos" && /[.:]/.test(s[1].path)
@@ -232,6 +272,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:owner/:name",
@@ -240,6 +281,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:owner/:name/:tab",
@@ -248,6 +290,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:host/:owner/:name",
@@ -256,6 +299,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:host/:owner/:name/:tab",
@@ -264,6 +308,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   { path: "**", redirectTo: "inbox" },
 ];

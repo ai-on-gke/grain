@@ -81,10 +81,12 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		p.encode(h)
 		return
 	}
+	var printed bool
 	// The failing checks first: a deployment whose dispatch is down has
 	// nothing more important to say, and a reader who stops at the
 	// first line has to see it.
 	if len(h.DispatchBlocked) > 0 {
+		printed = true
 		fmt.Println("FAILING: dispatch is blocked -- no task is dispatched until this clears:")
 		for _, c := range h.DispatchBlocked {
 			fmt.Printf("  [%s] %s (for %s, since %s)\n", c.Name, c.Error, c.Held, c.Since.Format(time.RFC3339))
@@ -95,6 +97,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		fmt.Println()
 	}
 	if h.Daemon != nil && h.Daemon.StoreSwitch != nil {
+		printed = true
 		fmt.Printf("ALERT (since %s): %s\n\n", h.Daemon.StoreSwitch.Since.UTC().Format("2006-01-02 15:04:05Z"), h.Daemon.StoreSwitch.Message)
 	}
 	// Capability servers out of use: what the capability.server-down
@@ -102,6 +105,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 	// printer never did, so `grain health` said "no counters" with a
 	// server down (docs/test-runs/2026-11-04-capabilities.md, F7).
 	if len(h.CapabilityServers) > 0 {
+		printed = true
 		fmt.Println("FAILING: capability servers out of use -- no grant is minted from one until it attaches again:")
 		for _, s := range h.CapabilityServers {
 			state := string(s.State)
@@ -115,6 +119,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		fmt.Println()
 	}
 	if len(h.TargetRepoHostWarnings) > 0 {
+		printed = true
 		fmt.Println("WARNING: target repositories missing their git host:")
 		for _, w := range h.TargetRepoHostWarnings {
 			fmt.Printf("  %s: %s\n", w.Repo, w.Message)
@@ -124,6 +129,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 	// Reviewed-merge logins a person signs in to: the gate passes every
 	// merge they make by hand as grain's (task 4386).
 	if len(h.MergeLoginWarnings) > 0 {
+		printed = true
 		fmt.Println("WARNING: reviewed-merge logins that belong to a user account:")
 		for _, w := range h.MergeLoginWarnings {
 			fmt.Printf("  %s %s: %s\n", w.Repo, w.Login, w.Message)
@@ -134,6 +140,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 	// dropped every time looks exactly like one that is fine from
 	// everywhere else (the live model suites, two weeks dark).
 	if len(h.StaleSchedules) > 0 {
+		printed = true
 		fmt.Println("FAILING: schedules with no run in more than twice their cadence:")
 		for _, s := range h.StaleSchedules {
 			last := "never"
@@ -154,6 +161,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 	// Declarations a repository merged that this daemon would not read:
 	// until grain/task-4392 they were in the journal and nowhere else.
 	if len(h.RefusedDeclarations) > 0 {
+		printed = true
 		fmt.Println("FAILING: repository declarations not read in full:")
 		for _, d := range h.RefusedDeclarations {
 			inForce := "nothing has loaded yet"
@@ -175,6 +183,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 	// the orchestrator's backstop wakes them in the end, but a wait this
 	// old usually means a verdict grain is failing to read.
 	if len(h.CIWaits) > 0 {
+		printed = true
 		fmt.Printf("WARNING: tasks waiting on CI for more than %s (resume_later):\n", ui.CIWaitHealthAge)
 		for _, w := range h.CIWaits {
 			where := w.Branch
@@ -192,6 +201,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 	}
 	hasHubIssue := h.Hub != nil && (h.Hub.LastError != "" || len(h.Hub.ScopeConflicts) > 0)
 	if hasHubIssue {
+		printed = true
 		fmt.Printf("hub (%s @ %s): %s\n", h.Hub.Entry, h.Hub.URL, h.Hub.State)
 		if h.Hub.LastError != "" {
 			if h.Hub.ConsecutiveFailures > 0 {
@@ -216,7 +226,7 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 	}
 	if len(h.Counters) == 0 {
-		if !hasHubIssue && len(h.CapabilityServers) == 0 && len(h.TargetRepoHostWarnings) == 0 && len(h.MergeLoginWarnings) == 0 && len(h.StaleSchedules) == 0 && len(h.RefusedDeclarations) == 0 {
+		if !printed {
 			fmt.Println("no counters: nothing on this daemon registers any")
 		}
 		return
