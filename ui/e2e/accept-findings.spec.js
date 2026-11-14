@@ -104,5 +104,8 @@ for (const viewport of [
         reviewTask: "4",
         reason: "merge as-is; follow-up filed",
       });
+    // The pane keeps polling /api/tasks/5: a poll still being fetched when
+    // the page closes would fail the test with "Response has been disposed".
+    await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 }
