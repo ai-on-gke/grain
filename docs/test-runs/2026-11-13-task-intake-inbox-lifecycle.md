@@ -377,3 +377,15 @@ phone page had no horizontal overflow. None of these are committed. No
 Gemini key was present, so the PNGs could not be described by a model, and
 this sandbox's file reader returns PNGs as bytes. Layout was checked with
 bounding boxes instead.
+
+## Follow-up: second merge of main (2026-11-14)
+
+`main` (aa8aa0fdb) landed its own fix for two of the bugs above: the stuck
+Inbox row's control (with the merge queue's sub-case as a fallback and the
+Cancel control labelled "Cancel task") and the cold `/api/tasks` failure
+notice on Tasks. The merge takes `main`'s `stallControl` and its
+`TasksStore.start()` check, drops this branch's now-duplicate versions and
+unit test, and updates `ui-ng/e2e/next-intake-lifecycle.spec.js` to expect
+"Cancel task". `next-intake-lifecycle.spec.js` and `main`'s
+`next-inbox-intake-regressions.spec.js` pass together (7/7), as do the
+inbox, tasks, create and task unit suites (155/155).
