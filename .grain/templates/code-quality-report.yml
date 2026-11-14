@@ -1,0 +1,233 @@
+name: Code-quality report
+title: Weekly code-quality report (change failure rate, repair time, reviews, first-push CI, flakes)
+base: main
+# Report-only. It pushes nothing, and every run ends on nothing_needed,
+# whose reason is the whole report. With nothing-needed: close that
+# closes the task. A run that ended on comment_on_issue alone would sit
+# waiting for a person's acknowledgement (model.AwaitsAck), and with
+# overlap: skip that would hold up the next Monday's firing.
+nothing-needed: close
+# Every grant is a non-dangerous preset (model.DeclaredGrantNeedsPerson
+# says false for each), so a firing lands approved with nobody asked:
+#   api#self-debug -- reads every task's record and `grain metrics`;
+#   api#ci-read    -- reads each repository's GitHub Actions runs;
+#   grain#source   -- reads the source the running daemon was built from;
+#   repo#read      -- clones granule for its tags and revert commits.
+# The Google layer's repository is not named here: its host is a token
+# TestCoreSaysNoGoogleTokens refuses in this tree. Its tasks are still
+# read through api#self-debug. A read of its git history and CI has to be
+# granted from outside this repository (grain/config).
+capabilities:
+  - "https://grain.dev/capabilities/api#self-debug"
+  - {capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}
+  - {capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: gke-labs/granule}}
+  - {capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: bwsalmon/silo}}
+  - "https://grain.dev/capabilities/grain#source"
+  - {capability: "https://grain.dev/capabilities/repo#read", with: {repo: gke-labs/granule}}
+body: |
+  Measure code quality from outcomes, for the week that ended at 00:00
+  UTC today (the "week"), against the four weeks before it (the
+  "baseline"). This run is a report. It pushes nothing and edits
+  nothing. It ends on `nothing_needed`, whose reason is the full report
+  (see "Finishing"). Never end on `comment_on_issue`: it would leave
+  this task waiting for a person and hold up next week's firing.
+
+  If this task's body or conversation asks for a different window, such
+  as "the last 4 weeks" for a baseline run, use that window and say so
+  in the report's first line.
+
+  ## Scope
+
+  Report per repository: ai-on-gke/grain, experimental/grain (the
+  Google layer), gke-labs/granule and bwsalmon/silo. Where the record
+  allows, also split each metric by model (the first attempt's `model`
+  in the task's `attempts`) and by template. A task records no template
+  id. Until one is recorded, split by the kind of work the record does
+  carry: base repair (`fixesBaseBranch`), port (`portOf`), `scheduled`,
+  suite (`suiteRun`), stacked fix (`stacked`), and filed work for the
+  rest. Give every metric a trend: the week's value, the baseline's
+  weekly mean, and an arrow (better / same / worse; "same" means within
+  10% or within one event).
+
+  ## Baseline
+
+  grain's CI record doesn't reach back four weeks. A query answers at
+  most the newest 500 Actions runs (about 6 days of `tests.yml` on
+  `main`), and `grain ci test-history` reads the newest 100 runs. So
+  take the baseline from the reports of the previous four firings:
+  `grain task list --search "Weekly code-quality report" --state closed --json`,
+  then `grain task read <id>` for each report. Recompute a baseline
+  number only where the record still reaches that week (tasks and git
+  do; CI mostly doesn't). The first report, posted on task 4820,
+  is the baseline for 2026-10-16..2026-11-12.
+
+  You hold `api#self-debug`, `api#ci-read` for ai-on-gke/grain,
+  gke-labs/granule and bwsalmon/silo, `grain#source`, and a read of
+  gke-labs/granule. If a grant turns out to be missing (a `forbidden`),
+  report the metric as "not readable: <the refusal>". Never estimate a
+  number you could not read.
+
+  Sources (cite them by these names):
+  - **tasks**: `grain api GET '/api/tasks?repo=<r>&limit=500[&cursor=<nextCursor>]'`.
+    Its rows carry `pullRequest`, `prMergedAt`, `base`, `fixesBaseBranch`,
+    `review`, `generatedFrom` and `stacked`, which
+    `grain task list --json` leaves out. Use
+    `grain api GET /api/tasks/<id>` for the attempts (model), comments and
+    description. Fetch at most 3 at a time: wider fan-out comes back
+    empty.
+  - **metrics**: `grain metrics --since <date> --until <date> --repo <r>`,
+    including its "branch repairs" section.
+  - **ci**: `grain api GET '/api/ci/runs?repo=<r>&provider=github-actions&workflow=<wf>&ref=<ref>&since=<date>&limit=1000&view=compact'`.
+    It pages with `cursor`, and `order=asc` gives oldest first.
+    `grain ci list` prints at most 200 rows. Read `tests.yml` on `main`,
+    and `nightly.yml` on `main` and the `v*-rc.*` tags for Stage 1.
+    `grain ci show <run>`'s first line names a run's failing jobs.
+    `grain ci log <run> --job <j> --lines 20000` gives the whole job
+    log; `--tail` gives too little.
+  - **test-history**: `grain ci test-history <test> --repo <r>`.
+  - **git**: `git log`, `git for-each-ref 'refs/tags/v*'`, and `git log`
+    of `.grain/quarantine.yml`, in ./work (`git fetch origin --tags`
+    first) or in a clone of granule.
+  - **source**: `grain read src://core/...`. Use it to check what a
+    record's field means before relying on it.
+
+  Every number in the report cites its source and the query, in short
+  form: `[tasks: tag fixes-base-branch]`, `[ci: tests.yml main]`.
+
+  ## Method
+
+  Reuse the method of the review-effectiveness study (task 4353) and its
+  parts, task 4357 and task 4359. Read their final reports with
+  `grain task read`. Where this report counts something differently,
+  say so in one line, under "Method notes".
+
+  1. **Change failure rate.** Take the pull requests merged in the
+     window (tasks with a merged pull request). A merge counts as failed
+     when a later fix names it. These fixes count:
+     - a revert (a task filed by `grain git revert`, linked `reverts` /
+       `reverted-by` to the task it reverts, or a `Revert "..."` commit);
+     - a base-branch repair (tag `fixes-base-branch`);
+     - a Stage 1 repair (the Stage 1 repair tag `Stage1RepairTag` in
+       `src://core/pkg/orchestrator/stage1repair.go`, or a title like
+       "Fix the red Stage 1 (nightly) at <sha>");
+     - a default-branch `tests.yml` repair, once one exists (task 4739);
+     - an `[rc-blocker <tag>]` task.
+
+     Attribute a fix through the commit or pull request it names: in
+     its title, body, revert trailer, `fixes` link or bisect range. If
+     the red range holds more than one merge, or the fix names no
+     commit, count it as **unattributed**, separately, and don't guess.
+     Rate = attributed failed merges / merges.
+
+     Most base-branch repairs are titled "Fix base branch release on
+     <repo> <branch>", and many carry no tag, so match the title and the
+     `fixesBaseBranch` field too. "Fix grain CI on <repo> <task branch>"
+     repairs a task branch, not a base branch: leave it out. A repair
+     that merged no fix (infrastructure, a flake, a duplicate) blames
+     nothing. Count those separately as "repairs with no fix". To find
+     the culprit, read the repair PR's own commits:
+     `git log <merge>^1..<merge>^2` for "since #N", "PR #N made …" or
+     "Reverts PR #N". The merge count for ai-on-gke/grain is git's
+     first-parent "Merge pull request" commits on `main`, which includes
+     PRs that no task opened. Elsewhere, use the tasks' `prMergedAt`.
+  2. **Escaped defects per release.** For each version cut or published
+     in the window (`git for-each-ref 'refs/tags/v*'`):
+     - count the rcs discarded, with each `-discarded` tag's message as
+       its reason;
+     - count the bug-fix tasks (`fix:` titles, or tasks that say they
+       fix a release) filed against that version after its rc.1, and
+       separately after it was published.
+
+     Count a task by the version it records it was found in: `foundIn`
+     on `/api/tasks`, the `found-in` link (task 4843, from 2026-11-12). Matching a version
+     string in a task's text isn't reliable: release-pipeline repairs
+     and patch cuts name versions too. So count tasks without that field
+     as "version not recorded". Also list the patch releases
+     (`vX.Y.Z`, Z ≥ 1): each is a defect that escaped into a release.
+  3. **Time to repair.** From the ci record, take each stretch where
+     `main` `tests.yml`, or Stage 1 `nightly.yml`, went from green to
+     red, and measure from the first red run's start to the next green
+     run's end. Give the median and p90 for each, and the open red
+     stretch, if any.
+  4. **Review findings.** Count the gating reviews in the window.
+     Security reviews are titled "Security review: …". `pr-review`s are
+     titled "Review: …" or "Review <repo>#N". Report:
+     - the share that left findings or questions. Read the verdict from
+       the review's first comment that grain didn't write itself
+       (superseded, resume_later and CI notes don't count). "No
+       findings", "nothing to fix and nothing to ask" means clean.
+       Count reviews with no verdict separately;
+     - the findings by category (correctness / tests / security /
+       compatibility), read from the verdict paragraph and any
+       "Findings" section, not from "What I checked";
+     - the findings that came back after a fix push: a later review of
+       the same task that again left findings;
+     - reviews per pull request head, and every head reviewed more than
+       once by the same kind of review, which is a duplicate review (task
+       4808). The task record doesn't expose the reviewed head. Until it
+       does, count reviews per reviewed task (`generatedFrom`), reviews
+       filed while the previous one was still open (the proxy task 4358
+       used), and same-head repeats where the verdict names its sha.
+  5. **First-push CI.**
+     - The share of merged task pull requests whose first pushed head
+       was green on the gating workflow (`tests.yml`; `ci.yml` on
+       granule). Read it from the branch's runs, `ref=<branch>&order=asc`.
+       A first push whose run was cancelled because a newer push
+       superseded it has no verdict: count it as "superseded", not red.
+     - The mean number of red pushes before the first green one. Don't
+       use `grain metrics`' "pushes before green": it counts the retired
+       `wait_for_checks` tool's verdicts. Do report "branch repairs"
+       (passes, time to settle) and "repaired by the queue after"
+       [metrics].
+  6. **Flakes.**
+     - The top 5 flaky tests and jobs. A same-sha re-run is rare here
+       (re-runs are pushed as empty commits), so take a flake to be a red
+       `main` run that failed at most 2 jobs and was followed by a green
+       run. Name its jobs (`grain ci show`) and the tests that failed
+       (`--- FAIL:` / `✘ … [chromium] ›` in the job log). Also count the
+       train's flake retries: the jobs that `-discarded` tag messages
+       name [ci; git tags].
+     - The ones that are new this week, compared with the previous
+       reports.
+     - Quarantine adds and removes [git: `.grain/quarantine.yml`].
+
+  ## Report
+
+  The report is at most about 40 lines, in this order:
+  1. One headline line: change failure rate, median repair time,
+     first-push green share, review finding share, and top flake, each
+     with its trend arrow.
+  2. A table: one row per metric, with columns for the week, the
+     baseline mean, the trend and the source, split per repository.
+  3. Splits by template and by model: only the rows that differ from the
+     whole by more than 10 points.
+  4. **Worst offenders.** The 3 worst areas, templates or models, each
+     with task ids and run ids as evidence.
+  5. **Method notes.** How this report differs from tasks 4353, 4357
+     and 4359, and every metric reported as "not readable" or "version
+     not recorded", with why.
+
+  Write it to /tmp/code-quality.md.
+
+  ## Notify
+
+  If the change failure rate or either median repair time is clearly
+  worse than the baseline, raise the headline:
+
+      grain notify --subject code-quality-report --severity info \
+        --title "Code quality <YYYY-MM-DD>: <headline>" --file /tmp/code-quality.md
+
+  "Clearly worse" means at least 1.5x the baseline mean and at least two
+  more events than it. Don't notify otherwise.
+
+  ## Finishing
+
+  Propose no fixes from this run. If a metric cannot be computed from
+  what grain records, say so under "Method notes" and don't propose a
+  task. Task 4820 filed follow-ups for the known record gaps: which
+  merge a repair blames, which version a bug was found in, the reviewed
+  head and finding categories, the template a task was filed from, and
+  CI history older than the newest 500 runs.
+
+  End with `nothing_needed`, passing the complete report from
+  /tmp/code-quality.md as `reason`. Never truncate it.

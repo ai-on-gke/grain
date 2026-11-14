@@ -1,0 +1,12 @@
+name: Weekly code-quality report
+template: code-quality-report
+base: main
+timezone: UTC
+# Monday, ahead of the 07:00 release process review, so the week it
+# reports on is the one that review reads too.
+weekly:
+  day: monday
+  at: "04:00"
+# The template ends every run on nothing_needed, which closes the task,
+# so a firing never holds the next one open.
+overlap: skip
