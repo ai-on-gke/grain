@@ -1611,6 +1611,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
         title: a.label,
         message: a.confirm,
         accept: a.label,
+        dismiss: a.dismiss,
         destructive: !!a.destructive,
         run: () => this.actAndFocus(key, aid),
       });

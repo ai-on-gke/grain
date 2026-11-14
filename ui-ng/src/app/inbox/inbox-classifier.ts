@@ -49,6 +49,9 @@ export interface InboxAction {
   variant: "primary" | "tonal" | "text";
   // confirm is asked, in a dialog, before the call is made.
   confirm?: string;
+  // dismiss labels the dialog's dismiss button where "Cancel" would read
+  // as the action itself.
+  dismiss?: string;
   // destructive marks the dialog's accept button as a warning.
   destructive?: boolean;
   // bulk is the batch bar's label when several selected rows offer it.
@@ -491,6 +494,55 @@ export function releaseConfirm(
 
 // --- entries ----------------------------------------------------------
 
+// stallControl is the button a stuck task's sub-case names
+// (t.reason.control, pkg/model's TaskReason), pressed from its row as
+// the task page's own button of the same name presses it -- the classic
+// Inbox's reasonControl (ui/src/state.js). A sub-case that names no
+// control a row can press gets none.
+function stallControl(t: Task): InboxAction | null {
+  switch (t.reason?.control) {
+    case "Run now":
+      return taskAction(
+        t,
+        "run-now",
+        "Run now",
+        "POST /api/tasks/{id}/run-now",
+        "primary",
+      );
+    case "Cancel":
+      return taskAction(
+        t,
+        "cancel",
+        "Cancel",
+        "POST /api/tasks/{id}/close",
+        "tonal",
+        {
+          confirm: `Cancel #${t.id}? The run in flight is stopped and the task is closed; it can be reopened later.`,
+          dismiss: "Keep it running",
+          destructive: true,
+        },
+      );
+    case "Undefer":
+      return taskAction(
+        t,
+        "undefer",
+        "Undefer",
+        "POST /api/tasks/{id}/undefer",
+        "primary",
+      );
+    case "Retry merge":
+      return taskAction(
+        t,
+        "retry-merge",
+        "Retry merge",
+        "POST /api/tasks/{id}/retry-merge",
+        "primary",
+      );
+    default:
+      return null;
+  }
+}
+
 function taskAction(
   t: Task,
   id: string,
@@ -715,6 +767,8 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     e.pillTone = "blast";
     e.summary = t.stall;
     e.rationale = "Grain reads this as stuck rather than busy.";
+    const control = stallControl(t);
+    if (control) e.actions.push(control);
     return e;
   }
   if (t.state === "proposed") {
