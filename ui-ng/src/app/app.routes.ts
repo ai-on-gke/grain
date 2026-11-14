@@ -166,9 +166,35 @@ export const routes: Routes = [
         (m) => m.ProcessesPageComponent,
       ),
   },
+  // Deep links to one item: /processes/<tab>/<id> selects it, and
+  // /processes/suites/runs/<id> opens a suite run (the `tab` route data
+  // reaches the component's tab input, as a path parameter would).
+  {
+    path: "processes/suites/runs/:runId",
+    title: "Suite run · grain",
+    data: { tab: "suites" },
+    loadComponent: () =>
+      import("./processes/processes-page.component").then(
+        (m) => m.ProcessesPageComponent,
+      ),
+  },
+  {
+    path: "processes/:tab/:id",
+    title: "Processes · grain",
+    loadComponent: () =>
+      import("./processes/processes-page.component").then(
+        (m) => m.ProcessesPageComponent,
+      ),
+  },
   { path: "schedules", redirectTo: "processes/schedules", pathMatch: "full" },
   { path: "templates", redirectTo: "processes/templates", pathMatch: "full" },
   { path: "suites", redirectTo: "processes/suites", pathMatch: "full" },
+  // The classic UI's item links (/schedules/<id>, /templates/<id>,
+  // /suites/<id>, /suites/runs/<id>) land on the same item here.
+  { path: "schedules/:id", redirectTo: "processes/schedules/:id" },
+  { path: "templates/:id", redirectTo: "processes/templates/:id" },
+  { path: "suites/runs/:runId", redirectTo: "processes/suites/runs/:runId" },
+  { path: "suites/:id", redirectTo: "processes/suites/:id" },
   {
     path: "telemetry",
     title: "Telemetry · grain",

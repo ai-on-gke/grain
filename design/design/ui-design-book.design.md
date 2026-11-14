@@ -322,6 +322,11 @@ Rules:
   on a phone. A fixed-position box sized against `100vw` must be
   border-box, or its padding pushes it off both edges
   (`ui-ng/e2e/next-dialog-fits-phone.spec.js`).
+- **A dialog shows its own errors.** A save refused while a modal dialog is
+  open is reported inside that dialog, above its actions, with
+  `role="alert"`; a page banner behind the scrim is not seen, and Save then
+  looks like it did nothing. Opening a dialog clears an error left from
+  before (`ui-ng/e2e/next-processes-walkthrough.spec.js`).
 
 ## 5. Interaction
 
