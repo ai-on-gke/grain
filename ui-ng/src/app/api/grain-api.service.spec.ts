@@ -471,6 +471,24 @@ describe("GrainApi verifier_unavailable retry", () => {
     expect(hj1.request.method).toBe("HEAD");
     hj1.flush(null);
     await expect(hJson).resolves.toBeNull();
+
+    // taskSummaries batch GET retries on 503 verifier_unavailable too.
+    const batch = api.taskSummaries(["10", "11"], 1, 1);
+    const b0 = http.expectOne(
+      "/api/tasks/summaries?ids=10,11&comments_limit=1&attempts_limit=1",
+    );
+    expect(b0.request.method).toBe("GET");
+    b0.flush(verifierUnavailableBody("bs0"), verifierUnavailableOpts("2"));
+    await vi.advanceTimersByTimeAsync(2600);
+    const b1 = http.expectOne(
+      "/api/tasks/summaries?ids=10,11&comments_limit=1&attempts_limit=1",
+    );
+    expect(b1.request.method).toBe("GET");
+    b1.flush(
+      { tasks: { "10": { id: "10", title: "Ten" } } },
+      { headers: { ETag: '"bs1"' } },
+    );
+    expect((await batch)["10"].title).toBe("Ten");
   });
 
   it("stops after at most 3 retries and surfaces the original error", async () => {

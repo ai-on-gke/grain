@@ -152,21 +152,36 @@ func (s *Server) taskReadableContext(r *http.Request) context.Context {
 	return model.WithExternalRefReadable(ctx, s.taskReadable(r))
 }
 
+const errTaskSummariesRepo = "GET /api/tasks/summaries does not take repo; it already returns only the tasks the caller may read"
+
+// taskSummariesRepoAllowed reports whether r's query carries no repo
+// parameter, or carries only the CI job repository injected by ciapi's
+// narrowRepo proxy for a CIAPICall.
+func taskSummariesRepoAllowed(r *http.Request) bool {
+	repoKey := "repo"
+	repos := r.URL.Query()[repoKey]
+	if len(repos) == 0 {
+		return true
+	}
+	if ciCall, isCIAPI := model.CIAPICallFromContext(r.Context()); isCIAPI && len(repos) == 1 {
+		return model.SameRepoText(strings.TrimSpace(repos[0]), ciCall.Repo.String())
+	}
+	return false
+}
+
 // isRepoNarrowedTasksRead reports whether pattern's handler narrows its
 // answer to s.taskReadable(r) when no ?repo= is given, so a caller holding
 // tasks:read on a subset of repositories may call it without naming one.
 func isRepoNarrowedTasksRead(pattern string, r *http.Request) bool {
 	if pattern == taskSummariesRoute {
-		if _, isCIAPI := model.CIAPICallFromContext(r.Context()); isCIAPI {
-			return true
-		}
+		return taskSummariesRepoAllowed(r)
 	}
 	q := r.URL.Query()
 	if repos := q["repo"]; len(repos) > 1 || (len(repos) == 1 && strings.TrimSpace(repos[0]) != "") {
 		return false
 	}
 	switch pattern {
-	case refSummaryRoute, taskSummariesRoute:
+	case refSummaryRoute:
 		return true
 	case "GET /api/tasks":
 		refs := q["externalRef"]

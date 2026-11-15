@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -426,7 +427,7 @@ func TestTaskSummariesMatchesSingleTaskClampsLimitsAndValidatesIDs(t *testing.T)
 		t.Fatal(err)
 	}
 	at := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 23; i++ {
 		if _, err := client.Store.AddComment(ctx, model.Comment{
 			TaskID:    t1.ID,
 			Body:      fmt.Sprintf("comment-%d", i),
@@ -436,7 +437,7 @@ func TestTaskSummariesMatchesSingleTaskClampsLimitsAndValidatesIDs(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	for n := 1; n <= 3; n++ {
+	for n := 1; n <= 12; n++ {
 		runID := t1.ID + "-" + strconv.Itoa(n)
 		if err := client.Store.StartRun(ctx, model.Run{
 			ID: runID, TaskID: t1.ID, Attempt: n, StartedAt: at.Add(time.Duration(n) * time.Hour),
@@ -449,7 +450,8 @@ func TestTaskSummariesMatchesSingleTaskClampsLimitsAndValidatesIDs(t *testing.T)
 	}
 
 	// Each entry matches GET /api/tasks/{id} JSON byte-for-byte with the same limits,
-	// and duplicates are de-duplicated.
+	// omitted limits default to comments_limit=20 and attempts_limit=10, and duplicates
+	// are de-duplicated.
 	for _, tc := range []struct {
 		name        string
 		batchQuery  string
@@ -461,9 +463,19 @@ func TestTaskSummariesMatchesSingleTaskClampsLimitsAndValidatesIDs(t *testing.T)
 			singleQuery: "?comments_limit=1&attempts_limit=1",
 		},
 		{
-			name:        "unbounded",
+			name:        "default-limits",
 			batchQuery:  fmt.Sprintf("ids=%s,%s", t1.ID, t2.ID),
-			singleQuery: "",
+			singleQuery: "?comments_limit=20&attempts_limit=10",
+		},
+		{
+			name:        "default-attempts-limit",
+			batchQuery:  fmt.Sprintf("ids=%s,%s&comments_limit=2", t1.ID, t2.ID),
+			singleQuery: "?comments_limit=2&attempts_limit=10",
+		},
+		{
+			name:        "default-comments-limit",
+			batchQuery:  fmt.Sprintf("ids=%s,%s&attempts_limit=2", t1.ID, t2.ID),
+			singleQuery: "?comments_limit=20&attempts_limit=2",
 		},
 		{
 			name:        "clamped-to-500",
@@ -484,6 +496,18 @@ func TestTaskSummariesMatchesSingleTaskClampsLimitsAndValidatesIDs(t *testing.T)
 			}
 			if len(got.Tasks) != 2 {
 				t.Fatalf("batch len = %d, want 2 (%s)", len(got.Tasks), body)
+			}
+			if tc.name == "default-limits" {
+				var d1 ui.TaskDetail
+				if err := json.Unmarshal(got.Tasks[t1.ID], &d1); err != nil {
+					t.Fatalf("decode t1 default detail: %v", err)
+				}
+				if len(d1.Comments) != 20 || d1.OlderComments != 3 {
+					t.Errorf("default comments = len %d older %d, want len 20 older 3", len(d1.Comments), d1.OlderComments)
+				}
+				if len(d1.Attempts) != 10 || d1.OlderAttempts != 2 {
+					t.Errorf("default attempts = len %d older %d, want len 10 older 2", len(d1.Attempts), d1.OlderAttempts)
+				}
 			}
 			for _, id := range []string{t1.ID, t2.ID} {
 				sCode, sBody := serve(t, srv, http.MethodGet, "/api/tasks/"+id+tc.singleQuery, "")
@@ -694,6 +718,124 @@ func TestTaskSummariesAuthorizationAndOmission(t *testing.T) {
 				t.Errorf("foreign vs missing probe diverged: foreign=(%d %q) missing=(%d %q)",
 					fCode, fBody, mCode, mBody)
 			}
+			for _, repoQuery := range []string{"&repo=acme/widgets", "&repo=acme/secret", "&repo="} {
+				rCode, rBody := call(batchPath + repoQuery)
+				if rCode != http.StatusBadRequest || !strings.Contains(rBody, "GET /api/tasks/summaries does not take repo") {
+					t.Errorf("GET %s%s = %d %s, want 400 rejecting repo", batchPath, repoQuery, rCode, rBody)
+				}
+			}
 		})
+	}
+
+	// Operator / unrestricted caller passing ?repo= also gets 400.
+	for _, repoQuery := range []string{"&repo=acme/widgets", "&repo=acme/secret", "&repo="} {
+		rec := doWithHeaders(t, srv, http.MethodGet, batchPath+repoQuery, "", h.as("admin@example.com"))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "GET /api/tasks/summaries does not take repo") {
+			t.Errorf("operator GET %s%s = %d %s, want 400 rejecting repo", batchPath, repoQuery, rec.Code, rec.Body.String())
+		}
+	}
+
+	// CI caller (with or without CI-proxy-rewritten ?repo=<job repo>) receives 200
+	// with only the job repository's tasks, and 400 if a foreign repo is passed.
+	ciCtx, _ := model.WithCIAPICall(ctx, model.CIAPICall{
+		Repo:   widgets,
+		Scopes: []model.APIScope{"tasks:read"},
+	})
+	for _, ciPath := range []string{batchPath, batchPath + "&repo=acme/widgets"} {
+		req := httptest.NewRequest(http.MethodGet, ciPath, nil).WithContext(ciCtx)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("CI GET %s = %d %s, want 200", ciPath, rec.Code, rec.Body.String())
+		}
+		var resp struct {
+			Tasks map[string]ui.TaskDetail `json:"tasks"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("CI decode: %v", err)
+		}
+		if len(resp.Tasks) != 1 || resp.Tasks["200"].ID != "200" {
+			t.Fatalf("CI tasks = %v, want only 200", resp.Tasks)
+		}
+	}
+	badCIReq := httptest.NewRequest(http.MethodGet, batchPath+"&repo=acme/secret", nil).WithContext(ciCtx)
+	badCIRec := httptest.NewRecorder()
+	srv.ServeHTTP(badCIRec, badCIReq)
+	if badCIRec.Code != http.StatusBadRequest {
+		t.Errorf("CI GET with foreign repo = %d %s, want 400", badCIRec.Code, badCIRec.Body.String())
+	}
+}
+
+func TestTaskSummariesSkipsPerEntryFailureAndFailsOnStoreError(t *testing.T) {
+	ui.LogToTest(t)
+	dataDir := t.TempDir()
+	db, err := sqlite.Open(sqlite.DefaultConfig(dataDir))
+	if err != nil {
+		t.Fatalf("opening sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	client := ui.NewClient(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+	}, store)
+	storeSettingsRow(t, client)
+	srv := ui.NewServerWithClient(client)
+
+	tGood, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "healthy summary", NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tBroken, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "broken detail", NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Seed a goal on tBroken and corrupt its JSON spec so Store.GetTask(ctx, tBroken.ID)
+	// succeeds on lookup, while building the TaskDetail (Store.TaskGoal) fails with a
+	// non-NotFoundError.
+	if err := store.SetTaskGoal(ctx, tBroken.ID, model.GoalDecl{
+		Kind:  model.GoalPersonCloses,
+		OnMet: model.GoalCloseOnMet,
+	}, "user:alice", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "UPDATE `task_goal` SET `spec` = '{corrupt' WHERE `task_id` = ?", tBroken.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Single-task detail on tBroken fails with 500, confirming responseFor errors on it.
+	if sCode, _ := serve(t, srv, http.MethodGet, "/api/tasks/"+tBroken.ID+"?comments_limit=1&attempts_limit=1", ""); sCode != http.StatusInternalServerError {
+		t.Fatalf("single GET /api/tasks/%s = %d, want 500", tBroken.ID, sCode)
+	}
+
+	// Batch summaries skips tBroken (logging id and err) and still returns 200 with tGood.
+	code, body := serve(t, srv, http.MethodGet, fmt.Sprintf("/api/tasks/summaries?ids=%s,%s", tBroken.ID, tGood.ID), "")
+	if code != http.StatusOK {
+		t.Fatalf("batch with per-entry failure = %d %s, want 200", code, body)
+	}
+	var resp struct {
+		Tasks map[string]ui.TaskDetail `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("decode batch: %v (%s)", err, body)
+	}
+	if len(resp.Tasks) != 1 || resp.Tasks[tGood.ID].ID != tGood.ID {
+		t.Fatalf("tasks after per-entry failure = %v, want only %s", resp.Tasks, tGood.ID)
+	}
+	if _, ok := resp.Tasks[tBroken.ID]; ok {
+		t.Errorf("broken task %s was not skipped: %v", tBroken.ID, resp.Tasks)
+	}
+
+	// When the store itself is unavailable on lookup, the whole request fails with 500.
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if cCode, cBody := serve(t, srv, http.MethodGet, "/api/tasks/summaries?ids="+tGood.ID, ""); cCode != http.StatusInternalServerError {
+		t.Errorf("batch on closed store = %d %s, want 500", cCode, cBody)
 	}
 }

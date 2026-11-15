@@ -2726,6 +2726,10 @@ type TaskSummariesResponse struct {
 }
 
 func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
+	if !taskSummariesRepoAllowed(r) {
+		writeClientError(w, validationErrorf("%s", errTaskSummariesRepo))
+		return
+	}
 	q, err := parseTaskSummariesQuery(r.URL.Query())
 	if err != nil {
 		writeClientError(w, err)
@@ -2750,8 +2754,8 @@ func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
 				if errors.As(err, &nfe) {
 					continue
 				}
-				writeClientError(w, err)
-				return
+				log.Printf("ui: task summary %s failed: %v", id, err)
+				continue
 			}
 			tasks[id] = json.RawMessage(entryBody)
 		}
@@ -3846,6 +3850,11 @@ func isValidTaskSummaryID(id string) bool {
 	return true
 }
 
+const (
+	defaultTaskSummariesCommentsLimit = 20
+	defaultTaskSummariesAttemptsLimit = 10
+)
+
 type taskSummariesQuery struct {
 	ids   []string
 	page  TaskPage
@@ -3885,10 +3894,10 @@ func parseTaskSummariesQuery(q url.Values) (taskSummariesQuery, error) {
 	if len(out.ids) == 0 {
 		return out, validationErrorf("ids is required")
 	}
-	clampLimit := func(name, raw string) (int, error) {
+	clampLimit := func(name, raw string, def int) (int, error) {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
-			return 0, nil
+			return def, nil
 		}
 		n, err := strconv.Atoi(raw)
 		if err != nil || n <= 0 {
@@ -3896,15 +3905,13 @@ func parseTaskSummariesQuery(q url.Values) (taskSummariesQuery, error) {
 		}
 		return min(n, maxTaskDetailPage), nil
 	}
-	out.paged = q.Has("comments_limit") || q.Has("attempts_limit")
-	if out.paged {
-		var err error
-		if out.page.CommentsLimit, err = clampLimit("comments_limit", q.Get("comments_limit")); err != nil {
-			return out, err
-		}
-		if out.page.AttemptsLimit, err = clampLimit("attempts_limit", q.Get("attempts_limit")); err != nil {
-			return out, err
-		}
+	out.paged = true
+	var err error
+	if out.page.CommentsLimit, err = clampLimit("comments_limit", q.Get("comments_limit"), defaultTaskSummariesCommentsLimit); err != nil {
+		return out, err
+	}
+	if out.page.AttemptsLimit, err = clampLimit("attempts_limit", q.Get("attempts_limit"), defaultTaskSummariesAttemptsLimit); err != nil {
+		return out, err
 	}
 	return out, nil
 }
