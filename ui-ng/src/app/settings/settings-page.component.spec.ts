@@ -1109,6 +1109,9 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         return Promise.resolve({
           secrets: [
             { name: "user-sec", keys: ["token"] },
+            { name: "registry-registration-token", keys: ["value"] },
+            { name: "agent-backend-vertex-main", keys: ["value"] },
+            { name: "repo-release-acme-app", keys: ["cosign"] },
             {
               name: "srv-sec",
               keys: ["apiToken"],
@@ -1271,6 +1274,16 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       el.querySelector('[data-testid="secret-row-user-sec"]'),
     ).not.toBeNull();
     expect(el.querySelector('[data-testid="secret-row-srv-sec"]')).toBeNull();
+    // Secrets another control owns stay out of the table and its Delete.
+    for (const owned of [
+      "registry-registration-token",
+      "agent-backend-vertex-main",
+      "repo-release-acme-app",
+    ]) {
+      expect(
+        el.querySelector(`[data-testid="secret-row-${owned}"]`),
+      ).toBeNull();
+    }
 
     el.querySelector<HTMLButtonElement>(
       '[data-testid="remove-cap-server-github-mcp"]',

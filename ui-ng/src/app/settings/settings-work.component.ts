@@ -1130,11 +1130,30 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly newScopeSetScopes = signal("");
 
   protected readonly secretsList = signal<SecretMetaRow[]>([]);
-  // otherSecrets leaves out a capability server's own secrets: those
-  // are managed (and removed) with the server, not here.
-  protected readonly otherSecrets = computed(() =>
-    this.secretsList().filter((s) => !s.capabilityServers?.length),
-  );
+  // otherSecrets leaves out the secrets another control owns, as the
+  // classic SecretsPanel does: a capability server's own secrets (managed
+  // and removed with the server), the Hub registration token, each model
+  // connection's agent-backend-<id> key and repo-release-* signing keys.
+  // Deleting one of those here would silently break what reads it.
+  protected readonly otherSecrets = computed(() => {
+    const raw =
+      this.state.settings()["agentBackends"] ??
+      this.state.deployment()["agentBackends"];
+    const claimed = new Set<string>(["registry-registration-token"]);
+    if (Array.isArray(raw)) {
+      for (const b of raw as { id?: string }[]) {
+        if (b?.id) claimed.add(`agent-backend-${b.id}`);
+      }
+    }
+    return this.secretsList().filter((s) => {
+      const name = this.secretRowName(s);
+      return (
+        !s.capabilityServers?.length &&
+        !claimed.has(name) &&
+        !name.startsWith("repo-release-")
+      );
+    });
+  });
   protected readonly secretName = signal("");
   protected readonly secretKey = signal("value");
   protected readonly secretVal = signal("");

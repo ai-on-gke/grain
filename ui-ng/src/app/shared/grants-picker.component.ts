@@ -317,10 +317,13 @@ export class GrantsPickerComponent {
   protected readonly methodOptions = computed<PillOption[]>(() =>
     this.methods().map((m) => {
       const verdict = m.policy?.task;
+      // policyRefusal is the verdict for this picker's repository: a
+      // kind-wide may_be_refused can still be refused here, and filing
+      // would turn the grant away.
       const blocked =
         verdict === "denied" ||
         verdict === "ci_only" ||
-        (!verdict && Boolean(m.policyRefusal));
+        Boolean(m.policyRefusal);
       return {
         value: m.ref,
         label: m.description ? `${m.ref} — ${m.description}` : m.ref,
@@ -460,7 +463,7 @@ export class GrantsPickerComponent {
     } else if (mode === "method") {
       const ref = (
         this.selectedMethod() ||
-        this.methodOptions()[0]?.value ||
+        this.methodOptions().find((o) => !o.disabled)?.value ||
         ""
       ).trim();
       if (!ref) {

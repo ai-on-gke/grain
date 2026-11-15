@@ -171,3 +171,18 @@ options). Re-run after the merge: ui-ng unit suite (480 tests), lint,
 Prettier, `next-connections-infrastructure-settings.spec.ts` (desktop,
 phone, dark), `next-connections-infra-settings.spec.js` and
 `next-full-system.spec.js` all pass.
+
+### Review findings addressed (task 6004)
+
+- `GrantsPickerComponent` now disables any method carrying a
+  `policyRefusal` for the picker's repository, even when the kind-wide
+  verdict is `may_be_refused` (as classic `GrantsPicker.jsx` does), and
+  `Add grant` with no method chosen falls back only to an enabled method,
+  refusing with "Choose a capability method." when every one is blocked.
+  New `ui-ng/src/app/shared/grants-picker.component.spec.ts` covers both
+  and fails on the previous code.
+- The `/next/` stored-secrets table now leaves out the secrets another
+  control owns, matching classic `SecretsPanel`: capability-server
+  secrets, `registry-registration-token`, `agent-backend-<id>` for each
+  model connection, and `repo-release-*`, so none of them is offered a
+  Delete there.
