@@ -79,12 +79,8 @@ func hookQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// writeStopSettings stages this run's --settings file on host, 0600, the
-// way writeMCPConfigJSON stages its --mcp-config.
-func writeStopSettings(ctx context.Context, host agent.Host, grainBinaryPath string, interactive bool, recordPath string) (string, error) {
-	return writeStopSettingsWithPolicy(ctx, host, grainBinaryPath, interactive, recordPath, "")
-}
-
+// writeStopSettingsWithPolicy stages this run's --settings file on host,
+// 0600, the way writeMCPConfigJSON stages its --mcp-config.
 func writeStopSettingsWithPolicy(ctx context.Context, host agent.Host, grainBinaryPath string, interactive bool, recordPath, policyPath string) (string, error) {
 	settings, err := stopHookSettingsWithPolicy(grainBinaryPath, interactive, recordPath, policyPath)
 	if err != nil {
