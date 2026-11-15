@@ -219,10 +219,14 @@ export function formatHostdLabels(
   return entries.map(([k, v]) => `${k}=${v}`).join(", ");
 }
 
+// formatRefreshedAt is "" for a connection whose provider has never
+// answered: the server sends Go's zero time ("0001-01-01T00:00:00Z") for
+// it, which is no time anything was refreshed.
 function formatRefreshedAt(iso?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
+  if (d.getUTCFullYear() <= 1) return "";
   const months = [
     "Jan",
     "Feb",
@@ -542,7 +546,9 @@ function formatRefreshedAt(iso?: string): string {
                             <summary>
                               {{ b.discovered.models?.length || 0 }} models
                               discovered
-                              @if (b.discovered.refreshedAt) {
+                              @if (
+                                formatRefreshedAt(b.discovered.refreshedAt)
+                              ) {
                                 <span
                                   class="s-meta"
                                   [attr.title]="b.discovered.refreshedAt"

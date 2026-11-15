@@ -310,3 +310,42 @@ test("opens Models for an old settings/connections link on a phone", async ({
   await expect(page.getByTestId("card-model-backends")).toBeVisible();
   await expect(page.getByTestId("settings-mobile-back")).toBeVisible();
 });
+
+// A connection whose provider has never answered carries Go's zero time
+// as refreshedAt; it is shown with its error and no refresh time, not as
+// refreshed on "Jan 1, 00:00 UTC".
+test("shows no refresh time for a provider that never answered", async ({
+  page,
+}) => {
+  const settings = (url) => url.pathname === "/api/settings";
+  await page.route(settings, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const json = await response.json();
+    json.agentBackends = [
+      ...(json.agentBackends || []),
+      {
+        id: "claude-never",
+        framework: "claude",
+        discovered: {
+          refreshedAt: "0001-01-01T00:00:00Z",
+          error: "no Claude Code OAuth token is configured for this model",
+        },
+      },
+    ];
+    await route.fulfill({ response, json });
+  });
+  try {
+    await page.goto("/next/settings/models");
+    const row = page
+      .getByTestId("card-model-backends")
+      .locator("tr", { hasText: "claude-never" });
+    await expect(row).toContainText("0 models discovered");
+    await expect(row).toContainText("no Claude Code OAuth token");
+    await expect(row.locator(".s-disc-details summary")).not.toContainText(
+      "UTC",
+    );
+  } finally {
+    await page.unroute(settings);
+  }
+});

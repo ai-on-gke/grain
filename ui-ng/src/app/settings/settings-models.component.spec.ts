@@ -302,6 +302,28 @@ describe("Settings → Models default and fallback models", () => {
     expect(await offered("picker-default-model")).toContain("gemini-ultra");
   });
 
+  it("gives no refresh time for a connection whose provider never answered", async () => {
+    const api = new FakeApi();
+    api.settingsBody["agentBackends"] = [
+      {
+        id: "agy",
+        framework: "antigravity",
+        discovered: {
+          refreshedAt: "0001-01-01T00:00:00Z",
+          error: "antigravity: agy models printed no model names",
+        },
+      },
+    ];
+    const { q } = await mount(api);
+    const summary = q(".s-disc-details summary")!.textContent ?? "";
+    expect(summary).toContain("0 models");
+    expect(summary).not.toContain("Jan 1");
+    expect(summary).not.toContain("UTC");
+    expect(q('[data-testid="card-model-backends"]')!.textContent).toContain(
+      "printed no model names",
+    );
+  });
+
   it("offers no Refresh to a person who cannot ask providers for their models", async () => {
     const api = new FakeApi();
     api.access = {
