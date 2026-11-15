@@ -240,7 +240,17 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                         }
                       </div>
                     } @empty {
-                      <p class="muted list-hint">No saved boards yet.</p>
+                      @if (store.boardsError(); as bErr) {
+                        <p
+                          class="list-hint boards-load-error"
+                          role="status"
+                          data-testid="boards-load-error"
+                        >
+                          The boards could not be loaded ({{ bErr }}).
+                        </p>
+                      } @else {
+                        <p class="muted list-hint">No saved boards yet.</p>
+                      }
                     }
                     @if (canWriteBoards()) {
                       <div class="boards-menu-sep" aria-hidden="true"></div>
@@ -349,7 +359,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
             type="button"
             class="btn-text"
             data-testid="board-save-cancel"
-            (click)="boardSaveOpen.set(false)"
+            (click)="closeBoardSave(true)"
           >
             Cancel
           </button>
@@ -2164,7 +2174,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     if ((ev.target as HTMLElement | null)?.closest?.(".confirm-inline")) return;
     if (this.boardSaveOpen()) {
       ev.preventDefault();
-      this.boardSaveOpen.set(false);
+      this.closeBoardSave(true);
     } else if (this.openMenu()) {
       ev.preventDefault();
       this.closeMenu(true);
@@ -2204,6 +2214,18 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     setTimeout(() => this.boardNameEl()?.nativeElement.focus());
   }
 
+  protected closeBoardSave(returnFocus: boolean): void {
+    this.boardSaveOpen.set(false);
+    this.boardName.set("");
+    if (returnFocus) {
+      setTimeout(() =>
+        document
+          .querySelector<HTMLElement>('[data-testid="saved-boards-btn"]')
+          ?.focus(),
+      );
+    }
+  }
+
   protected async submitBoardSave(ev: Event): Promise<void> {
     ev.preventDefault();
     const name = this.boardName().trim();
@@ -2214,8 +2236,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       query: this.currentBoardQuery(),
     });
     if (b) {
-      this.boardSaveOpen.set(false);
-      this.boardName.set("");
+      this.closeBoardSave(true);
       this.snack(`Saved board "${b.name}"`);
     }
   }

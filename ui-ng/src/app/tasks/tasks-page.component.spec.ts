@@ -1211,4 +1211,40 @@ describe("TasksPageComponent", () => {
     // Never "Nothing in this tab" for a list it could not read.
     expect(q(f, '[data-testid="tasks-pane-empty"]')).toBeNull();
   });
+
+  it("explains why saved boards could not be loaded instead of saying none exist, and returns focus from the save bar", async () => {
+    const api = new FakeApi();
+    const origGet = api.get;
+    api.get = (route: string, p?: unknown, query?: string) => {
+      if (route === "GET /api/boards") {
+        return Promise.reject({
+          status: 500,
+          error: { error: "store unavailable" },
+        });
+      }
+      return origGet(route, p, query);
+    };
+    const f = await render(api);
+    const trigger = q<HTMLButtonElement>(
+      f,
+      '[data-testid="saved-boards-btn"]',
+    )!;
+    trigger.click();
+    await settle(f);
+    const errEl = q(f, '[data-testid="boards-load-error"]');
+    expect(errEl?.textContent).toContain(
+      "The boards could not be loaded (store unavailable).",
+    );
+    expect(
+      q(f, '[data-testid="saved-boards-menu"]')?.textContent,
+    ).not.toContain("No saved boards yet.");
+
+    // Opening and cancelling the save bar returns focus to the Boards trigger.
+    q<HTMLButtonElement>(f, '[data-testid="board-save-open"]')!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="board-save-cancel"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="board-save-form"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
 });
