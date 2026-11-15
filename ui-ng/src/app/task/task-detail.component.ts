@@ -150,6 +150,7 @@ export function duration(from?: string, to?: string): string {
     "./task-detail.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/mermaid.css",
   ],
   host: {
     "(document:click)": "onDocClick($event)",

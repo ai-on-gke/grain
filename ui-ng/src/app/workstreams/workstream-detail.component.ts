@@ -128,6 +128,7 @@ const MODES: { id: LayoutMode; label: string }[] = [
     "./workstream-detail.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/mermaid.css",
   ],
   host: {
     "(document:keydown)": "onKey($event)",
