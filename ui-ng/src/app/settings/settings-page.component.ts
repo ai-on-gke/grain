@@ -20,7 +20,6 @@ import {
   OnDestroy,
   OnInit,
   ViewEncapsulation,
-  afterRenderEffect,
   computed,
   inject,
   input,
@@ -28,7 +27,7 @@ import {
   viewChild,
 } from "@angular/core";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
-import type { Subscription } from "rxjs";
+import { combineLatest, type Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
 import {
@@ -46,8 +45,8 @@ import {
   type SettingsSectionId,
   SETTINGS_GROUPS,
   filterSettingsGroups,
-  resolveSettingsAliasAnchor,
   resolveSettingsSection,
+  settingsAnchor,
   sectionMeta,
 } from "./settings-sections";
 import { SettingsSecurityComponent } from "./settings-security.component";
@@ -470,35 +469,8 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   private unregisterSlash: (() => void) | null = null;
   private readonly routeSection = signal<string | null>(null);
   private readonly routeFilePath = signal<string>("");
-  private readonly routeFragment = signal<string>("");
-  private lastScrolledKey = "";
 
   private subs: Subscription[] = [];
-
-  constructor() {
-    afterRenderEffect(() => {
-      if (!this.ready()) return;
-      const sec = this.activeSection();
-      const rawSec = this.routeSection() ?? this.section();
-      const anchor =
-        this.routeFragment() || resolveSettingsAliasAnchor(rawSec) || "";
-      if (!anchor) {
-        this.lastScrolledKey = "";
-        return;
-      }
-      const key = `${sec}#${anchor}`;
-      if (key === this.lastScrolledKey) return;
-      if (this.scrollToCardAnchor(anchor)) {
-        this.lastScrolledKey = key;
-      } else {
-        setTimeout(() => {
-          if (this.scrollToCardAnchor(anchor)) {
-            this.lastScrolledKey = key;
-          }
-        }, 80);
-      }
-    });
-  }
 
   protected readonly hasExplicitSection = computed(() => {
     const raw = this.routeSection() ?? this.section();
@@ -550,7 +522,6 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     });
     this.subs.push(
       this.route.paramMap.subscribe((pm) => {
-        this.routeSection.set(pm.get("section"));
         const fp = pm.get("filePath");
         if (fp) this.routeFilePath.set(fp);
       }),
@@ -561,9 +532,20 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
           this.routeFilePath.set("");
         }
       }),
-      this.route.fragment.subscribe((frag) => {
-        this.routeFragment.set((frag ?? "").trim());
-      }),
+      // A #fragment (Settings -> Capabilities#capability-policy, the
+      // links capability pickers give) or an old section name
+      // (/settings/secrets) names a card inside the section: scroll it
+      // into view once the section's own data has rendered it. The
+      // component is reused across sections, so watch the section and
+      // the fragment together: /settings/engine -> /settings/secrets
+      // changes only the section, and still has an anchor to reach.
+      combineLatest([this.route.paramMap, this.route.fragment]).subscribe(
+        ([pm, frag]) => {
+          const sec = pm.get("section");
+          this.routeSection.set(sec);
+          this.scrollToAnchor(settingsAnchor(sec ?? this.section(), frag));
+        },
+      ),
     );
     if (this.state.initialized() && this.state.config() !== null) {
       this.ready.set(true);
@@ -583,6 +565,39 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     this.unregisterSlash?.();
     this.unregisterSlash = null;
     this.subs.forEach((s) => s.unsubscribe());
+    if (this.anchorTimer) clearInterval(this.anchorTimer);
+  }
+
+  private anchorTimer: ReturnType<typeof setInterval> | null = null;
+
+  // scrollToAnchor waits up to 5s for the element -- a section's cards
+  // appear only after its own requests answer -- and scrolls it into
+  // view again while cards above it are still arriving and pushing it
+  // down, stopping once it has held still for three ticks.
+  private scrollToAnchor(id: string): void {
+    if (this.anchorTimer) clearInterval(this.anchorTimer);
+    this.anchorTimer = null;
+    if (!id || typeof document === "undefined") return;
+    let tries = 0;
+    let lastTop = Number.NaN;
+    let still = 0;
+    this.anchorTimer = setInterval(() => {
+      const el = document.getElementById(id);
+      if (el) {
+        const top = Math.round(el.getBoundingClientRect().top);
+        if (top === lastTop) {
+          still++;
+        } else {
+          still = 0;
+          el.scrollIntoView({ block: "start" });
+          lastTop = Math.round(el.getBoundingClientRect().top);
+        }
+      }
+      if (still >= 3 || ++tries > 50) {
+        if (this.anchorTimer) clearInterval(this.anchorTimer);
+        this.anchorTimer = null;
+      }
+    }, 100);
   }
 
   @HostListener("window:beforeunload", ["$event"])
@@ -619,29 +634,6 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
       ev.stopPropagation();
       this.filterQuery.set("");
     }
-  }
-
-  private scrollToCardAnchor(anchor: string): boolean {
-    const root = this.hostEl.nativeElement;
-    const scroller = root.querySelector<HTMLElement>(".settings-stage-scroll");
-    if (!scroller) return false;
-    const escaped =
-      typeof CSS !== "undefined" && typeof CSS.escape === "function"
-        ? CSS.escape(anchor)
-        : anchor.replace(/[^a-zA-Z0-9_-]/g, "");
-    const el =
-      (escaped ? root.querySelector<HTMLElement>(`#${escaped}`) : null) ??
-      root.querySelector<HTMLElement>(`[data-testid="${anchor}"]`);
-    if (!el) return false;
-    const scrollerRect = scroller.getBoundingClientRect();
-    const elRect = el.getBoundingClientRect();
-    const pad = elRect.height > scroller.clientHeight - 32 ? 12 : 20;
-    const nextTop = Math.max(
-      0,
-      scroller.scrollTop + (elRect.top - scrollerRect.top) - pad,
-    );
-    scroller.scrollTop = nextTop;
-    return true;
   }
 
   protected async onMobileBack(ev: MouseEvent): Promise<void> {
@@ -702,6 +694,8 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     }
     ev.preventDefault();
     if (id === this.activeSection() && this.hasExplicitSection()) return;
+    // Choosing a section stops any scroll still chasing its anchor.
+    this.scrollToAnchor("");
     if (!(await this.canLeave())) return;
     this.routeSection.set(id);
     void this.router.navigate(["/settings", id]);
