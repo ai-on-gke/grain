@@ -508,6 +508,10 @@ export interface CapabilityMethod {
   requiresArgs?: boolean;
   releasable?: boolean;
   policyRefusal?: string;
+  // The capability policy's verdict per run kind ("task", "process",
+  // "ci"): "denied", "may_be_refused" or "ci_only"; a kind it admits
+  // unconditionally is left out.
+  policy?: Record<string, string>;
   aliasOf?: string[];
 }
 
@@ -530,7 +534,9 @@ export interface GrantCheck {
   recorded: string;
   error?: string;
   fields?: { field: string; message: string }[];
-  catalogueRefusal?: boolean;
+  catalogueRefusal?: boolean | string;
+  // The canonical grants a retired bare capability name became.
+  aliasOf?: string[];
 }
 
 export interface CapabilityAuditEntry {

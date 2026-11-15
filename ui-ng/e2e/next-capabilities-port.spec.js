@@ -343,3 +343,65 @@ test("the server list fits a phone without sideways scroll @phone @dark", async 
   expect(overflow).toBeLessThanOrEqual(0);
   expect(await axe()).toEqual([]);
 });
+
+test("the New task grant picker shows the capability policy's verdicts and links the policy", async ({
+  page,
+}) => {
+  const DENIED = "https://grain.dev/capabilities/gcp#gcp-key";
+  const MAYBE = "https://grain.dev/capabilities/github#read-issues";
+  const REFUSED = "https://grain.dev/capabilities/grain#sql";
+  await page.route("**/api/capability-methods**", (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            ref: MAYBE,
+            capability: "https://grain.dev/capabilities/github",
+            method: "read-issues",
+            policy: { task: "may_be_refused" },
+          },
+          {
+            ref: DENIED,
+            capability: "https://grain.dev/capabilities/gcp",
+            method: "gcp-key",
+            policy: { task: "denied" },
+          },
+          {
+            ref: REFUSED,
+            capability: "https://grain.dev/capabilities/grain",
+            method: "sql",
+            policyRefusal:
+              "the capability policy denies grain#sql to acme/widgets",
+          },
+        ],
+      },
+    }),
+  );
+  await page.goto("/next/inbox");
+  await page.getByTestId("rail-new-task").click();
+  await expect(page.getByTestId("new-task-sheet")).toBeVisible();
+  await page.getByTestId("caps-options").click();
+  await page.getByTestId("nt-grants-add-open").click();
+  await page.getByTestId("nt-grants-mode-method").click();
+  // The sheet has a repository chosen, so the listing judged this one
+  // run: the method the policy refuses it is listed disabled with the
+  // policy's reason, and the builder links the policy.
+  await page.getByTestId("nt-grants-method-ref").click();
+  const refused = page.getByTestId(`nt-grants-method-ref-opt-${REFUSED}`);
+  await expect(refused).toHaveAttribute("aria-disabled", "true");
+  await expect(refused).toContainText("denies grain#sql");
+  await page.keyboard.press("Escape");
+  const note = page.getByTestId("nt-grants-method-policy");
+  await expect(note).toContainText("1 method is refused or may be refused");
+  const link = note.getByRole("link", { name: "Settings → Capabilities" });
+  await expect(link).toHaveAttribute(
+    "href",
+    /\/settings\/capabilities#capability-policy$/,
+  );
+
+  await link.click();
+  await expect(page).toHaveURL(
+    /\/next\/settings\/capabilities#capability-policy$/,
+  );
+  await expect(page.getByTestId("card-capability-policy")).toBeVisible();
+});
