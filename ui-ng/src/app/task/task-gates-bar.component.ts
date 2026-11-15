@@ -33,6 +33,7 @@ import type {
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { parseUnifiedDiff } from "../shared/diff-parse";
+import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
 import { unsatisfiedGates } from "../shared/gates";
 import type { ForceMergeRequest } from "./force-merge-dialog.component";
@@ -53,7 +54,7 @@ const REVIEW_CATEGORIES = [
 
 @Component({
   selector: "g-task-gates-bar",
-  imports: [DiffViewerComponent],
+  imports: [DiffViewerComponent, CappedMarkdownComponent],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./task-gates-bar.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -146,7 +147,13 @@ const REVIEW_CATEGORIES = [
               }
             </div>
             @if (pa.reason) {
-              <p class="muted" style="margin: 0">{{ pa.reason }}</p>
+              <g-capped-markdown
+                class="muted"
+                testid="gate-access-reason"
+                noun="reason"
+                label="Why the run asks"
+                [text]="pa.reason"
+              />
             }
             <ul class="gate-access-list" data-testid="access-items-list">
               @for (it of displayItems(); track $index) {
