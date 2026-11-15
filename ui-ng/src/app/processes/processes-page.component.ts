@@ -263,6 +263,8 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                   <ul
                     class="pop-menu align-right proc-new-menu"
                     role="menu"
+                    aria-label="New"
+                    aria-describedby="proc-new-menu-hint"
                     data-testid="proc-new-menu"
                   >
                     @if (access.can("POST /api/schedules")) {
@@ -303,6 +305,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                     }
                     <li
                       role="none"
+                      id="proc-new-menu-hint"
                       class="proc-new-menu-hint"
                       data-testid="proc-new-menu-hint"
                     >
@@ -3252,7 +3255,12 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   // ?sort= names the order; with none the list is in its custom order,
   // which is name order until somebody moves a row.
-  protected readonly activeSort = computed(() => parseProcessSort(this.sort()));
+  // Suites have no kinds, so a Kind sort carried onto their tab reads as
+  // the custom order it falls back to.
+  protected readonly activeSort = computed<ProcessSort>(() => {
+    const sort = parseProcessSort(this.sort());
+    return sort === "kind" && this.activeTab() === "suites" ? "custom" : sort;
+  });
   protected readonly customOrder = signal<string[]>(loadOrder());
   protected readonly noRuns = NO_RUNS;
   protected readonly moveNote = signal("");
