@@ -156,6 +156,16 @@ interface BackendEntry extends ModelBackendLike {
   disabled?: boolean;
 }
 
+// GET/PUT/DELETE /api/agent-backends/{id}/codex-auth: a Codex
+// connection's own ChatGPT-subscription login, reported by presence.
+// A connection never falls back to the deployment-wide login
+// (configuredCodexAuthFile), so sharedSet is not shown here.
+interface BackendCodexAuthStatus {
+  enabled?: boolean;
+  set?: boolean;
+  refreshError?: string;
+}
+
 interface TokenBudgetRow {
   connection: string;
   model?: string;
@@ -661,7 +671,7 @@ function formatRefreshedAt(iso?: string): string {
           </div>
 
           @if (backends().length > 0) {
-            <div class="s-table-wrap">
+            <div class="s-table-wrap s-table-pinned">
               <table class="s-table" aria-label="Model connections">
                 <thead>
                   <tr>
@@ -798,73 +808,192 @@ function formatRefreshedAt(iso?: string): string {
                         [attr.data-testid]="'backend-cred-row-' + b.id"
                       >
                         <td colspan="4">
-                          <form
-                            class="s-cred-bar"
-                            autocomplete="off"
-                            (submit)="
-                              $event.preventDefault(); saveBackendCred(b.id)
-                            "
-                          >
-                            <span class="s-label"
-                              >Credential for
-                              <span class="s-mono">{{ b.id }}</span></span
+                          @if (isCodexSubscription(b)) {
+                            <div
+                              class="s-field s-subrow-pin"
+                              [attr.data-testid]="'codex-auth-' + b.id"
                             >
-                            <input
-                              class="s-input s-input-inline"
-                              type="password"
-                              [attr.name]="'grain-backend-cred-' + b.id"
-                              autocomplete="new-password"
-                              data-lpignore="true"
-                              data-1p-ignore="true"
-                              [attr.aria-label]="'Credential for ' + b.id"
-                              placeholder="Paste API key or secret…"
-                              [value]="backendCredDrafts()[b.id] || ''"
-                              [disabled]="
-                                !access.can(
-                                  'PUT /api/agent-backends/{id}/credential'
-                                )
-                              "
-                              (input)="
-                                setBackendCredDraft(
-                                  b.id,
-                                  $any($event.target).value
-                                )
-                              "
-                            />
-                            <button
-                              type="submit"
-                              class="btn-primary s-btn-sm"
-                              [disabled]="
-                                !(backendCredDrafts()[b.id] || '').trim() ||
-                                !access.can(
-                                  'PUT /api/agent-backends/{id}/credential'
-                                )
+                              <div class="s-inline">
+                                <label
+                                  class="s-label"
+                                  [attr.for]="'codex-auth-input-' + b.id"
+                                  >ChatGPT subscription login (auth.json) for
+                                  <span class="s-mono">{{ b.id }}</span></label
+                                >
+                                <span
+                                  [class]="
+                                    'status-pill ' +
+                                    (codexAuthStatus()[b.id]?.set
+                                      ? 'healthy'
+                                      : 'neutral')
+                                  "
+                                  role="status"
+                                  [attr.data-testid]="
+                                    'codex-auth-status-' + b.id
+                                  "
+                                >
+                                  {{ codexAuthStatusLabel(b.id) }}
+                                </span>
+                              </div>
+                              @if (codexAuthStatus()[b.id]?.refreshError) {
+                                <div
+                                  class="status-pill error"
+                                  role="alert"
+                                  [attr.data-testid]="
+                                    'codex-auth-refresh-error-' + b.id
+                                  "
+                                >
+                                  {{ codexAuthStatus()[b.id]?.refreshError }}
+                                </div>
+                              }
+                              <p class="s-hint">
+                                Paste the auth.json from a Codex ChatGPT login.
+                                Only this connection uses it, and grain keeps
+                                its tokens refreshed. API keys are ignored in
+                                this mode.
+                              </p>
+                              <textarea
+                                class="s-textarea s-mono"
+                                rows="3"
+                                autocomplete="off"
+                                spellcheck="false"
+                                data-lpignore="true"
+                                data-1p-ignore="true"
+                                [attr.id]="'codex-auth-input-' + b.id"
+                                [attr.data-testid]="'input-codex-auth-' + b.id"
+                                placeholder='{"tokens": {...}}'
+                                [value]="codexAuthDrafts()[b.id] || ''"
+                                [disabled]="
+                                  codexAuthStatus()[b.id]?.enabled === false ||
+                                  !access.can(
+                                    'PUT /api/agent-backends/{id}/codex-auth'
+                                  )
+                                "
+                                (input)="
+                                  setCodexAuthDraft(
+                                    b.id,
+                                    $any($event.target).value
+                                  )
+                                "
+                              ></textarea>
+                              <div class="s-inline">
+                                <button
+                                  type="button"
+                                  class="btn-primary s-btn-sm"
+                                  [attr.data-testid]="'save-codex-auth-' + b.id"
+                                  [disabled]="
+                                    codexAuthBusy() ||
+                                    !(codexAuthDrafts()[b.id] || '').trim() ||
+                                    codexAuthStatus()[b.id]?.enabled ===
+                                      false ||
+                                    !access.can(
+                                      'PUT /api/agent-backends/{id}/codex-auth'
+                                    )
+                                  "
+                                  (click)="saveCodexAuth(b.id)"
+                                >
+                                  Save login
+                                </button>
+                                <button
+                                  type="button"
+                                  class="btn-tonal s-btn-sm"
+                                  [attr.data-testid]="
+                                    'clear-codex-auth-' + b.id
+                                  "
+                                  [attr.aria-label]="
+                                    'Clear subscription login for ' + b.id
+                                  "
+                                  [disabled]="
+                                    codexAuthBusy() ||
+                                    !codexAuthStatus()[b.id]?.set ||
+                                    !access.can(
+                                      'DELETE /api/agent-backends/{id}/codex-auth'
+                                    )
+                                  "
+                                  (click)="confirmClearCodexAuth(b.id)"
+                                >
+                                  Clear login
+                                </button>
+                                <button
+                                  type="button"
+                                  class="btn-text s-btn-sm"
+                                  (click)="openCredBackendId.set(null)"
+                                >
+                                  Close
+                                </button>
+                              </div>
+                            </div>
+                          } @else {
+                            <form
+                              class="s-cred-bar s-subrow-pin"
+                              autocomplete="off"
+                              (submit)="
+                                $event.preventDefault(); saveBackendCred(b.id)
                               "
                             >
-                              Save secret
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-tonal s-btn-sm"
-                              [attr.data-testid]="'clear-cred-' + b.id"
-                              [attr.aria-label]="'Clear credential for ' + b.id"
-                              [disabled]="
-                                !access.can(
-                                  'DELETE /api/agent-backends/{id}/credential'
-                                )
-                              "
-                              (click)="confirmClearBackendCred(b.id)"
-                            >
-                              Clear stored secret
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              (click)="openCredBackendId.set(null)"
-                            >
-                              Close
-                            </button>
-                          </form>
+                              <span class="s-label"
+                                >Credential for
+                                <span class="s-mono">{{ b.id }}</span></span
+                              >
+                              <input
+                                class="s-input s-input-inline"
+                                type="password"
+                                [attr.name]="'grain-backend-cred-' + b.id"
+                                autocomplete="new-password"
+                                data-lpignore="true"
+                                data-1p-ignore="true"
+                                [attr.aria-label]="'Credential for ' + b.id"
+                                placeholder="Paste API key or secret…"
+                                [value]="backendCredDrafts()[b.id] || ''"
+                                [disabled]="
+                                  !access.can(
+                                    'PUT /api/agent-backends/{id}/credential'
+                                  )
+                                "
+                                (input)="
+                                  setBackendCredDraft(
+                                    b.id,
+                                    $any($event.target).value
+                                  )
+                                "
+                              />
+                              <button
+                                type="submit"
+                                class="btn-primary s-btn-sm"
+                                [disabled]="
+                                  !(backendCredDrafts()[b.id] || '').trim() ||
+                                  !access.can(
+                                    'PUT /api/agent-backends/{id}/credential'
+                                  )
+                                "
+                              >
+                                Save secret
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [attr.data-testid]="'clear-cred-' + b.id"
+                                [attr.aria-label]="
+                                  'Clear credential for ' + b.id
+                                "
+                                [disabled]="
+                                  !access.can(
+                                    'DELETE /api/agent-backends/{id}/credential'
+                                  )
+                                "
+                                (click)="confirmClearBackendCred(b.id)"
+                              >
+                                Clear stored secret
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-text s-btn-sm"
+                                (click)="openCredBackendId.set(null)"
+                              >
+                                Close
+                              </button>
+                            </form>
+                          }
                         </td>
                       </tr>
                     }
@@ -926,7 +1055,7 @@ function formatRefreshedAt(iso?: string): string {
                   align="left"
                   [options]="frameworkOptions"
                   [value]="newBackendFw()"
-                  (valueChange)="newBackendFw.set($event)"
+                  (valueChange)="setNewBackendFw($event)"
                 />
               </div>
               <div class="s-field">
@@ -935,7 +1064,7 @@ function formatRefreshedAt(iso?: string): string {
                   testid="select-new-backend-auth"
                   ariaLabel="Backend auth mode"
                   align="left"
-                  [options]="authModeOptions"
+                  [options]="authModeOptions()"
                   [value]="newBackendAuthMode()"
                   (valueChange)="newBackendAuthMode.set($event)"
                 />
@@ -2777,12 +2906,17 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     { value: "medium", label: "Medium" },
     { value: "high", label: "High" },
   ];
-  protected readonly authModeOptions: readonly PillOption[] = [
+  // "subscription" (model.CodexAuthSubscription) is a Codex-only mode:
+  // the server refuses it for any other framework.
+  protected readonly authModeOptions = computed<PillOption[]>(() => [
     { value: "", label: "Provider default" },
     { value: "api_key", label: "API key / OAuth secret" },
+    ...(this.newBackendFw() === "codex"
+      ? [{ value: "subscription", label: "ChatGPT subscription (auth.json)" }]
+      : []),
     { value: "ambient", label: "Host ambient login" },
     { value: "vertex", label: "Vertex AI" },
-  ];
+  ]);
   protected readonly usageModeOptions: readonly PillOption[] = [
     { value: "advisory", label: "Advisory" },
     { value: "auto", label: "Auto throttle" },
@@ -2839,6 +2973,11 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly backends = signal<BackendEntry[]>([]);
   protected readonly backendCredDrafts = signal<Record<string, string>>({});
   protected readonly openCredBackendId = signal<string | null>(null);
+  protected readonly codexAuthDrafts = signal<Record<string, string>>({});
+  protected readonly codexAuthStatus = signal<
+    Partial<Record<string, BackendCodexAuthStatus>>
+  >({});
+  protected readonly codexAuthBusy = signal(false);
   protected readonly newBackendId = signal("");
   protected readonly newBackendName = signal("");
   protected readonly newBackendFw = signal("antigravity");
@@ -3240,6 +3379,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       this.editingBackendId.set("");
       await this.state.loadCore();
       this.syncBackendsFromState();
+      // An open Credential row that now holds a subscription login reads
+      // its status, as opening it would have.
+      const saved = this.backends().find((b) => b.id === backendId);
+      if (
+        this.openCredBackendId() === backendId &&
+        saved &&
+        this.isCodexSubscription(saved)
+      ) {
+        void this.loadCodexAuth(backendId);
+      }
       this.snackbar.show(`Saved model connection ${backendId}`);
     } catch (err) {
       this.state.recordError(err);
@@ -3298,6 +3447,106 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
 
   protected toggleCredEditor(id: string): void {
     this.openCredBackendId.update((cur) => (cur === id ? null : id));
+    const b = this.backends().find((x) => x.id === id);
+    if (this.openCredBackendId() === id && b && this.isCodexSubscription(b)) {
+      void this.loadCodexAuth(id);
+    }
+  }
+
+  protected setNewBackendFw(fw: string): void {
+    this.newBackendFw.set(fw);
+    if (fw !== "codex" && this.newBackendAuthMode() === "subscription") {
+      this.newBackendAuthMode.set("");
+    }
+  }
+
+  protected isCodexSubscription(b: BackendEntry): boolean {
+    return (
+      (b.framework || "").trim().toLowerCase() === "codex" &&
+      b.authMode === "subscription"
+    );
+  }
+
+  protected codexAuthStatusLabel(id: string): string {
+    const status = this.codexAuthStatus()[id];
+    if (!status) return "Checking…";
+    if (status.enabled === false) return "Unavailable on this daemon";
+    return status.set ? "Configured" : "Not set";
+  }
+
+  protected setCodexAuthDraft(id: string, value: string): void {
+    this.codexAuthDrafts.update((d) => ({ ...d, [id]: value }));
+  }
+
+  private setCodexAuthStatus(id: string, res: unknown): void {
+    const r = (res ?? {}) as BackendCodexAuthStatus;
+    this.codexAuthStatus.update((m) => ({
+      ...m,
+      [id]: {
+        enabled: r.enabled,
+        set: Boolean(r.set),
+        refreshError: r.refreshError || "",
+      },
+    }));
+  }
+
+  protected async loadCodexAuth(id: string): Promise<void> {
+    try {
+      const res = await this.api.get(
+        "GET /api/agent-backends/{id}/codex-auth",
+        { id },
+      );
+      this.setCodexAuthStatus(id, res);
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  protected async saveCodexAuth(id: string): Promise<void> {
+    const value = (this.codexAuthDrafts()[id] ?? "").trim();
+    if (!value) return;
+    this.codexAuthBusy.set(true);
+    try {
+      const res = await this.api.put(
+        "PUT /api/agent-backends/{id}/codex-auth",
+        { id },
+        { value },
+      );
+      this.setCodexAuthStatus(id, res);
+      this.setCodexAuthDraft(id, "");
+      this.snackbar.show(`Saved subscription login for ${id}`);
+    } catch (err) {
+      this.state.recordError(err);
+    } finally {
+      this.codexAuthBusy.set(false);
+    }
+  }
+
+  protected confirmClearCodexAuth(id: string): void {
+    this.confirmRequest.set({
+      title: `Clear the subscription login for ${id}?`,
+      message: `The auth.json stored for ${id} is deleted. Runs on ${id} stop until a new login is uploaded: the connection never falls back to the deployment's shared login.`,
+      accept: "Clear login",
+      destructive: true,
+      run: () => this.clearCodexAuth(id),
+    });
+  }
+
+  protected async clearCodexAuth(id: string): Promise<void> {
+    this.codexAuthBusy.set(true);
+    try {
+      const res = await this.api.delete(
+        "DELETE /api/agent-backends/{id}/codex-auth",
+        { id },
+      );
+      this.setCodexAuthStatus(id, res);
+      this.setCodexAuthDraft(id, "");
+      this.snackbar.show(`Cleared subscription login for ${id}`);
+    } catch (err) {
+      this.state.recordError(err);
+    } finally {
+      this.codexAuthBusy.set(false);
+    }
   }
 
   protected cancelEditBackend(): void {
