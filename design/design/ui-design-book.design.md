@@ -273,7 +273,11 @@ without switching prose or human names to monospace; `.s-mono` is reserved for
 technical slugs, model IDs and paths). Tables keep row actions on one right-aligned
 line (`.s-row-actions`), separate any below-table creation/edit form with a
 `.s-subsection` divider, and collapse per-connection password inputs behind an
-on-demand `Credential` row. Search filters live inside `<form role="search"
+on-demand `Credential` row. A sub-row editor inside a table that scrolls
+sideways (`.s-table-wrap.s-table-pinned`) carries `.s-subrow-pin`, so it stays
+pinned to the visible width at phone sizes rather than spanning the scrolled
+table; a Codex connection in the `subscription` auth mode shows its own
+auth.json login there in place of the key field. Search filters live inside `<form role="search"
 autocomplete="off">` and secret inputs carry `autocomplete="new-password"` inside
 `<form autocomplete="off">` so browser password managers never autofill emails
 into search bars. Single-choice pickers use `<g-pill-select>`; a model is always chosen
