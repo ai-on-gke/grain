@@ -65,7 +65,7 @@ Every direction's completed and spawned counts match the legacy walk. Spot check
 
 **Bug (filed, not fixed here): Workstreams drops done members on busy deployments.** `WorkstreamsStore.loadClosedPages` reads at most `MAX_CLOSED_PAGES × CLOSED_PAGE_LIMIT = 4 × 100 = 400` closed tasks, newest-closed first. Once a deployment has closed more than 400 tasks in the 14-day Done window, a workstream whose subtasks closed earlier silently loses them. Reproduction:
 
-1. `go run ./docs/test-runs/2026-11-14-next-heavy-data/seed -store <data-dir>/store` on a stopped daemon, without `-ws-last`, then start the daemon.
+1. `go run ./docs/test-runs/2026-11-14-next-heavy-data/seed/main.go -store <data-dir>/store` on a stopped daemon, without `-ws-last`, then start the daemon.
 2. Open `/next/workstreams/task:100`. It shows 4 nodes (root plus 3 open) and no fold toggle, although 45 merged subtasks exist.
 3. `GET /api/tasks?state=closed&closedSince=<now-14d>&limit=200` puts none of tasks 101–145 on the first page.
 

@@ -1,3 +1,5 @@
+//go:build ignore
+
 // Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,7 +20,7 @@
 // four repositories, and 2,000 more tasks in proposed-by trees (one 250
 // deep, a cycle, a dangling parent, a two-parent task).
 //
-//	go run ./docs/test-runs/2026-11-14-next-heavy-data/seed -store /tmp/heavy-ui/data/store
+//	go run ./docs/test-runs/2026-11-14-next-heavy-data/seed/main.go -store /tmp/heavy-ui/data/store
 package main
 
 import (
