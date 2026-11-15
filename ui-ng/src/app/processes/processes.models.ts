@@ -373,6 +373,12 @@ export interface RepoDeclarationsStatus {
   warnings?: string[];
 }
 
+// DeclaredTrigger is one .grain/triggers file a repository declares.
+export interface DeclaredTrigger {
+  repo: string;
+  path: string;
+}
+
 export interface RepoDefaultsView {
   repo?: string;
   declarations: boolean;

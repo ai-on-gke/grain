@@ -56,6 +56,7 @@ import { CompositionViewComponent } from "./composition-view.component";
 import {
   type Composition,
   type CreateScheduleRequest,
+  type DeclaredTrigger,
   type DerivedRuns,
   type ProcessSort,
   type CreateSuiteRequest,
@@ -161,6 +162,18 @@ function saveOrder(ids: readonly string[]): void {
   } catch {
     // Storage denied: the order lasts as long as the page does.
   }
+}
+
+// A row of the Schedules & Triggers list: a schedule, or a trigger a
+// repository declares in .grain/triggers.
+interface SchedTabRow {
+  key: string;
+  schedule?: Schedule;
+  trigger?: DeclaredTrigger;
+}
+
+function triggerName(path: string): string {
+  return path.replace(/^\.grain\/triggers\//, "");
 }
 
 const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
@@ -402,77 +415,134 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                   (valueChange)="setSort($event)"
                 />
               </div>
-              @if (store.loaded() && filteredSchedules().length === 0) {
+              @if (store.loaded() && scheduleRows().length === 0) {
                 <div class="empty-state" data-testid="schedules-empty">
                   <p>No schedules or event triggers match this view.</p>
                 </div>
               } @else {
                 <ul class="proc-list">
-                  @for (s of sortedSchedules(); track s.id) {
-                    @let badge = schedBadge(s);
-                    <li
-                      class="proc-li"
-                      [class.is-drop-target]="dropKey() === 'schedule:' + s.id"
-                      [attr.draggable]="
-                        activeSort() === 'custom' ? 'true' : null
-                      "
-                      (dragstart)="onDragStart($event, 'schedule:' + s.id)"
-                      (dragover)="onDragOver($event, 'schedule:' + s.id)"
-                      (dragleave)="onDragLeave('schedule:' + s.id)"
-                      (drop)="onDrop($event, 'schedules', 'schedule:' + s.id)"
-                      (dragend)="onDragEnd()"
-                    >
-                      <button
-                        type="button"
-                        class="proc-row"
-                        [class.is-selected]="selectedScheduleId() === s.id"
-                        [attr.aria-current]="
-                          selectedScheduleId() === s.id ? 'true' : null
+                  @for (r of scheduleRows(); track r.key) {
+                    @if (r.trigger; as tr) {
+                      <li
+                        class="proc-li"
+                        [class.is-drop-target]="dropKey() === r.key"
+                        [attr.draggable]="
+                          activeSort() === 'custom' ? 'true' : null
                         "
-                        [attr.data-testid]="'sched-row-' + s.id"
-                        [attr.aria-keyshortcuts]="
-                          activeSort() === 'custom'
-                            ? 'Alt+ArrowUp Alt+ArrowDown'
-                            : null
-                        "
-                        (click)="selectSchedule(s.id, true)"
-                        (keydown)="
-                          onRowKey($event, 'schedules', 'schedule:' + s.id)
-                        "
-                        (keydown.space)="
-                          selectSchedule(s.id, true); $event.preventDefault()
-                        "
+                        (dragstart)="onDragStart($event, r.key)"
+                        (dragover)="onDragOver($event, r.key)"
+                        (dragleave)="onDragLeave(r.key)"
+                        (drop)="onDrop($event, 'schedules', r.key)"
+                        (dragend)="onDragEnd()"
                       >
-                        <div class="proc-row-top">
-                          <span [class]="'status-pill ' + badge.tone">
-                            <g-status-icon
-                              [tone]="badge.tone"
-                              [kind]="badge.iconKind"
-                            />
-                            {{ badge.label }}
-                          </span>
-                          <span class="proc-row-title">{{
-                            s.title || s.templateName || s.suiteName || s.id
-                          }}</span>
-                          @if (isTrigger(s)) {
+                        <a
+                          class="proc-row"
+                          draggable="false"
+                          [routerLink]="repoAdvancedRoute(tr.repo)"
+                          [attr.data-testid]="'trigger-row-' + r.key"
+                          [attr.aria-keyshortcuts]="
+                            activeSort() === 'custom'
+                              ? 'Alt+ArrowUp Alt+ArrowDown'
+                              : null
+                          "
+                          [gTip]="
+                            'Open the Advanced tab of ' +
+                            tr.repo +
+                            ', where its triggers are'
+                          "
+                          (keydown)="onRowKey($event, 'schedules', r.key)"
+                        >
+                          <div class="proc-row-top">
+                            <span class="status-pill reply">
+                              <g-status-icon tone="reply" kind="reply" />
+                              Declared
+                            </span>
+                            <span class="proc-row-title">{{
+                              triggerName(tr.path)
+                            }}</span>
                             <span class="ci-provider-tag">Trigger</span>
-                          }
-                          @if (s.declaredIn) {
                             <span class="ci-provider-tag">.grain</span>
-                          }
-                        </div>
-                        <div class="proc-row-sub">
-                          <span>{{ cadenceOf(s.recurrence, s.timeZone) }}</span>
-                          @if (s.repo) {
-                            <span class="tabular">· {{ s.repo }}</span>
-                          }
-                          @if (schedNextRunOf(s); as nr) {
-                            <span class="tabular">· next: {{ stamp(nr) }}</span>
-                          }
-                          <span>· overlap: {{ s.overlap || "skip" }}</span>
-                        </div>
-                      </button>
-                    </li>
+                          </div>
+                          <div class="proc-row-sub">
+                            <span class="tabular">{{ tr.repo }}</span>
+                            <span class="tabular">· {{ tr.path }}</span>
+                            <span>· next: on change</span>
+                          </div>
+                        </a>
+                      </li>
+                    }
+                    @if (r.schedule; as s) {
+                      @let badge = schedBadge(s);
+                      <li
+                        class="proc-li"
+                        [class.is-drop-target]="
+                          dropKey() === 'schedule:' + s.id
+                        "
+                        [attr.draggable]="
+                          activeSort() === 'custom' ? 'true' : null
+                        "
+                        (dragstart)="onDragStart($event, 'schedule:' + s.id)"
+                        (dragover)="onDragOver($event, 'schedule:' + s.id)"
+                        (dragleave)="onDragLeave('schedule:' + s.id)"
+                        (drop)="onDrop($event, 'schedules', 'schedule:' + s.id)"
+                        (dragend)="onDragEnd()"
+                      >
+                        <button
+                          type="button"
+                          class="proc-row"
+                          [class.is-selected]="selectedScheduleId() === s.id"
+                          [attr.aria-current]="
+                            selectedScheduleId() === s.id ? 'true' : null
+                          "
+                          [attr.data-testid]="'sched-row-' + s.id"
+                          [attr.aria-keyshortcuts]="
+                            activeSort() === 'custom'
+                              ? 'Alt+ArrowUp Alt+ArrowDown'
+                              : null
+                          "
+                          (click)="selectSchedule(s.id, true)"
+                          (keydown)="
+                            onRowKey($event, 'schedules', 'schedule:' + s.id)
+                          "
+                          (keydown.space)="
+                            selectSchedule(s.id, true); $event.preventDefault()
+                          "
+                        >
+                          <div class="proc-row-top">
+                            <span [class]="'status-pill ' + badge.tone">
+                              <g-status-icon
+                                [tone]="badge.tone"
+                                [kind]="badge.iconKind"
+                              />
+                              {{ badge.label }}
+                            </span>
+                            <span class="proc-row-title">{{
+                              s.title || s.templateName || s.suiteName || s.id
+                            }}</span>
+                            @if (isTrigger(s)) {
+                              <span class="ci-provider-tag">Trigger</span>
+                            }
+                            @if (s.declaredIn) {
+                              <span class="ci-provider-tag">.grain</span>
+                            }
+                          </div>
+                          <div class="proc-row-sub">
+                            <span>{{
+                              cadenceOf(s.recurrence, s.timeZone)
+                            }}</span>
+                            @if (s.repo) {
+                              <span class="tabular">· {{ s.repo }}</span>
+                            }
+                            @if (schedNextRunOf(s); as nr) {
+                              <span class="tabular"
+                                >· next: {{ stamp(nr) }}</span
+                              >
+                            }
+                            <span>· overlap: {{ s.overlap || "skip" }}</span>
+                          </div>
+                        </button>
+                      </li>
+                    }
                   }
                 </ul>
               }
@@ -1563,7 +1633,7 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                           type="button"
                           role="switch"
                           class="g-switch"
-                          aria-label="Sync .grain/ declarations"
+                          attr.aria-label="Read {{ repo }}'s own declarations"
                           data-testid="decl-toggle-switch"
                           [disabled]="
                             !access.can(
@@ -1576,7 +1646,9 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
                             toggleRepoDeclarations(repo, !def.declarations)
                           "
                         ></button>
-                        <span>Sync <code>.grain/</code> declarations</span>
+                        <span
+                          >Read its own <code>.grain/</code> declarations</span
+                        >
                       </div>
                     }
                   </div>
@@ -3214,22 +3286,51 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     );
   });
 
-  protected readonly sortedSchedules = computed(() =>
-    sortProcessRows(
-      this.filteredSchedules().map((s) => ({
-        key: `schedule:${s.id}`,
-        name: s.title || s.templateName || s.suiteName || s.id,
-        kind: scheduleKindOf(s),
-        lastRunAt: s.lastRunAt || null,
-        nextRunAt:
-          s.enabled && !s.suppressed && !isEventTrigger(s)
-            ? s.nextRunAt || null
-            : null,
-        item: s,
-      })),
+  // A declared trigger is listed beside the schedules, as the classic
+  // page lists it: under All and Event triggers, never paused or
+  // suppressed, and with nothing to run until its files change.
+  protected readonly filteredTriggers = computed(() => {
+    const f = this.schedFilter();
+    if (f !== "all" && f !== "triggers") return [];
+    const q = this.filter.query().trim().toLowerCase();
+    return this.store
+      .triggers()
+      .filter((t) => !q || `${t.repo} ${t.path}`.toLowerCase().includes(q));
+  });
+
+  protected readonly scheduleRows = computed(() =>
+    sortProcessRows<SchedTabRow>(
+      [
+        ...this.filteredSchedules().map((s) => ({
+          key: `schedule:${s.id}`,
+          name: s.title || s.templateName || s.suiteName || s.id,
+          kind: scheduleKindOf(s),
+          lastRunAt: s.lastRunAt || null,
+          nextRunAt:
+            s.enabled && !s.suppressed && !isEventTrigger(s)
+              ? s.nextRunAt || null
+              : null,
+          item: { key: `schedule:${s.id}`, schedule: s },
+        })),
+        ...this.filteredTriggers().map((t) => {
+          const key = `trigger:${t.repo}:${t.path}`;
+          return {
+            key,
+            name: triggerName(t.path),
+            kind: "trigger",
+            lastRunAt: null,
+            nextRunAt: null,
+            item: { key, trigger: t },
+          };
+        }),
+      ],
       this.activeSort(),
       this.customOrder(),
     ).map((r) => r.item),
+  );
+
+  protected readonly sortedSchedules = computed(() =>
+    this.scheduleRows().flatMap((r) => (r.schedule ? [r.schedule] : [])),
   );
 
   protected readonly sortedTemplates = computed(() => {
@@ -3547,7 +3648,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   private visibleKeys(list: OrderedList): string[] {
     switch (list) {
       case "schedules":
-        return this.sortedSchedules().map((s) => `schedule:${s.id}`);
+        return this.scheduleRows().map((r) => r.key);
       case "templates":
         return this.sortedTemplates().map((t) => `template:${t.id}`);
       case "suites":
@@ -3614,7 +3715,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected tabCount(tab: ProcessTab): number {
     switch (tab) {
       case "schedules":
-        return this.store.schedules().length;
+        return this.store.schedules().length + this.store.triggers().length;
       case "templates":
         return this.store.templates().length;
       case "suites":
@@ -3628,6 +3729,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected schedBadge = scheduleStatusBadge;
+  protected triggerName = triggerName;
   protected schedNextRunOf = formatScheduleNextRun;
   protected tmplBadge = templateSourceBadge;
   protected cadenceOf = formatCadence;

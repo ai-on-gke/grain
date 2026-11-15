@@ -1331,4 +1331,30 @@ describe("ProcessesPageComponent (D-9)", () => {
       root.querySelector('[data-testid="proc-inspector"]')!.textContent,
     ).toContain("Target: acme/widgets @ default branch");
   });
+  it("lists a repository's declared triggers beside the schedules, linking its Advanced tab", async () => {
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    const row = root.querySelector<HTMLAnchorElement>(
+      '[data-testid="trigger-row-trigger:acme/widgets:.grain/triggers/docs.yml"]',
+    )!;
+    expect(row).not.toBeNull();
+    expect(row.getAttribute("href")).toBe("/repos/acme/widgets/advanced");
+    expect(row.textContent).toContain("docs.yml");
+    expect(row.textContent).toContain("on change");
+
+    // A trigger is never paused, so the Paused chip leaves it out.
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-filter-paused"]')!
+      .click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid^="trigger-row-"]')).toBeNull();
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-filter-triggers"]')!
+      .click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid^="trigger-row-"]')).not.toBeNull();
+  });
 });

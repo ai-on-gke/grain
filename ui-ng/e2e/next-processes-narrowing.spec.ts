@@ -20,16 +20,22 @@
 import { expect, test } from "./fixtures";
 
 test.use({
-  demoArgs: ["-schedules", "-github-sim", "-fake-ci", "-scheduled-workflows"],
+  demoArgs: [
+    "-schedules",
+    "-github-sim",
+    "-fake-ci",
+    "-scheduled-workflows",
+    "-sensitive-hold",
+  ],
 });
 test.describe.configure({ mode: "serial" });
 
-// rowTitles is each row's title once the list has loaded.
+// rowTitles is the title of each row of the list on screen -- schedules
+// and declared triggers alike -- once it has loaded.
 async function rowTitles(
   page: import("@playwright/test").Page,
-  prefix: string,
 ): Promise<string[]> {
-  const titles = page.locator(`[data-testid^="${prefix}"] .proc-row-title`);
+  const titles = page.locator(".proc-list .proc-row .proc-row-title");
   await expect(titles.first()).toBeVisible();
   return titles.allTextContents();
 }
@@ -67,7 +73,7 @@ test("the sort is kept in ?sort= through reload and Back/Forward", async ({
 }) => {
   await page.goto("processes/schedules");
   await expect(page.getByTestId("proc-sort")).toContainText("Custom order");
-  const byDefault = await rowTitles(page, "sched-row-");
+  const byDefault = await rowTitles(page);
   expect(byDefault.length).toBeGreaterThan(1);
   expect(byDefault).toEqual([...byDefault].sort((a, b) => a.localeCompare(b)));
 
@@ -122,40 +128,42 @@ test("a row moves in the custom order from the keyboard and by dragging", async 
     localStorage.removeItem("grain.list-order.processes"),
   );
   await page.reload();
-  const before = await rowTitles(page, "sched-row-");
+  // The declared trigger arrives after the schedules; wait for it so the
+  // list stops growing before it is read.
+  await expect(page.locator('[data-testid^="trigger-row-"]')).toHaveCount(1);
+  const before = await rowTitles(page);
   expect(before.length).toBeGreaterThan(1);
 
-  const first = page.locator('[data-testid^="sched-row-"]').first();
+  const first = page.locator(".proc-list .proc-row").first();
   await first.focus();
   await page.keyboard.press("Alt+ArrowDown");
   await expect(page.getByTestId("proc-move-note")).toHaveText(
     `Moved to position 2 of ${before.length}.`,
   );
   const moved = [before[1], before[0], ...before.slice(2)];
-  await expect.poll(() => rowTitles(page, "sched-row-")).toEqual(moved);
+  await expect.poll(() => rowTitles(page)).toEqual(moved);
   // Focus stays on the row that moved.
-  await expect(
-    page.locator('[data-testid^="sched-row-"]').nth(1),
-  ).toBeFocused();
+  await expect(page.locator(".proc-list .proc-row").nth(1)).toBeFocused();
 
   // The order is the classic page's own, kept across a reload.
   await page.reload();
-  await expect.poll(() => rowTitles(page, "sched-row-")).toEqual(moved);
+  await expect.poll(() => rowTitles(page)).toEqual(moved);
   const stored = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("grain.list-order.processes") || "[]"),
   );
-  expect(stored[0]).toMatch(/^schedule:/);
+  expect(stored).toHaveLength(before.length);
+  for (const key of stored) expect(key).toMatch(/^(schedule|trigger):/);
 
   // Dragging the last row onto the first puts it first.
   const rows = page.locator(".proc-li");
   await rows.last().dragTo(rows.first());
   await expect
-    .poll(() => rowTitles(page, "sched-row-"))
+    .poll(() => rowTitles(page))
     .toEqual([moved[moved.length - 1], ...moved.slice(0, -1)]);
 
   // Under any other sort the rows do not move.
   await page.goto("processes/schedules?sort=name");
-  await page.locator('[data-testid^="sched-row-"]').first().focus();
+  await page.locator(".proc-list .proc-row").first().focus();
   await page.keyboard.press("Alt+ArrowDown");
   await expect(page.getByTestId("proc-move-note")).toHaveText("");
   await expect(rows.first()).not.toHaveAttribute("draggable", "true");
@@ -202,4 +210,21 @@ test("the header New menu opens the kind asked for", async ({ page }) => {
   // ?new=suite deep-links the same form.
   await page.goto("processes/schedules?new=suite");
   await expect(page.getByTestId("suite-dialog")).toBeVisible();
+});
+
+// -sensitive-hold declares acme/widgets' .grain/triggers/payments.yml.
+test("a repository's declared trigger is a row that opens its Advanced tab", async ({
+  page,
+}) => {
+  await page.goto("processes/schedules");
+  const row = page.locator('[data-testid^="trigger-row-"]', {
+    hasText: "payments.yml",
+  });
+  await expect(row).toContainText("acme/widgets");
+  await expect(row).toContainText("on change");
+  await page.getByTestId("sched-filter-paused").click();
+  await expect(row).toHaveCount(0);
+  await page.getByTestId("sched-filter-triggers").click();
+  await row.click();
+  await expect(page).toHaveURL(/\/next\/repos\/acme\/widgets\/advanced/);
 });
