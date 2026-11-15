@@ -147,3 +147,76 @@ export function parseDefaultModels(source: unknown): string[] {
 export function containsModel(list: readonly string[], m: string): boolean {
   return list.some((x) => sameModel(x, m));
 }
+
+/** The effort vocabularies GET /api/settings reports, per framework. */
+export interface EffortVocabularies {
+  gemini?: readonly string[] | null;
+  codex?: readonly string[] | null;
+}
+
+/**
+ * How a model takes its reasoning effort: as a separate setting with these
+ * choices, or not at all -- with why, for the row to say.
+ */
+export type EffortSupport =
+  { separate: true; choices: string[] } | { separate: false; reason: string };
+
+// What antigravity.Efforts() says when the settings carry no vocabulary.
+const AGY_EFFORTS = ["low", "medium", "high"];
+
+function isAgy(framework: string): boolean {
+  return (
+    framework === "" || framework === "antigravity" || framework === "gemini"
+  );
+}
+
+// namesItsEffort mirrors antigravity's modelTakesNoEffort: "auto" leaves
+// agy to choose, and gemini-3.1-pro-high spells its effort into the name,
+// so agy refuses --effort beside either.
+function namesItsEffort(m: string, efforts: readonly string[]): boolean {
+  const id = m.trim().toLowerCase();
+  if (id === "auto") return true;
+  return efforts.some((e) => id.endsWith(`-${e.toLowerCase()}`));
+}
+
+/**
+ * effortSupport says whether m takes a separate reasoning effort
+ * (model.ModelSetting.Effort), from the framework of the connections that
+ * advertise it -- an enabled one first. Claude has no effort flag; agy
+ * drops --effort for a model whose name carries one; Codex always takes
+ * one. A model no connection advertises gets the agy rule, as the classic
+ * pane gave it.
+ */
+export function effortSupport(
+  m: string,
+  groups: readonly ModelGroup[],
+  vocab: EffortVocabularies,
+): EffortSupport {
+  const serving = groups.filter((g) => g.models.some((x) => sameModel(x, m)));
+  const g = serving.find((x) => !x.disabled) ?? serving[0];
+  const framework = (g?.framework ?? "").toLowerCase();
+  if (framework === "claude") {
+    return { separate: false, reason: "Claude takes no reasoning effort" };
+  }
+  if (framework === "codex") {
+    const choices = dedupe(vocab.codex ?? []);
+    return choices.length
+      ? { separate: true, choices }
+      : { separate: false, reason: "No effort choices are known" };
+  }
+  if (!isAgy(framework) && g) {
+    return { separate: false, reason: "No effort choices are known" };
+  }
+  const gemini = dedupe(vocab.gemini ?? []);
+  const choices = gemini.length ? gemini : AGY_EFFORTS;
+  if (namesItsEffort(m, choices)) {
+    return {
+      separate: false,
+      reason:
+        m.trim().toLowerCase() === "auto"
+          ? "The provider chooses the effort"
+          : "Effort is part of the model name",
+    };
+  }
+  return { separate: true, choices };
+}

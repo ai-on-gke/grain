@@ -35,6 +35,8 @@ import {
   type ModelBackendLike,
   availabilityNote,
   containsModel,
+  effortSupport,
+  type EffortSupport,
   modelAvailability,
   modelGroups,
   parseDefaultModels,
@@ -245,12 +247,12 @@ function formatRefreshedAt(iso?: string): string {
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">
-                Default model &amp; per-model reasoning effort
+                Default model, fallbacks &amp; reasoning effort
               </h3>
               <p class="s-card-desc">
                 The model a task runs on when it does not pin one, the fallback
-                models tried after it, and per-model reasoning effort. The
-                choices are the models your connections advertise.
+                models tried after it, and the reasoning effort each runs at.
+                The choices are the models your connections advertise.
               </p>
             </div>
           </div>
@@ -271,6 +273,28 @@ function formatRefreshedAt(iso?: string): string {
                 (valueChange)="setDefaultModel($event)"
               />
             </div>
+            @if (modelChain()[0]; as dm) {
+              <div class="s-field" data-testid="default-model-effort">
+                <span class="s-label">Reasoning effort</span>
+                @if (effortFor(dm); as es) {
+                  @if (es.separate || modelEffort(dm)) {
+                    <g-pill-select
+                      testid="effort-default-model"
+                      [ariaLabel]="'Reasoning effort for ' + dm"
+                      align="left"
+                      [options]="effortOptionsFor(dm)"
+                      [value]="modelEffort(dm)"
+                      [disabled]="!canWriteDeployment()"
+                      (valueChange)="setModelEffort(dm, $event)"
+                    />
+                  } @else {
+                    <span class="s-hint" data-testid="effort-default-model-none"
+                      >{{ es.reason }}.</span
+                    >
+                  }
+                }
+              </div>
+            }
           </div>
 
           <div class="s-field mp-fallbacks" data-testid="fallback-models">
@@ -294,6 +318,25 @@ function formatRefreshedAt(iso?: string): string {
                     <span class="mp-chain-model">{{ m }}</span>
                     @if (modelNote(m)) {
                       <span class="mp-flag">{{ modelNote(m) }}</span>
+                    }
+                    @if (effortFor(m); as es) {
+                      @if (es.separate || modelEffort(m)) {
+                        <g-pill-select
+                          class="mp-chain-effort"
+                          [testid]="'effort-fallback-' + $index"
+                          [ariaLabel]="'Reasoning effort for ' + m"
+                          [options]="effortOptionsFor(m)"
+                          [value]="modelEffort(m)"
+                          [disabled]="!canWriteDeployment()"
+                          (valueChange)="setModelEffort(m, $event)"
+                        />
+                      } @else {
+                        <span
+                          class="mp-chain-note"
+                          [attr.data-testid]="'effort-fallback-none-' + $index"
+                          >{{ es.reason }}</span
+                        >
+                      }
                     }
                     <span class="mp-chain-actions">
                       <button
@@ -362,9 +405,13 @@ function formatRefreshedAt(iso?: string): string {
 
           <div class="s-subsection">
             <div class="s-subhead">
-              <h4 class="s-subhead-title">Per-model reasoning effort</h4>
+              <h4 class="s-subhead-title">Reasoning effort for other models</h4>
             </div>
-            @if (modelSettingsRows().length > 0) {
+            <span class="s-hint">
+              For a model a task pins itself, outside the default and fallback
+              list above.
+            </span>
+            @if (otherModelSettingsRows().length > 0) {
               <div class="s-table-wrap">
                 <table
                   class="s-table"
@@ -378,11 +425,7 @@ function formatRefreshedAt(iso?: string): string {
                     </tr>
                   </thead>
                   <tbody>
-                    @for (
-                      ms of modelSettingsRows();
-                      track ms.model;
-                      let idx = $index
-                    ) {
+                    @for (ms of otherModelSettingsRows(); track ms.model) {
                       <tr [attr.data-testid]="'model-setting-row-' + ms.model">
                         <td class="s-mono">{{ ms.model }}</td>
                         <td>{{ ms.effort || "default" }}</td>
@@ -392,7 +435,10 @@ function formatRefreshedAt(iso?: string): string {
                               type="button"
                               class="btn-text s-btn-sm"
                               [disabled]="!canWriteDeployment()"
-                              (click)="removeModelSetting(idx)"
+                              [attr.aria-label]="
+                                'Remove effort for ' + ms.model
+                              "
+                              (click)="setModelEffort(ms.model, '')"
                             >
                               Remove
                             </button>
@@ -412,6 +458,7 @@ function formatRefreshedAt(iso?: string): string {
                 ariaLabel="Model for a reasoning effort setting"
                 placeholder="Choose a model"
                 [groups]="modelGroups()"
+                [exclude]="modelChain()"
                 [value]="newModelSettingName()"
                 [disabled]="!canWriteDeployment()"
                 (valueChange)="newModelSettingName.set($event)"
@@ -420,7 +467,11 @@ function formatRefreshedAt(iso?: string): string {
                 testid="select-model-setting-effort"
                 ariaLabel="Reasoning effort"
                 align="left"
-                [options]="effortOptions"
+                [options]="
+                  newModelSettingName()
+                    ? effortOptionsFor(newModelSettingName())
+                    : effortOptions
+                "
                 [value]="newModelSettingEffort()"
                 [disabled]="!canWriteDeployment()"
                 (valueChange)="newModelSettingEffort.set($event)"
@@ -430,13 +481,24 @@ function formatRefreshedAt(iso?: string): string {
                 class="btn-tonal s-btn-sm"
                 data-testid="add-model-setting-btn"
                 [disabled]="
-                  !newModelSettingName().trim() || !canWriteDeployment()
+                  !newModelSettingName().trim() ||
+                  !effortFor(newModelSettingName()).separate ||
+                  !canWriteDeployment()
                 "
                 (click)="addModelSetting()"
               >
                 Set model effort
               </button>
             </div>
+            @if (newModelSettingName(); as nm) {
+              @if (effortFor(nm); as es) {
+                @if (!es.separate) {
+                  <span class="s-hint" data-testid="model-setting-effort-none"
+                    >{{ es.reason }}.</span
+                  >
+                }
+              }
+            }
           </div>
         </div>
 
@@ -2218,6 +2280,68 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     this.snackbar.show(note);
   }
 
+  protected readonly effortVocab = computed(() => {
+    const s = this.state.settings();
+    const list = (v: unknown) =>
+      Array.isArray(v) ? v.map((x) => String(x)) : [];
+    return {
+      gemini: list(s["geminiEfforts"]),
+      codex: list(s["codexEfforts"]),
+    };
+  });
+
+  // effortFor says whether m takes a separate reasoning effort, from the
+  // framework of the connections that advertise it.
+  protected effortFor(m: string): EffortSupport {
+    return effortSupport(m, this.modelGroups(), this.effortVocab());
+  }
+
+  protected modelEffort(m: string): string {
+    const key = m.trim().toLowerCase();
+    return (
+      this.modelSettingsRows().find((r) => r.model.trim().toLowerCase() === key)
+        ?.effort ?? ""
+    );
+  }
+
+  // effortOptionsFor is "Model default" plus m's framework's vocabulary,
+  // and the stored effort flagged when that vocabulary does not offer it.
+  protected effortOptionsFor(m: string): PillOption[] {
+    const es = this.effortFor(m);
+    const choices = es.separate ? es.choices : [];
+    const cur = this.modelEffort(m);
+    const out: PillOption[] = [{ value: "", label: "Model default" }];
+    if (cur && !choices.includes(cur)) {
+      out.push({ value: cur, label: `${cur} (not offered)` });
+    }
+    for (const e of choices) out.push({ value: e, label: e });
+    return out;
+  }
+
+  // setModelEffort stages m's effort (model.ModelSetting), or drops m's
+  // setting for "", keeping every other model's setting as stored.
+  protected setModelEffort(m: string, effort: string): void {
+    const key = m.trim().toLowerCase();
+    const value = effort.trim();
+    const rows = this.modelSettingsRows();
+    const at = rows.findIndex((r) => r.model.trim().toLowerCase() === key);
+    const next = rows.filter((_, i) => i !== at);
+    if (value) {
+      const row = { ...(at >= 0 ? rows[at] : { model: m }), effort: value };
+      next.splice(at >= 0 ? at : next.length, 0, row);
+    }
+    this.state.setDeployField("modelSettings", next);
+  }
+
+  // otherModelSettingsRows are the effort settings of models outside the
+  // default-model list, whose rows carry their own effort.
+  protected otherModelSettingsRows(): ModelSettingRow[] {
+    const chain = this.modelChain();
+    return this.modelSettingsRows().filter(
+      (r) => !containsModel(chain, r.model),
+    );
+  }
+
   protected modelSettingsRows(): ModelSettingRow[] {
     const v = this.state.deployVal<unknown>("modelSettings", []);
     return Array.isArray(v) ? (v as ModelSettingRow[]) : [];
@@ -2226,19 +2350,8 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected addModelSetting(): void {
     const model = this.newModelSettingName().trim();
     if (!model) return;
-    const effort = this.newModelSettingEffort().trim();
-    const cur = this.modelSettingsRows().filter((r) => r.model !== model);
-    const next: ModelSettingRow[] = [
-      ...cur,
-      { model, ...(effort ? { effort } : {}) },
-    ];
-    this.state.setDeployField("modelSettings", next);
+    this.setModelEffort(model, this.newModelSettingEffort());
     this.newModelSettingName.set("");
-  }
-
-  protected removeModelSetting(idx: number): void {
-    const next = this.modelSettingsRows().filter((_, i) => i !== idx);
-    this.state.setDeployField("modelSettings", next);
   }
 
   private applyUsageSettings(s?: UsageSettingsDto | null): void {

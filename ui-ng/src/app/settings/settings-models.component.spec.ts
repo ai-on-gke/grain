@@ -47,6 +47,8 @@ class FakeApi {
       },
       { id: "claude", framework: "claude", models: ["opus-5"] },
     ],
+    geminiEfforts: ["low", "medium", "high"],
+    codexEfforts: ["minimal", "low", "medium", "high", "xhigh"],
   };
   deploymentBody: Record<string, unknown> = {
     defaultModel: "gemini-pro,opus-5,legacy-model",
@@ -324,6 +326,67 @@ describe("Settings → Models default and fallback models", () => {
     const put = api.calls.find((c) => c.key === "PUT /api/deployment");
     expect(put?.body).toEqual({
       modelSettings: [{ model: "gemini-flash", effort: "high" }],
+    });
+  });
+
+  it("pairs each default and fallback model with its own effort, only where it takes one", async () => {
+    const api = new FakeApi();
+    api.settingsBody["defaultModel"] =
+      "gemini-pro,gpt-codex,opus-5,gemini-flash-high";
+    api.settingsBody["agentBackends"] = [
+      {
+        id: "agy",
+        framework: "antigravity",
+        discovered: { models: ["gemini-pro", "gemini-flash-high"] },
+      },
+      { id: "cx", framework: "codex", models: ["gpt-codex"] },
+      { id: "claude", framework: "claude", models: ["opus-5"] },
+    ];
+    api.deploymentBody["modelSettings"] = [
+      { model: "gpt-codex", effort: "xhigh" },
+      { model: "pinned-elsewhere", effort: "low" },
+    ];
+    const { q, save, settle } = await mount(api);
+    const choose = async (testid: string, value: string) => {
+      q<HTMLButtonElement>(`[data-testid="${testid}"]`)!.click();
+      await settle();
+      const opt = q(`[data-testid="${testid}-opt-${value}"]`);
+      if (!opt) throw new Error(`${testid} does not offer ${value}`);
+      opt.click();
+      await settle();
+    };
+
+    // The default (agy, bare family name) takes a separate effort.
+    expect(q('[data-testid="effort-default-model"]')).not.toBeNull();
+    // Codex: its own vocabulary, showing the stored effort.
+    expect(q('[data-testid="effort-fallback-0"]')?.textContent).toContain(
+      "xhigh",
+    );
+    // Claude takes none; an agy name that spells its effort takes none.
+    expect(q('[data-testid="effort-fallback-1"]')).toBeNull();
+    expect(q('[data-testid="effort-fallback-none-1"]')?.textContent).toContain(
+      "Claude takes no reasoning effort",
+    );
+    expect(q('[data-testid="effort-fallback-2"]')).toBeNull();
+    expect(q('[data-testid="effort-fallback-none-2"]')?.textContent).toContain(
+      "Effort is part of the model name",
+    );
+
+    // A chained model's effort lives on its row, not in the table below.
+    expect(q('[data-testid="model-setting-row-gpt-codex"]')).toBeNull();
+    expect(
+      q('[data-testid="model-setting-row-pinned-elsewhere"]'),
+    ).not.toBeNull();
+
+    await choose("effort-default-model", "medium");
+    await choose("effort-fallback-0", "");
+    await save();
+    const put = api.calls.find((c) => c.key === "PUT /api/deployment");
+    expect(put?.body).toEqual({
+      modelSettings: [
+        { model: "pinned-elsewhere", effort: "low" },
+        { model: "gemini-pro", effort: "medium" },
+      ],
     });
   });
 });
