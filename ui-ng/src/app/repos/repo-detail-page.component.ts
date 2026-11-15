@@ -30,6 +30,7 @@ import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Subscription } from "rxjs";
 import type { RouteKey } from "../api/generated-routes";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
+import type { BaseBranchGate, BaseBranchGatesResponse } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { errText } from "../settings/settings-state.service";
@@ -42,6 +43,24 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
+
+// CI_MODE_ID is the CI mode control's anchor on the CI & Workflows tab,
+// which an unjudged gate's warning links to: on a repository grain CI is
+// not enabled for, that control is what enrols its watched branch.
+export const CI_MODE_ID = "repo-ci-mode";
+
+// unjudgedGatesFor is the base-branch gates nothing is judging for repo,
+// as the classic Repo page's header and Releases pane pick them out of
+// GET /api/base-branch-gates. A gate that is only late is left to the
+// release settings it sits beside, as on classic.
+export function unjudgedGatesFor(
+  gates: readonly BaseBranchGate[],
+  repo: string,
+): BaseBranchGate[] {
+  const want = repo.toLowerCase();
+  return gates.filter((g) => !g.judged && g.repo.toLowerCase() === want);
+}
 
 export type RepoTabId =
   "overview" | "ci" | "merge-queue" | "agents" | "branches" | "releases";
@@ -194,7 +213,12 @@ interface PendingReleaseRow {
 
 @Component({
   selector: "g-repo-detail-page",
-  imports: [RouterLink, PillSelectComponent, ConfirmDialogComponent],
+  imports: [
+    RouterLink,
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    StatusIconComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
@@ -280,6 +304,43 @@ interface PendingReleaseRow {
           @if (ready()) {
             @switch (activeTab()) {
               @case ("overview") {
+                <!-- A watched base branch nothing judges (GET
+                     /api/base-branch-gates): with CI mode on GitHub or No
+                     CI, grain never enrols the branch. Classic says it on
+                     the Repo page's header and on Releases, in the
+                     server's own sentence; it blocks nothing, so it is a
+                     warning (design book, "A deployment finding that
+                     blocks nothing"). -->
+                @for (
+                  gate of unjudgedGates();
+                  track gate.repo + " " + (gate.branch ?? "")
+                ) {
+                  <div
+                    class="repo-gate-banner"
+                    role="status"
+                    data-testid="repo-base-gate-warning"
+                  >
+                    <g-status-icon tone="blast" kind="warning" />
+                    <span class="repo-gate-text">
+                      {{ gate.detail || gate.reason }}
+                      @if (gate.runID) {
+                        <a
+                          [routerLink]="['/ci', 'runs', gate.runID]"
+                          data-testid="repo-base-gate-run-link"
+                          >View CI run</a
+                        >
+                      } @else if (gate.reason === "grain-ci-off") {
+                        <a
+                          [routerLink]="ciTabLink()"
+                          [fragment]="ciModeId"
+                          data-testid="repo-base-gate-ci-mode-link"
+                          (click)="goToCiMode($event)"
+                          >Go to CI Mode</a
+                        >
+                      }
+                    </span>
+                  </div>
+                }
                 <div class="s-card" data-testid="card-repo-config">
                   <div class="s-card-head">
                     <div>
@@ -528,7 +589,7 @@ interface PendingReleaseRow {
                   </div>
 
                   <div class="s-grid">
-                    <div class="s-field">
+                    <div class="s-field" [id]="ciModeId">
                       <span class="s-label">CI mode</span>
                       <g-pill-select
                         testid="select-repo-ci-mode"
@@ -878,6 +939,43 @@ interface PendingReleaseRow {
               }
 
               @case ("releases") {
+                <!-- A watched base branch nothing judges (GET
+                     /api/base-branch-gates): with CI mode on GitHub or No
+                     CI, grain never enrols the branch. Classic says it on
+                     the Repo page's header and on Releases, in the
+                     server's own sentence; it blocks nothing, so it is a
+                     warning (design book, "A deployment finding that
+                     blocks nothing"). -->
+                @for (
+                  gate of unjudgedGates();
+                  track gate.repo + " " + (gate.branch ?? "")
+                ) {
+                  <div
+                    class="repo-gate-banner"
+                    role="status"
+                    data-testid="repo-base-gate-warning"
+                  >
+                    <g-status-icon tone="blast" kind="warning" />
+                    <span class="repo-gate-text">
+                      {{ gate.detail || gate.reason }}
+                      @if (gate.runID) {
+                        <a
+                          [routerLink]="['/ci', 'runs', gate.runID]"
+                          data-testid="repo-base-gate-run-link"
+                          >View CI run</a
+                        >
+                      } @else if (gate.reason === "grain-ci-off") {
+                        <a
+                          [routerLink]="ciTabLink()"
+                          [fragment]="ciModeId"
+                          data-testid="repo-base-gate-ci-mode-link"
+                          (click)="goToCiMode($event)"
+                          >Go to CI Mode</a
+                        >
+                      }
+                    </span>
+                  </div>
+                }
                 <div class="s-card" data-testid="card-repo-release-settings">
                   <div class="s-card-head">
                     <div>
@@ -1373,6 +1471,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   } | null>(null);
 
   protected readonly ciMode = signal("grain");
+  protected readonly ciModeId = CI_MODE_ID;
+  protected readonly baseBranchGates = signal<BaseBranchGate[]>([]);
+  protected readonly unjudgedGates = computed(() =>
+    unjudgedGatesFor(this.baseBranchGates(), this.repoSlug()),
+  );
   protected readonly watchDefaultBranch = signal(false);
   protected readonly workflows = signal<RepoWorkflowRow[]>([]);
   protected readonly selectedWorkflowPath = signal(".grain/workflows/ci.yml");
@@ -1748,6 +1851,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           .catch(() => undefined),
       );
     }
+    jobs.push(this.loadBaseBranchGates());
     if (this.access.can("GET /api/deployment/git-connections")) {
       jobs.push(
         this.api
@@ -2030,6 +2134,67 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  // loadBaseBranchGates reads this repository's base-branch gates. It is
+  // asked again after every save that changes whether grain judges the
+  // branch (CI mode, Watch default branch), so the warning comes and goes
+  // with the control rather than on the next reload. A failed reading
+  // keeps the last one, as the server's own contract for it does.
+  //
+  // Readings run one after another: GrainApi.get shares a request still
+  // in flight for the same URL, so a second save's reading started
+  // beside the first's would be answered with the state before it.
+  private gatesReading: Promise<void> = Promise.resolve();
+
+  private loadBaseBranchGates(): Promise<void> {
+    this.gatesReading = this.gatesReading.then(() =>
+      this.readBaseBranchGates(),
+    );
+    return this.gatesReading;
+  }
+
+  private async readBaseBranchGates(): Promise<void> {
+    if (!this.can("GET /api/base-branch-gates")) return;
+    try {
+      const q = new URLSearchParams({
+        repo: this.repoSlug(),
+        fields: "full",
+      });
+      const r = await this.api.get<BaseBranchGatesResponse>(
+        "GET /api/base-branch-gates",
+        undefined,
+        q.toString(),
+      );
+      this.baseBranchGates.set(Array.isArray(r?.gates) ? r.gates : []);
+    } catch {
+      // Keep the previous reading.
+    }
+  }
+
+  protected ciTabLink(): string[] {
+    const h = this.resolvedHost();
+    const o = this.resolvedOwner();
+    const n = this.resolvedName();
+    return h ? ["/repos", h, o, n, "ci"] : ["/repos", o, n, "ci"];
+  }
+
+  // goToCiMode opens the CI & Workflows tab and brings its CI mode
+  // control into view, focused, as classic's "Go to CI Mode" does.
+  protected async goToCiMode(ev: Event): Promise<void> {
+    ev.preventDefault();
+    if (this.activeTab() !== "ci") {
+      if (!(await this.canLeave())) return;
+      this.routeTab.set("ci");
+      void this.router.navigate(this.ciTabLink(), { fragment: CI_MODE_ID });
+      void this.loadTabData("ci");
+    }
+    setTimeout(() => {
+      const root = this.hostEl.nativeElement as HTMLElement;
+      const el = root.querySelector<HTMLElement>(`#${CI_MODE_ID}`);
+      el?.scrollIntoView?.({ block: "center" });
+      el?.querySelector<HTMLElement>("button")?.focus();
+    });
+  }
+
   protected async saveCiMode(ciMode: string): Promise<void> {
     const previous = this.ciMode();
     this.ciMode.set(ciMode);
@@ -2040,6 +2205,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { ciMode },
       );
       this.snackbar.show(`CI mode set to ${ciMode}`);
+      void this.loadBaseBranchGates();
     } catch (err) {
       // A refused mode is not the repo's mode: put the pill back on
       // what the server still has rather than leave it naming one it
@@ -2058,6 +2224,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { watchDefaultBranch: next },
       );
       this.watchDefaultBranch.set(next);
+      void this.loadBaseBranchGates();
     } catch (err) {
       this.error.set(errText(err));
     }
