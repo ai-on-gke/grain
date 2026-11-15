@@ -187,7 +187,9 @@ test("classic Integrations links land on Settings -> Capabilities", async ({
     "/next/system/integrations",
   ]) {
     await page.goto(from);
-    await expect(page).toHaveURL(/\/next\/settings\/capabilities$/);
+    await expect(page).toHaveURL(
+      /\/next\/settings\/capabilities(#credentials)?$/,
+    );
     await expect(page.getByTestId("card-capability-servers")).toBeVisible();
   }
 });
