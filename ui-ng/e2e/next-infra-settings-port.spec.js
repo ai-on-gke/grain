@@ -200,3 +200,51 @@ test("Hosts: a revoked enrollment code offers no Rotate or Revoke", async ({
     });
   }
 });
+
+test("Sandboxes: the probe result fits its card at every width @phone @dark", async ({
+  page,
+}) => {
+  await page.route("**/api/settings", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const res = await route.fetch();
+    await route.fulfill({
+      response: res,
+      json: { ...(await res.json()), sandboxProbe: true },
+    });
+  });
+  await page.route("**/api/sandbox-probe", (route) =>
+    route.fulfill({
+      json: {
+        sandbox: "probe-ui-mi3x9k4q-ab12",
+        pod: "p",
+        access: "kubectl",
+        stdout: "a-long-unbroken-line-of-output-".repeat(6),
+        stderr: "",
+        exitCode: 0,
+      },
+    }),
+  );
+  await page.goto("/next/settings/sandboxes");
+  await page.getByTestId("run-sandbox-probe").click();
+  const card = await page.getByTestId("card-sandbox-sizing").boundingBox();
+  const banner = page.getByTestId("sandbox-probe-result");
+  await expect(banner).toBeVisible();
+  for (const id of [
+    "sandbox-probe-result",
+    "sandbox-probe-summary",
+    "sandbox-probe-stdout",
+    "sandbox-probe-dismiss",
+  ]) {
+    const b = await page.getByTestId(id).boundingBox();
+    expect(b.x, id).toBeGreaterThanOrEqual(card.x - 0.5);
+    expect(b.x + b.width, id).toBeLessThanOrEqual(card.x + card.width + 0.5);
+  }
+  // No sideways scroll on the page itself.
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+  await banner.screenshot({
+    path: test.info().outputPath(`probe-result.png`),
+  });
+});
