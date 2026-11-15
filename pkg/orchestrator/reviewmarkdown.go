@@ -70,14 +70,14 @@ func findingMarkdown(body string) string {
 }
 
 var (
-	fenceOpenRE   = regexp.MustCompile("^(```+|~~~+)")
-	codeSpanRE    = regexp.MustCompile("`+")
-	htmlCodeRE    = regexp.MustCompile(`(?is)<code>(.*?)</code>`)
-	htmlStrongRE  = regexp.MustCompile(`(?is)<(?:strong|b)>(.*?)</(?:strong|b)>`)
-	htmlEmRE      = regexp.MustCompile(`(?is)<(?:em|i)>(.*?)</(?:em|i)>`)
-	htmlBreakRE   = regexp.MustCompile(`(?i)<br\s*/?>`)
-	starBulletRE  = regexp.MustCompile(`(?m)^(\s*)\* `)
-	ampRE         = regexp.MustCompile(`&amp;(?:#?[A-Za-z0-9]+;)?`)
+	fenceOpenRE  = regexp.MustCompile("^(```+|~~~+)")
+	codeSpanRE   = regexp.MustCompile("`+")
+	htmlCodeRE   = regexp.MustCompile(`(?is)<code>(.*?)</code>`)
+	htmlStrongRE = regexp.MustCompile(`(?is)<(?:strong|b)>(.*?)</(?:strong|b)>`)
+	htmlEmRE     = regexp.MustCompile(`(?is)<(?:em|i)>(.*?)</(?:em|i)>`)
+	htmlBreakRE  = regexp.MustCompile(`(?i)<br\s*/?>`)
+	starBulletRE = regexp.MustCompile(`(?m)^(\s*)\* `)
+	ampRE        = regexp.MustCompile(`&amp;(?:#?[A-Za-z0-9]+;)?`)
 )
 
 // proseMarkdown converts the text outside fenced blocks: the code spans
