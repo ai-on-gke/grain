@@ -19,10 +19,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/grain-plc/pkg/grainclient"
 	"github.com/ai-on-gke/grain/grain-plc/pkg/perf"
@@ -139,5 +141,88 @@ func TestChatGatewayCommandsAndSSEForwarding(t *testing.T) {
 	replyResp.Body.Close()
 	if replyResp.StatusCode != http.StatusOK || gotReplyText != "Remove the legacy flag" {
 		t.Fatalf("reply status=%d gotReplyText=%q", replyResp.StatusCode, gotReplyText)
+	}
+}
+
+// TestOutboundURLDeliversForwardedEvents runs the command as an operator
+// does -- -watch-sse with -outbound-url -- and reads what reached the chat
+// platform: a comment_on_issue note (task.comment) is not announced as a
+// parked question, a real question is, once.
+func TestOutboundURLDeliversForwardedEvents(t *testing.T) {
+	defer plcseams.ResetForTest()
+
+	const secret = "chat-secret-456"
+	daemonSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w,
+			"id: 1\nevent: task.comment\ndata: {\"id\":\"1\",\"type\":\"task.comment\",\"taskId\":\"41\",\"commentId\":\"7\"}\n\n"+
+				"id: 2\nevent: task.state\ndata: {\"id\":\"2\",\"type\":\"task.state\",\"taskId\":\"41\",\"state\":\"awaiting_reply\",\"questionSummary\":\"Report: nothing to fix\"}\n\n"+
+				"id: 3\nevent: task.question\ndata: {\"id\":\"3\",\"type\":\"task.question\",\"taskId\":\"42\",\"questionSummary\":\"Keep the v1 API?\"}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer daemonSrv.Close()
+
+	got := make(chan plcseams.ChatMessage, 8)
+	chatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if sig := r.Header.Get(plcseams.HeaderChatSignature); sig != plcseams.SignPayload(secret, body) {
+			t.Errorf("outbound signature = %q, want the HMAC of the body", sig)
+		}
+		var msg plcseams.ChatMessage
+		if err := json.Unmarshal(body, &msg); err != nil {
+			t.Errorf("outbound body %q: %v", body, err)
+		}
+		got <- msg
+	}))
+	defer chatSrv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(ctx, []string{
+			"-listen", "127.0.0.1:0",
+			"-grain-url", daemonSrv.URL,
+			"-webhook-secret", secret,
+			"-default-space", "spaces/ops",
+			"-outbound-url", chatSrv.URL,
+			"-watch-sse",
+		}, io.Discard, io.Discard)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	var msgs []plcseams.ChatMessage
+	for len(msgs) < 3 {
+		select {
+		case m := <-got:
+			msgs = append(msgs, m)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("chat platform got %d messages, want 3: %+v", len(msgs), msgs)
+		}
+	}
+	parked := 0
+	for _, m := range msgs {
+		if m.SpaceID != "spaces/ops" {
+			t.Errorf("message posted to %q, want the default space: %+v", m.SpaceID, m)
+		}
+		if strings.Contains(m.Text, "parked on a question") {
+			parked++
+			if want := "Task #42 is parked on a question: Keep the v1 API?"; m.Text != want {
+				t.Errorf("question message = %q, want %q", m.Text, want)
+			}
+			if m.TaskID != "42" {
+				t.Errorf("task %s announced as parked on a question: %q", m.TaskID, m.Text)
+			}
+		}
+	}
+	if parked != 1 {
+		t.Errorf("%d parked-on-a-question messages, want 1: %+v", parked, msgs)
 	}
 }
