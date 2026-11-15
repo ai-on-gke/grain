@@ -108,6 +108,16 @@ export class AccessService {
     this.configLoaded.set(config !== null);
   }
 
+  patchConfig(patch: Partial<GrainConfig>): void {
+    const cur = this.config();
+    if (cur) {
+      this.config.set({ ...cur, ...patch });
+    } else {
+      this.config.set({ ...patch });
+      this.configLoaded.set(true);
+    }
+  }
+
   setWhoami(who: WhoamiResponse | null): void {
     this.whoami.set(who);
   }

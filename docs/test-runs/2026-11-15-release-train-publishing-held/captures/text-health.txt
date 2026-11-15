@@ -1,0 +1,66 @@
+grain
+new task
+pinned
+customize
+inbox
+1
+tasks
+3
+waiting
+3
+boards
+0
+sessions
+1
+processes
+53
+repos
+2
+alice@example.com(access code)
+v0.0.0-20261115070552-c6743dc5d17b+dirty · c6743dc-dirty · 2026-11-15 07:05Z
+system
+/
+health
+4
+system
+health
+logs
+sandboxes
+caches
+top
+pipeline
+metrics
+power
+overcommit: fixed
+Effective factors: CPU 2.00× · memory 1.00× · OOM kills: 0
+Nothing is publishing from acme/grain main
+
+Nothing has published from acme/grain main since 2026-11-15 06:56 UTC, 30m ago: 3 releases have been started since and every one of them published nothing, the last of them ending failure. Nothing is held up by that -- the merge queue is gated on this branch's own CI run and never on its release (docs/merge-queue-behind.md) -- so this repository is merging changes and shipping none of them, and will go on doing so until somebody looks at the publisher. Further releases on this branch are held pending resolution of triage task 2.
+
+deployment
+Since 7:26:56 AM
+open #2
+acknowledge
+investigate
+Paused — only tasks you Run now will start
+
+No new tasks are being picked up since 7:26:54 AM: this deployment is paused. Runs already in flight are left to finish. Run now still starts the task it is pressed on. — walkthrough: keep filed tasks open
+
+deployment
+Since 7:26:54 AM
+resume now
+No isolation: runs execute on this host
+
+Every dispatched run executes in a plain directory on the machine this daemon runs on, as its user, with that machine's filesystem, network and credentials -- nothing isolates an agent from it, and what a run changes outside its directory is not thrown away with it.
+
+Do not file work here you would not run on this machine yourself. Restart the daemon with -container-sandboxes or -granule-sandboxes (or re-run scripts/setup.sh without GRAIN_HOST_SANDBOXES) to isolate each run.
+
+deployment
+1 setup step left
+
+Still to do: add a model connection.
+
+Tasks wait until the deployment has a git host and a model connection.
+
+deployment
+finish setup

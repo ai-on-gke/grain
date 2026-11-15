@@ -1,0 +1,8 @@
+== acme/docs
+main
+release
+== acme/gadgets
+grain/6a93f9d8/task-2-walk-plain-access
+grain/6a93f9d8/task-3-walk-base-less-write
+main
+release

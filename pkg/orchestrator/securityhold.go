@@ -1177,11 +1177,7 @@ func withoutLinks(links []model.Link, kinds ...model.LinkKind) []model.Link {
 }
 
 func securityReviewTitle(task model.Task) string {
-	title := strings.TrimSpace(task.Title)
-	if title == "" {
-		title = task.ID
-	}
-	return "Security review: " + title
+	return "Security review: " + reviewSubjectTitle(task)
 }
 
 // securityReviewBody is the template's instructions with the subject
@@ -1200,6 +1196,7 @@ func securityReviewBody(tmpl model.Template, task model.Task, ref model.PullRequ
 		"any fix to it.\n\n",
 		task.ID, task.Title, task.BranchName(), ref, ref)
 	b.WriteString(matchList(matches, known))
+	b.WriteString("\n" + changeUnderReviewSection(task, true) + "\n")
 	return b.String()
 }
 
