@@ -99,14 +99,25 @@ test("Mermaid diagrams and attached images open full screen on the task page @ph
     const svg = good.locator(".mermaid-canvas svg");
     await expect(svg).toBeVisible({ timeout: 20_000 });
     await expect(good.locator(":scope > .code-card")).toBeHidden();
+    // The diagram's frame stays inside the description and the window;
+    // a diagram wider than the pane scrolls inside it rather than
+    // shrinking its labels past 60%.
     const descBox = await desc.boundingBox();
-    const svgBox = await svg.boundingBox();
-    expect(svgBox.width).toBeGreaterThan(40);
-    expect(svgBox.x).toBeGreaterThanOrEqual(descBox.x - 0.5);
-    expect(svgBox.x + svgBox.width).toBeLessThanOrEqual(
+    const canvasBox = await good.locator(".mermaid-canvas").boundingBox();
+    expect(canvasBox.x).toBeGreaterThanOrEqual(descBox.x - 0.5);
+    expect(canvasBox.x + canvasBox.width).toBeLessThanOrEqual(
       descBox.x + descBox.width + 0.5,
     );
-    expect(svgBox.x + svgBox.width).toBeLessThanOrEqual(vw + 0.5);
+    expect(canvasBox.x + canvasBox.width).toBeLessThanOrEqual(vw + 0.5);
+    const svgBox = await svg.boundingBox();
+    const natural = await svg.evaluate((el) => el.viewBox.baseVal.width);
+    expect(svgBox.width).toBeGreaterThanOrEqual(natural * 0.6 - 1);
+    expect(svgBox.width).toBeLessThanOrEqual(natural + 1);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - window.innerWidth,
+      ),
+    ).toBeLessThanOrEqual(0);
     await expect(svg.locator("text", { hasText: "Proxy" })).toHaveCount(1);
 
     // Source shows the fence under the diagram, and hides it again.
@@ -140,7 +151,8 @@ test("Mermaid diagrams and attached images open full screen on the task page @ph
     await expect(page.getByTestId("media-viewer-count")).toHaveCount(0);
     const fit = await big.boundingBox();
     inside(fit, vw, vh);
-    expect(fit.width).toBeGreaterThanOrEqual(svgBox.width - 0.5);
+    // Fitted: as wide as the stage allows, or its own width if smaller.
+    expect(fit.width).toBeGreaterThanOrEqual(Math.min(natural, vw - 128) - 1);
     inside(await page.getByTestId("media-viewer-close").boundingBox(), vw, vh);
     await page.getByTestId("media-viewer-zoom-in").click();
     await expect(page.getByTestId("media-viewer-zoom")).toHaveText("125%");

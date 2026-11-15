@@ -718,7 +718,15 @@ export class MarkdownDirective {
       `<button type="button" class="code-copy-btn" data-mermaid-expand aria-label="Open diagram full screen">Expand</button>` +
       `</span></div>` +
       `<button type="button" class="mermaid-canvas" data-mermaid-expand aria-label="Open diagram full screen"></button>`;
-    wrap.querySelector(".mermaid-canvas")!.innerHTML = svg;
+    const canvas = wrap.querySelector<HTMLElement>(".mermaid-canvas")!;
+    canvas.innerHTML = svg;
+    // In a narrow pane a wide diagram scales down only so far -- to 60%,
+    // where its labels are still readable -- and then scrolls sideways.
+    const drawn = canvas.querySelector("svg");
+    const vbWidth = drawn?.viewBox?.baseVal?.width ?? 0;
+    if (drawn && vbWidth > 0) {
+      drawn.style.minWidth = `${Math.round(vbWidth * 0.6)}px`;
+    }
     if (card) card.hidden = true;
     block.classList.add("is-rendered");
     block.prepend(wrap);
