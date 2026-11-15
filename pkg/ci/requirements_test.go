@@ -20,6 +20,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // The acceptance criterion this whole split was asked for: a job whose
@@ -61,7 +63,10 @@ func TestAJobDoesNotRunWithoutTheCapabilityItRequires(t *testing.T) {
 	if unmet.Conclusion != ConclusionErrored {
 		t.Errorf("a job with an unmet requirement concluded %q, want %q", unmet.Conclusion, ConclusionErrored)
 	}
-	want := `this job requires the capability "gemini-key" and this deployment does not provide it for acme/widgets`
+	// gemini-key is a retired bare name, so the refusal also names what it
+	// became, for the workflow to declare instead.
+	want := `this job requires the capability "gemini-key" and this deployment does not provide it for acme/widgets: ` +
+		`gemini-key is a retired capability name and grants nothing any longer: it became ` + model.GCPGeminiKeyGrant + `; declare that instead`
 	if unmet.Error != want {
 		t.Errorf("the job's record says %q, want %q", unmet.Error, want)
 	}

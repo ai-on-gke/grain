@@ -59,9 +59,106 @@ describe("TasksStore", () => {
     tasks.stop();
   });
 
-  // Stop sends no more of a bulk action: the calls already in flight
-  // finish, the rest are reported as skipped and left unchanged.
-  it("stops a bulk action part-way and reports what it never sent", async () => {
+  it("loads boards and base-branch gates once config arrives even when tasks resolve first", async () => {
+    let resolveConfig!: (cfg: Record<string, unknown>) => void;
+    const configPromise = new Promise<Record<string, unknown>>((r) => {
+      resolveConfig = r;
+    });
+    let resolveTasks!: (res: { body: unknown[]; changed: boolean }) => void;
+    const tasksPromise = new Promise<{ body: unknown[]; changed: boolean }>(
+      (r) => {
+        resolveTasks = r;
+      },
+    );
+
+    const fakeApi = {
+      config: () => configPromise,
+      openNotifications: () => Promise.resolve([]),
+      localScriptApprovals: () => Promise.resolve([]),
+      get: (route: string) => {
+        if (route === "GET /api/boards") {
+          return Promise.resolve([
+            {
+              id: "b1",
+              name: "Timeline Triage",
+              kind: "list",
+              query: "tab=all&view=timeline",
+            },
+          ]);
+        }
+        if (route === "GET /api/base-branch-gates") {
+          return Promise.resolve({
+            gates: [
+              {
+                repo: "sidthe/grain",
+                branch: "main",
+                judged: false,
+                reason: "failing",
+                detail: "ci failed",
+              },
+            ],
+          });
+        }
+        return Promise.resolve({});
+      },
+      getIfChanged: (route: string) =>
+        route === "GET /api/tasks"
+          ? tasksPromise
+          : Promise.resolve({ body: {}, changed: true }),
+    };
+
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: fakeApi },
+        {
+          provide: GrainEvents,
+          useValue: { events: () => new Subject<GrainEvent>() },
+        },
+      ],
+    });
+
+    const feed = TestBed.inject(TaskFeedStore);
+    const tasks = TestBed.inject(TasksStore);
+    feed.start();
+    tasks.start();
+    TestBed.flushEffects();
+
+    // Tasks resolve first while /api/config is still pending.
+    resolveTasks({
+      body: [{ id: "1", title: "Task 1", state: "queued", priority: 5 }],
+      changed: true,
+    });
+    await tasksPromise;
+    TestBed.flushEffects();
+    expect(tasks.live().map((t) => t.id)).toEqual(["1"]);
+    expect(tasks.boards()).toEqual([]);
+    expect(tasks.baseBranchGates()).toEqual([]);
+
+    // Config resolves afterwards with boards:read and ci:read scopes.
+    resolveConfig({
+      access: {
+        role: "dev",
+        roles: ["dev"],
+        full: false,
+        scopes: ["tasks:read", "boards:read", "ci:read"],
+      },
+    });
+    await configPromise;
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      TestBed.flushEffects();
+    }
+
+    expect(tasks.boards().map((b) => b.name)).toEqual(["Timeline Triage"]);
+    expect(tasks.baseBranchGates().map((g) => g.repo)).toEqual([
+      "sidthe/grain",
+    ]);
+    tasks.stop();
+  });
+
+  // A fake API whose task POSTs wait until released, so a test can stop
+  // or overlap batches while calls are in flight.
+  function heldApi() {
     const sent: string[] = [];
     const release: (() => void)[] = [];
     const fakeApi = {
@@ -84,6 +181,13 @@ describe("TasksStore", () => {
         },
       ],
     });
+    return { sent, release };
+  }
+
+  // Stop sends no more of a bulk action: the calls already in flight
+  // finish, the rest are reported as skipped and left unchanged.
+  it("stops a bulk action part-way and reports what it never sent", async () => {
+    const { sent, release } = heldApi();
     const tasks = TestBed.inject(TasksStore);
     const ids = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
     const run = tasks.runNow(ids);
@@ -93,14 +197,25 @@ describe("TasksStore", () => {
     tasks.stopBatch();
     expect(tasks.batch()?.stopping).toBe(true);
     release.forEach((r) => r());
-    expect(await run).toBe(6);
-    expect(sent).toHaveLength(4);
-    expect(tasks.lastBatch()).toEqual({
-      done: ["1", "2", "3", "4"],
-      failed: [],
+    expect(await run).toEqual({
+      failed: 0,
+      landed: ["1", "2", "3", "4"],
       skipped: ["5", "6", "7", "8", "9", "10"],
     });
+    expect(sent).toHaveLength(4);
     expect(tasks.batch()).toBeNull();
     expect(tasks.actionError()).toContain("Stopped after 4 of 10");
+  });
+
+  // Two batches in flight at once each report only their own tasks.
+  it("keeps each overlapping batch's outcome to itself", async () => {
+    const { release } = heldApi();
+    const tasks = TestBed.inject(TasksStore);
+    const a = tasks.submit(["1", "2"]);
+    const b = tasks.retryMerge(["3"]);
+    await new Promise((r) => setTimeout(r, 0));
+    release.forEach((r) => r());
+    expect(await a).toEqual({ failed: 0, landed: ["1", "2"], skipped: [] });
+    expect(await b).toEqual({ failed: 0, landed: ["3"], skipped: [] });
   });
 });

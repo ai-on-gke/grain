@@ -94,6 +94,25 @@ describe("dispatch-status", () => {
     ).toContain("in 2h");
   });
 
+  it("reads the daemon's 12-hour UTC reset clock in the viewer's zone", () => {
+    const out = formatNoticeText(
+      "gemini-x is paused until 8:00 PM UTC",
+      nowMs,
+      "America/Los_Angeles",
+    );
+    expect(out).toContain("PST");
+    expect(out).toContain("in 2h");
+    expect(out).toContain("[8:00 PM UTC]");
+    // A clock already on the viewer's zone is left as it came.
+    expect(
+      formatNoticeText(
+        "paused until 12:00 PM PST",
+        nowMs,
+        "America/Los_Angeles",
+      ),
+    ).toBe("paused until 12:00 PM PST");
+  });
+
   it("filters expired agentPause and scope pauses instead of lingering stale banners", () => {
     const expired = summarizeDispatchStatus(
       {

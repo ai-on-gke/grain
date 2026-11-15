@@ -311,8 +311,21 @@ test("Capabilities shows each server's state, tests only connectable servers, an
 test("Hosts says host, not hostd", async ({ page }) => {
   await page.goto("/next/settings/hosts");
   await expect(page.getByTestId("card-hostds-list")).toBeVisible();
-  const text = await page.locator("main").innerText();
-  expect(text).not.toMatch(/\bhostds?\b/i);
+  // A command to paste (the Invite hosts snippet) names the server's real
+  // /hostd/install URL; that path is the only place the word may appear.
+  const { prose, commands } = await page.locator("main").evaluate((m) => {
+    let prose = m.innerText;
+    const commands = [];
+    for (const c of m.querySelectorAll("pre, code")) {
+      commands.push(c.innerText);
+      prose = prose.replace(c.innerText, "");
+    }
+    return { prose, commands };
+  });
+  expect(prose).not.toMatch(/\bhostds?\b/i);
+  for (const c of commands) {
+    expect(c.replaceAll("/hostd/install", "")).not.toMatch(/\bhostds?\b/i);
+  }
 });
 
 test("Git connections: reusing a plain-host credential keeps it a git host", async ({
