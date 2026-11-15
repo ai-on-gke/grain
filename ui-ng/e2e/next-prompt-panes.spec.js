@@ -98,9 +98,12 @@ for (const [label, width] of [
   ["desktop", 1280],
   ["phone", 390],
 ]) {
+  // The desktop project runs both widths; the phone project only the
+  // phone one.
+  const tag = width < 1080 ? ["@phone"] : [];
   test(
     `task detail splits prompt from attributes (${label})`,
-    { tag: ["@phone"] },
+    { tag },
     async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await withPrompt(page, /\/api\/tasks\/3(\?|$)/, (t) => [t.task ?? t]);
@@ -122,7 +125,7 @@ for (const [label, width] of [
 
   test(
     `the tasks inspector pane splits prompt from attributes (${label})`,
-    { tag: ["@phone"] },
+    { tag },
     async ({ page }) => {
       // A phone shows the list over the pane; the full page covers it.
       test.skip(width < 1080, "desktop split only");
@@ -142,7 +145,7 @@ for (const [label, width] of [
 
   test(
     `schedule inspector renders its prompt as markdown (${label})`,
-    { tag: ["@phone"] },
+    { tag },
     async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await withPrompt(page, /\/api\/schedules(\?|$)/, (l) => l);
@@ -158,7 +161,7 @@ for (const [label, width] of [
 
   test(
     `template inspector renders its prompt as markdown (${label})`,
-    { tag: ["@phone"] },
+    { tag },
     async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
       await withPrompt(page, /\/api\/templates(\?|$)/, (l) => l);
@@ -169,3 +172,57 @@ for (const [label, width] of [
     },
   );
 }
+
+// A pane under 260px stacks each key over its value. Opening Processes
+// first and Tasks after, in one session, loads detail-panes.css before the
+// task detail's own stylesheet -- the order in which a rule there would win
+// over .g-attrs if they ever shared a selector again.
+test("a narrow attributes pane stacks keys over values after Processes", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("processes/schedules");
+  await page.locator('[data-testid^="sched-row-"]').first().click();
+  await expect(page.getByTestId("sched-config-pane")).toBeVisible();
+
+  const nav = page.getByRole("navigation", { name: "Primary destinations" });
+  await nav.getByRole("link", { name: "Tasks", exact: true }).click();
+  await page.locator('[data-testid^="open-"]').first().click();
+  await page.getByTestId("task-tab-details").click();
+  const attrs = page
+    .getByTestId("task-attributes-pane")
+    .filter({ visible: true });
+  await expect(attrs).toBeVisible();
+
+  // Narrow the pane itself to a 240px content box: what a 320px inspector
+  // split leaves it once the tab body and pane padding are taken off.
+  await attrs.evaluate((el) => {
+    el.style.boxSizing = "content-box";
+    el.style.width = "240px";
+  });
+  const dl = attrs.locator("dl.g-attrs");
+  await expect
+    .poll(() =>
+      dl.evaluate(
+        (el) => getComputedStyle(el).gridTemplateColumns.split(" ").length,
+      ),
+    )
+    .toBe(1);
+  const cells = await dl.locator("dt, dd").evaluateAll((els) =>
+    els.map((e) => {
+      const r = e.getBoundingClientRect();
+      return { tag: e.tagName, t: r.top, b: r.bottom, l: r.left };
+    }),
+  );
+  expect(cells.length).toBeGreaterThan(3);
+  for (let i = 0; i + 1 < cells.length; i++) {
+    const [k, v] = [cells[i], cells[i + 1]];
+    if (k.tag !== "DT" || v.tag !== "DD") continue;
+    expect(v.t, "the value sits under its key").toBeGreaterThanOrEqual(
+      k.b - 0.5,
+    );
+    expect(Math.abs(v.l - k.l), "key and value share a left edge").toBeLessThan(
+      1,
+    );
+  }
+});

@@ -54,8 +54,10 @@
 }
 
 /* Key-value attributes. The key column never takes more than 40% of the
-   pane, so a long value wraps beside its key instead of clipping. */
-.g-attrs {
+   pane, so a long value wraps beside its key instead of clipping. Scoped to
+   .g-pane so a page's own single-class rule (task detail's .facts, say)
+   cannot win the cascade when its stylesheet happens to load later. */
+.g-pane .g-attrs {
   display: grid;
   grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
   gap: 6px 16px;
@@ -64,13 +66,13 @@
   line-height: 20px;
 }
 
-.g-attrs dt {
+.g-pane .g-attrs dt {
   max-width: 40cqi;
   color: var(--md-sys-color-on-surface-variant);
   overflow-wrap: anywhere;
 }
 
-.g-attrs dd {
+.g-pane .g-attrs dd {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -82,14 +84,14 @@
 
 /* On narrow panes the key sits over its value. */
 @container (max-width: 260px) {
-  .g-attrs {
+  .g-pane .g-attrs {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
   }
-  .g-attrs dt {
+  .g-pane .g-attrs dt {
     max-width: none;
   }
-  .g-attrs dd + dt {
+  .g-pane .g-attrs dd + dt {
     margin-top: 8px;
   }
 }

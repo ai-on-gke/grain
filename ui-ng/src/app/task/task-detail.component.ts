@@ -1212,7 +1212,7 @@ export function duration(from?: string, to?: string): string {
               </section>
               <section class="g-pane" data-testid="task-attributes-pane">
                 <h2 class="g-pane-title">Attributes</h2>
-                <dl class="facts g-attrs">
+                <dl class="g-attrs">
                   <dt>Priority</dt>
                   <dd>
                     <g-priority-chip
