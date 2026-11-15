@@ -433,6 +433,7 @@ func (s *Server) routes() {
 	s.route("GET /api/registry/status", s.handleGetHubInstanceStatus)
 	s.route("GET /api/tasks", s.handleListTasks)
 	s.route("GET /api/tasks/states", s.handleTaskStates)
+	s.route("GET /api/tasks/summaries", s.handleTaskSummaries)
 	s.route("GET /api/tasks/wait", s.handleTasksWait)
 	s.route("GET /api/inbox", s.handleInbox)
 	s.route("GET /api/refs/{ref}/summary", s.handleRefSummary)

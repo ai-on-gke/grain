@@ -22,7 +22,7 @@ import {
   signal,
   untracked,
 } from "@angular/core";
-import { GrainApi } from "../api/grain-api.service";
+import { GrainApi, loadTaskSummaryBatches } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import { InboxStore } from "../inbox/inbox.store";
 import type {
@@ -32,6 +32,7 @@ import type {
   CreateBoardRequest,
   Task,
   TaskDetail,
+  TaskSummariesResponse,
 } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
@@ -362,36 +363,44 @@ export class TasksStore implements OnDestroy {
         return next;
       });
     }
-    const ids = tasks
-      .filter(
-        (t) =>
-          isWork(t) &&
-          !this.detailInFlight.has(t.id) &&
-          (t.state === "awaiting_submit" ||
-            t.reason?.reason === "base_repair" ||
-            t.reason?.reason === "awaiting_submit" ||
-            !!t.mergeGates?.some(isListCiPlaceholder)),
-      )
-      .map((t) => t.id)
-      .slice(0, 20);
-    await Promise.all(ids.map((id) => this.readSubmitDetail(id)));
+    const ids = [
+      ...new Set(
+        tasks
+          .filter(
+            (t) =>
+              isWork(t) &&
+              !this.detailInFlight.has(t.id) &&
+              (t.state === "awaiting_submit" ||
+                t.reason?.reason === "base_repair" ||
+                t.reason?.reason === "awaiting_submit" ||
+                !!t.mergeGates?.some(isListCiPlaceholder)),
+          )
+          .map((t) => t.id),
+      ),
+    ];
+    await this.readSubmitDetails(ids);
   }
 
-  private async readSubmitDetail(id: string): Promise<void> {
-    this.detailInFlight.add(id);
+  private async readSubmitDetails(ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return;
+    for (const id of ids) this.detailInFlight.add(id);
     try {
-      const d = await this.api.getIfChanged<TaskDetail>(
-        "GET /api/tasks/{id}",
-        { id },
-        "comments_limit=1&attempts_limit=1",
+      const { tasks } = await loadTaskSummaryBatches(ids, 1, 1, (query) =>
+        this.api
+          .getIfChanged<TaskSummariesResponse>(
+            "GET /api/tasks/summaries",
+            undefined,
+            query,
+          )
+          .then((r) => r?.body?.tasks),
       );
-      if (d?.body) {
-        this.details.update((m) => ({ ...m, [id]: d.body! }));
+      if (Object.keys(tasks).length > 0) {
+        this.details.update((m) => ({ ...m, ...tasks }));
       }
     } catch {
       // Leave cached/list gates when detail fails.
     } finally {
-      this.detailInFlight.delete(id);
+      for (const id of ids) this.detailInFlight.delete(id);
     }
   }
 

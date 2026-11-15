@@ -678,6 +678,10 @@ export class InboxStore implements OnDestroy {
       if (targets.length >= 20) break;
     }
     if (targets.length === 0) return;
+    if (typeof this.api.taskSummaries === "function") {
+      await this.readSummariesBatch(targets);
+      return;
+    }
     const concurrency = Math.min(4, targets.length);
     let cursor = 0;
     const worker = async () => {
@@ -687,6 +691,41 @@ export class InboxStore implements OnDestroy {
       }
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
+  }
+
+  private async readSummariesBatch(
+    targets: readonly { id: string; updatedAt: string }[],
+  ): Promise<void> {
+    const allowed = targets.filter((t) => this.canReadTask(t.id));
+    if (allowed.length === 0) return;
+    for (const t of allowed) this.summaryInFlight.add(t.id);
+    const expected = new Map(allowed.map((t) => [t.id, t.updatedAt]));
+    try {
+      const batch = await this.api.taskSummaries(
+        allowed.map((t) => t.id),
+        1,
+        1,
+      );
+      const updated: Record<string, TaskDetail> = {};
+      for (const [id, d] of Object.entries(batch)) {
+        if (
+          this.fullDetailLoaded.has(id) ||
+          this.detailInFlight.has(id) ||
+          this.selected()?.taskId === id
+        ) {
+          continue;
+        }
+        this.summaryUpdatedAt.set(id, expected.get(id) || d.updatedAt || "");
+        updated[id] = d;
+      }
+      if (Object.keys(updated).length > 0) {
+        this.details.update((m) => ({ ...m, ...updated }));
+      }
+    } catch {
+      // The row still shows its summary; the inspector says less.
+    } finally {
+      for (const t of allowed) this.summaryInFlight.delete(t.id);
+    }
   }
 
   private canReadTask(id: string): boolean {

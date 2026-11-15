@@ -669,6 +669,10 @@ export interface TaskDetail extends Task {
   ciFaults?: { kind?: string; summary?: string; detail?: string }[];
 }
 
+export interface TaskSummariesResponse {
+  tasks: Record<string, TaskDetail>;
+}
+
 // One standing conversation (pkg/ui console_sessions.go
 // ConsoleSessionSetting). Its conversation is the comments of its task.
 export interface ConsoleSession {
