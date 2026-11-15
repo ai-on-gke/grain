@@ -172,10 +172,11 @@ func relayReviewFeedback(ctx context.Context, store *model.Store, client github.
 	// First, and whatever becomes of the findings below: a review that
 	// found something must never leave a security hold for a clean
 	// review to release (securityhold.go).
-	if err := dropSecurityHoldOnFindings(ctx, store, client, task, findingsSummary(findings), now); err != nil {
+	summary := findingsSummary(findings)
+	if err := dropSecurityHoldOnFindings(ctx, store, client, task, summary, now); err != nil {
 		return 0, err
 	}
-	if err := dropPathTriggerHoldOnFindings(ctx, store, client, task, now); err != nil {
+	if err := dropPathTriggerHoldOnFindings(ctx, store, client, task, summary, now); err != nil {
 		return 0, err
 	}
 

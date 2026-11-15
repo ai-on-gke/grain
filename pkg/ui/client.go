@@ -1730,7 +1730,7 @@ func (c *Client) getTask(ctx context.Context, id string, page TaskPage, paged bo
 	detail.LocalScriptApprovals = c.localScriptApprovals().ForTask(id, c.now())
 	detail.CI = ciStatusFrom(obs)
 	gateStates, _ := c.mergeGateStates(ctx, *t)
-	detail.MergeGates = model.ComputeMergeGates(*t, obs, gateStates)
+	detail.MergeGates = model.ComputeMergeGatesWithChecks(*t, obs, gateStates, c.recordedHeadChecks(ctx, *t, obs))
 	if ownerID, inPlace := t.CIOwner(); inPlace {
 		// A review working on the reviewed change's own branch has no CI
 		// of its own: its branch's verdict is the reviewed task's.
@@ -2010,6 +2010,29 @@ func (c *Client) Attachment(ctx context.Context, taskID string, id int64) (model
 		return model.Attachment{}, &NotFoundError{message: fmt.Sprintf("no attachment %d on task %s", id, taskID)}
 	}
 	return *a, nil
+}
+
+// recordedHeadChecks is what grain has recorded of the GitHub checks on
+// t's pull request's branch (model.GitHubCIJob, written by the webhook and
+// the pull request sync), for the CI gate of a change grain's own CI has no
+// verdict on. nil -- the gate as it always was -- for a task with no pull
+// request, one in a repository grain CI judges, or when a read fails.
+func (c *Client) recordedHeadChecks(ctx context.Context, t model.Task, obs *model.Observation) *model.HeadChecks {
+	pr := model.TaskPullRequest(t)
+	if pr == nil || (obs != nil && obs.CI != nil) {
+		return nil
+	}
+	if grainCI, err := c.Store.RepoUsesGrainCI(ctx, pr.Repo); err != nil || grainCI {
+		return nil
+	}
+	jobs, err := c.Store.ListGitHubCIJobs(ctx, model.GitHubCIFilter{
+		Repo: pr.Repo.String(), Refs: []string{t.BranchName()}, Limit: 500,
+	})
+	if err != nil {
+		log.Printf("ui: task %s: reading its pull request's GitHub checks: %v", t.ID, err)
+		return nil
+	}
+	return model.HeadChecksFrom(jobs, "")
 }
 
 // mergeGateStates resolves only the task states ComputeMergeGates inspects

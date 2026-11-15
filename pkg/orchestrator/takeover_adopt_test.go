@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/github"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -539,5 +540,49 @@ func TestAdoptPullRequestEndToEndExternalAndUnapprovedShepherdRails(t *testing.T
 		if sh.Approval == nil || sh.AutoMerge || !hasLink(sh, model.LinkTakeoverMode, string(model.TakeoverFinish)) {
 			t.Fatalf("approved shepherd = %+v (links=%+v), want approved finish shepherd with AutoMerge=false", sh, sh.Links)
 		}
+	}
+}
+
+// GET /api/pull-requests/status gives the shepherd task's CI gate the
+// checks GitHub ran at the head it just read -- running while one is
+// unfinished, failing naming the check that failed, passed once all are
+// green -- rather than "waiting for checks" for a repository whose CI is
+// GitHub's.
+func TestPullRequestStatusCIGateReadsTheHeadsChecks(t *testing.T) {
+	t.Parallel()
+	f := newTakeoverFixture(t, "alice")
+	ref := model.PullRequestRef{Repo: f.repo, Number: f.pr}
+	f.adopt(model.AdoptPullRequestInput{Approved: true}, baseTime)
+	detail, _ := f.client.GetPullRequest("acme", "widgets", f.pr)
+	success, failure := "success", "failure"
+	ciGate := func() model.MergeGate {
+		t.Helper()
+		report, err := orchestrator.PullRequestStatusOf(f.ctx, f.deps, ref, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, g := range report.Gates {
+			if g.ID == model.GateCI {
+				return g
+			}
+		}
+		t.Fatalf("status gates = %+v, want a CI gate", report.Gates)
+		return model.MergeGate{}
+	}
+	f.sim.CheckRuns[detail.HeadSHA] = []github.CheckRun{
+		{ID: 1, Name: "go", Status: "completed", Conclusion: &success, HeadSHA: detail.HeadSHA},
+		{ID: 2, Name: "ui e2e", Status: "in_progress", HeadSHA: detail.HeadSHA},
+	}
+	if g := ciGate(); g.State != model.GateStateRunning || !strings.Contains(g.Detail, "1 of 2 checks unfinished (ui e2e)") {
+		t.Errorf("pending CI gate = %+v", g)
+	}
+	f.sim.CheckRuns[detail.HeadSHA][1] = github.CheckRun{ID: 2, Name: "ui e2e", Status: "completed", Conclusion: &failure, HeadSHA: detail.HeadSHA}
+	if g := ciGate(); g.State != model.GateStateFailing || !strings.HasPrefix(g.Detail, "failing: ui e2e") {
+		t.Errorf("red CI gate = %+v", g)
+	}
+	f.sim.CheckRuns[detail.HeadSHA] = append(f.sim.CheckRuns[detail.HeadSHA],
+		github.CheckRun{ID: 3, Name: "ui e2e", Status: "completed", Conclusion: &success, HeadSHA: detail.HeadSHA})
+	if g := ciGate(); g.State != model.GateStatePassed {
+		t.Errorf("green CI gate (after a re-run) = %+v", g)
 	}
 }

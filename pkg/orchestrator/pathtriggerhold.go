@@ -15,6 +15,7 @@
 package orchestrator
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -620,7 +621,7 @@ func gatingTaskIDs(task model.Task) map[string][]string {
 // the hold is `human: no` and the findings came from one of its own
 // gating tasks, which is exactly what `no` says not to wait for.
 func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, client github.Client,
-	review model.Task, now time.Time) error {
+	review model.Task, summary string, now time.Time) error {
 	if !isReviewTask(review) {
 		return nil
 	}
@@ -654,7 +655,7 @@ func dropPathTriggerHoldOnFindings(ctx context.Context, store *model.Store, clie
 		model.AddReviewFindings(t, model.ReviewFindingsRecord{
 			Gate:       gate,
 			ReviewTask: review.ID,
-			Summary:    "review " + review.ID + " left findings",
+			Summary:    cmp.Or(summary, "review "+review.ID+" left findings"),
 			At:         now,
 		})
 		if own {
