@@ -39,26 +39,36 @@ export interface Disconnection {
 const NETWORK_REASON =
   "This deployment cannot be reached: the connection to it failed.";
 
+// daemonAnswered is whether an error response's body is one the daemon
+// itself writes: every handler error goes out through pkg/ui's writeError
+// as a JSON object carrying a string `error` (apierror.Response). The daemon
+// answers 502/503 of its own -- a forge call that failed while reading a CI
+// job's log or a branch, a verifier briefly out of reach, CI not up yet --
+// and those are the daemon answering, not the daemon being out of reach. A
+// gateway in front of a daemon that is not there answers with its own HTML
+// or plain-text page instead.
+function daemonAnswered(body: unknown): boolean {
+  return (
+    body !== null &&
+    typeof body === "object" &&
+    typeof (body as { error?: unknown }).error === "string"
+  );
+}
+
 // unreachableReason is the sentence for an error that means the daemon could
 // not be reached at all, or "" when the daemon (or something speaking for it)
 // answered. A network failure surfaces as status 0; a 502/503/504 is a
-// gateway in front of the daemon saying it is not there -- except the
-// daemon's own verifier_unavailable 503, which is the daemon answering.
+// gateway in front of the daemon saying it is not there -- unless its body
+// is the daemon's own JSON error (daemonAnswered), which is the daemon
+// answering.
 export function unreachableReason(err: unknown): string {
   if (!(err instanceof HttpErrorResponse)) return "";
-  const body = err.error as { code?: string } | null;
+  if (err.status === 0) return NETWORK_REASON;
+  if (daemonAnswered(err.error)) return "";
   switch (err.status) {
-    case 0:
-      return NETWORK_REASON;
     case 502:
       return "This deployment cannot be reached: a gateway in front of it reports it is down (502 Bad Gateway).";
     case 503:
-      if (
-        body &&
-        typeof body === "object" &&
-        body.code === "verifier_unavailable"
-      )
-        return "";
       return "This deployment cannot be reached: a gateway in front of it reports it is unavailable (503 Service Unavailable).";
     case 504:
       return "This deployment cannot be reached: a gateway in front of it timed out waiting for an answer (504 Gateway Timeout).";

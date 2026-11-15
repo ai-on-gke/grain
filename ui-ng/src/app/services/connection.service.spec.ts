@@ -40,8 +40,28 @@ describe("unreachableReason", () => {
     expect(unreachableReason(e(502))).toContain("502 Bad Gateway");
     expect(unreachableReason(e(503))).toContain("503 Service Unavailable");
     expect(unreachableReason(e(504))).toContain("504 Gateway Timeout");
-    expect(unreachableReason(e(503, { code: "verifier_unavailable" }))).toBe(
-      "",
+    expect(unreachableReason(e(502, "<html>Bad Gateway</html>"))).toContain(
+      "502 Bad Gateway",
+    );
+    // The daemon's own 5xx answers carry its JSON error body (pkg/ui's
+    // writeError): a verifier briefly out of reach, or a forge call that
+    // failed while reading a CI job log, is the daemon answering.
+    expect(
+      unreachableReason(
+        e(503, {
+          error: "identity check unavailable (ref r1)",
+          code: "verifier_unavailable",
+        }),
+      ),
+    ).toBe("");
+    expect(
+      unreachableReason(
+        e(502, { error: 'reading job "test"\'s log from the forge: 500' }),
+      ),
+    ).toBe("");
+    expect(unreachableReason(e(503, { error: "CI is not up yet" }))).toBe("");
+    expect(unreachableReason(e(0, { error: "x" }))).toContain(
+      "the connection to it failed",
     );
     expect(unreachableReason(e(500))).toBe("");
     expect(unreachableReason(e(401))).toBe("");
@@ -67,6 +87,18 @@ describe("connectionInterceptor", () => {
   afterEach(() => {
     vi.useRealTimers();
     TestBed.resetTestingModule();
+  });
+
+  it("does not raise on the daemon's own 502 from a forge-backed read", async () => {
+    const a = firstValueFrom(http.get("/api/ci/runs/7/log")).catch(() => null);
+    ctl
+      .expectOne("/api/ci/runs/7/log")
+      .flush(
+        { error: 'reading job "test"\'s log from the forge: 500' },
+        { status: 502, statusText: "Bad Gateway" },
+      );
+    await a;
+    expect(conn.disconnection()).toBeNull();
   });
 
   it("raises on a failed connection and clears on the next answer", async () => {
