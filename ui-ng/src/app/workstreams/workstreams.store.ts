@@ -173,6 +173,7 @@ export class WorkstreamsStore implements OnDestroy {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private refreshing: Promise<void> | null = null;
   private queuedRefresh: Promise<void> | null = null;
+  private configInFlight: Promise<void> | null = null;
   private forceClosedPending = false;
   private pollCount = 0;
   private closedFetchedOnce = false;
@@ -389,8 +390,27 @@ export class WorkstreamsStore implements OnDestroy {
     }
   }
 
+  private ensureConfig(): Promise<void> {
+    if (this.access.configLoaded() || typeof this.api.config !== "function") {
+      return Promise.resolve();
+    }
+    return (this.configInFlight ??= Promise.resolve()
+      .then(() => this.api.config())
+      .then((cfg) => {
+        if (cfg && !this.access.configLoaded()) {
+          this.access.setConfig(cfg);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.configInFlight = null;
+      }));
+  }
+
   async ensureRootDetail(rootId: string): Promise<void> {
     if (!rootId || rootId.includes("/") || rootId.includes("#")) return;
+    if (this.extraTasks()[rootId] || this.detailInFlight.has(rootId)) return;
+    await this.ensureConfig();
     if (this.extraTasks()[rootId] || this.detailInFlight.has(rootId)) return;
     const known =
       this.openTasks().find((t) => t.id === rootId) ??

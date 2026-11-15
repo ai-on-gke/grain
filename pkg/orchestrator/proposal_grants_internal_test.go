@@ -98,7 +98,7 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 			Arguments: map[string]any{
 				"id":           "bare-legacy-cap",
 				"title":        "Bare legacy capability name",
-				"body":         "Retired bare names are kept as written, not expanded",
+				"body":         "Retired bare names grant nothing and are left off",
 				"repo":         "acme/app",
 				"branch":       "main",
 				"capabilities": []any{"self-repair", "self-debug"},
@@ -150,22 +150,15 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 	}
 
 	bareLegacy := byTitle["Bare legacy capability name"]
-	if bareLegacy.Approval != nil {
-		t.Errorf("bare-legacy-cap proposal approved unexpectedly: %+v", bareLegacy.Approval)
+	// The retired bare names are no aliases any longer, and grant
+	// nothing: the proposal is filed without them, its body naming what
+	// each became, rather than holding rows every dispatch refuses.
+	if got := model.GrantsBeyondCIReadDefault(bareLegacy); len(got) != 0 {
+		t.Errorf("bare-legacy-cap Grants = %+v, want none", got)
 	}
-	// The retired bare names are no aliases any longer: the proposal
-	// records them as written, which dispatch refuses.
-	wantExpanded := []model.Grant{
-		{Capability: "self-debug", Via: model.GrantByLabel},
-		{Capability: "self-repair", Via: model.GrantByLabel},
-	}
-	bareLegacy.Grants = model.GrantsBeyondCIReadDefault(bareLegacy)
-	if len(bareLegacy.Grants) != len(wantExpanded) {
-		t.Fatalf("bare-legacy-cap Grants = %+v, want %+v", bareLegacy.Grants, wantExpanded)
-	}
-	for i, want := range wantExpanded {
-		if !bareLegacy.Grants[i].Equal(want) {
-			t.Errorf("bare-legacy-cap Grants[%d] = %+v, want %+v", i, bareLegacy.Grants[i], want)
+	for _, name := range []string{"self-debug", "self-repair"} {
+		if !strings.Contains(bareLegacy.Body, "without `"+name+"`") {
+			t.Errorf("bare-legacy-cap body does not say %s was left off:\n%s", name, bareLegacy.Body)
 		}
 	}
 }

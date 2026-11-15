@@ -971,7 +971,7 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                           <input
                             type="text"
                             class="ops-input tabular"
-                            aria-label="New hostd name"
+                            aria-label="New host name"
                             [attr.data-testid]="'hostd-rename-input-' + h.name"
                             [value]="renameDraft()"
                             (input)="renameDraft.set($any($event.target).value)"
@@ -1608,6 +1608,7 @@ export class FleetPageComponent implements OnInit {
 
   protected readonly tab = signal<FleetTab>("sandboxes");
   private readonly loadedTabs = new Set<FleetTab>();
+  private bootstrapped = false;
   protected readonly loading = signal(false);
   protected readonly loadError = signal<string | null>(null);
   protected readonly confirmReq = signal<ConfirmRequest | null>(null);
@@ -1849,13 +1850,16 @@ export class FleetPageComponent implements OnInit {
           t === "hostds" || t === "controls" || t === "logs" ? t : "sandboxes";
         if (next === this.tab()) return;
         this.tab.set(next);
-        void this.ensureTabLoaded(next);
+        if (this.bootstrapped) {
+          void this.ensureTabLoaded(next);
+        }
       });
     void this.bootstrap();
   }
 
   private async bootstrap(): Promise<void> {
     await this.loadBootstrapConfig();
+    this.bootstrapped = true;
     await this.refreshAll();
   }
 

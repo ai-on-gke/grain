@@ -577,7 +577,7 @@ func TestProposeTaskAcceptsCapabilities(t *testing.T) {
 	res := tool.Handler(context.Background(), map[string]any{
 		"title":        "subtask",
 		"body":         "run ci check",
-		"capabilities": []any{"grain-ci", "gcp-key"},
+		"capabilities": []any{model.APIRef("self-debug"), model.GCPKeySandboxAgentGrant},
 	})
 	if res.IsError {
 		t.Fatalf("Handler errored: %s", res.Text)
@@ -586,8 +586,8 @@ func TestProposeTaskAcceptsCapabilities(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("len(ProposedTasks()) = %d, want 1", len(tasks))
 	}
-	if len(tasks[0].Capabilities) != 2 || tasks[0].Capabilities[0] != "grain-ci" || tasks[0].Capabilities[1] != "gcp-key" {
-		t.Errorf("Capabilities = %v, want [grain-ci gcp-key]", tasks[0].Capabilities)
+	if len(tasks[0].Capabilities) != 2 || tasks[0].Capabilities[0] != model.APIRef("self-debug") || tasks[0].Capabilities[1] != model.GCPKeySandboxAgentGrant {
+		t.Errorf("Capabilities = %v, want [%s %s]", tasks[0].Capabilities, model.APIRef("self-debug"), model.GCPKeySandboxAgentGrant)
 	}
 }
 
@@ -689,6 +689,29 @@ func TestProposeTaskRefusesAReviewGrant(t *testing.T) {
 	}
 	if got := sink.ProposedTasks(); len(got) != 0 {
 		t.Errorf("ProposedTasks() = %+v, want none", got)
+	}
+}
+
+// A retired bare name grants nothing: propose_task refuses it in the same
+// turn naming what it became, rather than answering "Recorded" and the
+// proposal being filed holding a row every dispatch refuses (2026-11-14
+// retired-aliases walkthrough, F5).
+func TestProposeTaskRefusesARetiredBareNameNamingWhatItBecame(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"self-debug", model.APIRef("self-debug")},
+		{"grain-ci", "CI Mode"},
+	} {
+		sink := &MockSink{}
+		tool := toolNamed(t, NewMockTools(sink, nil), "propose_task")
+		res := tool.Handler(context.Background(), map[string]any{
+			"title": "walk: bare names", "body": "b", "capabilities": []any{tc.name},
+		})
+		if !res.IsError || !strings.Contains(res.Text, "retired capability name") || !strings.Contains(res.Text, tc.want) {
+			t.Errorf("propose_task(%s) = %+v, want it refused naming %s", tc.name, res, tc.want)
+		}
+		if got := sink.ProposedTasks(); len(got) != 0 {
+			t.Errorf("propose_task(%s) recorded %+v, want none", tc.name, got)
+		}
 	}
 }
 

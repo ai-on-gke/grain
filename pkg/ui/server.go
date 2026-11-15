@@ -15,7 +15,6 @@
 package ui
 
 import (
-	"bytes"
 	"context"
 	"embed"
 	"errors"
@@ -1048,61 +1047,4 @@ func hostQualifiedRepoRequest(r *http.Request) *http.Request {
 	out.URL.Path, out.URL.RawPath = path, raw
 	out.RequestURI = out.URL.RequestURI()
 	return out
-}
-
-// frontendHandler serves both embedded frontends from the one "/"
-// catch-all: the Angular UI in staticNext under /next/ (a bare /next
-// redirects to /next/), and the React UI in static everywhere else.
-// Both sit behind the same ServeHTTP -- security headers, CSRF, the
-// access-code gate and verified-identity admission -- so the new UI has
-// no authentication path of its own: it is the same origin, the same
-// session cookie and the same /api/ as the old one.
-func frontendHandler(static, staticNext fs.FS) http.Handler {
-	legacy := spaHandler(static)
-	next := http.StripPrefix("/next", spaHandler(staticNext))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/next" {
-			target := "/next/"
-			if r.URL.RawQuery != "" {
-				target += "?" + r.URL.RawQuery
-			}
-			http.Redirect(w, r, target, http.StatusTemporaryRedirect)
-			return
-		}
-		if strings.HasPrefix(r.URL.Path, "/next/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		legacy.ServeHTTP(w, r)
-	})
-}
-
-// spaHandler serves static assets straight out of fsys, the same as
-// http.FileServerFS -- except a request for a path that isn't an actual
-// file falls back to index.html instead of 404ing. App.jsx (bwsalmon/
-// agents#548) now reads a sub-page like "/repos" or "/tasks/42" out of
-// the URL itself, but that only works for a client-side navigation that
-// starts from "/" already loaded; a direct hit on that URL -- a bookmark,
-// a shared link, a hard refresh -- is a real request this server has to
-// answer, and the only page it has to answer with is the one App.jsx's
-// own routing already knows how to parse.
-//
-// A //go:embed'd static/ with no built frontend yet (a fresh checkout
-// under `go test`, where static/ carries only placeholder.html) has no
-// index.html to fall back to; that case is left to fall through to the
-// normal file-not-found response rather than serving placeholder.html
-// in its place.
-func spaHandler(fsys fs.FS) http.Handler {
-	fileServer := http.FileServerFS(fsys)
-	index, indexErr := fs.ReadFile(fsys, "index.html")
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upath := strings.TrimPrefix(r.URL.Path, "/")
-		if upath != "" {
-			if _, err := fs.Stat(fsys, upath); err != nil && indexErr == nil {
-				http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
-				return
-			}
-		}
-		fileServer.ServeHTTP(w, r)
-	})
 }
