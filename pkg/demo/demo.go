@@ -1837,6 +1837,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	if err := seedDemoDurableTask(ctx, store, create, ago); err != nil {
 		return err
 	}
+	if err := seedDemoRolledOverTask(ctx, store, create, ago); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -622,9 +622,13 @@ test("heavy Telemetry progressive disclosure stays <2400px tall with grouped quo
   await saveShot(page, "heavy-telemetry-desktop-light");
 
   // Toggle notices, People filter, and Show all.
-  // The expanded list renders after the click returns, so poll for it
-  // rather than counting once (a phone-project run read 2 here).
-  await page.getByTestId("usage-warnings-toggle").click();
+  // Expanding is a signal flip and a re-render, which a loaded runner can
+  // land after a one-shot count() has already read the collapsed list:
+  // ui-ng e2e failed twice on 1dd87d1 reading 2 here. Wait for the toggle
+  // to say it has expanded, then for the list to grow.
+  const toggle = page.getByTestId("usage-warnings-toggle");
+  await toggle.click();
+  await expect(toggle).toHaveText("Show fewer");
   await expect(
     page.getByTestId("usage-warnings-banner").locator("li"),
   ).toHaveCount(12);
