@@ -99,7 +99,7 @@ func seedSensitiveHoldDemo(ctx context.Context, store *model.Store, cfg ui.Confi
 		}
 	}
 	review, err := client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title:       "Security review: Charge in cents",
+		Title:       "Targeted review (payments): Charge in cents",
 		Description: "Review " + model.BranchName(held.ID) + " for its change to `src/payments/x.go`.",
 		Repo:        repo.String(),
 		Base:        model.BranchName(held.ID),
@@ -114,6 +114,7 @@ func seedSensitiveHoldDemo(ctx context.Context, store *model.Store, cfg ui.Confi
 			model.Link{Kind: model.LinkFixes, Target: repo.String() + "#105"},
 			model.Link{Kind: model.LinkPathTriggerHold, Target: string(model.TriggerHumanRequired)},
 			model.Link{Kind: model.LinkPathTriggerTask, Target: "payments=" + review.ID},
+			model.Link{Kind: model.LinkTargetedReviewTrigger, Target: "payments"},
 			model.ApprovalRequiredLink(model.ApprovalRuleTrigger+"payments", trigger.Approvers))
 		return nil
 	}); err != nil {

@@ -230,11 +230,9 @@ for (const [label, size] of [
       await section.scrollIntoViewIfNeeded();
       const bareLine = section.locator('.grant-line[data-grant="self-debug"]');
       await expect(bareLine).toBeVisible();
-      await expect(bareLine).toContainText(
-        "Retired alias of api#self-debug + grain#source",
-      );
+      await expect(bareLine).toContainText("No longer offered");
       await expect(
-        bareLine.getByText("retired alias", { exact: true }),
+        bareLine.getByText("no longer offered", { exact: true }),
       ).toBeVisible();
 
       const sectionBox = await section.boundingBox();
@@ -255,7 +253,7 @@ for (const [label, size] of [
       ).toBeLessThan(4);
 
       const removeBtn = bareLine.getByRole("button", {
-        name: "Remove self-debug (retired alias)",
+        name: "Remove self-debug (no longer offered)",
       });
       const removeBox = await removeBtn.boundingBox();
       expect(removeBox.y).toBeGreaterThanOrEqual(lineBox.y - 0.5);

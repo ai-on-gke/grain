@@ -22,6 +22,7 @@ import {
   placement,
   planMove,
   sorted,
+  timelineEndMs,
 } from "./task-view";
 
 const t = (id: string, priority: number, extra: Partial<Task> = {}): Task =>
@@ -145,5 +146,45 @@ describe("task view", () => {
     expect(ago("2026-11-11T09:00:00Z", now)).toBe("3h");
     expect(ago("2026-11-08T12:00:00Z", now)).toBe("3d");
     expect(ago(undefined, now)).toBe("");
+  });
+});
+
+describe("timelineEndMs", () => {
+  const now = Date.parse("2026-11-14T12:00:00Z");
+  const task = (state: string, extra: Partial<Task> = {}): Task =>
+    ({
+      id: "1",
+      title: "t",
+      state,
+      createdAt: "2026-11-14T08:00:00Z",
+      ...extra,
+    }) as Task;
+
+  it("runs a still-open task to now", () => {
+    for (const state of [
+      "queued",
+      "proposed",
+      "awaiting_reply",
+      "deferred",
+      "running",
+    ]) {
+      expect(timelineEndMs(task(state), now)).toBe(now);
+    }
+  });
+
+  it("ends a task where its work ended", () => {
+    const ended = "2026-11-14T09:00:00Z";
+    expect(
+      timelineEndMs(task("awaiting_submit", { endedAt: ended }), now),
+    ).toBe(Date.parse(ended));
+    expect(timelineEndMs(task("closed", { closedAt: ended }), now)).toBe(
+      Date.parse(ended),
+    );
+  });
+
+  it("ends a finished task with no end recorded at its filing", () => {
+    expect(timelineEndMs(task("completed"), now)).toBe(
+      Date.parse("2026-11-14T08:00:00Z"),
+    );
   });
 });
