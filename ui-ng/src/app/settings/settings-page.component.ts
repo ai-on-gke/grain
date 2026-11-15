@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -25,7 +24,7 @@ import {
   signal,
 } from "@angular/core";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
-import type { Subscription } from "rxjs";
+import { combineLatest, type Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
 import { SettingsCodeComponent } from "./settings-code.component";
 import { SettingsComputeComponent } from "./settings-compute.component";
@@ -38,6 +37,7 @@ import {
   SETTINGS_GROUPS,
   filterSettingsGroups,
   resolveSettingsSection,
+  settingsAnchor,
   sectionMeta,
 } from "./settings-sections";
 import { SettingsSecurityComponent } from "./settings-security.component";
@@ -412,7 +412,6 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   protected readonly state = inject(SettingsStateService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
-  private readonly doc = inject(DOCUMENT);
 
   readonly section = input<string | undefined>(undefined);
   readonly path = input<string | undefined>(undefined);
@@ -456,72 +455,77 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.subs.push(
-      this.route.paramMap.subscribe((pm) => {
-        const sec = pm.get("section");
-        this.routeSection.set(sec);
-        const aliasTarget = SettingsPageComponent.aliasFragment(sec);
-        if (aliasTarget && !this.route.snapshot.fragment) {
-          this.scrollToAnchor(aliasTarget);
-        }
-      }),
       this.route.queryParamMap.subscribe((qm) => {
         this.routeFilePath.set(qm.get("path") ?? "");
       }),
-      this.route.fragment.subscribe((frag) => {
-        if (frag) this.scrollToAnchor(frag);
-      }),
+      // A #fragment (Settings -> Capabilities#capability-policy, the
+      // links capability pickers give) or an old section name
+      // (/settings/secrets) names a card inside the section: scroll it
+      // into view once the section's own data has rendered it. The
+      // component is reused across sections, so watch the section and
+      // the fragment together: /settings/engine -> /settings/secrets
+      // changes only the section, and still has an anchor to reach.
+      combineLatest([this.route.paramMap, this.route.fragment]).subscribe(
+        ([pm, frag]) => {
+          const sec = pm.get("section");
+          this.routeSection.set(sec);
+          this.scrollToAnchor(settingsAnchor(sec ?? this.section(), frag));
+        },
+      ),
     );
     if (this.state.initialized() && this.state.config() !== null) {
       this.ready.set(true);
-      this.scrollInitialAnchor();
       void this.state.loadCore(true);
       return;
     }
     void this.state.loadCore().then(() => {
       if (this.state.config() !== null) {
         this.ready.set(true);
-        this.scrollInitialAnchor();
       }
     });
   }
 
-  private static aliasFragment(raw: string | null | undefined): string | null {
-    const id = String(raw ?? "")
-      .trim()
-      .toLowerCase();
-    if (id === "secrets") return "other-secrets";
-    if (
-      id === "credentials" ||
-      id === "legacy-capabilities" ||
-      id === "integrations"
-    ) {
-      return "credentials";
-    }
-    if (id === "capability-servers") return "capability-servers";
-    return null;
-  }
-
-  private scrollInitialAnchor(): void {
-    const frag =
-      this.route.snapshot.fragment ||
-      SettingsPageComponent.aliasFragment(
-        this.routeSection() ?? this.section(),
-      );
-    if (frag) this.scrollToAnchor(frag);
-  }
-
-  private scrollToAnchor(id: string): void {
-    setTimeout(() => {
-      this.doc.getElementById(id)?.scrollIntoView({ block: "start" });
-    }, 0);
-  }
-
   ngOnDestroy(): void {
     this.subs.forEach((s) => s.unsubscribe());
+    if (this.anchorTimer) clearInterval(this.anchorTimer);
+  }
+
+  private anchorTimer: ReturnType<typeof setInterval> | null = null;
+
+  // scrollToAnchor waits up to 5s for the element -- a section's cards
+  // appear only after its own requests answer -- and scrolls it into
+  // view again while cards above it are still arriving and pushing it
+  // down, stopping once it has held still for three ticks.
+  private scrollToAnchor(id: string): void {
+    if (this.anchorTimer) clearInterval(this.anchorTimer);
+    this.anchorTimer = null;
+    if (!id || typeof document === "undefined") return;
+    let tries = 0;
+    let lastTop = Number.NaN;
+    let still = 0;
+    this.anchorTimer = setInterval(() => {
+      const el = document.getElementById(id);
+      if (el) {
+        const top = Math.round(el.getBoundingClientRect().top);
+        if (top === lastTop) {
+          still++;
+        } else {
+          still = 0;
+          el.scrollIntoView({ block: "start" });
+          lastTop = Math.round(el.getBoundingClientRect().top);
+        }
+      }
+      if (still >= 3 || ++tries > 50) {
+        if (this.anchorTimer) clearInterval(this.anchorTimer);
+        this.anchorTimer = null;
+      }
+    }, 100);
   }
 
   protected selectSection(id: SettingsSectionId, ev: Event): void {
     ev.preventDefault();
+    // Leaving a section stops any scroll still chasing its anchor.
+    this.scrollToAnchor("");
     this.routeSection.set(id);
     void this.router.navigate(["/settings", id]);
   }

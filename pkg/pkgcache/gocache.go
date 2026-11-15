@@ -38,6 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -588,6 +589,12 @@ func RunGoCacheProg(ctx context.Context, stdin io.Reader, stdout io.Writer, base
 		return hex.EncodeToString(h.Sum(nil)) == outputIDHex
 	}
 
+	// readOnly is set by the first upload the cache refuses with 403: a
+	// sandbox the cache does not know as a CI job may read the trusted
+	// build cache but not write it, and that does not change for the life
+	// of this process, so the rest of its uploads are not sent at all.
+	var readOnly atomic.Bool
+
 	var reqWg sync.WaitGroup
 	var uploadWg sync.WaitGroup
 	reqSem := make(chan struct{}, 16)
@@ -760,7 +767,7 @@ func RunGoCacheProg(ctx context.Context, stdin io.Reader, stdout io.Writer, base
 			Size:     int64(len(body)),
 		})
 
-		if baseURL == "" || err != nil {
+		if baseURL == "" || err != nil || readOnly.Load() {
 			return
 		}
 		uploadWg.Add(1)
@@ -768,6 +775,9 @@ func RunGoCacheProg(ctx context.Context, stdin io.Reader, stdout io.Writer, base
 			defer uploadWg.Done()
 			uploadSem <- struct{}{}
 			defer func() { <-uploadSem }()
+			if readOnly.Load() {
+				return
+			}
 
 			putOutReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, baseURL+goCacheOutputPrefix+outputIDHex, bytes.NewReader(body))
 			if reqErr != nil {
@@ -781,6 +791,10 @@ func RunGoCacheProg(ctx context.Context, stdin io.Reader, stdout io.Writer, base
 			}
 			_, _ = io.Copy(io.Discard, outResp.Body)
 			outResp.Body.Close()
+			if outResp.StatusCode == http.StatusForbidden {
+				readOnly.Store(true)
+				return
+			}
 			if outResp.StatusCode < 200 || outResp.StatusCode >= 300 {
 				return
 			}
@@ -797,6 +811,9 @@ func RunGoCacheProg(ctx context.Context, stdin io.Reader, stdout io.Writer, base
 			}
 			_, _ = io.Copy(io.Discard, actResp.Body)
 			actResp.Body.Close()
+			if actResp.StatusCode == http.StatusForbidden {
+				readOnly.Store(true)
+			}
 		}(actionIDHex, outputIDHex, body, encodedAct)
 	}
 
@@ -863,6 +880,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -993,6 +1011,12 @@ func main() {
 	}
 
 	ctx := context.Background()
+	// readOnly is set (to 1) by the first upload the cache refuses with
+	// 403: a sandbox it does not know as a CI job may read the trusted
+	// build cache but not write it, so the rest of this process's uploads
+	// are not sent at all rather than each refused in turn.
+	var readOnly int32
+
 	var reqWg sync.WaitGroup
 	var uploadWg sync.WaitGroup
 	reqSem := make(chan struct{}, 16)
@@ -1154,7 +1178,7 @@ func main() {
 			DiskPath: outFile,
 			Size:     int64(len(body)),
 		})
-		if baseURL == "" || err != nil {
+		if baseURL == "" || err != nil || atomic.LoadInt32(&readOnly) != 0 {
 			return
 		}
 		uploadWg.Add(1)
@@ -1162,6 +1186,9 @@ func main() {
 			defer uploadWg.Done()
 			uploadSem <- struct{}{}
 			defer func() { <-uploadSem }()
+			if atomic.LoadInt32(&readOnly) != 0 {
+				return
+			}
 
 			putOutReq, reqErr := http.NewRequestWithContext(ctx, http.MethodPut, baseURL+"/gocache/output/"+outputIDHex, bytes.NewReader(body))
 			if reqErr != nil {
@@ -1175,6 +1202,10 @@ func main() {
 			}
 			_, _ = io.Copy(io.Discard, outResp.Body)
 			outResp.Body.Close()
+			if outResp.StatusCode == http.StatusForbidden {
+				atomic.StoreInt32(&readOnly, 1)
+				return
+			}
 			if outResp.StatusCode < 200 || outResp.StatusCode >= 300 {
 				return
 			}
@@ -1191,6 +1222,9 @@ func main() {
 			}
 			_, _ = io.Copy(io.Discard, actResp.Body)
 			actResp.Body.Close()
+			if actResp.StatusCode == http.StatusForbidden {
+				atomic.StoreInt32(&readOnly, 1)
+			}
 		}(actionIDHex, outputIDHex, body, encodedAct)
 	}
 

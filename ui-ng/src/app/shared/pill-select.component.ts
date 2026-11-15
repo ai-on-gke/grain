@@ -32,7 +32,12 @@ export interface PillOption {
   value: string;
   label: string;
   toneClass?: string;
+  // disabled options stay in the list (and in keyboard order) so the
+  // reader can see what exists, but choosing one does nothing: the
+  // server's own vocabulary says it cannot run here (label says why).
   disabled?: boolean;
+  // hint is a second, smaller line under the label (why an option is
+  // disabled, or what choosing it means).
   hint?: string;
 }
 
@@ -96,10 +101,9 @@ let nextPillSelectId = 0;
               <button
                 type="button"
                 role="option"
-                [disabled]="opt.disabled || false"
-                [attr.aria-disabled]="opt.disabled ? 'true' : null"
                 [attr.aria-selected]="active"
-                [attr.title]="opt.hint || null"
+                [attr.aria-disabled]="opt.disabled ? 'true' : null"
+                [class.is-disabled]="opt.disabled"
                 [attr.data-testid]="
                   testid() ? testid() + '-opt-' + opt.value : null
                 "
@@ -111,8 +115,8 @@ let nextPillSelectId = 0;
                     aria-hidden="true"
                   ></span>
                 }
-                <span class="pill-opt-copy">
-                  <span class="pill-opt-label">{{ opt.label }}</span>
+                <span class="pill-opt-label"
+                  >{{ opt.label }}
                   @if (opt.hint) {
                     <span class="pill-opt-hint">{{ opt.hint }}</span>
                   }
@@ -206,9 +210,8 @@ export class PillSelectComponent implements OnDestroy {
     });
     setTimeout(() => {
       if (!this.open()) return;
-      const items = this.enabledOptionButtons();
-      const opts = this.options().filter((o) => !o.disabled);
-      const idx = opts.findIndex((o) => o.value === this.value());
+      const items = this.optionButtons();
+      const idx = this.options().findIndex((o) => o.value === this.value());
       (items[idx >= 0 ? idx : 0] ?? items[0])?.focus();
     }, 0);
   }
@@ -256,7 +259,7 @@ export class PillSelectComponent implements OnDestroy {
       this.close(false);
       return;
     }
-    const items = this.enabledOptionButtons();
+    const items = this.optionButtons();
     if (!items.length) return;
     const cur = items.indexOf(this.doc.activeElement as HTMLButtonElement);
     let next = -1;
@@ -277,12 +280,8 @@ export class PillSelectComponent implements OnDestroy {
     }
   }
 
-  private enabledOptionButtons(): HTMLButtonElement[] {
+  private optionButtons(): HTMLButtonElement[] {
     const m = this.menuEl()?.nativeElement;
-    return m
-      ? Array.from(
-          m.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
-        )
-      : [];
+    return m ? Array.from(m.querySelectorAll<HTMLButtonElement>("button")) : [];
   }
 }

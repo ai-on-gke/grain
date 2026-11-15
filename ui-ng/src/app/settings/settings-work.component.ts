@@ -60,7 +60,37 @@ interface CapabilityServerRow {
   config?: CapabilityServerConfig;
   builtin?: unknown;
   inProcess?: { name?: string; summary?: string } | null;
-  status?: { attached?: boolean; error?: string } | null;
+  status?: {
+    attached?: boolean;
+    error?: string;
+    reason?: string;
+    state?: string;
+  } | null;
+}
+
+// capServerState is the chip a server row shows: disabled when an
+// operator turned it off, otherwise the server's own status.state
+// ("attached" reads as enabled; needs-config / needs-hostd say what is
+// missing, in host wording; failed reads as an error) rather than
+// "enabled" for a server that cannot attach yet.
+export function capServerState(srv: CapabilityServerRow): {
+  label: string;
+  tone: string;
+} {
+  if (srv.config?.disabled) return { label: "disabled", tone: "neutral" };
+  const st = String(srv.status?.state ?? "").trim();
+  if (!st || st === "attached") return { label: "enabled", tone: "healthy" };
+  if (st === "needs-config") {
+    return { label: "needs-configuring", tone: "blast" };
+  }
+  // needs-hostd:<selector> is wire format (daemon.NeedsHostd); the chip
+  // says host, as the classic CapabilityServersPanel's needsHostLabel does.
+  if (st === "needs-hostd" || st.startsWith("needs-hostd:")) {
+    const sel = st.slice("needs-hostd:".length).trim();
+    return { label: sel ? `needs host ${sel}` : "needs host", tone: "blast" };
+  }
+  if (st === "failed") return { label: "failed", tone: "error" };
+  return { label: st, tone: st.startsWith("needs") ? "blast" : "neutral" };
 }
 
 export interface CapabilityPolicyRule {
@@ -496,11 +526,7 @@ interface SecretMetaRow {
       }
 
       @case ("capabilities") {
-        <div
-          class="s-card"
-          id="capability-servers"
-          data-testid="card-capability-servers"
-        >
+        <div class="s-card" data-testid="card-capability-servers">
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">Capability servers (MCP)</h3>
@@ -535,13 +561,15 @@ interface SecretMetaRow {
                         }}
                       </td>
                       <td>
+                        @let chip = capServerState(srv);
                         <span
-                          [class]="
-                            'status-pill ' +
-                            (!isDisabled ? 'healthy' : 'neutral')
+                          [class]="'status-pill ' + chip.tone"
+                          [attr.data-testid]="'cap-server-state-' + srv.id"
+                          [attr.title]="
+                            srv.status?.error || srv.status?.reason || null
                           "
                         >
-                          {{ !isDisabled ? "enabled" : "disabled" }}
+                          {{ chip.label }}
                         </span>
                       </td>
                       <td class="s-actions-cell">
@@ -565,17 +593,22 @@ interface SecretMetaRow {
                               {{ isDisabled ? "Enable" : "Disable" }}
                             </button>
                           }
-                          <button
-                            type="button"
-                            class="btn-tonal s-btn-sm"
-                            [attr.data-testid]="'test-cap-server-' + srv.id"
-                            [disabled]="
-                              !access.can('POST /api/capability-servers/test')
-                            "
-                            (click)="testCapServer(srv.id)"
-                          >
-                            Test
-                          </button>
+                          <!-- An in-process server has no connection to
+                               probe: the server answers Test with "no
+                               capability server ... is configured". -->
+                          @if (!srv.inProcess) {
+                            <button
+                              type="button"
+                              class="btn-tonal s-btn-sm"
+                              [attr.data-testid]="'test-cap-server-' + srv.id"
+                              [disabled]="
+                                !access.can('POST /api/capability-servers/test')
+                              "
+                              (click)="testCapServer(srv.id)"
+                            >
+                              Test
+                            </button>
+                          }
                           @if (
                             !srv.builtin &&
                             !srv.config?.builtin &&
@@ -605,7 +638,12 @@ interface SecretMetaRow {
           }
 
           @if (capTestNotice()) {
-            <div class="s-banner ok" data-testid="cap-test-notice">
+            <div
+              class="s-banner"
+              [class.ok]="capTestOk()"
+              [class.warn]="!capTestOk()"
+              data-testid="cap-test-notice"
+            >
               {{ capTestNotice() }}
             </div>
           }
@@ -811,12 +849,10 @@ interface SecretMetaRow {
 
         <div
           class="s-card"
-          id="credentials"
+          id="api-scope-sets"
           data-testid="card-scope-sets-secrets"
         >
-          <h3 class="s-card-title" id="api-scope-sets">
-            API scope sets &amp; secret vault
-          </h3>
+          <h3 class="s-card-title">API scope sets &amp; secret vault</h3>
           @if (scopeSets().length > 0) {
             <div class="s-inline">
               @for (ss of scopeSets(); track ss.name) {
@@ -876,7 +912,7 @@ interface SecretMetaRow {
           </div>
 
           <form
-            class="s-subsection"
+            class="s-subsection s-anchor"
             id="other-secrets"
             autocomplete="off"
             (submit)="$event.preventDefault(); putSecret()"
@@ -1052,8 +1088,7 @@ interface SecretMetaRow {
         </div>
       }
     }
-
-    @if (confirmRequest(); as req) {
+    @if (confirmReq(); as req) {
       <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
     }
   `,
@@ -1081,6 +1116,8 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly newServerId = signal("");
   protected readonly newServerUrl = signal("");
   protected readonly capTestNotice = signal("");
+  protected readonly capTestOk = signal(true);
+  protected readonly capServerState = capServerState;
 
   protected readonly policyRules = signal<CapabilityPolicyRule[]>([]);
   protected readonly newRuleCap = signal("");
@@ -1093,10 +1130,11 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly newScopeSetScopes = signal("");
 
   protected readonly secretsList = signal<SecretMetaRow[]>([]);
+  // otherSecrets leaves out a capability server's own secrets: those
+  // are managed (and removed) with the server, not here.
   protected readonly otherSecrets = computed(() =>
     this.secretsList().filter((s) => !s.capabilityServers?.length),
   );
-  protected readonly confirmRequest = signal<ConfirmRequest | null>(null);
   protected readonly secretName = signal("");
   protected readonly secretKey = signal("value");
   protected readonly secretVal = signal("");
@@ -1425,36 +1463,46 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   protected async testCapServer(id: string): Promise<void> {
     try {
-      const res = await this.api.post<{ ok?: boolean; detail?: string }>(
-        "POST /api/capability-servers/test",
-        undefined,
-        { id },
-      );
+      const res = await this.api.post<{
+        ok?: boolean;
+        detail?: string;
+        error?: string;
+        methods?: unknown[];
+      }>("POST /api/capability-servers/test", undefined, { id });
+      // The probe answers ok/error/methods; it has no `detail`, so a
+      // failure read only "failed" with the reason dropped.
+      const ok = res?.ok !== false;
+      const n = Array.isArray(res?.methods) ? res.methods.length : 0;
+      this.capTestOk.set(ok);
       this.capTestNotice.set(
-        `${id}: ${res?.detail || (res?.ok === false ? "failed" : "reachable")}`,
+        `${id}: ${
+          res?.detail ||
+          (ok
+            ? `reachable${n ? `, ${n} method${n === 1 ? "" : "s"}` : ""}`
+            : `failed — ${res?.error || "no reason given"}`)
+        }`,
       );
     } catch (err) {
       this.state.recordError(err);
     }
   }
 
-  protected secretRowName(sec: SecretMetaRow): string {
-    return sec.name || sec.secret || "";
-  }
+  protected readonly confirmReq = signal<ConfirmRequest | null>(null);
 
   protected async onConfirmDone(accepted: boolean): Promise<void> {
-    const req = this.confirmRequest();
-    this.confirmRequest.set(null);
-    if (accepted && req) {
-      await req.run();
-    }
+    const req = this.confirmReq();
+    this.confirmReq.set(null);
+    if (!accepted || !req) return;
+    await req.run();
   }
 
+  // Removing a server drops it from every grant naming it, so it asks
+  // first, as host and Git connection removal do.
   protected confirmRemoveCapServer(id: string): void {
-    this.confirmRequest.set({
-      title: `Remove capability server ${id}?`,
-      message: `Removes ${id} and deletes any secret stored exclusively for it.`,
-      accept: "Remove server",
+    this.confirmReq.set({
+      title: "Remove capability server?",
+      message: `Remove ${id}? Tasks that hold a grant on it can no longer use it.`,
+      accept: "Remove",
       destructive: true,
       run: () => this.removeCapServer(id),
     });
@@ -1472,8 +1520,12 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
+  protected secretRowName(sec: SecretMetaRow): string {
+    return sec.name || sec.secret || "";
+  }
+
   protected confirmDeleteScopeSet(name: string): void {
-    this.confirmRequest.set({
+    this.confirmReq.set({
       title: `Remove API scope set ${name}?`,
       message: `Grants referencing https://grain.dev/capabilities/api#${name} will grant nothing once it is removed.`,
       accept: "Remove scope set",
@@ -1495,7 +1547,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   }
 
   protected confirmDeleteSecret(secret: string): void {
-    this.confirmRequest.set({
+    this.confirmReq.set({
       title: `Delete secret ${secret}?`,
       message: `Deletes the secret ${secret} and every key stored in it. Stored values cannot be read back.`,
       accept: "Delete secret",

@@ -150,3 +150,24 @@ Per the Two UIs rule, every step was walked on `/next/` first wherever a `/next/
   - `ui-ng` lint & format (`npm run lint`, `npm run format:check`): clean, 0 warnings.
   - `ui-ng` Playwright E2E: `e2e/next-connections-infrastructure-settings.spec.ts` (new, desktop + `@phone` + `@dark`), `e2e/next-full-system.spec.js`, `e2e/next-hosts-confirm.spec.js` — all passed.
   - Classic `ui` Playwright E2E: `capability-server-settings`, `hub-settings-layout`, `hostds-settings-layout`, `host-script-settings`, `k8s-priority-class-settings` — 14/14 passed.
+
+## Merge with `main` (attempt 3)
+
+`main` had meanwhile landed a parallel walkthrough of the same sections
+(PR #1487, `next-connections-infra-settings.spec.js`) that fixed most of
+the same defects. The conflicts were resolved by taking `main`'s
+implementation of the pill-select disabled options, sandbox backend and
+network vocabulary, Engine placeholders, settings anchors and the Git
+connection host kind, and re-applying only what this branch added on top:
+the Git connection `Proxy (optional)` field and `via <proxy>` row hint,
+clearing the refusal banner after a successful Git connection save, the
+`Known hosts` label and hint (main labelled it "optional", but the server
+refuses an SSH key on any host but github.com without one), the masked
+`type="password"` secret value input with the stored-secrets table
+(server-owned secrets left out) and its confirmed Delete, and the
+confirmed Remove on non-built-in API scope sets. This branch's specs were
+updated to `main`'s wording (`Remove` accept buttons, `aria-disabled`
+options). Re-run after the merge: ui-ng unit suite (480 tests), lint,
+Prettier, `next-connections-infrastructure-settings.spec.ts` (desktop,
+phone, dark), `next-connections-infra-settings.spec.js` and
+`next-full-system.spec.js` all pass.

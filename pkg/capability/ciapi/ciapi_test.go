@@ -508,3 +508,89 @@ func TestTheProviderMintsOneTokenForAllOfAJobsGrantsForAllowedReposOnly(t *testi
 		t.Errorf("a provider configured for acme/widgets refused it: %s", res.Reason)
 	}
 }
+
+// A repository the deployment lists beside grain's own (Config.Repos,
+// grain_config.ci_api_repos) gets a token narrowed to itself: its
+// "script on a cadence" grants read its own tasks and file its own
+// templates, and nothing deployment-wide or of another repository's,
+// grain's included.
+func TestAListedRepositorysTokenIsNarrowedToThatRepository(t *testing.T) {
+	ctx := context.Background()
+	e := NewEndpoint()
+	e.Log = func(string, ...any) {}
+	e.SetURL("http://192.0.2.1:9000")
+	up := newUpstream()
+	e.SetUpstream(up)
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	resolve := DynamicProvider(e, Config{Repos: []model.RepoRef{grain, widgets}})
+	cc := model.CapabilityContext{
+		Task: model.Task{Target: &widgets, Grants: []model.Grant{
+			{Capability: "api:tasks:read"}, {Capability: "api:tasks:from-template"},
+		}},
+		Run: model.Run{ID: "ci-job"}, Now: time.Now(), CI: true,
+	}
+
+	for _, name := range []string{
+		"api:settings:read", "api:settings:write", "api:tasks:write", "api:releases:write",
+		"api:release-manager", "api:tasks:read@ai-on-gke/grain",
+	} {
+		p, _ := resolve(name)
+		if res, err := p.Resolve(ctx, cc); err != nil || !res.Refused {
+			t.Errorf("%s resolved for a listed repository's job (%+v, %v), want it refused", name, res, err)
+		}
+	}
+
+	read, _ := resolve("api:tasks:read")
+	if res, err := read.Resolve(ctx, cc); err != nil || res.Refused {
+		t.Fatalf("api:tasks:read for listed acme/widgets = %+v, %v", res, err)
+	}
+	m, err := read.Materialize(ctx, cc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var token string
+	for _, pl := range m.Placements {
+		if pl.Path == TokenPath {
+			token = strings.TrimSpace(pl.Content)
+		}
+	}
+	g, ok := e.Tokens.Lookup(token)
+	if !ok || !g.Repo.Same(widgets) {
+		t.Fatalf("token grants %+v, %v, want one for acme/widgets", g, ok)
+	}
+	if !g.Holds("tasks:read") || !g.MayFile("triage-item") || g.Holds("tasks:write") || g.Holds("settings:read") {
+		t.Errorf("token holds %+v, want tasks:read and tasks:from-template only", g)
+	}
+
+	w := call(e, "GET", "/api/tasks", token, "")
+	var tasks []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &tasks); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("GET /api/tasks = %d %s (%v)", w.Code, w.Body, err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != "2" {
+		t.Errorf("GET /api/tasks answered %+v, want acme/widgets' task 2 only (dropping both ai-on-gke/grain's 1 and the repository-less 3)", tasks)
+	}
+	for _, refused := range []struct{ method, path, body string }{
+		{"POST", "/api/tasks", `{"title":"x"}`},
+		{"GET", "/api/settings", ""},
+		{"GET", "/api/repos/ai-on-gke/grain/config", ""},
+		{"POST", "/api/tasks/from-template", `{"template":"triage-item","repo":"ai-on-gke/grain"}`},
+		{"POST", "/api/notifications/release-pending", `{"version":"v2.4.0","body":"spoof"}`},
+	} {
+		if w := call(e, refused.method, refused.path, token, refused.body); w.Code != http.StatusForbidden {
+			t.Errorf("%s %s %s = %d, want 403", refused.method, refused.path, refused.body, w.Code)
+		}
+	}
+	if w := call(e, "POST", "/api/tasks/from-template", token, `{"template":"triage-item"}`); w.Code != http.StatusOK {
+		t.Fatalf("filing acme/widgets' own template = %d %s", w.Code, w.Body)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(up.body[len(up.body)-1]), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["repo"] != "acme/widgets" || body["template"] != "triage-item" {
+		t.Errorf("from-template reached the API as %v, want acme/widgets' triage-item", body)
+	}
+}

@@ -67,7 +67,7 @@ test("Settings -> Git saves plain-git SSH + GitHub App connections, clears refus
     await page.getByTestId("select-git-conn-type").click();
     const appOpt = page.getByTestId("select-git-conn-type-opt-app");
     await expect(appOpt).toHaveAttribute("aria-disabled", "true");
-    await expect(appOpt).toContainText("A GitHub App needs a GitHub host");
+    await expect(appOpt).toContainText("Needs a GitHub host");
     await page.getByTestId("select-git-conn-type-opt-ssh").click();
 
     await page.getByLabel("Host", { exact: true }).fill("gitssh.example.test");
@@ -147,7 +147,7 @@ test("Settings -> Git saves plain-git SSH + GitHub App connections, clears refus
       .getByRole("button", { name: "Cancel" })
       .boundingBox())!;
     const acceptBox = (await dialog
-      .getByRole("button", { name: "Remove connection" })
+      .getByRole("button", { name: "Remove", exact: true })
       .boundingBox())!;
     expect(
       Math.abs(
@@ -167,7 +167,7 @@ test("Settings -> Git saves plain-git SSH + GitHub App connections, clears refus
       .getByTestId(`git-conn-row-${sshConn.credential}`)
       .getByRole("button", { name: "Remove" })
       .click();
-    await dialog.getByRole("button", { name: "Remove connection" }).click();
+    await dialog.getByRole("button", { name: "Remove", exact: true }).click();
     await expect(
       page.getByTestId(`git-conn-row-${sshConn.credential}`),
     ).toHaveCount(0);
@@ -246,7 +246,7 @@ test("Settings -> Capabilities, Engine & Sandboxes enforce confirmations, masked
       page.getByTestId(`cap-server-row-${customServerId}`),
     ).toBeVisible();
     await page.getByTestId(`remove-cap-server-${customServerId}`).click();
-    await dialog.getByRole("button", { name: "Remove server" }).click();
+    await dialog.getByRole("button", { name: "Remove", exact: true }).click();
     await expect(
       page.getByTestId(`cap-server-row-${customServerId}`),
     ).toHaveCount(0);
