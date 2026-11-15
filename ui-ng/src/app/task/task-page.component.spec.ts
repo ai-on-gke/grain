@@ -248,9 +248,11 @@ class FakeApi {
   patch = (r: string, p?: unknown, b?: unknown) => this.rec("PATCH", r, p, b);
   put = (r: string, p?: unknown, b?: unknown) => this.rec("PUT", r, p, b);
   delete = (r: string, p?: unknown) => this.rec("DELETE", r, p);
+  timeZone?: string;
   config = () =>
     Promise.resolve({
       access: null,
+      timeZone: this.timeZone,
       models: ["fast", "smart"],
       defaultModel: "smart",
       capabilities: [{ id: "self-debug", name: "Self debug", ready: true }],
@@ -890,6 +892,158 @@ describe("TaskPageComponent", () => {
     const f = await render(api);
     expect(q(f, '[data-testid="human-review-hold"]')).toBeNull();
     expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+  });
+
+  it("shows a path-trigger hold with its review task, approvals, security hold and merge rules", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      autoMerge: false,
+      pathTriggerHold: "required",
+      pathTriggerTasks: ["payments=28"],
+      approvals: [
+        {
+          rule: "trigger:payments",
+          source: "repository trigger",
+          approvers: ["ana", "ben"],
+        },
+      ],
+      repoRules: "rules@0f1e2d3c",
+      securityHold: "pkg/access",
+      securityReviewTask: "29",
+      mergePolicy: {
+        Head: "abcdef0123456789",
+        Mode: "grain",
+        GrainJobs: ["unit"],
+        Matched: ["payments-strict"],
+        Requirements: [
+          { Field: "auto_merge", Value: "never", From: ["payments-strict"] },
+          { Field: "ci.mode", Value: "grain", From: ["defaults"] },
+        ],
+      },
+    };
+    const f = await render(api);
+    const hold = q(f, '[data-testid="path-trigger-hold"]')!;
+    expect(hold.textContent).toContain(
+      "Held by this repository's gating triggers",
+    );
+    expect(hold.textContent).toContain("human: required");
+    expect(hold.textContent).toContain(".grain/triggers/payments.yml");
+    const link = q<HTMLAnchorElement>(
+      f,
+      '[data-testid="path-trigger-review-link"]',
+    )!;
+    expect(link.textContent).toContain("Review task #28");
+    expect(link.getAttribute("href")).toBe("/task/28");
+    expect(q(f, '[data-testid="approval-rule"]')!.textContent).toContain(
+      "Waiting for ana or ben",
+    );
+    expect(hold.textContent).toContain("rules@0f1e2d3c");
+
+    const sec = q(f, '[data-testid="security-hold"]')!;
+    expect(sec.textContent).toContain("Security hold: pkg/access");
+    expect(
+      q(f, '[data-testid="security-review-link"]')!.getAttribute("href"),
+    ).toBe("/task/29");
+
+    const policy = q(f, '[data-testid="merge-policy"]')!;
+    expect(policy.textContent).toContain("matched payments-strict");
+    expect(policy.textContent).toContain("abcdef012345");
+    const reqs = [
+      ...(f.nativeElement as HTMLElement).querySelectorAll(
+        '[data-testid="merge-requirement"]',
+      ),
+    ].map(
+      (el) =>
+        [...el.children].map((c) => c.textContent!.trim()).join(" | ") ||
+        el.textContent!.trim(),
+    );
+    expect(reqs).toEqual([
+      "auto_merge: never | from rule payments-strict",
+      "ci.mode: grain | from defaults",
+      "grain CI is narrowed to unit",
+    ]);
+  });
+
+  it("drops the hold callouts once the task closes or merges itself", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "closed",
+      pathTriggerHold: "required",
+      pathTriggerTasks: ["payments=28"],
+      securityReviewTask: "29",
+      mergePolicy: { Requirements: [{ Field: "port", Value: "no" }] },
+    };
+    let f = await render(api);
+    expect(q(f, '[data-testid="path-trigger-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="security-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="merge-policy"]')).toBeNull();
+    TestBed.inject(TaskStore).close();
+    TestBed.resetTestingModule();
+    api.detail = { ...api.detail, state: "awaiting_submit", autoMerge: true };
+    f = await render(api);
+    expect(q(f, '[data-testid="path-trigger-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="merge-policy"]')).toBeTruthy();
+  });
+
+  it("defers until a picked day, at its start in the deployment's zone, and shows the wake time", async () => {
+    const api = new FakeApi();
+    api.timeZone = "Asia/Tokyo";
+    api.detail = { ...api.detail, state: "proposed" };
+    const f = await render(api);
+    expect(q(f, '[data-testid="act-defer"]')).toBeTruthy();
+    q<HTMLButtonElement>(f, '[data-testid="act-defer-until"]')!.click();
+    await settle(f);
+    const date = q<HTMLInputElement>(f, '[data-testid="defer-until-date"]')!;
+    const submit = q<HTMLButtonElement>(
+      f,
+      '[data-testid="defer-until-submit"]',
+    )!;
+    expect(submit.disabled).toBe(true);
+    expect(date.min > "2026-01-01").toBe(true);
+
+    // A day already past is refused here, as the server would.
+    date.value = "2020-01-01";
+    date.dispatchEvent(new Event("input"));
+    await settle(f);
+    expect(submit.disabled).toBe(true);
+    expect(q(f, '[data-testid="defer-until-hint"]')!.textContent).toContain(
+      "after today",
+    );
+
+    date.value = "2030-01-15";
+    date.dispatchEvent(new Event("input"));
+    await settle(f);
+    expect(submit.disabled).toBe(false);
+    expect(q(f, '[data-testid="defer-until-hint"]')!.textContent).toContain(
+      "2030",
+    );
+    submit.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/defer"),
+    ).toMatchObject({
+      params: { id: "7" },
+      body: { deferredUntil: "2030-01-14T15:00:00.000Z" },
+    });
+    expect(q(f, '[data-testid="defer-until-form"]')).toBeNull();
+
+    TestBed.inject(TaskStore).close();
+    TestBed.resetTestingModule();
+    api.detail = {
+      ...api.detail,
+      state: "deferred",
+      approved: true,
+      deferredUntil: "2030-01-14T15:00:00Z",
+    };
+    const g = await render(api);
+    const wake = q(g, '[data-testid="task-deferred-until"]')!;
+    expect(wake.textContent).toContain("Picks itself back up on");
+    expect(wake.textContent).toContain("Jan 15, 2030");
+    expect(wake.textContent).toContain("onto the queue");
+    expect(q(g, '[data-testid="act-undefer"]')).toBeTruthy();
   });
 
   it("offers Rollover for a durable idle task but not Recreate sandbox", async () => {
