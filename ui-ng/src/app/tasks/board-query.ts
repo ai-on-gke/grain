@@ -175,16 +175,18 @@ export function boardQueryForView(v: BoardView): string {
 
 // OLD_NEXT_KEYS are the only keys /next/ wrote before it spoke this
 // grammar. It left tab= out of a board saved on Backlog, so a query
-// made of these keys alone, with no tab=, was saved on Backlog.
+// made of these keys alone (or of none at all: an unnarrowed Backlog
+// saved as ""), with no tab=, was saved on Backlog.
 const OLD_NEXT_KEYS = new Set(["tab", "q", "repo", "group", "view"]);
 
 // viewForQuery reads a board-grammar query (or a /next/tasks address)
-// into a view, or says why /next/tasks cannot show it. A query with no
-// condition on state opens on All, the nearest tab to classic's default
-// list, as an empty query does. The keys /next/ wrote before it spoke
-// this grammar (tab=, repo=, ...) are still read, and a query of those
-// keys alone with no tab= opens on Backlog, where /next/ saved it, so
-// boards saved then keep opening as saved.
+// into a view, or says why /next/tasks cannot show it. The keys /next/
+// wrote before it spoke this grammar (tab=, repo=, ...) are still read,
+// and a query of those keys alone with no tab= -- the empty one too --
+// opens on Backlog, where /next/ saved it, so boards saved then keep
+// opening as saved. Any other query with no condition on state is
+// classic's whole narrowing, which lists closed tasks too: no tab here
+// shows that, so it opens on the classic page.
 export function viewForQuery(
   query: string,
 ): { view: BoardView } | { why: string } {
@@ -202,14 +204,13 @@ export function viewForQuery(
     return { why: "it lists tasks with no repository" };
   }
   const legacyTab = p.get("tab");
-  let keys = 0;
   let onlyOldNext = true;
   p.forEach((_, k) => {
-    keys++;
     if (!OLD_NEXT_KEYS.has(k)) onlyOldNext = false;
   });
+  const tabbed = isTabId(legacyTab) || onlyOldNext;
   if (isTabId(legacyTab)) view.tab = legacyTab;
-  else if (keys && onlyOldNext) view.tab = "backlog";
+  else if (onlyOldNext) view.tab = "backlog";
   // A condition on state wins over a legacy tab= beside it; two of them
   // narrow to their intersection, which no tab is.
   let stated = false;
@@ -247,6 +248,11 @@ export function viewForQuery(
     } else {
       return { why: `it narrows by ${c.attr}, which /next/ cannot filter on` };
     }
+  }
+  if (!stated && !tabbed) {
+    return {
+      why: "it has no condition on state, so it lists closed tasks too",
+    };
   }
   for (const attr of LEGACY_FILTER_ATTRS) {
     if (p.get(attr)) {

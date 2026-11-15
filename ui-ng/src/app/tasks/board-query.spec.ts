@@ -80,11 +80,13 @@ describe("viewForQuery", () => {
     });
   });
 
-  it("opens a query with no state condition on All", () => {
-    expect(viewForQuery("")).toEqual({ view: view({ tab: "all" }) });
-    expect(viewForQuery("f=repo:any:o/n")).toEqual({
-      view: view({ tab: "all", repo: "o/n" }),
-    });
+  it("sends a board-grammar query with no state condition to classic", () => {
+    // Classic lists closed tasks too for these, which no tab here does.
+    for (const q of ["f=repo:any:o/n", "q=x&f=repo:any:o/n", "sort=manual"]) {
+      expect(viewForQuery(q), q).toEqual({
+        why: "it has no condition on state, so it lists closed tasks too",
+      });
+    }
   });
 
   it("still reads the keys /next/ wrote before", () => {
@@ -95,6 +97,7 @@ describe("viewForQuery", () => {
 
   it("opens a board /next/ saved on Backlog, with no tab=, on Backlog", () => {
     for (const [q, v] of [
+      ["", {}],
       ["repo=o/n", { repo: "o/n" }],
       ["group=repo", { group: "repo" }],
       ["q=flaky", { q: "flaky" }],
@@ -105,7 +108,7 @@ describe("viewForQuery", () => {
       });
     }
     // A board-grammar key beside them reads it as a classic board.
-    expect(viewForQuery("q=flaky&f=repo:any:o/n")).toEqual({
+    expect(viewForQuery("q=flaky&f=repo:any:o/n&f=state:none:closed")).toEqual({
       view: view({ tab: "all", q: "flaky", repo: "o/n" }),
     });
   });
@@ -156,12 +159,12 @@ describe("viewForQuery", () => {
   });
 
   it("trims a repo value and compares repo names without case", () => {
-    expect(viewForQuery("f=repo:any:%20o/n%20")).toEqual({
-      view: view({ tab: "all", repo: "o/n" }),
+    expect(viewForQuery("f=state:any:queued&f=repo:any:%20o/n%20")).toEqual({
+      view: view({ tab: "backlog", repo: "o/n" }),
     });
-    expect(viewForQuery("repo=Acme/Widgets&f=repo:any:acme/widgets")).toEqual({
-      view: view({ tab: "all", repo: "acme/widgets" }),
-    });
+    expect(
+      viewForQuery("tab=all&repo=Acme/Widgets&f=repo:any:acme/widgets"),
+    ).toEqual({ view: view({ tab: "all", repo: "acme/widgets" }) });
   });
 });
 
