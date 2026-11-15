@@ -1150,6 +1150,38 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         .querySelector('[data-testid="repos-plan-notice"]')
         ?.textContent?.trim(),
     ).toBe("2 open tasks would be stranded by current repository list.");
+
+    // A schedules-only entry strands no task, so it is never counted as one.
+    const notice = async () => {
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="check-repos-plan-btn"]',
+      )!.click();
+      await harness.fixture.whenStable();
+      harness.fixture.detectChanges();
+      return el
+        .querySelector('[data-testid="repos-plan-notice"]')
+        ?.textContent?.trim();
+    };
+    strandedEntries = [
+      { repo: "acme/cron", schedules: ["nightly"] } as unknown as {
+        repo: string;
+        tasks: string[];
+      },
+    ];
+    expect(await notice()).toBe(
+      "1 schedule would be stranded by current repository list.",
+    );
+    strandedEntries = [
+      { repo: "acme/legacy", tasks: ["101"] },
+      {
+        repo: "acme/cron",
+        schedules: ["nightly", "weekly"],
+        qualificationPlan: true,
+      } as unknown as { repo: string; tasks: string[] },
+    ];
+    expect(await notice()).toBe(
+      "1 open task, 2 schedules and 1 qualification plan would be stranded by current repository list.",
+    );
   });
 
   it("labels capability server states in host wording, gives failed the error tone, and titles needs-config with its reason", async () => {

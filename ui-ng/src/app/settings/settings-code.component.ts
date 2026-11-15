@@ -1458,16 +1458,35 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected async checkReposPlan(): Promise<void> {
     try {
       const res = await this.api.post<{
-        targetReposStranded?: Array<{ tasks?: unknown[] }>;
+        targetReposStranded?: Array<{
+          tasks?: unknown[];
+          schedules?: unknown[];
+          qualificationPlan?: boolean;
+        }>;
       }>("POST /api/repos/plan", undefined, { targetRepos: this.repos() });
-      const n = (res?.targetReposStranded ?? []).reduce(
-        (sum, entry) =>
-          sum + (Array.isArray(entry?.tasks) ? entry.tasks.length : 1),
+      // A stranded entry lists only what it strands (the API omits empty
+      // lists), so a schedules-only repo strands no task at all.
+      const entries = res?.targetReposStranded ?? [];
+      const count = (n: number, one: string, many: string) =>
+        `${n} ${n === 1 ? one : many}`;
+      const tasks = entries.reduce((s, e) => s + (e?.tasks?.length ?? 0), 0);
+      const schedules = entries.reduce(
+        (s, e) => s + (e?.schedules?.length ?? 0),
         0,
       );
+      const plans = entries.filter((e) => e?.qualificationPlan).length;
+      const parts = [
+        tasks ? count(tasks, "open task", "open tasks") : "",
+        schedules ? count(schedules, "schedule", "schedules") : "",
+        plans ? count(plans, "qualification plan", "qualification plans") : "",
+      ].filter(Boolean);
+      const list =
+        parts.length > 1
+          ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
+          : parts[0];
       this.reposPlanNotice.set(
-        n > 0
-          ? `${n} open ${n === 1 ? "task" : "tasks"} would be stranded by current repository list.`
+        list
+          ? `${list} would be stranded by current repository list.`
           : "All open tasks match active target repositories (0 stranded).",
       );
     } catch (err) {
