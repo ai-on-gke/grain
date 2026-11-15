@@ -520,7 +520,8 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 // role, an agent, an external-agent token) sees those whose repository --
 // the notification's own, or else its task's, as GET /api/events resolves
 // notification.* events -- it may read. A deployment-wide notification
-// (no repository and no task) is not shown to such a caller.
+// (no repository and no task) is shown only to a caller whose tasks:read
+// reaches every repository.
 func (s *Server) readableNotifications(r *http.Request, in []model.Notification) []model.Notification {
 	if !taskReadScoped(r) {
 		return in
@@ -540,9 +541,9 @@ func (s *Server) readableNotifications(r *http.Request, in []model.Notification)
 			}
 			repo = cached
 		}
-		if repo == "" {
-			return false
-		}
+		// readable("") holds only for a caller whose tasks:read reaches
+		// every repository (grain/viewer, an unrestricted agent grant), the
+		// way GET /api/events still streams it such notifications.
 		return readable(repo)
 	})
 }

@@ -462,6 +462,7 @@ func TestListNotificationsNarrowsToWhatARepoScopedReaderMayRead(t *testing.T) {
 	})
 	h.allow(t, "user:widgets@example.com", "widgets-reader")
 	h.allow(t, "user:boss@example.com", "grain/operator")
+	h.allow(t, "user:viewer@example.com", "grain/viewer")
 	seedAPITask(t, h.client, "721", "acme/widgets")
 	seedAPITask(t, h.client, "723", "acme/secret")
 	store := h.client.Store
@@ -498,6 +499,12 @@ func TestListNotificationsNarrowsToWhatARepoScopedReaderMayRead(t *testing.T) {
 	}
 	if all := subjects("boss@example.com"); len(all) != 5 {
 		t.Fatalf("operator's notifications = %v, want all five", all)
+	}
+	// grain/viewer is a limited (not Full) role, but its tasks:read reaches
+	// every repository, so it keeps the deployment-wide hosts.down the way
+	// GET /api/events streams it.
+	if all := subjects("viewer@example.com"); len(all) != 5 {
+		t.Fatalf("grain/viewer's notifications = %v, want all five, hosts.down included", all)
 	}
 	// Naming another repository is still refused rather than narrowed.
 	if code, body := h.call("widgets@example.com", http.MethodGet, "/api/notifications?repo=acme/secret", ""); code != http.StatusForbidden {
