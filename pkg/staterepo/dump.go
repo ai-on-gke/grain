@@ -857,8 +857,6 @@ func importTable(ctx context.Context, tx *sql.Tx, dir, table string, withhold bo
 	return nil
 }
 
-// resolveFileValue is value with a {"file": path} reference replaced by
-// the contents of that file under dir; any other value comes back as it is.
 // retiredGrantColumns are the comma-separated capability columns an
 // import of a dump written by an older build (a lower schema-version)
 // upgrades through upgradeRetiredCapabilityList: the default sets
@@ -896,6 +894,8 @@ func upgradeRetiredCapabilityList(list string) string {
 	return model.JoinCapabilities(out)
 }
 
+// resolveFileValue is value with a {"file": path} reference replaced by
+// the contents of that file under dir; any other value comes back as it is.
 func resolveFileValue(dir string, value any) (any, error) {
 	ref, ok := value.(map[string]any)
 	if !ok {
