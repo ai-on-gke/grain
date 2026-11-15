@@ -141,6 +141,8 @@ export interface CreateScheduleRequest {
   networkAccess?: string;
   nothingNeededAction?: string;
   keepRunning?: boolean;
+  admission?: string;
+  hosting?: string;
   model?: string;
   templateId?: string;
   suiteId?: string;
@@ -159,6 +161,10 @@ export interface UpdateScheduleRequest {
   autoMerge?: boolean;
   autoApproveProposals?: boolean;
   capabilities?: string[];
+  keepRunning?: boolean;
+  admission?: string;
+  hosting?: string;
+  model?: string;
   templateId?: string;
   suiteId?: string;
   recurrence?: Recurrence;
@@ -223,6 +229,8 @@ export interface CreateTemplateRequest {
   model?: string;
   interactive?: boolean;
   keepRunning?: boolean;
+  admission?: string;
+  hosting?: string;
   capabilities: string[];
   reads: string[];
   writes: WriteTarget[];
@@ -242,6 +250,8 @@ export interface UpdateTemplateRequest {
   model?: string;
   interactive?: boolean;
   keepRunning?: boolean;
+  admission?: string;
+  hosting?: string;
   capabilities?: string[];
   revision?: string;
 }
@@ -792,4 +802,58 @@ export function movedOrder(
   next.splice(to, 0, key);
   const shown = new Set(visible);
   return [...next, ...stored.filter((k) => !shown.has(k))];
+}
+
+// The Admission setting a template or schedule files every task at
+// (model.Template.Admission, model.Schedule.Admission); "" on the wire is
+// standard. Worded as the task pane and the classic AdmissionField word it.
+export const ADMISSION_OPTIONS: readonly {
+  value: string;
+  label: string;
+  help: string;
+}[] = [
+  {
+    value: "standard",
+    label: "Standard",
+    help: "Queued with ordinary work, under the worker limit.",
+  },
+  {
+    value: "bypass",
+    label: "Bypass queue",
+    help: "Admitted past the worker and merger limits and a pipeline pause; still charged to the sandbox budget.",
+  },
+  {
+    value: "durable",
+    label: "Durable",
+    help: "Bypass queue, plus no wall-clock deadline: suspended when idle and counted under the durable limit.",
+  },
+];
+
+// How every task a template or schedule files is hosted
+// (model.Template.Hosting); "" on the wire is unattended.
+export const HOSTING_OPTIONS: readonly {
+  value: string;
+  label: string;
+  help: string;
+}[] = [
+  {
+    value: "unattended",
+    label: "Unattended",
+    help: "Hands the agent its prompt and runs the turn to completion on its own.",
+  },
+  {
+    value: "console",
+    label: "Interactive console",
+    help: "Runs the agent CLI on an interactive terminal in the UI until somebody closes it.",
+  },
+];
+
+/** sameList says whether two grant lists hold the same grants in order. */
+export function sameList(
+  a: readonly string[] | undefined,
+  b: readonly string[] | undefined,
+): boolean {
+  const x = a ?? [];
+  const y = b ?? [];
+  return x.length === y.length && x.every((v, i) => v === y[i]);
 }
