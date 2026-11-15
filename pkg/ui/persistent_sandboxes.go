@@ -163,6 +163,7 @@ func (s *Server) handleStagingProxy(w http.ResponseWriter, r *http.Request) {
 	ps := s.tasks.Config.PersistentSandboxes
 	name := r.PathValue("name")
 	if ps == nil {
+		w.Header().Set("Cache-Control", cacheControlNoStore)
 		http.NotFound(w, r)
 		return
 	}
