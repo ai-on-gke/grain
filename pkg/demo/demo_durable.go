@@ -104,3 +104,46 @@ func seedDemoDurableTask(ctx context.Context, store *model.Store,
 	}
 	return nil
 }
+
+// DemoRolledOverTaskTitle is the title of the demo's rolled-over durable
+// task, and of the successor filed to carry its work on.
+const DemoRolledOverTaskTitle = "Watch the acme/widgets nightly build"
+
+// seedDemoRolledOverTask files a durable task a year and more old and
+// rolls it over (model.Store.Rollover), so the demo has a predecessor
+// whose page banners its successor and a successor that links back
+// (design/design/durable-tasks.design.md#DT-15). Seeded after
+// seedDemoDurableTask, for the same reason it is seeded last.
+func seedDemoRolledOverTask(ctx context.Context, store *model.Store,
+	create func(time.Time, ui.CreateTaskRequest) (ui.Task, error), ago func(time.Duration) time.Time) error {
+	filed := ago(400 * 24 * time.Hour)
+	task, err := create(filed, ui.CreateTaskRequest{
+		Title: DemoRolledOverTaskTitle,
+		Description: "Each morning, read last night's acme/widgets nightly build. File a repair task for any " +
+			"new failure, and say in the conversation which failures are still open.",
+		Approved: true,
+	})
+	if err != nil {
+		return err
+	}
+	if err := store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+		t.Admission = model.AdmissionDurable
+		return nil
+	}); err != nil {
+		return fmt.Errorf("seeding a rolled-over task: %w", err)
+	}
+	agent := model.Principal{Kind: model.PrincipalAgent, ID: "nightly-agent"}
+	byAgent := model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}, OnBehalfOf: &agent}
+	if _, err := store.AddComment(ctx, model.Comment{TaskID: task.ID, Author: byAgent, Handover: true,
+		Body: "The nightly is green apart from `TestUploadRetries`, a known flake tracked in #188. " +
+			"Nothing else is open.", CreatedAt: ago(2 * 24 * time.Hour)}); err != nil {
+		return fmt.Errorf("seeding a rolled-over task: %w", err)
+	}
+	why := "grain rolled it over by itself because it has been open since " +
+		filed.UTC().Format("2006-01-02") + " (the limit is a year)."
+	if _, err := store.Rollover(ctx, task.ID, model.Attribution{Actor: model.GrainPrincipal}, why,
+		ago(24*time.Hour)); err != nil {
+		return fmt.Errorf("seeding a rolled-over task: %w", err)
+	}
+	return nil
+}
