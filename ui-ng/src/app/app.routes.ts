@@ -400,6 +400,20 @@ export const routes: Routes = [
         (m) => m.SettingsPageComponent,
       ),
   },
+  // One capability server's page, /settings/capabilities/<capability ID>
+  // (the classic serverPath): the ID is a URL, sent as one encoded segment.
+  {
+    path: "settings/:section/:item",
+    title: "Capability server · Settings · grain",
+    canMatch: [
+      (_route: unknown, segments: UrlSegment[]) =>
+        segments[1]?.path === "capabilities",
+    ],
+    loadComponent: () =>
+      import("./settings/settings-page.component").then(
+        (m) => m.SettingsPageComponent,
+      ),
+  },
   {
     path: "settings/:section",
     title: "Settings · grain",

@@ -19,6 +19,7 @@ import {
   type OnInit,
   type SimpleChanges,
   ViewEncapsulation,
+  computed,
   inject,
   input,
   signal,
@@ -34,6 +35,22 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { RouterLink } from "@angular/router";
+import { InfoPopoverComponent } from "../shared/info-popover.component";
+import { CapabilityServerDetailComponent } from "./capability-server-detail.component";
+import {
+  type CapabilityHolder,
+  type CapabilityServerRow,
+  capServerKind,
+  capServerName,
+  capServerRuns,
+  capServerState,
+  capServerStateHelp,
+  capServerSummary,
+  holderLabel,
+  sortCapServers,
+  summarize,
+} from "./capability-servers";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -45,52 +62,7 @@ interface ConsoleSessionRow {
   state?: string;
 }
 
-interface CapabilityServerConfig {
-  command?: string;
-  args?: string[];
-  serverUrl?: string;
-  disabled?: boolean;
-  run?: string;
-  builtin?: string;
-}
-
-interface CapabilityServerRow {
-  id: string;
-  config?: CapabilityServerConfig;
-  builtin?: unknown;
-  inProcess?: { name?: string; summary?: string } | null;
-  status?: {
-    attached?: boolean;
-    error?: string;
-    reason?: string;
-    state?: string;
-  } | null;
-}
-
-// capServerState is the chip a server row shows: disabled when an
-// operator turned it off, otherwise the server's own status.state
-// ("attached" reads as enabled; needs-config / needs-hostd say what is
-// missing, in host wording; failed reads as an error) rather than
-// "enabled" for a server that cannot attach yet.
-export function capServerState(srv: CapabilityServerRow): {
-  label: string;
-  tone: string;
-} {
-  if (srv.config?.disabled) return { label: "disabled", tone: "neutral" };
-  const st = String(srv.status?.state ?? "").trim();
-  if (!st || st === "attached") return { label: "enabled", tone: "healthy" };
-  if (st === "needs-config") {
-    return { label: "needs-configuring", tone: "blast" };
-  }
-  // needs-hostd:<selector> is wire format (daemon.NeedsHostd); the chip
-  // says host, as the classic CapabilityServersPanel's needsHostLabel does.
-  if (st === "needs-hostd" || st.startsWith("needs-hostd:")) {
-    const sel = st.slice("needs-hostd:".length).trim();
-    return { label: sel ? `needs host ${sel}` : "needs host", tone: "blast" };
-  }
-  if (st === "failed") return { label: "failed", tone: "error" };
-  return { label: st, tone: st.startsWith("needs") ? "blast" : "neutral" };
-}
+export { capServerState } from "./capability-servers";
 
 export interface CapabilityPolicyRule {
   capability: string;
@@ -120,6 +92,11 @@ interface MemoryRow {
 interface ScopeSetRow {
   name: string;
   scopes: string[];
+  description?: string;
+  builtin?: boolean;
+  deprecated?: boolean;
+  person?: boolean;
+  catalogue?: { disabled?: boolean; legacyInProcess?: string[] } | null;
 }
 
 interface SecretMetaRow {
@@ -129,7 +106,13 @@ interface SecretMetaRow {
 
 @Component({
   selector: "g-settings-work",
-  imports: [PillSelectComponent, ConfirmDialogComponent],
+  imports: [
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    RouterLink,
+    InfoPopoverComponent,
+    CapabilityServerDetailComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -568,442 +551,598 @@ interface SecretMetaRow {
       }
 
       @case ("capabilities") {
-        <div class="s-card" data-testid="card-capability-servers">
-          <div class="s-card-head">
-            <div>
-              <h3 class="s-card-title">Capability servers (MCP)</h3>
-              <p class="s-card-desc">
-                External tool servers, secret bindings, and live connectivity
-                probes.
-              </p>
+        @if (item()) {
+          <g-capability-server-detail [id]="item()!" />
+        } @else {
+          <div class="s-card" data-testid="card-capability-servers">
+            <div class="s-card-head">
+              <div>
+                <h3 class="s-card-title">Capability servers</h3>
+                <p class="s-card-desc">
+                  A capability is something a task is given for one attempt: a
+                  short-lived cloud key, a checkout of another repository, an
+                  extra set of tools. A capability server hands them out. A task
+                  holds one when it, its template, its schedule or a CI job
+                  grants it as
+                  <code>&lt;capability ID&gt;#&lt;method&gt;</code> and the
+                  <a
+                    routerLink="/settings/capabilities"
+                    fragment="capability-policy"
+                    >Capability policy</a
+                  >
+                  allows it. Open a server to see what it gives a task.
+                </p>
+              </div>
             </div>
-          </div>
+            <div
+              class="s-banner readonly"
+              role="note"
+              data-testid="capability-servers-vs-legacy"
+            >
+              <span
+                >The older capabilities granted by a bare name, such as
+                <code>gcp-key</code> or <code>read-issues</code>, are retired
+                onto these servers' methods. A task, template or schedule that
+                still names one is told which grant replaces it; the GitHub
+                host, GCP settings and secrets they used are under
+                <a routerLink="/settings/capabilities" fragment="other-secrets"
+                  >Stored secrets</a
+                >.</span
+              >
+            </div>
 
-          @if (capServers().length > 0) {
-            <div class="s-table-wrap">
-              <table class="s-table" aria-label="Capability servers">
-                <thead>
-                  <tr>
-                    <th>Server ID</th>
-                    <th>Endpoint / Command</th>
-                    <th>State</th>
-                    <th class="s-actions-cell">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (srv of capServers(); track srv.id) {
-                    @let isDisabled = Boolean(srv.config?.disabled);
-                    <tr [attr.data-testid]="'cap-server-row-' + srv.id">
-                      <td class="s-mono">{{ srv.id }}</td>
-                      <td class="s-mono">
-                        {{
-                          srv.config?.serverUrl ||
-                            srv.config?.command ||
-                            (srv.inProcess ? "in-process" : "mcp")
-                        }}
-                      </td>
-                      <td>
-                        @let chip = capServerState(srv);
-                        <span
-                          [class]="'status-pill ' + chip.tone"
-                          [attr.data-testid]="'cap-server-state-' + srv.id"
-                          [attr.title]="
-                            srv.status?.error || srv.status?.reason || null
-                          "
-                        >
-                          {{ chip.label }}
-                        </span>
-                      </td>
-                      <td class="s-actions-cell">
-                        <div class="s-row-actions">
-                          @if (!srv.inProcess) {
-                            <button
-                              type="button"
-                              class="btn-tonal s-btn-sm"
-                              [attr.data-testid]="'toggle-cap-server-' + srv.id"
-                              [disabled]="
-                                !(isDisabled
-                                  ? access.can(
-                                      'POST /api/capability-servers/enable'
-                                    )
-                                  : access.can(
-                                      'POST /api/capability-servers/disable'
-                                    )) || state.sectionLocked('capabilities')
-                              "
-                              (click)="toggleCapServer(srv.id, isDisabled)"
+            @if (capServers().length > 0) {
+              <div
+                class="s-table-wrap s-table-stack-wrap"
+                role="region"
+                tabindex="0"
+                aria-label="Capability servers"
+              >
+                <table
+                  class="s-table s-table-stack"
+                  aria-label="Capability servers"
+                >
+                  <thead>
+                    <tr>
+                      <th>Server</th>
+                      <th>Runs</th>
+                      <th>State</th>
+                      <th class="s-actions-cell">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (srv of sortedCapServers(); track srv.id) {
+                      @let isDisabled = Boolean(srv.config?.disabled);
+                      @let sum = serverSummary(srv);
+                      @let where = serverRuns(srv);
+                      <tr
+                        [attr.data-testid]="'cap-server-row-' + srv.id"
+                        [attr.data-kind]="serverKind(srv)"
+                      >
+                        <td>
+                          <div class="cap-server-cell">
+                            <a
+                              class="cap-server-name"
+                              [routerLink]="[
+                                '/settings',
+                                'capabilities',
+                                srv.id,
+                              ]"
+                              [attr.data-testid]="'cap-server-link-' + srv.id"
+                              >{{ serverName(srv) }}</a
                             >
-                              {{ isDisabled ? "Enable" : "Disable" }}
-                            </button>
-                          }
-                          <!-- An in-process server has no connection to
+                            @if (serverKind(srv) !== "custom") {
+                              <span class="status-pill neutral cap-kind-pill">{{
+                                serverKind(srv)
+                              }}</span>
+                            }
+                            @if (sum.short) {
+                              <span class="s-hint cap-summary">
+                                <span>{{ sum.short }}</span>
+                                @if (sum.truncated) {
+                                  <g-info-popover
+                                    [text]="sum.full"
+                                    [label]="serverName(srv)"
+                                    [testid]="
+                                      'cap-server-summary-info-' + srv.id
+                                    "
+                                  />
+                                }
+                              </span>
+                            }
+                            @if (serverKind(srv) !== "custom") {
+                              <span class="s-hint s-mono cap-server-id">{{
+                                srv.id
+                              }}</span>
+                            }
+                          </div>
+                        </td>
+                        <td data-label="Runs">
+                          <span class="cap-chip-group">
+                            <span>{{ where.label }}</span>
+                            <g-info-popover
+                              [text]="where.help"
+                              [label]="where.label"
+                            />
+                          </span>
+                        </td>
+                        <td data-label="State">
+                          @let chip = capServerState(srv);
+                          <span class="cap-chip-group">
+                            <span
+                              [class]="'status-pill ' + chip.tone"
+                              [attr.data-testid]="'cap-server-state-' + srv.id"
+                              [attr.title]="
+                                srv.status?.error || srv.status?.reason || null
+                              "
+                            >
+                              {{ chip.label }}
+                            </span>
+                            @if (stateHelp(srv)) {
+                              <g-info-popover
+                                [text]="stateHelp(srv)"
+                                [label]="chip.label"
+                                [testid]="'cap-server-state-info-' + srv.id"
+                              />
+                            }
+                          </span>
+                        </td>
+                        <td class="s-actions-cell" data-label="Actions">
+                          <div class="s-row-actions">
+                            @if (!srv.inProcess) {
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [attr.data-testid]="
+                                  'toggle-cap-server-' + srv.id
+                                "
+                                [disabled]="
+                                  !(isDisabled
+                                    ? access.can(
+                                        'POST /api/capability-servers/enable'
+                                      )
+                                    : access.can(
+                                        'POST /api/capability-servers/disable'
+                                      )) || state.sectionLocked('capabilities')
+                                "
+                                (click)="toggleCapServer(srv.id, isDisabled)"
+                              >
+                                {{ isDisabled ? "Enable" : "Disable" }}
+                              </button>
+                            }
+                            <!-- An in-process server has no connection to
                                probe: the server answers Test with "no
                                capability server ... is configured". -->
-                          @if (!srv.inProcess) {
-                            <button
-                              type="button"
-                              class="btn-tonal s-btn-sm"
-                              [attr.data-testid]="'test-cap-server-' + srv.id"
-                              [disabled]="
-                                !access.can('POST /api/capability-servers/test')
-                              "
-                              (click)="testCapServer(srv.id)"
-                            >
-                              Test
-                            </button>
-                          }
-                          @if (
-                            !srv.builtin &&
-                            !srv.config?.builtin &&
-                            !srv.inProcess
-                          ) {
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              [attr.data-testid]="'remove-cap-server-' + srv.id"
-                              [disabled]="
-                                !access.can(
-                                  'POST /api/capability-servers/remove'
-                                ) || state.sectionLocked('capabilities')
-                              "
-                              (click)="confirmRemoveCapServer(srv.id)"
-                            >
-                              Remove
-                            </button>
-                          }
-                        </div>
-                      </td>
-                    </tr>
-                  }
-                </tbody>
-              </table>
-            </div>
-          }
-
-          @if (capTestNotice()) {
-            <div
-              class="s-banner"
-              [class.ok]="capTestOk()"
-              [class.warn]="!capTestOk()"
-              data-testid="cap-test-notice"
-            >
-              {{ capTestNotice() }}
-            </div>
-          }
-
-          <div class="s-subsection">
-            <div class="s-subhead">
-              <h4 class="s-subhead-title">Add capability server</h4>
-            </div>
-            <div class="s-grid">
-              <div class="s-field">
-                <label class="s-label" for="cs-id">Server ID</label>
-                <input
-                  id="cs-id"
-                  class="s-input s-mono"
-                  type="text"
-                  data-testid="input-cap-server-id"
-                  placeholder="jira-mcp"
-                  [value]="newServerId()"
-                  (input)="newServerId.set($any($event.target).value)"
-                />
+                            @if (!srv.inProcess) {
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [attr.data-testid]="'test-cap-server-' + srv.id"
+                                [disabled]="
+                                  !access.can(
+                                    'POST /api/capability-servers/test'
+                                  )
+                                "
+                                (click)="testCapServer(srv.id)"
+                              >
+                                Test
+                              </button>
+                            }
+                            @if (
+                              !srv.builtin &&
+                              !srv.config?.builtin &&
+                              !srv.inProcess
+                            ) {
+                              <button
+                                type="button"
+                                class="btn-text s-btn-sm"
+                                [attr.data-testid]="
+                                  'remove-cap-server-' + srv.id
+                                "
+                                [disabled]="
+                                  !access.can(
+                                    'POST /api/capability-servers/remove'
+                                  ) || state.sectionLocked('capabilities')
+                                "
+                                (click)="confirmRemoveCapServer(srv.id)"
+                              >
+                                Remove
+                              </button>
+                            }
+                          </div>
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
               </div>
-              <div class="s-field">
-                <label class="s-label" for="cs-url"
-                  >HTTP URL or stdio cmd</label
-                >
-                <input
-                  id="cs-url"
-                  class="s-input s-mono"
-                  type="text"
-                  data-testid="input-cap-server-url"
-                  placeholder="https://mcp.internal/sse"
-                  [value]="newServerUrl()"
-                  (input)="newServerUrl.set($any($event.target).value)"
-                />
+            }
+
+            @if (capTestNotice()) {
+              <div
+                class="s-banner"
+                [class.ok]="capTestOk()"
+                [class.warn]="!capTestOk()"
+                data-testid="cap-test-notice"
+              >
+                {{ capTestNotice() }}
               </div>
-            </div>
-            <div class="s-inline">
-              <button
-                type="button"
-                class="btn-tonal"
-                data-testid="save-cap-server-btn"
-                [disabled]="
-                  !newServerId().trim() ||
-                  !newServerUrl().trim() ||
-                  !access.can('PUT /api/capability-servers') ||
-                  state.sectionLocked('capabilities')
-                "
-                (click)="saveCapServer()"
-              >
-                Save capability server
-              </button>
-            </div>
-          </div>
-        </div>
+            }
 
-        <div
-          class="s-card"
-          id="capability-policy"
-          data-testid="card-capability-policy"
-        >
-          <div class="s-card-head">
-            <div>
-              <h3 class="s-card-title">Capability grant policy</h3>
-              <p class="s-card-desc">
-                Ordered rules admitting or denying capability references across
-                repositories and untrusted triggers.
-              </p>
-            </div>
-            <div class="s-inline">
-              <button
-                type="button"
-                class="btn-tonal s-btn-sm"
-                data-testid="preview-cap-policy-btn"
-                [disabled]="!access.can('POST /api/capability-policy/preview')"
-                (click)="previewCapPolicy()"
-              >
-                Preview policy
-              </button>
-              <button
-                type="button"
-                class="btn-primary s-btn-sm"
-                data-testid="save-cap-policy-btn"
-                [disabled]="
-                  !access.can('PUT /api/capability-policy') ||
-                  state.sectionLocked('capabilities')
-                "
-                (click)="saveCapPolicy()"
-              >
-                Save policy
-              </button>
-            </div>
-          </div>
-
-          @if (policyRules().length > 0) {
-            <div class="s-table-wrap">
-              <table class="s-table" aria-label="Capability policy rules">
-                <thead>
-                  <tr>
-                    <th>Capability pattern</th>
-                    <th>Effect</th>
-                    <th>Repo filter</th>
-                    <th>Untrusted</th>
-                    <th class="s-actions-cell">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (r of policyRules(); track $index; let idx = $index) {
-                    <tr [attr.data-testid]="'policy-rule-row-' + idx">
-                      <td class="s-mono">{{ r.capability }}</td>
-                      <td>
-                        <span
-                          [class]="
-                            'status-pill ' + (r.deny ? 'error' : 'healthy')
-                          "
-                        >
-                          {{ r.deny ? "Deny" : "Admit" }}
-                        </span>
-                      </td>
-                      <td class="s-mono">
-                        {{ r.repos?.join(", ") || "*" }}
-                      </td>
-                      <td>
-                        {{
-                          !r.deny && r.allowUntrusted
-                            ? "Allowed"
-                            : "Trusted only"
-                        }}
-                      </td>
-                      <td class="s-actions-cell">
-                        <div class="s-row-actions">
-                          <button
-                            type="button"
-                            class="btn-text s-btn-sm"
-                            [disabled]="
-                              !access.can('PUT /api/capability-policy') ||
-                              state.sectionLocked('capabilities')
-                            "
-                            (click)="removePolicyRule(idx)"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  }
-                </tbody>
-              </table>
-            </div>
-          }
-
-          <div class="s-inline">
-            <input
-              class="s-input s-input-inline s-mono"
-              type="text"
-              aria-label="Capability pattern"
-              data-testid="input-policy-capability"
-              placeholder="gh-cli"
-              [value]="newRuleCap()"
-              (input)="newRuleCap.set($any($event.target).value)"
-            />
-            <input
-              class="s-input s-input-inline s-mono"
-              type="text"
-              aria-label="Repositories filter (comma-separated)"
-              data-testid="input-policy-repos"
-              placeholder="acme/* (empty = *)"
-              [value]="newRuleRepos()"
-              (input)="newRuleRepos.set($any($event.target).value)"
-            />
-            <g-pill-select
-              testid="select-policy-effect"
-              ariaLabel="Rule effect"
-              align="left"
-              [options]="policyEffectOptions"
-              [value]="newRuleEffect()"
-              (valueChange)="newRuleEffect.set($event)"
-            />
-            @if (newRuleEffect() !== "deny") {
+            <div class="s-subsection">
+              <div class="s-subhead">
+                <h4 class="s-subhead-title">Add capability server</h4>
+              </div>
+              <div class="s-grid">
+                <div class="s-field">
+                  <label class="s-label" for="cs-id">Server ID</label>
+                  <input
+                    id="cs-id"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-cap-server-id"
+                    placeholder="jira-mcp"
+                    [value]="newServerId()"
+                    (input)="newServerId.set($any($event.target).value)"
+                  />
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="cs-url"
+                    >HTTP URL or stdio cmd</label
+                  >
+                  <input
+                    id="cs-url"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-cap-server-url"
+                    placeholder="https://mcp.internal/sse"
+                    [value]="newServerUrl()"
+                    (input)="newServerUrl.set($any($event.target).value)"
+                  />
+                </div>
+              </div>
               <div class="s-inline">
                 <button
                   type="button"
-                  class="g-switch"
-                  role="switch"
-                  data-testid="switch-policy-allow-untrusted"
-                  [attr.aria-checked]="newRuleAllowUntrusted()"
-                  aria-label="Allow untrusted triggers"
-                  (click)="newRuleAllowUntrusted.set(!newRuleAllowUntrusted())"
-                ></button>
-                <span class="s-label">Allow untrusted</span>
+                  class="btn-tonal"
+                  data-testid="save-cap-server-btn"
+                  [disabled]="
+                    !newServerId().trim() ||
+                    !newServerUrl().trim() ||
+                    !access.can('PUT /api/capability-servers') ||
+                    state.sectionLocked('capabilities')
+                  "
+                  (click)="saveCapServer()"
+                >
+                  Save capability server
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div
+            class="s-card"
+            id="capability-policy"
+            data-testid="card-capability-policy"
+          >
+            <div class="s-card-head">
+              <div>
+                <h3 class="s-card-title">Capability grant policy</h3>
+                <p class="s-card-desc">
+                  Ordered rules admitting or denying capability references
+                  across repositories and untrusted triggers.
+                </p>
+              </div>
+              <div class="s-inline">
+                <button
+                  type="button"
+                  class="btn-tonal s-btn-sm"
+                  data-testid="preview-cap-policy-btn"
+                  [disabled]="
+                    !access.can('POST /api/capability-policy/preview')
+                  "
+                  (click)="previewCapPolicy()"
+                >
+                  Preview policy
+                </button>
+                <button
+                  type="button"
+                  class="btn-primary s-btn-sm"
+                  data-testid="save-cap-policy-btn"
+                  [disabled]="
+                    !access.can('PUT /api/capability-policy') ||
+                    state.sectionLocked('capabilities')
+                  "
+                  (click)="saveCapPolicy()"
+                >
+                  Save policy
+                </button>
+              </div>
+            </div>
+
+            @if (policyRules().length > 0) {
+              <div class="s-table-wrap">
+                <table class="s-table" aria-label="Capability policy rules">
+                  <thead>
+                    <tr>
+                      <th>Capability pattern</th>
+                      <th>Effect</th>
+                      <th>Repo filter</th>
+                      <th>Untrusted</th>
+                      <th class="s-actions-cell">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (r of policyRules(); track $index; let idx = $index) {
+                      <tr [attr.data-testid]="'policy-rule-row-' + idx">
+                        <td class="s-mono">{{ r.capability }}</td>
+                        <td>
+                          <span
+                            [class]="
+                              'status-pill ' + (r.deny ? 'error' : 'healthy')
+                            "
+                          >
+                            {{ r.deny ? "Deny" : "Admit" }}
+                          </span>
+                        </td>
+                        <td class="s-mono">
+                          {{ r.repos?.join(", ") || "*" }}
+                        </td>
+                        <td>
+                          {{
+                            !r.deny && r.allowUntrusted
+                              ? "Allowed"
+                              : "Trusted only"
+                          }}
+                        </td>
+                        <td class="s-actions-cell">
+                          <div class="s-row-actions">
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              [disabled]="
+                                !access.can('PUT /api/capability-policy') ||
+                                state.sectionLocked('capabilities')
+                              "
+                              (click)="removePolicyRule(idx)"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
               </div>
             }
-            <button
-              type="button"
-              class="btn-tonal s-btn-sm"
-              data-testid="add-policy-rule-btn"
-              [disabled]="!newRuleCap().trim()"
-              (click)="addPolicyRule()"
-            >
-              Add rule
-            </button>
-          </div>
-        </div>
 
-        <div
-          class="s-card"
-          id="api-scope-sets"
-          data-testid="card-scope-sets-secrets"
-        >
-          <h3 class="s-card-title">API scope sets &amp; secret vault</h3>
-          @if (scopeSets().length > 0) {
             <div class="s-inline">
-              @for (ss of scopeSets(); track ss.name) {
-                <span class="status-pill neutral s-mono"
-                  >{{ ss.name }} ({{ ss.scopes.length }})</span
-                >
+              <input
+                class="s-input s-input-inline s-mono"
+                type="text"
+                aria-label="Capability pattern"
+                data-testid="input-policy-capability"
+                placeholder="gh-cli"
+                [value]="newRuleCap()"
+                (input)="newRuleCap.set($any($event.target).value)"
+              />
+              <input
+                class="s-input s-input-inline s-mono"
+                type="text"
+                aria-label="Repositories filter (comma-separated)"
+                data-testid="input-policy-repos"
+                placeholder="acme/* (empty = *)"
+                [value]="newRuleRepos()"
+                (input)="newRuleRepos.set($any($event.target).value)"
+              />
+              <g-pill-select
+                testid="select-policy-effect"
+                ariaLabel="Rule effect"
+                align="left"
+                [options]="policyEffectOptions"
+                [value]="newRuleEffect()"
+                (valueChange)="newRuleEffect.set($event)"
+              />
+              @if (newRuleEffect() !== "deny") {
+                <div class="s-inline">
+                  <button
+                    type="button"
+                    class="g-switch"
+                    role="switch"
+                    data-testid="switch-policy-allow-untrusted"
+                    [attr.aria-checked]="newRuleAllowUntrusted()"
+                    aria-label="Allow untrusted triggers"
+                    (click)="
+                      newRuleAllowUntrusted.set(!newRuleAllowUntrusted())
+                    "
+                  ></button>
+                  <span class="s-label">Allow untrusted</span>
+                </div>
               }
-            </div>
-          }
-          <div class="s-inline">
-            <input
-              class="s-input s-input-inline s-mono"
-              type="text"
-              aria-label="Scope set name"
-              data-testid="input-scope-set-name"
-              placeholder="ci-readonly"
-              [value]="newScopeSetName()"
-              (input)="newScopeSetName.set($any($event.target).value)"
-            />
-            <input
-              class="s-input s-input-inline s-mono"
-              type="text"
-              aria-label="Scopes list"
-              data-testid="input-scope-set-scopes"
-              placeholder="tasks:read,ci:read"
-              [value]="newScopeSetScopes()"
-              (input)="newScopeSetScopes.set($any($event.target).value)"
-            />
-            <button
-              type="button"
-              class="btn-tonal s-btn-sm"
-              data-testid="save-scope-set-btn"
-              [disabled]="
-                !newScopeSetName().trim() ||
-                !access.can('PUT /api/api-scope-sets') ||
-                state.sectionLocked('capabilities')
-              "
-              (click)="saveScopeSet()"
-            >
-              Save scope set
-            </button>
-          </div>
-
-          <div class="s-field s-anchor" id="other-secrets">
-            <span class="s-label"
-              >Stored secrets ({{ secretsList().length }}) — write-only</span
-            >
-            <div class="s-inline">
-              <input
-                class="s-input s-input-inline s-mono"
-                type="text"
-                aria-label="Secret name"
-                data-testid="input-secret-name"
-                placeholder="webhook-secret"
-                [value]="secretName()"
-                (input)="secretName.set($any($event.target).value)"
-              />
-              <input
-                class="s-input s-input-inline s-mono"
-                type="text"
-                aria-label="Secret key"
-                data-testid="input-secret-key"
-                placeholder="token"
-                [value]="secretKey()"
-                (input)="secretKey.set($any($event.target).value)"
-              />
-              <textarea
-                class="s-textarea s-input-inline s-mono s-masked"
-                rows="1"
-                autocomplete="off"
-                spellcheck="false"
-                data-lpignore="true"
-                data-1p-ignore="true"
-                aria-label="Secret value"
-                data-testid="input-secret-value"
-                placeholder="Secret value or PEM…"
-                [value]="secretVal()"
-                (input)="secretVal.set($any($event.target).value)"
-              ></textarea>
               <button
                 type="button"
                 class="btn-tonal s-btn-sm"
-                data-testid="store-secret-btn"
-                [disabled]="
-                  !secretName().trim() ||
-                  !secretKey().trim() ||
-                  secretVal().length === 0 ||
-                  !secretsEnabled() ||
-                  !access.can('PUT /api/secrets/{secret}/{key}')
-                "
-                (click)="putSecret()"
+                data-testid="add-policy-rule-btn"
+                [disabled]="!newRuleCap().trim()"
+                (click)="addPolicyRule()"
               >
-                Store secret
+                Add rule
               </button>
             </div>
           </div>
 
-          @if (!secretsEnabled()) {
-            <span class="s-hint" data-testid="secrets-store-disabled"
-              >This server has no secret store configured, so nothing can be
-              stored here yet.</span
-            >
-          }
-          @if (!access.can("POST /api/secrets/redact")) {
-            <span class="s-hint" data-testid="secrets-redact-restricted">{{
-              access.deniedReason("POST /api/secrets/redact")
-            }}</span>
-          }
-        </div>
+          <div
+            class="s-card"
+            id="api-scope-sets"
+            data-testid="card-scope-sets-secrets"
+          >
+            <h3 class="s-card-title">API scope sets &amp; secret vault</h3>
+            @if (scopeSets().length > 0) {
+              <ul class="cap-scope-sets" aria-label="API scope sets">
+                @for (ss of scopeSets(); track ss.name) {
+                  <li
+                    class="cap-scope-set"
+                    [attr.data-testid]="'scope-set-row-' + ss.name"
+                  >
+                    <div class="cap-scope-set-main">
+                      <span class="s-mono cap-scope-set-name">{{
+                        ss.name
+                      }}</span>
+                      <span class="s-hint s-num"
+                        >{{ ss.scopes.length }}
+                        {{ ss.scopes.length === 1 ? "scope" : "scopes" }}</span
+                      >
+                      @if (ss.builtin) {
+                        <span class="status-pill neutral">built-in</span>
+                      }
+                      @if (ss.person) {
+                        <span class="status-pill blast">requires a person</span>
+                      }
+                      @if (ss.catalogue?.disabled) {
+                        <span class="status-pill error">disabled</span>
+                      }
+                      @for (
+                        legacy of ss.catalogue?.legacyInProcess ?? [];
+                        track legacy
+                      ) {
+                        <span class="status-pill blast s-mono"
+                          >in_process.{{ legacy }}</span
+                        >
+                      }
+                      @if (ss.deprecated) {
+                        <span
+                          class="status-pill blast"
+                          [attr.data-testid]="'scope-set-deprecated-' + ss.name"
+                          >deprecated</span
+                        >
+                      }
+                    </div>
+                    @if (ss.description) {
+                      <span class="s-hint">{{ ss.description }}</span>
+                    }
+                    @if (!ss.builtin) {
+                      <div class="s-row-actions">
+                        <button
+                          type="button"
+                          class="btn-text s-btn-sm"
+                          [attr.data-testid]="'remove-scope-set-' + ss.name"
+                          [attr.aria-label]="'Remove scope set ' + ss.name"
+                          [disabled]="
+                            !access.can('POST /api/api-scope-sets/delete') ||
+                            state.sectionLocked('capabilities')
+                          "
+                          (click)="askRemoveScopeSet(ss.name)"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    }
+                  </li>
+                }
+              </ul>
+            }
+            <div class="s-inline">
+              <input
+                class="s-input s-input-inline s-mono"
+                type="text"
+                aria-label="Scope set name"
+                data-testid="input-scope-set-name"
+                placeholder="ci-readonly"
+                [value]="newScopeSetName()"
+                (input)="newScopeSetName.set($any($event.target).value)"
+              />
+              <input
+                class="s-input s-input-inline s-mono"
+                type="text"
+                aria-label="Scopes list"
+                data-testid="input-scope-set-scopes"
+                placeholder="tasks:read,ci:read"
+                [value]="newScopeSetScopes()"
+                (input)="newScopeSetScopes.set($any($event.target).value)"
+              />
+              <button
+                type="button"
+                class="btn-tonal s-btn-sm"
+                data-testid="save-scope-set-btn"
+                [disabled]="
+                  !newScopeSetName().trim() ||
+                  !access.can('PUT /api/api-scope-sets') ||
+                  state.sectionLocked('capabilities')
+                "
+                (click)="saveScopeSet()"
+              >
+                Save scope set
+              </button>
+            </div>
+
+            <div class="s-field s-anchor" id="other-secrets">
+              <span class="s-label"
+                >Stored secrets ({{ secretsList().length }}) — write-only</span
+              >
+              <div class="s-inline">
+                <input
+                  class="s-input s-input-inline s-mono"
+                  type="text"
+                  aria-label="Secret name"
+                  data-testid="input-secret-name"
+                  placeholder="webhook-secret"
+                  [value]="secretName()"
+                  (input)="secretName.set($any($event.target).value)"
+                />
+                <input
+                  class="s-input s-input-inline s-mono"
+                  type="text"
+                  aria-label="Secret key"
+                  data-testid="input-secret-key"
+                  placeholder="token"
+                  [value]="secretKey()"
+                  (input)="secretKey.set($any($event.target).value)"
+                />
+                <textarea
+                  class="s-textarea s-input-inline s-mono s-masked"
+                  rows="1"
+                  autocomplete="off"
+                  spellcheck="false"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  aria-label="Secret value"
+                  data-testid="input-secret-value"
+                  placeholder="Secret value or PEM…"
+                  [value]="secretVal()"
+                  (input)="secretVal.set($any($event.target).value)"
+                ></textarea>
+                <button
+                  type="button"
+                  class="btn-tonal s-btn-sm"
+                  data-testid="store-secret-btn"
+                  [disabled]="
+                    !secretName().trim() ||
+                    !secretKey().trim() ||
+                    secretVal().length === 0 ||
+                    !secretsEnabled() ||
+                    !access.can('PUT /api/secrets/{secret}/{key}')
+                  "
+                  (click)="putSecret()"
+                >
+                  Store secret
+                </button>
+              </div>
+            </div>
+
+            @if (!secretsEnabled()) {
+              <span class="s-hint" data-testid="secrets-store-disabled"
+                >This server has no secret store configured, so nothing can be
+                stored here yet.</span
+              >
+            }
+            @if (!access.can("POST /api/secrets/redact")) {
+              <span class="s-hint" data-testid="secrets-redact-restricted">{{
+                access.deniedReason("POST /api/secrets/redact")
+              }}</span>
+            }
+          </div>
+        }
       }
 
       @case ("memory") {
@@ -1085,6 +1224,9 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   private readonly snackbar = inject(SnackbarService);
 
   readonly section = input.required<SettingsSectionId>();
+  // item is the one thing a section's address names under it: the
+  // capability server of /settings/capabilities/<id>.
+  readonly item = input<string | null>(null);
 
   protected readonly Number = Number;
   protected readonly Boolean = Boolean;
@@ -1098,6 +1240,11 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly newSessionTitle = signal("");
 
   protected readonly capServers = signal<CapabilityServerRow[]>([]);
+  // The in-process built-ins first, then the configurable built-ins,
+  // then the deployment's own (classic lists them in that order too).
+  protected readonly sortedCapServers = computed(() =>
+    sortCapServers(this.capServers()),
+  );
   protected readonly newServerId = signal("");
   protected readonly newServerUrl = signal("");
   protected readonly capTestNotice = signal("");
@@ -1131,6 +1278,10 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   ngOnChanges(changes: SimpleChanges): void {
     if (changes["section"] && !changes["section"].firstChange) {
+      this.loadForSection();
+    } else if (changes["item"] && !changes["item"].firstChange) {
+      // Back from a server's page, where it may have been disabled or
+      // removed: read the list again.
       this.loadForSection();
     }
   }
@@ -1581,6 +1732,76 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
         policy: { rules: this.policyRules() },
       });
       this.snackbar.show("Capability policy saved");
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  protected serverName(srv: CapabilityServerRow): string {
+    return capServerName(srv);
+  }
+
+  protected serverKind(srv: CapabilityServerRow): string {
+    return capServerKind(srv);
+  }
+
+  protected serverRuns(srv: CapabilityServerRow) {
+    return capServerRuns(srv);
+  }
+
+  protected serverSummary(srv: CapabilityServerRow) {
+    return summarize(capServerSummary(srv));
+  }
+
+  protected stateHelp(srv: CapabilityServerRow): string {
+    return capServerStateHelp(srv);
+  }
+
+  // askRemoveScopeSet counts the set's grants before anything is
+  // removed: every one of them grants nothing afterwards, so the
+  // confirmation lists them (classic ApiScopeSetsPanel's askRemove).
+  protected async askRemoveScopeSet(name: string): Promise<void> {
+    let holders: CapabilityHolder[] | null = null;
+    if (this.access.can("GET /api/api-scope-sets/usage")) {
+      try {
+        const usage = await this.api.get<
+          { name: string; holders?: CapabilityHolder[]; holderCount?: number }[]
+        >("GET /api/api-scope-sets/usage");
+        const own = (Array.isArray(usage) ? usage : []).find(
+          (u) => u.name === name,
+        );
+        holders = own?.holders ?? [];
+      } catch {
+        // The count is the warning's detail; removing works without it.
+      }
+    }
+    const grant = `https://grain.dev/capabilities/api#${name}`;
+    let message: string;
+    if (holders === null) {
+      message = `grain could not count what grants ${grant}. Every grant of it will grant nothing once it is removed.`;
+    } else if (holders.length === 0) {
+      message = `Nothing grants ${grant}.`;
+    } else {
+      const n = holders.length;
+      message = `${n} ${n === 1 ? "grant holds" : "grants hold"} ${grant}, and will grant nothing once it is removed:`;
+    }
+    this.confirmReq.set({
+      title: `Remove scope set ${name}?`,
+      message,
+      items: (holders ?? []).map((h) => holderLabel(h)),
+      accept: "Remove",
+      destructive: true,
+      run: () => this.removeScopeSet(name),
+    });
+  }
+
+  protected async removeScopeSet(name: string): Promise<void> {
+    try {
+      await this.api.post("POST /api/api-scope-sets/delete", undefined, {
+        name,
+      });
+      await this.loadCapabilities();
+      this.snackbar.show(`Removed scope set ${name}`);
     } catch (err) {
       this.state.recordError(err);
     }

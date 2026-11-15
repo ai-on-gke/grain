@@ -316,7 +316,15 @@ hand-written list: a choice the daemon cannot use stays listed as a `disabled`
 means grain's default shows blank with the server's `<key>Default` as its
 placeholder, and a cleared box saves that default again. A card a link points
 at carries an `id` (`#capability-policy`, `#other-secrets`), and the page
-scrolls to the URL's fragment once the section has rendered.
+scrolls to the URL's fragment once the section has rendered. One thing a section
+lists may have a page of its own under the section's address
+(`/settings/capabilities/<capability ID>`, the ID one encoded segment): its
+row's name links there, the page keeps the drawer and has a "← All …" link
+back, and an ID nothing answers to says so on that page rather than falling
+through to another destination. Capability servers are listed in-process
+built-ins first, then built-ins, then the deployment's own; a removal that
+leaves grants granting nothing lists them in the confirm dialog
+(`ConfirmRequest.items`) before anything is removed.
 
 ### Breakpoints
 
@@ -343,6 +351,7 @@ it rather than copy it.
 | Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
+| Info popover | `shared/info-popover.component.ts` (`<g-info-popover>`) | the (i) beside a chip or a cut-short summary whose meaning takes a sentence: opens on click, tap, Enter or Space, closes on Escape (focus back on the (i)), an outside click or a scroll, and stays inside the viewport |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
 | Director shaper | `director/director-shaper.component.ts` | in-sheet task shaping with `grain-draft` diff & Apply |
 | Session canvas | `sessions/session-canvas.component.ts` | coplanar right-hand Docs, sandboxed HTML Mocks, `grain-plan` DAG, Memory editor |

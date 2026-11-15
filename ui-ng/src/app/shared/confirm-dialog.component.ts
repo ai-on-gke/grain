@@ -39,6 +39,9 @@ export interface ConfirmRequest {
   scope?: Scope;
   // Gerund phrase for multi-repo/owner confirm tick (defaults to "approving work").
   actionVerb?: string;
+  // What the action touches, one line each, listed under the message: the
+  // grants a removal leaves granting nothing, say.
+  items?: readonly string[];
   run: () => Promise<unknown>;
 }
 
@@ -90,6 +93,13 @@ export function bypassConfirm(
       >
         <h2 id="confirm-title" class="modal-title">{{ c.title }}</h2>
         <p id="confirm-body" class="modal-body">{{ c.message }}</p>
+        @if (c.items?.length) {
+          <ul class="scope-list confirm-items" data-testid="confirm-items">
+            @for (item of c.items; track $index) {
+              <li>{{ item }}</li>
+            }
+          </ul>
+        }
         @if (c.scope; as s) {
           <ul class="scope-list" data-testid="confirm-scope">
             @for (line of lines(); track line) {

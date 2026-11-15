@@ -240,6 +240,10 @@ async function mountSettings(url: string, api = new FakeSettingsApi()) {
         [
           { path: "settings", component: SettingsPageComponent },
           { path: "settings/:section", component: SettingsPageComponent },
+          {
+            path: "settings/:section/:item",
+            component: SettingsPageComponent,
+          },
           { path: "repos/:owner/:name", children: [] },
           { path: "repos/:owner/:name/:tab", children: [] },
         ],
@@ -1381,6 +1385,66 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     expect(chip("broken-mcp").textContent?.trim()).toBe("failed");
     expect(chip("broken-mcp").classList.contains("error")).toBe(true);
     expect(chip("broken-mcp").getAttribute("title")).toBe("connection refused");
+  });
+
+  it("asks before removing a scope set, listing the grants that hold it, and removes it on Remove", async () => {
+    const api = new FakeSettingsApi();
+    const baseGet = api.get;
+    api.get = (key, params, query) => {
+      if (key === "GET /api/api-scope-sets") {
+        return Promise.resolve({
+          sets: [
+            { name: "grain/viewer", scopes: ["tasks:read"], builtin: true },
+            { name: "ops/triage", scopes: ["tasks:read"], deprecated: true },
+          ],
+        });
+      }
+      if (key === "GET /api/api-scope-sets/usage") {
+        return Promise.resolve([
+          {
+            name: "ops/triage",
+            holders: [{ kind: "task", id: "4", name: "Sort it", grant: "g" }],
+          },
+        ]);
+      }
+      return baseGet(key, params, query);
+    };
+    const { el, harness } = await mountSettings("/settings/capabilities", api);
+    const q = (id: string) =>
+      el.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+    expect(q("remove-scope-set-grain/viewer")).toBeNull();
+    expect(q("scope-set-deprecated-ops/triage")?.textContent?.trim()).toBe(
+      "deprecated",
+    );
+    q("remove-scope-set-ops/triage")!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 0));
+    harness.fixture.detectChanges();
+    expect(q("confirm-dialog")?.textContent).toContain("1 grant holds");
+    expect(q("confirm-items")?.textContent).toContain("Task #4 “Sort it”");
+    expect(
+      api.calls.some((c) => c.key === "POST /api/api-scope-sets/delete"),
+    ).toBe(false);
+    q("confirm-accept")!.click();
+    await harness.fixture.whenStable();
+    const del = api.calls.find(
+      (c) => c.key === "POST /api/api-scope-sets/delete",
+    );
+    expect(del?.body).toEqual({ name: "ops/triage" });
+  });
+
+  it("shows a capability server's own page at /settings/capabilities/<id>", async () => {
+    const { el } = await mountSettings(
+      `/settings/capabilities/${encodeURIComponent("github-mcp")}`,
+    );
+    expect(
+      el
+        .querySelector('[data-testid="capability-server-title"]')
+        ?.textContent?.trim(),
+    ).toBe("github-mcp");
+    expect(
+      el.querySelector('[data-testid="card-capability-servers"]'),
+    ).toBeNull();
   });
 
   it("sends the chosen host kind when saving a connection over an existing stored credential", async () => {
