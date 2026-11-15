@@ -24,7 +24,7 @@ import {
   signal,
 } from "@angular/core";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
-import type { Subscription } from "rxjs";
+import { combineLatest, type Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
 import { SettingsCodeComponent } from "./settings-code.component";
 import { SettingsComputeComponent } from "./settings-compute.component";
@@ -455,21 +455,23 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.subs.push(
-      this.route.paramMap.subscribe((pm) => {
-        this.routeSection.set(pm.get("section"));
-      }),
       this.route.queryParamMap.subscribe((qm) => {
         this.routeFilePath.set(qm.get("path") ?? "");
       }),
       // A #fragment (Settings -> Capabilities#capability-policy, the
       // links capability pickers give) or an old section name
       // (/settings/secrets) names a card inside the section: scroll it
-      // into view once the section's own data has rendered it.
-      this.route.fragment.subscribe((frag) => {
-        this.scrollToAnchor(
-          settingsAnchor(this.routeSection() ?? this.section(), frag),
-        );
-      }),
+      // into view once the section's own data has rendered it. The
+      // component is reused across sections, so watch the section and
+      // the fragment together: /settings/engine -> /settings/secrets
+      // changes only the section, and still has an anchor to reach.
+      combineLatest([this.route.paramMap, this.route.fragment]).subscribe(
+        ([pm, frag]) => {
+          const sec = pm.get("section");
+          this.routeSection.set(sec);
+          this.scrollToAnchor(settingsAnchor(sec ?? this.section(), frag));
+        },
+      ),
     );
     if (this.state.initialized() && this.state.config() !== null) {
       this.ready.set(true);
@@ -522,6 +524,8 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   protected selectSection(id: SettingsSectionId, ev: Event): void {
     ev.preventDefault();
+    // Leaving a section stops any scroll still chasing its anchor.
+    this.scrollToAnchor("");
     this.routeSection.set(id);
     void this.router.navigate(["/settings", id]);
   }

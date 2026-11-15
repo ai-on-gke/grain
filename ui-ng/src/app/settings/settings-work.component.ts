@@ -59,13 +59,19 @@ interface CapabilityServerRow {
   config?: CapabilityServerConfig;
   builtin?: unknown;
   inProcess?: { name?: string; summary?: string } | null;
-  status?: { attached?: boolean; error?: string; state?: string } | null;
+  status?: {
+    attached?: boolean;
+    error?: string;
+    reason?: string;
+    state?: string;
+  } | null;
 }
 
 // capServerState is the chip a server row shows: disabled when an
 // operator turned it off, otherwise the server's own status.state
 // ("attached" reads as enabled; needs-config / needs-hostd say what is
-// missing) rather than "enabled" for a server that cannot attach yet.
+// missing, in host wording; failed reads as an error) rather than
+// "enabled" for a server that cannot attach yet.
 export function capServerState(srv: CapabilityServerRow): {
   label: string;
   tone: string;
@@ -76,6 +82,13 @@ export function capServerState(srv: CapabilityServerRow): {
   if (st === "needs-config") {
     return { label: "needs-configuring", tone: "blast" };
   }
+  // needs-hostd:<selector> is wire format (daemon.NeedsHostd); the chip
+  // says host, as the classic CapabilityServersPanel's needsHostLabel does.
+  if (st === "needs-hostd" || st.startsWith("needs-hostd:")) {
+    const sel = st.slice("needs-hostd:".length).trim();
+    return { label: sel ? `needs host ${sel}` : "needs host", tone: "blast" };
+  }
+  if (st === "failed") return { label: "failed", tone: "error" };
   return { label: st, tone: st.startsWith("needs") ? "blast" : "neutral" };
 }
 
@@ -547,7 +560,9 @@ interface SecretMetaRow {
                         <span
                           [class]="'status-pill ' + chip.tone"
                           [attr.data-testid]="'cap-server-state-' + srv.id"
-                          [attr.title]="srv.status?.error || null"
+                          [attr.title]="
+                            srv.status?.error || srv.status?.reason || null
+                          "
                         >
                           {{ chip.label }}
                         </span>

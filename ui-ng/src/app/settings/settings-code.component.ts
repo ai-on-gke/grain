@@ -1592,6 +1592,9 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       payload = {
         credential: this.newGitCred().trim(),
         host,
+        // The server writes the credential's host record with this
+        // kind, and an empty one reads as github.
+        kind: this.newGitKind(),
         ...(scope ? { scope } : {}),
       };
     } else {
