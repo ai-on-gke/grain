@@ -374,6 +374,13 @@ export const routes: Routes = [
         (m) => m.SettingsPageComponent,
       ),
   },
+  {
+    path: "repos",
+    pathMatch: "full",
+    title: "Repos · grain",
+    loadComponent: () =>
+      import("./repos/repos-page.component").then((m) => m.ReposPageComponent),
+  },
   // The classic UI keeps a repository's tab at
   // /repos/<owner>/<name>/settings/<tab>; pasted under /next/ that read
   // as host "owner", owner "name", repo "settings" and loaded a repo
