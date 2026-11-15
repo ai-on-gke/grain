@@ -8,13 +8,17 @@ g-capped-markdown {
   min-width: 0;
 }
 
-/* About 20 lines, never more than a third of the window, so the actions
-   below a question and the task's details stay on screen. */
+/* About 20 lines, and never more than 40% of the pane it is in (cqh is
+   the nearest size container's height, the window's without one), so
+   the actions below a question and the task's details stay on screen.
+   It may shrink below that when its container squeezes it. */
 .capped-md {
   box-sizing: border-box;
   align-self: stretch;
+  flex: 0 1 auto;
   min-width: 0;
-  max-height: min(400px, 34dvh);
+  min-height: 0;
+  max-height: min(400px, 40cqh);
   overflow-y: auto;
   overscroll-behavior: contain;
   overflow-wrap: anywhere;
@@ -23,9 +27,11 @@ g-capped-markdown {
   color: var(--md-sys-color-on-surface);
 }
 
-/* Open: taller, still bounded, so the action row under it is still seen. */
+/* Open: no cap of its own; it takes what its container gives it (in the
+   Inbox, all the pane but the body's floor), so the action row under it
+   is still seen. */
 .capped-md.is-open {
-  max-height: min(60dvh, 960px);
+  max-height: none;
 }
 
 .capped-md:focus-visible {
