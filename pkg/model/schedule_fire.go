@@ -299,6 +299,13 @@ func (s *Store) fireSchedule(ctx context.Context, sched Schedule, now time.Time,
 			foldedOccurrences(sched, now, loc)); err != nil {
 			return firing, err
 		}
+		// The schedule is no longer starved. Its blocker closing clears
+		// the notification as well, but a workflow schedule fires over a
+		// review past workflowReviewHold and leaves it open.
+		if _, err := s.ClearNotification(ctx, NotificationSubject(FamilyScheduleStarved, sched.ID),
+			PrincipalString(SchedulePrincipal)); err != nil {
+			return firing, err
+		}
 	}
 	return firing, nil
 }

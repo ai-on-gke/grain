@@ -44,7 +44,7 @@ import (
 // (it is already the older of any task it ties with, so the queue's FIFO
 // order puts it first at that priority), the task is told why, and a
 // FamilyScheduleStarved notification is raised in the Inbox until it
-// closes.
+// closes or the schedule fires again (fireSchedule).
 const (
 	// ScheduleStarvedAfter is how long a held occurrence may wait on a
 	// never-started task before the schedule counts as starved.
@@ -116,9 +116,14 @@ func ScheduleStarved(occurrence, now time.Time, occurrences int) bool {
 // that has run, or finished into awaiting_reply for somebody to read, is
 // left alone by the queued and never-run checks below.
 //
+// A review is held only for workflowReviewHold, though, after which the
+// schedule fires over it and leaves it open; so the notification clears
+// when the schedule fires as well as when its task closes, and one open
+// for a different task than k's is replaced rather than kept.
+//
 // Every cycle may call it: the priority only ever rises, the comment is
 // written only when it does, and the notification is raised only while
-// none is open for the schedule.
+// none is open for the schedule's current blocker.
 func (s *Store) EscalateStarvedScheduleBlocker(ctx context.Context, sched Schedule, k ScheduleSkip,
 	now time.Time, loc *time.Location) (StarvedScheduleFiring, error) {
 
@@ -175,6 +180,18 @@ func (s *Store) EscalateStarvedScheduleBlocker(ctx context.Context, sched Schedu
 	open, err := s.OpenNotification(ctx, subject)
 	if err != nil {
 		return out, err
+	}
+	if open != nil && open.TaskID != k.TaskID {
+		// The blocker has changed since it was raised -- another task
+		// in the overlap group, or a later firing's review while an
+		// abandoned one is still open -- with no firing in between to
+		// clear it. RaiseNotification would only re-raise the open row,
+		// keeping the old task and its ClearsWhen, so clear it and raise
+		// one that names (and clears with) the task holding it now.
+		if _, err := s.ClearNotification(ctx, subject, PrincipalString(SchedulePrincipal)); err != nil {
+			return out, err
+		}
+		open = nil
 	}
 	if open == nil {
 		if _, err := s.RaiseNotification(ctx, Notification{

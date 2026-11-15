@@ -347,3 +347,135 @@ func TestStartedWorkflowScheduleReviewIsNotStarved(t *testing.T) {
 		t.Errorf("notification for a review that has started: %+v", n)
 	}
 }
+
+// workflowReview files a queued review of sched's firing at filed, the
+// way FileWorkflowReview leaves one, and records that firing as settled
+// by it.
+func workflowReview(t *testing.T, store *model.Store, sched model.Schedule, id string,
+	firedAt, filed time.Time) model.Task {
+	t.Helper()
+	ctx := t.Context()
+	review := filedTask(t, ctx, store, id, sched.Target)
+	review.Title = sched.Title
+	review.Origin = model.Origin{Attribution: model.Attribution{Actor: model.SchedulePrincipal},
+		Reason: model.ReasonSchedule}
+	review.Approval = &model.Attribution{Actor: model.SchedulePrincipal}
+	review.Tags = []string{model.ScheduleFiringTag(sched.ID)}
+	review.CreatedAt = &filed
+	review.Priority = model.DefaultTaskPriority
+	if err := store.PutTask(ctx, review); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutScheduledWorkflowRun(ctx, model.ScheduledWorkflowRun{
+		ScheduleID: sched.ID, Stem: "live-secrets", Repo: sched.Target, FiredAt: firedAt,
+		FinishedAt: &filed, Conclusion: "success", ReviewTaskID: review.ID,
+	}); err != nil {
+		t.Fatalf("recording the firing reviewed by %s: %v", id, err)
+	}
+	return review
+}
+
+// workflowReviewHold expires with the escalated review still open: the
+// schedule fires over it and leaves it open, so the notification must
+// clear on that firing rather than wait for a close that may never come,
+// and the next review to starve the schedule must get a notification of
+// its own rather than be masked by the abandoned one's.
+func TestStarvedWorkflowNotificationClearsWhenTheScheduleFiresOverTheReview(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	firstMorning := time.Date(2026, 11, 12, 5, 53, 0, 0, time.UTC)
+	templateID := model.WorkflowReviewTemplateID("live-secrets")
+	sched := model.Schedule{
+		ID: "live-secrets", Title: "Review live-secrets", Target: repo, TemplateID: &templateID,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 5*60 + 53},
+		Overlap:    model.OverlapSkip, Enabled: true,
+		NextRunAt: firstMorning.Add(24 * time.Hour), CreatedAt: firstMorning.Add(-24 * time.Hour),
+	}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatalf("filing schedule: %v", err)
+	}
+	busyQueue(t, store, "busy-9", 9)
+	first := workflowReview(t, store, sched, "review-1", firstMorning, firstMorning.Add(5*time.Minute))
+
+	if err := runScheduleOnly(t, store, firstMorning.Add(25*time.Hour)); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if n := starvedNotification(t, store, sched.ID); n == nil || n.TaskID != first.ID {
+		t.Fatalf("notification an hour into the hold = %+v, want one naming %s", n, first.ID)
+	}
+
+	// Three mornings after review-1 was filed the hold is over: the
+	// schedule fires over the review, which stays open.
+	thirdMorning := firstMorning.Add(72 * time.Hour)
+	if err := runScheduleOnly(t, store, thirdMorning.Add(10*time.Minute)); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	if st, err := store.State(ctx, first.ID); err != nil || st == model.StateClosed {
+		t.Fatalf("review-1 state after the schedule fired over it = %q (%v), want it left open", st, err)
+	}
+	if row, err := store.GetScheduledWorkflowRun(ctx, sched.ID); err != nil || row == nil || !row.FiredAt.After(firstMorning) {
+		t.Fatalf("workflow run after the hold expired = %+v (%v), want a new firing", row, err)
+	}
+	if n := starvedNotification(t, store, sched.ID); n != nil {
+		t.Fatalf("notification after the schedule fired again = %+v, want it cleared", n)
+	}
+
+	// That firing's review never starts either, and starves the next
+	// morning's occurrence while review-1 is still open.
+	second := workflowReview(t, store, sched, "review-2", thirdMorning, thirdMorning.Add(30*time.Minute))
+	if err := runScheduleOnly(t, store, thirdMorning.Add(25*time.Hour)); err != nil {
+		t.Fatalf("RunCycle: %v", err)
+	}
+	n := starvedNotification(t, store, sched.ID)
+	if n == nil {
+		t.Fatal("no notification for a later review starving the schedule")
+	}
+	if n.TaskID != second.ID || n.ClearsWhen == nil || n.ClearsWhen.Task != second.ID {
+		t.Errorf("notification = %+v (clears %+v), want one naming and clearing with %s", n, n.ClearsWhen, second.ID)
+	}
+}
+
+// The blocker of a held occurrence can change while its notification is
+// open, with no firing in between -- another never-started task in the
+// overlap group once the first one's hold ends. The notification follows
+// the task now holding the schedule, rather than keeping the first one's
+// task and clearing when that one closes.
+func TestStarvedScheduleNotificationFollowsANewBlocker(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	due := time.Date(2026, 11, 13, 5, 53, 0, 0, time.UTC)
+	sched := model.Schedule{
+		ID: "nightly", Title: "Nightly", Target: repo,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 5*60 + 53},
+		Overlap:    model.OverlapSkip, Enabled: true, NextRunAt: due, CreatedAt: due.Add(-48 * time.Hour),
+	}
+	if err := store.PutSchedule(ctx, sched); err != nil {
+		t.Fatalf("filing schedule: %v", err)
+	}
+	busyQueue(t, store, "busy-9", 9)
+	filedTask(t, ctx, store, "blocker-1", repo)
+	filedTask(t, ctx, store, "blocker-2", repo)
+
+	skip := func(task string) model.ScheduleSkip {
+		return model.ScheduleSkip{ScheduleID: sched.ID, Occurrence: due, Outcome: model.ScheduleSkipHeld,
+			Reason: model.SuppressedByOpenReview, TaskID: task}
+	}
+	now := due.Add(2 * time.Hour)
+	if out, err := store.EscalateStarvedScheduleBlocker(ctx, sched, skip("blocker-1"), now, time.UTC); err != nil || !out.Notified {
+		t.Fatalf("escalating blocker-1 = %+v, %v; want it notified", out, err)
+	}
+	out, err := store.EscalateStarvedScheduleBlocker(ctx, sched, skip("blocker-2"), now.Add(time.Minute), time.UTC)
+	if err != nil || !out.Notified {
+		t.Fatalf("escalating blocker-2 = %+v, %v; want it notified", out, err)
+	}
+	n := starvedNotification(t, store, sched.ID)
+	if n == nil || n.TaskID != "blocker-2" || n.ClearsWhen == nil || n.ClearsWhen.Task != "blocker-2" {
+		t.Fatalf("notification = %+v, want one naming and clearing with blocker-2", n)
+	}
+	// The same blocker again is the one notification, not a re-raise.
+	if out, err := store.EscalateStarvedScheduleBlocker(ctx, sched, skip("blocker-2"), now.Add(2*time.Minute), time.UTC); err != nil || out.Notified {
+		t.Fatalf("escalating blocker-2 again = %+v, %v; want no new notification", out, err)
+	}
+}

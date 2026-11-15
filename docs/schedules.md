@@ -1799,7 +1799,12 @@ skipped, so no release candidate was cut that day, and nothing said why.
   - A warning notification `pipeline.schedule-starved:<schedule id>`
     (`model.FamilyScheduleStarved`) names the schedule, the task (and
     holding schedule, when in an overlap group) and how long it has been
-    held. It is raised once while open, and cleared when the task closes.
+    held. It is raised once while open, and cleared when the task closes
+    or the schedule fires again -- a workflow schedule fires over a
+    review past `workflowReviewHold` and leaves the review open. If the
+    blocker changes while it is open (another task in the overlap group,
+    or a later review while an abandoned one is still open), it is
+    cleared and raised again naming the new task.
 - **Not done: admission.** A raised priority still waits for a free
   worker. `admission: bypass` would also start the task past a full
   worker pool. It is not applied automatically, because only a person may
