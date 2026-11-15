@@ -154,7 +154,7 @@ func run(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("ghcr-prune", flag.ContinueOnError)
 	registryFlag := fs.String("registry", "", "container registry to prune: docker.io or ghcr.io (default: from PACKAGE_PUBLISH_REGISTRY or docker.io)")
 	namespaceFlag := fs.String("namespace", "", "Docker Hub namespace when -registry=docker.io (default: from RELEASE_IMAGE_REPO or grainai)")
-	usernameFlag := fs.String("username", "", "Docker Hub login username when -registry=docker.io (default: DOCKERHUB_USERNAME, PACKAGE_PUBLISH_USERNAME, or grainai)")
+	usernameFlag := fs.String("username", "", "Docker Hub login username when -registry=docker.io: the user who owns a personal access token, or the organization for an organization access token (default: DOCKERHUB_USERNAME, PACKAGE_PUBLISH_USERNAME, or the namespace)")
 	owner := fs.String("owner", "", "GitHub owner of the source repository (and GHCR package owner when -registry=ghcr.io)")
 	repo := fs.String("repo", "", "GitHub repository name for live branch lookup (and GHCR package prefix when -registry=ghcr.io)")
 	packages := fs.String("packages", "grain,sandbox,sandbox-base,sandbox-k8s,sandbox-k8s-base,hub,registry", "comma-separated package names, relative to the repository")
