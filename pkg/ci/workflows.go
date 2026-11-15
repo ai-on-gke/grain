@@ -119,6 +119,10 @@ func init() {
 		IsRepoRead:   IsRepoReadCapability,
 		DeclaredOnly: declaredOnly,
 		Canonical:    model.CanonicalCIGrant,
+		Retired: func(id string) string {
+			msg, _, _ := model.RetiredGrantRefusal(id)
+			return msg
+		},
 	}
 }
 

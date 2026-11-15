@@ -465,6 +465,7 @@ interface StateRepoEntryDto {
                                 'DELETE /api/deployment/git-connections/{cred}'
                               ) || state.sectionLocked('git')
                             "
+                            [attr.data-testid]="'remove-git-conn-' + cred"
                             (click)="
                               confirmDeleteGitConnection(
                                 cred,
@@ -744,7 +745,7 @@ interface StateRepoEntryDto {
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="flush-ci-cache-btn"
-                (click)="flushCiCache()"
+                (click)="confirmFlushCiCache()"
               >
                 Flush CI job cache
               </button>
@@ -1736,6 +1737,19 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     } catch (err) {
       this.state.error.set(errText(err));
     }
+  }
+
+  // Flushing drops every repository's cached CI job state, so it asks
+  // first, as Caches' two flushes do.
+  protected confirmFlushCiCache(): void {
+    this.confirmReq.set({
+      title: "Flush CI job cache?",
+      message:
+        "Deletes the cached CI job state of every repository on this controller. The next CI run of each starts cold.",
+      accept: "Flush cache",
+      destructive: true,
+      run: () => this.flushCiCache(),
+    });
   }
 
   protected async flushCiCache(): Promise<void> {

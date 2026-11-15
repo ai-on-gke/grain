@@ -769,11 +769,19 @@ describe("ProcessesPageComponent (D-9)", () => {
   });
 
   it("preserves TemplateField metadata (label, default, options, required) across PATCH and launches via POST /api/tasks/from-template", async () => {
-    const harness = await RouterTestingHarness.create(
-      "/processes/templates?launch=1",
-    );
+    const harness = await RouterTestingHarness.create("/processes/templates");
     await flush(harness);
     const root = harness.routeNativeElement!;
+    root
+      .querySelector<HTMLElement>(
+        '[data-testid="tmpl-row-repo:template:acme/widgets:release-notes"]',
+      )!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLElement>('[data-testid="proc-launch-template-btn"]')!
+      .click();
+    await flush(harness);
 
     const launchDialog = root.querySelector(
       '[data-testid="launch-template-dialog"]',
@@ -1249,6 +1257,8 @@ describe("ProcessesPageComponent (D-9)", () => {
     )!;
     expect(offRow.textContent).toContain("next: suppressed");
     expect(offRow.textContent).not.toContain("2027-11-16");
+    (offRow as HTMLElement).click();
+    await flush(harness);
     const insp = root.querySelector('[data-testid="proc-inspector"]')!;
     expect(insp.textContent).toContain("Next: suppressed");
     expect(insp.textContent).not.toContain("2027-11-16");
@@ -1283,6 +1293,12 @@ describe("ProcessesPageComponent (D-9)", () => {
     // Template with required field and no default sends placeholder {{pkg}}
     await harness.navigateByUrl("/processes/templates");
     await flush(harness);
+    root
+      .querySelector<HTMLElement>(
+        '[data-testid="tmpl-row-tmpl-req-nodefault"]',
+      )!
+      .click();
+    await flush(harness);
     const tmplCompCall = api.calls.find(
       (c) =>
         c.route === "GET /api/templates/{id}/composition" &&
@@ -1314,5 +1330,31 @@ describe("ProcessesPageComponent (D-9)", () => {
     expect(
       root.querySelector('[data-testid="proc-inspector"]')!.textContent,
     ).toContain("Target: acme/widgets @ default branch");
+  });
+  it("lists a repository's declared triggers beside the schedules, linking its Advanced tab", async () => {
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    const row = root.querySelector<HTMLAnchorElement>(
+      '[data-testid="trigger-row-trigger:acme/widgets:.grain/triggers/docs.yml"]',
+    )!;
+    expect(row).not.toBeNull();
+    expect(row.getAttribute("href")).toBe("/repos/acme/widgets/advanced");
+    expect(row.textContent).toContain("docs.yml");
+    expect(row.textContent).toContain("on change");
+
+    // A trigger is never paused, so the Paused chip leaves it out.
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-filter-paused"]')!
+      .click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid^="trigger-row-"]')).toBeNull();
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-filter-triggers"]')!
+      .click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid^="trigger-row-"]')).not.toBeNull();
   });
 });

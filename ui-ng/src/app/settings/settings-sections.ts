@@ -446,6 +446,9 @@ const SECTION_ALIASES: Readonly<Record<string, SettingsSectionId>> = {
   accounts: "access",
   sandbox: "sandboxes",
   admin: "general",
+  // Model connections are a card on Models; classic Settings' old
+  // connections tab opened it too (docs/connections-and-models.md).
+  connections: "models",
 };
 
 // SECTION_ANCHORS is where an old link that now lands inside a bigger

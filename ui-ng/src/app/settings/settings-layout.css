@@ -424,3 +424,21 @@ a.settings-mobile-back {
     padding: 16px 16px 168px;
   }
 }
+
+/* Settings -> Hosts: the Invite hosts block at the head of the enrollment
+   codes card, with the selected code's join command. */
+.hd-invite {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.hd-invite .s-hint {
+  margin: 0;
+}
+
+.hd-invite-secret {
+  overflow-wrap: anywhere;
+  user-select: all;
+}

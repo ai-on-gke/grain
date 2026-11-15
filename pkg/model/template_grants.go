@@ -24,7 +24,7 @@ import (
 
 // TemplateWithinTask reports why tmpl hands out more than acting holds, or
 // nil when it does not: every one of the template's grants must be one
-// acting holds itself and none may be one only a person may give
+// acting holds itself (compared under HeldGrantKey) and none may be one only a person may give
 // (IsPersonOnlyGrant: a dangerous api grant, or priority-dispatch); every repository
 // it may push to must be one acting may push to (WriteTargetFor); every
 // repository it reads must be one acting may already fetch.
@@ -46,7 +46,7 @@ func TemplateWithinTask(acting Task, tmpl Template) error {
 	held := make([]string, 0, len(acting.Grants))
 	for _, g := range acting.Grants {
 		for _, c := range CanonicalLegacyGrants(g.Capability) {
-			held = append(held, CanonicalGrantKey(c))
+			held = append(held, HeldGrantKey(c))
 		}
 	}
 	for _, g := range tmpl.Grants {
@@ -57,7 +57,7 @@ func TemplateWithinTask(acting Task, tmpl Template) error {
 			if IsPersonOnlyGrant(needed) {
 				return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
 			}
-			if !slices.Contains(held, CanonicalGrantKey(needed)) {
+			if !slices.Contains(held, HeldGrantKey(needed)) {
 				return fmt.Errorf("template %s grants %s, which the agent's own task does not hold", tmpl.ID, g.Capability)
 			}
 		}
@@ -143,9 +143,9 @@ func IsDangerousGrant(name string) bool {
 // been edited since. Dropped names are returned beside the rest.
 func ReviewGrants(grants []Grant, reviewed Task) (kept []Grant, dropped []string) {
 	for _, g := range grants {
-		key := CanonicalGrantKey(g.Capability)
+		key := HeldGrantKey(g.Capability)
 		if IsPersonOnlyGrant(g.Capability) && !slices.ContainsFunc(reviewed.Grants, func(h Grant) bool {
-			return CanonicalGrantKey(h.Capability) == key
+			return HeldGrantKey(h.Capability) == key
 		}) {
 			dropped = append(dropped, g.Capability)
 			continue

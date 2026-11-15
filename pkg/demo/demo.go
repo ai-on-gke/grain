@@ -1674,6 +1674,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 				// so the template page shows a sized template.
 				Sandbox: model.SandboxShape{DiskGB: 100},
 			},
+			// A declared `push:` list (grain/task-2536), so the repository
+			// page's Advanced tab has an extra push ref to show.
+			Push: []model.RefPush{{Pattern: "refs/tags/nightly-*", Force: true}},
 		}},
 		Suites: []model.DeclaredSuiteFile{{
 			Path: model.SuiteDeclarationDir + "/smoke.yml",
