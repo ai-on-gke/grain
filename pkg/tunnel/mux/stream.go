@@ -252,14 +252,6 @@ func (s *Stream) reserveSend(want int, dl *time.Time) (int, error) {
 			if timer != nil {
 				timer.Stop()
 			}
-			// Data that arrived before the session ended is still the
-			// caller's: hand it over before reporting the close.
-			s.mu.Lock()
-			pending := len(s.buf) > 0
-			s.mu.Unlock()
-			if pending {
-				continue
-			}
 			return 0, s.mux.getCloseErr()
 		}
 		if timer != nil {
