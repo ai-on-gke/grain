@@ -1,0 +1,1 @@
+tasks: A=2 (1 core) B=3 (2 cores)
