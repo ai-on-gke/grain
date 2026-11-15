@@ -120,16 +120,10 @@ func isAssetPath(upath string) bool {
 	return hashedAssetExtensions[ext] || ext == ".map"
 }
 
-type cachedBundle struct {
-	once        sync.Once
-	raw         []byte
-	contentType string
-	strongETag  string
-	weakETag    string
-	err         error
-
-	gzipOnce sync.Once
-	gz       []byte
+type cachedGzipBundle struct {
+	once sync.Once
+	gz   []byte
+	err  error
 }
 
 type frontendAssets struct {
@@ -138,7 +132,7 @@ type frontendAssets struct {
 	staticNext       fs.FS
 	staticNextETags  map[string]string
 	handler          http.Handler
-	bundles          sync.Map // clean request path ("/next/<name>" or "/assets/<name>") -> *cachedBundle
+	gzipBundles      sync.Map // clean request path ("/next/<name>" or "/assets/<name>") -> *cachedGzipBundle
 	gzipComputations atomic.Int64
 }
 
@@ -260,69 +254,76 @@ func (s *Server) serveHashedFrontendBundle(w http.ResponseWriter, r *http.Reques
 	return true
 }
 
-// serveExemptBundle serves an exempt content-hashed bundle from a lazy
-// per-file cache keyed by rawPath, ignoring Range headers (always 200 with the
-// full body) and caching the gzipped representation on first gzip request so
-// unauthenticated callers cannot trigger repeated per-request compression or
-// multipart range work.
+// serveExemptBundle serves an exempt content-hashed bundle, ignoring Range
+// headers (always 200 with the full body), serving the identity variant
+// straight from fsys, and caching only the gzipped representation (computed
+// once on first gzip request, keyed by rawPath) so unauthenticated callers
+// cannot trigger repeated per-request compression, multipart range work, or
+// duplicate heap copies of raw bundles.
 func (fa *frontendAssets) serveExemptBundle(w http.ResponseWriter, r *http.Request, rawPath string, fsys fs.FS, relPath, precomputedETag string) {
-	v, _ := fa.bundles.LoadOrStore(rawPath, &cachedBundle{})
-	bundle := v.(*cachedBundle)
-	bundle.once.Do(func() {
-		data, readErr := fs.ReadFile(fsys, relPath)
-		if readErr != nil {
-			bundle.err = readErr
-			return
-		}
-		ct := mime.TypeByExtension(path.Ext(relPath))
-		if ct == "" {
-			ct = http.DetectContentType(data)
-		}
-		etag := precomputedETag
-		if etag == "" {
-			etag = etagOf(data)
-		}
-		bundle.raw = data
-		bundle.contentType = ct
-		bundle.strongETag = etag
-		if strings.HasPrefix(etag, "W/") {
-			bundle.weakETag = etag
-		} else {
-			bundle.weakETag = "W/" + etag
-		}
-	})
-	if bundle.err != nil {
-		w.Header().Set("Cache-Control", cacheControlNoStore)
-		http.Error(w, "reading embedded asset", http.StatusInternalServerError)
-		return
-	}
-
-	h := w.Header()
-	h.Set("Content-Type", bundle.contentType)
-	h.Set("Cache-Control", cacheControlImmutable)
-
-	body := bundle.raw
-	etag := bundle.strongETag
-	if acceptsGzip(r) {
-		bundle.gzipOnce.Do(func() {
+	var body []byte
+	wantGzip := acceptsGzip(r)
+	if wantGzip {
+		v, _ := fa.gzipBundles.LoadOrStore(rawPath, &cachedGzipBundle{})
+		entry := v.(*cachedGzipBundle)
+		entry.once.Do(func() {
+			raw, readErr := fs.ReadFile(fsys, relPath)
+			if readErr != nil {
+				entry.err = readErr
+				return
+			}
 			var buf bytes.Buffer
 			gz := gzipWriters.Get().(*gzip.Writer)
 			gz.Reset(&buf)
-			_, _ = gz.Write(bundle.raw)
+			_, _ = gz.Write(raw)
 			_ = gz.Close()
 			gzipWriters.Put(gz)
-			bundle.gz = bytes.Clone(buf.Bytes())
+			entry.gz = bytes.Clone(buf.Bytes())
 			fa.gzipComputations.Add(1)
 		})
-		body = bundle.gz
-		etag = bundle.weakETag
+		if entry.err != nil {
+			w.Header().Set("Cache-Control", cacheControlNoStore)
+			http.Error(w, "reading embedded asset", http.StatusInternalServerError)
+			return
+		}
+		body = entry.gz
+	} else {
+		raw, readErr := fs.ReadFile(fsys, relPath)
+		if readErr != nil {
+			w.Header().Set("Cache-Control", cacheControlNoStore)
+			http.Error(w, "reading embedded asset", http.StatusInternalServerError)
+			return
+		}
+		body = raw
+	}
+
+	ct := mime.TypeByExtension(path.Ext(relPath))
+	if ct == "" {
+		ct = http.DetectContentType(body)
+	}
+	strongETag := precomputedETag
+	if strongETag == "" && !wantGzip {
+		strongETag = etagOf(body)
+	}
+	etag := strongETag
+	if wantGzip && etag != "" && !strings.HasPrefix(etag, "W/") {
+		etag = "W/" + etag
+	}
+
+	h := w.Header()
+	h.Set("Content-Type", ct)
+	h.Set("Cache-Control", cacheControlImmutable)
+	setVaryAcceptEncoding(h)
+	if wantGzip {
 		h.Set("Content-Encoding", "gzip")
-		setVaryAcceptEncoding(h)
 	}
 	if etag != "" {
 		h.Set("ETag", etag)
 	}
-	if r.Header.Get("Range") == "" && etagMatches(r.Header.Get("If-None-Match"), etag) {
+	if r.Header.Get("Range") == "" && exemptETagMatches(r.Header.Get("If-None-Match"), etag) {
+		h.Del("Content-Type")
+		h.Del("Content-Length")
+		h.Del("Content-Encoding")
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
@@ -331,6 +332,22 @@ func (fa *frontendAssets) serveExemptBundle(w http.ResponseWriter, r *http.Reque
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(body)
 	}
+}
+
+// exemptETagMatches reports whether an If-None-Match header matches etag for
+// the active variant on the exempt path (the strong ETag for identity
+// responses, the weak "W/" ETag for gzip responses).
+func exemptETagMatches(header, etag string) bool {
+	if header == "" || etag == "" {
+		return false
+	}
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || candidate == etag {
+			return true
+		}
+	}
+	return false
 }
 
 func setVaryAcceptEncoding(h http.Header) {

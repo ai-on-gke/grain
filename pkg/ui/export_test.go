@@ -118,3 +118,21 @@ func FrontendGzipComputationsForTest(s *Server) int64 {
 	}
 	return fa.gzipComputations.Load()
 }
+
+// FrontendCachedGzipBytesForTest returns the cached gzip bytes stored for
+// rawPath in s's exempt bundle cache, or (nil, false) if rawPath is not cached.
+func FrontendCachedGzipBytesForTest(s *Server, rawPath string) ([]byte, bool) {
+	fa := s.frontend.Load()
+	if fa == nil {
+		return nil, false
+	}
+	v, ok := fa.gzipBundles.Load(rawPath)
+	if !ok {
+		return nil, false
+	}
+	entry := v.(*cachedGzipBundle)
+	if entry.err != nil {
+		return nil, false
+	}
+	return entry.gz, true
+}

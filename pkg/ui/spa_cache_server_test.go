@@ -530,6 +530,18 @@ func TestHashedFrontendBundleExemptionNeverCallsIdentityVerifier(t *testing.T) {
 	}
 }
 
+type readCountingFS struct {
+	fs.FS
+	readFiles atomic.Int64
+}
+
+func (c *readCountingFS) ReadFile(name string) ([]byte, error) {
+	if name == "chunk-OMVX5472.js" {
+		c.readFiles.Add(1)
+	}
+	return fs.ReadFile(c.FS, name)
+}
+
 func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 	ui.ResetIAPConfig()
 	t.Cleanup(ui.ResetIAPConfig)
@@ -544,14 +556,18 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 		"assets/app.js":            {Data: []byte(gatedAssetBody)},
 		"assets/index-co56kW-3.js": {Data: []byte(bundleBody)},
 	}
-	nextFS := fstest.MapFS{
-		"index.html":        {Data: []byte("<html>next</html>")},
-		"chunk-OMVX5472.js": {Data: []byte(bundleBody)},
+	countingNextFS := &readCountingFS{
+		FS: fstest.MapFS{
+			"index.html":        {Data: []byte("<html>next</html>")},
+			"chunk-OMVX5472.js": {Data: []byte(bundleBody)},
+		},
 	}
-	ui.SetFrontendFSForTest(srv, legacyFS, nextFS)
+	ui.SetFrontendFSForTest(srv, legacyFS, countingNextFS)
+	readsAfterInit := countingNextFS.readFiles.Load()
 
-	// 1. Identity variant when gzip is not accepted (lazy gzip cache not computed yet).
-	for _, acceptEnc := range []string{"", "identity", "gzip;q=0"} {
+	// 1. Identity variant when gzip is not accepted: served straight from the embedded FS
+	// (no raw bundle cached in memory), with Vary: Accept-Encoding and strong ETag.
+	for i, acceptEnc := range []string{"", "identity", "gzip;q=0"} {
 		hdrs := map[string]string{}
 		if acceptEnc != "" {
 			hdrs["Accept-Encoding"] = acceptEnc
@@ -563,6 +579,9 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 		if got := idRec.Header().Get("Content-Encoding"); got != "" {
 			t.Fatalf("identity GET (Accept-Encoding=%q): Content-Encoding = %q, want empty", acceptEnc, got)
 		}
+		if got := strings.Join(idRec.Header().Values("Vary"), ","); !strings.Contains(got, "Accept-Encoding") {
+			t.Fatalf("identity GET (Accept-Encoding=%q): Vary = %q, want Accept-Encoding", acceptEnc, got)
+		}
 		strongETag := idRec.Header().Get("ETag")
 		if !strings.HasPrefix(strongETag, `"`) || strings.HasPrefix(strongETag, "W/") {
 			t.Fatalf("identity GET (Accept-Encoding=%q): ETag = %q, want strong ETag", acceptEnc, strongETag)
@@ -570,14 +589,21 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 		if idRec.Body.String() != bundleBody {
 			t.Fatalf("identity GET (Accept-Encoding=%q): body mismatch (len=%d, want %d)", acceptEnc, idRec.Body.Len(), len(bundleBody))
 		}
+		if got := countingNextFS.readFiles.Load() - readsAfterInit; got != int64(i+1) {
+			t.Fatalf("identity GET #%d: fs.ReadFile count = %d, want %d (must read straight from fsys)", i+1, got, i+1)
+		}
 	}
 	if got := ui.FrontendGzipComputationsForTest(srv); got != 0 {
 		t.Fatalf("FrontendGzipComputationsForTest after identity requests = %d, want 0 (lazy gzip)", got)
+	}
+	if _, ok := ui.FrontendCachedGzipBytesForTest(srv, "/next/chunk-OMVX5472.js"); ok {
+		t.Fatal("FrontendCachedGzipBytesForTest after identity requests = true, want false (cache holds gzip bytes only)")
 	}
 
 	// Capture strong ETag of /next/chunk-OMVX5472.js for weak ETag comparison.
 	idRec := serveFrom(srv, networkAddr, http.MethodGet, "/next/chunk-OMVX5472.js", "", nil)
 	strongETag := idRec.Header().Get("ETag")
+	readsBeforeGzip := countingNextFS.readFiles.Load()
 
 	// 2. Gzip served from per-file cache with correct headers and identical bytes on a second request,
 	// and not gzipped a second time by withCompression.
@@ -603,6 +629,13 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 	if got := ui.FrontendGzipComputationsForTest(srv); got != 1 {
 		t.Fatalf("FrontendGzipComputationsForTest after first gzip GET = %d, want 1", got)
 	}
+	if got := countingNextFS.readFiles.Load() - readsBeforeGzip; got != 1 {
+		t.Fatalf("first gzip GET: fs.ReadFile count delta = %d, want 1", got)
+	}
+	cachedGz, ok := ui.FrontendCachedGzipBytesForTest(srv, "/next/chunk-OMVX5472.js")
+	if !ok || !bytes.Equal(cachedGz, gzRec1.Body.Bytes()) {
+		t.Fatalf("FrontendCachedGzipBytesForTest mismatch (ok=%v, len=%d, want %d)", ok, len(cachedGz), gzRec1.Body.Len())
+	}
 	// Decompress once: if withCompression had gzipped a second time, this would yield gzip bytes instead of bundleBody.
 	zr, err := gzip.NewReader(bytes.NewReader(gzRec1.Body.Bytes()))
 	if err != nil {
@@ -617,7 +650,7 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 		t.Fatalf("decompressed first gzip GET body mismatch (len=%d, want %d)", len(decompressed), len(bundleBody))
 	}
 
-	// Second gzip request for the same bundle must return identical bytes and headers without re-compressing.
+	// Second gzip request for the same bundle must return identical bytes and headers without re-reading or re-compressing.
 	gzRec2 := serveFrom(srv, networkAddr, http.MethodGet, "/next/chunk-OMVX5472.js", "", map[string]string{
 		"Accept-Encoding": "deflate, gzip;q=1",
 	})
@@ -639,8 +672,107 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 	if got := ui.FrontendGzipComputationsForTest(srv); got != 1 {
 		t.Fatalf("FrontendGzipComputationsForTest after second gzip GET = %d, want 1 (must serve from cache)", got)
 	}
+	if got := countingNextFS.readFiles.Load() - readsBeforeGzip; got != 1 {
+		t.Fatalf("second gzip GET: fs.ReadFile count delta = %d, want 1 (must serve from cache)", got)
+	}
 
-	// 3. Range requests (single and multi-range, identity and gzip) on an exempt bundle are ignored
+	// Subsequent identity request after gzip is cached still reads from fsys and returns exact identity bytes.
+	idAfterGz := serveFrom(srv, networkAddr, http.MethodGet, "/next/chunk-OMVX5472.js", "", nil)
+	if idAfterGz.Code != http.StatusOK || idAfterGz.Body.String() != bundleBody {
+		t.Fatalf("identity GET after gzip cached: status=%d len=%d, want 200 len=%d", idAfterGz.Code, idAfterGz.Body.Len(), len(bundleBody))
+	}
+	if got := countingNextFS.readFiles.Load() - readsBeforeGzip; got != 2 {
+		t.Fatalf("identity GET after gzip cached: fs.ReadFile count delta = %d, want 2", got)
+	}
+
+	// 3. 304 Not Modified on the exempt path: carries ETag, Cache-Control, and Vary,
+	// and omits Content-Type, Content-Length, and Content-Encoding; cross-variant ETags do not match.
+	condId := serveFrom(srv, networkAddr, http.MethodGet, "/next/chunk-OMVX5472.js", "", map[string]string{
+		"If-None-Match": strongETag,
+	})
+	if condId.Code != http.StatusNotModified {
+		t.Fatalf("conditional identity GET with strong ETag: status = %d, want 304", condId.Code)
+	}
+	if condId.Body.Len() != 0 {
+		t.Fatalf("conditional identity 304 body len = %d, want 0", condId.Body.Len())
+	}
+	for _, forbidden := range []string{"Content-Type", "Content-Length", "Content-Encoding"} {
+		if vals := condId.Header().Values(forbidden); len(vals) != 0 {
+			t.Fatalf("conditional identity 304 carried %s = %v, want absent", forbidden, vals)
+		}
+	}
+	if got := condId.Header().Get("ETag"); got != strongETag {
+		t.Fatalf("conditional identity 304 ETag = %q, want %q", got, strongETag)
+	}
+	if got := condId.Header().Get("Cache-Control"); got != "private, max-age=31536000, immutable" {
+		t.Fatalf("conditional identity 304 Cache-Control = %q, want immutable", got)
+	}
+	if got := strings.Join(condId.Header().Values("Vary"), ","); !strings.Contains(got, "Accept-Encoding") {
+		t.Fatalf("conditional identity 304 Vary = %q, want Accept-Encoding", got)
+	}
+
+	condGz := serveFrom(srv, networkAddr, http.MethodGet, "/next/chunk-OMVX5472.js", "", map[string]string{
+		"Accept-Encoding": "gzip",
+		"If-None-Match":   wantWeakETag,
+	})
+	if condGz.Code != http.StatusNotModified {
+		t.Fatalf("conditional gzip GET with weak ETag: status = %d, want 304", condGz.Code)
+	}
+	if condGz.Body.Len() != 0 {
+		t.Fatalf("conditional gzip 304 body len = %d, want 0", condGz.Body.Len())
+	}
+	for _, forbidden := range []string{"Content-Type", "Content-Length", "Content-Encoding"} {
+		if vals := condGz.Header().Values(forbidden); len(vals) != 0 {
+			t.Fatalf("conditional gzip 304 carried %s = %v, want absent", forbidden, vals)
+		}
+	}
+	if got := condGz.Header().Get("ETag"); got != wantWeakETag {
+		t.Fatalf("conditional gzip 304 ETag = %q, want %q", got, wantWeakETag)
+	}
+	if got := condGz.Header().Get("Cache-Control"); got != "private, max-age=31536000, immutable" {
+		t.Fatalf("conditional gzip 304 Cache-Control = %q, want immutable", got)
+	}
+	if got := strings.Join(condGz.Header().Values("Vary"), ","); !strings.Contains(got, "Accept-Encoding") {
+		t.Fatalf("conditional gzip 304 Vary = %q, want Accept-Encoding", got)
+	}
+
+	// Cross-variant If-None-Match must NOT return 304:
+	// - Identity ETag sent with Accept-Encoding: gzip must return 200 with the gzip variant.
+	gzWithStrongETag := serveFrom(srv, networkAddr, http.MethodGet, "/next/chunk-OMVX5472.js", "", map[string]string{
+		"Accept-Encoding": "gzip",
+		"If-None-Match":   strongETag,
+	})
+	if gzWithStrongETag.Code != http.StatusOK {
+		t.Fatalf("gzip GET with identity strong ETag: status = %d, want 200", gzWithStrongETag.Code)
+	}
+	if got := gzWithStrongETag.Header().Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("gzip GET with identity strong ETag: Content-Encoding = %q, want gzip", got)
+	}
+	if got := gzWithStrongETag.Header().Get("ETag"); got != wantWeakETag {
+		t.Fatalf("gzip GET with identity strong ETag: ETag = %q, want %q", got, wantWeakETag)
+	}
+	if !bytes.Equal(gzWithStrongETag.Body.Bytes(), gzRec1.Body.Bytes()) {
+		t.Fatal("gzip GET with identity strong ETag: body mismatch")
+	}
+
+	// - Gzip W/ ETag sent without Accept-Encoding: gzip must return 200 with the identity variant.
+	idWithWeakETag := serveFrom(srv, networkAddr, http.MethodGet, "/next/chunk-OMVX5472.js", "", map[string]string{
+		"If-None-Match": wantWeakETag,
+	})
+	if idWithWeakETag.Code != http.StatusOK {
+		t.Fatalf("identity GET with gzip weak ETag: status = %d, want 200", idWithWeakETag.Code)
+	}
+	if got := idWithWeakETag.Header().Get("Content-Encoding"); got != "" {
+		t.Fatalf("identity GET with gzip weak ETag: Content-Encoding = %q, want empty", got)
+	}
+	if got := idWithWeakETag.Header().Get("ETag"); got != strongETag {
+		t.Fatalf("identity GET with gzip weak ETag: ETag = %q, want %q", got, strongETag)
+	}
+	if idWithWeakETag.Body.String() != bundleBody {
+		t.Fatal("identity GET with gzip weak ETag: body mismatch")
+	}
+
+	// 4. Range requests (single and multi-range, identity and gzip) on an exempt bundle are ignored
 	// and always return 200 OK with the full body.
 	for _, rangeHdr := range []string{"bytes=0-3", "bytes=0-3,5-8"} {
 		rangeId := serveFrom(srv, networkAddr, http.MethodGet, "/next/chunk-OMVX5472.js", "", map[string]string{
@@ -680,7 +812,7 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 		t.Fatalf("FrontendGzipComputationsForTest after Range gzip GETs = %d, want 1", got)
 	}
 
-	// 4. Gated paths keep their behaviour unchanged: refused without credentials, and honouring Range
+	// 5. Gated paths keep their behaviour unchanged: refused without credentials, and honouring Range
 	// and withCompression when authenticated.
 	unauthGated := serveFrom(srv, networkAddr, http.MethodGet, "/assets/app.js", "", map[string]string{
 		"Range": "bytes=0-3",
