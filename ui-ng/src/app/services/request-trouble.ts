@@ -37,15 +37,6 @@ export const SUSTAINED_MS = 30_000;
 // POLL_BACKOFF_MAX_MS caps a failing poll's backoff.
 export const POLL_BACKOFF_MAX_MS = 60_000;
 
-// isVerifierUnavailable is the daemon's own 503 for "the sign-in
-// verifier in front of me could not be reached" (pkg/ui
-// principalrefusal.go's verifier_unavailable): a transient that retries
-// clear, never a refusal of who the caller is.
-export function isVerifierUnavailable(err: unknown): boolean {
-  const e = err as { status?: number; error?: { code?: string } };
-  return e?.status === 503 && e?.error?.code === "verifier_unavailable";
-}
-
 // retryAfterMs is the delay a failed response's Retry-After header asks
 // for, in milliseconds, or null when it names none.
 export function retryAfterMs(err: unknown, now = Date.now()): number | null {

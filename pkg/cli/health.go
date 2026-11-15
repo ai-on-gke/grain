@@ -179,6 +179,29 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 		fmt.Println()
 	}
+	// Base branches that have stopped publishing (model.BaseBranchPublishing,
+	// grain/task-511), and whether a release triage task holds them --
+	// which is what holds a `skip-when: publishing-held` schedule. The
+	// response carried them, System → Health showed them, and this printer
+	// said "no counters" over a held release train
+	// (docs/test-runs/2026-11-15-release-train-publishing-held.md, F1).
+	// A WARNING: a release that publishes nothing holds no merge.
+	if len(h.BaseBranchPublishing) > 0 {
+		printed = true
+		fmt.Println("WARNING: base branches publishing nothing:")
+		for _, p := range h.BaseBranchPublishing {
+			branch := p.Branch
+			if branch == "" {
+				branch = "(default branch)"
+			}
+			state := "not held"
+			if p.Gated && p.TriageTaskID != "" {
+				state = "held by release triage task " + p.TriageTaskID
+			}
+			fmt.Printf("  %s %s (%s): %s\n", p.Repo, branch, state, p.Detail)
+		}
+		fmt.Println()
+	}
 	// Tasks resume_later deferred on a CI verdict grain has not seen yet:
 	// the orchestrator's backstop wakes them in the end, but a wait this
 	// old usually means a verdict grain is failing to read.

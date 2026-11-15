@@ -67,6 +67,7 @@ import { CustomizeNavDialogComponent } from "./shell/customize-nav-dialog.compon
 import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
 import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
+import { NavProgressComponent } from "./shell/nav-progress.component";
 import { NextUpComponent } from "./shell/next-up.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
 
@@ -159,6 +160,7 @@ export class DeferErrorDirective implements OnInit {
     DeferErrorDirective,
     SnackbarComponent,
     NewTaskSheetComponent,
+    NavProgressComponent,
     NextUpComponent,
     DispatchBannerComponent,
     HelpDialogComponent,
@@ -173,6 +175,7 @@ export class DeferErrorDirective implements OnInit {
     "(document:keydown)": "onGlobalKey($event)",
   },
   template: `
+    <g-nav-progress />
     <div class="app-shell">
       <nav
         class="nav-rail"
@@ -973,7 +976,6 @@ export class AppComponent implements OnInit, OnDestroy {
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
   private readonly injector = inject(Injector);
-  private readonly usageStatus = signal<UsagePauseInput | null>(null);
 
   protected readonly icons = ICONS;
   protected readonly rosettePath = CHLADNI_ROSETTE_PATH;
@@ -1093,7 +1095,7 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly dispatchBanner = computed(() =>
     summarizeDispatchStatus(
       this.access.rawConfig(),
-      this.usageStatus(),
+      this.access.usage(),
       this.access.clockNow(),
     ),
   );
@@ -1336,7 +1338,6 @@ export class AppComponent implements OnInit, OnDestroy {
           .get<UsagePauseInput>("GET /api/usage")
           .catch(() => null);
         if (usage && ("warnings" in usage || "scopes" in usage)) {
-          this.usageStatus.set(usage);
           this.access.setUsage(usage);
         }
       }

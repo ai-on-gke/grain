@@ -1574,7 +1574,7 @@ func (s *Store) listTasks(ctx context.Context, where string) ([]Task, error) {
 	for i := range out {
 		ptrs[i] = &out[i]
 	}
-	if err := hydrateTasks(ctx, s.db, ptrs); err != nil {
+	if err := hydrateTasks(ctx, s.db, ptrs, where); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -2079,7 +2079,7 @@ func (s *Store) MergeQueueRepairing(ctx context.Context) (map[string]bool, error
 }
 
 func hydrate(ctx context.Context, q querier, t *Task) error {
-	return hydrateTasks(ctx, q, []*Task{t})
+	return hydrateTasks(ctx, q, []*Task{t}, "")
 }
 
 // hydrateTasks fills in what hangs off each of tasks -- its reads,
@@ -2091,7 +2091,15 @@ func hydrate(ctx context.Context, q querier, t *Task) error {
 // six seconds on Postgres for every rebuild of GET /api/tasks (grain
 // task 5812). Each query keeps its ORDER BY, so a task's own rows come
 // back in the order they always did.
-func hydrateTasks(ctx context.Context, q querier, tasks []*Task) error {
+//
+// where is the filter listTasks chose tasks with, over `task` AS `t`,
+// or "" for every task. A filtered list bounds each child query by it
+// too, so ListOpenTasks reads the rows of the sixty open tasks it
+// returns rather than those of the 5,700 closed ones beside them
+// (review 5882). The filter is evaluated again by each child query, so
+// a task that closes between the list query and its children's comes
+// back without them; it is gone from the open list on the next read.
+func hydrateTasks(ctx context.Context, q querier, tasks []*Task, where string) error {
 	if len(tasks) == 0 {
 		return nil
 	}
@@ -2099,9 +2107,12 @@ func hydrateTasks(ctx context.Context, q querier, tasks []*Task) error {
 	for _, t := range tasks {
 		byID[t.ID] = t
 	}
-	where, args := "", any(nil)
-	if len(tasks) == 1 {
+	args := any(nil)
+	switch {
+	case len(tasks) == 1:
 		where, args = " WHERE `task_id` = ?", tasks[0].ID
+	case where != "":
+		where = " WHERE `task_id` IN (SELECT `t`.`id` FROM `task` AS `t`" + where + ")"
 	}
 	if err := each(ctx, q,
 		"SELECT `task_id`,`owner`,`name` FROM `task_read`"+where+" ORDER BY `owner`,`name`",

@@ -17,7 +17,6 @@ import {
   POLL_BACKOFF_MAX_MS,
   ReadTrouble,
   SUSTAINED_MS,
-  isVerifierUnavailable,
   retryAfterMs,
 } from "./request-trouble";
 
@@ -65,7 +64,7 @@ describe("ReadTrouble", () => {
   });
 });
 
-describe("retryAfterMs and isVerifierUnavailable", () => {
+describe("retryAfterMs", () => {
   it("reads seconds and dates, and nothing else", () => {
     expect(retryAfterMs({ headers: headers({ "Retry-After": "5" }) })).toBe(
       5000,
@@ -80,15 +79,5 @@ describe("retryAfterMs and isVerifierUnavailable", () => {
       ),
     ).toBe(10000);
     expect(retryAfterMs({})).toBeNull();
-  });
-
-  it("knows the daemon's verifier_unavailable 503", () => {
-    expect(
-      isVerifierUnavailable({
-        status: 503,
-        error: { code: "verifier_unavailable" },
-      }),
-    ).toBe(true);
-    expect(isVerifierUnavailable({ status: 503, error: {} })).toBe(false);
   });
 });
