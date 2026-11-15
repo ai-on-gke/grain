@@ -300,11 +300,19 @@ every scope is also reported over the last 7 days, beside its interval:
   scope): while it is in force the week is spent, and the meters say *Weekly
   limit reached* with its reset rather than an empty interval. A pause on
   any other refusal has `pauseHorizon: "interval"`.
-- **Weekly reset and run-out** (`weeklyResetAt`, `weeklyRunsOutAt`). A known
-  weekly limit also bounds *Sustains*: the scope sustains the smaller of what
-  its interval and its week have left.
+- **Weekly reset and run-out** (`weeklyResetAt`, `weeklyRunsOutAt`). The
+  weekly quota resets on a fixed weekly cycle, so once a learned weekly reset
+  has passed the next is taken as a week after it. A known weekly limit also
+  bounds *Sustains*: the scope sustains the smaller of what its interval and
+  its week have left, over the hours to each one's reset.
 
-Warnings say which limit they are about: "default model opus on claude hit
+Runs are read back over at least a week for these figures, but the per-run
+averages behind *Sustains* (tokens per worker-hour, average tokens per run)
+and the deployment rollup still look back only a day (or the longest
+interval window), so week-old runs do not move the interval's estimate.
+
+Warnings say which limit they are about, and where both would run out
+before their resets, the one that runs out first: "default model opus on claude hit
 its weekly limit and is paused until Nov 16 03:00 UTC", "... hit its 5h
 interval limit and is paused until 14:00 UTC", "... runs out of its weekly
 limit in ~11h, before its weekly reset".

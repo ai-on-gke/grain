@@ -111,10 +111,18 @@ func TestLearnedWeeklyCapacityBoundsTheScope(t *testing.T) {
 	if s.Limit != 50000000 || s.WeeklyLimit != 2000000 || s.WeeklyLimitSource != "learned" || s.WeeklyUsed != 900000 || s.WeeklyRemaining != 1100000 {
 		t.Fatalf("scope = %+v", s)
 	}
-	// 1.1M left of the week at 450k per worker-hour over 7 days is ~0
-	// workers, far below the interval's estimate.
-	if s.SustainableWorkers == nil || *s.SustainableWorkers != 0 {
-		t.Fatalf("sustainable = %v, want the weekly bound 0", s.SustainableWorkers)
+	// The weekly reset 6 days ago puts the next one a day away. 1.1M left
+	// of the week at 100k per worker-hour (the last day's run; the
+	// average does not reach back a week) over that day is 0.5 workers,
+	// far below the interval's estimate.
+	if s.WeeklyResetAt == nil || !s.WeeklyResetAt.Equal(now.Add(24*time.Hour)) || !s.WeeklyWindowStart.Equal(now.Add(-6*24*time.Hour)) {
+		t.Fatalf("weekly reset %v from %v, want now+1d from now-6d", s.WeeklyResetAt, s.WeeklyWindowStart)
+	}
+	if s.SustainableWorkers == nil || *s.SustainableWorkers != 0.5 {
+		t.Fatalf("sustainable = %v, want the weekly bound 0.5", s.SustainableWorkers)
+	}
+	if s.AvgTokensPerRun != 100000 {
+		t.Fatalf("avg tokens per run = %v, want the last day's 100k", s.AvgTokensPerRun)
 	}
 	if s.WeeklyRunsOutAt == nil || !s.WeeklyRunsOutAt.Equal(now.Add(11*time.Hour)) {
 		t.Fatalf("weekly runs out at %v, want now+11h", s.WeeklyRunsOutAt)
@@ -126,5 +134,50 @@ func TestLearnedWeeklyCapacityBoundsTheScope(t *testing.T) {
 	in.Capacities[1].ResetAt = now.Add(-24 * time.Hour)
 	if s := Compute(in).Scopes[0]; s.WeeklyUsed != 100000 || !s.WeeklyWindowStart.Equal(now.Add(-24*time.Hour)) {
 		t.Fatalf("after a weekly reset: %+v", s)
+	}
+}
+
+// The interval running out first does not silence the week when the
+// interval resets before it runs out: only a horizon that warns competes.
+func TestWeeklyRunOutWarnsWhenTheIntervalResetsFirst(t *testing.T) {
+	in := Input{
+		Now: now, MaxWorkers: 6,
+		Runs: []model.RunUsage{run("a", "conn", "opus", 30*time.Minute, 1000000)},
+		Capacities: []model.UsageCapacity{
+			{Connection: "conn", Model: "opus", Tokens: 5000000, Window: DefaultWindow, ResetAt: now.Add(time.Hour)},
+			{Connection: "conn", Model: "opus" + weeklyCapacitySuffix, Tokens: 21000000, Window: WeeklyWindow, ResetAt: now.Add(3 * 24 * time.Hour)},
+		},
+		DefaultModels: []string{"opus"},
+	}
+	rep := Compute(in)
+	s := rep.Scopes[0]
+	// Interval: 4M left at 1M/h runs out in 4h, after its reset in 1h.
+	// Week: 20M left runs out in 20h, days before its reset.
+	if s.RunsOutAt == nil || !s.RunsOutAt.Equal(now.Add(4*time.Hour)) || s.WeeklyRunsOutAt == nil || !s.WeeklyRunsOutAt.Equal(now.Add(20*time.Hour)) {
+		t.Fatalf("runs out at %v, weekly %v", s.RunsOutAt, s.WeeklyRunsOutAt)
+	}
+	if len(rep.Warnings) != 1 || !strings.Contains(rep.Warnings[0], "runs out of its weekly limit in ~20h, before its weekly reset") {
+		t.Fatalf("warnings = %q", rep.Warnings)
+	}
+}
+
+// Raising the lookback to a week for the weekly horizon leaves the
+// interval's per-run averages, and so its estimate, on the last day.
+func TestWeekOldRunsDoNotMoveTheIntervalEstimate(t *testing.T) {
+	recent := []model.RunUsage{run("a", "conn", "opus", 30*time.Minute, 100000)}
+	in := Input{
+		Now: now, MaxWorkers: 20, Runs: recent,
+		Settings: model.UsageSettings{Budgets: []model.TokenBudget{budget("conn", "opus", 1000000, "5h")}},
+	}
+	before := Compute(in)
+	in.Runs = append(append([]model.RunUsage{}, recent...), run("old", "conn", "opus", 3*24*time.Hour, 5000000))
+	after := Compute(in)
+	b, a := before.Scopes[0], after.Scopes[0]
+	if *a.SustainableWorkers != *b.SustainableWorkers || a.AvgTokensPerRun != b.AvgTokensPerRun || after.Rollup.Runs != 1 {
+		t.Fatalf("a 3-day-old run moved the interval: sustainable %v -> %v, avg %v -> %v, rollup %d runs",
+			*b.SustainableWorkers, *a.SustainableWorkers, b.AvgTokensPerRun, a.AvgTokensPerRun, after.Rollup.Runs)
+	}
+	if a.WeeklyUsed != 5100000 {
+		t.Fatalf("weekly used = %d, want the old run counted in the week", a.WeeklyUsed)
 	}
 }
