@@ -23,7 +23,11 @@ import { test, expect } from "./fixtures.js";
 //   - a paused task that was also stopped offers one Resume, not a second
 //     that calls Retry, which the server always refuses while paused;
 //   - a dependency chip says the state of the task it waits on, and its
-//     title on hover.
+//     title on hover;
+//   - the goal editor reads the goal it is editing (the task row's
+//     camelCase onLimit, not the declaration's on_limit), so saving it
+//     again does not quietly turn "notify" back into "hold", and Clear
+//     goal leaves no stale Goal line behind.
 
 async function taskByTitle(demoServer, accessCode, title) {
   const res = await fetch(`${demoServer}/api/tasks?fields=list`, {
@@ -143,4 +147,52 @@ test("a dependency chip says its task's state, and its title on hover", async ({
     .getByRole("button", { name: `Remove dependency #${dep.id}` })
     .click();
   await expect(chip).toHaveCount(0);
+});
+
+test("the goal editor keeps a goal's at-limit choice across a re-save, and Clear goal clears it", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  const t = await taskByTitle(
+    demoServer,
+    accessCode,
+    "Extract pagination query helper",
+  );
+  const goalOf = async () => {
+    const res = await fetch(`${demoServer}/api/tasks/${t.id}`, {
+      headers: { Authorization: `Bearer ${accessCode}` },
+    });
+    return (await res.json()).goal ?? null;
+  };
+  const pick = async (testid, label) => {
+    await page.getByTestId(testid).click();
+    await page.getByRole("option", { name: label }).click();
+  };
+  await page.goto(`/next/task/${t.id}`);
+
+  await page.getByTestId("act-edit").click();
+  await pick("edit-goal-kind", "Base branch green");
+  await pick("edit-goal-on-limit", "Notify & back off");
+  await page.getByTestId("edit-goal-save").click();
+  await expect.poll(async () => (await goalOf())?.onLimit).toBe("notify");
+
+  await page.reload();
+  await page.getByTestId("act-edit").click();
+  await expect(page.getByTestId("edit-goal-on-limit")).toContainText(
+    "Notify & back off",
+  );
+  await page.getByTestId("edit-goal-save").click();
+  await expect(page.getByTestId("edit-goal-save")).toBeEnabled();
+  await page.waitForTimeout(500);
+  const resaved = await goalOf();
+  expect(resaved?.kind).toBe("base-green");
+  expect(resaved?.onLimit).toBe("notify");
+
+  await page.getByTestId("edit-goal-clear").click();
+  await expect.poll(goalOf).toBeNull();
+  await page.reload();
+  await expect(
+    page.getByRole("definition").filter({ hasText: "base-green" }),
+  ).toHaveCount(0);
 });

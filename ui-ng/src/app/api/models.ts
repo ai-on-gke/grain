@@ -177,11 +177,26 @@ export interface GoalDecl {
   max_stall?: string;
 }
 
-export interface TaskGoalView extends GoalDecl {
+// TaskGoalView is a task's goal as GET /api/tasks/{id} returns it: the
+// task_goal row (model.TaskGoal), whose fields are camelCase -- unlike
+// GoalDecl, the snake_case body PUT /api/tasks/{id}/goal takes.
+export interface TaskGoalView {
+  taskId?: string;
+  kind: string;
+  spec: GoalSpec;
+  onMet?: string;
+  onLimit?: string;
+  declaredBy?: string;
+  declaredAt?: string;
   metAt?: string;
-  limitNotifiedAt?: string;
-  resumesWithoutProgress?: number;
+  evidence?: string;
   outcome?: string;
+  progressAt?: string;
+  resumesSinceProgress?: number;
+  maxResumes?: number;
+  // A Go time.Duration: nanoseconds.
+  maxStall?: number;
+  limitNotifiedAt?: string;
   [key: string]: unknown;
 }
 
