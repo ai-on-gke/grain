@@ -18,6 +18,7 @@ import {
   Component,
   ElementRef,
   HostListener,
+  Injector,
   NgZone,
   type OnDestroy,
   type OnInit,
@@ -37,6 +38,7 @@ import { SnackbarService } from "../services/snackbar.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { ViewFilter } from "../services/view-filter.service";
 import { errorText } from "../sessions/session-helpers";
+import { formatStamp } from "../shared/dispatch-status";
 import { ActorChipComponent } from "../shared/actor-chip.component";
 import {
   ConfirmDialogComponent,
@@ -54,6 +56,8 @@ import { CompositionViewComponent } from "./composition-view.component";
 import {
   type Composition,
   type CreateScheduleRequest,
+  type DerivedRuns,
+  type ProcessSort,
   type CreateSuiteRequest,
   type DeclarationAcceptanceView,
   type ProcessTab,
@@ -65,12 +69,18 @@ import {
   type Template,
   type TemplateField,
   type UpdateScheduleRequest,
+  PROCESS_SORTS,
   buildSuiteRunPasses,
+  derivedRuns,
   describeSuiteMode,
   formatCadence,
   formatScheduleNextRun,
   isEventTrigger,
+  movedOrder,
+  parseProcessSort,
+  scheduleKindOf,
   skipFolded,
+  sortProcessRows,
   suppressionReasonLabel,
   scheduleStatusBadge,
   suiteRunBadge,
@@ -124,6 +134,36 @@ const CADENCE_KINDS: readonly { id: string; label: string }[] = [
 type SchedFilter = "all" | "active" | "paused" | "triggers" | "suppressed";
 type TmplFilter = "all" | "deployment" | "declared" | "system";
 type SuitesPaneView = "suites" | "runs";
+type OrderedList = "schedules" | "templates" | "suites";
+
+// The custom order is browser state, kept under the classic Processes
+// page's own key (ui/src/listOrder.js, list "processes") with its row
+// keys ("schedule:<id>", "template:<id>", "suite:<id>"), so a row moved
+// on either page sits in the same place on the other.
+const ORDER_KEY = "grain.list-order.processes";
+
+function loadOrder(): string[] {
+  try {
+    const raw = globalThis.localStorage?.getItem(ORDER_KEY);
+    const ids: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(ids)
+      ? ids.filter((x): x is string => typeof x === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveOrder(ids: readonly string[]): void {
+  try {
+    if (ids.length === 0) globalThis.localStorage?.removeItem(ORDER_KEY);
+    else globalThis.localStorage?.setItem(ORDER_KEY, JSON.stringify(ids));
+  } catch {
+    // Storage denied: the order lasts as long as the page does.
+  }
+}
+
+const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
 
 @Component({
   selector: "g-processes-page",
@@ -164,18 +204,6 @@ type SuitesPaneView = "suites" | "runs";
           </h1>
           <div class="headline-actions">
             @switch (activeTab()) {
-              @case ("schedules") {
-                @if (access.can("POST /api/schedules")) {
-                  <button
-                    type="button"
-                    class="btn-primary"
-                    data-testid="proc-new-schedule-btn"
-                    (click)="openScheduleDialog(null)"
-                  >
-                    New schedule
-                  </button>
-                }
-              }
               @case ("templates") {
                 @if (
                   store.templates().length > 0 && canOpenLaunchTemplateDialog()
@@ -187,16 +215,6 @@ type SuitesPaneView = "suites" | "runs";
                     (click)="openLaunchTemplateDialog(selectedTemplate())"
                   >
                     Launch from template
-                  </button>
-                }
-                @if (access.can("POST /api/templates")) {
-                  <button
-                    type="button"
-                    class="btn-primary"
-                    data-testid="proc-new-template-btn"
-                    (click)="openTemplateDialog(null)"
-                  >
-                    New template
                   </button>
                 }
               }
@@ -214,17 +232,73 @@ type SuitesPaneView = "suites" | "runs";
                     Run suite
                   </button>
                 }
-                @if (access.can("POST /api/suites")) {
-                  <button
-                    type="button"
-                    class="btn-primary"
-                    data-testid="proc-new-suite-btn"
-                    (click)="openSuiteDialog(null)"
-                  >
-                    New suite
-                  </button>
-                }
               }
+            }
+            @if (canCreateAny()) {
+              <div class="pill-dropdown">
+                <button
+                  type="button"
+                  class="btn-primary"
+                  data-testid="proc-new-menu-btn"
+                  aria-haspopup="menu"
+                  [attr.aria-expanded]="openPicker() === 'newMenu'"
+                  (click)="togglePicker('newMenu', $event)"
+                >
+                  New ▾
+                </button>
+                @if (openPicker() === "newMenu") {
+                  <ul
+                    class="pop-menu align-right proc-new-menu"
+                    role="menu"
+                    data-testid="proc-new-menu"
+                  >
+                    @if (access.can("POST /api/schedules")) {
+                      <li role="none">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="proc-new-schedule"
+                          (click)="newProcess('schedule')"
+                        >
+                          Schedule
+                        </button>
+                      </li>
+                    }
+                    @if (access.can("POST /api/templates")) {
+                      <li role="none">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="proc-new-template"
+                          (click)="newProcess('template')"
+                        >
+                          Template
+                        </button>
+                      </li>
+                    }
+                    @if (access.can("POST /api/suites")) {
+                      <li role="none">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="proc-new-suite"
+                          (click)="newProcess('suite')"
+                        >
+                          Suite
+                        </button>
+                      </li>
+                    }
+                    <li
+                      role="none"
+                      class="proc-new-menu-hint"
+                      data-testid="proc-new-menu-hint"
+                    >
+                      Workflow schedules and triggers are declared in a
+                      repository's <code>.grain/</code>, not created here.
+                    </li>
+                  </ul>
+                }
+              </div>
             }
           </div>
         </div>
@@ -238,6 +312,7 @@ type SuitesPaneView = "suites" | "runs";
             <a
               class="tab-link"
               [routerLink]="['/processes', t.id]"
+              queryParamsHandling="merge"
               [attr.aria-current]="activeTab() === t.id ? 'page' : null"
               [attr.data-testid]="'proc-tab-' + t.id"
               [gTip]="t.tip"
@@ -296,6 +371,9 @@ type SuitesPaneView = "suites" | "runs";
           aria-label="Process items"
           data-testid="proc-list-pane"
         >
+          <p class="sr-only" aria-live="polite" data-testid="proc-move-note">
+            {{ moveNote() }}
+          </p>
           @switch (activeTab()) {
             @case ("schedules") {
               <div
@@ -314,6 +392,15 @@ type SuitesPaneView = "suites" | "runs";
                     {{ sf.label }}
                   </button>
                 }
+                <g-pill-select
+                  class="proc-sort"
+                  prefix="Sort"
+                  [options]="sortOptions()"
+                  [value]="activeSort()"
+                  ariaLabel="Sort"
+                  testid="proc-sort"
+                  (valueChange)="setSort($event)"
+                />
               </div>
               @if (store.loaded() && filteredSchedules().length === 0) {
                 <div class="empty-state" data-testid="schedules-empty">
@@ -321,9 +408,20 @@ type SuitesPaneView = "suites" | "runs";
                 </div>
               } @else {
                 <ul class="proc-list">
-                  @for (s of filteredSchedules(); track s.id) {
+                  @for (s of sortedSchedules(); track s.id) {
                     @let badge = schedBadge(s);
-                    <li class="proc-li">
+                    <li
+                      class="proc-li"
+                      [class.is-drop-target]="dropKey() === 'schedule:' + s.id"
+                      [attr.draggable]="
+                        activeSort() === 'custom' ? 'true' : null
+                      "
+                      (dragstart)="onDragStart($event, 'schedule:' + s.id)"
+                      (dragover)="onDragOver($event, 'schedule:' + s.id)"
+                      (dragleave)="onDragLeave('schedule:' + s.id)"
+                      (drop)="onDrop($event, 'schedules', 'schedule:' + s.id)"
+                      (dragend)="onDragEnd()"
+                    >
                       <button
                         type="button"
                         class="proc-row"
@@ -332,7 +430,15 @@ type SuitesPaneView = "suites" | "runs";
                           selectedScheduleId() === s.id ? 'true' : null
                         "
                         [attr.data-testid]="'sched-row-' + s.id"
+                        [attr.aria-keyshortcuts]="
+                          activeSort() === 'custom'
+                            ? 'Alt+ArrowUp Alt+ArrowDown'
+                            : null
+                        "
                         (click)="selectSchedule(s.id, true)"
+                        (keydown)="
+                          onRowKey($event, 'schedules', 'schedule:' + s.id)
+                        "
                         (keydown.space)="
                           selectSchedule(s.id, true); $event.preventDefault()
                         "
@@ -361,7 +467,7 @@ type SuitesPaneView = "suites" | "runs";
                             <span class="tabular">· {{ s.repo }}</span>
                           }
                           @if (schedNextRunOf(s); as nr) {
-                            <span class="tabular">· next: {{ nr }}</span>
+                            <span class="tabular">· next: {{ stamp(nr) }}</span>
                           }
                           <span>· overlap: {{ s.overlap || "skip" }}</span>
                         </div>
@@ -389,6 +495,15 @@ type SuitesPaneView = "suites" | "runs";
                     {{ tf.label }}
                   </button>
                 }
+                <g-pill-select
+                  class="proc-sort"
+                  prefix="Sort"
+                  [options]="sortOptions()"
+                  [value]="activeSort()"
+                  ariaLabel="Sort"
+                  testid="proc-sort"
+                  (valueChange)="setSort($event)"
+                />
               </div>
               @if (store.loaded() && filteredTemplates().length === 0) {
                 <div class="empty-state" data-testid="templates-empty">
@@ -396,9 +511,21 @@ type SuitesPaneView = "suites" | "runs";
                 </div>
               } @else {
                 <ul class="proc-list">
-                  @for (t of filteredTemplates(); track t.id) {
+                  @for (t of sortedTemplates(); track t.id) {
                     @let badge = tmplBadge(t);
-                    <li class="proc-li">
+                    @let runs = templateRuns().get(t.id) ?? noRuns;
+                    <li
+                      class="proc-li"
+                      [class.is-drop-target]="dropKey() === 'template:' + t.id"
+                      [attr.draggable]="
+                        activeSort() === 'custom' ? 'true' : null
+                      "
+                      (dragstart)="onDragStart($event, 'template:' + t.id)"
+                      (dragover)="onDragOver($event, 'template:' + t.id)"
+                      (dragleave)="onDragLeave('template:' + t.id)"
+                      (drop)="onDrop($event, 'templates', 'template:' + t.id)"
+                      (dragend)="onDragEnd()"
+                    >
                       <button
                         type="button"
                         class="proc-row"
@@ -407,7 +534,15 @@ type SuitesPaneView = "suites" | "runs";
                           selectedTemplateId() === t.id ? 'true' : null
                         "
                         [attr.data-testid]="'tmpl-row-' + t.id"
+                        [attr.aria-keyshortcuts]="
+                          activeSort() === 'custom'
+                            ? 'Alt+ArrowUp Alt+ArrowDown'
+                            : null
+                        "
                         (click)="selectTemplate(t.id, true)"
+                        (keydown)="
+                          onRowKey($event, 'templates', 'template:' + t.id)
+                        "
                         (keydown.space)="
                           selectTemplate(t.id, true); $event.preventDefault()
                         "
@@ -440,6 +575,23 @@ type SuitesPaneView = "suites" | "runs";
                           } @else if (t.repo) {
                             <span class="tabular">· bound to {{ t.repo }}</span>
                           }
+                          @if (runs.lastRunAt; as lr) {
+                            <span
+                              class="tabular"
+                              [attr.data-testid]="'tmpl-last-' + t.id"
+                              >· last: {{ stamp(lr) }}</span
+                            >
+                          }
+                          <span
+                            class="tabular"
+                            [attr.data-testid]="'tmpl-next-' + t.id"
+                            >·
+                            {{
+                              runs.nextRunAt
+                                ? "next: " + stamp(runs.nextRunAt)
+                                : "on demand"
+                            }}</span
+                          >
                         </div>
                       </button>
                     </li>
@@ -468,6 +620,17 @@ type SuitesPaneView = "suites" | "runs";
                     Suite runs ({{ filteredSuiteRuns().length }})
                   </button>
                 </div>
+                @if (suitesView() === "suites") {
+                  <g-pill-select
+                    class="proc-sort"
+                    prefix="Sort"
+                    [options]="sortOptions()"
+                    [value]="activeSort()"
+                    ariaLabel="Sort"
+                    testid="proc-sort"
+                    (valueChange)="setSort($event)"
+                  />
+                }
               </div>
 
               @if (suitesView() === "suites") {
@@ -477,8 +640,20 @@ type SuitesPaneView = "suites" | "runs";
                   </div>
                 } @else {
                   <ul class="proc-list">
-                    @for (st of filteredSuites(); track st.id) {
-                      <li class="proc-li">
+                    @for (st of sortedSuites(); track st.id) {
+                      @let runs = suiteRunsById().get(st.id) ?? noRuns;
+                      <li
+                        class="proc-li"
+                        [class.is-drop-target]="dropKey() === 'suite:' + st.id"
+                        [attr.draggable]="
+                          activeSort() === 'custom' ? 'true' : null
+                        "
+                        (dragstart)="onDragStart($event, 'suite:' + st.id)"
+                        (dragover)="onDragOver($event, 'suite:' + st.id)"
+                        (dragleave)="onDragLeave('suite:' + st.id)"
+                        (drop)="onDrop($event, 'suites', 'suite:' + st.id)"
+                        (dragend)="onDragEnd()"
+                      >
                         <button
                           type="button"
                           class="proc-row"
@@ -493,7 +668,15 @@ type SuitesPaneView = "suites" | "runs";
                               : null
                           "
                           [attr.data-testid]="'suite-row-' + st.id"
+                          [attr.aria-keyshortcuts]="
+                            activeSort() === 'custom'
+                              ? 'Alt+ArrowUp Alt+ArrowDown'
+                              : null
+                          "
                           (click)="selectSuite(st.id, true)"
+                          (keydown)="
+                            onRowKey($event, 'suites', 'suite:' + st.id)
+                          "
                           (keydown.space)="
                             selectSuite(st.id, true); $event.preventDefault()
                           "
@@ -518,6 +701,23 @@ type SuitesPaneView = "suites" | "runs";
                             @if (st.requireApproval) {
                               <span>· requires approval</span>
                             }
+                            @if (runs.lastRunAt; as lr) {
+                              <span
+                                class="tabular"
+                                [attr.data-testid]="'suite-last-' + st.id"
+                                >· last: {{ stamp(lr) }}</span
+                              >
+                            }
+                            <span
+                              class="tabular"
+                              [attr.data-testid]="'suite-next-' + st.id"
+                              >·
+                              {{
+                                runs.nextRunAt
+                                  ? "next: " + stamp(runs.nextRunAt)
+                                  : "on demand"
+                              }}</span
+                            >
                           </div>
                         </button>
                       </li>
@@ -2721,6 +2921,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   readonly runId = input<string | undefined>(undefined);
   readonly kind = input<string | undefined>(undefined);
   readonly q = input<string | undefined>(undefined);
+  readonly sort = input<string | undefined>(undefined);
   readonly new = input<string | undefined>(undefined);
   readonly launch = input<string | undefined>(undefined);
   readonly launchTemplate = input<string | undefined>(undefined);
@@ -2735,6 +2936,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
+  private readonly injector = inject(Injector);
 
   private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
     if (ev.key === "Escape" && this.openPicker()) {
@@ -2976,6 +3178,97 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       .filter((r) => !q || r.toLowerCase().includes(q));
   });
 
+  // ?sort= names the order; with none the list is in its custom order,
+  // which is name order until somebody moves a row.
+  protected readonly activeSort = computed(() => parseProcessSort(this.sort()));
+  protected readonly customOrder = signal<string[]>(loadOrder());
+  protected readonly noRuns = NO_RUNS;
+  protected readonly moveNote = signal("");
+  protected readonly dropKey = signal<string | null>(null);
+  private dragKey: string | null = null;
+
+  protected readonly sortOptions = computed<PillOption[]>(() =>
+    PROCESS_SORTS.filter(
+      (o) => o.id !== "kind" || this.activeTab() !== "suites",
+    ).map((o) => ({ value: o.id, label: o.label })),
+  );
+
+  protected readonly templateRuns = computed(() => {
+    const scheds = this.store.schedules();
+    return new Map(
+      this.store
+        .templates()
+        .map((t) => [t.id, derivedRuns(scheds, "templateId", t.id)] as const),
+    );
+  });
+
+  protected readonly suiteRunsById = computed(() => {
+    const scheds = this.store.schedules();
+    const runs = this.store.suiteRuns();
+    return new Map(
+      this.store
+        .suites()
+        .map(
+          (st) => [st.id, derivedRuns(scheds, "suiteId", st.id, runs)] as const,
+        ),
+    );
+  });
+
+  protected readonly sortedSchedules = computed(() =>
+    sortProcessRows(
+      this.filteredSchedules().map((s) => ({
+        key: `schedule:${s.id}`,
+        name: s.title || s.templateName || s.suiteName || s.id,
+        kind: scheduleKindOf(s),
+        lastRunAt: s.lastRunAt || null,
+        nextRunAt:
+          s.enabled && !s.suppressed && !isEventTrigger(s)
+            ? s.nextRunAt || null
+            : null,
+        item: s,
+      })),
+      this.activeSort(),
+      this.customOrder(),
+    ).map((r) => r.item),
+  );
+
+  protected readonly sortedTemplates = computed(() => {
+    const runs = this.templateRuns();
+    return sortProcessRows(
+      this.filteredTemplates().map((t) => ({
+        key: `template:${t.id}`,
+        name: t.name || t.title || t.id,
+        kind: templateSourceBadge(t).label,
+        ...(runs.get(t.id) ?? NO_RUNS),
+        item: t,
+      })),
+      this.activeSort(),
+      this.customOrder(),
+    ).map((r) => r.item);
+  });
+
+  protected readonly sortedSuites = computed(() => {
+    const runs = this.suiteRunsById();
+    return sortProcessRows(
+      this.filteredSuites().map((st) => ({
+        key: `suite:${st.id}`,
+        name: st.name || st.id,
+        kind: "suite",
+        ...(runs.get(st.id) ?? NO_RUNS),
+        item: st,
+      })),
+      this.activeSort(),
+      this.customOrder(),
+    ).map((r) => r.item);
+  });
+
+  protected readonly canCreateAny = computed(
+    () =>
+      this.access.can("POST /api/schedules") ||
+      this.access.can("POST /api/templates") ||
+      this.access.can("POST /api/suites"),
+  );
+
   protected readonly selectedSchedule = computed(() => {
     const id = this.selectedScheduleId();
     return this.store.schedules().find((s) => s.id === id) ?? null;
@@ -3012,21 +3305,37 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   private handledDeepLinkKey = "";
   private handledItemLinkKey = "";
-  private lastSyncedQuery: string | undefined = undefined;
 
   constructor() {
     afterNextRender(() => this.sp.attach());
 
-    // Sync ?q= query parameter into ViewFilter when arriving on a deep link.
+    // ?q= (a shared link, a reload, Back and Forward) fills the "Filter
+    // this view" box, and what is typed there goes back into ?q=, the way
+    // the Tasks page keeps it. While one of this page's own ?q= writes is
+    // in flight, the ?q= it passes through is an echo of what was typed,
+    // possibly already overtaken by the next keystroke, so it must not
+    // refill the box.
+    let writingQ = 0;
     effect(() => {
-      const qParam = this.q();
+      const q = this.q() ?? "";
       untracked(() => {
-        if (qParam !== undefined && qParam !== this.lastSyncedQuery) {
-          this.lastSyncedQuery = qParam;
-          this.filter.query.set(qParam);
-        } else if (qParam === undefined) {
-          this.lastSyncedQuery = undefined;
+        if (writingQ === 0 && q !== this.filter.query()) {
+          this.filter.query.set(q);
         }
+      });
+    });
+    effect(() => {
+      const typed = this.filter.query();
+      untracked(() => {
+        if (typed === (this.q() ?? "")) return;
+        writingQ++;
+        void this.router
+          .navigate([], {
+            queryParams: { q: typed || null },
+            queryParamsHandling: "merge",
+            replaceUrl: true,
+          })
+          .finally(() => writingQ--);
       });
     });
 
@@ -3087,9 +3396,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     effect(() => {
       const tab = this.activeTab();
       const loaded = this.store.loaded();
-      const scheds = this.filteredSchedules();
-      const tmpls = this.filteredTemplates();
-      const suites = this.filteredSuites();
+      const scheds = this.sortedSchedules();
+      const tmpls = this.sortedTemplates();
+      const suites = this.sortedSuites();
       const repos = this.filteredDeclRepos();
       untracked(() => {
         if (!loaded || this.itemId() || this.runId()) return;
@@ -3139,6 +3448,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         if (newParam === "1" || newParam === "schedule") {
           if (this.access.can("POST /api/schedules")) {
             this.openScheduleDialog(null);
+          }
+        } else if (newParam === "template") {
+          if (this.access.can("POST /api/templates")) {
+            this.openTemplateDialog(null);
+          }
+        } else if (newParam === "suite") {
+          if (this.access.can("POST /api/suites")) {
+            this.openSuiteDialog(null);
           }
         } else if (launchParam === "1") {
           if (this.canOpenLaunchTemplateDialog()) {
@@ -3192,6 +3509,107 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected togglePicker(name: string, ev: Event): void {
     ev.stopPropagation();
     this.openPicker.set(this.openPicker() === name ? null : name);
+  }
+
+  // newProcess is the header New menu: it narrows the page to the kind
+  // asked for and opens that kind's form over it.
+  protected newProcess(kind: "schedule" | "template" | "suite"): void {
+    this.openPicker.set(null);
+    const tab: ProcessTab =
+      kind === "schedule"
+        ? "schedules"
+        : kind === "template"
+          ? "templates"
+          : "suites";
+    if (this.activeTab() !== tab || this.itemId() || this.runId()) {
+      void this.router.navigate(["/processes", tab], {
+        queryParamsHandling: "merge",
+      });
+    }
+    if (kind === "suite") this.suitesView.set("suites");
+    if (kind === "schedule") this.openScheduleDialog(null);
+    else if (kind === "template") this.openTemplateDialog(null);
+    else this.openSuiteDialog(null);
+  }
+
+  protected setSort(raw: string): void {
+    const sort: ProcessSort = parseProcessSort(raw);
+    if (sort === this.activeSort()) return;
+    void this.router.navigate([], {
+      queryParams: { sort: sort === "custom" ? null : sort },
+      queryParamsHandling: "merge",
+    });
+  }
+
+  protected stamp(at: string): string {
+    return formatStamp(at);
+  }
+
+  private visibleKeys(list: OrderedList): string[] {
+    switch (list) {
+      case "schedules":
+        return this.sortedSchedules().map((s) => `schedule:${s.id}`);
+      case "templates":
+        return this.sortedTemplates().map((t) => `template:${t.id}`);
+      case "suites":
+        return this.sortedSuites().map((st) => `suite:${st.id}`);
+    }
+  }
+
+  private moveRow(list: OrderedList, key: string, delta: number): boolean {
+    const visible = this.visibleKeys(list);
+    const next = movedOrder(this.customOrder(), visible, key, delta);
+    if (!next) return false;
+    this.customOrder.set(next);
+    saveOrder(next);
+    const at = next.indexOf(key) + 1;
+    this.moveNote.set(`Moved to position ${at} of ${visible.length}.`);
+    return true;
+  }
+
+  // Alt+ArrowUp / Alt+ArrowDown move the focused row one place in the
+  // custom order, keeping focus on it.
+  protected onRowKey(ev: KeyboardEvent, list: OrderedList, key: string): void {
+    if (!ev.altKey || (ev.key !== "ArrowUp" && ev.key !== "ArrowDown")) return;
+    if (this.activeSort() !== "custom") return;
+    ev.preventDefault();
+    const btn = ev.currentTarget as HTMLElement | null;
+    if (this.moveRow(list, key, ev.key === "ArrowUp" ? -1 : 1)) {
+      afterNextRender(() => btn?.focus(), { injector: this.injector });
+    }
+  }
+
+  protected onDragStart(ev: DragEvent, key: string): void {
+    if (this.activeSort() !== "custom") return;
+    this.dragKey = key;
+    ev.dataTransfer?.setData("text/plain", key);
+    if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "move";
+  }
+
+  protected onDragOver(ev: DragEvent, key: string): void {
+    if (!this.dragKey || this.dragKey === key) return;
+    ev.preventDefault();
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+    this.dropKey.set(key);
+  }
+
+  protected onDragLeave(key: string): void {
+    if (this.dropKey() === key) this.dropKey.set(null);
+  }
+
+  protected onDrop(ev: DragEvent, list: OrderedList, key: string): void {
+    const from = this.dragKey;
+    this.onDragEnd();
+    if (!from || from === key) return;
+    ev.preventDefault();
+    const visible = this.visibleKeys(list);
+    const delta = visible.indexOf(key) - visible.indexOf(from);
+    this.moveRow(list, from, delta);
+  }
+
+  protected onDragEnd(): void {
+    this.dragKey = null;
+    this.dropKey.set(null);
   }
 
   protected tabCount(tab: ProcessTab): number {
