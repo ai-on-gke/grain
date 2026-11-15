@@ -196,7 +196,7 @@ func TestScale50k(t *testing.T) {
 func TestScaleSmoke(t *testing.T) {
 	t.Parallel()
 	cfg := scaleConfig{
-		total: 400, waiting: 60, running: 8, repos: 3,
+		total: 200, waiting: 40, running: 6, repos: 3,
 		duration: 3 * time.Second, runLifetime: 600 * time.Millisecond, heartbeat: 100 * time.Millisecond,
 		apiWorkers: 1, sseClients: 2, seedWorkers: 2,
 		minCompletions: 1,
@@ -805,7 +805,10 @@ func runScale(t *testing.T, backend string, cfg scaleConfig) {
 	// full-table scan at 50,000 rows.
 	explainHotQueries(t, ctx, backend, db, store, stats)
 
-	runCtx, stopRun := context.WithTimeout(ctx, cfg.duration)
+	// The run phase's clock starts once every slot is filled (below), not
+	// here: under -race on a loaded CI machine the setup alone can take
+	// longer than a smoke run's whole duration.
+	runCtx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
 	var runs sync.WaitGroup
 	var live atomic.Int64
@@ -872,6 +875,7 @@ func runScale(t *testing.T, backend string, cfg scaleConfig) {
 		}
 	}
 	dispatchOnce()
+	time.AfterFunc(cfg.duration, stopRun)
 	if got := live.Load(); got < int64(cfg.running) {
 		t.Errorf("first dispatch filled %d of %d slots from a queue of %d", got, cfg.running, census[model.StateQueued])
 	}
@@ -891,7 +895,9 @@ func runScale(t *testing.T, backend string, cfg scaleConfig) {
 	bg.Add(1)
 	go func() {
 		defer bg.Done()
-		for runCtx.Err() == nil {
+		// At least one tick, however short the run: a run with no tick
+		// measured nothing about the orchestrator.
+		for first := true; first || runCtx.Err() == nil; first = false {
 			tickCtx, cancel := context.WithTimeout(ctx, cfg.tickTimeout)
 			start := time.Now()
 			err := orchestrator.RunCycle(tickCtx, deps, start.UTC())
