@@ -269,4 +269,7 @@ test("SSH known_hosts and its hint stay inside the card on a phone @phone @dark"
     () => document.documentElement.scrollWidth - window.innerWidth,
   );
   expect(overflow).toBeLessThanOrEqual(0);
+  await page.getByTestId("card-git-connections").screenshot({
+    path: test.info().outputPath(`git-ssh-form.png`),
+  });
 });
