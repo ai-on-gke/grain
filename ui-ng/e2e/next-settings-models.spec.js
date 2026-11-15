@@ -209,7 +209,7 @@ test("Settings Models - Discovered models, no framework keys card, and fallback 
 // Refresh asks a provider now (POST .../discover, connections:write): a
 // person without that scope is offered no Refresh at all, neither on the
 // connection's row nor inside the model picker, while one who holds it
-// sees both (docs/test-runs/2026-11-14-settings-models.md).
+// sees the row's Refresh (docs/test-runs/2026-11-14-settings-models.md).
 test("offers Refresh models only to a person who may ask providers", async ({
   page,
   request,
@@ -247,12 +247,66 @@ test("offers Refresh models only to a person who may ask providers", async ({
     await expect(
       page.getByTestId("refresh-backend-claude-discover"),
     ).toHaveCount(0);
-    await page.getByTestId("picker-default-model").click();
-    await expect(
-      page.getByRole("button", { name: /refresh models/i }),
-    ).toHaveCount(0);
+    // The picker is read-only for them, and nothing on the page offers to
+    // ask a provider.
+    await expect(page.getByTestId("picker-default-model")).toBeDisabled();
+    await expect(page.getByRole("button", { name: /refresh/i })).toHaveCount(0);
   } finally {
     await page.unroute(viewerConfig);
     await request.delete("/api/deployment/agent-backends/claude-discover");
   }
+});
+
+// Clearing a connection's stored secret cannot be undone, so it asks
+// first, as removing the connection does: Cancel sends nothing, and only
+// Accept sends the DELETE. (`grain demo` keeps no secret store, so the
+// DELETE is counted here rather than sent.)
+test("clears a connection's stored secret only after confirming", async ({
+  page,
+  request,
+}) => {
+  const id = "claude-clear-walk";
+  expect(
+    (
+      await request.put(`/api/deployment/agent-backends/${id}`, {
+        data: { id, framework: "claude", models: ["claude-opus-5"] },
+      })
+    ).ok(),
+  ).toBe(true);
+  const deletes = [];
+  const credential = `**/api/agent-backends/${id}/credential`;
+  await page.route(credential, async (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    deletes.push(route.request().url());
+    await route.fulfill({ json: { set: false } });
+  });
+  try {
+    await page.goto("/next/settings/connections");
+    await page.getByTestId(`toggle-cred-${id}`).click();
+    await page.getByTestId(`clear-cred-${id}`).click();
+    const dialog = page.getByTestId("confirm-dialog");
+    await expect(dialog).toContainText(`Clear the credential for ${id}?`);
+    await page.getByTestId("confirm-cancel").click();
+    await expect(dialog).toHaveCount(0);
+    expect(deletes).toEqual([]);
+
+    await page.getByTestId(`clear-cred-${id}`).click();
+    await page.getByTestId("confirm-accept").click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => deletes.length).toBe(1);
+  } finally {
+    await page.unroute(credential);
+    await request.delete(`/api/deployment/agent-backends/${id}`);
+  }
+});
+
+// An old /settings/connections link opens Models -- where the model
+// connections are -- at a phone width too, not the bare section list.
+test("opens Models for an old settings/connections link on a phone", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/next/settings/connections");
+  await expect(page.getByTestId("card-model-backends")).toBeVisible();
+  await expect(page.getByTestId("settings-mobile-back")).toBeVisible();
 });

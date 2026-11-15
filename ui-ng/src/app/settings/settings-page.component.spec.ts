@@ -1163,6 +1163,16 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     });
   });
 
+  it("opens Models, not the phone section list, for an old /settings/connections link", async () => {
+    const { el } = await mountSettings("/settings/connections");
+    const shell = el.querySelector(".settings-shell")!;
+    expect(shell.classList).toContain("is-mobile-detail");
+    expect(shell.classList).not.toContain("is-mobile-list");
+    expect(
+      el.querySelector('[data-testid="card-model-backends"]'),
+    ).not.toBeNull();
+  });
+
   it("scrolls to an old section name's card on in-app navigation and stops when another section is chosen", async () => {
     const { el, harness } = await mountSettings("/settings/engine");
     const scrolled: string[] = [];
