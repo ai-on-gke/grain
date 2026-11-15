@@ -30,6 +30,20 @@ g-repos-page {
   gap: 12px;
 }
 
+/* The Add form is taller than the title: keep the title on the form's
+   first line rather than centred against all of it. */
+.repos-inner > .view-headline-row {
+  align-items: flex-start;
+}
+
+.repos-inner > .view-headline-row .view-headline {
+  line-height: 36px;
+}
+
+.repos-drag {
+  display: inline-flex;
+}
+
 .repos-count {
   margin-left: 8px;
   font-size: 14px;

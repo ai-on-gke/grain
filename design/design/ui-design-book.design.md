@@ -144,7 +144,7 @@ do not pull in an icon font.
   72px rail
 ```
 
-- **Rail order:** Inbox, Workstreams, Tasks, Agents, Sessions, Processes, CI,
+- **Rail order:** Inbox, Workstreams, Tasks, Agents, Sessions, Processes, CI, Repos,
   Telemetry, Context, Fleet; Settings pinned at the bottom. People can hide
   destinations (Customize navigation); Inbox cannot be hidden.
 - **New task button:** filled primary, 60×60 (52 on short screens), with a
