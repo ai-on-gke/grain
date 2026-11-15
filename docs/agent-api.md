@@ -491,11 +491,13 @@ own repository:
   elements belonging to another repository (or, for a `ci_api_repos`
   repository, carrying no `repo`) are removed.
 - `POST /api/tasks/from-template` files for the job's repository only
-  (refusing a template that reads or writes another repository), from the
-  templates the grant allows, and files the task approved unless the
-  template asks for unaccepted person-held grants or settings
-  (`DeclarationAcceptance`, `keep_running`, elevated priority, or a
-  declared push set), in which case it lands proposed for a person.
+  (refusing a template that reads, writes, or grants API access on another
+  repository), from the templates the grant allows, and files the task
+  approved unless the template asks for unaccepted person-held grants,
+  deployment-wide or write API/daemon grants beyond the job's own repository
+  bounds, or person-only settings (`DeclarationAcceptance`, `keep_running`,
+  elevated priority, or a declared push set), in which case it lands proposed
+  for a person.
 
 A job may hold only the scopes whose answers narrow to one repository:
 `ci:read`, `tasks:read`, `tasks:from-template`, `sandboxes:read`,

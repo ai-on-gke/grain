@@ -577,6 +577,7 @@ func TestAListedRepositorysTokenIsNarrowedToThatRepository(t *testing.T) {
 		{"GET", "/api/settings", ""},
 		{"GET", "/api/repos/ai-on-gke/grain/config", ""},
 		{"POST", "/api/tasks/from-template", `{"template":"triage-item","repo":"ai-on-gke/grain"}`},
+		{"POST", "/api/notifications/release-pending", `{"version":"v2.4.0","body":"spoof"}`},
 	} {
 		if w := call(e, refused.method, refused.path, token, refused.body); w.Code != http.StatusForbidden {
 			t.Errorf("%s %s %s = %d, want 403", refused.method, refused.path, refused.body, w.Code)

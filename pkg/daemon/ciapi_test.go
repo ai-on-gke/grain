@@ -720,6 +720,61 @@ func TestAListedRepositorysCIAPITokenIsIsolatedEndToEnd(t *testing.T) {
 					Reads:  []model.RepoRef{grainRepo},
 				},
 			},
+			{
+				Path: model.TemplateDeclarationDir + "/cross-grant.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "cross-grant"),
+					Name:   "cross-grant",
+					Title:  "Grant grain read",
+					Body:   "Cross-repo api grant",
+					Target: &widgets,
+					Grants: []model.Grant{{Capability: "api:tasks:read@" + grainRepo.String()}},
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/unscoped-read.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "unscoped-read"),
+					Name:   "unscoped-read",
+					Title:  "Deployment-wide tasks:read",
+					Body:   "Unscoped api grant",
+					Target: &widgets,
+					Grants: []model.Grant{{Capability: "api:tasks:read"}},
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/repo-write-api.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "repo-write-api"),
+					Name:   "repo-write-api",
+					Title:  "Repo settings write",
+					Body:   "Non-CI api write scope",
+					Target: &widgets,
+					Grants: []model.Grant{{Capability: "api:repos:write@" + widgets.String()}},
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/grain-source.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "grain-source"),
+					Name:   "grain-source",
+					Title:  "Grain source",
+					Body:   "Deployment daemon capability",
+					Target: &widgets,
+					Grants: []model.Grant{{Capability: model.GrainSourceGrant}},
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/own-ci-read.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "own-ci-read"),
+					Name:   "own-ci-read",
+					Title:  "Own CI read",
+					Body:   "Repo-narrowed CI read",
+					Target: &widgets,
+					Grants: []model.Grant{{Capability: "api:ci:read@" + widgets.String()}},
+				},
+			},
 		},
 	}, now, time.UTC); err != nil {
 		t.Fatalf("syncing widgets declarations: %v", err)
@@ -844,17 +899,32 @@ func TestAListedRepositorysCIAPITokenIsIsolatedEndToEnd(t *testing.T) {
 		t.Errorf("plain task Origin.Attribution = %+v, want automation:ci-api", storedPlain.Origin.Attribution)
 	}
 
-	// 4. Templates reaching another repository via reads or writes are refused (403).
-	for _, stem := range []string{"cross-write", "cross-read"} {
+	// 4. Templates reaching another repository via reads, writes, or API grants are refused (403).
+	for _, stem := range []string{"cross-write", "cross-read", "cross-grant"} {
 		if w := do(http.MethodPost, "/api/tasks/from-template", `{"template":"`+stem+`"}`); w.Code != http.StatusForbidden {
 			t.Errorf("filing %s = %d %s, want 403 Forbidden", stem, w.Code, w.Body)
 		}
 	}
 
-	// 5. Templates asking for unaccepted person-held grants, admission bypass,
-	// keep_running, or a declared push set land unapproved (StateProposed)
-	// waiting for a person rather than self-approving.
-	for _, stem := range []string{"admin-op", "bypass-op", "standing", "tagger"} {
+	// Meanwhile a template carrying a repo-narrowed CI-admitted API grant on
+	// acme/widgets itself still lands approved.
+	ownCIW := do(http.MethodPost, "/api/tasks/from-template", `{"template":"own-ci-read"}`)
+	if ownCIW.Code != http.StatusCreated {
+		t.Fatalf("filing own-ci-read = %d %s, want 201 Created", ownCIW.Code, ownCIW.Body)
+	}
+	var ownCITask ui.Task
+	if err := json.Unmarshal(ownCIW.Body.Bytes(), &ownCITask); err != nil {
+		t.Fatal(err)
+	}
+	if !ownCITask.Approved || ownCITask.State != model.StateQueued {
+		t.Errorf("own-ci-read landed approved=%v state=%s, want approved queued", ownCITask.Approved, ownCITask.State)
+	}
+
+	// 5. Templates asking for unaccepted person-held grants, deployment-wide or
+	// non-CI API/daemon grants, admission bypass, keep_running, or a declared
+	// push set land unapproved (StateProposed) waiting for a person rather than
+	// self-approving.
+	for _, stem := range []string{"admin-op", "unscoped-read", "repo-write-api", "grain-source", "bypass-op", "standing", "tagger"} {
 		w := do(http.MethodPost, "/api/tasks/from-template", `{"template":"`+stem+`"}`)
 		if w.Code != http.StatusCreated {
 			t.Fatalf("filing %s = %d %s, want 201 Created (held unapproved)", stem, w.Code, w.Body)
@@ -866,6 +936,52 @@ func TestAListedRepositorysCIAPITokenIsIsolatedEndToEnd(t *testing.T) {
 		if created.Approved || created.State != model.StateProposed {
 			t.Errorf("unaccepted %s landed approved=%v state=%s, want unapproved proposed", stem, created.Approved, created.State)
 		}
+	}
+
+	// 6. POST /api/notifications/release-pending requires the full release-gate-read
+	// scopes (including sandboxes:read), and even with them cannot overwrite an open
+	// pending-release notification belonging to another repository.
+	if w := do(http.MethodPost, "/api/notifications/release-pending", `{"version":"v2.4.0","body":"spoof"}`); w.Code != http.StatusForbidden {
+		t.Errorf("release-pending without sandboxes:read = %d %s, want 403 Forbidden", w.Code, w.Body)
+	}
+	grainSubj := model.NotificationSubject(model.FamilyReleasePending, "v2.4.0")
+	if _, err := store.RaiseNotification(ctx, model.Notification{
+		Subject:  grainSubj,
+		Severity: model.NotificationWarning,
+		Title:    "v2.4.0 is ready to promote",
+		Body:     "official grain soak summary",
+		Repo:     grainRepo.String(),
+		RaisedBy: "automation:grain",
+		Actions:  model.ReleasePendingActions,
+	}); err != nil {
+		t.Fatalf("seeding grain release-pending notification: %v", err)
+	}
+	_, widgetsGateToken, err := gate.Tokens.Mint(ciapi.Grant{
+		Repo:      widgets,
+		RunID:     "ci-widgets-gate",
+		Expires:   now.Add(time.Hour),
+		Scopes:    []model.APIScope{"ci:read", "tasks:read", "sandboxes:read", "tasks:from-template"},
+		Templates: []string{"release-notes"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spoofReq := httptest.NewRequest(http.MethodPost, "/api/notifications/release-pending",
+		strings.NewReader(`{"version":"v2.4.0","body":"spoofed widgets body"}`))
+	spoofReq.RemoteAddr = "10.0.0.5:4242"
+	spoofReq.Header.Set("Authorization", "Bearer "+widgetsGateToken)
+	spoofReq.Header.Set("Content-Type", "application/json")
+	spoofW := httptest.NewRecorder()
+	gate.ServeHTTP(spoofW, spoofReq)
+	if spoofW.Code != http.StatusForbidden {
+		t.Errorf("cross-repo release-pending overwrite = %d %s, want 403 Forbidden", spoofW.Code, spoofW.Body)
+	}
+	openGrainNotif, err := store.OpenNotification(ctx, grainSubj)
+	if err != nil || openGrainNotif == nil {
+		t.Fatalf("reading open grain notification: %+v (%v)", openGrainNotif, err)
+	}
+	if openGrainNotif.Repo != grainRepo.String() || openGrainNotif.Body != "official grain soak summary" {
+		t.Errorf("grain release-pending notification after spoof attempt = %+v, want untouched grain body", openGrainNotif)
 	}
 
 	// Once a person accepts admin-op's declaration set, subsequent CI filings
