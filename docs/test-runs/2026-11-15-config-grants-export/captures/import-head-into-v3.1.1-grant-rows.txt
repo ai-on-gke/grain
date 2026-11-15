@@ -1,0 +1,12 @@
+template_id|capability|via|folder
+template-1|https://grain.dev/capabilities/repo#read={"repo":"acme/docs"}|label|
+template-1|https://grain.dev/capabilities/repo#write={"base":"main","repo":"acme/gadgets"}|label|
+template-2|https://grain.dev/capabilities/repo#read={"repo":"acme/docs"}|label|
+template-2|https://grain.dev/capabilities/repo#write={"base":"release","repo":"acme/docs"}|label|
+template-2|https://grain.dev/capabilities/repo#write={"base":"","repo":"acme/gadgets"}|label|
+template-3|https://grain.dev/capabilities/repo#read={"repo":"acme/docs"}|label|
+template-3|https://grain.dev/capabilities/repo#write={"base":"","repo":"acme/gadgets"}|label|
+schedule_id|capability|via|folder
+sched-1|https://grain.dev/capabilities/repo#read={"repo":"acme/docs"}|label|
+sched-1|https://grain.dev/capabilities/repo#write={"base":"","repo":"acme/docs"}|label|
+sched-1|https://grain.dev/capabilities/repo#write={"base":"main","repo":"acme/gadgets"}|label|
