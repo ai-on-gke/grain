@@ -39,14 +39,16 @@ function workstreamMultiSegmentMatcher(
 // addresses live in this app: a bookmark or a link pasted out of the
 // classic UI lands on the page that has the same content rather than
 // falling through to the Inbox. Each entry is the path and, for Fleet,
-// the ?tab= that shows it.
-const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
-  health: ["/fleet"],
+// the ?tab= that shows it and the card it opens at: Health is Fleet's
+// Health tab, and Power is the Host Power card on Pauses & Controls,
+// beside Restart daemon.
+const SYSTEM_TABS: Record<string, readonly [string, string?, string?]> = {
+  health: ["/fleet", "health"],
   sandboxes: ["/fleet"],
   top: ["/fleet"],
   logs: ["/fleet", "logs"],
   pipeline: ["/fleet", "controls"],
-  power: ["/fleet", "controls"],
+  power: ["/fleet", "controls", "fleet-power"],
   caches: ["/settings/caches"],
   metrics: ["/telemetry"],
   upgrade: ["/settings/upgrade"],
@@ -56,9 +58,10 @@ const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
 // query the old link carried (a /system/metrics?repo=... narrowing, say).
 function legacy(tab: string): RedirectFunction {
   return ({ queryParams }) => {
-    const [path, fleetTab] = SYSTEM_TABS[tab] ?? ["/fleet"];
+    const [path, fleetTab, fragment] = SYSTEM_TABS[tab] ?? ["/fleet"];
     return inject(Router).createUrlTree([path], {
       queryParams: fleetTab ? { ...queryParams, tab: fleetTab } : queryParams,
+      fragment,
     });
   };
 }

@@ -49,6 +49,7 @@ const ROUTES = [
   "telemetry",
   "context",
   "fleet",
+  "fleet?tab=health",
   "settings",
 ];
 
@@ -122,7 +123,7 @@ for (const size of SIZES) {
 
         if (SHOTS) {
           fs.mkdirSync(SHOTS, { recursive: true });
-          const file = `${r.replace(/[/:]/g, "_")}-${size.name}-${theme}.png`;
+          const file = `${r.replace(/[/:?=]/g, "_")}-${size.name}-${theme}.png`;
           await page.screenshot({ path: path.join(SHOTS, file) });
         }
       }

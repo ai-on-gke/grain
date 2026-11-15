@@ -15,7 +15,7 @@
 import type { DispatchCondition } from "../api/models";
 export type { DispatchCondition };
 
-export type FleetTab = "sandboxes" | "hostds" | "controls" | "logs";
+export type FleetTab = "sandboxes" | "hostds" | "health" | "controls" | "logs";
 
 export interface SandboxSnapshot {
   sandbox: string;
