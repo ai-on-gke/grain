@@ -812,6 +812,17 @@ function BoardCard({
             label={`superseded by ${t.supersededBy}`}
           />
         )}
+        {/* The same answer for a durable task closed by rollover
+            (model.LinkRolledOverTo, durable-tasks.design.md#DT-15). */}
+        {t.rolledOverTo && (
+          <Chip
+            size="small"
+            variant="outlined"
+            data-testid="task-rolled-over-chip"
+            title={`closed by rollover past its record limit; its work carries on in task ${t.rolledOverTo}`}
+            label={`rolled over to ${t.rolledOverTo}`}
+          />
+        )}
         {/* TaskList.jsx's held chip, on a card as on a row. */}
         {t.heldBy && !t.approved && (
           <Chip

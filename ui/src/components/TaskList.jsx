@@ -889,6 +889,17 @@ export function TaskRow({
             label={`superseded by ${t.supersededBy}`}
           />
         )}
+        {/* The same answer for a durable task closed by rollover
+            (model.LinkRolledOverTo, durable-tasks.design.md#DT-15). */}
+        {t.rolledOverTo && (
+          <Chip
+            size="small"
+            variant="outlined"
+            data-testid="task-rolled-over-chip"
+            title={`closed by rollover past its record limit; its work carries on in task ${t.rolledOverTo}`}
+            label={`rolled over to ${t.rolledOverTo}`}
+          />
+        )}
         {/* A proposal its agent could have queued on its own permission
             and asked to wait for a person instead (propose_task's
             hold_for_approval, ui.Task.HeldBy). Said while it still waits,

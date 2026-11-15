@@ -1105,11 +1105,19 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 	// failure: it is about the host, not about the sandbox pool, and a
 	// deployment with no pool to report still has to say it.
 	hostCredentials := s.tasks.hostCredentialsWarning(r.Context())
+	var storeSwitch *StoreSwitch
+	if s.tasks.Config.StoreSwitch != nil {
+		storeSwitch = s.tasks.Config.StoreSwitch()
+	}
 	// The same goes for a stale sandbox image pin: it is in the settings,
 	// and says so whether or not a pool is wired to report on.
 	if s.tasks.Config.Sandboxes == nil && s.tasks.Config.HostStats == nil && s.tasks.Config.Daemon == nil && s.tasks.Config.StandingSandboxes == nil && s.tasks.Config.PersistentSandboxes == nil && s.tasks.Config.Overcommit == nil {
+		var daemonHealth *DaemonHealth
+		if storeSwitch != nil {
+			daemonHealth = &DaemonHealth{StoreSwitch: storeSwitch}
+		}
 		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, DispatchBlocked: s.tasks.dispatchBlocked(),
-			StateRepoSync: syncFailure, HostCredentials: hostCredentials,
+			StateRepoSync: syncFailure, HostCredentials: hostCredentials, Daemon: daemonHealth,
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
 			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context()),
 			TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
@@ -1155,13 +1163,11 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		daemon := s.tasks.Config.Daemon()
 		resp.Daemon = &daemon
 	}
-	if s.tasks.Config.StoreSwitch != nil {
-		if sw := s.tasks.Config.StoreSwitch(); sw != nil {
-			if resp.Daemon == nil {
-				resp.Daemon = &DaemonHealth{}
-			}
-			resp.Daemon.StoreSwitch = sw
+	if storeSwitch != nil {
+		if resp.Daemon == nil {
+			resp.Daemon = &DaemonHealth{}
 		}
+		resp.Daemon.StoreSwitch = storeSwitch
 	}
 	if s.tasks.Config.Sandboxes != nil {
 		resp.Sandboxes, resp.SandboxReading = s.tasks.sandboxHealth(r.Context())

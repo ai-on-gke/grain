@@ -108,7 +108,8 @@ func (s *Server) taskReadable(r *http.Request) func(string) bool {
 		tokSet = set
 		hasTok = true
 	}
-	if !isAgent && !hasTok && role == nil {
+	ciCall, isCIAPI := model.CIAPICallFromContext(ctx)
+	if !isAgent && !hasTok && role == nil && !isCIAPI {
 		if p, ok := PrincipalFromContext(ctx); ok && p.Kind == model.PrincipalAgent {
 			return func(string) bool { return false }
 		}
@@ -124,24 +125,28 @@ func (s *Server) taskReadable(r *http.Request) func(string) bool {
 		if role != nil && !role.allows("tasks:read", repo) {
 			return false
 		}
+		if isCIAPI && (repo == "" || !model.SameRepoText(repo, ciCall.Repo.String())) {
+			return false
+		}
 		return true
 	}
 }
 
 // taskReadableContext attaches s.taskReadable(r) as a lineage-inheritance
 // guard on ctx whenever r is made by a scoped principal (an agent, an
-// external-agent token, or a limited verified-identity RBAC role), leaving
-// unrestricted operator and full-role callers untouched.
+// external-agent token, a CI API token, or a limited verified-identity RBAC
+// role), leaving unrestricted operator and full-role callers untouched.
 func (s *Server) taskReadableContext(r *http.Request) context.Context {
 	ctx := r.Context()
 	_, isAgent := agentCallFromContext(ctx)
 	tok := externalTokenFromContext(ctx)
+	_, isCIAPI := model.CIAPICallFromContext(ctx)
 	role := accessRoleFromContext(ctx)
 	if role != nil && role.Full {
 		role = nil
 	}
 	p, hasP := PrincipalFromContext(ctx)
-	if !isAgent && tok == nil && role == nil && (!hasP || p.Kind != model.PrincipalAgent) {
+	if !isAgent && tok == nil && role == nil && !isCIAPI && (!hasP || p.Kind != model.PrincipalAgent) {
 		return ctx
 	}
 	return model.WithExternalRefReadable(ctx, s.taskReadable(r))

@@ -71,6 +71,8 @@ import {
   formatRunAt,
   isEventTrigger,
   scheduleNextRunLabel,
+  skipFolded,
+  suppressionReasonLabel,
   scheduleStatusBadge,
   suiteRunBadge,
   templateSourceBadge,
@@ -794,6 +796,12 @@ type SuitesPaneView = "suites" | "runs";
                     <span
                       >Overlap: <strong>{{ s.overlap || "skip" }}</strong></span
                     >
+                    @if (s.overlapGroup) {
+                      <span data-testid="sched-overlap-group"
+                        >Overlap group:
+                        <strong>{{ s.overlapGroup }}</strong></span
+                      >
+                    }
                     <span class="tabular" data-testid="sched-detail-next"
                       >Next: {{ nextRunOf(s) }}</span
                     >
@@ -813,7 +821,7 @@ type SuitesPaneView = "suites" | "runs";
                   }
                   @if (s.suppressed; as sup) {
                     <div class="banner banner-error" style="margin: 6px 0 0">
-                      Suppressed ({{ sup.reason }}):
+                      Suppressed — {{ suppressionLabel(sup.reason) }}:
                       {{ sup.detail || "Previous firing is still open." }}
                       @if (sup.taskId) {
                         —
@@ -873,13 +881,35 @@ type SuitesPaneView = "suites" | "runs";
                     </p>
                   }
                   @for (sk of (s.skips ?? []).slice(0, 5); track sk.at) {
-                    <div class="proc-kv-item">
+                    <div
+                      class="proc-kv-item proc-skip-row"
+                      data-testid="sched-skip"
+                    >
                       <span class="muted">{{ sk.summary }}</span>
-                      @if (sk.taskId) {
-                        <a [routerLink]="['/task', sk.taskId]"
-                          >#{{ sk.taskId }}</a
-                        >
-                      }
+                      <span class="proc-skip-refs">
+                        @if (sk.taskId) {
+                          <a [routerLink]="['/task', sk.taskId]"
+                            >#{{ sk.taskId }}</a
+                          >
+                        }
+                        @if (sk.outcome === "fired") {
+                          <span data-testid="sched-skip-outcome">
+                            → fired
+                            @if (sk.firedTaskId) {
+                              <a [routerLink]="['/task', sk.firedTaskId]"
+                                >#{{ sk.firedTaskId }}</a
+                              >
+                            }
+                            @if (skipFolded(sk); as folded) {
+                              · {{ folded }}
+                            }
+                          </span>
+                        } @else if (sk.outcome === "dropped") {
+                          <span data-testid="sched-skip-outcome"
+                            >→ dropped</span
+                          >
+                        }
+                      </span>
                     </div>
                   }
                 </div>
@@ -3116,6 +3146,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected nextRunOf = scheduleNextRunLabel;
   protected runAtOf = formatRunAt;
   protected isTrigger = isEventTrigger;
+  protected suppressionLabel = suppressionReasonLabel;
+  protected skipFolded = skipFolded;
   protected suiteModeOf = describeSuiteMode;
   protected runBadgeOf = suiteRunBadge;
 
@@ -3154,7 +3186,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         // A required field with no default would have the server refuse
         // the whole preview ("field is required"), leaving the pane with
         // none; preview it with its own placeholder instead.
-        else if (f.required) defaults[f.name] = `{{${f.name}}}`;
+        else if (f.required)
+          defaults[f.name] = f.options?.length ? f.options[0] : `{{${f.name}}}`;
       }
       void this.store
         .fetchTemplateComposition(

@@ -680,6 +680,97 @@ describe("ProcessesPageComponent (D-9)", () => {
     );
   });
 
+  it("says a publishing-held suppression in words, shows the overlap group and each skip's outcome, and no Next for an event trigger", async () => {
+    api.schedules.push({
+      id: "sched-train",
+      title: "Release train",
+      description: "Cut an rc.",
+      repo: "acme/widgets",
+      base: "main",
+      autoMerge: false,
+      capabilities: [],
+      recurrence: { kind: "every_n_minutes", everyNMinutes: 20 },
+      overlap: "skip",
+      overlapGroup: "release-train",
+      source: "acme/widgets",
+      type: "template",
+      enabled: true,
+      nextRunAt: "2026-11-15T09:20:00Z",
+      createdAt: "2026-11-01T00:00:00Z",
+      suppressed: {
+        reason: "publishingHeld",
+        taskId: "2",
+        detail: "skipped: publishing held by task 2",
+      },
+      skips: [
+        {
+          occurrence: "2026-11-15T08:00:00Z",
+          at: "2026-11-15T08:00:00Z",
+          reason: "publishingHeld",
+          summary: "skipped at 2026-11-15 08:00 UTC: publishing held by task 2",
+          taskId: "2",
+          outcome: "fired",
+          firedTaskId: "5",
+          folded: 3,
+        },
+        {
+          occurrence: "2026-11-15T07:00:00Z",
+          at: "2026-11-15T07:00:00Z",
+          reason: "task",
+          summary: "skipped at 2026-11-15 07:00 UTC: #1 is still open",
+          taskId: "1",
+          outcome: "dropped",
+        },
+      ],
+      revision: "rev-train",
+    });
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-row-sched-train"]')!
+      .click();
+    await flush(harness);
+
+    const text = root.textContent ?? "";
+    expect(text).toContain(
+      "Suppressed — publishing held: skipped: publishing held by task 2",
+    );
+    expect(text).not.toContain("publishingHeld");
+    expect(
+      root.querySelector('[data-testid="sched-overlap-group"]')?.textContent,
+    ).toContain("Overlap group: release-train");
+    // A suppressed timed schedule keeps its real next time, formatted.
+    const next = root.querySelector('[data-testid="sched-detail-next"]');
+    expect(next?.textContent).toContain("Next:");
+    expect(next?.textContent).toMatch(/2026/);
+    expect(next?.textContent).not.toContain("suppressed");
+    expect(next?.textContent).not.toContain("T09:20:00Z");
+
+    const outcomes = Array.from(
+      root.querySelectorAll('[data-testid="sched-skip-outcome"]'),
+    ).map((el) => el.textContent?.replace(/\s+/g, " ").trim());
+    expect(outcomes).toEqual([
+      "→ fired #5 · 3 later occurrences folded in",
+      "→ dropped",
+    ]);
+    const fired = root.querySelector<HTMLAnchorElement>(
+      '[data-testid="sched-skip-outcome"] a',
+    )!;
+    expect(fired.getAttribute("href")).toBe("/task/5");
+
+    // An event trigger's nextRunAt is a placeholder, not a time.
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-row-sched-gitref"]')!
+      .click();
+    await flush(harness);
+    expect(root.textContent).not.toContain("Next: 2026-11-13T10:00:00Z");
+    expect(
+      root.querySelector('[data-testid="sched-detail-next"]')?.textContent,
+    ).toContain("Next: on event");
+  });
+
   it("preserves TemplateField metadata (label, default, options, required) across PATCH and launches via POST /api/tasks/from-template", async () => {
     const harness = await RouterTestingHarness.create(
       "/processes/templates?launch=1",

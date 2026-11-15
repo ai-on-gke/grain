@@ -231,3 +231,21 @@ Filed as one follow-up task. All of these exist on the classic page:
 - An unsaved-edit guard when following a schedule's task link (the
   `/next/` dialogs are modal; links behind them are not reachable while a
   draft is open, so there is nothing to guard yet).
+
+## Addendum (2026-11-15, merge-queue repair)
+
+- Merged `main` into the branch; resolved conflicts in
+  `processes-page.component.ts` (kept main's overlap-group line and skip
+  helpers beside this branch's formatted Next line) and
+  `processes-detail.css` (kept both `.dialog-error` and `.proc-skip-*`).
+- Review 5763's open question: a template whose required **selector**
+  field has no default still had no preview, because the `{{name}}`
+  placeholder is not one of its options. The preview now uses the first
+  option; `next-processes-walkthrough.spec.js` covers it.
+- Main had hidden an event trigger's placeholder Next. `scheduleNextRunLabel`
+  now says "on event" for an enabled trigger and "suppressed" for a
+  suppressed one, and keeps the real (formatted) time for a suppressed
+  timed schedule, such as one held by publishing.
+- Re-ran: ui-ng unit tests (492 pass), `next-processes-walkthrough.spec.js`
+  (5 pass) and `next-full-system.spec.js` (5 pass) against a fresh
+  `grain demo` build.

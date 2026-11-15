@@ -200,3 +200,40 @@ test("a template with a required field still previews its composition", async ({
     await page.request.delete(`/api/templates/${tmpl.id}`);
   }
 });
+
+// A required selector field (one with options) and no default must preview
+// with its first option: a "{{name}}" placeholder is not one of its options,
+// so the server refuses it.
+test("a template with a required selector field still previews its composition", async ({
+  page,
+}) => {
+  const created = await page.request.post("/api/templates", {
+    data: {
+      name: "e2e-required-selector",
+      title: "Fix {{area}}",
+      description: "Please fix {{area}}.",
+      params: ["area"],
+      fields: [{ name: "area", required: true, options: ["alpha", "beta"] }],
+    },
+  });
+  expect(created.ok()).toBe(true);
+  const tmpl = await created.json();
+  const refused = [];
+  page.on("response", (r) => {
+    if (r.url().includes("/composition") && r.status() >= 400) {
+      refused.push(`${r.status()} ${r.url()}`);
+    }
+  });
+  try {
+    await page.goto(`/next/processes/templates/${tmpl.id}`);
+    await expect(page.getByTestId("tmpl-detail-title")).toContainText(
+      "e2e-required-selector",
+    );
+    const inspector = page.getByTestId("proc-inspector");
+    await expect(inspector).toContainText("Composition preview");
+    await expect(inspector).toContainText("Fix alpha");
+    expect(refused).toEqual([]);
+  } finally {
+    await page.request.delete(`/api/templates/${tmpl.id}`);
+  }
+});

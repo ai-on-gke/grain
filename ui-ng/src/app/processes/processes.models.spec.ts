@@ -30,12 +30,20 @@ function sched(over: Partial<Schedule>): Schedule {
 }
 
 describe("scheduleNextRunLabel", () => {
+  it("says an enabled event trigger fires on event, not its placeholder", () => {
+    const s = sched({
+      recurrence: { kind: "git_ref" } as Schedule["recurrence"],
+    });
+    expect(scheduleNextRunLabel(s)).toBe("on event");
+  });
+
   it("says paused for a paused schedule rather than its stale nextRunAt", () => {
     expect(scheduleNextRunLabel(sched({ enabled: false }))).toBe("paused");
   });
 
-  it("says suppressed rather than the placeholder far-future time", () => {
+  it("says suppressed rather than a trigger's placeholder far-future time", () => {
     const s = sched({
+      recurrence: { kind: "git_ref" },
       nextRunAt: "2027-11-15T11:52:03.650805487Z",
       suppressed: { reason: "watchedRepoOffTarget", detail: "x" },
     } as Partial<Schedule>);

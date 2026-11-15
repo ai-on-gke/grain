@@ -1065,6 +1065,12 @@ var Migrations = []Migration{
 			"ALTER TABLE `grain_config` ADD COLUMN `qa` TEXT NOT NULL DEFAULT ''",
 		},
 	},
+	{
+		Version: 147,
+		Description: "have every repository's declarations read again, writing back the grants a schedule file " +
+			"declares that a firing from before 144 wrote its template's over (grain/task-5360)",
+		Up: rereadDeclarations,
+	},
 }
 
 // schema99AutoUpgradeReleaseTable is auto_upgrade_release as schema 99
