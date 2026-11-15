@@ -1,7 +1,12 @@
 /* Live turn steps (live-steps.component.ts; design book §5). */
 
+/* The thread it sits in (.chat-log) is a scrolling flex column. A flex item
+   there must never shrink: the raw transcript this replaced was an
+   overflow:auto <pre>, whose automatic minimum height is 0, so a full thread
+   squeezed it to the top sliver of its first line behind the composer. */
 .g-live-steps {
   display: block;
+  flex: none;
   min-width: 0;
   max-width: 100%;
 }

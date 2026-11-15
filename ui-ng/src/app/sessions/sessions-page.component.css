@@ -150,9 +150,15 @@ g-sessions-page {
   font-size: 20px;
 }
 
+/* One line: a long tool-call summary ends in an ellipsis (its title holds
+   the whole line) rather than pushing the thread down. */
 .chat-activity {
   margin: 0;
   padding: 8px 20px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  flex: none;
   font-size: 12px;
   line-height: 16px;
   color: var(--md-sys-color-on-surface-variant);

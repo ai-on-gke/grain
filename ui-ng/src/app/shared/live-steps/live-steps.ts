@@ -37,8 +37,7 @@ export interface LiveStep {
 }
 
 export type LiveItem =
-  | { kind: "text"; text: string }
-  | { kind: "step"; step: LiveStep };
+  { kind: "text"; text: string } | { kind: "step"; step: LiveStep };
 
 const CALL_LINE = /^> ([\w.:\-/]+)\((.*)\)\s*$/;
 const LABEL_MAX = 120;
@@ -62,7 +61,9 @@ const SUMMARY_KEYS = [
 // Tools whose call is a shell command, shown as the command itself.
 const COMMAND_KEYS = ["command", "cmd"];
 
-export function parseLiveTranscript(text: string | null | undefined): LiveItem[] {
+export function parseLiveTranscript(
+  text: string | null | undefined,
+): LiveItem[] {
   const items: LiveItem[] = [];
   if (!text) return items;
   const lines = text.replace(/\r\n/g, "\n").split("\n");
@@ -186,7 +187,10 @@ function stepLabel(
   return summary ? `${tool}: ${summary}` : tool;
 }
 
-function stepCall(args: Record<string, unknown> | null, rawArgs: string): string {
+function stepCall(
+  args: Record<string, unknown> | null,
+  rawArgs: string,
+): string {
   if (!args) return decodeEscapes(rawArgs);
   for (const k of COMMAND_KEYS) {
     const v = args[k];

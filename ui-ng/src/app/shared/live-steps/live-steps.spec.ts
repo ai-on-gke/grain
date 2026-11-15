@@ -138,7 +138,9 @@ describe("LiveStepsComponent", () => {
     const long = Array.from({ length: 40 }, (_, i) => `row ${i}`).join("\n");
     const f = await render(`> run_command({"command":"seq 40"})\n${long}\n`);
     const el = f.nativeElement as HTMLElement;
-    (el.querySelector('[data-testid="live-step-toggle"]') as HTMLElement).click();
+    (
+      el.querySelector('[data-testid="live-step-toggle"]') as HTMLElement
+    ).click();
     f.detectChanges();
     const out = () =>
       el.querySelector('[data-testid="live-step-output"]')?.textContent ?? "";

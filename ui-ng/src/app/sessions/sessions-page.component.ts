@@ -288,7 +288,11 @@ export function clock(iso: string | undefined, now = new Date()): string {
             </div>
 
             @if (activity(); as a) {
-              <p class="chat-activity" data-testid="chat-activity">
+              <p
+                class="chat-activity"
+                data-testid="chat-activity"
+                [attr.title]="a"
+              >
                 {{ a }}
               </p>
             }

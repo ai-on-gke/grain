@@ -250,6 +250,20 @@ inspector and Task Detail. Sessions shares its message styles.
 - The composer is `box-sizing: border-box; width: 100%`; attach, hint and
   Send share one row. A "New messages ↓" pill appears when something arrives
   while you are scrolled up.
+- **Live turn steps** (`shared/live-steps/`, `g-live-steps`). A running
+  turn's transcript is never shown raw. Each tool call is one 28px line,
+  labelled with the `description` the agent gave the call, or failing that
+  the tool name and a decoded argument summary. A label too long for the row
+  ends in an ellipsis and the row's title holds all of it. A spinner ring
+  marks a call still running, a tertiary dot one that is done, and an error
+  square one that failed, so colour never carries the state alone. Clicking a
+  line expands the decoded call (the command text for a shell tool, pretty
+  JSON otherwise, never `\uXXXX` escapes) and its output, clipped to 12 lines
+  behind "Show all". When the reply lands, the steps fold into one "N steps"
+  disclosure above it. Anything placed directly in the scrolling thread
+  (`.chat-log`, a flex column) must be `flex: none`. An `overflow: auto`
+  child has an automatic minimum height of 0, so a full thread squeezes it
+  to a sliver behind the composer.
 
 ### Settings
 

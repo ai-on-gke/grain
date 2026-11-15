@@ -112,8 +112,9 @@ import { clipOutput, liveSteps, parseLiveTranscript } from "./live-steps";
                         data-testid="live-step-show-all"
                         (click)="showAll(i)"
                       >
-                        Show all ({{ clip.hidden }} more
-                        line{{ clip.hidden === 1 ? "" : "s" }})
+                        Show all ({{ clip.hidden }} more line{{
+                          clip.hidden === 1 ? "" : "s"
+                        }})
                       </button>
                     }
                   } @else {
