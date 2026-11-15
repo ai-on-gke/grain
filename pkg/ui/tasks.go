@@ -2904,6 +2904,8 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// default put in after them would be a grant neither gate saw.
 	if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalAgent {
 		// filed as the body says
+	} else if _, isCIAPI := model.CIAPICallFromContext(r.Context()); isCIAPI {
+		// filed as the template says
 	} else if a := accessRoleFromContext(r.Context()); a != nil && !a.Full {
 		// filed as the body says
 	} else if cfg, err := s.tasks.Store.GetConfig(r.Context()); err == nil && cfg != nil {

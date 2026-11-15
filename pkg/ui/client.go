@@ -3267,6 +3267,21 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		links = append(links, model.Link{Kind: model.LinkGoogleChat, Target: strings.TrimSpace(req.GoogleChatSpace)})
 	}
 	now := c.now()
+	if ciCall, isCIAPI := model.CIAPICallFromContext(ctx); isCIAPI {
+		if req.ChangeTarget != nil || target == nil || !target.Same(ciCall.Repo) {
+			return Task{}, forbiddenErrorf("this CI token files tasks for %s only", ciCall.Repo)
+		}
+		for _, r := range reads {
+			if !r.Same(ciCall.Repo) {
+				return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s reads %s", ciCall.Repo, req.TemplateID, r)
+			}
+		}
+		for _, w := range writes {
+			if !w.Repo.Same(ciCall.Repo) {
+				return Task{}, forbiddenErrorf("this CI token reaches %s only, and template %s writes %s", ciCall.Repo, req.TemplateID, w.Repo)
+			}
+		}
+	}
 	// Decoded before NewTaskID allocates anything: a bad attachment should
 	// fail this call with nothing written at all, not leave a task behind
 	// with none of the files it was supposed to carry.
@@ -3414,6 +3429,49 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 		}
 	}
 	catalogueHold := false
+	var declHoldNote string
+	if _, isCIAPI := model.CIAPICallFromContext(ctx); isCIAPI && proposedBy == nil {
+		declHeld := model.DeclaredCompositionHold(model.Composition{
+			Grants:        grants,
+			Admission:     taskAdmission,
+			NetworkAccess: model.NetworkAccess(req.NetworkAccess),
+		})
+		if len(declHeld) > 0 && c.Store != nil && model.IsRepoDeclaredID(filedFrom) {
+			accepted, widened, err := c.Store.NoteDeclaredTemplateHold(ctx, filedFrom, declHeld, now)
+			if err != nil {
+				return Task{}, err
+			}
+			var remaining []string
+			for _, g := range catalogueNeedsPerson {
+				if !slices.Contains(declHeld, g) {
+					remaining = append(remaining, g)
+				}
+			}
+			catalogueNeedsPerson = remaining
+			if !accepted {
+				declHoldNote = model.DeclarationAcceptanceNote(filedFrom, declHeld, widened)
+				req.Approved = false
+			}
+		}
+		var ciPersonOnly []string
+		if declaredPush != nil {
+			ciPersonOnly = append(ciPersonOnly, fmt.Sprintf("template %s carries a declared push set (%s), which requires a person's approval", filedFrom, declaredPush.Path))
+		}
+		if req.KeepRunning || (req.KeepRunningSnake != nil && *req.KeepRunningSnake) {
+			ciPersonOnly = append(ciPersonOnly, "it sets keep_running, which only a person may give")
+		}
+		if priority > model.DefaultTaskPriority {
+			ciPersonOnly = append(ciPersonOnly, fmt.Sprintf("it sets priority %d above the default (%d), which only a person may give", priority, model.DefaultTaskPriority))
+		}
+		if len(ciPersonOnly) > 0 {
+			why := strings.Join(ciPersonOnly, "; ")
+			if needsPersonWhy == "" {
+				needsPersonWhy = why
+			} else {
+				needsPersonWhy += "; " + why
+			}
+		}
+	}
 	if needsPersonWhy != "" && proposedBy == nil && (c.requestActor(ctx).Actor.Kind != model.PrincipalHuman || limitedRole || isDelegatedRequest(ctx)) {
 		catalogueHold, req.Approved = true, false
 	}
@@ -3741,7 +3799,9 @@ func (c *Client) CreateTask(ctx context.Context, req CreateTaskRequest) (Task, e
 	}
 	switch {
 	case catalogueHold:
-		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._"
+		task.Body += "\n\n_Filed for a person to approve: " + needsPersonWhy + "._" + declHoldNote
+	case declHoldNote != "":
+		task.Body += declHoldNote
 	case req.Approved || (req.Interactive && proposedBy == nil && c.requestActor(ctx).Actor.Kind != model.PrincipalAgent):
 		approval := c.requestActor(ctx)
 		task.Approval = &approval

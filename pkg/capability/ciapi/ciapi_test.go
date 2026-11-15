@@ -569,8 +569,8 @@ func TestAListedRepositorysTokenIsNarrowedToThatRepository(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &tasks); err != nil || w.Code != http.StatusOK {
 		t.Fatalf("GET /api/tasks = %d %s (%v)", w.Code, w.Body, err)
 	}
-	if len(tasks) != 2 || tasks[0].ID != "2" || tasks[1].ID != "3" {
-		t.Errorf("GET /api/tasks answered %+v, want acme/widgets' task 2 and the repository-less 3", tasks)
+	if len(tasks) != 1 || tasks[0].ID != "2" {
+		t.Errorf("GET /api/tasks answered %+v, want acme/widgets' task 2 only (dropping both ai-on-gke/grain's 1 and the repository-less 3)", tasks)
 	}
 	for _, refused := range []struct{ method, path, body string }{
 		{"POST", "/api/tasks", `{"title":"x"}`},
