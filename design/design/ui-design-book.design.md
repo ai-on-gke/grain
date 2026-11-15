@@ -318,6 +318,15 @@ placeholder, and a cleared box saves that default again. A card a link points
 at carries an `id` (`#capability-policy`, `#other-secrets`), and the page
 scrolls to the URL's fragment once the section has rendered.
 
+A stored secret is listed by name and key, its value a mask that is never
+read back (Settings → Capabilities → Deployment credentials, `#other-secrets`).
+Replace fills the one set form with that name and key and focuses its masked
+value box, and Remove asks first, because a removed value can only be pasted
+again. A secret a capability server or another settings page owns is shown
+there, not offered for removal here. Each half of a card that saves through
+different scopes says which half is read-only for the reader and why
+(`next-deployment-credentials.spec.js`).
+
 ### Breakpoints
 
 `< 600px` phone, `600–839px` compact, `840–1279px` medium, `≥ 1280px`

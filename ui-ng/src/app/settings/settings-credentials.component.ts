@@ -235,16 +235,15 @@ export function claimedSecret(name: string, backendIds: string[]): boolean {
           } @else {
             <span class="s-hint" id="cred-gcp-count-hint"
               >How many service accounts to mint from (default 1). Above 1,
-              grain uses &lt;prefix&gt;-0&#64;…, &lt;prefix&gt;-1&#64;… in turn.</span
+              grain uses &lt;prefix&gt;-0&#64;…, &lt;prefix&gt;-1&#64;… in
+              turn.</span
             >
           }
         </div>
       </div>
       <div class="s-toggle-row">
         <div class="s-toggle-copy">
-          <span class="s-toggle-name" id="cred-insecure-label"
-            >Speak plain HTTP to GitHub host</span
-          >
+          <span class="s-toggle-name">Speak plain HTTP to GitHub host</span>
           <span class="s-hint"
             >For a test or mock GitHub only; never for a real one.</span
           >
@@ -254,7 +253,7 @@ export function claimedSecret(name: string, backendIds: string[]): boolean {
           class="g-switch"
           role="switch"
           data-testid="switch-cred-github-insecure"
-          aria-labelledby="cred-insecure-label"
+          aria-label="Speak plain HTTP to GitHub host"
           [attr.aria-checked]="Boolean(state.val('githubInsecureHttp', false))"
           [disabled]="!canWriteFields()"
           (click)="
@@ -640,7 +639,7 @@ export class SettingsCredentialsComponent implements OnInit {
     ev.preventDefault();
     document
       .getElementById("other-secrets")
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      ?.scrollIntoView?.({ behavior: "smooth", block: "start" });
   }
 
   protected onNameInput(v: string): void {
@@ -670,7 +669,7 @@ export class SettingsCredentialsComponent implements OnInit {
     this.replacing.set(`${row.secret}/${row.key}`);
     const box = this.valueBox()?.nativeElement;
     box?.focus();
-    box?.scrollIntoView({ block: "nearest" });
+    box?.scrollIntoView?.({ block: "nearest" });
   }
 
   protected cancelReplace(): void {
