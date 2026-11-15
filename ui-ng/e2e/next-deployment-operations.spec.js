@@ -242,3 +242,305 @@ test("Re-run failed follows to the run it starts", async ({ page }) => {
     }),
   ]);
 });
+
+test("a deep link to a later Fleet tab keeps that tab in view on a phone @phone", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const [gotoPath, tabId] of [
+    ["fleet?tab=controls", "controls"],
+    ["system/logs", "logs"],
+  ]) {
+    await page.goto(gotoPath);
+    const btn = page.getByTestId(`fleet-tab-${tabId}`);
+    await expect(btn).toHaveAttribute("aria-selected", "true");
+    await expect
+      .poll(async () => {
+        const b = await btn.boundingBox();
+        return Boolean(b && b.x >= 0 && b.x + b.width <= 390);
+      })
+      .toBe(true);
+  }
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+});
+
+test("pausing, resuming, and lifting quota pauses on Fleet update the global dispatch banner immediately", async ({
+  page,
+}) => {
+  try {
+    await page.goto("fleet?tab=controls");
+    await page
+      .getByLabel("Pipeline pause reason")
+      .fill("walkthrough sync check");
+    await page.getByRole("button", { name: "Pause pipeline" }).click();
+
+    const banner = page.getByTestId("global-dispatch-banner");
+    await expect(banner).toBeVisible();
+    await expect(banner).toContainText("walkthrough sync check");
+    await expect(page.getByTestId("live-pill")).toContainText(
+      "Pipeline paused",
+    );
+
+    await page.getByRole("button", { name: "Resume pipeline" }).click();
+    await expect(banner).toHaveCount(0);
+  } finally {
+    await page.request.delete("/api/pipeline-pause").catch(() => {});
+  }
+
+  let paused = true;
+  const pausePayload = {
+    paused: true,
+    pauses: [
+      {
+        connection: "gemini-pro",
+        connectionName: "Gemini 2.5 Pro",
+        model: "gemini-2.5-pro",
+        until: new Date(Date.now() + 3600e3).toISOString(),
+        secondsRemaining: 3600,
+        reason: "quota reached",
+        canLift: true,
+      },
+    ],
+  };
+  await page.route("**/api/config", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({
+      response: res,
+      json: {
+        ...body,
+        agentPause: paused ? pausePayload : { paused: false, pauses: [] },
+      },
+    });
+  });
+  await page.route(/\/api\/pause(\?.*)?$/, (route) => {
+    if (route.request().method() === "DELETE") {
+      paused = false;
+      return route.fulfill({ json: { pause: { paused: false, pauses: [] } } });
+    }
+    return route.fulfill({
+      json: {
+        enabled: true,
+        pause: paused ? pausePayload : { paused: false, pauses: [] },
+      },
+    });
+  });
+
+  await page.reload();
+  const banner = page.getByTestId("global-dispatch-banner");
+  await expect(banner).toContainText("Gemini 2.5 Pro");
+  await page.getByRole("button", { name: "Lift pause" }).click();
+  await expect(banner).toHaveCount(0);
+});
+
+test("Settings -> Caches disables Flush when caches are off, and asks before flushing when on", async ({
+  page,
+}) => {
+  await page.goto("settings/caches");
+  const pkgBtn = page.getByRole("button", { name: "Flush proxy cache" });
+  const actBtn = page.getByRole("button", { name: "Flush Actions cache" });
+  await expect(pkgBtn).toBeDisabled();
+  await expect(actBtn).toBeDisabled();
+  await expect(page.getByTestId("card-caches")).toContainText(
+    "Proxy cache not enabled on daemon",
+  );
+  await expect(page.getByTestId("card-caches")).toContainText(
+    "Actions cache not enabled on daemon",
+  );
+
+  const flushes = [];
+  await page.route("**/api/package-cache", (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        cache: [{ kind: "npm", entries: 12, bytes: 2 * 1024 * 1024 }],
+      },
+    }),
+  );
+  await page.route("**/api/actions-cache", (route) =>
+    route.fulfill({
+      json: { enabled: true, entries: 5, bytes: 4 * 1024 * 1024 },
+    }),
+  );
+  await page.route("**/api/package-cache/flush", (route) => {
+    flushes.push("package");
+    return route.fulfill({ json: { entries: 12, bytes: 2097152, cache: [] } });
+  });
+  await page.route("**/api/actions-cache/flush", (route) => {
+    flushes.push("actions");
+    return route.fulfill({
+      json: {
+        entries: 5,
+        bytes: 4194304,
+        cache: { enabled: true, entries: 0, bytes: 0 },
+      },
+    });
+  });
+
+  await page.reload();
+  await expect(pkgBtn).toBeEnabled();
+  await expect(actBtn).toBeEnabled();
+
+  await pkgBtn.click();
+  const dialog = page.getByTestId("confirm-dialog");
+  await expect(dialog).toContainText("Flush package proxy cache?");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  expect(flushes).toEqual([]);
+
+  await pkgBtn.click();
+  await dialog.getByRole("button", { name: "Flush cache" }).click();
+  await expect(page.getByTestId("card-caches")).toContainText(
+    "0 cached packages · 0 B",
+  );
+
+  await actBtn.click();
+  await expect(dialog).toContainText("Flush GitHub Actions cache?");
+  await dialog.getByRole("button", { name: "Flush cache" }).click();
+  await expect(page.getByTestId("card-caches")).toContainText(
+    "Cached entries: 0",
+  );
+  expect(flushes).toEqual(["package", "actions"]);
+});
+
+test("CI names each row uniquely, keeps selected runs in the URL, narrows non-task Re-run failed to failed jobs, and asks once for an unknown run", async ({
+  page,
+}) => {
+  const at = new Date(Date.now() - 120e3).toISOString();
+  let runs = [
+    {
+      id: "ci-main-2",
+      provider: "grain",
+      repo: "acme/widgets",
+      branch: "main",
+      commit: "abcdef1234567890",
+      workflow: "tests",
+      event: "push",
+      requestedBy: "alice@example.com",
+      status: "completed",
+      conclusion: "success",
+      startedAt: at,
+      finishedAt: at,
+      jobs: [
+        {
+          jobId: "lint",
+          name: "lint",
+          conclusion: "success",
+          status: "completed",
+        },
+      ],
+    },
+    {
+      id: "ci-main-1",
+      provider: "grain",
+      repo: "acme/widgets",
+      branch: "main",
+      commit: "abcdef1234567890",
+      workflow: "tests",
+      event: "push",
+      requestedBy: "alice@example.com",
+      status: "completed",
+      conclusion: "failure",
+      startedAt: at,
+      finishedAt: at,
+      jobs: [
+        {
+          jobId: "lint",
+          name: "lint",
+          conclusion: "success",
+          status: "completed",
+        },
+        {
+          jobId: "e2e",
+          name: "e2e",
+          conclusion: "failure",
+          status: "completed",
+        },
+      ],
+    },
+  ];
+  const posted = [];
+  let unknownGets = 0;
+  await page.route(/\/api\/ci\/runs(\?.*)?$/, (route) => {
+    if (route.request().method() === "POST") {
+      posted.push(route.request().postDataJSON());
+      const created = {
+        id: "ci-rerun-3",
+        provider: "grain",
+        repo: "acme/widgets",
+        branch: "main",
+        workflow: "tests",
+        status: "queued",
+        startedAt: new Date().toISOString(),
+        jobs: [],
+      };
+      runs = [created, ...runs];
+      return route.fulfill({ status: 201, json: created });
+    }
+    return route.fulfill({
+      json: { enabled: true, runs, matched: runs.length, stored: runs.length },
+    });
+  });
+  await page.route(/\/api\/ci\/runs\/[^/?]+(\?.*)?$/, (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").pop();
+    const run = runs.find((r) => r.id === id);
+    if (!run) {
+      unknownGets++;
+      return route.fulfill({ status: 404, json: { error: `no CI run ${id}` } });
+    }
+    return route.fulfill({ json: run });
+  });
+  await page.route(/\/api\/ci\/runs\/[^/]+\/artifacts/, (route) =>
+    route.fulfill({ json: { available: false, artifacts: [] } }),
+  );
+
+  await page.goto("ci");
+  await expect(page.getByRole("button", { name: /ci-main-2/ })).toBeVisible();
+  const failRow = page.getByRole("button", { name: /ci-main-1/ });
+  await failRow.click();
+  await expect(page).toHaveURL(/\/next\/ci\/runs\/ci-main-1$/);
+
+  await page.reload();
+  await expect(page).toHaveURL(/\/next\/ci\/runs\/ci-main-1$/);
+  await expect(page.getByTestId("ci-detail-status")).toContainText("Failed");
+
+  await page.getByTestId("ci-rerun-failed-btn").click();
+  await expect(page).toHaveURL(/\/next\/ci\/runs\/ci-rerun-3$/);
+  expect(posted).toEqual([
+    expect.objectContaining({
+      repo: "acme/widgets",
+      ref: "main",
+      commit: "abcdef1234567890",
+      event: "push",
+      jobs: ["e2e"],
+      recheck: true,
+    }),
+  ]);
+
+  await page.goto("ci/runs/ci-forgotten-404");
+  await expect(page.getByTestId("ci-action-error")).toContainText(
+    "no CI run ci-forgotten-404",
+  );
+  expect(unknownGets).toBe(1);
+});
+
+test("classic System -> Metrics ?f=repo:any:... links narrow /next/telemetry to that repository", async ({
+  page,
+}) => {
+  const queries = [];
+  await page.route(/\/api\/metrics\?.*/, async (route) => {
+    queries.push(new URL(route.request().url()).search);
+    return route.continue();
+  });
+  await page.goto("system/metrics?f=repo%3Aany%3Aacme%2Fwidgets&window=30d");
+  await expect(page).toHaveURL(/\/next\/telemetry\?/);
+  await expect(page.getByTestId("telemetry-clear-scope")).toBeVisible();
+  await expect
+    .poll(() =>
+      queries.some(
+        (q) => q.includes("repo=acme%2Fwidgets") && q.includes("window=30d"),
+      ),
+    )
+    .toBe(true);
+});

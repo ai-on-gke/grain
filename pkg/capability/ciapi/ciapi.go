@@ -116,6 +116,14 @@ func (g Grant) MayFile(stem string) bool {
 	return g.Holds("tasks:from-template") && (g.AnyTemplate || slices.Contains(g.Templates, stem))
 }
 
+// HoldsReleaseGate reports whether the grant holds every scope of the
+// api:release-gate-read preset (ci:read, tasks:read, sandboxes:read, and
+// tasks:from-template covering release-notes), which is what
+// POST /api/notifications/release-pending requires.
+func (g Grant) HoldsReleaseGate() bool {
+	return g.Holds("ci:read") && g.Holds("tasks:read") && g.Holds("sandboxes:read") && g.MayFile("release-notes")
+}
+
 // Tokens is the registry of live tokens. Safe for concurrent use; the
 // zero value is not -- use NewTokens.
 type Tokens struct {

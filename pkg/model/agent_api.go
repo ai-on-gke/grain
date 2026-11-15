@@ -15,6 +15,7 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"slices"
@@ -1293,4 +1294,54 @@ func CIAPIScopes() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// CIAPICall is the verified CI API token grant carried in-process on a
+// request forwarded by pkg/capability/ciapi to grain's API server, so every
+// handler -- including non-JSON namespace/log/attachment reads, task/{id}
+// sub-resources, event streams, and template filings -- holds the request to
+// that token's repository and automation principal rather than treating the
+// in-process forward as an unrestricted human operator.
+type CIAPICall struct {
+	ID         string
+	Repo       RepoRef
+	RunID      string
+	Scopes     []APIScope
+	authorized *bool
+}
+
+type ciAPICallContextKey struct{}
+
+// WithCIAPICall attaches call to ctx, with a fresh authorized slot that an
+// upstream server aware of CIAPICall sets via MarkAuthorized once its own
+// repository-scoped gate has admitted the request.
+func WithCIAPICall(ctx context.Context, call CIAPICall) (context.Context, CIAPICall) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	auth := false
+	call.authorized = &auth
+	return context.WithValue(ctx, ciAPICallContextKey{}, call), call
+}
+
+// CIAPICallFromContext returns the CIAPICall on ctx, if any.
+func CIAPICallFromContext(ctx context.Context) (CIAPICall, bool) {
+	if ctx == nil {
+		return CIAPICall{}, false
+	}
+	call, ok := ctx.Value(ciAPICallContextKey{}).(CIAPICall)
+	return call, ok
+}
+
+// MarkAuthorized records that an upstream server's own repository-scoped
+// authorization gate admitted this CI API request.
+func (c CIAPICall) MarkAuthorized() {
+	if c.authorized != nil {
+		*c.authorized = true
+	}
+}
+
+// Authorized reports whether MarkAuthorized was called on this CIAPICall.
+func (c CIAPICall) Authorized() bool {
+	return c.authorized != nil && *c.authorized
 }
