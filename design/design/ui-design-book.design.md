@@ -424,6 +424,9 @@ that order.
   line numbers.
 - Long text truncates with an ellipsis and a tooltip, never wraps a table
   row to six lines.
+- A row's badges (Repair, "Rolled over to #N", …) wrap onto a line under
+  its title before they squeeze the title below a readable width (about
+  120px) on a phone; a title cut to a few letters is not a truncation.
 
 **Sparks** (sparingly, never at the cost of speed):
 

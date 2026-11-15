@@ -83,6 +83,21 @@ async function run(width) {
   }
   check(`tasks list no side scroll ${w}`, await noSideScroll(page));
 
+  // Saved boards: save the closed-tab search as a board, open the plain
+  // list, apply the board, and the pill is back.
+  await page.goto(`${BASE}/next/tasks?tab=closed&q=nightly`);
+  await page.getByTestId(`row-${A}`).waitFor();
+  const boardName = `Rolled over ${width}`;
+  await page.getByTestId("saved-boards-btn").click();
+  await page.getByTestId("board-save-open").click();
+  await page.getByTestId("board-name-input").fill(boardName);
+  await page.getByTestId("board-save-submit").click();
+  await page.goto(`${BASE}/next/tasks`);
+  await page.getByTestId("saved-boards-btn").click();
+  await page.getByTestId("saved-boards-menu").getByText(boardName).first().click();
+  await page.getByTestId(`row-${A}`).waitFor();
+  check(`saved board keeps pill ${w}`, await page.getByTestId(`rolled-over-${A}`).isVisible(), page.url());
+
   // Item 2: banners, both directions, with and without the pane.
   await page.goto(`${BASE}/next/task/${B}`);
   const to = page.getByTestId("task-rolled-over-to");
