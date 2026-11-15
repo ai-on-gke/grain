@@ -260,7 +260,7 @@ func TestMigration144ClearsTemplateCopiesOffSchedules(t *testing.T) {
 	}
 }
 
-// A store that already ran migration 144 -- every v3.6.0 store -- still
+// A store that already ran migration 144 -- every v3.7.0 store -- still
 // has its repositories' declarations read again: migration 147 forgets
 // the commit each was last read at, so the next reconcile writes back the
 // grants a schedule file declares that a firing from before 144 wrote its

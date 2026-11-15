@@ -134,7 +134,7 @@ func migrateScheduleOwnSettings(ctx context.Context, tx *sql.Tx) error {
 // Forgetting the commit each repository was last read at has the next
 // reconcile read every one again, which puts them back.
 //
-// It is a migration of its own, not part of 144, because v3.6.0 shipped
+// It is a migration of its own, not part of 144, because v3.7.0 shipped
 // 144: a store that already ran it would never run an edit to it.
 // Idempotent: a second pass forgets a commit the reconcile already
 // read again, and costs one re-read.
