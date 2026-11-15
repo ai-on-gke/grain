@@ -1654,6 +1654,12 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   protected run(sel: InboxEntry, a: InboxAction): void {
     const key = sel.key;
     const aid = a.id;
+    // A report's Acknowledge asks nothing, so it gets the row button's
+    // Undo instead of a confirm.
+    if (this.rowAcknowledge(sel) === a) {
+      this.acknowledgeRow(sel);
+      return;
+    }
     if (a.confirm) {
       this.confirming.set({
         title: a.label,
