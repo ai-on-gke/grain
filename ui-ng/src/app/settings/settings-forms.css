@@ -179,6 +179,12 @@
   min-width: 0;
 }
 
+/* A short number beside an inline field (a host's capacity). */
+.s-input-inline.s-input-narrow {
+  flex: 0 0 96px;
+  width: 96px;
+}
+
 .s-textarea {
   min-height: 88px;
   padding: 10px 12px;
@@ -199,6 +205,10 @@
   font-size: 13px;
   line-height: 18px;
   color: var(--md-sys-color-on-surface-variant);
+}
+
+.s-hint.s-hint-warn {
+  color: var(--md-sys-color-warning);
 }
 
 .s-row {
@@ -334,6 +344,14 @@
 .s-banner.ok {
   background: var(--md-sys-color-tertiary-container);
   color: var(--md-sys-color-on-tertiary-container);
+}
+
+.s-probe-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
 }
 
 .s-plan-panel {

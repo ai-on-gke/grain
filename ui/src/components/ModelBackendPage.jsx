@@ -669,6 +669,15 @@ export default function ModelBackendPage({
                       <Button
                         type="button"
                         onClick={async () => {
+                          // Only pasting the key again undoes this, so
+                          // it asks first, as ui-ng's Settings does.
+                          if (
+                            !window.confirm(
+                              `Clear the credential for ${draft.id}? The secret stored for it is deleted, and only saving the key again brings it back.`,
+                            )
+                          ) {
+                            return;
+                          }
                           try {
                             await api(
                               `/api/agent-backends/${encodeURIComponent(draft.id)}/credential`,

@@ -373,3 +373,34 @@ Engine and CI is now on `/next/`, covered by
 - **CI:** queue age boost, step output MiB/days, output per run,
   artifacts per run/per file/days, job cache entries/days, each blank
   with its `<key>Default` placeholder.
+
+## Hosts and Git parity on `/next/` (task 5519, 2026-11-15)
+
+The classic-only controls listed under Hosts and Git above are now on
+`/next/settings/hostds` and `/next/settings/git`, driving the same routes:
+
+- **Hosts:** Edit (owner, labels, capacity in one `PATCH /api/hostds/{name}`;
+  a blanked capacity is sent as `0`, which clears it, as classic does --
+  `null` would leave the old value, since the server reads an absent
+  capacity as "unchanged"), Rename (`POST .../rename`), a resolved error
+  banner taken down by the save that fixed it, New enrollment code
+  options (expiry, max uses, default capacity, default labels, allowed
+  principals) with each code's defaults in its row, pending requests
+  with editable host name / labels / capacity and rekeys marked (their
+  name fixed), the connected host's address, principal and build, a
+  lasting Delete / Delete revoked notice listing cleared pauses and
+  skipped hosts, and the legacy token form's guidance and Owner field.
+  `local` still offers no actions.
+- **Git:** per-connection Test (`POST .../check` with host, credential,
+  scope, listing each repository's push access), Proxy (sent as `proxy`,
+  shown as "via proxy …"), "Reuse authentication from" in Link stored
+  credential mode (each credential named with the hosts and scopes it
+  serves), the refusal banner (a proxy carrying a login is refused with
+  400 and said beside the form; the fixed save takes it down), and a
+  pointer to Settings → Capabilities#credentials.
+- **No git connection:** the notice did not exist on `/next/`; it now
+  shows in the New task sheet and on Settings → Repos, names tokens,
+  GitHub Apps, SSH keys and ambient logins, and links to
+  `/next/settings/git`.
+
+Covered by `ui-ng/e2e/next-hosts-git-parity.spec.js`.

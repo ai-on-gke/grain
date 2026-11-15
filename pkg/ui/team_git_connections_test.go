@@ -167,6 +167,57 @@ func TestAddTeamGitConnectionRefusesNoCredential(t *testing.T) {
 	}
 }
 
+// TestAddTeamGitConnectionRefusesUnknownCredential is grain/task-6019: a
+// connection naming a stored credential that does not exist -- a typo in
+// Settings → Git's "Existing stored credential name" -- answered 500
+// internal. It is the request's fault, so it is a 400 naming the
+// credential, and nothing is written.
+func TestAddTeamGitConnectionRefusesUnknownCredential(t *testing.T) {
+	client, store, _ := testClient(t)
+	dir := t.TempDir()
+	credentials, err := gitproxy.LoadCredentialSet(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Config.Credentials = credentials
+	srv := ui.NewServerWithClient(client)
+	ctx := context.Background()
+
+	if err := store.PutConfig(ctx, model.Config{PollInterval: model.DefaultPollInterval}); err != nil {
+		t.Fatal(err)
+	}
+	root := map[string]string{"Content-Type": "application/json", "X-Grain-User": "root"}
+
+	rec := doWithHeaders(t, srv, http.MethodPost, "/api/deployment/git-connections",
+		`{"credential": "walk-existing-git", "host": "git-existing.walk.example.test", "kind": "git"}`, root)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST git-connections with an unknown credential: got %d %s, want 400", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), `no stored credential named \"walk-existing-git\"`) {
+		t.Errorf("400 body = %s, want it to name the missing credential", rec.Body)
+	}
+
+	rec = doWithHeaders(t, srv, http.MethodGet, "/api/deployment", "", root)
+	var team ui.Team
+	if err := json.Unmarshal(rec.Body.Bytes(), &team); err != nil {
+		t.Fatalf("Unmarshal team: %v", err)
+	}
+	if len(team.GitConnections) != 0 || team.HasGitCredential {
+		t.Fatalf("a refused connection left the team with connections=%+v hasGitCredential=%v", team.GitConnections, team.HasGitCredential)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("a refused connection wrote %v into the credentials directory", names)
+	}
+}
+
 func TestAddTeamGitConnectionRefusesDuplicateHostAndScope(t *testing.T) {
 	client, store, _ := testClient(t)
 	credDir := t.TempDir()
