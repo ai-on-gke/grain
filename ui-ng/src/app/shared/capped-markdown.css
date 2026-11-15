@@ -1,0 +1,60 @@
+/* g-capped-markdown: a long message in a box of capped height. */
+
+g-capped-markdown {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* About 20 lines, never more than a third of the window, so the actions
+   below a question and the task's details stay on screen. */
+.capped-md {
+  box-sizing: border-box;
+  align-self: stretch;
+  min-width: 0;
+  max-height: min(400px, 34dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--md-sys-color-on-surface);
+}
+
+/* Open: taller, still bounded, so the action row under it is still seen. */
+.capped-md.is-open {
+  max-height: min(60dvh, 960px);
+}
+
+.capped-md:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+  border-radius: var(--md-sys-shape-corner-small);
+}
+
+.capped-md p,
+.capped-md ul,
+.capped-md ol,
+.capped-md blockquote {
+  margin: 0 0 8px;
+}
+
+.capped-md ul,
+.capped-md ol {
+  padding-left: 24px;
+}
+
+.capped-md li > ul,
+.capped-md li > ol {
+  margin: 2px 0 0;
+}
+
+.capped-md .code-card {
+  margin: 0 0 8px;
+}
+
+.capped-md-toggle {
+  flex-shrink: 0;
+}

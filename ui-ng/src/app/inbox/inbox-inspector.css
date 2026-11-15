@@ -65,6 +65,9 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* Never squeezed: its question is capped (g-capped-markdown), so the
+     dock is as tall as that cap and its actions, and stays whole. */
+  flex: 0 0 auto;
 }
 
 .resolution-dock .banner {
@@ -97,10 +100,14 @@
   display: none;
 }
 
+/* The rest of the pane: the task's evidence, conversation and diff. A
+   scroll container's flex floor is 0, so without one a tall dock left
+   this a sliver; it keeps room for a screenful of its own. */
 .inspector-body {
   padding: 12px 20px 24px;
   overflow-y: auto;
   flex: 1;
+  min-height: min(240px, 30dvh);
   display: flex;
   flex-direction: column;
   gap: 12px;
