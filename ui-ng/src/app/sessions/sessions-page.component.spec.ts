@@ -339,7 +339,12 @@ describe("SessionsPageComponent", () => {
     const file = new File(["shot-bytes"], "screen.png", { type: "image/png" });
     Object.defineProperty(input, "files", { value: [file] });
     input.dispatchEvent(new Event("change"));
-    await settle(f);
+    // Staging reads the file asynchronously, which can outlast settle's
+    // fixed wait on a loaded runner: wait for the staged chip itself.
+    for (let i = 0; i < 100; i++) {
+      await settle(f);
+      if (q(f, '[data-testid="staged-att-0"]')) break;
+    }
 
     expect(text(f, '[data-testid="staged-att-0"]')).toContain("screen.png");
     const sendBtn = q(f, '[data-testid="send"]') as HTMLButtonElement;
