@@ -977,7 +977,8 @@ trigger's `trigger:<name>` findings) until one of three things happens:
 - **A clean re-review.** Push fixes, and the review filed for the new head
   passes.
 - **The owner accepts them as they are.** Use **Accept findings…** beside
-  the gate on the task's merge-gates panel, or `grain accept-findings -gate
+  the gate in the task's merge gates (the Changes tab in the new UI at
+  `/next/`, the merge-gates panel in the classic one), or `grain accept-findings -gate
   <gate> [-review <task>] <id> <reason>` (`POST
   /api/tasks/{id}/accept-findings`, `tasks:write`). A person with an
   unlimited role (grain/operator) may do this; a limited role and an agent
