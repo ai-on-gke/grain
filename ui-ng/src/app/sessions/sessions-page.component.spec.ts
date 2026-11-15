@@ -339,11 +339,17 @@ describe("SessionsPageComponent", () => {
     const file = new File(["shot-bytes"], "screen.png", { type: "image/png" });
     Object.defineProperty(input, "files", { value: [file] });
     input.dispatchEvent(new Event("change"));
-    await settle(f);
-
-    expect(text(f, '[data-testid="staged-att-0"]')).toContain("screen.png");
+    // Staging reads the file asynchronously, which can outlast settle()'s
+    // fixed pause on a loaded runner: wait for the chip and the enabled
+    // Send button rather than for a set time.
+    await vi.waitFor(async () => {
+      await settle(f);
+      expect(text(f, '[data-testid="staged-att-0"]')).toContain("screen.png");
+      expect(
+        (q(f, '[data-testid="send"]') as HTMLButtonElement).disabled,
+      ).toBe(false);
+    });
     const sendBtn = q(f, '[data-testid="send"]') as HTMLButtonElement;
-    expect(sendBtn.disabled).toBe(false);
     sendBtn.click();
     await settle(f);
 
