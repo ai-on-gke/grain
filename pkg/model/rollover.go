@@ -359,8 +359,14 @@ func rolloverCarry(ctx context.Context, tx *sql.Tx, t Task) (brief, handover str
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", "", fmt.Errorf("reading task %s's brief: %w", t.ID, err)
 	}
+	var carried string
 	if strings.TrimSpace(current) != "" {
 		brief = current
+	} else if from := rolledOverFrom(t); from != "" {
+		// A successor rolled over again: its description is still the
+		// RolloverBody it was filed with, so carry what that body carried
+		// rather than nesting it inside the next one.
+		brief, carried = unwrapRolloverBody(brief, from)
 	}
 	err = tx.QueryRowContext(ctx,
 		"SELECT `body` FROM `task_comment` WHERE `task_id` = ? AND `handover` = ? ORDER BY `id` DESC LIMIT 1",
@@ -368,7 +374,43 @@ func rolloverCarry(ctx context.Context, tx *sql.Tx, t Task) (brief, handover str
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", "", fmt.Errorf("reading task %s's handover: %w", t.ID, err)
 	}
+	if strings.TrimSpace(handover) == "" {
+		// No handover of its own: the one it was filed with is still the
+		// latest word on the work.
+		handover = carried
+	}
 	return brief, handover, nil
+}
+
+// rolledOverFrom is the predecessor t was rolled over from, or "".
+func rolledOverFrom(t Task) string {
+	for _, l := range t.Links {
+		if l.Kind == LinkRolledOverFrom {
+			return l.Target
+		}
+	}
+	return ""
+}
+
+// unwrapRolloverBody splits a description RolloverBody wrote for a task
+// rolled over from predecessorID back into the brief and handover it was
+// made of. A description edited since, which no longer ends in
+// RolloverBody's footer, is all brief.
+func unwrapRolloverBody(body, predecessorID string) (brief, handover string) {
+	footer := fmt.Sprintf("Rolled over from [task %s](/tasks/%s).", predecessorID, predecessorID)
+	rest, ok := strings.CutSuffix(strings.TrimSpace(body), footer)
+	if !ok {
+		return body, ""
+	}
+	rest = strings.TrimSpace(rest)
+	const heading = "## Handover\n\n"
+	if after, ok := strings.CutPrefix(rest, heading); ok {
+		return "", after
+	}
+	if i := strings.LastIndex(rest, "\n\n"+heading); i >= 0 {
+		return rest[:i], rest[i+len("\n\n"+heading):]
+	}
+	return rest, ""
 }
 
 // moveTaskGoalTx moves from's goal, if it has one, onto to.
