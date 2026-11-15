@@ -325,3 +325,39 @@ test(
     }
   },
 );
+
+// A refused save says why beside the Save that was pressed: at phone
+// width the dialog scrolls, and an error at its top was out of view
+// (viewport ratio 0) when the server turned the save down.
+test(
+  "a refused schedule save is in view beside its actions",
+  { tag: ["@phone"] },
+  async ({ page }) => {
+    await page.goto("processes/schedules");
+    await page.getByTestId("proc-new-schedule-btn").click();
+    const dialog = page.getByRole("dialog");
+    await page.getByTestId("sched-title-input").fill("e2e: too often");
+    await page.getByTestId("sched-desc-input").fill("Throwaway.");
+    await page.getByTestId("sched-repo-input").fill("acme/widgets");
+    await page.getByTestId("sched-kind-everyNMinutes").click();
+    await dialog.getByLabel("Every N minutes").fill("5");
+    const save = page.getByTestId("sched-save-btn");
+    await save.click();
+
+    const error = dialog.getByTestId("proc-dialog-error");
+    await expect(error).toContainText("at least 10");
+    await expect(error).toBeInViewport();
+    const box = (await error.boundingBox())!;
+    const frame = (await dialog.boundingBox())!;
+    const saveBox = (await save.boundingBox())!;
+    // Inside the dialog, wrapped rather than running past its edge, and
+    // above the actions.
+    expect(box.x).toBeGreaterThanOrEqual(frame.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(frame.x + frame.width + 0.5);
+    expect(box.y + box.height).toBeLessThanOrEqual(saveBox.y + 0.5);
+
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await page.getByTestId("proc-new-schedule-btn").click();
+    await expect(page.getByTestId("proc-dialog-error")).toHaveCount(0);
+  },
+);
