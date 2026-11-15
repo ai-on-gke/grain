@@ -34,7 +34,7 @@ func TestGitCredentialMigrationFidelity(t *testing.T) {
 	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 
-	runWithGrant := func(t *testing.T, withOverride, migrate bool) (statuses map[string]int, resolvedNames map[string]string, resolvedTokens map[string]string) {
+	runWithGrant := func(t *testing.T, grant string, migrate bool) (statuses map[string]int, resolvedNames map[string]string, resolvedTokens map[string]string) {
 		t.Helper()
 		db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
 		if err != nil {
@@ -82,10 +82,10 @@ func TestGitCredentialMigrationFidelity(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if withOverride {
+		if grant != "" {
 			if _, err := db.ExecContext(ctx,
 				"INSERT INTO `task_grant` (`task_id`, `capability`, `via`) VALUES (?, ?, ?)",
-				tk.ID, "github-credential:release-bot", string(model.GrantByLabel),
+				tk.ID, grant, string(model.GrantByLabel),
 			); err != nil {
 				t.Fatal(err)
 			}
@@ -97,7 +97,7 @@ func TestGitCredentialMigrationFidelity(t *testing.T) {
 			if err := model.New(db).Init(ctx); err != nil {
 				t.Fatalf("migrating 119 -> %d: %v", model.SchemaVersion, err)
 			}
-			if withOverride {
+			if grant != "" {
 				gotTask, err := store.GetTask(ctx, tk.ID)
 				if err != nil {
 					t.Fatal(err)
@@ -154,9 +154,10 @@ func TestGitCredentialMigrationFidelity(t *testing.T) {
 		return statuses, resolvedNames, resolvedTokens
 	}
 
-	// 1. With github-credential:release-bot vs migrated repo#credential={"credential":"release-bot"}.
-	beforeStatuses, beforeNames, beforeTokens := runWithGrant(t, true, false)
-	afterStatuses, afterNames, afterTokens := runWithGrant(t, true, true)
+	// 1. Imported RetiredGrantsBecame(github-credential:release-bot) vs migrated repo#credential={"credential":"release-bot"}.
+	importedGrant := model.RetiredGrantsBecame("github-credential:release-bot")[0]
+	beforeStatuses, beforeNames, beforeTokens := runWithGrant(t, importedGrant, false)
+	afterStatuses, afterNames, afterTokens := runWithGrant(t, "github-credential:release-bot", true)
 
 	for _, repo := range []string{"acme/widgets", "acme/docs", "acme/deploy"} {
 		if beforeStatuses[repo] != 200 || afterStatuses[repo] != 200 {
@@ -170,15 +171,22 @@ func TestGitCredentialMigrationFidelity(t *testing.T) {
 		}
 	}
 
-	// 2. Without override grant: repo-specific and team default credentials match identically.
-	noGrantBefore, noGrantBeforeNames, noGrantBeforeTokens := runWithGrant(t, false, false)
-	noGrantAfter, noGrantAfterNames, noGrantAfterTokens := runWithGrant(t, false, true)
+	// 2. An un-migrated github-credential:<name> row is no longer an alias and falls back to the deployment/repo credential.
+	unmigratedStatuses, unmigratedNames, unmigratedTokens := runWithGrant(t, "github-credential:release-bot", false)
+
+	// 3. Without override grant: repo-specific and team default credentials match identically.
+	noGrantBefore, noGrantBeforeNames, noGrantBeforeTokens := runWithGrant(t, "", false)
+	noGrantAfter, noGrantAfterNames, noGrantAfterTokens := runWithGrant(t, "", true)
 	wantFallback := map[string]string{
 		"acme/widgets": "team-bot",
 		"acme/docs":    "repo-bot",
 		"acme/deploy":  "team-bot",
 	}
 	for repo, wantName := range wantFallback {
+		if unmigratedStatuses[repo] != 200 || unmigratedNames[repo] != wantName || unmigratedTokens[repo] != noGrantAfterTokens[repo] {
+			t.Errorf("unmigrated retired %s: status=%d name=%q token=%q, want 200 %q %q",
+				repo, unmigratedStatuses[repo], unmigratedNames[repo], unmigratedTokens[repo], wantName, noGrantAfterTokens[repo])
+		}
 		if noGrantBefore[repo] != 200 || noGrantAfter[repo] != 200 {
 			t.Errorf("fallback %s HTTP status: before=%d after=%d, want 200", repo, noGrantBefore[repo], noGrantAfter[repo])
 		}

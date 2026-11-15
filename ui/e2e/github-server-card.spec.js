@@ -14,45 +14,27 @@
 
 import { expect, test } from "./fixtures.js";
 
-// Settings -> Capabilities says the in-process github-sandbox grant was
-// retired onto the in-process github server's #sandbox-repo method, below the
-// bootstrap-playbooks notice, and the notice stays inside the page at desktop
-// and phone widths.
+// Settings -> Capabilities opens on its Capability servers card, with no
+// deprecation notice above it now the retired names' aliases are gone,
+// and the in-process github server's card renders without widening the
+// page, at desktop and phone widths.
 for (const [label, width, height] of [
   ["desktop", 1280, 900],
   ["phone", 390, 844],
 ]) {
-  test(`shows the github-sandbox deprecation notice at ${label} width`, async ({
+  test(`opens on the capability servers card at ${label} width`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height });
     await page.goto("/settings/capabilities");
-    const notice = page.getByTestId("github-sandbox-deprecation-notice");
-    await expect(notice).toBeVisible();
-    for (const text of [
-      "github-sandbox",
-      "https://grain.dev/capabilities/github#sandbox-repo",
-      "github-app/app-id",
-      "github-app/private-key",
-    ]) {
-      await expect(notice).toContainText(text);
-    }
-    const box = await notice.boundingBox();
-    const above = await page
-      .getByTestId("bootstrap-playbooks-deprecation-notice")
-      .boundingBox();
+    const servers = page.getByRole("heading", { name: "Capability servers" });
+    await expect(servers).toBeVisible();
+    await expect(
+      page.locator('[data-testid$="-deprecation-notice"]'),
+    ).toHaveCount(0);
+    const box = await servers.boundingBox();
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(width);
-    // Stacked under the bootstrap-playbooks notice, the same width, not beside it.
-    expect(box.y).toBeGreaterThanOrEqual(above.y + above.height);
-    expect(Math.abs(box.width - above.width)).toBeLessThanOrEqual(1);
-    expect(Math.abs(box.x - above.x)).toBeLessThanOrEqual(1);
-    // The long reference wraps inside the notice rather than widening it
-    // or the page.
-    const clipped = await notice.evaluate(
-      (el) => el.scrollWidth > el.clientWidth,
-    );
-    expect(clipped).toBe(false);
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth > window.innerWidth,
     );

@@ -76,15 +76,6 @@ class FakeSettingsApi {
     if (key === "GET /api/deployment") {
       return Promise.resolve(structuredClone(this.deploymentBody));
     }
-    if (key === "GET /api/agent-keys") {
-      return Promise.resolve({
-        enabled: true,
-        geminiApiKeySet: true,
-        claudeOAuthTokenSet: false,
-        openaiApiKeySet: false,
-        codexAuthJSONSet: false,
-      });
-    }
     if (key === "GET /api/access/principals") {
       return Promise.resolve([
         { entry: "operator@example.com", role: "grain/operator" },
@@ -188,9 +179,6 @@ class FakeSettingsApi {
         ...((body ?? {}) as Record<string, unknown>),
       };
       return Promise.resolve(structuredClone(this.settingsBody));
-    }
-    if (key === "POST /api/agent-keys/{framework}/check") {
-      return Promise.resolve({ ok: true, detail: "200 OK (models reachable)" });
     }
     if (key === "POST /api/external-agents/tokens") {
       return Promise.resolve({ token: "gma_live_secret_token_999" });
@@ -357,7 +345,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     expect(el.querySelector('[data-testid="settings-save-bar"]')).toBeNull();
   });
 
-  it("enforces configRepoOnly read-only chip and banner on config-managed sections while keeping API keys editable", async () => {
+  it("enforces configRepoOnly read-only chip and banner on config-managed sections", async () => {
     const api = new FakeSettingsApi();
     api.configBody.configRepoOnly = true;
     api.settingsBody["configRepoOnly"] = true;
@@ -378,69 +366,23 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         ?.hasAttribute("disabled"),
     ).toBe(true);
 
-    // Navigate to Models: zero password inputs mount on initial load, and the
-    // secret key toggle/input stays enabled even when configRepoOnly is true.
+    // Navigate to Models: zero password inputs mount on initial load.
     await harness.navigateByUrl("/settings/models");
     await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
     expect(el.querySelectorAll('input[type="password"]').length).toBe(0);
-    const toggleBtn = el.querySelector<HTMLButtonElement>(
-      '[data-testid="toggle-agent-key-antigravity"]',
-    )!;
-    expect(toggleBtn.disabled).toBe(false);
-    toggleBtn.click();
-    harness.detectChanges();
-    const keyInput = el.querySelector<HTMLInputElement>(
-      '[data-testid="input-agent-key-antigravity"]',
-    )!;
-    expect(keyInput.disabled).toBe(false);
   });
 
-  it("manages Model Connections and verifies framework API keys", async () => {
+  it("manages Model Connections without a standalone framework keys card", async () => {
     const { el, api, harness } = await mountSettings("/settings/models");
 
     expect(el.querySelectorAll('input[type="password"]').length).toBe(0);
-    el.querySelector<HTMLButtonElement>(
-      '[data-testid="toggle-agent-key-claude"]',
-    )!.click();
-    harness.detectChanges();
-
-    setInput(
-      el.querySelector<HTMLInputElement>(
-        '[data-testid="input-agent-key-claude"]',
-      )!,
-      "sk-ant-test-123",
+    // Credentials live on each connection; the deployment-wide framework
+    // keys card (and its /api/agent-keys reads) is retired from the UI.
+    expect(el.querySelector('[data-testid="card-agent-keys"]')).toBeNull();
+    expect(api.calls.some((c) => c.key.includes("/api/agent-keys"))).toBe(
+      false,
     );
-    harness.detectChanges();
-    el.querySelector<HTMLButtonElement>(
-      '[data-testid="save-agent-key-claude"]',
-    )!.click();
-    await new Promise((r) => setTimeout(r, 200));
-    harness.detectChanges();
-
-    expect(
-      api.calls.some(
-        (c) =>
-          c.key === "PUT /api/agent-keys/{framework}" &&
-          c.params?.["framework"] === "claude",
-      ),
-    ).toBe(true);
-    expect(
-      el.querySelector('[data-testid="input-agent-key-claude"]'),
-    ).toBeNull();
-
-    harness.detectChanges();
-    el.querySelector<HTMLButtonElement>(
-      '[data-testid="check-agent-key-antigravity"]',
-    )!.click();
-    harness.detectChanges();
-    await harness.fixture.whenStable();
-    await new Promise((r) => setTimeout(r, 200));
-    harness.detectChanges();
-    expect(
-      el.querySelector('[data-testid="key-check-result-antigravity"]')
-        ?.textContent,
-    ).toContain("200 OK");
 
     // Add a new Vertex backend connection
     setInput(
@@ -1023,5 +965,77 @@ describe("SettingsPageComponent (M13 D-12)", () => {
           (c.body as { scope?: string })?.scope === "acme/widgets",
       ),
     ).toBe(true);
+  });
+
+  it("renders skeletons on cold config load, fires section fetches once per mount, and opens warm Settings synchronously across route leaves", async () => {
+    localStorage.clear();
+    const api = new FakeSettingsApi();
+    let resolveCfg!: (v: GrainConfig) => void;
+    api.config = () =>
+      new Promise<GrainConfig>((res) => {
+        resolveCfg = res;
+      });
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(
+          [
+            { path: "settings", component: SettingsPageComponent },
+            { path: "settings/:section", component: SettingsPageComponent },
+            { path: "other", children: [] },
+          ],
+          withComponentInputBinding(),
+        ),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: api },
+      ],
+    });
+    const harness = await RouterTestingHarness.create("/settings/git");
+    harness.fixture.autoDetectChanges(true);
+    await harness.fixture.whenStable();
+
+    const el = harness.fixture.nativeElement as HTMLElement;
+    expect(
+      el.querySelector('[data-testid="settings-skeleton"]'),
+    ).not.toBeNull();
+
+    // Unblock cold config and switch config() back to fast resolved response for background refreshes.
+    const cfg = structuredClone(api.configBody);
+    api.config = () => Promise.resolve(structuredClone(api.configBody));
+    resolveCfg(cfg);
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    await harness.fixture.whenStable();
+
+    expect(el.querySelector('[data-testid="settings-skeleton"]')).toBeNull();
+    // Guarded ngOnChanges prevents duplicate child loadForSection() call on initial mount.
+    expect(
+      api.calls.filter((c) => c.key === "GET /api/deployment/git-connections")
+        .length,
+    ).toBe(1);
+
+    // Visiting /settings/repositories fetches reachable-repos once.
+    await harness.navigateByUrl("/settings/repositories");
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.filter((c) => c.key === "GET /api/deployment/reachable-repos")
+        .length,
+    ).toBe(1);
+
+    // Leave Settings for another route and come back: warm open renders without skeletons and hits 60s reachable-repos cache.
+    await harness.navigateByUrl("/other");
+    await harness.navigateByUrl("/settings/repositories");
+    harness.fixture.detectChanges();
+    const warmEl = harness.fixture.nativeElement as HTMLElement;
+    expect(
+      warmEl.querySelector('[data-testid="settings-skeleton"]'),
+    ).toBeNull();
+    expect(
+      warmEl.querySelector('[data-testid="input-add-repo"]'),
+    ).not.toBeNull();
+    expect(
+      api.calls.filter((c) => c.key === "GET /api/deployment/reachable-repos")
+        .length,
+    ).toBe(1);
   });
 });

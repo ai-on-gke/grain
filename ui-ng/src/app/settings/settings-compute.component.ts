@@ -15,8 +15,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  OnChanges,
-  OnInit,
+  type OnChanges,
+  type OnInit,
+  type SimpleChanges,
   ViewEncapsulation,
   computed,
   inject,
@@ -43,6 +44,10 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import {
+  type UsagePauseInput,
+  summarizeDispatchStatus,
+} from "../shared/dispatch-status";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -82,21 +87,6 @@ const NETWORK_ACCESS_LABELS: Readonly<Record<string, string>> = {
   open: "Open (full network)",
   none: "None (isolated)",
 };
-
-interface AgentKeysResponse {
-  enabled?: boolean;
-  geminiApiKeySet?: boolean;
-  claudeOAuthTokenSet?: boolean;
-  openaiApiKeySet?: boolean;
-  codexAuthJSONSet?: boolean;
-  codexAuthRefreshError?: string;
-}
-
-interface KeyCheckResult {
-  ok: boolean;
-  detail: string;
-  checkedAt?: string;
-}
 
 interface ModelSettingRow {
   model: string;
@@ -256,6 +246,23 @@ function formatRefreshedAt(iso?: string): string {
   template: `
     @switch (section()) {
       @case ("models") {
+        @if (modelsDispatchStatus(); as dp) {
+          <div
+            class="s-banner"
+            [class.error]="dp.tone === 'error'"
+            [class.warn]="dp.tone === 'warn'"
+            role="status"
+            data-testid="models-quota-banner"
+          >
+            <strong>{{ dp.headline }}</strong>
+            @if (dp.resetText) {
+              <span class="s-num"> · {{ dp.resetText }}</span>
+            }
+            @if (dp.subline) {
+              <span> — {{ dp.subline }}</span>
+            }
+          </div>
+        }
         <div class="s-card" data-testid="card-model-defaults">
           <div class="s-card-head">
             <div>
@@ -298,17 +305,13 @@ function formatRefreshedAt(iso?: string): string {
             </span>
             @if (fallbackModels().length > 0) {
               <ol class="mp-chain" aria-label="Fallback models, in order">
-                @for (
-                  m of fallbackModels();
-                  track m;
-                  let i = $index, first = $first, last = $last
-                ) {
+                @for (m of fallbackModels(); track m) {
                   <li
                     class="mp-chain-row"
-                    [attr.data-testid]="'fallback-row-' + i"
+                    [attr.data-testid]="'fallback-row-' + $index"
                   >
                     <span class="mp-chain-pos" aria-hidden="true">{{
-                      i + 1
+                      $index + 1
                     }}</span>
                     <span class="mp-chain-model">{{ m }}</span>
                     @if (modelNote(m)) {
@@ -319,9 +322,9 @@ function formatRefreshedAt(iso?: string): string {
                         type="button"
                         class="btn-text s-btn-sm"
                         [attr.aria-label]="'Move ' + m + ' up'"
-                        [attr.data-testid]="'fallback-up-' + i"
-                        [disabled]="first || !canEditChain()"
-                        (click)="moveFallback(i, -1)"
+                        [attr.data-testid]="'fallback-up-' + $index"
+                        [disabled]="$first || !canEditChain()"
+                        (click)="moveFallback(m, -1)"
                       >
                         Up
                       </button>
@@ -329,9 +332,9 @@ function formatRefreshedAt(iso?: string): string {
                         type="button"
                         class="btn-text s-btn-sm"
                         [attr.aria-label]="'Move ' + m + ' down'"
-                        [attr.data-testid]="'fallback-down-' + i"
-                        [disabled]="last || !canEditChain()"
-                        (click)="moveFallback(i, 1)"
+                        [attr.data-testid]="'fallback-down-' + $index"
+                        [disabled]="$last || !canEditChain()"
+                        (click)="moveFallback(m, 1)"
                       >
                         Down
                       </button>
@@ -339,9 +342,9 @@ function formatRefreshedAt(iso?: string): string {
                         type="button"
                         class="btn-text s-btn-sm"
                         [attr.aria-label]="'Remove ' + m"
-                        [attr.data-testid]="'fallback-remove-' + i"
+                        [attr.data-testid]="'fallback-remove-' + $index"
                         [disabled]="!canEditChain()"
-                        (click)="removeFallback(i)"
+                        (click)="removeFallback(m)"
                       >
                         Remove
                       </button>
@@ -455,237 +458,6 @@ function formatRefreshedAt(iso?: string): string {
               >
                 Set model effort
               </button>
-            </div>
-          </div>
-        </div>
-
-        <div class="s-card" data-testid="card-agent-keys">
-          <div class="s-card-head">
-            <div>
-              <h3 class="s-card-title">Framework API keys &amp; Codex auth</h3>
-              <p class="s-card-desc">
-                Write-only credentials stored in the secret vault; values are
-                never returned to the browser.
-              </p>
-            </div>
-          </div>
-          @if (!access.can("GET /api/agent-keys")) {
-            <div class="s-banner warn" data-testid="agent-keys-restricted">
-              {{ access.deniedReason("GET /api/agent-keys") }}
-            </div>
-          } @else {
-            @if (!agentKeysEnabled()) {
-              <div class="s-banner readonly" data-testid="agent-keys-disabled">
-                Local secrets vault is not configured on this controller.
-              </div>
-            }
-            <div class="s-table-wrap">
-              <table class="s-table" aria-label="Framework API keys">
-                <thead>
-                  <tr>
-                    <th>Framework</th>
-                    <th>Status</th>
-                    <th class="s-actions-cell">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (fw of frameworks; track fw) {
-                    <tr>
-                      <td class="s-cell-title">{{ fw }}</td>
-                      <td>
-                        <span
-                          [class]="
-                            'status-pill ' +
-                            (isKeyConfigured(fw) ? 'healthy' : 'neutral')
-                          "
-                          [attr.data-testid]="'agent-key-status-' + fw"
-                        >
-                          {{ isKeyConfigured(fw) ? "Configured" : "Not set" }}
-                        </span>
-                        @if (keyChecks()[fw]; as chk) {
-                          <span
-                            [class]="
-                              'status-pill ' + (chk.ok ? 'healthy' : 'error')
-                            "
-                            [attr.data-testid]="'key-check-result-' + fw"
-                            style="margin-left: 6px"
-                          >
-                            {{ chk.ok ? "Valid" : "Failed" }}: {{ chk.detail }}
-                          </span>
-                        }
-                      </td>
-                      <td class="s-actions-cell">
-                        <div class="s-row-actions">
-                          <button
-                            type="button"
-                            class="btn-tonal s-btn-sm"
-                            [attr.data-testid]="'toggle-agent-key-' + fw"
-                            [attr.aria-expanded]="openKeyFramework() === fw"
-                            [attr.aria-label]="'Update API key for ' + fw"
-                            [disabled]="
-                              !agentKeysEnabled() ||
-                              !access.can('PUT /api/agent-keys/{framework}')
-                            "
-                            (click)="toggleKeyEditor(fw)"
-                          >
-                            Update key
-                          </button>
-                          <button
-                            type="button"
-                            class="btn-tonal s-btn-sm"
-                            [attr.data-testid]="'check-agent-key-' + fw"
-                            [disabled]="
-                              !access.can(
-                                'POST /api/agent-keys/{framework}/check'
-                              ) || busyKey() === fw
-                            "
-                            (click)="checkAgentKey(fw)"
-                          >
-                            Check
-                          </button>
-                          @if (isKeyConfigured(fw)) {
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              [attr.data-testid]="'clear-agent-key-' + fw"
-                              [disabled]="
-                                !agentKeysEnabled() ||
-                                !access.can(
-                                  'DELETE /api/agent-keys/{framework}'
-                                ) ||
-                                busyKey() === fw
-                              "
-                              (click)="clearAgentKey(fw)"
-                            >
-                              Clear
-                            </button>
-                          }
-                        </div>
-                      </td>
-                    </tr>
-                    @if (openKeyFramework() === fw) {
-                      <tr
-                        class="s-subrow"
-                        [attr.data-testid]="'agent-key-row-' + fw"
-                      >
-                        <td colspan="3">
-                          <form
-                            class="s-cred-bar"
-                            autocomplete="off"
-                            (submit)="$event.preventDefault(); saveAgentKey(fw)"
-                          >
-                            <span class="s-label"
-                              >API key for
-                              <span class="s-mono">{{ fw }}</span></span
-                            >
-                            <input
-                              class="s-input s-input-inline"
-                              type="password"
-                              [attr.name]="'grain-agent-key-' + fw"
-                              autocomplete="new-password"
-                              data-lpignore="true"
-                              data-1p-ignore="true"
-                              [attr.aria-label]="fw + ' API key'"
-                              [attr.data-testid]="'input-agent-key-' + fw"
-                              placeholder="Paste secret key…"
-                              [value]="keyDrafts()[fw] || ''"
-                              [disabled]="
-                                !agentKeysEnabled() ||
-                                !access.can('PUT /api/agent-keys/{framework}')
-                              "
-                              (input)="
-                                setKeyDraft(fw, $any($event.target).value)
-                              "
-                            />
-                            <button
-                              type="submit"
-                              class="btn-primary s-btn-sm"
-                              [attr.data-testid]="'save-agent-key-' + fw"
-                              [disabled]="
-                                !agentKeysEnabled() ||
-                                !(keyDrafts()[fw] || '').trim() ||
-                                !access.can(
-                                  'PUT /api/agent-keys/{framework}'
-                                ) ||
-                                busyKey() === fw
-                              "
-                            >
-                              Save key
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              (click)="openKeyFramework.set(null)"
-                            >
-                              Close
-                            </button>
-                          </form>
-                        </td>
-                      </tr>
-                    }
-                  }
-                </tbody>
-              </table>
-            </div>
-          }
-
-          <div class="s-subsection">
-            <div class="s-field">
-              <div class="s-inline">
-                <label class="s-label" for="f-codex-auth"
-                  >Codex auth.json (OAuth session bundle)</label
-                >
-                <span
-                  [class]="
-                    'status-pill ' +
-                    (codexAuthJsonSet() ? 'healthy' : 'neutral')
-                  "
-                  data-testid="codex-auth-status"
-                >
-                  {{ codexAuthJsonSet() ? "Configured" : "Not set" }}
-                </span>
-                @if (codexAuthRefreshError()) {
-                  <span class="status-pill error">{{
-                    codexAuthRefreshError()
-                  }}</span>
-                }
-              </div>
-              <textarea
-                id="f-codex-auth"
-                class="s-textarea s-mono"
-                rows="2"
-                data-testid="input-codex-auth"
-                placeholder='{"tokens": {...}}'
-                [value]="codexAuthDraft()"
-                [disabled]="!access.can('PUT /api/codex-auth')"
-                (input)="codexAuthDraft.set($any($event.target).value)"
-              ></textarea>
-              <div class="s-inline">
-                <button
-                  type="button"
-                  class="btn-tonal s-btn-sm"
-                  data-testid="save-codex-auth"
-                  [disabled]="
-                    !codexAuthDraft().trim() ||
-                    !access.can('PUT /api/codex-auth')
-                  "
-                  (click)="saveCodexAuth()"
-                >
-                  Save Codex auth
-                </button>
-                <button
-                  type="button"
-                  class="btn-text s-btn-sm"
-                  data-testid="clear-codex-auth"
-                  [disabled]="
-                    !this.codexAuthJsonSet() ||
-                    !access.can('DELETE /api/codex-auth')
-                  "
-                  (click)="clearCodexAuth()"
-                >
-                  Clear Codex auth
-                </button>
-              </div>
             </div>
           </div>
         </div>
@@ -1961,7 +1733,6 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly Boolean = Boolean;
   protected readonly formatLabels = formatHostdLabels;
   protected readonly formatRefreshedAt = formatRefreshedAt;
-  protected readonly frameworks = ["antigravity", "claude", "codex"] as const;
 
   protected readonly frameworkOptions: readonly PillOption[] = [
     { value: "antigravity", label: "Antigravity (Gemini)" },
@@ -2030,16 +1801,6 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     { value: "auto", label: "Pressure-governed auto" },
   ];
 
-  protected readonly agentKeysEnabled = signal(true);
-  protected readonly agentKeys = signal<Record<string, boolean>>({});
-  protected readonly codexAuthJsonSet = signal(false);
-  protected readonly codexAuthRefreshError = signal("");
-  protected readonly keyDrafts = signal<Record<string, string>>({});
-  protected readonly keyChecks = signal<Record<string, KeyCheckResult>>({});
-  protected readonly busyKey = signal<string | null>(null);
-  protected readonly openKeyFramework = signal<string | null>(null);
-  protected readonly codexAuthDraft = signal("");
-
   protected readonly newModelSettingName = signal("");
   protected readonly newModelSettingEffort = signal("high");
 
@@ -2070,6 +1831,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly newBudgetTokens = signal("");
   protected readonly newBudgetWindow = signal("24h");
   protected readonly usageSummary = signal("");
+  protected readonly usageSnapshot = signal<UsagePauseInput | null>(null);
+  protected readonly modelsDispatchStatus = computed(() =>
+    summarizeDispatchStatus(
+      this.access.rawConfig(),
+      this.usageSnapshot() ?? this.access.usage(),
+      this.access.clockNow(),
+      undefined,
+      { modelQuotaOnly: true },
+    ),
+  );
 
   protected readonly persistentSandboxes = signal<
     { name: string; state?: string }[]
@@ -2124,8 +1895,10 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     this.loadForSection();
   }
 
-  ngOnChanges(): void {
-    this.loadForSection();
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes["section"] && !changes["section"].firstChange) {
+      this.loadForSection();
+    }
   }
 
   protected canWriteSettings(): boolean {
@@ -2184,16 +1957,20 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     this.setModelChain([...chain, m]);
   }
 
-  protected moveFallback(idx: number, delta: -1 | 1): void {
+  protected moveFallback(model: string, delta: -1 | 1): void {
     const fb = [...this.fallbackModels()];
+    const idx = fb.findIndex((x) => x.toLowerCase() === model.toLowerCase());
+    if (idx < 0) return;
     const to = idx + delta;
     if (to < 0 || to >= fb.length) return;
     [fb[idx], fb[to]] = [fb[to], fb[idx]];
     this.setModelChain([this.modelChain()[0], ...fb]);
   }
 
-  protected removeFallback(idx: number): void {
-    const fb = this.fallbackModels().filter((_, i) => i !== idx);
+  protected removeFallback(model: string): void {
+    const fb = this.fallbackModels().filter(
+      (x) => x.toLowerCase() !== model.toLowerCase(),
+    );
     this.setModelChain([this.modelChain()[0], ...fb]);
   }
 
@@ -2287,14 +2064,14 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     const sec = this.section();
     if (sec === "models") {
       this.syncBackendsFromState();
-      if (this.access.can("GET /api/agent-keys")) {
-        void this.loadAgentKeys();
-      }
       if (this.access.can("GET /api/usage")) {
         void this.api
           .get<Record<string, unknown>>("GET /api/usage")
           .then((u) => {
             if (!u) return;
+            const parsed = u as unknown as UsagePauseInput;
+            this.usageSnapshot.set(parsed);
+            this.access.setUsage(parsed);
             this.applyUsageSettings(
               u["settings"] as UsageSettingsDto | undefined,
             );
@@ -2329,148 +2106,6 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       this.state.deployment()["agentBackends"];
     if (Array.isArray(raw)) {
       this.backends.set(raw as BackendEntry[]);
-    }
-  }
-
-  private applyAgentKeysResponse(
-    res: AgentKeysResponse | null | undefined,
-  ): void {
-    if (!res || typeof res !== "object") return;
-    if (res.enabled !== undefined) {
-      this.agentKeysEnabled.set(Boolean(res.enabled));
-    }
-    this.agentKeys.set({
-      antigravity: Boolean(res.geminiApiKeySet),
-      gemini: Boolean(res.geminiApiKeySet),
-      claude: Boolean(res.claudeOAuthTokenSet),
-      codex: Boolean(res.openaiApiKeySet),
-    });
-    this.codexAuthJsonSet.set(Boolean(res.codexAuthJSONSet));
-    this.codexAuthRefreshError.set(res.codexAuthRefreshError ?? "");
-  }
-
-  protected async loadAgentKeys(): Promise<void> {
-    try {
-      const res = await this.api.get<AgentKeysResponse>("GET /api/agent-keys");
-      this.applyAgentKeysResponse(res);
-    } catch {
-      // Non-fatal
-    }
-  }
-
-  protected isKeyConfigured(fw: string): boolean {
-    return Boolean(this.agentKeys()[fw]);
-  }
-
-  protected setKeyDraft(fw: string, val: string): void {
-    this.keyDrafts.update((p) => ({ ...p, [fw]: val }));
-  }
-
-  protected toggleKeyEditor(fw: string): void {
-    this.openKeyFramework.update((cur) => (cur === fw ? null : fw));
-  }
-
-  protected async saveAgentKey(fw: string): Promise<void> {
-    const value = (this.keyDrafts()[fw] ?? "").trim();
-    if (!value) return;
-    this.busyKey.set(fw);
-    try {
-      const res = await this.api.put<AgentKeysResponse>(
-        "PUT /api/agent-keys/{framework}",
-        { framework: fw },
-        { value },
-      );
-      this.setKeyDraft(fw, "");
-      this.openKeyFramework.set(null);
-      if (res && "geminiApiKeySet" in res) {
-        this.applyAgentKeysResponse(res);
-      } else {
-        this.agentKeys.update((p) => ({ ...p, [fw]: true }));
-      }
-      this.snackbar.show(`Saved ${fw} API key`);
-    } catch (err) {
-      this.state.recordError(err);
-    } finally {
-      this.busyKey.set(null);
-    }
-  }
-
-  protected async clearAgentKey(fw: string): Promise<void> {
-    this.busyKey.set(fw);
-    try {
-      const res = await this.api.delete<AgentKeysResponse>(
-        "DELETE /api/agent-keys/{framework}",
-        { framework: fw },
-      );
-      if (res && "geminiApiKeySet" in res) {
-        this.applyAgentKeysResponse(res);
-      } else {
-        this.agentKeys.update((p) => ({ ...p, [fw]: false }));
-      }
-      this.snackbar.show(`Cleared ${fw} API key`);
-    } catch (err) {
-      this.state.recordError(err);
-    } finally {
-      this.busyKey.set(null);
-    }
-  }
-
-  protected async checkAgentKey(fw: string): Promise<void> {
-    this.busyKey.set(fw);
-    try {
-      const res = await this.api.post<{
-        ok?: boolean;
-        detail?: string;
-        checkedAt?: string;
-      }>("POST /api/agent-keys/{framework}/check", { framework: fw }, {});
-      this.keyChecks.update((p) => ({
-        ...p,
-        [fw]: {
-          ok: Boolean(res?.ok),
-          detail: res?.detail || (res?.ok ? "Key verified" : "Check failed"),
-          checkedAt: res?.checkedAt,
-        },
-      }));
-    } catch (err) {
-      this.keyChecks.update((p) => ({
-        ...p,
-        [fw]: { ok: false, detail: errText(err) },
-      }));
-    } finally {
-      this.busyKey.set(null);
-    }
-  }
-
-  protected async saveCodexAuth(): Promise<void> {
-    const value = this.codexAuthDraft().trim();
-    if (!value) return;
-    try {
-      const res = await this.api.put<AgentKeysResponse>(
-        "PUT /api/codex-auth",
-        undefined,
-        { value },
-      );
-      this.codexAuthDraft.set("");
-      if (res && "codexAuthJSONSet" in res) {
-        this.applyAgentKeysResponse(res);
-      }
-      this.snackbar.show("Codex auth saved");
-    } catch (err) {
-      this.state.recordError(err);
-    }
-  }
-
-  protected async clearCodexAuth(): Promise<void> {
-    try {
-      const res = await this.api.delete<AgentKeysResponse>(
-        "DELETE /api/codex-auth",
-      );
-      if (res && "codexAuthJSONSet" in res) {
-        this.applyAgentKeysResponse(res);
-      }
-      this.snackbar.show("Codex auth cleared");
-    } catch (err) {
-      this.state.recordError(err);
     }
   }
 

@@ -138,7 +138,7 @@ func TestConsoleSessionHasNo8hDeadline(t *testing.T) {
 		Body:        director.Body,
 		Origin:      director.Origin,
 		Tags:        director.Tags,
-		Grants:      []model.Grant{{Capability: "self-debug", Via: model.GrantByGrain}},
+		Grants:      []model.Grant{{Capability: model.APIRef("self-debug"), Via: model.GrantByGrain}},
 		Interactive: true,
 		CreatedAt:   &legacyCreated,
 		Approval:    director.Approval,
@@ -307,7 +307,7 @@ func TestConsoleSessionAddingCapabilityMidConversationRestartsAndResumes(t *test
 	}
 
 	// Add self-debug capability while the conversation run is live.
-	cfg.ConsoleSessions[0].Capabilities = []string{"self-debug"}
+	cfg.ConsoleSessions[0].Capabilities = []string{"api:self-debug", model.GrainSourceGrant}
 	if err := store.PutConfig(ctx, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestConsoleSessionAddingCapabilityMidConversationRestartsAndResumes(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.ContainsFunc(updated.Grants, func(g model.Grant) bool { return g.Capability == "self-debug" }) {
+	if !slices.ContainsFunc(updated.Grants, func(g model.Grant) bool { return g.Capability == model.APIRef("self-debug") }) {
 		t.Fatalf("updated grants = %+v, want self-debug included", updated.Grants)
 	}
 }

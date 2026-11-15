@@ -622,6 +622,29 @@ export default function DetailOverlay({
                       </Fragment>,
                     );
                   }
+                  // Both halves of a rollover (model.LinkRolledOverFrom /
+                  // model.LinkRolledOverTo): a durable task past its
+                  // record limit and the successor carrying its work on
+                  // (durable-tasks.design.md#DT-15).
+                  if (t.rolledOverFrom) {
+                    items.push(
+                      <Fragment key="rolled-over-from">
+                        rolled over from{" "}
+                        <TaskLink
+                          id={t.rolledOverFrom}
+                          onOpenTask={onOpenTask}
+                        />
+                      </Fragment>,
+                    );
+                  }
+                  if (t.rolledOverTo) {
+                    items.push(
+                      <Fragment key="rolled-over-to">
+                        rolled over to{" "}
+                        <TaskLink id={t.rolledOverTo} onOpenTask={onOpenTask} />
+                      </Fragment>,
+                    );
+                  }
                   // Both halves of a revert (model.LinkReverts / model.LinkRevertedBy):
                   // allows walking back and forth between a revert task and its origin task.
                   if (t.reverts) {
@@ -724,6 +747,38 @@ export default function DetailOverlay({
               />
               <AttachmentLinks taskId={t.id} attachments={t.attachments} />
             </>
+          )}
+
+          {/* A rolled-over task is closed, and its work goes on under
+              another number (durable-tasks.design.md#DT-15): said first,
+              so somebody following an old link learns where to go
+              before reading a record that has stopped growing. */}
+          {t.rolledOverTo && (
+            <Alert
+              severity="info"
+              sx={{ mb: 2 }}
+              data-testid="task-rolled-over-to"
+            >
+              <strong>
+                Rolled over to{" "}
+                <TaskLink id={t.rolledOverTo} onOpenTask={onOpenTask} />.
+              </strong>{" "}
+              This durable task passed its record limit, so its work carries on
+              in the successor, with its brief, handover, pull request and
+              waits. This record is kept as it was.
+            </Alert>
+          )}
+          {t.rolledOverFrom && (
+            <Alert
+              severity="info"
+              sx={{ mb: 2 }}
+              data-testid="task-rolled-over-from"
+            >
+              Carries on the work of{" "}
+              <TaskLink id={t.rolledOverFrom} onOpenTask={onOpenTask} />, rolled
+              over when it passed its record limit; its earlier conversation and
+              runs are there.
+            </Alert>
           )}
 
           {t.state === "failed" && (

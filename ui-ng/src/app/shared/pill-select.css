@@ -15,6 +15,7 @@ g-priority-chip {
   align-items: center;
   gap: 6px;
   min-height: 36px;
+  max-width: min(260px, calc(100vw - 48px));
   padding: 0 10px 0 12px;
   border: 1px solid var(--md-sys-color-outline-variant);
   border-radius: var(--md-sys-shape-corner-full);
@@ -64,6 +65,13 @@ g-priority-chip {
 .pill-select-prefix {
   color: var(--md-sys-color-on-surface-variant);
   font-weight: 400;
+  flex-shrink: 0;
+}
+.pill-select-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pill-select-btn.is-inverse .pill-select-prefix {
   color: inherit;

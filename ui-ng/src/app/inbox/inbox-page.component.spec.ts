@@ -213,15 +213,16 @@ describe("InboxPageComponent", () => {
     expect(api.diffReads).not.toContain("9");
     expect(q(f, '[data-testid="inspector-diff"]')).toBeNull();
 
-    // A repository-scoped proposal with a pushed branch previews its diff, and
-    // a truncated diff without an external PR URL links to the task's Changes tab.
+    // A repository-scoped awaiting_submit decision without an external PR URL
+    // previews its diff and links to the task's Changes tab.
     api.taskList = [
       ...api.taskList,
       {
         id: "14",
-        title: "Proposed branch diff",
-        state: "proposed",
+        title: "Branch ready without PR link",
+        state: "awaiting_submit",
         repo: "acme/widgets",
+        branch: "grain/task-14",
       },
       {
         id: "15",
@@ -257,7 +258,7 @@ describe("InboxPageComponent", () => {
     };
     await store.refresh();
     store.applyUpdates();
-    store.select("task:14:proposal");
+    store.select("task:14:submit");
     await f.whenStable();
     await new Promise((r) => setTimeout(r));
     await f.whenStable();
@@ -272,11 +273,12 @@ describe("InboxPageComponent", () => {
     expect(truncLink?.textContent).toContain("See the full diff");
     expect(truncLink?.getAttribute("href")).toContain("/task/14");
 
-    // A proposal with no pushed branch (404 -> null) renders no empty diff pane.
+    // A proposal with no pushed branch skips diffPreview cleanly without 404s or an empty diff pane.
     store.select("task:15:proposal");
     await f.whenStable();
     await new Promise((r) => setTimeout(r));
     await f.whenStable();
+    expect(api.diffReads).not.toContain("15");
     expect(q(f, '[data-testid="inspector-diff"]')).toBeNull();
   });
 

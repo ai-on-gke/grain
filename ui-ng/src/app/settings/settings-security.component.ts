@@ -15,8 +15,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  OnChanges,
-  OnInit,
+  type OnChanges,
+  type OnInit,
+  type SimpleChanges,
   ViewEncapsulation,
   computed,
   inject,
@@ -792,8 +793,10 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
     this.loadForSection();
   }
 
-  ngOnChanges(): void {
-    this.loadForSection();
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes["section"] && !changes["section"].firstChange) {
+      this.loadForSection();
+    }
   }
 
   protected canWriteSettings(): boolean {

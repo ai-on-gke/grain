@@ -510,6 +510,58 @@ function taskAction(
   };
 }
 
+// stallControl is the button a stuck task's sub-case names (the
+// orchestrator's liveness reason's control: Run now, Cancel, Undefer or
+// Retry merge), as the classic Inbox's reasonControl offers it. The
+// merge queue's own sub-case stands in when the task's names none. A
+// sub-case naming no control a row can press offers none.
+function stallControl(t: Task): InboxAction | null {
+  for (const r of [t.reason, t.mergeQueueReason]) {
+    switch (r?.control) {
+      case "Run now":
+        return taskAction(
+          t,
+          "run-now",
+          "Run now",
+          "POST /api/tasks/{id}/run-now",
+          "primary",
+        );
+      case "Cancel":
+        // "Cancel task", not the sub-case's bare "Cancel": the confirm
+        // dialog's own dismiss button is "Cancel", and two buttons of one
+        // name side by side leave a person guessing which one stops the run.
+        return taskAction(
+          t,
+          "cancel",
+          "Cancel task",
+          "POST /api/tasks/{id}/close",
+          "tonal",
+          {
+            confirm: `Cancel #${t.id}? The run in flight is stopped and the task is closed; it can be reopened later.`,
+            destructive: true,
+          },
+        );
+      case "Undefer":
+        return taskAction(
+          t,
+          "undefer",
+          "Undefer",
+          "POST /api/tasks/{id}/undefer",
+          "primary",
+        );
+      case "Retry merge":
+        return taskAction(
+          t,
+          "retry-merge",
+          "Retry merge",
+          "POST /api/tasks/{id}/retry-merge",
+          "primary",
+        );
+    }
+  }
+  return null;
+}
+
 function taskEntry(t: Task, kind: EntryKind, groupId: string): InboxEntry {
   return {
     key: `task:${t.id}:${kind}`,
@@ -715,6 +767,8 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     e.pillTone = "blast";
     e.summary = t.stall;
     e.rationale = "Grain reads this as stuck rather than busy.";
+    const control = stallControl(t);
+    if (control) e.actions.push(control);
     return e;
   }
   if (t.state === "proposed") {
@@ -758,12 +812,22 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
 
 export function classifyNotification(n: Notification): InboxEntry {
   const release = pendingReleaseOf(n);
+  const taskId =
+    n.taskId || n.investigationTaskId || n.clearsWhen?.task || null;
+  const title = n.title || n.subject || "Notification";
+  const ref = release
+    ? release.version
+    : n.title && n.subject && n.subject !== n.title
+      ? n.subject
+      : taskId
+        ? `#${taskId}`
+        : n.subject || n.family || "alert";
   const base: InboxEntry = {
     key: `notification:${n.id}`,
     kind: release ? "release" : "notification",
     groupId: release ? "release" : "notification",
-    ref: release ? release.version : n.subject,
-    title: release ? `${release.version} is ready to promote` : n.subject,
+    ref,
+    title: release ? `${release.version} is ready to promote` : title,
     repo: n.repo || release?.repo || "",
     owner: "",
     summary: release ? pendingReleaseSentence(n) : notificationSentence(n),
@@ -775,14 +839,12 @@ export function classifyNotification(n: Notification): InboxEntry {
           ? "Warning"
           : "Alert",
     pillTone: release ? "blast" : n.severity === "critical" ? "error" : "blast",
-    at: n.raisedAt || null,
+    at: n.lastRaisedAt || n.raisedAt || null,
     rationale: release
       ? "Promoting tags the release, moves latest onto it and publishes its images."
       : "An alert stays open until somebody acknowledges or clears it.",
-    taskId: n.investigationTaskId || null,
-    taskLink: n.investigationTaskId
-      ? `/task/${encodeURIComponent(n.investigationTaskId)}`
-      : null,
+    taskId,
+    taskLink: taskId ? `/task/${encodeURIComponent(taskId)}` : null,
     externalLink: null,
     notification: n,
     release: release ?? undefined,

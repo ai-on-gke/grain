@@ -227,6 +227,12 @@ describe("Settings → Models default and fallback models", () => {
     q<HTMLButtonElement>('[data-testid="fallback-up-2"]')!.click();
     await new Promise((r) => setTimeout(r, 5));
     expect(fallbacks()).toEqual(["opus-5", "gemini-flash", "legacy-model"]);
+    q<HTMLButtonElement>('[data-testid="fallback-up-1"]')!.click();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(fallbacks()).toEqual(["gemini-flash", "opus-5", "legacy-model"]);
+    q<HTMLButtonElement>('[data-testid="fallback-down-0"]')!.click();
+    await new Promise((r) => setTimeout(r, 5));
+    expect(fallbacks()).toEqual(["opus-5", "gemini-flash", "legacy-model"]);
     expect(
       q<HTMLButtonElement>('[data-testid="fallback-up-0"]')!.disabled,
     ).toBe(true);

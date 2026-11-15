@@ -162,6 +162,12 @@ do not pull in an icon font.
   `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
   its query kept (`app.routes.ts`), rather than falling through to the
   Inbox.
+- **Dispatch & quota alerts:** when dispatch is paused or model quotas are
+  exhausted (`shared/dispatch-status.ts`), a lazy `@defer`-loaded global banner
+  (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
+  `Details (N)` breakdown, paired with status on the topbar live pill and
+  contextual queue/settings notices formatted in the configured or local
+  timezone with relative countdowns.
 
 ### Destinations fill the stage
 
@@ -213,6 +219,18 @@ Three columns: tree (≈21%), graph (flexible, minimum 280px), and task detail
 (`clamp(440px, 40%, 580px)`). The detail column gets room first; the graph
 takes what is left. Below 1280px it becomes two panes.
 
+- **Heavy-data progressive disclosure:** Workstreams list rows summarize
+  progress cleanly (`N/M done`, full counts in tooltip), cap repository lists
+  at two plus `+N`, keep the detail header free of async description text (`0px`
+  height shift when root task details load) by rendering the workstream goal
+  inside the right-hand inspector's `In this stream` section as a 1-line
+  plain-text preview with a toggle into a bounded (`max-height: 240px`)
+  Markdown view, fold completed leaves above 40 nodes by default, and clip SVG
+  node labels to node bounds. Telemetry groups quota notices into one collapsible banner, slices
+  heavy sections initially (`8` scopes/templates/directions, `12` contributors
+  with `All | People` filter and `2 +K` repos), and always keeps contributors
+  alphabetical (`A–Z`).
+
 ### The conversation
 
 One component, `shared/conversation/` (`g-conversation`), is the thread and
@@ -254,7 +272,10 @@ Remove buttons and an add picker that excludes what is already listed. Booleans 
 `Save changes` with a `POST /api/settings/plan` diff preview). Opt-in workflow
 controls (such as quality control PR rollout in `Settings -> Tasks`) live inside
 their section's `.s-card` with dependent fields disabled while off — never as
-persistent topbar or bottombar status badges.
+persistent topbar or bottombar status badges. Root-persistent `SettingsStateService`
+shows `.s-card` skeletons on cold load, opens warm Settings revisits immediately
+while refreshing in the background, guards child `ngOnChanges` on non-first
+`section` changes, and caches slow `reachable-repos` lookups for 60s.
 
 A settings picker offers the server's own vocabulary (for example
 `sandboxBackendOptions` and `networkAccesses` from `GET /api/settings`), never a
@@ -327,6 +348,15 @@ Rules:
   - The composer is locked to its target task.
   - Batch actions name their scope (repos, owners) in the confirmation.
   - Undo for reversible actions.
+  - An action that moves a branch, opens a pull request on someone's
+    behalf or drops a record (promote, merge back, delete) asks first in
+    the confirm dialog, naming what it touches.
+  - A form that waits for a Save button asks before its edits are
+    dropped, whether by a tab switch, a link, the rail or browser Back
+    (a `canDeactivate` guard plus the page's own tab bar). Discard puts
+    back the saved values.
+  - A refused value is reported beside its field (`aria-invalid`) and
+    clears on the next edit, not in a page-wide banner.
 - **Live, quietly.** Server-sent events update lists in place. Never steal
   focus or scroll position on an update; hold an update while the person is
   interacting with the row.
@@ -399,7 +429,20 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
   small; use `@defer` for overlays.
 - Each component stylesheet under 8 kB. Do not re-import shared CSS in a
   parent that a child component already loads; it duplicates the bytes.
+- Request efficiency: coalesce concurrent identical GET/conditional reads,
+  serve `GET /api/config` and Inbox summary hydrations with ETag `If-None-Match`
+  and bounded worker pools (`<= 4`), throttle hidden-tab or unmounted-page
+  polling, load inactive Fleet tabs lazily, and never block primary pickers on
+  slow `reachable-repos` discovery.
 - No new runtime dependency without a reason written in the pull request.
+- A click never waits silently on the network. Every lazy page chunk is
+  preloaded shortly after start-up (`shell/route-preload.ts`, skipped under
+  Save-Data), so navigation does not stall behind a slow origin. A
+  navigation still pending after 120 ms shows the shell's top progress bar
+  (`shell/nav-progress.component.ts`), which takes no pointer events. Routes
+  have no resolvers or guards that wait on polled reads; a page loads its own
+  data and shows its loading state. `e2e/next-task-page-stall.spec.js`
+  covers this.
 
 ## 10. How to test a UI change
 

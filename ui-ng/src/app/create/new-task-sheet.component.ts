@@ -112,7 +112,10 @@ const FRAMEWORKS: readonly PillOption[] = [
     DirectorShaperComponent,
   ],
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["./new-task-sheet.component.css"],
+  styleUrls: [
+    "./new-task-sheet.component.css",
+    "../shared/surface-controls.css",
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     "(document:keydown.escape)": "onEscape($event)",
@@ -1226,13 +1229,22 @@ export class NewTaskSheetComponent {
 
   protected readonly shown = computed(() => this.byVisibility("shown"));
   protected readonly capsFields = computed(() => {
-    if (!this.access.can("POST /api/tasks", this.repoForAccess())) return [];
+    if (
+      !this.access.canAccessTask(
+        "POST /api/tasks",
+        this.repoForAccess() ?? null,
+      )
+    )
+      return [];
     return this.byVisibility("more").filter((id) =>
       NewTaskSheetComponent.CAPS_SECTION_IDS.has(id),
     );
   });
   protected readonly more = computed(() => {
-    const hidden = !this.access.can("POST /api/tasks", this.repoForAccess())
+    const hidden = !this.access.canAccessTask(
+      "POST /api/tasks",
+      this.repoForAccess() ?? null,
+    )
       ? new Set(["model", "sandboxCpus"])
       : new Set();
     return this.byVisibility("more").filter(
@@ -1290,10 +1302,10 @@ export class NewTaskSheetComponent {
     if (tmpl && repo && fromTemplateStem(repo, tmpl)) {
       return (
         this.access.can("POST /api/tasks/from-template", repo) ||
-        this.access.can("POST /api/tasks", repo)
+        this.access.canAccessTask("POST /api/tasks", repo)
       );
     }
-    return this.access.can("POST /api/tasks", repo);
+    return this.access.canAccessTask("POST /api/tasks", repo ?? null);
   });
 
   protected readonly deniedReason = computed(() => {
@@ -1303,7 +1315,7 @@ export class NewTaskSheetComponent {
       if (this.access.can("POST /api/tasks/from-template", repo)) return null;
       return this.access.deniedReason("POST /api/tasks/from-template", repo);
     }
-    return this.access.deniedReason("POST /api/tasks", repo);
+    return this.access.deniedReasonForTask("POST /api/tasks", repo ?? null);
   });
 
   protected readonly canAskDirector = computed(
@@ -1362,42 +1374,41 @@ export class NewTaskSheetComponent {
     }
 
     const canGet = typeof this.api.get === "function";
-    const [tmplRes, reachRes] = await Promise.allSettled([
-      canGet && this.access.can("GET /api/templates")
-        ? this.api.get<Template[] | { templates?: Template[] }>(
-            "GET /api/templates",
-          )
-        : Promise.resolve([]),
-      canGet && this.access.can("GET /api/deployment/reachable-repos")
-        ? this.api.get<string[] | { repos?: string[] }>(
-            "GET /api/deployment/reachable-repos",
-          )
-        : Promise.resolve([]),
-    ]);
-
-    if (gen !== this.generation || !this.svc.isOpen()) return;
-    if (tmplRes.status === "fulfilled") {
-      const v = tmplRes.value;
-      const list = Array.isArray(v) ? v : (v?.templates ?? []);
-      this.templates.set(list);
-    }
-    if (reachRes.status === "fulfilled") {
-      const v = reachRes.value as {
-        repos?: Array<{ repo: string; push?: boolean } | string>;
-      };
-      const list = Array.isArray(v) ? v : (v?.repos ?? []);
-      if (Array.isArray(list)) {
-        this.reachableRepos.set(
-          list.map((x) => (typeof x === "string" ? x : x.repo)),
-        );
-        this.reachablePushRepos.set(
-          list
-            .filter((x) => typeof x === "string" || x.push)
-            .map((x) => (typeof x === "string" ? x : x.repo)),
-        );
-      }
-    }
     void this.loadBranchesFor(this.draft().repo);
+    if (canGet && this.access.can("GET /api/templates")) {
+      void this.api
+        .get<Template[] | { templates?: Template[] }>("GET /api/templates")
+        .then((v) => {
+          if (gen !== this.generation || !this.svc.isOpen()) return;
+          const list = Array.isArray(v) ? v : (v?.templates ?? []);
+          this.templates.set(list);
+        })
+        .catch(() => undefined);
+    }
+    if (canGet && this.access.can("GET /api/deployment/reachable-repos")) {
+      void this.api
+        .get<string[] | { repos?: string[] }>(
+          "GET /api/deployment/reachable-repos",
+        )
+        .then((v) => {
+          if (gen !== this.generation || !this.svc.isOpen()) return;
+          const obj = v as {
+            repos?: Array<{ repo: string; push?: boolean } | string>;
+          };
+          const list = Array.isArray(obj) ? obj : (obj?.repos ?? []);
+          if (Array.isArray(list)) {
+            this.reachableRepos.set(
+              list.map((x) => (typeof x === "string" ? x : x.repo)),
+            );
+            this.reachablePushRepos.set(
+              list
+                .filter((x) => typeof x === "string" || x.push)
+                .map((x) => (typeof x === "string" ? x : x.repo)),
+            );
+          }
+        })
+        .catch(() => undefined);
+    }
   }
 
   private async loadBranchesFor(repo: string): Promise<void> {
@@ -1788,7 +1799,7 @@ export class NewTaskSheetComponent {
         OVERRIDE_KEYS.some((k) => differs(d[k], fresh[k]));
 
       const canOnlyPostFromTemplate =
-        !this.access.can("POST /api/tasks", effectiveRepo) &&
+        !this.access.canAccessTask("POST /api/tasks", effectiveRepo || null) &&
         this.access.can("POST /api/tasks/from-template", effectiveRepo);
       if (
         tmpl &&

@@ -438,6 +438,110 @@ describe("WorkstreamsPageComponent", () => {
     fixture.detectChanges();
     expect(el.querySelector('[data-testid="ws-show-tree"]')).toBeNull();
   });
+
+  it("renders compact row progress text with full summary tooltip, caps repos to 2+N, clamps long goals, and folds >40 completed tree leaves", async () => {
+    const longGoal =
+      "Coordinate cross-repository schema rollout with staged canary gates, automated verification suites, strict observability thresholds, zero-downtime fallback migration scripts, and post-deploy regression checks across all worker pools.";
+    const tasks: Task[] = [
+      t("700", {
+        title: "Heavy stream",
+        description: longGoal,
+        state: "running",
+        repo: "acme/alpha",
+      }),
+    ];
+    for (let i = 1; i <= 38; i++) {
+      tasks.push(
+        t(String(700 + i), {
+          title: `Completed step ${i}`,
+          state: "completed",
+          origin: "task:700",
+          generatedFrom: "700",
+          parent: "700",
+          repo: i === 1 ? "acme/beta" : i === 2 ? "acme/gamma" : "acme/delta",
+        }),
+      );
+    }
+    for (let i = 39; i <= 45; i++) {
+      tasks.push(
+        t(String(700 + i), {
+          title: `Queued dependent ${i}`,
+          state: i === 45 ? "awaiting_reply" : "queued",
+          origin: "task:700",
+          generatedFrom: "700",
+          parent: "700",
+          dependsOn: i > 39 ? ["700"] : undefined,
+        }),
+      );
+    }
+    api.open = tasks;
+
+    const { fixture, router } = await mount("/workstreams");
+    const el = fixture.nativeElement as HTMLElement;
+    const row = el
+      .querySelector('[data-testid="ws-row-task:700"]')!
+      .closest(".ws-row")!;
+    const pcell = row.querySelector<HTMLElement>(".ws-pcell")!;
+    expect(
+      pcell.querySelector(".ws-ptext > span:first-child")?.textContent,
+    ).toContain("38/45 done");
+    expect(pcell.getAttribute("title")).toContain("38 of 45 done");
+    expect(row.querySelector(".mono")?.textContent).toContain("alpha, beta +3");
+    expect(row.querySelector("g-status-icon")).not.toBeNull();
+
+    // Open heavy detail view: verify goal lives in inspector (never .ws-dhead) as a 1-line preview with Markdown toggle,
+    // 4-item relationship cap, SVG clipPath, and >40 node auto-folding.
+    await router.navigateByUrl("/workstreams/task:700?node=700");
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(el.querySelector(".ws-dhead [data-testid='ws-goal']")).toBeNull();
+    const inspector = el.querySelector('[data-testid="ws-inspector"]')!;
+    const goal = inspector.querySelector('[data-testid="ws-goal"]')!;
+    expect(goal.classList.contains("ws-goal-preview")).toBe(true);
+    const goalToggle = inspector.querySelector<HTMLButtonElement>(
+      '[data-testid="ws-goal-toggle"]',
+    )!;
+    expect(goalToggle.getAttribute("aria-expanded")).toBe("false");
+    goalToggle.click();
+    fixture.detectChanges();
+    expect(goalToggle.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      inspector
+        .querySelector('[data-testid="ws-goal"]')!
+        .classList.contains("ws-goal-panel"),
+    ).toBe(true);
+
+    // Initially folds the 38 completed leaf nodes.
+    expect(
+      el.querySelectorAll('[data-testid^="ws-tree-node-"]').length,
+    ).toBeLessThan(20);
+    const foldToggle = el.querySelector<HTMLButtonElement>(
+      '[data-testid="ws-fold-done-toggle"]',
+    )!;
+    expect(foldToggle.textContent).toContain("Expand all (38)");
+    foldToggle.click();
+    fixture.detectChanges();
+    expect(
+      el.querySelectorAll('[data-testid^="ws-tree-node-"]').length,
+    ).toBeGreaterThanOrEqual(45);
+    expect(foldToggle.textContent).toContain("Collapse done");
+
+    // Root waitedOnBy list caps to 4 items with a +N more toggle.
+    const moreWaited = el.querySelector<HTMLButtonElement>(
+      '[data-testid="ws-rel-more-waitedOnBy"]',
+    )!;
+    expect(moreWaited.textContent?.trim()).toMatch(/^\+\d+ more$/);
+    moreWaited.click();
+    fixture.detectChanges();
+    expect(moreWaited.textContent?.trim()).toBe("Show fewer");
+
+    // SVG graph nodes carry <clipPath> and <title>.
+    expect(
+      el.querySelectorAll("clipPath[id^='ws-gclip-']").length,
+    ).toBeGreaterThan(0);
+    expect(el.querySelector(".ws-gnode title")).not.toBeNull();
+  });
 });
 
 describe("Workstreams detail embedded task pane", () => {
@@ -506,5 +610,150 @@ describe("Workstreams detail embedded task pane", () => {
     expect(detail().querySelector(".task-tab-body h2")!.textContent).toBe(
       "Runs",
     );
+  });
+
+  it("initializes embedded task pane tab from ?pane= on cold load and preserves #fragment in workstream URLs", async () => {
+    api.open = [
+      t("301", {
+        title: "Issue stream",
+        state: "running",
+        origin: "acme/widgets#42",
+      }),
+      t("302", {
+        title: "Subtask",
+        state: "running",
+        origin: "acme/widgets#42",
+      }),
+    ];
+    TestBed.configureTestingModule({
+      imports: [WorkstreamsPageComponent],
+      providers: [
+        provideRouter(
+          [
+            { path: "workstreams/:key", component: WorkstreamsPageComponent },
+            {
+              matcher: (segs) =>
+                segs.length >= 3 && segs[0]?.path === "workstreams"
+                  ? {
+                      consumed: segs,
+                      posParams: {
+                        key: {
+                          ...segs[1],
+                          path: segs
+                            .slice(1)
+                            .map((s) => s.path)
+                            .join("/"),
+                        } as never,
+                      },
+                    }
+                  : null,
+              component: WorkstreamsPageComponent,
+            },
+            { path: "**", children: [] },
+          ],
+          withComponentInputBinding(),
+        ),
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    TestBed.inject(AccessService).setConfig({
+      access: null,
+      viewerOwner: "alice",
+    });
+    const harness = await RouterTestingHarness.create(
+      "/workstreams/acme/widgets?pane=runs#42",
+    );
+    await TestBed.inject(WorkstreamsStore).refresh(true);
+    for (let i = 0; i < 3; i++) {
+      harness.detectChanges();
+      await harness.fixture.whenStable();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    harness.detectChanges();
+    const el = harness.routeNativeElement as HTMLElement;
+    expect(el.querySelector('[data-testid="ws-detail"]')).not.toBeNull();
+    const activeTab = el.querySelector(
+      "g-task-detail .task-tabs [aria-current]",
+    );
+    expect(activeTab?.getAttribute("data-testid")).toBe("task-tab-runs");
+  });
+
+  it("resolves /workstreams/#task:<id> fragment deep links, preserves fragment on patchQuery, and exits cleanly via Back", async () => {
+    api.open = [
+      t("10", { title: "Fragment stream", state: "running" }),
+      t("11", {
+        title: "Fragment child",
+        state: "queued",
+        origin: "task:10",
+        generatedFrom: "10",
+      }),
+    ];
+    TestBed.configureTestingModule({
+      imports: [WorkstreamsPageComponent],
+      providers: [
+        provideRouter(
+          [
+            { path: "workstreams", component: WorkstreamsPageComponent },
+            { path: "workstreams/:key", component: WorkstreamsPageComponent },
+            { path: "**", children: [] },
+          ],
+          withComponentInputBinding(),
+        ),
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+    TestBed.inject(AccessService).setConfig({
+      access: null,
+      viewerOwner: "alice",
+    });
+    const harness = await RouterTestingHarness.create("/workstreams#task:10");
+    await TestBed.inject(WorkstreamsStore).refresh(true);
+    for (let i = 0; i < 3; i++) {
+      harness.detectChanges();
+      await harness.fixture.whenStable();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    harness.detectChanges();
+    const el = harness.routeNativeElement as HTMLElement;
+    expect(
+      el.querySelector('[data-testid="ws-detail-title"]')?.textContent,
+    ).toContain("Fragment stream");
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="ws-tree-node-11"]',
+    )!.click();
+    for (let i = 0; i < 3; i++) {
+      harness.detectChanges();
+      await harness.fixture.whenStable();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    harness.detectChanges();
+    expect(TestBed.inject(Router).url).toBe("/workstreams?node=11#task:10");
+
+    // Clicking an embedded g-task-detail pane tab preserves #task:10 fragment.
+    el.querySelector<HTMLAnchorElement>(
+      'g-task-detail [data-testid="task-tab-runs"]',
+    )!.click();
+    for (let i = 0; i < 3; i++) {
+      harness.detectChanges();
+      await harness.fixture.whenStable();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    harness.detectChanges();
+    expect(TestBed.inject(Router).url).toBe(
+      "/workstreams?node=11&pane=runs#task:10",
+    );
+
+    el.querySelector<HTMLButtonElement>('[data-testid="ws-back"]')!.click();
+    for (let i = 0; i < 3; i++) {
+      harness.detectChanges();
+      await harness.fixture.whenStable();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    harness.detectChanges();
+    expect(TestBed.inject(Router).url).toBe("/workstreams");
+    expect(el.querySelector('[data-testid="ws-detail"]')).toBeNull();
   });
 });

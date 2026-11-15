@@ -254,7 +254,7 @@ export function guideKeyForUrl(url: string): string {
 @Component({
   selector: "g-help-dialog",
   encapsulation: ViewEncapsulation.None,
-  styleUrl: "./shell-overlays.css",
+  styleUrls: ["./shell-overlays.css", "../shared/surface-controls.css"],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="scrim" aria-hidden="true" (click)="help.close()"></div>

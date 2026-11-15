@@ -106,7 +106,7 @@ func TestTaskDetailRebuildsWhenLocalScriptApprovalRequestedOrExpired(t *testing.
 	srv, client := testServer(t)
 	created := decode[ui.Task](t, do(t, srv, http.MethodPost, "/api/tasks", `{"title":"fix it","approved":true}`))
 	if err := client.Store.UpdateTask(context.Background(), created.ID, func(task *model.Task) error {
-		task.Grants = append(task.Grants, model.Grant{Capability: "local-scripts:ops", Via: model.GrantByDefault})
+		task.Grants = append(task.Grants, model.Grant{Capability: `https://grain.dev/capabilities/host-script#host-script={"script":"deploy"}`, Via: model.GrantByDefault})
 		return nil
 	}); err != nil {
 		t.Fatal(err)

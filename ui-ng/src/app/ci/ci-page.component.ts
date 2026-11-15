@@ -116,6 +116,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "../inbox/inbox-queue.css",
     "./ci-list.css",
     "./ci-detail.css",

@@ -217,6 +217,49 @@ func (s *Server) goCacheNamespace(r *http.Request, pathNS string) (ns, scope str
 const goCacheReadOnly = "grain's Go build cache only takes writes from authenticated CI jobs: " +
 	"this sandbox reads the trusted build cache and keeps what it compiles to itself."
 
+// goCacheReadOnlyLogEvery is how often, at most, the daemon log says a
+// readonly caller's Go build-cache write was refused. A single go build in
+// a task sandbox PUTs every artifact it compiles, each one refused by
+// design, and a line apiece buried everything else in the log.
+const goCacheReadOnlyLogEvery = time.Minute
+
+// readOnlyRefusals rate-limits the log lines refuseReadOnlyGoCacheWrite
+// writes, counting the refusals it leaves out between them.
+type readOnlyRefusals struct {
+	mu         sync.Mutex
+	last       time.Time
+	suppressed int
+}
+
+// refuseReadOnlyGoCacheWrite answers a readonly caller's PUT with
+// goCacheReadOnly, as refuse does, but logs at most one line per
+// goCacheReadOnlyLogEvery: the refusal is expected, and the caller's
+// RunGoCacheProg carries on from its local directory either way.
+func (s *Server) refuseReadOnlyGoCacheWrite(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	rl := &s.goCacheReadOnlyLog
+	rl.mu.Lock()
+	logIt := rl.last.IsZero() || now.Sub(rl.last) >= goCacheReadOnlyLogEvery
+	suppressed := rl.suppressed
+	if logIt {
+		rl.last = now
+		rl.suppressed = 0
+	} else {
+		rl.suppressed++
+	}
+	rl.mu.Unlock()
+	if logIt {
+		note := ""
+		if suppressed > 0 {
+			note = fmt.Sprintf(" [%d more refused since the last line, not logged]", suppressed)
+		}
+		s.logf("package cache: refused %s %s: %s%s", r.Method, requestTarget(r), goCacheReadOnly, note)
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	fmt.Fprintln(w, goCacheReadOnly)
+}
+
 func (s *Server) openGoCacheAction(actionID, ns, scope string) (Object, bool) {
 	var keys []string
 	switch ns {
@@ -284,7 +327,7 @@ func (s *Server) serveGoCacheAction(w http.ResponseWriter, r *http.Request, rawI
 
 	case http.MethodPut:
 		if ns == "readonly" {
-			s.refuse(w, r, http.StatusForbidden, goCacheReadOnly)
+			s.refuseReadOnlyGoCacheWrite(w, r)
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
@@ -383,7 +426,7 @@ func (s *Server) serveGoCacheOutput(w http.ResponseWriter, r *http.Request, rawI
 		// caller that may write no action entry has nothing to store one
 		// for, and is not given the shared disk to fill.
 		if ns, _ := s.goCacheNamespace(r, ""); ns == "readonly" {
-			s.refuse(w, r, http.StatusForbidden, goCacheReadOnly)
+			s.refuseReadOnlyGoCacheWrite(w, r)
 			return
 		}
 		entry, err := s.cache.NewWriter(KindGoBuild, goCacheOutputKey(outputID))

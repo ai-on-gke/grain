@@ -70,14 +70,21 @@ type Reach struct {
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 
-	mu    sync.Mutex
-	cache map[string]reachEntry
+	mu      sync.Mutex
+	cache   map[string]reachEntry
+	flights map[string]*reachFlight
 }
 
 type reachEntry struct {
 	repos     []ReachableRepo
 	truncated bool
 	at        time.Time
+}
+
+type reachFlight struct {
+	done  chan struct{}
+	entry *reachEntry
+	err   error
 }
 
 // Reachability is what Check concludes about one repository.
@@ -244,14 +251,46 @@ func (r *Reach) entryForHost(name, host string) (*reachEntry, error) {
 	}
 	r.mu.Lock()
 	cached, ok := r.cache[key]
-	r.mu.Unlock()
 	if ok && now.Sub(cached.at) < ttl {
+		r.mu.Unlock()
 		return &cached, nil
 	}
+	if flight := r.flights[key]; flight != nil {
+		r.mu.Unlock()
+		<-flight.done
+		return flight.entry, flight.err
+	}
+	flight := &reachFlight{done: make(chan struct{})}
+	if r.flights == nil {
+		r.flights = map[string]*reachFlight{}
+	}
+	r.flights[key] = flight
+	r.mu.Unlock()
+
+	settled := false
+	defer func() {
+		if settled {
+			return
+		}
+		r.mu.Lock()
+		if flight.err == nil {
+			flight.err = fmt.Errorf("listing the repositories the %q credential can reach: aborted", name)
+		}
+		close(flight.done)
+		delete(r.flights, key)
+		r.mu.Unlock()
+	}()
 
 	repos, truncated, err := listReachable(api, *cred.Token, r.Credentials.IsApp(name))
 	if err != nil {
-		return nil, fmt.Errorf("listing the repositories the %q credential can reach: %w", name, err)
+		err = fmt.Errorf("listing the repositories the %q credential can reach: %w", name, err)
+		r.mu.Lock()
+		flight.err = err
+		close(flight.done)
+		delete(r.flights, key)
+		settled = true
+		r.mu.Unlock()
+		return nil, err
 	}
 	if normHost != "" && (r.Host != "" || api != r.API) && !model.SameGitHost(normHost, r.Host, model.DefaultGitHost) {
 		prefix := normHost + "/"
@@ -272,6 +311,10 @@ func (r *Reach) entryForHost(name, host string) (*reachEntry, error) {
 		}
 	}
 	r.cache[key] = fresh
+	flight.entry = &fresh
+	close(flight.done)
+	delete(r.flights, key)
+	settled = true
 	r.mu.Unlock()
 	return &fresh, nil
 }
