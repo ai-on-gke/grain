@@ -272,7 +272,10 @@ controls use the proportional 14/20 body stack (`.s-num` aligns numeric figures
 without switching prose or human names to monospace; `.s-mono` is reserved for
 technical slugs, model IDs and paths). Tables keep row actions on one right-aligned
 line (`.s-row-actions`), separate any below-table creation/edit form with a
-`.s-subsection` divider, and collapse per-connection password inputs behind an
+`.s-subsection` divider, let long paths and ref patterns break inside their
+cells (`overflow-wrap: anywhere`) rather than scroll the table on a phone, give a
+`.s-table-wrap` that can still scroll sideways `role="region"`, `tabindex="0"`
+and a label (axe's `scrollable-region-focusable`), and collapse per-connection password inputs behind an
 on-demand `Credential` row. Search filters live inside `<form role="search"
 autocomplete="off">` and secret inputs carry `autocomplete="new-password"` inside
 `<form autocomplete="off">` so browser password managers never autofill emails

@@ -92,6 +92,12 @@
   overflow-wrap: anywhere;
 }
 
+/* Paths and ref patterns are single long words: let them break inside
+ * their cell rather than push the table sideways on a phone. */
+.repo-adv-table td {
+  overflow-wrap: anywhere;
+}
+
 .repo-adv-danger {
   border-color: var(--md-sys-color-error);
 }
@@ -99,5 +105,14 @@
 @media (max-width: 767px) {
   .repo-page-scroll {
     padding: 16px 16px 64px;
+  }
+
+  .repo-adv-table th,
+  .repo-adv-table td {
+    padding: 8px;
+  }
+
+  .repo-adv-table th {
+    letter-spacing: 0;
   }
 }

@@ -1550,9 +1550,12 @@ interface PendingReleaseRow {
                       class="s-table-wrap"
                       role="region"
                       tabindex="0"
-                      aria-label="Extra push refs, scrolls sideways"
+                      aria-label="Extra push refs table"
                     >
-                      <table class="s-table" aria-label="Extra push refs">
+                      <table
+                        class="s-table repo-adv-table"
+                        aria-label="Extra push refs"
+                      >
                         <thead>
                           <tr>
                             <th>Template file</th>
@@ -1612,9 +1615,12 @@ interface PendingReleaseRow {
                         class="s-table-wrap"
                         role="region"
                         tabindex="0"
-                        aria-label="Port directions, scrolls sideways"
+                        aria-label="Port directions table"
                       >
-                        <table class="s-table" aria-label="Port directions">
+                        <table
+                          class="s-table repo-adv-table"
+                          aria-label="Port directions"
+                        >
                           <thead>
                             <tr>
                               <th>Direction</th>

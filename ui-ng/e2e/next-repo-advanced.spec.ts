@@ -58,9 +58,9 @@ const patchConfig = (page: Page, patch: Record<string, unknown>) =>
     },
   );
 
-// checkLayout checks the layout the tab rests on:
-// nothing pushes the page wider than the viewport, and every card sits
-// inside it.
+// checkLayout checks the layout the tab rests on: nothing pushes the
+// page wider than the viewport, every card sits inside it, and neither
+// table scrolls sideways.
 const checkLayout = async (page: Page) => {
   const overflow = await page.evaluate(
     () =>
@@ -80,6 +80,17 @@ const checkLayout = async (page: Page) => {
     expect(box, id).not.toBeNull();
     expect(box!.x, id).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width, id).toBeLessThanOrEqual(width + 0.5);
+  }
+  // Paths and ref patterns break inside their cells, so even the four
+  // port columns fit a phone without scrolling.
+  for (const name of ["Extra push refs table", "Port directions table"]) {
+    const wrap = page.getByRole("region", { name });
+    if ((await wrap.count()) === 0) continue;
+    const [scroll, client] = await wrap.evaluate((el) => [
+      el.scrollWidth,
+      el.clientWidth,
+    ]);
+    expect(scroll, name).toBeLessThanOrEqual(client);
   }
 };
 
