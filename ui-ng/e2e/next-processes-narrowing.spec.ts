@@ -173,44 +173,48 @@ test("a row moves in the custom order from the keyboard and by dragging", async 
   );
 });
 
-test("the header New menu opens the kind asked for", async ({ page }) => {
-  await page.goto("processes/schedules");
-  await page.getByTestId("proc-new-menu-btn").click();
-  const menu = page.getByTestId("proc-new-menu");
-  await expect(menu.getByRole("menuitem")).toHaveText([
-    "Schedule",
-    "Template",
-    "Suite",
-  ]);
-  await expect(page.getByTestId("proc-new-menu-hint")).toContainText(
-    "declared in a repository",
-  );
-  // The menu sits inside the viewport, under its button.
-  const box = (await menu.boundingBox())!;
-  const vw = page.viewportSize()!.width;
-  expect(box.x).toBeGreaterThanOrEqual(0);
-  expect(box.x + box.width).toBeLessThanOrEqual(vw + 0.5);
+test(
+  "the header New menu opens the kind asked for",
+  { tag: ["@phone", "@dark"] },
+  async ({ page }) => {
+    await page.goto("processes/schedules");
+    await page.getByTestId("proc-new-menu-btn").click();
+    const menu = page.getByTestId("proc-new-menu");
+    await expect(menu.getByRole("menuitem")).toHaveText([
+      "Schedule",
+      "Template",
+      "Suite",
+    ]);
+    await expect(page.getByTestId("proc-new-menu-hint")).toContainText(
+      "declared in a repository",
+    );
+    // The menu sits inside the viewport, under its button.
+    const box = (await menu.boundingBox())!;
+    const vw = page.viewportSize()!.width;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(vw + 0.5);
 
-  await page.getByTestId("proc-new-suite").click();
-  await expect(page).toHaveURL(/\/processes\/suites/);
-  await expect(page.getByTestId("suite-dialog")).toBeVisible();
-  await page
-    .getByTestId("suite-dialog")
-    .getByRole("button", { name: "Cancel" })
-    .click();
+    await page.getByTestId("proc-new-suite").click();
+    await expect(page).toHaveURL(/\/processes\/suites/);
+    await expect(page.getByTestId("suite-dialog")).toBeVisible();
+    await page
+      .getByTestId("suite-dialog")
+      .getByRole("button", { name: "Cancel" })
+      .click();
 
-  await page.getByTestId("proc-new-menu-btn").click();
-  await page.getByTestId("proc-new-template").click();
-  await expect(page).toHaveURL(/\/processes\/templates/);
-  await expect(
-    page.locator('[aria-labelledby="tmpl-dialog-title"]'),
-  ).toBeVisible();
-  await page.keyboard.press("Escape");
+    await page.getByTestId("proc-new-menu-btn").click();
+    await page.getByTestId("proc-new-template").click();
+    await expect(page).toHaveURL(/\/processes\/templates/);
+    await expect(
+      page.locator('[aria-labelledby="tmpl-dialog-title"]'),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
 
-  // ?new=suite deep-links the same form.
-  await page.goto("processes/schedules?new=suite");
-  await expect(page.getByTestId("suite-dialog")).toBeVisible();
-});
+    // ?new=suite deep-links the same form.
+    await page.goto("processes/schedules?new=suite");
+    await expect(page.getByTestId("suite-dialog")).toBeVisible();
+  },
+);
 
 // -sensitive-hold declares acme/widgets' .grain/triggers/payments.yml.
 test("a repository's declared trigger is a row that opens its Advanced tab", async ({
@@ -228,3 +232,51 @@ test("a repository's declared trigger is a row that opens its Advanced tab", asy
   await row.click();
   await expect(page).toHaveURL(/\/next\/repos\/acme\/widgets\/advanced/);
 });
+
+// The sort sits in each list's subbar beside its chips: one control
+// height, inside the list pane, wrapping rather than overflowing at phone
+// width. A trigger row and a template's "on demand" stay inside their row.
+test(
+  "the sort, trigger rows and derived runs fit their pane",
+  { tag: ["@phone", "@dark"] },
+  async ({ page }) => {
+    await page.goto("processes/schedules");
+    const pane = page.getByTestId("proc-list-pane");
+    const bar = page.getByRole("toolbar", { name: "Schedule filter" });
+    const sort = page.getByTestId("proc-sort");
+    await expect(sort).toBeVisible();
+    const paneBox = (await pane.boundingBox())!;
+    const sortBox = (await sort.boundingBox())!;
+    const chipBox = (await page.getByTestId("sched-filter-all").boundingBox())!;
+    expect(Math.abs(sortBox.height - chipBox.height)).toBeLessThanOrEqual(1);
+    expect(sortBox.x).toBeGreaterThanOrEqual(paneBox.x);
+    expect(sortBox.x + sortBox.width).toBeLessThanOrEqual(
+      paneBox.x + paneBox.width + 0.5,
+    );
+    expect(
+      await bar.evaluate((el) => el.scrollWidth - el.clientWidth),
+    ).toBeLessThanOrEqual(0);
+
+    const trigger = page.locator('[data-testid^="trigger-row-"]').first();
+    await expect(trigger).toBeVisible();
+    const tBox = (await trigger.boundingBox())!;
+    expect(tBox.x + tBox.width).toBeLessThanOrEqual(
+      paneBox.x + paneBox.width + 0.5,
+    );
+    expect(
+      await trigger.evaluate((el) => el.scrollWidth - el.clientWidth),
+    ).toBeLessThanOrEqual(0);
+
+    await page.goto("processes/templates");
+    const onDemand = page
+      .locator('[data-testid^="tmpl-next-"]', { hasText: "on demand" })
+      .first();
+    await expect(onDemand).toBeVisible();
+    const row = page
+      .locator('[data-testid^="tmpl-row-"]', { has: onDemand })
+      .first();
+    const rBox = (await row.boundingBox())!;
+    const dBox = (await onDemand.boundingBox())!;
+    expect(dBox.x + dBox.width).toBeLessThanOrEqual(rBox.x + rBox.width + 0.5);
+  },
+);

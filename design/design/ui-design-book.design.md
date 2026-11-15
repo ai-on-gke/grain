@@ -363,6 +363,18 @@ Rules:
   (`isTypingTarget`).
 - **URLs.** Every view, tab and selection that a person might share has a
   URL (`?tab=`, `?task=`, `?pane=`). Back works.
+  A list's narrowing and order are URL state too: the "Filter this view"
+  box is `?q=` (written back as it is typed, with `replaceUrl`) and a
+  sort is `?sort=`, so a reload and Back/Forward keep them. Tabs carry
+  both (`queryParamsHandling="merge"`). See
+  `ui-ng/e2e/next-processes-narrowing.spec.ts`.
+- **A custom order moves by pointer and by keyboard.** Where a list keeps
+  a person's own order (a "Custom order" sort), a row is dragged, or moved
+  one place with `Alt+ArrowUp` / `Alt+ArrowDown` (named in
+  `aria-keyshortcuts`). Each move is announced in a polite live region,
+  and focus stays on the row that moved. That order is browser state, kept
+  under the classic UI's own `grain.list-order.<list>` key and row keys,
+  so both UIs show it.
 - **Role-aware.** An action the person cannot take is hidden, or shown
   disabled with the reason. It is never shown enabled only to fail.
 - **State-aware.** The same goes for an action the item's state refuses.

@@ -21,6 +21,7 @@ g-processes-page {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  box-sizing: border-box;
   width: 100%;
   padding: 12px 16px;
   border: 0;
@@ -30,6 +31,11 @@ g-processes-page {
   text-align: left;
   cursor: pointer;
   transition: background-color 120ms var(--md-sys-motion-effects);
+}
+
+/* A trigger row is a link (it opens the repository), drawn as a row. */
+a.proc-row {
+  text-decoration: none;
 }
 
 .proc-row:focus-visible {
@@ -98,6 +104,14 @@ g-processes-page {
   .proc-mobile-back {
     display: inline-flex;
   }
+}
+
+/* One control height across a subbar: chips, the suites/runs switch and
+   the sort sit on one baseline (36px in toolbars, the design book's rule). */
+.proc-subbar .filter-chip,
+.proc-subbar .segmented button,
+.proc-subbar g-pill-select button {
+  min-height: 36px;
 }
 
 /* The sort sits at the end of each list's subbar, after its chips. */
