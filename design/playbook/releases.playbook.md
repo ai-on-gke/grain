@@ -545,11 +545,30 @@ A person may also file one by hand with **Use…** and a `version`. v3.6.0's man
 - For anything only a person can do, it raises one `grain notify --subject release-manager:vX.Y.Z` notification. That covers a grant, a held task, a force-merge or accepted finding, `latest` or `promote.yml` for a patch, a `-pending` approval, and disk or capacity on a host.
 - Once core `vX.Y.Z` is out, it drives the edition's release task for that version. If none has appeared within an hour, it files one from the edition's own `sync-oss-release` template, which is held for a person because the manager holds no write there.
 
-**When it ends.** Once core `vX.Y.Z` is tagged and published and the edition's `vX.Y.Z` is released with images published, it closes with `nothing_needed`. The closing report gives both release commits and image digests, every rc and why it was dropped, the fixes it filed, and what a person had to do. Before closing, it files the manager for any newer version whose rc was dropped by its schedule while it was open.
+**When it ends.** Once core `vX.Y.Z` is tagged and published and the edition's `vX.Y.Z` is released with images published, it closes with `nothing_needed`. The closing report gives both release commits and image digests, every rc and why it was dropped, the fixes it filed, and what a person had to do. Before closing, it files the release's audit (§17), and the manager for any newer version whose rc was dropped by its schedule while it was open.
 
 **What it may do.** It holds the `api#task-admin` and `api#ci-read` presets and the `releases:read`, `schedules:read` and `repos:read` scopes on `ai-on-gke/grain`, `templates:read` (to find the edition's `sync-oss-release` template), and `api#self-debug`, whose `tasks:read` reads the edition's tasks. The edition's repository read is granted to the template in grain's settings, because this repository may not name it (`TestCoreSaysNoGoogleTokens`). Not the `api#release-manager` preset: its `releases:write` and `schedules:write` would let a run nobody approved rewrite the qualification plan, promote or delete candidates, or disable a schedule. Nor `api#dispatch-control`: its `dispatch:write` (run-now, pausing dispatch) is refused on the sandbox channel the manager's `grain api` calls use. None of these is a scope only a person may grant, so a firing is filed approved with no hold (`model.DeclaredFiringHold`; `TestTheReleaseManagerLandsApprovedWithItsGrants`). The cross-task rail still applies: the manager cannot steer a task holding grants it lacks (the edition's release task does), and asks a person instead.
 
 **What it may not do.** It never force-merges (it holds no `merge:force`), bypasses or weakens a gate, quarantines a test to get a release through, pushes code or tags, or deletes a ref. It changes no file and opens no pull request. Fixes go in their own tasks, and releases are cut by the train and the edition's sync.
+
+### 17. The release audit (one task per release, at its end)
+
+v3.8.0 went out with every check green while a downstream edition's `channel-release-v3.8.0` asset release and its `latest`/`main` images still named a 3.7.0 build. Each step had passed on its own terms. Nothing compared the end state with what the release promised.
+
+So every release ends with a **release audit**: one task, filed from `.grain/templates/release-audit.yml` (`repo:template:ai-on-gke:grain:release-audit`, field `version`) by the release manager as it closes (§16, `propose_task` with `template_fields: {version: vX.Y.Z}`). It checks the end state as a whole and reports **pass**, **fail** or **unverified** with evidence for each of these:
+
+- **Tags → commits.** `vX.Y.Z` and every `vX.Y.Z-rc.N[-discarded]`: which rc was promoted, that `vX.Y.Z` is on its commit, that each discarded rc has a reason, and that `release/vX.Y.Z`, if it exists, agrees with the tag. A patch passes the patch-tag guard instead.
+- **Published artifacts.** Every image the tag's `release-images.sh promote` and `publish-release.yml` publish (`docker.io/grainai/grain`, `hub`, `sandbox`, ...) exists at `vX.Y.Z` and was built from the tag's commit (the `org.opencontainers.image.revision` label, or the same digest as `:sha-<short>`), with its digests. `latest` points at `vX.Y.Z` for a minor and was moved or left alone correctly for a patch (`docs/release-candidate-management.md` §9). The GitHub Release exists with notes and assets.
+- **Channels.** Every `channel-*`/`sha-*` GitHub Release and image tag naming this version or its commit resolves to that build and nothing else, and older versions' tags are untouched.
+- **Pipeline hygiene.** No open rc-blocker, Stage 1 repair or release-pinned task is left. The version's managers are closed. Every notification still open for it is listed.
+- **Upgrade path.** `pkg/upgrade` on `main` (`LatestRelease`, `releasedVersions`) resolves `latest` and `vX.Y.Z` to the published build, checked against the registry.
+- **Timeline.** rc cuts, stages, promotion and publish, with run links, what a person had to do, and anything out of order.
+
+**Downstream editions.** Core's audit checks an edition only as far as core can see it: whether the edition's release task for the version closed and whether the edition's own audit was filed. The edition's refs and images are its own audit's, filed from its own repository.
+
+**How it ends.** All pass: `comment_on_issue` with the report. Any failure or unverified check: one focused fix task per root cause with `propose_task` (after searching for an open owner), then `ask_question` with a `summary` naming the failure.
+
+**What it may do.** The manager's read scopes and nothing it steers with: `api#ci-read`, `releases:read` and `repos:read` on `ai-on-gke/grain`, and `api#self-debug` (`tasks:read`, which also reads notifications). Docker Hub's images are public, so inspecting them needs no credential. It is read-only: it changes no file, opens no pull request, and never pushes, moves, retags or deletes a ref, an image tag or a GitHub Release, so it never races the train, the publish workflows or a repair still running (`TestTheReleaseAuditOnlyReads`, `tests/deploy`).
 
 ---
 
