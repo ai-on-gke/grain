@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Component, input } from "@angular/core";
+import { Component, input, output } from "@angular/core";
 @Component({
   selector: "g-task-detail",
   template: '<div id="task-title">#{{id()}}</div>',
@@ -22,6 +22,8 @@ class MockTaskDetailComponent {
   readonly id = input<string>();
   readonly pane = input<boolean>();
   readonly tab = input<string>();
+  readonly closable = input<boolean>();
+  readonly closed = output<void>();
 }
 
 import { TaskDetailComponent } from "../task/task-detail.component";
@@ -569,7 +571,10 @@ describe("AgentsPageComponent", () => {
       } as unknown as Task,
     ];
     const f = await render(api);
+    f.componentRef.setInput("task", "7");
+    f.detectChanges();
     const split = f.nativeElement.querySelector(".inbox-split");
+    expect(split.classList).toContain("has-pane");
     expect(split).toBeTruthy();
     const resizer = f.nativeElement.querySelector(".inbox-resizer");
     expect(resizer).toBeTruthy();
@@ -577,7 +582,7 @@ describe("AgentsPageComponent", () => {
     expect(pane).toBeTruthy();
   });
 
-  it("auto-selects the first running agent on desktop when no task in URL", async () => {
+  it("shows full-width cards with no agent in focus when no task is in the URL", async () => {
     const api = new FakeApi();
     api.live = [
       {
@@ -589,10 +594,14 @@ describe("AgentsPageComponent", () => {
     ];
     const f = await render(api);
     f.detectChanges();
-    expect(
-      f.nativeElement.querySelector(".agent-card.is-selected"),
-    ).toBeTruthy();
-    expect(f.componentInstance["selectedId"]()).toBe("123");
+    expect(f.nativeElement.querySelector(".agent-card")).toBeTruthy();
+    expect(f.nativeElement.querySelector(".agent-card.is-selected")).toBeNull();
+    expect(f.componentInstance["selectedId"]()).toBeNull();
+    const split = f.nativeElement.querySelector(".inbox-split");
+    expect(split.classList).not.toContain("has-pane");
+    expect(split.classList).not.toContain("is-idle");
+    expect(f.nativeElement.querySelector(".inbox-resizer")).toBeNull();
+    expect(f.nativeElement.querySelector(".tasks-detail-pane")).toBeNull();
   });
 
   it("highlights the card matching ?task= parameter", async () => {
@@ -638,6 +647,7 @@ describe("AgentsPageComponent", () => {
       } as unknown as Task,
     ];
     const f = await render(api);
+    f.componentRef.setInput("task", "123");
     f.detectChanges();
 
     // Press j
@@ -652,6 +662,27 @@ describe("AgentsPageComponent", () => {
       [],
       expect.objectContaining({ queryParams: { task: "456" } }),
     );
+  });
+
+  it("opens the inspector on the first agent with j or k when none is in focus", async () => {
+    const api = new FakeApi();
+    api.live = [run("123"), run("456")];
+    const f = await render(api);
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    for (const k of ["j", "k"]) {
+      f.componentInstance["onKey"]({
+        key: k,
+        target: document.body,
+        preventDefault: () => {},
+      } as unknown as KeyboardEvent);
+    }
+    expect(nav).toHaveBeenCalledTimes(2);
+    for (const call of nav.mock.calls) {
+      expect(call[1]).toEqual(
+        expect.objectContaining({ queryParams: { task: "123" } }),
+      );
+    }
   });
 
   it("with nothing running and nothing pinned, drops the split for one full-width idle state", async () => {
@@ -887,6 +918,58 @@ describe("AgentsPageComponent selection and inspector", () => {
       }),
     );
     expect(nav).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes the inspector from the bar button, Escape, the pane's close, or the selected card", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const { harness, router } = await renderRouted(api, "/agents?task=456");
+    const root = harness.routeNativeElement as HTMLElement;
+    const open = async () => {
+      await router.navigateByUrl("/agents?task=456&pane=runs");
+      await settle(harness);
+      expect(root.querySelector(".inbox-split")!.classList).toContain(
+        "has-pane",
+      );
+      expect(root.querySelector(".agent-card.is-selected")).not.toBeNull();
+    };
+    const shut = async () => {
+      await settle(harness);
+      expect(router.url).toBe("/agents");
+      expect(root.querySelector(".inbox-split")!.classList).not.toContain(
+        "has-pane",
+      );
+      expect(root.querySelector('[data-testid="agents-pane"]')).toBeNull();
+      expect(root.querySelector(".agent-card.is-selected")).toBeNull();
+      expect(root.querySelectorAll(".agent-card").length).toBe(2);
+    };
+
+    await open();
+    root
+      .querySelector<HTMLElement>('[data-testid="agents-pane-close"]')!
+      .click();
+    await shut();
+
+    await open();
+    key("Escape");
+    await shut();
+
+    await open();
+    root
+      .querySelector<HTMLElement>(
+        '[data-testid="agents-pane"] [data-testid="pane-close"]',
+      )!
+      .click();
+    await shut();
+
+    await open();
+    root
+      .querySelector<HTMLElement>('[data-testid="agent-456"] .agent-activity')!
+      .click();
+    await shut();
+    // Escape with nothing in focus leaves the card view as it is.
+    key("Escape");
+    await shut();
   });
 
   it("switches inspector tabs from the embedded pane", async () => {

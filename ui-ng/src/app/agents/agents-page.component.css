@@ -434,6 +434,16 @@ body.agents-wall .agent-title {
   }
 }
 
+/* No agent in focus: the inspector is closed and the cards take the
+   whole width, wall-of-cards style. */
+.agents-split:not(.has-pane) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.agents-split:not(.has-pane) .queue-pane {
+  border-right: 0;
+}
+
 /* Nothing running: no split, no empty inspector; one centred state. */
 .agents-split.is-idle {
   grid-template-columns: minmax(0, 1fr);

@@ -133,9 +133,9 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
       <div
         class="inbox-split agents-split"
         #split
-        [class.has-pane]="!isPhone() && !idle()"
+        [class.has-pane]="paneOpen()"
         [class.is-idle]="idle()"
-        [class.is-collapsed]="sp.collapsed() && !isPhone()"
+        [class.is-collapsed]="sp.collapsed() && paneOpen()"
         [class.is-dragging]="sp.dragging()"
         [style.--queue-w.%]="sp.ratioExact()"
       >
@@ -425,7 +425,7 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
             }
           </div>
         </div>
-        @if (!isPhone() && !idle()) {
+        @if (paneOpen()) {
           <div
             class="inbox-resizer"
             role="separator"
@@ -504,6 +504,15 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
                 >
                   42 / 58
                 </button>
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="agents-pane-close"
+                  gTip="Close the inspector and show every card (Esc)"
+                  (click)="closePane()"
+                >
+                  Close inspector
+                </button>
               </div>
             </div>
             @if (pinnedAway(); as away) {
@@ -526,11 +535,14 @@ const STATUS_TEXT: Record<AgentStatus, string> = {
               </div>
             }
             @if (selectedId(); as activeId) {
-              <g-task-detail [pane]="true" [tab]="pane()" [id]="activeId" />
-            } @else {
-              <div class="pane-empty">
-                <p>No agents running.</p>
-              </div>
+              <g-task-detail
+                [pane]="true"
+                [tab]="pane()"
+                [id]="activeId"
+                [closable]="true"
+                (closed)="closePane()"
+                (expand)="openFull(activeId)"
+              />
             }
           </section>
         }
@@ -739,13 +751,15 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     element: () => this.splitEl()?.nativeElement,
   });
 
-  protected readonly selectedId = computed(() => {
-    const fromUrl = this.task();
-    if (fromUrl) return fromUrl;
-    if (this.isPhone() || !this.store.loaded()) return null;
-    const all = this.store.agents();
-    return all.length > 0 ? all[0].task.id : null;
-  });
+  // selectedId is the agent in the inspector: only the one ?task= names.
+  // With none the page is a full-width wall of cards and no card is
+  // marked selected; j, k or a click opens the inspector on one.
+  protected readonly selectedId = computed(() => this.task() || null);
+
+  /** The inspector is open: a desktop width with an agent in focus. */
+  protected readonly paneOpen = computed(
+    () => !this.isPhone() && !this.idle() && !!this.selectedId(),
+  );
 
   protected isPhone(): boolean {
     return (
@@ -785,7 +799,7 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     const cur = ev.currentTarget as Element | null;
     const control = t?.closest("a, button");
     if (control && control !== cur && cur?.contains(control)) return;
-    this.selectTask(id);
+    this.toggleTask(id);
   }
 
   // pickKey is Enter or Space on the focused card or row itself. It
@@ -794,14 +808,52 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
   protected pickKey(ev: Event, id: string): void {
     if (ev.target !== ev.currentTarget) return;
     ev.preventDefault();
+    this.toggleTask(id);
+  }
+
+  // toggleTask selects a card, or closes the inspector when the card is
+  // the one already in it.
+  private toggleTask(id: string): void {
+    if (!this.isPhone() && this.selectedId() === id) {
+      this.closePane();
+      return;
+    }
     this.selectTask(id);
   }
 
+  // step moves the inspector to the next or previous agent; with none in
+  // focus, either direction opens it on the first.
   protected step(dir: number): void {
     const all = this.store.agents();
     if (!all.length) return;
-    const nextIdx = Math.max(0, Math.min(all.length - 1, this.lastIndex + dir));
+    const nextIdx = this.selectedId()
+      ? Math.max(0, Math.min(all.length - 1, this.lastIndex + dir))
+      : 0;
     this.selectTask(all[nextIdx].task.id);
+  }
+
+  protected openFull(id: string): void {
+    void this.router.navigate(["/task", id], {
+      queryParams: { from: "agents", tab: this.pane() },
+    });
+  }
+
+  // closePane closes the inspector, leaving every card full width with
+  // none selected, and puts focus back on the card or row it showed.
+  protected closePane(): void {
+    const prev = this.selectedId();
+    void this.router.navigate([], {
+      queryParams: { task: null, pane: null },
+      queryParamsHandling: "merge",
+    });
+    if (!prev) return;
+    setTimeout(() =>
+      this.doc
+        .querySelector<HTMLElement>(
+          `[data-testid="agent-${prev}"], [data-testid="agent-row-${prev}"]`,
+        )
+        ?.focus(),
+    );
   }
 
   protected readonly store = inject(AgentsStore);
@@ -1081,13 +1133,9 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
       return;
     }
     if (this.doc.querySelector('[aria-modal="true"]')) return;
-    const task = this.task();
-    if (task) {
+    if (this.task()) {
       ev.preventDefault();
-      void this.router.navigate([], {
-        queryParams: { task: null, pane: null },
-        queryParamsHandling: "merge",
-      });
+      this.closePane();
       return;
     }
     if (this.wall()) {
@@ -1119,9 +1167,7 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
       const sel = this.selectedId();
       if (sel) {
         ev.preventDefault();
-        void this.router.navigate(["/task", sel], {
-          queryParams: { from: "agents", tab: this.pane() },
-        });
+        this.openFull(sel);
       }
     }
   }
