@@ -48,6 +48,7 @@ import {
 import { TipDirective } from "../shared/tip.directive";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService } from "./settings-state.service";
+import { SandboxCommitmentNoteComponent } from "./sandbox-notes";
 
 const TZ_STORAGE_KEY = "grain.timeZone";
 
@@ -79,7 +80,12 @@ function formatBytes(bytes: number): string {
 
 @Component({
   selector: "g-settings-instance",
-  imports: [PillSelectComponent, ConfirmDialogComponent, TipDirective],
+  imports: [
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    TipDirective,
+    SandboxCommitmentNoteComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -563,6 +569,10 @@ function formatBytes(bytes: number): string {
               >
             </div>
           </div>
+
+          <g-sandbox-commitment-note
+            [commitment]="$any(state.settings())['sandboxCommitment']"
+          />
 
           <div class="s-toggle-row">
             <div class="s-toggle-copy">
