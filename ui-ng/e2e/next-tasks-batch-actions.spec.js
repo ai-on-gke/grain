@@ -119,6 +119,28 @@ test("Run selected now under a pause, the rows that wait for it, and Stop part-w
     await tick(page, made[2].id).check();
     const bar = page.getByTestId("batch-bar");
     await expect(bar).toContainText("2 selected");
+    // The bar fits the screen at every width: it wraps rather than running
+    // its new buttons off the right edge, and nothing scrolls sideways.
+    const vw = page.viewportSize().width;
+    const barBox = await bar.boundingBox();
+    expect(barBox.x).toBeGreaterThanOrEqual(0);
+    expect(barBox.x + barBox.width).toBeLessThanOrEqual(vw + 0.5);
+    for (const control of await bar.locator("button").all()) {
+      const box = await control.boundingBox();
+      expect(box.x).toBeGreaterThanOrEqual(barBox.x - 0.5);
+      expect(box.x + box.width).toBeLessThanOrEqual(
+        barBox.x + barBox.width + 0.5,
+      );
+      expect(box.y).toBeGreaterThanOrEqual(barBox.y - 0.5);
+      expect(box.y + box.height).toBeLessThanOrEqual(
+        barBox.y + barBox.height + 0.5,
+      );
+    }
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
     await bar.getByTestId("batch-run-now").click();
     const dialog = page.getByTestId("confirm-dialog");
     await expect(dialog).toContainText("Start 2 tasks now");
@@ -184,6 +206,7 @@ test("Bulk edit sets a free Task priority, and capabilities attach and detach", 
   page,
   demoServer,
   accessCode,
+  axe,
 }) => {
   const stamp = Date.now();
   const x = await queued(demoServer, accessCode, `Bulk X ${stamp}`);
@@ -198,6 +221,7 @@ test("Bulk edit sets a free Task priority, and capabilities attach and detach", 
   await page.getByRole("option", { name: "Bulk edit…" }).click();
   const form = page.getByTestId("batch-edit-dialog");
   await expect(form).toContainText("Edit 2 tasks");
+  expect(await axe()).toEqual([]);
   await form.getByTestId("bulk-priority").fill("1e3");
   await expect(form.getByTestId("bulk-priority-error")).toBeVisible();
   await expect(form.getByTestId("batch-edit-apply")).toBeDisabled();
