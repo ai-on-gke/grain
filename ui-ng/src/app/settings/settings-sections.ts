@@ -234,6 +234,8 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "sessions",
           "director",
           "turns",
+          "max agent turns",
+          "default capabilities",
           "timeout",
           "standing",
           "skills",
@@ -328,6 +330,9 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "banner",
           "lock",
           "timezone",
+          "time zone",
+          "deployment id",
+          "settings lock",
         ],
       },
       {
@@ -358,6 +363,8 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "command line",
           "terminal",
           "token",
+          "skill",
+          "grain skill install",
         ],
       },
       {
@@ -439,6 +446,9 @@ const SECTION_ALIASES: Readonly<Record<string, SettingsSectionId>> = {
   accounts: "access",
   sandbox: "sandboxes",
   admin: "general",
+  // Model connections are a card on Models; classic Settings' old
+  // connections tab opened it too (docs/connections-and-models.md).
+  connections: "models",
 };
 
 // SECTION_ANCHORS is where an old link that now lands inside a bigger

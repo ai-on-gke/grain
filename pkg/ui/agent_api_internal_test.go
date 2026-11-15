@@ -1117,6 +1117,33 @@ func TestExternalTemplateWithinMatchesBothAPIGrantSpellings(t *testing.T) {
 	}
 }
 
+// TestExternalTemplateWithinFoldsEmptyMethodArgs is
+// TestTemplateWithinTaskFoldsEmptyMethodArgs for an external agent
+// credential: server#method={} and bare server#method are one grant in
+// either direction, and arguments are never dropped.
+func TestExternalTemplateWithinFoldsEmptyMethodArgs(t *testing.T) {
+	tok := &model.ExternalAgentToken{Name: "bot"}
+	allow := func(string) bool { return true }
+	bare := model.GitHubReadIssuesRef
+	empty := model.GitHubReadIssuesRef + "={}"
+	withArgs := model.GitHubReadIssuesRef + `={"repo":"acme/widgets"}`
+	for _, tc := range []struct {
+		held, granted string
+		want          bool
+	}{
+		{empty, bare, true},
+		{bare, empty, true},
+		{bare, withArgs, false},
+		{empty, withArgs, false},
+	} {
+		err := externalTemplateWithin(tok, []string{tc.held},
+			model.Template{ID: "t", Grants: []model.Grant{{Capability: tc.granted}}}, allow)
+		if got := err == nil; got != tc.want {
+			t.Errorf("held %s, template grants %s: within = %v (%v), want %v", tc.held, tc.granted, got, err, tc.want)
+		}
+	}
+}
+
 func TestCapabilityByIDRejectsMalformedAPIServerRefs(t *testing.T) {
 	c := &Client{}
 	for _, bad := range []string{

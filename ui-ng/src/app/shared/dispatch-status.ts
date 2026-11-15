@@ -106,6 +106,29 @@ export function parseResetMs(
   return null;
 }
 
+// formatStamp prints an absolute server timestamp (RFC 3339, nanoseconds
+// and all) in the display time zone -- Preferences' choice, else the
+// deployment's, else the browser's -- as "Nov 14, 2026, 12:02:32 UTC".
+// A value that does not parse is returned as it came.
+export function formatStamp(at: string, preferredTz?: string | null): string {
+  const ms = Date.parse(at);
+  if (!at || Number.isNaN(ms)) return at;
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone: effectiveDisplayTimeZone(preferredTz),
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    }).format(new Date(ms));
+  } catch {
+    return at;
+  }
+}
+
 export function formatLocalReset(
   until?: string,
   secondsRemaining?: number,
@@ -141,20 +164,29 @@ export function formatLocalReset(
   return `${clock} (${rel})`;
 }
 
-// Formats a UTC "HH:MM UTC" phrase inside a backend warning string into the
-// user's local timezone alongside a relative reset countdown.
+// Formats a UTC clock phrase inside a backend warning string -- "14:05 UTC",
+// or the daemon's 12-hour "2:05 PM UTC" -- into the user's local timezone
+// alongside a relative reset countdown.
 export function formatNoticeText(
   text: string,
   nowMs = Date.now(),
   preferredTz?: string | null,
 ): string {
-  return text.replace(/\b(\d{2}):(\d{2})\s*UTC\b/g, (raw, hh, mm) => {
+  const clock = /\b(\d{1,2}):(\d{2})(?:\s*([AaPp][Mm]))?\s*UTC\b/g;
+  return text.replace(clock, (raw, hh, mm, ampm?: string) => {
+    let hour = Number(hh);
+    if (ampm) {
+      if (hour < 1 || hour > 12) return raw;
+      hour = (hour % 12) + (ampm.toUpperCase() === "PM" ? 12 : 0);
+    } else if (hh.length !== 2) {
+      return raw;
+    }
     const cur = new Date(nowMs);
     let target = Date.UTC(
       cur.getUTCFullYear(),
       cur.getUTCMonth(),
       cur.getUTCDate(),
-      Number(hh),
+      hour,
       Number(mm),
       0,
       0,

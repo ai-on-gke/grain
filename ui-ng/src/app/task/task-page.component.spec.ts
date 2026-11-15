@@ -1379,6 +1379,16 @@ describe("duration", () => {
         query: { task: "7" },
       });
       expect(backFrom("tasks:nonsense", "7").label).toBe("Tasks");
+      expect(backFrom("agents", "7", false)).toEqual({
+        label: "Agents",
+        commands: ["/agents"],
+        query: { task: "7" },
+      });
+      expect(backFrom("agents", "7", true)).toEqual({
+        label: "Agents",
+        commands: ["/agents"],
+        query: null,
+      });
     });
 
     it("offers Send back instead of Submit while CI is failing and shows CI in the header", async () => {

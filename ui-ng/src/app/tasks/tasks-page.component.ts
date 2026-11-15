@@ -1061,8 +1061,10 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
           } @else if (canCloseSelected()) {
             @if (confirmClose()) {
               <span data-testid="close-confirm"
-                >Close {{ selected().length }}? Running work stops and open pull
-                requests are left behind; this cannot be undone.</span
+                >Close {{ selected().length }}
+                {{ selected().length === 1 ? "task" : "tasks" }}? Running work
+                stops and open pull requests are left behind; this cannot be
+                undone.</span
               >
               <button
                 type="button"
@@ -1075,7 +1077,8 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
               <button
                 type="button"
                 class="btn-text"
-                (click)="confirmClose.set(false)"
+                data-testid="close-keep"
+                (click)="cancelConfirmClose()"
               >
                 Keep
               </button>
@@ -1823,12 +1826,19 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       const tab = this.current();
       untracked(() => {
         this.checked.set(new Set());
+        this.confirmClose.set(false);
         this.openMenu.set(null);
         this.cancelPick();
         if (tab === "closed" && !this.store.closedLoaded()) {
           void this.store.loadClosed();
         }
       });
+    });
+    effect(() => {
+      const hasSelected = this.selected().length > 0;
+      if (!hasSelected && this.confirmClose()) {
+        untracked(() => this.confirmClose.set(false));
+      }
     });
   }
 
@@ -2039,7 +2049,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   protected async retryTask(id: string, ev: Event): Promise<void> {
     ev.stopPropagation();
-    const failed = await this.store.retry([id]);
+    const { failed } = await this.store.retry([id]);
     if (failed === 0) {
       this.snack(`Retrying #${id}`);
     }
@@ -2122,6 +2132,26 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   protected clearChecked(): void {
     this.checked.set(new Set());
+    this.confirmClose.set(false);
+  }
+
+  private uncheck(ids: readonly string[]): void {
+    if (!ids.length) return;
+    const done = new Set(ids);
+    const next = new Set([...this.checked()].filter((id) => !done.has(id)));
+    this.checked.set(next);
+    if (!next.size) this.confirmClose.set(false);
+  }
+
+  protected cancelConfirmClose(returnFocus = true): void {
+    this.confirmClose.set(false);
+    if (returnFocus) {
+      setTimeout(() =>
+        document
+          .querySelector<HTMLElement>('[data-testid="batch-close"]')
+          ?.focus(),
+      );
+    }
   }
 
   // ---------- menus ----------
@@ -2175,7 +2205,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     if (ev.defaultPrevented) return;
     if (document.querySelector('[aria-modal="true"]')) return;
     if ((ev.target as HTMLElement | null)?.closest?.(".confirm-inline")) return;
-    if (this.boardSaveOpen()) {
+    if (this.confirmClose()) {
+      ev.preventDefault();
+      this.cancelConfirmClose(true);
+    } else if (this.boardSaveOpen()) {
       ev.preventDefault();
       this.boardSaveOpen.set(false);
     } else if (this.openMenu()) {
@@ -2340,38 +2373,37 @@ export class TasksPageComponent implements OnInit, OnDestroy {
 
   protected async approve(ids: readonly string[]): Promise<void> {
     this.closeMenu(true);
-    const failed = await this.store.approve(ids);
-    const done = ids.length - failed;
-    if (done) {
-      this.clearChecked();
+    const { landed } = await this.store.approve(ids);
+    if (landed.length) {
+      this.uncheck(landed);
       this.snack(
-        `Approved ${this.ids(ids)}; ${done === 1 ? "it is" : "they are"} in the Backlog`,
+        `Approved ${this.ids(landed)}; ${landed.length === 1 ? "it is" : "they are"} in the Backlog`,
       );
     }
   }
 
   protected async defer(ids: readonly string[]): Promise<void> {
     this.closeMenu(true);
-    const failed = await this.store.defer(ids);
-    if (failed < ids.length) {
-      this.clearChecked();
-      this.snack(`Deferred ${this.ids(ids)}`, {
+    const { landed } = await this.store.defer(ids);
+    if (landed.length) {
+      this.uncheck(landed);
+      this.snack(`Deferred ${this.ids(landed)}`, {
         label: "Undo",
         run: async () => {
-          await this.store.undefer(ids);
+          await this.store.undefer(landed);
         },
       });
     }
   }
 
   protected async undefer(ids: readonly string[]): Promise<void> {
-    const failed = await this.store.undefer(ids);
-    if (failed < ids.length) {
-      this.clearChecked();
-      this.snack(`Brought back ${this.ids(ids)}`, {
+    const { landed } = await this.store.undefer(ids);
+    if (landed.length) {
+      this.uncheck(landed);
+      this.snack(`Brought back ${this.ids(landed)}`, {
         label: "Undo",
         run: async () => {
-          await this.store.defer(ids);
+          await this.store.defer(landed);
         },
       });
     }
@@ -2389,20 +2421,25 @@ export class TasksPageComponent implements OnInit, OnDestroy {
       .some((t) => t && !["queued", "proposed", "deferred"].includes(t.state));
     if (live && !confirmed) {
       this.confirmClose.set(true);
+      setTimeout(() =>
+        document
+          .querySelector<HTMLElement>('[data-testid="close-keep"]')
+          ?.focus(),
+      );
       return;
     }
     this.confirmClose.set(false);
-    const failed = await this.store.close(ids);
-    if (failed < ids.length) {
-      this.clearChecked();
+    const { landed } = await this.store.close(ids);
+    if (landed.length) {
+      this.uncheck(landed);
       this.snack(
-        `Closed ${this.ids(ids)}`,
+        `Closed ${this.ids(landed)}`,
         live
           ? null
           : {
               label: "Undo",
               run: async () => {
-                await this.store.reopen(ids);
+                await this.store.reopen(landed);
               },
             },
       );
@@ -2410,10 +2447,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   }
 
   protected async reopen(ids: readonly string[]): Promise<void> {
-    const failed = await this.store.reopen(ids);
-    if (failed < ids.length) {
-      this.clearChecked();
-      this.snack(`Reopened ${this.ids(ids)}`);
+    const { landed } = await this.store.reopen(ids);
+    if (landed.length) {
+      this.uncheck(landed);
+      this.snack(`Reopened ${this.ids(landed)}`);
     }
   }
 
@@ -2422,10 +2459,10 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     p: number,
   ): Promise<void> {
     this.closeMenu(true);
-    const { failed, undo } = await this.store.setPriority(ids, p);
-    if (failed < ids.length) {
+    const { landed, undo } = await this.store.setPriority(ids, p);
+    if (landed.length) {
       this.snack(
-        `Priority of ${this.ids(ids)} set to ${levelOf(p).name} ${p}`,
+        `Priority of ${this.ids(landed)} set to ${levelOf(p).name} ${p}`,
         undo,
       );
     }

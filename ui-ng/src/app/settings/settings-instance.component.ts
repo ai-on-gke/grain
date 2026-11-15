@@ -487,10 +487,16 @@ function formatBytes(bytes: number): string {
                 [placeholder]="state.defaultHint('pollInterval', '10s')"
                 [value]="state.val('pollInterval', '')"
                 [disabled]="!canWriteSettings()"
+                aria-describedby="e-poll-hint"
                 (input)="
                   state.setField('pollInterval', $any($event.target).value)
                 "
               />
+              <span class="s-hint" id="e-poll-hint"
+                >Go duration, e.g. 10s. Blank uses grain's default ({{
+                  state.val("pollIntervalDefault", "10s")
+                }}).</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="e-workers">Max worker agents</label>
@@ -501,6 +507,7 @@ function formatBytes(bytes: number): string {
                 min="1"
                 data-testid="input-max-workers"
                 [value]="state.defaultedNumber('maxWorkers')"
+                aria-describedby="e-workers-hint"
                 [placeholder]="state.defaultHint('maxWorkers', '10')"
                 [disabled]="!canWriteSettings()"
                 (input)="
@@ -515,6 +522,10 @@ function formatBytes(bytes: number): string {
                   state.setNumber('maxWorkers', $any($event.target).value, 10)
                 "
               />
+              <span class="s-hint" id="e-workers-hint"
+                >Ordinary tasks dispatched at once (10 by default; blank
+                resets).</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="e-mpr"
@@ -525,7 +536,9 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="number"
                 min="1"
+                data-testid="input-max-merges-per-repo"
                 [value]="state.defaultedNumber('maxMergesPerRepo')"
+                aria-describedby="e-mpr-hint"
                 [placeholder]="state.defaultHint('maxMergesPerRepo', '5')"
                 [disabled]="!canWriteSettings()"
                 (input)="
@@ -544,6 +557,10 @@ function formatBytes(bytes: number): string {
                   )
                 "
               />
+              <span class="s-hint" id="e-mpr-hint"
+                >Ready pull requests merged into each branch per queue cycle (5
+                by default; blank resets).</span
+              >
             </div>
           </div>
 
@@ -994,9 +1011,32 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     return this.doc.defaultView?.location?.origin || "http://localhost:8080";
   }
 
+  // cliSnippet is what a workstation runs to install the grain CLI, sign
+  // in and add the agent skills -- the classic Settings -> CLI lines
+  // (ui/src/components/settings/CLISection.jsx). The installer is
+  // /cli/install.sh (pkg/ui/cli_install.go), never /api/hostd/install.sh:
+  // that one installs a host, wants root and a registered name, and is
+  // no way to get the CLI onto a laptop.
   protected cliSnippet(): string {
     const origin = this.serverOrigin();
-    return `curl -fsSL ${origin}/api/hostd/install.sh | sh\ngrain login ${origin}`;
+    let host = "";
+    try {
+      host = new URL(origin).hostname;
+    } catch {
+      // An origin that is not a URL names no host; the slug is "default".
+    }
+    // The context name `grain login` gives a deployment when --name is
+    // left out (pkg/cli/login.go contextSlug).
+    const slug =
+      host
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "default";
+    return [
+      `curl -fsSL ${origin}/cli/install.sh | sh`,
+      `grain login ${origin} --name ${slug} --issue-token --scope-set grain/external-dev --expires 30d`,
+      `grain skill install --jetski   # or --claude, --codex, --gemini`,
+    ].join("\n");
   }
 
   private loadForSection(): void {
@@ -1118,7 +1158,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       const n = res?.delivered_count;
       this.snackbar.show(
         typeof n === "number"
-          ? `Broadcast delivered to ${n} task(s)`
+          ? `Broadcast delivered to ${n} ${n === 1 ? "task" : "tasks"}`
           : "Broadcast delivered to active tasks",
       );
     } catch (err) {

@@ -58,4 +58,101 @@ describe("TasksStore", () => {
     expect(tasks.loadError()).toContain("could not be read");
     tasks.stop();
   });
+
+  it("loads boards and base-branch gates once config arrives even when tasks resolve first", async () => {
+    let resolveConfig!: (cfg: Record<string, unknown>) => void;
+    const configPromise = new Promise<Record<string, unknown>>((r) => {
+      resolveConfig = r;
+    });
+    let resolveTasks!: (res: { body: unknown[]; changed: boolean }) => void;
+    const tasksPromise = new Promise<{ body: unknown[]; changed: boolean }>(
+      (r) => {
+        resolveTasks = r;
+      },
+    );
+
+    const fakeApi = {
+      config: () => configPromise,
+      openNotifications: () => Promise.resolve([]),
+      localScriptApprovals: () => Promise.resolve([]),
+      get: (route: string) => {
+        if (route === "GET /api/boards") {
+          return Promise.resolve([
+            {
+              id: "b1",
+              name: "Timeline Triage",
+              kind: "list",
+              query: "tab=all&view=timeline",
+            },
+          ]);
+        }
+        if (route === "GET /api/base-branch-gates") {
+          return Promise.resolve({
+            gates: [
+              {
+                repo: "sidthe/grain",
+                branch: "main",
+                judged: false,
+                reason: "failing",
+                detail: "ci failed",
+              },
+            ],
+          });
+        }
+        return Promise.resolve({});
+      },
+      getIfChanged: (route: string) =>
+        route === "GET /api/tasks"
+          ? tasksPromise
+          : Promise.resolve({ body: {}, changed: true }),
+    };
+
+    TestBed.configureTestingModule({
+      providers: [
+        { provide: GrainApi, useValue: fakeApi },
+        {
+          provide: GrainEvents,
+          useValue: { events: () => new Subject<GrainEvent>() },
+        },
+      ],
+    });
+
+    const feed = TestBed.inject(TaskFeedStore);
+    const tasks = TestBed.inject(TasksStore);
+    feed.start();
+    tasks.start();
+    TestBed.flushEffects();
+
+    // Tasks resolve first while /api/config is still pending.
+    resolveTasks({
+      body: [{ id: "1", title: "Task 1", state: "queued", priority: 5 }],
+      changed: true,
+    });
+    await tasksPromise;
+    TestBed.flushEffects();
+    expect(tasks.live().map((t) => t.id)).toEqual(["1"]);
+    expect(tasks.boards()).toEqual([]);
+    expect(tasks.baseBranchGates()).toEqual([]);
+
+    // Config resolves afterwards with boards:read and ci:read scopes.
+    resolveConfig({
+      access: {
+        role: "dev",
+        roles: ["dev"],
+        full: false,
+        scopes: ["tasks:read", "boards:read", "ci:read"],
+      },
+    });
+    await configPromise;
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      TestBed.flushEffects();
+    }
+
+    expect(tasks.boards().map((b) => b.name)).toEqual(["Timeline Triage"]);
+    expect(tasks.baseBranchGates().map((g) => g.repo)).toEqual([
+      "sidthe/grain",
+    ]);
+    tasks.stop();
+  });
 });
