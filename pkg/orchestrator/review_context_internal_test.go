@@ -383,3 +383,22 @@ func TestChangeUnderReviewEscapesBackticksAndInvalidUTF8(t *testing.T) {
 		t.Errorf("newline in base ref injected a top-level section header:\n%s", got)
 	}
 }
+
+func TestStripIncrementalReviewRecognisesLegacyNoteEnding(t *testing.T) {
+	t.Parallel()
+	// An undispatched incremental review filed before incrementalNoteEnd
+	// changed still ends with the old sentence, and must still be turned back
+	// into a full review when the review it waited on closes unfinished.
+	full := "Review the change." + reviewFactsHeader + "for acme/widgets#1 at bbbbbbb.\n"
+	legacy := incrementalNoteHeader + " An earlier review of this kind read the change at aaaaaaa. " +
+		"Review only what changed since: `git diff aaaaaaa bbbbbbb` -- none of the change's own files moved. " +
+		legacyIncrementalNoteEnd
+	review := model.Task{Body: full + legacy, Tags: []string{"path-trigger-since:aaaaaaa"}}
+	stripIncrementalReview(&review)
+	if review.Body != full {
+		t.Errorf("legacy incremental appendix not stripped:\n%s", review.Body)
+	}
+	if len(review.Tags) != 0 {
+		t.Errorf("path-trigger-since tag kept: %v", review.Tags)
+	}
+}

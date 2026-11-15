@@ -549,6 +549,11 @@ func incrementalNote(since, head string, delta []string) string {
 const incrementalNoteEnd = "Do not re-review the rest of the change, " +
 	"but do check the callers of anything those commits changed, wherever they are.\n"
 
+// legacyIncrementalNoteEnd is how incrementalNote ended before
+// incrementalNoteEnd; undispatched reviews filed then still carry it, and
+// must still be stripped back to a full review.
+const legacyIncrementalNoteEnd = "Do not re-review the rest of the change.\n"
+
 const reviewFactsHeader = "\n\n---\n\ngrain: filed by the path trigger(s) "
 
 // generatedIncrementalNoteAt returns where grain's incrementalNote appendix at
@@ -563,7 +568,7 @@ func generatedIncrementalNoteAt(body string) int {
 	}
 	rest := body[idx+len(incrementalNoteHeader):]
 	if !strings.HasPrefix(rest, " An earlier review of this kind read the change at ") ||
-		!strings.HasSuffix(rest, incrementalNoteEnd) {
+		!(strings.HasSuffix(rest, incrementalNoteEnd) || strings.HasSuffix(rest, legacyIncrementalNoteEnd)) {
 		return -1
 	}
 	return idx
