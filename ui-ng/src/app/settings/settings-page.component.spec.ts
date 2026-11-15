@@ -931,15 +931,33 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       '[data-testid="clear-cred-claude-team"]',
     )!;
     expect(clearBtn).toBeTruthy();
-    clearBtn.click();
-    await harness.fixture.whenStable();
-    expect(
+    const cleared = () =>
       api.calls.some(
         (c) =>
           c.key === "DELETE /api/agent-backends/{id}/credential" &&
           c.params?.["id"] === "claude-team",
-      ),
-    ).toBe(true);
+      );
+    // Clearing a stored secret asks first; dismissing deletes nothing.
+    clearBtn.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Clear the credential for claude-team?");
+    expect(cleared()).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+    expect(cleared()).toBe(false);
+    clearBtn.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(cleared()).toBe(true);
 
     el.querySelector<HTMLButtonElement>(
       '[data-testid="remove-backend-claude-team"]',

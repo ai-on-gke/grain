@@ -205,3 +205,54 @@ test("Settings Models - Discovered models, no framework keys card, and fallback 
   const addFallbackBtn = page.getByTestId("picker-add-fallback");
   await expect(addFallbackBtn).toBeVisible();
 });
+
+// Refresh asks a provider now (POST .../discover, connections:write): a
+// person without that scope is offered no Refresh at all, neither on the
+// connection's row nor inside the model picker, while one who holds it
+// sees both (docs/test-runs/2026-11-14-settings-models.md).
+test("offers Refresh models only to a person who may ask providers", async ({
+  page,
+  request,
+}) => {
+  const put = await request.put(
+    "/api/deployment/agent-backends/claude-discover",
+    { data: { id: "claude-discover", framework: "claude" } },
+  );
+  expect(put.ok()).toBe(true);
+  const viewerConfig = (url) => url.pathname === "/api/config";
+  try {
+    await page.goto("/next/settings/models");
+    await expect(
+      page.getByTestId("refresh-backend-claude-discover"),
+    ).toBeVisible();
+
+    await page.route(viewerConfig, async (route) => {
+      const response = await route.fetch();
+      const json = {
+        ...(await response.json()),
+        access: {
+          role: "grain/viewer",
+          roles: ["grain/viewer"],
+          full: false,
+          scopes: ["settings:read", "connections:read", "deployment:read"],
+        },
+      };
+      await route.fulfill({ response, json });
+    });
+    await page.reload();
+    await expect(page.getByTestId("card-model-defaults")).toBeVisible();
+    await expect(page.getByTestId("card-model-backends")).toContainText(
+      "claude-discover",
+    );
+    await expect(
+      page.getByTestId("refresh-backend-claude-discover"),
+    ).toHaveCount(0);
+    await page.getByTestId("picker-default-model").click();
+    await expect(
+      page.getByRole("button", { name: /refresh models/i }),
+    ).toHaveCount(0);
+  } finally {
+    await page.unroute(viewerConfig);
+    await request.delete("/api/deployment/agent-backends/claude-discover");
+  }
+});

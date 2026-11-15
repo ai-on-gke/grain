@@ -65,11 +65,16 @@ class FakeApi {
     },
   };
 
+  access: Record<string, unknown> = {
+    role: "grain/operator",
+    full: true,
+    scopes: [],
+  };
   config = () =>
     Promise.resolve({
       version: "v3.6.0",
       configRepoOnly: false,
-      access: { role: "grain/operator", full: true, scopes: [] },
+      access: this.access,
     });
   get = (key: string) => {
     this.calls.push({ method: "GET", key });
@@ -295,6 +300,23 @@ describe("Settings → Models default and fallback models", () => {
     // A pinned connection has nothing to discover.
     expect(q('[data-testid="refresh-backend-claude"]')).toBeNull();
     expect(await offered("picker-default-model")).toContain("gemini-ultra");
+  });
+
+  it("offers no Refresh to a person who cannot ask providers for their models", async () => {
+    const api = new FakeApi();
+    api.access = {
+      role: "grain/viewer",
+      full: false,
+      scopes: ["settings:read", "connections:read", "deployment:read"],
+    };
+    const { q, el } = await mount(api);
+    expect(q('[data-testid="refresh-backend-agy"]')).toBeNull();
+    q<HTMLButtonElement>('[data-testid="picker-default-model"]')!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    const refresh = [...el.querySelectorAll("button")].filter((b) =>
+      /refresh/i.test(b.textContent ?? ""),
+    );
+    expect(refresh).toEqual([]);
   });
 
   it("refreshes every discovering connection from inside the picker", async () => {

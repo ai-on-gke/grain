@@ -570,15 +570,13 @@ function formatRefreshedAt(iso?: string): string {
                       </td>
                       <td class="s-actions-cell">
                         <div class="s-row-actions">
-                          @if (discovers(b)) {
+                          @if (discovers(b) && canRefreshModels()) {
                             <button
                               type="button"
                               class="btn-tonal s-btn-sm"
                               [attr.data-testid]="'refresh-backend-' + b.id"
                               [attr.aria-label]="'Refresh models of ' + b.id"
-                              [disabled]="
-                                !canRefreshModels() || refreshingModels()
-                              "
+                              [disabled]="refreshingModels()"
                               (click)="refreshDiscoveredModels(b.id)"
                             >
                               Refresh
@@ -689,7 +687,7 @@ function formatRefreshedAt(iso?: string): string {
                                   'DELETE /api/agent-backends/{id}/credential'
                                 )
                               "
-                              (click)="clearBackendCred(b.id)"
+                              (click)="confirmClearBackendCred(b.id)"
                             >
                               Clear stored secret
                             </button>
@@ -2203,6 +2201,18 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     } catch (err) {
       this.state.recordError(err);
     }
+  }
+
+  // Clearing a connection's secret cannot be undone short of pasting the
+  // key again, so it asks first, as removing the connection does.
+  protected confirmClearBackendCred(id: string): void {
+    this.confirmRequest.set({
+      title: `Clear the credential for ${id}?`,
+      message: `The secret stored for ${id} is deleted. Runs and model discovery on ${id} no longer use it, and only saving the key again brings it back.`,
+      accept: "Clear secret",
+      destructive: true,
+      run: () => this.clearBackendCred(id),
+    });
   }
 
   protected async clearBackendCred(id: string): Promise<void> {
