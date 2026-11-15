@@ -81,7 +81,7 @@ export function deriveMergeGates(t) {
     (f) => f.gate === "security-review",
   );
   const humanSecFindings = (t.humanReviewHold || []).filter(
-    (r) => r.category === "security-findings",
+    (r) => r.source === "security-findings",
   );
   if (
     t.securityHold ||
