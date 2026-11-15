@@ -1871,9 +1871,6 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     const caps = (this.access.rawConfig()?.capabilities ?? [])
       .filter((c) => c.ready !== false || held.has(c.id))
       .map((c) => ({ value: c.id, label: c.name || c.id }));
-    for (const id of held)
-      if (!caps.some((c) => c.value === id))
-        caps.push({ value: id, label: id });
     this.editing.set({
       mode,
       count: rows.length,
