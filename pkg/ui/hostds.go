@@ -37,6 +37,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
 	"github.com/ai-on-gke/grain/pkg/agent/claude"
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	agentdrelease "github.com/ai-on-gke/grain/pkg/agentd/release"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
@@ -89,8 +90,11 @@ type HostUpdate struct {
 // platform. Only a connected, agents-only host that lists
 // FeatureSelfUpdate, whose update.mode is not off, is offered anything,
 // and only a release newer than its build and inside its update.pin.
+// The platform is the host's own word, so only one a release is built
+// for is looked up: anything else would key the release cache and an
+// upstream fetch on a string the host chose.
 func hostUpdateFor(st *hostd.RemoteStatus, latest func(platform string) (string, bool)) *HostUpdate {
-	if st == nil || !st.Connected || !st.AgentsOnly || st.Platform == "" ||
+	if st == nil || !st.Connected || !st.AgentsOnly || !slices.Contains(agentdrelease.Platforms, st.Platform) ||
 		!slices.Contains(st.Features, hostd.FeatureSelfUpdate) || st.UpdateMode == hostd.UpdateOff {
 		return nil
 	}

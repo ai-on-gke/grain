@@ -28,7 +28,9 @@ import (
 )
 
 func TestHostUpdateForOffersOnlySelfUpdatingAgents(t *testing.T) {
-	latest := func(platform string) (string, bool) { return "v3.9.0", platform == "linux/amd64" }
+	latest := func(platform string) (string, bool) {
+		return "v3.9.0", platform == "linux/amd64" || platform == "../../x"
+	}
 	agent := func(edit func(*hostd.RemoteStatus)) *hostd.RemoteStatus {
 		st := &hostd.RemoteStatus{Connected: true, RemotePeer: hostd.RemotePeer{
 			Build: "v3.8.0", AgentsOnly: true, Platform: "linux/amd64", UpdateMode: hostd.UpdateOffer,
@@ -52,6 +54,7 @@ func TestHostUpdateForOffersOnlySelfUpdatingAgents(t *testing.T) {
 		"unversioned build": func(st *hostd.RemoteStatus) { st.Build = "dev" },
 		"no release":        func(st *hostd.RemoteStatus) { st.Platform = "linux/arm64" },
 		"offline":           func(st *hostd.RemoteStatus) { st.Connected = false },
+		"unknown platform":  func(st *hostd.RemoteStatus) { st.Platform = "../../x" },
 	} {
 		if u := hostUpdateFor(agent(edit), latest); u != nil {
 			t.Errorf("%s: offered %+v", name, u)
