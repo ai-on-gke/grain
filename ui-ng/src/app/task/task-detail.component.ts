@@ -610,6 +610,48 @@ export function duration(from?: string, to?: string): string {
           </p>
         }
 
+        <!-- Rollover (durable-tasks.design.md#DT-15): a closed durable
+             task's work goes on under another number, said before the
+             rest of the page so an old link leads somewhere. -->
+        @if (t.rolledOverTo; as next) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-rolled-over-to"
+          >
+            <strong
+              >Rolled over to
+              <a
+                [routerLink]="linkTo(next)"
+                [queryParams]="linkQuery(next)"
+                [queryParamsHandling]="pane() ? 'merge' : ''"
+                (click)="onTreeNodeClick($event, next)"
+                >#{{ next }}</a
+              >.</strong
+            >
+            This durable task passed its record limit, so its work carries on in
+            the successor, with its brief, handover, pull request and waits.
+            This record is kept as it was.
+          </p>
+        }
+        @if (t.rolledOverFrom; as prev) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-rolled-over-from"
+          >
+            Carries on the work of
+            <a
+              [routerLink]="linkTo(prev)"
+              [queryParams]="linkQuery(prev)"
+              [queryParamsHandling]="pane() ? 'merge' : ''"
+              (click)="onTreeNodeClick($event, prev)"
+              >#{{ prev }}</a
+            >, rolled over when it passed its record limit; its earlier
+            conversation and runs are there.
+          </p>
+        }
+
         <!-- Inline Pending Approval / Gate Panels -->
         @if (queuedPauseNotice(); as qpn) {
           <p
@@ -1106,7 +1148,7 @@ export function duration(from?: string, to?: string): string {
               }
               <dt>Filed</dt>
               <dd>
-                {{ ago(t.createdAt) }} ago by
+                {{ filedAgo(t.createdAt) }} by
                 {{ t.authorLabel || t.author || "unknown" }}
               </dd>
               @if (t.approvedByLabel) {
@@ -1288,6 +1330,13 @@ export class TaskDetailComponent implements OnDestroy {
 
   protected readonly label = stateLabel;
   protected readonly ago = ago;
+  // filedAgo reads "just now" rather than "now ago" for a task filed in
+  // the last minute (ago() says "now" there).
+  protected filedAgo(iso: string | undefined): string {
+    const a = ago(iso);
+    if (!a) return "";
+    return a === "now" ? "just now" : `${a} ago`;
+  }
   protected readonly dur = duration;
   protected readonly prio = priorityOf;
   protected readonly level = levelOf;

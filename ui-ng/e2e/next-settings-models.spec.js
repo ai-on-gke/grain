@@ -143,7 +143,13 @@ test.describe("Settings → Models default and fallback models", () => {
       "claude-sonnet-5",
     );
     // Move it to the top of the fallbacks, drop the retired one.
+    // Wait for each move to render before the next click: the row test ids
+    // are re-bound on change detection, so a second click fired before the
+    // first move lands can hit the button of the row that used to sit there.
     await card.getByTestId("fallback-up-2").click();
+    await expect(card.getByTestId("fallback-row-1")).toContainText(
+      "claude-sonnet-5",
+    );
     await card.getByTestId("fallback-up-1").click();
     await expect(card.getByTestId("fallback-row-0")).toContainText(
       "claude-sonnet-5",
@@ -177,7 +183,7 @@ test.describe("Settings → Models default and fallback models", () => {
   });
 });
 
-test("Settings Models - Discovered models, clear credential, and fallback models", async ({
+test("Settings Models - Discovered models, no framework keys card, and fallback models", async ({
   page,
 }) => {
   await page.goto("/next/settings/models");
@@ -191,11 +197,9 @@ test("Settings Models - Discovered models, clear credential, and fallback models
     );
   }
 
-  // Clear credential
-  const clearBtn = page.getByTestId("clear-codex-auth");
-  if (await clearBtn.isEnabled()) {
-    await clearBtn.click();
-  }
+  // The standalone framework keys card is retired: credentials live on
+  // each connection.
+  await expect(page.getByTestId("card-agent-keys")).toHaveCount(0);
 
   // Fallback models (done in existing tests, just verifying structure)
   const addFallbackBtn = page.getByTestId("picker-add-fallback");

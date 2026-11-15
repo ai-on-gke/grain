@@ -1430,6 +1430,13 @@ const (
 	// for this task's change (-> "<trigger>=<task ID>"). A gated hold
 	// is released only once every gating one has finished.
 	LinkPathTriggerTask LinkKind = "path-trigger-task"
+	// LinkTargetedReviewTrigger names one gating trigger on this task's
+	// change whose review is a targeted review -- a sensitive trigger with
+	// no template of its own, reviewed with grain's security review brief
+	// (-> the trigger's name). Written and dropped with
+	// LinkPathTriggerTask, so the merge gates can show that trigger's
+	// review apart from the code review (ComputeMergeGates).
+	LinkTargetedReviewTrigger LinkKind = "targeted-review-trigger"
 	// LinkPathTriggersRead records the head commit grain last judged
 	// this task's pull request against its repository's pull-request
 	// triggers at (-> the sha), so a head that moves is judged again.
@@ -3080,6 +3087,12 @@ type Comment struct {
 	// FiledVia is the sanitized X-Grain-Client label of the tool the
 	// comment was posted from, as Task.FiledVia is the task's.
 	FiledVia string
+	// Note marks a run's comment_on_issue note, whose Summary
+	// (Store.NoteSummary) names a report rather than a question: GET
+	// /api/events records it as task.comment, not task.question
+	// (design/design/integration-events.design.md §3.2). Only read as the
+	// comment is written; it is not stored.
+	Note bool
 }
 
 // Attachment is one file carried alongside a task -- bwsalmon/agents#522's
