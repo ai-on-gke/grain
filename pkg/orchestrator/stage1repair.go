@@ -367,7 +367,7 @@ func repairCIReadDeniedNote(repo model.RepoRef, d model.RepoCIDefaults) string {
 	if d.GrainCI || d.CIRead {
 		return ""
 	}
-	return fmt.Sprintf("\nThis repair holds no CI read: this deployment's capability policy denies "+
+	return fmt.Sprintf("\n\nThis repair holds no CI read: this deployment's capability policy denies "+
 		"%s on %s, so `grain ci list` and `grain ci log` answer forbidden here. Work from the failing "+
 		"jobs above and `grain ci wait` on your own branch, and do not request %s -- the policy refuses it.\n",
 		model.APIRef("ci-read"), repo, model.APIRef("ci-read"))
