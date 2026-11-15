@@ -554,6 +554,17 @@ export function duration(from?: string, to?: string): string {
                       <span>Close the pull request too</span>
                     </label>
                   }
+                  <input
+                    type="text"
+                    class="close-reason"
+                    data-testid="close-reason"
+                    aria-label="Reason for closing (optional)"
+                    placeholder="Reason (optional)"
+                    maxlength="500"
+                    [value]="closeReason()"
+                    (input)="closeReason.set($any($event.target).value)"
+                    (keydown.enter)="close(true)"
+                  />
                   <button
                     type="button"
                     #closeYes
@@ -1469,6 +1480,9 @@ export class TaskDetailComponent implements OnDestroy {
 
   protected readonly confirmClose = signal(false);
   protected readonly closePr = signal(false);
+  // What the person closing says about why, kept on the close's task
+  // event (POST /api/tasks/{id}/close's reason; ui.CloseOptions.Reason).
+  protected readonly closeReason = signal("");
   protected readonly confirming = signal<ConfirmRequest | null>(null);
   protected readonly forceMergeReq = signal<ForceMergeRequest | null>(null);
   protected readonly editOpen = signal(false);
@@ -1716,6 +1730,7 @@ export class TaskDetailComponent implements OnDestroy {
       const id = this.id();
       untracked(() => {
         this.confirmClose.set(false);
+        this.closeReason.set("");
         this.confirming.set(null);
         this.editOpen.set(false);
         this.compactOpen.set(false);
@@ -2291,10 +2306,13 @@ export class TaskDetailComponent implements OnDestroy {
       return;
     }
     this.confirmClose.set(false);
+    const reason = confirmed ? this.closeReason().trim() : "";
+    this.closeReason.set("");
     const ok = await this.store.act(
       "close",
       this.post("POST /api/tasks/{id}/close", {
         close_pull_request: this.closePr(),
+        ...(reason ? { reason } : {}),
       }),
       id,
     );
@@ -2319,6 +2337,7 @@ export class TaskDetailComponent implements OnDestroy {
 
   protected keep(): void {
     this.confirmClose.set(false);
+    this.closeReason.set("");
     setTimeout(() => this.closeBtn()?.nativeElement.focus());
   }
 

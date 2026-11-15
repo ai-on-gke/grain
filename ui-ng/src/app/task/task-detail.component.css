@@ -45,6 +45,18 @@ g-task-page {
   font-size: 13px;
 }
 
+.close-reason {
+  min-width: 0;
+  width: 220px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  font: inherit;
+}
+
 .task-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
