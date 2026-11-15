@@ -425,13 +425,15 @@ rather than proposing duplicate tasks.
 `grain pr status --task 26` and `--task 27` each reported no CI run recorded.
 `grain_get_task` returned 403 (`tasks:read` grant unavailable); namespace task
 reading was likewise denied. This is **not** evidence either task is unstarted,
-merged, or complete. Final refresh at **23:52 UTC** returned the same no-CI result for both branches.
-After fetching, #27's branch contains commit `6bb8cfc85` (not on main): its diff
-adds shrink/scroll constraints and a Director-specific Enter-to-send option with
-Shift+Enter/IME guards and regression tests. This confirms implementation is in
-progress, not landed parity. No #26 remote branch was available in the fetched
-refs. Definitive task state remains unverified without the grant. No task-record
-access workaround or duplicate proposal was attempted.
+merged, or complete. Final refresh at **23:53 UTC** used `grain ci list --task` as well: #26 has no
+runs; #27 has GitHub Actions tests running at `6bb8cfc85`, with both scanning
+workflows successful. The generic `grain pr status` result alone did not expose
+these Actions runs. After fetching, #27's branch contains that commit (not on
+main): its diff adds shrink/scroll constraints and a Director-specific
+Enter-to-send option with Shift+Enter/IME guards and regression tests. This
+confirms implementation is in progress, not landed parity. No #26 remote branch
+was available in fetched refs. Definitive task state remains unverified without
+the grant. No task-record access workaround or duplicate proposal was attempted.
 
 ## Validation and open limits
 
