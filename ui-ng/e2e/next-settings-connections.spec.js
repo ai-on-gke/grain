@@ -110,22 +110,22 @@ test("Capabilities: removing a server asks first, and the secret form masks its 
   await expect(page.getByTestId("card-capability-servers")).toBeVisible();
   await expect(srv).toHaveCount(0);
 
-  // The value box masks what is typed into it.
-  const value = page.getByTestId("input-secret-value");
-  await value.fill("not-a-real-secret");
-  const security = await value.evaluate((el) =>
-    getComputedStyle(el).getPropertyValue("-webkit-text-security"),
-  );
-  expect(security).toBe("disc");
-
   // `grain demo` runs with no secret store (GET /api/secrets says
-  // enabled: false), where a PUT 404s: the form says so instead.
+  // enabled: false), where a PUT 404s: the card says so and offers no
+  // form. With a store, the value box masks what is typed into it
+  // (next-deployment-credentials.spec.js covers the store itself).
   const secrets = await (await page.request.get("/api/secrets")).json();
   if (secrets.enabled === false) {
     await expect(page.getByTestId("secrets-store-disabled")).toBeVisible();
-    await page.getByTestId("input-secret-name").fill("regress");
-    await page.getByTestId("input-secret-key").fill("token");
-    await expect(page.getByTestId("store-secret-btn")).toBeDisabled();
+    await expect(page.getByTestId("input-secret-value")).toHaveCount(0);
+    await expect(page.getByTestId("store-secret-btn")).toHaveCount(0);
+  } else {
+    const value = page.getByTestId("input-secret-value");
+    await value.fill("not-a-real-secret");
+    const security = await value.evaluate((el) =>
+      getComputedStyle(el).getPropertyValue("-webkit-text-security"),
+    );
+    expect(security).toBe("disc");
   }
 });
 

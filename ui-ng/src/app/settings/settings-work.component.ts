@@ -34,6 +34,7 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { SettingsCredentialsComponent } from "./settings-credentials.component";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -122,14 +123,13 @@ interface ScopeSetRow {
   scopes: string[];
 }
 
-interface SecretMetaRow {
-  name: string;
-  keys?: string[];
-}
-
 @Component({
   selector: "g-settings-work",
-  imports: [PillSelectComponent, ConfirmDialogComponent],
+  imports: [
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    SettingsCredentialsComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -894,7 +894,7 @@ interface SecretMetaRow {
           id="api-scope-sets"
           data-testid="card-scope-sets-secrets"
         >
-          <h3 class="s-card-title">API scope sets &amp; secret vault</h3>
+          <h3 class="s-card-title">API scope sets</h3>
           @if (scopeSets().length > 0) {
             <div class="s-inline">
               @for (ss of scopeSets(); track ss.name) {
@@ -937,73 +937,8 @@ interface SecretMetaRow {
               Save scope set
             </button>
           </div>
-
-          <div class="s-field s-anchor" id="other-secrets">
-            <span class="s-label"
-              >Stored secrets ({{ secretsList().length }}) — write-only</span
-            >
-            <div class="s-inline">
-              <input
-                class="s-input s-input-inline s-mono"
-                type="text"
-                aria-label="Secret name"
-                data-testid="input-secret-name"
-                placeholder="webhook-secret"
-                [value]="secretName()"
-                (input)="secretName.set($any($event.target).value)"
-              />
-              <input
-                class="s-input s-input-inline s-mono"
-                type="text"
-                aria-label="Secret key"
-                data-testid="input-secret-key"
-                placeholder="token"
-                [value]="secretKey()"
-                (input)="secretKey.set($any($event.target).value)"
-              />
-              <textarea
-                class="s-textarea s-input-inline s-mono s-masked"
-                rows="1"
-                autocomplete="off"
-                spellcheck="false"
-                data-lpignore="true"
-                data-1p-ignore="true"
-                aria-label="Secret value"
-                data-testid="input-secret-value"
-                placeholder="Secret value or PEM…"
-                [value]="secretVal()"
-                (input)="secretVal.set($any($event.target).value)"
-              ></textarea>
-              <button
-                type="button"
-                class="btn-tonal s-btn-sm"
-                data-testid="store-secret-btn"
-                [disabled]="
-                  !secretName().trim() ||
-                  !secretKey().trim() ||
-                  secretVal().length === 0 ||
-                  !secretsEnabled() ||
-                  !access.can('PUT /api/secrets/{secret}/{key}')
-                "
-                (click)="putSecret()"
-              >
-                Store secret
-              </button>
-            </div>
-          </div>
-
-          @if (!secretsEnabled()) {
-            <span class="s-hint" data-testid="secrets-store-disabled"
-              >This server has no secret store configured, so nothing can be
-              stored here yet.</span
-            >
-          }
-          @if (!access.can("POST /api/secrets/redact")) {
-            <span class="s-hint" data-testid="secrets-redact-restricted">{{
-              access.deniedReason("POST /api/secrets/redact")
-            }}</span>
-          }
         </div>
+        <g-settings-credentials />
       }
 
       @case ("memory") {
@@ -1113,14 +1048,6 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly scopeSets = signal<ScopeSetRow[]>([]);
   protected readonly newScopeSetName = signal("");
   protected readonly newScopeSetScopes = signal("");
-
-  protected readonly secretsList = signal<SecretMetaRow[]>([]);
-  // GET /api/secrets says enabled: false when the server has no secret
-  // store; a PUT then 404s, so the form says so instead of offering it.
-  protected readonly secretsEnabled = signal(true);
-  protected readonly secretName = signal("");
-  protected readonly secretKey = signal("value");
-  protected readonly secretVal = signal("");
 
   protected readonly memoryBody = signal("");
   protected readonly memoryDocs = signal<string[]>([]);
@@ -1417,17 +1344,6 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
         // Non-fatal
       }
     }
-    if (this.access.can("GET /api/secrets")) {
-      try {
-        const sec = await this.api.get<
-          SecretMetaRow[] | { secrets?: SecretMetaRow[]; enabled?: boolean }
-        >("GET /api/secrets");
-        this.secretsList.set(Array.isArray(sec) ? sec : (sec?.secrets ?? []));
-        this.secretsEnabled.set(Array.isArray(sec) || sec?.enabled !== false);
-      } catch {
-        // Non-fatal
-      }
-    }
   }
 
   protected async saveCapServer(): Promise<void> {
@@ -1601,21 +1517,6 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       this.newScopeSetScopes.set("");
       await this.loadCapabilities();
       this.snackbar.show(`Saved scope set ${name}`);
-    } catch (err) {
-      this.state.recordError(err);
-    }
-  }
-
-  protected async putSecret(): Promise<void> {
-    try {
-      await this.api.put(
-        "PUT /api/secrets/{secret}/{key}",
-        { secret: this.secretName().trim(), key: this.secretKey().trim() },
-        { value: this.secretVal() },
-      );
-      this.secretVal.set("");
-      await this.loadCapabilities();
-      this.snackbar.show("Secret stored");
     } catch (err) {
       this.state.recordError(err);
     }
