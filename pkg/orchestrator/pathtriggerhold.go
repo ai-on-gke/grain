@@ -374,7 +374,7 @@ func applyPathTriggerGate(ctx context.Context, store *model.Store, client github
 		if len(gates) == 0 {
 			if wasHeld || hasTriggerReviewFindings(*t) {
 				// The change no longer touches any gated path.
-				t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold, model.LinkPathTriggerTask)
+				t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold, model.LinkPathTriggerTask, model.LinkTargetedReviewTrigger)
 				clearTriggerReviewQuestions(t)
 				model.ClearReviewFindingsForGate(t, model.GateReview)
 				if !hasSecurityHold(*t) && !heldForHuman(*t) && !model.HasReviewFindings(*t) && len(model.PendingApprovals(*t)) == 0 {
@@ -392,8 +392,15 @@ func applyPathTriggerGate(ctx context.Context, store *model.Store, client github
 				model.ClearReviewFindingsForGate(t, rf.Gate)
 			}
 		}
-		t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold, model.LinkPathTriggerTask)
+		t.Links = withoutLinks(t.Links, model.LinkPathTriggerHold, model.LinkPathTriggerTask, model.LinkTargetedReviewTrigger)
+		targeted := map[string]bool{}
 		for _, g := range gates {
+			if g.template == model.SecurityReviewTemplateID && !targeted[g.trigger] {
+				// A sensitive trigger with no template of its own: its
+				// review shows as the targeted review gate.
+				targeted[g.trigger] = true
+				t.Links = append(t.Links, model.Link{Kind: model.LinkTargetedReviewTrigger, Target: g.trigger})
+			}
 			if g.err != nil {
 				if !bypass {
 					model.AddReviewFindings(t, model.ReviewFindingsRecord{

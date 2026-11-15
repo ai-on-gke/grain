@@ -245,6 +245,7 @@ that predates the list is credited from its protocol version
 | `hook_policy` | contract v1+ | `agy-tool-hook` and `claude-stop-hook` accept `-policy` and evaluate a staged per-run hook policy file (`pkg/agent/hookpolicy`) | stages no policy file and omits `-policy`; hooks fall back to the roster and stop rule compiled into the host binary |
 | `handover` | contract v1+ | `Request.handover` on `drain` (`idle`) hands live detached CLI runs over across an in-place re-exec and adopts them in `loadSpools`; `Exit.draining` marks processes ended by hostd's own drain or stop | cuts over only when idle, and cannot distinguish drain-cap kills on `Exit` |
 | `env_deny_v2` | contract v1+ | `env: ["*"]` and `NAME_*` patterns also refuse the `env_deny_v2` names (`DYLD_*`, `GIT_*`, `JAVA_TOOL_OPTIONS`, `NODE_PATH`, ...); only an exact name admits one | nothing to do: the daemon sends none of those names, and an exact name is admitted by every host |
+| `self_update` | contract v1+ | a rootless `grain-agentd` whose owner can run `grain-agentd update` (signed release, pinned key, idle cutover, rollback); `Hello.platform`, `Hello.update_mode` and `Hello.update_pin` carry the allowlist's `update:` policy. A root-installed `grain host` never lists it | offers it no update: Settings -> Hosts shows nothing to take, and the owner reinstalls with the one-liner |
 
 `renew`, `logins` and `agents_only` shipped before the feature list existed;
 hosts on those builds are credited with neither, which is exactly the
@@ -535,7 +536,11 @@ Filed as separate tasks, each after this one lands:
    the env list from the agentd binary.
 5. **Signed per-platform agentd release binaries** -- prerequisite for 6.
 6. **`grain-agentd update`** -- the owner-run self-update above, feature
-   `self_update`.
+   `self_update`. Built (`pkg/agentd/update.go`, docs/grain-agentd.md
+   "Updating it"): steps 3-7, with `offer` shown per host on Settings ->
+   Hosts. `auto` stays unimplemented until the freeze fails by the
+   criterion above. The rolled-back host does not yet report the failure to
+   the controller; it is recorded in `~/.local/lib/grain-agentd/update-failed`.
 
 ## Appendix: the generated contract
 
@@ -562,6 +567,7 @@ feature logins_map
 feature hook_policy
 feature handover
 feature env_deny_v2
+feature self_update
 json Request.op hostd.Op [start]
 json Request.kind hostd.Kind [start]
 json Request.name string [start]
@@ -597,6 +603,9 @@ json Hello.codex_auth string [stage]
 json Hello.logins []string [logins]
 json Hello.login_targets map[string]string [logins_map]
 json Hello.agents_only bool [agents_only]
+json Hello.platform string [self_update]
+json Hello.update_mode string [self_update]
+json Hello.update_pin string [self_update]
 json Hello.features []hostd.Feature [features]
 json Process.id string [detach]
 json Process.run string [detach]
@@ -657,6 +666,7 @@ yaml Allowlist.drain_cap time.Duration [drain]
 yaml Allowlist.capacity int [start]
 yaml Allowlist.labels map[string]string [start]
 yaml Allowlist.logins map[string]string [logins_map]
+yaml Allowlist.update hostd.UpdatePolicy [self_update]
 yaml Entry.path string [start]
 yaml Entry.command string [start]
 yaml Entry.args []string [start]
@@ -667,6 +677,8 @@ yaml Entry.env []string [start]
 yaml Entry.pass_env []string [start]
 yaml Entry.set_env map[string]string [start]
 yaml Entry.max_duration time.Duration [start]
+yaml UpdatePolicy.mode string [self_update]
+yaml UpdatePolicy.pin string [self_update]
 const BuildHeader = "X-Grain-Hostd-Build" [start]
 const HostHeader = "X-Grain-Hostd-Host" [start]
 const KindCLI = "cli" [start]

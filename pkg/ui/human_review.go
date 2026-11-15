@@ -167,10 +167,24 @@ func (c *Client) ReleaseHumanReviewHold(ctx context.Context, id string) (HumanRe
 		if errors.Is(err, model.ErrAgentCannotReleaseHumanReview) {
 			return HumanReviewResult{}, forbiddenErrorf("%v", err)
 		}
+		// model.ErrFindingsRequireRereviewOrOverride (a hold of review
+		// findings alone) is a 409 by writeClientError, not a 500.
 		return HumanReviewResult{}, err
 	}
-	return HumanReviewResult{Task: id, Reasons: []HumanReviewView{}}, nil
+	// A hold of findings and other reasons together releases the others;
+	// the findings stay, and the answer names them.
+	out := HumanReviewResult{Task: id, Reasons: []HumanReviewView{}}
+	if held, err := c.Store.GetTask(ctx, id); err == nil && held != nil {
+		if rs := humanReviewViews(model.HumanReviewReasons(*held)); len(rs) > 0 {
+			out.Reasons = rs
+		}
+	}
+	return out, nil
 }
+
+// findingsHoldCode is the API error code of a Release hold refused because
+// the hold is review findings alone (model.ErrFindingsRequireRereviewOrOverride).
+const findingsHoldCode = "review_findings_hold"
 
 func (s *Server) handleRequestHumanReview(w http.ResponseWriter, r *http.Request) {
 	var req HumanReviewRequestBody
