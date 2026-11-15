@@ -64,22 +64,69 @@ function legacy(tab: string): RedirectFunction {
 }
 
 function classicRepoSettingsMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (s[0]?.path !== "repos") return null;
   if (
-    (s.length !== 4 && s.length !== 5) ||
-    s[0]?.path !== "repos" ||
-    s[3]?.path !== "settings" ||
+    (s.length === 4 || s.length === 5) &&
+    s[3]?.path === "settings" &&
+    !/[.:]/.test(s[1].path)
+  ) {
+    return {
+      consumed: s,
+      posParams: {
+        owner: s[1],
+        name: s[2],
+        ...(s[4] ? { tab: s[4] } : {}),
+      },
+    };
+  }
+  if (
+    (s.length === 5 || s.length === 6) &&
+    s[4]?.path === "settings" &&
     /[.:]/.test(s[1].path)
   ) {
-    return null;
+    return {
+      consumed: s,
+      posParams: {
+        host: s[1],
+        owner: s[2],
+        name: s[3],
+        ...(s[5] ? { tab: s[5] } : {}),
+      },
+    };
   }
-  return {
-    consumed: s,
-    posParams: {
-      owner: s[1],
-      name: s[2],
-      ...(s[4] ? { tab: s[4] } : {}),
-    },
-  };
+  return null;
+}
+
+// Classic per-release links (/repos/[<host>/]<owner>/<name>/releases/<release>)
+// open that repository's Releases tab with `release` bound so a missing
+// release falls back to the newest one with an explanation instead of matching
+// :host/:owner/:name/:tab as a repository named "releases".
+function repoReleaseMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (s[0]?.path !== "repos") return null;
+  if (s.length === 5 && s[3]?.path === "releases" && !/[.:]/.test(s[1].path)) {
+    return {
+      consumed: s,
+      posParams: {
+        owner: s[1],
+        name: s[2],
+        tab: s[3],
+        release: s[4],
+      },
+    };
+  }
+  if (s.length === 6 && s[4]?.path === "releases" && /[.:]/.test(s[1].path)) {
+    return {
+      consumed: s,
+      posParams: {
+        host: s[1],
+        owner: s[2],
+        name: s[3],
+        tab: s[4],
+        release: s[5],
+      },
+    };
+  }
+  return null;
 }
 
 // repoLeaveGuard asks the repository page before leaving it with an
@@ -253,11 +300,21 @@ export const routes: Routes = [
   {
     matcher: classicRepoSettingsMatcher,
     redirectTo: ({ params }) => {
-      const tab = params["tab"];
-      return tab && tab !== "overview"
-        ? `/repos/${params["owner"]}/${params["name"]}/${tab}`
+      const prefix = params["host"]
+        ? `/repos/${params["host"]}/${params["owner"]}/${params["name"]}`
         : `/repos/${params["owner"]}/${params["name"]}`;
+      const tab = params["tab"];
+      return tab && tab !== "overview" ? `${prefix}/${tab}` : prefix;
     },
+  },
+  {
+    matcher: repoReleaseMatcher,
+    title: "Repository · grain",
+    loadComponent: () =>
+      import("./repos/repo-detail-page.component").then(
+        (m) => m.RepoDetailPageComponent,
+      ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     matcher: (s) =>
@@ -265,6 +322,21 @@ export const routes: Routes = [
         ? {
             consumed: s,
             posParams: { host: s[1], owner: s[2], name: s[3] },
+          }
+        : null,
+    title: "Repository · grain",
+    loadComponent: () =>
+      import("./repos/repo-detail-page.component").then(
+        (m) => m.RepoDetailPageComponent,
+      ),
+    canDeactivate: [repoLeaveGuard],
+  },
+  {
+    matcher: (s) =>
+      s.length === 5 && s[0].path === "repos" && /[.:]/.test(s[1].path)
+        ? {
+            consumed: s,
+            posParams: { host: s[1], owner: s[2], name: s[3], tab: s[4] },
           }
         : null,
     title: "Repository · grain",
@@ -285,24 +357,6 @@ export const routes: Routes = [
   },
   {
     path: "repos/:owner/:name/:tab",
-    title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
-    canDeactivate: [repoLeaveGuard],
-  },
-  {
-    path: "repos/:host/:owner/:name",
-    title: "Repository · grain",
-    loadComponent: () =>
-      import("./repos/repo-detail-page.component").then(
-        (m) => m.RepoDetailPageComponent,
-      ),
-    canDeactivate: [repoLeaveGuard],
-  },
-  {
-    path: "repos/:host/:owner/:name/:tab",
     title: "Repository · grain",
     loadComponent: () =>
       import("./repos/repo-detail-page.component").then(

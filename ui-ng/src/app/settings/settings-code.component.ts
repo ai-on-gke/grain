@@ -1391,6 +1391,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       this.newRepoUrl.set("");
       await this.state.loadCore();
       this.syncReposList();
+      this.state.clearError();
       this.snackbar.show(`Added ${repo}`);
     } catch (err) {
       this.state.error.set(errText(err));
@@ -1402,22 +1403,29 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected async checkReposPlan(): Promise<void> {
     try {
       const res = await this.api.post<{
-        targetReposStranded?: unknown[];
+        targetReposStranded?: { repo?: string; summary?: string }[];
       }>("POST /api/repos/plan", undefined, { targetRepos: this.repos() });
-      const n = res?.targetReposStranded?.length ?? 0;
+      const items = res?.targetReposStranded ?? [];
+      const summaries = items
+        .map((s) => s.summary?.trim() || s.repo?.trim() || "")
+        .filter(Boolean);
       this.reposPlanNotice.set(
-        n > 0
-          ? `${n} open task(s) would be stranded by current repository list.`
+        summaries.length > 0
+          ? summaries.join("\n")
           : "All open tasks match active target repositories (0 stranded).",
       );
+      this.state.clearError();
     } catch (err) {
       this.state.error.set(errText(err));
     }
   }
 
   protected async startRemoveRepo(repo: string): Promise<void> {
-    this.reposPlanNotice.set("Checking stranded tasks...");
-    this.confirmReq.set({
+    const remaining = this.repos().filter(
+      (r) => r.toLowerCase() !== repo.toLowerCase(),
+    );
+    const unrestricts = this.repos().length > 0 && remaining.length === 0;
+    const initialReq: ConfirmRequest = {
       title: `Remove repository ${repo}?`,
       message: "Checking stranded tasks...",
       accept: "Remove",
@@ -1428,36 +1436,46 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
           owner,
           name,
         });
-        this.repos.update((list) => list.filter((r) => r !== repo));
+        this.repos.update((list) =>
+          list.filter((r) => r.toLowerCase() !== repo.toLowerCase()),
+        );
+        await this.state.loadCore();
+        this.syncReposList();
+        this.reposPlanNotice.set("");
+        this.state.clearError();
         this.snackbar.show(`Removed ${repo}`);
       },
-    });
+    };
+    this.reposPlanNotice.set("Checking stranded tasks...");
+    this.confirmReq.set(initialReq);
 
     try {
       const plan = await this.api.post<{
-        tasks?: string[];
-        schedules?: string[];
+        targetReposStranded?: { repo?: string; summary?: string }[];
       }>("POST /api/repos/plan", undefined, {
-        targetRepos: this.repos().filter((r) => r !== repo),
+        targetRepos: remaining,
       });
-      const stranded =
-        (plan?.tasks?.length || 0) + (plan?.schedules?.length || 0);
-      let msg = "";
-      if (stranded > 0)
-        msg += `Warning: This will strand ${stranded} tasks/schedules.\n`;
-      msg += `Warning: Per-repo settings (setup command, prompt, grants) will be deleted.`;
+      if (this.confirmReq() !== initialReq) return;
+      const parts: string[] = [];
+      if (unrestricts) {
+        parts.push(
+          `Removing ${repo}, the only configured repository, leaves the allowlist empty so new tasks may target any repository again (${repo} included).`,
+        );
+      }
+      for (const s of plan?.targetReposStranded ?? []) {
+        if (s.summary?.trim()) parts.push(s.summary.trim());
+      }
+      parts.push(
+        "Warning: Per-repo settings (setup command, prompt, grants) will be deleted.",
+      );
+      const msg = parts.join("\n\n");
       this.reposPlanNotice.set(msg);
-      // Update the request with the new message
-      const req = this.confirmReq();
-      if (req) {
-        this.confirmReq.set({ ...req, message: msg });
-      }
+      this.confirmReq.set({ ...initialReq, message: msg });
     } catch (err) {
-      this.reposPlanNotice.set(errText(err));
-      const req = this.confirmReq();
-      if (req) {
-        this.confirmReq.set({ ...req, message: errText(err) });
-      }
+      if (this.confirmReq() !== initialReq) return;
+      const msg = errText(err);
+      this.reposPlanNotice.set(msg);
+      this.confirmReq.set({ ...initialReq, message: msg });
     }
   }
 
@@ -1494,6 +1512,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
         ...all,
         [repo]: { ...all[repo], bypassGates: on },
       }));
+      this.state.clearError();
     } catch (err) {
       this.state.error.set(errText(err));
     }
@@ -1575,6 +1594,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       this.newGitAppInstallId.set("");
       await this.loadGitConnections();
       this.state.invalidateReachableRepos();
+      this.state.clearError();
       this.snackbar.show(`Saved Git connection on ${host}`);
     } catch (err) {
       this.state.recordError(err);
@@ -1604,6 +1624,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
           res?.summary || (res?.ok === false ? "Check reported issues" : "OK"),
         );
       }
+      this.state.clearError();
     } catch (err) {
       this.state.error.set(errText(err));
     }
@@ -1616,6 +1637,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       });
       await this.loadGitConnections();
       this.state.invalidateReachableRepos();
+      this.state.clearError();
       this.snackbar.show(`Removed ${cred}`);
     } catch (err) {
       this.state.error.set(errText(err));
@@ -1635,6 +1657,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       this.ghTokenValue.set("");
       await this.loadGitConnections();
       this.state.invalidateReachableRepos();
+      this.state.clearError();
       const nowHasDefault = this.gitConnections().some(
         (c) => c.credential === name && !c.scope,
       );
