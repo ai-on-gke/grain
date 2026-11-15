@@ -1403,4 +1403,59 @@ describe("SettingsPage", () => {
     await user.click(screen.getAllByTestId("settings-result")[0]);
     expect(onSection).toHaveBeenCalledWith("config-repo", "config-repo");
   });
+
+  it("renders Settings → Access without reading GET /api/settings when the caller lacks settings:read", async () => {
+    const showError = vi.fn();
+    api.mockImplementation((path) => {
+      if (path === "/api/settings") {
+        const err = new Error(
+          "role access-admins holds no scope settings:read",
+        );
+        err.status = 403;
+        return Promise.reject(err);
+      }
+      if (path === "/api/access/principals") {
+        return Promise.resolve({
+          entries: [{ entry: "user:alice@example.com", role: "grain/viewer" }],
+          roles: [{ name: "grain/viewer", builtin: true }],
+        });
+      }
+      if (path === "/api/access/history") {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve({});
+    });
+
+    render(
+      <PreferencesProvider>
+        <SettingsPage
+          config={{
+            authenticated: true,
+            actor: "user:alice@example.com",
+            authMethod: "iap",
+            access: {
+              role: "access-admins",
+              roles: ["access-admins"],
+              full: false,
+              scopes: ["access:read", "access:write"],
+            },
+          }}
+          section="access"
+          onSection={vi.fn()}
+          showError={showError}
+        />
+      </PreferencesProvider>,
+    );
+
+    expect(
+      await screen.findByTestId("principal-row-user:alice@example.com"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Deployment settings could not be read/),
+    ).toBeNull();
+    expect(
+      api.mock.calls.filter(([path]) => path === "/api/settings"),
+    ).toHaveLength(0);
+    expect(showError).not.toHaveBeenCalled();
+  });
 });

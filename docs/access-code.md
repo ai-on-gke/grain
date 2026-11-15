@@ -24,7 +24,7 @@ network listener takes depends on two settings:
 | **No IAP** | neither | accepted from anywhere, as below | not checked (logged and ignored) |
 | **IAP, code still accepted** | `-ui-iap-audience` | accepted from anywhere | verified, and its person is signed in |
 | **IAP required** | `-ui-iap-audience` and `-ui-require-iap` | only over loopback with no forwarding headers ([break-glass](#break-glass-over-loopback)) | verified, and its person is signed in |
-| **Hub required** | `-ui-hub-{issuer,audience,keys-url}` and `-ui-require-verifier=registry` | only over loopback with no forwarding headers ([break-glass SSH](#break-glass-ssh-on-registry-hosted-instances)) | `X-Grain-Registry-Assertion` verified, and its person is signed in |
+| **Hub required** | `-ui-hub-{issuer,audience,keys-url}` and `-ui-require-verifier=registry` | only over loopback with no forwarding headers ([break-glass SSH](#break-glass-ssh-on-registry-hosted-instances)) | `X-Grain-Hub-Assertion` verified, and its person is signed in |
 
 - **No IAP.** Local and standalone deployments. Everything on this page
   applies as written.
@@ -65,12 +65,15 @@ network listener takes depends on two settings:
   (`GRAIN_HUB_ISSUER`), `-ui-hub-audience`
   (`GRAIN_HUB_AUDIENCE`) and `-ui-hub-keys-url`
   (`GRAIN_HUB_KEYS_URL`) are all set. It verifies the short-lived
-  ES256 `X-Grain-Registry-Assertion` JWT that `grain-registry` signs on
+  ES256 `X-Grain-Hub-Assertion` JWT that `grain-hub` signs on
   every proxied request to `https://<name>.<instance-domain>/`, checking
   the signature against the hub's JWKS
   (`https://<registry-host>/.well-known/jwks.json`), exact `iss`
   equality, single-audience `aud` equality
   (`https://<name>.<instance-domain>`), and `exp`/`iat`/`nbf` bounds.
+  The hub also sends the same JWT as `X-Grain-Registry-Assertion`, its
+  name before the Grain Registry became the Grain Hub, and either is
+  accepted.
   Its `AccessCodeWins()` is `false`: a verified hub assertion always
   takes precedence over the access code, and an invalid assertion fails
   closed with `401`. Hosted VM instances created by the hub run with
@@ -82,7 +85,7 @@ network listener takes depends on two settings:
   served in-process over a `MuxListener` (`RemoteAddr` is
   `stream-<id>-remote`, never `127.0.0.1`) behind a mandatory
   tunnel-ingress gate that unconditionally requires a valid
-  `X-Grain-Registry-Assertion` and never accepts `grain_access` cookies,
+  `X-Grain-Hub-Assertion` and never accepts `grain_access` cookies,
   `X-Grain-Access-Code` or bearer access codes over the tunnel -- even if
   a workstation daemon omits `-ui-require-verifier=registry` on its local
   `127.0.0.1` TCP listener so local CLI commands can still use the access
@@ -103,7 +106,8 @@ With `-ui-require-iap` or `-ui-require-verifier=<name>` (including
 `-ui-require-verifier=registry`) the code is still accepted from
 `127.0.0.1` or `::1` when the request carries none of `X-Forwarded-For`,
 `Forwarded`, `X-Real-Ip`, IAP's headers (`X-Goog-IAP-JWT-Assertion`),
-`X-Grain-Registry-Assertion` or any registered verifier's headers. A
+`X-Grain-Hub-Assertion`, `X-Grain-Registry-Assertion` or any registered
+verifier's headers. A
 proxy on the same host therefore cannot relay somebody's code in. That
 leaves a way in which does not depend on IAP or the hub proxy, from
 the daemon's own host:
@@ -451,9 +455,8 @@ which is the owner the daemon expects.
 without the access code too: an enrolling host signs its join and poll
 requests with its generated Ed25519 keypair, presents a shared `ghe_...`
 enrollment code (which grants nothing except filing a pending join request)
-plus a verified enrolling identity (from the proxy `IdentityVerifier`,
-`ui.RegisterHostJoinVerifier`, or a GitHub device-flow token verified
-server-side), and waits for the deployment owner to accept it. For
+plus a verified enrolling identity (from the proxy `IdentityVerifier` or a
+GitHub device-flow token verified server-side), and waits for the deployment owner to accept it. For
 legacy per-host token installs, the script reads the token on the machine
 itself from stdin or `$GRAIN_HOSTD_TOKEN`; `--release` and `--image` are
 filled in only for an admitted caller or passed on the command line.
@@ -489,17 +492,81 @@ also records who presented it, as the principal `access-code:<name>`
   (`v2.<issued>.<name>.<mac>`), so it cannot be edited. A session signed
   in before names existed (`v1`) keeps working until it expires, as
   "operator (access code)".
-- **The CLI** sends `X-Grain-Access-Name` beside a bearer code:
-  `$GRAIN_OWNER` when set, else the local account as `<user>@<host>`.
-  The header counts only beside the code. The name is what the CLI
-  says, not something grain verified: anybody who holds the code is the
-  owner already, so the name attributes the request, it does not
-  authorize it. For a verified identity, use `grain login` through IAP
-  or an identity proxy.
+- **The CLI**, when it sends the code, sends `X-Grain-Access-Name`
+  beside it: `$GRAIN_OWNER` when set, else the local account as
+  `<user>@<host>`. The header counts only beside the code. The name is
+  what the CLI says, not something grain verified: anybody who holds the
+  code is the owner already, so the name attributes the request, it does
+  not authorize it. The two ways below give the host CLI a verified
+  identity instead, and day to day it then sends no code at all.
 - **The access history** (Settings -> Access, the config audit) records
   every mutating request the code authenticates under the surface
   `access-code`: who, the source address, the route and the time,
   beside role changes.
+
+### On the daemon's host: the API socket
+
+The daemon also serves its API on a unix socket,
+`<data-dir>/api/grain.sock`, in a directory only its own account may
+enter (mode `0700`). `-api-socket` names another path, in a directory
+of its own (a new one, or one the daemon's account owns and that holds
+nothing but the socket: a shared directory such as `/tmp`, or one with
+other files in it such as `/run`, `$HOME` or the data directory, is
+refused rather than restricted), and `none` turns it off. For each connection the daemon asks the kernel which account
+connected (`SO_PEERCRED`) and maps that uid to a person:
+
+- `-host-accounts 1000=alice@example.com,1001=bob@example.com`
+  (`$GRAIN_HOST_ACCOUNTS`) names them;
+- the daemon's own account maps to `-deployment-owner` unless
+  `-host-accounts` names it.
+
+With neither set, no account maps to anybody and the socket is not
+served. A mapped caller is recorded as that person, with the source
+`host-account`, which is a verified source: it can be named in an
+`Approved-by:` trailer, which `access-code:<name>` never can. The
+allowlist still decides what they may do, as for any verified sign-in;
+`-deployment-owner` is always on it.
+
+Nothing on the socket is trusted for being there:
+
+- a uid the map names nobody for is refused with `403` before the
+  request reaches the API, whatever it presents, the access code
+  included;
+- a mapped caller is only that person: the socket drops the access
+  code, bearer tokens, cookies, `X-Grain-Access-Name`,
+  `X-Grain-Acting-Task` and every proxy identity or forwarding header;
+- a socket request's address is `unix-socket:uid=<n>`, never empty, so
+  it is never taken for the daemon's own in-process calls, which stay
+  trusted as before.
+
+The host `grain` CLI dials the socket in place of a loopback
+`-server` whenever it exists and this account can reach it, unless
+`-token`, `$GRAIN_TOKEN` (or another token variable) or the context's
+own credential says how to sign in. It finds the socket under
+`$GRAIN_DATA_DIR`; `$GRAIN_API_SOCKET` names another, and
+`GRAIN_API_SOCKET=none` sends the CLI back to `-server` and the code.
+The directory's `0700` means that by default only the daemon's account
+(and root) can connect, which is what the CLI wrapper `scripts/setup.sh`
+installs runs as. To let another account in, grant it search on the
+directory (`setfacl -m u:alice:x <data-dir>/api`) and name its uid in
+`-host-accounts`. The socket itself is mode `0666`, so the directory is
+the gate, and on a directory that carries an ACL a restart keeps the
+group search bit that holds the ACL's mask, so the grant survives it,
+and clears the ACL's owning-group entry (`g::`) so only named grants
+pass that mask (without an ACL the directory goes back to `0700`). Being able to connect admits nobody on
+its own.
+
+### Elsewhere: `grain login` through IAP or an identity proxy
+
+`grain login <url>` that signs a person in through IAP (a Google ID
+token) or a credential source a wrapper registered (`--auth <source>`)
+now keeps a personal token afterwards: a `grain/external-dev` `gma_`
+token owned by them, as `--issue-token` mints. From then on the context
+is that token, recorded as `external:cli-…` on behalf of the person,
+and needs neither the proxy's sign-in nor the code day to day. `grain
+logout` revokes it. `--issue-token=false` keeps a context that signs in
+through the proxy on every call instead. A deployment with
+`externalAgentApi` off cannot issue one, and says so.
 
 ## Bootstrap and recovery only: `grain access-code mode`
 

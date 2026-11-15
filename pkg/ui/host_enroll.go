@@ -25,8 +25,8 @@ import (
 	"net/url"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -99,42 +99,6 @@ func validateJoinMetadata(req hostd.JoinSubmitRequest) error {
 		}
 	}
 	return nil
-}
-
-// HostJoinIdentity is the verified person or account enrolling a host on
-// POST /api/hostd/join when an edition registers a custom HostJoinVerifier.
-type HostJoinIdentity struct {
-	Principal  string
-	GitHubOrgs []string
-	Via        string
-}
-
-// HostJoinVerifier extracts a verified enrolling identity from r when present.
-type HostJoinVerifier func(r *http.Request) (HostJoinIdentity, bool, error)
-
-var (
-	hostJoinVerifierMu sync.RWMutex
-	hostJoinVerifier   HostJoinVerifier
-)
-
-// RegisterHostJoinVerifier installs fn as the edition's custom enrolling-identity
-// verifier on POST /api/hostd/join and returns an idempotent unregister closure.
-func RegisterHostJoinVerifier(fn HostJoinVerifier) (unregister func()) {
-	hostJoinVerifierMu.Lock()
-	defer hostJoinVerifierMu.Unlock()
-	prev := hostJoinVerifier
-	hostJoinVerifier = fn
-	return func() {
-		hostJoinVerifierMu.Lock()
-		defer hostJoinVerifierMu.Unlock()
-		hostJoinVerifier = prev
-	}
-}
-
-func registeredHostJoinVerifier() HostJoinVerifier {
-	hostJoinVerifierMu.RLock()
-	defer hostJoinVerifierMu.RUnlock()
-	return hostJoinVerifier
 }
 
 // hostdEnrollOpenRoute reports whether r is one of the self-authenticating
@@ -618,7 +582,7 @@ func (s *Server) handleHostdJoin(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if status == http.StatusServiceUnavailable {
-			w.Header().Set("Retry-After", verifierRetryAfter)
+			w.Header().Set("Retry-After", strconv.Itoa(verifierRetryAfter))
 		}
 		writeError(w, status, apierror.Public(err.Error()))
 		return
@@ -691,16 +655,6 @@ func (s *Server) enrollmentCodeName(c *model.HostEnrollmentCode) string {
 
 func (s *Server) verifyHostJoinEnrollee(r *http.Request, ghToken string, needOrgs bool) (string, []string, int, *hostd.JoinSubmitResponse, error) {
 	ctx := r.Context()
-	if fn := registeredHostJoinVerifier(); fn != nil {
-		ident, ok, err := fn(r)
-		if err != nil {
-			return "", nil, http.StatusUnauthorized, nil, fmt.Errorf("enrolling identity did not verify: %v", err)
-		}
-		if ok && strings.TrimSpace(ident.Principal) != "" {
-			return strings.ToLower(strings.TrimSpace(ident.Principal)), ident.GitHubOrgs, 0, nil, nil
-		}
-	}
-
 	cv := cachedOrVerifyCaller(r)
 	if cv.present {
 		if cv.err != nil {

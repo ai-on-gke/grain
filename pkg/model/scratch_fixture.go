@@ -73,7 +73,7 @@ func ScratchFixture(child, parent Task, parentPushesScratch bool) bool {
 		child.ChangeTarget == nil &&
 		len(child.Writes) == 0 &&
 		len(UngrantedReads(child, parent)) == 0 &&
-		GrantsSubsetOf(child.Grants, parent.Grants)
+		GrantsSubsetOf(GrantsBeyondCIReadDefault(child), parent.Grants)
 }
 
 // PushesOwnScratchBranch reports whether t's runs may push its own

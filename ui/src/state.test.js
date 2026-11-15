@@ -14,6 +14,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  questionActivity,
   ASKED_STATES,
   DISPLAY_STATE_ORDER,
   askedCase,
@@ -1560,6 +1561,20 @@ describe("unionCapabilities", () => {
     expect(unionCapabilities(undefined, undefined)).toEqual([]);
     expect(unionCapabilities(["gcp-key"], null)).toEqual(["gcp-key"]);
   });
+
+  it("deduplicates canonical api# references against legacy api: strings", () => {
+    expect(
+      unionCapabilities(
+        [
+          'https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}',
+        ],
+        ["api:tasks:read@acme/widgets", "api:ci:read"],
+      ),
+    ).toEqual([
+      'https://grain.dev/capabilities/api#tasks:read={"repo":"acme/widgets"}',
+      "api:ci:read",
+    ]);
+  });
 });
 
 describe("defaultCapabilitiesFor", () => {
@@ -2944,6 +2959,24 @@ describe("askedCase", () => {
     });
   });
 
+  // Task 3803: a person's question no run has been shown is waiting on an
+  // agent, not on the owner's Reply.
+  it("names a person's undelivered comment ahead of a plain answer", () => {
+    const t = {
+      state: "awaiting_reply",
+      unansweredCommentFrom: "atyburcy@example.com",
+    };
+    expect(askedCase(t)).toEqual({
+      kind: "unanswered",
+      title: "Unanswered question from atyburcy@example.com",
+      action: "reply",
+    });
+    expect(stateTitle(t)).toBe("Unanswered question from atyburcy@example.com");
+    expect(baseRepairWaitReason(t)).toBe(
+      "unanswered question from atyburcy@example.com",
+    );
+  });
+
   it("distinguishes a parked question from an answered report in baseRepairWaitReason", () => {
     expect(
       baseRepairWaitReason({
@@ -3024,5 +3057,39 @@ describe("the asked display state", () => {
       { state: "running", count: 1 },
       { state: "asked", count: 1 },
     ]);
+  });
+});
+
+describe("questionActivity", () => {
+  it("puts a question's summary on the row", () => {
+    expect(
+      questionActivity({
+        state: "awaiting_reply",
+        questionSummary: "Which base?",
+      }),
+    ).toEqual({ note: "Which base?", byQuestion: true });
+  });
+
+  it("puts a closing note's own summary on the row", () => {
+    expect(
+      questionActivity({
+        state: "awaiting_reply",
+        noteSummary: "Set GRAIN_MERGE_LOGINS to unblock image publishing",
+      }),
+    ).toEqual({
+      note: "Set GRAIN_MERGE_LOGINS to unblock image publishing",
+      byQuestion: true,
+    });
+  });
+
+  it("says nothing for a note without a summary or a stopped turn", () => {
+    expect(questionActivity({ state: "awaiting_reply" })).toBeNull();
+    expect(
+      questionActivity({
+        state: "awaiting_reply",
+        turnStopped: true,
+        noteSummary: "x",
+      }),
+    ).toBeNull();
   });
 });

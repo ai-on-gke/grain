@@ -96,8 +96,8 @@ offered for renaming.
 Two capabilities are deliberately not shipped on and are one tick away:
 **`https://grain.dev/capabilities/grain#host-exec`** (formerly `self-repair`),
 which lets a run change things on grain's own host and is the one grant here
-that can break the deployment it is talking about, and **`api:memory`**
-(formerly `memory`), which writes the standing instructions every later run is
+that can break the deployment it is talking about, and
+**`https://grain.dev/capabilities/api#memory`** (formerly `memory`), which writes the standing instructions every later run is
 given.
 
 A wrapper distribution can register further capability methods as on by default
@@ -133,8 +133,8 @@ repositories one at a time (`pkg/model/console_session_reach.go`):
 - **CI for every repository.** `api:ci-read`, unscoped, granted
   `GrantByDefault`, so `grain ci list/show/log` and `grain pr status
   --task/--ref` read grain CI and GitHub Actions runs on every repository.
-  This is not `grain-ci`, which is a repository's CI Mode and cannot be
-  attached by hand. A session's task is given the grant once
+  This is not `grain#ci` (formerly `grain-ci`), which a repository's CI
+  Mode grants and which cannot be attached by hand. A session's task is given the grant once
   (`ConsoleSessionConfigSnapshot.OfferedDefaults`), so an operator who
   removes it from the task keeps it removed across cycles and restarts of
   the daemon. Unticking it in the session's pane also records it in the
@@ -208,8 +208,8 @@ session's conversation but cannot send it anything or change it.
 
 **The capabilities are in the chat pane rather than in Settings.** Half
 of what anybody asks a director is something it can only do with a
-capability it may not have, and the answer — "I would need self-repair
-for that" — is useless if acting on it means finding a dialog and a tab
+capability it may not have, and the answer — "I would need
+`grain#host-exec` for that" — is useless if acting on it means finding a dialog and a tab
 inside it. The grant is a tick box under the message that asked for it,
 and the reconciler carries it onto the session's task. A run keeps the
 capabilities, repositories, network access and model it started with,
@@ -271,16 +271,17 @@ not the same one**.
 ## Acting through grain's API
 
 The director can do anything a person can do in the UI if its session
-holds the scope. It asks for scopes as `api:<scope>` or `api:<preset>`
-capabilities, granted in the session's capability pane, and any such
+holds the scope. It asks for scopes as `https://grain.dev/capabilities/api#<scope>` or
+`https://grain.dev/capabilities/api#<preset>` grants (formerly `api:<scope>`), granted in the
+session's capability pane, and any such
 grant attaches the `grain-controller` MCP server, whose
 `grain_explore_scope` and `grain_invoke` reach every route under the
 scopes it holds. For example:
 
-- `api:task-admin` to reorder, edit, retry and close tasks and re-run
+- `…/api#task-admin` to reorder, edit, retry and close tasks and re-run
   their CI;
-- `api:ci-read` to read job logs;
-- `api:release-manager` to run schedules and cut and promote release
+- `…/api#ci-read` to read job logs;
+- `…/api#release-manager` to run schedules and cut and promote release
   candidates.
 
 Its prompt tells it to ask the person for a scope by name rather than
@@ -295,7 +296,7 @@ Five scopes are out of the director's reach whatever it is granted:
 [director-capabilities.spec.md](../design/spec/director/director-capabilities.spec.md)
 §3.3, G7), and it applies with or without a `settings/capabilities.yml`.
 It covers every grant reaching one of those scopes, including a preset
-or scope set that expands to one, such as `api:grain/operator`. Grain
+or scope set that expands to one, such as `…/api#grain/operator`. Grain
 refuses such a grant when it is attached to the director's task, refuses
 to save it in the session pane, holds the director at dispatch while it
 holds one, and refuses those routes at the API gate. A rule in

@@ -21,8 +21,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -98,6 +98,40 @@ type LocalScriptApprovals struct {
 	byID    map[string]*LocalScriptApproval
 	changed map[string]chan struct{}
 	tokens  map[string]approvalCallbackToken
+
+	// onExpire, when set, hears of every approval a sweep settles as
+	// expired past its deadline, once each, outside mu (prune runs on
+	// every read of the registry, and a task-page read could otherwise
+	// settle it silently, leaving its /expire nothing to report; an
+	// approval /expire settles itself is recorded by that handler,
+	// under its caller's attribution). unreported
+	// holds those settled under mu until flushExpired hands them on.
+	onExpire   func(LocalScriptApproval)
+	unreported []LocalScriptApproval
+}
+
+// SetOnExpire installs fn to hear of each approval a sweep settles as
+// expired; see onExpire.
+func (a *LocalScriptApprovals) SetOnExpire(fn func(LocalScriptApproval)) {
+	a.mu.Lock()
+	a.onExpire = fn
+	a.mu.Unlock()
+}
+
+// flushExpired hands every approval settled as expired since the last
+// flush to onExpire, outside mu. Methods that may settle one defer it
+// before taking mu, so it runs after mu is released.
+func (a *LocalScriptApprovals) flushExpired() {
+	a.mu.Lock()
+	fn, list := a.onExpire, a.unreported
+	a.unreported = nil
+	a.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	for _, r := range list {
+		fn(r)
+	}
 }
 
 func (a *LocalScriptApprovals) init() {
@@ -165,6 +199,7 @@ func (a *LocalScriptApprovals) CheckToken(tok string, now time.Time) (string, bo
 
 // Request records a new pending approval.
 func (a *LocalScriptApprovals) Request(r LocalScriptApproval, now time.Time) LocalScriptApproval {
+	defer a.flushExpired()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.init()
@@ -187,6 +222,7 @@ func (a *LocalScriptApprovals) prune(now time.Time) {
 	for id, r := range a.byID {
 		if r.Status == LocalScriptPending && now.After(r.Deadline) {
 			a.settle(r, LocalScriptExpired, "", now)
+			a.unreported = append(a.unreported, *r)
 		}
 		if r.Status != LocalScriptPending && now.Sub(r.Deadline) > localScriptKeep {
 			delete(a.byID, id)
@@ -215,6 +251,7 @@ func (a *LocalScriptApprovals) version(now time.Time) int64 {
 	if a == nil {
 		return 0
 	}
+	defer a.flushExpired()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if len(a.byID) > 0 {
@@ -248,6 +285,7 @@ func (a *LocalScriptApprovals) list(now time.Time, keep func(*LocalScriptApprova
 	if a == nil {
 		return nil
 	}
+	defer a.flushExpired()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.init()
@@ -271,6 +309,7 @@ var errLocalScriptAnswered = validationErrorf("this local-script call is no long
 
 // Answer settles a pending approval, or says it is not pending.
 func (a *LocalScriptApprovals) Answer(task, id string, approve bool, by string, now time.Time) (LocalScriptApproval, error) {
+	defer a.flushExpired()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.init()
@@ -290,13 +329,17 @@ func (a *LocalScriptApprovals) Answer(task, id string, approve bool, by string, 
 	return *r, nil
 }
 
-// Expire settles a pending approval as expired: its call stopped waiting.
-func (a *LocalScriptApprovals) Expire(task, id string, now time.Time) {
+// Expire settles a pending approval as expired: its call stopped
+// waiting. It reports whether it settled one.
+func (a *LocalScriptApprovals) Expire(task, id string, now time.Time) bool {
+	defer a.flushExpired()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if r, ok := a.byID[id]; ok && r.TaskID == task && r.Status == LocalScriptPending {
 		a.settle(r, LocalScriptExpired, "", now)
+		return true
 	}
+	return false
 }
 
 // Wait blocks until approval id is answered, ctx ends, or max passes,
@@ -330,6 +373,9 @@ func (c *Client) localScriptApprovals() *LocalScriptApprovals {
 		} else {
 			c.localScripts = &LocalScriptApprovals{}
 		}
+		c.localScripts.SetOnExpire(func(a LocalScriptApproval) {
+			c.recordLocalScriptEvent(context.Background(), model.IntegrationEventLocalScriptAnswered, a)
+		})
 	})
 	return c.localScripts
 }
@@ -349,8 +395,8 @@ type localScriptApprovalRequest struct {
 	Deadline       time.Time `json:"deadline"`
 }
 
-// localScriptStdinPreviewMax is localexec.StdinPreviewMax, restated for
-// the same reason as localScriptsNamePattern.
+// localScriptStdinPreviewMax is localexec.StdinPreviewMax, restated
+// without importing pkg/localexec into pkg/ui.
 const localScriptStdinPreviewMax = 4096
 
 // localScriptMaxWait bounds a request's deadline: a script's timeout is
@@ -388,7 +434,7 @@ func (s *Server) handleRequestLocalScriptApproval(w http.ResponseWriter, r *http
 		return
 	}
 	if !localScriptsGranted(*task) {
-		writeClientError(w, validationErrorf("task %s holds no local-scripts capability", id))
+		writeClientError(w, validationErrorf("task %s holds no host-script grant (https://grain.dev/capabilities/host-script#host-script)", id))
 		return
 	}
 	if strings.TrimSpace(req.Tool) == "" || strings.TrimSpace(req.Script) == "" {
@@ -413,14 +459,12 @@ func (s *Server) handleRequestLocalScriptApproval(w http.ResponseWriter, r *http
 		StdinBytes: req.Stdin, StdinPreview: req.StdinPreview, StdinTruncated: req.StdinTruncated,
 		StdinSHA256: req.StdinSHA256, Deadline: req.Deadline,
 	}, now)
+	s.recordLocalScriptEvent(r.Context(), model.IntegrationEventLocalScriptPending, approval)
 	writeJSON(w, http.StatusOK, approval)
 }
 
 func localScriptsGranted(t model.Task) bool {
 	for _, g := range t.Grants {
-		if _, ok := localScriptsName(g.Capability); ok {
-			return true
-		}
 		if strings.HasSuffix(model.CapabilityGrantRef(g.Capability), "#host-script") {
 			return true
 		}
@@ -487,20 +531,6 @@ func (s *Server) authenticateApprovalCallback(w http.ResponseWriter, r *http.Req
 	return taskID, true
 }
 
-// localScriptsNamePattern matches localscripts.Name without importing
-// pkg/capability/localscripts into pkg/ui.
-var localScriptsNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,62}$`)
-
-// localScriptsName is the declaration a local-scripts:<name> capability
-// names.
-func localScriptsName(id string) (string, bool) {
-	name, ok := strings.CutPrefix(id, "local-scripts:")
-	if !ok || !localScriptsNamePattern.MatchString(name) {
-		return "", false
-	}
-	return name, true
-}
-
 // handleWaitLocalScriptApproval answers once the approval is answered,
 // or after at most ?wait= seconds (default and cap 25), whichever is
 // first -- a long poll the mcpserver repeats until the call's deadline.
@@ -534,12 +564,18 @@ func (s *Server) handleExpireLocalScriptApproval(w http.ResponseWriter, r *http.
 		writeClientError(w, forbiddenErrorf("task %s's run may not expire approvals on task %s", p.ID, id))
 		return
 	}
+	// An approval this settles is recorded here, under the caller's
+	// attribution; one a sweep already found past its deadline was
+	// recorded by the registry's onExpire, as grain's.
 	reg := s.tasks.localScriptApprovals()
-	reg.Expire(id, r.PathValue("approval"), s.tasks.now())
+	settled := reg.Expire(id, r.PathValue("approval"), s.tasks.now())
 	approval, ok := reg.Get(id, r.PathValue("approval"))
 	if !ok {
 		writeClientError(w, &NotFoundError{ID: r.PathValue("approval")})
 		return
+	}
+	if settled {
+		s.recordLocalScriptEvent(r.Context(), model.IntegrationEventLocalScriptAnswered, approval)
 	}
 	writeJSON(w, http.StatusOK, approval)
 }
@@ -569,6 +605,7 @@ func (s *Server) handleAnswerLocalScriptApproval(w http.ResponseWriter, r *http.
 		writeClientError(w, err)
 		return
 	}
+	s.recordLocalScriptEvent(r.Context(), model.IntegrationEventLocalScriptAnswered, approval)
 	if err := s.tasks.AddCommentWithAuthor(r.Context(), id, localScriptAnswerComment(approval), nil, by); err != nil {
 		writeClientError(w, fmt.Errorf("the call was %s, but recording that on the task failed: %w", approval.Status, err))
 		return
@@ -626,4 +663,56 @@ func (s *Server) handleListLocalScriptApprovals(w http.ResponseWriter, r *http.R
 		out = append(out, a)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// recordLocalScriptEvent records a local_script.* event for a, so GET
+// /api/events readers who may read its task learn of it without polling.
+// The approvals live in memory; the event is only a notice of one, and a
+// failure to record it is logged rather than failing the call.
+func (s *Server) recordLocalScriptEvent(ctx context.Context, typ model.IntegrationEventType, a LocalScriptApproval) {
+	if s.tasks == nil {
+		return
+	}
+	if _, ok := model.EventActorFromContext(ctx); !ok {
+		if _, hasPrincipal := PrincipalFromContext(ctx); hasPrincipal {
+			ctx = model.WithEventActor(ctx, RequestActor(ctx))
+		}
+	}
+	s.tasks.recordLocalScriptEvent(ctx, typ, a)
+}
+
+// recordLocalScriptEvent is Server.recordLocalScriptEvent on the client,
+// which the registry's onExpire calls without a request.
+func (c *Client) recordLocalScriptEvent(ctx context.Context, typ model.IntegrationEventType, a LocalScriptApproval) {
+	if c.Store == nil {
+		return
+	}
+	ev := model.IntegrationEvent{
+		Type:       typ,
+		At:         c.now(),
+		TaskID:     a.TaskID,
+		ApprovalID: a.ID,
+		Script:     a.Script,
+		Summary:    localScriptSummary(a),
+	}
+	if typ == model.IntegrationEventLocalScriptAnswered {
+		ev.Decision = a.Status
+	}
+	if err := c.Store.RecordIntegrationEvent(ctx, ev); err != nil {
+		log.Printf("recording %s for task %s's %s: %v", typ, a.TaskID, a.ID, err)
+	}
+}
+
+// localScriptSummary is a's call on one line: the script and how many
+// arguments it was given -- never the arguments or stdin themselves,
+// which the approval (readable only to who may act on the task) holds.
+func localScriptSummary(a LocalScriptApproval) string {
+	switch n := len(a.Args); n {
+	case 0:
+		return a.Script
+	case 1:
+		return a.Script + " (1 argument)"
+	default:
+		return fmt.Sprintf("%s (%d arguments)", a.Script, n)
+	}
 }

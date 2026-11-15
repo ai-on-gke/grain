@@ -161,9 +161,12 @@ func (s RepoDeclarationSource) Read(ctx context.Context, repo model.RepoRef) (mo
 	if err != nil {
 		return model.RepoDeclarations{}, "", err
 	}
-	declared, err := repodecl.Load(os.DirFS(checkout), repo)
+	// Forward-compatible: a file written for a newer grain than this one
+	// is held back, its last good version kept, rather than refusing
+	// everything else the repository declares (docs/declarations.md).
+	declared, err := repodecl.LoadForwardCompatible(os.DirFS(checkout), repo)
 	if err != nil {
-		return model.RepoDeclarations{}, "", err
+		return model.RepoDeclarations{}, "", model.DeclarationRefusal{Err: err}
 	}
 	return declared, strings.TrimSpace(commit), nil
 }

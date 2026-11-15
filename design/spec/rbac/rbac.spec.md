@@ -500,6 +500,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/deployment/git-connections/check` | `connections:read` | `admin` | Probes git forge connection credential. |
 | `PUT /api/deployment/agent-backends/{backendId}` | `connections:write` | `admin` | Configures model backend. |
 | `DELETE /api/deployment/agent-backends/{backendId}` | `connections:write` | `admin` | Removes model backend. |
+| `POST /api/deployment/agent-backends/{backendId}/discover` | `connections:write` | `admin` | Refreshes the models the backend's provider advertises (writes only the discovered-models cache). |
 | `PUT /api/deployment/repos/{owner}/{name}/git-connection` | `connections:write` | `admin` | Binds git connection to repository. |
 | `GET /api/deployment/secret-audit` | `secrets:read` | `admin` | Reads secret access/write audit log. |
 | `GET /api/deployment/audit-logs` | `secrets:read` | `admin` | Reads deployment security/config audit logs. |
@@ -536,6 +537,8 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/state-repo/remote` | `settings:write` | `admin` | Configures `grain/config` remote URL. |
 | `POST /api/state-repo/secrets-key` | `secrets:write` | `admin` | Generates/rotates state-repo secrets encryption key. |
 | `POST /api/state-repo/import-key` | `secrets:write` | `admin` | Imports state-repo secrets encryption key. |
+| `POST /api/state-repo/secrets-key/wrap` | `secrets:write` | `admin` | Wraps the secrets key with a Cloud KMS key, in the daemon (`grain state key wrap`). |
+| `POST /api/state-repo/secrets-key/unwrap` | `secrets:write` | `admin` | Puts the secrets key back in plaintext form (`grain state key unwrap`). |
 | `POST /api/state-repo/secrets-repo` | `secrets:write` | `admin` | Configures encrypted secrets backup repository. |
 | `POST /api/state-repo/reset-notice` | `settings:write` | `admin` | Clears state-repo warning notice. |
 | `GET /api/database` | `settings:read` | `admin` | Reads which database backend is in use. No route migrates it: store moves are offline only (docs/database.md). |
@@ -543,6 +546,7 @@ Every pattern registered on `ui.Server` (`pkg/ui/server.go`, `pkg/ui/route_scope
 | `POST /api/package-cache/flush` | `caches:write` | `admin` | Flushes package cache. |
 | `POST /api/actions-cache/flush` | `caches:write` | `admin` | Flushes GitHub Actions cache. |
 | `POST /api/upgrade` | `deployment:upgrade` | `admin` | Starts or schedules Grain controller upgrade. |
+| `DELETE /api/upgrade/current` | `deployment:upgrade` | `admin` | Cancels an in-progress upgrade before cut-over. |
 | `DELETE /api/upgrade/scheduled` | `deployment:upgrade` | `admin` | Cancels scheduled upgrade. |
 | `POST /api/host/restart` | `deployment:restart` | `admin` | Restarts Grain controller process. |
 | `POST /api/persistent-sandboxes/{name}/{action}` | `deployment:restart` | `admin` | Starts/stops/restarts persistent sandbox. |

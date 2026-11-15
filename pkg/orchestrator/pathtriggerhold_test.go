@@ -154,8 +154,10 @@ func TestGatedPathRequiringAHumanIsNeverReleased(t *testing.T) {
 
 func TestGatedPathsUnderSeveralTriggersWaitForAllUnderTheStrictest(t *testing.T) {
 	t.Parallel()
+	docs := gateTrigger("docs", model.TriggerHumanNo, "docs")
+	docs.Template = templateID("planner")
 	ctx, store, _, client, task := finishGated(t, []model.PathTrigger{
-		gateTrigger("docs", model.TriggerHumanNo, "docs"),
+		docs,
 		gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets"),
 	}, "docs/a.md", "config/secrets/prod.yml")
 
@@ -165,7 +167,7 @@ func TestGatedPathsUnderSeveralTriggersWaitForAllUnderTheStrictest(t *testing.T)
 	}
 	ids := gatingIDs(got)
 	if len(ids) != 2 {
-		t.Fatalf("want a gating task per trigger, got %v", ids)
+		t.Fatalf("want a gating task per review template, got %v", ids)
 	}
 	completeReview(t, ctx, store, ids[0])
 	syncTriggerHolds(t, ctx, store, client, baseTime.Add(time.Hour))
@@ -302,5 +304,63 @@ func TestPullRequestTriggerTasksInheritTheChangesRequester(t *testing.T) {
 			t.Errorf("trigger task %s (%q): creator %q; want the change's requester",
 				id, got.Title, got.Creator)
 		}
+	}
+}
+
+// A person's Submit is about the head they read. A push after it that
+// changes a `human: required` trigger's paths -- and none of the trust-
+// boundary patches the change's clearance was given for, so that clearance
+// carries -- is judged afresh by the trigger, which asks for a person
+// again: the Submit is not carried to a head whose watched files the
+// person never saw.
+func TestHumanRequiredTriggerAsksAgainAfterAPushCarriesTheClearance(t *testing.T) {
+	t.Parallel()
+	ctx, store, sim, client, task := finishGated(t,
+		[]model.PathTrigger{gateTrigger("secrets", model.TriggerHumanRequired, "config/secrets")},
+		"pkg/ui/server.go", "config/secrets/prod.yml")
+	branch := model.BranchName(task.ID)
+
+	got := reloaded(t, ctx, store, task.ID)
+	reviewID := linkOf(got, model.LinkSecurityReviewTask)
+	gates := gatingIDs(got)
+	if reviewID == "" || len(gates) != 1 {
+		t.Fatalf("want a security review and one gating task: links=%+v", got.Links)
+	}
+	completeReview(t, ctx, store, reviewID)
+	completeReview(t, ctx, store, gates[0])
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	syncTriggerHolds(t, ctx, store, client, baseTime.Add(time.Hour))
+	read := prHeadOf(t, client, reloaded(t, ctx, store, task.ID))
+	humanSubmit(t, ctx, store, task.ID, read)
+	syncTriggerHolds(t, ctx, store, client, baseTime.Add(70*time.Minute))
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(80*time.Minute)); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	if mergedBranch(sim, branch) {
+		t.Fatal("merged before CI read green")
+	}
+
+	pushFile(t, sim.BareRepo, branch, "config/secrets/prod.yml", "changed after the Submit\n")
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(2*time.Hour)); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	got = reloaded(t, ctx, store, task.ID)
+	if _, carriedTo, _ := strings.Cut(linkOf(got, model.LinkTrustBoundaryCleared), "@"); strings.EqualFold(carriedTo, read) {
+		t.Fatalf("the new head was not classified: links=%+v", got.Links)
+	}
+	for _, id := range gatingIDs(got) {
+		completeReview(t, ctx, store, id)
+	}
+	syncTriggerHolds(t, ctx, store, client, baseTime.Add(3*time.Hour))
+	setMergeable(sim, true)
+	sim.CheckRuns[branch] = greenCheck
+	if err := orchestrator.SyncPullRequests(ctx, store, client, baseTime.Add(4*time.Hour)); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
+	if got := reloaded(t, ctx, store, task.ID); got.AutoMerge || mergedBranch(sim, branch) {
+		t.Fatalf("a human: required trigger's paths changed after the Submit and it merged on that Submit: automerge=%v links=%+v",
+			got.AutoMerge, got.Links)
 	}
 }

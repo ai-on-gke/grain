@@ -113,6 +113,7 @@ func TestExternalModeRefusesEachConfigWriteWithTheEditToCommit(t *testing.T) {
 		{http.MethodPut, "/api/deployment/agent-backends/c2", `{"framework":"codex"}`, "tables/grain_config.json", "codex"},
 		{http.MethodDelete, "/api/deployment/agent-backends/c", ``, "tables/grain_config.json", "claude"},
 		{http.MethodPut, "/api/deployment/repos/acme/widgets/config", `{"promptExtension":"mind the gap"}`, "tables/repo_config.json", "mind the gap"},
+		{http.MethodPut, "/api/usage/settings", `{"mode":"auto","minWorkers":3}`, "tables/usage_setting.json", "minWorkers"},
 		// Not rehearsed: the route sets a secret before its write, so it
 		// is refused at the guard with the file and no patch.
 		{http.MethodPost, "/api/gcp-keys", `{"name":"prod","projectId":"p1","serviceAccountEmail":"sa@p1.iam.gserviceaccount.com"}`, "tables/gcp_key.json", ""},

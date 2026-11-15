@@ -201,6 +201,10 @@ const errAccessCodeRecovery = "the access code is in recovery mode (grain access
 const errAccessCodeOff = "the access code is switched off on this daemon (grain access-code mode off): sign in with a verified identity, " +
 	"or run `grain access-code mode on` on the daemon's own host"
 
+// accessCodeAuditSurface is the config audit surface a mutating request
+// the code authenticated is recorded under.
+const accessCodeAuditSurface = "access-code"
+
 // accessCodeUse is one request the code authenticated, as the access
 // history and the recovery notification record it.
 type accessCodeUse struct {
@@ -240,7 +244,7 @@ func (s *Server) recordAccessCodeUse(ctx context.Context, u accessCodeUse, recov
 		summary := fmt.Sprintf("access code: %s %s by %s from %s", u.Method, u.Path, u.who(), u.Source)
 		by := RequestActor(ctx)
 		if _, err := s.tasks.Store.RecordConfigAudit(context.WithoutCancel(ctx), model.ConfigAuditEntry{
-			At: at, By: by.Actor, OnBehalfOf: by.OnBehalfOf, Surface: "access-code", Summary: summary,
+			At: at, By: by.Actor, OnBehalfOf: by.OnBehalfOf, Surface: accessCodeAuditSurface, Summary: summary,
 		}); err != nil {
 			log.Printf("grain access: recording %q: %v", summary, err)
 		}

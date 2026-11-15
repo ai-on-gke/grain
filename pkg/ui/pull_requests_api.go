@@ -76,7 +76,7 @@ func (c *Client) pullRequestAdopter() (PullRequestAdopter, error) {
 func pullRequestCallRepo(r *http.Request, pattern string, body []byte) (string, bool, error) {
 	var raw string
 	switch pattern {
-	case "POST /api/pull-requests/adopt", "POST /api/pull-requests/review":
+	case "POST /api/pull-requests/adopt", "POST /api/pull-requests/review", "POST /api/pull-requests/submit":
 		var req struct {
 			PR string `json:"pr"`
 		}
@@ -198,13 +198,11 @@ func (c *Client) checkAdoptedShepherdApproval(ctx context.Context, repo model.Re
 		if call, ok := agentCallFromContext(ctx); ok {
 			set, reason, hasGrants = call.grants, strings.TrimSpace(call.reason), true
 		} else if tok := externalTokenFromContext(ctx); tok != nil {
-			_, resolved, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+			held, resolved, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
 			if err != nil {
 				return forbiddenErrorf("external agent %q has invalid grants: %v", tok.Name, err)
 			}
-			if role := accessRoleFromContext(ctx); role != nil && !role.Full {
-				resolved = resolved.Intersect(role.set).Without(role.deny)
-			}
+			_, resolved = narrowExternalGrants(held, resolved, accessRoleFromContext(ctx))
 			set, hasGrants = resolved, true
 		}
 		if hasGrants {
@@ -223,7 +221,7 @@ func (c *Client) checkAdoptedShepherdApproval(ctx context.Context, repo model.Re
 	}
 	if call, ok := agentCallFromContext(ctx); ok {
 		if !call.grants.Allows("tasks:admin", targetRepo) {
-			return forbiddenErrorf("task %s cannot approve task %s: approving work needs api:tasks:admin", by.ID, task.ID)
+			return forbiddenErrorf("task %s cannot approve task %s: approving work needs https://grain.dev/capabilities/api#tasks:admin", by.ID, task.ID)
 		}
 		if strings.TrimSpace(call.reason) == "" {
 			return forbiddenErrorf("task %s cannot approve task %s without a reason: it is not approved, and adopting it would "+
@@ -246,14 +244,14 @@ func (c *Client) checkAdoptedShepherdApproval(ctx context.Context, repo model.Re
 			how = "it is in the chain that proposed it (" + strings.Join(chain, " → ") + ")"
 		}
 		return forbiddenErrorf("task %s cannot approve task %s: %s, and an agent never approves its own proposals, "+
-			"directly or through the tasks they filed, even under api:tasks:admin or dispatch:write -- a person approves them "+
+			"directly or through the tasks they filed, even under https://grain.dev/capabilities/api#tasks:admin or dispatch:write -- a person approves them "+
 			"(docs/agent-api.md)", me, task.ID, how)
 	}
 	if holds, err := c.proposalPersonHolds(ctx, task, proposer, acting); err != nil {
 		return err
 	} else if len(holds) > 0 {
 		return forbiddenErrorf("task %s cannot approve task %s: it is held for a person (%s), and an agent never "+
-			"approves a task held for a person, even under api:tasks:admin or dispatch:write (docs/agent-api.md)",
+			"approves a task held for a person, even under https://grain.dev/capabilities/api#tasks:admin or dispatch:write (docs/agent-api.md)",
 			me, task.ID, strings.Join(holds, "; "))
 	}
 	return c.agentMayApprove(ctx, task)
@@ -395,6 +393,19 @@ func (s *Server) handlePullRequestStatus(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *Server) handleSubmitPullRequest(w http.ResponseWriter, r *http.Request) {
+	var req SubmitPullRequestRequest
+	if !readJSON(w, r, &req) {
+		return
+	}
+	out, err := s.tasks.SubmitPullRequest(r.Context(), req)
+	if err != nil {
+		writePullRequestError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // AdoptPullRequest is POST /api/pull-requests/adopt over the wire.
 func (c *HTTPClient) AdoptPullRequest(ctx context.Context, req AdoptPullRequestRequest) (model.PullRequestAdoption, error) {
 	var out model.PullRequestAdoption
@@ -417,5 +428,12 @@ func (c *HTTPClient) PullRequestStatus(ctx context.Context, pr string, threads b
 	}
 	var out model.PullRequestReport
 	err := c.do(ctx, http.MethodGet, "/api/pull-requests/status?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+// SubmitPullRequest is POST /api/pull-requests/submit over the wire.
+func (c *HTTPClient) SubmitPullRequest(ctx context.Context, req SubmitPullRequestRequest) (SubmitPullRequestResult, error) {
+	var out SubmitPullRequestResult
+	err := c.do(ctx, http.MethodPost, "/api/pull-requests/submit", req, &out)
 	return out, err
 }

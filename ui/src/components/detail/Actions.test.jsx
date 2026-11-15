@@ -16,6 +16,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import DetailOverlay from "../DetailOverlay.jsx";
+import { AccessConfigProvider } from "../../AccessContext.jsx";
 import api from "../../api.js";
 import { TimeZoneProvider } from "../../TimeZoneContext.jsx";
 import { resetDetailMocks, baseTask, config } from "./testFixtures.js";
@@ -875,6 +876,75 @@ describe("DetailOverlay actions", () => {
     expect(api).toHaveBeenCalledWith("/api/tasks/12/run-now", {
       method: "POST",
     });
+  });
+
+  it("requires tasks:admin on the task's repo to Run now an unapproved task, while dispatch:write suffices once approved", () => {
+    const limitedConfig = {
+      ...config,
+      access: {
+        role: "carol-limited",
+        roles: ["carol-limited"],
+        full: false,
+        scopes: ["tasks:read", "tasks:admin", "dispatch:write"],
+        repoLimits: { "tasks:admin": ["acme/widgets"] },
+      },
+    };
+    const { rerender } = render(
+      <AccessConfigProvider config={limitedConfig}>
+        <DetailOverlay
+          task={{
+            ...baseTask,
+            repo: "acme/other",
+            state: "proposed",
+            approved: false,
+          }}
+          tasks={[]}
+          config={limitedConfig}
+          onClose={() => {}}
+          onOpenTask={() => {}}
+          act={vi.fn()}
+        />
+      </AccessConfigProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+
+    rerender(
+      <AccessConfigProvider config={limitedConfig}>
+        <DetailOverlay
+          task={{
+            ...baseTask,
+            repo: "acme/other",
+            state: "queued",
+            approved: true,
+          }}
+          tasks={[]}
+          config={limitedConfig}
+          onClose={() => {}}
+          onOpenTask={() => {}}
+          act={vi.fn()}
+        />
+      </AccessConfigProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
+
+    rerender(
+      <AccessConfigProvider config={limitedConfig}>
+        <DetailOverlay
+          task={{
+            ...baseTask,
+            repo: "acme/widgets",
+            state: "proposed",
+            approved: false,
+          }}
+          tasks={[]}
+          config={limitedConfig}
+          onClose={() => {}}
+          onOpenTask={() => {}}
+          act={vi.fn()}
+        />
+      </AccessConfigProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
   });
 
   it("shows Run now on a task whose pull request is on the merge queue", () => {

@@ -14,20 +14,58 @@ cd "$ROOT_DIR"
 
 CONTAINER_NAME="${CONTAINER_NAME:-myvm}"
 GRANULE_IMAGE="${GRANULE_IMAGE:-granule:local}"
+# fio runs with --direct=1 (O_DIRECT), which tmpfs rejects with EINVAL, and
+# /tmp is tmpfs on stock Debian/systemd hosts. Even where O_DIRECT were
+# accepted, a tmpfs target would measure RAM rather than block storage, so
+# the disk benchmarks default to the disk-backed /var/tmp instead.
+BENCH_SCRATCH_DIR="${BENCH_SCRATCH_DIR:-/var/tmp}"
+GUEST_SCRATCH_DIR="/var/tmp"
+GRANULE_FIO_STARTED=0
 
 cleanup() {
-    sudo rm -f /tmp/test.fio /tmp/docker_test.fio
+    sudo rm -f "$BENCH_SCRATCH_DIR/test.fio" "$BENCH_SCRATCH_DIR/docker_test.fio"
+    if [ "$GRANULE_FIO_STARTED" = "1" ]; then
+        sudo docker exec "$CONTAINER_NAME" granule exec -- rm -f "$GUEST_SCRATCH_DIR/granule_test.fio" >/dev/null 2>&1 || true
+    fi
     if [ "$CONTAINER_NAME" = "myvm" ]; then
         sudo docker rm -f myvm 2>/dev/null || true
     fi
 }
 trap cleanup EXIT
 
+# run_fio runs the given fio command line and prints its IOPS figure. The
+# output is captured before it is parsed so that when fio fails, its own
+# diagnostic (e.g. "destination does not support O_DIRECT") is shown rather
+# than discarded, and the script stops with fio's exit status.
+run_fio() {
+    local out rc=0
+    out="$("$@" 2>&1)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "fio failed with exit status $rc: $*" >&2
+        printf '%s\n' "$out" >&2
+        return "$rc"
+    fi
+    if ! printf '%s\n' "$out" | grep -o 'IOPS=[0-9A-Za-z.]*'; then
+        echo "fio output did not contain an IOPS figure: $*" >&2
+        printf '%s\n' "$out" >&2
+        return 1
+    fi
+}
+
+if [ ! -d "$BENCH_SCRATCH_DIR" ]; then
+    echo "BENCH_SCRATCH_DIR=$BENCH_SCRATCH_DIR is not a directory" >&2
+    exit 1
+fi
+
 # 1. Setup Docker and Tools if not present
-if ! command -v docker &> /dev/null || ! command -v sysbench &> /dev/null || ! command -v fio &> /dev/null; then
+missing_pkgs=()
+command -v docker &>/dev/null || missing_pkgs+=(docker.io)
+command -v sysbench &>/dev/null || missing_pkgs+=(sysbench)
+command -v fio &>/dev/null || missing_pkgs+=(fio)
+if [ "${#missing_pkgs[@]}" -gt 0 ]; then
     sudo apt-get update
-    sudo apt-get install -y docker.io sysbench fio
-    if [ -n "${USER:-}" ]; then
+    sudo apt-get install -y "${missing_pkgs[@]}"
+    if [[ " ${missing_pkgs[*]} " == *" docker.io "* ]] && [ -n "${USER:-}" ]; then
         sudo usermod -aG docker "$USER" || true
     fi
 fi
@@ -41,11 +79,10 @@ fi
 
 if ! sudo docker image inspect bench:local >/dev/null 2>&1; then
     echo "Building bench:local..."
-    cat << 'EOF' > Dockerfile.bench
+    sudo docker build -t bench:local - <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y sysbench fio pciutils kmod strace net-tools
 EOF
-    sudo docker build -t bench:local -f Dockerfile.bench .
 fi
 
 echo "=== System Info ==="
@@ -57,8 +94,8 @@ sysbench cpu --cpu-max-prime=20000 --threads=1 run | grep "events per second:"
 echo "RAM (MiB/sec):"
 sysbench memory --memory-block-size=1K --memory-total-size=10G --memory-oper=read --threads=1 run | grep -o '([0-9.]* MiB/sec)'
 echo "Disk (IOPS):"
-fio --name=host-randwrite --filename=/tmp/test.fio --ioengine=libaio --iodepth=1 --rw=randwrite --bs=4k --direct=1 --size=1G --numjobs=1 --runtime=10 --group_reporting 2>/dev/null | grep -o 'IOPS=[0-9A-Za-z.]*'
-rm -f /tmp/test.fio
+run_fio fio --name=host-randwrite --filename="$BENCH_SCRATCH_DIR/test.fio" --ioengine=libaio --iodepth=1 --rw=randwrite --bs=4k --direct=1 --size=1G --numjobs=1 --runtime=10 --group_reporting
+rm -f "$BENCH_SCRATCH_DIR/test.fio"
 
 echo "=== [2] Docker Native ==="
 echo "CPU (events/sec):"
@@ -66,8 +103,8 @@ sudo docker run --rm bench:local sysbench cpu --cpu-max-prime=20000 --threads=1 
 echo "RAM (MiB/sec):"
 sudo docker run --rm bench:local sysbench memory --memory-block-size=1K --memory-total-size=10G --memory-oper=read --threads=1 run | grep -o '([0-9.]* MiB/sec)'
 echo "Disk (IOPS):"
-sudo docker run --rm -v /tmp:/data bench:local fio --name=dock-randwrite --filename=/data/docker_test.fio --ioengine=libaio --iodepth=1 --rw=randwrite --bs=4k --direct=1 --size=1G --numjobs=1 --runtime=10 --group_reporting 2>/dev/null | grep -o 'IOPS=[0-9A-Za-z.]*'
-sudo rm -f /tmp/docker_test.fio
+run_fio sudo docker run --rm -v "$BENCH_SCRATCH_DIR:/data" bench:local fio --name=dock-randwrite --filename=/data/docker_test.fio --ioengine=libaio --iodepth=1 --rw=randwrite --bs=4k --direct=1 --size=1G --numjobs=1 --runtime=10 --group_reporting
+sudo rm -f "$BENCH_SCRATCH_DIR/docker_test.fio"
 
 echo "=== [3] Granule (VM) ==="
 if [ "$(sudo docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || true)" != "true" ]; then
@@ -82,4 +119,7 @@ sudo docker exec "$CONTAINER_NAME" granule exec -- sysbench cpu --cpu-max-prime=
 echo "RAM (MiB/sec):"
 sudo docker exec "$CONTAINER_NAME" granule exec -- sysbench memory --memory-block-size=1K --memory-total-size=10G --memory-oper=read --threads=1 run | grep -o '([0-9.]* MiB/sec)'
 echo "Disk (IOPS):"
-sudo docker exec "$CONTAINER_NAME" granule exec -- fio --name=granule-randwrite --filename=/tmp/granule_test.fio --ioengine=libaio --iodepth=1 --rw=randwrite --bs=4k --direct=1 --size=1G --numjobs=1 --runtime=10 --group_reporting 2>/dev/null | grep -o 'IOPS=[0-9A-Za-z.]*'
+GRANULE_FIO_STARTED=1
+run_fio sudo docker exec "$CONTAINER_NAME" granule exec -- fio --name=granule-randwrite --filename="$GUEST_SCRATCH_DIR/granule_test.fio" --ioengine=libaio --iodepth=1 --rw=randwrite --bs=4k --direct=1 --size=1G --numjobs=1 --runtime=10 --group_reporting
+sudo docker exec "$CONTAINER_NAME" granule exec -- rm -f "$GUEST_SCRATCH_DIR/granule_test.fio"
+GRANULE_FIO_STARTED=0

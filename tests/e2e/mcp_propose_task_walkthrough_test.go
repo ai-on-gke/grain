@@ -41,7 +41,7 @@ import (
 //     - network_access: "none" / "open" (assert network sandbox gating)
 //     - template_id & template_fields (assert interpolation of title and body)
 //     - reads & writes (assert multi-repository target and credential resolution)
-//     - capabilities: ["gcp-key"] (assert capability assignment)
+//     - capabilities: [gcp#gcp-key] (assert capability assignment)
 //  4. Execute end-of-run replay via orchestrator.ProcessResult and verify relayProposedTasks
 //     correctly handles declarative parameters and template expansion.
 //  5. Dispatch tasks through dispatch.Cycle and verify dispatcher honors orderKey, sizing,
@@ -102,9 +102,13 @@ func TestMCPProposeTaskWalkthroughSection4(t *testing.T) {
 			t.Fatalf("creating base task 2: %v", err)
 		}
 
-		// Parent task that will propose subsequent work
+		// Parent task that will propose subsequent work. It runs in a
+		// sandbox as large as the live proposal below asks for: a proposal
+		// asking for more than its proposer's sandbox waits for a person
+		// (model.ProposalSandboxShapeAbove) and would not be queued.
 		parentTask, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 			Title: "Director Task", Repo: "acme/widgets", Approved: true,
+			SandboxCPUs: 4, SandboxMemoryMB: 8192, SandboxDiskGB: 40,
 		})
 		if err != nil {
 			t.Fatalf("creating parent task: %v", err)
@@ -127,7 +131,7 @@ func TestMCPProposeTaskWalkthroughSection4(t *testing.T) {
 			NetworkAccess:   string(model.NetworkNone),
 			Reads:           []string{"acme/docs"},
 			Writes:          []ui.WriteTarget{{Repo: "acme/backend", Base: "release-v2"}},
-			Capabilities:    &[]string{"gcp-key"},
+			Capabilities:    &[]string{model.GCPKeySandboxAgentGrant},
 			Model:           "claude-sonnet-5",
 			AgentFramework:  "claude",
 			Approved:        true,
@@ -199,7 +203,7 @@ func TestMCPProposeTaskWalkthroughSection4(t *testing.T) {
 						"network_access":    "none",
 						"reads":             []any{"acme/docs"},
 						"writes":            []any{map[string]any{"repo": "acme/gateway", "base": "main"}},
-						"capabilities":      []any{"gcp-key"},
+						"capabilities":      []any{model.GCPKeySandboxAgentGrant},
 					},
 				},
 			},

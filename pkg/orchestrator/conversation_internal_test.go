@@ -283,8 +283,8 @@ func TestAHandoverInTheKeptTailIsNotRepeated(t *testing.T) {
 	if !strings.Contains(section, "The next line is this task's handover") {
 		t.Errorf("handover on cut thread missing provenance framing: %q", lastOf(section))
 	}
-	if strings.Contains(section, "write_handover") {
-		t.Errorf("thread with no post-handover overflow should not re-request write_handover: %q", lastOf(section))
+	if strings.Contains(section, "grain handover write") {
+		t.Errorf("thread with no post-handover overflow should not re-request grain handover write: %q", lastOf(section))
 	}
 }
 
@@ -354,7 +354,7 @@ func TestAThreadCutOnlyOfItsHandoverStillSaysItWasCut(t *testing.T) {
 	if !strings.Contains(section, "The next line is this task's handover") {
 		t.Errorf("the carried handover is missing its provenance framing: %q", section[:min(len(section), 600)])
 	}
-	if strings.Contains(section, "write_handover") {
+	if strings.Contains(section, "grain handover write") {
 		t.Error("a thread whose post-handover messages fit within tailBudget was asked for another handover")
 	}
 }
@@ -370,12 +370,12 @@ func TestOnlyACutThreadIsAskedForAHandover(t *testing.T) {
 	whole := commentThreadSection([]model.Comment{
 		humanComment(1, "the merge lane may only ever hold one branch"),
 	})
-	if strings.Contains(whole, "write_handover") {
+	if strings.Contains(whole, "grain handover write") {
 		t.Errorf("a thread that fits whole was asked for a handover: %q", whole)
 	}
 
 	cut := commentThreadSection(longThread())
-	if !strings.Contains(cut, "write_handover") {
+	if !strings.Contains(cut, "grain handover write") {
 		t.Errorf("a cut thread was not asked for a handover: %q", lastOf(cut))
 	}
 	if !strings.Contains(cut, "write this task's handover") {
@@ -530,8 +530,8 @@ func TestHandoverResetsConversationWindowForSubsequentTurns(t *testing.T) {
 	if !strings.Contains(before, model.PromptThreadCutNotice) {
 		t.Fatalf("expected thread >64 KiB before handover to be cut:\n%s", firstOf(before))
 	}
-	if !strings.Contains(before, "write_handover") {
-		t.Fatalf("expected cut thread before handover to ask for write_handover:\n%s", lastOf(before))
+	if !strings.Contains(before, "grain handover write") {
+		t.Fatalf("expected cut thread before handover to ask for grain handover write:\n%s", lastOf(before))
 	}
 
 	// Record a handover and a few small incremental follow-up comments.
@@ -556,8 +556,8 @@ func TestHandoverResetsConversationWindowForSubsequentTurns(t *testing.T) {
 	if n := elidedCount(t, after); n <= 0 {
 		t.Errorf("expected positive elided pre-handover message count, got %d", n)
 	}
-	if strings.Contains(after, "write_handover") {
-		t.Errorf("post-handover thread with small delta still asks for write_handover:\n%s", lastOf(after))
+	if strings.Contains(after, "grain handover write") {
+		t.Errorf("post-handover thread with small delta still asks for grain handover write:\n%s", lastOf(after))
 	}
 	for _, want := range []string{
 		"pre-handover-000",
@@ -638,8 +638,8 @@ func TestSupersededHandoversDoNotConsumeTailBudget(t *testing.T) {
 	if n := elidedCount(t, section); n != 23 {
 		t.Errorf("elidedCount = %d, want 23 (20 initial comments + 3 superseded handovers)", n)
 	}
-	if strings.Contains(section, "write_handover") {
-		t.Errorf("thread section asked for write_handover despite post-handover messages fitting within tailBudget:\n%s", lastOf(section))
+	if strings.Contains(section, "grain handover write") {
+		t.Errorf("thread section asked for grain handover write despite post-handover messages fitting within tailBudget:\n%s", lastOf(section))
 	}
 }
 
@@ -682,7 +682,7 @@ func TestLargeHandoverDoesNotConsumePostHandoverTailBudget(t *testing.T) {
 			t.Errorf("post-handover comment %q was crowded out by large handover", marker)
 		}
 	}
-	if strings.Contains(section, "write_handover") {
-		t.Errorf("section asked for write_handover even though post-handover messages fit in tailBudget:\n%s", lastOf(section))
+	if strings.Contains(section, "grain handover write") {
+		t.Errorf("section asked for grain handover write even though post-handover messages fit in tailBudget:\n%s", lastOf(section))
 	}
 }

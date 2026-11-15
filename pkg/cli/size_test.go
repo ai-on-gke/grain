@@ -43,7 +43,7 @@ var oversizedCmdFiles = map[string]struct {
 	// One flag.FlagSet declaration per daemon setting (over 150 of
 	// them), each with its help text, parsed into a daemon.Config. The
 	// daemon's wiring and validation are in pkg/daemon; what is left is flags.
-	"daemon.go": {max: 1400, reason: "the daemon's flag set"},
+	"daemon.go": {max: 1393, reason: "the daemon's flag set"},
 }
 
 // TestCmdGrainFilesStaySmall keeps cmd/grain a CLI rather than a second

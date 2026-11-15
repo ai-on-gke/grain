@@ -425,16 +425,8 @@ func (t *SandboxTokens) AuthenticateGrant(token string) (Grant, bool) {
 	return t.reloadAndLookupGrant(token)
 }
 
-// lookupLocked answers for token from the cached map. The caller holds
+// lookupGrantLocked answers for token from the cached map. The caller holds
 // t.mu.
-func (t *SandboxTokens) lookupLocked(token string) (string, bool) {
-	g, ok := t.lookupGrantLocked(token)
-	if !ok {
-		return "", false
-	}
-	return g.Sandbox, true
-}
-
 func (t *SandboxTokens) lookupGrantLocked(token string) (Grant, bool) {
 	rec, ok := t.byToken[token]
 	if !ok {
@@ -446,17 +438,9 @@ func (t *SandboxTokens) lookupGrantLocked(token string) (Grant, bool) {
 	return rec, true
 }
 
-// reloadAndLookup re-reads the file and answers for token, both under one
+// reloadAndLookupGrant re-reads the file and answers for token, both under one
 // hold of the write lock. It stats the file again once it holds the lock,
 // so callers queued behind one reload do not each repeat it.
-func (t *SandboxTokens) reloadAndLookup(token string) (string, bool) {
-	g, ok := t.reloadAndLookupGrant(token)
-	if !ok {
-		return "", false
-	}
-	return g.Sandbox, true
-}
-
 func (t *SandboxTokens) reloadAndLookupGrant(token string) (Grant, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

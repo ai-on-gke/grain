@@ -1409,6 +1409,21 @@ EOF
 # keyless would publish every digest to the public Rekor log. So
 # --tlog-upload=false, and verifiers pass --insecure-ignore-tlog=true.
 #
+# cosign is a v3 release, and v3 has two defaults this cannot keep, so
+# every sign and attest below passes $cosign_legacy_flags. v3 writes a
+# new-format bundle (an OCI referrer, tagged sha256-<hex> with no
+# suffix) that the v2.4.1 cosign bundled in every grain image before
+# v3.5.0 cannot find: its `verify` says "no signatures found", so each of
+# those deployments would refuse its next upgrade. --new-bundle-format=false
+# writes the legacy sha256-<hex>.sig / .att tags instead, which v2.4.1,
+# v2.6.5 and v3.1.4 all verify (docs/image-signing.md), and which
+# cmd/ghcr-prune groups by digest. v3 also refuses --tlog-upload=false
+# whenever a signing config is in play, and a signing config forces the
+# new bundle format, so --use-signing-config=false turns it off; v3.1.4
+# calls that flag deprecated and prints so, but it is the only way to a
+# legacy, tlog-free signature until the offline flag it promises lands.
+cosign_legacy_flags=(--tlog-upload=false --new-bundle-format=false --use-signing-config=false)
+#
 # No key, no signature: the release goes ahead unsigned and says so, as
 # every release before this did, unless REQUIRE_IMAGE_SIGNING=true. A key
 # with no cosign to use it is a failure, though -- a release that was
@@ -1424,12 +1439,15 @@ esac
 
 # cosign itself, from the Go module proxy when this sandbox has none:
 # pinned, so what signs a release is a version somebody chose. The
-# sandbox already has Go -- the guest build needs it.
-cosign_version="${COSIGN_VERSION:-v2.4.1}"
+# sandbox already has Go -- the guest build needs it. GOTOOLCHAIN=auto
+# because cosign v3 needs a newer Go than go.mod pins (v3.1.4 says go
+# 1.27), and a GOTOOLCHAIN=local Go refuses it outright; auto fetches the
+# toolchain the module asks for from the same proxy.
+cosign_version="${COSIGN_VERSION:-v3.1.4}"
 ensure_cosign() {
   command -v cosign >/dev/null 2>&1 && return 0
   echo "release-images.sh: installing cosign $cosign_version"
-  if ! GOBIN="${TMPDIR:-/tmp}/release-images-cosign" go install "github.com/sigstore/cosign/v2/cmd/cosign@$cosign_version"; then
+  if ! GOTOOLCHAIN=auto GOBIN="${TMPDIR:-/tmp}/release-images-cosign" go install "github.com/sigstore/cosign/v3/cmd/cosign@$cosign_version"; then
     echo "release-images.sh: a signing key is at $signing_key but cosign could not be installed, so nothing can be signed" >&2
     return 1
   fi
@@ -1462,9 +1480,10 @@ sign_image() {
   fi
   for attempt in 1 2 3; do
     if COSIGN_PASSWORD="$(cat "$signing_password_file" 2>/dev/null || true)" \
-      registry_env cosign sign --yes --key "$signing_key" --tlog-upload=false "$digest_ref"; then
+      registry_env cosign sign --yes --key "$signing_key" "${cosign_legacy_flags[@]}" "$digest_ref"; then
       echo "release-images.sh: signed $digest_ref ($image)"
-      return 0
+      attest_reviewed_merge "$digest_ref"
+      return
     fi
     if [ "$attempt" -lt 3 ]; then
       sleep $((20 * attempt))
@@ -1474,8 +1493,106 @@ sign_image() {
   return 1
 }
 
+# Whether $commit reached the release branches through a reviewed merge
+# (pkg/reviewedmerge, cmd/reviewed-merge;
+# docs/security/audits/2026-11-10-insider-risk.md, finding 3): the merge
+# commit of a pull request merged into main or release/v*, either by grain
+# -- one of $GRAIN_MERGE_LOGINS, the forge logins grain merges as, which
+# only grain's credential is and which merges only once grain's holds have
+# let a change go -- or with the forge's review record, an approval by an
+# owner, member or collaborator other than its author of the head that
+# was merged. So is every first-parent commit between $commit and the one
+# this branch's published grain image was built from, since a reviewed merge on top of an
+# unreviewed one carries it into the release too. Where that image is not
+# an ancestor of $commit (a branch with nothing published yet, such as a
+# new release/v*) the chain runs from where $commit's history leaves
+# main's: checking a release branch's tip alone would let a reviewed merge
+# on top of commits pushed onto that branch carry them in. A commit on
+# main itself with no ancestor published (an on-demand build of a
+# superseded commit) is checked alone: a newer published image was
+# checked with its own chain.
+#
+# Sets reviewed_merge_record to the record's file, which sign_image attests
+# onto each image it signs, as the image's provenance of how its commit
+# was reviewed. Refuses (returns 1) a commit that is not, or one whose
+# records cannot be read: the forge is read with $GITHUB_TOKEN, which needs
+# pull-requests: read. REQUIRE_REVIEWED_MERGE=false (or 0 or no) skips the
+# check, says so with the value it was given, and publishes the images
+# with no record.
+#
+# This runs from the commit it checks, so a commit that also rewrote this
+# function gets past it. It stops an unreviewed commit being published by
+# a release that was not tampered with; what holds against one that was is
+# the same check made by the deployment before it upgrades
+# (-upgrade-reviewed-merge-repo, pkg/upgrade/reviewed.go), which runs
+# nothing from the commit to decide.
+reviewed_merge_record=""
+check_reviewed_merge() {
+  local since="" held out
+  case "${REQUIRE_REVIEWED_MERGE:-true}" in
+    0 | [Ff]alse | FALSE | [Nn]o | NO)
+      echo "release-images.sh: WARNING: REQUIRE_REVIEWED_MERGE=${REQUIRE_REVIEWED_MERGE}, so $short is published without checking that it reached $GRAIN_CI_REF through a reviewed merge"
+      return 0
+      ;;
+  esac
+  held="$(image_revision "$root/grain:$branch")"
+  if [[ "$held" =~ ^[0-9a-f]{40}$ ]] && git merge-base --is-ancestor "$held" "$commit" 2>/dev/null; then
+    since="$held"
+  else
+    since="$(git merge-base "$commit" refs/remotes/origin/main 2>/dev/null || true)"
+    [ "$since" != "$commit" ] || since=""
+  fi
+  out="${TMPDIR:-/tmp}/reviewed-merge-$short.json"
+  # Built, not go run: go run exits 1 whatever the program exits with,
+  # which would hide the forge error's 3 behind a refusal's message.
+  local rc=0 bin="${TMPDIR:-/tmp}/reviewed-merge-$short"
+  if ! go build -o "$bin" ./cmd/reviewed-merge; then
+    echo "release-images.sh: refusing to publish $short: could not build cmd/reviewed-merge to check its reviewed merge (above)" >&2
+    return 1
+  fi
+  "$bin" -repo "$GRAIN_CI_REPO" -commit "$commit" ${since:+-since "$since"} \
+    -branches "${RELEASE_REVIEWED_BRANCHES:-main,release/v*}" -mergers "${GRAIN_MERGE_LOGINS:-}" >"$out" || rc=$?
+  case "$rc" in
+    0) ;;
+    3)
+      echo "release-images.sh: not publishing $short: the forge could not be read to check that it reached $GRAIN_CI_REF through a reviewed merge (above); nothing was decided about it, so a re-run may publish it" >&2
+      return 1
+      ;;
+    *)
+      echo "release-images.sh: refusing to publish $short: it did not reach $GRAIN_CI_REF through a reviewed merge (above)" >&2
+      return 1
+      ;;
+  esac
+  echo "release-images.sh: $short reached $GRAIN_CI_REF through reviewed merges${since:+ since ${since:0:7}}: $(cat "$out")"
+  reviewed_merge_record="$out"
+}
+
+# Attest $reviewed_merge_record onto $1 (`repo@sha256:...`) with the
+# release key, as an in-toto statement whose predicate is the record.
+attest_reviewed_merge() {
+  local digest_ref="$1" attempt
+  [ -n "$reviewed_merge_record" ] || return 0
+  for attempt in 1 2 3; do
+    if COSIGN_PASSWORD="$(cat "$signing_password_file" 2>/dev/null || true)" \
+      registry_env cosign attest --yes --key "$signing_key" "${cosign_legacy_flags[@]}" \
+        --type "https://github.com/ai-on-gke/grain/reviewed-merge/v1" \
+        --predicate "$reviewed_merge_record" "$digest_ref"; then
+      echo "release-images.sh: attested the reviewed-merge record onto $digest_ref"
+      return 0
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      sleep $((20 * attempt))
+    fi
+  done
+  echo "could not attest the reviewed-merge record onto $digest_ref in three attempts" >&2
+  return 1
+}
+
 publish_images() {
   ensure_direct_registry_route "$registry"
+  # Nothing is signed, attested or tagged for a commit that did not reach
+  # the branch through a reviewed merge.
+  check_reviewed_merge || return 1
   # The two sandbox images' sha- tags were published by the build, which
   # had to have their digests to stamp into the grain image. They are
   # signed here, by those digests, now that the release's suites have

@@ -31,6 +31,13 @@
 // not -- an unfamiliar word is no reason to leave a stopped schedule
 // looking like a working one.
 export function describeSuppression(suppressed) {
+  // Held by another schedule in its overlap group (grain/task-3895): the
+  // server's sentence names that schedule and the group, which the
+  // per-reason words below -- all about this schedule's own last firing
+  // -- would get wrong.
+  if (suppressed?.heldByScheduleId && suppressed.detail) {
+    return suppressed.detail;
+  }
   switch (suppressed?.reason) {
     case "task":
       return "the task its last firing filed is still open";
@@ -48,6 +55,10 @@ export function describeSuppression(suppressed) {
       return suppressed.detail
         ? suppressed.detail
         : "skipped: this deployment doesn't run this repository's standing work";
+    case "publishingHeld":
+      return suppressed.detail
+        ? suppressed.detail
+        : "skipped: publishing from its base branch is held by a release triage task";
     case "watchedRepoOffTarget":
       return suppressed.detail
         ? suppressed.detail

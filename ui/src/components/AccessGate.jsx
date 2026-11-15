@@ -47,7 +47,17 @@ export default function AccessGate({
   children,
 }) {
   const { reason } = useAccess(config);
-  const why = reason(scope, repo);
+  const scopes = Array.isArray(scope) ? scope.filter(Boolean) : [scope];
+  let deniedScope = "";
+  let why = "";
+  for (const sc of scopes) {
+    const r = reason(sc, repo);
+    if (r) {
+      deniedScope = sc;
+      why = r;
+      break;
+    }
+  }
   if (!why) return children;
   if (hide) return null;
   const child = Children.only(children);
@@ -60,7 +70,7 @@ export default function AccessGate({
     <Tooltip title={why} describeChild>
       <span
         className="access-gate"
-        data-access-denied={scope}
+        data-access-denied={deniedScope}
         tabIndex={0}
         style={{
           display: "inline-flex",

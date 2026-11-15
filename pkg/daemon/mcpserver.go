@@ -166,10 +166,6 @@ func (d DaemonChangeChecks) ChangeCIRefusal(ctx context.Context, tool string) (s
 
 type DaemonTasks struct {
 	Client *ui.HTTPClient
-	// taskID is the task this run belongs to, sent with a broadcast so
-	// that the daemon checks that task's own team and grants rather than
-	// taking this process's word for them.
-	taskID string
 }
 
 func (d DaemonTasks) ListTasks(ctx context.Context) ([]mcp.TaskSummary, error) {
@@ -189,7 +185,7 @@ func (d DaemonTasks) Task(ctx context.Context, id string) (mcp.TaskRecord, error
 	if err != nil {
 		return mcp.TaskRecord{}, err
 	}
-	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, AuthorLabel: detail.AuthorLabel, Provenance: detail.Provenance, Base: detail.Base, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
+	record := mcp.TaskRecord{TaskSummary: taskSummary(detail.Task), Description: detail.Description, Author: detail.Author, AuthorKind: detail.AuthorKind, AuthorLabel: detail.AuthorLabel, Provenance: detail.Provenance, Base: detail.Base, FoundIn: detail.Task.FoundIn, Capabilities: detail.Capabilities, PullRequest: detail.PullRequest, PullRequestMergedAt: detail.PrMergedAt, PullRequestClosedAt: detail.PrClosedAt, FailedAttempts: detail.FailedAttempts, LastFailureAt: detail.LastFailureAt, LastFailureReason: detail.LastFailureReason, Activity: mcp.TaskActivity{Note: detail.Activity, At: detail.ActivityAt, BySetup: detail.ActivityBySetup}}
 	for _, a := range detail.Attempts {
 		record.Attempts = append(record.Attempts, mcp.TaskAttempt{Number: a.Number, StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, Outcome: a.Outcome, Detail: a.Detail, PromptBytes: a.PromptBytes, PromptTokens: a.PromptTokens, Model: a.Model, AgentFramework: a.AgentFramework})
 	}
@@ -1486,13 +1482,12 @@ func (g GrantNames) Has(name string) bool { return slices.Contains(g, name) }
 // served by the run's agent framework -- agent/antigravity's pre-tool
 // hook, say -- rather than by any tool of this process.
 var servedGrants = []string{
-	grainserver.LegacySelfDebug, grainserver.SourceRef, grainserver.SourceGrant,
-	grainlog.CapabilityName, grainserver.JournalRef, grainserver.JournalGrant,
-	grainserver.LegacyGrainCI, grainserver.CIRef, grainserver.CIGrant, deploymenthealth.CapabilityName, grainserver.HealthRef, grainserver.HealthGrant,
-	grainserver.LegacyReadIssues, grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
-	dbaccess.CapabilityDBRead, dbaccess.CapabilityDBWrite,
+	grainserver.SourceRef, grainserver.SourceGrant,
+	grainserver.JournalRef, grainserver.JournalGrant,
+	grainserver.CIRef, grainserver.CIGrant, grainserver.HealthRef, grainserver.HealthGrant,
+	grainserver.ReadIssuesRef, grainserver.ReadIssuesGrant,
 	grainserver.SQLRef, grainserver.SQLRef + "={}", grainserver.SQLReadGrant, grainserver.SQLWriteGrant,
-	selfrepair.CapabilityName, grainserver.HostExecRef, grainserver.HostExecGrant,
+	grainserver.HostExecRef, grainserver.HostExecGrant,
 }
 
 func warnUnknownGrants(grants GrantNames) {
@@ -1505,10 +1500,7 @@ func warnUnknownGrants(grants GrantNames) {
 			continue
 		}
 		if model.IsBootstrapPlaybooksGrant(name) {
-			continue // the bootstrap map, or its retired bare alias: src://playbooks and `grain playbooks` read it
-		}
-		if model.APIAliasPreset(name) != "" {
-			continue // bare alias for an api preset (served by grain-controller on POST /api/mcp)
+			continue // the bootstrap map: src://playbooks and `grain playbooks` read it
 		}
 		if !slices.Contains(served, name) {
 			fmt.Fprintf(os.Stderr,
@@ -1591,6 +1583,7 @@ func grainLogRedactor(secretsDir string) *grainlog.Redactor {
 		return nil
 	}
 	known = append(known, knownGitHubTokens(secretsDir)...)
+	known = append(known, knownLooseCredentials(secretsDir)...)
 	return grainlog.NewRedactor(known)
 }
 
@@ -1697,6 +1690,7 @@ func grainLogRedactorFor(secretsDir string, secretStore *secrets.Store) *grainlo
 	}
 	if secretsDir != "" {
 		known = append(known, knownGitHubTokens(secretsDir)...)
+		known = append(known, knownLooseCredentials(secretsDir)...)
 	}
 	return grainlog.NewRedactor(known)
 }
@@ -1900,6 +1894,7 @@ func (f *daemonProposalFiler) FileProposal(ctx context.Context, p mcp.ProposedTa
 		Title: p.Title, Description: p.Body, Repo: repo, NoRepo: p.NoRepo, ChangeTarget: p.ChangeTarget, Base: base, Priority: priority, AutoMerge: auto,
 		DeclineAutoMerge: p.AutoMerge != nil && !*p.AutoMerge,
 		TemplateID:       p.TemplateID, Fields: p.TemplateFields, AtFront: p.AtFront,
+		FoundIn:   p.FoundIn,
 		DependsOn: deps, CustomFields: fields, Supersedes: supersedes,
 		Reads: p.Reads, Designs: p.Designs, Writes: writes, ReviewTemplateID: p.ReviewTemplateID,
 		ProposedBy: f.parent, ProposalKey: key, Capabilities: caps,
@@ -2081,21 +2076,21 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	var grants GrantNames
 	fs.Var(&grants, "grant",
 		"name of a capability grant this run's task holds, whose tools this server should serve; "+
-			"repeat the flag for each. \"api:self-debug\" (api:tasks:read and api:deployment:read; the retired "+
-			"\"self-debug\" reads as it) serves the four task readers, read_pipeline_changes and read_grain_metrics "+
-			"over -server; "+
-			"\"grain-log\" serves read_grain_log over this host's journal, "+
+			"repeat the flag for each. \"https://grain.dev/capabilities/api#self-debug\" (the tasks:read and "+
+			"deployment:read scopes; formerly \"self-debug\") serves the four "+
+			"task readers, read_pipeline_changes and read_grain_metrics over -server; "+
+			"\"https://grain.dev/capabilities/grain#journal\" (formerly \"grain-log\") serves read_grain_log over this host's journal, "+
 			"redacted with -grain-secrets-dir. Passed "+
 			"by a Framework from the grants on the run's own task (agent.RunConfig.Grants, "+
 			"agent.GrantArgs).")
 	grainSrcDir := fs.String("grain-src-dir", "",
 		"directory holding grain's own source, read-only (pkg/cli/daemon.go's sourceDir: the copy "+
 			"baked into the deployment image, or -upgrade-src-dir's checkout).")
-	grainStateDir := fs.String("grain-state-dir", "", "controller-local synchronized deployment state repository; only used with -grant deployment-health")
+	grainStateDir := fs.String("grain-state-dir", "", "controller-local synchronized deployment state repository; only used with -grant https://grain.dev/capabilities/grain#health")
 	grainSecretsDir := fs.String("grain-secrets-dir", "",
 		"directory holding this deployment's own secrets (cmd/grain's secretsDir: -data-dir/secrets), "+
 			"read on this host so that read_grain_log can redact those values out of the journal "+
-			"before returning any of it. Only used with -grant grain-log, and never served to a run "+
+			"before returning any of it. Only used with -grant https://grain.dev/capabilities/grain#journal, and never served to a run "+
 			"-- what it buys is the ability to recognize a credential in a log line and remove it. "+
 			"Unset, or unreadable, read_grain_log refuses every call rather than answering with an "+
 			"unredacted journal.")
@@ -2554,8 +2549,7 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	}
 	// The task readers, read_pipeline_changes and read_grain_metrics are
 	// what self-debug opened over the daemon's REST API, and are its
-	// api:self-debug preset's now (tasks:read and deployment:read; the
-	// retired bare self-debug still reads as that preset). A run is told
+	// api:self-debug preset's now (tasks:read and deployment:read). A run is told
 	// the preset by the orchestrator's runGrants, beside grain#source.
 	if selfDebugAPI := model.APIGrantsOf(grants); selfDebugAPI.Allows("tasks:read", "") && selfDebugAPI.Allows("deployment:read", "") {
 		var reader mcp.TaskReader
@@ -2725,9 +2719,16 @@ func repoTransport(credentials *gitproxy.CredentialSet, insecureHTTP bool, defau
 // name that is not in that store resolves to nothing, exactly as no name
 // does (credentialTokenSource.selectGitCredential).
 func runCredentialSource(credentials *gitproxy.CredentialSet, credential string) credentialTokenSource {
+	return runCredentialSourceOn(credentials, credential, "")
+}
+
+func runCredentialSourceOn(credentials *gitproxy.CredentialSet, credential, offDefaultHost string) credentialTokenSource {
 	src := credentialTokenSource{credentials: credentials}
 	if name := strings.TrimSpace(credential); name != "" {
 		src.teamCredential = func(string, string, string) (string, bool) { return name, true }
+	}
+	if off := strings.TrimSpace(offDefaultHost); off != "" {
+		src.hostOf = func(string, string) string { return off }
 	}
 	return src
 }
@@ -2758,7 +2759,11 @@ func issueReader(dataDir, githubHost string, insecureHTTP bool, repo, credential
 		return nil, scope, fmt.Errorf("loading the GitHub credential ladder: %w", err)
 	}
 	var transport github.Transport
+	var offDefaultHost string
 	if repo != "" {
+		if ref, err := model.ParseRepo(repo); err == nil {
+			offDefaultHost = ref.OffDefaultHost()
+		}
 		t, _, err := repoTransport(credentials, insecureHTTP, githubHost, repo, credential)
 		if err != nil {
 			return nil, scope, fmt.Errorf("repository %q is on a plain git host with no issues API: %w", repo, err)
@@ -2769,7 +2774,7 @@ func issueReader(dataDir, githubHost string, insecureHTTP bool, repo, credential
 		rt.UseTLS = !insecureHTTP
 		transport = rt
 	}
-	client := github.NewClient(transport, runCredentialSource(credentials, credential))
+	client := github.NewClient(transport, runCredentialSourceOn(credentials, credential, offDefaultHost))
 	client.Caller = "agent tools"
 	return client, scope, nil
 }
@@ -2796,7 +2801,18 @@ func pullRequestToolsWithUpstream(dataDir, githubHost string, insecureHTTP bool,
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"grain mcpserver: pull_request_status and wait_for_checks are unavailable this run: %v\n", err)
-		return mcp.NewPullRequestTools(nil, nil, mcp.PullRequestScope{})
+		return nil
+	}
+	// With no GitHub reader -- a task with no repository, or a host's
+	// sandbox, whose mcpserver is started without -data-dir/-pr-repo --
+	// every one of these tools answers only "no GitHub repository
+	// configured", so they are left off the roster rather than offered to
+	// a run that can only ever get that error (task 4364). Such a run reads
+	// CI with `grain ci wait` and `grain pr open`, which answer through the
+	// daemon on every sandbox; a grain-CI run's own wait_for_checks is
+	// registered by the grain CI tool set, not here.
+	if client == nil {
+		return nil
 	}
 	return mcp.NewPullRequestTools(client, grainCI, scope)
 }
@@ -2823,7 +2839,7 @@ func githubDefaultBranchReader(dataDir, githubHost string, insecureHTTP bool, cr
 		if err != nil {
 			return "", err
 		}
-		client := github.NewClient(transport, runCredentialSource(credentials, credential))
+		client := github.NewClient(transport, runCredentialSourceOn(credentials, credential, ref.OffDefaultHost()))
 		client.Caller = "agent tools"
 		return client.DefaultBranch(ref.Owner, ref.Name)
 	}
@@ -2887,7 +2903,7 @@ func pullRequestReaderWithUpstream(dataDir, githubHost string, insecureHTTP bool
 	// the repository at all: a private repository read with no
 	// credential is a 404, which pull_request_status would otherwise
 	// report as a branch that was never pushed.
-	client := github.NewClient(transport, runCredentialSource(credentials, credential))
+	client := github.NewClient(transport, runCredentialSourceOn(credentials, credential, ref.OffDefaultHost()))
 	client.Caller = "agent tools"
 	// An unset -pr-base is carried through as the empty string rather
 	// than resolved here: it is the ordinary case, and what it resolves

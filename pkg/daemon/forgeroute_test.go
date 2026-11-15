@@ -41,6 +41,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/gitproxy/gitproxytest"
 
@@ -50,6 +51,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/postgres/postgrestest"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // The made-up command-backed source these tests run against.
@@ -508,6 +510,39 @@ func TestGrainCIReadsAForgeCLIHostsWorkflowsThroughForgeCLI(t *testing.T) {
 	}
 }
 
+// A repository filed on another host a moment after the router last read
+// the deployment's repositories is not left on the default host for the
+// rest of the cache's life: the first run on it finishes by reading its
+// branch through this, and the default host has never heard of it.
+func TestForgeRouterFindsARepositoryFiledSinceItsLastRead(t *testing.T) {
+	store, ctx := openStuckTestStore(t)
+	prev := storeRepoHostsMissRetry
+	storeRepoHostsMissRetry = 10 * time.Millisecond
+	t.Cleanup(func() { storeRepoHostsMissRetry = prev })
+	file := func(id string, ref model.RepoRef) {
+		t.Helper()
+		stuckTask(t, ctx, store, id)
+		task, err := store.GetTask(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		task.Target = &ref
+		if err := store.PutTask(ctx, *task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file("first", model.RepoRef{Host: depotTestHost, Owner: "acme", Name: "first"})
+	hostOf := storeRepoHosts(store)
+	if got := hostOf("acme", "first"); got != depotTestHost {
+		t.Fatalf("hostOf(acme/first) = %q, want %q", got, depotTestHost)
+	}
+	file("second", model.RepoRef{Host: depotTestHost, Owner: "acme", Name: "second"})
+	time.Sleep(20 * time.Millisecond)
+	if got := hostOf("acme", "second"); got != depotTestHost {
+		t.Errorf("hostOf(acme/second), filed after the last read, = %q, want %q", got, depotTestHost)
+	}
+}
+
 // A request the router cannot place on another host -- a repository the
 // deployment knows on the default host, or on two hosts -- stays on the
 // default host, and one that names its host always goes there.
@@ -653,5 +688,93 @@ func TestForgeRouterSendsAForgeCLIDefaultHostThroughForgeCLI(t *testing.T) {
 	}
 	if len(guard.calls) != 0 {
 		t.Fatalf("the plain -github-host transport was asked: %q", guard.calls)
+	}
+}
+
+func TestRepoNameGateRoutesByHostAndAddTargetRepoKeepsHost(t *testing.T) {
+	f := newDepotFixture(t)
+	t.Cleanup(func() { liveRepoNames.Store(nil) })
+	f.depot.handle = func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Method == http.MethodGet && strings.EqualFold(r.URL.Path, "/api/v3/repos/experimental/bsalmon-test") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"full_name":"experimental/bsalmon-test"}`))
+			return true
+		}
+		return false
+	}
+
+	dotcom := github.NewFakeTransport(github.ApiResponse{
+		Status: 200,
+		Body:   []byte(`{"full_name":"experimental/bsalmon-test"}`),
+	})
+	client, _ := newForgeClientOver(dotcom, model.DefaultGitHost, f.store, f.creds)
+	liveRepoNames.Store(client)
+
+	poll, workers, ghHost := "30s", 1, model.DefaultGitHost
+	uiClient := ui.NewClient(ui.Config{
+		Actor:     ui.DefaultActor("alice@example.com"),
+		RepoNames: repoNameGate{store: f.store, defaultHost: model.DefaultGitHost},
+	}, f.store)
+	if _, err := uiClient.UpdateSettings(f.ctx, ui.UpdateSettingsRequest{
+		PollInterval: &poll,
+		MaxWorkers:   &workers,
+		GitHubHost:   &ghHost,
+	}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+
+	// Adding the command-backed host repository asks forgecli on depotTestHost
+	// (never dotcom) and keeps depotTestHost despite the hostless full_name.
+	if _, err := uiClient.AddTargetRepo(f.ctx, depotTestHost+"/Experimental/Bsalmon-Test"); err != nil {
+		t.Fatalf("AddTargetRepo(depot): %v", err)
+	}
+	targets, err := f.store.TargetRepos(f.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDepot := depotTestHost + "/experimental/bsalmon-test"
+	if len(targets) != 1 || targets[0] != wantDepot {
+		t.Fatalf("TargetRepos = %v, want [%s]", targets, wantDepot)
+	}
+	if len(dotcom.Calls) != 0 {
+		t.Fatalf("default host was asked during non-default host add: %+v", dotcom.Calls)
+	}
+
+	// Adding the same owner/name on the default host asks dotcom (not
+	// depotTestHost via storeRepoHosts) and keeps both entries distinct.
+	depotReqsBefore := len(f.depot.requests())
+	if _, err := uiClient.AddTargetRepo(f.ctx, "Experimental/Bsalmon-Test"); err != nil {
+		t.Fatalf("AddTargetRepo(default host): %v", err)
+	}
+	targets, _ = f.store.TargetRepos(f.ctx)
+	if len(dotcom.Calls) != 1 || dotcom.Calls[0].Path != "/repos/Experimental/Bsalmon-Test" {
+		t.Fatalf("dotcom calls = %+v, want [/repos/Experimental/Bsalmon-Test]", dotcom.Calls)
+	}
+	if len(f.depot.requests()) != depotReqsBefore {
+		t.Fatalf("depot was asked for a default-host add: %q", f.depot.requests()[depotReqsBefore:])
+	}
+	if len(targets) != 2 || targets[0] != wantDepot || targets[1] != "experimental/bsalmon-test" {
+		t.Fatalf("TargetRepos = %v, want [%s experimental/bsalmon-test]", targets, wantDepot)
+	}
+
+	// Adding a repository on an unconfigured non-default host skips dialing
+	// and falls back to the typed spelling with its host intact.
+	if _, err := uiClient.AddTargetRepo(f.ctx, "unconfigured.forge.test/Team/Service"); err != nil {
+		t.Fatalf("AddTargetRepo(unconfigured host): %v", err)
+	}
+	targets, _ = f.store.TargetRepos(f.ctx)
+	if len(targets) != 3 || targets[2] != "unconfigured.forge.test/Team/Service" {
+		t.Fatalf("TargetRepos = %v, want unconfigured.forge.test/Team/Service kept", targets)
+	}
+
+	// A repoNameGate with no store also fails closed rather than dialing a
+	// non-default host without checking GitConnectionOn.
+	depotReqsBeforeNilStore := len(f.depot.requests())
+	if _, err := (repoNameGate{defaultHost: model.DefaultGitHost}).RepoFullName(depotTestHost, "Experimental", "Bsalmon-Test"); err == nil {
+		t.Fatal("repoNameGate with nil store succeeded on non-default host")
+	}
+	if len(f.depot.requests()) != depotReqsBeforeNilStore {
+		t.Fatalf("repoNameGate with nil store dialed %s", depotTestHost)
 	}
 }

@@ -114,12 +114,12 @@ var capabilityForTool = map[string]string{
 	// deployment's own measurements. A run that asks one of these without
 	// the grant is asking a reasonable question and should be told which
 	// box to have ticked, not that grain cannot answer it.
-	"list_grain_tasks":           "api:self-debug",
-	"read_grain_task":            "api:self-debug",
-	"read_grain_task_prompt":     "api:self-debug",
-	"read_grain_task_transcript": "api:self-debug",
-	"read_pipeline_changes":      "api:self-debug",
-	"read_grain_metrics":         "api:self-debug",
+	"list_grain_tasks":           "https://grain.dev/capabilities/api#self-debug",
+	"read_grain_task":            "https://grain.dev/capabilities/api#self-debug",
+	"read_grain_task_prompt":     "https://grain.dev/capabilities/api#self-debug",
+	"read_grain_task_transcript": "https://grain.dev/capabilities/api#self-debug",
+	"read_pipeline_changes":      "https://grain.dev/capabilities/api#self-debug",
+	"read_grain_metrics":         "https://grain.dev/capabilities/api#self-debug",
 	"read_grain_log":             "https://grain.dev/capabilities/grain#journal",
 	"read_deployment_health":     "https://grain.dev/capabilities/grain#health",
 	"read_deployment_state":      "https://grain.dev/capabilities/grain#health",

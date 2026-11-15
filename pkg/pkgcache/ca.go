@@ -236,6 +236,12 @@ func SaveCA(path string, ca *CA) error {
 	return nil
 }
 
+// NeedsRenewal reports whether c is within caRenewWindow of expiry at now,
+// the point LoadOrCreateCA replaces a persisted CA rather than loading it.
+func (c *CA) NeedsRenewal(now time.Time) bool {
+	return !c.rootCert.NotAfter.After(now.Add(caRenewWindow))
+}
+
 // PEM returns the PEM-encoded CA certificate followed by its EC private key.
 func (c *CA) PEM() []byte {
 	out := make([]byte, 0, len(c.rootPEM)+len(c.keyPEM))

@@ -126,6 +126,13 @@ type PathTrigger struct {
 	// as approver tokens (a user, or "team:<name>"). Empty is the admins
 	// of the held task's team.
 	Approvers []string `json:"approvers,omitempty"`
+	// Fixes lets the review a gating trigger files push fixes and open a
+	// pull request of its own merged back into the change's branch. Off,
+	// which is the default, the review posts its findings on the pull
+	// request and fixes nothing (orchestrator's pathtriggerreview.go).
+	// Grain's own security review works on the change's branch and never
+	// opens a pull request either way.
+	Fixes bool `json:"fixes,omitempty"`
 }
 
 // WatchesBranch reports whether a change landing on (or proposed

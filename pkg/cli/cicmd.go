@@ -725,57 +725,6 @@ func pullRequestBranch(ctx context.Context, c *ui.HTTPClient, pr string) (repo, 
 		err: fmt.Errorf("no grain task tracks %s, so its branch is not known here: wait on it with -ref <branch> -repo %s", ref, ref.Repo)}
 }
 
-// cmdCIRetrigger is `grain ci retrigger <run-id>`: run the jobs of a run
-// that failed again, once, with the job cache bypassed -- the in-sandbox
-// `grain ci retrigger` for a run named by id rather than a task's own
-// branch. -jobs names the jobs instead of taking the failed ones.
-func cmdCIRetrigger(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
-	fs := flag.NewFlagSet("grain ci retrigger", flag.ContinueOnError)
-	jobsFlag := fs.String("jobs", "",
-		"rerun these jobs, by id, comma-separated, rather than the ones that failed")
-	pos, err := parseArgs(fs, args)
-	if err != nil {
-		return err
-	}
-	if err := atMostArgs(fs, pos, 1); err != nil {
-		return err
-	}
-	id := strings.TrimSpace(first(pos))
-	if id == "" {
-		return usageErrorf("a run id is required: %q (\"grain ci list\" prints them)", "grain ci retrigger <run-id>")
-	}
-	run, err := c.CIRun(ctx, id)
-	if err != nil {
-		return err
-	}
-	if ci.ProviderOf(run) != ci.ProviderGrain || run.Actions != nil {
-		return usageErrorf("run %s is a %s run: grain ci retrigger reruns grain CI's own jobs only", id, ci.ProviderOf(run))
-	}
-	jobs := cicli.SplitJobs(*jobsFlag)
-	if len(jobs) == 0 {
-		jobs = cicli.FailedJobIDs(run)
-	}
-	if len(jobs) == 0 {
-		return usageErrorf("run %s has no failed jobs to rerun: name the ones to run with -jobs", id)
-	}
-	req := ui.CIRunRequest{
-		Repo: run.Repo, Ref: run.Ref, Commit: run.Commit,
-		Jobs: jobs, Recheck: true,
-	}
-	// The run's own event, so that the jobs planned are the ones that
-	// ran -- but never a manual dispatch's, which would hand the rerun
-	// release secrets the run it repeats may not have had.
-	if run.Event == ci.EventPush || run.Event == ci.EventPullRequest {
-		req.Event = string(run.Event)
-	}
-	next, err := c.StartCIRun(ctx, req)
-	if err != nil {
-		return err
-	}
-	out.ciRetriggered(run, next, jobs)
-	return nil
-}
-
 // cmdCITestHistory is `grain ci test-history <test>`: how one test has
 // fared across a repository's recent runs -- passes, failures, flakes --
 // read and rendered by the same ci.QueryTestHistory the in-sandbox

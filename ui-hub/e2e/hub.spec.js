@@ -606,3 +606,99 @@ test("focuses Cancel, traps Tab, cancels on Escape, and restores focus across ev
     }
   }
 });
+
+test("auto-refreshes entry detail with a last-updated bar, status timeline and server-changed hint at desktop and phone in light and dark", async ({
+  browser,
+}) => {
+  const viewports = [
+    { name: "desktop", width: 1440, height: 900, isMobile: false },
+    { name: "phone", width: 390, height: 844, isMobile: true },
+  ];
+  const entryURL = `${demo.url}/api/entries/alice-workstation`;
+  const original = await (await fetch(entryURL)).json();
+  try {
+    for (const vp of viewports) {
+      for (const theme of ["light", "dark"]) {
+        const context = await browser.newContext({
+          viewport: { width: vp.width, height: vp.height },
+          colorScheme: theme,
+          isMobile: vp.isMobile,
+          hasTouch: vp.isMobile,
+        });
+        await context.addInitScript(
+          ([k, v]) => localStorage.setItem(k, v),
+          ["grain.themeMode", theme],
+        );
+        const page = await context.newPage();
+        const pageErrors = [];
+        page.on("pageerror", (err) => pageErrors.push(err.message));
+
+        await page.goto(`${demo.url}/entries/alice-workstation`);
+        const bar = page.getByTestId("entry-refresh-status");
+        await expect(bar).toContainText("Last updated");
+        await expect(bar).toContainText("refreshing every");
+
+        // The bar sits between the header and the first section, inside the
+        // viewport, with its dot centred on the text line.
+        const barBox = await bar.boundingBox();
+        expect(barBox.x).toBeGreaterThanOrEqual(0);
+        expect(barBox.x + barBox.width).toBeLessThanOrEqual(vp.width + 0.5);
+        const headerBox = await page.locator(".gs-page-header").boundingBox();
+        expect(barBox.y).toBeGreaterThanOrEqual(
+          headerBox.y + headerBox.height - 0.5,
+        );
+        const dot = await bar.locator(".reg-refresh-dot").boundingBox();
+        const text = await bar.locator("span").nth(1).boundingBox();
+        expect(
+          Math.abs(dot.y + dot.height / 2 - (text.y + text.height / 2)),
+        ).toBeLessThan(text.height / 2);
+
+        const timeline = page.getByTestId("entry-status-timeline");
+        await expect(timeline.locator("li")).toHaveCount(1);
+
+        // Another client renames the entry while this page has an edit open.
+        const display = page.getByLabel("Display name");
+        await display.fill(`local edit ${vp.name} ${theme}`);
+        const renamed = `Renamed elsewhere ${vp.name} ${theme}`;
+        const resp = await page.request.patch(entryURL, {
+          data: { display_name: renamed },
+        });
+        expect(resp.ok()).toBe(true);
+        await bar.getByRole("button", { name: "Refresh now" }).click();
+        const hint = page.getByTestId("server-changed-displayName");
+        await expect(hint).toContainText(renamed);
+        await expect(display).toHaveValue(`local edit ${vp.name} ${theme}`);
+        const hintBox = await hint.boundingBox();
+        const inputBox = await display.boundingBox();
+        expect(hintBox.y).toBeGreaterThanOrEqual(inputBox.y + inputBox.height);
+        expect(hintBox.x + hintBox.width).toBeLessThanOrEqual(
+          inputBox.x + inputBox.width + 0.5,
+        );
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth > window.innerWidth,
+          ),
+        ).toBe(false);
+        if (process.env.HUB_SHOTS) {
+          await page.screenshot({
+            path: `${process.env.HUB_SHOTS}/detail-${vp.name}-${theme}.png`,
+            fullPage: true,
+          });
+        }
+        await page.getByRole("button", { name: "Discard my edits" }).click();
+        await expect(display).toHaveValue(renamed);
+        await expect(hint).toHaveCount(0);
+
+        expect(pageErrors).toEqual([]);
+        await context.close();
+      }
+    }
+  } finally {
+    // Put back what the shared demo had for the specs after this one.
+    await fetch(entryURL, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ display_name: original.display_name || "" }),
+    });
+  }
+});

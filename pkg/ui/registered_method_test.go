@@ -53,7 +53,7 @@ func TestRegisteredMethodIsListedAndGranted(t *testing.T) {
 		if err != nil {
 			t.Fatalf("filing a task holding %s: %v", asked, err)
 		}
-		if held := task.Capabilities; !slices.Equal(held, []string{capabilitytest.MethodGrant}) {
+		if held := withoutDefaultCIRead(task.Capabilities); !slices.Equal(held, []string{capabilitytest.MethodGrant}) {
 			t.Errorf("a task filed holding %s holds %v, want %s", asked, held, capabilitytest.MethodGrant)
 		}
 	}

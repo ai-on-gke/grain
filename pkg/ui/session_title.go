@@ -113,14 +113,18 @@ func (c *Client) RenameConsoleSessionOfTask(ctx context.Context, taskID, title s
 	case utf8.RuneCountInString(title) > model.ConsoleSessionTitleMaxLength:
 		return SessionTitle{}, errSessionTitleLong
 	}
-	comments, err := c.Store.Comments(ctx, taskID)
+	first, err := c.Store.FirstHumanComment(ctx, taskID)
 	if err != nil {
 		return SessionTitle{}, err
+	}
+	firstMsg := ""
+	if first != nil {
+		firstMsg = first.Body
 	}
 	sessions, err := c.UpdateConsoleSession(ctx, sessionID, UpdateConsoleSessionRequest{
 		Title:         &title,
 		renameByAgent: true,
-		firstMessage:  model.ConsoleSessionFirstMessage(comments),
+		firstMessage:  firstMsg,
 	})
 	if err != nil {
 		return SessionTitle{}, err

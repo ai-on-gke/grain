@@ -470,6 +470,15 @@ func TestTheProviderMintsOneTokenForAllOfAJobsGrantsForAllowedReposOnly(t *testi
 	if env := placed[EnvPath]; !strings.Contains(env, URLEnv+"=") || !strings.Contains(env, TokenEnv+"=\""+token+"\"") {
 		t.Errorf("env file = %q, want both exports", env)
 	}
+	env := StepEnv([]model.Materialized{{Materialization: model.Materialization{Placements: []model.Placement{
+		{Side: model.SideSandbox, Path: "/home/debian/.ci-key", Content: "unrelated\n"},
+	}}}, {Materialization: m}})
+	if len(env) != 2 || env[URLEnv] != "http://192.0.2.1:9000" || env[TokenEnv] != token {
+		t.Errorf("StepEnv = %v, want the listener and the token, and nothing else's placements", env)
+	}
+	if env := StepEnv(nil); env != nil {
+		t.Errorf("StepEnv of no grants = %v, want nil", env)
+	}
 	g, ok := e.Tokens.Lookup(token)
 	if !ok || !g.Repo.Same(grain) || g.RunID != "ci-job" {
 		t.Fatalf("token grants %+v, %v", g, ok)

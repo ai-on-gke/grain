@@ -353,15 +353,24 @@ func (r *Repo) checkPullRequest(ctx context.Context, pr PullRequestHead) (string
 	if _, err := r.git(ctx, "worktree", "add", "--detach", "--quiet", "--", tree, pr.HeadSHA); err != nil {
 		return "", fmt.Errorf("%w: checking %s out: %v", ErrCheckNotRun, pr.HeadSHA, err)
 	}
+	// The base is the commit this deployment's own branch is at -- the
+	// settings it runs on -- so that the check refuses a typed-in
+	// capability server credential the pull request adds and only warns
+	// about one the deployment already held (statecheck.LiteralCredentials).
+	// Without it every such credential would only be a warning.
+	base, err := r.git(ctx, "rev-parse", "--verify", "--quiet", "--end-of-options", "refs/heads/"+r.branch+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("%w: reading %s's head to check against: %v", ErrCheckNotRun, r.branch, err)
+	}
 	check := r.cfg.CheckTree
 	if check == nil {
 		check = runCheckSubprocess
 	}
-	return check(ctx, tree)
+	return check(ctx, tree, strings.TrimSpace(base))
 }
 
-// runCheckSubprocess runs `grain state check` over a tree, as a process
-// of its own with a deadline.
+// runCheckSubprocess runs `grain state check -base BASE` over a tree, as
+// a process of its own with a deadline.
 //
 // This binary, found through os.Executable rather than by name on PATH:
 // the check has to be run by the build that would import the tree for
@@ -371,14 +380,14 @@ func (r *Repo) checkPullRequest(ctx context.Context, pr PullRequestHead) (string
 // Its combined output is the answer either way -- the check's own report
 // is what a reader of a red check run needs, and there is no job log
 // anywhere else to go and read.
-func runCheckSubprocess(ctx context.Context, dir string) (string, error) {
+func runCheckSubprocess(ctx context.Context, dir, base string) (string, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("%w: grain could not find its own binary: %v", ErrCheckNotRun, err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, self, "state", "check", dir)
+	cmd := exec.CommandContext(ctx, self, "state", "check", "-base", base, "--", dir)
 	out, err := cmd.CombinedOutput()
 	report := strings.TrimSpace(string(out))
 	if ctx.Err() != nil {

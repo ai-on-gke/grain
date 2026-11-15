@@ -109,8 +109,9 @@ func TestStageRefusesToFollowASymlinkOutOfTheRoot(t *testing.T) {
 	}
 }
 
-// TestStageSymlinkTakesOnlyTheCodexLogin: the one link a run stages is
-// to this machine's codex login, and no other target is linked in.
+// TestStageSymlinkTargetsConfiguredLogins: StageSymlink allows regular
+// files from the built-in table when logins: is absent, or from the
+// allowlist's logins: map when present, and refuses everything else.
 func TestStageSymlinkTakesOnlyTheCodexLogin(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -132,9 +133,61 @@ func TestStageSymlinkTakesOnlyTheCodexLogin(t *testing.T) {
 	}
 	for _, target := range []string{"/etc/passwd", filepath.Join(home, ".ssh"), "~/.ssh/id_ed5519"} {
 		other := StageOp{Op: StageSymlink, Path: filepath.Join(root, "other"), Target: target}
-		if r := s.stage(&other); r.Error == "" || !strings.Contains(r.Error, "codex login") {
+		if r := s.stage(&other); r.Error == "" || !strings.Contains(r.Error, "configured login file") {
 			t.Errorf("stage(symlink -> %s) = %+v, want a refusal", target, r)
 		}
+	}
+
+	// An explicit logins: map replaces the built-in table, resolves ~/ and
+	// symlinks to regular files, and refuses directories, FIFOs and unmapped
+	// logins.
+	realCred := filepath.Join(home, "dotfiles", "mycli-auth.json")
+	if err := os.MkdirAll(filepath.Dir(realCred), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(realCred, []byte(`{"token":"ok"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	credLink := filepath.Join(home, ".mycli-link.json")
+	if err := os.Symlink(realCred, credLink); err != nil {
+		t.Fatal(err)
+	}
+	dirTarget := filepath.Join(home, ".dir-login")
+	if err := os.MkdirAll(dirTarget, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fifoTarget := filepath.Join(home, ".fifo-login")
+	if err := syscall.Mkfifo(fifoTarget, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	allowPath := filepath.Join(t.TempDir(), "agentd.yaml")
+	allowYAML := "logins:\n" +
+		"  mycli: ~/.mycli-link.json\n" +
+		"  dircli: ~/.dir-login\n" +
+		"  fifocli: ~/.fifo-login\n" +
+		"  missing: ~/.no-such-login.json\n"
+	if err := os.WriteFile(allowPath, []byte(allowYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mapped := &Server{StageRoot: root, Allowlist: allowPath, AllowlistOwners: []uint32{uint32(os.Getuid())}}
+
+	// Unmapped ~/.codex/auth.json is refused when logins: omits codex.
+	if r := mapped.stage(&StageOp{Op: StageSymlink, Path: filepath.Join(root, "codex-denied"), Target: op.Target}); r.Error == "" {
+		t.Error("StageSymlink allowed built-in codex login despite explicit logins: map omitting it")
+	}
+	// Directories, FIFOs and missing files in logins: are refused.
+	for _, bad := range []string{dirTarget, fifoTarget, filepath.Join(home, ".no-such-login.json")} {
+		if r := mapped.stage(&StageOp{Op: StageSymlink, Path: filepath.Join(root, "bad"), Target: bad}); r.Error == "" {
+			t.Errorf("StageSymlink(%s) succeeded for non-regular/missing target", bad)
+		}
+	}
+	// Mapped symlinked login resolves to its underlying regular file.
+	stagedLink := filepath.Join(root, "mycli.json")
+	if r := mapped.stage(&StageOp{Op: StageSymlink, Path: stagedLink, Target: realCred}); r.Error != "" {
+		t.Fatalf("StageSymlink(resolved target): %s", r.Error)
+	}
+	if dest, err := os.Readlink(stagedLink); err != nil || dest != realCred {
+		t.Fatalf("Readlink(%s) = %q, %v; want %q", stagedLink, dest, err, realCred)
 	}
 }
 

@@ -361,7 +361,7 @@ func labelOriginRepo(client github.Client, prRepo model.RepoRef, task model.Task
 	if label == "" {
 		return
 	}
-	if err := client.AddLabel(prRepo.Owner, prRepo.Name, number, label); err != nil {
+	if err := client.AddLabel(prRepo.StoredOwner(), prRepo.Name, number, label); err != nil {
 		log.Printf("orchestrator: labelling %s#%d %q: %v -- the pull request goes unlabelled",
 			prRepo, number, label, err)
 	}
@@ -464,7 +464,7 @@ func syncWorkTree(ctx context.Context, store *model.Store, client github.Client,
 	case prev != nil && prev.Body == body:
 		// Nothing to say: just note that it was looked at.
 	case record.CommentID == 0:
-		id, err := client.CreateComment(repo.Owner, repo.Name, number, body)
+		id, err := client.CreateComment(repo.StoredOwner(), repo.Name, number, body)
 		if err != nil {
 			return fmt.Errorf("orchestrator: posting the progress comment on %s: %w", origin, err)
 		}
@@ -474,7 +474,7 @@ func syncWorkTree(ctx context.Context, store *model.Store, client github.Client,
 		if !ok {
 			return nil
 		}
-		if err := editor.UpdateComment(repo.Owner, repo.Name, record.CommentID, body); err != nil {
+		if err := editor.UpdateComment(repo.StoredOwner(), repo.Name, record.CommentID, body); err != nil {
 			return fmt.Errorf("orchestrator: editing the progress comment on %s: %w", origin, err)
 		}
 	}
@@ -517,7 +517,7 @@ func refreshLineage(ctx context.Context, store *model.Store, client github.Clien
 		log.Printf("orchestrator: drawing %s's lineage: %v", task.ID, err)
 		return
 	}
-	detail, err := client.GetPullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number)
+	detail, err := client.GetPullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number)
 	if err != nil || detail.State != "open" || !grainAuthored(detail.Body, task.ID) {
 		return
 	}
@@ -525,7 +525,7 @@ func refreshLineage(ctx context.Context, store *model.Store, client github.Clien
 	if body == detail.Body {
 		return
 	}
-	if err := client.UpdatePullRequestBody(pr.Repo.Owner, pr.Repo.Name, pr.Number, body); err != nil {
+	if err := client.UpdatePullRequestBody(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number, body); err != nil {
 		log.Printf("orchestrator: updating %s's lineage: %v", pr, err)
 	}
 }
@@ -556,10 +556,10 @@ func mergeTaskPullRequest(ctx context.Context, store *model.Store, client github
 	}
 	merger, ok := client.(messageMerger)
 	if len(trailers) == 0 || !ok {
-		return client.MergePullRequest(repo.Owner, repo.Name, number, headSHA)
+		return client.MergePullRequest(repo.StoredOwner(), repo.Name, number, headSHA)
 	}
 	if prTitle == "" {
-		if detail, err := client.GetPullRequest(repo.Owner, repo.Name, number); err == nil {
+		if detail, err := client.GetPullRequest(repo.StoredOwner(), repo.Name, number); err == nil {
 			prTitle = detail.Title
 		}
 	}
@@ -567,5 +567,5 @@ func mergeTaskPullRequest(ctx context.Context, store *model.Store, client github
 	if prTitle != "" {
 		message = prTitle + "\n\n" + message
 	}
-	return merger.MergePullRequestWithMessage(repo.Owner, repo.Name, number, headSHA, "", message)
+	return merger.MergePullRequestWithMessage(repo.StoredOwner(), repo.Name, number, headSHA, "", message)
 }

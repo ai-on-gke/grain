@@ -1,0 +1,52 @@
+=== PASS: tag push always runs
+    run=true (want true)
+    | event is push; running Stage 1
+=== PASS: workflow_dispatch always runs
+    run=true (want true)
+    | event is workflow_dispatch; running Stage 1
+=== PASS: schedule, rc green 3h ago -> skip
+    run=false (want false)
+    | skipping the scheduled nightly on main: v3.7.0-rc.2's Stage 1 concluded success at 2026-11-10T23:11:00Z (https://example.test/r/7)
+=== PASS: schedule, rc red 23h ago -> skip (any verdict counts)
+    run=false (want false)
+    | skipping the scheduled nightly on main: v3.7.0-rc.2's Stage 1 concluded failure at 2026-11-10T03:11:00Z (https://example.test/r/7)
+=== PASS: schedule, rc cancelled 1h ago -> run
+    run=true (want true)
+    | no vX.Y.Z-rc.N Stage 1 run concluded in the last 24h; running the scheduled nightly on main
+=== PASS: schedule, rc 25h ago -> run
+    run=true (want true)
+    | no vX.Y.Z-rc.N Stage 1 run concluded in the last 24h; running the scheduled nightly on main
+=== PASS: schedule, only main runs -> run
+    run=true (want true)
+    | no vX.Y.Z-rc.N Stage 1 run concluded in the last 24h; running the scheduled nightly on main
+=== PASS: schedule, refs/tags/ prefix -> skip
+    run=false (want false)
+    | skipping the scheduled nightly on main: refs/tags/v3.7.0-rc.3's Stage 1 concluded success at 2026-11-11T01:11:00Z (https://example.test/r/7)
+=== PASS: schedule, rc on page 2 behind 100 recent main runs -> skip
+    run=false (want false)
+    | skipping the scheduled nightly on main: v3.7.0-rc.4's Stage 1 concluded success at 2026-11-11T00:11:00Z (https://example.test/r/7)
+=== PASS: schedule, fractional-second timestamps
+    run=false (want false)
+    | skipping the scheduled nightly on main: v3.7.0-rc.5's Stage 1 concluded success at 2026-11-11T01:11:00.000Z ()
+=== PASS: schedule, API 500 -> fail open
+    run=true (want true)
+    | curl: (22) The requested URL returned error: 500
+    | curl: (22) The requested URL returned error: 500
+    | curl: (22) The requested URL returned error: 500
+    | curl: (22) The requested URL returned error: 500
+    | ::warning title=idle-gate::could not list nightly.yml runs from the Actions API; running Stage 1 as the safety net
+=== PASS: schedule, API 403 -> fail open
+    run=true (want true)
+    | curl: (22) The requested URL returned error: 403
+    | curl: (22) The requested URL returned error: 403
+    | curl: (22) The requested URL returned error: 403
+    | curl: (22) The requested URL returned error: 403
+    | ::warning title=idle-gate::could not list nightly.yml runs from the Actions API; running Stage 1 as the safety net
+=== PASS: schedule, API answers HTML -> fail open
+    run=true (want true)
+    | parse error: Invalid numeric literal at line 1, column 11
+    | ::warning title=idle-gate::could not read the Actions API's answer; running Stage 1 as the safety net
+=== PASS: schedule, API answers {} -> run
+    run=true (want true)
+    | no vX.Y.Z-rc.N Stage 1 run concluded in the last 24h; running the scheduled nightly on main
+14 scenario(s), 0 failed

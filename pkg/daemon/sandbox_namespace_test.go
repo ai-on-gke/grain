@@ -29,7 +29,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
@@ -220,7 +219,7 @@ func TestSandboxProxyServesTheStage2Roots(t *testing.T) {
 		{token: "own", path: "/fs/task/t-7/attempts?list", status: 200, want: []string{"1/", "2/"}},
 		// A sibling task in the run's own repository is not, without
 		// self-debug or an api:tasks:read grant naming the repository.
-		{token: "own", path: "/fs/task/t-8/record.md", status: 403, want: []string{"api:tasks:read@"}, not: []string{"Widget task t-8"}},
+		{token: "own", path: "/fs/task/t-8/record.md", status: 403, want: []string{"api#tasks:read {repo: "}, not: []string{"Widget task t-8"}},
 		{token: "debug", path: "/fs/task/t-8/record.md", status: 200, want: []string{"Widget task t-8", "Depends on: t-7 (running)"}},
 		{token: "debug", path: "/fs/task/?list", status: 200, want: []string{"t-7/", "t-8/"}},
 		{token: "debug", path: "/fs/task/t-404/record.md", status: 404},
@@ -273,7 +272,7 @@ func TestSandboxProxyServesTheStage2Roots(t *testing.T) {
 
 // TestSandboxProxyServesDBQueriesReadOnly is /cli/db/query answered by
 // query_grain_db's backend: rows for a read, a refusal for a write even
-// from a run whose task holds db-write, and the grant's refusal without
+// from a run whose task holds grain#sql write, and the grant's refusal without
 // it.
 func TestSandboxProxyServesDBQueriesReadOnly(t *testing.T) {
 	srv, store, _ := stage2Proxy(t, stage2Scopes{
@@ -282,8 +281,8 @@ func TestSandboxProxyServesDBQueriesReadOnly(t *testing.T) {
 	})
 	ctx := context.Background()
 	if err := store.PutTask(ctx, model.Task{ID: "t-db", Title: "DB task", Grants: []model.Grant{
-		{Capability: dbaccess.CapabilityDBRead, Via: model.GrantByLabel},
-		{Capability: dbaccess.CapabilityDBWrite, Via: model.GrantByLabel},
+		{Capability: model.GrainSQLReadGrant, Via: model.GrantByLabel},
+		{Capability: model.GrainSQLWriteGrant, Via: model.GrantByLabel},
 	}}); err != nil {
 		t.Fatal(err)
 	}

@@ -49,24 +49,29 @@ func TestApprovingAConfigChangeNeedsTheScopesItConfers(t *testing.T) {
 		name   string
 		role   *accessRole
 		files  []string
+		cols   []string
 		refuse string
 	}{
-		{"host script in mcp_servers", settingsOnly, []string{"tables/grain_config.json"}, "capabilities:admin"},
-		{"widened scope set", settingsOnly, []string{"tables/api_scope_set.json"}, "capabilities:admin"},
-		{"template grants", settingsOnly, []string{"settings/templates.yml"}, "capabilities:admin"},
-		{"extracted script", settingsOnly, []string{"scripts/setup.sh"}, "capabilities:admin"},
-		{"git credential", capAdmin, []string{"tables/git_credential.json"}, "secrets:write"},
-		{"standing sandbox secret", capAdmin, []string{"tables/standing_sandbox_secret.json"}, "secrets:write"},
-		{"capability admin adds a host script", capAdmin, []string{"tables/grain_config.json"}, ""},
-		{"plain setting", settingsOnly, []string{"tables/usage_settings.json"}, ""},
-		{"unlimited session", nil, []string{"tables/grain_config.json", "tables/git_credential.json"}, ""},
+		{"host script in mcp_servers", settingsOnly, []string{"tables/grain_config.json"}, nil, "capabilities:admin"},
+		// Task 3973: judged by the columns the change alters, where they
+		// were recorded when it was proposed.
+		{"mcp_servers column", settingsOnly, []string{"tables/grain_config.json"}, []string{"mcp_servers"}, "capabilities:admin"},
+		{"max_workers column", settingsOnly, []string{"tables/grain_config.json"}, []string{"max_workers"}, ""},
+		{"widened scope set", settingsOnly, []string{"tables/api_scope_set.json"}, nil, "capabilities:admin"},
+		{"template grants", settingsOnly, []string{"settings/templates.yml"}, nil, "capabilities:admin"},
+		{"extracted script", settingsOnly, []string{"scripts/setup.sh"}, nil, "capabilities:admin"},
+		{"git credential", capAdmin, []string{"tables/git_credential.json"}, nil, "secrets:write"},
+		{"standing sandbox secret", capAdmin, []string{"tables/standing_sandbox_secret.json"}, nil, "secrets:write"},
+		{"capability admin adds a host script", capAdmin, []string{"tables/grain_config.json"}, nil, ""},
+		{"plain setting", settingsOnly, []string{"tables/usage_settings.json"}, nil, ""},
+		{"unlimited session", nil, []string{"tables/grain_config.json", "tables/git_credential.json"}, nil, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			if tc.role != nil {
 				ctx = withAccessRole(ctx, tc.role)
 			}
-			err := configChangeScopeRefusal(ctx, model.PendingConfigChange{Files: tc.files})
+			err := configChangeScopeRefusal(ctx, model.PendingConfigChange{Files: tc.files, Columns: columnsOf(tc.files, tc.cols)})
 			if tc.refuse == "" {
 				if err != nil {
 					t.Fatalf("refused: %v", err)
@@ -79,6 +84,15 @@ func TestApprovingAConfigChangeNeedsTheScopesItConfers(t *testing.T) {
 			}
 		})
 	}
+}
+
+// columnsOf records cols as the columns a change to the first of files
+// alters, or nothing when cols is nil.
+func columnsOf(files, cols []string) map[string][]string {
+	if cols == nil {
+		return nil
+	}
+	return map[string][]string{files[0]: cols}
 }
 
 // Repointing grain/config at another remote hands every grant the config
@@ -186,5 +200,79 @@ func TestAcceptingADeclarationChecksTheScopesOfTheSetSeen(t *testing.T) {
 	}
 	if _, err := srv.tasks.AcceptDeclaration(person, "ci:acme/widgets:publish", []string{gcp}); err != nil {
 		t.Fatalf("accepting the set as it stands: %v", err)
+	}
+}
+
+// Revoking a declaration's acceptance (task 4604) takes what accepting
+// does: an agent, a delegated request and a role lacking a scope the
+// accepted set needs are refused and leave the acceptance standing; a
+// person acting directly with the scopes revokes it, and the config audit
+// log names them.
+func TestRevokingADeclarationTakesAPersonActingDirectly(t *testing.T) {
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const id = "ci:acme/widgets:publish"
+	items := []string{`gcp#gcp-key={"permission_set":"publisher"}`, "api:secrets:write"}
+	if _, _, err := store.NoteCIJobDeclaration(ctx, model.RepoRef{Owner: "acme", Name: "widgets"},
+		"publish", "abc123", items, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	acc, err := store.GetDeclarationAcceptance(ctx, id)
+	if err != nil || acc == nil {
+		t.Fatalf("the declaration's record: %+v, %v", acc, err)
+	}
+	if _, err := store.AcceptDeclaration(ctx, id, "alice@example.com", []string{"capabilities:admin", "secrets:write"},
+		acc.Requested, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(Config{Actor: DefaultActor("alice")}, store)
+	person := func(role *accessRole) context.Context {
+		return withAccessRole(WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: role.Who}), role)
+	}
+	delegated := roleHolding("alice@example.com", "capabilities:admin", "secrets:write")
+	delegated.Delegated = true
+
+	for _, tc := range []struct {
+		name   string
+		ctx    context.Context
+		refuse string
+	}{
+		{"agent", WithPrincipal(ctx, model.Principal{Kind: model.PrincipalAgent, ID: "task-12"}), "only a person acting directly"},
+		{"delegated person", person(delegated), "only a person acting directly"},
+		{"role without secrets:write", person(roleHolding("caps@example.com", "capabilities:admin")), "secrets:write"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := srv.tasks.RevokeDeclarationAcceptance(tc.ctx, id)
+			var forbidden *ForbiddenError
+			if !errors.As(err, &forbidden) || !strings.Contains(err.Error(), tc.refuse) {
+				t.Fatalf("err = %v, want a forbidden error naming %q", err, tc.refuse)
+			}
+			if got, _ := store.GetDeclarationAcceptance(ctx, id); got == nil || got.AcceptedAt == nil {
+				t.Fatalf("a refused revocation cleared the acceptance: %+v", got)
+			}
+		})
+	}
+
+	got, err := srv.tasks.RevokeDeclarationAcceptance(person(roleHolding("caps@example.com", "capabilities:admin", "secrets:write")), id)
+	if err != nil {
+		t.Fatalf("revoking as a person holding the scopes: %v", err)
+	}
+	if !got.Awaiting || got.AcceptedBy != "" || got.AcceptedAt != nil {
+		t.Fatalf("after revoking the view is %+v, want it awaiting acceptance with nobody's", got)
+	}
+	audit, err := store.ConfigAudit(ctx, 1)
+	if err != nil || len(audit) == 0 || audit[0].By.ID != "caps@example.com" || !strings.Contains(audit[0].Summary, "revoked") {
+		t.Fatalf("the config audit log after revoking: %+v, %v; want caps@example.com's revocation", audit, err)
+	}
+	if _, err := srv.tasks.RevokeDeclarationAcceptance(person(roleHolding("caps@example.com", "capabilities:admin", "secrets:write")), id); err == nil {
+		t.Fatal("revoking a declaration nobody has accepted succeeded; want it refused as nothing to revoke")
 	}
 }

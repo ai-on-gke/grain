@@ -66,7 +66,17 @@ const s = {
 };
 
 const SECTIONS = {
-  general: <GeneralSection s={s} config={{}} />,
+  // General renders daily and release modes so both autoUpgradeTime and
+  // autoUpgradeMinIntervalHours are exercised against SETTINGS_INDEX.
+  general: (
+    <>
+      <GeneralSection s={s} config={{}} />
+      <GeneralSection
+        s={{ ...s, settings: { ...settings, autoUpgradeOn: "release" } }}
+        config={{}}
+      />
+    </>
+  ),
   agents: <AgentsSection s={s} />,
   engine: <EngineSection s={s} />,
   ci: <CISection s={s} />,
@@ -185,6 +195,23 @@ describe("settingsIndex", () => {
     });
     expect(matchSettings("rollback").map((e) => e.section)).toContain(
       "upgrade",
+    );
+  });
+
+  // Cards a person searches for by their heading or by what they hold,
+  // which the filter once answered "No setting matches" for.
+  it.each([
+    ["budget", "models", "usage"],
+    ["fewest workers", "models", "usage"],
+    ["run location", "models", "cli-run"],
+    ["fallback", "models", "model-defaults"],
+    ["commit identity", "agents", "commit-identity"],
+    ["settings lock", "general", "settings-lock"],
+    ["about", "general", "about"],
+    ["role", "access", "allowed-principals"],
+  ])("finds %s in Settings → %s#%s", (query, section, anchor) => {
+    expect(matchSettings(query)).toContainEqual(
+      expect.objectContaining({ section, anchor }),
     );
   });
 

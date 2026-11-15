@@ -128,7 +128,7 @@ func TestCreateTaskGetsRepoDefaultsHoweverTheRepoIsSpelled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(task.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
+	if !reflect.DeepEqual(withoutDefaultCIRead(task.Capabilities), []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("capabilities = %v, want [gemini-key]: the repo's own defaults", task.Capabilities)
 	}
 }

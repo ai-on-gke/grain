@@ -63,6 +63,7 @@ var tablePrimaryKeys = map[string][]string{
 	"task_read":                      {"task_id", "owner", "name"},
 	"task_write":                     {"task_id", "owner", "name", "base"},
 	"task_filed_template":            {"task_id"},
+	"task_source_template":           {"task_id"},
 	"task_grant":                     {"task_id", "capability"},
 	"task_grant_wait":                {"task_id"},
 	"task_pause":                     {"task_id"},
@@ -104,6 +105,8 @@ var tablePrimaryKeys = map[string][]string{
 	"task_run_usage":                 {"run_id"},
 	"usage_capacity":                 {"connection_id", "model"},
 	"usage_setting":                  {"id"},
+	"task_context":                   {"task_id"},
+	"task_brief_edit":                {"id"},
 	"tuning_recommendation":          {"id"},
 	"release":                        {"id"},
 	"release_candidate":              {"id"},
@@ -167,6 +170,9 @@ var tablePrimaryKeys = map[string][]string{
 	"allowed_principal_migration":    {"id"},
 	"integration_event":              {"id"},
 	"secret_entries":                 {"secret_name", "key"},
+	"task_qa_assignment":             {"root_origin", "epoch"},
+	"task_qa_check_run":              {"id"},
+	"task_qa_finding":                {"id"},
 }
 
 // Auto-increment primary key column for tables that use sequences or SERIAL.
@@ -200,21 +206,27 @@ var autoIncrementTables = map[string]string{
 	"base_hold_history":             "id",
 	"merge_queue_contention":        "id",
 	"scheduled_firing_skip":         "id",
+	"task_brief_edit":               "id",
 	"force_merge_history":           "id",
 	"tuning_recommendation":         "id",
 	"secret_resolution_audit":       "id",
 	"credential_access_audit":       "id",
 	"notification":                  "id",
 	"integration_event":             "id",
+	"task_qa_check_run":             "id",
+	"task_qa_finding":               "id",
 }
 
 type adaptedConnector struct {
 	inner driver.Connector
 	cfg   Config
+	// fence is the pool's single-writer lease check (write_fence.go),
+	// shared with every driver and connection it hands out.
+	fence *writeFence
 }
 
 func newAdaptedConnector(inner driver.Connector, cfg Config) driver.Connector {
-	return &adaptedConnector{inner: inner, cfg: cfg}
+	return &adaptedConnector{inner: inner, cfg: cfg, fence: &writeFence{}}
 }
 
 func (c *adaptedConnector) Connect(ctx context.Context) (driver.Conn, error) {
@@ -222,28 +234,32 @@ func (c *adaptedConnector) Connect(ctx context.Context) (driver.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &adaptedConn{inner: conn}, nil
+	return &adaptedConn{inner: conn, fence: c.fence}, nil
 }
 
 func (c *adaptedConnector) Driver() driver.Driver {
-	return &adaptedDriver{inner: c.inner.Driver(), cfg: c.cfg}
+	return &adaptedDriver{inner: c.inner.Driver(), cfg: c.cfg, fence: c.fence}
 }
 
 type adaptedDriver struct {
 	inner driver.Driver
 	cfg   Config
+	fence *writeFence
 }
+
+func (d *adaptedDriver) IsPostgresDriver() bool { return true }
 
 func (d *adaptedDriver) Open(name string) (driver.Conn, error) {
 	conn, err := d.inner.Open(name)
 	if err != nil {
 		return nil, err
 	}
-	return &adaptedConn{inner: conn}, nil
+	return &adaptedConn{inner: conn, fence: d.fence}, nil
 }
 
 type adaptedConn struct {
 	inner driver.Conn
+	fence *writeFence
 }
 
 func (c *adaptedConn) Prepare(query string) (driver.Stmt, error) {
@@ -328,7 +344,9 @@ func (c *adaptedConn) takeWriterLock(ctx context.Context) error {
 	if _, err := execer.ExecContext(ctx, fmt.Sprintf("SELECT pg_advisory_xact_lock(%d, hashtext(current_schema()))", writerLockKey), nil); err != nil {
 		return fmt.Errorf("postgres: taking the writer lock: %w", err)
 	}
-	return nil
+	// Under the writer lock, so a new lease holder's first write queues
+	// behind any write this check lets through (write_fence.go).
+	return c.fence.check(ctx, c.inner)
 }
 
 func (c *adaptedConn) Ping(ctx context.Context) error {

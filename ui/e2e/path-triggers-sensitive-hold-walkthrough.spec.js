@@ -39,7 +39,9 @@ async function heldTask(request) {
 }
 
 test.describe("Sensitive path hold walkthrough", () => {
-  test("the owner's Submit releases a change a sensitive trigger holds", async ({
+  // Submit is the approver's gate only: the trigger's review is a gate of
+  // its own, so the change stays off the queue until that review passes.
+  test("the owner's Submit records approval and the change waits for its gating review", async ({
     page,
     request,
   }) => {
@@ -55,21 +57,32 @@ test.describe("Sensitive path hold walkthrough", () => {
     await expect(page.getByTestId("approval-rule")).toContainText(
       "trigger:payments (.grain/triggers/payments.yml): waiting for ",
     );
+    await expect(page.getByTestId("merge-gate-review")).toContainText(
+      "Code review: running",
+    );
+    await expect(page.getByTestId("merge-gate-approval")).toContainText(
+      "Approval: needed",
+    );
     const autoMerge = page.getByLabel("Auto-merge once checks pass");
     await expect(autoMerge).not.toBeChecked();
 
-    const released = page.waitForResponse(
+    const submitted = page.waitForResponse(
       (r) =>
         r.url().endsWith(`/api/tasks/${held.id}/submit`) &&
         r.request().method() === "POST",
     );
-    await page.getByRole("button", { name: "Submit", exact: true }).click();
-    expect((await released).ok()).toBeTruthy();
-    await expect(autoMerge).toBeChecked();
-    await expect(page.getByTestId("sensitive-hold")).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Submit (merges when the reviews pass)" })
+      .click();
+    expect((await submitted).ok()).toBeTruthy();
 
+    // Approved, and still waiting: the review gate has not passed.
+    await expect(page.getByTestId("merge-gate-approval")).toContainText(
+      "Approval: given",
+    );
+    await expect(autoMerge).not.toBeChecked();
     const after = await (await request.get(`/api/tasks/${held.id}`)).json();
-    expect(after.autoMerge).toBe(true);
+    expect(after.autoMerge).toBe(false);
     expect(after.approvals).toEqual([
       expect.objectContaining({ rule: "trigger:payments" }),
     ]);

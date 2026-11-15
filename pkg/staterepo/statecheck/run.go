@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 )
@@ -39,6 +40,11 @@ type Options struct {
 	// deployment-specific state checks (external state repo and encrypted
 	// secrets backup repo) to refuse forbidden git_ref schedules.
 	DataDir string
+	// Base reads the state repository as the branch the change is
+	// against holds it, so that LiteralCredentials can refuse a typed-in
+	// credential the change adds and only warn about one the base
+	// already held. Nil is no base: every one is a warning.
+	Base BaseFile
 }
 
 // Run is the whole of `grain state check`: it loads dir into a database
@@ -128,6 +134,33 @@ func Run(ctx context.Context, out io.Writer, dir string, opts Options) error {
 	}
 	for _, w := range implicitMirror {
 		fmt.Fprintf(out, "warning: %s\n", w)
+	}
+	usage, err := UsageSettings(ctx, db)
+	if err != nil {
+		return err
+	}
+	for _, w := range usage {
+		fmt.Fprintf(out, "warning: %s\n", w)
+	}
+	var baseServers map[string]protocol.ServerConfig
+	if opts.Base != nil && !opts.Migrate {
+		// -migrate checks a dump the running build has just exported,
+		// whose literals are the deployment's own and are moved at the
+		// new build's first start: nothing in it is a change to refuse.
+		if baseServers, err = BaseMCPServers(opts.Base); err != nil {
+			// Read as a base that held none, so the check fails closed:
+			// every typed-in credential is refused rather than let
+			// through because the comparison could not be made.
+			fmt.Fprintf(out, "warning: the base's capability servers could not be read (%v), so every typed-in credential counts as new\n", err)
+			baseServers = map[string]protocol.ServerConfig{}
+		}
+	}
+	literals, err := LiteralCredentials(ctx, db, baseServers)
+	for _, w := range literals {
+		fmt.Fprintf(out, "warning: %s\n", w)
+	}
+	if err != nil {
+		return err
 	}
 	if err := APIScopeSets(ctx, db, out, opts.PreviousAPIScopeSets); err != nil {
 		return err

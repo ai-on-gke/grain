@@ -58,10 +58,11 @@ func setupCmd(args []string) {
 	if len(args) == 0 || args[0] != "gcp" {
 		fmt.Fprintln(os.Stderr, `usage: grain setup gcp [flags]
 
-Bootstraps the external GCP infrastructure the gcp-key and gemini-key
-capabilities need: the agent and minter service accounts, the IAM roles
+Bootstraps the external GCP infrastructure the gcp server's gcp-key and
+gemini-key methods need (https://grain.dev/capabilities/gcp#gcp-key and
+#gemini-key): the agent and minter service accounts, the IAM roles
 between them, and (with -enable-gemini-key) the project-level API-key
-admin role and the APIs both capabilities call. Safe to run more than
+admin role and the APIs both methods call. Safe to run more than
 once -- every step is get-or-create, so a re-run after fixing a manual
 step (see its own output) picks up right there.`)
 		os.Exit(2)
@@ -85,7 +86,7 @@ func cmdSetupGCP(ctx context.Context, args []string) error {
 	minterAccountID := fs.String("minter-account-id", gcpsetup.DefaultMinterAccountID,
 		"account_id of the service account that mints/revokes the agent account's keys")
 	enableGeminiKey := fs.Bool("enable-gemini-key", false,
-		"also grant the minter account roles/serviceusage.apiKeysAdmin and enable the Gemini/API Keys APIs, for the gemini-key capability")
+		"also grant the minter account roles/serviceusage.apiKeysAdmin and enable the Gemini/API Keys APIs, for the gcp server's gemini-key method (https://grain.dev/capabilities/gcp#gemini-key)")
 	mintKey := fs.Bool("mint-key", false,
 		"mint a key for the minter account and write it to -key-out -- do this once, on a new installation; "+
 			"a later run leaves an existing key alone (see this file's own doc comment on why)")

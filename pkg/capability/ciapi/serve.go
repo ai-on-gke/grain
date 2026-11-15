@@ -82,7 +82,7 @@ func Route(r *http.Request, grant Grant, upstream Upstream) (forward *http.Reque
 	}
 	if r.Method == http.MethodPost && path == "/api/notifications/release-pending" {
 		if !grant.MayFile("release-notes") {
-			return nil, fmt.Sprintf("POST /api/notifications/release-pending needs release-gate-read (api:release-gate-read), "+
+			return nil, fmt.Sprintf("POST /api/notifications/release-pending needs https://grain.dev/capabilities/api#release-gate-read, "+
 				"which this job's token does not hold (it holds %s)", scopeList(grant.Scopes)), http.StatusForbidden
 		}
 		body, reason := releasePendingBody(r, grant.Repo)

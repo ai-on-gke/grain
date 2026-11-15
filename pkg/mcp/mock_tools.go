@@ -27,6 +27,7 @@ import (
 	"unicode"
 
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // ProposalFiler persists an interactive proposal while its run is still live.
@@ -245,6 +246,9 @@ type ProposedTask struct {
 	// NoPort files the proposal as one whose change is not ported to its
 	// repository's other paired branches (model.Task.NoPort).
 	NoPort bool
+	// FoundIn is the release the proposal is filed against, as the
+	// agent wrote it (model.LinkFoundIn); "" for none stated.
+	FoundIn string
 	// KeepRunning files the proposal so that its task immediately restarts
 	// when its run exits rather than completing or parking (model.Task.KeepRunning).
 	KeepRunning bool
@@ -324,6 +328,11 @@ type MockSink struct {
 	accessChecker  AccessRequestChecker
 	proposedTasks  []ProposedTask
 	reviewComments []ReviewComment
+	// commentNudged is set once comment_on_issue has turned a note back
+	// for reading as a request to a person with no summary saying so
+	// (commentOnIssueTool). The nudge is given once: a run that sends the
+	// same note again has thought about it, and its words are relayed.
+	commentNudged bool
 	// files is how ask_question and comment_on_issue read and hold an
 	// attachment given by path (SetAttachmentFiles); the zero value
 	// refuses one.
@@ -409,12 +418,6 @@ func (s *MockSink) ProposedTasks() []ProposedTask {
 	return out
 }
 
-func (s *MockSink) RecordProposedTask(task ProposedTask) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.proposedTasks = append(s.proposedTasks, task)
-}
-
 func (s *MockSink) ReviewComments() []ReviewComment {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -471,6 +474,8 @@ func NewMockTools(sink *MockSink, proposeRepos []string) []Tool {
 		commentOnIssueTool(sink),
 		nothingNeededTool(sink),
 		writeHandoverTool(),
+		compactContextTool(),
+		updateBriefTool(),
 		proposeTaskTool(sink, proposeRepos, "", nil),
 		addReviewCommentTool(sink),
 	}
@@ -577,7 +582,7 @@ func requestSecretTool(sink *MockSink) Tool {
 					"type": "string",
 					"description": "The name to store it under, as grain resolves " +
 						"one: \"stripe-api-key\" for a secret holding a single " +
-						"value, or \"<secret>/<key>\" (\"github-app/app-id\") to " +
+						"value, or \"<secret>/<key>\" (\"deploy-bot/token\") to " +
 						"name one key of a secret that holds several. Use the " +
 						"name whatever will consume it already looks up, if " +
 						"something does.",
@@ -607,6 +612,17 @@ func requestSecretTool(sink *MockSink) Tool {
 					Text: fmt.Sprintf("%q is not a name grain can store a secret under: "+
 						"give \"<secret>\" or \"<secret>/<key>\", each part non-empty and "+
 						"free of spaces, backslashes and path components like \".\".", secret),
+					IsError: true,
+				}
+			}
+			if secrets.GrainHeld(secret) {
+				return Result{
+					Text: fmt.Sprintf("%q is where grain keeps its own credentials or signing "+
+						"material (a git credential, a CA, a signing key, a model or minter key, "+
+						"a release secret or a repository token), which a run may not ask a "+
+						"human to replace. Each has its own place in Settings (a git credential "+
+						"is added in Settings -> GitHub); if this work needs one, say so with "+
+						"ask_question or comment_on_issue instead.", secret),
 					IsError: true,
 				}
 			}
@@ -683,11 +699,16 @@ func commentOnIssueTool(sink *MockSink) Tool {
 					"type":        "string",
 					"description": "The full text of the comment to post to this task's conversation. If this is a closing note or report, include the complete, detailed findings or report here -- never truncate it, summarize it with an ellipsis (…), or save the rest for a conversational response.",
 				},
+				"summary":     noteSummarySchema(),
 				"attachments": responseAttachmentsSchema(),
 			},
 			"required": []string{"comment"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) Result {
+			summary, err := questionSummaryArg(args)
+			if err != nil {
+				return Result{Text: err.Error(), IsError: true}
+			}
 			if _, err := ResponseAttachments(ctx, args, sink.attachmentFiles()); err != nil {
 				return Result{Text: err.Error(), IsError: true}
 			}
@@ -696,13 +717,51 @@ func commentOnIssueTool(sink *MockSink) Tool {
 				return Result{Text: "comment is required", IsError: true}
 			}
 			sink.mu.Lock()
+			defer sink.mu.Unlock()
+			// The safety net behind model.PersonActionInstruction: a note
+			// that asks a person to do something, with no summary to say
+			// what, is the closing note #4256 left -- an inbox line made of
+			// its opening sentence and the action buried below. Turned back
+			// once, as an error so this call is not the one relayed.
+			if phrase, asks := model.NoteAsksAPerson(comment); asks && summary == "" && !sink.commentNudged {
+				sink.commentNudged = true
+				return Result{Text: noteNeedsSummaryNudge(phrase), IsError: true}
+			}
 			sink.comment = comment
-			sink.mu.Unlock()
 			return Result{Text: "Recorded. When this run finishes, grain relays this comment into the " +
 				"task's conversation; with no branch pushed and no question asked, it is the " +
 				"task's closing note."}
 		},
 	}
+}
+
+// noteSummarySchema is comment_on_issue's `summary`: optional, unlike a
+// question's, because most notes are reports, but the line the inbox and
+// the task row show of a task resting on the note when there is one.
+func noteSummarySchema() map[string]any {
+	return map[string]any{
+		"type":      "string",
+		"maxLength": model.MaxQuestionSummaryLen,
+		"description": "Optional one-line summary of the note, shown alone as the inbox and " +
+			"task-list line of a task resting on it. A single line of at most 100 characters, " +
+			"no newlines. If the note needs a person to do something, end with ask_question " +
+			"instead; where a note is still right, name the action here (\"Set " +
+			"GRAIN_MERGE_LOGINS on ai-on-gke/grain to unblock image publishing\"), not the " +
+			"note's opening.",
+	}
+}
+
+// noteNeedsSummaryNudge is what comment_on_issue answers a note that
+// reads as needing a person, given without a summary.
+func noteNeedsSummaryNudge(phrase string) string {
+	return fmt.Sprintf("Not recorded yet: this note reads as needing a person to act (%q), and "+
+		"it has no summary, so the inbox would show its opening sentence instead of the action. "+
+		"If somebody has to do something -- set a variable, grant access, run a command, make a "+
+		"decision -- end with ask_question instead: its summary names the action, and its "+
+		"question starts with a numbered checklist of the exact steps (UI path and CLI "+
+		"equivalent), then the option you recommend, then the diagnosis. If this really is a "+
+		"report nobody has to act on, call comment_on_issue again, with a summary to be safe; "+
+		"the same note sent again is relayed as it is.", phrase)
 }
 
 // NothingNeededDescription is the sentence the nothing_needed tool and
@@ -947,8 +1006,12 @@ func proposeTaskProperties(proposeRepos []string) map[string]any {
 			"type": "string",
 			"enum": []any{"close", "ack"},
 		},
-		"keep_running":      map[string]any{"type": "boolean"},
-		"no_port":           map[string]any{"type": "boolean"},
+		"keep_running": map[string]any{"type": "boolean"},
+		"no_port":      map[string]any{"type": "boolean"},
+		"found_in": map[string]any{
+			"type":        "string",
+			"description": "Release the bug was found in: vX.Y.Z or vX.Y.Z-rc.N",
+		},
 		"fixes_base_branch": map[string]any{"type": "boolean"},
 		"origin":            map[string]any{"type": "string"},
 		"no_repo":           map[string]any{"type": "boolean"},
@@ -1140,6 +1203,13 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 			if noPort, ok := argBool(args, "no_port"); ok {
 				task.NoPort = noPort
 			}
+			if foundIn, ok := argString(args, "found_in"); ok {
+				normalized, err := model.NormalizeFoundIn(foundIn)
+				if err != nil {
+					return Result{Text: err.Error(), IsError: true}
+				}
+				task.FoundIn = normalized
+			}
 			if keepRunning, ok := argBool(args, "keep_running"); ok {
 				task.KeepRunning = keepRunning
 			}
@@ -1178,6 +1248,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 					"a human whatever your permission covers."
 			}
 			recorded += notBeforeOutcome(task.NotBefore)
+			recorded += ciOnlyProposalGrantsOutcome(task.Capabilities)
 			if task.Supersedes != "" {
 				recorded += fmt.Sprintf(" Task %s is closed as superseded by it at the same "+
 					"moment, if it is still a task that may be -- one already dispatched, or in "+
@@ -1458,4 +1529,37 @@ func networkAccessEnum() []any {
 		out[i] = string(n)
 	}
 	return out
+}
+
+// ciOnlyProposalGrantsOutcome is what a proposal recorded for filing at run
+// end is told, at the call, about each CI capability it names
+// (model.TaskGrantCIOnlyRefusal): orchestrator.relayProposedTasks files it
+// with a repository read as reads instead, or without the grant, once
+// this run has ended -- too late for the run to hear about it any other
+// way. A grain CI grant is passed over there and so here. "" when it
+// names none.
+func ciOnlyProposalGrantsOutcome(capabilities []string) string {
+	var b strings.Builder
+	for _, c := range capabilities {
+		c = strings.TrimSpace(c)
+		if c == "" || model.IsGrainCIGrant(c) {
+			continue
+		}
+		for _, g := range model.CanonicalLegacyGrants(c) {
+			if g == "" || model.IsGrainCIGrant(g) {
+				continue
+			}
+			why := model.TaskGrantCIOnlyRefusal(g)
+			if why == "" {
+				continue
+			}
+			if repo, ok := model.RepoReadTarget(g); ok {
+				fmt.Fprintf(&b, " `%s` is a CI capability no task run is handed, so this proposal will be filed "+
+					"with reads: [%q] in its place.", c, repo.String())
+			} else {
+				fmt.Fprintf(&b, " `%s` will be left off this proposal: %s", c, why)
+			}
+		}
+	}
+	return b.String()
 }

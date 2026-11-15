@@ -45,21 +45,6 @@ cluster's rather than a number an operator sized by hand.
 
 Three things have to exist first.
 
-**Images from release assets, if you use them.** Grain also publishes its
-images as GitHub release assets
-([docs/release-assets.md](../../docs/release-assets.md)), which a cluster
-cannot `docker load`. To run a release from its assets rather than from
-`docker.io/grainai/*`, load and push it into a registry the cluster can pull
-from -- the deployment's own `sandbox_image_mirror`, for example an Artifact
-Registry repository in the cluster's project -- with
-`scripts/release-assets.sh mirror <release> <registry/prefix>`, and name the
-pushed refs in the Deployment's `image:` and `-k8s-sandbox-image`.
-`scripts/migrate-local-to-gke.sh --mirror <registry/path>` does the same push
-for a host that was installed from release assets. Never leave a
-`grain/<image>:sha-<12 hex>` manifest ref in a pod spec: it names no registry,
-so kubelet would look for it on Docker Hub, and the daemon refuses to hand it
-to a pod.
-
 **A sandbox image.** CI publishes `docker.io/grainai/sandbox-k8s`
 with all three supported agent CLIs (`claude`, `agy`, and `codex`), `git`,
 `bash`, `curl`, and a non-root user with a writable home. Each grain build
@@ -75,10 +60,15 @@ stops the daemon's own ServiceAccount, which can create pods, from
 creating a privileged or host-mounting one; see the comment above the
 Namespace in `grain.yaml`.
 
-**A CNI that enforces NetworkPolicy, if you want `network: none` tasks.**
-See `networkpolicy.yaml`, which says what to check and in what order.
-Without it, a task asking for no network access is refused rather than
-silently given a networked pod.
+**A CNI that enforces NetworkPolicy, and Workload Identity on GKE.**
+Both manifests ship `grain-sandbox-egress`, the NetworkPolicy that keeps
+an open-network sandbox pod off the node's metadata server and the
+cluster's own pods, nodes and Services, but a policy object is only a
+fence on a cluster that enforces it. See [Fencing sandboxes off the
+metadata server and the cluster](#fencing-sandboxes-off-the-metadata-server-and-the-cluster)
+below. Without `-k8s-network-policy`, a task asking for no network
+access is refused rather than silently given a networked pod, and so is
+any attempt holding an external capability grant.
 
 **A storage class that gives ReadWriteOnce volumes.** grain's state is an
 embedded SQLite database on a filesystem, with one writer.
@@ -106,6 +96,87 @@ the `grain` container as `GRAIN_DB_DSN`, which the daemon reads when no
 On a deployment that already has a SQLite store on its volume, migrate it
 first with `grain upgrade-postgres -data-dir /data -dsn …` in the pod,
 with replicas at 0 or the daemon paused.
+
+## Fencing sandboxes off the metadata server and the cluster
+
+A sandbox runs whatever its task's repository runs, so an open-network
+sandbox pod has to be kept off three things its namespace's ordinary
+networking hands it: the node's metadata server (`169.254.169.254`,
+GKE's metadata proxy at `169.254.169.252`, `fd20:ce::254`) and the node
+service account token behind it, the cluster's own Services, pods, nodes
+and API server, and any capability server whose control plane runs in
+the cluster. On a single host grain installs that fence itself, as an
+nftables chain per sandbox. On Kubernetes it is three layers, and only
+the first two are grain's:
+
+1. **`grain-sandbox-egress`**, the NetworkPolicy at the end of both
+   `grain.yaml` and `grain-granule.yaml` (and in `networkpolicy.yaml`,
+   which explains every rule — the copies are tested to match). It
+   allows grain's own pod, cluster DNS and the internet, and drops
+   `169.254.0.0/16`, `fc00::/7`, `fe80::/10`, every RFC 1918 range,
+   `100.64.0.0/10` and loopback. It is applied with either manifest,
+   so applying one alone no longer leaves sandboxes unfenced.
+2. **The granule splice** (`k8s-granule` only). Each open-network
+   granule pod's netshim splice drops guest frames addressed to the
+   metadata and workload-identity endpoints
+   (`orchestrator.K8sGranuleMetadataGuardIPs`) before they leave the pod,
+   whatever the CNI does. A guest's traffic never reaches the pod's IP
+   stack — the splice is a tc redirect between the tap and `eth0` — so
+   this is a tc filter rather than an nftables chain, and it matches the
+   endpoints themselves rather than whole ranges. The ranges are layer
+   1's.
+3. **Your cluster.** A NetworkPolicy is stored by every cluster and
+   enforced only by some, and grain cannot tell which from inside a pod.
+
+What that asks of a GKE cluster:
+
+- **Enforce NetworkPolicy.** Create the cluster with Dataplane V2
+  (`gcloud container clusters create … --enable-dataplane-v2`), or turn
+  on Calico network policy enforcement on an existing one
+  (`gcloud container clusters update CLUSTER --update-addons=NetworkPolicy=ENABLED`,
+  then `--enable-network-policy`). Autopilot clusters run Dataplane V2
+  already. Other distributions: Calico, Cilium and Antrea all enforce
+  policy; kubenet and a managed CNI with its policy plugin left off do
+  not.
+- **Use Workload Identity Federation for GKE** on every node pool that
+  schedules sandboxes (`--workload-pool=PROJECT.svc.id.goog` on the
+  cluster, `--workload-metadata=GKE_METADATA` on the pool). The pool's
+  pods then reach GKE's metadata server rather than the node's own,
+  which hands a pod with no annotated Kubernetes service account no
+  Google credential at all. Sandbox pods run as the namespace's
+  `default` account with no token mounted, and that account should stay
+  unannotated. This is what keeps the node's service account out of
+  reach on a cluster where layer 1 is not enforced, so do it even if
+  you never set the flag below.
+- **Check it, then say so.** Run a pod carrying the sandbox labels and
+  confirm the metadata server times out:
+
+  ```sh
+  kubectl -n grain run fence-check --rm -it --restart=Never \
+    --labels=app.kubernetes.io/managed-by=grain,app.kubernetes.io/component=sandbox \
+    --image=curlimages/curl -- \
+    curl -sS -m 5 -H 'Metadata-Flavor: Google' \
+    http://169.254.169.254/computeMetadata/v1/instance/service-accounts/
+  ```
+
+  A timeout is the fence working; a service-account list is not. Run
+  it again with `grain.dev/network=none` added to `--labels`, against
+  `https://example.com` this time: a network:none pod (held by
+  `grain-sandbox-network-none`, which `grain.yaml` also ships) must not
+  reach the internet either, because the flag below is also what lets
+  network:none tasks run on this backend. Then
+  uncomment `-k8s-network-policy` in the Deployment's args. The flag
+  only seeds a new deployment's stored settings: on one that already
+  has them, run `grain settings -k8s-network-policy=true` (or tick it
+  under Settings → Sandboxes) and restart the daemon instead.
+
+`-k8s-network-policy` is the operator saying layer 3 holds. Without it,
+both Kubernetes backends report their open-network sandboxes unfenced,
+the same way a Docker host that cannot run `nft` does
+(`-container-sandbox-fence`), and grain refuses every attempt holding an
+external capability grant: nothing then keeps a capability server's
+control plane out of a sandbox's reach. In-process grants are
+unaffected.
 
 ## The daemon does not run as root
 
@@ -201,8 +272,10 @@ the daemon, only `kubectl exec`.
 # before this apply.
 kubectl apply -f deploy/kubernetes/grain.yaml
 
-# Optional, and only with the checks in its header done:
-kubectl apply -f deploy/kubernetes/networkpolicy.yaml
+# grain.yaml already carries both sandbox fences: grain-sandbox-egress
+# for open-network pods and grain-sandbox-network-none for network:none
+# ones. networkpolicy.yaml holds the same two objects with every rule
+# explained; applying it as well changes nothing.
 
 # The UI has no authentication of its own. Tunnel to it rather than
 # exposing the Service until something authenticates in front of it.
@@ -421,6 +494,64 @@ and grain reports that as `the cluster has no PriorityClass named
 create cluster-scoped objects, clear the three names in Settings
 instead, and drop `priorityClassName: grain-daemon` from the Deployment. The daemon itself needs no new RBAC: the classes come from the
 manifest, not from grain.
+
+## Wrapping the secrets key with Cloud KMS (Workload Identity)
+
+The secrets private key lives on the `grain-data` volume as
+`secrets/secrets.key`, so a PD snapshot of that volume holds every
+credential the deployment stores. On GKE, wrap it with a Cloud KMS key
+instead. The daemon unwraps it once at start with the Google service
+account the `grain` Kubernetes ServiceAccount (`grain.yaml`) is bound to
+through Workload Identity. That account's token comes from the GKE
+metadata server, the same way a GCE VM gets one, so nothing in
+`grain.yaml` names a credential.
+
+With Workload Identity enabled on the cluster and its node pool:
+
+```bash
+PROJECT=my-project REGION=us-central1 NS=grain
+GSA=grain-daemon@$PROJECT.iam.gserviceaccount.com
+
+# A Google service account for the daemon, which the grain KSA may act as.
+gcloud iam service-accounts create grain-daemon --project "$PROJECT"
+gcloud iam service-accounts add-iam-policy-binding "$GSA" \
+  --role roles/iam.workloadIdentityUser \
+  --member "serviceAccount:$PROJECT.svc.id.goog[$NS/grain]"
+kubectl -n "$NS" annotate serviceaccount grain \
+  iam.gke.io/gcp-service-account="$GSA"
+
+# A key ring and a key in the cluster's region, rotating every 90 days,
+# and the daemon's account on that key only.
+gcloud kms keyrings create grain-secrets --location "$REGION" --project "$PROJECT"
+gcloud kms keys create secrets-key --keyring grain-secrets --location "$REGION" \
+  --project "$PROJECT" --purpose encryption \
+  --rotation-period 90d --next-rotation-time "$(date -u -d '+90 days' +%Y-%m-%dT%H:%M:%SZ)"
+gcloud kms keys add-iam-policy-binding secrets-key --keyring grain-secrets \
+  --location "$REGION" --project "$PROJECT" \
+  --role roles/cloudkms.cryptoKeyEncrypterDecrypter --member "serviceAccount:$GSA"
+
+# Restart the pod so it picks up the annotation, then wrap, in the daemon.
+kubectl -n "$NS" rollout restart deployment/grain
+kubectl -n "$NS" exec deploy/grain -- grain state key wrap \
+  -kms "projects/$PROJECT/locations/$REGION/keyRings/grain-secrets/cryptoKeys/secrets-key"
+```
+
+`grain state key wrap` checks that the wrapped key unwraps to the same key
+before it replaces the file, and lists any plaintext copies it can still
+see. Delete those, and replace any copy of the plaintext key you escrowed
+elsewhere with the wrapped file's contents. From then on:
+
+- Each start makes one KMS decrypt call. If KMS is unreachable or the
+  binding is removed, the pod still starts and serves the UI. Anything
+  that needs a secret fails with `KMS unreachable for <key>` or
+  `KMS permission denied for <key>`, and the store retries with backoff.
+  Settings → State shows the protection mode, the key and the last
+  unwrap.
+- After KMS rotates the key, the next start rewraps the file under the
+  new primary version.
+- **Run `grain state key unwrap` before rolling back** to an image older
+  than the one that wrapped the key. An older build cannot read the
+  wrapped form.
 
 ## Operating notes
 

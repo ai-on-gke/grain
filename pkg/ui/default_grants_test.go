@@ -95,7 +95,7 @@ func TestRepoDefaultAndCICapabilitiesTakeMethodGrants(t *testing.T) {
 
 	out = nil
 	code = postJSON(t, ts, http.MethodPut, "/api/repos/acme/widgets/ci-capabilities", map[string]any{
-		"ciCapabilities": []string{"github-sandbox", defaultGrantIn, defaultGrantRecorded},
+		"ciCapabilities": []string{model.GitHubSandboxRepoRef, defaultGrantIn, defaultGrantRecorded},
 	}, &out)
 	if code != http.StatusOK {
 		t.Fatalf("PUT ci-capabilities: %d %v", code, out)
@@ -160,4 +160,50 @@ func stringsOf(v any) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+func TestConfigRouteExpandsRegisteredAliasesAndCanonicalizesDefaultCapabilities(t *testing.T) {
+	t.Cleanup(model.RegisterLegacyGrantAlias("custom-alias", defaultGrantRecorded))
+	ts, c := grantTestServer(t)
+	ctx := context.Background()
+	cfg, err := c.Store.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := model.DefaultConfig()
+	if cfg != nil {
+		next = *cfg
+	}
+	next.DefaultCapabilities = []string{"custom-alias", "self-debug", "api:tasks:read@acme/widgets"}
+	if err := c.Store.PutConfig(ctx, next); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo:                model.RepoRef{Owner: "acme", Name: "widgets"},
+		DefaultCapabilities: []string{"custom-alias", "self-debug", "api:ci:read"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out map[string]any
+	if code := postJSON(t, ts, http.MethodGet, "/api/config", nil, &out); code != http.StatusOK {
+		t.Fatalf("GET /api/config: %d %v", code, out)
+	}
+	// The registered alias reads as its grant; the retired bare self-debug
+	// is no alias any longer and grants nothing.
+	wantDeploy := []string{
+		defaultGrantRecorded,
+		model.APIGrantString("tasks:read", "acme/widgets"),
+	}
+	if got := stringsOf(out["defaultCapabilities"]); !slices.Equal(got, wantDeploy) {
+		t.Fatalf("/api/config defaultCapabilities = %v, want %v", got, wantDeploy)
+	}
+	repoMap, _ := out["repoDefaultCapabilities"].(map[string]any)
+	wantRepo := []string{
+		defaultGrantRecorded,
+		model.APIRef("ci:read"),
+	}
+	if got := stringsOf(repoMap["acme/widgets"]); !slices.Equal(got, wantRepo) {
+		t.Fatalf("/api/config repoDefaultCapabilities[acme/widgets] = %v, want %v", got, wantRepo)
+	}
 }

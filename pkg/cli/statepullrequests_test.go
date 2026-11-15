@@ -96,7 +96,37 @@ func TestConfigPullRequestStaysInsideTheController(t *testing.T) {
 	if err := ui.NewClient(ui.Config{}, store).Submit(ctx, task.ID); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
+	// Submit records the person's approval only: the config change is held
+	// for its security review too, and both gates must pass.
 	if err := orchestrator.SyncPullRequests(ctx, store, client, now.Add(time.Minute)); err != nil {
+		t.Fatalf("SyncPullRequests before the review: %v", err)
+	}
+	if d, err := client.GetPullRequest("grain", "config", 6); err != nil || d.Merged {
+		t.Fatalf("detail before the security review = %+v, %v; want it still open", d, err)
+	}
+	submitted, err := store.GetTask(ctx, task.ID)
+	if err != nil || submitted == nil {
+		t.Fatalf("reading submitted task: %+v, %v", submitted, err)
+	}
+	reviewID := ""
+	for _, l := range submitted.Links {
+		if l.Kind == model.LinkSecurityReviewTask {
+			reviewID = l.Target
+		}
+	}
+	if reviewID == "" {
+		t.Fatalf("no security review filed for the config change: %+v", submitted.Links)
+	}
+	reviewDone := now.Add(2 * time.Minute)
+	if err := store.ObserveClose(ctx, reviewID, reviewDone, model.GrainPrincipal, "security review clean", func(o *model.Observation) {
+		o.CompletedAt = &reviewDone
+	}); err != nil {
+		t.Fatalf("finishing the security review: %v", err)
+	}
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, now.Add(3*time.Minute)); err != nil {
+		t.Fatalf("SyncSecurityHolds: %v", err)
+	}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, now.Add(4*time.Minute)); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
 	detail, err = client.GetPullRequest("grain", "config", 6)

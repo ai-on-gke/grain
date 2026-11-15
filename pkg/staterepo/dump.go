@@ -282,6 +282,17 @@ func exportAll(ctx context.Context, db querier, dir string) error {
 	return nil
 }
 
+// settingsTablesSince names the SettingsTables a database can predate,
+// with the schema version whose migration created each. Every other
+// settings table is in the v2 baseline, so a missing one is a bug and
+// exportTable says so; one of these is simply absent from a store that
+// has not been migrated that far yet (an export taken before an in-place
+// upgrade, or the daemon's schema-upgrade tests), and is left out of
+// that export rather than failing it.
+var settingsTablesSince = map[string]int{
+	"usage_setting": 130,
+}
+
 // ExportConfig writes only the editable configuration tables and removes
 // every operational table file left by an older build.
 func ExportConfig(ctx context.Context, db *sql.DB, dir string) error {
@@ -316,6 +327,17 @@ func exportConfig(ctx context.Context, tx querier, dir string) error {
 	for _, table := range tables {
 		if nested[table] {
 			continue
+		}
+		if _, late := settingsTablesSince[table]; late {
+			cols, err := columns(ctx, tx, table)
+			if err != nil {
+				return err
+			}
+			if len(cols) == 0 {
+				// A store that predates the table: nothing to export,
+				// and the stale-file sweep below drops any old copy.
+				continue
+			}
 		}
 		data, err := exportTable(ctx, tx, dir, table, true)
 		if err != nil {
@@ -663,6 +685,18 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 	if err := plan.restore(ctx, tx); err != nil {
 		return err
 	}
+	// Bulk imports insert rows with explicit primary-key IDs across every path
+	// that lands here (Import, ImportTables, ImportMigrated, and live settings
+	// merges). SQLite AUTOINCREMENT follows explicit IDs on its own and needs
+	// nothing, whereas PostgreSQL serial sequences stay where they were unless
+	// setval moves them. Resynchronize now -- before data migrations below
+	// allocate new rows from sequences such as task_comment -- and once more
+	// before commit in case a migration wrote explicit IDs of its own.
+	if model.IsPostgresDB(db) {
+		if _, err := model.SyncPostgresSequences(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+	}
 	// A dump from before a migration that rewrites rows (the retired
 	// capability grants, 67 onwards) gets those rewrites here, keyed by the
 	// migration's own number: the rows were never in a store that ran them.
@@ -708,6 +742,11 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		}
 		for _, c := range changes {
 			log.Printf("staterepo: host placement: %s", c)
+		}
+	}
+	if model.IsPostgresDB(db) {
+		if _, err := model.SyncPostgresSequences(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
 		}
 	}
 	return tx.Commit()

@@ -98,7 +98,7 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 			Arguments: map[string]any{
 				"id":           "bare-legacy-cap",
 				"title":        "Bare legacy capability name",
-				"body":         "Expands one-release retired aliases like ui.Client.CreateTask",
+				"body":         "Retired bare names are kept as written, not expanded",
 				"repo":         "acme/app",
 				"branch":       "main",
 				"capabilities": []any{"self-repair", "self-debug"},
@@ -145,7 +145,7 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 	if capsRef.Approval == nil || !capsRef.AutoMerge {
 		t.Errorf("caps-api-ref proposal held unexpectedly: approval=%+v autoMerge=%v", capsRef.Approval, capsRef.AutoMerge)
 	}
-	if want := model.APIGrantString("tasks:read", "acme/app"); len(capsRef.Grants) != 1 || capsRef.Grants[0].Capability != want {
+	if want, got := model.APIGrantString("tasks:read", "acme/app"), model.GrantsBeyondCIReadDefault(capsRef); len(got) != 1 || got[0].Capability != want {
 		t.Errorf("caps-api-ref Grants = %+v, want [%s]", capsRef.Grants, want)
 	}
 
@@ -153,11 +153,13 @@ func TestRelayProposedTasksUnifiedGrantsEquivalenceAndNormalization(t *testing.T
 	if bareLegacy.Approval != nil {
 		t.Errorf("bare-legacy-cap proposal approved unexpectedly: %+v", bareLegacy.Approval)
 	}
+	// The retired bare names are no aliases any longer: the proposal
+	// records them as written, which dispatch refuses.
 	wantExpanded := []model.Grant{
-		{Capability: model.APIRef("self-debug"), Via: model.GrantByLabel},
-		{Capability: model.GrainHostExecGrant, Via: model.GrantByLabel},
-		{Capability: model.GrainSourceGrant, Via: model.GrantByLabel},
+		{Capability: "self-debug", Via: model.GrantByLabel},
+		{Capability: "self-repair", Via: model.GrantByLabel},
 	}
+	bareLegacy.Grants = model.GrantsBeyondCIReadDefault(bareLegacy)
 	if len(bareLegacy.Grants) != len(wantExpanded) {
 		t.Fatalf("bare-legacy-cap Grants = %+v, want %+v", bareLegacy.Grants, wantExpanded)
 	}

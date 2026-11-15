@@ -138,7 +138,7 @@ func reconcilePathTriggers(ctx context.Context, deps Deps, now time.Time) error 
 			// minutes late costs nothing, and the merge queue's own reads
 			// are what the budget is kept for.
 			poll := github.PollKey{Scope: storeScope(deps.Store),
-				Subject: github.BranchSubject(repo.Owner, repo.Name, branch), Aspect: "path triggers"}
+				Subject: github.BranchSubject(repo.StoredOwner(), repo.Name, branch), Aspect: "path triggers"}
 			if !github.Polls().Due(poll, github.PollBackground, false, now) {
 				continue
 			}
@@ -174,13 +174,13 @@ var pathTriggerDefaults sync.Map
 // with a trigger was a call a tick for an answer that does not move.
 func pathTriggerDefaultBranch(deps Deps, repo model.RepoRef, now time.Time) (string, error) {
 	poll := github.PollKey{Scope: storeScope(deps.Store),
-		Subject: github.BranchSubject(repo.Owner, repo.Name, ""), Aspect: "default branch"}
+		Subject: github.BranchSubject(repo.StoredOwner(), repo.Name, ""), Aspect: "default branch"}
 	cacheKey := poll.Scope + ":" + strings.ToLower(repo.String())
 	if cached, ok := pathTriggerDefaults.Load(cacheKey); ok &&
 		!github.Polls().Due(poll, github.PollBackground, false, now) {
 		return cached.(string), nil
 	}
-	def, err := deps.Client.DefaultBranch(repo.Owner, repo.Name)
+	def, err := deps.Client.DefaultBranch(repo.StoredOwner(), repo.Name)
 	if err != nil {
 		return "", err
 	}
@@ -246,7 +246,7 @@ func fireMergeTriggers(ctx context.Context, deps Deps, repo model.RepoRef, branc
 
 // comparedFiles is every path changed between two commits.
 func comparedFiles(client github.Client, repo model.RepoRef, from, to string) ([]string, error) {
-	cmp, err := client.CompareRefs(repo.Owner, repo.Name, from, to)
+	cmp, err := client.CompareRefs(repo.StoredOwner(), repo.Name, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +345,7 @@ func mergeOrigin(client github.Client, repo model.RepoRef, sha string) model.Wor
 	if client == nil {
 		return ""
 	}
-	pr, err := client.MergedPullRequestForCommit(repo.Owner, repo.Name, sha)
+	pr, err := client.MergedPullRequestForCommit(repo.StoredOwner(), repo.Name, sha)
 	if err != nil || pr == nil || pr.Number <= 0 {
 		return ""
 	}
@@ -447,8 +447,8 @@ func fileCoalesced(ctx context.Context, store *model.Store, tag string, now time
 }
 
 // putFiledTask writes a task fileCoalesced's build made -- or, for one
-// build already wrote (a stacked review), updates it to carry the tags
-// and links build added.
+// build already wrote (a stacked review), updates it to carry the tags,
+// links and deferral build added.
 func putFiledTask(ctx context.Context, store *model.Store, task model.Task) error {
 	existing, err := store.GetTask(ctx, task.ID)
 	if err != nil {
@@ -461,6 +461,7 @@ func putFiledTask(ctx context.Context, store *model.Store, task model.Task) erro
 		t.Tags = task.Tags
 		t.Links = task.Links
 		t.Approval, t.ApprovedAt = task.Approval, task.ApprovedAt
+		t.DeferredAt, t.DeferredUntil = task.DeferredAt, task.DeferredUntil
 		return nil
 	})
 }

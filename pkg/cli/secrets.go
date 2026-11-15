@@ -129,6 +129,9 @@ func runSecrets(args []string) error {
 			fs.Usage()
 			return errors.New("-data-dir (or -db-driver and -db-dsn) is required")
 		}
+		if err := refuseUnrecordedCatalogue(*dataDir, *dbDriver, driver); err != nil {
+			return err
+		}
 		catStore, db, err := daemon.OpenStore(driver, dsn, *dataDir)
 		if err != nil {
 			return err
@@ -364,4 +367,29 @@ func writeSecretFile(path, value string) error {
 		return fmt.Errorf("moving the key into place at %s: %w", path, err)
 	}
 	return nil
+}
+
+// refuseUnrecordedCatalogue stops `grain secrets` under
+// -secrets-backend=secretmanager from opening a new, empty SQLite
+// catalogue in a data directory whose daemon writes to another store.
+// A daemon started with a password-carrying -postgres-url under that
+// backend cannot record its DSN in db-config.json (the password would
+// have to go into the very store it opens), so -data-dir alone resolves
+// to SQLite; the 2026-11-07 walkthrough's `grain secrets set` created
+// <data-dir>/store and catalogued its secret there, where the daemon
+// never looks, while the value went to Secret Manager. The data
+// directory's high-water mark still names the store the daemon writes
+// to, which is what this checks. An explicit -db-driver is taken as
+// given.
+func refuseUnrecordedCatalogue(dataDir, explicitDriver, resolvedDriver string) error {
+	if dataDir == "" || explicitDriver != "" || resolvedDriver == "postgres" || daemon.HasSQLiteStore(dataDir) {
+		return nil
+	}
+	mark, err := daemon.ReadStoreHighWater(dataDir)
+	if err != nil || mark == nil || mark.Store == "" || strings.HasPrefix(mark.Store, "SQLite") {
+		return nil
+	}
+	return fmt.Errorf("the daemon on %s writes to %s (%s), but nothing under %s records how to reach it, so this would "+
+		"start a new, empty SQLite catalogue the daemon never reads; name its database with -db-driver postgres -db-dsn URL "+
+		"(or $GRAIN_DB_DRIVER and $GRAIN_DB_DSN)", dataDir, mark.Store, daemon.StoreHighWaterFile, dataDir)
 }

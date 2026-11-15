@@ -98,12 +98,23 @@ func goCacheActionKey(actionIDHex string) string {
 	return "gocache/action/" + actionIDHex
 }
 
+// goCacheTrustedActionKey is where a trusted job's action entries are
+// kept. It is "v2" because, before JobTokens decided trust, any sandbox
+// could PUT to /gocache/trusted/action/ unauthenticated: whatever the
+// first layout holds may be a trojaned OutputID, and none of it is read.
 func goCacheTrustedActionKey(actionIDHex string) string {
-	return "gocache/trusted/action/" + actionIDHex
+	return "gocache/trusted/v2/action/" + actionIDHex
 }
 
-func goCacheUntrustedActionKey(actionIDHex string) string {
-	return "gocache/untrusted/action/" + actionIDHex
+// goCacheUntrustedActionKey is where an untrusted writer's action entries
+// are kept: under scope, the credential it was identified by
+// (JobTokenSet.lookupScope), or the single shared untrusted namespace
+// when scope is "" (SplitGoCacheTrust with no JobTokens).
+func goCacheUntrustedActionKey(actionIDHex, scope string) string {
+	if scope == "" {
+		return "gocache/untrusted/action/" + actionIDHex
+	}
+	return "gocache/untrusted/" + scope + "/action/" + actionIDHex
 }
 
 func goCacheOutputKey(outputIDHex string) string {
@@ -161,38 +172,58 @@ func (s *Server) serveGoCache(w http.ResponseWriter, r *http.Request) {
 		"grain's package cache serves the Go build cache under /gocache/action/<actionIDHex> and /gocache/output/<outputIDHex>.")
 }
 
-// goCacheNamespace resolves the action namespace ("trusted", "untrusted", or ""
-// for single-host shared mode) for r. When JobTokens is set, a job cannot
-// escalate its own trust via path or header: its token decides.
-func (s *Server) goCacheNamespace(r *http.Request, pathNS string) string {
+// goCacheNamespace resolves the action namespace for r: "trusted",
+// "untrusted" (with the scope its entries are kept under), "readonly", or
+// "" for single-host shared mode.
+//
+// When JobTokens is set, a caller cannot escalate its own trust via path
+// or header: its token decides. A trusted job reads and writes the trusted
+// namespace. An untrusted job reads the trusted namespace and then one of
+// its own, scoped to the credential it presented, and writes only that
+// one. A caller JobTokens does not know -- a task sandbox, which presents
+// no token at all -- is "readonly": it reads the trusted namespace and
+// writes nothing, since cmd/go executes whatever OutputID an action entry
+// names without checking that compiling ActionID produced it.
+func (s *Server) goCacheNamespace(r *http.Request, pathNS string) (ns, scope string) {
 	if s.jobTokens != nil {
-		if access, ok := s.jobTokens.Lookup(r); ok && access.Trusted {
-			return "trusted"
+		access, scope, ok := s.jobTokens.lookupScope(r)
+		switch {
+		case !ok:
+			return "readonly", ""
+		case access.Trusted:
+			return "trusted", ""
+		default:
+			return "untrusted", scope
 		}
-		return "untrusted"
 	}
 	if pathNS == "trusted" || pathNS == "untrusted" {
-		return pathNS
+		return pathNS, ""
 	}
 	switch strings.ToLower(strings.TrimSpace(r.Header.Get("Grit-Cache-Trust"))) {
 	case "trusted":
-		return "trusted"
+		return "trusted", ""
 	case "untrusted":
-		return "untrusted"
+		return "untrusted", ""
 	}
 	if s.splitGoCacheTrust {
-		return "untrusted"
+		return "untrusted", ""
 	}
-	return ""
+	return "", ""
 }
 
-func (s *Server) openGoCacheAction(actionID, ns string) (Object, bool) {
+// goCacheReadOnly is the refusal a "readonly" caller's PUT gets. The
+// helper's uploads are best effort (RunGoCacheProg), so a build in such a
+// sandbox goes on, served from its own local directory.
+const goCacheReadOnly = "grain's Go build cache only takes writes from authenticated CI jobs: " +
+	"this sandbox reads the trusted build cache and keeps what it compiles to itself."
+
+func (s *Server) openGoCacheAction(actionID, ns, scope string) (Object, bool) {
 	var keys []string
 	switch ns {
-	case "trusted":
+	case "trusted", "readonly":
 		keys = []string{goCacheTrustedActionKey(actionID)}
 	case "untrusted":
-		keys = []string{goCacheTrustedActionKey(actionID), goCacheUntrustedActionKey(actionID)}
+		keys = []string{goCacheTrustedActionKey(actionID), goCacheUntrustedActionKey(actionID, scope)}
 	default:
 		keys = []string{goCacheActionKey(actionID), goCacheTrustedActionKey(actionID)}
 	}
@@ -204,12 +235,12 @@ func (s *Server) openGoCacheAction(actionID, ns string) (Object, bool) {
 	return nil, false
 }
 
-func goCacheWriteActionKey(actionID, ns string) string {
+func goCacheWriteActionKey(actionID, ns, scope string) string {
 	switch ns {
 	case "trusted":
 		return goCacheTrustedActionKey(actionID)
 	case "untrusted":
-		return goCacheUntrustedActionKey(actionID)
+		return goCacheUntrustedActionKey(actionID, scope)
 	default:
 		return goCacheActionKey(actionID)
 	}
@@ -222,11 +253,11 @@ func (s *Server) serveGoCacheAction(w http.ResponseWriter, r *http.Request, rawI
 			fmt.Sprintf("grain's package cache expects a hexadecimal action ID under %s, not %q.", goCacheActionPrefix, rawID))
 		return
 	}
-	ns := s.goCacheNamespace(r, pathNS)
+	ns, scope := s.goCacheNamespace(r, pathNS)
 
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
-		f, ok := s.openGoCacheAction(actionID, ns)
+		f, ok := s.openGoCacheAction(actionID, ns, scope)
 		if !ok {
 			w.Header().Set(cacheStatusHeader, "miss")
 			http.Error(w, "action not found", http.StatusNotFound)
@@ -252,6 +283,10 @@ func (s *Server) serveGoCacheAction(w http.ResponseWriter, r *http.Request, rawI
 		}
 
 	case http.MethodPut:
+		if ns == "readonly" {
+			s.refuse(w, r, http.StatusForbidden, goCacheReadOnly)
+			return
+		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
 		if err != nil {
 			s.refuse(w, r, http.StatusBadRequest, fmt.Sprintf("grain's package cache could not read action %s: %v", actionID, err))
@@ -279,7 +314,7 @@ func (s *Server) serveGoCacheAction(w http.ResponseWriter, r *http.Request, rawI
 			s.refuse(w, r, http.StatusInternalServerError, fmt.Sprintf("grain's package cache could not encode action %s: %v", actionID, err))
 			return
 		}
-		entry, err := s.cache.NewWriter(KindGoBuild, goCacheWriteActionKey(actionID, ns))
+		entry, err := s.cache.NewWriter(KindGoBuild, goCacheWriteActionKey(actionID, ns, scope))
 		if err != nil {
 			s.refuse(w, r, http.StatusInternalServerError, fmt.Sprintf("grain's package cache could not store action %s: %v", actionID, err))
 			return
@@ -343,6 +378,14 @@ func (s *Server) serveGoCacheOutput(w http.ResponseWriter, r *http.Request, rawI
 		}
 
 	case http.MethodPut:
+		// Outputs are content-addressed and verified on every read, so
+		// one can only ever be served for an action entry naming it. A
+		// caller that may write no action entry has nothing to store one
+		// for, and is not given the shared disk to fill.
+		if ns, _ := s.goCacheNamespace(r, ""); ns == "readonly" {
+			s.refuse(w, r, http.StatusForbidden, goCacheReadOnly)
+			return
+		}
 		entry, err := s.cache.NewWriter(KindGoBuild, goCacheOutputKey(outputID))
 		if err != nil {
 			s.refuse(w, r, http.StatusInternalServerError, fmt.Sprintf("grain's package cache could not store output %s: %v", outputID, err))

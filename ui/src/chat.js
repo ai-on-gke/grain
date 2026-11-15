@@ -66,7 +66,20 @@ export function chatEntries(t) {
     });
   }
 
-  (t.comments || []).forEach((c, i) => {
+  const allComments = t.comments || [];
+  const compactedThrough = Number(t.compactedThrough || 0);
+  let anchorHandover = null;
+  if (compactedThrough > 0) {
+    anchorHandover =
+      allComments.find(
+        (c) =>
+          c.handover && typeof c.id === "number" && c.id > compactedThrough,
+      ) ||
+      [...allComments].reverse().find((c) => c.handover) ||
+      null;
+  }
+
+  const toMessageEntry = (c, i) => {
     const trimmed = (c.body || "").trim();
     // Synthetic resting comments between console session exchanges,
     // system notification lines, and synthetic wake comments are not
@@ -79,16 +92,16 @@ export function chatEntries(t) {
       (trimmed === "_Waiting for you._" ||
         trimmed.startsWith("**Notification ("))
     )
-      return;
+      return null;
     if (
       c.authorKind === "automation" &&
       c.author === "schedule" &&
       (trimmed.startsWith("_Woken early:_") ||
         trimmed.startsWith("_Scheduled wake._"))
     )
-      return;
+      return null;
 
-    entries.push({
+    return {
       // A comment's own id where there is one -- ui.Comment.ID, the
       // conversation's own order -- and the index for a shape that
       // predates it, rather than the body, which is not unique.
@@ -109,8 +122,49 @@ export function chatEntries(t) {
       })(),
       body: c.body || "",
       attachments: c.attachments || [],
+    };
+  };
+
+  const summarisedEntries = [];
+  const summarisedRaw = new Set();
+  if (compactedThrough > 0) {
+    allComments.forEach((c, i) => {
+      if (
+        typeof c.id === "number" &&
+        c.id <= compactedThrough &&
+        c !== anchorHandover
+      ) {
+        summarisedRaw.add(c);
+        const m = toMessageEntry(c, i);
+        if (m) summarisedEntries.push(m);
+      }
     });
+  }
+
+  let attachedSummarised = false;
+  allComments.forEach((c, i) => {
+    if (summarisedRaw.has(c)) return;
+    const m = toMessageEntry(c, i);
+    if (!m) return;
+    if (c === anchorHandover && summarisedEntries.length > 0) {
+      m.summarised = summarisedEntries;
+      attachedSummarised = true;
+    }
+    entries.push(m);
   });
+  if (!attachedSummarised && summarisedEntries.length > 0) {
+    const lastSum = summarisedEntries[summarisedEntries.length - 1];
+    entries.push({
+      key: "summarised-group",
+      kind: "message",
+      at: lastSum.at,
+      direction: "incoming",
+      sender: "grain",
+      body: "",
+      attachments: [],
+      summarised: summarisedEntries,
+    });
+  }
 
   (t.attempts || []).forEach((a) => {
     // A live attempt is already on screen as the typing indicator, and a

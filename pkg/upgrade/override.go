@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/installtrack"
+	"github.com/ai-on-gke/grain/pkg/registryauth"
 )
 
 // imageRefPattern is the character set an image reference may use: the
@@ -101,10 +102,21 @@ type ImageTarget struct {
 	Repository        string
 	DefaultRepository string
 	Repositories      []string
-	Source            ImageSource
-	SourceDefault     bool
-	SourceLocked      bool
-	Fallback          ImageSource
+	// RepositoryWarning is RepositoryWarning(): set when Repository names
+	// no registry host, so an upgrade would refuse to pull it.
+	RepositoryWarning string
+	// Edition is this deployment's edition as the pane names it ("oss",
+	// or its install track's name); empty when it has no track to go by.
+	Edition string
+	// OtherEditionRepositories are repositories this deployment could
+	// otherwise pull from that carry another edition's builds. They are
+	// never in Repositories: the pane offers them only behind its
+	// explicit "switch edition" override (edition.go).
+	OtherEditionRepositories []EditionRepository
+	// EditionSwitchLosses is what switching to another edition gives up
+	// (EditionSwitchLosses), for that override's confirmation. Empty
+	// when there is no other edition to switch to.
+	EditionSwitchLosses []string
 }
 
 // ImageTarget reports where an image upgrade would pull from, and false
@@ -114,19 +126,31 @@ func (u *Upgrader) ImageTarget() (ImageTarget, bool) {
 		return ImageTarget{}, false
 	}
 	t := ImageTarget{
-		Repository:    u.EffectiveRepository(),
-		Source:        u.EffectiveImageSource(),
-		SourceDefault: !u.IsImageSourceExplicit(),
-		SourceLocked:  u.cfg.Image.SourceLocked,
-		Fallback:      u.EffectiveImageFallback(),
+		Repository:        u.EffectiveRepository(),
+		RepositoryWarning: u.RepositoryWarning(),
 	}
 	if u.cfg.Image.Track != "" {
 		t.DefaultRepository = installtrack.DefaultRepository(u.cfg.Image.Track)
 	}
+	if mine, ok := u.deploymentEdition(); ok {
+		t.Edition = editionName(mine)
+	}
 	for _, repo := range installtrack.KnownSuccessorRepositories(u.cfg.Image.AllowedRepositories...) {
-		if u.validateRepository(repo) == nil {
-			t.Repositories = append(t.Repositories, repo)
+		if u.validateRepository(repo) != nil {
+			continue
 		}
+		// Another edition's repository is not a choice like the others:
+		// picking it swaps this edition's build for another's
+		// (grain/task-4153), so it is listed apart, for the override.
+		if other, cross := u.otherEdition(repo); cross {
+			t.OtherEditionRepositories = append(t.OtherEditionRepositories,
+				EditionRepository{Repository: repo, Edition: editionName(other)})
+			if t.EditionSwitchLosses == nil {
+				t.EditionSwitchLosses = EditionSwitchLosses(u.cfg.Image.Track, other)
+			}
+			continue
+		}
+		t.Repositories = append(t.Repositories, repo)
 	}
 	return t, true
 }
@@ -140,32 +164,106 @@ func (u *Upgrader) validateRepository(repo string) error {
 	return installtrack.ValidateTargetRepository(base, repo, u.cfg.Image.AllowedRepositories...)
 }
 
+// isRecordedRollbackImage reports whether image is the exact PreviousImage a
+// completed upgrade recorded in StatusFile, so "Roll back to <previous>" works
+// even when the previous build was pinned to a sha-... tag or digest alone.
+// Only a digest-pinned reference counts: it skips the repository and branch
+// allow-lists, which is safe only for content this deployment already ran,
+// and a tag alone names whatever was last pushed to it.
+func (u *Upgrader) isRecordedRollbackImage(image string) bool {
+	if u.cfg.StatusFile == "" {
+		return false
+	}
+	prev, err := readStatus(u.cfg.StatusFile)
+	if err != nil || prev.PreviousImage == "" {
+		return false
+	}
+	if _, pinned := kubeDigestRef(prev.PreviousImage); !pinned {
+		return false
+	}
+	return strings.TrimSpace(image) == strings.TrimSpace(prev.PreviousImage)
+}
+
 // ValidateImage is the check StartImage makes of an image: it returns the
 // branch the upgrade is recorded under and the reference it would pull.
 // A tag in image names the branch (TagForBranch, inverted) and wins over
 // branch; a digest pins the bytes, and branch -- the channel the request
 // came from -- is then only the label.
+//
+// An image in another edition's repository is refused (ErrCrossEdition):
+// ValidateImageWith's SwitchEdition is the only way to name one.
 func (u *Upgrader) ValidateImage(branch, image string) (string, string, error) {
+	branch, ref, _, err := u.validateImage(branch, image, ImageOptions{})
+	return branch, ref, err
+}
+
+// ValidateImageWith is ValidateImage with StartImageWith's options: with
+// SwitchEdition, an image in another edition's repository is accepted,
+// and so is one in a repository this build cannot classify (the pulled
+// image's own edition stamp then decides, at the verify step).
+func (u *Upgrader) ValidateImageWith(branch, image string, o ImageOptions) (string, string, error) {
+	branch, ref, _, err := u.validateImage(branch, image, o)
+	return branch, ref, err
+}
+
+// validateImage is ValidateImageWith, also returning the edition switch
+// the upgrade is to record (nil for none).
+func (u *Upgrader) validateImage(branch, image string, opts ImageOptions) (string, string, *EditionSwitch, error) {
 	branch = strings.TrimSpace(branch)
-	if u.Mode() != ModeImage {
-		return "", "", errors.New("an explicit image only applies to a deployment that upgrades by pulling an image (-upgrade-image)")
+	if u.Mode() != ModeImage && u.Mode() != ModeKube {
+		return "", "", nil, errors.New("an explicit image only applies to a deployment that upgrades by pulling an image (-upgrade-image)")
 	}
 	o, err := ParseImageOverride(image)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
-	if err := u.validateRepository(o.Repository); err != nil {
-		return "", "", err
+	isRollback := u.isRecordedRollbackImage(image)
+	// A Kubernetes deployment takes an explicit image for one thing only:
+	// rolling back to the exact image its last upgrade replaced. Anything
+	// else would be a new way to point its Deployment at an image of the
+	// caller's choosing, and one without the edition guard the image path
+	// has (deploymentEdition reads only ImageConfig's track) -- so it is
+	// refused, as every explicit image on this path was before rollback.
+	if u.Mode() == ModeKube && !isRollback {
+		return "", "", nil, errors.New("an explicit image only applies to a deployment that upgrades by pulling an image (-upgrade-image); " +
+			"a Kubernetes deployment accepts one only to roll back to the image its last upgrade replaced")
+	}
+	if !isRollback {
+		if err := u.validateRepository(o.Repository); err != nil {
+			return "", "", nil, err
+		}
+	} else if u.cfg.Refusal != "" {
+		return "", "", nil, errors.New(u.cfg.Refusal)
+	}
+	effOpts := opts
+	if isRollback {
+		if _, cross := u.otherEdition(o.Repository); cross {
+			effOpts.SwitchEdition = true
+		}
+	}
+	sw, err := u.editionSwitchFor(o.Repository, effOpts)
+	if err != nil {
+		return "", "", nil, err
 	}
 	if o.Tag != "" {
 		branch = branchForTag(o.Tag)
+	} else if isRollback && branch == "" {
+		if o.Digest != "" && len(o.Digest) >= len("sha256:")+12 {
+			branch = "sha256-" + o.Digest[len("sha256:"):len("sha256:")+12]
+		} else {
+			branch = "rollback"
+		}
 	}
-	if err := u.checkBranch(branch); err != nil {
-		return "", "", err
+	if !isRollback {
+		if err := u.checkBranch(branch); err != nil {
+			return "", "", nil, err
+		}
+	} else if err := validateBranch(branch); err != nil {
+		return "", "", nil, err
 	}
 	ref, err := u.imageRefIn(o.Repository, branch)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	if o.Digest != "" {
 		if o.Tag == "" {
@@ -173,22 +271,59 @@ func (u *Upgrader) ValidateImage(branch, image string) (string, string, error) {
 		}
 		ref += "@" + o.Digest
 	}
-	return branch, ref, nil
+	return branch, ref, sw, nil
 }
 
 // StartImage is Start, pulling image rather than the branch's tag in the
 // configured repository; an empty image is exactly Start. See
 // ValidateImage for how image and branch combine.
 func (u *Upgrader) StartImage(branch, image string) error {
+	return u.StartImageWith(branch, image, ImageOptions{})
+}
+
+// StartImageWith is StartImage with options: SwitchEdition is the
+// explicit "switch edition" override, the one way an upgrade may pull
+// another edition's build, and it is recorded on Status.EditionSwitch
+// and in the daemon log. It needs an image to switch to.
+func (u *Upgrader) StartImageWith(branch, image string, opts ImageOptions) error {
 	if strings.TrimSpace(image) == "" {
+		if opts.SwitchEdition {
+			return errors.New("switching edition needs the image to switch to: name another edition's repository or image")
+		}
 		return u.Start(branch)
 	}
-	branch, ref, err := u.ValidateImage(branch, image)
+	branch, ref, sw, err := u.validateImage(branch, image, opts)
 	if err != nil {
 		log.Printf("upgrade: refusing an upgrade to image %q: %v", image, err)
 		return err
 	}
-	return u.start(branch, ref)
+	return u.startWithOptions(branch, ref, sw, true, "")
+}
+
+// editionSwitchFor is the edition switch an upgrade onto repo records,
+// nil when it crosses no edition, or the refusal: another edition's
+// repository without opts.SwitchEdition, or a switch asked of this
+// edition's own repository, where there is nothing to switch.
+func (u *Upgrader) editionSwitchFor(repo string, opts ImageOptions) (*EditionSwitch, error) {
+	other, cross := u.otherEdition(repo)
+	if !opts.SwitchEdition {
+		if cross {
+			return nil, u.crossEditionError(repo, other)
+		}
+		return nil, nil
+	}
+	mine, ok := u.deploymentEdition()
+	if !ok {
+		return nil, errors.New("this deployment has no install track to switch edition from")
+	}
+	if theirs, known := repositoryEdition(repo); known && theirs == mine {
+		return nil, fmt.Errorf("%s already carries the %s edition's builds, which this deployment is on: there is no edition to switch to, so leave \"switch edition\" off", repo, editionName(mine))
+	}
+	sw := &EditionSwitch{From: editionName(mine), Repository: repo, RequestedBy: strings.TrimSpace(opts.RequestedBy)}
+	if cross {
+		sw.To = editionName(other)
+	}
+	return sw, nil
 }
 
 // overrideRef is the reference StartImage asked the running upgrade to
@@ -200,8 +335,19 @@ func (u *Upgrader) overrideRef() string {
 }
 
 // start is Start after its branch has been checked, with ref the image
-// to pull instead of the branch's tag ("" for none).
-func (u *Upgrader) start(branch, ref string) error {
+// to pull instead of the branch's tag ("" for none) and sw the edition
+// switch the operator asked for (nil for none).
+func (u *Upgrader) start(branch, ref string, sw *EditionSwitch) error {
+	return u.startWithOptions(branch, ref, sw, true, "")
+}
+
+// startWithOptions is start, with manual false for an upgrade that already
+// drained through a schedule (no grace window), and commit the object id
+// to check out instead of branch on the source pipeline ("" for none; only
+// StartRollback passes one).
+func (u *Upgrader) startWithOptions(branch, ref string, sw *EditionSwitch, manual bool, commit string) error {
+	prevImg, prevRel, prevCommit := u.snapshotPrevious()
+
 	u.mu.Lock()
 	if u.done != nil {
 		u.mu.Unlock()
@@ -210,10 +356,44 @@ func (u *Upgrader) start(branch, ref string) error {
 	}
 	u.done = make(chan struct{})
 	u.override = ref
+	u.commit = commit
+	u.switching = sw
+	u.cancelled = false
+	u.cancelledBy = ""
+	u.cancelReason = ""
+	u.irreversible = false
+	u.cancelFn = nil
+	u.targetLabel = branch
+	u.previousLabel = previousDisplayFromStatus(Status{
+		Branch:          branch,
+		PreviousImage:   prevImg,
+		PreviousRelease: prevRel,
+		PreviousCommit:  prevCommit,
+	})
 	u.mu.Unlock()
 
 	now := time.Now().UTC()
-	status := Status{Branch: branch, Phase: PhaseRunning, StartedAt: &now, Process: processID}
+	var graceUntil *time.Time
+	graceWindow := time.Duration(0)
+	if manual && u.GraceWindow() > 0 {
+		graceWindow = u.GraceWindow()
+		until := now.Add(graceWindow)
+		graceUntil = &until
+	}
+	status := Status{
+		Branch:          branch,
+		Phase:           PhaseRunning,
+		StartedAt:       &now,
+		GraceUntil:      graceUntil,
+		PreviousImage:   prevImg,
+		PreviousRelease: prevRel,
+		PreviousCommit:  prevCommit,
+		Process:         processID,
+	}
+	if sw != nil {
+		recorded := *sw
+		status.EditionSwitch = &recorded
+	}
 	if err := writeStatus(u.cfg.StatusFile, status); err != nil {
 		u.release()
 		log.Printf("upgrade: %s: not started: recording upgrade status in %s: %v", branch, u.cfg.StatusFile, err)
@@ -222,13 +402,27 @@ func (u *Upgrader) start(branch, ref string) error {
 	// Everything from here on says which branch it is about
 	// (progress.logf); this one line is what ties the request that
 	// arrived to the sequence of steps that follows it.
-	if ref != "" {
+	switch {
+	case sw != nil:
+		to := sw.To
+		if to == "" {
+			to = "whichever edition the image says it is"
+		}
+		who := "the operator"
+		if sw.RequestedBy != "" {
+			who = sw.RequestedBy
+		}
+		log.Printf("upgrade: %s: requested, switching edition from %s to %s at %s's explicit request, pulling %s",
+			branch, sw.From, to, who, ref)
+	case ref != "":
 		log.Printf("upgrade: %s: requested, pulling %s", branch, ref)
-	} else {
+	case commit != "":
+		log.Printf("upgrade: %s: requested, rolling back to commit %s", branch, commit)
+	default:
 		log.Printf("upgrade: %s: requested", branch)
 	}
 
-	go u.run(branch, status)
+	go u.run(branch, status, graceWindow)
 	return nil
 }
 
@@ -237,7 +431,14 @@ func (u *Upgrader) start(branch, ref string) error {
 // another repository, for a registry that refused the credentials; or
 // pick another tag for one that has never published this one. Empty for
 // any other failure, whose own words are already the best account.
-func registryHint(ref string, err error) string {
+//
+// The repository it suggests instead is own, this deployment's own
+// edition's default, and none when that is the repository that failed:
+// it used to name the open-source repository to every deployment, which
+// on another edition's track is an invitation to cross editions
+// (grain/task-4153). Nothing is pulled from it: the upgrade has failed,
+// and a hint is all this is.
+func registryHint(ref, own string, err error) string {
 	if err == nil {
 		return ""
 	}
@@ -249,8 +450,12 @@ func registryHint(ref string, err error) string {
 			ref, repositoryOf(ref))
 	case strings.Contains(msg, "unauthenticated") || strings.Contains(msg, "unauthorized") ||
 		strings.Contains(msg, "denied") || statusCode40x.MatchString(msg):
-		return fmt.Sprintf("the registry refused this host's credentials for %s: authenticate the host to %s (e.g. `docker login`, or gcloud auth configure-docker for Artifact Registry), or choose %s on the upgrade pane",
-			ref, registryHost(ref), installtrack.DefaultOSSGrainRepository)
+		hint := fmt.Sprintf("the registry refused this host's credentials for %s: authenticate the host to %s (e.g. `docker login`, or gcloud auth configure-docker for Artifact Registry)",
+			ref, registryHost(ref))
+		if own = strings.TrimSpace(own); own != "" && own != repositoryOf(ref) && registryauth.HostOf(own) != "" {
+			hint += fmt.Sprintf(", or choose %s on the upgrade pane", own)
+		}
+		return hint
 	}
 	return ""
 }

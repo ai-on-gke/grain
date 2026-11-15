@@ -109,3 +109,33 @@ func TestNewGoogleCloudStorageRequiresBucket(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+// TestGoogleCloudStorageEndpointEnvTargetsAStub is how the 2026-11-07
+// walkthrough ran a real `grain backup -gcs-bucket` against a local GCS
+// stub: GRAIN_BACKUP_GCS_ENDPOINT replaces the endpoint, sends no
+// credentials and ignores -google-credentials-file.
+func TestGoogleCloudStorageEndpointEnvTargetsAStub(t *testing.T) {
+	var gotAuth, gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth, gotPath = r.Header.Get("Authorization"), r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"bucket":"walk-backups","name":"b.zip"}`)
+	}))
+	defer server.Close()
+	t.Setenv(GCSEndpointEnv, server.URL+"/storage/v1/")
+
+	destination, err := NewGoogleCloudStorage(context.Background(), "walk-backups", "/nonexistent/credentials.json")
+	if err != nil {
+		t.Fatalf("NewGoogleCloudStorage: %v", err)
+	}
+	remote, err := destination.Upload(context.Background(), "b.zip", mediaTypeZIP, strings.NewReader("zip"))
+	if err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if gotPath != "/upload/storage/v1/b/walk-backups/o" || gotAuth != "" {
+		t.Errorf("stub saw path %q auth %q, want the upload path and no credentials", gotPath, gotAuth)
+	}
+	if remote.ID != "gs://walk-backups/b.zip" {
+		t.Errorf("remote.ID = %q", remote.ID)
+	}
+}

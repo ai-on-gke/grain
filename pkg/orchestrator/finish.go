@@ -224,7 +224,7 @@ func processResult(ctx context.Context, store *model.Store, reach *gitproxy.Reac
 // already on the remote when it was dispatched, at preRunBranchSHA (""
 // when it was not, or when nobody read it at dispatch). That head is what
 // lets a nothing_needed run be told apart from one that pushed: see
-// branchUnmovedSince.
+// branchUnmovedSinceWithStore.
 func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.Reach, client github.Client,
 	appBot AppBotIdentityFunc, task model.Task, result *agent.Result, runID, preRunBranchSHA string, now time.Time) error {
 
@@ -246,7 +246,13 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	comment, hasComment := effectiveCommentOnIssue(result)
 	if hasComment {
 		attachments, dropped := mcp.ResponseAttachmentsTolerant(firstToolCallArgs(result, "comment_on_issue"), staged)
-		if _, err := relayCommentWithAttachments(ctx, store, task, withDroppedAttachments(comment, dropped), attachments, now); err != nil {
+		// The note's own one line, when the run gave one: what the inbox
+		// and the task row show of a task resting on it (ui.Task.NoteSummary).
+		// None is not derived -- a report's opening sentence is not a
+		// summary of what anybody has to do.
+		summary, _ := firstToolCallArg(result, "comment_on_issue", "summary")
+		summary = model.NormalizeQuestionSummary(summary)
+		if _, err := relayNote(ctx, store, task, withDroppedAttachments(comment, dropped), summary, attachments, now); err != nil {
 			return fmt.Errorf("orchestrator: posting comment for %s: %w", task.ID, err)
 		}
 		checkAndRecordStewardReportText(ctx, store, task, runID, comment, result, now)
@@ -273,6 +279,15 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// that the task stays open and gets dispatched again must not.
 	proxyResult := withProxyReviewCalls(store, runID, result)
 	if err := relayHandover(ctx, store, task, proxyResult, now); err != nil {
+		return err
+	}
+	// compact_context and update_brief, on the same terms: written for
+	// the runs after this one, and neither ends anything
+	// (context_compaction.go).
+	if err := relayCompaction(ctx, store, task, proxyResult, runID, now); err != nil {
+		return err
+	}
+	if err := relayBrief(ctx, store, task, proxyResult, now); err != nil {
 		return err
 	}
 
@@ -366,7 +381,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// (model.SuspendRequested, recorded as parked), which no failure
 	// streak counts and which the next attempt's prompt reads to say what
 	// it waited on (parkedResumeSection).
-	if susp, ok, err := requestedSuspension(ctx, store, task.ID, result); err != nil {
+	if susp, ok, err := requestedSuspension(ctx, store, task, result); err != nil {
 		return err
 	} else if ok {
 		susp.RunID, susp.CreatedAt = runID, now
@@ -420,7 +435,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if !staleBranch && !inPlace {
 		pushedCommit := true
 		if preRunBranchSHA != "" && client != nil && task.Target != nil {
-			if head, herr := client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName()); herr == nil && head != nil {
+			if head, herr := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName()); herr == nil && head != nil {
 				pushedCommit = head.SHA != preRunBranchSHA
 			}
 		}
@@ -585,6 +600,23 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// worse -- it would hold that change's own merge until
 	// defaultReviewTaskDeadline ran out and the queue announced that the
 	// review had never finished, which by then would be untrue.
+	//
+	// A report-only sub-task another task filed closes instead
+	// (model.ClosesOnAnswer): its dependents are waiting on a close, and
+	// its note is its parent's to read.
+	if hasComment && findings == 0 && !pushedInPlace && model.ClosesOnAnswer(task) {
+		// Read again rather than trusting the snapshot taken at dispatch:
+		// a changelist the run uploaded is linked to the stored task while
+		// the run is live (ui.Client's changelist link), and a task with a
+		// change linked is not a report to close (model.AwaitsAck).
+		fresh, err := store.GetTask(ctx, task.ID)
+		if err != nil {
+			return fmt.Errorf("orchestrator: re-reading %s before closing it on its answer: %w", task.ID, err)
+		}
+		if fresh != nil && model.ClosesOnAnswer(*fresh) {
+			return finishAnswered(ctx, store, *fresh, now)
+		}
+	}
 	if hasComment || findings > 0 || pushedInPlace {
 		return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
 			o.CompletedAt = &now
@@ -686,7 +718,7 @@ func nothingNeededReason(result *agent.Result) (string, bool) {
 // posted beside it, and the run keeps the outcome RunDispatch gave it.
 // "Pushed" means pushed by this run: a branch an earlier attempt left,
 // whose head has not moved since dispatch, does not outrank it
-// (branchUnmovedSince) unless a pull request is open off it, and is
+// (branchUnmovedSinceWithStore) unless a pull request is open off it, and is
 // noted on the task on the way here (retireStaleBranch).
 //
 // Only a run with nothing else to show is recorded as
@@ -726,8 +758,33 @@ func finishNothingNeeded(ctx context.Context, store *model.Store, task model.Tas
 	return nil
 }
 
-// branchUnmovedSince is whether task's branch is still at sha, the head
-// it had when the run was dispatched -- that is, whether the run pushed
+// finishAnswered closes a report-only sub-task (model.ClosesOnAnswer)
+// whose run ended on a closing note alone: no pull request, no question,
+// no park. The note is already in the task's conversation; the close is
+// what lets a task that depends on it dispatch (the task_blocked view
+// counts a blocker until it closes), and a pointer on the parent's own
+// thread is where a person reading the parent finds it.
+func finishAnswered(ctx context.Context, store *model.Store, task model.Task, now time.Time) error {
+	if err := closeTask(ctx, store, task.ID, now, "the report-only task answered", func(o *model.Observation) {
+		o.CompletedAt = &now
+		o.ClosedAt = &now
+		o.RetryRequestedAt = nil
+	}); err != nil {
+		return err
+	}
+	if err := noteOnTask(ctx, store, task.ID, model.AnsweredClosedNote, now); err != nil {
+		return err
+	}
+	parent := task.Proposer.TaskID
+	if p, err := store.GetTask(ctx, parent); err != nil || p == nil {
+		return err
+	}
+	return noteOnTask(ctx, store, parent, fmt.Sprintf("[Task %s](/tasks/%s) %q, which this task filed, "+
+		"answered and closed itself; its closing note is on that task.", task.ID, task.ID, task.Title), now)
+}
+
+// branchUnmovedSinceWithStore is whether task's branch is still at sha, the
+// head it had when the run was dispatched -- that is, whether the run pushed
 // nothing to it -- with no pull request open off it. An empty sha is a
 // branch nobody read at dispatch, or one that was not there yet, and says
 // nothing about who pushed it, so it is never unmoved: the caller then
@@ -736,15 +793,11 @@ func finishNothingNeeded(ctx context.Context, store *model.Store, task model.Tas
 // change somebody may be reviewing, and is never stale either: salvage
 // finds that pull request again and leaves the task waiting on it, as it
 // did before nothing_needed could outrank a branch at all.
-func branchUnmovedSince(client github.Client, task model.Task, sha string) (bool, error) {
-	return branchUnmovedSinceWithStore(context.Background(), nil, client, task, sha)
-}
-
 func branchUnmovedSinceWithStore(ctx context.Context, store *model.Store, client github.Client, task model.Task, sha string) (bool, error) {
 	if sha == "" || client == nil || task.Target == nil {
 		return false, nil
 	}
-	head, err := client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName())
+	head, err := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName())
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: reading %s's branch head: %w", task.ID, err)
 	}
@@ -752,7 +805,7 @@ func branchUnmovedSinceWithStore(ctx context.Context, store *model.Store, client
 		return false, nil
 	}
 	prRepo, headRef, _ := taskPullRequestTarget(ctx, store, task)
-	pr, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef)
+	pr, err := client.FindOpenPullRequestForBranch(prRepo.StoredOwner(), prRepo.Name, headRef)
 	if err != nil {
 		return false, fmt.Errorf("orchestrator: looking for a pull request open off %s's branch: %w", task.ID, err)
 	}
@@ -764,7 +817,7 @@ func branchUnmovedSinceWithStore(ctx context.Context, store *model.Store, client
 // told which branch was left behind. The branch itself is not deleted:
 // its commits are an earlier attempt's real work, and whether anybody
 // wants them is not grain's to decide. No pull request is open off it
-// (branchUnmovedSince), so there is none to close.
+// (branchUnmovedSinceWithStore), so there is none to close.
 func retireStaleBranch(ctx context.Context, store *model.Store, task model.Task, now time.Time) error {
 	note := fmt.Sprintf("This run found nothing needed and pushed nothing, so grain did not open a pull "+
 		"request off `%s`, the branch an earlier attempt of task %s left on %s. The branch is left "+
@@ -845,6 +898,14 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 	if !pushed {
 		return false, nil
 	}
+	if reviewCommentsOnly(task) {
+		// A review posts its findings; it was not asked to fix them
+		// (pathtriggerreview.go). What it pushed is left where it is, and
+		// the run ends like any other review's.
+		return false, noteOnTask(ctx, store, task.ID, fmt.Sprintf("Branch %s was pushed, but this review "+
+			"was filed to post findings, not to fix them, so no pull request was opened for it.",
+			task.BranchName()), now)
+	}
 	closed, err := taskClosed(ctx, store, task.ID)
 	if err != nil {
 		return true, err
@@ -852,28 +913,30 @@ func salvagePushedBranch(ctx context.Context, store *model.Store, client github.
 	if closed {
 		return true, noteOrphanedPullRequests(ctx, store, client, task.ID, now)
 	}
-	if rc, ok := client.(*github.RESTClient); ok {
-		if src, ok := rc.Tokens.(github.GitOnlySource); ok {
-			if reason := src.GitOnly(task.Target.StoredOwner(), task.Target.Name); reason != "" {
-				host := task.Target.GitHost()
-				note := fmt.Sprintf("Branch %s pushed to %s; no pull request opened because %s is a plain git host.", task.BranchName(), task.Target, host)
-				if !strings.Contains(reason, "a plain git host") {
-					note = fmt.Sprintf("Branch %s pushed to %s; no pull request opened: %s.", task.BranchName(), task.Target, reason)
-				}
-				if err := noteOnTask(ctx, store, task.ID, note, now); err != nil {
-					return true, err
-				}
-				if taskKeepRunning(ctx, store, task) {
-					markKeepRunningRequeued(store, task.ID, "", false)
-					return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
-						o.CompletedAt = nil
-					})
-				}
+	// Asked of the client rather than of a *github.RESTClient's Tokens:
+	// the daemon's client is a StateRepoPullRequestClient around one, and
+	// a type assertion to the REST client never saw a plain git host
+	// through it (tests/e2e/git_hosts_daemon_test.go).
+	if src, ok := client.(github.GitOnlySource); ok {
+		if reason := src.GitOnly(task.Target.StoredOwner(), task.Target.Name); reason != "" {
+			host := task.Target.GitHost()
+			note := fmt.Sprintf("Branch %s pushed to %s; no pull request opened because %s is a plain git host.", task.BranchName(), task.Target, host)
+			if !strings.Contains(reason, "a plain git host") {
+				note = fmt.Sprintf("Branch %s pushed to %s; no pull request opened: %s.", task.BranchName(), task.Target, reason)
+			}
+			if err := noteOnTask(ctx, store, task.ID, note, now); err != nil {
+				return true, err
+			}
+			if taskKeepRunning(ctx, store, task) {
+				markKeepRunningRequeued(store, task.ID, "", false)
 				return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
-					o.CompletedAt = &now
-					o.RetryRequestedAt = nil
+					o.CompletedAt = nil
 				})
 			}
+			return true, observeField(ctx, store, task.ID, now, func(o *model.Observation) {
+				o.CompletedAt = &now
+				o.RetryRequestedAt = nil
+			})
 		}
 	}
 	if err := finishWithPullRequest(ctx, store, client, task, now); err != nil {
@@ -988,14 +1051,12 @@ var (
 // plain git host asks about a different repository on GitHub, and a 404
 // from that read every pushed branch there as one nobody could check.
 func targetBranchExists(client github.Client, target model.RepoRef, branch string) (bool, error) {
-	if rc, ok := client.(*github.RESTClient); ok {
-		if src, ok := rc.Tokens.(github.GitBranchSource); ok {
-			if exists, ok, err := src.GitBranchExists(target.StoredOwner(), target.Name, branch); ok {
-				return exists, err
-			}
+	if src, ok := client.(github.GitBranchSource); ok {
+		if exists, ok, err := src.GitBranchExists(target.StoredOwner(), target.Name, branch); ok {
+			return exists, err
 		}
 	}
-	return branchExistsSettled(client, target.Owner, target.Name, branch)
+	return branchExistsSettled(client, target.StoredOwner(), target.Name, branch)
 }
 
 // branchExistsSettled re-checks a "no such branch" answer before acting
@@ -1326,6 +1387,20 @@ func relayCommentWithAttachments(ctx context.Context, store *model.Store, task m
 // ordinary comment.
 func relayQuestion(ctx context.Context, store *model.Store, task model.Task,
 	body, summary string, attachments []mcp.ResponseAttachment, now time.Time) (int64, error) {
+	return relayAgentComment(ctx, store, task, body, summary, false, attachments, now)
+}
+
+// relayNote is relayQuestion for a comment_on_issue note: summary is the
+// note's own one line (Store.NoteSummary), and the comment is marked
+// model.Comment.Note so GET /api/events records it as task.comment
+// rather than as a question nobody asked.
+func relayNote(ctx context.Context, store *model.Store, task model.Task,
+	body, summary string, attachments []mcp.ResponseAttachment, now time.Time) (int64, error) {
+	return relayAgentComment(ctx, store, task, body, summary, true, attachments, now)
+}
+
+func relayAgentComment(ctx context.Context, store *model.Store, task model.Task,
+	body, summary string, note bool, attachments []mcp.ResponseAttachment, now time.Time) (int64, error) {
 
 	now, err := answeringTime(ctx, store, task.ID, now)
 	if err != nil {
@@ -1340,6 +1415,7 @@ func relayQuestion(ctx context.Context, store *model.Store, task model.Task,
 		},
 		Body:      body,
 		Summary:   summary,
+		Note:      note,
 		CreatedAt: now,
 	})
 	if err != nil {
@@ -1416,21 +1492,25 @@ func relayHandover(ctx context.Context, store *model.Store, task model.Task,
 	if !ok || handover == "" {
 		return nil
 	}
-	existing, err := store.Comments(ctx, task.ID)
+	last, err := store.LatestHandover(ctx, task.ID)
 	if err != nil {
-		return fmt.Errorf("orchestrator: reading comments before posting handover for %s: %w", task.ID, err)
+		return fmt.Errorf("orchestrator: reading the last handover before posting one for %s: %w", task.ID, err)
 	}
-	for i := len(existing) - 1; i >= 0; i-- {
-		if existing[i].Handover {
-			if strings.TrimSpace(existing[i].Body) == handover {
-				return nil
-			}
-			break
+	if last != nil && strings.TrimSpace(last.Body) == handover {
+		// The same handover written again is the run confirming it is
+		// still true, which resets its age (model.HandoverAge) without a
+		// new version.
+		if err := store.ConfirmHandover(ctx, task.ID, now); err != nil {
+			return fmt.Errorf("orchestrator: confirming handover for %s: %w", task.ID, err)
 		}
+		return nil
 	}
 	now, err = answeringTime(ctx, store, task.ID, now)
 	if err != nil {
 		return fmt.Errorf("orchestrator: posting handover for %s: %w", task.ID, err)
+	}
+	if err := store.BumpHandoverVersion(ctx, task.ID); err != nil {
+		return fmt.Errorf("orchestrator: counting handover for %s: %w", task.ID, err)
 	}
 	agentPrincipal := model.Principal{Kind: model.PrincipalAgent, ID: task.ID}
 	if _, err := store.AddComment(ctx, model.Comment{
@@ -1661,6 +1741,12 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 	// a refusal that is only a log line leaves the person reading the
 	// runner's task one recommendation short with no word why.
 	var refusedTuning []refusedTuningProposal
+	// Proposals filed with something admission refused or lowered, said
+	// on task's own conversation once the batch is through
+	// (noteProposalAdmissionChanges): the note on each proposal reaches
+	// whoever opens it, but the run that asked has ended and its tool
+	// call only said "Recorded".
+	var changedProposals []proposalAdmissionChange
 
 	// The capability catalogue (settings/capabilities.yml), read once:
 	// each proposal is judged against it below, as ui.CreateTask judges
@@ -1846,6 +1932,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		body += model.OriginKeptNote(namedOrigin, target, &task)
 
 		var interactive bool
+		// The template's sandbox shape (model.Template.Sandbox), filled
+		// into each dimension the proposal leaves unstated below.
+		var tmplSandbox model.SandboxShape
+		// The template the proposal was composed from, recorded for
+		// reporting (model.Task.SourceTemplateID) and never as
+		// TemplateID: a run cannot hand a template's push set or
+		// template-restricted grants on to work it files.
+		var sourceTemplate string
 		if tmplID != "" {
 			tmpl, err := store.GetTemplate(ctx, tmplID)
 			if err != nil {
@@ -1857,6 +1951,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					targetRef = *target
 				}
 				comp := model.ComposeTemplateTask(*tmpl, fieldValues, targetRef, base, false)
+				sourceTemplate = tmpl.ID
 				if title == "" {
 					title = comp.Title
 				}
@@ -1875,6 +1970,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 					priority = comp.Priority
 				}
 				interactive = comp.Interactive
+				tmplSandbox = comp.Sandbox
 				if !keepRunningSet {
 					keepRunning = comp.KeepRunning
 				}
@@ -1940,6 +2036,13 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		// dropped here, as a non-string entry always was, since the
 		// live propose_task call already refused it.
 		capabilities, _ := model.CapabilityEntries(p["capabilities"])
+		var ciReads []model.RepoRef
+		// What admission changed about this proposal -- a CI capability
+		// refused or turned into reads, a sandbox shape lowered -- said
+		// again on the proposer's own conversation once the batch is
+		// through (noteProposalAdmissionChanges), where the run that
+		// asked for it and the person watching that task read it.
+		var admissionChanges []string
 		for _, cap := range capabilities {
 			cap = strings.TrimSpace(cap)
 			if aliasAdm, isLegacyAdm := model.LegacyAdmissionAlias(cap); isLegacyAdm {
@@ -1970,6 +2073,26 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			// matching ui.Client.creationGrants so a relayed proposal stores
 			// the exact same grant set as its live twin.
 			for _, expanded := range expandProposalGrant(cap) {
+				// A CI capability (model.TaskGrantCIOnlyRefusal) is
+				// refused here, as ui.CreateTask refuses the identical
+				// call filed live, rather than filed onto a task every
+				// dispatch of which would then refuse it (task 4532). A
+				// repository read is the one with a task equivalent, and
+				// is filed as that reads entry -- for UngrantedReads below
+				// to judge like any other -- rather than dropped.
+				if why := model.TaskGrantCIOnlyRefusal(expanded); why != "" {
+					if repo, ok := model.RepoReadTarget(expanded); ok {
+						ciReads = append(ciReads, repo)
+						body += ciReadGrantAsReadsNote(cap, repo)
+						admissionChanges = append(admissionChanges, fmt.Sprintf(
+							"`%s` is a CI capability, so it was filed with `reads: [%q]` instead", cap, repo.String()))
+					} else {
+						body += ciOnlyGrantRefusedNote(cap, why)
+						admissionChanges = append(admissionChanges, fmt.Sprintf(
+							"`%s` is a CI capability, not a task grant, so it was filed without it", cap))
+					}
+					continue
+				}
 				found := false
 				for _, g := range grants {
 					if g.Capability == expanded {
@@ -2055,6 +2178,35 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		if v, ok := p["sandbox_disk_gb"]; ok {
 			diskGB, _ = argInt(v)
 		}
+		// A dimension the proposal states keeps its value and the
+		// template fills the rest, one at a time, as ui.Client.fromTemplate
+		// does for a filing through the API.
+		templateFilledShape := (cpus == 0 && tmplSandbox.CPUs != 0) ||
+			(memoryMB == 0 && tmplSandbox.MemoryMB != 0) || (diskGB == 0 && tmplSandbox.DiskGB != 0)
+		if cpus == 0 {
+			cpus = tmplSandbox.CPUs
+		}
+		if memoryMB == 0 {
+			memoryMB = tmplSandbox.MemoryMB
+		}
+		if diskGB == 0 {
+			diskGB = tmplSandbox.DiskGB
+		}
+		// Held to the deployment's maximum, as the live call is
+		// (ui.Client.refuseSandboxShapeAboveMax). That call refuses with a
+		// 400 the agent reads; this run has ended, so the shape is clamped
+		// and the body says so, rather than filing a task nobody can
+		// approve. A shape above the proposer's own is held for a person
+		// below (model.ProposalSandboxShapeAbove), as filed live.
+		shape, shapeNote := clampProposalSandboxShape(ctx, store,
+			model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB}, templateFilledShape)
+		cpus, memoryMB, diskGB = shape.CPUs, shape.MemoryMB, shape.DiskGB
+		body += shapeNote
+		if shapeNote != "" {
+			admissionChanges = append(admissionChanges, fmt.Sprintf(
+				"its sandbox is above this deployment's maximum, so it was filed at %s",
+				model.SandboxShape{CPUs: cpus, MemoryMB: memoryMB, DiskGB: diskGB}.Describe()))
+		}
 		// A proposal chooses a model (model.Task.Model) and, separately, may
 		// pin a connection; the store's own migration and dispatch read a
 		// pin naming no connection as the model choice it used to be.
@@ -2097,12 +2249,25 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			return fmt.Errorf("orchestrator: placing proposed task %q in the backlog: %w", title, err)
 		}
 		reads := proposedReads(p, target)
+		for _, repo := range ciReads {
+			if (target == nil || !repo.Same(*target)) && !slices.ContainsFunc(reads, repo.Same) {
+				reads = append(reads, repo)
+			}
+		}
 		writes := proposedWrites(p, target, base)
 		reviewTemplateID, reviewTemplateNote, err := proposedReviewTemplate(ctx, store, task, p, target)
 		if err != nil {
 			return fmt.Errorf("orchestrator: resolving review template for proposed task %q: %w", title, err)
 		}
 		body += reviewTemplateNote
+		// The release this proposal is filed against (model.LinkFoundIn).
+		// A value that is no release version is dropped with a note
+		// rather than refusing the proposal, the way network_access is.
+		statedFoundIn, _ := p["found_in"].(string)
+		foundIn, foundInErr := model.NormalizeFoundIn(statedFoundIn)
+		if foundInErr != nil {
+			body += fmt.Sprintf("\n\n_grain could not record the release this proposal is found in (%q): want a tag such as v2.5.0 or v2.5.0-rc.2._", strings.TrimSpace(statedFoundIn))
+		}
 		proposal := model.Task{
 			ID:     id,
 			Intent: model.IntentImplement,
@@ -2142,11 +2307,14 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			Reads:            reads,
 			Writes:           writes,
 			ReviewTemplateID: reviewTemplateID,
+			SourceTemplateID: sourceTemplate,
 			Tags:             []string{key},
 			Links:            links,
 			CreatedAt:        &now,
 			OrderKey:         orderKey,
 		}
+		model.SetFoundIn(&proposal, foundIn)
+		model.ApplyDerivedFoundIn(&proposal)
 		// The proposing task's root requester's work, as ui.CreateTask
 		// records the identical call filed live.
 		model.InheritRequester(&proposal, task)
@@ -2452,7 +2620,7 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			proposal.Body += otherBranchQueueNote(task, proposal)
 		}
 		asked := proposedAutoMerge(p, task) &&
-			model.GrantsSubsetOf(proposal.Grants, task.Grants)
+			model.GrantsSubsetOf(model.GrantsBeyondCIReadDefault(proposal), task.Grants)
 		proposal.AutoMerge = asked && model.LandsWhereGranted(aligned, task)
 		if scratch {
 			// Merging into the scratch branch is what the fixture is for,
@@ -2485,6 +2653,10 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		}
 		if err := store.PutTask(ctx, proposal); err != nil {
 			return fmt.Errorf("orchestrator: filing proposed task %q: %w", title, err)
+		}
+		if len(admissionChanges) > 0 {
+			changedProposals = append(changedProposals, proposalAdmissionChange{
+				id: proposal.ID, title: title, changes: admissionChanges})
 		}
 		if goal != nil {
 			if err := store.SetTaskGoal(ctx, proposal.ID, *goal,
@@ -2528,7 +2700,54 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 			}
 		}
 	}
+	if err := noteProposalAdmissionChanges(ctx, store, task, changedProposals, now); err != nil {
+		return err
+	}
 	return noteRefusedTuningProposals(ctx, store, task, refusedTuning, now)
+}
+
+// proposalAdmissionChange is one proposal relayProposedTasks filed with
+// something its run asked for refused or lowered: changes are what
+// admission did, one line each.
+type proposalAdmissionChange struct {
+	id      string
+	title   string
+	changes []string
+}
+
+// noteProposalAdmissionChanges posts one comment on task naming each
+// proposal it filed with a CI capability refused (or turned into reads)
+// or a sandbox shape lowered to the deployment's maximum. Each proposal's
+// own body says so already, but the run that proposed it has ended and
+// its propose_task call answered only "Recorded": this is where that run,
+// on its next turn, and the person watching its task hear about it.
+// Nothing is posted when nothing was changed.
+func noteProposalAdmissionChanges(ctx context.Context, store *model.Store, task model.Task,
+	changed []proposalAdmissionChange, now time.Time) error {
+
+	if len(changed) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	if len(changed) == 1 {
+		b.WriteString("grain filed 1 proposal from this run without something it asked for:\n")
+	} else {
+		fmt.Fprintf(&b, "grain filed %d proposals from this run without something they asked for:\n", len(changed))
+	}
+	for _, c := range changed {
+		fmt.Fprintf(&b, "\n- task %s %q: %s.", c.id, c.title, strings.Join(c.changes, "; "))
+	}
+	b.WriteString("\n\nEach proposal's description says why. An operator can raise sandboxShapeLimits in settings; " +
+		"a CI capability is declared in the repository's CI workflow, not on a task.")
+	if _, err := store.AddComment(ctx, model.Comment{
+		TaskID:    task.ID,
+		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalAutomation, ID: "grain"}},
+		Body:      b.String(),
+		CreatedAt: now,
+	}); err != nil {
+		return fmt.Errorf("orchestrator: noting proposals filed with admission changes on %s: %w", task.ID, err)
+	}
+	return nil
 }
 
 // refusedTuningProposal is one propose_task call of the tuning runner that
@@ -2614,12 +2833,14 @@ func defaultTaskGrants(ctx context.Context, store *model.Store, target *model.Re
 		}
 	}
 	if target != nil {
-		usesGrainCI, err := store.RepoUsesGrainCI(ctx, *target)
-		if err == nil && usesGrainCI {
-			grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
-		} else if err != nil && grainci.RepoUsesGrainCI(repoCfg, *target) {
-			grants = append(grants, model.Grant{Capability: grainci.Grant, Via: model.GrantByDefault})
+		ciDefaults, err := store.RepoCIDefaults(ctx, *target)
+		if err != nil {
+			ciDefaults = model.RepoCIDefaults{GrainCI: grainci.RepoUsesGrainCI(repoCfg, *target)}
+			if !ciDefaults.GrainCI && cfg != nil {
+				ciDefaults = model.RepoCIDefaultsFor(false, cfg.CapabilityPolicy, *target)
+			}
 		}
+		grants = model.AdjustRepoCIGrants(grants, *target, ciDefaults)
 	}
 	return grants, nil
 }
@@ -3199,6 +3420,50 @@ func droppedCustomFieldNote(dropped []string) string {
 		"`"+strings.Join(dropped, "`, `")+"`")
 }
 
+// clampProposalSandboxShape holds asked, a relayed proposal's sandbox
+// shape, to this deployment's maximum (model.SandboxShapeLimits.Max with
+// grain's defaults filled in): a dimension above it is lowered to it, and
+// a negative one is dropped to "not stated". The note, "" when nothing
+// changed, is what the proposal's body says about it. A settings row that
+// cannot be read is grain's default maximum, never no maximum.
+//
+// fromTemplate says the proposal's template filled at least one dimension
+// (its `sandbox:`), so the note does not put the template's size down to
+// the run alone.
+func clampProposalSandboxShape(ctx context.Context, store *model.Store, asked model.SandboxShape, fromTemplate bool) (model.SandboxShape, string) {
+	var limits model.SandboxShapeLimits
+	if cfg, err := store.GetConfig(ctx); err == nil && cfg != nil {
+		limits = cfg.SandboxShapeLimits
+	}
+	ceiling := limits.ResolvedMax()
+	out := asked
+	var changed []string
+	clamp := func(name string, v *int, limit int) {
+		switch {
+		case *v < 0:
+			changed = append(changed, fmt.Sprintf("%s %d (dropped)", name, *v))
+			*v = 0
+		case *v > limit:
+			changed = append(changed, fmt.Sprintf("%s %d (lowered to %d)", name, *v, limit))
+			*v = limit
+		}
+	}
+	clamp("sandbox_cpus", &out.CPUs, ceiling.CPUs)
+	clamp("sandbox_memory_mb", &out.MemoryMB, ceiling.MemoryMB)
+	clamp("sandbox_disk_gb", &out.DiskGB, ceiling.DiskGB)
+	if len(changed) == 0 {
+		return out, ""
+	}
+	asker := "the run that proposed this asked for"
+	if fromTemplate {
+		asker = "this proposal, with its template's `sandbox:` filled in, asks for"
+	}
+	return out, fmt.Sprintf("\n\n---\n\ngrain: %s a sandbox this deployment "+
+		"does not give any task (most it allows: %s), so it was filed at what the deployment allows: %s. "+
+		"An operator can raise sandboxShapeLimits in settings if the work needs more.",
+		asker, ceiling.Describe(), strings.Join(changed, ", "))
+}
+
 // droppedNetworkAccessNote is what a human approving the proposal reads
 // in place of a network_access the run asked for and grain has no
 // sandbox for. The proposal carries no override instead, so it runs on
@@ -3249,7 +3514,7 @@ func proposalDefaultBranches(client github.Client) func(model.RepoRef) string {
 		if def, ok := known[key]; ok {
 			return def
 		}
-		def, err := client.DefaultBranch(repo.Owner, repo.Name)
+		def, err := client.DefaultBranch(repo.StoredOwner(), repo.Name)
 		if err != nil {
 			log.Printf("orchestrator: reading %s's default branch to judge a proposal's base: %v "+
 				"-- comparing bases as written", repo, err)
@@ -3663,7 +3928,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 
 	branch := task.BranchName()
 	prRepo, headRef, crossRepo := taskPullRequestTarget(ctx, store, task)
-	if existing, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef); err != nil {
+	if existing, err := client.FindOpenPullRequestForBranch(prRepo.StoredOwner(), prRepo.Name, headRef); err != nil {
 		return github.PullRequest{}, landedWork{}, err
 	} else if existing != nil {
 		refreshPullRequest(ctx, store, client, task, existing.Number)
@@ -3696,7 +3961,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 
 	if !crossRepo && task.Target != nil {
 		if behind, err := branchIsBehind(client, *task.Target, base, branch); err == nil && behind {
-			_, mergeErr := client.MergeBranch(task.Target.Owner, task.Target.Name, branch, base, fmt.Sprintf("Merge %s into %s", base, branch))
+			_, mergeErr := client.MergeBranch(task.Target.StoredOwner(), task.Target.Name, branch, base, fmt.Sprintf("Merge %s into %s", base, branch))
 			if mergeErr != nil {
 				if github.IsMergeConflict(mergeErr) {
 					files := github.ConflictFiles(mergeErr)
@@ -3748,7 +4013,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 	if landed.partial() {
 		body = landed.partialSentence() + "\n\n" + body
 	}
-	pr, err := client.CreatePullRequest(prRepo.Owner, prRepo.Name, headRef, base, title, body)
+	pr, err := client.CreatePullRequest(prRepo.StoredOwner(), prRepo.Name, headRef, base, title, body)
 	if err != nil && github.IsNoCommitsBetween(err) {
 		// The same condition, learnt from GitHub instead of from the
 		// compare: the read above failed, or the branch moved between the
@@ -3822,7 +4087,7 @@ func conflictError(err error) (*mergeConflictError, bool) {
 // branchIsBehind reports whether head is behind base on repo -- that is,
 // whether base carries commits that head does not yet contain.
 func branchIsBehind(client github.Client, repo model.RepoRef, base, head string) (bool, error) {
-	comp, err := client.CompareRefs(repo.Owner, repo.Name, base, head)
+	comp, err := client.CompareRefs(repo.StoredOwner(), repo.Name, base, head)
 	if err != nil {
 		if notFound(err) {
 			return false, nil
@@ -3876,7 +4141,7 @@ func branchIsBehind(client github.Client, repo model.RepoRef, base, head string)
 func pullRequestBase(ctx context.Context, store *model.Store, client github.Client, task model.Task) (base, retargetedFrom string, err error) {
 	prRepo, _, _ := taskPullRequestTarget(ctx, store, task)
 	if task.Base != "" {
-		exists, err := client.BranchExists(prRepo.Owner, prRepo.Name, task.Base)
+		exists, err := client.BranchExists(prRepo.StoredOwner(), prRepo.Name, task.Base)
 		if err != nil {
 			return "", "", fmt.Errorf("orchestrator: checking %s's base branch %q: %w", task.ID, task.Base, err)
 		}
@@ -3885,13 +4150,13 @@ func pullRequestBase(ctx context.Context, store *model.Store, client github.Clie
 		}
 		if store != nil {
 			if targetBase, _, merged, err := store.MergedUpstreamTaskBase(ctx, *task.Target, task.Base); err == nil && merged && targetBase != "" && targetBase != task.Base && targetBase != task.BranchName() {
-				if targetExists, err := client.BranchExists(prRepo.Owner, prRepo.Name, targetBase); err == nil && targetExists {
+				if targetExists, err := client.BranchExists(prRepo.StoredOwner(), prRepo.Name, targetBase); err == nil && targetExists {
 					return targetBase, task.Base, nil
 				}
 			}
 		}
 	}
-	def, err := client.DefaultBranch(prRepo.Owner, prRepo.Name)
+	def, err := client.DefaultBranch(prRepo.StoredOwner(), prRepo.Name)
 	if err != nil {
 		return "", "", err
 	}
@@ -3920,23 +4185,23 @@ func seedEmptyRepoBase(ctx context.Context, store *model.Store, client github.Cl
 	if targetBase == "" || targetBase == branch {
 		targetBase = "main"
 	}
-	head, err := client.GetBranchHead(task.Target.Owner, task.Target.Name, branch)
+	head, err := client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, branch)
 	if err != nil {
 		return github.PullRequest{}, landedWork{}, fmt.Errorf("reading %s's tip on %s: %w", branch, task.Target, err)
 	}
 	if head == nil || head.SHA == "" {
 		return github.PullRequest{}, landedWork{}, fmt.Errorf("branch %q on %s has no head commit", branch, task.Target)
 	}
-	exists, err := client.BranchExists(task.Target.Owner, task.Target.Name, targetBase)
+	exists, err := client.BranchExists(task.Target.StoredOwner(), task.Target.Name, targetBase)
 	if err != nil {
 		return github.PullRequest{}, landedWork{}, fmt.Errorf("checking %q on %s: %w", targetBase, task.Target, err)
 	}
 	if !exists {
-		if err := client.CreateBranch(task.Target.Owner, task.Target.Name, targetBase, head.SHA); err != nil {
+		if err := client.CreateBranch(task.Target.StoredOwner(), task.Target.Name, targetBase, head.SHA); err != nil {
 			return github.PullRequest{}, landedWork{}, fmt.Errorf("initializing %q on empty repository %s: %w", targetBase, task.Target, err)
 		}
 	}
-	if err := client.SetDefaultBranch(task.Target.Owner, task.Target.Name, targetBase); err != nil {
+	if err := client.SetDefaultBranch(task.Target.StoredOwner(), task.Target.Name, targetBase); err != nil {
 		return github.PullRequest{}, landedWork{}, fmt.Errorf("setting default branch of %s to %q: %w", task.Target, targetBase, err)
 	}
 	if store != nil {
@@ -4049,11 +4314,11 @@ func retargetTaskBase(ctx context.Context, store *model.Store, client github.Cli
 	}
 	if prBaseRef == "" && client != nil {
 		if pr := model.TaskPullRequest(task); pr != nil && (pr.Repo.Same(*task.Target) || pr.Repo.Same(prRepo)) {
-			if detail, err := client.GetPullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number); err == nil {
+			if detail, err := client.GetPullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number); err == nil {
 				prBaseRef = detail.BaseRef
 			}
-		} else if existing, err := client.FindOpenPullRequestForBranch(prRepo.Owner, prRepo.Name, headRef); err == nil && existing != nil {
-			if detail, err := client.GetPullRequest(prRepo.Owner, prRepo.Name, existing.Number); err == nil {
+		} else if existing, err := client.FindOpenPullRequestForBranch(prRepo.StoredOwner(), prRepo.Name, headRef); err == nil && existing != nil {
+			if detail, err := client.GetPullRequest(prRepo.StoredOwner(), prRepo.Name, existing.Number); err == nil {
 				prBaseRef = detail.BaseRef
 			}
 		}
@@ -4063,12 +4328,12 @@ func retargetTaskBase(ctx context.Context, store *model.Store, client github.Cli
 		if prBaseRef != "" && prBaseRef != oldBase {
 			newBase = prBaseRef
 		} else if newBase == "" && client != nil {
-			if def, err := client.DefaultBranch(prRepo.Owner, prRepo.Name); err == nil && def != "" && def != task.BranchName() {
+			if def, err := client.DefaultBranch(prRepo.StoredOwner(), prRepo.Name); err == nil && def != "" && def != task.BranchName() {
 				newBase = def
 			}
 		}
 	} else if prBaseRef != "" && prBaseRef != oldBase && client != nil {
-		if exists, err := client.BranchExists(prRepo.Owner, prRepo.Name, oldBase); err == nil && !exists {
+		if exists, err := client.BranchExists(prRepo.StoredOwner(), prRepo.Name, oldBase); err == nil && !exists {
 			merged = true
 			newBase = prBaseRef
 		}
@@ -4201,8 +4466,13 @@ func emptyBranchDetail(empty *noCommitsError) string {
 // call replaces what an earlier one asked for. Its detail keeps the
 // words a park always had (model.ParkedDetail, ParkedUntilDetail), which
 // the next prompt reads back, for the two forms that are parks.
-func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
+//
+// task is the task as the run was dispatched with it, before any park it
+// made: parkLinks checks the run's word on which links its parks wrote
+// against the links that were already there.
+func requestedSuspension(ctx context.Context, store *model.Store, task model.Task,
 	result *agent.Result) (model.Suspension, bool, error) {
+	taskID := task.ID
 	susp := model.Suspension{Kind: model.SuspendRequested}
 	targets, err := parkedOn(ctx, store, taskID, result)
 	if err != nil {
@@ -4214,7 +4484,8 @@ func requestedSuspension(ctx context.Context, store *model.Store, taskID string,
 		if reason = strings.TrimSpace(reason); reason != "" {
 			susp.Detail += ": " + reason
 		}
-		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged || parkedUntilMerged(result)}.JSON()
+		susp.ResumeOn = model.ResumeOn{Tasks: targets, UntilMerged: when.UntilMerged || parkedUntilMerged(result),
+			Links: parkLinks(result, targets, task.Links)}.JSON()
 		return susp, true, nil
 	}
 	if until, ok := parkedUntil(result); ok {
@@ -4305,6 +4576,50 @@ func parkedUntilMerged(result *agent.Result) bool {
 	return merged
 }
 
+// parkLinks is the targets, of those a run parked on, whose depends-on
+// links its parks wrote rather than found already declared
+// (model.ResumeOn.Links), as each park's result says the daemon took it
+// (mcp.ResumeLaterTaken). A run may park more than once, and only the
+// first park on a target writes its link, so these are gathered over
+// every park the run made.
+//
+// The tool results are the run's own transcript, so they are not taken
+// on their word: the resumption deletes every link named here, and a
+// result that named one the task already had before the run (before)
+// would strip a declared dependency. Those are dropped, whatever the
+// result says.
+func parkLinks(result *agent.Result, targets []string, before []model.Link) []string {
+	if result == nil {
+		return nil
+	}
+	var links []string
+	for _, c := range result.ToolCalls {
+		if c.IsError || (c.Name != "resume_later" && c.Name != "wait_for_task") {
+			continue
+		}
+		taken, ok := mcp.ResumeLaterTaken(c.Text)
+		if !ok {
+			continue
+		}
+		for _, id := range taken.Links {
+			if slices.Contains(targets, id) && !slices.Contains(links, id) && !dependsOnBefore(before, id) {
+				links = append(links, id)
+			}
+		}
+	}
+	return links
+}
+
+// dependsOnBefore reports whether links has a depends-on link to id.
+func dependsOnBefore(links []model.Link, id string) bool {
+	for _, l := range links {
+		if l.Kind == model.LinkDependsOn && l.Target == id {
+			return true
+		}
+	}
+	return false
+}
+
 // parkedOn is the tasks a run parked its task on through wait_for_task,
 // or resume_later's task form, or nil if it did not park.
 //
@@ -4353,6 +4668,23 @@ func parkedOn(ctx context.Context, store *model.Store, taskID string, result *ag
 		}
 	}
 	return parked, nil
+}
+
+// ciReadGrantAsReadsNote is the line added to a proposal whose grant was
+// a CI job's read access to repo (repo-read:<repo>), filed as the reads
+// entry a task reads another repository through instead.
+func ciReadGrantAsReadsNote(grant string, repo model.RepoRef) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for `%s`, a CI capability that no task "+
+		"run is handed, so it was filed with `reads: [%q]` instead -- a task's own read access to %s.",
+		grant, repo.String(), repo)
+}
+
+// ciOnlyGrantRefusedNote is the line added to a proposal whose grant was
+// a CI capability with no task equivalent (model.TaskGrantCIOnlyRefusal),
+// dropped for it with grain's own reason.
+func ciOnlyGrantRefusedNote(grant, why string) string {
+	return fmt.Sprintf("\n\n---\n\ngrain: this proposal asked for `%s`, so it was filed without that "+
+		"grant: %s", grant, why)
 }
 
 // reviewOfGrantRefusedNote is the line added to a proposal whose grant
@@ -4460,18 +4792,18 @@ func resolveContextCommitSHA(reach *gitproxy.Reach, client github.Client, repo m
 		ResolveCommitSHA(owner, repo, ref string) (string, error)
 	}
 	if r, ok := client.(shaResolver); ok {
-		if sha, err := r.ResolveCommitSHA(repo.Owner, repo.Name, ref); err == nil && model.IsFullCommitSHA(sha) {
+		if sha, err := r.ResolveCommitSHA(repo.StoredOwner(), repo.Name, ref); err == nil && model.IsFullCommitSHA(sha) {
 			return strings.ToLower(sha), nil
 		}
 	}
 	if client != nil {
 		lookup := ref
 		if lookup == "HEAD" {
-			if def, err := client.DefaultBranch(repo.Owner, repo.Name); err == nil && def != "" {
+			if def, err := client.DefaultBranch(repo.StoredOwner(), repo.Name); err == nil && def != "" {
 				lookup = def
 			}
 		}
-		if head, err := client.GetBranchHead(repo.Owner, repo.Name, lookup); err == nil && head != nil && model.IsFullCommitSHA(head.SHA) {
+		if head, err := client.GetBranchHead(repo.StoredOwner(), repo.Name, lookup); err == nil && head != nil && model.IsFullCommitSHA(head.SHA) {
 			return strings.ToLower(head.SHA), nil
 		}
 	}

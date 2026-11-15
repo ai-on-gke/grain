@@ -19,6 +19,7 @@
 // Part of the App suite -- see App.test.jsx for why it is six files.
 
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -29,6 +30,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App, { LOADING_PANE_DELAY_MS, POLL_INTERVAL_MS } from "./App.jsx";
 import api from "./api.js";
+import { isTaskDetailGetPath } from "./taskDetailPages.js";
+import { navigateInApp } from "./commentLinks.js";
 import {
   config,
   initialTasks,
@@ -175,7 +178,7 @@ describe("App", () => {
     const realImpl = api.getMockImplementation();
     let release;
     api.mockImplementation((path, opts) => {
-      if (path === "/api/tasks/1" && opts?.poll) {
+      if (isTaskDetailGetPath(path, "1") && opts?.poll) {
         return new Promise((resolve) => {
           release = () => resolve(realImpl(path, { method: "GET" }));
         });
@@ -211,6 +214,60 @@ describe("App", () => {
     ).not.toBeInTheDocument();
   });
 
+  // The same tick's read can also be overtaken on the same task: asked
+  // for before a mutation landed and answered after act()'s own re-read,
+  // it put back what the mutation had just changed -- a grant just
+  // removed reappeared on the pane until the next tick (task 4828, the
+  // grant matrix's github#sandbox-repo flake).
+  it("drops a polled detail that an act's own re-read overtook", async () => {
+    vi.useFakeTimers();
+    setupApi();
+    const realImpl = api.getMockImplementation();
+    let held = ["legacy-cap"];
+    const detailOf = async (path) => ({
+      ...(await realImpl(path, { method: "GET" })),
+      capabilities: [...held],
+    });
+    let release = null;
+    let holdNext = false;
+    api.mockImplementation((path, opts) => {
+      if (path === "/api/tasks/1/capabilities" && opts?.method === "POST") {
+        held = [];
+        return Promise.resolve({});
+      }
+      if (isTaskDetailGetPath(path, "1")) {
+        if (opts?.poll && holdNext) {
+          holdNext = false;
+          // Answered now, before the removal; delivered after it.
+          const stale = detailOf(path);
+          return new Promise((resolve) => {
+            release = () => resolve(stale);
+          });
+        }
+        return detailOf(path);
+      }
+      return realImpl(path, opts);
+    });
+    window.history.replaceState(null, "", "/tasks/1");
+    render(<App />);
+    await runTimers();
+    const remove = () =>
+      screen.queryByRole("button", { name: "Remove legacy-cap" });
+    expect(remove()).toBeInTheDocument();
+
+    holdNext = true;
+    await runTimers(POLL_INTERVAL_MS);
+    expect(release).toBeTypeOf("function");
+
+    fireEvent.click(remove());
+    await runTimers();
+    expect(remove()).not.toBeInTheDocument();
+
+    release();
+    await runTimers();
+    expect(remove()).not.toBeInTheDocument();
+  });
+
   // Two opens in quick succession start two fetches, and the one the
   // user asked for last is the one the pane should land on, whichever
   // answers last.
@@ -220,7 +277,7 @@ describe("App", () => {
     const realImpl = api.getMockImplementation();
     let release;
     api.mockImplementation((path, opts) => {
-      if (path === "/api/tasks/1" && !opts?.poll) {
+      if (isTaskDetailGetPath(path, "1") && !opts?.poll) {
         return new Promise((resolve) => {
           release = () => resolve(realImpl(path, opts));
         });
@@ -261,7 +318,7 @@ describe("App", () => {
     const realImpl = api.getMockImplementation();
     let release;
     api.mockImplementation((path, opts) => {
-      if (path === "/api/tasks/1" && !opts?.poll) {
+      if (isTaskDetailGetPath(path, "1") && !opts?.poll) {
         return new Promise((resolve) => {
           release = () => resolve(realImpl(path, opts));
         });
@@ -304,7 +361,7 @@ describe("App", () => {
     const realImpl = api.getMockImplementation();
     let release;
     api.mockImplementation((path, opts) => {
-      if (path === "/api/tasks/2" && !opts?.poll) {
+      if (isTaskDetailGetPath(path, "2") && !opts?.poll) {
         return new Promise((resolve) => {
           release = () => resolve(realImpl(path, opts));
         });
@@ -346,7 +403,7 @@ describe("App", () => {
     setupApi();
     const realImpl = api.getMockImplementation();
     api.mockImplementation((path, opts) => {
-      if (path === "/api/tasks/1" && !opts?.poll) {
+      if (isTaskDetailGetPath(path, "1") && !opts?.poll) {
         return Promise.reject(new Error("task 1 is gone"));
       }
       return realImpl(path, opts);
@@ -370,7 +427,7 @@ describe("App", () => {
     const realImpl = api.getMockImplementation();
     let release;
     api.mockImplementation((path, opts) => {
-      if (path === "/api/tasks/1" && !opts?.poll) {
+      if (isTaskDetailGetPath(path, "1") && !opts?.poll) {
         return new Promise((resolve) => {
           release = () => resolve(realImpl(path, opts));
         });
@@ -437,7 +494,7 @@ describe("App", () => {
     const base = api.getMockImplementation();
     let failing = true;
     api.mockImplementation((p, opts) => {
-      if (failing && p === "/api/tasks/1") {
+      if (failing && isTaskDetailGetPath(p, "1")) {
         const err = new Error("500 Internal Server Error");
         err.status = 500;
         return Promise.reject(err);
@@ -470,7 +527,7 @@ describe("App", () => {
     const base = api.getMockImplementation();
     let failing = true;
     api.mockImplementation((p, opts) =>
-      failing && p === "/api/tasks/1"
+      failing && isTaskDetailGetPath(p, "1")
         ? Promise.reject(new TypeError("Failed to fetch"))
         : base(p, opts),
     );
@@ -496,7 +553,7 @@ describe("App", () => {
     setupApi();
     const base = api.getMockImplementation();
     api.mockImplementation((p, opts) => {
-      if (p === "/api/tasks/1") {
+      if (isTaskDetailGetPath(p, "1")) {
         const err = new Error("no such task");
         err.status = 404;
         return Promise.reject(err);
@@ -538,6 +595,47 @@ describe("App", () => {
     expect(push).not.toHaveBeenCalled();
     expect(window.history.length).toBe(length);
     push.mockRestore();
+  });
+
+  // ...including when Back and Forward come before the task has loaded:
+  // that is two loads of one task, and the first one answering used to
+  // release the second's hold on the URL effect while it still fetched,
+  // so the page behind the pane was pushed over /tasks/1#comment=…, and
+  // the pane arriving after it pushed /tasks/1 without the fragment
+  // (ui/e2e/responsive-navigation-walkthrough.spec.js, under load).
+  it("keeps the address when Back and Forward beat a task's load", async () => {
+    setupApi();
+    const base = api.getMockImplementation();
+    const loads = [];
+    api.mockImplementation((p, opts) =>
+      isTaskDetailGetPath(p, "1")
+        ? new Promise((resolve) =>
+            loads.push(() => base(p, opts).then(resolve)),
+          )
+        : base(p, opts),
+    );
+    render(<App />);
+    await screen.findByText("Fix bug");
+
+    act(() => navigateInApp("/tasks/1#comment=1"));
+    await waitFor(() => expect(loads).toHaveLength(1));
+    window.history.back();
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    const push = vi.spyOn(window.history, "pushState");
+    const replace = vi.spyOn(window.history, "replaceState");
+    window.history.forward();
+    await waitFor(() => expect(loads).toHaveLength(2));
+
+    await act(async () => loads[0]());
+    await act(async () => loads[1]());
+    await screen.findByRole("heading", { name: /Fix bug/ });
+    expect(window.location.pathname + window.location.hash).toBe(
+      "/tasks/1#comment=1",
+    );
+    expect(push).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+    push.mockRestore();
+    replace.mockRestore();
   });
 
   it("discards a field edit when a dependency opens another task", async () => {
@@ -826,7 +924,7 @@ describe("App", () => {
     expect(api).toHaveBeenCalledWith("/api/tasks/2", patch);
 
     expect(
-      await screen.findByText(`1 of 2 task(s) failed: ${refusal}`),
+      await screen.findByText(`1 of 2 tasks failed: ${refusal}`),
     ).toBeInTheDocument();
 
     // Half the edit happened, and the store behind the list says which

@@ -90,7 +90,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 			keys := append([]string{e.Name}, e.Keys...)
 			return list.matches(keys...)
 		})
-		page := pageOf(matched, list)
+		page := pageOfBy(matched, list, func(e secretEntry) string { return e.Name })
 		resp.Secrets = page.Items
 		resp.Total = page.Total
 		resp.Truncated = page.Truncated

@@ -17,6 +17,8 @@ package model
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -35,6 +37,52 @@ var SchedulePrincipal = Principal{Kind: PrincipalAutomation, ID: "schedule"}
 // awaiting a reply, or otherwise unclosed) does not pile up a second one
 // on top of it.
 func ScheduleFiringTag(scheduleID string) string { return "schedule:" + scheduleID }
+
+// ScheduleOverlapGroupTag is the tag every task filed by a schedule in
+// overlap group group, firing into repo, carries beside its own
+// ScheduleFiringTag (Schedule.OverlapGroup, grain/task-3895) -- what
+// keeps the group held by a task whose schedule has since been renamed
+// or withdrawn. The repository is part of it, so the same group name in
+// two repositories is two groups. Empty when there is no group.
+func ScheduleOverlapGroupTag(repo RepoRef, group string) string {
+	group = strings.TrimSpace(group)
+	if repo == (RepoRef{}) || group == "" {
+		return ""
+	}
+	return scheduleGroupTagPrefix + repo.String() + ":" + group
+}
+
+const scheduleGroupTagPrefix = "schedule-group:"
+
+// scheduleFiringTags is the tags a task sched files carries: its own
+// firing tag, its overlap group's when it has one and is set to skip,
+// and whatever else the caller adds.
+func scheduleFiringTags(sched Schedule, repo RepoRef, extra ...string) []string {
+	tags := []string{ScheduleFiringTag(sched.ID)}
+	if !sched.Overlap.Allows() {
+		if gt := ScheduleOverlapGroupTag(repo, sched.OverlapGroup); gt != "" {
+			tags = append(tags, gt)
+		}
+	}
+	return append(tags, extra...)
+}
+
+// overlapGroupHold is the group half of the overlap check for a schedule
+// set to skip: the firing held by another schedule in its group, as the
+// ScheduleFiring every fireXSchedule returns for it, or nil.
+func (s *Store) overlapGroupHold(ctx context.Context, sched Schedule, repo RepoRef,
+	now time.Time) (*ScheduleFiring, error) {
+
+	if sched.Overlap.Allows() || sched.OverlapGroup == "" {
+		return nil, nil
+	}
+	sup, err := s.OverlapGroupInFlight(ctx, sched, repo, now)
+	if err != nil || sup == nil {
+		return nil, err
+	}
+	return &ScheduleFiring{Skipped: true, OpenReview: sup.openReviewID(),
+		Skip: s.overlapGroupSkip(ctx, sched, now, *sup)}, nil
+}
 
 // ScheduleFiring is what one firing actually did -- what a caller needs
 // to say so afterwards, which is the whole reason firing lives here
@@ -572,6 +620,12 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 	// the skip would name the task while SuppressedFiring named the
 	// switch.
 	tag := ScheduleFiringTag(sched.ID)
+	// The repository the group is scoped to is the one this firing goes
+	// into, for the reason the target-repo check above asks it.
+	groupRepo := sched.Target
+	if comp.Target != nil {
+		groupRepo = *comp.Target
+	}
 	standing := tmpl != nil && IsStandingTemplateID(tmpl.ID)
 	// A standing template asks whatever the overlap policy says: it is
 	// one task by definition, so OverlapAllow cannot mean a second one.
@@ -583,6 +637,14 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 			return ScheduleFiring{}, fmt.Errorf("checking for a previous unfinished firing: %w", err)
 		}
 		if open != nil && standing {
+			// Waking a standing job is a firing too, so another schedule
+			// in its group still running holds it.
+			if held, err := s.overlapGroupHold(ctx, sched, groupRepo, now); err != nil || held != nil {
+				if err != nil {
+					return ScheduleFiring{}, err
+				}
+				return *held, nil
+			}
 			if err := s.applyStandingDeclarations(ctx, open.ID, *tmpl, now); err != nil {
 				return ScheduleFiring{}, err
 			}
@@ -608,6 +670,26 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 				Skip: s.overlapSkip(ctx, sched, now, SuppressedByOpenTask, open.ID)}, nil
 		}
 	}
+	// The group's check, after the schedule's own: its own previous
+	// firing is the more useful thing to name when both are true.
+	if held, err := s.overlapGroupHold(ctx, sched, groupRepo, now); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
+	// A condition the schedule declared (Schedule.SkipWhen), after both:
+	// a previous firing still going is the more useful thing to name.
+	base := comp.Base
+	if base == "" {
+		base = sched.Base
+	}
+	if held, err := s.publishingHeldFiring(ctx, sched, groupRepo, base, now, advance); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
 
 	// What a repository's declaration asked for, recorded as of this
 	// firing, is what Settings -> Capabilities offers a person to
@@ -615,7 +697,7 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 	if err := noteDeclarationHold(ctx, s.db, comp.DeclarationHold, now); err != nil {
 		return ScheduleFiring{}, err
 	}
-	id, err := s.putScheduleTask(ctx, comp, []string{tag}, now)
+	id, err := s.putScheduleTask(ctx, comp, scheduleFiringTags(sched, groupRepo), now)
 	if err != nil {
 		return ScheduleFiring{}, err
 	}
@@ -652,18 +734,48 @@ func (s *Store) fireTaskSchedule(ctx context.Context, sched Schedule, now time.T
 // (Schedule.TemplateID's own doc comment): what a firing does after it
 // files, and what ResyncTemplateSchedules does when the template itself
 // is saved.
+//
+// Admission, Hosting and Grants are not part of that cache, and are left
+// as they are. On a template-backed schedule they are what the schedule
+// adds to its template -- a raise of its admission or hosting, and
+// capabilities beside its grants -- which ComposeScheduleTask merges with
+// the template's at every firing, and which a repository's declared
+// schedule (`admission:`, `hosting:`, `grants:` beside `template:`) or a
+// settings row says. Copying the template's over them, as this used to,
+// filed the schedule's own raise and grants on its first firing only:
+// the row it was read back from next time held the template's, which
+// cannot be told apart from the schedule's own (2026-11-11 capabilities
+// walkthrough, tasks 4519 and 4607).
 func (sc *Schedule) syncTemplateCache(tmpl Template) {
 	sc.Title, sc.Body = tmpl.FilledTitleBody()
-	sc.AutoMerge, sc.Reads, sc.Writes, sc.Grants, sc.CustomFields, sc.NetworkAccess, sc.NothingNeededAction, sc.KeepRunning, sc.Admission, sc.Hosting =
-		tmpl.AutoMerge, tmpl.Reads, tmpl.Writes,
-		tmpl.Grants, tmpl.CustomFields, tmpl.NetworkAccess, tmpl.NothingNeededAction, tmpl.KeepRunning, tmpl.Admission, tmpl.Hosting
-	// Model is not part of that cache: it is the schedule's own
+	sc.AutoMerge, sc.Reads, sc.Writes, sc.CustomFields, sc.NetworkAccess, sc.NothingNeededAction, sc.KeepRunning =
+		tmpl.AutoMerge, tmpl.Reads, tmpl.Writes, tmpl.CustomFields, tmpl.NetworkAccess, tmpl.NothingNeededAction, tmpl.KeepRunning
+	// Model is not part of that cache either: it is the schedule's own
 	// choice, which beats the template's (Schedule.Model), and
 	// copying the template's over it would erase that choice.
 	// Target and Base are part of that cache only while the template
 	// is bound: an unbound one composes against the schedule's own,
 	// so this writes back what was already there.
 	sc.Target, sc.Base = tmpl.FiringTarget(sc.Target, sc.Base)
+}
+
+// WithTemplateSettings is sc's admission, hosting and grants as its
+// firings hold them: tmpl's admission and hosting raised by sc's own, and
+// tmpl's grants with sc's own beside them -- what ComposeScheduleTask
+// files. A template-backed schedule's own columns hold only what it adds
+// to its template (Schedule.Grants), so this is what it is shown as, and
+// what a request resending it is measured against (ui.scheduleFrom).
+func (sc Schedule) WithTemplateSettings(tmpl Template) Schedule {
+	sc.Admission = MaxAdmission(tmpl.Admission, sc.Admission)
+	sc.Hosting = MaxHosting(tmpl.Hosting, sc.Hosting)
+	grants := slices.Clone(tmpl.Grants)
+	for _, g := range sc.Grants {
+		if !slices.ContainsFunc(grants, func(have Grant) bool { return have.Capability == g.Capability }) {
+			grants = append(grants, g)
+		}
+	}
+	sc.Grants = grants
+	return sc
 }
 
 // ResyncTemplateSchedules refreshes the display cache of every schedule
@@ -702,6 +814,9 @@ func (s *Store) ResyncTemplateSchedules(ctx context.Context, tmpl Template) erro
 func (s *Store) putScheduleTask(ctx context.Context, comp Composition, tags []string,
 	now time.Time) (string, error) {
 
+	if err := refuseCompositionSandboxAboveMax(ctx, s.db, comp); err != nil {
+		return "", err
+	}
 	id, err := s.NewTaskID(ctx)
 	if err != nil {
 		return "", fmt.Errorf("allocating an id for %q: %w", comp.Title, err)
@@ -812,6 +927,18 @@ func (s *Store) fireWorkflowSchedule(ctx context.Context, sched Schedule, stem s
 				Skip: s.overlapSkip(ctx, sched, now, reason, hold.heldReview())}, nil
 		}
 		abandoned = hold.Review
+	}
+	if held, err := s.overlapGroupHold(ctx, sched, sched.Target, now); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
+	if held, err := s.publishingHeldFiring(ctx, sched, sched.Target, sched.Base, now, advance); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
 	}
 
 	// Written before the firing is recorded, so that a store this fails
@@ -1079,7 +1206,9 @@ func (s *Store) FileWorkflowReview(ctx context.Context, sched Schedule, row Sche
 	if err != nil {
 		return "", false, err
 	}
-	id, err := s.putScheduleTask(ctx, comp, []string{ScheduleFiringTag(row.ScheduleID), tag}, now)
+	tagged := sched
+	tagged.ID = row.ScheduleID
+	id, err := s.putScheduleTask(ctx, comp, scheduleFiringTags(tagged, row.Repo, tag), now)
 	if err != nil {
 		return "", false, err
 	}
@@ -1175,6 +1304,18 @@ func (s *Store) fireSuiteSchedule(ctx context.Context, sched Schedule, now time.
 				Skip: s.overlapSkip(ctx, sched, now, SuppressedBySuiteRun, "")}, nil
 		}
 	}
+	if held, err := s.overlapGroupHold(ctx, sched, sched.Target, now); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
+	if held, err := s.publishingHeldFiring(ctx, sched, sched.Target, sched.Base, now, advance); err != nil || held != nil {
+		if err != nil {
+			return ScheduleFiring{}, err
+		}
+		return *held, nil
+	}
 
 	suite, err := s.GetSuite(ctx, *sched.SuiteID)
 	if err != nil {
@@ -1183,7 +1324,17 @@ func (s *Store) fireSuiteSchedule(ctx context.Context, sched Schedule, now time.
 	if suite == nil {
 		return ScheduleFiring{}, fmt.Errorf("suite %s no longer exists", *sched.SuiteID)
 	}
-	run, err := s.CreateScheduledSuiteRun(ctx, *suite, sched.Target, sched.Base, sched.ID, now)
+	// Its tasks carry the group's tag, as a task schedule's do
+	// (scheduleFiringTags without the firing tag, which names a task
+	// schedule's own previous firing): what keeps the run holding the
+	// group once this schedule is renamed or withdrawn while it runs.
+	var groupTags []string
+	if !sched.Overlap.Allows() {
+		if gt := ScheduleOverlapGroupTag(sched.Target, sched.OverlapGroup); gt != "" {
+			groupTags = append(groupTags, gt)
+		}
+	}
+	run, err := s.CreateScheduledSuiteRun(ctx, *suite, sched.Target, sched.Base, sched.ID, now, groupTags...)
 	if err != nil {
 		return ScheduleFiring{}, fmt.Errorf("starting a run of suite %s: %w", suite.ID, err)
 	}

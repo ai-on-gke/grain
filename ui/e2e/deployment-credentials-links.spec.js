@@ -124,6 +124,26 @@ test("the Deployment credentials card follows a capability server's own secret w
   ).find((s) => s.id === DEMO);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/settings/capabilities#capability-servers");
+  // The demo server's bearer token goes into the secrets store and the
+  // header names it: a credential typed into a header is refused.
+  const secret = async (method, value) =>
+    page.evaluate(
+      async ([m, v]) =>
+        (
+          await fetch("/api/secrets/links-e2e/token", {
+            method: m,
+            headers: { "Content-Type": "application/json" },
+            body: m === "PUT" ? JSON.stringify({ value: v }) : undefined,
+          })
+        ).status,
+      [method, value],
+    );
+  expect(
+    await secret(
+      "PUT",
+      demo.config.headers.Authorization.replace(/^Bearer /, ""),
+    ),
+  ).toBeLessThan(300);
   await page.getByTestId("capability-server-add-button").click();
   const add = page.getByTestId("capability-server-add");
   await add.getByLabel(/Capability ID/).fill(ID);
@@ -132,7 +152,7 @@ test("the Deployment credentials card follows a capability server's own secret w
   await add.getByLabel(/Server URL/).fill(demo.config.serverUrl);
   await add
     .getByLabel(/Headers/)
-    .fill(`Authorization=${demo.config.headers.Authorization}`);
+    .fill("Authorization=Bearer $secret:links-e2e/token");
   await add.getByRole("button", { name: "Add server" }).click();
   const card = page.locator(`[data-capability-server="${ID}"]`);
   await card.getByRole("button", { name: "Edit server settings" }).click();
@@ -161,4 +181,5 @@ test("the Deployment credentials card follows a capability server's own secret w
   await expect(page.locator("#other-secrets")).not.toContainText(ID);
   await page.reload();
   await expect(page.locator("#other-secrets")).not.toContainText(ID);
+  await secret("DELETE");
 });

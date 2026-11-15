@@ -51,8 +51,10 @@ type AccessCodePrecedence interface {
 // it could not check the header at all rather than found it bad: a
 // backend it consults that is not reachable yet, say just after a
 // restart. Unavailable reporting true makes the refusal a 503 with
-// Retry-After and a "starting up" page rather than the 401 a bad
-// signature gets. It is still a refusal: the request is not admitted
+// Retry-After and a "temporarily unavailable" page (or verifier_unavailable
+// JSON) rather than the 401 a bad signature gets; the error may also have
+// UnavailableReason() string, a machine-readable name for what was not
+// reachable ("tonic_unreachable"), which the JSON carries as `reason`. It is still a refusal: the request is not admitted
 // and neither the access code nor another verifier is consulted.
 type VerifierUnavailableError interface {
 	error
@@ -204,16 +206,6 @@ func WithIAPAudience(audience string) IAPVerifierOption {
 	return webauth.WithIAPAudience(audience)
 }
 
-// WithIAPIssuer pins the expected JWT issuer on an IAP IdentityVerifier.
-func WithIAPIssuer(issuer string) IAPVerifierOption {
-	return webauth.WithIAPIssuer(issuer)
-}
-
-// WithIAPKeysURL pins the public-key endpoint URL on an IAP IdentityVerifier.
-func WithIAPKeysURL(keysURL string) IAPVerifierOption {
-	return webauth.WithIAPKeysURL(keysURL)
-}
-
 type iapVerifier struct {
 	inner *webauth.IAPVerifier
 }
@@ -258,47 +250,14 @@ func (v *iapVerifier) Verify(r *http.Request) (VerifiedIdentity, bool, error) {
 	}, true, nil
 }
 
-// HubVerifierOption configures a registry IdentityVerifier created by NewHubVerifier.
+// HubVerifierOption configures a registry IdentityVerifier created by webauth.NewHubVerifier.
 type HubVerifierOption = webauth.HubVerifierOption
-
-// WithHubValidator overrides JWT validation on a registry IdentityVerifier.
-func WithHubValidator(v HubValidator) HubVerifierOption {
-	return webauth.WithHubValidator(v)
-}
-
-// WithHubAudience pins an expected single-URL audience on a registry
-// IdentityVerifier, taking precedence over request/package defaults.
-func WithHubAudience(audience string) HubVerifierOption {
-	return webauth.WithHubAudience(audience)
-}
-
-// WithHubIssuer pins the expected JWT issuer on a registry IdentityVerifier.
-func WithHubIssuer(issuer string) HubVerifierOption {
-	return webauth.WithHubIssuer(issuer)
-}
-
-// WithHubKeysURL pins the JWKS endpoint URL on a registry IdentityVerifier.
-func WithHubKeysURL(keysURL string) HubVerifierOption {
-	return webauth.WithHubKeysURL(keysURL)
-}
-
-// WithHubVerifierHTTPClient pins an HTTP client for fetching JWKS keys on
-// a registry IdentityVerifier.
-func WithHubVerifierHTTPClient(client *http.Client) HubVerifierOption {
-	return webauth.WithHubVerifierHTTPClient(client)
-}
 
 type hubVerifier struct {
 	inner *webauth.HubVerifier
 }
 
 var defaultHubVerifier IdentityVerifier = &hubVerifier{inner: webauth.NewHubVerifier()}
-
-// NewHubVerifier constructs an IdentityVerifier for grain-registry
-// (X-Grain-Registry-Assertion).
-func NewHubVerifier(opts ...HubVerifierOption) IdentityVerifier {
-	return &hubVerifier{inner: webauth.NewHubVerifier(opts...)}
-}
 
 func (v *hubVerifier) Name() string {
 	return string(AuthMethodHub)
@@ -398,6 +357,11 @@ func verifyCallerNow(r *http.Request) callerVerification {
 	}
 	if isHubTunnelRequest(r) {
 		return verifyHubTunnelCaller(r)
+	}
+	// The API socket's caller is who its uid maps to, whatever headers
+	// it sends (HostAccountHandler dropped them anyway).
+	if a := hostAccountFromContext(r.Context()); a != nil {
+		return hostAccountVerification(a)
 	}
 	for _, v := range activeVerifiers(r.Context()) {
 		headers := v.Headers()

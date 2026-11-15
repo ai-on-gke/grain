@@ -274,12 +274,17 @@ func TestTheStatePaneNamesAndClearsTheSecretsRepository(t *testing.T) {
 	if settings.TokenFile == "" {
 		t.Fatalf("the pasted token was not written anywhere the push can find it: %+v", settings)
 	}
-	token, err := os.ReadFile(settings.TokenFile)
+	// Kept in the secrets store, not as plaintext at that path, and
+	// served to git from there.
+	token, err := daemon.RepoToken(dataDir, settings.Remote, settings.TokenFile)(ctx)
 	if err != nil {
-		t.Fatalf("reading the token file: %v", err)
+		t.Fatalf("resolving the pasted token: %v", err)
 	}
-	if strings.TrimSpace(string(token)) != "ghp_x" {
-		t.Fatalf("the token file holds %q", token)
+	if token != "ghp_x" {
+		t.Fatalf("the pasted token resolves to %q", token)
+	}
+	if _, err := os.Stat(settings.TokenFile); err == nil {
+		t.Fatalf("the pasted token was also written as plaintext to %s", settings.TokenFile)
 	}
 	// And the git proxy is told at once rather than at the next restart:
 	// a repository holding grain's ciphertext is one no sandbox may clone

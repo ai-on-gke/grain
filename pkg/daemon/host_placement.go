@@ -68,7 +68,7 @@ func (c Config) localHostdLogins(ctx context.Context) ([]string, bool) {
 	ctx, cancel := context.WithTimeout(hostd.ForDisplay(ctx), localHostdLoginsTimeout)
 	defer cancel()
 	h, err := exec.hostdClient().Hello(ctx)
-	if err != nil || h.Protocol < 2 {
+	if err != nil || (!h.Has(hostd.FeatureLogins) && len(h.Logins) == 0) {
 		return nil, false
 	}
 	return h.Logins, true

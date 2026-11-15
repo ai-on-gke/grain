@@ -16,8 +16,9 @@ schema migration 132, grain/config's `grants:` read as one key with
 the `release-gate-read` provider retired (§3's "As built" notes say what
 it does and what it left for later). Slice 5 (repository grants in the
 picker) is implemented in [Task #3322](/tasks/3322); see "Slice 5 as
-built" under Slices. Reads and writes are still stored in their own
-tables after both, and
+built" under Slices. Reads and writes stay stored in their own tables.
+[Task #3882](/tasks/3882) decided to keep them there, with a grant
+projection and a deny-only policy check (§3, slice 4), and
 slice 6, the per-capability conversions of §4, is mostly done; §4's
 table says which, and the remaining slices and conversions are filed from
 [Task #3274](/tasks/3274). The overview of capabilities as a whole is
@@ -227,6 +228,45 @@ once with a fidelity test.**
   editing reads and writes in the picker as lists, so moving it is a
   follow-up of its own; until then `TaskRepoGrants` is the projection,
   as for `#target` (Q2).
+  *Storage decision ([Task #3882](/tasks/3882)):* the read and write
+  tables (`task_read`/`task_write`, `template_*`, `schedule_*`) **stay
+  the source of truth, and are not mirrored** into the grant tables.
+  `Target`/`Base` stay columns (Q2) for the same reason. About thirty SQL
+  sites join the read/write tables directly: the `task_ready` view,
+  `pkg/dispatch`, `pkg/orchestrator` (liveness, targetrepos, cycle),
+  `pkg/metrics`, the postgres adapter, `pkg/trustboundary`, the repo-case
+  renames, and the grain/config import. Moving them all is one large
+  change with nothing to gain at its end. A mirror would be a second copy
+  every one of those writers had to keep in step. It would also be a
+  `#read` row in `task_grant` that every grant reader (admission,
+  prompts, the catalogue, the export) had to learn to skip. The grant form
+  is a pair of functions at the model boundary instead.
+  `model.TaskRepoGrants` projects Reads and Writes to `…/repo#read {repo}`
+  and `…/repo#write {repo, base}`. `model.TaskRepoAccessOf` is its
+  inverse: it reads grant rows back into Reads and Writes and leaves every
+  other grant (`#target`, a CI job's `{repo}`-only `#write`, a `refs`
+  widening) where it was. A future move of storage would use the same two
+  functions at Store load and save. The fidelity test
+  (`TestRepoAccessReadBackFromGrantRowsKeepsItsAnswers`, beside migration
+  132's) stores each fixture's access as those grant rows in `task_grant`,
+  `template_grant` and `schedule_grant`, and reads it back through
+  `TaskRepoAccessOf`. The result must be the same access, and
+  `UngrantedWrites`, `UngrantedReads`, `LandsWhereGranted`, `SameBranch`,
+  `TemplateWithinTask` (its `mayRead` and `WriteTargetFor`) and the
+  policy must give the same answer for every (proposer, child) pair.
+  *Policy:* a task's own access goes through
+  `CapabilityPolicy.PermitsTaskRepoGrant`. That is `Permits` without the
+  CI-only refusal, and it applies deny rules only: who may read or push a
+  repository is still for `mayRead`/`UngrantedWrites` to decide, so the
+  policy can narrow access but never has to admit it. An allow rule
+  written for CI jobs' `{repo}` grants therefore refuses no task. What
+  sets a task's access apart from a CI job's `#read {repo}`, which has
+  the same shape, is where it comes from: Reads, never `task_grant`.
+  `Permits` still refuses a `#read` in a task's capabilities as a CI
+  grant pasted onto a task. Admission (`checkTaskGrantsPolicy`) applies
+  the check to every task that reads or writes beyond its target, so a
+  deny rule on `…/repo#write` for `runKinds: [task]` now holds such a
+  task back.
 - **State-repo export (grain/config).** The exported YAML gains
   `grants:` lists. `capabilities:`, `reads:` and `writes:` keep being
   read (`declschema`), and for a release keep being *written* beside
@@ -245,6 +285,26 @@ once with a fidelity test.**
   (`decodeCompanion`), so writing `#read`/`#write` there would hand its
   template tasks a CI-only grant. Writing them into `grants:` as well
   lands with that follow-up, a release after this reader.
+  *As built ([Task #4063](/tasks/4063)):* the reader (merge `29192f3f8`)
+  shipped in `v3.5.0`. The export now writes each read row as
+  `…/repo#read {repo}` and each write row as `…/repo#write {repo, base}`
+  under `grants:`, after the entry's own grant rows
+  (`repoGrantEntries`), and still writes `reads:`/`writes:`. A row whose
+  repository is not a plain `owner/name` on the default host goes under
+  `reads:`/`writes:` only. On import the two spellings collapse into one
+  row, so export → import → export is stable
+  (`TestRepoAccessExportedAsGrantsRoundTrips`).
+  *As built ([Task #5460](/tasks/5460)):* Task #4063's merge
+  (`02b08e160`) shipped in `v3.8.0`. The export no longer writes a plain
+  `owner/name` read or write row under `reads:`/`writes:`: such a row is
+  written once, under `grants:` (`repoGrantEntry`). `reads:`/`writes:`
+  are still written for the rows a grant cannot carry -- a repository
+  off the default host, or a write row whose base is NULL -- so no row is
+  lost. The import still reads `reads:`/`writes:` (`declschema`), so a
+  grain/config written by an older release keeps loading, and export →
+  import → export stays byte-for-byte stable
+  (`TestRepoAccessExportedAsGrantsRoundTrips`,
+  `TestSettingsGrantsAndReadsWritesAreOneKey`).
 - **Repository declarations.** `.grain/templates/*.yml` and
   `.grain/schedules/*.yml` accept `grants:` beside `capabilities:`,
   `reads:`, `writes:` and `push:` indefinitely. These live in other
@@ -271,8 +331,12 @@ the rows not marked **done**:
 `capability.RegisterProvider` seam and the Settings → Legacy capabilities
 tab are removed; the tab's GitHub host, GCP settings and secrets are the
 Deployment credentials card on Settings → Capabilities. The bare names
-remain one-release aliases (no promoted release contains every
-conversion yet). The task forms' empty Legacy capabilities checklist
+stayed aliases for one release; once v3.3.0 carried every conversion
+they were dropped (task 3621): `model.CanonicalLegacyGrant(s)` now
+rewrites only an alias a build outside core registers, and the
+migration-only copy of the table (`model.RetiredGrantsBecame`) serves
+the state-repository import and a catalogue still naming a retired
+capability. Every migration that rewrites them stays. The task forms' empty Legacy capabilities checklist
 is removed too (PR #985).
 
 | In-process id | Becomes (proposed) | Kind of change |

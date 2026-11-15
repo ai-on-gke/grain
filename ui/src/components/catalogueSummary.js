@@ -34,42 +34,43 @@ const BUILTIN_PRESETS = new Set([
 
 const RETIRED_IN_PROCESS = {
   "team-broadcast": {
-    grant: "api:grain/team-broadcast",
+    grant: "https://grain.dev/capabilities/api#grain/team-broadcast",
     preset: "team-broadcast",
     scopeSet: "grain/team-broadcast",
   },
   "dispatch-control": {
-    grant: "api:grain/dispatch-control",
+    grant: "https://grain.dev/capabilities/api#grain/dispatch-control",
     preset: "dispatch-control",
     scopeSet: "grain/dispatch-control",
   },
   "pipeline-control": {
-    grant: "api:grain/pipeline-control",
+    grant: "https://grain.dev/capabilities/api#grain/pipeline-control",
     preset: "pipeline-control",
     scopeSet: "grain/pipeline-control",
   },
   memory: {
-    grant: "api:grain/memory",
+    grant: "https://grain.dev/capabilities/api#grain/memory",
     preset: "memory",
     scopeSet: "grain/memory",
   },
   "release-notes": {
-    grant: "api:grain/release-notes",
+    grant: "https://grain.dev/capabilities/api#grain/release-notes",
     preset: "release-notes",
     scopeSet: "grain/release-notes",
   },
   "self-upgrade": {
-    grant: "api:grain/self-upgrade",
+    grant: "https://grain.dev/capabilities/api#grain/self-upgrade",
     preset: "self-upgrade",
     scopeSet: "grain/self-upgrade",
   },
   "test-quarantine": {
-    grant: "api:grain/test-quarantine",
+    grant: "https://grain.dev/capabilities/api#grain/test-quarantine",
     preset: "test-quarantine",
     scopeSet: "grain/test-quarantine",
   },
   "deployment-health": {
-    grant: "api:deployment:read + https://grain.dev/capabilities/grain#health",
+    grant:
+      "https://grain.dev/capabilities/api#deployment:read + https://grain.dev/capabilities/grain#health",
     moveTo:
       'api_scopes.raw_scopes["deployment:read"] and servers (https://grain.dev/capabilities/grain#health)',
   },
@@ -196,7 +197,7 @@ export function summariseCatalogueEntries(catalogue) {
     const scopeSet = presetScopeSet(key);
     items.push({
       key: `preset:${key}`,
-      target: `api:${scopeSet}`,
+      target: `https://grain.dev/capabilities/api#${scopeSet}`,
       source: `api_scopes.presets.${key}`,
       details,
       retired: false,
@@ -251,7 +252,7 @@ export function summariseCatalogueEntries(catalogue) {
     if (details.length === 0) continue;
     items.push({
       key: `raw:${pattern}`,
-      target: `api:${pattern}`,
+      target: `https://grain.dev/capabilities/api#${pattern}`,
       source: `api_scopes.raw_scopes["${pattern}"]`,
       details,
       retired: false,

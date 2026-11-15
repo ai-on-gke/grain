@@ -293,12 +293,57 @@ func TaskRepoGrants(t Task) []Grant {
 		out = append(out, Grant{Capability: RepoTargetRef, With: repoBaseWith(t.Target.String(), t.Base)})
 	}
 	for _, r := range t.Reads {
-		out = append(out, Grant{Capability: RepoReadRef, With: repoWith(r.String())})
+		out = append(out, TaskRepoReadGrant(r))
 	}
 	for _, w := range t.Writes {
-		out = append(out, Grant{Capability: RepoWriteRef, With: repoBaseWith(w.Repo.String(), w.Base)})
+		out = append(out, TaskRepoWriteGrant(w))
 	}
 	return out
+}
+
+// TaskRepoReadGrant is the …/repo#read {repo} grant one Reads entry is.
+// It has the shape of a CI job's read grant; what makes it a task's is
+// where it comes from (Reads, never task_grant), which is why the
+// capability policy judges it through PermitsTaskRepoGrant.
+func TaskRepoReadGrant(repo RepoRef) Grant {
+	return Grant{Capability: RepoReadRef, With: repoWith(repo.String())}
+}
+
+// TaskRepoWriteGrant is the …/repo#write {repo, base} grant one Writes
+// entry is. The base tells it from a CI job's {repo}-only write.
+func TaskRepoWriteGrant(w WriteTarget) Grant {
+	return Grant{Capability: RepoWriteRef, With: repoBaseWith(w.Repo.String(), w.Base)}
+}
+
+// TaskRepoAccessOf is TaskRepoGrants' inverse for reads and writes: the
+// Reads every …/repo#read {repo} in grants stands for and the Writes
+// every …/repo#write {repo, base} does, in order and each once, with
+// every other grant -- #target, a #write widening refs, a {repo}-only
+// #write, anything not repository access -- left in rest. A grant may be
+// in either spelling (a Grant with With, or its Key in Capability).
+func TaskRepoAccessOf(grants []Grant) (reads []RepoRef, writes []WriteTarget, rest []Grant) {
+	for _, g := range grants {
+		c := CanonicalGrant(g.Key())
+		if c.Capability == RepoReadRef || c.Capability == RepoWriteRef {
+			repo, base, hasBase, err := RepoGrantArgs(c)
+			switch {
+			case err != nil:
+			case c.Capability == RepoReadRef && !hasBase:
+				if !slices.Contains(reads, repo) {
+					reads = append(reads, repo)
+				}
+				continue
+			case c.Capability == RepoWriteRef && hasBase:
+				w := WriteTarget{Repo: repo, Base: base}
+				if !slices.Contains(writes, w) {
+					writes = append(writes, w)
+				}
+				continue
+			}
+		}
+		rest = append(rest, g)
+	}
+	return reads, writes, rest
 }
 
 // TaskRepoAccessKeys is the Key of each read and write grant

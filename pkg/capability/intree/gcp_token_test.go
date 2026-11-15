@@ -546,6 +546,15 @@ func TestGCPTokenModeIntrospectAndRealGcloud(t *testing.T) {
 		if strings.Contains(string(actLog), subject) || strings.Contains(string(actLog), testOrgSA) {
 			t.Fatalf("activate.log leaked token material:\n%s", actLog)
 		}
+		// `gcloud auth login --cred-file` introspects the access token at
+		// the config's token_info_url; against Google's STS that answered
+		// {"active": false} for an impersonated token, so it must reach
+		// this server's /introspect and succeed.
+		loginCmd := exec.Command(gcloudPath, "auth", "login", "--cred-file="+credLocal, "--quiet")
+		loginCmd.Env = env
+		if out, err := loginCmd.CombinedOutput(); err != nil {
+			t.Fatalf("gcloud auth login --cred-file failed: %v\n%s", err, out)
+		}
 		printCmd := exec.Command(gcloudPath, "auth", "print-access-token")
 		printCmd.Env = env
 		out, err := printCmd.CombinedOutput()

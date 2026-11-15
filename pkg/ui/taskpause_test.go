@@ -211,7 +211,7 @@ func TestAGracefulPauseOfARunningTaskMessagesTheRun(t *testing.T) {
 	}
 	last := comments[len(comments)-1]
 	if last.Author.Actor.Kind != model.PrincipalHuman || !strings.Contains(last.Body, "commit and push") ||
-		!strings.Contains(last.Body, "write_handover") {
+		!strings.Contains(last.Body, "grain handover write") {
 		t.Fatalf("the run was told %q by %+v, want the operator's pause message", last.Body, last.Author)
 	}
 

@@ -168,13 +168,11 @@ func (s *Server) resolveMCPCallerAccess(ctx context.Context) (mcpCallerAccess, e
 	// X-Grain-Acting-Task on a token's request is ignored rather than let
 	// widen the token's scopes to a task's grants.
 	if tok := externalTokenFromContext(ctx); tok != nil {
-		_, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
+		held, set, _, err := model.ResolveExternalAgentGrants(tok.ScopeSet, tok.Scopes, tok.Repos)
 		if err != nil {
 			return mcpCallerAccess{role: role, externalToken: tok}, err
 		}
-		if role != nil && !role.Full {
-			set = set.Intersect(role.set).Without(role.deny)
-		}
+		_, set = narrowExternalGrants(held, set, role)
 		return mcpCallerAccess{
 			role:          role,
 			externalToken: tok,
@@ -304,7 +302,7 @@ func scopeDomainGroup(scope APIScope) string {
 }
 
 var domainGuidance = map[string]string{
-	"tasks":        "Task lifecycle & mutations. Prefer grain_list_tasks, grain_get_task, grain_filing_context, and grain_submit_task for common reads/filing; use grain_invoke for comments, state transitions, dependencies, approvals, and task-admin edits. Pass arguments.expect on admin mutations to avoid clobbering concurrent changes.",
+	"tasks":        "Task lifecycle and mutations. Read and file with grain_list_tasks, grain_get_task, grain_filing_context, grain_submit_task; grain_invoke the rest, with arguments.expect on admin edits.",
 	"ci":           "Grain CI workflows, runs, logs, faults, and artifacts. Filter list calls by repo/branch when possible before fetching full job logs.",
 	"merge":        "Pull request creation, merge-queue retries, and force-merges. Force-merge requires merge:force and an explicit reason.",
 	"repos":        "Target repository onboarding, branch configuration, CI mode, merge settings, and declarations. api_get_repo_settings / api_set_repo_settings read and write every per-repository setting together; the per-field routes (ci-mode, setup-command, ...) are aliases of them, listed only with includeAliases=true.",
@@ -320,7 +318,7 @@ var domainGuidance = map[string]string{
 	"connections":  "Git connections and model backend definitions.",
 	"sessions":     "Interactive console sessions and standing Director/chat sessions.",
 	"caches":       "CI, package, and GitHub Actions cache inspection and flushing.",
-	"dispatch":     "Queue/pipeline pause controls and immediate task dispatch (run-now).",
+	"dispatch":     "Queue/pipeline pause controls, immediate task dispatch (run-now), and what a durable task's next dispatch carries (context compaction, current brief, and rollover to a successor).",
 	"memory":       "Deployment and per-repository standing agent memory documents.",
 }
 
@@ -503,7 +501,7 @@ func renderScopeOverview(access mcpCallerAccess, authorized []APIRoute) mcp.Resu
 	if len(authorized) == 0 {
 		msg := "No Grain controller API scopes are currently authorized for this caller."
 		if access.actingTaskID != "" {
-			msg += fmt.Sprintf(" Ask a human to grant task %s an api:<scope> or api:<preset> capability (e.g. api:tasks-read, api:task-admin, api:ci-read, api:deployment:read).", access.actingTaskID)
+			msg += fmt.Sprintf(" Ask a human to grant task %s an agent API scope or preset, https://grain.dev/capabilities/api#<scope-or-preset> (e.g. #tasks:read, #task-admin, #ci-read, #deployment:read).", access.actingTaskID)
 		} else if access.role != nil && !access.role.Full {
 			msg += fmt.Sprintf(" %s holds no controller API scopes; ask an access-code admin to assign a role that includes them (docs/access-code.md).", access.role.label())
 		}
@@ -1295,6 +1293,7 @@ func (s *Server) submitTaskTool() mcp.Tool {
 				},
 				"grants": map[string]any{
 					"type":        "array",
+					"items":       map[string]any{},
 					"description": "Unified grants, each a grant string or a {capability, with} object, as POST /api/tasks takes them (repo#target, repo#read and repo#write included). A request that also names the same kind the old way -- capabilities, reads, writes, or repo/base/no_repo beside repo#target -- is refused.",
 				},
 				"depends_on": map[string]any{
@@ -1662,6 +1661,7 @@ func taskDetailToMCPRecord(detail TaskDetail) mcp.TaskRecord {
 		AuthorLabel:         detail.AuthorLabel,
 		Provenance:          detail.Provenance,
 		Base:                detail.Base,
+		FoundIn:             t.FoundIn,
 		Capabilities:        detail.Capabilities,
 		PullRequest:         detail.PullRequest,
 		PullRequestMergedAt: detail.PrMergedAt,

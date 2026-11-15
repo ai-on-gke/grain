@@ -247,7 +247,10 @@ What takes judgement is the steward's. Woken by
    posting the completed `grain/release-qualification` failure; Phase 2 reads
    that check run and cuts nothing (`rc_held=vX.Y.Z-rc.(N+1)`) until it
    completes. Every fix or revert task's title starts
-   `[rc-blocker vX.Y.Z-rc.N]` (`model.RCBlockerMarker`). While any task with
+   `[rc-blocker vX.Y.Z-rc.N]` (`model.RCBlockerMarker`) and passes
+   `found_in: vX.Y.Z-rc.N`, so the defect is recorded against that
+   candidate (`model.LinkFoundIn`; grain reads it out of the marker when
+   the steward leaves it out). While any task with
    it is open, the reconciler keeps `grain/rc-hold` in progress (updating its
    summary to name the blockers) past the triage window. The reconciler
    completes the check once every blocker has landed, when the steward's
@@ -297,15 +300,43 @@ The prompt is `pipelineStewardBody`, written around the four rules of
    `grain read deploy://pipeline-changes --cursor <cursor>`, paging on with
    the command each page ends with. Read nothing else unless a
    change, or the note that woke it, names it.
-2. **Re-read before acting or naming.** Call `read_grain_task(id,
-   view: "summary")` immediately before acting on a task or naming it,
-   and pass `expect` on every mutating call.
+2. **Re-read before acting or naming.** Run `grain task read <id>` in
+   this wake immediately before acting on a task or naming it, and pass
+   `expect` on every mutating call. The handover, the conversation,
+   earlier reports and the wake note are memory, not records: anything
+   they say is re-read before it is restated.
 3. **Disagreement means stop.** A record that contradicts the handover
    is not acted on: it raises `agent.<task>:record-disagrees` with
    `notify_operator`, with both versions, and carries on with the rest.
 4. **Short reports, every claim cited.** The closing report is at most
    15 lines (`model.PipelineStewardReportLines`), each claim ending with
-   the id it was read from (`[task 832]`, `[ci run …]`, `[batch …]`).
+   the id of a record read in this wake (`[task 832]`, `[ci run …]`,
+   `[batch …]`). A claim it cannot ground in this wake's reads goes under
+   a separate `## Unverified` heading (`model.PipelineStewardUnverifiedHeading`),
+   which the report check does not count.
+
+Before posting, it runs `grain report check --file <report>`. This is the
+check grain runs on the posted report (below), run on the draft against
+what the wake has read so far. A failing check fails the report. The
+steward re-reads each task the check names, fixes each line it quotes
+from the record or moves it under `## Unverified`, and checks once more.
+It retries once, then posts.
+
+## How its reports are checked
+
+Every report it posts is checked by `stewardReportCheck`
+(`pkg/orchestrator/stewardreportcheck.go`,
+`design/design/durable-tasks.design.md#DT-14`). The check counts claims
+that are uncited, that cite a task the wake never read, or that give a
+task a state or kind its record does not have. The counts are stored per
+wake and shown in `grain metrics agents`. A failing report raises
+`agent.steward:report-mismatch`, and a 7-day rate above 5% of claims
+raises `pipeline.steward-regression`.
+
+A read counts wherever it was made: an MCP tool or the in-sandbox `grain`
+CLI. The proxy records each CLI read as it serves it. A listing or feed
+(the pipeline-changes feed, `grain task list`, `grain merge-queue`)
+records every id its page showed (`model.ReadOutputIDs`).
 
 Its actions are comment, reorder, retry, `notify_operator`,
 `message_task` (to another task's agent; it never parks that task) and

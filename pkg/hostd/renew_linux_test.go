@@ -30,13 +30,22 @@ import (
 )
 
 // renewHarness is a controller that knows one key-bound host, ws-renew,
-// and mints a fresh token on every in-band renewal.
+// and mints a fresh token on every in-band renewal. A token it has
+// superseded still answers, as the store's does for hostdRenewGrace
+// (model.RenewHostdCredential): a session can drop after the controller
+// has renewed but before the reply reaches the host, which then
+// reconnects -- and renews -- with the token it still holds. Revoking
+// that token at once instead shut the host out for good with "does not
+// take that host token", which no real controller does, and failed
+// TestSilentRenewalSurvivesReconnectsShorterThanTheInterval whenever a
+// drop landed in that gap.
 type renewHarness struct {
 	remote  *hostd.Remote
 	url     string
 	priv    ed25519.PrivateKey
 	mu      sync.Mutex
 	current string
+	issued  map[string]bool
 	renews  int
 }
 
@@ -47,12 +56,12 @@ func newRenewHarness(t *testing.T) *renewHarness {
 		t.Fatal(err)
 	}
 	pubStr := hostd.PublicKeyString(pub)
-	h := &renewHarness{priv: priv, current: "ghd_renew_0"}
+	h := &renewHarness{priv: priv, current: "ghd_renew_0", issued: map[string]bool{"ghd_renew_0": true}}
 	h.remote = &hostd.Remote{
 		ResolveCredential: func(_ context.Context, tok string) (hostd.ResolvedCredential, bool, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
-			if tok != h.current {
+			if !h.issued[tok] {
 				return hostd.ResolvedCredential{}, false, nil
 			}
 			return hostd.ResolvedCredential{Name: "ws-renew", Owner: "alice@example.com", PublicKey: pubStr}, true, nil
@@ -60,11 +69,12 @@ func newRenewHarness(t *testing.T) *renewHarness {
 		Renew: func(_ context.Context, name, curTok string) (string, time.Time, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
-			if curTok != h.current {
-				return "", time.Time{}, fmt.Errorf("stale token %q", curTok)
+			if !h.issued[curTok] {
+				return "", time.Time{}, fmt.Errorf("unknown token %q", curTok)
 			}
 			h.renews++
 			h.current = fmt.Sprintf("ghd_renew_%d", h.renews)
+			h.issued[h.current] = true
 			return h.current, time.Now().Add(30 * 24 * time.Hour), nil
 		},
 	}
@@ -157,13 +167,18 @@ func TestSilentRenewalSurvivesReconnectsShorterThanTheInterval(t *testing.T) {
 	}()
 	defer func() { close(stopFlap); <-flapped }()
 
+	// Bounded by ctx rather than by a few intervals: a ticker started
+	// afresh on every connection never fires here however long it is
+	// given, while a schedule that survives the drops can still take
+	// several tries on a loaded runner, since each one a drop cuts short
+	// is tried again an interval later.
 	select {
 	case tok := <-renewed:
 		if tok != h.token() {
 			t.Fatalf("host holds %q, controller issued %q", tok, h.token())
 		}
-	case <-time.After(8 * interval):
-		t.Fatalf("no silent renewal in %v while the connection dropped every %v", 8*interval, interval/4)
+	case <-ctx.Done():
+		t.Fatalf("no silent renewal while the connection dropped every %v", interval/4)
 	}
 }
 

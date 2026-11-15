@@ -1,0 +1,87 @@
+{
+ "taskId": "20",
+ "cursor": 11,
+ "summarisedComment": 8,
+ "results": [
+  {
+   "width": "desktop",
+   "theme": "light",
+   "overflowPx": 0,
+   "wideElements": [],
+   "editBrief": true,
+   "originalDisclosure": true,
+   "contextPanel": true,
+   "staleBadge": true,
+   "compact": true,
+   "writeHandover": true,
+   "collapsed": 4,
+   "bg": "rgb(247, 246, 243)",
+   "deepLink": {
+    "open": true,
+    "inView": true,
+    "highlighted": true
+   },
+   "errors": []
+  },
+  {
+   "width": "desktop",
+   "theme": "dark",
+   "overflowPx": 0,
+   "wideElements": [],
+   "editBrief": true,
+   "originalDisclosure": true,
+   "contextPanel": true,
+   "staleBadge": true,
+   "compact": true,
+   "writeHandover": true,
+   "collapsed": 4,
+   "bg": "rgb(15, 16, 19)",
+   "deepLink": {
+    "open": true,
+    "inView": true,
+    "highlighted": true
+   },
+   "errors": []
+  },
+  {
+   "width": "phone",
+   "theme": "light",
+   "overflowPx": 0,
+   "wideElements": [],
+   "editBrief": true,
+   "originalDisclosure": true,
+   "contextPanel": true,
+   "staleBadge": true,
+   "compact": true,
+   "writeHandover": true,
+   "collapsed": 4,
+   "bg": "rgb(247, 246, 243)",
+   "deepLink": {
+    "open": true,
+    "inView": true,
+    "highlighted": true
+   },
+   "errors": []
+  },
+  {
+   "width": "phone",
+   "theme": "dark",
+   "overflowPx": 0,
+   "wideElements": [],
+   "editBrief": true,
+   "originalDisclosure": true,
+   "contextPanel": true,
+   "staleBadge": true,
+   "compact": true,
+   "writeHandover": true,
+   "collapsed": 4,
+   "bg": "rgb(15, 16, 19)",
+   "deepLink": {
+    "open": true,
+    "inView": true,
+    "highlighted": true
+   },
+   "errors": []
+  }
+ ]
+}

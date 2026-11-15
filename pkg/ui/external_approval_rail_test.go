@@ -181,8 +181,11 @@ func TestExternalAgentRunNowApprovesOnlyUnderTasksAdmin(t *testing.T) {
 // still holds it.
 func TestExternalAgentApprovalRailHoldsInTheClient(t *testing.T) {
 	_, client := testServer(t)
-	ctx := ui.WithPrincipal(context.Background(), model.Principal{
+	principal := ui.WithPrincipal(context.Background(), model.Principal{
 		Kind: model.PrincipalAgent, ID: "external:rails-ext", Source: model.SourceExternalToken,
+	})
+	ctx := ui.WithExternalTokenForTest(principal, &model.ExternalAgentToken{
+		Name: "rails-ext", Scopes: []string{"tasks:read", "tasks:write", "tasks:admin", "dispatch:write"}, Repos: []string{"acme/widgets"},
 	})
 	railTask(t, client, "940", "", func(task *model.Task) { task.Admission = model.AdmissionDurable })
 	railTask(t, client, "941", "", func(task *model.Task) {
@@ -198,6 +201,22 @@ func TestExternalAgentApprovalRailHoldsInTheClient(t *testing.T) {
 		}
 		wantProposed(t, client, id)
 	}
+	// Past the credential's own ceiling: writes to a repository it does not hold.
+	railTask(t, client, "943", "", func(task *model.Task) {
+		task.Writes = []model.WriteTarget{{Repo: model.RepoRef{Owner: "acme", Name: "gadgets"}}}
+	})
+	for _, err := range []error{client.Approve(ctx, "943"), client.RunNow(ctx, "943")} {
+		if err == nil || !strings.Contains(err.Error(), "(writes)") {
+			t.Errorf("approving task 943 (writes acme/gadgets) as external:rails-ext: %v, want a refusal naming writes", err)
+		}
+	}
+	wantProposed(t, client, "943")
+	// An external caller whose credential cannot be read is refused, not
+	// let through on grants nobody can see.
+	if err := client.Approve(principal, "942"); err == nil || !strings.Contains(err.Error(), "could not be read") {
+		t.Errorf("Client.Approve(942) as external:rails-ext with no credential: %v, want a refusal", err)
+	}
+	wantProposed(t, client, "942")
 	if err := client.RunNow(ctx, "942"); err != nil {
 		t.Errorf("Client.RunNow(942) as external:rails-ext: %v, want it approved and run", err)
 	}
@@ -305,4 +324,116 @@ func TestExternalAgentRunNowApprovalNeedsAReasonAsApproveDoes(t *testing.T) {
 	if code, body := bare("964", "run-now"); code != http.StatusOK {
 		t.Errorf("run-now of an approved task without a reason: %d %s, want 200", code, body)
 	}
+}
+
+// An external credential approves only work it could have filed itself:
+// one held to acme/widgets, refused POST /api/tasks for writes or reads
+// reaching acme/gadgets, open networkAccess, autoApproveProposals, a grant it does not hold or a
+// review template granting one, is refused approving -- or running now --
+// a stored person-filed acme/widgets task carrying any of them, over REST,
+// POST /mcp and POST /api/mcp's grain_invoke alike, and the task stays
+// proposed (post-merge review of PR #987, finding 2.2). Work within its
+// ceiling is still approved.
+func TestExternalAgentApprovalIsHeldToTheCredentialsCeiling(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	enableExternalAgentAPI(t, client.Store)
+	cfg, err := client.Store.GetConfig(ctx)
+	if err != nil || cfg == nil {
+		t.Fatalf("reading config: %+v %v", cfg, err)
+	}
+	cfg.NetworkAccess = model.NetworkNone
+	if err := client.Store.PutConfig(ctx, *cfg); err != nil {
+		t.Fatal(err)
+	}
+	token := railCredential(t, client, "widgets-admin", "tasks:read", "tasks:write", "tasks:admin", "dispatch:write")
+	gadgets, err := model.ParseRepo("acme/gadgets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Store.PutTemplate(ctx, model.Template{
+		ID: "heavy-review", Name: "heavy-review", Title: "Heavy review", Body: "Review it.",
+		Grants: []model.Grant{{Capability: "github#read-issues"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, want string
+		edit       func(*model.Task)
+	}{
+		{"writes", "(writes)", func(task *model.Task) { task.Writes = []model.WriteTarget{{Repo: gadgets}} }},
+		{"reads", "(reads)", func(task *model.Task) { task.Reads = []model.RepoRef{gadgets} }},
+		{"networkAccess", "(networkAccess)", func(task *model.Task) { task.NetworkAccess = model.NetworkOpen }},
+		{"autoApproveProposals", "(autoApproveProposals)", func(task *model.Task) { task.AutoApproveProposals = true }},
+		{"api grant", "(capabilities)", func(task *model.Task) {
+			task.Grants = append(task.Grants, model.Grant{Capability: model.APIRef("tasks:write")})
+		}},
+		{"capability", "(capabilities)", func(task *model.Task) {
+			task.Grants = append(task.Grants, model.Grant{Capability: "github#read-issues"})
+		}},
+		{"reviewTemplateId", "(reviewTemplateId)", func(task *model.Task) { task.ReviewTemplateID = "heavy-review" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ids := []string{"rest-approve", "rest-run-now", "mcp-approve", "mcp-run-now", "invoke-approve", "invoke-run-now"}
+			for i := range ids {
+				ids[i] = strings.ReplaceAll(tc.name, " ", "-") + "-" + ids[i]
+				railTask(t, client, ids[i], "", tc.edit)
+			}
+			refused := func(route, out string) {
+				t.Helper()
+				if !strings.Contains(out, tc.want) || !strings.Contains(out, "external:widgets-admin") {
+					t.Errorf("%s: %s, want a refusal naming external:widgets-admin and %q", route, out, tc.want)
+				}
+			}
+			for i, action := range []string{"approve", "run-now"} {
+				code, body := externalTaskAction(t, srv, token, ids[i], action)
+				if code != http.StatusForbidden {
+					t.Errorf("REST %s: %d %s, want 403", action, code, body)
+				}
+				refused("REST "+action, body)
+			}
+			for i, tool := range []string{"api_approve", "api_run_now"} {
+				_, res := callMCPTool(t, srv, token, tool, map[string]any{"id": ids[2+i], "reason": "testing the approval ceiling"})
+				var text string
+				for _, c := range res.Content {
+					text += c.Text
+				}
+				if !res.IsError {
+					t.Errorf("POST /mcp %s: %s, want an error", tool, text)
+				}
+				refused("POST /mcp "+tool, text)
+				out, isErr := externalMCPTaskAction(t, srv, token, tool, ids[4+i])
+				if !isErr {
+					t.Errorf("POST /api/mcp grain_invoke %s: %s, want an error", tool, out)
+				}
+				refused("POST /api/mcp grain_invoke "+tool, out)
+			}
+			for _, id := range ids {
+				wantProposed(t, client, id)
+			}
+		})
+	}
+
+	// Within the ceiling: writes, reads and grants on acme/widgets alone.
+	within := func(task *model.Task) {
+		widgets := *task.Target
+		task.Writes = []model.WriteTarget{{Repo: widgets}}
+		task.Reads = []model.RepoRef{widgets}
+		task.Grants = append(task.Grants, model.Grant{Capability: model.APIGrantString("tasks:read", "acme/widgets")})
+	}
+	railTask(t, client, "970", "", within)
+	railTask(t, client, "971", "", within)
+	railTask(t, client, "972", "", within)
+	if code, body := externalTaskAction(t, srv, token, "970", "approve"); code != http.StatusOK {
+		t.Errorf("REST approve within the ceiling: %d %s, want 200", code, body)
+	}
+	wantQueued(t, client, "970")
+	if _, res := callMCPTool(t, srv, token, "api_run_now", map[string]any{"id": "971", "reason": "within the ceiling"}); res.IsError {
+		t.Errorf("POST /mcp api_run_now within the ceiling: %+v, want success", res)
+	}
+	if out, isErr := externalMCPTaskAction(t, srv, token, "api_approve", "972"); isErr {
+		t.Errorf("POST /api/mcp grain_invoke api_approve within the ceiling: %s, want success", out)
+	}
+	wantQueued(t, client, "972")
 }

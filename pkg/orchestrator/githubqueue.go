@@ -168,7 +168,7 @@ func enqueueOnGitHub(client github.Client, ref model.PullRequestRef, base, head 
 		if now.Sub(q.polled) < githubQueuePollInterval {
 			return q.entry, nil
 		}
-		entry, err := queuer.MergeQueueEntryOf(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		entry, err := queuer.MergeQueueEntryOf(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil {
 			return q.entry, err
 		}
@@ -187,7 +187,7 @@ func enqueueOnGitHub(client github.Client, ref model.PullRequestRef, base, head 
 	} else {
 		q = githubQueued{head: head}
 	}
-	entry, err := queuer.EnqueuePullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number, head)
+	entry, err := queuer.EnqueuePullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number, head)
 	if err != nil {
 		forgetGitHubQueued(ref)
 		return github.MergeQueueEntry{}, err

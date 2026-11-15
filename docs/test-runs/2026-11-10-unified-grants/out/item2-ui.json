@@ -1,0 +1,243 @@
+{
+  "surfaces": {
+    "newTaskOverlay": {
+      "target": {
+        "present": true,
+        "buttonCount": 0,
+        "removable": false,
+        "text": "acme/widgets · default branch · targetthis task's repo -- change it above"
+      },
+      "menu": {
+        "ciMethodCount": 0,
+        "repoReadRowCount": 1
+      },
+      "readFocus": {
+        "focusedAddGrant": true,
+        "activeFocusInfo": {
+          "tag": "BUTTON",
+          "text": "Add grant…",
+          "ariaLabel": null
+        }
+      },
+      "writeFocus": {
+        "focusedAddGrant": true,
+        "activeFocusInfo": {
+          "tag": "BUTTON",
+          "text": "Add grant…",
+          "ariaLabel": null
+        }
+      },
+      "storedAfterCreate": {
+        "id": "4",
+        "reads": [
+          "acme/lib"
+        ],
+        "writes": [
+          {
+            "repo": "acme/other",
+            "base": "staging"
+          }
+        ]
+      }
+    },
+    "taskPane": {
+      "target": {
+        "present": true,
+        "buttonCount": 0,
+        "removable": false,
+        "text": "acme/widgets · default branch · targetthis task's repo -- change it under Repos"
+      },
+      "menu": {
+        "ciMethodCount": 0,
+        "repoReadRowCount": 1
+      },
+      "readFocus": {
+        "focusedAddGrant": true,
+        "activeFocusInfo": {
+          "tag": "BUTTON",
+          "text": "Add grant…",
+          "ariaLabel": null
+        }
+      },
+      "writeFocus": {
+        "focusedAddGrant": true,
+        "activeFocusInfo": {
+          "tag": "BUTTON",
+          "text": "Add grant…",
+          "ariaLabel": null
+        }
+      },
+      "afterInitialRemove": {
+        "reads": [],
+        "writes": []
+      },
+      "afterAddReload": {
+        "reads": [
+          "acme/lib"
+        ],
+        "writes": [
+          {
+            "repo": "acme/other",
+            "base": "staging"
+          }
+        ]
+      },
+      "afterFinalRemoveReload": {
+        "reads": [],
+        "writes": [],
+        "grantEvents": []
+      }
+    },
+    "templateEditor": {
+      "target": {
+        "present": true,
+        "buttonCount": 0,
+        "removable": false,
+        "text": "acme/widgets · default branch · targetthe template's bound repo -- change it above"
+      },
+      "menu": {
+        "ciMethodCount": 0,
+        "repoReadRowCount": 1
+      },
+      "readFocus": {
+        "focusedAddGrant": true,
+        "activeFocusInfo": {
+          "tag": "BUTTON",
+          "text": "Add grant…",
+          "ariaLabel": null
+        }
+      },
+      "writeFocus": {
+        "focusedAddGrant": true,
+        "activeFocusInfo": {
+          "tag": "BUTTON",
+          "text": "Add grant…",
+          "ariaLabel": null
+        }
+      },
+      "afterAddReload": {
+        "reads": [
+          "acme/lib"
+        ],
+        "writes": [
+          {
+            "repo": "acme/other",
+            "base": "staging"
+          }
+        ]
+      },
+      "afterRemoveReload": {
+        "reads": [],
+        "writes": []
+      }
+    },
+    "scheduleEditor": {
+      "target": {
+        "present": true,
+        "buttonCount": 0,
+        "removable": false,
+        "text": "acme/widgets · default branch · targetthe repo every firing targets -- change it above"
+      },
+      "menu": {
+        "ciMethodCount": 0,
+        "repoReadRowCount": 1
+      },
+      "readFocus": {
+        "focusedAddGrant": true,
+        "activeFocusInfo": {
+          "tag": "BUTTON",
+          "text": "Add grant…",
+          "ariaLabel": null
+        }
+      },
+      "writeFocus": {
+        "focusedAddGrant": true,
+        "activeFocusInfo": {
+          "tag": "BUTTON",
+          "text": "Add grant…",
+          "ariaLabel": null
+        }
+      },
+      "afterAddReload": {
+        "reads": [
+          "acme/lib"
+        ],
+        "writes": [
+          {
+            "repo": "acme/other",
+            "base": "staging"
+          }
+        ]
+      },
+      "afterRemoveReload": {
+        "reads": [],
+        "writes": []
+      }
+    },
+    "consoleSession": {
+      "target": {
+        "present": false,
+        "buttonCount": -1,
+        "removable": false,
+        "text": null
+      },
+      "menu": {
+        "ciMethodCount": 0,
+        "repoReadRowCount": 1
+      },
+      "readFocus": {
+        "focusedAddGrant": true,
+        "activeFocusInfo": {
+          "tag": "BUTTON",
+          "text": "Add grant…",
+          "ariaLabel": null
+        }
+      },
+      "writeFocus": {
+        "focusedAddGrant": true,
+        "activeFocusInfo": {
+          "tag": "BUTTON",
+          "text": "Add grant…",
+          "ariaLabel": null
+        }
+      },
+      "afterAddReload": {
+        "reads": [
+          "acme/lib"
+        ],
+        "writes": [
+          {
+            "repo": "acme/other",
+            "base": "staging"
+          }
+        ]
+      },
+      "afterRemoveReload": {
+        "reads": [],
+        "writes": []
+      },
+      "directorOfferedReadOptionsWhenReadsAllTrue": [
+        "grain/config"
+      ]
+    }
+  },
+  "pushCheck": {
+    "pushLines": [
+      {
+        "grant": "https://grain.dev/capabilities/repo#write push acme/widgets refs/heads/candidate",
+        "text": "acme/widgets refs/heads/candidate · pushdeclared by the template",
+        "buttons": 0
+      },
+      {
+        "grant": "https://grain.dev/capabilities/repo#write push acme/widgets refs/tags/latest (force)",
+        "text": "acme/widgets refs/tags/latest (force) · pushdeclared by the template",
+        "buttons": 0
+      }
+    ]
+  },
+  "ciPageHasRepoRead": {
+    "ciMethodCount": 1,
+    "repoReadRowCount": 0
+  },
+  "pageErrors": []
+}

@@ -1045,3 +1045,49 @@ func TestAdmissionEnforcesCapabilityPolicyOnAPIGrants(t *testing.T) {
 		t.Errorf("external server called %q when api grant was denied by policy", got)
 	}
 }
+
+// A task's own reads and writes are the …/repo#read and #write grants
+// they project to (unified-grants §3): a capability policy deny rule
+// naming one refuses the task at admission, while an allow rule written
+// for CI jobs' {repo} grants refuses no task, and a task with neither is
+// admitted.
+func TestAdmissionEnforcesCapabilityPolicyOnTaskRepoAccess(t *testing.T) {
+	caller := &mintCaller{}
+	deps, store, ctx, _ := passHarness(t, caller)
+	if err := store.PutConfig(ctx, model.Config{
+		CapabilityPolicy: model.CapabilityPolicy{
+			Rules: []model.CapabilityPolicyRule{
+				{Capability: model.RepoWriteRef, Deny: true, RunKinds: []string{model.CapabilityRunTask}},
+				{Capability: model.RepoReadRef, RunKinds: []string{model.CapabilityRunCI}},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deps.CapabilityServers = nil
+	admit := capabilityAdmitter(deps, admitAll)
+	docs := model.RepoRef{Owner: "acme", Name: "docs"}
+	for _, tc := range []struct {
+		id     string
+		task   model.Task
+		admits bool
+	}{
+		{"r200", model.Task{Reads: []model.RepoRef{docs}}, true},
+		{"w201", model.Task{Writes: []model.WriteTarget{{Repo: docs, Base: "main"}}}, false},
+		{"n202", model.Task{}, true},
+	} {
+		tc.task.ID, tc.task.Title, tc.task.Target = tc.id, "repo access policy check", &widgets
+		if err := store.PutTask(ctx, tc.task); err != nil {
+			t.Fatal(err)
+		}
+		adm, err := admit(ctx, dispatch.Candidate{TaskID: tc.id, RunID: dispatch.RunID(tc.id, 1), Attempt: 1})
+		if err != nil || adm.Admitted != tc.admits {
+			t.Fatalf("%s: admit = %+v, %v; want admitted %v", tc.id, adm, err, tc.admits)
+		}
+		if !tc.admits {
+			if comments, _ := store.Comments(ctx, tc.id); len(comments) == 0 || !strings.Contains(comments[len(comments)-1].Body, "capability policy denies") {
+				t.Errorf("%s: comments = %+v, want capability policy refusal comment", tc.id, comments)
+			}
+		}
+	}
+}

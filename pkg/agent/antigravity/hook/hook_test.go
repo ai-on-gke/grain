@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/agent/hookpolicy"
 )
 
 func payload(t *testing.T, name string, args map[string]any) []byte {
@@ -143,5 +145,137 @@ func TestRun(t *testing.T) {
 	Run(nil, bytes.NewReader(payload(t, "mcp_grain-sandbox_read_file", nil)), &out, &errOut)
 	if out.Len() != 0 {
 		t.Errorf("Run wrote %q for a grain tool, want nothing", out.String())
+	}
+}
+
+func TestPolicyFileReplacesCompiledInRosterAndGrants(t *testing.T) {
+	dir := t.TempDir()
+	record := filepath.Join(dir, HostToolCallsFilename)
+	policyPath := filepath.Join(dir, hookpolicy.Filename)
+	raw, err := hookpolicy.Marshal(hookpolicy.File{
+		Version: hookpolicy.Version,
+		Tool: &hookpolicy.ToolPolicy{
+			AllowedTools:             []string{"mcp_grain-sandbox_future_tool", "exit_plan_mode"},
+			AllowedPatterns:          []string{"mcp_wildcard_*"},
+			CapabilityToolPrefix:     "mcp_",
+			CapabilityServerPrefixes: []string{"mcp_open_server_"},
+			HostToolGrants: []hookpolicy.HostToolGrant{
+				// Never registered via RegisterHostToolGrant in this binary.
+				{Capability: "https://grain.example/capabilities/unlinked#search={}", Tools: []string{"unlinked_search"}},
+			},
+			RecordPath: record,
+			TaskID:     "42",
+			RunID:      "run-9",
+			DenyReasons: map[string]string{
+				"custom_trap": "do not call custom_trap in headless mode",
+			},
+			DenyPatterns: []hookpolicy.DenyPattern{
+				{Pattern: "legacy_*", Reason: "legacy tools are retired"},
+			},
+			DefaultDenySuffix: "is blocked by staged policy.",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts, ignored := ParseArgs([]string{FlagPolicy, policyPath, FlagCapabilityTool, "cap/read_item"})
+	if len(ignored) != 0 {
+		t.Fatalf("ParseArgs ignored %q", ignored)
+	}
+
+	// Tools in the staged policy are admitted even though PublishedTools knows none of them.
+	for _, allowed := range []string{
+		"mcp_grain-sandbox_future_tool",
+		"mcp_wildcard_anything",
+		"mcp_open_server_ping",
+		"mcp_cap_read_item",
+		"unlinked_search",
+	} {
+		if got := verdict(t, DecisionFor(opts, payload(t, allowed, map[string]any{"query": "q1"}))); got != "no opinion" {
+			t.Errorf("DecisionFor(%q) = %s, want no opinion", allowed, got)
+		}
+	}
+
+	// A tool in compiled-in PublishedTools that is absent from the staged policy is denied:
+	// the hook evaluates only the staged data when the file is present.
+	reply := DecisionFor(opts, payload(t, "mcp_grain-sandbox_run_command", nil))
+	if got := verdict(t, reply); got != "deny" || !strings.Contains(string(reply), "is blocked by staged policy.") {
+		t.Errorf("omitted compiled-in tool: reply = %s, want policy denial", reply)
+	}
+
+	// Custom exact and pattern deny reasons come from the policy file.
+	trapReply := DecisionFor(opts, payload(t, "custom_trap", nil))
+	if !strings.Contains(string(trapReply), "do not call custom_trap in headless mode") {
+		t.Errorf("custom_trap reply = %s", trapReply)
+	}
+	patReply := DecisionFor(opts, payload(t, "legacy_exec", nil))
+	if !strings.Contains(string(patReply), "legacy tools are retired") {
+		t.Errorf("legacy_exec reply = %s", patReply)
+	}
+
+	// Unlinked host-tool grant was recorded to RecordPath from the policy file.
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var call HostToolCall
+	if err := json.Unmarshal(bytes.TrimSpace(data), &call); err != nil || call.Tool != "unlinked_search" || call.Task != "42" || call.Run != "run-9" || call.Query != "q1" {
+		t.Errorf("recorded call = %q (%v)", data, err)
+	}
+
+	// Corrupt policy file fails closed rather than falling open or falling back silently.
+	corrupt := filepath.Join(dir, "corrupt.json")
+	if err := os.WriteFile(corrupt, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := verdict(t, DecisionFor(Options{PolicyPath: corrupt}, payload(t, "mcp_grain-sandbox_run_command", nil))); got != "deny" {
+		t.Errorf("corrupt policy = %s, want deny", got)
+	}
+
+	// Absent policy file falls back to compiled-in PublishedTools.
+	missing := filepath.Join(dir, "absent.json")
+	if got := verdict(t, DecisionFor(Options{PolicyPath: missing}, payload(t, "mcp_grain-sandbox_run_command", nil))); got != "no opinion" {
+		t.Errorf("absent policy fallback = %s, want no opinion", got)
+	}
+}
+
+// A staged host-tool grant admits only the exact tool names it lists, as a
+// compiled-in HostToolGrant always has: a '*' in one is a literal byte, not a
+// pattern that opens every host tool behind it.
+func TestStagedHostToolGrantsMatchExactly(t *testing.T) {
+	dir := t.TempDir()
+	record := filepath.Join(dir, HostToolCallsFilename)
+	policyPath := filepath.Join(dir, hookpolicy.Filename)
+	raw, err := hookpolicy.Marshal(hookpolicy.File{Tool: &hookpolicy.ToolPolicy{
+		HostToolGrants: []hookpolicy.HostToolGrant{
+			{Capability: "https://grain.example/capabilities/wide#search={}", Tools: []string{"host_*", "exact_lookup"}},
+		},
+		RecordPath: record,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{PolicyPath: policyPath}
+	for _, name := range []string{"host_exec", "host_", "exact_lookup2", ""} {
+		if got := verdict(t, DecisionFor(opts, payload(t, name, nil))); got != "deny" {
+			t.Errorf("DecisionFor(%q) = %s, want deny", name, got)
+		}
+	}
+	if got := verdict(t, DecisionFor(opts, payload(t, "exact_lookup", nil))); got != "no opinion" {
+		t.Errorf("DecisionFor(exact_lookup) = %s, want no opinion", got)
+	}
+	data, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(strings.TrimSpace(string(data)), "\n") + 1; n != 1 || !strings.Contains(string(data), `"exact_lookup"`) {
+		t.Errorf("recorded calls = %q, want exactly the one exact_lookup", data)
 	}
 }

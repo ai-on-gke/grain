@@ -12,8 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import api from "../api.js";
+import {
+  mergeFreshDetail,
+  fetchEarlier,
+  prependEarlierPage,
+  taskEarlierPath,
+} from "../taskDetailPages.js";
 import AppIcon, { ExternalLinkIcon } from "./AppIcon.jsx";
 import ClChip from "./ClChip.jsx";
 import PresubmitBadge from "./PresubmitBadge.jsx";
@@ -78,6 +91,11 @@ import PendingAccess from "./detail/PendingAccess.jsx";
 import LocalScriptApprovals from "./detail/LocalScriptApprovals.jsx";
 import SuspendedSession from "./detail/SuspendedSession.jsx";
 import GoalSection from "./detail/GoalSection.jsx";
+import {
+  BriefSection,
+  ContextSection,
+  useTaskContext,
+} from "./detail/TaskContext.jsx";
 import Target from "./detail/Target.jsx";
 import MergePolicy from "./detail/MergePolicy.jsx";
 import TaskLink from "./detail/TaskLink.jsx";
@@ -165,7 +183,7 @@ function SuiteRunLink({ origin, onOpenSuiteRun }) {
 }
 
 export default function DetailOverlay({
-  task: t,
+  task: propTask,
   tasks,
   config,
   templates,
@@ -184,15 +202,61 @@ export default function DetailOverlay({
   onFilterExternalRef: rawFilterExternalRef,
   act,
   showError,
+  onLoadEarlier = null,
   // animate: false when this pane takes the place of one already on
   // screen (Overlay's own note), so the swap does not fade.
   animate = true,
 }) {
+  const [localTask, setLocalTask] = useState(null);
+  useEffect(() => {
+    setLocalTask((prev) => {
+      if (!prev || String(prev.id) !== String(propTask?.id)) return null;
+      return mergeFreshDetail(prev, propTask);
+    });
+  }, [propTask]);
+  const t = !onLoadEarlier && localTask ? localTask : propTask;
+  const tRef = useRef(t);
+  tRef.current = t;
+  const effectiveLoadEarlier = useCallback(
+    async (opts = {}) => {
+      if (onLoadEarlier) return onLoadEarlier(opts);
+      const cur = tRef.current;
+      const path = taskEarlierPath(cur, opts);
+      if (!path) return null;
+      const wantComments =
+        (cur.olderComments || 0) > 0 &&
+        Array.isArray(cur.comments) &&
+        cur.comments.length > 0;
+      const wantAttempts =
+        !opts.commentsOnly &&
+        (cur.olderAttempts || 0) > 0 &&
+        Array.isArray(cur.attempts) &&
+        cur.attempts.length > 0;
+      try {
+        const earlier = await fetchEarlier(api, cur, opts);
+        if (!earlier) return null;
+        setLocalTask((prev) =>
+          prependEarlierPage(prev || propTask, earlier, {
+            loadedComments: wantComments,
+            loadedAttempts: wantAttempts,
+          }),
+        );
+        return earlier;
+      } catch (err) {
+        if (showError) showError(err);
+        return null;
+      }
+    },
+    [onLoadEarlier, propTask, showError],
+  );
   const byId = useMemo(
     () => new Map((tasks || []).map((other) => [other.id, other])),
     [tasks],
   );
   const phase = completionPhase(t);
+  // A durable task's compaction cursor, handover age and current brief
+  // (design/design/durable-tasks.design.md#DT-15); null on any other task.
+  const [taskContext, setTaskContext] = useTaskContext(t);
   // And grain's verdict that this task's merge-queue wait has stopped
   // being one (state.js's mergeQueueStall) -- the same chip the row in
   // the list carries, so the page somebody opens because of it says the
@@ -558,6 +622,29 @@ export default function DetailOverlay({
                       </Fragment>,
                     );
                   }
+                  // Both halves of a rollover (model.LinkRolledOverFrom /
+                  // model.LinkRolledOverTo): a durable task past its
+                  // record limit and the successor carrying its work on
+                  // (durable-tasks.design.md#DT-15).
+                  if (t.rolledOverFrom) {
+                    items.push(
+                      <Fragment key="rolled-over-from">
+                        rolled over from{" "}
+                        <TaskLink
+                          id={t.rolledOverFrom}
+                          onOpenTask={onOpenTask}
+                        />
+                      </Fragment>,
+                    );
+                  }
+                  if (t.rolledOverTo) {
+                    items.push(
+                      <Fragment key="rolled-over-to">
+                        rolled over to{" "}
+                        <TaskLink id={t.rolledOverTo} onOpenTask={onOpenTask} />
+                      </Fragment>,
+                    );
+                  }
                   // Both halves of a revert (model.LinkReverts / model.LinkRevertedBy):
                   // allows walking back and forth between a revert task and its origin task.
                   if (t.reverts) {
@@ -642,13 +729,56 @@ export default function DetailOverlay({
                   so it stays a plain string -- only a real description
                   (often an agent's own markdown, for a task another run
                   proposed) goes through the renderer. */}
-              {t.description ? (
-                <Markdown className="description">{t.description}</Markdown>
-              ) : (
-                <div className="description">(no description)</div>
-              )}
+              {/* On a durable task with a current brief, the brief stands
+                  where the description does, since it is what prompts
+                  carry; the description is kept under it (DT-15). */}
+              <BriefSection
+                t={t}
+                context={taskContext}
+                setContext={setTaskContext}
+                act={act}
+                description={
+                  t.description ? (
+                    <Markdown className="description">{t.description}</Markdown>
+                  ) : (
+                    <div className="description">(no description)</div>
+                  )
+                }
+              />
               <AttachmentLinks taskId={t.id} attachments={t.attachments} />
             </>
+          )}
+
+          {/* A rolled-over task is closed, and its work goes on under
+              another number (durable-tasks.design.md#DT-15): said first,
+              so somebody following an old link learns where to go
+              before reading a record that has stopped growing. */}
+          {t.rolledOverTo && (
+            <Alert
+              severity="info"
+              sx={{ mb: 2 }}
+              data-testid="task-rolled-over-to"
+            >
+              <strong>
+                Rolled over to{" "}
+                <TaskLink id={t.rolledOverTo} onOpenTask={onOpenTask} />.
+              </strong>{" "}
+              This durable task passed its record limit, so its work carries on
+              in the successor, with its brief, handover, pull request and
+              waits. This record is kept as it was.
+            </Alert>
+          )}
+          {t.rolledOverFrom && (
+            <Alert
+              severity="info"
+              sx={{ mb: 2 }}
+              data-testid="task-rolled-over-from"
+            >
+              Carries on the work of{" "}
+              <TaskLink id={t.rolledOverFrom} onOpenTask={onOpenTask} />, rolled
+              over when it passed its record limit; its earlier conversation and
+              runs are there.
+            </Alert>
           )}
 
           {t.state === "failed" && (
@@ -712,26 +842,30 @@ export default function DetailOverlay({
               and is not hidden behind anything. */}
           {/* A /tasks/<id>#comment=<id> link scrolls to its comment,
               wherever on this pane that is drawn (commentLinks.js). */}
-          <CommentDeepLink t={t} />
+          <CommentDeepLink t={t} onLoadEarlier={effectiveLoadEarlier} />
           {t.interactive ? (
             <>
-              <TaskChat t={t} act={act} />
+              <TaskChat t={t} act={act} onLoadEarlier={effectiveLoadEarlier} />
               <details className="task-chat-history">
                 <summary>Task history</summary>
                 <Timeline
                   t={t}
+                  context={taskContext}
                   act={act}
                   showError={showError}
                   onOpenTask={onOpenTask}
+                  onLoadEarlier={effectiveLoadEarlier}
                 />
               </details>
             </>
           ) : (
             <Timeline
               t={t}
+              context={taskContext}
               act={act}
               showError={showError}
               onOpenTask={onOpenTask}
+              onLoadEarlier={effectiveLoadEarlier}
             />
           )}
         </div>
@@ -899,6 +1033,14 @@ export default function DetailOverlay({
           {/* What grain checks to close this task, rather than its agent's
               word (design/design/durable-tasks.design.md#DT-4). */}
           <GoalSection t={t} act={act} config={config} tasks={tasks} />
+          {/* What a durable task's next prompt starts from, and Compact
+              (design/design/durable-tasks.design.md#DT-15). */}
+          <ContextSection
+            t={t}
+            context={taskContext}
+            setContext={setTaskContext}
+            act={act}
+          />
           {/* The repo this task is filed against and its base branch.
               The other repos it reads and writes are grants, in Access
               below (unified-grants slice 5), where its target shows

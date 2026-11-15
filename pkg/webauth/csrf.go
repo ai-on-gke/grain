@@ -24,13 +24,6 @@ import (
 
 var defaultCrossOriginProtection = http.NewCrossOriginProtection()
 
-// NewCrossOriginProtection constructs a stdlib http.CrossOriginProtection
-// instance enforcing Fetch-Metadata (Sec-Fetch-Site) and Origin checks on
-// unsafe HTTP methods.
-func NewCrossOriginProtection() *http.CrossOriginProtection {
-	return http.NewCrossOriginProtection()
-}
-
 // CheckCrossOrigin refuses a cross-site browser request with an unsafe method
 // using stdlib http.CrossOriginProtection. Safe methods (GET, HEAD, OPTIONS)
 // and non-browser callers carrying neither Sec-Fetch-Site nor Origin pass.

@@ -1,0 +1,16 @@
+## 1. not listed
+run 21455d8d0a6652fa: errored
+
+[{"name":"probe","conclusion":"errored","error":"building a sandbox for this job: CI capability \"api:ci-read\" refused: api:ci-read is not offered to acme/widgets's jobs: it reads deployment-wide state, and grain's API is offered to CI for ai-on-gke/grain only","warning":null}]
+## 2. merged change lists acme/widgets
+grain_config.ci_api_repos=acme/widgets
+run 144ca1ec960e5767: success
+PROBE: NO_API_TOKEN
+
+[{"name":"probe","conclusion":"success","error":null,"warning":null}]
+## 3. merged change removes it
+grain_config.ci_api_repos=
+run 2c52ff2258bf8cc4: errored
+
+[{"name":"probe","conclusion":"errored","error":"building a sandbox for this job: CI capability \"api:ci-read\" refused: api:ci-read is not offered to acme/widgets's jobs: it reads deployment-wide state, and grain's API is offered to CI for ai-on-gke/grain only","warning":null}]
+daemon pid unchanged: 34960

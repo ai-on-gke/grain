@@ -58,6 +58,8 @@ type fakeHubServer struct {
 	nextRetryAfter string
 	nextConflicts  []api.ScopeConflict
 	nextInterval   int
+	// nextEnvironmentName is the environment_name heartbeat replies carry.
+	nextEnvironmentName string
 }
 
 func newFakeHubServer(t *testing.T) (*fakeHubServer, *httptest.Server) {
@@ -169,6 +171,7 @@ func newFakeHubServer(t *testing.T) (*fakeHubServer, *httptest.Server) {
 		f.heartbeats = append(f.heartbeats, req)
 		conflicts := append([]api.ScopeConflict(nil), f.nextConflicts...)
 		interval := f.nextInterval
+		envName := f.nextEnvironmentName
 		f.mu.Unlock()
 
 		status := api.StatusOnline
@@ -180,6 +183,7 @@ func newFakeHubServer(t *testing.T) (*fakeHubServer, *httptest.Server) {
 			Status:              status,
 			NextIntervalSeconds: interval,
 			Conflicts:           conflicts,
+			EnvironmentName:     envName,
 		})
 	})
 

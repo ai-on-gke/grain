@@ -1,0 +1,6 @@
+name: Declared walk schedule
+template: walk
+every:
+  hours: 6
+grants:
+  - https://grain.dev/capabilities/api#secrets:write

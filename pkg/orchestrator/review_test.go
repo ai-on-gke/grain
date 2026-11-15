@@ -468,12 +468,23 @@ func TestSyncPullRequestsGivesUpOnAReviewThatNeverFinishes(t *testing.T) {
 		t.Fatalf("comments = %q, want the second one naming the review it gave up on", bodies)
 	}
 
-	// Blocked, not abandoned: it still merges the moment it reads clean.
+	// Blocked so later tasks in the repo can move, while this task's required
+	// review gate remains enforced until the review finishes (or is overridden).
 	if err := orchestrator.SyncPullRequests(ctx, store, client, late.Add(time.Minute)); err != nil {
 		t.Fatalf("SyncPullRequests: %v", err)
 	}
+	if sim.PullRequests[0].Merged {
+		t.Fatal("an overdue required review must not silently skip the review gate and merge")
+	}
+	done := late.Add(2 * time.Minute)
+	if err := store.Observe(ctx, model.Observation{TaskID: review.ID, CompletedAt: &done}); err != nil {
+		t.Fatal(err)
+	}
+	if err := orchestrator.SyncPullRequests(ctx, store, client, late.Add(3*time.Minute)); err != nil {
+		t.Fatalf("SyncPullRequests: %v", err)
+	}
 	if !sim.PullRequests[0].Merged {
-		t.Fatal("a task the queue gave up waiting on a review for still merges once clean")
+		t.Fatal("once the required review finishes cleanly, the blocked task merges")
 	}
 }
 
@@ -701,6 +712,57 @@ func TestSyncReviewsNeverGrantsADangerousGrantTheReviewedTaskLacks(t *testing.T)
 	for _, want := range []string{"api:deployment-ops", "gcp-key"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("review grants = %v, want %s kept", got, want)
+		}
+	}
+}
+
+// On a ci_mode: github repository, SyncReviews attaches repo-scoped
+// api:ci-read@<repo> (rather than stripping CI access completely) and carries
+// the cheap-review testing guidance so the reviewer reads check results
+// instead of re-running suites or waiting on CI.
+func TestSyncReviewsGrantsRepoScopedCIReadAndCarriesTestingGuidance(t *testing.T) {
+	t.Parallel()
+	store, ctx := openStore(t)
+	sim, client := newSim(t, "acme", "widgets", "main")
+	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
+	if err := store.PutRepoConfig(ctx, model.RepoConfig{
+		Repo: repo, CIMode: model.CIModeGitHub,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tmpl := reviewTemplate(t, ctx, store)
+	task := completedTask(t, ctx, store, sim, client, "t1", repo, true, tmpl.ID)
+
+	if err := orchestrator.SyncReviews(ctx, store, baseTime); err != nil {
+		t.Fatalf("SyncReviews: %v", err)
+	}
+	filed := reviewTaskOf(t, ctx, store, task.ID)
+	wantGrant := model.APIGrantString("ci-read", repo.String())
+	if len(filed.Grants) != 1 || filed.Grants[0].Capability != wantGrant || filed.Grants[0].Via != model.GrantByGrain {
+		t.Fatalf("review task grants = %+v, want [{Capability:%s Via:grain}]", filed.Grants, wantGrant)
+	}
+	if err := store.StartRun(ctx, model.Run{
+		ID: filed.ID + "-1", TaskID: filed.ID, Sandbox: "sb-review-ci",
+		Attempt: 1, StartedAt: baseTime.Add(time.Minute),
+	}, model.Limits{}); err != nil {
+		t.Fatal(err)
+	}
+	scope, live, err := store.SandboxNamespaceScope(ctx, "sb-review-ci")
+	if err != nil || !live {
+		t.Fatalf("SandboxNamespaceScope = live %v, err %v", live, err)
+	}
+	if !scope.MayReadCI || scope.MayReadAllCI || !scope.AllowedRepos["acme/widgets"] || scope.AllowedRepos["acme/other"] {
+		t.Errorf("SandboxNamespaceScope = %+v, want repo-scoped CI read on acme/widgets only", scope)
+	}
+	for _, want := range []string{
+		"Testing and CI",
+		"Do not run `go test ./...`",
+		"Do not call `grain ci wait`",
+		"narrowly targeted test (`go test ./pkg/x -run TestName`)",
+		"`go build ./...` or `go vet`",
+	} {
+		if !strings.Contains(filed.Body, want) {
+			t.Errorf("review body missing %q:\n%s", want, filed.Body)
 		}
 	}
 }

@@ -63,9 +63,8 @@ var boolFlagDef = regexp.MustCompile(`fs\.Bool\("([a-z0-9-]+)"`)
 var varFlagDef = regexp.MustCompile(`fs\.Var\(&[A-Za-z0-9_]+, "([a-z0-9-]+)"`)
 
 // daemonFlagFiles are the files beside daemon.go that register a flag on
-// its FlagSet: sandboxnet.go's -k8s-sandbox-service, daemon_upgrade_source.go's
-// -upgrade-image and its image source flags.
-var daemonFlagFiles = []string{"sandboxnet.go", "ghwebhook_flags.go", "daemon_upgrade_source.go"}
+// its FlagSet: sandboxnet.go's -k8s-sandbox-service.
+var daemonFlagFiles = []string{"sandboxnet.go", "ghwebhook_flags.go"}
 
 // daemonFlags is every flag pkg/cli/daemon.go defines, mapped to
 // whether it takes a value -- with the ones registered for it from

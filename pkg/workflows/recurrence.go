@@ -146,7 +146,8 @@ func (t GitHubWorkflowRunTrigger) MatchesConclusion(conclusion string) bool {
 	return false
 }
 
-// MatchesBranch reports whether branch matches t.Branches, or fallbackBase when
+// MatchesBranch reports whether branch matches t.Branches -- a name, or a
+// glob pattern -- or fallbackBase when
 // Branches is empty. When both Branches and fallbackBase are empty, no branch
 // matches -- the caller must resolve the schedule's base or the repository's
 // default branch first.
@@ -166,6 +167,13 @@ func (t GitHubWorkflowRunTrigger) MatchesBranch(branch, fallbackBase string) boo
 		w := strings.TrimPrefix(strings.TrimSpace(want), "refs/heads/")
 		if w != "" && w == b {
 			return true
+		}
+		// A glob ("v*-rc.*", a release candidate tag's run) matches as
+		// path.Match does, as docs/schedules.md has always said it would.
+		if strings.ContainsAny(w, "*?[") {
+			if ok, err := path.Match(w, b); err == nil && ok {
+				return true
+			}
 		}
 	}
 	return false

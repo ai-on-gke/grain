@@ -181,6 +181,13 @@ func logRedactor(secretsDir string, secretStore *secrets.Store) func() (*grainlo
 	}
 }
 
+// LogRedactor is logRedactor for a caller outside this package that
+// builds a ui.Config of its own -- tests/security's credential exposure
+// sweep, which must redact with exactly what a daemon hands its UI.
+func LogRedactor(secretsDir string, secretStore *secrets.Store) func() (*grainlog.Redactor, error) {
+	return logRedactor(secretsDir, secretStore)
+}
+
 func HostTopOrNil(cfg Config) func(ctx context.Context, lines int) ([]string, error) {
 	if KubernetesMode(cfg) {
 		return nil

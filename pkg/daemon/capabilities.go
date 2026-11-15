@@ -39,13 +39,56 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
-func newCapabilityRegistryWithStore(_ *model.Store, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
+func newCapabilityRegistryWithStore(store *model.Store, providers ...model.CapabilityProvider) *model.CapabilityRegistry {
 	reg := model.NewCapabilityRegistry(providers...)
 	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
 	// A CI job's api grants are a token for CIAPI rather than routes an
-	// agent may call (pkg/capability/ciapi).
-	reg.RegisterCIDynamic(ciapi.DynamicProvider(CIAPI, ciapi.Config{}))
+	// agent may call (pkg/capability/ciapi), offered to the repositories
+	// grain_config.ci_api_repos lists. Read here, from the store, because
+	// grain CI builds a registry for every job it admits (ciProviders in
+	// run.go): a changed setting reaches the next job without a restart.
+	reg.RegisterCIDynamic(ciapi.DynamicProvider(CIAPI, ciapi.Config{Repos: ciAPIRepos(store)}))
 	return reg
+}
+
+// ciAPIRepos is the repositories whose trusted CI jobs may hold api
+// grants: grain's own (model.GrainSourceRepo), always, and whatever
+// grain_config.ci_api_repos adds to it. Always rather than only when
+// the list is empty, so that an operator offering the API to one more
+// repository does not take it away from grain's own release train
+// (release-gate-read) by not repeating it. nil -- grain's own only
+// (ciapi.Config.Repos) -- when there is no store, no config row, or
+// nothing listed. An entry that is not a repository is logged and left
+// out rather than failing every job's resolution: leaving it out only
+// ever offers less.
+func ciAPIRepos(store *model.Store) []model.RepoRef {
+	if store == nil {
+		return nil
+	}
+	cfg, err := store.GetConfig(context.Background())
+	if err != nil {
+		log.Printf("grain daemon: reading grain_config.ci_api_repos: %v; offering grain's API to %s's CI jobs only", err, model.GrainSourceRepo())
+		return nil
+	}
+	if cfg == nil {
+		return nil
+	}
+	var repos []model.RepoRef
+	for _, entry := range cfg.CIAPIRepos {
+		if strings.TrimSpace(entry) == "" {
+			continue
+		}
+		repo, err := model.ParseRepo(entry)
+		if err != nil {
+			log.Printf("grain daemon: grain_config.ci_api_repos: ignoring %q: %v", entry, err)
+			continue
+		}
+		repos = append(repos, repo)
+	}
+	if len(repos) == 0 {
+		return nil
+	}
+	return append([]model.RepoRef{model.GrainSourceRepo()}, repos...)
 }
 
 // capabilityProviders builds every capability provider this deployment
@@ -176,12 +219,9 @@ func grantTools(srcDir, secretsDir string, secretStore *secrets.Store) map[strin
 		// Built per run rather than once here, so that a secret set
 		// since this process started is redacted by the next run that
 		// reads the journal rather than by the next restart.
-		grainlog.CapabilityName: func(_ *model.Store, taskID string) []mcp.Tool {
-			return grainlog.Tools(grainlog.Config{
-				TaskID:   taskID,
-				Redactor: grainLogRedactorFor(secretsDir, secretStore),
-			})
-		},
+		// Keyed by grain#journal alone: the retired bare grain-log is
+		// no longer an alias, so a task still holding it is given no
+		// journal tools.
 		grainserver.JournalGrant: func(_ *model.Store, taskID string) []mcp.Tool {
 			return grainlog.Tools(grainlog.Config{
 				TaskID:   taskID,
@@ -215,6 +255,10 @@ type credentialTokenSource struct {
 	// caller that dropped a RepoRef's host still be authenticated with
 	// the credential for the host forgeRouter sends it to.
 	hostOf func(owner, repo string) string
+	// mergeCredential, when set, is the credential name owner/repo's pull
+	// requests are merged with when that is not its push credential
+	// (model.Store.GitMergeCredentialOn), or false.
+	mergeCredential func(host, owner, repo string) (name string, ok bool)
 }
 
 // ref is owner/repo as a RepoRef: host-qualified as stored
@@ -393,6 +437,84 @@ func (c credentialTokenSource) AppSlugFor(owner, repo string) (string, error) {
 	return strings.TrimSuffix(login, "[bot]"), nil
 }
 
+// selectMergeCredential is owner/repo's merge credential's name, and the
+// credential itself when the store holds it (github.MergeTokenSource).
+func (c credentialTokenSource) selectMergeCredential(owner, repo string) (string, gitproxy.Credential, bool) {
+	if c.mergeCredential == nil {
+		return "", gitproxy.Credential{}, false
+	}
+	ref := c.ref(owner, repo)
+	host := ref.GitHost()
+	name, ok := c.mergeCredential(host, ref.Owner, ref.Name)
+	if !ok || name == "" {
+		return "", gitproxy.Credential{}, false
+	}
+	if c.credentials == nil {
+		return name, gitproxy.Credential{}, true
+	}
+	cred, _ := c.credentials.GetForRepoOn(name, host, ref.Owner, ref.Name)
+	return name, cred, true
+}
+
+// MergeTokenFor is github.MergeTokenSource: the token owner/repo's merge
+// credential gives, nil when it names one the store does not hold or
+// cannot mint a token for -- which refuses the merge rather than making it
+// under the push credential -- and nil too when the push credential's
+// forge traffic goes through its host's own tool (MergeRefusalFor).
+func (c credentialTokenSource) MergeTokenFor(owner, repo string) (*string, bool) {
+	_, cred, ok := c.selectMergeCredential(owner, repo)
+	if !ok {
+		return nil, false
+	}
+	if c.mergeRefusal(owner, repo) != "" {
+		return nil, true
+	}
+	return cred.Token, true
+}
+
+// MergeRefusalFor is github.MergeRefusalSource: why owner/repo's merge
+// credential gave no token for the merge it was asked for, or "" to let
+// the generic ErrNoMergeToken stand.
+func (c credentialTokenSource) MergeRefusalFor(owner, repo string) string {
+	if _, _, ok := c.selectMergeCredential(owner, repo); !ok {
+		return ""
+	}
+	return c.mergeRefusal(owner, repo)
+}
+
+// mergeRefusal is a sentence when owner/repo's push credential sends its
+// forge traffic through its host's tool (`<tool> api`): forgeRouter picks
+// the transport by the push credential, and that transport drops the
+// request's Authorization header and authenticates with the tool's own
+// login, so a merge sent with the merge credential's token would be made
+// as that login -- the person's -- and recorded as the merge credential's.
+func (c credentialTokenSource) mergeRefusal(owner, repo string) string {
+	if c.credentials == nil {
+		return ""
+	}
+	push, ok := c.selectGitCredential(owner, repo)
+	if !ok || !c.credentials.ForgeViaCommand(push.Name) {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s is pushed with %s, whose forge calls go through its host's own tool as that tool's login, "+
+		"which a merge credential cannot replace", owner, repo, push.Name)
+}
+
+// MergeIdentityFor is github.MergeTokenSource: the merge credential's
+// name, with the App's bot login when it is an App's.
+func (c credentialTokenSource) MergeIdentityFor(owner, repo string) string {
+	name, _, ok := c.selectMergeCredential(owner, repo)
+	if !ok {
+		return ""
+	}
+	if c.credentials != nil {
+		if login, isApp, err := c.credentials.AppBotLogin(name); err == nil && isApp && login != "" {
+			return fmt.Sprintf("merge credential %s (%s)", name, login)
+		}
+	}
+	return "merge credential " + name
+}
+
 func (c credentialTokenSource) TokenFor(owner, repo string) *string {
 	cred, ok := c.selectCredential(owner, repo)
 	if !ok {
@@ -473,6 +595,46 @@ func repoTeamCredential(store *model.Store) func(host, owner, repo string) (stri
 		cache[key] = entry{name: name, ok: ok, at: now}
 		mu.Unlock()
 		return name, ok
+	}
+}
+
+// repoMergeCredential is credentialTokenSource.mergeCredential over
+// store (model.Store.GitMergeCredentialOn), trusting one answer for
+// repoTeamCredentialTTL as repoTeamCredential does. A store error is
+// logged and answered as no merge credential, which leaves the merge on
+// the push credential exactly as before the setting existed.
+func repoMergeCredential(store *model.Store) func(host, owner, repo string) (string, bool) {
+	if store == nil {
+		return nil
+	}
+	type entry struct {
+		name string
+		at   time.Time
+	}
+	var (
+		mu    sync.Mutex
+		cache = map[string]entry{}
+	)
+	return func(host, owner, repo string) (string, bool) {
+		key := strings.ToLower(host + "/" + owner + "/" + repo)
+		now := getRepoTeamCredentialNow()
+		mu.Lock()
+		if e, hit := cache[key]; hit && now.Sub(e.at) < getRepoTeamCredentialTTL() {
+			mu.Unlock()
+			return e.name, e.name != ""
+		}
+		mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		name, err := store.GitMergeCredentialOn(ctx, host, owner, repo)
+		if err != nil {
+			log.Printf("grain daemon: finding the merge credential for %s/%s: %v", owner, repo, err)
+			return "", false
+		}
+		mu.Lock()
+		cache[key] = entry{name: name, at: now}
+		mu.Unlock()
+		return name, name != ""
 	}
 }
 

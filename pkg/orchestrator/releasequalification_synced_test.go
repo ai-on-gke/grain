@@ -38,12 +38,11 @@ const (
 )
 
 var (
-	edCoreSHA  = "0123456789ab" + strings.Repeat("0", 28) // core's v1.4.0
-	edTrunkSHA = "aaaaaaaaaaaa" + strings.Repeat("0", 28) // a core commit no release was cut from
-	edOldSHA   = strings.Repeat("b", 40)                  // the edition's sync to v1.3.0
-	edSyncSHA  = strings.Repeat("c", 40)                  // the edition's sync to v1.4.0
-	edHeadSHA  = strings.Repeat("d", 40)                  // the edition tracking core's trunk
-	edItems    = []string{"edition-a", "edition-b", "edition-smoke"}
+	edCoreSHA = "0123456789ab" + strings.Repeat("0", 28) // core's v1.4.0
+	edOldSHA  = strings.Repeat("b", 40)                  // the edition's sync to v1.3.0
+	edSyncSHA = strings.Repeat("c", 40)                  // the edition's sync to v1.4.0
+	edHeadSHA = strings.Repeat("d", 40)                  // the edition tracking core's trunk
+	edItems   = []string{"edition-a", "edition-b", "edition-smoke"}
 )
 
 func edGoMod(version string) string {

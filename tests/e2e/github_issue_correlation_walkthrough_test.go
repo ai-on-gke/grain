@@ -157,7 +157,7 @@ func TestGitHubIssueCorrelationAndAutoCloseWalkthrough(t *testing.T) {
 		// Step 3: Dispatch Task with -issue 101 and --capability read-issues
 		// ---------------------------------------------------------------------
 		t.Log("=== Step 3: Dispatch Task with -issue 101 and --capability read-issues ===")
-		caps := []string{"read-issues"}
+		caps := []string{model.GitHubReadIssuesGrant}
 		taskReq := ui.CreateTaskRequest{
 			Title:        "Fix button contrast in dark mode",
 			Description:  "Resolve contrast ratio issues on dark mode buttons",
@@ -173,7 +173,7 @@ func TestGitHubIssueCorrelationAndAutoCloseWalkthrough(t *testing.T) {
 		if createdTask.Issue != issueNumber {
 			t.Fatalf("createdTask.Issue = %d, want %d", createdTask.Issue, issueNumber)
 		}
-		if len(createdTask.Capabilities) != 1 || createdTask.Capabilities[0] != model.GitHubReadIssuesGrant {
+		if caps := withoutDefaultCIRead(createdTask.Capabilities); len(caps) != 1 || caps[0] != model.GitHubReadIssuesGrant {
 			t.Fatalf("createdTask.Capabilities = %v, want [%q]", createdTask.Capabilities, model.GitHubReadIssuesGrant)
 		}
 
@@ -205,7 +205,7 @@ func TestGitHubIssueCorrelationAndAutoCloseWalkthrough(t *testing.T) {
 			"-github-host", githubHost,
 			"-github-insecure-http",
 			"-pr-repo", targetRepo,
-			"-grant", "read-issues",
+			"-grant", model.GitHubReadIssuesGrant,
 		)
 
 		// Verify advertised tools

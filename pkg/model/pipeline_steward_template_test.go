@@ -111,3 +111,25 @@ func TestReleaseFloorAndPreviousCandidate(t *testing.T) {
 		t.Error("PreviousCandidate found a candidate before rc.1")
 	}
 }
+
+// The steward is told to ground every claim in this wake's reads, to
+// re-read before restating memory, to set apart what it cannot ground,
+// and to fail its own report on grain's check and retry once.
+func TestPipelineStewardIsToldToGroundEveryClaimInThisWake(t *testing.T) {
+	t.Parallel()
+	body := pipelineStewardBody(t)
+	for _, want := range []string{
+		"run `grain task read <id>` in this wake",
+		"are memory, not records",
+		"A summary of a summary is not a source.",
+		"*in this wake*",
+		"goes under a separate `" + model.PipelineStewardUnverifiedHeading + "` heading",
+		"Run `grain report check --file <f>`.",
+		"If it fails, your report fails",
+		"Retry once only",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the steward's prompt does not say %q", want)
+		}
+	}
+}

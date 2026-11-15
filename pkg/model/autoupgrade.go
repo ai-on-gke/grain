@@ -98,6 +98,11 @@ type AutoUpgradeRelease struct {
 	ScheduledAt *time.Time
 	// Outcome is how it ended: one of the AutoUpgradeOutcome values.
 	Outcome string
+	// SucceededAt is when the last automatic upgrade actually completed
+	// (PhaseOK without Status.Unchanged), preserved across later unchanged,
+	// scheduled or failed releases so reconcileReleaseUpgrade can enforce
+	// Config.AutoUpgradeMinIntervalHours.
+	SucceededAt *time.Time
 }
 
 // The values of AutoUpgradeRelease.Outcome.
@@ -111,16 +116,18 @@ const (
 	// AutoUpgradeFailed is an upgrade that failed; a notification
 	// (FamilyUpgradeFailed) says where.
 	AutoUpgradeFailed = "failed"
+	// AutoUpgradeCancelled is an upgrade cancelled by an operator.
+	AutoUpgradeCancelled = "cancelled"
 )
 
 // GetAutoUpgradeRelease reads the record, or nil (with no error) for a
 // deployment whose release-triggered upgrade has never looked.
 func (s *Store) GetAutoUpgradeRelease(ctx context.Context) (*AutoUpgradeRelease, error) {
 	row := s.db.QueryRowContext(ctx,
-		"SELECT `newest`,`seen_at`,`release_tag`,`target`,`scheduled_at`,`outcome` FROM `auto_upgrade_release` WHERE `id` = 1")
+		"SELECT `newest`,`seen_at`,`release_tag`,`target`,`scheduled_at`,`outcome`,`succeeded_at` FROM `auto_upgrade_release` WHERE `id` = 1")
 	var r AutoUpgradeRelease
-	var scheduled sql.NullTime
-	if err := row.Scan(&r.Newest, &r.SeenAt, &r.Release, &r.Target, &scheduled, &r.Outcome); err != nil {
+	var scheduled, succeeded sql.NullTime
+	if err := row.Scan(&r.Newest, &r.SeenAt, &r.Release, &r.Target, &scheduled, &r.Outcome, &succeeded); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -131,19 +138,26 @@ func (s *Store) GetAutoUpgradeRelease(ctx context.Context) (*AutoUpgradeRelease,
 		t := scheduled.Time.UTC()
 		r.ScheduledAt = &t
 	}
+	if succeeded.Valid {
+		t := succeeded.Time.UTC()
+		r.SucceededAt = &t
+	}
 	return &r, nil
 }
 
 // SetAutoUpgradeRelease writes the record, replacing the one before it.
 func (s *Store) SetAutoUpgradeRelease(ctx context.Context, r AutoUpgradeRelease) error {
-	var scheduled any
+	var scheduled, succeeded any
 	if r.ScheduledAt != nil {
 		scheduled = r.ScheduledAt.UTC()
 	}
+	if r.SucceededAt != nil {
+		succeeded = r.SucceededAt.UTC()
+	}
 	return s.write(ctx, "record the release-triggered upgrade for "+r.Newest, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
-			"REPLACE INTO `auto_upgrade_release` (`id`,`newest`,`seen_at`,`release_tag`,`target`,`scheduled_at`,`outcome`) VALUES (1,?,?,?,?,?,?)",
-			r.Newest, r.SeenAt.UTC(), r.Release, r.Target, scheduled, r.Outcome)
+			"REPLACE INTO `auto_upgrade_release` (`id`,`newest`,`seen_at`,`release_tag`,`target`,`scheduled_at`,`outcome`,`succeeded_at`) VALUES (1,?,?,?,?,?,?,?)",
+			r.Newest, r.SeenAt.UTC(), r.Release, r.Target, scheduled, r.Outcome, succeeded)
 		return err
 	})
 }

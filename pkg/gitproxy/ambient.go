@@ -403,6 +403,29 @@ func AmbientHostHTTPClient(h CredentialHost, source string, timeout time.Duratio
 	return commandForgeClient(src, h, timeout), true
 }
 
+// AmbientForgeTransport is the github.Transport for h's REST API through
+// source's tool, for a login that is not saved yet -- the connection
+// editor's Test on an ambient connection it has not saved: ok is false
+// unless source (or the registered source claiming h.Host, when source
+// is empty) is a ForgeViaCommand one, which a saved credential's
+// ForgeTransport would send through `<tool> api` too.
+func AmbientForgeTransport(h CredentialHost, source string) (github.Transport, bool) {
+	client, ok := AmbientHostHTTPClient(h, source, appMintTimeout)
+	if !ok {
+		return nil, false
+	}
+	apiHost, prefix, ok := h.APIBase()
+	if !ok {
+		return nil, false
+	}
+	transport := github.NewRealTransport(apiHost)
+	transport.Host = apiHost
+	transport.PathPrefix = prefix
+	transport.UseTLS = h.useTLS()
+	transport.Client = client
+	return transport, true
+}
+
 // ForgeTransport is the github.Transport for credential name's own
 // host's REST API: what a check of that credential, or a listing of what
 // it reaches, sends with.
@@ -913,7 +936,7 @@ var (
 )
 
 // RegisterAmbientHomeDir adds dir as a parent directory of per-user
-// local-disk homes (<dir>/<username>) that AmbientHome prefers over the
+// local-disk homes (<dir>/<username>) that ambientHome prefers over the
 // passwd entry's HomeDir when <dir>/<username> is a directory owned by the
 // daemon's own uid -- for workstations whose NSS/LDAP passwd entry names an
 // autofs home that hangs on non-interactive access. It returns a function
@@ -958,10 +981,6 @@ func ambientAccount() string {
 	}
 	return name + " on " + host
 }
-
-// AmbientHome is the account's real home directory: where its gh login
-// (.config/gh/hosts.yml) and git config live.
-func AmbientHome() string { return ambientHome() }
 
 // ambientHome is the account's real home directory: where its gh login
 // (.config/gh/hosts.yml) and git config live. A host-mode unit points the

@@ -34,7 +34,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
-	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A sandbox's tools are its authority: whatever its MCP server publishes,
@@ -67,6 +66,11 @@ var everyRunTool = map[string]string{
 	"ask_question": "escape hatch", "request_secret": "escape hatch", "request_access": "escape hatch", "comment_on_issue": "escape hatch",
 	"nothing_needed": "escape hatch",
 	"write_handover": "escape hatch", "propose_task": "escape hatch", "add_review_comment": "escape hatch",
+	// write_handover's deliberate forms (durable-tasks DT-15): each is
+	// relayed when the run ends and only rewrites the run's own task's
+	// handover, compaction cursor or current brief -- never another
+	// task's, and never the original description.
+	"compact_context": "own task", "update_brief": "own task",
 	// The run's own branch's CI, which it cannot leave.
 	"pull_request_status": "own branch", "base_branch_status": "own branch", "wait_for_checks": "own branch",
 	// Answering and resolving review comments on the pull request open
@@ -216,8 +220,11 @@ func stubDaemon(t *testing.T, grants []string) string {
 // stub daemon whose task holds grants, and -interactive when asked.
 func publishedDaemonTools(t *testing.T, interactive bool, grants ...string) map[string]bool {
 	t.Helper()
+	// -data-dir gives the server a GitHub reader, as a local daemon's run
+	// has: without one the pull request tools are left off altogether
+	// (TestControlRoster checks that).
 	args := append(mcpserverArgs(t, grants), "-server", stubDaemon(t, grants), "-task", "1",
-		"-pr-repo", "acme/widgets", "-pr-branch", "grain/task-1")
+		"-pr-repo", "acme/widgets", "-pr-branch", "grain/task-1", "-data-dir", t.TempDir())
 	if interactive {
 		args = append(args, "-interactive")
 	}
@@ -374,9 +381,6 @@ func checkGrantPartition(t *testing.T, who string, bare map[string]bool, allowed
 				continue
 			}
 			for _, name := range names {
-				if strings.HasPrefix(name, "api_") && model.APIAliasPreset(grant) != "" && model.APIAliasPreset(other) != "" {
-					continue
-				}
 				if slices.Contains(otherNames, name) {
 					t.Errorf("%q is offered both to a run holding %s and to one holding %s", name, grant, other)
 				}
@@ -553,9 +557,12 @@ func TestGetCIArtifactRefusesARepositoryOutsideTheTask(t *testing.T) {
 // escalation tools, plus the tools of grants no sandbox process may
 // reach -- and nothing the `grain` CLI serves instead.
 func TestControlRoster(t *testing.T) {
-	control := func(interactive bool, grants ...string) map[string]bool {
+	controlWith := func(dataDir string, interactive bool, grants ...string) map[string]bool {
 		t.Helper()
 		args := []string{"mcpserver", "-sandbox-root", t.TempDir()}
+		if dataDir != "" {
+			args = append(args, "-data-dir", dataDir)
+		}
 		for _, g := range grants {
 			args = append(args, "-grant", g)
 		}
@@ -566,10 +573,14 @@ func TestControlRoster(t *testing.T) {
 		}
 		return listTools(t, args, grants)
 	}
+	control := func(interactive bool, grants ...string) map[string]bool {
+		t.Helper()
+		return controlWith(t.TempDir(), interactive, grants...)
+	}
 	want := []string{"run_command", "read_file", "write_file", "edit_file",
 		"ask_question", "request_secret", "request_access", "comment_on_issue", "nothing_needed",
 		"propose_task", "wait_for_task", "resume_later", "recreate_sandbox"}
-	got := control(false, "grain-ci", "self-debug", "memory")
+	got := control(false, grainci.Grant, "api:self-debug", "https://grain.dev/capabilities/grain#source={}", "api:memory")
 	for _, name := range want {
 		if !got[name] {
 			t.Errorf("the control roster has no %q; got %v", name, got)
@@ -585,12 +596,19 @@ func TestControlRoster(t *testing.T) {
 		}
 	}
 	if github := control(false); !github["wait_for_checks"] || !github["pull_request_status"] || !github["base_branch_status"] {
-		t.Errorf("a run without grain-ci reads GitHub's checks only through its MCP tools; got %v", github)
+		t.Errorf("a run without grain-ci whose server has a GitHub reader is not offered GitHub's CI tools; got %v", github)
 	}
-	if !control(true, "grain-ci")["chat"] {
+	// A host's sandbox starts its server with no data directory, so no
+	// GitHub reader: the tools could only answer "no GitHub repository
+	// configured", and are not offered (task 4364). Such a run reads CI
+	// with `grain ci wait` and `grain pr open`.
+	if host := controlWith("", false); host["wait_for_checks"] || host["pull_request_status"] || host["base_branch_status"] {
+		t.Errorf("a run with no GitHub reader is offered CI tools that can only error; got %v", host)
+	}
+	if !control(true, grainci.Grant)["chat"] {
 		t.Errorf("an interactive run's control roster has no chat")
 	}
-	if up := control(false, "grain-ci", "api:self-upgrade"); up["api_start_upgrade"] || up["api_cancel_scheduled_upgrade"] || up["api_get_upgrade_status"] {
+	if up := control(false, grainci.Grant, "api:self-upgrade"); up["api_start_upgrade"] || up["api_cancel_scheduled_upgrade"] || up["api_get_upgrade_status"] {
 		t.Errorf("grain-sandbox serves no api_* tools (api:* grants are served on grain-controller /api/mcp); got %v", up)
 	}
 }

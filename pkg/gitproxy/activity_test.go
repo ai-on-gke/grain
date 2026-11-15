@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -162,5 +163,138 @@ func TestNamespaceRequestsNarrateAndRecordToolCalls(t *testing.T) {
 	refused := act.toolRows[2]
 	if refused.runID != "run-b" || refused.tool != "grain_read" || !refused.errored {
 		t.Errorf("refused read recorded as %+v", refused)
+	}
+}
+
+// feedDeploy answers deploy://pipeline-changes with a fixed page.
+type feedDeploy struct{ page string }
+
+func (d feedDeploy) ReadMergeQueue(context.Context) (string, error) { return "", nil }
+func (d feedDeploy) ReadMetrics(context.Context, string, namespace.MetricsQuery) (string, error) {
+	return "", nil
+}
+func (d feedDeploy) ReadPipelineChanges(context.Context, string, int) (string, error) {
+	return d.page, nil
+}
+func (d feedDeploy) ReadHealth(context.Context) (string, error)            { return "", nil }
+func (d feedDeploy) ReadState(context.Context, string) (string, error)     { return "", nil }
+func (d feedDeploy) ListStateTables(context.Context) ([]string, error)     { return nil, nil }
+func (d feedDeploy) ListGrainLogSources(context.Context) ([]string, error) { return nil, nil }
+func (d feedDeploy) ReadGrainLog(context.Context, string, namespace.GrainLogQuery) (string, error) {
+	return "", nil
+}
+
+type apiCallActivity struct {
+	fakeActivity
+	apiCalls []string
+}
+
+func (a *apiCallActivity) RecordProxyAPICall(_ context.Context, runID, tool, targetIDs string, _ int64) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.apiCalls = append(a.apiCalls, runID+":"+tool+":"+targetIDs)
+	return nil
+}
+
+// A pipeline-changes page read through the grain CLI names the tasks it
+// showed in task_run_api_call, as the MCP tool it replaced does, so the
+// steward's report check counts them as read (orchestrator's
+// ReadIDsFromAPICalls).
+func TestPipelineChangesReadRecordsTheTasksItShowed(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb-steward": "tok-steward"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := "task 832 task queued→running 2026-11-11T09:00:00Z\n" +
+		"task 833 stall none→stalled 2026-11-11T09:01:00Z (no progress for 3h)\n" +
+		"next: grain read deploy://pipeline-changes --cursor 2026-11-11T09:01:00Z~1"
+	act := &apiCallActivity{}
+	proxy := &gitproxy.GitProxy{
+		Tokens:    tokens,
+		Namespace: &namespace.Server{Deploy: feedDeploy{page: page}, Redactor: redact.New(nil)},
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-steward": {TaskID: "768", RunID: "run-s", MayReadPipeline: true},
+		}},
+		Activity: act,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/fs/deploy/pipeline-changes", nil)
+	req.Header.Set("Authorization", basicAuthHeader("tok-steward"))
+	rec := httptest.NewRecorder()
+	gitproxy.NewHandler(proxy).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read pipeline-changes: %d %s", rec.Code, rec.Body)
+	}
+
+	act.mu.Lock()
+	defer act.mu.Unlock()
+	if want := []string{"run-s:read_pipeline_changes:832,833"}; len(act.apiCalls) != 1 || act.apiCalls[0] != want[0] {
+		t.Errorf("API calls = %q, want %q", act.apiCalls, want)
+	}
+}
+
+type fakeReportChecker struct {
+	gotTask, gotRun, gotReport string
+}
+
+func (f *fakeReportChecker) CheckReportDraft(_ context.Context, taskID, runID, report string) (string, bool, error) {
+	f.gotTask, f.gotRun, f.gotReport = taskID, runID, report
+	failed := strings.Contains(report, "[task 999]")
+	if failed {
+		return "Report check fails: claims=1 uncited=0 unread=1 mismatched=0", true, nil
+	}
+	return "Report check passes: claims=1 uncited=0 unread=0 mismatched=0", false, nil
+}
+
+// grain report check hands the draft and the live run to the checker, and
+// a failing draft is a 422 so the command exits non-zero.
+func TestReportCheckRouteAnswersTheDraftsVerdict(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "sandbox-tokens.json")
+	raw, _ := json.Marshal(map[string]string{"sb-steward": "tok-steward"})
+	if err := os.WriteFile(tokenFile, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokens, err := gitproxy.LoadSandboxTokens(tokenFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checker := &fakeReportChecker{}
+	act := &apiCallActivity{}
+	proxy := &gitproxy.GitProxy{
+		Tokens: tokens,
+		NamespaceScopes: fakeNamespaceScopes{scopes: map[string]model.NamespaceScope{
+			"sb-steward": {TaskID: "768", RunID: "run-s"},
+		}},
+		Activity:      act,
+		ReportChecker: checker,
+	}
+	h := gitproxy.NewHandler(proxy)
+	post := func(report string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"report": report})
+		req := httptest.NewRequest(http.MethodPost, "/cli/report/check", strings.NewReader(string(body)))
+		req.Header.Set("Authorization", basicAuthHeader("tok-steward"))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := post("- Task 832 is queued [task 832]")
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Body.String(), "Report check passes") {
+		t.Fatalf("passing draft: %d %q", rec.Code, rec.Body)
+	}
+	if checker.gotTask != "768" || checker.gotRun != "run-s" || checker.gotReport != "- Task 832 is queued [task 832]" {
+		t.Errorf("checker asked about task %q run %q report %q", checker.gotTask, checker.gotRun, checker.gotReport)
+	}
+	rec = post("- Task 999 is queued [task 999]")
+	if rec.Code != http.StatusUnprocessableEntity || !strings.HasPrefix(rec.Body.String(), "Report check fails") {
+		t.Fatalf("failing draft: %d %q", rec.Code, rec.Body)
+	}
+	if rec := post("  "); rec.Code != http.StatusBadRequest {
+		t.Errorf("empty draft: %d, want 400", rec.Code)
 	}
 }

@@ -50,14 +50,14 @@ func TestHostingSettingAndLegacyConsoleAlias(t *testing.T) {
 		t.Fatalf("explicit.Hosting = %q, want console", explicit.Hosting)
 	}
 
-	legacyCaps := []string{"console", "github-sandbox"}
+	legacyCaps := []string{"console", model.GitHubSandboxRepoGrant}
 	aliased, err := c.CreateTask(ctx, ui.CreateTaskRequest{
 		Title: "legacy console", Capabilities: &legacyCaps, Approved: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if aliased.Hosting != "console" || !slices.Equal(aliased.Capabilities, []string{model.GitHubSandboxRepoGrant}) {
+	if aliased.Hosting != "console" || !slices.Equal(withoutDefaultCIRead(aliased.Capabilities), []string{model.GitHubSandboxRepoGrant}) {
 		t.Fatalf("aliased = (hosting=%q, caps=%v), want (console, [%s])", aliased.Hosting, aliased.Capabilities, model.GitHubSandboxRepoGrant)
 	}
 
@@ -102,7 +102,7 @@ func TestHostingSettingAndLegacyConsoleAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if afterAttach.Hosting != "console" || len(afterAttach.Capabilities) != 0 {
+	if afterAttach.Hosting != "console" || len(withoutDefaultCIRead(afterAttach.Capabilities)) != 0 {
 		t.Fatalf("after attach = (hosting=%q, caps=%v), want (console, [])", afterAttach.Hosting, afterAttach.Capabilities)
 	}
 

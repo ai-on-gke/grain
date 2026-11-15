@@ -19,7 +19,8 @@
 #            Dockerfile or Granulefile (the base images, the apt package
 #            lists, the pinned docker/kubectl/cosign binaries and agent
 #            CLI versions all live there) -- or the gate itself builds the
-#            release's four images from the PR and scans them, failing
+#            release's four images from the PR and scans them, and the
+#            guest's packed root filesystem as sandbox-rootfs, failing
 #            the way the release would.
 #   weekly   every Monday, the published `latest` images (or the tag a
 #            dispatch names) are scanned and reported without failing:
@@ -160,6 +161,8 @@ jobs:
           restore-keys: |
             trivy-${{ runner.os }}-
 
+      # scan-images.sh also scans the guest's packed disk, as
+      # sandbox-rootfs: the root filesystem the sandbox boots.
       - name: Scan the images
         run: |
           bash ./scripts/scan-images.sh --out image-vulns-report --title "PR image vulnerabilities" \
@@ -194,6 +197,13 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+
+      - name: Free runner disk space
+        # The guest's disk is copied out of its image to be scanned
+        # (scripts/scan-images.sh), several gigabytes beside the pull.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h
 
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0

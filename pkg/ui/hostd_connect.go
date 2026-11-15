@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/hostd"
@@ -53,7 +54,7 @@ func (s *Server) handleHostdConnect(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("grain daemon: refused a grain hostd on %s connecting from %s: %v", hostdHostOf(r), r.RemoteAddr, err)
 		if code == http.StatusServiceUnavailable {
-			w.Header().Set("Retry-After", verifierRetryAfter)
+			w.Header().Set("Retry-After", strconv.Itoa(verifierRetryAfter))
 		}
 		http.Error(w, "host: "+err.Error(), code)
 		return

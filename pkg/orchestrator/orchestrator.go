@@ -64,6 +64,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/qa"
 	"github.com/ai-on-gke/grain/pkg/staterepo"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
@@ -482,6 +483,12 @@ type Config struct {
 	// Skills is this deployment's default repository skill discovery
 	// configuration (model.Config.Skills), refreshed from grain_config each cycle.
 	Skills *model.SkillsConfig
+	// QA is this deployment's quality control engine and PR rollout configuration
+	// (model.Config.QA), refreshed from grain_config each cycle.
+	QA model.QAConfig
+	// QAProfiler records optional JSONL stage timing and heap allocation deltas
+	// for QA assignment and check stages.
+	QAProfiler *qa.Profiler
 	// TimeZone is this deployment's own clock, model.Config.TimeZone --
 	// "" for one that never set it. It is the zone a run's prompt tells
 	// the time in for a task that names none of its own (RunDispatch);
@@ -536,6 +543,11 @@ type Config struct {
 	// deployment that really wants a longer one sets it explicitly
 	// instead of switching this off.
 	MaxRunRuntime time.Duration
+	// AutoCompactBytes is the assembled-prompt size past which a durable
+	// task's run is asked to compact its context before anything else
+	// (context_compaction.go, design/design/durable-tasks.design.md#DT-15).
+	// Zero uses DefaultAutoCompactBytes.
+	AutoCompactBytes int
 	// MaxDurableRuns is how many runs of durable tasks (model.Task.IsDurable,
 	// design/design/durable-tasks.design.md#DT-1) may be live at once. They are
 	// admitted outside every worker and merger count, as every task with
@@ -550,6 +562,11 @@ type Config struct {
 	// has no deadline (maxRunRuntime), so this is what catches a wedged
 	// one. Zero uses DefaultDurableIdleTimeout.
 	DurableIdleTimeout time.Duration
+	// CIWakeBackstop is how long a task deferred by resume_later on a CI
+	// verdict may wait before reconcileWake undefers it regardless, with a
+	// note and a stall notification. Zero uses DefaultCIWakeStallBound;
+	// negative disables the backstop.
+	CIWakeBackstop time.Duration
 	// durable is set by durableDispatch for the run of a durable task:
 	// maxRunRuntime is then 0, no deadline at all.
 	durable bool
@@ -975,6 +992,13 @@ type Config struct {
 	// The release-triggered automatic upgrade (reconcileReleaseUpgrade)
 	// follows it; nil leaves that mode with nothing to follow.
 	LatestRelease func(ctx context.Context) (string, error)
+	// ReleaseUpgradeClockOffset, when set, is how far ahead of the real
+	// clock the release-triggered upgrade measures its settle window and
+	// minimum interval (reconcileReleaseUpgrade, watchAutoUpgrade). It is
+	// test-only: a deployment's daemon leaves it nil, and only a grain
+	// built with the grain_debugclock tag sets it (daemon.DebugClockOffset),
+	// so a walkthrough can step past hours of waiting in minutes.
+	ReleaseUpgradeClockOffset func() time.Duration
 	// UpgradeDrainWindow, when non-zero, bounds how long a scheduled upgrade
 	// will wait for in-flight tasks and CI jobs to complete before proceeding
 	// with the upgrade. If the draining window elapses and runs are still active,
@@ -1168,6 +1192,10 @@ type HostSandboxes struct {
 	mu       sync.Mutex
 	live     map[string]*hostSandbox
 	building map[string]bool
+
+	// cpu turns each live run's process-tree CPU time into the rate
+	// Health reports (SandboxHealth.CPUCores).
+	cpu hostCPUSampler
 }
 
 // NewHostSandboxes returns a HostSandboxes rooted at baseDir, which must

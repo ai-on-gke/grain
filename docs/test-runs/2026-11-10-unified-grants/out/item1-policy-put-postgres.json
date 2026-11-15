@@ -1,0 +1,1 @@
+{"policy":{"rules":[{"capability":"https://grain.dev/capabilities/api#tasks:read","deny":true}]}}

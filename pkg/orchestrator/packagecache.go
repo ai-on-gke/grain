@@ -689,3 +689,40 @@ func RefreshAdoptedSandbox(ctx context.Context, src PackageCacheSource, sandbox 
 	}
 	return nil
 }
+
+// goCacheWriterScript runs pkgcache.GoCacheWriterCommand's `go env -w`,
+// and only where the sandbox has a Go toolchain and the GOCACHEPROG helper
+// configureTools compiled: without the helper there is no GOCACHEPROG to
+// repoint, and setting one would break every go command in the sandbox.
+// It prints "skipped" when it does nothing, so a caller can tell the two
+// apart and give back a credential nothing will present.
+const goCacheWriterScript = `set -eu
+if ! command -v go >/dev/null 2>&1 || [ ! -x "` + pkgcache.GoCacheProgPath + `" ]; then
+  echo skipped
+  exit 0
+fi
+exec "$@"`
+
+// ConfigureGoCacheWriter repoints sandbox's GOCACHEPROG at base carrying
+// token, a credential the caller registered as a Go build-cache writer
+// (pkgcache.JobTokenSet). It runs after PrepareSandbox, which configures
+// the token-less GOCACHEPROG every sandbox gets, and overrides it for
+// this sandbox's own user only. configured is false, with no error, when
+// the sandbox has no Go toolchain or no helper to point anywhere.
+func ConfigureGoCacheWriter(ctx context.Context, sandbox Sandbox, base, token string) (configured bool, err error) {
+	command, err := pkgcache.GoCacheWriterCommand(base, token)
+	if err != nil {
+		return false, err
+	}
+	commander, ok := sandbox.(SandboxCommander)
+	if !ok {
+		return false, nil
+	}
+	stdout, stderr, exitCode := commander.RunInSandbox(ctx,
+		append([]string{"sh", "-c", goCacheWriterScript, "sh"}, command.Argv...), "")
+	if exitCode != 0 {
+		return false, fmt.Errorf("pointing %s's Go build cache at its job token: %s",
+			sandbox.Name(), guestCommandDetail(stderr, exitCode))
+	}
+	return strings.TrimSpace(stdout) != "skipped", nil
+}

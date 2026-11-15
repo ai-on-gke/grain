@@ -335,7 +335,7 @@ func TestMessageTaskToConsoleSessionWakesWithoutSyntheticWakeComment(t *testing.
 	}
 	var sawNote, sawSyntheticWake bool
 	for _, c := range comments {
-		sawNote = sawNote || (c.ID == note.ID && c.Body == "finished the check")
+		sawNote = sawNote || (c.ID == note.ID && strings.HasSuffix(c.Body, "finished the check"))
 		sawSyntheticWake = sawSyntheticWake || (c.Author.Actor == model.SchedulePrincipal && strings.Contains(c.Body, "_Woken early:_"))
 	}
 	if !sawNote {

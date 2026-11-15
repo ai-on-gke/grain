@@ -315,7 +315,7 @@ func (s *Server) resolveSrc(ctx context.Context, scope Scope, relPath string) (*
 	if !scope.PermitsSrcPath(relPath) {
 		trimmed := strings.TrimPrefix(strings.TrimSuffix(relPath, "/"), "/")
 		if trimmed == "playbooks" || strings.HasPrefix(trimmed, "playbooks/") {
-			return nil, RefuseCapability("src://"+relPath, "bootstrap-playbooks")
+			return nil, RefuseCapability("src://"+relPath, model.BootstrapPlaybooksGrant)
 		}
 		return nil, RefuseCapability("src://"+relPath, model.GrainSourceRef)
 	}
@@ -541,7 +541,7 @@ func repoSegmentCount(first string) int {
 
 func (s *Server) resolveCI(ctx context.Context, scope Scope, relPath string) (*ResolvedNode, error) {
 	if !scope.PermitsCI("") {
-		return nil, RefuseCapability("ci://"+relPath, model.GrainCIRef)
+		return nil, RefuseCIRead("ci://"+relPath, scope.TaskRepo)
 	}
 	if s == nil || s.CIStore == nil {
 		return nil, fmt.Errorf("%w: CI store is unavailable", ErrNotFound)

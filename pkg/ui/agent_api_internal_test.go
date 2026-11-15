@@ -375,18 +375,20 @@ func TestAPIPresetsExpand(t *testing.T) {
 	has("api:ci-read", "ci:read")
 	has("api:deployment-ops", "deployment:upgrade", "deployment:restart", "deployment:reboot")
 	has("api:release-manager", "releases:write", "schedules:write", "ci:write", "tasks:write")
-	// The old capabilities are aliases for their presets.
-	has("self-debug", "tasks:read", "deployment:read")
 	has("api:self-debug", "tasks:read", "deployment:read")
-	has("self-upgrade", "deployment:read", "deployment:upgrade")
 	has("api:self-upgrade", "deployment:read", "deployment:upgrade")
-	has("pipeline-control", "dispatch:write")
-	has("memory", "memory:read", "memory:write")
+	has("api:pipeline-control", "dispatch:write")
 	has("api:memory", "memory:read", "memory:write")
-	has("release-notes", "release-notes:read", "release-notes:write")
 	has("api:release-notes", "release-notes:read", "release-notes:write")
-	has("test-quarantine", "tests:write")
 	has("api:test-quarantine", "tests:write")
+	// Retired bare names are no longer aliases for their presets.
+	for _, retired := range []string{"self-debug", "self-upgrade", "pipeline-control", "memory", "release-notes", "test-quarantine"} {
+		for _, s := range model.APIScopes() {
+			if APIGrantsOf([]string{retired}).Allows(s.Scope, "acme/widgets") {
+				t.Errorf("retired bare %s still grants %s", retired, s.Scope)
+			}
+		}
+	}
 	for _, p := range model.APIPresets() {
 		for _, s := range p.Scopes {
 			if _, ok := apiScopeInfo(s); !ok {
@@ -474,6 +476,17 @@ func TestAPICapabilitiesCarryPickerFields(t *testing.T) {
 	if r := byID["api:task-admin"]; !r.Preset || !slices.Equal(r.Scopes,
 		[]string{"tasks:read", "tasks:write", "merge:write", "ci:read", "ci:write", "notifications:write"}) {
 		t.Errorf("api:task-admin = %+v", r)
+	}
+	if _, dup := byID["api:grain/task-admin"]; dup {
+		t.Errorf("api:grain/task-admin offered alongside api:task-admin")
+	}
+	for _, role := range []string{"api:grain/viewer", "api:grain/contributor", "api:grain/delegated"} {
+		if r := byID[role]; !r.Preset || r.Dangerous || len(r.Scopes) == 0 {
+			t.Errorf("%s = %+v, want non-dangerous preset", role, r)
+		}
+	}
+	if r := byID["api:grain/operator"]; !r.Preset || !r.Dangerous || len(r.Scopes) == 0 {
+		t.Errorf("api:grain/operator = %+v, want dangerous preset", r)
 	}
 	if r := byID["api:merge:force"]; !r.Dangerous || r.Preset {
 		t.Errorf("api:merge:force = %+v, want a dangerous scope", r)
@@ -802,7 +815,7 @@ var capabilitiesAdminBodylessRoutes = map[string]bool{
 // route nor a new field can add an unscanned key silently.
 func TestCapabilitiesAdminGrantKeysAreScanned(t *testing.T) {
 	inputs := routeHandlerInputs(t)
-	held := []string{"api:capabilities:admin", "api:tasks:read", "gcp-key", "self-upgrade"}
+	held := []string{"api:capabilities:admin", "api:tasks:read", model.GCPKeySandboxAgentGrant, "api:self-upgrade"}
 	for pattern, scope := range routeScopes {
 		if scope != "capabilities:admin" {
 			continue
@@ -849,13 +862,13 @@ func TestCapabilitiesAdminGrantKeysAreScanned(t *testing.T) {
 					data, _ := json.Marshal(map[string]any{key: v, "attach": true})
 					return data
 				}
-				for _, grant := range []string{"self-debug", "api:deployment:upgrade", "api:capabilities:admin", "self-upgrade",
+				for _, grant := range []string{model.GrainSourceGrant, "api:deployment:upgrade", "api:capabilities:admin", "api:self-upgrade",
 					"api:tasks:write", "api:secrets:write@acme/widgets"} {
 					if agentGrantEscalation(held, pattern, encode(grant), nil) == nil {
 						t.Errorf("%s let an agent grant %s under %q", pattern, grant, key)
 					}
 				}
-				for _, grant := range []string{"api:tasks:read", "gcp-key"} {
+				for _, grant := range []string{"api:tasks:read", model.GCPKeySandboxAgentGrant} {
 					if err := agentGrantEscalation(held, pattern, encode(grant), nil); err != nil {
 						t.Errorf("%s refused an agent %s under %q, which it holds: %v", pattern, grant, key, err)
 					}
@@ -1130,6 +1143,7 @@ func TestCapabilityByIDRejectsMalformedAPIServerRefs(t *testing.T) {
 var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/access/access-code":                                    true,
 	"GET /api/actions-cache":                                         true,
+	"GET /api/tasks/{id}/context":                                    true,
 	"GET /api/agent-backends/{id}/codex-auth":                        true,
 	"GET /api/agent-keys":                                            true,
 	"GET /api/capability-policy":                                     true,
@@ -1198,6 +1212,7 @@ var agentAPISingleReadRoutes = map[string]bool{
 	"GET /api/tasks/{id}/attempts/{number}/capability-audit":         true,
 	"GET /api/tasks/{id}/attempts/{number}/transcript":               true,
 	"GET /api/tasks/{id}/prompt":                                     true,
+	"GET /api/tasks/{id}/diff-preview":                               true,
 	"GET /api/tasks/{id}/tree":                                       true,
 	"GET /api/templates/{id}/composition":                            true,
 	"GET /api/upgrade":                                               true,

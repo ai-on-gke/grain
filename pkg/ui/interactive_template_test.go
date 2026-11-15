@@ -155,7 +155,7 @@ func TestATemplatesGrantArgumentsAndNetworkAccessReachTheTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := refGrants(filed.Capabilities); len(got) != 1 || got[0] != recorded {
+	if got := refGrants(withoutDefaultCIRead(filed.Capabilities)); len(got) != 1 || got[0] != recorded {
 		t.Errorf("task grants = %q, want %q", got, recorded)
 	}
 	if filed.NetworkAccess != string(model.NetworkOpen) {

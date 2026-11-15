@@ -166,11 +166,6 @@ func (r *Registry) Retain(keep func(name string) bool) {
 	r.order = order
 }
 
-// Names is every registered tool's name, in registration order.
-func (r *Registry) Names() []string {
-	return append([]string(nil), r.order...)
-}
-
 // Handle answers one already-unmarshaled-into-bytes JSON-RPC request line
 // and returns the response line to write back, or nil for a notification
 // (no id) that has no response at all -- notifications/initialized is the

@@ -42,12 +42,6 @@ func SetExternalCheckStallThreshold(d time.Duration) func() {
 	return externalChecks.setWindow(d)
 }
 
-// ExternalCheckStallThreshold returns the active external-check stall
-// threshold, or zero when disabled.
-func ExternalCheckStallThreshold() time.Duration {
-	return externalChecks.currentWindow()
-}
-
 // ForgetExternalChecks drops ref's external-check stall sighting.
 func ForgetExternalChecks(ref Ref) {
 	externalChecks.forget(ref)

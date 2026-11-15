@@ -1497,6 +1497,24 @@ export function StaleSandboxImageAlerts({ warnings }) {
   ));
 }
 
+export function TargetRepoHostAlerts({ warnings }) {
+  if (!Array.isArray(warnings) || warnings.length === 0) return null;
+  return warnings.map((w) => (
+    <Alert
+      key={w.repo}
+      severity="warning"
+      data-testid="repo-host-mismatch-alert"
+      sx={{ mb: "1rem", overflowWrap: "anywhere" }}
+    >
+      <strong>{w.repo}</strong>: {w.message} Update it in{" "}
+      <Link href={buildPath({ view: "repos" })} underline="hover">
+        Repos
+      </Link>
+      .
+    </Alert>
+  ));
+}
+
 // DaemonHealthLine is the deployment's own state, above the readings it
 // takes of the machine under it: how long this process has been up, how
 // many times its service has started lately, and which of the flags it
@@ -1811,6 +1829,9 @@ export default function SandboxHealthPage({
       {data !== null && <HostCredentialsAlert warning={data.hostCredentials} />}
       {data !== null && (
         <StaleSandboxImageAlerts warnings={data.sandboxImageWarnings} />
+      )}
+      {data !== null && (
+        <TargetRepoHostAlerts warnings={data.targetRepoHostWarnings} />
       )}
       {data !== null && !data.enabled && (
         <Alert severity="info" sx={{ mb: 2 }}>

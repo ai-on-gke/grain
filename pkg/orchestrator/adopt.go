@@ -215,7 +215,7 @@ func ResumeAdoptedRun(ctx context.Context, deps Deps, host AdoptHost, a AdoptedR
 	}
 	var preRunBranchSHA string
 	if deps.Client != nil && task.Target != nil && (run.Attempt > 1 || obs.RepairInFlight() || hasFixesLink(*task)) {
-		if head, err := deps.Client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName()); err == nil && head != nil {
+		if head, err := deps.Client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName()); err == nil && head != nil {
 			preRunBranchSHA = head.SHA
 		}
 	}
@@ -517,7 +517,7 @@ func registerAdoptedRecreation(ctx context.Context, deps Deps, task model.Task, 
 		tools:              tools,
 		sandboxRoot:        sandboxRoot,
 		placer:             placer,
-		mint:               deps.MintSandboxToken,
+		mint:               mintSandboxTokenFor(deps, task.ID, run.Attempt),
 		credentialIdentity: deps.CredentialGitIdentity,
 		unrestorable:       unrestorable,
 	}

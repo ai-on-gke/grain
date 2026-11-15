@@ -612,48 +612,21 @@ func (c *TunnelCache) ActiveWaiters(name string) int {
 	return len(c.waiters[name])
 }
 
-// PostgresNotificationHandlers holds callbacks for PostgreSQL LISTEN/NOTIFY channels.
-type PostgresNotificationHandlers struct {
+// postgresNotificationHandlers holds callbacks for PostgreSQL LISTEN/NOTIFY channels.
+type postgresNotificationHandlers struct {
 	OnEntry      func(name string)
 	OnTunnel     func(name string)
 	OnCatalog    func(name string)
 	OnDelegation func(payload string)
 }
 
-// ListenPostgresNotifications connects to `dsn` and listens on `registry_entries` and
-// `registry_tunnels`, invoking `onEntry(payload)` and `onTunnel(payload)` when notifications arrive.
-// It automatically reconnects with backoff until `ctx` is canceled.
-func ListenPostgresNotifications(ctx context.Context, dsn string, onEntry func(name string), onTunnel func(name string)) {
-	ListenPostgresAllNotifications(ctx, dsn, onEntry, onTunnel, nil)
-}
-
-// ListenPostgresAllNotifications connects to `dsn` and listens on `registry_entries`,
-// `registry_tunnels`, and `registry_catalog`.
-func ListenPostgresAllNotifications(
-	ctx context.Context,
-	dsn string,
-	onEntry func(name string),
-	onTunnel func(name string),
-	onCatalog func(name string),
-) {
-	ListenPostgresChannels(ctx, dsn, PostgresNotificationHandlers{
-		OnEntry:   onEntry,
-		OnTunnel:  onTunnel,
-		OnCatalog: onCatalog,
-	})
-}
-
-// ListenPostgresChannels connects to `dsn` and listens on `registry_entries`,
-// `registry_tunnels`, `registry_catalog`, and `registry_delegations`.
-// It automatically reconnects with backoff until `ctx` is canceled.
-func ListenPostgresChannels(ctx context.Context, dsn string, h PostgresNotificationHandlers) {
-	listenPostgresChannels(ctx, dsn, h, nil)
-}
-
+// listenPostgresChannels connects to `dsn` and listens on `registry_entries`,
+// `registry_tunnels`, `registry_catalog`, and `registry_delegations`, reconnecting
+// until `ctx` is canceled.
 func listenPostgresChannels(
 	ctx context.Context,
 	dsn string,
-	h PostgresNotificationHandlers,
+	h postgresNotificationHandlers,
 	onFirstAttempt func(),
 ) {
 	if strings.TrimSpace(dsn) == "" {
@@ -684,7 +657,7 @@ func listenPostgresChannels(
 func runPostgresListenSession(
 	ctx context.Context,
 	dsn string,
-	h PostgresNotificationHandlers,
+	h postgresNotificationHandlers,
 	onReady func(),
 ) error {
 	conn, err := pgx.Connect(ctx, dsn)

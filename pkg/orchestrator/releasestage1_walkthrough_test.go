@@ -112,6 +112,24 @@ func TestStage1JobHistoriesFromTheReleaseTrainWalkthrough(t *testing.T) {
 			want: want{infra: "sustained load was cancelled, timed out or starved of capacity 3 attempts in a row"},
 		},
 		{
+			// A retry dispatched by a key the job does not have runs
+			// nothing: each skipped retry is infrastructure, so the rc
+			// stalls rather than waiting on a retry forever.
+			name:    "a failed job skipped on three retries in a row stalls on infrastructure",
+			nightly: "failure",
+			jobs: []github.ActionsRunJob{job(rqSHA, "grant matrix through the UI", 1, "failure"),
+				job(rqSHA, "grant matrix through the UI", 2, "skipped"), job(rqSHA, "grant matrix through the UI", 3, "skipped"),
+				job(rqSHA, "grant matrix through the UI", 4, "skipped")},
+			want: want{infra: "grant matrix through the UI was cancelled, timed out or starved of capacity 3 attempts in a row"},
+		},
+		{
+			name:    "a failed job passing after a skipped retry is a flake",
+			nightly: "failure",
+			jobs: []github.ActionsRunJob{job(rqSHA, "sustained load", 1, "failure"), job(rqSHA, "sustained load", 2, "skipped"),
+				job(rqSHA, "sustained load", 3, "success")},
+			want: want{stage2: true},
+		},
+		{
 			name:    "a job blocked on infrastructure for over 2h stalls",
 			nightly: "cancelled",
 			jobs:    []github.ActionsRunJob{job(rqSHA, "sustained load", 1, "cancelled"), queued("sustained load", 2)},

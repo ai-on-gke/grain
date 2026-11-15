@@ -22,6 +22,8 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/agent/claude/stophook"
+	"github.com/ai-on-gke/grain/pkg/agent/hookpolicy"
+	"github.com/ai-on-gke/grain/pkg/agent/stoprule"
 )
 
 // StopHookSubcommand is the argv[1] cmd/grain matches to run ServeStopHook:
@@ -37,18 +39,26 @@ func ServeStopHook(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 }
 
 // stopHookSettings is the content of the --settings file that installs
-// the hook for one run: grain forking itself as Claude Code's Stop hook,
-// with the run's own arguments. A file rather than the inline JSON
-// --settings also takes, because hostd admits a path-like argument only
-// as a clean absolute path that exists under its roots
-// (hostd.checkArg), and a JSON command line is neither.
+// the hook for one run on a host without hook_policy.
 func stopHookSettings(grainBinaryPath string, interactive bool, recordPath string) (string, error) {
+	return stopHookSettingsWithPolicy(grainBinaryPath, interactive, recordPath, "")
+}
+
+// stopHookSettingsWithPolicy is stopHookSettings with -policy policyPath
+// appended when policyPath is non-empty (hosts with FeatureHookPolicy). A
+// file rather than the inline JSON --settings also takes, because hostd
+// admits a path-like argument only as a clean absolute path that exists
+// under its roots (hostd.checkArg), and a JSON command line is neither.
+func stopHookSettingsWithPolicy(grainBinaryPath string, interactive bool, recordPath, policyPath string) (string, error) {
 	command := hookQuote(grainBinaryPath) + " " + StopHookSubcommand
 	if interactive {
 		command += " -interactive"
 	}
 	if recordPath != "" {
 		command += " -record " + hookQuote(recordPath)
+	}
+	if policyPath != "" {
+		command += " " + stophook.FlagPolicy + " " + hookQuote(policyPath)
 	}
 	data, err := json.Marshal(map[string]any{
 		"hooks": map[string]any{
@@ -72,7 +82,11 @@ func hookQuote(s string) string {
 // writeStopSettings stages this run's --settings file on host, 0600, the
 // way writeMCPConfigJSON stages its --mcp-config.
 func writeStopSettings(ctx context.Context, host agent.Host, grainBinaryPath string, interactive bool, recordPath string) (string, error) {
-	settings, err := stopHookSettings(grainBinaryPath, interactive, recordPath)
+	return writeStopSettingsWithPolicy(ctx, host, grainBinaryPath, interactive, recordPath, "")
+}
+
+func writeStopSettingsWithPolicy(ctx context.Context, host agent.Host, grainBinaryPath string, interactive bool, recordPath, policyPath string) (string, error) {
+	settings, err := stopHookSettingsWithPolicy(grainBinaryPath, interactive, recordPath, policyPath)
 	if err != nil {
 		return "", err
 	}
@@ -81,6 +95,30 @@ func writeStopSettings(ctx context.Context, host agent.Host, grainBinaryPath str
 		return "", err
 	}
 	if err := host.WriteFile(ctx, path, []byte(settings), 0o600); err != nil {
+		host.RemoveAll(ctx, path)
+		return "", err
+	}
+	return path, nil
+}
+
+// stageStopPolicy stages this run's stop-rule policy file on host, 0600,
+// when host advertises FeatureHookPolicy, and returns "" without staging
+// anything for older hosts.
+func stageStopPolicy(ctx context.Context, host agent.Host, interactive bool) (string, error) {
+	if !agent.SupportsHookPolicy(host) {
+		return "", nil
+	}
+	sp := stoprule.DefaultPolicy()
+	sp.Interactive = &interactive
+	data, err := hookpolicy.Marshal(hookpolicy.File{Version: hookpolicy.Version, Stop: &sp})
+	if err != nil {
+		return "", err
+	}
+	path, err := host.CreateTemp(ctx, "", "grain-claude-hook-policy-*.json")
+	if err != nil {
+		return "", err
+	}
+	if err := host.WriteFile(ctx, path, data, 0o600); err != nil {
 		host.RemoveAll(ctx, path)
 		return "", err
 	}

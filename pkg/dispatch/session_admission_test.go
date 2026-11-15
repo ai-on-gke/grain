@@ -272,7 +272,7 @@ func TestAnAdmissionRefusalNamesItsGateAndASessionsIsAWarning(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"dispatch: candidate ordinary skipped: admission refused by model availability -- all connections serving claude-opus-5-5 are busy (2 cooling off after a usage limit)",
-		"dispatch: WARNING: priority-dispatch task director (a console session or a bypass- or durable-admission task) refused admission by model availability -- all connections serving claude-opus-5-5",
+		"dispatch: WARNING: priority task director (a console session or a bypass- or durable-admission task) refused admission by model availability -- all connections serving claude-opus-5-5",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log lacks %q:\n%s", want, out)
@@ -313,7 +313,7 @@ func TestASessionRefusedByTheDiskFloorSaysItIsWaitingForSandboxBudget(t *testing
 	if err != nil || wait == nil || !strings.HasPrefix(wait.Resource, "waiting for sandbox budget: disk:") {
 		t.Fatalf("the session's wait = %+v (%v), want \"waiting for sandbox budget: disk: ...\"", wait, err)
 	}
-	if !strings.Contains(buf.String(), "dispatch: WARNING: priority-dispatch task director") {
+	if !strings.Contains(buf.String(), "dispatch: WARNING: priority task director") {
 		t.Errorf("a session held by the budget should be logged as a warning:\n%s", buf.String())
 	}
 }

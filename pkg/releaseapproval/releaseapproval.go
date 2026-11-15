@@ -22,10 +22,11 @@
 // App, so a bot. So the dispatch carries a Record: the repository, the
 // version, the decision, the exact commit its -pending tag stages, the
 // person who decided and a short expiry, signed with an ECDSA P-256 key
-// only the deployment holds (its data directory, never a sandbox's). The
-// workflow verifies it against the public key the operator put in the
-// repository variable GRAIN_RELEASE_APPROVAL_KEY
-// (scripts/verify-release-approval.sh), with openssl alone.
+// only the deployment holds (its secrets store or a Cloud KMS key
+// version, kms.go -- never a sandbox's). The workflow verifies it
+// against the public key the operator put in the repository variable
+// GRAIN_RELEASE_APPROVAL_KEY (scripts/verify-release-approval.sh), with
+// openssl alone.
 //
 // The deployment signs a Record only inside ui.Client.DecideRelease,
 // after it has refused every caller but a person: an agent's token, an
@@ -144,7 +145,14 @@ func (r Record) Text() (string, error) {
 
 // Signer signs records with the deployment's key.
 type Signer struct {
-	key *attest.FileSigner
+	key signingKey
+}
+
+// signingKey is a key held in the secrets store or a file
+// (attest.FileSigner), or in Cloud KMS (KMSSigner).
+type signingKey interface {
+	SignDigest(ctx context.Context, digest [sha256.Size]byte) ([]byte, error)
+	Public() *ecdsa.PublicKey
 }
 
 // loadMu serialises LoadSigner: the first load creates the key file, and
@@ -154,14 +162,21 @@ type Signer struct {
 var loadMu sync.Mutex
 
 // LoadSigner reads the deployment's key under dataDir, making one the
-// first time.
+// first time: from the secrets store beside it when there is one
+// (keystore.go), else from <dataDir>/release-approval-key.pem.
 func LoadSigner(dataDir string) (*Signer, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		return nil, fmt.Errorf("release approval: this deployment has no data directory to keep its signing key in")
 	}
 	loadMu.Lock()
 	defer loadMu.Unlock()
-	key, err := attest.LoadOrCreateFileSigner(filepath.Join(dataDir, KeyFile))
+	var key *attest.FileSigner
+	var err error
+	if store := keyStore(dataDir); store != nil {
+		key, err = loadStoredSigner(store, dataDir)
+	} else {
+		key, err = attest.LoadOrCreateFileSigner(filepath.Join(dataDir, KeyFile))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("release approval: signing key: %w", err)
 	}

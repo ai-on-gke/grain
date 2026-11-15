@@ -210,7 +210,7 @@ func TestGCPKeyRemovedArgsRefusedAcrossAPIAndCheck(t *testing.T) {
 				// Valid permission_set grant and legacy bare gcp-key alias still succeed.
 				validCaps := []string{
 					`https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"iap-test"}`,
-					"gcp-key",
+					model.GCPKeySandboxAgentGrant,
 				}
 				created, err := client.CreateTask(ctx, ui.CreateTaskRequest{
 					NoRepo:       true,
@@ -218,7 +218,7 @@ func TestGCPKeyRemovedArgsRefusedAcrossAPIAndCheck(t *testing.T) {
 					Capabilities: &validCaps,
 				})
 				if err != nil {
-					t.Fatalf("CreateTask with permission_set + bare gcp-key failed: %v", err)
+					t.Fatalf("CreateTask with two permission sets failed: %v", err)
 				}
 				want := []string{
 					`https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"iap-test","primary":true}`,

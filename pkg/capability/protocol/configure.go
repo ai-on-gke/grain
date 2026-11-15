@@ -301,9 +301,48 @@ func ResolveConfig(schema map[string]any, config map[string]any, lookup SecretLo
 	return out, nil
 }
 
+// WaitingError is a tool refusing for something outside grain it is
+// waiting on rather than for what it was sent (§4.5.5): a credential on
+// the host that has expired and is renewed there, say. Waiting is the
+// server's short phrase for it, read after "waiting for" ("a credential
+// renewal"), which Settings shows in place of "needs configuring"; a configure
+// refused this way is tried again every retry interval instead of
+// waiting for somebody to edit the entry. A handler served by
+// CapabilityServer returns one with Waiting, and it reaches grain as
+// structuredContent.waiting on the isError result.
+type WaitingError struct {
+	Waiting string
+	Err     error
+}
+
+func (e *WaitingError) Error() string { return e.Err.Error() }
+
+func (e *WaitingError) Unwrap() error { return e.Err }
+
+// Waiting returns err as a WaitingError waiting on waiting.
+func Waiting(waiting string, err error) error {
+	return &WaitingError{Waiting: waiting, Err: err}
+}
+
+// maxWaiting bounds the waiting phrase grain keeps from a server: it is
+// a chip's label, not a message.
+const maxWaiting = 80
+
+// waitingPhrase is a server's waiting phrase as grain shows it: one
+// line, bounded.
+func waitingPhrase(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > maxWaiting {
+		s = truncate(s, maxWaiting)
+	}
+	return s
+}
+
 // Configure calls the server's configure tool with its resolved
 // configuration (§4.5.4). The configuration holds secret values: an
-// error is the server's own message, which the caller scrubs.
+// error is the server's own message, which the caller scrubs. One the
+// server marked as waiting (structuredContent.waiting) is a
+// *WaitingError.
 func (s *Server) Configure(ctx context.Context, config map[string]any) error {
 	if config == nil {
 		config = map[string]any{}

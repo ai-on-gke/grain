@@ -227,13 +227,13 @@ export function setupApi(
       tasksState = [...rest.slice(0, idx), ...moved, ...rest.slice(idx)];
       return Promise.resolve(tasksState);
     }
-    const detailMatch = path.match(/^\/api\/tasks\/(\w+)$/);
+    const detailMatch = path.match(/^\/api\/tasks\/([\w-]+)(?:\?.*)?$/);
     // An edit, which the bulk edit form sends one of per selected task
     // (BulkEditOverlay.jsx). Applied to the list behind the fake rather
     // than answered and forgotten, so a test can ask afterwards which
     // rows actually moved -- which is the whole question when only some
     // of them did.
-    if (detailMatch && method === "PATCH") {
+    if (detailMatch && method === "PATCH" && !path.includes("?")) {
       const id = detailMatch[1];
       const refusal = rejectPatch(id);
       if (refusal) return Promise.reject(refusal);

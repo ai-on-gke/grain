@@ -190,11 +190,6 @@ func CheckUIRequireVerifier(cfg Config) error {
 	return fmt.Errorf("-ui-require-verifier=%q names no active IdentityVerifier: configure that verifier first, or drop -ui-require-verifier to keep accepting the access code over the network", req)
 }
 
-// CheckUIRequireIAP is an alias for CheckUIRequireVerifier.
-func CheckUIRequireIAP(cfg Config) error {
-	return CheckUIRequireVerifier(cfg)
-}
-
 // startUIServer serves pkg/ui.Server -- the JSON API plus the static
 // frontend -- on addr, over the same store RunCycle dispatches against,
 // returning a shutdown func the same shape startGitProxy's own is.
@@ -340,6 +335,7 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		DBDriver:                   cfg.DbDriver,
 		DBDSN:                      cfg.DbDSN,
 		DataDir:                    cfg.DataDir,
+		ReleaseApprovalKMSKey:      cfg.ReleaseApprovalKMSKey,
 		SourceDB:                   db,
 		// The fixed set grain ships providers for, plus the api rows appended
 		// last as a marker that this picker offers the agent API (pickerCapabilities).
@@ -431,13 +427,14 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		Reboot:      HostAction(cfg, newRestartRequests(cfg.DataDir).wrap("the reboot button", rebootHost(cfg.RebootCmd))),
 		Shutdown:    HostAction(cfg, shutdownHost(cfg.ShutdownCmd)),
 		Restart:     HostAction(cfg, newRestartRequests(cfg.DataDir).wrap("the restart button", restartDaemon(cfg.RestartCmd))),
-		RepoNames:   repoNameGate{},
+		RepoNames:   repoNameGate{store: store, defaultHost: cfg.GithubHost},
 		Credentials: uiCredentials,
 		// What each of those credentials reaches on GitHub, so a task is
 		// refused at filing against a repository its team cannot reach
 		// and the New task pickers can offer what it can (grain/task-1850).
-		GitReach:               &gitproxy.Reach{Credentials: uiCredentials, API: githubTransport, Host: cfg.GithubHost},
+		GitReach:               &gitproxy.Reach{Credentials: uiCredentials, API: githubTransport, Host: restClientHost(cfg.GithubHost)},
 		GitHubBranches:         githubClient,
+		MergeLoginWarnings:     mergeLoginWarnings(cfg, store, githubClient),
 		GitHubPullRequestFiles: githubClient,
 		GitHubPullRequests:     githubClient,
 		GitHubForkPullRequests: githubClient,
@@ -897,6 +894,16 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		}()
 	}
 
+	socketSrv, err := startAPISocket(cfg, srv)
+	if err != nil {
+		localScriptApprovalURL.Store("")
+		_ = callbackSrv.Close()
+		if httpSrv != nil {
+			_ = httpSrv.Close()
+		}
+		return nil, err
+	}
+
 	log.Printf("grain daemon: single-tenant: every caller, this host's loopback included, presents the access code in %s -- "+
 		"a browser on the UI's \"Enter access code\" page, the grain CLI as a bearer token; `grain access-code` prints it",
 		ui.LocalAPITokenPath(cfg.DataDir))
@@ -912,11 +919,55 @@ func startUIServer(cfg Config, uiLn net.Listener, store *model.Store, db *sql.DB
 		cancelDiscovery()
 		localScriptApprovalURL.Store("")
 		_ = callbackSrv.Shutdown(ctx)
+		if socketSrv != nil {
+			_ = socketSrv.Shutdown(ctx)
+		}
 		if httpSrv != nil {
 			return httpSrv.Shutdown(ctx)
 		}
 		return nil
 	}, nil
+}
+
+// startAPISocket serves srv on -api-socket as well (ui.HostAccountHandler):
+// every connection is recorded as the person its peer's uid maps to,
+// through -host-accounts or, for the daemon's own account,
+// -deployment-owner. With no account mapped there is nobody it could
+// admit, so it serves nothing, and nil.
+func startAPISocket(cfg Config, srv *ui.Server) (*http.Server, error) {
+	path := strings.TrimSpace(cfg.APISocket)
+	if strings.EqualFold(path, "none") {
+		return nil, nil
+	}
+	owner := strings.TrimSpace(cfg.DeploymentOwner)
+	if owner == "" {
+		owner = strings.TrimSpace(os.Getenv(ui.DeploymentOwnerEnv))
+	}
+	owner, _ = ui.NormalizeDeploymentOwner(owner) // CheckDeploymentOwner has refused a bad one
+	accounts := cfg.HostAccounts.WithDaemonAccount(uint32(os.Getuid()), owner)
+	if len(accounts) == 0 {
+		log.Print("grain daemon: no API socket: neither -host-accounts nor -deployment-owner names a person for any host account")
+		return nil, nil
+	}
+	if path == "" {
+		path = ui.APISocketPath(cfg.DataDir)
+	}
+	ln, err := ui.ListenAPISocket(path)
+	if err != nil {
+		return nil, fmt.Errorf("listening on the API socket %s: %w", path, err)
+	}
+	log.Printf("grain daemon: serving the API on %s as well, for host accounts %s", path, accounts)
+	hs := &http.Server{
+		Handler:           srv.HostAccountHandler(func() ui.HostAccounts { return accounts }),
+		ConnContext:       ui.HostAccountConnContext,
+		ReadHeaderTimeout: 30 * time.Second,
+	}
+	go func() {
+		if err := hs.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Printf("grain daemon: API socket server: %v", err)
+		}
+	}()
+	return hs, nil
 }
 
 // daemonRestarting is ui.Config.Restarting for this process: true once

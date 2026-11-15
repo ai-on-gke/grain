@@ -254,6 +254,9 @@ type PullRequestReport struct {
 	// MergeQueue is "queued", "held: review", "held: ci", "merged" or
 	// "not-queued".
 	MergeQueue string `json:"mergeQueue"`
+	// Gates lists each required merge gate on the pull request and its
+	// current state.
+	Gates []MergeGate `json:"gates,omitempty"`
 }
 
 // PullRequestShepherd is the shepherd half of a PullRequestReport.

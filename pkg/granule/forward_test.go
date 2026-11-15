@@ -281,7 +281,6 @@ type forwardPair struct {
 	c2gReader, g2cReader  *io.PipeReader
 	ready                 chan struct{}
 	clientDone, guestDone chan error
-	guestErr              error
 	guestExited, stopped  bool
 	clientExited          bool
 }

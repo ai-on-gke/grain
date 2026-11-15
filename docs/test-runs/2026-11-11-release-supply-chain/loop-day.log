@@ -1,0 +1,105 @@
+=== tick: 06:40 PST: cut rc.1 on c1
+    fake time: 2026-11-11T14:40:00Z  /  2026-11-11 06:40:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.1.0; next minor v2.2.0; notes from v2.1.0
+    release-from-trunk: the release day is 2026-11-11 (America/Los_Angeles); RELEASE_MAX_PER_DAY is 0, so there is no daily cap
+    release-from-trunk: phase 2: cutting v2.2.0-rc.1 on 81ee5c12bc83
+    release-from-trunk: phase 2: v2.2.0-rc.1 is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0-rc.1
+=== tick: 07:00 PST: rc.1 qualifying, no Stage 1 yet -> wait
+    fake time: 2026-11-11T15:00:00Z  /  2026-11-11 07:00:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.1.0; next minor v2.2.0; notes from v2.1.0
+    release-from-trunk: the release day is 2026-11-11 (America/Los_Angeles); RELEASE_MAX_PER_DAY is 0, so there is no daily cap
+      PENDING nightly: nightly.yml has not run on v2.2.0-rc.1 (81ee5c12bc83) yet
+      SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+      Qualification: PENDING v2.2.0-rc.1 (nightly).
+    RELEASE_TRAIN_RESULT=noop
+    tags: v2.1.0 v2.2.0-rc.1
+=== tick: 08:00 PST: rc.1 green -> release v2.2.0 and cut next rc in the same tick
+    fake time: 2026-11-11T16:00:00Z  /  2026-11-11 08:00:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.1.0; next minor v2.2.0; notes from v2.1.0
+    release-from-trunk: the release day is 2026-11-11 (America/Los_Angeles); RELEASE_MAX_PER_DAY is 0, so there is no daily cap
+      SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    release-from-trunk: phase 1: v2.2.0-rc.1 qualified; releasing it as v2.2.0 and moving latest onto it (81ee5c12bc83)
+    release-from-trunk: output promoted_version=v2.2.0
+    release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh promote v2.2.0
+    release-from-trunk: phase 2: cutting v2.3.0-rc.1 on 0647cfc4f73f
+    release-from-trunk: phase 2: v2.3.0-rc.1 is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0-rc.1
+=== tick: 09:00 PST: v2.3.0-rc.1 red -> drop and cut rc.N+1 from newer c3
+    fake time: 2026-11-11T17:00:00Z  /  2026-11-11 09:00:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.2.0; next minor v2.3.0; notes from v2.2.0
+    release-from-trunk: the release day is 2026-11-11 (America/Los_Angeles); RELEASE_MAX_PER_DAY is 0, so there is no daily cap
+      PENDING cmd-grain-stress: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING go-long: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING image-vulns: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING installer-variants: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING kvm-route-stress: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING kvm-sandboxes: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING loadtest: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING long-sim: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING long-term-test: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING merge-stress: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING postgres-stress: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING real-kubernetes: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING scalability: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING staterepo-soak: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING tunnel-stress: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING ui-e2e-long: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING upgrade-test: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      PENDING vulns: failed for the first time (failure); it gets one retry on v2.3.0-rc.1
+      SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    release-from-trunk: phase 1: v2.3.0-rc.1 failed qualification; dropping it
+    release-from-trunk: phase 2: cutting v2.3.0-rc.2 on ab4672c4d0c6
+    release-from-trunk: phase 2: v2.3.0-rc.2 is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2
+    v2.3.0-rc.1: (no Discard-Reason: red drop)
+    newest rc: v2.3.0-rc.2 on ab4672c (c3=ab4672c)
+=== tick: 11:00 PST: v2.3.0-rc.2 green -> second release of the day; no new commit
+    fake time: 2026-11-11T19:00:00Z  /  2026-11-11 11:00:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.2.0; next minor v2.3.0; notes from v2.2.0
+    release-from-trunk: the release day is 2026-11-11 (America/Los_Angeles); RELEASE_MAX_PER_DAY is 0, so there is no daily cap
+      SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    release-from-trunk: phase 1: v2.3.0-rc.2 qualified; releasing it as v2.3.0 and moving latest onto it (ab4672c4d0c6)
+    release-from-trunk: output promoted_version=v2.3.0
+    release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh promote v2.3.0
+    release-from-trunk: phase 2: no new LKG commit on main since ab4672c4d0c6; nothing to cut
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2
+=== tick: 11:20 PST: no new commit since the release -> wait
+    fake time: 2026-11-11T19:20:00Z  /  2026-11-11 11:20:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.3.0; next minor v2.4.0; notes from v2.3.0
+    release-from-trunk: the release day is 2026-11-11 (America/Los_Angeles); RELEASE_MAX_PER_DAY is 0, so there is no daily cap
+    release-from-trunk: phase 2: no new LKG commit on main since ab4672c4d0c6; nothing to cut
+    RELEASE_TRAIN_RESULT=noop
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2
+=== tick: 11:40 PST: still nothing new -> wait
+    fake time: 2026-11-11T19:40:00Z  /  2026-11-11 11:40:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.3.0; next minor v2.4.0; notes from v2.3.0
+    release-from-trunk: the release day is 2026-11-11 (America/Los_Angeles); RELEASE_MAX_PER_DAY is 0, so there is no daily cap
+    release-from-trunk: phase 2: no new LKG commit on main since ab4672c4d0c6; nothing to cut
+    RELEASE_TRAIN_RESULT=noop
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2
+=== tick: 12:40 PST: newer green commit -> cut
+    fake time: 2026-11-11T20:40:00Z  /  2026-11-11 12:40:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.3.0; next minor v2.4.0; notes from v2.3.0
+    release-from-trunk: the release day is 2026-11-11 (America/Los_Angeles); RELEASE_MAX_PER_DAY is 0, so there is no daily cap
+    release-from-trunk: phase 2: cutting v2.4.0-rc.1 on 5a759c9fc89b
+    release-from-trunk: phase 2: v2.4.0-rc.1 is cut and candidate is on it; nightly.yml qualifies it (Stage 1) alone: RELEASE_QUALIFICATION_APP=none skips grain/release-qualification (Stage 2)
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0-rc.1
+=== tick: 15:00 PST: v2.4.0-rc.1 green -> third release the same Pacific day
+    fake time: 2026-11-11T23:00:00Z  /  2026-11-11 15:00:00 PST  (exit 0)
+    release-from-trunk: major 2 (floor minor 0); newest promoted release v2.3.0; next minor v2.4.0; notes from v2.3.0
+    release-from-trunk: the release day is 2026-11-11 (America/Los_Angeles); RELEASE_MAX_PER_DAY is 0, so there is no daily cap
+      SKIPPED grain/release-qualification: CHECK_QUALIFICATION_APP=none (qualified by Stage 1 nightly.yml)
+    release-from-trunk: phase 1: v2.4.0-rc.1 qualified; releasing it as v2.4.0 and moving latest onto it (5a759c9fc89b)
+    release-from-trunk: output promoted_version=v2.4.0
+    release-from-trunk: RELEASE_IMAGES=off: not running release-images.sh promote v2.4.0
+    release-from-trunk: phase 2: no new LKG commit on main since 5a759c9fc89b; nothing to cut
+    RELEASE_TRAIN_RESULT=acted
+    tags: v2.1.0 v2.2.0 v2.2.0-rc.1 v2.3.0 v2.3.0-rc.1 v2.3.0-rc.1-discarded v2.3.0-rc.2 v2.4.0 v2.4.0-rc.1
+=== released today (Pacific): v2.1.0 v2.2.0 v2.3.0 v2.4.0
+=== latest -> latest (5a759c9)

@@ -53,9 +53,12 @@ import (
 // something the existing suite asserts rather than something this commit
 // message claims.
 
-// forgeRef is model.PullRequestRef in pkg/forge's spelling.
+// forgeRef is model.PullRequestRef in pkg/forge's spelling. Its Owner is
+// the repository's StoredOwner -- "host/owner" off the default host -- so
+// the forge calls pkg/forge makes with it reach the pull request's own
+// host even when the same owner/name is on another host too.
 func forgeRef(ref model.PullRequestRef) forge.Ref {
-	return forge.Ref{Owner: ref.Repo.Owner, Repo: ref.Repo.Name, Number: ref.Number}
+	return forge.Ref{Owner: ref.Repo.StoredOwner(), Repo: ref.Repo.Name, Number: ref.Number}
 }
 
 // grainCIVerdict is pkg/forge's, aliased rather than converted: it is
@@ -1387,14 +1390,32 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 	// before the run pushed its fixes on top). A forced merge is the one
 	// thing that does merge a running task's branch, so it is still
 	// classified first.
-	midRun := e.running && forcedMergeOf(e.obs) == nil
+	//
+	// A forced merge gets past a check below only where the operator's
+	// override for this head names every gate that check left standing
+	// (forceOverridesGates): one that names CI does not merge a head
+	// classified onto the trust boundary after it was asked for.
+	earlyForced := forcedMergeOf(e.obs)
+	validForce := earlyForced != nil && detail.HeadSHA != "" && !earlyForced.movedSince(detail.HeadSHA)
+	forceOverrides := func() (bool, error) {
+		if !validForce {
+			return false, nil
+		}
+		return forceOverridesGates(ctx, store, task.ID, earlyForced.headSHA)
+	}
+	midRun := e.running && earlyForced == nil
 	if detail.State == "open" && !detail.Merged && !midRun {
 		// A human's Submit is pinned to the head it shipped first, so the
 		// base-branch merges below carry it rather than re-hold it
 		// (securityhold_submit.go).
 		pinned, ok, err := pinHumanSubmit(ctx, store, client, task, ref, detail.HeadSHA, now)
-		if err != nil || !ok {
+		if err != nil {
 			return err
+		}
+		if !ok {
+			if over, err := forceOverrides(); err != nil || !over {
+				return err
+			}
 		}
 		task = pinned
 		e.task = pinned
@@ -1403,7 +1424,9 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			return err
 		}
 		if !cleared {
-			return nil
+			if over, err := forceOverrides(); err != nil || !over {
+				return err
+			}
 		}
 		// And the repository's own pull-request triggers, judged by the
 		// base's rules against a head they have not seen yet
@@ -1413,18 +1436,36 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 			return err
 		}
 		if !current {
-			return nil
+			if over, err := forceOverrides(); err != nil || !over {
+				return err
+			}
 		}
 		// And whoever a sensitive path or grain's own guard named: a
 		// change still owed an approver's Submit does not merge, however
 		// its auto-merge came to be on (model's sensitive_path.go).
-		if held, err := withdrawForPendingApprovals(ctx, store, client, task, ref, now); err != nil || held {
+		if held, err := withdrawForPendingApprovals(ctx, store, client, task, ref, now); err != nil {
+			return err
+		} else if held {
+			if over, err := forceOverrides(); err != nil || !over {
+				return err
+			}
+		}
+		// And the deployment's own repositories: a pull request open
+		// against one removed since it was opened is left open, its
+		// auto-merge withdrawn, rather than merged into a repository
+		// grain no longer works in (targetrepos.go). No override gets
+		// past this one while the repository stays off the list.
+		if held, err := withdrawForRemovedRepo(ctx, store, task, ref, now); err != nil || held {
 			return err
 		}
 		// And the repository's merge rules, where they say a person has
 		// to press Submit (`auto_merge: never`, mergerules.go).
-		if held, err := withdrawForMergePolicy(ctx, store, client, e.task, ref, e.policy, now); err != nil || held {
+		if held, err := withdrawForMergePolicy(ctx, store, client, e.task, ref, e.policy, now); err != nil {
 			return err
+		} else if held {
+			if over, err := forceOverrides(); err != nil || !over {
+				return err
+			}
 		}
 	}
 
@@ -1538,7 +1579,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		e.reds, e.unfixable = splitReds(e, find)
 	}
 	var review reviewState
-	if !stacked && !blocked && !settled {
+	if !stacked && !settled {
 		review, err = reviewStateOf(ctx, store, task, e.obs, now)
 		if err != nil {
 			return err
@@ -1659,12 +1700,25 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		forced = nil
 	}
 	forcing := forced != nil && !settled && health != model.PrConflicted
+	// A red that is wholly a shared fault grain attributed to this head,
+	// and that has since gone green on the base, is re-run rather than
+	// repaired or left for a person -- blocked or not, since a block is
+	// exactly where such a change used to wait for somebody to press
+	// Retry merge (sharedfaultrerun.go).
+	sharedRerun := false
+	if !forcing && !stacked && !settled && !working && !repairing && health == model.PrFailing {
+		if sharedRerun, err = rerunSharedFaultRed(ctx, store, client, e, now); err != nil {
+			return err
+		}
+	}
 	switch {
-	case !forcing && review.overdue:
-		// The review is not arriving. Say so, give up the wait, and leave
-		// the merge itself to the next cycle -- which reads a task the
-		// store now says is blocked, and merges it the moment it reads
-		// clean the way it does any other blocked task.
+	case sharedRerun:
+		// CI is running again on the same head; the next cycle judges it.
+
+	case !forcing && !blocked && review.overdue:
+		// The review has been stuck past its deadline: step around this change
+		// so later tasks in the repo can move, while keeping the required
+		// review gate enforced (review.pending stays true below).
 		if err := escalateUnfinishedReview(ctx, store, task, ref, review.taskID, now); err != nil {
 			return err
 		}
@@ -1823,7 +1877,7 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// reads conflicted, and only one still clean on the same head goes
 		// on to merge.
 		if member && !forcing && walk.mergedThisCycle(lane) {
-			fresh, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+			fresh, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 			if err != nil {
 				return fmt.Errorf("orchestrator: re-reading %s after this cycle's merge into %s: %w", ref, detail.BaseRef, err)
 			}
@@ -1931,10 +1985,11 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// than assume, since GitHub applies it asynchronously the same way
 		// it computes Mergeable asynchronously (detail.Mergeable's own doc
 		// comment).
-		detail, err = client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		detail, err = client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil {
 			return fmt.Errorf("orchestrator: re-reading %s after merge: %w", ref, err)
 		}
+		recordMergedAs(ctx, store, client, task.ID, ref, detail, now)
 		health = healthOf(detail, checks, e.requiredCheck, checksKnown, checksSettled, grain)
 		if member {
 			// Under MergeRecheckEnforce, each entry in the lane is checked
@@ -2033,6 +2088,11 @@ func syncEntry(ctx context.Context, store *model.Store, client github.Client,
 		// triage's to catch rather than a reason to leave this task open.
 		if err := filePorts(ctx, store, client, gate.Porter, task, ref, detail, now); err != nil {
 			log.Printf("orchestrator: %v", err)
+		}
+	}
+	if isReviewTask(task) && health == model.PrMerged {
+		if err := clearReviewFindingsOnCleanReview(ctx, store, task); err != nil {
+			log.Printf("orchestrator: clearing review findings after %s merged: %v", task.ID, err)
 		}
 	}
 	if err := closeSecurityReviewOnSettle(ctx, store, client, task, ref, detail, health, now); err != nil {
@@ -2217,7 +2277,7 @@ func recordPostMergeCI(ctx context.Context, store *model.Store, client github.Cl
 			task.ID, branch, ref.Repo, branch)
 		return nil
 	}
-	head, err := client.GetBranchHead(ref.Repo.Owner, ref.Repo.Name, branch)
+	head, err := client.GetBranchHead(ref.Repo.StoredOwner(), ref.Repo.Name, branch)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's post-merge head on %s: %w", branch, ref.Repo, err)
 	}
@@ -2463,6 +2523,15 @@ func advanceMergeQueueHead(ctx context.Context, store *model.Store, client githu
 		var ev buildEvidence
 		if health == model.PrFailing && !gateIsGrainCI && !model.IsConfigRepo(ref.Repo) {
 			ev = readBuildEvidence(client, ref, detail.HeadSHA)
+		}
+		// A red whose every failing job died on the runner -- its DNS, a
+		// package mirror it could not reach, the runner itself lost --
+		// is waited out with re-runs of the failed jobs, not repaired:
+		// no commit clears it, and an outage longer than the repair
+		// budget used to leave every queued pull request in
+		// merge_failed (prinfra.go, 2026-11-11).
+		if held, err := waitOutInfraFailure(ctx, store, client, e, ev, now); err != nil || held {
+			return err
 		}
 		// Startup failures, from either direction: this pull request's
 		// own runs all died before a step (github.OnlyStartupFailures),
@@ -2778,7 +2847,7 @@ func bringHeadUpToDate(ctx context.Context, store *model.Store, client github.Cl
 		return false, err
 	}
 
-	result, err := client.MergeBranch(ref.Repo.Owner, ref.Repo.Name,
+	result, err := client.MergeBranch(ref.Repo.StoredOwner(), ref.Repo.Name,
 		detail.HeadRef, detail.BaseRef, refreshCommitMessage(detail))
 	switch {
 	case err == nil:
@@ -2965,7 +3034,7 @@ func refreshStaleHead(ctx context.Context, store *model.Store, client github.Cli
 		return refreshUnreachable, nil
 	}
 
-	result, err := client.MergeBranch(ref.Repo.Owner, ref.Repo.Name,
+	result, err := client.MergeBranch(ref.Repo.StoredOwner(), ref.Repo.Name,
 		detail.HeadRef, detail.BaseRef, refreshCommitMessage(detail))
 	switch {
 	case err == nil:
@@ -3255,7 +3324,7 @@ func grainCINote(grain grainCIVerdict) string {
 // a build with no log are both "no log here" to every decision, and
 // neither one is a fact anything may go on to explain (readBuildEvidence).
 func failingJobLogs(client github.Client, ref model.PullRequestRef, headSHA string) (logs []github.JobLog, read bool) {
-	logs, err := client.FailedJobLogs(ref.Repo.Owner, ref.Repo.Name, headSHA)
+	logs, err := client.FailedJobLogs(ref.Repo.StoredOwner(), ref.Repo.Name, headSHA)
 	if err != nil {
 		log.Printf("orchestrator: reading the failing job logs for %s: %v -- "+
 			"filing the fix task with the check names alone", ref, err)
@@ -3340,7 +3409,7 @@ func readBuildEvidence(client github.Client, ref model.PullRequestRef, headSHA s
 	if !read || !actionsStateWorthReading(logs) {
 		return ev
 	}
-	state, err := client.ActionsState(ref.Repo.Owner, ref.Repo.Name, headSHA)
+	state, err := client.ActionsState(ref.Repo.StoredOwner(), ref.Repo.Name, headSHA)
 	if err != nil {
 		log.Printf("orchestrator: reading what Actions has against %s at %s: %v -- "+
 			"filing the fix task without saying why there is no log", ref, shortSHA(headSHA), err)
@@ -3396,7 +3465,7 @@ const workflowDir = ".github/workflows/"
 // a person: it costs a request per startup failure to recover the
 // automatic repair in the one case it would have worked.
 func touchedWorkflowFiles(client github.Client, ref model.PullRequestRef) (workflows []string, read bool) {
-	files, err := client.ListPullRequestFiles(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+	files, err := client.ListPullRequestFiles(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 	if err != nil {
 		log.Printf("orchestrator: reading which files %s touches: %v -- "+
 			"escalating its startup failure rather than guessing a workflow edit "+
@@ -3540,7 +3609,7 @@ func noJobLogSection(ev buildEvidence) string {
 			"there is no job log to hand you: the failing check named above comes through " +
 			"the Checks API from something else -- Buildkite, CircleCI, a review bot -- " +
 			"which keeps its own output. Your sandbox cannot reach it and neither can " +
-			"`pull_request_status`, so reproduce the failure in your checkout; if its name " +
+			"`grain ci wait`, so reproduce the failure in your checkout; if its name " +
 			"does not say what to reproduce, say so on this task rather than pushing at " +
 			"it blind."
 	}
@@ -3550,8 +3619,8 @@ func noJobLogSection(ev buildEvidence) string {
 			return heading + "When the queue looked, " + stillRunningPhrase(state) +
 				", and no job of " + runsPronoun(state.Runs) + " had failed yet: the check " +
 				"above concluded ahead of the Actions API, which is ordinary. That read is " +
-				"older than your sandbox, so call `pull_request_status` first -- it " +
-				"fetches the failing jobs' logs for this pull request -- and read what it " +
+				"older than your sandbox, so run `grain ci wait` first -- it " +
+				"fetches the failing jobs' logs for this branch -- and read what it " +
 				"says before going through the code."
 		}
 		return heading + allFinishedPhrase(state.Runs) +
@@ -3568,12 +3637,12 @@ func noJobLogSection(ev buildEvidence) string {
 	if state.Unfinished > 0 {
 		b.WriteString("\nAt that moment " + stillRunningPhrase(state) + ", which is why there " +
 			"is no log here: Actions only serves a job's log once its run has finished. " +
-			"That read is older than your sandbox, so call `pull_request_status` -- it " +
+			"That read is older than your sandbox, so run `grain ci wait` -- it " +
 			"will most likely fetch the log now.")
 	} else {
 		b.WriteString("\nThose runs had all finished and their logs were still not served: a " +
 			"log past Actions' 90-day retention, or a credential that may not fetch one. " +
-			"`pull_request_status` reads the same commit and will find no more, so work " +
+			"`grain ci wait` reads the same commit and will find no more, so work " +
 			"from the failed steps above and reproduce that step in your checkout.")
 	}
 	return b.String()
@@ -3752,9 +3821,7 @@ func requeueForRepair(ctx context.Context, store *model.Store,
 		return err
 	}
 
-	return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
-		markRepairAsked(o, now, attempt.baseTip, attempt.failures, attempt.why)
-	})
+	return askForRepair(ctx, store, task.ID, now, attempt.baseTip, attempt.failures, attempt.why)
 }
 
 // repairAttempt is which automatic repair requeueForRepair is asking for
@@ -3774,7 +3841,7 @@ func baseTipOf(client github.Client, ref model.PullRequestRef, base string) stri
 	if client == nil || base == "" {
 		return ""
 	}
-	head, err := client.GetBranchHead(ref.Repo.Owner, ref.Repo.Name, base)
+	head, err := client.GetBranchHead(ref.Repo.StoredOwner(), ref.Repo.Name, base)
 	if err != nil {
 		log.Printf("orchestrator: reading %s's head on %s: %v", base, ref.Repo, err)
 		return ""
@@ -3910,6 +3977,14 @@ func blockMergeQueueAgainst(ctx context.Context, store *model.Store, taskID, com
 	if err := queueComment(ctx, store, taskID, comment, now); err != nil {
 		return err
 	}
+	// The comment reaches whoever is watching this task; the notification
+	// reaches the Inbox, approved or not (mergeneedsperson.go).
+	defer func() {
+		if err := raiseMergeNeedsPerson(ctx, store, taskID, reason,
+			mergeLane.noteWithWayOut(mergeStateFailed, reason), now); err != nil {
+			log.Printf("orchestrator: raising %s for %s: %v", model.FamilyMergeNeedsPerson, taskID, err)
+		}
+	}()
 	return observeField(ctx, store, taskID, now, func(o *model.Observation) {
 		o.MergeQueueBlockedAt = &now
 		// A fresh block is measured against the base its red verdict was

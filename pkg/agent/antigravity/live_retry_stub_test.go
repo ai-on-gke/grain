@@ -100,7 +100,7 @@ const refusalProbeRuntime = 7 * time.Minute
 // binary a deployment really runs.
 //
 // The Dockerfile's ARG is the single source of the version everywhere it
-// matters: the image installs it, .grain/workflows/live-agent.yml derives
+// matters: the image installs it, .github/workflows/live-agent.yml derives
 // the agy the probes below measure from the same line and asserts the
 // installed binary reports it, and Dockerfile.k8s-sandbox is held equal
 // to it by tests/deploy. So the pin moving off measuredAgyVersion means
@@ -439,7 +439,7 @@ func liveAgyPath(t *testing.T) string {
 // behaviour was seen on.
 //
 // It is the first line only, which is how both Dockerfiles and
-// .grain/workflows/live-agent.yml check an installed agy against the pin
+// .github/workflows/live-agent.yml check an installed agy against the pin
 // (`agy --version | head -n1`); requireMeasuredAgy compares against the
 // same pin, so it has to read the version the same way.
 func agyVersion(t *testing.T) string {

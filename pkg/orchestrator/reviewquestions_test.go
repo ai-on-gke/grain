@@ -158,7 +158,7 @@ func TestAReviewsFindingsHoldTheChangeAsQuestionsForItsOwner(t *testing.T) {
 		t.Errorf("the draft review was not recorded: %+v", got.Links)
 	}
 	bodies := strings.Join(commentBodies(t, ctx, store, reviewed.ID), "\n")
-	for _, want := range []string{"Review needs your decision", "1 open question", "I recommend not", "Reply here", "Ship as is"} {
+	for _, want := range []string{"Review needs your decision", "1 open question", "I recommend not", "Reply here", "force-merge override"} {
 		if !strings.Contains(bodies, want) {
 			t.Errorf("the task's conversation lacks %q:\n%s", want, bodies)
 		}
@@ -226,8 +226,9 @@ func TestAReplyOnTheReviewRedispatchesTheHeldChange(t *testing.T) {
 	}
 }
 
-// Submit is "ship as is": the change merges, nothing is redispatched, and
-// the hold is dropped.
+// Submit does NOT clear open review questions or findings: auto-merge stays
+// off until the owner replies (sending a fix + re-review) or an operator
+// overrides the review gate under merge:force.
 func TestSubmittingAChangeHeldOnQuestionsShipsItAsIs(t *testing.T) {
 	t.Parallel()
 	store, ctx, _, reviewed, _ := heldOnQuestions(t)
@@ -237,14 +238,14 @@ func TestSubmittingAChangeHeldOnQuestionsShipsItAsIs(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	say(t, ctx, store, reviewed.ID, owner, "shipping it", baseTime.Add(time.Minute))
-	if err := orchestrator.SyncReviewQuestions(ctx, store, baseTime.Add(2*time.Minute)); err != nil {
-		t.Fatal(err)
+	got := reloaded(t, ctx, store, reviewed.ID)
+	if got.AutoMerge {
+		t.Fatal("Submit / auto-merge must not bypass open review questions or findings")
 	}
-	if s := stateOf(t, ctx, store, reviewed.ID); s != model.StateCompleted {
-		t.Fatalf("state = %q, want %q -- a submitted change is not run again", s, model.StateCompleted)
+	if _, held := model.ReviewQuestionsOf(got); !held {
+		t.Error("open review questions hold was dropped by Submit")
 	}
-	if _, held := model.ReviewQuestionsOf(reloaded(t, ctx, store, reviewed.ID)); held {
-		t.Error("a submitted change still carries its questions hold")
+	if !model.HasReviewFindings(got) {
+		t.Error("review findings gate block was dropped by Submit")
 	}
 }

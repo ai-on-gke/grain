@@ -680,7 +680,7 @@ func TestOwnerTrustAndExternalAgentTokenFilesAreClassified(t *testing.T) {
 		"pkg/ui": {
 			"canIssuePersonExternalAgentToken", "externalAgentTokenOwner", "selfServiceLimits",
 			"CreateExternalAgentToken", "RotateExternalAgentToken",
-			"authenticateExternalAgent", "ExternalAgentAPITools", "handleMCP",
+			"authenticateExternalAgent", "externalAgentAPITools", "handleMCP",
 		},
 	}
 	for dir, names := range gates {

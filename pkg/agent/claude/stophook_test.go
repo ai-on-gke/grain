@@ -15,12 +15,16 @@
 package claude
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
 	"github.com/ai-on-gke/grain/pkg/agent/claude/stophook"
+	"github.com/ai-on-gke/grain/pkg/agent/hookpolicy"
 )
 
 // sessionLines is a Claude Code session transcript: the same assistant
@@ -124,6 +128,60 @@ func TestStopHookParsesSessionsAsParseEventsDoes(t *testing.T) {
 	}
 	if stophook.Subcommand != StopHookSubcommand {
 		t.Errorf("stophook.Subcommand = %q, want %q", stophook.Subcommand, StopHookSubcommand)
+	}
+}
+
+func TestStopHookPolicyStagedOnlyForHostsWithFeatureHookPolicy(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("TMPDIR", t.TempDir())
+
+	// Capable host (FeatureHookPolicy): stages policy file and passes -policy.
+	capable := agent.HostdHost{HookPolicy: true}
+	policyPath, err := stageStopPolicy(ctx, capable, false)
+	if err != nil || policyPath == "" {
+		t.Fatalf("stageStopPolicy(capable) = %q, %v", policyPath, err)
+	}
+	defer os.Remove(policyPath)
+	file, err := hookpolicy.Load(policyPath)
+	if err != nil || file == nil || file.Stop == nil {
+		t.Fatalf("Load(%s) = %+v, %v", policyPath, file, err)
+	}
+	settings, err := stopHookSettingsWithPolicy("/opt/grain-agentd", false, "/tmp/rec.jsonl", policyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(settings, "-policy '"+policyPath+"'") {
+		t.Errorf("capable settings = %s, want -policy %s", settings, policyPath)
+	}
+
+	// Evaluating stophook.Run with the staged policy allows resume_later on success.
+	tp := policyPath + ".transcript.jsonl"
+	if err := os.WriteFile(tp, []byte(sessionLines(t,
+		hookAssistantTool("t1", "mcp__grain-sandbox__resume_later", map[string]any{"reason": "waiting on CI"}),
+		hookToolResult("t1", "parked", false),
+	)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]any{"hook_event_name": "Stop", "transcript_path": tp})
+	var out, errOut bytes.Buffer
+	ServeStopHook([]string{"-policy", policyPath}, bytes.NewReader(payload), &out, &errOut)
+	if out.Len() != 0 {
+		t.Errorf("resume_later with staged policy blocked: %s", out.String())
+	}
+
+	// Older host without FeatureHookPolicy: stages nothing and omits -policy so
+	// an older agentd's flag.FlagSet does not reject an unknown flag.
+	older := agent.HostdHost{HookPolicy: false}
+	oldPolicy, err := stageStopPolicy(ctx, older, false)
+	if err != nil || oldPolicy != "" {
+		t.Fatalf("stageStopPolicy(older) = %q, %v; want empty", oldPolicy, err)
+	}
+	oldSettings, err := stopHookSettingsWithPolicy("/opt/old-agentd", false, "/tmp/rec.jsonl", oldPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(oldSettings, "-policy") {
+		t.Errorf("older settings = %s, must not contain -policy", oldSettings)
 	}
 }
 

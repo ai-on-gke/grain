@@ -1,0 +1,107 @@
+== item 2 from the UIs (seeded rows 3, 4, 6)
+{
+  "next-approve-3": {
+    "status": 400,
+    "shown": [
+      "task 3 cannot be approved holding https://grain.dev/capabilities/repo#write={\"repo\":\"acme/widgets\"}: https://grain.dev/capabilities/repo#write={\"repo\":\"acme/widgets\"} is a CI capability, not a task grant: it gives a CI job push access to another repository, released only to a release, a workflow_dis",
+      "task 3 cannot be approved holding https://grain.dev/capabilities/repo#write={\"repo\":\"acme/widgets\"}: https://grain.dev/capabilities/repo#write={\"repo\":\"acme/widgets\"} is a CI capability, not a task grant: it gives a CI job push access to another repository, released only to a release, a workflow_dis"
+    ]
+  },
+  "classic-approve-3": {
+    "status": 400,
+    "shown": [
+      "task 3 cannot be approved holding https://grain.dev/capabilities/repo#write={\"repo\":\"acme/widgets\"}: https://grain.dev/capabilities/repo#write={\"repo\":\"acme/widgets\"} is a CI capability, not a task grant: it gives a CI job push access to another repository, released only to a release, a workflow_dis"
+    ]
+  },
+  "state-3": "proposed",
+  "next-approve-4": {
+    "status": 400,
+    "shown": [
+      "sandbox shape is above this deployment's maximum: sandboxDiskGb 500 (ceiling 100); ask for less, or have an operator raise sandboxShapeLimits in settings Dismiss",
+      "sandbox shape is above this deployment's maximum: sandboxDiskGb 500 (ceiling 100); ask for less, or have an operator raise sandboxShapeLimits in settings Dismiss"
+    ]
+  },
+  "classic-approve-4": {
+    "status": 400,
+    "shown": [
+      "This deployment's sandboxes are directories on the daemon's own machine, which have no shape of their own, so this task fails at sandbox setup rather than running unshaped. Clear the override and it runs like any other task here.\nclear sandbox shape",
+      "sandbox shape is above this deployment's maximum: sandboxDiskGb 500 (ceiling 100); ask for less, or have an operator raise sandboxShapeLimits in settings"
+    ]
+  },
+  "state-4": "proposed",
+  "next-approve-6": {
+    "status": 400,
+    "shown": [
+      "task 6 cannot be approved holding repo-read:acme/gadgets: https://grain.dev/capabilities/repo#read={\"repo\":\"acme/gadgets\"} is a CI capability, not a task grant: it gives a CI job read access to another repository, and only a CI job is handed it -- a task run is not one. A task that needs to read acm",
+      "task 6 cannot be approved holding repo-read:acme/gadgets: https://grain.dev/capabilities/repo#read={\"repo\":\"acme/gadgets\"} is a CI capability, not a task grant: it gives a CI job read access to another repository, and only a CI job is handed it -- a task run is not one. A task that needs to read acm"
+    ]
+  },
+  "classic-approve-6": {
+    "status": 400,
+    "shown": [
+      "This deployment's sandboxes are directories on the daemon's own machine, which have no shape of their own, so this task fails at sandbox setup rather than running unshaped. Clear the override and it runs like any other task here.\nclear sandbox shape",
+      "task 6 cannot be approved holding repo-read:acme/gadgets: https://grain.dev/capabilities/repo#read={\"repo\":\"acme/gadgets\"} is a CI capability, not a task grant: it gives a CI job read access to another repository, and only a CI job is handed it -- a task run is not one. A task that needs to read acm"
+    ]
+  },
+  "state-6": "proposed"
+}
+== item 4: /next/ task 10, classic task 11
+{
+  "next-open": {
+    "apiOptions": [
+      "api:grain/ci-read",
+      "api:grain/contributor",
+      "api:grain/delegated",
+      "api:grain/deployment-ops",
+      "api:grain/dispatch-control",
+      "api:grain/external-dev",
+      "api:grain/external-read",
+      "api:grain/memory",
+      "api:grain/operator",
+      "api:grain/pipeline-control",
+      "api:grain/release-gate-read",
+      "api:grain/release-manager",
+      "api:grain/release-notes",
+      "api:grain/self-debug",
+      "api:grain/self-upgrade",
+      "api:grain/task-admin",
+      "api:grain/team-broadcast",
+      "api:grain/test-quarantine",
+      "api:grain/viewer"
+    ]
+  },
+  "next-add-grain-operator": {
+    "error": []
+  },
+  "next-add-repo-credential": {
+    "error": []
+  },
+  "next-ungrantable-repo": {
+    "error": [
+      "repo-read:acme/gadgets is a CI capability, not a task grant: it gives a CI job read access to another repository, and only a CI job is handed it -- a task run is not one. A task that needs to read acme/gadgets names it in its reads instead: reads: [\"acme/gadgets\"]. Take it off this task. A CI job that needs it declares it in its own `capabilities:` in the repository's .grain/workflows file; the repos page's CI capabilities list does not grant it."
+    ]
+  },
+  "nextStored": [
+    "https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/widgets\"}",
+    "https://grain.dev/capabilities/api#grain/operator",
+    "https://grain.dev/capabilities/repo#credential={\"credential\":\"bot\"}"
+  ],
+  "classic-add-grain-operator": "ok",
+  "classic-add-repo-credential": {
+    "draftButtons": [
+      "",
+      "add another",
+      "",
+      "edit as json",
+      ""
+    ]
+  },
+  "classicStored": [
+    "https://grain.dev/capabilities/api#ci-read={\"repo\":\"acme/widgets\"}",
+    "https://grain.dev/capabilities/api#grain/operator",
+    "https://grain.dev/capabilities/repo#credential={\"credential\":\"bot\"}"
+  ]
+}
+== what each run was handed (operator preset sections, repo#credential block)
+task 10: api#test-quarantine section=True, api#self-debug section=True, repo#credential block=True, says bot token=True
+task 11: api#test-quarantine section=True, api#self-debug section=True, repo#credential block=True, says bot token=True

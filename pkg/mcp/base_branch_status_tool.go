@@ -128,9 +128,7 @@ func baseBranchStatusTool(client PullRequestReader, grainCI GrainCIReader, scope
 		Handler: func(ctx context.Context, _ map[string]any) Result {
 			if client == nil || !scope.complete() {
 				return Result{
-					Text: "There is no base branch to report on: this run has no GitHub " +
-						"repository configured for it. Do the work in the sandbox and " +
-						"report what you found instead.",
+					Text:    noGitHubRepoMessage("There is no base branch to report on"),
 					IsError: true,
 				}
 			}

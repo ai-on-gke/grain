@@ -63,7 +63,10 @@ func requestAccessTool(sink *MockSink) Tool {
 			"item is checked now, as the task's grants editor checks it -- an unknown " +
 			"capability, arguments its schema refuses, a repository this deployment does not " +
 			"work with, or something the task holds already is refused, so fix the request " +
-			"and call again. Dangerous scopes are a person's to grant, which is what this " +
+			"and call again. Never ask for grain#ci: a repository's CI Mode grants it, " +
+			"never a person, and `grain ci wait` and `grain pr open` need no grant; to read " +
+			"CI runs and logs, ask for https://grain.dev/capabilities/api#ci-read with {repo}. " +
+			"Dangerous scopes are a person's to grant, which is what this " +
 			"asks for. Only the first request_access call in a run is relayed. Do not use " +
 			"ask_question to ask for access: a reply there grants nothing. After calling " +
 			"this, do not take any further actions.",
@@ -96,7 +99,7 @@ func requestAccessTool(sink *MockSink) Tool {
 							},
 							"repo":       map[string]any{"type": "string", "description": "owner/name, for read and write."},
 							"base":       map[string]any{"type": "string", "description": "For write: the branch to land work on; omit for the repository's default."},
-							"capability": map[string]any{"type": "string", "description": "For grant: an in-process capability id, an api:<scope> grant, or a capability server method's <capability>#<method> reference."},
+							"capability": map[string]any{"type": "string", "description": "For grant: a capability server method's <capability>#<method> reference (grain's agent API scopes and presets are https://grain.dev/capabilities/api#<scope>), or an in-process capability id."},
 							"with":       map[string]any{"type": "object", "description": "For grant: the method's with: arguments."},
 							"access":     map[string]any{"type": "string", "enum": []string{"open"}, "description": "For network: \"open\"."},
 						},

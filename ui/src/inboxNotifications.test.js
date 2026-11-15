@@ -286,6 +286,43 @@ describe("a question's notification", () => {
     expect(entry.body).toBe("Ship the exporter");
     expect(entry.key).toBe("task:42:reply");
   });
+
+  it("is titled by a closing note's own summary when its run gave one", () => {
+    const [entry] = inboxEntries(
+      [
+        {
+          id: "42",
+          title: "Fix base branch release",
+          state: "awaiting_reply",
+          noteSummary: "Set GRAIN_MERGE_LOGINS to unblock image publishing",
+        },
+      ],
+      [],
+    );
+    expect(entry.title).toBe(
+      "Set GRAIN_MERGE_LOGINS to unblock image publishing",
+    );
+    expect(entry.body).toBe(
+      "42 answered in a comment: Fix base branch release",
+    );
+  });
+
+  it("names whose question an answered task still owes a run", () => {
+    const [entry] = inboxEntries(
+      [
+        {
+          id: "42",
+          title: "Ship the exporter",
+          state: "awaiting_reply",
+          unansweredCommentFrom: "atyburcy@example.com",
+        },
+      ],
+      [],
+    );
+    expect(entry.title).toBe(
+      "42 has an unanswered question from atyburcy@example.com",
+    );
+  });
 });
 
 describe("taskReason for a CL", () => {

@@ -368,6 +368,72 @@ describe("HostdsSection", () => {
     confirm.mockRestore();
   });
 
+  // Each of these took effect on one click (2026-11-11 walkthrough).
+  it("asks before revoking or rotating a host, a code, or rejecting a join request", async () => {
+    const code = { name: "default", code: "ghe_0011", uses: 0 };
+    const pendingReq = {
+      id: "hjr_9",
+      enrollment_code: "default",
+      hostname: "devbox.example",
+      suggested_name: "devbox",
+    };
+    api.mockImplementation(async (path, opts) => {
+      if (path === "/api/hostds" && !opts) return [LOCAL, WS];
+      if (path === "/api/hostds/enrollment-codes" && !opts) return [code];
+      if (path === "/api/hostds/pending" && !opts) return [pendingReq];
+      if (path === "/api/hostds/ws-1/rotate")
+        return { hostd: { name: "ws-1" }, token: "ghd_new" };
+      return {};
+    });
+    render(<HostdsSection showError={vi.fn()} />);
+    const row = await screen.findByTestId("hostd-row-ws-1");
+    await screen.findByTestId("pending-host-hjr_9");
+    const posted = () =>
+      api.mock.calls
+        .filter(([, opts]) => opts?.method === "POST")
+        .map(([path]) => path);
+    const actions = [
+      [
+        within(row).getByRole("button", { name: "Revoke" }),
+        "/api/hostds/ws-1/revoke",
+        /Revoke host ws-1\?.*cannot be restored/,
+      ],
+      [
+        within(row).getByRole("button", { name: "Rotate" }),
+        "/api/hostds/ws-1/rotate",
+        /Rotate host ws-1's token\?/,
+      ],
+      [
+        screen.getByRole("button", { name: "Rotate code" }),
+        "/api/hostds/enrollment-codes/default/rotate",
+        /Rotate enrollment code default\?/,
+      ],
+      [
+        screen.getByRole("button", { name: "Revoke code" }),
+        "/api/hostds/enrollment-codes/default/revoke",
+        /Revoke enrollment code default\?/,
+      ],
+      [
+        screen.getByRole("button", { name: "Reject" }),
+        "/api/hostds/pending/hjr_9/reject",
+        /Reject the join request from devbox\.example\?/,
+      ],
+    ];
+    const confirm = vi.spyOn(window, "confirm");
+    for (const [button, path, question] of actions) {
+      confirm.mockReturnValueOnce(false);
+      await userEvent.click(button);
+      expect(confirm).toHaveBeenLastCalledWith(expect.stringMatching(question));
+      expect(posted()).not.toContain(path);
+    }
+    for (const [button, path] of actions) {
+      confirm.mockReturnValueOnce(true);
+      await userEvent.click(button);
+      expect(posted()).toContain(path);
+    }
+    confirm.mockRestore();
+  });
+
   it("deletes every revoked hostd at once and lists the skipped", async () => {
     const revoked = (name) => ({
       ...WS,

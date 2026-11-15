@@ -200,9 +200,7 @@ func waitForChecksTool(client PullRequestReader, grainCI GrainCIReader, scope Pu
 		Handler: func(ctx context.Context, args map[string]any) Result {
 			if client == nil || !scope.complete() {
 				return Result{
-					Text: "There is no CI to wait for: this run has no GitHub repository " +
-						"configured for it. Do the work in the sandbox and report what " +
-						"you found instead.",
+					Text:    noGitHubRepoMessage("There is no CI to wait for"),
 					IsError: true,
 				}
 			}

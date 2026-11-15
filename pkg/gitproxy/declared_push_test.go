@@ -209,7 +209,9 @@ func TestADeclaredSchedulesRunPushesItsDeclaredRefs(t *testing.T) {
 	if filed.TemplateID != tmplID {
 		t.Fatalf("the filed task's TemplateID = %q, want %q", filed.TemplateID, tmplID)
 	}
-	if len(filed.Grants) != 0 {
+	// None beyond the default read of its own repository's CI
+	// (model.DefaultCIReadGrant), which pushes nothing.
+	if g := model.GrantsBeyondCIReadDefault(*filed); len(g) != 0 {
 		t.Fatalf("the filed task holds grants %v; this walkthrough is the push with none", filed.Grants)
 	}
 	if err := store.StartRun(ctx, model.Run{ID: "r1", TaskID: filed.ID, Attempt: 1, StartedAt: now}, model.Limits{}); err != nil {

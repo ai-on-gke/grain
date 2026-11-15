@@ -17,6 +17,9 @@ package ui
 import (
 	"context"
 	"net/http"
+	"strings"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // AgentModel is one model an agent framework's own CLI says it can run,
@@ -100,8 +103,38 @@ func (s *Server) handleListAgentModels(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
+	framework := r.URL.Query().Get("framework")
+	// ?backend= names one of the deployment's connections: the catalog is
+	// what that connection's provider lists, with its credentials, so it
+	// is asked on that connection's framework when ?framework= says
+	// nothing -- a Claude connection is never answered with agy's list --
+	// and an id that names no connection is refused rather than answered
+	// with the deployment default's catalog as though it existed.
+	if backendID := strings.TrimSpace(r.URL.Query().Get("backend")); backendID != "" && s.tasks.Store != nil {
+		cfg, err := s.tasks.Store.GetConfig(r.Context())
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
+		var found *model.AgentBackend
+		if cfg != nil {
+			for i := range cfg.AgentBackends {
+				if cfg.AgentBackends[i].ID == backendID {
+					found = &cfg.AgentBackends[i]
+					break
+				}
+			}
+		}
+		if found == nil {
+			writeClientError(w, &NotFoundError{ID: backendID, message: "no connection " + backendID})
+			return
+		}
+		if framework == "" {
+			framework = model.NormalizeAgentFrameworkName(found.Framework)
+		}
+	}
 	lister := s.tasks.Config.AgentModels
-	switch r.URL.Query().Get("framework") {
+	switch framework {
 	case "", "gemini", "antigravity":
 	case "codex":
 		lister = s.tasks.Config.CodexModels

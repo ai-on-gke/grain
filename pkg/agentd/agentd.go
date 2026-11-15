@@ -37,10 +37,12 @@
 // allowlist can name agent CLIs and nothing else, and an agent CLI already
 // runs as the user with the user's shell.
 //
-// `grain-agentd install -server URL [-name NAME]` sets it up for the user
-// running it (install.go): the binary in ~/.local/bin, the token (prompted
-// for, or $GRAIN_HOSTD_TOKEN) in ~/.config/grain, an allowlist with agy,
-// and a systemd --user unit, started.
+// `grain-agentd install -server URL [-join CODE | -name NAME]` sets it up for
+// the user running it (install.go): the binary in ~/.local/bin, an allowlist
+// filled in from the controller's /hostd/install template for the CLIs present
+// on this machine, the credential in ~/.config/grain, and a systemd --user
+// unit, started. `grain-agentd allow <name>` adds one CLI entry from the same
+// controller template after confirmation on the host (allow.go).
 //
 // The package stays small on purpose: it links pkg/hostd and the leaf hook
 // packages and nothing of the daemon's (no pkg/ui, pkg/daemon, pkg/model
@@ -62,6 +64,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -69,6 +72,7 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/agent/antigravity/hook"
 	"github.com/ai-on-gke/grain/pkg/agent/claude/stophook"
+	"github.com/ai-on-gke/grain/pkg/agentd/release"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -98,6 +102,8 @@ func Main(args []string) int {
 			return 0
 		case "install":
 			return install(args[2:], os.Stdout, os.Stderr)
+		case "allow":
+			return allow(args[2:], os.Stdin, os.Stdout, os.Stderr)
 		case "hostd":
 			// Accepted for symmetry with `grain hostd`.
 			return run(args[2:], os.Stdout, os.Stderr)
@@ -112,19 +118,50 @@ func Main(args []string) int {
 
 // paths is where grain-agentd keeps everything, under the user's home.
 type paths struct {
-	Bin, Token, Key, Allowlist, StateDir, Stage, UnitDir string
+	Bin, Token, Key, ReleasePub, Allowlist, StateDir, Stage, UnitDir string
 }
 
 func pathsFor(home string) paths {
 	return paths{
-		Bin:       filepath.Join(home, ".local", "bin", Program),
-		Token:     filepath.Join(home, ".config", "grain", "agentd-token"),
-		Key:       filepath.Join(home, ".config", "grain", "agentd-key"),
-		Allowlist: filepath.Join(home, ".config", "grain", "agentd.yaml"),
-		StateDir:  filepath.Join(home, ".local", "state", Program),
-		Stage:     filepath.Join(home, ".grain", "hostd-stage"),
-		UnitDir:   filepath.Join(home, ".config", "systemd", "user"),
+		Bin:        filepath.Join(home, ".local", "bin", Program),
+		Token:      filepath.Join(home, ".config", "grain", "agentd-token"),
+		Key:        filepath.Join(home, ".config", "grain", "agentd-key"),
+		ReleasePub: filepath.Join(home, ".config", "grain", release.DefaultConfigFileName),
+		Allowlist:  filepath.Join(home, ".config", "grain", "agentd.yaml"),
+		StateDir:   filepath.Join(home, ".local", "state", Program),
+		Stage:      filepath.Join(home, ".grain", "hostd-stage"),
+		UnitDir:    filepath.Join(home, ".config", "systemd", "user"),
 	}
+}
+
+// PinnedReleasePublicKey loads the release public key pinned at
+// ~/.config/grain/agentd-release.pub, falling back to the public key embedded
+// in this grain-agentd binary when the file is absent. Symlinks and group- or
+// world-writable files are refused.
+func PinnedReleasePublicKey(home string) (ed25519.PublicKey, error) {
+	path := pathsFor(home).ReleasePub
+	st, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return release.EmbeddedPublicKey()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	if st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s must be a regular file, not a symlink", path)
+	}
+	if st.Mode().Perm()&0o022 != 0 {
+		return nil, fmt.Errorf("%s is writable by group or others (mode %04o)", path, st.Mode().Perm())
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	pub, err := release.ParsePublicKey(string(raw))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return pub, nil
 }
 
 // owners are the uids grain-agentd accepts as its allowlist's owner: the
@@ -152,6 +189,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	iapAudience := fs.String("iap-audience", "", "the OAuth client ID of the IAP in front of the daemon, for an IAP URL")
 	build := fs.Bool("build", false, "print this binary's build and exit")
 	check := fs.Bool("check", false, "check the allowlist, print the agent CLIs it offers, and exit")
+	drain := fs.Bool("drain", false, "ask the host agent serving -socket to drain, and exit: one of this build's protocol cuts over (it keeps taking starts "+
+		"and exits the moment no agent CLI runs, refusing new starts only if no such moment comes within the allowlist's drain_cap); "+
+		"any other refuses new starts and waits for its agent CLIs (up to drain_cap). Either then exits for systemd to start "+
+		"the binary ~/.local/bin/grain-agentd names. SIGUSR1 to the host agent drains")
 	registerTransportFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -164,6 +205,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if geteuid() == 0 {
 		fmt.Fprintln(stderr, Program+": refusing to run as root; run it as the user whose agent CLIs it starts")
 		return 2
+	}
+	if *drain {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := askDrain(ctx, hostd.Client{Socket: *socket, Build: version.Get().Release}); err != nil {
+			fmt.Fprintln(stderr, Program+": "+err.Error())
+			return 1
+		}
+		return 0
 	}
 	if *check {
 		if err := checkAgentsOnly(*allowlist, owners()); err != nil {
@@ -305,11 +355,40 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// remote run's hooks name this binary itself (Hello.Grain falls back
 		// to os.Executable). No Builtins: agent CLIs and nothing else.
 	}
+	usr1 := make(chan os.Signal, 1)
+	signal.Notify(usr1, syscall.SIGUSR1)
+	defer signal.Stop(usr1)
+	go drainOnSignal(usr1, srv)
 	if err := srv.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintln(stderr, Program+": "+err.Error())
 		return 1
 	}
 	return 0
+}
+
+// askDrain is -drain: the request `grain host -drain` makes, for a host
+// agent that has no `grain` binary beside it. One speaking this build's
+// protocol is cut over -- grain-agentd has no in-place re-exec, so a
+// handover would fall back to the same cutover -- and any other is
+// drained, so its runs end on the build they started on. Without this
+// flag (and SIGUSR1, drainOnSignal) nothing short of the daemon could
+// drain a grain-agentd: the 2026-11-13 walkthrough's `grain-agentd
+// -drain` was refused as an unknown flag, and SIGUSR1 was ignored
+// (docs/test-runs/2026-11-13-hosts-env-drain.md, F1).
+func askDrain(ctx context.Context, c hostd.Client) error {
+	if h, err := c.Hello(ctx); err == nil && h.Protocol == hostd.ProtocolVersion {
+		return c.Cutover(ctx)
+	}
+	return c.Drain(ctx)
+}
+
+// drainOnSignal drains srv on every signal sig delivers, as `grain host`
+// does on SIGUSR1: new starts are refused, the running agent CLIs finish
+// (up to drain_cap), and Serve returns for systemd to restart the unit.
+func drainOnSignal(sig <-chan os.Signal, srv interface{ Drain() }) {
+	for range sig {
+		srv.Drain()
+	}
 }
 
 // parseServer reads -server: an http or https URL with a host.
@@ -329,7 +408,7 @@ func checkAgentsOnly(path string, owners []uint32) error {
 	a, err := hostd.LoadAllowlist(path, owners)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("no allowlist at %s: write one with a clis: entry for each agent CLI this machine runs (capabilities: stays empty)", path)
+			return fmt.Errorf("no allowlist at %s: run `%s allow <name>` or write one with a clis: entry for each agent CLI this machine runs (capabilities: stays empty)", path, Program)
 		}
 		return err
 	}
@@ -338,7 +417,7 @@ func checkAgentsOnly(path string, owners []uint32) error {
 		return fmt.Errorf("%s names capabilities (%s): %s runs agent CLIs only; remove them, or run `grain host`, which serves capabilities too", path, strings.Join(names, ", "), Program)
 	}
 	if len(a.CLIs) == 0 {
-		return fmt.Errorf("%s offers no agent CLIs: add a clis: entry (agy, claude or codex)", path)
+		return fmt.Errorf("%s offers no agent CLIs: run `%s allow <name>` or add a clis: entry", path, Program)
 	}
 	return nil
 }
@@ -359,10 +438,38 @@ func readToken(path string) (string, error) {
 }
 
 func defaultSocket() string {
-	if d := os.Getenv("XDG_RUNTIME_DIR"); d != "" {
+	return defaultSocketFor(os.Getenv("XDG_RUNTIME_DIR"), os.Getuid(), runUserDir)
+}
+
+// runUserDir is where systemd puts a user's XDG_RUNTIME_DIR; a seam for
+// tests.
+var runUserDir = "/run/user"
+
+// defaultSocketFor is defaultSocket for a runtime dir, uid and the base
+// of systemd's per-user runtime dirs. With no XDG_RUNTIME_DIR -- a shell
+// opened with `sudo -u` or `su`, which drop it -- the user's own
+// /run/user/<uid> is still the runtime dir grain-agentd.service runs
+// with, so `grain-agentd -drain` from that shell finds the socket the
+// unit listens on rather than a /tmp one nothing serves (the 2026-11-13
+// walkthrough, docs/test-runs/2026-11-13-hosts-env-drain.md, F1).
+func defaultSocketFor(xdg string, uid int, runUser string) string {
+	if xdg != "" {
+		return filepath.Join(xdg, Program, "agentd.sock")
+	}
+	if d := filepath.Join(runUser, strconv.Itoa(uid)); ownedDir(d, uid) {
 		return filepath.Join(d, Program, "agentd.sock")
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", Program, os.Getuid()), "agentd.sock")
+	return filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d", Program, uid), "agentd.sock")
+}
+
+// ownedDir reports whether path is a directory owned by uid.
+func ownedDir(path string, uid int) bool {
+	st, err := os.Stat(path)
+	if err != nil || !st.IsDir() {
+		return false
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	return ok && int(sys.Uid) == uid
 }
 
 func allowlistOrDetectedCLIs(path string, owners []uint32) []string {

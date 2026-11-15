@@ -343,6 +343,16 @@ Hosted instances move through a narrow state machine:
      repo.
   4. `probing` → `running`: once `/healthz` and `/api/registry/status`
      respond on the new `backend_url`, the entry returns to `running`.
+
+  Hosted `instance` VMs run with `-disable-self-upgrade`, so this external VM
+  replacement does not use the daemon's in-place `pkg/upgrade` pipeline and
+  cannot be cancelled with `DELETE /api/upgrade/current` or
+  `grain upgrade cancel` (run `grain hub upgrade -version <previous> <name>`
+  afterwards to move back). By contrast, `connected` entries run their own
+  `grain daemon` and support per-instance upgrade cancellation, grace-window
+  countdown, and one-click rollback via the Hub's proxied
+  `[Settings → Upgrade](/settings/upgrade)` pane, `DELETE /api/upgrade/current`,
+  or `grain -context <name> upgrade cancel`.
 - **Stop and start (`stopping` → `stopped`).** An entry manager can
   park an idle instance with `grain hub stop <name>` (or
   `POST /api/entries/<name>/stop`, or **Stop** on the entry's page and
@@ -601,7 +611,9 @@ configured repositories or `WorkOwnership` settings change):
 
 The hub updates the entry's health, task counts, build stamps, and
 `reported` scopes, and responds with
-`{status, next_heartbeat_seconds, scope_conflicts}`. Check a grain's
+`{status, next_heartbeat_seconds, scope_conflicts, environment_name}`
+-- the last being the name the grain shows itself under by default
+([What an instance is called](#what-an-instance-is-called)). Check a grain's
 live registration state, last heartbeat timestamp, and any scope
 conflicts from the grain itself with:
 
@@ -646,6 +658,47 @@ repository scopes used by the directory and work router.
   grains stay visible **only** to their `owner`, verified `owner_group`
   members, and hub `admins`. Setting `listed = true` publishes the
   entry into `GET /api/directory` and `GET /api/route`.
+
+### What an instance is called
+
+A grain the hub knows about names itself after its entry: its
+**environment name** -- the browser tab title and the sidebar badge in
+its own UI, and the name in Settings -- defaults to the entry's
+`display_name`, or to its `name` when the entry has no display name.
+That makes it obvious, with several hub grains open in tabs, which one
+you are looking at.
+
+- **Hosted instances.** The reconciler puts the name in the VM's
+  `grain-config` metadata as `environment_name`;
+  `scripts/grain-instance-init.sh` writes it to `daemon.env` as
+  `GRAIN_DEFAULT_ENVIRONMENT_NAME`, which the daemon reads as
+  `-default-environment-name`.
+- **Connected grains.** The heartbeat reply carries it as
+  `environment_name`, and the daemon applies it on every heartbeat.
+
+It is a default only. The daemon records the name the hub gave it
+(`grain_config.hub_environment_name`), and adopts a new one from the hub
+only while its environment name is empty or still that hub-given name. A
+name the operator sets in **Settings** (or in the state repository's
+`tables/grain_config.json`) is anything else, and the hub never
+overrides it. Clearing the name in Settings hands it back to the hub,
+which fills it in again.
+
+Changing the entry's `display_name` therefore
+renames the grain unless its operator has named it themselves:
+
+- a **connected** grain picks the new name up on its next heartbeat;
+- a **hosted** instance picks it up the next time the hub builds its VM
+  (an upgrade, resize or replace). `grain-config` is written only when a
+  VM is created, so a running VM keeps the name it booted with until
+  then.
+
+The name is cut down to what the daemon's Settings accept rather than
+failing provisioning. Line breaks, tabs and other control characters
+become spaces, runs of spaces collapse, and the result is cut to 32
+characters. For hosted instances, the characters a `daemon.env` line
+cannot carry unchanged to both systemd and docker (`"`, `'`, `\`, `$`
+and `` ` ``) are dropped.
 
 ### Repository scopes (`repo`, `path_prefix`, `role`)
 
@@ -1158,7 +1211,7 @@ for machine-readable JSON output on every subcommand.
 | `grain hub update [flags] <name>` | Edit catalog metadata, `owner_group`, `listed`/`unlisted`, `tags`, `host_kind`, `connected_principal`, `shape`, `allow_ssh`, or `ship_logs` |
 | `grain hub scopes [-set <repo[:prefix[:role]]>]... [-clear] <name>` | View or replace `declared` repository scope overrides on `<name>` |
 | `grain hub rotate-credential [flags] <name>` | Mint a replacement `grc_…` token for a `connected` entry (`-overlap`, `-revoke-previous`, `-cred-id`, `-label`, `-token-file`) |
-| `grain hub upgrade [-version <vX.Y.Z>] <name>` | Replace a hosted `instance` VM onto the target (or current default) release image |
+| `grain hub upgrade [-version <vX.Y.Z>] <name>` | Replace a hosted `instance` VM onto the target (or current default) release image (`connected` entries upgrade in place via `grain -context <name> upgrade` and cancel via `grain -context <name> upgrade cancel`) |
 | `grain hub resize [-shape <shape>] [-disk-gb <gb>] [-version <vX.Y.Z>] <name>` | Replace a hosted `instance` VM onto a new shape and/or boot disk size (`20`–`4000` GB) |
 | `grain hub delete [-confirm <name>\|-yes] [-delete-disk] <name>` | Delete an entry (fencing a hosted instance's database for the 7-day restore window unless `-delete-disk` is set, and holding the name for 30 days) |
 | `grain hub stop <name>` | Stop a hosted `instance`'s VM while keeping its state (`stopping` → `stopped`) |

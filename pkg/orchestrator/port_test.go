@@ -135,6 +135,7 @@ func TestAMergeOnAPairedBranchFilesAPortToTheOther(t *testing.T) {
 			sim, client, repo := pairedSim(t, ctx, store, tc.landed, tc.other)
 			task, branch := queuedTaskWithPullRequest(t, ctx, store, sim, client, "t1", repo)
 			task.Grants = []model.Grant{{Capability: "gcp-key", Via: model.GrantByLabel}}
+			task.TemplateID = "nightly-audit"
 			if err := store.PutTask(ctx, task); err != nil {
 				t.Fatal(err)
 			}
@@ -154,6 +155,12 @@ func TestAMergeOnAPairedBranchFilesAPortToTheOther(t *testing.T) {
 			}
 			if port.AutoMerge != task.AutoMerge {
 				t.Errorf("port auto-merge = %v, want the source's %v", port.AutoMerge, task.AutoMerge)
+			}
+			if port.SourceTemplateID != "nightly-audit" {
+				t.Errorf("port source template = %q, want the source's nightly-audit", port.SourceTemplateID)
+			}
+			if port.TemplateID != "" {
+				t.Errorf("port template = %q, want none: a port is not filed from the template", port.TemplateID)
 			}
 			if !slices.ContainsFunc(port.Grants, func(g model.Grant) bool { return g.Capability == "gcp-key" }) {
 				t.Errorf("port grants = %+v, want the source's gcp-key carried over", port.Grants)
@@ -826,6 +833,27 @@ func TestPortOfAnUnreviewedChangeIsHeld(t *testing.T) {
 	if err := store.UpdateTask(ctx, source.ID, func(t *model.Task) error {
 		t.Links = append(t.Links, model.Link{Kind: model.LinkSecurityHold, Target: trustboundary.Version})
 		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sourceHead := headOf(t, sim.BareRepo, branch)
+	forceAt := baseTime.Add(30 * time.Minute)
+	// What ui.Client.ForceMergeWithGates records beside the stamp: the
+	// override names the security review it skips, for this commit.
+	if err := store.UpdateTask(ctx, source.ID, func(t *model.Task) error {
+		t.Links = append(t.Links, model.GateOverrideRecord{
+			Gates: []string{model.GateSecurityReview}, Reason: "override security review for hotfix",
+			By: "alice", HeadSHA: sourceHead, At: forceAt,
+		}.Link())
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ObserveField(ctx, source.ID, forceAt, func(o *model.Observation) {
+		o.ForceMergeAt = &forceAt
+		o.ForceMergeReason = "override security review for hotfix"
+		o.ForceMergeBy = "alice"
+		o.ForceMergeHeadSHA = sourceHead
 	}); err != nil {
 		t.Fatal(err)
 	}

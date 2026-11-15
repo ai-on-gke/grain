@@ -381,7 +381,7 @@ export default function ApiScopeSetsPanel({ showError, readOnly, onSaved }) {
 
 function RemoveConfirmation({ confirm, onCancel, onRemove }) {
   const { set, holders } = confirm;
-  const grant = `api:${set.name}`;
+  const grant = `https://grain.dev/capabilities/api#${set.name}`;
   let summary;
   if (holders === null) {
     summary = `Grain could not count what grants ${grant}. Every grant of it will grant nothing once it is removed.`;

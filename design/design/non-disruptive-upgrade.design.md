@@ -569,6 +569,23 @@ Two compatibility rules come with this:
   release as a run-host protocol change, so a rollback meets a store it
   can still read.
 
+#### Cancelling a running upgrade, the grace window, and one-click rollback
+
+Manual upgrades started from `[Settings → Upgrade](/settings/upgrade)`, `POST /api/upgrade`, or `grain upgrade start` begin with a short countdown step (`grace window`, configured via `-upgrade-grace-window` / `GRAIN_UPGRADE_GRACE_WINDOW`, default `10s`, `0` to disable) before pulling, building, or checking anything, so an accidental click can be undone before work starts. Scheduled and automatic upgrades (`StartScheduled`) skip that countdown because they were already cancellable throughout their queue drain (`DELETE /api/upgrade/scheduled`).
+
+An upgrade already in `PhaseRunning` is cancelled via `DELETE /api/upgrade/current` (`deployment:upgrade`, recorded in `config_audit` with the caller and reason), the Upgrade pane's **Cancel upgrade** button, or `grain upgrade cancel`. Each upgrade mode has a single atomic point of no return (`markIrreversible`):
+
+* **Image mode (`ModeImage`):** rewriting the host's image reference file (`stepRecord`, `/etc/grain/image.env`) immediately before requesting the service restart.
+* **Kubernetes mode (`ModeKube`):** patching the `Deployment` pod template to the new digest (`stepRollout`).
+* **Source mode (`ModeSource`):** committing the newly built binary over `InstallPath` and requesting the service restart (`stepRestart`).
+
+Step 3 (`Flush`) runs immediately *before* `markIrreversible` in all three modes:
+
+* **Before the point of no return** (grace window, pull/checkout, build, signature verification, health check, unit-flag check, sandbox image pull/pack/mirror, priority-class check, schema check/export, and `Flush`): cancelling cancels the step context, removes any image pulled or newly tagged only for this upgrade, deletes check pods and temporary files (`.tmp`, `.new`, `.prev`), discards any prepared schema export (`Schema.Discard`), calls `resume` (`runHostUpgrade.readopt`) so every run detached during `Flush` is re-adopted in place with nothing lost, releases `orchestrator.UpgradeHold` so neither the queue nor the pipeline stays paused, and finishes progress in `PhaseCancelled` (`phase: "cancelled"`, step state `"cancelled"`), naming who cancelled it.
+* **At and after the point of no return** (including `RestartPending` while the old daemon drains): `DELETE /api/upgrade/current` returns `409 Conflict` with `"restarting onto <target> — too late to cancel; upgrade back to <previous> afterwards"`, and the Upgrade pane disables **Cancel upgrade** with the same text.
+* **One-click rollback:** at upgrade start, the upgrader records the build being replaced (`Status.PreviousImage` pinned by digest on image and Kubernetes modes; `PreviousRelease` and `PreviousCommit` on source mode). Once an upgrade completes (`phase: "ok"`), the Upgrade pane displays the replaced build with **Roll back to `<previous>`**; it and `grain upgrade rollback` post `POST /api/upgrade` with `rollback: true` and no target, and the daemon runs `Upgrader.StartRollback`, which reads the target from its own status file. On image and Kubernetes modes that is `StartImage` onto `PreviousImage`, accepted without the repository and branch allow-lists only when pinned by digest, since it is content this deployment already ran. On source mode it is `PreviousCommit`, a full object id checked out by id and never as a branch: `git fetch origin <oid>`, a check that `<oid>^{commit}` resolves to `<oid>` itself, then `git switch --detach <oid>` and `reset --hard HEAD`, with HEAD checked to be `<oid>` before the build (a commit already in the checkout's object store is used when origin will not serve it by id). That one commit, through `StartRollback` alone, skips `-upgrade-allowed-branches`. An ordinary `Start` never does: a branch named after an old commit or release is one anybody who can push could create, so `Start(<oid>)` still has to match the allow-list, and `checkout` would fetch `origin/<oid>`. A rollback always starts now; it cannot be scheduled for after tasks finish. The pane offers source-mode rollback only when `PreviousCommit` is recorded, labelling it with `PreviousRelease` when there is one.
+* **Grain Hub:** `connected` Hub entries run `pkg/upgrade` on their own daemon and support per-instance cancel, grace countdown, and rollback over the Hub's tunnel or `grain -context <name> upgrade cancel`. Hosted `instance` VMs run with `-disable-self-upgrade` and upgrade externally by GCE VM replacement (`grain hub upgrade <name>`), which does not use `pkg/upgrade`.
+
 ### 7. The default policy
 
 Once Stage 2 ships, the proposed default is **upgrade now and adopt the

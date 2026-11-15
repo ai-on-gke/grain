@@ -34,3 +34,26 @@ func TestHumanSubmittedTargetRoundTrips(t *testing.T) {
 		}
 	}
 }
+
+// A person's ID is often an e-mail address: its '@' is not the head's, so
+// a Submit naming no head reads as one naming none, by whom it was, and
+// when -- not as a Submit of the head "example.com|...".
+func TestHumanSubmittedByTargetWithAnEmailActor(t *testing.T) {
+	at := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	for _, tc := range []struct{ by, head, wantHead string }{
+		{"alice@example.com", "", ""},
+		{"alice@example.com", "ABCdef0123", "abcdef0123"},
+		{"user:bob@example.com", "0123abcd", "0123abcd"},
+	} {
+		target := HumanSubmittedByTarget(tc.by, at, tc.head)
+		if got := HumanSubmittedHead(target); got != tc.wantHead {
+			t.Errorf("HumanSubmittedHead(%q) = %q, want %q", target, got, tc.wantHead)
+		}
+		if got := HumanSubmittedBy(target); got != tc.by {
+			t.Errorf("HumanSubmittedBy(%q) = %q, want %q", target, got, tc.by)
+		}
+		if got, ok := HumanSubmittedAt(target); !ok || !got.Equal(at) {
+			t.Errorf("HumanSubmittedAt(%q) = %v, %v, want %v", target, got, ok, at)
+		}
+	}
+}

@@ -37,6 +37,11 @@ func PrincipalLabel(p model.Principal, behalf *model.Principal) string {
 		return strings.TrimSpace(behalf.ID) + " (via " + via + ")"
 	}
 	label := principalLabelOf(p)
+	if via := model.RelayedVia(model.Attribution{Actor: p, OnBehalfOf: behalf}); via != nil {
+		// A person's answer a session relayed for them: "alice@x via
+		// session 7" (Client.AddRelayedComment).
+		return label + " via " + principalLabelOf(*via)
+	}
 	if behalf != nil && behalf.Verified() {
 		label += " for " + principalLabelOf(*behalf)
 	}
@@ -86,6 +91,11 @@ func principalLabelOf(p model.Principal) string {
 // name, which keeps PrincipalLabel's "session <id>".
 func sessionLabel(p model.Principal, behalf *model.Principal, title func(id string) string) string {
 	label := PrincipalLabel(p, behalf)
+	if via := model.RelayedVia(model.Attribution{Actor: p, OnBehalfOf: behalf}); via != nil {
+		// The session is the one behind the person here: "alice@x via
+		// director".
+		return principalLabelOf(p) + " via " + sessionLabel(*via, nil, title)
+	}
 	if p.Kind != model.PrincipalAgent || p.Source != model.SourceSession || title == nil {
 		return label
 	}

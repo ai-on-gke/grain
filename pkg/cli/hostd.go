@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
@@ -59,8 +60,9 @@ func hostdCmd(args []string) {
 	check := fs.Bool("check", false, "check the allowlist, print what it offers, and exit")
 	drain := fs.Bool("drain", false, "ask the host agent serving -socket to drain for an upgrade, and exit: it refuses new starts, "+
 		"waits for what it runs (up to the allowlist's drain_cap), then exits for systemd to restart it on the new binary. "+
-		"A host agent speaking this build's protocol is asked for a cutover instead: it keeps taking starts and exits the first "+
-		"moment nothing runs, draining only if no such moment comes within drain_cap. SIGUSR1 to the host agent drains")
+		"A host agent speaking this build's protocol with handover re-execs onto the new binary in place while keeping live detached runs up; "+
+		"one without handover cuts over at the first moment nothing runs, draining only if no such moment comes within drain_cap. "+
+		"SIGUSR1 to the host agent drains")
 	status := fs.Bool("status", false, "ask the host agent serving -socket whether it answers and what it offers, print that on one line, "+
 		"then one line per process it holds (a detached run's id, run, task and pid), and exit: 1 when it does not answer. "+
 		"scripts/setup.sh's readiness report runs it")
@@ -127,7 +129,11 @@ func hostdCmd(args []string) {
 		// one.
 		do := c.Drain
 		if h, err := c.Hello(ctx); err == nil && h.Protocol == hostd.ProtocolVersion {
-			do = c.Cutover
+			if h.Has(hostd.FeatureHandover) {
+				do = c.Handover
+			} else {
+				do = c.Cutover
+			}
 		}
 		if err := do(ctx); err != nil {
 			fmt.Fprintln(os.Stderr, "grain host: "+err.Error())
@@ -224,6 +230,7 @@ func hostdCmd(args []string) {
 		CurrentLink:     hostd.CurrentLinkFor(os.Args[0]),
 		Builtins:        intree.HostdBuiltins(),
 		BuiltinCommand:  hostdSelf(),
+		Reexec:          hostdReexec(),
 		RenewName:       *name,
 		RenewKey:        privKey,
 		CurrentToken:    getToken,
@@ -268,6 +275,24 @@ func hostdSelf() string {
 		return ""
 	}
 	return resolved
+}
+
+// hostdReexec replaces this process in place with the binary os.Args[0]
+// resolves to now -- for grain-hostd.service, current/grain after the
+// extractor has moved current -- keeping the same pid, systemd cgroup,
+// and child processes so loadSpools adopts live detached runs.
+func hostdReexec() func() error {
+	target := os.Args[0]
+	if !filepath.IsAbs(target) {
+		lp, err := exec.LookPath(target)
+		if err != nil {
+			return nil
+		}
+		target = lp
+	}
+	return func() error {
+		return syscall.Exec(target, os.Args, os.Environ())
+	}
 }
 
 // logHostdIdentity logs the identity d's ID token names: the one a

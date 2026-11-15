@@ -27,6 +27,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
+	"github.com/ai-on-gke/grain/pkg/capability/deploymenthealth"
+	"github.com/ai-on-gke/grain/pkg/capability/grainlog"
+	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
+	"github.com/ai-on-gke/grain/pkg/capability/selfrepair"
+	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
@@ -897,6 +903,147 @@ func TestControllerMCPSubmitTaskForwardsGrants(t *testing.T) {
 		}
 		if len(after) != len(before) {
 			t.Errorf("%s: a refused request filed a task (%d tasks, then %d)", tc.name, len(before), len(after))
+		}
+	}
+}
+
+// A provider that refuses one tool declaration refuses the whole tools
+// list, so one bad schema breaks every run handed that surface -- and only
+// against a real model: Gemini refused grain_submit_task's items-less
+// grants array (INVALID_ARGUMENT: ...properties[...].items: missing field)
+// in v3.5.0 while every scripted test stayed green (#4225). This holds
+// every MCP tool surface grain hands a model -- the controller's
+// tools/list, the agent API route tools, the sandbox mcpserver's tools,
+// and the in-process capability toolsets -- to the function-declaration
+// rules of every model in the default_model chain
+// (mcp.FunctionDeclarationProblems), on every pull request, at no model
+// cost. The in-process capability servers' with: schemas are grain's to
+// validate, not a model's, so they are held to the array rule alone.
+func TestMCPToolSurfacesConformToModelFunctionDeclarationRules(t *testing.T) {
+	t.Parallel()
+	srv, _, code := newSingleTenantControllerMCPServer(t)
+	headers := map[string]string{ui.AccessCodeHeader: code}
+	rec := callControllerMCP(t, srv, headers, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tools/list = %d: %s", rec.Code, rec.Body.String())
+	}
+	assertToolsListJSONConforms(t, "controller", rec.Body.Bytes())
+
+	var apiGrants []string
+	for _, r := range ui.AgentAPIRoutes() {
+		apiGrants = append(apiGrants, "api:"+string(r.Scope))
+	}
+	assertMCPToolsConform(t, "agent_api", ui.AgentAPITools(nil, "1", apiGrants))
+
+	var sandboxTools []mcp.Tool
+	for _, group := range [][]mcp.Tool{
+		mcp.NewSandboxTools(""),
+		mcp.NewMockTools(&mcp.MockSink{}, []string{"owner/repo"}),
+		mcp.NewLiveProposalTools(&mcp.MockSink{}, []string{"owner/repo"}, "1", nil),
+		mcp.NewPullRequestTools(nil, nil, mcp.PullRequestScope{Owner: "owner", Repo: "repo", Branch: "b"}),
+		mcp.NewWaitForChecksTools(nil, nil, mcp.PullRequestScope{Owner: "owner", Repo: "repo", Branch: "b"}),
+		mcp.NewOpenPullRequestTools(nil),
+		mcp.NewWaitForTaskTools(nil, nil),
+		mcp.NewResumeLaterTools(nil, nil),
+		mcp.NewGrainCIWaitTools(nil, mcp.CIRepoScope{Repo: "owner/repo"}, "main"),
+		mcp.NewGrainCIReadTools(nil, mcp.CIRepoScope{Repo: "owner/repo"}, "main"),
+		mcp.NewGrainCIArtifactTools(nil, mcp.CIRepoScope{Repo: "owner/repo"}, "", "main"),
+		mcp.NewRunCIJobTools(nil, mcp.CIRepoScope{Repo: "owner/repo"}),
+		mcp.NewChangeChecksTools(nil),
+		mcp.NewChangeReviewTools(nil),
+		mcp.NewRecreateSandboxTools(nil),
+		mcp.NewRevertTools(nil),
+		mcp.NewNotifyTools(nil),
+		mcp.NewIssueTools(nil, mcp.IssueScope{}),
+		mcp.NewMergeQueueTools(nil),
+		mcp.NewHumanReviewTools(nil),
+		mcp.NewPipelineTools(nil),
+		mcp.NewTaskTools(nil),
+		mcp.NewMetricsTools(nil),
+		mcp.NewRenameSessionTools(nil),
+		mcp.NewNamespaceTools(mcp.NamespaceToolsConfig{}),
+		mcp.NewStatusTools(nil),
+		mcp.NewChatTools(nil, nil),
+	} {
+		sandboxTools = append(sandboxTools, group...)
+	}
+	sandboxTools = append(sandboxTools, mcp.NewProposeConfigChangeTools(nil, "1", sandboxTools)...)
+	assertMCPToolsConform(t, "sandbox_mcpserver", sandboxTools)
+
+	var capTools []mcp.Tool
+	for _, group := range [][]mcp.Tool{
+		dbaccess.Tools(dbaccess.Config{AllowWrite: true}),
+		deploymenthealth.Tools(deploymenthealth.Config{}),
+		grainlog.Tools(grainlog.Config{}),
+		selfrepair.HostCommandTools(nil, "1", 0, 0),
+		selfrepair.ConfirmedHostCommandTools(nil),
+	} {
+		capTools = append(capTools, group...)
+	}
+	assertMCPToolsConform(t, "capability_tools", capTools)
+
+	for name, ps := range map[string]map[string]any{
+		"grain":  methodsSchemaMap(grainserver.Server().Methods),
+		"api":    methodsSchemaMap(grainserver.APIServer().Methods),
+		"repo":   methodsSchemaMap(grainserver.RepoServer().Methods),
+		"github": methodsSchemaMap(grainserver.GitHubServer().Methods),
+	} {
+		raw, err := json.Marshal(ps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var normalized any
+		if err := json.Unmarshal(raw, &normalized); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range mcp.ArrayItemsProblems("capability_server."+name, normalized) {
+			t.Error(p)
+		}
+	}
+}
+
+func methodsSchemaMap[M any](methods map[string]M) map[string]any {
+	raw, err := json.Marshal(methods)
+	if err != nil {
+		panic(err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		panic(err)
+	}
+	return out
+}
+
+func assertMCPToolsConform(t *testing.T, suite string, tools []mcp.Tool) {
+	t.Helper()
+	reg := mcp.NewRegistry()
+	reg.Register(tools...)
+	raw := reg.Handle(context.Background(), []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	assertToolsListJSONConforms(t, suite, raw)
+}
+
+// assertToolsListJSONConforms reads a tools/list answer the way a model
+// client does -- off the wire, as JSON -- and fails on every declaration
+// in it a provider would refuse.
+func assertToolsListJSONConforms(t *testing.T, suite string, payload []byte) {
+	t.Helper()
+	var resp struct {
+		Result struct {
+			Tools []struct {
+				Name        string         `json:"name"`
+				InputSchema map[string]any `json:"inputSchema"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(payload, &resp); err != nil {
+		t.Fatalf("%s: unmarshal tools/list: %v", suite, err)
+	}
+	if len(resp.Result.Tools) == 0 {
+		t.Fatalf("%s: tools/list returned no tools", suite)
+	}
+	for _, tool := range resp.Result.Tools {
+		for _, p := range mcp.FunctionDeclarationProblems(tool.Name, tool.InputSchema) {
+			t.Errorf("%s.%s: %s", suite, tool.Name, p)
 		}
 	}
 }

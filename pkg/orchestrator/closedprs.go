@@ -86,11 +86,11 @@ func syncClosedPullRequests(ctx context.Context, store *model.Store, client gith
 			continue
 		}
 		key := github.PollKey{Scope: storeScope(store),
-			Subject: github.PullRequestSubject(ref.Repo.Owner, ref.Repo.Name, ref.Number), Aspect: closedPollAspect}
+			Subject: github.PullRequestSubject(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number), Aspect: closedPollAspect}
 		if !github.Polls().Due(key, github.PollNormal, false, now) {
 			continue
 		}
-		detail, err := client.GetPullRequest(ref.Repo.Owner, ref.Repo.Name, ref.Number)
+		detail, err := client.GetPullRequest(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number)
 		if err != nil {
 			// Backed off like any other read that saw nothing new, so a
 			// forge refusing every read is asked every PollCap rather than

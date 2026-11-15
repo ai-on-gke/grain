@@ -216,3 +216,143 @@ jobs:
             args+=(--dry-run)
           fi
           bash ./scripts/release-assets.sh "${args[@]}" cli-publish "${RELEASE_VERSION}" "${RUNNER_TEMP}/release-cli"
+
+  agentd:
+    name: build the rc's grain-agentd
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      rc: ${{ steps.rc.outputs.rc }}
+    steps:
+      - name: Resolve the rc and whether it still needs grain-agentd
+        id: rc
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${INPUT_TAG:-}"
+          if [ -z "$tag" ]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+            echo "release-train-assets: ${tag@Q} is not an rc; it carries no grain-agentd"
+            exit 0
+          fi
+          if curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${tag}/grain-agentd-linux-amd64.manifest.json" &&
+             curl -fsSIL -o /dev/null "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/${tag}/grain-agentd-linux-arm64.manifest.json"; then
+            echo "release-train-assets: ${tag} already carries grain-agentd"
+            exit 0
+          fi
+          echo "rc=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.rc.outputs.rc != ''
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Cache Go modules and build cache
+        if: steps.rc.outputs.rc != ''
+        # zizmor: ignore[cache-poisoning]
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/go/pkg/mod/cache/download
+            ~/.cache/go-build
+          key: go-dl-${{ runner.os }}-${{ hashFiles('go.sum', 'third_party/granule/go.sum') }}
+          restore-keys: |
+            go-dl-${{ runner.os }}-
+
+      - name: Setup Go
+        if: steps.rc.outputs.rc != ''
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build grain-agentd
+        if: steps.rc.outputs.rc != ''
+        env:
+          RELEASE: ${{ steps.rc.outputs.rc }}
+          AGENTD_RELEASE_PUBLIC_KEY: ${{ vars.AGENTD_RELEASE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          bash ./scripts/build-agentd.sh --ref "refs/tags/${RELEASE}" "${RUNNER_TEMP}/release-agentd"
+          bash ./scripts/release-assets.sh agentd-validate "${RUNNER_TEMP}/release-agentd"
+
+      - name: Hand grain-agentd to agentd-assets
+        if: steps.rc.outputs.rc != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: grain-agentd
+          path: |
+            ${{ runner.temp }}/release-agentd/grain-agentd-*
+          if-no-files-found: error
+          retention-days: 1
+
+  agentd-assets:
+    name: publish the rc's grain-agentd
+    needs: [publish, agentd]
+    if: needs.agentd.outputs.rc != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # AGENTD_RELEASE_SIGNING_KEY is an agentd-release environment secret,
+    # released only to the refs that environment's deployment rules allow
+    # (docs/agentd-release-signing.md), not a repository secret any
+    # workflow on any pushed branch could read.
+    environment: agentd-release
+    permissions:
+      contents: write
+    concurrency:
+      group: grain-agentd-assets-${{ needs.agentd.outputs.rc }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch grain-agentd built by agentd
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: grain-agentd
+          path: ${{ runner.temp }}/release-agentd
+
+      - name: Sign and publish grain-agentd
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          RELEASE_VERSION: ${{ needs.agentd.outputs.rc }}
+          SIGNING_KEY_PEM: ${{ secrets.AGENTD_RELEASE_SIGNING_KEY }}
+          AGENTD_RELEASE_PUBLIC_KEY: ${{ vars.AGENTD_RELEASE_PUBLIC_KEY }}
+          ROTATIONS_JSON: ${{ vars.AGENTD_RELEASE_ROTATIONS }}
+          REQUIRE_AGENTD_SIGNING: ${{ vars.REQUIRE_AGENTD_SIGNING }}
+        run: |
+          set -euo pipefail
+          key_file=""
+          rot_file=""
+          cleanup() { rm -f "${key_file}" "${rot_file}"; }
+          trap cleanup EXIT
+          dry_run="${INPUT_DRY_RUN:-false}"
+          # A dry run never writes the signing key to the runner's disk.
+          if [ "${dry_run}" != "true" ] && [ -n "${SIGNING_KEY_PEM:-}" ]; then
+            key_file="${RUNNER_TEMP}/agentd-signing.key"
+            printf '%s\n' "${SIGNING_KEY_PEM}" > "${key_file}"
+            chmod 600 "${key_file}"
+            export AGENTD_RELEASE_SIGNING_KEY="${key_file}"
+          fi
+          if [ "${dry_run}" != "true" ] && [ -n "${ROTATIONS_JSON:-}" ]; then
+            rot_file="${RUNNER_TEMP}/agentd-rotations.json"
+            printf '%s\n' "${ROTATIONS_JSON}" > "${rot_file}"
+            export AGENTD_RELEASE_ROTATIONS="${rot_file}"
+          fi
+          args=()
+          if [ "${dry_run}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          bash ./scripts/release-assets.sh "${args[@]}" agentd-sign "${RUNNER_TEMP}/release-agentd"
+          bash ./scripts/release-assets.sh "${args[@]}" agentd-publish "${RELEASE_VERSION}" "${RUNNER_TEMP}/release-agentd"

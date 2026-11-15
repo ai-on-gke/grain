@@ -1,0 +1,820 @@
+{
+  "initialForms": {
+    "taskPane": {
+      "items": [
+        {
+          "grant": "https://grain.dev/capabilities/repo#target",
+          "kind": "repo-target",
+          "text": "acme/widgets · default branch · targetthis task's repo -- change it under Repos"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+          "kind": "repo-read",
+          "text": "acme/lib · readcloned alongside, never pushed to"
+        },
+        {
+          "grant": "self-debug",
+          "kind": "capability",
+          "text": "self-debugRetired alias of api:self-debug + grain#sourceretired alias"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+          "kind": "method",
+          "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#test-quarantine",
+          "kind": "method",
+          "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        }
+      ],
+      "count": 5,
+      "hasDuplicates": false
+    },
+    "templateEditor": {
+      "items": [
+        {
+          "grant": "https://grain.dev/capabilities/repo#target",
+          "kind": "repo-target",
+          "text": "acme/widgets · default branch · targetthe template's bound repo -- change it above"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+          "kind": "repo-read",
+          "text": "acme/lib · readcloned alongside, never pushed to"
+        },
+        {
+          "grant": "self-debug",
+          "kind": "capability",
+          "text": "self-debugRetired alias of api:self-debug + grain#sourceretired alias"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+          "kind": "method",
+          "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#test-quarantine",
+          "kind": "method",
+          "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        }
+      ],
+      "count": 5,
+      "hasDuplicates": false
+    },
+    "scheduleEditor": {
+      "items": [
+        {
+          "grant": "https://grain.dev/capabilities/repo#target",
+          "kind": "repo-target",
+          "text": "acme/widgets · default branch · targetthe repo every firing targets -- change it above"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+          "kind": "repo-read",
+          "text": "acme/lib · readcloned alongside, never pushed to"
+        },
+        {
+          "grant": "self-debug",
+          "kind": "capability",
+          "text": "self-debugRetired alias of api:self-debug + grain#sourceretired alias"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+          "kind": "method",
+          "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#test-quarantine",
+          "kind": "method",
+          "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        }
+      ],
+      "count": 5,
+      "hasDuplicates": false
+    },
+    "settingsTasks": {
+      "items": [
+        {
+          "grant": "self-debug",
+          "kind": "capability",
+          "text": "self-debugRetired alias of api:self-debug + grain#sourceretired alias"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+          "kind": "method",
+          "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#test-quarantine",
+          "kind": "method",
+          "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        }
+      ],
+      "count": 3,
+      "hasDuplicates": false
+    },
+    "repoDefaults": {
+      "items": [
+        {
+          "grant": "self-debug",
+          "kind": "capability",
+          "text": "self-debugRetired alias of api:self-debug + grain#sourceretired alias"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+          "kind": "method",
+          "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#test-quarantine",
+          "kind": "method",
+          "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        }
+      ],
+      "count": 3,
+      "hasDuplicates": false
+    },
+    "repoCICapabilities": {
+      "selectText": "CI capabilitiesGitHub sandboxCI capabilitiesGranted to every CI job in this repo, starting with the next run. Each job gets its own credentials, which are revoked when it finishes. Task defaults are configured separately.",
+      "grantsPicker": {
+        "items": [
+          {
+            "grant": "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+            "kind": "method",
+            "text": "repo server › readhttps://grain.dev/capabilities/repo#readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.repo *repo *Pattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          }
+        ],
+        "count": 1,
+        "hasDuplicates": false
+      }
+    },
+    "consoleSessionOps": {
+      "items": [
+        {
+          "grant": "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+          "kind": "repo-read",
+          "text": "acme/lib · readcloned alongside, never pushed to"
+        },
+        {
+          "grant": "self-debug",
+          "kind": "capability",
+          "text": "self-debugRetired alias of api:self-debug + grain#sourceretired alias"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+          "kind": "method",
+          "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#test-quarantine",
+          "kind": "method",
+          "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        }
+      ],
+      "count": 4,
+      "hasDuplicates": false
+    },
+    "newTaskOverlay": {
+      "items": [
+        {
+          "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+          "kind": "method",
+          "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#self-debug",
+          "kind": "method",
+          "text": "api:self-debughttps://grain.dev/capabilities/api#self-debugAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/grain#source={}",
+          "kind": "method",
+          "text": "grain › source"
+        },
+        {
+          "grant": "https://grain.dev/capabilities/api#test-quarantine",
+          "kind": "method",
+          "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        }
+      ],
+      "count": 4,
+      "hasDuplicates": false
+    }
+  },
+  "edits": [
+    {
+      "surface": "taskPane (add tasks:write)",
+      "diff": {
+        "task1": {
+          "before": {
+            "capabilities": [
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "self-debug"
+            ],
+            "reads": [
+              "acme/lib"
+            ],
+            "writes": []
+          },
+          "after": {
+            "capabilities": [
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#tasks:write",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "self-debug"
+            ],
+            "reads": [
+              "acme/lib"
+            ],
+            "writes": []
+          }
+        }
+      },
+      "uiAfter": {
+        "items": [
+          {
+            "grant": "https://grain.dev/capabilities/repo#target",
+            "kind": "repo-target",
+            "text": "acme/widgets · default branch · targetthis task's repo -- change it under Repos"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+            "kind": "repo-read",
+            "text": "acme/lib · readcloned alongside, never pushed to"
+          },
+          {
+            "grant": "self-debug",
+            "kind": "capability",
+            "text": "self-debugRetired alias of api:self-debug + grain#sourceretired alias"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+            "kind": "method",
+            "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#tasks:write",
+            "kind": "method",
+            "text": "api:tasks:writehttps://grain.dev/capabilities/api#tasks:writeAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#test-quarantine",
+            "kind": "method",
+            "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          }
+        ],
+        "count": 6,
+        "hasDuplicates": false
+      }
+    },
+    {
+      "surface": "settingsTasks (add tasks:write)",
+      "diff": {
+        "settings": {
+          "before": {
+            "defaultCapabilities": [
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "self-debug",
+              "https://grain.dev/capabilities/api#test-quarantine"
+            ]
+          },
+          "after": {
+            "defaultCapabilities": [
+              "https://grain.dev/capabilities/api#self-debug",
+              "https://grain.dev/capabilities/grain#source={}",
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "https://grain.dev/capabilities/api#tasks:write"
+            ]
+          }
+        }
+      },
+      "uiAfter": {
+        "items": [
+          {
+            "grant": "https://grain.dev/capabilities/api#self-debug",
+            "kind": "method",
+            "text": "api:self-debughttps://grain.dev/capabilities/api#self-debugAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/grain#source={}",
+            "kind": "method",
+            "text": "grain › source"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+            "kind": "method",
+            "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#test-quarantine",
+            "kind": "method",
+            "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#tasks:write",
+            "kind": "method",
+            "text": "api:tasks:writehttps://grain.dev/capabilities/api#tasks:writeAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          }
+        ],
+        "count": 5,
+        "hasDuplicates": false
+      }
+    },
+    {
+      "surface": "templateEditor (add tasks:write + Save)",
+      "diff": {
+        "template": {
+          "before": {
+            "capabilities": [
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "self-debug"
+            ],
+            "reads": [
+              "acme/lib"
+            ],
+            "writes": []
+          },
+          "after": {
+            "capabilities": [
+              "https://grain.dev/capabilities/api#self-debug",
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#tasks:write",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "https://grain.dev/capabilities/grain#source={}"
+            ],
+            "reads": [
+              "acme/lib"
+            ],
+            "writes": []
+          }
+        }
+      },
+      "uiAfter": {
+        "items": [
+          {
+            "grant": "https://grain.dev/capabilities/repo#target",
+            "kind": "repo-target",
+            "text": "acme/widgets · default branch · targetthe template's bound repo -- change it above"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+            "kind": "repo-read",
+            "text": "acme/lib · readcloned alongside, never pushed to"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#self-debug",
+            "kind": "method",
+            "text": "api:self-debughttps://grain.dev/capabilities/api#self-debugAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+            "kind": "method",
+            "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#tasks:write",
+            "kind": "method",
+            "text": "api:tasks:writehttps://grain.dev/capabilities/api#tasks:writeAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#test-quarantine",
+            "kind": "method",
+            "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/grain#source={}",
+            "kind": "method",
+            "text": "grain › source"
+          }
+        ],
+        "count": 7,
+        "hasDuplicates": false
+      }
+    },
+    {
+      "surface": "scheduleEditor (add tasks:write + Save)",
+      "diff": {
+        "schedule": {
+          "before": {
+            "capabilities": [
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "self-debug"
+            ],
+            "reads": [
+              "acme/lib"
+            ],
+            "writes": []
+          },
+          "after": {
+            "capabilities": [
+              "https://grain.dev/capabilities/api#self-debug",
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#tasks:write",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "https://grain.dev/capabilities/grain#source={}"
+            ],
+            "reads": [
+              "acme/lib"
+            ],
+            "writes": []
+          }
+        }
+      },
+      "uiAfter": {
+        "items": [
+          {
+            "grant": "https://grain.dev/capabilities/repo#target",
+            "kind": "repo-target",
+            "text": "acme/widgets · default branch · targetthe repo every firing targets -- change it above"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+            "kind": "repo-read",
+            "text": "acme/lib · readcloned alongside, never pushed to"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#self-debug",
+            "kind": "method",
+            "text": "api:self-debughttps://grain.dev/capabilities/api#self-debugAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+            "kind": "method",
+            "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#tasks:write",
+            "kind": "method",
+            "text": "api:tasks:writehttps://grain.dev/capabilities/api#tasks:writeAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#test-quarantine",
+            "kind": "method",
+            "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/grain#source={}",
+            "kind": "method",
+            "text": "grain › source"
+          }
+        ],
+        "count": 7,
+        "hasDuplicates": false
+      }
+    },
+    {
+      "surface": "consoleSessionOps (add tasks:write)",
+      "diff": {
+        "opsSession": {
+          "before": {
+            "capabilities": [
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "self-debug"
+            ],
+            "reads": [
+              "acme/lib"
+            ],
+            "taskCapabilities": [
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "self-debug"
+            ]
+          },
+          "after": {
+            "capabilities": [
+              "https://grain.dev/capabilities/api#self-debug",
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#tasks:write",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "https://grain.dev/capabilities/grain#source={}"
+            ],
+            "reads": [
+              "acme/lib"
+            ],
+            "taskCapabilities": [
+              "https://grain.dev/capabilities/api#self-debug",
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#tasks:write",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "https://grain.dev/capabilities/grain#source={}"
+            ]
+          }
+        }
+      },
+      "uiAfter": {
+        "items": [
+          {
+            "grant": "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+            "kind": "repo-read",
+            "text": "acme/lib · readcloned alongside, never pushed to"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#self-debug",
+            "kind": "method",
+            "text": "api:self-debughttps://grain.dev/capabilities/api#self-debugAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+            "kind": "method",
+            "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#tasks:write",
+            "kind": "method",
+            "text": "api:tasks:writehttps://grain.dev/capabilities/api#tasks:writeAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#test-quarantine",
+            "kind": "method",
+            "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/grain#source={}",
+            "kind": "method",
+            "text": "grain › source"
+          }
+        ],
+        "count": 6,
+        "hasDuplicates": false
+      }
+    },
+    {
+      "surface": "repoDefaults (add deployment:read)",
+      "diff": {
+        "repoWidgets": {
+          "before": {
+            "defaultCapabilities": [
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "self-debug",
+              "https://grain.dev/capabilities/api#test-quarantine"
+            ],
+            "ciCapabilities": [
+              "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+              "https://grain.dev/capabilities/github#sandbox-repo={}"
+            ]
+          },
+          "after": {
+            "defaultCapabilities": [
+              "https://grain.dev/capabilities/api#self-debug",
+              "https://grain.dev/capabilities/grain#source={}",
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "https://grain.dev/capabilities/api#deployment:read"
+            ],
+            "ciCapabilities": [
+              "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+              "https://grain.dev/capabilities/github#sandbox-repo={}"
+            ]
+          }
+        }
+      },
+      "uiAfter": {
+        "items": [
+          {
+            "grant": "https://grain.dev/capabilities/api#self-debug",
+            "kind": "method",
+            "text": "api:self-debughttps://grain.dev/capabilities/api#self-debugAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/grain#source={}",
+            "kind": "method",
+            "text": "grain › source"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+            "kind": "method",
+            "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#test-quarantine",
+            "kind": "method",
+            "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/api#deployment:read",
+            "kind": "method",
+            "text": "api:deployment:readhttps://grain.dev/capabilities/api#deployment:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          }
+        ],
+        "count": 5,
+        "hasDuplicates": false
+      }
+    },
+    {
+      "surface": "repoCICapabilities (add repo#read acme/other)",
+      "diff": {
+        "repoWidgets": {
+          "before": {
+            "defaultCapabilities": [
+              "https://grain.dev/capabilities/api#self-debug",
+              "https://grain.dev/capabilities/grain#source={}",
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "https://grain.dev/capabilities/api#deployment:read"
+            ],
+            "ciCapabilities": [
+              "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+              "https://grain.dev/capabilities/github#sandbox-repo={}"
+            ]
+          },
+          "after": {
+            "defaultCapabilities": [
+              "https://grain.dev/capabilities/api#self-debug",
+              "https://grain.dev/capabilities/grain#source={}",
+              "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+              "https://grain.dev/capabilities/api#test-quarantine",
+              "https://grain.dev/capabilities/api#deployment:read"
+            ],
+            "ciCapabilities": [
+              "https://grain.dev/capabilities/github#sandbox-repo={}",
+              "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+              "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/other\"}"
+            ]
+          }
+        }
+      },
+      "uiAfter": {
+        "items": [
+          {
+            "grant": "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+            "kind": "method",
+            "text": "repo server › readhttps://grain.dev/capabilities/repo#readArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.repo *repo *Pattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          },
+          {
+            "grant": "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/other\"}",
+            "kind": "method",
+            "text": "repo server › readhttps://grain.dev/capabilities/repo#readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.repo *repo *Pattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+          }
+        ],
+        "count": 2,
+        "hasDuplicates": false
+      }
+    }
+  ],
+  "newTaskAfterPartialDefaultsEdit": {
+    "items": [
+      {
+        "grant": "https://grain.dev/capabilities/api#self-debug",
+        "kind": "method",
+        "text": "api:self-debughttps://grain.dev/capabilities/api#self-debugAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/grain#source={}",
+        "kind": "method",
+        "text": "grain › source"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+        "kind": "method",
+        "text": "api:tasks:readhttps://grain.dev/capabilities/api#tasks:readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/api#test-quarantine",
+        "kind": "method",
+        "text": "api:test-quarantinehttps://grain.dev/capabilities/api#test-quarantineAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+      },
+      {
+        "grant": "https://grain.dev/capabilities/api#tasks:write",
+        "kind": "method",
+        "text": "api:tasks:writehttps://grain.dev/capabilities/api#tasks:writeAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.reporepoPattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+      }
+    ],
+    "count": 5,
+    "hasDuplicates": false
+  },
+  "pageErrors": [],
+  "beforeAllEdits": {
+    "task1": {
+      "capabilities": [
+        "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+        "https://grain.dev/capabilities/api#test-quarantine",
+        "self-debug"
+      ],
+      "reads": [
+        "acme/lib"
+      ],
+      "writes": []
+    },
+    "template": {
+      "capabilities": [
+        "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+        "https://grain.dev/capabilities/api#test-quarantine",
+        "self-debug"
+      ],
+      "reads": [
+        "acme/lib"
+      ],
+      "writes": []
+    },
+    "schedule": {
+      "capabilities": [
+        "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+        "https://grain.dev/capabilities/api#test-quarantine",
+        "self-debug"
+      ],
+      "reads": [
+        "acme/lib"
+      ],
+      "writes": []
+    },
+    "settings": {
+      "defaultCapabilities": [
+        "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+        "self-debug",
+        "https://grain.dev/capabilities/api#test-quarantine"
+      ]
+    },
+    "repoWidgets": {
+      "defaultCapabilities": [
+        "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+        "self-debug",
+        "https://grain.dev/capabilities/api#test-quarantine"
+      ],
+      "ciCapabilities": [
+        "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/lib\"}",
+        "https://grain.dev/capabilities/github#sandbox-repo={}"
+      ]
+    },
+    "repoLib": {
+      "ciCapabilities": [
+        "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/widgets\"}",
+        "self-debug"
+      ]
+    },
+    "opsSession": {
+      "capabilities": [
+        "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+        "https://grain.dev/capabilities/api#test-quarantine",
+        "self-debug"
+      ],
+      "reads": [
+        "acme/lib"
+      ],
+      "taskCapabilities": [
+        "https://grain.dev/capabilities/api#tasks:read={\"repo\":\"acme/widgets\"}",
+        "https://grain.dev/capabilities/api#test-quarantine",
+        "self-debug"
+      ]
+    },
+    "directorSession": {
+      "capabilities": [
+        "https://grain.dev/capabilities/api#capabilities:detach",
+        "https://grain.dev/capabilities/api#capabilities:read",
+        "https://grain.dev/capabilities/api#ci-read",
+        "https://grain.dev/capabilities/api#deployment:read",
+        "https://grain.dev/capabilities/api#dispatch:read",
+        "https://grain.dev/capabilities/api#releases:read",
+        "https://grain.dev/capabilities/api#repos:read",
+        "https://grain.dev/capabilities/api#schedules:read",
+        "https://grain.dev/capabilities/api#self-debug",
+        "https://grain.dev/capabilities/api#settings:read",
+        "https://grain.dev/capabilities/api#suites:read",
+        "https://grain.dev/capabilities/api#task-admin",
+        "https://grain.dev/capabilities/api#templates:read",
+        "https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}",
+        "https://grain.dev/capabilities/grain#health={}",
+        "https://grain.dev/capabilities/grain#journal={}",
+        "https://grain.dev/capabilities/grain#source={}"
+      ]
+    }
+  },
+  "repoLibCIEdit": {
+    "selectTextBefore": "CI capabilitiesself-debugCI capabilitiesGranted to every CI job in this repo, starting with the next run. Each job gets its own credentials, which are revoked when it finishes. Task defaults are configured separately.",
+    "grantsPickerBefore": {
+      "items": [
+        {
+          "grant": "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/widgets\"}",
+          "kind": "method",
+          "text": "repo server › readhttps://grain.dev/capabilities/repo#readAdd anotherArguments are recorded on the task in plain text. Never put a secret in one; a server's credentials belong in Settings → Capability servers.repo *repo *Pattern: ^[^/\\s]+(/[^/\\s]+){1,2}$"
+        }
+      ],
+      "count": 1,
+      "hasDuplicates": false
+    },
+    "putStatus": 200,
+    "putBody": "{\"repo\":\"acme/lib\",\"ciCapabilities\":[\"self-debug\",\"https://grain.dev/capabilities/repo#read={\\\"repo\\\":\\\"acme/widgets\\\"}\",\"https://grain.dev/capabilities/repo#read={\\\"repo\\\":\\\"acme/other\\\"}\"],\"availableCICapabilities\":[\"https://grain.dev/capabilities/github#sandbox-repo={}\",\"https://grain.dev/capabilities/release#registry-push={}\",\"https://grain.dev/capabilities/release#package-publish={}\",\"https://grain.dev/capabilities/release#image-signing={}\"],\"defaultCapabilities\":null,\"deploymentDefaultCapabilities\":[\"https://grain.dev/capabilities/api#self-debug\",\"https://grain.dev/capabilities/grain#source={}\",\"https://grain.dev/capabilities/api#tasks:read={\\\"repo\\\":\\\"acme/widgets\\\"}\",\"https://grain.dev/capabilities/api#test-quarantine\",\"https://grain.dev/capabilities/api#tasks:write\"],\"effectiveDefaultCapabilities\":[\"https://grain.dev/capabilities/api#self-debug\",\"https://grain.dev/capabilities/grain#source={}\",\"https://grain.dev/capabilities/api#tasks:read={\\\"repo\\\":\\\"acme/widgets\\\"}\",\"https://grain.dev/capabilities/api#test-quarantine\",\"https://grain.dev/capabilities/api#tasks:write\"],\"defaultAdmission\":\"\",\"deploymentDefaultAdmission\":\"standard\",\"effectiveDefaultAdmission\":\"standard\",\"defaultHosting\":\"\",\"deploymentDefaultHosting\":\"unattended\",\"effectiveDefaultHosting\":\"unattended\",\"promptExtension\":\"\",\"deploymentPromptExtension\":\"\",\"effectivePromptExtension\":\"\",\"setupCommand\":\"\",\"effectiveSkillFolders\":[\".claude/skills\",\".agents/skills\",\".codex/skills\",\".gemini/skills\",\"skills\"],\"declarations\":false,\"requireBranchUpToDate\":false,\"ignoreGitHubCI\":false,\"ciMode\":\"github\",\"watchDefaultBranch\":false,\"mergeOnGreen\":false,\"baseRepairBypassesHumanGates\":false,\"mergeRecheck\":\"enforce\",\"issueImport\":{\"enabled\":false,\"repo\":\"\",\"label\":\"\",\"approved\":false,\"intervalSeconds\":0,\"effectiveIntervalSeconds\":600},\"unfixableChecks\":null,\"grainCICheckName\":\"grain CI\",\"upstreamRepo\":\"\"}\n",
+    "diff": {
+      "repoLib": {
+        "before": {
+          "ciCapabilities": [
+            "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/widgets\"}",
+            "self-debug"
+          ]
+        },
+        "after": {
+          "ciCapabilities": [
+            "self-debug",
+            "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/widgets\"}",
+            "https://grain.dev/capabilities/repo#read={\"repo\":\"acme/other\"}"
+          ]
+        }
+      }
+    }
+  }
+}

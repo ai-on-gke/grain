@@ -1,0 +1,17 @@
+name: Release manager (patch)
+# Start a release manager (.grain/templates/release-manager.yml) for a
+# patch release, which the train never cuts: scripts/release-patch.sh
+# pushes release/vX.Y.Z and release.yml builds it before the vX.Y.Z tag
+# exists (docs/release-candidate-management.md section 9). The head branch
+# names the version. A build of the train's own release/vX.Y.0
+# convergence branch (playbook section 5), or a backport merged onto a
+# branch whose version is already released or already managed, files a
+# task that ends in nothing_needed on its first check-in.
+template: release-manager
+base: main
+trigger:
+  github_workflow_run:
+    workflow: release.yml
+    branches: ["release/v*"]
+    conclusions: [success, failure]
+overlap: skip

@@ -22,6 +22,9 @@ package ui_test
 
 import (
 	"context"
+	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,24 +63,29 @@ func requireSubmitted(t *testing.T, ctx context.Context, store *model.Store, id 
 	if err != nil || got == nil {
 		t.Fatalf("reading %s: %v", id, err)
 	}
-	if !got.AutoMerge {
-		t.Fatal("auto-merge is still off after Submit")
+	// Because LinkSecurityHold and LinkReviewQuestions remain active review
+	// gates, Submit records approval (LinkHumanSubmitted) and drops human-only
+	// holds while keeping AutoMerge off until the review gates pass.
+	if got.AutoMerge {
+		t.Fatal("auto-merge turned on despite pending security review and review questions")
 	}
 	links := map[model.LinkKind]string{}
 	for _, l := range got.Links {
 		links[l.Kind] = l.Target
 	}
-	for _, kind := range []model.LinkKind{model.LinkSecurityHold, model.LinkHumanOnlyHold, model.LinkBrokenRulesHold,
-		model.LinkReviewQuestions} {
+	for _, kind := range []model.LinkKind{model.LinkHumanOnlyHold, model.LinkBrokenRulesHold} {
 		if target, ok := links[kind]; ok {
 			t.Errorf("%s = %q survived Submit", kind, target)
+		}
+	}
+	for _, kind := range []model.LinkKind{model.LinkSecurityHold, model.LinkReviewQuestions} {
+		if links[kind] == "" {
+			t.Errorf("review gate %s was cleared by Submit: links=%+v", kind, got.Links)
 		}
 	}
 	if links[model.LinkHumanSubmitted] == "" {
 		t.Errorf("Submit left no %s marker for the orchestrator to pin: links=%+v", model.LinkHumanSubmitted, got.Links)
 	}
-	// What the review was and what it cleared stay for the orchestrator
-	// to judge against the head it reads.
 	if links[model.LinkSecurityReviewTask] != "551" {
 		t.Errorf("the security review link went with the hold: links=%+v", got.Links)
 	}
@@ -223,4 +231,146 @@ func TestSubmitRecordsTheHeadTheHumanWasShown(t *testing.T) {
 		}
 	}
 	t.Fatalf("Submit left no %s marker: links=%+v", model.LinkHumanSubmitted, got.Links)
+}
+
+func TestForceMergeRequiresExplicitOverrideGatesForReviews(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.AutoMerge = false
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkFixes, Target: "acme/widgets#88"},
+			model.Link{Kind: model.LinkSecurityHold, Target: "trust-boundary/v5"},
+			model.Link{Kind: model.LinkSecurityReviewTask, Target: "551"},
+		)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := time.Date(2026, 11, 10, 1, 0, 0, 0, time.UTC)
+	if err := store.Observe(ctx, model.Observation{
+		TaskID: task.ID, CompletedAt: &done,
+		CI: &model.CIStatus{RunID: "run-1", Commit: "0123456789abcdef0123456789abcdef01234567", Conclusion: "success", FinishedAt: &done},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Plain ForceMerge without naming security-review is refused!
+	if err := c.ForceMerge(ctx, task.ID, "hotfix", ""); err == nil {
+		t.Fatal("ForceMerge without explicit overrideGates must refuse an unsatisfied security-review gate")
+	}
+
+	// A person's approval is given by Submit, by someone the approvers
+	// name; merge:force does not stand in for it.
+	if err := c.ForceMergeWithGates(ctx, task.ID, "hotfix", "", []string{"security-review", "approval"}); err == nil ||
+		!strings.Contains(err.Error(), `unknown gate "approval"`) {
+		t.Fatalf("ForceMergeWithGates naming approval = %v, want it refused as a gate no override skips", err)
+	}
+
+	// Naming security-review explicitly with a reason succeeds and records the override.
+	if err := c.ForceMergeWithGates(ctx, task.ID, "hotfix", "", []string{"security-review"}); err != nil {
+		t.Fatalf("ForceMergeWithGates: %v", err)
+	}
+	got, err := store.GetTask(ctx, task.ID)
+	if err != nil || got == nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	ov, ok := model.LatestGateOverride(*got)
+	if !ok || ov.Reason != "hotfix" || len(ov.Gates) != 1 || ov.Gates[0] != "security-review" {
+		t.Fatalf("LatestGateOverride = %+v (%v), want security-review override", ov, ok)
+	}
+}
+
+func TestSubmitPullRequestSeparatesApprovalAndGateOverride(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.AutoMerge = false
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkFixes, Target: "acme/widgets#99"},
+			model.Link{Kind: model.LinkSecurityHold, Target: "trust-boundary/v5"},
+			model.Link{Kind: model.LinkSecurityReviewTask, Target: "601"},
+		)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := time.Date(2026, 11, 10, 1, 0, 0, 0, time.UTC)
+	if err := store.Observe(ctx, model.Observation{
+		TaskID: task.ID, CompletedAt: &done,
+		CI: &model.CIStatus{RunID: "run-1", Commit: "0123456789abcdef0123456789abcdef01234567", Conclusion: "success", FinishedAt: &done},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Normal SubmitPullRequest records approval without clearing security-review.
+	res, err := c.SubmitPullRequest(ctx, ui.SubmitPullRequestRequest{PR: "acme/widgets#99"})
+	if err != nil {
+		t.Fatalf("SubmitPullRequest: %v", err)
+	}
+	if !res.Approved || len(res.Overridden) != 0 {
+		t.Fatalf("res = %+v, want Approved=true and Overridden empty", res)
+	}
+	got, _ := store.GetTask(ctx, task.ID)
+	if got.AutoMerge {
+		t.Fatal("SubmitPullRequest turned AutoMerge on while security-review was still running")
+	}
+
+	// Override without reason is refused.
+	if _, err := c.SubmitPullRequest(ctx, ui.SubmitPullRequestRequest{
+		PR: "acme/widgets#99", OverrideGates: []string{"security-review"},
+	}); err == nil {
+		t.Fatal("SubmitPullRequest override without reason must fail")
+	}
+
+	// Override with explicit gate and reason succeeds.
+	ovRes, err := c.SubmitPullRequest(ctx, ui.SubmitPullRequestRequest{
+		PR: "acme/widgets#99", OverrideGates: []string{"security-review"}, Reason: "emergency rollback",
+	})
+	if err != nil {
+		t.Fatalf("SubmitPullRequest override: %v", err)
+	}
+	if len(ovRes.Overridden) != 1 || ovRes.Overridden[0] != "security-review" {
+		t.Fatalf("ovRes = %+v, want security-review overridden", ovRes)
+	}
+}
+
+// `grain pr submit` acts on the pull request the task merges, so it finds a
+// task only by that one: naming another pull request the task merely links
+// would approve, or override the gates of, a pull request nobody named.
+func TestSubmitPullRequestFindsATaskOnlyByItsOwnPullRequest(t *testing.T) {
+	t.Parallel()
+	c, store, ctx := testClient(t)
+	task := create(t, c, ctx)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.AutoMerge = false
+		tk.Links = append(tk.Links,
+			model.Link{Kind: model.LinkFixes, Target: "acme/widgets#98"},
+			model.Link{Kind: model.LinkFixes, Target: "acme/widgets#99"},
+		)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := store.GetTask(ctx, task.ID)
+	own := model.TaskPullRequest(*got)
+	if own == nil {
+		t.Fatal("the task has no pull request")
+	}
+	other := "acme/widgets#98"
+	if own.String() == other {
+		other = "acme/widgets#99"
+	}
+	_, err := c.SubmitPullRequest(ctx, ui.SubmitPullRequestRequest{PR: other})
+	var nf *ui.NotFoundError
+	if !errors.As(err, &nf) {
+		t.Fatalf("SubmitPullRequest(%s) = %v, want not found: the task's own pull request is %s", other, err, own)
+	}
+	if got, _ := store.GetTask(ctx, task.ID); slices.ContainsFunc(got.Links, func(l model.Link) bool {
+		return l.Kind == model.LinkHumanSubmitted
+	}) {
+		t.Fatalf("a Submit naming %s was recorded on task %s, whose pull request is %s", other, task.ID, own)
+	}
 }

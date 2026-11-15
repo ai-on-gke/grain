@@ -65,16 +65,20 @@ jobs:
     # Every run reads the remote's tags, the CI runs on main and staging's
     # state, none of which is in the tree: a replayed green is not a run.
     cache: false
-    # repo-write pushes the rc, -discarded and -pending tags and moves
-    # refs/heads/candidate (pkg/gitproxy/ciref.go); release-gate-read is
-    # the api:release-gate-read token the script reads main's runs,
-    # grain-candidate and the exploration tasks through, and files the
-    # release-notes task and the release.pending notification with;
-    # package-publish publishes the rc and pending images. Signing is
-    # optional, as in release.yml: a deployment without a signing key
-    # still releases.
-    capabilities: ["repo-write:ai-on-gke/grain", release-gate-read, package-publish]
-    optional-capabilities: [image-signing]
+    # repo#write pushes the rc, -discarded and -pending tags and moves
+    # refs/heads/candidate (pkg/gitproxy/ciref.go); api#release-gate-read
+    # is the token the script reads main's runs, grain-candidate and the
+    # exploration tasks through, and files the release-notes task and the
+    # release.pending notification with; release#package-publish
+    # publishes the rc and pending images. Signing is optional, as in
+    # release.yml: a deployment without a signing key still releases.
+    # (These were repo-write:ai-on-gke/grain, release-gate-read and
+    # package-publish before their retirement; docs/ci-capabilities.md.)
+    capabilities:
+      - {capability: "https://grain.dev/capabilities/repo#write", with: {repo: ai-on-gke/grain}}
+      - "https://grain.dev/capabilities/api#release-gate-read"
+      - "https://grain.dev/capabilities/release#package-publish"
+    optional-capabilities: ["https://grain.dev/capabilities/release#image-signing"]
     # A run can build two sets of daemon images -- the pending release's
     # and the next rc's -- each about as long as promote.yml's one
     # rebuild; every other run is a few API reads and nothing else.

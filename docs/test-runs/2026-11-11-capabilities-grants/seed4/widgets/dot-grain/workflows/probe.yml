@@ -1,0 +1,15 @@
+name: probe
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  probe:
+    capabilities:
+      - https://grain.dev/capabilities/api#ci-read
+    steps:
+      - name: Does this job hold a grain API token?
+        run: |
+          tok=""
+          for f in /home/debian/.grain-api/token "$HOME/.grain-api/token"; do [ -s "$f" ] && tok="$f"; done
+          if [ -n "${GRAIN_API_TOKEN:-}" ] || [ -n "$tok" ]; then echo "PROBE: HAS_API_TOKEN file=$tok url=${GRAIN_API_URL:-}"; else echo "PROBE: NO_API_TOKEN"; fi

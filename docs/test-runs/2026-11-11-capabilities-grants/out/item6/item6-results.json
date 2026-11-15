@@ -1,0 +1,114 @@
+[
+  {
+    "page": "/settings/capabilities",
+    "width": "desktop",
+    "theme": "light",
+    "ok": true,
+    "errors": [],
+    "waitingTexts": [
+      "The server is running but is waiting for its Server settings to be filled in before it can hand anything out.",
+      "waiting for the host's gcloud credential to be renewed (run the host's login command)"
+    ],
+    "chipInsideRow": true,
+    "horizontalScroll": false
+  },
+  {
+    "page": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fgchat",
+    "width": "desktop",
+    "theme": "light",
+    "ok": true,
+    "errors": [],
+    "waitingTexts": [
+      "The server is running but is waiting for its Server settings to be filled in before it can hand anything out.",
+      "waiting for the host's gcloud credential to be renewed (run the host's login command)",
+      "The server is running but is waiting for its Server settings to be filled in before it can hand anything out.",
+      "Waiting for the host's gcloud credential to be renewed (run the host's login command). grain tries it again every minute, and it attaches by"
+    ],
+    "chipInsideRow": true,
+    "horizontalScroll": false
+  },
+  {
+    "page": "/settings/capabilities",
+    "width": "desktop",
+    "theme": "dark",
+    "ok": true,
+    "errors": [],
+    "waitingTexts": [
+      "The server is running but is waiting for its Server settings to be filled in before it can hand anything out.",
+      "waiting for the host's gcloud credential to be renewed (run the host's login command)"
+    ],
+    "chipInsideRow": true,
+    "horizontalScroll": false
+  },
+  {
+    "page": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fgchat",
+    "width": "desktop",
+    "theme": "dark",
+    "ok": true,
+    "errors": [],
+    "waitingTexts": [
+      "The server is running but is waiting for its Server settings to be filled in before it can hand anything out.",
+      "waiting for the host's gcloud credential to be renewed (run the host's login command)",
+      "The server is running but is waiting for its Server settings to be filled in before it can hand anything out.",
+      "Waiting for the host's gcloud credential to be renewed (run the host's login command). grain tries it again every minute, and it attaches by"
+    ],
+    "chipInsideRow": true,
+    "horizontalScroll": false
+  },
+  {
+    "page": "/settings/capabilities",
+    "width": "phone",
+    "theme": "light",
+    "ok": true,
+    "errors": [],
+    "waitingTexts": [
+      "The server is running but is waiting for its Server settings to be filled in before it can hand anything out.",
+      "waiting for the host's gcloud credential to be renewed (run the host's login command)"
+    ],
+    "chipInsideRow": true,
+    "horizontalScroll": false
+  },
+  {
+    "page": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fgchat",
+    "width": "phone",
+    "theme": "light",
+    "ok": true,
+    "errors": [],
+    "waitingTexts": [
+      "The server is running but is waiting for its Server settings to be filled in before it can hand anything out.",
+      "waiting for the host's gcloud credential to be renewed (run the host's login command)",
+      "The server is running but is waiting for its Server settings to be filled in before it can hand anything out.",
+      "Waiting for the host's gcloud credential to be renewed (run the host's login command). grain tries it again every minute, and it attaches by"
+    ],
+    "chipInsideRow": true,
+    "horizontalScroll": false
+  },
+  {
+    "page": "/settings/capabilities",
+    "width": "phone",
+    "theme": "dark",
+    "ok": true,
+    "errors": [],
+    "waitingTexts": [
+      "The server is running but is waiting for its Server settings to be filled in before it can hand anything out.",
+      "waiting for the host's gcloud credential to be renewed (run the host's login command)"
+    ],
+    "chipInsideRow": true,
+    "horizontalScroll": false
+  },
+  {
+    "page": "/settings/capabilities/https%3A%2F%2Fgrain.dev%2Fcapabilities%2Fgchat",
+    "width": "phone",
+    "theme": "dark",
+    "ok": true,
+    "errors": [],
+    "waitingTexts": [
+      "The server is running but is waiting for its Server settings to be filled in before it can hand anything out.",
+      "waiting for the host's gcloud credential to be renewed (run the host's login command)",
+      "The server is running but is waiting for its Server settings to be filled in before it can hand anything out.",
+      "Waiting for the host's gcloud credential to be renewed (run the host's login command). grain tries it again every minute, and it attaches by"
+    ],
+    "chipInsideRow": true,
+    "horizontalScroll": false
+  }
+]

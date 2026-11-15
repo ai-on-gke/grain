@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"net/http"
+	"slices"
 	"sort"
 
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -253,25 +254,41 @@ func (c *Client) grantHolders(ctx context.Context, keep func(string) bool) ([]Ca
 	if err != nil {
 		return nil, err
 	}
+	templateGrants := map[string][]model.Grant{}
 	for _, t := range templates {
 		name := t.Name
 		if name == "" {
 			name = t.Title
 		}
 		addGrants("template", t.ID, name, t.Target, t.Grants, taskSubject(t.Target))
+		templateGrants[t.ID] = t.Grants
 	}
 	schedules, err := c.Store.ListSchedules(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, s := range schedules {
-		// A schedule naming a template files that template's grants,
-		// which are already listed under the template.
-		if s.TemplateID != nil {
-			continue
+		grants := s.Grants
+		if s.TemplateID != nil && *s.TemplateID != "" {
+			// A schedule naming a template files that template's grants,
+			// which are already listed under the template, beside its own
+			// (model.Schedule.Grants), which are listed here. One of
+			// grain's own schedules carries only a copy of its template's
+			// (orchestrator.applySystemContent), and a schedule whose
+			// template is gone files nothing.
+			tmplGrants, ok := templateGrants[*s.TemplateID]
+			if !ok || model.IsSystemTemplateID(*s.TemplateID) {
+				continue
+			}
+			grants = nil
+			for _, g := range s.Grants {
+				if !slices.ContainsFunc(tmplGrants, func(have model.Grant) bool { return have.Capability == g.Capability }) {
+					grants = append(grants, g)
+				}
+			}
 		}
 		repo := s.Target
-		addGrants("schedule", s.ID, s.Title, &repo, s.Grants, taskSubject(&repo))
+		addGrants("schedule", s.ID, s.Title, &repo, grants, taskSubject(&repo))
 	}
 	// The deployment's and each repository's default grants are seeded
 	// onto every task filed there (model.Config.DefaultCapabilities), so

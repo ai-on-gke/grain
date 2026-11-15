@@ -610,9 +610,13 @@ func TestGranuleFirewall_OpenNetworkFence(t *testing.T) {
 			rule("ip daddr 172.18.0.1 tcp dport { 9728 } accept"),
 			rule("ip6 daddr fd00::1 tcp dport { 9728 } accept"),
 			rule("icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert } accept"),
+			rule("ip daddr 172.18.0.1 meta l4proto { tcp, udp } th dport 53 accept"),
+			rule("ip6 daddr fd00::1 meta l4proto { tcp, udp } th dport 53 accept"),
+			rule("ip daddr { 0.0.0.0/8, 127.0.0.0/8, 172.18.0.0/16 } counter drop"),
+			rule("ip6 daddr { ::1/128, ::ffff:0.0.0.0/96, fd00::/64 } counter drop"),
 			rule("meta l4proto { tcp, udp } th dport 53 accept"),
-			rule("ip daddr { 127.0.0.0/8, 169.254.0.0/16, 172.17.0.0/16, 172.18.0.0/16, 192.168.1.0/24 } counter drop"),
-			rule("ip6 daddr { ::1/128, 2001:db8::/64, fd00::/64, fe80::/10 } counter drop"),
+			rule("ip daddr { 0.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.17.0.0/16, 172.18.0.0/16, 192.168.1.0/24 } counter drop"),
+			rule("ip6 daddr { ::1/128, ::ffff:0.0.0.0/96, 2001:db8::/64, fc00::/7, fe80::/10 } counter drop"),
 		}
 		last := -1
 		for _, want := range ordered {

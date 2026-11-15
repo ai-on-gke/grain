@@ -307,10 +307,20 @@ func escalatedCapabilities(child, parent Task, labelOnly bool) []string {
 	// included (design/spec/capabilities/capabilities.spec.md §2.3.4) --
 	// except grain#ci attached by default from the target repository's CI
 	// Mode, which mints no credential and cannot be held by a standing
-	// session or a task on a GitHub-mode repository (ui.Client.capabilityByID).
+	// session or a task on a GitHub-mode repository (ui.Client.capabilityByID),
+	// and the default api:ci-read on the child's own repository that takes
+	// its place there (DefaultCIReadGrant), which is read-only and mints
+	// nothing either.
+	var childTarget RepoRef
+	if child.Target != nil {
+		childTarget = *child.Target
+	}
 	childRefs := make([]Grant, 0, len(child.Grants))
 	for _, g := range child.Grants {
 		if g.Via == GrantByDefault && IsGrainCIGrant(g.Capability) {
+			continue
+		}
+		if IsDefaultCIReadGrant(g, childTarget) {
 			continue
 		}
 		childRefs = append(childRefs, g)

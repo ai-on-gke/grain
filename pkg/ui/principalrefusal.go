@@ -15,12 +15,15 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
+	"github.com/ai-on-gke/grain/pkg/apierror"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -275,36 +278,83 @@ func writeDelegateRefused(w http.ResponseWriter, r *http.Request, de *delegateNo
 // Retry-After, and a page that says to reload rather than advice about
 // audiences and clocks.
 func writeAssertionRefused(w http.ResponseWriter, r *http.Request, err error) {
-	status, page := http.StatusUnauthorized, assertionRefusedPage
 	if verifierUnavailable(err) {
-		status, page = http.StatusServiceUnavailable, verifierStartingPage
-		w.Header().Set("Retry-After", verifierRetryAfter)
-		err = fmt.Errorf("identity assertion could not be checked yet: %w", err)
-	} else {
-		err = fmt.Errorf("identity assertion was not accepted: %w", err)
+		writeVerifierUnavailable(w, r, err)
+		return
 	}
+	err = fmt.Errorf("identity assertion was not accepted: %w", err)
 	if !browserNavigation(r) {
-		writeError(w, status, err)
+		writeError(w, http.StatusUnauthorized, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	if err := page.Execute(w, err.Error()); err != nil {
+	w.WriteHeader(http.StatusUnauthorized)
+	if err := assertionRefusedPage.Execute(w, err.Error()); err != nil {
 		fmt.Fprintln(w, "identity assertion was not accepted")
 	}
 }
 
 // verifierRetryAfter is the Retry-After, in seconds, on a refusal whose
 // verifier was not available yet.
-const verifierRetryAfter = "5"
+const verifierRetryAfter = 5
 
-var verifierStartingPage = template.Must(template.New("verifier-starting").Parse(`<!doctype html>
+// verifierUnavailableMessage is what an API caller refused by a verifier
+// that could not check its identity is told, ahead of the log reference.
+const verifierUnavailableMessage = "sign-in verification could not check your identity right now; retrying shortly"
+
+// writeVerifierUnavailable answers a request whose verifier could not
+// check its signed identity (VerifierUnavailableError): 503 with
+// Retry-After. An API caller gets the verifier_unavailable code and, when
+// the error names one (UnavailableReason), the backend that was not
+// reachable, so the UI retries quietly instead of reporting the daemon
+// unreachable; the error itself, which can carry host paths and
+// addresses, goes only to the log. A browser is shown a page that says to
+// reload -- naming startup only when the verifier said it is starting up.
+func writeVerifierUnavailable(w http.ResponseWriter, r *http.Request, err error) {
+	w.Header().Set("Retry-After", strconv.Itoa(verifierRetryAfter))
+	err = fmt.Errorf("identity assertion could not be checked yet: %w", err)
+	if !browserNavigation(r) {
+		body := apierror.Withheld(http.StatusServiceUnavailable, apierror.CodeVerifierUnavailable, verifierUnavailableMessage, err)
+		body.Reason = verifierUnavailableReason(err)
+		body.RetryAfter = verifierRetryAfter
+		writeJSON(w, http.StatusServiceUnavailable, body)
+		return
+	}
+	page := verifierPage{Heading: "Sign-in verification is temporarily unavailable", Detail: err.Error()}
+	if strings.Contains(err.Error(), "starting up") {
+		page.Heading, page.StartingUp = "Sign-in verification is starting up", true
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	if err := verifierUnavailablePage.Execute(w, page); err != nil {
+		fmt.Fprintln(w, "identity assertion could not be checked")
+	}
+}
+
+// verifierUnavailableReason is the machine-readable reason err gives for
+// its verifier being unavailable ("tonic_unreachable", say), or "" when it
+// gives none.
+func verifierUnavailableReason(err error) string {
+	var r interface{ UnavailableReason() string }
+	if errors.As(err, &r) {
+		return r.UnavailableReason()
+	}
+	return ""
+}
+
+type verifierPage struct {
+	Heading, Detail string
+	StartingUp      bool
+}
+
+var verifierUnavailablePage = template.Must(template.New("verifier-unavailable").Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>grain: sign-in verification is starting up</title>
+<title>grain: {{.Heading}}</title>
 <style>
 body { font-family: system-ui, sans-serif; display: flex; min-height: 100vh; margin: 0; align-items: center; justify-content: center; background: #f5f5f5; }
 main { background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.15); max-width: 30rem; width: 100%; box-sizing: border-box; }
@@ -315,9 +365,10 @@ code { font-size: .85rem; }
 </head>
 <body>
 <main>
-<h1>Sign-in verification is starting up</h1>
-<p>grain could not check the signed identity the proxy in front of it attached to this request yet -- usually because the daemon has just restarted -- so it has not let the request in.</p>
-<p id="refused-reason"><code>{{.}}</code></p>
+<h1>{{.Heading}}</h1>
+{{if .StartingUp}}<p>grain could not check the signed identity the proxy in front of it attached to this request yet -- usually because the daemon has just restarted -- so it has not let the request in.</p>
+{{else}}<p>grain could not check the signed identity the proxy in front of it attached to this request right now, so it has not let the request in. This is usually brief.</p>
+{{end}}<p id="refused-reason"><code>{{.Detail}}</code></p>
 <p>Reload the page in a few seconds and it should work.</p>
 </main>
 </body>

@@ -113,3 +113,22 @@ func TestChangesBoundTheDetailAndNotTheCount(t *testing.T) {
 		t.Errorf("carried %d events with %d dropped, want %d and 5", len(c.Events), c.Dropped, metrics.MaxChangeEvents)
 	}
 }
+
+// A reader that read back over history holding nothing but bookkeeping
+// reaches further than its oldest change, and says so (task 4405): one
+// change in a fourteen-day window is not "history reaches back to that
+// change".
+func TestChangesTakeTheReadersOwnReach(t *testing.T) {
+	reaches := since.Add(-14 * 24 * time.Hour)
+	rep := metrics.Compute(metrics.Input{
+		Window:          win,
+		SettingsHistory: true,
+		SettingsChanges: []metrics.SettingsChange{
+			change(time.Hour, "beef", "max_workers 10 -> 12", dial("max_workers", "10", "12")),
+		},
+		SettingsReaches: reaches,
+	})
+	if r := rep.Changes.Reaches; r == nil || !r.Equal(reaches) {
+		t.Errorf("Reaches = %v, want the reader's own %v", r, reaches)
+	}
+}

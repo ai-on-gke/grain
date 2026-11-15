@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  Alert,
   Box,
   Checkbox,
   FormControlLabel,
@@ -36,7 +37,7 @@ import {
   confirmBaseRepairBypass,
   repoCIMode,
 } from "../RepoPage.jsx";
-import { repoHostOf } from "../RepoList.jsx";
+import { repoHostOf, targetRepoHostMismatches } from "../RepoList.jsx";
 import SettingsCard from "./SettingsCard.jsx";
 
 // RepositoriesSection is Settings → Repositories: an index only
@@ -132,6 +133,11 @@ export default function RepositoriesSection({
   // when settings live in the config repo, both of which the API refuses.
   const bypassReadOnly = (repo) =>
     Boolean(config?.configRepoOnly) || !repoAdministered(config, repo);
+  const hostMismatches = targetRepoHostMismatches(
+    reach,
+    config?.targetRepos,
+    config?.githubHost,
+  );
 
   return (
     <SettingsCard title="Repositories" anchor="repositories">
@@ -141,6 +147,20 @@ export default function RepositoriesSection({
         </Typography>
       ) : (
         <>
+          {hostMismatches.length > 0 && (
+            <Stack spacing={1} sx={{ mb: 2 }}>
+              {hostMismatches.map((m) => (
+                <Alert
+                  key={m.repo}
+                  severity="warning"
+                  data-testid="repo-host-mismatch-alert"
+                  sx={{ overflowWrap: "anywhere" }}
+                >
+                  <strong>{m.repo}</strong>: {m.message}
+                </Alert>
+              ))}
+            </Stack>
+          )}
           <Box sx={{ overflowX: "auto" }}>
             <Table size="small" aria-label="Repositories">
               <TableHead>

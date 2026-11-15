@@ -150,6 +150,22 @@ func TestCapabilityMethodsListArgumentSchemas(t *testing.T) {
 	if !slices.ContainsFunc(methods, func(m ui.CapabilityMethod) bool { return m.Ref == model.GrainJournalRef && !m.RequiresArgs }) {
 		t.Errorf("methods missing in-process %s: %+v", model.GrainJournalRef, methods)
 	}
+	byRef := map[string]ui.CapabilityMethod{}
+	for _, m := range methods {
+		byRef[m.Ref] = m
+	}
+	if got := byRef["https://grain.dev/capabilities/api#grain/task-admin"].AliasOf; !slices.Equal(got, []string{"https://grain.dev/capabilities/api#task-admin"}) {
+		t.Errorf("api#grain/task-admin AliasOf = %v, want [api#task-admin]", got)
+	}
+	for _, canonical := range []string{
+		"https://grain.dev/capabilities/api#task-admin",
+		"https://grain.dev/capabilities/api#grain/viewer",
+		"https://grain.dev/capabilities/api#grain/operator",
+	} {
+		if got := byRef[canonical].AliasOf; len(got) != 0 {
+			t.Errorf("%s AliasOf = %v, want empty", canonical, got)
+		}
+	}
 
 	if err := client.SetCapabilityPolicy(context.Background(), model.CapabilityPolicy{
 		Rules: []model.CapabilityPolicyRule{
@@ -218,7 +234,7 @@ func TestSetCapabilityGrantWithArguments(t *testing.T) {
 	}
 	staging := grantTestCap + `#key={"account":"staging","scopes":["all"]}`
 	prod := grantTestCap + `#key={"account":"prod","project":"web","scopes":["all"]}`
-	got := refGrants(detail.Capabilities)
+	got := refGrants(withoutDefaultCIRead(detail.Capabilities))
 	if len(got) != 2 || !contains(got, staging) || !contains(got, prod) {
 		t.Fatalf("grants = %q, want staging and prod, normalized, once each", got)
 	}
@@ -229,7 +245,7 @@ func TestSetCapabilityGrantWithArguments(t *testing.T) {
 		t.Fatalf("replace: %d %v", code, out)
 	}
 	detail, _ = client.GetTask(ctx, task.ID)
-	got = refGrants(detail.Capabilities)
+	got = refGrants(withoutDefaultCIRead(detail.Capabilities))
 	if len(got) != 2 || contains(got, prod) || !contains(got, grantTestCap+`#key={"account":"prod","project":"api","scopes":["all"]}`) {
 		t.Fatalf("after replace: %q", got)
 	}
@@ -239,7 +255,7 @@ func TestSetCapabilityGrantWithArguments(t *testing.T) {
 		t.Fatalf("detach: %d %v", code, out)
 	}
 	detail, _ = client.GetTask(ctx, task.ID)
-	if got = refGrants(detail.Capabilities); len(got) != 1 || contains(got, staging) {
+	if got = refGrants(withoutDefaultCIRead(detail.Capabilities)); len(got) != 1 || contains(got, staging) {
 		t.Fatalf("after detach: %q", got)
 	}
 
@@ -313,48 +329,50 @@ func TestCheckCapabilityGrants(t *testing.T) {
 	if !out[3].Unchecked {
 		t.Errorf("a grant of an unattached server: %+v", out[3])
 	}
-	if out[4].Recorded != model.GCPKeySandboxAgentGrant || out[4].Error != "" || !slices.Equal(out[4].AliasOf, []string{model.GCPKeySandboxAgentGrant}) {
-		t.Errorf("retired gcp-key alias: %+v", out[4])
-	}
-	if out[5].Recorded != model.GitHubReadIssuesGrant || out[5].Error != "" || !slices.Equal(out[5].AliasOf, []string{model.GitHubReadIssuesGrant}) {
-		t.Errorf("retired read-issues alias: %+v", out[5])
-	}
-	if out[6].Error != "" || !slices.Equal(out[6].AliasOf, model.SelfDebugGrants()) {
-		t.Errorf("retired self-debug multi-grant alias: %+v", out[6])
+	for i, name := range []string{"gcp-key", "read-issues", "self-debug"} {
+		if out[4+i].Error == "" || len(out[4+i].AliasOf) != 0 {
+			t.Errorf("retired bare %s should be refused, not read as an alias: %+v", name, out[4+i])
+		}
 	}
 }
 
 func TestReadIssuesInputAliasRecordsGitHubReadIssuesGrant(t *testing.T) {
 	_, client := grantTestServer(t)
 	ctx := context.Background()
-	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
-		Title:        "with legacy read-issues alias",
+	if _, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:        "with retired read-issues",
 		Capabilities: &[]string{"read-issues"},
+	}); err == nil {
+		t.Fatal("CreateTask accepted the retired bare read-issues")
+	}
+	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:        "with github#read-issues",
+		Capabilities: &[]string{model.GitHubReadIssuesGrant},
 	})
 	if err != nil {
-		t.Fatalf("CreateTask with read-issues alias: %v", err)
+		t.Fatalf("CreateTask with github#read-issues: %v", err)
 	}
-	if len(task.Capabilities) != 1 || task.Capabilities[0] != model.GitHubReadIssuesGrant {
+	if len(withoutDefaultCIRead(task.Capabilities)) != 1 || withoutDefaultCIRead(task.Capabilities)[0] != model.GitHubReadIssuesGrant {
 		t.Fatalf("CreateTask capabilities = %v, want [%s]", task.Capabilities, model.GitHubReadIssuesGrant)
 	}
-	if err := client.SetCapability(ctx, task.ID, "read-issues", false); err != nil {
+	if err := client.SetCapability(ctx, task.ID, model.GitHubReadIssuesGrant, false); err != nil {
 		t.Fatalf("detaching via read-issues alias: %v", err)
 	}
 	afterDetach, err := client.GetTask(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(afterDetach.Capabilities) != 0 {
+	if len(withoutDefaultCIRead(afterDetach.Capabilities)) != 0 {
 		t.Fatalf("after detach via alias: %v, want empty", afterDetach.Capabilities)
 	}
-	if err := client.SetCapability(ctx, task.ID, "read-issues", true); err != nil {
+	if err := client.SetCapability(ctx, task.ID, model.GitHubReadIssuesGrant, true); err != nil {
 		t.Fatalf("attaching via read-issues alias: %v", err)
 	}
 	afterAttach, err := client.GetTask(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(afterAttach.Capabilities) != 1 || afterAttach.Capabilities[0] != model.GitHubReadIssuesGrant {
+	if len(withoutDefaultCIRead(afterAttach.Capabilities)) != 1 || withoutDefaultCIRead(afterAttach.Capabilities)[0] != model.GitHubReadIssuesGrant {
 		t.Fatalf("after attach via alias: %v, want [%s]", afterAttach.Capabilities, model.GitHubReadIssuesGrant)
 	}
 }
@@ -613,5 +631,151 @@ func TestCapabilityMethodsMarkWhatThePolicyDenies(t *testing.T) {
 	}
 	if code := postJSON(t, ts, "GET", "/api/capability-methods?kind=job", nil, nil); code != 400 {
 		t.Errorf("an unknown kind: %d, want 400", code)
+	}
+}
+
+// POST /api/capability-grants/check refuses the same repository and scope-set
+// grants that POST /api/tasks/{id}/capabilities and PATCH /api/tasks/{id}
+// refuse, and capabilityRefusal explains a task's own repository access rather
+// than calling repo#target or repo#write {repo, base} an unknown capability.
+// CI-only repo#write {repo} is what the repos page's CI capabilities list
+// grants through the same check, so the check records it and refuses it only
+// for a task subject (CatalogueRefusal), as the task writes do.
+func TestCheckAndWritesAgreeOnRepoAndScopeSetRefusals(t *testing.T) {
+	ts, client := grantTestServer(t)
+	ctx := context.Background()
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+	if err := client.PutAPIScopeSet(ctx, model.APIScopeSet{
+		Name:   "ops/triage",
+		Scopes: []string{"ci:read", "tasks:read"},
+		Repos:  []string{"acme/widgets"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:        "check vs writes",
+		NoRepo:       true,
+		Capabilities: &[]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name           string
+		cap            string
+		with           map[string]any
+		wantSubstr     string
+		wantField      string
+		wantCatalogRef bool
+		checkRecords   bool
+	}{
+		{
+			name:           "repo#target",
+			cap:            model.RepoTargetRef,
+			with:           map[string]any{"repo": "acme/widgets", "base": "main"},
+			wantSubstr:     "Repository access",
+			wantCatalogRef: true,
+		},
+		{
+			name:           "repo#write target",
+			cap:            model.RepoWriteRef,
+			with:           map[string]any{"repo": "acme/widgets", "base": "main"},
+			wantSubstr:     "Repository access",
+			wantCatalogRef: true,
+		},
+		{
+			name:           "repo#write CI only",
+			cap:            model.RepoWriteRef,
+			with:           map[string]any{"repo": "acme/widgets"},
+			wantSubstr:     "CI capability",
+			wantCatalogRef: true,
+			checkRecords:   true,
+		},
+		{
+			name:       "grain#ci",
+			cap:        model.GrainCIRef,
+			wantSubstr: "CI Mode",
+		},
+		{
+			name:       "scope set outside repo limit",
+			cap:        model.APIRef("ops/triage"),
+			with:       map[string]any{"repo": "acme/gadgets"},
+			wantSubstr: "scope set ops/triage reaches only acme/widgets, not acme/gadgets",
+			wantField:  "repo",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reqItem := map[string]any{"capability": tc.cap}
+			if tc.with != nil {
+				reqItem["with"] = tc.with
+			}
+			var checks []ui.GrantCheck
+			if code := postJSON(t, ts, "POST", "/api/capability-grants/check", map[string]any{
+				"grants": []any{reqItem},
+			}, &checks); code != 200 || len(checks) != 1 {
+				t.Fatalf("check: %d %+v", code, checks)
+			}
+			c := checks[0]
+			if tc.checkRecords {
+				if c.Error != "" || c.Recorded == "" {
+					t.Errorf("check = %+v, want it recorded (the repos page's CI capabilities list grants it)", c)
+				}
+			} else if c.Recorded != "" || !strings.Contains(c.Error, tc.wantSubstr) || strings.Contains(c.Error, "unknown capability") {
+				t.Errorf("check = %+v, want error containing %q and no Recorded", c, tc.wantSubstr)
+			}
+			if tc.wantField != "" && !strings.Contains(c.Fields[tc.wantField], tc.wantSubstr) {
+				t.Errorf("check fields = %+v, want %q naming %q", c.Fields, tc.wantField, tc.wantSubstr)
+			}
+
+			var withSubject []ui.GrantCheck
+			if code := postJSON(t, ts, "POST", "/api/capability-grants/check", map[string]any{
+				"grants":  []any{reqItem},
+				"subject": map[string]any{"repo": "acme/widgets"},
+			}, &withSubject); code != 200 || len(withSubject) != 1 {
+				t.Fatalf("check with subject: %d %+v", code, withSubject)
+			}
+			if tc.wantCatalogRef && !strings.Contains(withSubject[0].CatalogueRefusal, tc.wantSubstr) {
+				t.Errorf("check with subject CatalogueRefusal = %q, want %q", withSubject[0].CatalogueRefusal, tc.wantSubstr)
+			}
+
+			attachBody := map[string]any{"capability": tc.cap, "attach": true}
+			if tc.with != nil {
+				attachBody["with"] = tc.with
+			}
+			var attachOut map[string]any
+			if code := postJSON(t, ts, "POST", "/api/tasks/"+task.ID+"/capabilities", attachBody, &attachOut); code != 400 {
+				t.Fatalf("attach: %d %v, want 400", code, attachOut)
+			}
+			if msg, _ := attachOut["error"].(string); !strings.Contains(msg, tc.wantSubstr) || strings.Contains(msg, "unknown capability") {
+				t.Errorf("attach error = %q, want %q and not unknown capability", msg, tc.wantSubstr)
+			}
+
+			var patchOut map[string]any
+			if code := postJSON(t, ts, "PATCH", "/api/tasks/"+task.ID, map[string]any{
+				"capabilities": []any{reqItem},
+			}, &patchOut); code != 400 {
+				t.Fatalf("PATCH: %d %v, want 400", code, patchOut)
+			}
+			if msg, _ := patchOut["error"].(string); !strings.Contains(msg, tc.wantSubstr) || strings.Contains(msg, "unknown capability") {
+				t.Errorf("PATCH error = %q, want %q and not unknown capability", msg, tc.wantSubstr)
+			}
+		})
+	}
+
+	// Valid siblings -- scope set within its repo limit, and repo#write {refs, force} -- still check and attach.
+	for _, valid := range []map[string]any{
+		{"capability": model.APIRef("ops/triage"), "with": map[string]any{"repo": "acme/widgets"}},
+		{"capability": model.RepoWriteRef, "with": map[string]any{"refs": []string{"refs/heads/*", "refs/tags/*"}, "force": true}},
+	} {
+		var checks []ui.GrantCheck
+		if code := postJSON(t, ts, "POST", "/api/capability-grants/check", map[string]any{"grants": []any{valid}}, &checks); code != 200 || len(checks) != 1 || checks[0].Error != "" || checks[0].Recorded == "" {
+			t.Fatalf("valid check(%v): %d %+v", valid, code, checks)
+		}
+		attachBody := map[string]any{"capability": valid["capability"], "with": valid["with"], "attach": true}
+		if code := postJSON(t, ts, "POST", "/api/tasks/"+task.ID+"/capabilities", attachBody, nil); code != 200 {
+			t.Fatalf("valid attach(%v): %d", valid, code)
+		}
 	}
 }

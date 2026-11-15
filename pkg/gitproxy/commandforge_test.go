@@ -352,6 +352,43 @@ func TestGGHTimesOut(t *testing.T) {
 	}
 }
 
+// A tool that exits on its own having printed no response is reported by
+// what it said, not as cancelled: the context wait cancels afterwards is
+// not why it stopped.
+func TestCommandForgeToolThatFailsSaysWhatItSaid(t *testing.T) {
+	state := fakeGGHAPI(t)
+	c := gghDepotSet(t, "")
+	src, h, ok := c.forgeCommand("depot")
+	if !ok {
+		t.Fatal("depot is not a forgecli credential")
+	}
+	client := commandForgeClient(src, h, 10*time.Second)
+	writeRaw(t, state, "api-exit", "4")
+
+	writeRaw(t, state, "api-stderr", "To get started with forgecli, please run: forgecli auth login\n")
+	resp, err := client.Get("https://depot.code.forge.test/api/v3/rate_limit")
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("a forgecli that printed no response answered")
+	}
+	if msg := err.Error(); strings.Contains(msg, "cancelled") ||
+		!strings.Contains(msg, "please run: forgecli auth login") ||
+		!strings.Contains(msg, "run `GH_HOST=depot.code.forge.test forgecli auth login` as ") {
+		t.Fatalf("not logged in = %v; want what forgecli said and the source's LoginFix", err)
+	}
+
+	writeRaw(t, state, "api-stderr", "error connecting to depot.code.forge.test: no route to host\n")
+	resp, err = client.Get("https://depot.code.forge.test/api/v3/rate_limit")
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("a forgecli that printed no response answered")
+	}
+	if msg := err.Error(); strings.Contains(msg, "cancelled") || strings.Contains(msg, "auth login") ||
+		!strings.Contains(msg, "failed: error connecting to depot.code.forge.test: no route to host") {
+		t.Fatalf("failure = %v; want what forgecli said", err)
+	}
+}
+
 func TestGGHGitForwardGoesThroughGGHWithTheWholeURL(t *testing.T) {
 	state := fakeGGHAPI(t)
 	c := gghDepotSet(t, "")

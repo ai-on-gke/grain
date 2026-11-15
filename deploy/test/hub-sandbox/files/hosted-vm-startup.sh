@@ -70,6 +70,7 @@ db_name="$(jq -r '.GRAIN_DB_NAME // empty' <<<"${cfg_json}")"
 db_user="$(jq -r '.GRAIN_DB_USER // empty' <<<"${cfg_json}")"
 db_pw_secret="$(jq -r '.GRAIN_DB_PASSWORD_SECRET // .db_password_secret // empty' <<<"${cfg_json}")"
 daemon_image="$(jq -r '.GRAIN_DAEMON_IMAGE // empty' <<<"${cfg_json}")"
+environment_name="$(jq -r '.environment_name // empty' <<<"${cfg_json}")"
 
 if [[ -z "${daemon_image}" ]]; then
   daemon_image="${DEFAULT_DAEMON_IMAGE}"
@@ -132,6 +133,9 @@ cat > /etc/grain-daemon/daemon.env <<ENV_EOF
 GRAIN_DB_DRIVER=postgres
 GRAIN_DB_DSN=postgres://${enc_user}:${enc_pw}@${sql_ip}:5432/${db_name}?sslmode=require
 ENV_EOF
+if [[ -n "${environment_name}" ]]; then
+  printf 'GRAIN_DEFAULT_ENVIRONMENT_NAME=%s\n' "${environment_name}" >>/etc/grain-daemon/daemon.env
+fi
 chmod 0600 /etc/grain-daemon/daemon.env
 
 ar_host="${daemon_image%%/*}"

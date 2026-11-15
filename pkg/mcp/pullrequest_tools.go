@@ -167,7 +167,7 @@ func (s PullRequestScope) prRepo() string {
 
 func (s PullRequestScope) prHead() string {
 	if s.hasUpstream() && s.Branch != "" && !strings.Contains(s.Branch, ":") {
-		return s.Owner + ":" + s.Branch
+		return github.BareOwner(s.Owner) + ":" + s.Branch
 	}
 	return s.Branch
 }
@@ -315,11 +315,30 @@ func gateIsGrainCINotice(judged bool) string {
 	if judged {
 		return notice + " What decides this branch is below."
 	}
-	return notice + " Nor does anything else: this run does not hold the grain-ci " +
-		"capability, so no grain CI verdict will be recorded for the commit you push, " +
+	return notice + " Nor does anything else: this run does not hold the " +
+		"https://grain.dev/capabilities/grain#ci capability -- grain grants that from the " +
+		"repository's CI mode, and nobody attaches it by hand -- so no grain CI verdict will be " +
+		"recorded for the commit you push, " +
 		"and the merge queue will wait for one until it gives up and asks a person. " +
 		"That is a fact about how this task was filed, not about your change -- say so " +
 		"in what you report."
+}
+
+// noGitHubRepoMessage is what pull_request_status, base_branch_status and
+// wait_for_checks answer a run built without a GitHub client or a complete
+// scope -- an mcpserver started without the data it reads GitHub through,
+// as runhost and hosts sandboxes' are. The task usually does have a
+// repository and branch, and the sandbox's own grain CLI reaches the same
+// checks through the daemon without any grant, so the answer names those
+// commands rather than leaving the run to conclude it needs a CI grant
+// (task 4361: a run read this as "ask for grain#ci" and parked on a request
+// nobody could grant).
+func noGitHubRepoMessage(what string) string {
+	return what + ": this run has no GitHub repository configured for it in this tool. " +
+		"If this task has a repository and branch, run `grain pr open` in the sandbox " +
+		"for its pull request and checks, and `grain ci wait` for the CI verdict on your " +
+		"pushed commit (GitHub Actions included): both work without any grant. Otherwise " +
+		"do the work in the sandbox and report what you found instead."
 }
 
 // elisionAdviceCIReport is what the three GitHub CI reports say if the
@@ -365,9 +384,7 @@ func pullRequestStatusTool(client PullRequestReader, grainCI GrainCIReader, scop
 			Handler: func(ctx context.Context, _ map[string]any) Result {
 				if client == nil || !scope.complete() {
 					return Result{
-						Text: "There is no pull request to report on: this run has no GitHub " +
-							"repository configured for it. Do the work in the sandbox and " +
-							"report what you found instead.",
+						Text:    noGitHubRepoMessage("There is no pull request to report on"),
 						IsError: true,
 					}
 				}
@@ -410,9 +427,7 @@ func pullRequestStatusTool(client PullRequestReader, grainCI GrainCIReader, scop
 		Handler: func(ctx context.Context, _ map[string]any) Result {
 			if client == nil || !scope.complete() {
 				return Result{
-					Text: "There is no pull request to report on: this run has no GitHub " +
-						"repository configured for it. Do the work in the sandbox and " +
-						"report what you found instead.",
+					Text:    noGitHubRepoMessage("There is no pull request to report on"),
 					IsError: true,
 				}
 			}

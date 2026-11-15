@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/capability/grainserver"
 	"github.com/ai-on-gke/grain/pkg/capability/intree"
 	"github.com/ai-on-gke/grain/pkg/capability/protocol"
@@ -61,6 +62,34 @@ type CapabilityMethod struct {
 	// why the capability policy (§4.2.2) denies this method to that run;
 	// empty where it admits it, and on a listing that names no run.
 	PolicyRefusal string `json:"policyRefusal,omitempty"`
+	// AliasOf, when non-empty, names the canonical method Ref(s) this
+	// method aliases (for example api#grain/task-admin -> [api#task-admin],
+	// which pickers offer once under the unprefixed preset).
+	AliasOf []string `json:"aliasOf,omitempty"`
+	// DescriptionTruncated and ArgsTruncated say a paged call cut this
+	// row to fit an agent's tool-result budget: Description to its first
+	// pageRowDescriptionBytes bytes, and each array in Args (an enum of
+	// gchat's spaces, say) to its first pageRowArrayItems items, with
+	// ArgItemCounts giving each cut array's full length by its path in
+	// the schema. Ask with fields=full (and q=<ref>) for the whole row.
+	DescriptionTruncated bool           `json:"descriptionTruncated,omitempty"`
+	ArgsTruncated        bool           `json:"argsTruncated,omitempty"`
+	ArgItemCounts        map[string]int `json:"argItemCounts,omitempty"`
+}
+
+// pagedCapabilityMethod is m as a paged row carries it: the first
+// pageRowDescriptionBytes of its description and the first
+// pageRowArrayItems items of each array in its argument schema. A
+// method whose description and schema enumerate a configured list --
+// gchat#post names every space -- was 26 KB on its own.
+func pagedCapabilityMethod(m CapabilityMethod) CapabilityMethod {
+	if desc, cut := truncateText(m.Description, pageRowDescriptionBytes); cut {
+		m.Description, m.DescriptionTruncated = desc, true
+	}
+	if args, cut := capJSONObject(m.Args, pageRowArrayItems); len(cut) > 0 {
+		m.Args, m.ArgsTruncated, m.ArgItemCounts = args, true, cut
+	}
+	return m
 }
 
 // ListCapabilityMethods is every method of every attached capability
@@ -90,6 +119,14 @@ func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 	for _, s := range statuses {
 		for _, m := range s.MethodDetails {
 			ref := s.ID + "#" + m.Name
+			var aliasOf []string
+			if s.ID == grainserver.APIID {
+				if unprefixed, ok := strings.CutPrefix(m.Name, model.APIScopeSetBuiltinPrefix); ok {
+					if _, isPreset := model.APIPresetNamed(unprefixed); isPreset {
+						aliasOf = []string{grainserver.APIID + "#" + unprefixed}
+					}
+				}
+			}
 			out = append(out, CapabilityMethod{
 				Ref:          ref,
 				Capability:   s.ID,
@@ -99,6 +136,7 @@ func (c *Client) ListCapabilityMethods(ctx context.Context) []CapabilityMethod {
 				RequiresArgs: !protocol.ArgsHaveNoRequirement(m.Args),
 				Releasable:   m.Releasable,
 				Policy:       policy.Verdicts(ref, configured),
+				AliasOf:      aliasOf,
 			})
 		}
 	}
@@ -224,6 +262,15 @@ func (c *Client) CheckCapabilityGrants(ctx context.Context, grants []GrantReques
 
 func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.Lookup) GrantCheck {
 	check := GrantCheck{Grant: s}
+	// grain#ci is a well-formed reference to a registered method, so the
+	// checks below would pass it -- and SetCapability would then refuse
+	// it (capabilityByID). A check that says yes to what the edit says no
+	// to is how request_access relayed a grain#ci nobody could grant
+	// (task 4361): refuse it here, in the same words.
+	if grainci.IsGrant(s) {
+		check.Error = capabilityRefusal(s)
+		return check
+	}
 	if !model.IsCapabilityRef(s) {
 		if _, ok := c.capabilityByID(s); !ok {
 			check.Error = capabilityRefusal(s)
@@ -246,6 +293,8 @@ func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.
 	if check.Unchecked {
 		if err := model.CheckCapabilityGrantArgsOffline(s); err != nil {
 			check.Error, check.Fields = err.Error(), grantFieldErrors(err)
+		} else if errMsg, fields := postNormalizeGrantRefusal(s); errMsg != "" {
+			check.Error, check.Fields = errMsg, fields
 		} else {
 			check.Recorded = s
 		}
@@ -256,7 +305,12 @@ func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.
 		check.Error, check.Fields = err.Error(), grantFieldErrors(err)
 		return check
 	}
-	check.Recorded = names[0]
+	recorded := names[0]
+	if errMsg, fields := postNormalizeGrantRefusal(recorded); errMsg != "" {
+		check.Error, check.Fields = errMsg, fields
+		return check
+	}
+	check.Recorded = recorded
 	if spec, err := model.CapabilityGrantSpec(check.Recorded); err == nil {
 		check.Args = spec.With
 	}
@@ -266,6 +320,34 @@ func (c *Client) checkSingleCapabilityGrant(s, reqGrant string, lookup protocol.
 		check.Changed = check.Recorded != s
 	}
 	return check
+}
+
+// postNormalizeGrantRefusal refuses normalized capability references that
+// validate against their server's JSON schema yet cannot be attached as a
+// capability grant anywhere: a task's own repository target or write
+// target (repo#target, repo#write {repo, base}) and an api#* scope set
+// limited to a repository outside its reach. CI-only repo#write {repo}
+// is not refused here: the repos page's CI capabilities list grants it
+// and checks it through this same call, so it is refused for a task only
+// when the check names one (markCatalogueRefusals' CatalogueRefusal) and
+// by the task writes themselves.
+func postNormalizeGrantRefusal(grant string) (string, map[string]string) {
+	if msg, ok := taskRepoGrantRefusal(grant); ok {
+		return msg, nil
+	}
+	if g, ok, err := model.ParseAPIGrant(grant); ok {
+		if err != nil {
+			return err.Error(), nil
+		}
+		if err := g.OutsideRepoLimit(); err != nil {
+			var fields map[string]string
+			if g.Repo != "" {
+				fields = map[string]string{"repo": err.Error()}
+			}
+			return err.Error(), fields
+		}
+	}
+	return "", nil
 }
 
 // protocolCapabilityID is the capability_id a grant string names, without
@@ -424,7 +506,7 @@ func (s *Server) handleListCapabilityMethods(w http.ResponseWriter, r *http.Requ
 	methods = filterList(methods, func(m CapabilityMethod) bool {
 		return list.matches(m.Ref, m.Capability, m.Method, m.Description)
 	})
-	writeList(w, methods, list)
+	writePageTrimmed(w, r, methods, list, nil, pagedCapabilityMethod)
 }
 
 func (s *Server) handleCheckCapabilityGrants(w http.ResponseWriter, r *http.Request) {

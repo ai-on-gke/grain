@@ -481,7 +481,7 @@ func (c *Client) requireMemoryGrant(ctx context.Context, id, repo string) error 
 	if APIGrantsOf(grantNames(task.Grants)).Allows("memory:write", strings.TrimSpace(repo)) {
 		return nil
 	}
-	return forbiddenErrorf("task %s does not hold the memory:write scope (api:memory), so its run may not write memory", id)
+	return forbiddenErrorf("task %s does not hold the memory:write scope (https://grain.dev/capabilities/api#memory), so its run may not write memory", id)
 }
 
 // handleListMemories answers GET /api/memory. An old client's ?team= is
@@ -548,7 +548,7 @@ func (s *Server) handleListMemoryDocuments(w http.ResponseWriter, r *http.Reques
 		docs = filterList(docs, func(d MemoryDocument) bool { return strings.EqualFold(d.Repo, repo) })
 	}
 	docs = filterList(docs, func(d MemoryDocument) bool { return list.matches(d.Name, d.Repo, d.Summary) })
-	writeList(w, docs, list)
+	writeListBy(w, docs, list, func(d MemoryDocument) string { return d.Repo + "\x00" + d.Name })
 }
 
 // handleGetMemoryDocument answers GET /api/memory/documents/{name}, with

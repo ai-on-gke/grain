@@ -40,11 +40,13 @@ import (
 	"github.com/ai-on-gke/grain/pkg/gitproxy"
 	"github.com/ai-on-gke/grain/pkg/hub/api"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/postgres"
 	"github.com/ai-on-gke/grain/pkg/modelproxy"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/pkgcache"
 	"github.com/ai-on-gke/grain/pkg/policy"
+	"github.com/ai-on-gke/grain/pkg/qa"
 	"github.com/ai-on-gke/grain/pkg/sandboxaddr"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
 	"github.com/ai-on-gke/grain/pkg/secrets"
@@ -219,6 +221,15 @@ func Run(ctx context.Context, cfg Config) error {
 		_ = db.Close()
 		return *lost
 	}
+	// Every read-write transaction from here on first confirms the lease
+	// is still this process's, so the writes made between losing it and
+	// the keep-alive noticing are refused rather than committed beside
+	// the new writer's (postgres/write_fence.go).
+	if writerLock != nil {
+		if err := postgres.FenceWrites(db, writerLock); err != nil {
+			return err
+		}
+	}
 	// And the same on a PostgreSQL store itself, which a tool on another
 	// host can see where it cannot see the lock file (postgres.HoldDaemonLease).
 	if cfg.DbDriver == "postgres" {
@@ -320,6 +331,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if fatalStateRepoLoad(loadErr) {
 		return fmt.Errorf("loading the config repository: %w", loadErr)
 	}
+	if cfg.DbDriver == "postgres" {
+		syncBehindPostgresSequences(ctx, db)
+	}
 	// Init asked the startup guard (model.Store.CheckSingleTenant) of the
 	// store as it was opened. The load above can bring a multi-tenant
 	// deployment's rows into it, from its state repository, so the same
@@ -376,6 +390,10 @@ func Run(ctx context.Context, cfg Config) error {
 			"it, the sync loop retries every %s, and the UI's State pane says so until one works. "+
 			"The load reported: %v", stateRepo.Dir(), stateSyncInterval, loadErr)
 	}
+	// The hub's name for this deployment, applied once the state
+	// repository's grain_config is in, so a name set there (or in
+	// Settings) is the one that is kept.
+	adoptDefaultEnvironmentName(ctx, store, cfg.DefaultEnvironmentName)
 	// The encrypted-secrets backup is refused to every sandbox. The set is
 	// live so changing that backup through the UI takes effect immediately.
 	forbidden := gitproxy.NewForbiddenSet()
@@ -388,12 +406,17 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	MoveLooseCredentialsIntoStore(cfg, secretStore)
+	if os.Getenv(gitproxy.CredentialsInFilesEnv) != "files" {
+		cfg.caSecrets = secretStore
+	}
 	LogIgnoredRelaySettings(cfg.DataDir, secretStore, log.Printf)
 	// Every secret a run resolves through it is audited against its team
 	// (the Audit / Security tab). ui.NewServer attaches the store only to
 	// the UI's own open of the secrets (ui_server.go), never to this one,
 	// so without this no run's resolution was ever recorded (task 3140).
 	secretStore.SetAuditLogger(store)
+	retrySecretsKey(ctx, secretStore)
 	// A dispatch condition's text (DispatchConditions) is served to
 	// every queued task's reason, which an agent reads from its sandbox,
 	// so it is redacted with the same list the journal is read through
@@ -720,6 +743,9 @@ func Run(ctx context.Context, cfg Config) error {
 			DiskOvercommit:       cfg.DiskOvercommit,
 			DefaultNetworkAccess: cfg.networkAccess,
 			Access:               access,
+			// Whether grain-sandbox-egress is enforced, so external
+			// capability grants are only admitted where it is.
+			NetworkPolicyEnforced: cfg.K8sNetworkPolicy,
 		})
 		accessLive = granuleSandboxes.Live
 		sandboxes = granuleSandboxes
@@ -828,6 +854,11 @@ func Run(ctx context.Context, cfg Config) error {
 	// moved onto it.
 	if _, err := migrateLocalScripts(ctx, store, cfg.LocalScriptsConfig()); err != nil {
 		log.Printf("daemon: local-scripts: moving declarations to host-script: %v", err)
+	}
+	// Also before the capability servers start, so each starts with the
+	// $secret: references its typed-in credentials became.
+	if err := migrateLiteralCredentials(ctx, store, secretStore); err != nil {
+		log.Printf("daemon: moving typed-in capability server credentials into the secrets store: %v", err)
 	}
 	// transcriptDir is where a run's own agent.Framework may mirror its
 	// transcript-in-progress live, and where the UI server below reads one
@@ -1053,7 +1084,7 @@ func Run(ctx context.Context, cfg Config) error {
 	// nil on a deployment configured for neither pipeline, which both
 	// halves already have to handle: the UI hides the pane and the
 	// reconciler applies nothing.
-	upgrader := newUpgrader(cfg, db, store, githubCredentials)
+	upgrader := newUpgrader(cfg, db, store)
 
 	// Which filesystems this deployment's own state sits on, resolved once
 	// for the two halves that read them: the host status pane's disk rows
@@ -1460,6 +1491,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 	if err := orchestrator.RecoverOrphanedRunsExcept(ctx, store, githubClient, time.Now().UTC(), adoptedRuns); err != nil {
 		log.Printf("grain daemon: recovering orphaned runs: %v", err)
 	}
+	// Their processes run on in a hostd that did not answer, until it is
+	// back to cancel them.
+	adopted.cancelAbandoned(ctx, store)
 	orchestrator.SyncSandboxLedger(ctx, orchestrator.Deps{
 		Store:      store,
 		Ledger:     cfg.Ledger,
@@ -1474,17 +1508,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			ciProviders := func() *model.CapabilityRegistry {
 				return newCapabilityRegistryWithStore(store, CapabilityProviders(live.Current(), store, ModelProxies, live.GitHubTokens(), live.gitHubCredentialSource())...)
 			}
-			ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live))
-			ciService.SandboxImage = live.CurrentSandboxImage
-			// A trusted release runs only from a branch the repository has
-			// reviewed into, whoever asked for it (grain/task-949).
-			ciService.ReleaseRefRefusal = CiReleaseRefRefusal(store, githubClient)
-			// The attached capability servers a job's capability references
-			// are minted through, the same ones a task's are.
-			WithCICapabilityServers(ciService, func() orchestrator.CapabilityServers { return capabilityServerLookup(live) })
-			// And the relay their ports and mcp_endpoints reach a job's
-			// sandbox through, the same one a task's do.
-			WithCICapabilityPorts(ciService, capabilityPorts, capabilityPortsURL)
+			ciService := BuildCIService(ctx, cfg, LimitsWithDisk(live.limits, disks), live.ciRetention, live.ciStorageBounds, store, sandboxes, credentials, proxyURL, tokens, stateHooks.CheckImage, forbidden, ciProviders, secretStore, pkgCache.sandboxURL(live), pkgCache.sandboxCA(live), pkgCache.SandboxDNS(live), actionsCache.grantFor(live),
+				WithDaemonCIWiring(live.CurrentSandboxImage, CiReleaseRefRefusal(store, githubClient), pkgCache,
+					func() orchestrator.CapabilityServers { return capabilityServerLookup(live) }, capabilityPorts, capabilityPortsURL))
 			LiveCI.Store(ciService)
 			defer ciService.Detach()
 			log.Printf("grain daemon: grain CI is on for repos whose CI mode is \"Use Grain CI\" (Settings -> Repos); "+
@@ -1652,6 +1678,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// Every agent sandbox found OOM-killed is a decrease signal
 			// for auto overcommit (orchestrator.applySandboxOOM).
 			NoteOOM: overcommitNoteOOM(cfg.Overcommit),
+			// resume_later's CI waits are woken regardless past this
+			// (-ci-wake-backstop, orchestrator.reconcileWake).
+			CIWakeBackstop: cfg.CIWakeBackstop,
 			// The mechanical first attempt at a port, through the git
 			// proxy started above (porter.go); nil files every port as
 			// an agent task.
@@ -1827,6 +1856,9 @@ func runDaemon(ctx context.Context, cfg Config, store *model.Store, sandboxes or
 			// release-triggered automatic upgrade follows.
 			LatestRelease:      latestRelease(upgrader),
 			UpgradeDrainWindow: cfg.UpgradeDrainWindow,
+			QAProfiler:         qa.NewProfiler(qa.DefaultPerfLogPath(cfg.DataDir)),
+			// nil in every build a deployment runs (debug_clock.go).
+			ReleaseUpgradeClockOffset: DebugClockOffset,
 		},
 		MintSandboxGrant:   tokens.EnsureGrant,
 		MintSandboxToken:   tokens.EnsureToken,

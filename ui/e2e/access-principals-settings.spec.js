@@ -271,3 +271,93 @@ test("Settings → Access validates, adds, warns on last-entry removal, and rest
     }
   }
 });
+
+test("Settings → Access wraps a long history, a long reason, and a refusal on the panel without overflow", async ({
+  page,
+  request,
+}) => {
+  const initialData = await (
+    await request.get("/api/access/principals")
+  ).json();
+  const initialEntries = initialData.entries || [];
+  const longReason =
+    "Quarterly access audit rotation: narrowing secondary operator sessions after incident review #4821 while preserving primary break-glass coverage and documenting the ticket trail in full detail for compliance.";
+
+  try {
+    // Seed 12 history rows including a long reason so the Access history card is populated.
+    for (let i = 0; i < 6; i++) {
+      await request.patch(
+        `/api/access/principals/${encodeURIComponent("group:eng-oncall@example.com")}`,
+        {
+          data: {
+            role: i % 2 === 0 ? "grain/viewer" : "grain/contributor",
+            reason: i === 5 ? longReason : `scheduled audit check #${i + 1}`,
+          },
+        },
+      );
+    }
+
+    for (const viewport of [DESKTOP, PHONE]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/settings/access");
+      await expect(page.getByTestId("allowed-principals-table")).toBeVisible();
+      await expect(page.getByTestId("access-history")).toContainText(
+        longReason,
+      );
+
+      // Open the reason panel on an operator entry, trigger the missing-reason error, then fill the long reason.
+      await page
+        .getByRole("button", { name: "Remove user:alice@example.com" })
+        .click();
+      const panel = page.getByTestId("access-change-panel");
+      await expect(panel).toBeVisible();
+      await page.getByTestId("access-change-apply").click();
+      const errBox = page.getByTestId("access-change-error");
+      await expect(errBox).toBeVisible();
+      await page.getByTestId("access-change-reason").fill(longReason);
+
+      const cardBox = await page.locator("#allowed-principals").boundingBox();
+      const panelBox = await panel.boundingBox();
+      const errRect = await errBox.boundingBox();
+      const applyRect = await page
+        .getByTestId("access-change-apply")
+        .boundingBox();
+      const histBox = await page.locator("#access-history").boundingBox();
+
+      expect(panelBox.x).toBeGreaterThanOrEqual(cardBox.x - 1);
+      expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(
+        cardBox.x + cardBox.width + 1,
+      );
+      expect(errRect.x).toBeGreaterThanOrEqual(panelBox.x - 1);
+      expect(errRect.x + errRect.width).toBeLessThanOrEqual(
+        panelBox.x + panelBox.width + 1,
+      );
+      expect(applyRect.y).toBeGreaterThanOrEqual(
+        errRect.y + errRect.height - 1,
+      );
+      expect(histBox.y).toBeGreaterThan(cardBox.y + cardBox.height - 1);
+      expect(histBox.x + histBox.width).toBeLessThanOrEqual(viewport.width + 1);
+      expect(
+        await page.evaluate(
+          () =>
+            document.documentElement.scrollWidth >
+            document.documentElement.clientWidth + 1,
+        ),
+      ).toBe(false);
+
+      await panel.getByRole("button", { name: "Cancel" }).click();
+    }
+  } finally {
+    const current = await (await request.get("/api/access/principals")).json();
+    for (const e of current.entries || []) {
+      await request.delete(
+        `/api/access/principals/${encodeURIComponent(e.entry)}`,
+      );
+    }
+    for (const { entry, reason, role } of initialEntries) {
+      await request.post("/api/access/principals", {
+        data: { entry, role, reason: reason || "restoring the demo" },
+      });
+    }
+  }
+});

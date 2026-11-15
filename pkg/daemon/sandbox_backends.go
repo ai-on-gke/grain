@@ -484,7 +484,8 @@ var checkHostConfinement = mcp.CheckHostConfinement
 // hostSandboxHiddenPaths is what -host-sandboxes runs every run's
 // run_command with hidden (orchestrator.HostSandboxes.WithHidden): this
 // daemon's data directory, which holds its local API token, plus its
-// database, secrets and keys.
+// database, secrets and keys, and its API socket (-api-socket) when that
+// lies outside it.
 //
 // That token is the access code, and the code with the UI's URL is full
 // owner access (docs/access-code.md), so a host where run_command cannot
@@ -522,6 +523,27 @@ func hostSandboxHiddenPaths(ctx context.Context, cfg Config) ([]string, error) {
 		}
 		if !alreadyCovered {
 			paths = append(paths, absObj)
+		}
+	}
+	// The API socket admits the daemon's own account as -deployment-owner
+	// (startAPISocket), which is who every run_command here executes as:
+	// moved out of the data directory with -api-socket, it would be a
+	// person's verified identity one `curl --unix-socket` away from every
+	// agent. Hidden, its path is /dev/null and a connect is refused.
+	if sock := strings.TrimSpace(cfg.APISocket); sock != "" && !strings.EqualFold(sock, "none") {
+		absSock, err := filepath.Abs(sock)
+		if err != nil {
+			return nil, err
+		}
+		alreadyCovered := false
+		for _, p := range paths {
+			if pathUnder(absSock, p) {
+				alreadyCovered = true
+				break
+			}
+		}
+		if !alreadyCovered {
+			paths = append(paths, absSock)
 		}
 	}
 	if len(paths) == 0 {

@@ -116,6 +116,7 @@ var notSettings = []string{
 	"task_read",
 	"task_write",
 	"task_filed_template",
+	"task_source_template",
 	"task_grant",
 	"task_link",
 	"task_tag",
@@ -216,6 +217,11 @@ var notSettings = []string{
 	// would race the daemon writing new ones.
 	"task_comment",
 	"task_attachment",
+	// A durable task's compaction cursor, handover version and current
+	// brief, and the brief's edits (model.TaskContext): written by runs
+	// and people as the task goes, beside its comments.
+	"task_context",
+	"task_brief_edit",
 	// Who closed or reopened a task (model.TaskEvent): grain's record of
 	// what somebody did, written in the same breath as the closure.
 	"task_event",
@@ -356,14 +362,14 @@ var notSettings = []string{
 	// deployment dispatching onto a key that never refused it, and
 	// exporting them would churn the state repository on every limit.
 	"usage_limit_pause",
-	// Token accounting (model/tokenusage.go): what each run spent, what
-	// a provider's refusals taught grain about a window's size, and the
-	// operator's budgets and concurrency mode. Runtime state like the
-	// pauses above: per-run rows churn on every run, and a learned
-	// capacity belongs to the credential this deployment met it on.
+	// Token accounting (model/tokenusage.go): what each run spent, and
+	// what a provider's refusals taught grain about a window's size.
+	// Runtime state like the pauses above: per-run rows churn on every
+	// run, and a learned capacity belongs to the credential this
+	// deployment met it on. The operator's budgets and concurrency mode
+	// (usage_setting) are settings and are on SettingsTables.
 	"task_run_usage",
 	"usage_capacity",
-	"usage_setting",
 	// Memory is written by agents while runs are live, so it remains
 	// outside SettingsTables even though its Markdown representation is
 	// imported separately when a repository change arrives.
@@ -475,6 +481,12 @@ var notSettings = []string{
 	// (model.CIStepAttachment): written while a step runs so a restart
 	// can reattach it, and deleted when its job is done.
 	"ci_step_attachment",
+	// Sticky per-tree QA rollout assignments, per-run check verdicts and
+	// individual QA findings (model.QAAssignment, model.QACheckRun,
+	// model.QAFinding): runtime telemetry and task execution history.
+	"task_qa_assignment",
+	"task_qa_check_run",
+	"task_qa_finding",
 }
 
 // The converse of TestSettingsTablesAllExist, and the one that catches a

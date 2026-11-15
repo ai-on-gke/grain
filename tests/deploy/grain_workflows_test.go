@@ -1641,11 +1641,11 @@ func makeRule(makefile, target string) (recipe string, prerequisites []string, o
 func TestTheReleaseDoesNotRequireImageSigning(t *testing.T) {
 	job := grainJob(t, ".grain/workflows/release.yml", "images")
 	for _, id := range job.Capabilities {
-		if id == "image-signing" {
+		if model.CanonicalCIGrant(id) == model.CanonicalCIGrant("image-signing") {
 			t.Errorf("the release images job requires image-signing: a deployment without its provider refuses every release, including the one that would upgrade it -- declare it under optional-capabilities instead")
 		}
 	}
-	if !slices.Contains(job.OptionalCapabilities, "image-signing") {
+	if !slices.Contains(job.OptionalCapabilities, model.ImageSigningRef) {
 		t.Errorf("the release images job does not declare image-signing under optional-capabilities (has %v): a granted signing key would never reach the push, and every release would publish unsigned", job.OptionalCapabilities)
 	}
 	if v, ok := job.Env["REQUIRE_IMAGE_SIGNING"]; ok && v != "false" {
@@ -1940,12 +1940,12 @@ func TestTheReleaseTrainRunsDailyWithTheCapabilitiesItUses(t *testing.T) {
 		t.Fatalf("%s declares %d jobs, want the one train job", releaseTrainPath, len(w.Jobs))
 	}
 	job := w.Jobs[0]
-	want := []string{"repo-write:ai-on-gke/grain", "release-gate-read", "package-publish"}
+	want := []string{model.RepoWriteGrant(model.GrainSourceRepo()), model.APIRef(model.ReleaseGateReadCapability), model.PackagePublishRef}
 	if !slices.Equal(job.Capabilities, want) {
 		t.Errorf("%s job %s holds %v, want %v", releaseTrainPath, job.ID, job.Capabilities, want)
 	}
-	if !slices.Equal(job.OptionalCapabilities, []string{"image-signing"}) {
-		t.Errorf("%s job %s has optional capabilities %v, want [image-signing]: a deployment without a signing key must still release",
+	if !slices.Equal(job.OptionalCapabilities, []string{model.ImageSigningRef}) {
+		t.Errorf("%s job %s has optional capabilities %v, want [release#image-signing]: a deployment without a signing key must still release",
 			releaseTrainPath, job.ID, job.OptionalCapabilities)
 	}
 	if job.Cache {
@@ -1986,10 +1986,14 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 	job := releaseTrainWorkflow(t).Jobs[0]
 	gate := ciapi.NewEndpoint()
 	gate.SetURL("http://192.0.2.1:9000")
+	// The daemon resolves every api grant a job declares -- the train's
+	// https://grain.dev/capabilities/api#release-gate-read, and the
+	// retired bare release-gate-read alias -- through ciapi's dynamic
+	// provider (daemon.CapabilityProviders), and so does this registry.
 	reg := model.NewCapabilityRegistry(
-		ciapi.NewAlias(gate, ciapi.Config{}, model.ReleaseGateReadCapability, ciapi.Aliases[model.ReleaseGateReadCapability]),
 		packagepublish.New(packagepublish.Config{Credentials: releaseTrainPackageCredential{}}),
 	)
+	reg.RegisterCIDynamic(ciapi.DynamicProvider(gate, ciapi.Config{}))
 	creds := releaseTrainCredential(`{"registry":"ghcr.io","username":"bot","token":"secret"}`)
 
 	// An operator's dispatch and grain's own cron both hold every one of
@@ -2022,6 +2026,17 @@ func TestTheReleaseTrainsCapabilitiesAreGrantedOnGrainsOwnRepository(t *testing.
 			if model.IsRepoAccessGrant(id) {
 				if !model.RepoAccessAdmitsCIEvent(id, string(tc.event), tc.trusted) {
 					t.Errorf("%s: %s's train is refused %s", tc.event, repo, id)
+				}
+				continue
+			}
+			// A release server method (release#package-publish) has no
+			// in-process provider: the job's grant admission mints it
+			// through the server, under the rule the server declares
+			// (model.CIGrantRule), which is what has to admit the event.
+			if model.IsCapabilityRef(id) && !model.IsAPIGrantRef(id) {
+				rule, ok := model.CIGrantRuleFor(id)
+				if !ok || !rule.Admits(string(tc.event), tc.trusted) {
+					t.Errorf("%s: %s's train is refused %s (rule %+v, declared %v)", tc.event, repo, id, rule, ok)
 				}
 				continue
 			}

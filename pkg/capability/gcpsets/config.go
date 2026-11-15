@@ -406,7 +406,7 @@ func Schema() map[string]any {
 			"permission_sets": map[string]any{
 				"type":        "array",
 				"title":       "Permission sets",
-				"description": "What a gcp-key grant's with: {permission_set} chooses among; the first is the default.",
+				"description": "What a gcp#gcp-key grant's with: {permission_set} chooses among; the first is the default.",
 				"items": map[string]any{
 					"type":                 "object",
 					"additionalProperties": false,
@@ -920,13 +920,6 @@ func scopeResource(project, scope string) (string, bool) {
 		return "projects/" + project + "/locations/" + loc + "/repositories/" + repo, true
 	}
 	return "", false
-}
-
-// ScopeResource resolves a permission set's resource_scope (e.g.
-// "buckets/<name>" or "repositories/<location>/<repo>") to the resource name
-// Cloud.GetPolicy and Cloud.SetPolicy use.
-func ScopeResource(project, scope string) (string, bool) {
-	return scopeResource(project, scope)
 }
 
 func list(v any) []map[string]any {

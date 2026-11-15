@@ -2,7 +2,7 @@ name: Release qualification - Quarantine & CI diagnostics MCP tools
 title: "Qualify {{rc_tag}}: quarantine and CI diagnostic tools"
 base: main
 auto-merge: false
-capabilities: ["api:ci-read@ai-on-gke/grain"]
+capabilities: [{capability: "https://grain.dev/capabilities/api#ci-read", with: {repo: ai-on-gke/grain}}]
 # Stage 2 of release-candidate qualification
 # (design/playbook/releases.playbook.md §2). Filed by grain's
 # release-qualification reconciler (pkg/orchestrator/releasequalification.go)

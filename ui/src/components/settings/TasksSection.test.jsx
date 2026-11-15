@@ -150,7 +150,7 @@ describe("TasksSection", () => {
     ).not.toBeInTheDocument();
 
     const grants = screen.getByTestId("default-grants");
-    expect(within(grants).getByLabelText("api:tasks:read")).toBeInTheDocument();
+    expect(within(grants).getByLabelText("api#tasks:read")).toBeInTheDocument();
     const sectionEl = await waitFor(() => {
       const el = grants.querySelector(`[data-grant='${held}']`);
       expect(el?.querySelector("input")).toBeTruthy();
@@ -170,7 +170,7 @@ describe("TasksSection", () => {
     );
 
     await user.click(
-      within(grants).getByRole("button", { name: /^Remove api:tasks:read/ }),
+      within(grants).getByRole("button", { name: /^Remove api#tasks:read/ }),
     );
     expect(s.saveChoice).toHaveBeenLastCalledWith({
       defaultCapabilities: ["gcp-key", held],

@@ -18,7 +18,7 @@ package model
 // parked on, beyond what Task itself says (Task.Interactive): the facts a
 // reader resolves from the task's observation and its pending comment.
 // The orchestrator's liveness sub-case reads them (awaiting_reply/question,
-// /answered, /your_message, /access_request, /stopped), and they are the
+// /answered, /unanswered_comment, /your_message, /access_request, /stopped), and they are the
 // same facts the UI's askedCase tells its badge apart by, so the badge and
 // the reason beside it cannot disagree.
 //
@@ -36,4 +36,8 @@ type ReplyFacts struct {
 	// Stopped is a turn a person stopped: the pending comment is
 	// TurnStoppedComment.
 	Stopped bool
+	// UnansweredComment is a person's comment no run has been shown
+	// (UndeliveredPersonComment): the task is waiting on a run, not on
+	// its owner's Reply.
+	UnansweredComment bool
 }

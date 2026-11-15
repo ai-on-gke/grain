@@ -165,6 +165,7 @@ function describeRemovalWarning(targetEntry, entriesCount, signedInEmail) {
 export default function AccessSection({
   config,
   whoami = null,
+  onSaved,
   onLogout,
   showError,
 }) {
@@ -177,6 +178,7 @@ export default function AccessSection({
   const recordedAs = whoami?.actor?.label || "";
 
   const ownRole = accessRoleLabel(config);
+  const canRead = canAccess(config, "access:read");
   // A verified session without access:write sees the list but none of the
   // controls that change it; one with it may still be refused a role
   // wider than its own, which the server explains.
@@ -240,12 +242,35 @@ export default function AccessSection({
   }, []);
 
   useEffect(() => {
+    if (!canRead) {
+      setEntries([]);
+      setDroppedFlagEntries([]);
+      setHistory(null);
+      setCodeMode(null);
+      setLoaded(true);
+      return;
+    }
     loadPrincipals();
     loadHistory();
     loadCodeMode();
-  }, [loadPrincipals, loadHistory, loadCodeMode]);
+  }, [canRead, loadPrincipals, loadHistory, loadCodeMode]);
 
   const reload = async () => {
+    let nextConfig;
+    if (onSaved) {
+      try {
+        nextConfig = await onSaved();
+      } catch {
+        return;
+      }
+    }
+    if (!canAccess(nextConfig || config, "access:read")) {
+      setEntries([]);
+      setDroppedFlagEntries([]);
+      setHistory(null);
+      setLoaded(true);
+      return;
+    }
     await loadPrincipals();
     await loadHistory();
   };
@@ -324,7 +349,8 @@ export default function AccessSection({
       if (err?.code === "confirm_self" && !confirmSelf) {
         setPending({ ...change, confirmSelf: err.message || String(err) });
       } else if (pending || change.needsReason || change.warn) {
-        setPending({ ...change, error: err?.message || String(err) });
+        const { confirmSelf: _dropped, ...rest } = change;
+        setPending({ ...rest, error: err?.message || String(err) });
       } else {
         showError?.(err);
       }
@@ -586,29 +612,31 @@ export default function AccessSection({
           </Alert>
         )}
 
-        <Box sx={{ overflowX: "auto", mt: 1.5 }}>
-          {loaded && entries.length === 0 ? (
-            <Typography
-              variant="body2"
-              color="text.secondary"
-              sx={{ py: 1 }}
-              data-testid="allowed-principals-empty"
-            >
-              No allowed users or groups yet. Only the access code can sign in
-              until an entry is added.
-            </Typography>
-          ) : people.length > 0 ? (
-            <PrincipalTable
-              rows={people}
-              busy={busy}
-              canWrite={canWrite}
-              roles={roles}
-              onRemove={handleRequestRemove}
-              onRole={changeRole}
-              testid="allowed-principals-table"
-            />
-          ) : null}
-        </Box>
+        {canRead && (
+          <Box sx={{ overflowX: "auto", mt: 1.5 }}>
+            {loaded && entries.length === 0 ? (
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{ py: 1 }}
+                data-testid="allowed-principals-empty"
+              >
+                No allowed users or groups yet. Only the access code can sign in
+                until an entry is added.
+              </Typography>
+            ) : people.length > 0 ? (
+              <PrincipalTable
+                rows={people}
+                busy={busy}
+                canWrite={canWrite}
+                roles={roles}
+                onRemove={handleRequestRemove}
+                onRole={changeRole}
+                testid="allowed-principals-table"
+              />
+            ) : null}
+          </Box>
+        )}
 
         {serviceAccounts.length > 0 && (
           <Box sx={{ mt: 2 }} data-testid="allowed-service-accounts">
@@ -709,7 +737,7 @@ export default function AccessSection({
               </Button>
             </Stack>
           </Box>
-        ) : (
+        ) : canRead ? (
           <Typography
             variant="body2"
             color="text.secondary"
@@ -718,6 +746,16 @@ export default function AccessSection({
           >
             Your role does not include <code>access:write</code>, so you can see
             this list but not change it.
+          </Typography>
+        ) : (
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ mt: 2 }}
+            data-testid="access-read-only"
+          >
+            Your role does not include <code>access:read</code>, so this list is
+            hidden.
           </Typography>
         )}
       </SettingsCard>

@@ -112,7 +112,9 @@ func TestReconcileScheduleFilesAnAlreadyApprovedTask(t *testing.T) {
 	if len(got.Reads) != 1 || got.Reads[0] != sched.Reads[0] {
 		t.Errorf("reads = %+v, want %+v", got.Reads, sched.Reads)
 	}
-	if len(got.Grants) != 1 || got.Grants[0].Capability != "web-search" {
+	// Beside the schedule's own grant, the default read of the target's CI
+	// (GitHub CI: the repository has no CI mode set).
+	if grants := model.GrantsBeyondCIReadDefault(got); len(grants) != 1 || grants[0].Capability != "web-search" {
 		t.Errorf("grants = %+v, want web-search", got.Grants)
 	}
 

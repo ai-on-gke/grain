@@ -140,10 +140,24 @@ func (s *Store) RunHostd(ctx context.Context, runID string) (*TaskRunHostd, erro
 
 // TaskRunHostds is the hostd each of taskID's runs recorded, by run id.
 func (s *Store) TaskRunHostds(ctx context.Context, taskID string) (map[string]TaskRunHostd, error) {
+	return s.TaskRunHostdsInRange(ctx, taskID, 0, 0)
+}
+
+// TaskRunHostdsInRange is TaskRunHostds bounded to attempts [minAttempt,
+// maxAttempt] when maxAttempt > 0.
+func (s *Store) TaskRunHostdsInRange(ctx context.Context, taskID string, minAttempt, maxAttempt int) (map[string]TaskRunHostd, error) {
 	out := map[string]TaskRunHostd{}
+	query := "SELECT `h`.`run_id`,`h`.`task_id`,`h`.`hostd`,`h`.`instance`,`h`.`owner`,`h`.`at` FROM `task_run_hostd` AS `h` WHERE `h`.`task_id` = ?"
+	args := []any{taskID}
+	if maxAttempt > 0 {
+		query = "SELECT `h`.`run_id`,`h`.`task_id`,`h`.`hostd`,`h`.`instance`,`h`.`owner`,`h`.`at` FROM `task_run_hostd` AS `h` " +
+			"JOIN `task_run` AS `r` ON `r`.`id` = `h`.`run_id` " +
+			"WHERE `h`.`task_id` = ? AND `r`.`attempt` >= ? AND `r`.`attempt` <= ?"
+		args = append(args, minAttempt, maxAttempt)
+	}
 	err := each(ctx, s.db,
-		"SELECT `run_id`,`task_id`,`hostd`,`instance`,`owner`,`at` FROM `task_run_hostd` WHERE `task_id` = ?",
-		[]any{taskID},
+		query,
+		args,
 		func(rows *sql.Rows) error {
 			var r TaskRunHostd
 			if err := rows.Scan(&r.RunID, &r.TaskID, &r.Hostd, &r.Instance, &r.Owner, &r.At); err != nil {

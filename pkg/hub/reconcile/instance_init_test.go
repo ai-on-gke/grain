@@ -44,9 +44,10 @@ func TestGrainInstanceInitBootsFromReconcilerMetadata(t *testing.T) {
 		Secrets:        hub.SecretsConfig{SecretPrefix: "grain-inst-"},
 	}
 	entry := &store.EntryRow{
-		Name:       "alpha",
-		OwnerEmail: "alice@example.com",
-		OwnerGroup: "eng@example.com",
+		Name:        "alpha",
+		DisplayName: "Alpha team",
+		OwnerEmail:  "alice@example.com",
+		OwnerGroup:  "eng@example.com",
 	}
 
 	for _, tc := range []struct {
@@ -212,6 +213,9 @@ func TestGrainInstanceInitBootsFromReconcilerMetadata(t *testing.T) {
 				"GRAIN_REQUIRE_VERIFIER=registry",
 				"GRAIN_DISABLE_SELF_UPGRADE=true",
 				"GRAIN_MANAGEMENT_URL=https://registry.example.com/entries/alpha",
+				// The entry's display name, as the daemon's default
+				// environment name (-default-environment-name).
+				"GRAIN_DEFAULT_ENVIRONMENT_NAME=Alpha team",
 				"GRAIN_DB_DRIVER=postgres",
 				"GRAIN_SECRETS_BACKEND=secretmanager",
 				"GRAIN_SECRETS_SM_PREFIX=projects/test-proj/secrets/grain-inst-alpha-",

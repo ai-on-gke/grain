@@ -180,7 +180,7 @@ func (o *PullRequestOpener) Comment(ctx context.Context, ref, body string) error
 	if err != nil {
 		return err
 	}
-	_, err = o.Client.CreateComment(pr.Repo.Owner, pr.Repo.Name, pr.Number, body)
+	_, err = o.Client.CreateComment(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number, body)
 	return err
 }
 
@@ -198,7 +198,7 @@ func (o *PullRequestOpener) Close(ctx context.Context, ref string) error {
 	if err != nil {
 		return err
 	}
-	return o.Client.ClosePullRequest(pr.Repo.Owner, pr.Repo.Name, pr.Number)
+	return o.Client.ClosePullRequest(pr.Repo.StoredOwner(), pr.Repo.Name, pr.Number)
 }
 
 // pullRequestGate is the ui.Config.PullRequests the UI/API server is
@@ -307,3 +307,17 @@ func (o *PullRequestOpener) deps() orchestrator.Deps {
 }
 
 var _ ui.PullRequestAdopter = (*PullRequestOpener)(nil)
+
+// reportCheckAdapter is the sandbox proxy's gitproxy.CLIReportChecker:
+// grain report check, answered by the check grain runs on a posted
+// steward report (orchestrator.CheckStewardReportDraft).
+type reportCheckAdapter struct {
+	store *model.Store
+}
+
+func (a reportCheckAdapter) CheckReportDraft(ctx context.Context, taskID, runID, report string) (string, bool, error) {
+	if a.store == nil {
+		return "", false, fmt.Errorf("no store to check reports against")
+	}
+	return orchestrator.CheckStewardReportDraft(ctx, a.store, taskID, runID, report)
+}

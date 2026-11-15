@@ -144,7 +144,7 @@ func readStage1(forge ReleaseQualificationForge, repo model.RepoRef, sha string,
 	if !ok || cfg.Stage1Workflow == "" {
 		return stage1Verdict{}, nil
 	}
-	runs, err := reader.WorkflowRunsOnCommit(repo.Owner, repo.Name, sha)
+	runs, err := reader.WorkflowRunsOnCommit(repo.StoredOwner(), repo.Name, sha)
 	if err != nil {
 		return stage1Verdict{}, err
 	}
@@ -157,7 +157,7 @@ func readStage1(forge ReleaseQualificationForge, repo model.RepoRef, sha string,
 		if run.Name != cfg.Stage1Workflow {
 			continue
 		}
-		jobs, err := reader.ListActionsJobAttempts(repo.Owner, repo.Name, run.ID)
+		jobs, err := reader.ListActionsJobAttempts(repo.StoredOwner(), repo.Name, run.ID)
 		if err != nil {
 			return stage1Verdict{}, fmt.Errorf("reading the jobs of %s run %d: %w", cfg.Stage1Workflow, run.ID, err)
 		}
@@ -189,6 +189,7 @@ func readStage1(forge ReleaseQualificationForge, repo model.RepoRef, sha string,
 			return keys[i].attempt < keys[j].attempt
 		})
 		job := stage1Job{name: name}
+		last := ""
 		for _, k := range keys {
 			// Every shard of one attempt is one verdict: any pending shard
 			// is pending, then any failure, then any infrastructure.
@@ -199,8 +200,16 @@ func readStage1(forge ReleaseQualificationForge, repo model.RepoRef, sha string,
 					break
 				}
 			}
+			// A skipped attempt after a failure or infrastructure one is a
+			// dispatched retry in which the job did not run (its inputs.jobs
+			// did not name it): infrastructure, as candidate-gate.sh has it,
+			// not a first failure left waiting on a retry forever.
+			if c == "skipped" && (last == "failure" || last == "infra") {
+				c = "infra"
+			}
 			if c != "skipped" || len(keys) == 1 {
 				job.attempts = append(job.attempts, c)
+				last = c
 			}
 		}
 		if len(job.attempts) > 0 {
@@ -431,7 +440,7 @@ func stage1Failed(forge ReleaseQualificationForge, repo model.RepoRef, sha strin
 		if !ok {
 			return false, nil
 		}
-		statuses, err := reader.CommitStatuses(repo.Owner, repo.Name, sha)
+		statuses, err := reader.CommitStatuses(repo.StoredOwner(), repo.Name, sha)
 		if err != nil {
 			return false, err
 		}
@@ -442,7 +451,7 @@ func stage1Failed(forge ReleaseQualificationForge, repo model.RepoRef, sha strin
 		}
 		return false, nil
 	}
-	runs, err := forge.ListWorkflowRuns(repo.Owner, repo.Name, sha)
+	runs, err := forge.ListWorkflowRuns(repo.StoredOwner(), repo.Name, sha)
 	if err != nil {
 		return false, err
 	}

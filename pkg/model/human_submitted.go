@@ -23,26 +23,66 @@ import (
 // human submitted, and the pull request head they were shown when they
 // did (head; "" where nothing said which it was).
 //
-// The head is the one the human's decision is about, and the only one
-// orchestrator's pinHumanSubmit will pin it to: a push landing between
-// the Submit and the cycle that reads the branch is a commit nobody
-// reviewed, and is classified like any other moved head rather than
-// cleared on the strength of a decision about its parent.
+// The head is the one the human's approval is about: a push landing after
+// the Submit (other than a reviewer's own clean fix commit) is code nobody
+// reviewed, so the approval does not carry to it.
 func HumanSubmittedTarget(at time.Time, head string) string {
+	return HumanSubmittedByTarget("", at, head)
+}
+
+// HumanSubmittedByTarget encodes who approved via Submit alongside when and
+// which pull request head they saw (`[by|]RFC3339[@head]`).
+func HumanSubmittedByTarget(by string, at time.Time, head string) string {
+	by = strings.ReplaceAll(strings.TrimSpace(by), "|", "")
 	when := at.UTC().Format(time.RFC3339)
 	head = strings.ToLower(strings.TrimSpace(head))
-	if head == "" {
-		return when
+	base := when
+	if by != "" {
+		base = by + "|" + when
 	}
-	return when + "@" + head
+	if head == "" {
+		return base
+	}
+	return base + "@" + head
 }
 
 // HumanSubmittedHead is the head a LinkHumanSubmitted target says the
 // human was shown, or "" for one that names none -- written before the
 // head was recorded, or by a Submit nothing could read the head for.
 func HumanSubmittedHead(target string) string {
-	if i := strings.LastIndexByte(target, '@'); i >= 0 {
-		return target[i+1:]
+	_, _, head := splitHumanSubmitted(target)
+	return head
+}
+
+// splitHumanSubmitted takes a `[by|]RFC3339[@head]` target apart. by is
+// read off the front, up to the one '|' HumanSubmittedByTarget writes (it
+// strips any from by itself), and head off what follows the timestamp: by is
+// a person's ID, often an e-mail address, so the last '@' of the whole
+// target is the head's only where one was written -- a Submit naming no
+// head by alice@example.com would otherwise read as one of "example.com|...".
+func splitHumanSubmitted(target string) (by, when, head string) {
+	rest := target
+	if b, r, ok := strings.Cut(rest, "|"); ok {
+		by, rest = strings.TrimSpace(b), r
 	}
-	return ""
+	when, head, _ = strings.Cut(rest, "@")
+	return by, strings.TrimSpace(when), strings.TrimSpace(head)
+}
+
+// HumanSubmittedBy returns who recorded the LinkHumanSubmitted approval, or ""
+// when the target was written without an actor.
+func HumanSubmittedBy(target string) string {
+	by, _, _ := splitHumanSubmitted(target)
+	return by
+}
+
+// HumanSubmittedAt parses the timestamp recorded in a LinkHumanSubmitted
+// target.
+func HumanSubmittedAt(target string) (time.Time, bool) {
+	_, when, _ := splitHumanSubmitted(target)
+	at, err := time.Parse(time.RFC3339, when)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return at, true
 }

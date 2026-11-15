@@ -165,6 +165,18 @@ func TestOutputReportsWhatTheRingDropped(t *testing.T) {
 	}
 }
 
+func TestLastOutputIsWhenTheProcessLastPrinted(t *testing.T) {
+	s := &Session{done: make(chan struct{})}
+	if got := s.LastOutput(); !got.IsZero() {
+		t.Fatalf("LastOutput() = %v before anything was printed, want zero", got)
+	}
+	before := time.Now()
+	s.append([]byte("hello"))
+	if got := s.LastOutput(); got.Before(before) || got.After(time.Now()) {
+		t.Fatalf("LastOutput() = %v, want the time of the append (after %v)", got, before)
+	}
+}
+
 // One session per task: a second dispatch of a task that already has a
 // live console is a bug, not a second window onto the same branch.
 func TestManagerRefusesASecondSessionForTheSameTask(t *testing.T) {

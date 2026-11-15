@@ -46,10 +46,15 @@ func (p *GitProxy) ServeGitSignHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	sandbox, ok := p.authenticateSandbox(w, r)
+	grant, ok := p.authenticateSandboxGrant(w, r)
 	if !ok {
 		return
 	}
+	if denied, status, reason := p.checkGrantBinding(r.Context(), grant); denied {
+		http.Error(w, "forbidden: "+reason, status)
+		return
+	}
+	sandbox := grant.Sandbox
 	credName, status, reason := p.resolveSigningCredential(r.Context(), sandbox)
 	if credName == "" {
 		http.Error(w, reason, status)

@@ -229,30 +229,6 @@ func (p *progress) logf(format string, args ...any) {
 	log.Printf(p.prefix+format, args...)
 }
 
-// setSource records which image source ("registry" or "release-assets") this
-// upgrade used on Status.Source.
-func (p *progress) setSource(source ImageSource) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.status.Source = string(source)
-	p.dirty = true
-}
-
-// setFallbackNote records why this upgrade fell back from its primary image
-// source (for example "release has no image assets; pulled from <registry>").
-func (p *progress) setFallbackNote(note string) {
-	if p == nil {
-		return
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.status.FallbackNote = note
-	p.dirty = true
-}
-
 // start marks a step running. The step must be in the plan -- a
 // mismatch between the plan and what run actually does is a bug in this
 // package, and one that would otherwise show up as a pane that quietly
@@ -295,6 +271,9 @@ func (p *progress) done(name, detail string) {
 	p.status.Steps[i].State = StepDone
 	p.status.Steps[i].FinishedAt = &now
 	p.status.Steps[i].Detail = truncate(detail, maxStepDetail)
+	if name == stepGrace {
+		p.status.GraceUntil = nil
+	}
 	p.current = -1
 	took := elapsed(p.status.Steps[i].StartedAt, now)
 	if detail != "" {
@@ -353,6 +332,7 @@ func (p *progress) succeed(detail string, restarting bool) {
 	defer p.mu.Unlock()
 	now := time.Now().UTC()
 	p.status.Phase = PhaseOK
+	p.status.GraceUntil = nil
 	p.status.Detail = detail
 	if restarting {
 		p.status.Detail = detail + "; restarting"
@@ -380,6 +360,17 @@ func (p *progress) isUnchanged() bool {
 	return p.unchangedFlag
 }
 
+// recordEditionSwitch replaces the edition switch the status records
+// (Status.EditionSwitch) -- once the pulled image has said which
+// edition it is -- and writes it out at once: it is the record that a
+// cross-edition move was asked for, and must not wait on the next line.
+func (p *progress) recordEditionSwitch(sw *EditionSwitch) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.status.EditionSwitch = sw
+	p.flushLocked()
+}
+
 // unchanged closes the upgrade out as PhaseOK with Status.Unchanged set,
 // marking every step that had not run yet as StepSkipped so the pane
 // shows why the rest of the plan was not needed.
@@ -395,6 +386,7 @@ func (p *progress) unchanged(detail string) {
 	}
 	p.current = -1
 	p.status.Phase = PhaseOK
+	p.status.GraceUntil = nil
 	p.status.Unchanged = true
 	p.status.Detail = detail
 	p.status.FinishedAt = &now
@@ -419,9 +411,36 @@ func (p *progress) fail(err error) {
 		p.current = -1
 	}
 	p.status.Phase = PhaseFailed
+	p.status.GraceUntil = nil
 	p.status.Detail = err.Error()
 	p.status.FinishedAt = &now
 	p.logf("failed after %s: %v", shortDuration(time.Since(p.startedAt)), err)
+	p.flushLocked()
+}
+
+// cancel closes the upgrade out as PhaseCancelled, marking whichever step was
+// running as StepCancelled and recording who cancelled it and why.
+func (p *progress) cancel(by, reason string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now().UTC()
+	detail := formatCancelledDetail(by, reason)
+	if p.current >= 0 {
+		step := &p.status.Steps[p.current]
+		step.State = StepCancelled
+		step.FinishedAt = &now
+		step.Detail = truncate(detail, maxStepDetail)
+		p.logf("step %d/%d %s: cancelled after %s (%s)",
+			p.current+1, len(p.status.Steps), step.Name, elapsed(step.StartedAt, now), detail)
+		p.current = -1
+	}
+	p.status.Phase = PhaseCancelled
+	p.status.CancelledBy = by
+	p.status.CancelReason = reason
+	p.status.GraceUntil = nil
+	p.status.Detail = detail
+	p.status.FinishedAt = &now
+	p.logf("cancelled after %s: %s", shortDuration(time.Since(p.startedAt)), detail)
 	p.flushLocked()
 }
 

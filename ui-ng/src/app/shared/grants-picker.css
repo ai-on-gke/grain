@@ -1,0 +1,109 @@
+/* Shared Capabilities & Per-Method / API-Scope Grants Picker (< 3 kB). */
+
+.grants-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.grants-toggle-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.grant-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.grant-pill[aria-pressed="true"] {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  border-color: transparent;
+}
+
+.grant-pill:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.grants-held-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.grant-held-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  font-family: var(--grain-font-mono);
+  font-size: 11px;
+}
+
+.grant-held-remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+.grants-builder {
+  padding: 10px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.grants-mode-tabs {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.grants-builder-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.grants-builder-input {
+  flex: 1 1 160px;
+  min-width: 120px;
+  padding: 6px 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-on-surface);
+  font-family: var(--grain-font-mono);
+  font-size: 12px;
+}
+
+.grants-mode-tabs {
+  flex-wrap: wrap;
+  max-width: 100%;
+}

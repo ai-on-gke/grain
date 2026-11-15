@@ -288,11 +288,11 @@ describe("NewTaskOverlay", () => {
     expect(screen.queryByLabelText("Legacy capabilities")).toBeNull();
     const grants = screen.getByTestId("new-task-grants");
     const apiGrant = within(grants).getByLabelText(
-      "api:ci:read · repo: acme/widgets",
+      "api#ci:read · repo: acme/widgets",
     );
     await user.click(within(apiGrant).getByRole("button", { name: /remove/i }));
     expect(
-      within(grants).queryByLabelText("api:ci:read · repo: acme/widgets"),
+      within(grants).queryByLabelText("api#ci:read · repo: acme/widgets"),
     ).toBeNull();
 
     await user.type(screen.getByLabelText(/Title/), "Remove api ref default");

@@ -68,3 +68,58 @@ func TestRepoAllowedWildcards(t *testing.T) {
 		t.Errorf("allowed list should match backend/core")
 	}
 }
+
+// One owner/name can exist on two git hosts as two repositories, so an
+// owner wildcard on one host must not admit that owner on another, in
+// either direction, while an explicit host still matches its own repos.
+func TestRepoAllowedOwnerWildcardStaysOnItsHost(t *testing.T) {
+	onDefault := RepoRef{Owner: "acme", Name: "widgets"}
+	onOther := RepoRef{Host: "git.example.com", Owner: "acme", Name: "widgets"}
+	for _, tc := range []struct {
+		allowed string
+		target  RepoRef
+		want    bool
+	}{
+		{"git.example.com/acme/*", onOther, true},
+		{"git.example.com/acme/*", onDefault, false},
+		{"acme/*", onDefault, true},
+		{"acme/*", onOther, false},
+		{"github.com/acme/*", onDefault, true},
+		{"github.com/acme/*", onOther, false},
+		{"git.example.com/acme/widgets", onDefault, false},
+		{"acme/widgets", onOther, false},
+		{"*", onOther, true},
+		{"*/*", onOther, true},
+	} {
+		if got := RepoAllowed([]string{tc.allowed}, tc.target); got != tc.want {
+			t.Errorf("RepoAllowed([%q], %s) = %v, want %v", tc.allowed, tc.target, got, tc.want)
+		}
+	}
+}
+
+// A capability catalogue entry's repos: globs follow RepoAllowed's host
+// rule: `owner/*` is the default host's owner and `host/owner/*` that
+// host's, never both.
+func TestCatalogueRepoGlobsStayOnTheirHost(t *testing.T) {
+	onDefault := RepoRef{Owner: "acme", Name: "widgets"}
+	onOther := RepoRef{Host: "git.example.com", Owner: "acme", Name: "widgets"}
+	for _, tc := range []struct {
+		pattern string
+		target  RepoRef
+		want    bool
+	}{
+		{"acme/*", onDefault, true},
+		{"acme/*", onOther, false},
+		{"git.example.com/acme/*", onOther, true},
+		{"git.example.com/acme/*", onDefault, false},
+		{"acme/widgets", onOther, false},
+		{"git.example.com/acme/widgets", onOther, true},
+		{"*", onOther, true},
+		{"*/*", onOther, true},
+	} {
+		target := tc.target
+		if got := matchesRepo([]string{tc.pattern}, &target); got != tc.want {
+			t.Errorf("matchesRepo([%q], %s) = %v, want %v", tc.pattern, tc.target, got, tc.want)
+		}
+	}
+}

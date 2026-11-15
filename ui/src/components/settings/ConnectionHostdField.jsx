@@ -109,7 +109,14 @@ export default function ConnectionHostdField({
   const [labelled, setLabelled] = useState(
     () => selector !== "" && selector.includes("="),
   );
-  const pick = labelled ? LABELS : selector;
+  // A host named from elsewhere -- the Credentials section's ambient
+  // host saves one while this picker is still on "by label" -- is not a
+  // label selector, so the picker says that host rather than an empty
+  // label box.
+  useEffect(() => {
+    if (named) setLabelled(false);
+  }, [named]);
+  const pick = labelled && !named ? LABELS : selector;
   // Typed as text, so a separator is not eaten as it is typed; each
   // change hands over the list it now says.
   const [fallback, setFallback] = useState(() =>

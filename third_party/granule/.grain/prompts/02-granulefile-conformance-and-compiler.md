@@ -41,9 +41,9 @@ EOF
 cat << 'EOF' > /tmp/Granulefile.vmwrap
 FROM alpine:latest AS builder
 RUN apk add --no-cache gcc
-VM WRAP builder AS runtime_vm
-VOLUME ["/data"]
 CMD ["/bin/sh"]
+VM WRAP AS runtime_vm
+VOLUME ["/data"]
 EOF
 /tmp/granule granulefile check -f /tmp/Granulefile.vmwrap
 

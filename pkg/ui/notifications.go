@@ -150,7 +150,7 @@ func (c *Client) AgentNotify(ctx context.Context, taskID string, req RaiseNotifi
 		return NotificationRaiseResponse{}, validationErrorf("%v", err)
 	}
 	if severity == model.NotificationCritical && !admin {
-		return NotificationRaiseResponse{}, forbiddenErrorf("only a task holding api:task-admin may raise a critical " +
+		return NotificationRaiseResponse{}, forbiddenErrorf("only a task holding https://grain.dev/capabilities/api#task-admin may raise a critical " +
 			"notification; raise it as warning, which still reaches the operator")
 	}
 	req.Subject = strings.TrimSpace(req.Subject)
@@ -291,7 +291,7 @@ func (c *Client) ClearNotification(ctx context.Context, id int64) (model.Notific
 		}
 		if !isTaskAdmin(task) {
 			return model.Notification{}, forbiddenErrorf("task %s may only clear its own notifications (%s...) "+
-				"without api:task-admin", actor.ID, AgentNamespace(actor.ID))
+				"without https://grain.dev/capabilities/api#task-admin", actor.ID, AgentNamespace(actor.ID))
 		}
 	}
 	if _, err := c.Store.ClearNotificationByID(ctx, id, model.PrincipalString(actor)); err != nil {
@@ -393,8 +393,11 @@ func (c *Client) PostTaskNote(ctx context.Context, target, from, body string) (M
 	}
 	if !isTaskAdmin(sender) && !related(sender, recipient) {
 		return Message{}, forbiddenErrorf("task %s may only message its parent or its children, and task %s is neither: "+
-			"message_task to any other task needs api:task-admin", from, target)
+			"message_task to any other task needs https://grain.dev/capabilities/api#task-admin", from, target)
 	}
+	// A note from a parent or child narrower than recipient reaches its
+	// run marked as untrusted agent input (agentCrossTaskRail).
+	body = c.untrustedAgentInputNotice(ctx, sender, recipient) + body
 	now := c.now()
 	id, err := c.Store.AddComment(ctx, model.Comment{
 		TaskID:    target,
@@ -494,7 +497,7 @@ func (s *Server) handleListNotifications(w http.ResponseWriter, r *http.Request)
 			notifications[i].Body = listNotificationBody(notifications[i])
 		}
 	}
-	writeList(w, notifications, list)
+	writeListBy(w, notifications, list, func(n model.Notification) string { return strconv.FormatInt(n.ID, 10) })
 }
 
 // pendingReleaseFamily is the release train's "approve this release"

@@ -37,15 +37,18 @@ const SecurityReviewTemplateID = SystemTemplatePrefix + "security-review"
 // a fact about one pull request, and the orchestrator appends them to the
 // task body it files, under the instructions here.
 func securityReviewTemplate() *Template {
+	// No grain#ci grant here: a security review works in place on the
+	// reviewed change's own branch (orchestrator.putSecurityReview), opens no
+	// pull request of its own, and never starts or owns a grain CI run.
+	// orchestrator.newReview attaches repo-scoped api:ci-read@<repo> to every
+	// review targeting a repository -- the narrowest read-only grant that
+	// keeps `grain ci checks`, `grain ci list` and `grain ci log` working on
+	// both ci_mode: github and ci_mode: grain repositories without exposing
+	// run-triggering tools or changing merge gating.
 	return &Template{
 		ID:   SecurityReviewTemplateID,
 		Name: "Security review of a trust-boundary change",
 		Body: securityReviewBody(),
-		Grants: []Grant{
-			// Named as a string rather than through
-			// pkg/capability/grainci, which imports this package.
-			{Capability: GrainCIGrant, Via: GrantByGrain},
-		},
 	}
 }
 
@@ -89,6 +92,17 @@ func securityReviewBody() string {
 		"and anything pushed after that is classified again before it merges. Describe each fix in your closing note " +
 		"(comment_on_issue), so a reader can see what you changed without having approved it. " +
 		"Never leave a finding you could have fixed.\n\n")
+	b.WriteString("**Testing and CI.** The change's own GitHub Actions or grain CI run is the test " +
+		"signal: read its result (`grain pr open` / check statuses, `grain ci checks <sha>`, " +
+		"`grain ci list --ref @branch`, `grain ci log`, or `grain pr status`) rather than re-running " +
+		"suites yourself. Do not run `go test ./...`, package-wide or `-race` runs across packages, " +
+		"or long suites: when a fix is pushed, CI re-runs on the new head and the merge queue gates " +
+		"on it. Do not call `grain ci wait` (or `wait_for_checks`) to wait for CI to finish -- finish " +
+		"the review; grain will not merge a head whose CI has not passed. Do run a narrowly targeted " +
+		"test (`go test ./pkg/x -run TestName`) when needed to confirm or refute a specific finding, " +
+		"or to check a fix you are about to push compiles and passes its own tests, and say which " +
+		"tests you ran in your closing note (`comment_on_issue`). After pushing a fix, " +
+		"`go build ./...` or `go vet` on the touched packages is enough locally.\n\n")
 	b.WriteString("Use an `add_review_comment` call only for what you cannot or should not fix " +
 		"yourself, since that is what sends the change to a human: a design " +
 		"decision, a trade-off, or a behaviour change the brief does not settle. Write each as a " +

@@ -41,10 +41,11 @@ export function upgradeProgress(steps) {
   const list = Array.isArray(steps) ? steps : [];
   const total = list.length;
   const settled = list.filter((step) =>
-    ["done", "skipped", "failed"].includes(step.state),
+    ["done", "skipped", "failed", "cancelled"].includes(step.state),
   ).length;
   let index = list.findIndex((step) => step.state === "running");
   if (index < 0) index = list.findIndex((step) => step.state === "failed");
+  if (index < 0) index = list.findIndex((step) => step.state === "cancelled");
   return {
     total,
     settled,

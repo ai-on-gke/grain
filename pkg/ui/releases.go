@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -367,7 +368,7 @@ func (s *Server) handleListReleases(w http.ResponseWriter, r *http.Request) {
 	releases = filterList(releases, func(rel Release) bool {
 		return list.matches(rel.Name, rel.LatestBranch, rel.ProdBranch)
 	})
-	writeList(w, releases, list)
+	writeListBy(w, releases, list, func(rel Release) string { return rel.Repo + "\x00" + rel.Name })
 }
 
 func (s *Server) handleCreateRelease(w http.ResponseWriter, r *http.Request) {
@@ -477,7 +478,7 @@ func (s *Server) handleListCandidates(w http.ResponseWriter, r *http.Request) {
 	candidates = filterList(candidates, func(c Candidate) bool {
 		return page.matches(c.Branch, c.Status, c.Release)
 	})
-	writeList(w, candidates, page)
+	writeListBy(w, candidates, page, func(c Candidate) string { return strconv.FormatInt(c.ID, 10) })
 }
 
 func (s *Server) handleCutCandidate(w http.ResponseWriter, r *http.Request) {

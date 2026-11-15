@@ -52,6 +52,9 @@ type postedRun struct {
 type checkPoster struct {
 	posts   []postedRun
 	checked []string
+	// bases is the -base each check was handed: what the tree is
+	// compared with.
+	bases []string
 	// sawProposal is whether the tree grain handed the check had the pull
 	// request's own change in it, asked while the check is running
 	// because the worktree is gone by the time it returns.
@@ -69,8 +72,9 @@ func (p *checkPoster) post(_ context.Context, post staterepo.CheckRunPost) (int6
 	return p.next, nil
 }
 
-func (p *checkPoster) check(_ context.Context, dir string) (string, error) {
+func (p *checkPoster) check(_ context.Context, dir, base string) (string, error) {
 	p.checked = append(p.checked, dir)
+	p.bases = append(p.bases, base)
 	if _, err := os.Stat(filepath.Join(dir, "PROPOSED")); err == nil {
 		p.sawProposal = true
 	}
@@ -188,6 +192,16 @@ func TestGrainPostsItsOwnCheckOnAStateRepoPullRequest(t *testing.T) {
 	}
 	if poster.checked[0] == repo.Dir() {
 		t.Fatal("grain checked its own working tree instead of a worktree of the pull request")
+	}
+	// It is checked against the settings this deployment runs on, so
+	// that a typed-in capability server credential the pull request adds
+	// fails it rather than being only a warning.
+	branchHead, err := exec.Command("git", "-C", repo.Dir(), "rev-parse", "refs/heads/"+repo.Branch()).Output()
+	if err != nil {
+		t.Fatalf("reading the deployment's branch head: %v", err)
+	}
+	if len(poster.bases) != 1 || poster.bases[0] != strings.TrimSpace(string(branchHead)) || poster.bases[0] == head {
+		t.Fatalf("the check was handed base %v, want the deployment's own branch head %s", poster.bases, branchHead)
 	}
 	// A tree that was checked out is a tree that is cleaned up: a
 	// worktree left behind would accumulate one per settings change for

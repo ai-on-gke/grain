@@ -40,8 +40,8 @@ func TestPathTriggerDoesNotReleaseAHumanOnlyHold(t *testing.T) {
 	if linkOf(got, model.LinkHumanOnlyHold) == "" {
 		t.Fatalf("a human-only hold carries no marker of its own: links %+v", got.Links)
 	}
-	if linkOf(got, model.LinkSecurityHold) != "" {
-		t.Fatalf("a human-only hold carries a releasable hold link: links %+v", got.Links)
+	if linkOf(got, model.LinkSecurityHold) == "" {
+		t.Fatalf("expected security-review gate alongside human-only hold: links %+v", got.Links)
 	}
 	ids := gatingIDs(got)
 	if len(ids) == 0 {
@@ -49,6 +49,12 @@ func TestPathTriggerDoesNotReleaseAHumanOnlyHold(t *testing.T) {
 	}
 	for _, id := range ids {
 		completeReview(t, ctx, store, id)
+	}
+	if secID := linkOf(got, model.LinkSecurityReviewTask); secID != "" {
+		completeReview(t, ctx, store, secID)
+	}
+	if err := orchestrator.SyncSecurityHolds(ctx, store, client, baseTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
 	}
 	syncTriggerHolds(t, ctx, store, client, baseTime.Add(time.Hour))
 

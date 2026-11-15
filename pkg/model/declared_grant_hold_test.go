@@ -147,6 +147,78 @@ func TestAnAcceptedDeclaredScheduleFiresApprovedUntilItWidens(t *testing.T) {
 	}
 }
 
+// Revoking a person's acceptance of a declared schedule's set (task 4604)
+// withdraws it: the next firing is held again and says nobody has
+// accepted the set, the record shows as awaiting acceptance with what it
+// asked for kept, and a firing filed approved before the revocation no
+// longer has a person standing behind it at dispatch.
+func TestARevokedDeclaredScheduleIsHeldAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	id := model.RepoDeclaredID(model.DeclaredSchedule, nightlyRepo, "rotate")
+	secrets := "api:secrets:write"
+	sched := model.Schedule{
+		ID:         id,
+		Title:      "Rotate",
+		Target:     nightlyRepo,
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 9 * 60},
+		Enabled:    true,
+		NextRunAt:  firstNight,
+		CreatedAt:  firstNight.Add(-time.Hour),
+		Overlap:    model.OverlapAllow,
+		Grants:     []model.Grant{{Capability: secrets}},
+	}
+	fireForTask(t, store, ctx, sched)
+	acc, err := store.GetDeclarationAcceptance(ctx, id)
+	if err != nil || acc == nil {
+		t.Fatalf("no record after the first firing: %+v, %v", acc, err)
+	}
+	if _, err := store.AcceptDeclaration(ctx, id, "alice@example.com", []string{"secrets:write"}, acc.Requested, firstNight); err != nil {
+		t.Fatalf("accepting: %v", err)
+	}
+	approved := fireForTask(t, store, ctx, sched)
+	if approved.Approval == nil {
+		t.Fatalf("a firing within the accepted set was held: %q", approved.Body)
+	}
+
+	accepted, err := store.GetDeclarationAcceptance(ctx, id)
+	if err != nil || accepted == nil {
+		t.Fatalf("the accepted record: %+v, %v", accepted, err)
+	}
+	// A revocation checked against a set other than the one accepted --
+	// one accepted wider since it was read -- is refused and withdraws
+	// nothing.
+	if _, err := store.RevokeDeclarationAcceptance(ctx, id, nil); !errors.Is(err, model.ErrAcceptanceMoved) {
+		t.Fatalf("revoking a set other than the accepted one: err = %v, want ErrAcceptanceMoved", err)
+	}
+	if still, _ := store.GetDeclarationAcceptance(ctx, id); still == nil || still.AcceptedAt == nil {
+		t.Fatalf("a refused revocation cleared the acceptance: %+v", still)
+	}
+	got, err := store.RevokeDeclarationAcceptance(ctx, id, accepted.Accepted)
+	if err != nil {
+		t.Fatalf("revoking: %v", err)
+	}
+	if _, err := store.RevokeDeclarationAcceptance(ctx, id, accepted.Accepted); !errors.Is(err, model.ErrAcceptanceMoved) {
+		t.Fatalf("revoking twice: err = %v, want ErrAcceptanceMoved", err)
+	}
+	if got.AcceptedAt != nil || got.AcceptedBy != "" || len(got.Accepted) != 0 || !got.Awaiting() ||
+		!slices.Equal(got.Requested, acc.Requested) {
+		t.Fatalf("after revoking the record is %+v, want nothing accepted and %v still asked for", got, acc.Requested)
+	}
+
+	task := fireForTask(t, store, ctx, sched)
+	if task.Approval != nil {
+		t.Fatalf("a firing after the revocation landed approved: %+v", task.Approval)
+	}
+	if !strings.Contains(task.Body, "Nobody has accepted that set yet") {
+		t.Errorf("a firing after the revocation does not say nobody has accepted: %q", task.Body)
+	}
+	if stands, err := store.PersonStandsBehind(ctx, *approved, []string{secrets}); err != nil || stands {
+		t.Errorf("PersonStandsBehind(the firing approved before the revocation) = %v, %v; want false", stands, err)
+	}
+}
+
 // A declared template's grants are accepted under the template when an
 // operator's schedule fires it: the same rule, keyed by what was
 // declared.

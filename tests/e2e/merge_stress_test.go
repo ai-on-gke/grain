@@ -713,7 +713,10 @@ func assertFinalInvariants(t *testing.T, store *model.Store, ctx context.Context
 		case model.StateClosed:
 			closedCount++
 			branch := model.BranchName(task.ID)
-			if task.Target != nil {
+			// A report-only sub-task closes on its closing note alone, with
+			// no pull request (orchestrator finishAnswered), so there is no
+			// branch of its to find in main.
+			if task.Target != nil && !model.ClosesOnAnswer(task) {
 				bare := barePaths[task.Target.Owner+"/"+task.Target.Name]
 				if !branchIsAncestor(t, bare, "main", branch) {
 					t.Errorf("task %s was closed/merged but main in %s does not contain %s", task.ID, task.Target, branch)

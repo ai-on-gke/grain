@@ -33,16 +33,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ai-on-gke/grain/pkg/capability/imagesigning"
-	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
-	"github.com/ai-on-gke/grain/pkg/capability/registrypush"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 // ciOnlyIDs is the capabilities this whole file is about, named from the
 // providers themselves rather than spelled out again here.
-var ciOnlyIDs = []string{registrypush.CapabilityName, packagepublish.CapabilityName, imagesigning.CapabilityName}
+var ciOnlyIDs = []string{model.RegistryPushRef + "={}", model.PackagePublishRef + "={}", model.ImageSigningRef + "={}"}
 
 func TestCIOnlyCapabilitiesAreNotInTheTaskPicker(t *testing.T) {
 	t.Parallel()
@@ -113,7 +110,6 @@ func TestCIOnlyCapabilitiesAreRefusedEverywhereATaskCouldHoldOne(t *testing.T) {
 	for _, id := range ciOnlyIDs {
 		// Recorded and offered as the release server's method each
 		// became (schema migration 101).
-		id = model.CanonicalLegacyGrant(id)
 		if !slices.Contains(defaults.CICapabilities, id) ||
 			!slices.Contains(defaults.AvailableCICapabilities, id) {
 			t.Errorf("the repo's CI picker lost %q: %+v", id, defaults)

@@ -37,6 +37,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/objectstore"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/secrets"
+	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
 type Config struct {
@@ -45,6 +47,10 @@ type Config struct {
 	DbDSN           string
 	SecretsBackend  string
 	SecretsSMPrefix string
+	// ReleaseApprovalKMSKey is the Cloud KMS key version release
+	// approvals are signed with (-release-approval-kms-key), or "" for
+	// the key the secrets store holds (ui.Config.ReleaseApprovalKMSKey).
+	ReleaseApprovalKMSKey string
 	// WriterLockWaitTimeout, WriterLockKeepAlive, and WriterLockReacquireWindow
 	// configure the PostgreSQL session-level single-writer advisory lock
 	// acquired at daemon startup when DbDriver is "postgres". Zero values use
@@ -249,9 +255,16 @@ type Config struct {
 	UiRequireVerifier string
 	// UiRequireIAP is -ui-require-iap (ui.Config.RequireIAP), an alias for
 	// UiRequireVerifier = "iap".
-	UiRequireIAP            bool
-	UiAllowedPrincipals     []string
-	DeploymentOwner         string
+	UiRequireIAP        bool
+	UiAllowedPrincipals []string
+	DeploymentOwner     string
+	// HostAccounts is -host-accounts: who each host account's requests on
+	// the API socket are recorded as (ui.HostAccountHandler). The daemon's
+	// own account maps to DeploymentOwner unless it names it.
+	HostAccounts ui.HostAccounts
+	// APISocket is -api-socket: where the API is served on a unix socket
+	// as well; "" is ui.APISocketPath(DataDir), "none" serves none.
+	APISocket               string
 	UiCloudIdentityEndpoint string
 	UiOpen                  bool
 	Actor                   string
@@ -377,6 +390,10 @@ type Config struct {
 	// before the run fails as an infrastructure failure, with no strike
 	// (agent.ErrHostdLost). Zero fails it at once.
 	HostdReattachTimeout time.Duration
+	// CIWakeBackstop is -ci-wake-backstop: how long a task resume_later
+	// deferred on a CI verdict may wait before it is woken regardless
+	// (orchestrator.Config.CIWakeBackstop). Zero is the default.
+	CIWakeBackstop time.Duration
 	// HostdRemote is set by -hostd-token-file (or $GRAIN_HOSTD_TOKEN):
 	// the session of a grain hostd on another machine that dials in to
 	// /api/hostd/connect with that token (hostd -server), through which
@@ -438,24 +455,31 @@ type Config struct {
 	// runs grain from a container (bwsalmon/agents#645).
 	UpgradeImage        string
 	UpgradeImageRefFile string
-	// UpgradeImageSource selects where ModeImage pulls candidate images from
-	// ("registry"; empty uses the track or default registry source).
-	// UpgradeImageSourceLocked records that the setting came from a daemon
-	// flag or environment variable.
-	UpgradeImageSource           string
-	UpgradeImageSourceLocked     bool
-	UpgradeImageFallback         string
-	UpgradeImageFallbackExplicit bool
 	// upgradeVerifyCmd checks an image's signature before either image
 	// path runs it (upgrade.ImageConfig.VerifyCmd); empty verifies
 	// nothing and every upgrade says so.
 	UpgradeVerifyCmd []string
+	// UpgradeReviewedMergeRepo, when set (owner/name, or host/owner/name
+	// on a GitHub Enterprise Server), also refuses an
+	// image upgrade whose commit did not reach that repository's release
+	// branches through a reviewed merge (upgrade.ImageConfig.ReviewedMerge,
+	// pkg/reviewedmerge). UpgradeReviewedMergeLogins are the forge logins
+	// its grain merges as, and UpgradeReviewedMergeTokenFile a file holding
+	// a read token for its API (none reads through the host's forge tool
+	// when a command-backed ambient source claims its host, and
+	// anonymously otherwise).
+	UpgradeReviewedMergeRepo      string
+	UpgradeReviewedMergeLogins    []string
+	UpgradeReviewedMergeTokenFile string
 	// upgradeAllowedBranches is the only branches either path may upgrade
 	// to (upgrade.Config.AllowedBranches); empty means its default.
 	UpgradeAllowedBranches []string
 	// UpgradeDrainWindow bounds how long a scheduled upgrade waits for active
 	// runs to finish before proceeding with the upgrade anyway.
 	UpgradeDrainWindow time.Duration
+	// UpgradeGraceWindow adds a countdown between confirming a manual upgrade
+	// and starting its work (0 disables the countdown).
+	UpgradeGraceWindow time.Duration
 	// DisableSelfUpgrade disables in-VM self-upgrade actions (pkg/upgrade,
 	// automatic/scheduled upgrades, and in-VM SQLite-to-PostgreSQL cutover)
 	// and hides in-VM upgrade controls in the UI in favour of an optional
@@ -465,6 +489,13 @@ type Config struct {
 	// deployment's lifecycle and upgrades are managed externally
 	// (-management-url / $GRAIN_MANAGEMENT_URL).
 	ManagementURL string
+	// DefaultEnvironmentName is the environment name a Grain Hub gives
+	// this deployment by default (-default-environment-name /
+	// $GRAIN_DEFAULT_ENVIRONMENT_NAME, set from a hosted instance's
+	// grain-config): applied at start to a deployment with no name, or
+	// still the hub's previous one, and never over one its operator set
+	// (model.Config.AdoptHubEnvironmentName).
+	DefaultEnvironmentName string
 
 	// rebootCmd is what the UI's reboot-host button runs; empty means
 	// rebootHost's own `sudo systemctl reboot` default.
@@ -859,6 +890,10 @@ type Config struct {
 	SandboxAccessAddr     string
 	SandboxAccessDial     string
 	SandboxAccessCASecret string
+	// caSecrets is the secrets store the sandbox-access and package-cache
+	// CA bundles are kept in (ca_store.go), set by Run once it has opened
+	// one. Nil keeps them in their <data-dir>/*.pem files.
+	caSecrets *secrets.Store
 	// K8sGranuleAccess is how grain reaches a k8s-granule sandbox's guest
 	// once its pod is Ready: orchestrator.K8sGranuleAccessKubectl (the
 	// default, `granule exec` over `kubectl exec`) or
@@ -1056,6 +1091,10 @@ func LoadConfig(ctx context.Context, store *model.Store, flagCfg Config) (Config
 			// `grain connections import` ran before this first start:
 			// keep what it recorded (model.Config.ConnectionsOnly).
 			seed = seed.WithConnectionsOf(*stored)
+			// ...and the name a Grain Hub gave it a moment ago, in
+			// adoptDefaultEnvironmentName, which ran before this first
+			// load and wrote a row holding only that name.
+			seed = seed.WithHubEnvironmentNameOf(*stored)
 		}
 		if err := store.PutConfig(ctx, seed); err != nil {
 			return Config{}, fmt.Errorf("seeding stored configuration from flags: %w", err)

@@ -227,7 +227,7 @@ func (s *Server) handleListMergeBatches(w http.ResponseWriter, r *http.Request) 
 		matched := filterList(out.Batches, func(b MergeBatch) bool {
 			return list.matches(b.Repo, b.Branch, b.Ref, b.RunID)
 		})
-		page := pageOf(matched, list)
+		page := pageOfBy(matched, list, func(b MergeBatch) string { return b.Repo + "\x00" + b.Branch + "\x00" + b.Ref })
 		out.Batches = page.Items
 		out.Total = page.Total
 		out.Truncated = page.Truncated

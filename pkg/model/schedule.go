@@ -16,8 +16,10 @@ package model
 
 import (
 	"fmt"
-	"github.com/ai-on-gke/grain/pkg/workflows"
+	"strings"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/workflows"
 )
 
 // OverlapPolicy is what a schedule does when it comes due while its own
@@ -73,6 +75,67 @@ func (p OverlapPolicy) Validate() error {
 	}
 }
 
+// ScheduleSkipWhen is a condition a schedule declares (`skip-when:`) under
+// which its firings are held rather than filed (grain/task-4393).
+//
+// It is for work that cannot do anything useful while something else is
+// broken. On 2026-11-10 ai-on-gke/grain's main published nothing for
+// seven hours while its release triage task was open, and the release
+// train, which can only cut from a commit whose release published, woke
+// 45 times in those 24 hours to find that out. A held firing is recorded
+// (ScheduleSkip) and fires once as soon as the condition clears, the way
+// an overlap skip does.
+type ScheduleSkipWhen string
+
+const (
+	// SkipWhenNever is the zero value: nothing outside the schedule
+	// holds it.
+	SkipWhenNever ScheduleSkipWhen = ""
+	// SkipWhenPublishingHeld holds a firing while publishing from the
+	// base branch it fires into is held pending a release triage task
+	// (BaseBranchPublishing.Gated) -- the "Further releases on this
+	// branch are held" finding deployment health reports.
+	SkipWhenPublishingHeld ScheduleSkipWhen = "publishing-held"
+)
+
+// ParseScheduleSkipWhen reads a declared `skip-when:` value.
+func ParseScheduleSkipWhen(v string) (ScheduleSkipWhen, error) {
+	switch w := ScheduleSkipWhen(strings.TrimSpace(v)); w {
+	case SkipWhenNever, SkipWhenPublishingHeld:
+		return w, nil
+	default:
+		return "", fmt.Errorf("unknown skip-when condition %q -- the one there is is %q", v, SkipWhenPublishingHeld)
+	}
+}
+
+// maxOverlapGroupLen bounds Schedule.OverlapGroup so it stays readable in
+// tags, skip records and the schedules page.
+const maxOverlapGroupLen = 128
+
+// ValidateOverlapGroup checks that group is either empty (no shared
+// overlap group) or a name made of ASCII letters, digits, '.', '_' and
+// '-', starting with a letter or digit. Refusing colons, slashes and
+// whitespace keeps ScheduleOverlapGroupTag unambiguous.
+func ValidateOverlapGroup(group string) error {
+	if group == "" {
+		return nil
+	}
+	if len(group) > maxOverlapGroupLen {
+		return fmt.Errorf("overlap group %q is longer than %d characters", group, maxOverlapGroupLen)
+	}
+	for i := 0; i < len(group); i++ {
+		c := group[i]
+		alnum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if i == 0 && !alnum {
+			return fmt.Errorf("overlap group %q must start with a letter or digit", group)
+		}
+		if !alnum && c != '-' && c != '_' && c != '.' {
+			return fmt.Errorf("overlap group %q may only contain letters, digits, '.', '_' and '-'", group)
+		}
+	}
+	return nil
+}
+
 // Schedule is what a human sets up once and grain refiles as a real
 // Task on a fixed cadence -- bwsalmon/agents#376's v2 equivalent of
 // v1's scheduled_jobs.py, with one deliberate difference: there is no
@@ -122,6 +185,12 @@ type Schedule struct {
 	// alongside Reads and Grants, and taken from the template instead
 	// while TemplateID is set, exactly as they are.
 	Writes []WriteTarget
+	// Grants is the capabilities every task this schedule files holds.
+	// Unlike Reads and Writes it is not taken from the template while
+	// TemplateID is set: it is then the capabilities the schedule grants
+	// beside its template's (ComposeScheduleTask files both), which a
+	// repository's declared schedule says as `grants:` beside
+	// `template:`, and a firing leaves it as it is (syncTemplateCache).
 	Grants []Grant
 
 	// NetworkAccess is how much network every task this schedule files
@@ -154,8 +223,13 @@ type Schedule struct {
 	NothingNeededAction NothingNeededAction
 	KeepRunning         bool
 	// Admission is the optional admission setting for tasks this schedule files.
+	// While TemplateID is set it is not a copy of the template's but the
+	// schedule's own raise of it (ComposeScheduleTask takes the higher of
+	// the two), and a firing leaves it as it is (syncTemplateCache).
 	Admission Admission
-	// Hosting is the optional hosting setting for tasks this schedule files.
+	// Hosting is the optional hosting setting for tasks this schedule
+	// files -- the schedule's own raise of its template's while TemplateID
+	// is set, exactly as Admission is.
 	Hosting Hosting
 
 	// Model is the model every task this schedule files asks for
@@ -219,7 +293,7 @@ type Schedule struct {
 
 	// TemplateID, if set, names the Template (template.go) this
 	// schedule fires from instead of its own
-	// Title/Body/AutoMerge/Reads/Grants/NetworkAccess/NothingNeededAction/CustomFields above
+	// Title/Body/AutoMerge/Reads/Writes/NetworkAccess/NothingNeededAction/CustomFields above
 	// (bwsalmon/agents#516). Target and Base are this schedule's own,
 	// unless that template is bound to a repo of its own, in which case
 	// the binding decides both (Template.Target, docs/composition.md's
@@ -232,7 +306,9 @@ type Schedule struct {
 	// keeps them in sync as a display cache each time it fires, so
 	// ui.scheduleFrom can render a schedule's effective title and the
 	// rest with no extra lookup, but while TemplateID is set they are
-	// not what decides what gets filed.
+	// not what decides what gets filed. Admission, Hosting and Grants are
+	// not part of that cache: they are what the schedule adds to its
+	// template, and are its own whether or not TemplateID is set.
 	TemplateID *string
 
 	// SuiteID, if set, names the Suite (suite.go) this schedule runs on
@@ -270,6 +346,20 @@ type Schedule struct {
 	// unclosed task carrying the schedule's firing tag for one that
 	// files a task, an unfinished run for one that runs a suite.
 	Overlap OverlapPolicy
+	// OverlapGroup widens OverlapSkip across every schedule that names the
+	// same group and fires into the same repository (grain/task-3895): a
+	// firing is held while any schedule in that repository and group has
+	// an unfinished firing -- an open task carrying
+	// ScheduleOverlapGroupTag, an unfinished suite run, or an unsettled
+	// ScheduledWorkflowRun or held review. Scoped per repository so one
+	// repository's declarations cannot hold another's schedules. Empty
+	// (the default) means the schedule checks only its own previous
+	// firing; it is meaningless, and refused, beside OverlapAllow.
+	OverlapGroup string
+	// SkipWhen is a condition outside the schedule that holds its firings
+	// the way an unfinished previous firing does (ScheduleSkipWhen,
+	// grain/task-4393). Empty, the default, holds nothing.
+	SkipWhen ScheduleSkipWhen
 	// Enabled is the pause/resume switch a UI toggles -- a disabled
 	// schedule stays around (with its own history in NextRunAt/LastRunAt)
 	// rather than being deleted, the same as closing a task keeps its row

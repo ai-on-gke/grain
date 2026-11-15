@@ -16,7 +16,7 @@ make ui-screenshots PAGES=/,/inbox OUT=screenshots/after
 
 This builds the frontend, installs Playwright's Chromium, builds `grain`
 from the checkout and runs `grain demo` over a throwaway store. That is
-the same seeded server the e2e suite's workers use (`ui/e2e/fixtures.js`).
+the same seeded server the e2e suite's workers use (`ui-shared/e2e/demo.js`).
 It then shoots every page in `PAGES` at desktop (1440×900) and phone
 (390×844) widths, in light and dark. The theme goes through the app's own
 `grain.themeMode` setting as well as `prefers-color-scheme`.
@@ -66,6 +66,17 @@ offers a role, not what the server lets it do.
 
 ```sh
 make ui-screenshots PAGES=/tasks/1,/settings/general ACCESS=viewer OUT=screenshots/viewer
+```
+
+To shoot a state the demo does not seed, lay a JSON file's top-level
+fields over one route's real answer with `--merge PATH=FILE.json`
+(`MERGE=` for the make target), repeated for more routes. The stale
+schedules on System → Health and the CI pane are shot this way, from the
+same fixture `ui/e2e/stale-schedules.spec.js` uses:
+
+```sh
+make ui-screenshots PAGES=/system/health,/ci \
+  MERGE=/api/sandboxes=e2e/stale-schedules.fixture.json OUT=screenshots/after
 ```
 
 An uncaught page error fails the run, because a blank pane is not a
@@ -159,3 +170,15 @@ merges it. The description links each image by that commit's sha, so the
 images are visible to the same people who can read the pull request. Only
 PNG, JPEG, GIF and WebP files are published; other attachments stay in
 grain's conversation. A description a human has rewritten is left alone.
+
+## The new Angular UI (`/next/`)
+
+All `/next/` routes (`ui-ng/src/app/app.routes.ts`) are covered by one Playwright + axe suite over `grain demo`:
+
+```sh
+make test-e2e-ng
+```
+
+Set `GRAIN_UI_SHOTS=/tmp/next-shots` to also save desktop (`1440×900`) and phone (`390×844`) light and dark PNGs for every `/next/` destination. `make ui-screenshots PAGES=/next/inbox,/next/tasks OUT=screenshots/after` works for `/next/` routes too when producing `contact-sheet.png`.
+
+For `ui-ng/` design rules, component reuse, and the three-review mandate, read [`design/design/ui-design-book.design.md`](../design/design/ui-design-book.design.md).

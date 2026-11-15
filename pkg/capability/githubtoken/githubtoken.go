@@ -74,12 +74,6 @@ func realTransport(host string, insecureHTTP bool) github.Transport {
 	return rt
 }
 
-// Description describes selecting the named GitHub credential for a task.
-func Description(name string) string {
-	return fmt.Sprintf(
-		"Push and pull through the %q GitHub token instead of this deployment's default one", name)
-}
-
 // PromptSection tells the agent which named GitHub credential its pushes carry.
 func PromptSection(name string) string {
 	return fmt.Sprintf(

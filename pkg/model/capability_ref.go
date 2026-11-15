@@ -750,6 +750,38 @@ func (p CapabilityPolicy) Permits(g string, s CapabilitySubject, servers ...map[
 	return nil
 }
 
+// PermitsTaskRepoGrant reports why a task's own repository access --
+// one of TaskRepoGrants' …/repo#read {repo} (a Reads entry) or
+// …/repo#write {repo, base} (a Writes entry) -- may not be held by s, or
+// nil when it may.
+//
+// It is Permits without the CI-only refusal: a #read {repo} in a task's
+// capabilities (task_grant) is a CI job's grant pasted onto a task, and
+// Permits still refuses that, but the same shape projected from Reads is
+// the task's own fetch access, which mayRead and UngrantedReads already
+// decided. For the same reason only deny rules apply here: who may read
+// or push a repository is the repository rules' to grant, so a policy may
+// narrow a task's repository access but never has to admit it, and an
+// allow rule written for CI jobs' {repo} grants refuses no task.
+// Anything else -- a {repo}-only #write, a #write widening refs, a
+// non-repository grant -- is refused as not a task's repository access.
+func (p CapabilityPolicy) PermitsTaskRepoGrant(g Grant, s CapabilitySubject, servers ...map[string]protocol.ServerConfig) error {
+	reads, writes, rest := TaskRepoAccessOf([]Grant{g})
+	if len(rest) != 0 || len(reads)+len(writes) != 1 {
+		return fmt.Errorf("%s is not a task's repository access (…/repo#read {repo} or …/repo#write {repo, base})", g.Key())
+	}
+	ref := CapabilityGrantRef(CanonicalGrant(g.Key()).Capability)
+	for i, r := range p.Rules {
+		if !r.Deny || !r.namesAny(equivalentCapabilityRefs(ref, servers)) {
+			continue
+		}
+		if r.covers(s) {
+			return fmt.Errorf("the capability policy denies %s to this %s (rule %d: deny %s)", ref, s.describe(), i+1, r.Capability)
+		}
+	}
+	return nil
+}
+
 // VerdictForKind reports what p does to a grant of ref for a trusted run
 // of kind when the repository and trigger event are not yet known:
 // CapabilityPolicyCIOnly when ref is a CI capability no run of that kind

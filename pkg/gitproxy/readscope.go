@@ -379,6 +379,15 @@ func (a *ReadOnlyScopeAuthorizer) Refusal(owner, repo string) (string, bool) {
 	return "", false
 }
 
+// RemovedReason implements RemovalExplainer by passing the question on
+// to Next, as Refusal does.
+func (a *ReadOnlyScopeAuthorizer) RemovedReason(ctx context.Context, sandbox, owner, repo string) (string, bool) {
+	if explainer, ok := a.Next.(RemovalExplainer); ok {
+		return explainer.RemovedReason(ctx, sandbox, owner, repo)
+	}
+	return "", false
+}
+
 // WithheldReason reports why a request that Authorize refused was withheld by
 // the CI event gate on a grant sandbox declared, if WriteScopes recorded one.
 func (a *ReadOnlyScopeAuthorizer) WithheldReason(sandbox, owner, repo string) (string, bool) {

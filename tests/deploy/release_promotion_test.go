@@ -249,6 +249,23 @@ func TestTheReleaseTrainIsScheduledContinuously(t *testing.T) {
 	if sched.Overlap != model.OverlapSkip {
 		t.Errorf("the release-train schedule's overlap is %q, want skip: two ticks would race for the same tags", sched.Overlap)
 	}
+	if sched.SkipWhen != model.SkipWhenPublishingHeld {
+		t.Errorf("the release-train schedule's skip-when is %q, want %q so ticks are held while main's publishing is held",
+			sched.SkipWhen, model.SkipWhenPublishingHeld)
+	}
+	var stage1Sched *model.Schedule
+	for i := range decl.Schedules {
+		if decl.Schedules[i].Path == ".grain/schedules/release-train-on-stage1.yml" {
+			stage1Sched = &decl.Schedules[i].Schedule
+		}
+	}
+	if stage1Sched == nil {
+		t.Fatal(".grain/schedules/release-train-on-stage1.yml is not declared")
+	}
+	if stage1Sched.SkipWhen != model.SkipWhenPublishingHeld {
+		t.Errorf("the release-train-on-stage1 schedule's skip-when is %q, want %q so Stage 1 ticks do not wake while main's publishing is held",
+			stage1Sched.SkipWhen, model.SkipWhenPublishingHeld)
+	}
 	var trainTmpl *model.Template
 	for i := range decl.Templates {
 		if decl.Templates[i].Path == ".grain/templates/release-train.yml" {
@@ -272,6 +289,35 @@ func TestTheReleaseTrainIsScheduledContinuously(t *testing.T) {
 	if strings.Contains(body, "call `comment_on_issue`") {
 		t.Errorf("release-train.yml still instructs calling comment_on_issue, which parks a branchless tick in awaiting_reply and stalls the 20-minute train")
 	}
+}
+
+// trainTickPriority is the least priority a release-train tick may be
+// filed at: above model.PriorityReleaseGate's Stage 2 work, at the top
+// of what a busy queue holds. On 2026-11-10 tick #3946 was filed at the
+// default 5 and sat queued fourteen hours behind priority-9 work while
+// overlap: skip held every later tick, and no rc was cut that day
+// (grain/task-4086).
+const trainTickPriority = 9
+
+// A release-train tick is one script run and a close: it must never wait
+// behind the backlog, because a tick that waits holds every tick after it.
+func TestTheReleaseTrainTickIsFiledAtHighPriority(t *testing.T) {
+	decl := declarations(t)
+	for _, tmpl := range decl.Templates {
+		if tmpl.Path != ".grain/templates/release-train.yml" {
+			continue
+		}
+		if tmpl.Template.Priority == nil {
+			t.Fatalf(".grain/templates/release-train.yml sets no priority:, so every tick files at %d and starves "+
+				"behind the backlog; set priority: %d or more", model.DefaultTaskPriority, trainTickPriority)
+		}
+		if *tmpl.Template.Priority < trainTickPriority || *tmpl.Template.Priority <= model.PriorityReleaseGate {
+			t.Errorf(".grain/templates/release-train.yml priority is %d, want at least %d (above the backlog and "+
+				"Stage 2's %d)", *tmpl.Template.Priority, trainTickPriority, model.PriorityReleaseGate)
+		}
+		return
+	}
+	t.Fatal(".grain/templates/release-train.yml is not declared")
 }
 
 // The train's grant reaches the release now (playbook §1): vM.Y.0 created,
@@ -354,14 +400,26 @@ func TestPublishReleaseVerifiesBeforeItPublishes(t *testing.T) {
 	contains(t, publishCLI, "needs: [publish, cli]")
 	contains(t, publishCLI, "if: needs.publish.outputs.train == 'true'")
 	contains(t, publishCLI, "release-assets.sh cli-publish")
+
+	buildAgentd := namedJob(t, text, "agentd")
+	contains(t, buildAgentd, "contents: read")
+	contains(t, buildAgentd, "scripts/build-agentd.sh")
+	if strings.Contains(buildAgentd, "write") || strings.Contains(buildAgentd, "secrets.") || strings.Contains(buildAgentd, "github.token") {
+		t.Errorf("publish-release.yml's agentd job, which runs build-agentd.sh, holds a write permission or a token:\n%s", buildAgentd)
+	}
+	publishAgentd := namedJob(t, text, "agentd-assets")
+	contains(t, publishAgentd, "needs: [publish, agentd]")
+	contains(t, publishAgentd, "if: needs.publish.outputs.train == 'true'")
+	contains(t, publishAgentd, "release-assets.sh agentd-publish")
+
 	// The step loop above reads the publish job alone, so hold every other
-	// job to the same rule: besides publish and cli (which can write
+	// job to the same rule: besides publish, cli and agentd (which can write
 	// nothing), a job runs only once publish has verified the tag as the
 	// train's.
 	jobs := text[strings.Index(text, "\njobs:\n"):]
 	for _, key := range workflowJobKey.FindAllString(jobs, -1) {
 		job := strings.TrimSuffix(strings.TrimSpace(key), ":")
-		if job == "publish" || job == "cli" {
+		if job == "publish" || job == "cli" || job == "agentd" {
 			continue
 		}
 		body := namedJob(t, text, job)
@@ -414,6 +472,62 @@ func TestEveryPublishedReleaseGetsItsGrainCLI(t *testing.T) {
 		}
 		if strings.Contains(publish, "build-cli.sh") || strings.Contains(publish, "setup-go") {
 			t.Errorf("%s: the cli-assets job, which holds contents: write, builds something", file)
+		}
+	}
+}
+
+// Every vX.Y.Z and vX.Y.Z-rc.N release also carries the per-platform static
+// grain-agentd binaries and signed manifests: built in an `agentd` job holding
+// only `contents: read` and no secrets, then signed (with OpenSSL) and
+// uploaded by `agentd-assets` without running setup-go.
+func TestEveryPublishedReleaseGetsSignedGrainAgentd(t *testing.T) {
+	for file, releaseJob := range map[string]string{
+		"promote.yml":              "assets",
+		"promote-release.yml":      "assets",
+		"publish-release.yml":      "publish",
+		"release-train-assets.yml": "publish",
+	} {
+		text := stripComments(read(t, ".github", "workflows", file))
+		build := namedJob(t, text, "agentd")
+		if !strings.Contains(build, "contents: read") || strings.Contains(build, "write") ||
+			strings.Contains(build, "secrets.") || strings.Contains(build, "github.token") {
+			t.Errorf("%s: the agentd job, which runs build-agentd.sh, must hold contents: read and no token:\n%s", file, build)
+		}
+		for _, want := range []string{
+			"actions/cache@", "~/go/pkg/mod/cache/download", "~/.cache/go-build",
+			"scripts/build-agentd.sh", "release-assets.sh agentd-validate", "RELEASE: ", "name: grain-agentd",
+		} {
+			if !strings.Contains(build, want) {
+				t.Errorf("%s: the agentd job does not say %q", file, want)
+			}
+		}
+		if strings.Index(build, "actions/cache@") > strings.Index(build, "actions/setup-go@") {
+			t.Errorf("%s: the agentd job must restore actions/cache before actions/setup-go", file)
+		}
+		publish := namedJob(t, text, "agentd-assets")
+		for _, want := range []string{
+			"contents: write", "needs: [", releaseJob, "name: grain-agentd",
+			"AGENTD_RELEASE_SIGNING_KEY", "agentd-sign", "agentd-publish",
+		} {
+			if !strings.Contains(publish, want) {
+				t.Errorf("%s: the agentd-assets job does not say %q", file, want)
+			}
+		}
+		// The signing key is an environment secret, so a workflow pushed on
+		// any other branch cannot read it.
+		if !strings.Contains(publish, "environment: agentd-release") {
+			t.Errorf("%s: the agentd-assets job, which reads AGENTD_RELEASE_SIGNING_KEY, does not run in the agentd-release environment", file)
+		}
+		for _, other := range []string{"agentd", releaseJob} {
+			if strings.Contains(namedJob(t, text, other), "AGENTD_RELEASE_SIGNING_KEY") {
+				t.Errorf("%s: the %s job names AGENTD_RELEASE_SIGNING_KEY; only agentd-assets may", file, other)
+			}
+		}
+		if !strings.Contains(publish, "group: grain-agentd-assets-${{ ") {
+			t.Errorf("%s: the agentd-assets job does not queue in the shared grain-agentd-assets-<release> group", file)
+		}
+		if strings.Contains(publish, "build-agentd.sh") || strings.Contains(publish, "setup-go") {
+			t.Errorf("%s: the agentd-assets job, which holds contents: write, builds something", file)
 		}
 	}
 }
@@ -711,10 +825,10 @@ func TestReleaseReviewAndWatchdogHoldReadOnlyTaskAndSuiteScopes(t *testing.T) {
 	decl := declarations(t)
 	repo := model.GrainSourceRepo().String()
 	wantGrants := []string{
-		model.APIGrantPrefix + "ci-read@" + repo,
-		model.APIGrantPrefix + "self-debug",
-		model.APIGrantPrefix + "suites:read@" + repo,
-		model.APIGrantPrefix + "releases:read@" + repo,
+		model.APIGrantString("ci-read", repo),
+		model.APIGrantString("self-debug", ""),
+		model.APIGrantString("suites:read", repo),
+		model.APIGrantString("releases:read", repo),
 	}
 	targets := map[string]bool{
 		".grain/templates/release-process-review.yml": false,

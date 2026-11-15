@@ -20,23 +20,24 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/capability/packagepublish"
 	"github.com/ai-on-gke/grain/pkg/ci"
+	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/repodecl"
 )
 
 // Grain reads a cron under .grain/workflows as a task schedule of its own
 // (pkg/repodecl's workflows.go). With ai-on-gke/grain in ci_mode: "github",
-// only the live-agent workflows (live-agent.yml, live-frameworks.yml,
-// live-secrets-repo.yml) carry `on: schedule` in .grain/workflows; all
-// non-agent workflows in .grain/workflows are manual workflow_dispatch only,
-// while the ported nightly, post-reset-e2e and gcp-smoke schedules run in
-// .github/workflows/ (the release train is .grain/templates/release-train.yml).
+// only live-secrets-repo.yml, which needs a grain-only GitHub write
+// credential, carries `on: schedule` in .grain/workflows; every other
+// workflow there is manual workflow_dispatch only, while the ported
+// nightly, post-reset-e2e, gcp-smoke and live model suites (live-agent.yml,
+// live-frameworks.yml) run in .github/workflows/ (the release train is
+// .grain/templates/release-train.yml).
 func TestTheNightlysVerdictIsBackedByAGrainWorkflowThatIsActuallyScheduled(t *testing.T) {
 	workflows, err := ci.LoadNativeDir(os.DirFS(repoRoot(t)))
 	if err != nil {
 		t.Fatalf("this repository's own %s does not parse: %v", ci.WorkflowDir, err)
 	}
 	liveScheduled := map[string]bool{
-		".grain/workflows/live-agent.yml":        false,
-		".grain/workflows/live-frameworks.yml":   false,
 		".grain/workflows/live-secrets-repo.yml": false,
 	}
 	for _, w := range workflows {
@@ -70,6 +71,60 @@ func TestTheNightlysVerdictIsBackedByAGrainWorkflowThatIsActuallyScheduled(t *te
 	ghNightly := upTo(t, stripComments(read(t, ".github", "workflows", "nightly.yml")), "jobs:")
 	contains(t, ghNightly, "schedule:")
 	contains(t, ghNightly, `cron: "11 2 * * *"`)
+
+	for file, cron := range map[string]string{
+		"live-agent.yml":      `cron: "37 7 * * *"`,
+		"live-frameworks.yml": `cron: "19 6 * * *"`,
+	} {
+		triggers := upTo(t, stripComments(read(t, ".github", "workflows", file)), "jobs:")
+		contains(t, triggers, "schedule:")
+		contains(t, triggers, cron)
+	}
+}
+
+// ai-on-gke/grain is ci_mode: github, so grain drops the firing of every
+// .grain/workflows cron (model.Store.suppressWorkflowGrainCIOff) -- which
+// is how live-secrets-repo.yml went unrun after the mode change, with
+// nothing saying so. A workflow kept on grain CI with an `on: schedule`
+// therefore needs a .grain/schedules entry with `grain-ci: true` on main,
+// or its cron is a nightly that never happens.
+func TestEveryScheduledGrainWorkflowRunsUnderCIModeGitHub(t *testing.T) {
+	root := repoRoot(t)
+	workflows, err := ci.LoadNativeDir(os.DirFS(root))
+	if err != nil {
+		t.Fatalf("this repository's own %s does not parse: %v", ci.WorkflowDir, err)
+	}
+	decl, err := repodecl.Load(os.DirFS(root), model.GrainSourceRepo())
+	if err != nil {
+		t.Fatalf("repodecl.Load: %v", err)
+	}
+	runs := map[string]bool{}
+	for _, sf := range decl.Schedules {
+		sched := sf.Schedule
+		if sched.TemplateID == nil || !sched.Enabled || !sched.WorkflowRunsUnder(model.CIModeGitHub) {
+			continue
+		}
+		if sched.Base != "" && sched.Base != "main" {
+			continue
+		}
+		if stem, ok := model.WorkflowReviewStem(*sched.TemplateID); ok {
+			runs[stem] = true
+		}
+	}
+	for _, w := range workflows {
+		if len(w.On.Schedule) == 0 {
+			continue
+		}
+		stem := model.DeclarationStem(w.Path)
+		if !runs[stem] {
+			t.Errorf("%s declares `on: schedule`, which never fires in a ci_mode: github repository: add "+
+				"%s/%s.yml with `workflow: %s` and `grain-ci: true` (docs/declarations.md), or drop the cron",
+				w.Path, model.ScheduleDeclarationDir, stem, stem)
+		}
+	}
+	if !runs["live-secrets-repo"] {
+		t.Errorf("no grain-ci schedule runs live-secrets-repo on main any more")
+	}
 }
 
 // The publishing credential is refused to a scheduled run a caller asked

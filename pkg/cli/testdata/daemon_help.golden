@@ -9,6 +9,8 @@ Usage of grain daemon:
     	where the agy CLI runs: "container" (a subprocess in the daemon's own container) or "host" (through the host agent, or a child of a daemon on the bare machine). Settings -> Models overrides it; empty is container in a container and host on the bare machine. "auto" is accepted and ignored for one release
   -allow-unisolated-host-sandboxes
     	let -host-sandboxes start on a daemon others can reach, accepting that everyone who can file a task there may run anything on this host as this daemon's user
+  -api-socket string
+    	unix socket to serve the API on as well, for host accounts -host-accounts or -deployment-owner names (default <data-dir>/api/grain.sock, served only when some account is mapped; "none" turns it off)
   -as string
     	principal the UI/API attributes tasks and comments it creates to (defaults to the OS user)
   -backup-gcs-bucket string
@@ -49,6 +51,8 @@ Usage of grain daemon:
     	how many days a grain CI run's step output may live, whatever room there is under -ci-step-output-mb. 0 uses grain's own default, 14 days; a negative number bounds output by size alone. Stored on this deployment's config row the first time it starts; change it in Settings (or 'grain settings') after that, where it takes effect without a restart.
   -ci-step-output-mb MiB
     	ceiling on the step output grain CI keeps across its whole history, in MiB -- whole runs' output is swept, oldest first, until what is left fits, and the runs themselves stay where they are. This is the expensive half and the only one that makes a red run diagnosable rather than merely countable, so it is bounded by disk rather than by a count of runs: what one run prints is between nothing and the -ci-run-output-kb cap. 0 uses grain's own default, 64MiB, which is three or four days of a deployment starting 300 runs a day; a negative number keeps every byte forever. Stored on this deployment's config row the first time it starts; change it in Settings (or 'grain settings') after that, where it takes effect without a restart.
+  -ci-wake-backstop duration
+    	how long a task that resume_later deferred on a CI verdict may wait before grain wakes it anyway, with a note on the task and a stall notification; a negative duration, such as -1s, disables the backstop (default 6h0m0s)
   -claude-oauth-token-file string
     	file holding the Claude Code OAuth token the agent authenticates as, passed to the claude subprocess as CLAUDE_CODE_OAUTH_TOKEN. Optional, and the exact counterpart of -gemini-api-key-file above: the UI stores one as the "claude-oauth-token" secret and that wins over this file
   -claude-path string
@@ -85,6 +89,8 @@ Usage of grain daemon:
     	database backend driver ("sqlite" or "postgres"); defaults to sqlite (default "sqlite")
   -db-dsn string
     	database connection string / DSN or path; for sqlite defaults to <data-dir>/store
+  -default-environment-name string
+    	the environment name (the UI's tab title and sidebar badge) this deployment takes when it has none, or still has the one this flag gave it before: never one its operator set in Settings or its state repo. A Grain Hub sets it to a hosted instance's entry display name ($GRAIN_DEFAULT_ENVIRONMENT_NAME when unset)
   -default-target-repo string
     	owner/name a task created through the UI/API with no repo of its own targets
   -deployment-owner string
@@ -147,6 +153,8 @@ Usage of grain daemon:
     	allow -grit-url, knowing it runs no repository's workflows, takes grit's attestation key from grit itself, and has no reverse-tunnel mode: for developing the grit split, not for a deployment's CI
   -grit-url url
     	EXPERIMENTAL, refused without -grit-experimental: remote grit server base url (e.g. http://127.0.0.1:4244); when unset, CI runs in-process. It runs none of a repository's workflows yet (design/design/grit-split.design.md, GS-3 to GS-5 deferred)
+  -host-accounts string
+    	comma-separated uid=email pairs naming the person each host account's requests on the API socket are recorded as (the daemon's own account maps to -deployment-owner unless named here; $GRAIN_HOST_ACCOUNTS when unset)
   -host-sandbox-env value
     	NAME or NAME=VALUE, repeatable, only with -host-sandboxes: an environment variable every host-sandbox run of this machine's own tasks (not anybody else's) gets on top of the default allowlist -- NAME alone passes this daemon's own value, NAME=VALUE sets that one. For ambient workstation credentials a run should use as you: SSH_AUTH_SOCK, HTTPS_PROXY/HTTP_PROXY/NO_PROXY, CLOUDSDK_CONFIG=$HOME/.config/gcloud. Every run then acts with that identity. HOME cannot be set (it stays pinned to the run's directory, which keeps its git credentials its own). Values reach runs through a 0600 file and are redacted from what run_command returns, but a NAME=VALUE entry sits on this daemon's own command line, so one with credentials in a URL (user:pass@) is refused: export it and pass NAME alone
   -host-sandboxes
@@ -206,7 +214,7 @@ Usage of grain daemon:
   -k8s-namespace string
     	namespace sandbox pods are created in (only used with -k8s-sandboxes). Two deployments sharing a cluster must not share this: the sweep for pods a dead process or a failed delete left behind (K8sSandboxes.SweepOrphans, at startup and on every reconcile tick) deletes every grain sandbox pod in the namespace it is not itself holding (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig) (default "grain")
   -k8s-network-policy
-    	assert that this cluster's CNI actually enforces NetworkPolicy objects, and that deploy/kubernetes/networkpolicy.yaml is installed. Without it a task asking for no network access is refused rather than silently given a networked pod, since a policy object is accepted by every cluster and enforced by only some. Only used with -k8s-sandboxes (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
+    	assert that this cluster's CNI actually enforces NetworkPolicy objects, and that deploy/kubernetes/networkpolicy.yaml is installed. Without it a task asking for no network access is refused rather than silently given a networked pod, since a policy object is accepted by every cluster and enforced by only some, and attempts holding an external capability grant are refused because nothing then keeps an open-network pod off the metadata server and the cluster. Only used with -k8s-sandboxes and -k8s-granule-sandboxes (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -k8s-node-selector value
     	one "key=value" nodeSelector entry for sandbox pods -- repeat for each. Pins sandboxes to a node pool sized for build workloads, or one whose nodes offer nested virtualization. Only used with -k8s-sandboxes (bwsalmon/agents#320: seeds the stored configuration on first use; ignored once one exists -- see loadConfig)
   -k8s-priority-class-agent string
@@ -252,7 +260,7 @@ Usage of grain daemon:
   -kontur-workspace string
     	former name of -granule-workspace, still accepted so existing systemd unit files keep working
   -local-scripts value
-    	NAME=/absolute/path/local-scripts.yaml, repeatable: a host-managed local-scripts declaration a task holding local-scripts:NAME is served (docs/local-scripts.md). Every other declaration is read from the state repository's local-scripts/NAME/local-scripts.yaml
+    	NAME=/absolute/path/local-scripts.yaml, repeatable: a host-managed local-scripts declaration, each of whose scripts a task holding its host-script grant is served (https://grain.dev/capabilities/host-script#host-script {script}; docs/local-scripts.md). Every other declaration is read from the state repository's local-scripts/NAME/local-scripts.yaml
   -management-url string
     	optional external http:// or https:// URL where this deployment's lifecycle and upgrades are managed (for example its registry entry page), shown in place of in-VM self-upgrade controls when -disable-self-upgrade is set ($GRAIN_MANAGEMENT_URL when unset)
   -max-agent-turns int
@@ -337,6 +345,8 @@ Usage of grain daemon:
     	removed: the rendezvous relay is gone. The daemon refuses to start with this set
   -relay-url string
     	removed: the rendezvous relay is gone. The daemon refuses to start with this set
+  -release-approval-kms-key string
+    	Cloud KMS EC_SIGN_P256_SHA256 key version (projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<n>) to sign Inbox release approvals with, so the private key never leaves KMS; empty keeps the key in the secrets store (secret release-approval-key). Changing it changes the public key grain release approval-key reports, so each repository's GRAIN_RELEASE_APPROVAL_KEY variable must be updated to match; defaults to $GRAIN_RELEASE_APPROVAL_KMS_KEY
   -repair-reserve-sandboxes int
     	how many standard agent sandboxes' worth of that budget is kept for base-branch repairs -- tasks marked fixes_base_branch and the CI confirming their branch green -- so a red base branch's repair starts on a saturated deployment instead of queueing behind the work it blocks. 0 reserves nothing; a repair the reserve cannot hold may still pre-empt work blocked on the same base (model.Budget.RepairReserve) (default 1)
   -repo value
@@ -433,18 +443,22 @@ Usage of grain daemon:
     	comma-separated branches the UI's Upgrade button, a scheduled upgrade or an agent may upgrade this deployment to, each a path.Match pattern ('*' never crosses a '/'; e.g. main,release/*), or ** for any branch at all; any other branch is refused. The default is grain's own release names -- main, candidate, latest and vX.Y.Z release tags -- which only grain's merge queue and release cut move; a task or feature branch needs listing here (default "main,candidate,rc,latest,v[0-9]*.[0-9]*.[0-9]*")
   -upgrade-drain-window duration
     	maximum time a scheduled upgrade waits for active tasks and CI runs to drain before proceeding with the upgrade (0 waits indefinitely for runs to complete normally)
+  -upgrade-grace-window duration
+    	grace window between confirming a manual upgrade and starting its work, during which the Upgrade pane shows a countdown with Cancel (0 disables the countdown; $GRAIN_UPGRADE_GRACE_WINDOW when unset) (default 10s)
   -upgrade-image string
     	image repository, with no tag, that CI publishes a tag per branch to (e.g. docker.io/grainai/grain); set, the UI's Upgrade button pulls a branch's image instead of building one, and -upgrade-image-ref-file is required
-  -upgrade-image-fallback string
-    	fallback image source when the primary source cannot fetch a candidate daemon image: "none" or "registry" (legacy "release-assets" logs a deprecation warning and maps to "none"; or GRAIN_UPGRADE_IMAGE_FALLBACK)
   -upgrade-image-ref-file string
     	file a successful -upgrade-image upgrade rewrites with the image the service should run, as one GRAIN_IMAGE=<ref> line for grain-daemon.service to read as an EnvironmentFile (required with -upgrade-image)
-  -upgrade-image-source string
-    	where -upgrade-image pulls candidate container images from: "registry" (docker pull, the default; legacy "release-assets" logs a deprecation warning and maps to "registry"; or GRAIN_UPGRADE_IMAGE_SOURCE)
   -upgrade-install-path string
     	where a successful upgrade's binary is installed to (required with -upgrade-src-dir)
   -upgrade-restart-cmd value
     	one argument of the command run at the end of a successful upgrade to bring the new build up -- repeat for every argument, e.g. -upgrade-restart-cmd=sudo -upgrade-restart-cmd=systemctl -upgrade-restart-cmd=restart -upgrade-restart-cmd=grain-daemon.service. Omitted entirely, the upgrade still happens but nothing brings the new build up on its own. Used by both upgrade paths below.
+  -upgrade-reviewed-merge-logins string
+    	comma-separated forge logins the -upgrade-reviewed-merge-repo repository's grain merges as; a merge by one of them counts as reviewed
+  -upgrade-reviewed-merge-repo string
+    	owner/name (github.com) or host/owner/name (a GitHub Enterprise Server, asked at https://<host>/api/v3) of the repository -upgrade-image is built from: refuse an upgrade whose image's commit did not reach its main or release/v* through a reviewed merge -- one grain made (-upgrade-reviewed-merge-logins) or one the forge's review record covers -- with every first-parent commit since the running build's. Needs -upgrade-verify-cmd. Omitted, nothing is asked
+  -upgrade-reviewed-merge-token-file string
+    	file holding a read token for the forge API -upgrade-reviewed-merge-repo is asked through (omitted, it is read through the host's own forge tool when a command-backed ambient source claims its host, and anonymously otherwise)
   -upgrade-src-dir string
     	git checkout of bwsalmon/grain to fetch/build from when the UI's Upgrade button is used; empty disables the feature
   -upgrade-verify-cmd value

@@ -50,24 +50,17 @@ sha256sum ~/.local/bin/grain         # record it beside $PINNED
 grain version
 ```
 
-`scripts/install-grain.sh` does it in one command. By default it installs
-from the release's GitHub release assets instead
-([docs/release-assets.md](release-assets.md)): it downloads `images.json` and
-the `grain-image.tar.gz` tarball it names, checks the tarball against the
-manifest's sha256 and its `.sha256` sidecar, `docker load`s it and checks the
-loaded image ID, so no registry is involved. With `-image` it pulls from the
-registry as above, and refuses an image whose signature does not verify when
-you give it a key:
+`scripts/install-grain.sh` does it in one command, and refuses an image whose
+signature does not verify when you give it a key:
 
 ```sh
-scripts/install-grain.sh -version v1.9.0                     # release assets
-scripts/install-grain.sh -version v1.9.0 -image docker.io/grainai/grain -key cosign.pub
+scripts/install-grain.sh -version v1.9.0 -key cosign.pub
 ```
 
 If `~/.local/bin` is not on your `PATH`, add it. Without docker, copy the
 binary off any machine that has it. Every `vX.Y.Z` release also carries
 `grain-<os>-<arch>.tar.gz` archives for Linux and macOS and a
-`checksums.txt` (docs/release-assets.md, "The grain CLI"), which a running
+`checksums.txt` ([docs/release-assets.md](release-assets.md)), which a running
 daemon's `curl -fsSL <origin>/cli/install.sh | sh` installs. To build from
 source instead, use `make dist-cli`. It writes the same
 `bin/dist/grain-<os>-<arch>.tar.gz` and `checksums.txt`.
@@ -160,15 +153,17 @@ approvers: ["me@example.com", "me"]
 allow_unapproved_external: false
 capabilities:
   allow:
-    - "grain-ci"  # and the ones you named
+    - "https://grain.dev/capabilities/grain#ci={}"  # and the ones you named
     # The Director chat's own grants. Remove one and the Director is held for it.
-    - "durable"
-    - "self-debug"
-    - "https://grain.dev/capabilities/grain#journal"
-    - "api:deployment:read"
-    - "https://grain.dev/capabilities/grain#health"
+    - "https://grain.dev/capabilities/api#self-debug"
+    - "https://grain.dev/capabilities/grain#source={}"
+    - "https://grain.dev/capabilities/grain#journal={}"
+    - "https://grain.dev/capabilities/api#deployment:read"
+    - "https://grain.dev/capabilities/grain#health={}"
     - 'https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}'
-    - "api:ci-read"
+    - "https://grain.dev/capabilities/api#task-admin"
+    # ... and the Director's other read-only api grants, ending with
+    - "https://grain.dev/capabilities/api#ci-read"
 network: ["open"]
 allow_external_on_host_sandboxes: false
 ```
@@ -179,11 +174,12 @@ from anybody else that does not carry your approval.
 
 Init lists some things you did not name:
 
-- `grain-ci`: the retired bare name (schema migration 96) of
-  `https://grain.dev/capabilities/grain#ci`, which local policy reads as
-  that grant. Grain grants it to every task on a repository whose CI mode
-  is grain, and it carries no credential. It is the run's own
-  `wait_for_checks` against the repository's `.grain/workflows`.
+- `https://grain.dev/capabilities/grain#ci={}`: grain CI. Grain grants
+  it to every task on a repository whose CI mode is grain, and it carries
+  no credential. It is the run's own `wait_for_checks` against the
+  repository's `.grain/workflows`. A policy written by an older init
+  names it `grain-ci`, its retired bare name, which local policy still
+  reads as this grant.
 - `grain/config`: this deployment's own state repository, which the
   Director reads.
 - The Director chat's own grants, named exactly so you can see each one
@@ -274,7 +270,12 @@ journalctl --user -u grain -n 50      # confirm it came up
 `~/.local/bin/grain` in place is enough. If you moved it, re-run `grain
 init workstation -non-interactive`. That rewrites `daemon.sh` and the unit,
 and keeps your policy. To go back, install the previous version the same
-way.
+way. That works only while both versions are at the same store schema
+(`grain schema-version`). The new version migrates `~/.grain`'s store in
+place on its first start and keeps no copy, and an older version refuses
+it. So copy `~/.grain` with the daemon stopped before you upgrade, and
+follow [Downgrading to an earlier build](host-setup.md#downgrading-to-an-earlier-build)
+to go back across a schema change.
 
 ## Uninstalling
 

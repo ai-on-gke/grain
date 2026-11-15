@@ -190,7 +190,9 @@ func (c *Client) pendingConfigChangeFor(ctx context.Context, id, headSHA, verb s
 // settings:write who approved a change adding a host script or widening
 // a scope set would have made a capabilities:admin grant they could not
 // make directly. What the change confers is read from the paths it
-// touches (trustboundary.StateScopes). An unlimited session, the
+// touches, and in tables/grain_config.json from the columns it alters
+// (trustboundary.StateScopes): a max_workers edit needs settings:write
+// alone, an mcp_servers one capabilities:admin. An unlimited session, the
 // deployment's owner holding the access code, holds every scope.
 func configChangeScopeRefusal(ctx context.Context, pending model.PendingConfigChange) error {
 	role := accessRoleFromContext(ctx)
@@ -198,7 +200,7 @@ func configChangeScopeRefusal(ctx context.Context, pending model.PendingConfigCh
 		return nil
 	}
 	var missing []string
-	for _, sc := range trustboundary.StateScopes(pending.Files) {
+	for _, sc := range trustboundary.StateScopes(pending.Files, pending.Columns) {
 		if !role.allows(APIScope(sc), "") {
 			missing = append(missing, sc)
 		}

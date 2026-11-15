@@ -246,6 +246,7 @@ func transcriptObjectRedactor(cfg Config, secretStore *secrets.Store) func() (*r
 		}
 		if secretsDir != "" {
 			known = append(known, knownGitHubTokens(secretsDir)...)
+			known = append(known, knownLooseCredentials(secretsDir)...)
 		}
 		if len(cfg.HostSandboxEnv) > 0 {
 			env, _, err := ResolveHostSandboxEnv(cfg.HostSandboxEnv, os.LookupEnv)

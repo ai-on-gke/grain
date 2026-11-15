@@ -16,6 +16,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -182,12 +184,22 @@ func syncDeclarations(ctx context.Context, deps Deps, repo model.RepoRef,
 	if err := errors.Join(checkTriggerTemplates(ctx, deps.Store, declared.Triggers),
 		checkTriggerApprovers(ctx, deps.Store, declared.Triggers)); err != nil {
 		return recordDeclarationFailure(ctx, deps, repo, now,
-			fmt.Errorf("reading %s's declarations: %w", repo, err))
+			fmt.Errorf("reading %s's declarations: %w", repo, model.DeclarationRefusal{Err: err}))
 	}
 	changed, err := deps.Store.SyncRepoDeclarations(ctx, repo, commit, declared, now, loc)
 	if err != nil {
 		return recordDeclarationFailure(ctx, deps, repo, now,
 			fmt.Errorf("storing %s's declarations: %w", repo, err))
+	}
+	before := ""
+	if last != nil {
+		before = last.LastError
+	}
+	if after, err := deps.Store.GetRepoDeclarationSync(ctx, repo); err == nil && after != nil {
+		noticeDeclarations(ctx, deps.Store, repo, before, after.LastError, after.Commit, now)
+		if after.LastError != "" {
+			log.Printf("orchestrator: %s at %s: %s", repo, shortCommit(commit), after.LastError)
+		}
 	}
 	log.Printf("orchestrator: %s at %s declares %d template(s), %d suite(s), %d schedule(s), %d trigger(s)",
 		repo, shortCommit(commit), len(declared.Templates), len(declared.Suites), len(declared.Schedules),
@@ -367,12 +379,88 @@ func logSettingsChanges(repo model.RepoRef, commit, source string, changed []mod
 // what somebody looking at the repository sees, and the cycle's own log
 // is what somebody looking at the daemon sees, and a failure this quiet
 // deserves both.
+//
+// A refusal (model.DeclarationRefusal: the files themselves, not the
+// repository being out of reach) also raises an Inbox notice the first
+// time it is seen, and both say which commit's declarations are still in
+// force -- the thing nobody reading the bare parse error can work out.
 func recordDeclarationFailure(ctx context.Context, deps Deps, repo model.RepoRef,
 	now time.Time, cause error) error {
+	last, _ := deps.Store.GetRepoDeclarationSync(ctx, repo)
+	inForce := ""
+	before := ""
+	if last != nil {
+		inForce, before = last.Commit, last.LastError
+	}
+	if model.IsDeclarationRefusal(cause) {
+		cause = fmt.Errorf("%w (%s)", cause, inForceNote(inForce))
+	}
 	if err := deps.Store.RecordDeclarationFailure(ctx, repo, cause.Error(), now); err != nil {
 		return errors.Join(cause, fmt.Errorf("orchestrator: recording %s's declaration failure: %w", repo, err))
 	}
+	if model.IsDeclarationRefusal(cause) {
+		noticeDeclarations(ctx, deps.Store, repo, before, cause.Error(), inForce, now)
+	}
 	return fmt.Errorf("orchestrator: %w", cause)
+}
+
+func inForceNote(commit string) string {
+	if commit == "" {
+		return "nothing from this repository has loaded yet"
+	}
+	return "the declarations of " + shortCommit(commit) + " stay in force"
+}
+
+// DeclarationsRefusedSubject is the family of the Inbox notice a refused
+// or held-back declaration raises: one subject per repository and error
+// text, so a new error is a new notice and the same error re-read every
+// poll is not.
+const DeclarationsRefusedSubject = "declarations.refused"
+
+func declarationNoticeSubject(repo model.RepoRef, lastError string) string {
+	sum := sha256.Sum256([]byte(lastError))
+	return DeclarationsRefusedSubject + ":" + repo.String() + ":" + hex.EncodeToString(sum[:4])
+}
+
+// noticeDeclarations keeps a repository's Inbox notice level with its
+// sync row's LastError: before is what the row said until this poll,
+// after what it says now. A changed error clears the notice for the old
+// one and raises one for the new; a cleared error clears it. A failure to
+// reach the repository is not a refusal and never gets here.
+func noticeDeclarations(ctx context.Context, store *model.Store, repo model.RepoRef,
+	before, after, inForce string, now time.Time) {
+	if before == after {
+		return
+	}
+	if before != "" {
+		if _, err := store.ClearNotification(ctx, declarationNoticeSubject(repo, before), "automation:orchestrator"); err != nil {
+			log.Printf("orchestrator: clearing %s's declarations notice: %v", repo, err)
+		}
+	}
+	if after == "" {
+		return
+	}
+	title := "Declarations in " + repo.String() + " were refused"
+	body := "grain could not read " + repo.String() + "'s `.grain` declarations, and " + inForceNote(inForce) + ":\n\n" +
+		after + "\n\nNothing else says so: fix the files, or, if they were written for a newer grain than this " +
+		"deployment runs, upgrade the deployment (docs/declarations.md, \"Declarations newer than the daemon\")."
+	if strings.HasPrefix(after, model.HeldBackMarker) {
+		title = "Declarations in " + repo.String() + " need a newer grain"
+		body = "This grain build could not decode some of " + repo.String() + "'s `.grain` files and held them back; " +
+			"everything else it declares loaded.\n\n" + strings.TrimPrefix(after, model.HeldBackMarker) +
+			"\n\nUpgrade the deployment to load them (docs/declarations.md, \"Declarations newer than the daemon\")."
+	}
+	if _, err := store.RaiseNotification(ctx, model.Notification{
+		Subject:  declarationNoticeSubject(repo, after),
+		Severity: model.NotificationWarning,
+		Title:    title,
+		Body:     body,
+		Repo:     repo.String(),
+		RaisedBy: "automation:orchestrator",
+		RaisedAt: now,
+	}); err != nil {
+		log.Printf("orchestrator: raising %s's declarations notice: %v", repo, err)
+	}
 }
 
 func shortCommit(commit string) string {

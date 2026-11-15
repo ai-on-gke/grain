@@ -49,6 +49,8 @@ type Server struct {
 
 	Builtins       []BuiltinEntry
 	BuiltinCommand string
+	Reexec         func() error
+	AllowHandover  bool
 }
 
 // Drain does nothing off Linux.
@@ -56,6 +58,9 @@ func (s *Server) Drain() {}
 
 // Cutover does nothing off Linux.
 func (s *Server) Cutover() {}
+
+// StartHandover does nothing off Linux.
+func (s *Server) StartHandover() {}
 
 // Draining is always false off Linux.
 func (s *Server) Draining() bool { return false }

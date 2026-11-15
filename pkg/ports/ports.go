@@ -59,6 +59,11 @@ const SandboxAccess = 4244
 const (
 	// Figma is the figma capability server's loopback data-plane port.
 	Figma = 4253
+	// Git is the git capability server's loopback data-plane port, and
+	// unless -sandbox-port says otherwise its port inside the sandbox
+	// too. It was 9728 once: the daemon's own git proxy, which held it
+	// first, so the built-in never started in a daemon.
+	Git = 4254
 )
 
 // 4280-4289: persistent sandboxes' host_port (model.PersistentSandbox),

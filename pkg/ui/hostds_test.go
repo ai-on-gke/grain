@@ -375,3 +375,24 @@ func TestAttemptCapabilityAuditIncludesHostd(t *testing.T) {
 		t.Fatalf("capability-audit records = %+v, want [hostd=h2, hostd='']", got.Records)
 	}
 }
+
+func TestHostCLISnippetGatesEnvOpenOnFeature(t *testing.T) {
+	modern := hostd.ThisHello("v3.5.0")
+	for _, fw := range []string{"claude", "codex"} {
+		got := ui.HostCLISnippet(fw, modern)
+		if !strings.Contains(got, `env: ["*"]`+"\n") || !strings.Contains(got, "paths_under: [~/.grain/hostd-stage]\n") {
+			t.Errorf("HostCLISnippet(%q, modern) =\n%s", fw, got)
+		}
+	}
+	if got := ui.HostCLISnippet("antigravity", modern); !strings.Contains(got, `env: [HOME, "*"]`+"\n") {
+		t.Errorf("HostCLISnippet(antigravity, modern) =\n%s", got)
+	}
+
+	older := hostd.Hello{Protocol: 4, Features: []hostd.Feature{hostd.FeatureStart, hostd.FeatureStage, hostd.FeatureFeatures}}
+	for _, fw := range []string{"claude", "codex", "antigravity"} {
+		got := ui.HostCLISnippet(fw, older)
+		if strings.Contains(got, `"*"`) || strings.Contains(got, "~/") {
+			t.Errorf("HostCLISnippet(%q, older) wrote env_open syntax for a host without env_open:\n%s", fw, got)
+		}
+	}
+}

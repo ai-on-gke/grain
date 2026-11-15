@@ -47,10 +47,23 @@ async function expectPortSection(page, settings) {
   for (let i = 0; i < ROWS.length; i++) {
     await expect(rows.nth(i).locator("td")).toHaveText(ROWS[i]);
   }
+  // The repository's own port-types findings are already on the
+  // declarations status above the table, so the table adds only the rest
+  // -- and every finding is said exactly once on the tab (2026-11-11
+  // repository walkthrough: each declared one used to be drawn twice).
+  const said = settings.declarationsStatus?.warnings || [];
   const warnings = ports.locator(".port-warning");
   await expect(warnings).toHaveText(
-    settings.portWarnings.map((w) => `Warning: ${w}`),
+    settings.portWarnings
+      .filter((w) => !said.includes(w))
+      .map((w) => `Warning: ${w}`),
   );
+  const panel = page.locator("[role=tabpanel]:not([hidden])");
+  for (const w of settings.portWarnings) {
+    await expect(panel.getByText(`Warning: ${w}`, { exact: true })).toHaveCount(
+      1,
+    );
+  }
   // Read-only: nothing in the section can be edited or pressed.
   await expect(
     ports.locator("input, textarea, select, button, [role=button]"),

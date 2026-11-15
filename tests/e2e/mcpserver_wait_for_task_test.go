@@ -136,7 +136,7 @@ func TestWaitForTaskParksThenResumesWhenTheTargetMerges(t *testing.T) {
 		t.Fatalf("runs = %+v, want one parked", runs)
 	}
 	prompt := orchestrator.BuildPrompt(*a, "", "", false, 0, orchestrator.History{
-		Attempt: 2, Attempts: runs, Resumed: orchestrator.ResumedFrom(ctx, store, runs),
+		Attempt: 2, Attempts: runs, Resumed: orchestrator.ResumedFrom(ctx, store, *a, runs),
 	}, nil)
 	for _, want := range []string{"resumes from a park", "Task b1", "outcome merged"} {
 		if !strings.Contains(prompt, want) {

@@ -53,6 +53,12 @@ GRAIN_DAEMON_URL='@GRAIN_DAEMON_URL@'
 GRAIN_DAEMON_RELEASE='@GRAIN_DAEMON_RELEASE@'
 GRAIN_DAEMON_IMAGE='@GRAIN_DAEMON_IMAGE@'
 
+default_agentd_template() {
+  cat <<'AGENTD_TEMPLATE'
+@GRAIN_AGENTD_TEMPLATE@
+AGENTD_TEMPLATE
+}
+
 VERSIONS_DIR=/usr/local/lib/grain/hostd
 CONFIG_DIR=/etc/grain
 ALLOWLIST="$CONFIG_DIR/hostd.yaml"
@@ -81,6 +87,7 @@ Options:
   --join CODE          enroll via a shared code from Settings -> Hosts -> Invite hosts
   --agentd             enroll and install rootless grain-agentd (--user systemd service)
   --agentd-bin PATH    grain-agentd binary to install when --agentd is set
+  --print-template     with --agentd: print the controller's allowlist template JSON and exit
   --name NAME          the host's name in the daemon's registry (Settings -> Hosts; optional with --join)
   --user USER          the account hostd runs as and the CLIs it starts run as
                        (default: current user with --join, else \$SUDO_USER; never root)
@@ -127,6 +134,7 @@ as_root() {
 JOIN_CODE="${GRAIN_HOST_JOIN_CODE:-}"
 AGENTD=0
 AGENTD_BIN="${GRAIN_AGENTD_BIN:-}"
+PRINT_TEMPLATE=0
 NAME="${GRAIN_HOSTD_NAME:-}"
 HOSTD_USER="${GRAIN_HOSTD_USER:-${SUDO_USER:-}}"
 CAPACITY=""
@@ -149,6 +157,7 @@ parse_args() {
       --join) need_arg "$1" $#; JOIN_CODE="$2"; shift 2 ;;
       --agentd) AGENTD=1; shift ;;
       --agentd-bin) need_arg "$1" $#; AGENTD_BIN="$2"; shift 2 ;;
+      --print-template) PRINT_TEMPLATE=1; shift ;;
       --name) need_arg "$1" $#; NAME="$2"; shift 2 ;;
       --user) need_arg "$1" $#; HOSTD_USER="$2"; shift 2 ;;
       --capacity) need_arg "$1" $#; CAPACITY="$2"; shift 2 ;;
@@ -483,6 +492,18 @@ enroll_host() {
   fi
 }
 
+supports_env_open() {
+  [ -n "${GRAIN:-}" ] && [ -x "$GRAIN" ] && [ -n "${WORK:-}" ] || return 1
+  probe="$WORK/env-open-probe.yaml"
+  printf 'clis:\n  probe:\n    path: /bin/sh\n    env: ["*"]\n' > "$probe"
+  as_root chown root:root "$probe"
+  as_root chmod 0644 "$probe"
+  ok=0
+  as_root "$GRAIN" hostd -check -allowlist "$probe" >/dev/null 2>&1 || ok=1
+  rm -f "$probe"
+  return "$ok"
+}
+
 allowlist_content() {
   cat <<YAML
 # grain hostd's allowlist: every program the grain daemon at
@@ -502,16 +523,20 @@ YAML
       printf '  "%s": "%s"\n' "${label%%=*}" "${label#*=}"
     done
   fi
-  cat <<'YAML'
+  env_example='[HOME, AGY_CLI_DISABLE_AUTO_UPDATE, GEMINI_API_KEY, GOOGLE_API_KEY]'
+  if supports_env_open; then
+    env_example='[HOME, "*"]'
+  fi
+  cat <<YAML
 # An agent CLI this machine runs for the daemon, for example:
 #  agy:
 #    path: /usr/local/bin/agy
 #    paths_under: [/var/lib/grain]
 #    cwd_under: [/var/lib/grain]
-#    env: [HOME]
+#    env: $env_example
 clis: {}
 # A stdio capability server a capability config starts with run: host;
-# grain's own are added below by `grain hostd -ensure-builtins`.
+# grain's own are added below by \`grain hostd -ensure-builtins\`.
 capabilities:
 YAML
 }
@@ -591,7 +616,43 @@ start_unit() {
   fi
 }
 
+download_agentd() {
+  [ "$(uname -s)" = Linux ] || return 1
+  case "$(uname -m)" in
+    x86_64|amd64) agentd_arch=amd64 ;;
+    aarch64|arm64) agentd_arch=arm64 ;;
+    *) return 1 ;;
+  esac
+  agentd_base="${SERVER%/}/api/hostd/agentd/linux/$agentd_arch"
+  log "downloading grain-agentd (linux/$agentd_arch) from $SERVER"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL --retry 2 -o "$WORK/manifest.json" -- "$agentd_base/manifest.json" || return 1
+    curl -fsSL --retry 2 -o "$WORK/grain-agentd" -- "$agentd_base" || return 1
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q -O "$WORK/manifest.json" -- "$agentd_base/manifest.json" || return 1
+    wget -q -O "$WORK/grain-agentd" -- "$agentd_base" || return 1
+  else
+    die "neither curl nor wget is installed to download grain-agentd"
+  fi
+  agentd_want="$(tr -d ' \t\r\n' < "$WORK/manifest.json" | sed -n 's/.*"sha256":"\([0-9a-f]\{64\}\)".*/\1/p')"
+  if [ "${#agentd_want}" -ne 64 ]; then
+    die "$agentd_base/manifest.json carries no valid 64-digit SHA-256"
+  fi
+  agentd_got="$(sha256_of "$WORK/grain-agentd")"
+  if [ "$agentd_got" != "$agentd_want" ]; then
+    die "$agentd_base has SHA-256 ${agentd_got:-<empty>}, not $agentd_want: not installing it"
+  fi
+  chmod 0755 "$WORK/grain-agentd"
+  return 0
+}
+
 run_agentd_install() {
+  tpl="$(default_agentd_template)"
+  if [ "$PRINT_TEMPLATE" = 1 ]; then
+    [ -n "$tpl" ] || die "this copy of the script carries no agentd allowlist template"
+    printf '%s\n' "$tpl"
+    return 0
+  fi
   [ "$(id -u)" != 0 ] || die "--agentd installs a rootless user service: run this as yourself, not root"
   check_join_code
   check_server
@@ -603,6 +664,8 @@ run_agentd_install() {
       -*) die "$value holds a leading '-': give a plain value" ;;
     esac
   done
+  make_work_dir
+  trap 'rm -rf "$WORK"' EXIT
   if [ -n "$AGENTD_BIN" ]; then
     [ -x "$AGENTD_BIN" ] || die "--agentd-bin $AGENTD_BIN is not an executable"
     AGENTD_CMD="$AGENTD_BIN"
@@ -610,8 +673,15 @@ run_agentd_install() {
     AGENTD_CMD="$(command -v grain-agentd)"
   elif [ -n "${HOME:-}" ] && [ -x "$HOME/.local/bin/grain-agentd" ]; then
     AGENTD_CMD="$HOME/.local/bin/grain-agentd"
+  elif download_agentd; then
+    AGENTD_CMD="$WORK/grain-agentd"
   else
-    die "grain-agentd not found on \$PATH or ~/.local/bin (pass --agentd-bin PATH, or omit --agentd to install the host agent)"
+    die "grain-agentd not found on \$PATH or ~/.local/bin, and could not download it from $SERVER (pass --agentd-bin PATH, or omit --agentd to install the host agent)"
+  fi
+
+  if [ -z "${GRAIN_AGENTD_TEMPLATE:-}" ] && [ -n "$tpl" ] && [ "$SERVER" = "$GRAIN_DAEMON_URL" ]; then
+    GRAIN_AGENTD_TEMPLATE="$tpl"
+    export GRAIN_AGENTD_TEMPLATE
   fi
 
   set -- "$AGENTD_CMD" install -server "$SERVER"
@@ -619,10 +689,10 @@ run_agentd_install() {
   [ -z "$NAME" ] || set -- "$@" -name "$NAME"
   [ -z "$IAP_AUDIENCE" ] || set -- "$@" -iap-audience "$IAP_AUDIENCE"
   [ "$START" = 1 ] || set -- "$@" -no-start
-  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
-    exec "$@" </dev/tty
+  if ( : </dev/tty ) 2>/dev/null; then
+    "$@" </dev/tty
   else
-    exec "$@"
+    "$@"
   fi
 }
 

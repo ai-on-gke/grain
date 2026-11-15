@@ -1,0 +1,19 @@
+{
+  "staleSchedules": [
+    {
+      "id": "sched-never-ran",
+      "title": "Weekly docs link check",
+      "repo": { "Owner": "acme", "Name": "gadgets", "Host": "" },
+      "cadence": 604800000000000
+    },
+    {
+      "id": "workflow-acme-widgets-live-agent",
+      "title": "live-agent",
+      "repo": { "Owner": "acme", "Name": "widgets", "Host": "" },
+      "workflow": "live-agent",
+      "cadence": 86400000000000,
+      "lastRunAt": "2026-10-28T07:37:00Z",
+      "reason": "this repository uses github CI mode, so .grain/workflows/live-agent.yml's cron is dropped at every firing: port it to .github/workflows/ or declare a .grain/schedules/ entry with grain-ci: true"
+    }
+  ]
+}

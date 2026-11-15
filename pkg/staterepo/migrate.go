@@ -276,21 +276,6 @@ type MigratedReport struct {
 	ApplyErr error
 }
 
-// Migrated is Reformat's counterpart for a deployment whose rows came
-// across: this database, exported at this build's schema, over a dump
-// written at another one, in one commit that says the rows are the same
-// rows.
-//
-// Mechanically it shares Reformat's export-and-push shape, plus one step
-// Reformat never wants: when the repository holds commits past this host's
-// loaded-head marker that the old daemon never applied, MigrateRepo attempts
-// to three-way merge those settings changes into db before exporting at the
-// new schema, and reports any commits that still could not be applied.
-func Migrated(ctx context.Context, r *Repo, db *sql.DB, version int) (bool, error) {
-	report, err := MigrateRepo(ctx, r, db, version)
-	return report.Committed, err
-}
-
 // MigrateRepo brings the state repository onto version from db, first
 // attempting to merge any commits in the state repository past this host's
 // loaded-head marker that the database had not yet applied.
@@ -549,13 +534,9 @@ func formatUnappliedInline(commits []UnappliedCommit) string {
 	return strings.Join(parts, ", ")
 }
 
-// migratedCommitMessage says what a migration did, in the terms
+// migratedCommitMessageWithReport says what a migration did, in the terms
 // reformatCommitMessage says what a reformat did -- and against it,
 // since the two diffs are indistinguishable.
-func migratedCommitMessage(found, version int, build string, now time.Time) string {
-	return migratedCommitMessageWithReport(found, version, build, now, MigratedReport{})
-}
-
 func migratedCommitMessageWithReport(found, version int, build string, now time.Time, report MigratedReport) string {
 	was := "an earlier schema"
 	if found > 0 {

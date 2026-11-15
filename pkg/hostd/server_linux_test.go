@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -716,4 +717,37 @@ func socketInodeOf(t *testing.T, ln net.Listener) uint64 {
 		t.Fatalf("readlink = %q: %v", link, err)
 	}
 	return inode
+}
+
+// Serve is done with its socket path when it returns: the replacement
+// hostd a cutover or handover starts next -- in this process for an
+// in-process handover, or the same pid after Reexec -- makes its own
+// socket there, and a goroutine of the old Serve still removing the path
+// afterwards unlinked the new socket, so every daemon dial found nothing
+// to connect to until the new hostd restarted.
+func TestServeHasLetGoOfItsSocketPathWhenItReturns(t *testing.T) {
+	for i := range 20 {
+		ts := startServer(t, "", nil)
+		if _, err := ts.client.Hello(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		ts.srv.Drain() // nothing runs: Serve returns at once
+		if err := <-ts.done; err != nil {
+			t.Fatal(err)
+		}
+		ts.done <- nil
+		if _, err := os.Lstat(ts.srv.Socket); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("pass %d: the socket path after Serve returned: %v, want it removed already", i, err)
+		}
+		// What the replacement makes there is its own from then on.
+		if err := os.WriteFile(ts.srv.Socket, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for range 100 { // let any straggler of the old Serve run
+			runtime.Gosched()
+		}
+		if _, err := os.Lstat(ts.srv.Socket); err != nil {
+			t.Fatalf("pass %d: what the next hostd made at the socket path is gone: %v", i, err)
+		}
+	}
 }

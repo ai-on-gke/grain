@@ -629,7 +629,10 @@ func hasAPIGrant(grants []model.Grant) bool {
 	})
 }
 
-func checkAPIGrantsPolicy(policy model.CapabilityPolicy, configured map[string]protocol.ServerConfig, task model.Task) error {
+// checkTaskGrantsPolicy holds task's api grants and its own repository
+// access to the capability policy, which a task with no capability server
+// reference is judged by without a pass being minted.
+func checkTaskGrantsPolicy(policy model.CapabilityPolicy, configured map[string]protocol.ServerConfig, task model.Task) error {
 	subject := model.CapabilitySubject{Repo: task.Target, Kind: model.CapabilityRunTask}
 	for _, g := range task.Grants {
 		if !isAPIServerGrant(g.Capability) {
@@ -640,7 +643,24 @@ func checkAPIGrantsPolicy(policy model.CapabilityPolicy, configured map[string]p
 			return &grainRefusalError{Grant: model.CapabilityGrantRef(canon), Reason: err.Error()}
 		}
 	}
+	// The task's own reads and writes, as the …/repo#read and #write
+	// grants they are (unified-grants §3): a policy's deny rule naming
+	// either refuses them here, as it would any other grant.
+	for _, g := range model.TaskRepoGrants(task) {
+		if g.Capability == model.RepoTargetRef {
+			continue
+		}
+		if err := policy.PermitsTaskRepoGrant(g, subject, configured); err != nil {
+			return &grainRefusalError{Grant: g.Capability, Reason: err.Error()}
+		}
+	}
 	return nil
+}
+
+// hasRepoAccess reports whether task reads or writes a repository besides
+// its target, which the capability policy judges (checkTaskGrantsPolicy).
+func hasRepoAccess(task model.Task) bool {
+	return len(task.Reads) > 0 || len(task.Writes) > 0
 }
 
 func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func(runID string) string) dispatch.Admitter {
@@ -649,7 +669,7 @@ func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func
 		// Read before admit rather than after it, so that nothing admit
 		// reserves is left outstanding by a read failing in between.
 		task, err := deps.Store.GetTask(ctx, candidate.TaskID)
-		if err != nil || task == nil || (!model.HasCapabilityRef(task.Grants) && !hasAPIGrant(task.Grants)) {
+		if err != nil || task == nil || (!model.HasCapabilityRef(task.Grants) && !hasAPIGrant(task.Grants) && !hasRepoAccess(*task)) {
 			return admit(ctx, candidate)
 		}
 		adm, err := admit(ctx, candidate)
@@ -679,7 +699,7 @@ func capabilityAdmitterFor(deps Deps, admit dispatch.Admitter, connectionOf func
 			}
 			if cfg != nil {
 				configured, _ := intree.EnsureBuiltins(cfg.MCPServers)
-				if err := checkAPIGrantsPolicy(cfg.CapabilityPolicy, configured, *task); err != nil {
+				if err := checkTaskGrantsPolicy(cfg.CapabilityPolicy, configured, *task); err != nil {
 					if serr := admissionMintFailed(ctx, deps, passes, *task, err, at); serr != nil {
 						log.Printf("orchestrator: task %s: recording its failed capability admission: %v", task.ID, serr)
 					}
@@ -866,7 +886,7 @@ func mintCapabilityPass(ctx context.Context, deps Deps, task model.Task, candida
 			return nil, &grainRefusalError{Grant: g.Ref.String(), Reason: err.Error()}
 		}
 	}
-	if err := checkAPIGrantsPolicy(policy, configured, task); err != nil {
+	if err := checkTaskGrantsPolicy(policy, configured, task); err != nil {
 		return nil, err
 	}
 	// What a local-scripts declaration became on host-script stays withheld

@@ -311,7 +311,7 @@ func branchCommits(client github.Client, repo model.RepoRef, base, branch string
 	if base == "" {
 		return nil, false
 	}
-	commits, err := client.CompareCommits(repo.Owner, repo.Name, base, branch)
+	commits, err := client.CompareCommits(repo.StoredOwner(), repo.Name, base, branch)
 	if err != nil {
 		log.Printf("orchestrator: reading %s's commits over %s: %v -- "+
 			"the pull request gets grain's plain one-line body instead", branch, base, err)
@@ -354,7 +354,7 @@ func branchCommits(client github.Client, repo model.RepoRef, base, branch string
 // and the pull request is open either way.
 func refreshPullRequest(ctx context.Context, store *model.Store, client github.Client, task model.Task, number int) {
 	repo, headRef, _ := taskPullRequestTarget(ctx, store, task)
-	detail, err := client.GetPullRequest(repo.Owner, repo.Name, number)
+	detail, err := client.GetPullRequest(repo.StoredOwner(), repo.Name, number)
 	if err != nil {
 		log.Printf("orchestrator: reading %s/%s#%d to refresh its description: %v",
 			repo.Owner, repo.Name, number, err)
@@ -384,7 +384,7 @@ func refreshPullRequest(ctx context.Context, store *model.Store, client github.C
 	// still pushing to.
 	commits, _ := branchCommits(client, repo, base, headRef)
 	if title := titleFromCommits(commits); title != "" && title != detail.Title {
-		if err := client.UpdatePullRequestTitle(repo.Owner, repo.Name, number, title); err != nil {
+		if err := client.UpdatePullRequestTitle(repo.StoredOwner(), repo.Name, number, title); err != nil {
 			log.Printf("orchestrator: renaming %s/%s#%d: %v -- "+
 				"it is still called what the branch's first commit called it",
 				repo.Owner, repo.Name, number, err)
@@ -402,7 +402,7 @@ func refreshPullRequest(ctx context.Context, store *model.Store, client github.C
 	if body == detail.Body {
 		return
 	}
-	if err := client.UpdatePullRequestBody(repo.Owner, repo.Name, number, body); err != nil {
+	if err := client.UpdatePullRequestBody(repo.StoredOwner(), repo.Name, number, body); err != nil {
 		log.Printf("orchestrator: rewriting %s/%s#%d's description: %v -- "+
 			"it still says what the branch looked like when it was opened",
 			repo.Owner, repo.Name, number, err)

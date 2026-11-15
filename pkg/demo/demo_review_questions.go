@@ -71,7 +71,9 @@ func seedReviewQuestionsDemo(ctx context.Context, store *model.Store, cfg ui.Con
 			"- `Makefile:41` -- Should the core build also publish the google image? I recommend not: "+
 			"keep the core image core-only and publish google from its own target.\n\n"+
 			"Reply here (or on task %s) with your decision, and grain sends another run on this task "+
-			"to carry it out. Or ship it as it stands with **Ship as is** (Submit), leaving these open.",
+			"to carry it out -- it fixes what you decided and a clean re-review clears the gate. "+
+			"Pressing Submit records your approval only and will not merge over open findings; "+
+			"merging without fixing them requires a force-merge override with a reason.",
 			review.ID, repo, review.ID),
 		CreatedAt: now.Add(-5 * time.Minute),
 	})

@@ -169,7 +169,7 @@ describe("a built-in template", () => {
       screen.queryByRole("button", { name: "Add grant…" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /Remove api:tasks:read/i }),
+      screen.queryByRole("button", { name: /Remove api#tasks:read/i }),
     ).not.toBeInTheDocument();
     unmount();
 
@@ -189,7 +189,7 @@ describe("a built-in template", () => {
       screen.queryByRole("button", { name: "Add grant…" }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /Remove api:tasks:read/i }),
+      screen.queryByRole("button", { name: /Remove api#tasks:read/i }),
     ).not.toBeInTheDocument();
   });
 

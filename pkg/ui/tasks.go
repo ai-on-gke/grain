@@ -23,6 +23,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -184,6 +185,10 @@ type Task struct {
 	// NoPort is model.Task.NoPort: this task's change is not ported to
 	// its repository's other paired branches.
 	NoPort bool `json:"noPort,omitempty"`
+	// FoundIn is the release this task is filed against
+	// (model.LinkFoundIn), vX.Y.Z or vX.Y.Z-rc.N; "" when none is
+	// recorded.
+	FoundIn string `json:"foundIn,omitempty"`
 	// FixesBaseBranch is model.FixesBaseBranch: this task is a repair of
 	// its base branch -- grain's own, or one a person marked -- and is
 	// never made to wait on that branch's repair. GrainBaseRepair says
@@ -215,8 +220,15 @@ type Task struct {
 	// telling a reader apart from "no review".
 	ReviewTemplateID   string `json:"reviewTemplateId,omitempty"`
 	ReviewTemplateName string `json:"reviewTemplateName,omitempty"`
-	Owner              string `json:"owner"`
-	Creator            string `json:"creator,omitempty"`
+	// TemplateID is the template this task was filed from --
+	// model.Task.SourceTemplateID: a schedule's, a suite's or a path
+	// trigger's firing, a filing or a proposal naming a templateId, or a
+	// port of a task that was. Omitted for a task written from scratch,
+	// and for every task filed before grain recorded it. A record for
+	// reporting, deciding nothing about the task.
+	TemplateID string `json:"templateId,omitempty"`
+	Owner      string `json:"owner"`
+	Creator    string `json:"creator,omitempty"`
 	// FiledVia is the X-Grain-Client label of the tool that filed the
 	// task (model.Task.FiledVia), and Provenance the line it reads as
 	// ("filed from jetski/1.4 by jane@example.com"); both "" for a task
@@ -332,6 +344,13 @@ type Task struct {
 	// replaced nothing and was replaced by nothing.
 	Supersedes   string `json:"supersedes,omitempty"`
 	SupersededBy string `json:"supersededBy,omitempty"`
+	// RolledOverFrom is the durable task this one was rolled over from,
+	// and RolledOverTo the successor this one was rolled over to --
+	// model.LinkRolledOverFrom and model.LinkRolledOverTo
+	// (design/design/durable-tasks.design.md#DT-15). RolledOverTo is the
+	// forward a reader of a closed task follows to the work's live task.
+	RolledOverFrom string `json:"rolledOverFrom,omitempty"`
+	RolledOverTo   string `json:"rolledOverTo,omitempty"`
 	// SupersedeMoved is the open dependents of the task this one
 	// superseded that now wait on this one instead
 	// (model.SupersedeResult.Moved), and SupersedeKept the ones left
@@ -382,6 +401,19 @@ type Task struct {
 	// ChangeTargetKind is the kind of non-git change this task's work is
 	// ("changelist"), or "" for a git task (model.ChangeTarget).
 	ChangeTargetKind string `json:"changeTargetKind,omitempty"`
+	// MergeGates lists each required merge gate on this task's pull request
+	// (CI, security review, configured/trigger code review, and human
+	// approval) and its current state.
+	MergeGates []model.MergeGate `json:"mergeGates,omitempty"`
+	// ReviewFindings lists any unresolved review-findings gate blocks on
+	// this task's pull request.
+	ReviewFindings []model.ReviewFindingsRecord `json:"reviewFindings,omitempty"`
+	// GateOverride is the most recent explicit merge:force gate override on
+	// this task, if any.
+	GateOverride *model.GateOverrideRecord `json:"gateOverride,omitempty"`
+	// HumanApprovedBy is who recorded a Submit approval for the current
+	// pull request head, if any.
+	HumanApprovedBy string `json:"humanApprovedBy,omitempty"`
 	// Reviewers is the person-set list of reviewer usernames for this task
 	// (model.Task.Reviewers, docs/design/changelists.md §5).
 	Reviewers []string `json:"reviewers,omitempty"`
@@ -526,12 +558,38 @@ type Task struct {
 	// sentence for one asked without a summary; "" when the task is not
 	// parked on a question, or is parked on a stopped turn.
 	QuestionSummary string `json:"questionSummary,omitempty"`
+	// NoteSummary is QuestionSummary for an awaiting_reply task that asked
+	// nothing but answered in a comment: the one-line summary its run gave
+	// that closing note (comment_on_issue's `summary`, model.Store.NoteSummary),
+	// shown on the inbox row, the task list's status line and a
+	// notification's title in place of "answered in a comment". Never
+	// derived from the note's body; "" when the note has no summary, and
+	// whenever QuestionSummary, a stopped turn, an access request or an
+	// unanswered comment already says what the task is waiting on.
+	NoteSummary string `json:"noteSummary,omitempty"`
 	// QuestionCommentID is the id of the comment an awaiting_reply task is
 	// parked on (Observation.PendingQuestionCommentID) -- a question, a
 	// credential or access request, or a stopped turn -- so a row can link
 	// straight to it (model.CommentPath), as GET /api/inbox's path does.
 	// 0 when the task is not parked.
 	QuestionCommentID int64 `json:"questionCommentId,omitempty"`
+	// UnansweredCommentFrom is who wrote the newest person's comment on an
+	// awaiting_reply task that no run has been shown yet
+	// (model.UndeliveredPersonComment), "" when there is none. A person's
+	// comment on such a task queues a run at once (reopenAcknowledgeable),
+	// so this is set only where something left one undelivered, and a row
+	// says "unanswered question from X" rather than offering the owner a
+	// plain Reply for a question that was never theirs to answer.
+	UnansweredCommentFrom string `json:"unansweredCommentFrom,omitempty"`
+	// UncountedAgentReplyFrom names the agent -- a director or console
+	// session, or another task's run -- whose comment is the newest on an
+	// awaiting_reply task since its question, and which did not count as
+	// a reply (model.UncountedAgentComment): the task page says a person's
+	// reply is still needed rather than leave a relayed answer looking
+	// like one. UncountedAgentReplyID is that comment's id. Only GET
+	// /api/tasks/{id} sets them.
+	UncountedAgentReplyFrom string `json:"uncountedAgentReplyFrom,omitempty"`
+	UncountedAgentReplyID   int64  `json:"uncountedAgentReplyId,omitempty"`
 	// AwaitingAccess is an awaiting_reply task parked on an access
 	// request (request_access) rather than a question: what it wants is
 	// a grant, which its card offers, not a reply.
@@ -708,6 +766,10 @@ type Comment struct {
 	AuthorLabel     string `json:"authorLabel,omitempty"`
 	OnBehalfOfKind  string `json:"onBehalfOfKind,omitempty"`
 	OnBehalfOfLabel string `json:"onBehalfOfLabel,omitempty"`
+	// RelayedVia is the console session that relayed this person's answer
+	// for them (model.RelayedVia), "" for a comment the person posted
+	// themselves.
+	RelayedVia string `json:"relayedVia,omitempty"`
 	// Handover marks this comment as the task's handover: a run's standing
 	// summary of the older part of the conversation, written for the next
 	// run on the task rather than for a person (model.Comment.Handover).
@@ -786,6 +848,19 @@ type TaskDetail struct {
 	// agents#445: "show attempts and their status, in order, in the task
 	// view").
 	Attempts []Attempt `json:"attempts,omitempty"`
+	// OlderComments and OlderAttempts are how many comments and runs a
+	// paged read (?comments_limit=, ?attempts_limit=) left out before the
+	// ones it answered: 0 for the whole record, and for a page that
+	// reaches the start of it. Ask again with comments_before= the first
+	// answered comment's id (or attempts_before= the first answered run's
+	// number) for the page before.
+	OlderComments int `json:"olderComments,omitempty"`
+	OlderAttempts int `json:"olderAttempts,omitempty"`
+	// CompactedThrough is model.TaskContext.CompactedThrough: the last
+	// comment id folded into this task's compaction handover, or 0 for a
+	// task never compacted. Comments at or before it remain in the record
+	// and are collapsed under the handover on the task page (DT-15).
+	CompactedThrough int64 `json:"compactedThrough,omitempty"`
 	// Usage is every attempt's Usage summed: what the task has spent at
 	// its providers so far. Nil when no attempt reported any.
 	Usage *TaskUsage `json:"usage,omitempty"`
@@ -1190,6 +1265,7 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		PromptExtension:      t.PromptExtension,
 		Skills:               t.Skills.Clone(),
 		ReviewTemplateID:     t.ReviewTemplateID,
+		TemplateID:           t.SourceTemplateID,
 		ReviewTemplateName:   reviewTemplateName,
 		Owner:                cmp.Or(strings.TrimSpace(t.Owner), strings.TrimSpace(t.Creator), model.DefaultTaskOwner),
 		Creator:              t.Creator,
@@ -1310,6 +1386,12 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		if l.Kind == model.LinkSupersededBy {
 			out.SupersededBy = l.Target
 		}
+		if l.Kind == model.LinkRolledOverFrom {
+			out.RolledOverFrom = l.Target
+		}
+		if l.Kind == model.LinkRolledOverTo {
+			out.RolledOverTo = l.Target
+		}
 		if l.Kind == model.LinkReverts {
 			out.Reverts = l.Target
 		}
@@ -1318,6 +1400,9 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		}
 		if l.Kind == model.LinkPortOf {
 			out.PortOf = l.Target
+		}
+		if l.Kind == model.LinkFoundIn {
+			out.FoundIn = l.Target
 		}
 		if l.Kind == model.LinkPortedBy {
 			out.PortedBy = append(out.PortedBy, l.Target)
@@ -1348,7 +1433,24 @@ func taskFrom(t model.Task, state model.State, targetStates map[string]model.Sta
 		if l.Kind.Blocks() && targetStates[l.Target] != model.StateClosed && !slices.Contains(out.BlockedBy, l.Target) {
 			out.BlockedBy = append(out.BlockedBy, l.Target)
 		}
+		if l.Kind == model.LinkHumanSubmitted {
+			out.HumanApprovedBy = cmp.Or(model.HumanSubmittedBy(l.Target), "approved")
+		} else if l.Kind == model.LinkHumanApproved && out.HumanApprovedBy == "" {
+			out.HumanApprovedBy = cmp.Or(model.HumanSubmittedBy(l.Target), "approved")
+		}
 	}
+	out.ReviewFindings = model.ReviewFindings(t)
+	if ov, ok := model.LatestGateOverride(t); ok {
+		out.GateOverride = &ov
+	}
+	synthObs := &model.Observation{
+		MergeQueueBlockedAt: mergeQueueBlockedAt,
+		MergeQueueState:     mergeQueue.State,
+		MergeQueueNote:      mergeQueue.Note,
+		PrMergedAt:          span.PrMergedAt,
+		PrClosedAt:          span.PrClosedAt,
+	}
+	out.MergeGates = model.ComputeMergeGates(t, synthObs, targetStates)
 	out.Context = contextRefViews(t)
 	out.Blocked = len(out.BlockedBy) > 0
 	return out
@@ -1377,7 +1479,12 @@ func commentFrom(c model.Comment, attachments []Attachment) Comment {
 	if c.Author.Actor.Kind != model.PrincipalAutomation {
 		out.AuthorLabel = PrincipalLabel(c.Author.Actor, c.Author.OnBehalfOf)
 	}
-	if b := c.Author.OnBehalfOf; b != nil {
+	if via := model.RelayedVia(c.Author); via != nil {
+		// A person's answer a session relayed: AuthorLabel already reads
+		// "alice@x via session 7", and the session is no one the words
+		// were said on behalf of.
+		out.RelayedVia = via.ID
+	} else if b := c.Author.OnBehalfOf; b != nil {
 		out.OnBehalfOf = b.ID
 		out.OnBehalfOfKind = string(b.Kind)
 		out.OnBehalfOfLabel = PrincipalLabel(*b, nil)
@@ -2128,7 +2235,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	deployment, err := s.tasks.GetTeam(r.Context(), model.DefaultTeamID)
+	deployment, err := s.tasks.getTeamWithRepoWorkflows(r.Context(), model.DefaultTeamID, repoWorkflows)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -2154,6 +2261,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	authMethod, _ := s.authMethod(r)
+	secretList := s.tasks.listSecretsBestEffort()
 	resp := configResponse{
 		Access:              accessRoleInfo(r.Context()),
 		AuthMethod:          authMethod,
@@ -2165,9 +2273,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		IdentityNotAccepted: identityNotAccepted(r, authenticated),
 		ListenPort:          requestLocalPort(r),
 		Proxied:             relayedByProxy(r),
-		Capabilities:        s.tasks.capabilitiesWithReadiness(cfg, repoConfigs),
+		Capabilities:        s.tasks.capabilitiesWithReadinessFrom(cfg, repoConfigs, secretList),
 		CapabilityMethods:   len(s.tasks.ListCapabilityMethods(r.Context())),
-		CICapabilities:      s.tasks.ciCapabilitiesWithReadiness(cfg, repoConfigs),
+		CICapabilities:      s.tasks.ciCapabilitiesWithReadinessFrom(cfg, repoConfigs, secretList),
 		RebootEnabled:       s.tasks.Config.Reboot != nil,
 		ShutdownEnabled:     s.tasks.Config.Shutdown != nil,
 		RestartEnabled:      s.tasks.Config.Restart != nil,
@@ -2235,11 +2343,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		// (*Client).defaultCapabilities filters before granting -- the
 		// form should tick what a task would really be filed with, and
 		// a stored id no row answers to is neither.
-		for _, id := range cfg.DefaultCapabilities {
-			if _, ok := s.tasks.capabilityByID(id); ok {
-				resp.DefaultCapabilities = append(resp.DefaultCapabilities, id)
-			}
-		}
+		resp.DefaultCapabilities = s.tasks.resolveDefaultCapabilities(cfg.DefaultCapabilities)
 	}
 	if actor.ID == "" {
 		resp.SingleTenantRefusal = singleTenantRefusal
@@ -2290,12 +2394,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			resp.RepoDefaultHostings[rc.Repo.String()] = string(rc.DefaultHosting)
 		}
-		var ids []string
-		for _, id := range rc.DefaultCapabilities {
-			if _, ok := s.tasks.capabilityByID(id); ok {
-				ids = append(ids, id)
-			}
-		}
+		ids := s.tasks.resolveDefaultCapabilities(rc.DefaultCapabilities)
 		if len(ids) == 0 {
 			continue
 		}
@@ -2379,7 +2478,47 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if call, ok := agentCallFromContext(r.Context()); ok {
 		narrowConfigForAgentCall(&resp, call)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	etagResp := resp
+	if resp.AgentPause != nil {
+		pauseCopy := *resp.AgentPause
+		pauseCopy.SecondsRemaining = 0
+		if len(pauseCopy.Pauses) > 0 {
+			entries := append([]AgentPauseEntry(nil), pauseCopy.Pauses...)
+			for i := range entries {
+				entries[i].SecondsRemaining = 0
+			}
+			pauseCopy.Pauses = entries
+		}
+		etagResp.AgentPause = &pauseCopy
+	}
+	body, err := json.Marshal(etagResp)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	body = append(body, '\n')
+	etag := etagOf(body)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("ETag", etag)
+	w.Header().Add("Vary", "Cookie")
+	w.Header().Add("Vary", "Authorization")
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if resp.AgentPause != nil {
+		body, err = json.Marshal(resp)
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
+		body = append(body, '\n')
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(body)
+	}
 }
 
 func narrowConfigForAgentCall(resp *configResponse, call agentCall) {
@@ -2583,29 +2722,46 @@ func (s *Server) handleTaskStates(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	body, etag, err := s.taskDetails.response(r.Context(), s.tasks, id)
+	q := r.URL.Query()
+	page, paged, err := parseTaskPage(q)
 	if err != nil {
 		writeClientError(w, err)
 		return
 	}
 	// ?comments_since= (external-cli spec #XC-18) is a polling loop's
 	// cursor: the same detail, with only the conversation items written
-	// strictly after it. Never answered 304 -- the cached ETag is the
-	// whole detail's.
-	if raw := strings.TrimSpace(r.URL.Query().Get("comments_since")); raw != "" {
+	// strictly after it. Built from the store rather than the whole cached
+	// detail, and never answered 304.
+	if raw := strings.TrimSpace(q.Get("comments_since")); raw != "" {
 		since, perr := time.Parse(time.RFC3339Nano, raw)
 		if perr != nil {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("comments_since %q is not an RFC 3339 time", raw))
 			return
 		}
-		var detail TaskDetail
-		if err := json.Unmarshal(body, &detail); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+		detail, err := s.tasks.GetTaskSince(r.Context(), id, since, page, paged)
+		if err != nil {
+			writeClientError(w, err)
 			return
 		}
-		detail.Comments = commentsAfter(detail.Comments, since)
 		w.Header().Set("Cache-Control", "no-cache")
 		writeJSON(w, http.StatusOK, detail)
+		return
+	}
+	// ?comments_before= / ?attempts_before= fetch an older slice on demand
+	// directly from the store without evicting open panes from taskDetailCache.
+	if paged && (page.CommentsBefore > 0 || page.AttemptsBefore > 0) {
+		detail, err := s.tasks.GetTaskPage(r.Context(), id, page)
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		writeJSON(w, http.StatusOK, detail)
+		return
+	}
+	body, etag, err := s.taskDetails.responseFor(r.Context(), s.tasks, id, page, paged)
+	if err != nil {
+		writeClientError(w, err)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-cache")
@@ -2962,6 +3118,34 @@ type addCommentRequest struct {
 	Attachments []AttachmentUpload `json:"attachments"`
 	Author      string             `json:"author,omitempty"`
 	Reviewers   *[]string          `json:"reviewers,omitempty"`
+	// Reopen asks for a closed task to be reopened along with the
+	// comment -- the UI's "Reopen and send" -- so the reopen queues the
+	// run that answers it (Client.AddCommentReopening). Held to whether
+	// the caller may reopen the task, as POST /api/tasks/{id}/reopen is.
+	// Ignored on a task that is not closed.
+	Reopen bool `json:"reopen,omitempty"`
+	// Relay asks for the comment to be written as the answer of the
+	// person a console session is acting for, "<person> via <session>",
+	// and to count as that person's reply: it lifts a pending question and
+	// sends an awaiting_reply task back to the queue
+	// (Client.AddRelayedComment). Only a director or console session
+	// acting for a verified person may ask, and only on a task that person
+	// could reply on themselves (Server.relayAttribution). A person's own
+	// comment is already theirs, and relay changes nothing about it.
+	Relay bool `json:"relay,omitempty"`
+}
+
+// commentResponse is POST /api/tasks/{id}/comments' answer: the task as
+// it stands after the comment and, for one left on a task that is still
+// closed, CommentDelivery and Notice saying it reached no agent -- or, for
+// an agent's that left a task waiting on a person, that it did not count
+// as their reply (CommentAwaitingPerson). Relayed is set when the comment
+// was written as a person's relayed answer.
+type commentResponse struct {
+	Task
+	CommentDelivery string `json:"commentDelivery,omitempty"`
+	Notice          string `json:"notice,omitempty"`
+	Relayed         bool   `json:"relayed,omitempty"`
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
@@ -2972,20 +3156,84 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Author = requestPerson(r.Context())
 	id := r.PathValue("id")
+	if req.Reopen {
+		if err := mayReopen(r); err != nil {
+			writeError(w, agentRefusalStatus(err), err)
+			return
+		}
+	}
 	if req.Reviewers != nil {
 		if _, err := s.tasks.UpdateTask(r.Context(), id, UpdateTaskRequest{Reviewers: req.Reviewers}); err != nil {
 			writeClientError(w, err)
 			return
 		}
 	}
-	if err := s.tasks.AddCommentWithAuthor(r.Context(), id, req.Body, req.Attachments, req.Author); err != nil {
-		writeClientError(w, err)
-		return
+	var person, session *model.Principal
+	if req.Relay {
+		var err error
+		if person, session, err = s.relayAttribution(r, id); err != nil {
+			log.Printf("grain api: refused relay onto task %s: %v", id, err)
+			writeClientError(w, err)
+			return
+		}
+	}
+	if person != nil {
+		if err := s.tasks.AddRelayedComment(r.Context(), id, req.Body, req.Attachments, *person, *session); err != nil {
+			writeClientError(w, err)
+			return
+		}
+	} else {
+		add := s.tasks.AddCommentWithAuthor
+		if req.Reopen {
+			add = s.tasks.AddCommentReopening
+		}
+		if err := add(r.Context(), id, req.Body, req.Attachments, req.Author); err != nil {
+			writeClientError(w, err)
+			return
+		}
 	}
 	// Best effort: the comment is written, and a zone that failed to
 	// stick costs the next run only the time of day it is told.
 	_ = s.tasks.noteRequesterTimeZone(r.Context(), id, requestTimeZone(r))
-	s.respondWithTask(w, r, id)
+	task, err := s.tasks.Task(r.Context(), id)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	resp := commentResponse{Task: task, Relayed: person != nil}
+	if task.State == model.StateClosed {
+		resp.CommentDelivery = CommentNotDelivered
+		resp.Notice = CommentNotDeliveredNotice
+	} else if person == nil && agentCommentNotCounted(r.Context(), task) {
+		resp.CommentDelivery = CommentAwaitingPerson
+		resp.Notice = CommentAwaitingPersonNotice(task.ID)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// mayReopen refuses an agent's comment a reopen: what an agent says
+// never sends a task to the queue, and a run may not reopen its own task
+// (selfMutableTaskRoutes), so the reopen would be one it could not make.
+// A person's role is asked about the reopen with the comment's own
+// (authorizeRoleCall's commentAsksReopen).
+func mayReopen(r *http.Request) error {
+	if _, ok := agentCallFromContext(r.Context()); ok {
+		return errors.New("an agent's comment cannot reopen a task: call POST /api/tasks/{id}/reopen separately")
+	}
+	return nil
+}
+
+// commentAsksReopen is whether a POST /api/tasks/{id}/comments body
+// carries reopen: true, read without consuming it (peekBody).
+func commentAsksReopen(r *http.Request) bool {
+	body, err := peekBody(r)
+	if err != nil || len(body) == 0 {
+		return false
+	}
+	var req struct {
+		Reopen bool `json:"reopen"`
+	}
+	return json.Unmarshal(body, &req) == nil && req.Reopen
 }
 
 // handleGetAttachment serves one attachment's raw content -- the only
@@ -3149,23 +3397,27 @@ type forceMergeRequest struct {
 	// request's head as it is when the request arrives. Either way it is
 	// for that one commit (bwsalmon/grain#2399).
 	Head string `json:"head,omitempty"`
+	// OverrideGates names each unsatisfied gate to skip under merge:force
+	// (e.g. ["security-review"]). Required whenever any review gate is
+	// unsatisfied; no default or shorthand skips a review gate.
+	OverrideGates []string `json:"overrideGates,omitempty"`
 }
 
-// handleForceMerge is the UI's own "Force merge" button, and `grain
-// force-merge`: an operator telling grain to land a change the merge
-// queue is not going to land on its own, with a reason recorded against
-// the task and the pull request. See Client.ForceMerge.
+// handleForceMerge is the UI's own "Force merge" / gate-override action, and
+// `grain force-merge`: an operator telling grain to land a change the merge
+// queue is not going to land on its own, with a reason recorded against the
+// task and the pull request. See Client.ForceMergeWithGates.
 //
 // It records the request and returns; the merge is grain's next
 // merge-queue cycle's to perform, which is what keeps grain's own state
-// consistent with what happened on GitHub. Nothing here talks to GitHub.
+// consistent with what happened on GitHub.
 func (s *Server) handleForceMerge(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req forceMergeRequest
 	if !readOptionalJSON(w, r, &req) {
 		return
 	}
-	if err := s.tasks.ForceMerge(r.Context(), id, req.Reason, req.Head); err != nil {
+	if err := s.tasks.ForceMergeWithGates(r.Context(), id, req.Reason, req.Head, req.OverrideGates); err != nil {
 		writeClientError(w, err)
 		return
 	}
@@ -3290,6 +3542,14 @@ func writeClientError(w http.ResponseWriter, err error) {
 	var nf *NotFoundError
 	if errors.As(err, &nf) {
 		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	// The release approval key in Cloud KMS could not be read: KMS is
+	// upstream of this process, so 502, naming the setting to check.
+	var rak *releaseApprovalKMSError
+	if errors.As(err, &rak) {
+		writeJSON(w, http.StatusBadGateway, apierror.Withheld(http.StatusBadGateway, apierror.CodeUpstream,
+			releaseApprovalKMSMessage, err))
 		return
 	}
 	var snf *scheduleNotFoundError
@@ -3491,13 +3751,59 @@ func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// commentsAfter is the comments created strictly after since, in order.
-func commentsAfter(comments []Comment, since time.Time) []Comment {
-	out := make([]Comment, 0, len(comments))
-	for _, c := range comments {
-		if c.CreatedAt.After(since) {
-			out = append(out, c)
-		}
+// maxTaskDetailPage is the most comments or runs one paged task detail
+// read answers.
+const maxTaskDetailPage = 500
+
+// TaskPage names a bounded slice of a task's conversation and runs on
+// GET /api/tasks/{id} (durable-tasks.design.md#DT-15).
+type TaskPage struct {
+	CommentsLimit  int
+	CommentsBefore int64
+	AttemptsLimit  int
+	AttemptsBefore int
+}
+
+// parseTaskPage parses ?comments_limit=, ?comments_before=, ?attempts_limit=
+// and ?attempts_before= on GET /api/tasks/{id}. paged is true when any of
+// those parameters was passed.
+func parseTaskPage(q url.Values) (TaskPage, bool, error) {
+	has := q.Has("comments_limit") || q.Has("comments_before") || q.Has("attempts_limit") || q.Has("attempts_before")
+	if !has {
+		return TaskPage{}, false, nil
 	}
-	return out
+	limit := func(name, raw string) (int, error) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return 0, nil
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 || n > maxTaskDetailPage {
+			return 0, validationErrorf("%s must be an integer from 1 to %d", name, maxTaskDetailPage)
+		}
+		return n, nil
+	}
+	var p TaskPage
+	var err error
+	if p.CommentsLimit, err = limit("comments_limit", q.Get("comments_limit")); err != nil {
+		return TaskPage{}, false, err
+	}
+	if p.AttemptsLimit, err = limit("attempts_limit", q.Get("attempts_limit")); err != nil {
+		return TaskPage{}, false, err
+	}
+	if raw := strings.TrimSpace(q.Get("comments_before")); raw != "" {
+		before, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || before <= 0 {
+			return TaskPage{}, false, validationErrorf("comments_before must be a comment id")
+		}
+		p.CommentsBefore = before
+	}
+	if raw := strings.TrimSpace(q.Get("attempts_before")); raw != "" {
+		before, err := strconv.Atoi(raw)
+		if err != nil || before <= 0 {
+			return TaskPage{}, false, validationErrorf("attempts_before must be an attempt number")
+		}
+		p.AttemptsBefore = before
+	}
+	return p, true, nil
 }

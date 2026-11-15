@@ -25,6 +25,15 @@ describe("describeSuppression", () => {
     expect(describeSuppression({ reason: "task" })).toMatch(/task/);
     expect(describeSuppression({ reason: "suiteRun" })).toMatch(/suite run/);
     expect(describeSuppression({ reason: "workflowRun" })).toMatch(/CI run/);
+    expect(describeSuppression({ reason: "publishingHeld" })).toMatch(
+      /publishing/,
+    );
+    expect(
+      describeSuppression({
+        reason: "publishingHeld",
+        detail: "skipped: publishing held by task 4256",
+      }),
+    ).toBe("skipped: publishing held by task 4256");
     expect(describeSuppression({ reason: "review" })).toMatch(/review/);
   });
 
@@ -35,6 +44,21 @@ describe("describeSuppression", () => {
     expect(describeSuppression({ reason: "somethingNew" })).toMatch(
       /has not finished/,
     );
+  });
+
+  // Held by another schedule in its overlap group: the server's sentence
+  // names that schedule, where "its last firing" would be wrong.
+  it("uses the server's sentence for a firing held by its overlap group", () => {
+    const detail =
+      'the task schedule "Sync" (sync) filed is still open, and both are in overlap group "release-sync"';
+    expect(
+      describeSuppression({
+        reason: "task",
+        taskId: "42",
+        heldByScheduleId: "sync",
+        detail,
+      }),
+    ).toBe(detail);
   });
 });
 

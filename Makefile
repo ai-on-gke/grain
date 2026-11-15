@@ -171,7 +171,7 @@ IMAGE ?= grain:dev
 # IMAGE_HUB is the tag `make image-hub` builds; IMAGE_REGISTRY its
 # pre-rename name, honoured for a release (as is `make image-registry`).
 IMAGE_HUB ?= $(or $(IMAGE_REGISTRY),grain-hub:dev)
-.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli $(CMDS) $(EXTRA_CMDS)
+.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-ng test-e2e-ng-suite test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli dist-agentd $(CMDS) $(EXTRA_CMDS)
 
 all: vet test build
 
@@ -204,10 +204,19 @@ build: frontend $(CMDS)
 # what deleting it was guarding against: server.go serves this directory
 # with http.FileServerFS, so "/" resolves to index.html once a build
 # exists and placeholder.html is reachable only at its own path.
+#
+# ui-ng/ is the Angular rewrite (design/design/angular-ui.design.md),
+# built into pkg/ui/static-next and served under /next/ beside ui/. It
+# gets the same clear-then-build treatment and the same three tracked
+# files, and like ui/ keeps its build toolchain in `dependencies` so
+# `npm ci --omit=dev` is enough to build it.
 frontend:
 	find pkg/ui/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
 		-not -name 'placeholder.html' -delete
 	cd ui && npm ci --omit=dev && npm run build
+	find pkg/ui/static-next -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
+		-not -name 'placeholder.html' -delete
+	cd ui-ng && npm ci --omit=dev && npm run build
 	find pkg/hub/server/static -mindepth 1 -not -name '.gitignore' -not -name '.gitkeep' \
 		-not -name 'placeholder.html' -delete
 	cd ui-hub && npm ci --omit=dev && npm run build
@@ -258,6 +267,9 @@ cli: grain
 
 dist-cli:
 	./scripts/build-cli.sh $(BIN)/dist
+
+dist-agentd:
+	./scripts/build-agentd.sh $(BIN)/dist-agentd
 
 builder:
 	$(CONTAINER_ENGINE) build \
@@ -326,6 +338,7 @@ container-build: builder
 test: frontend
 	go test -race -timeout 30m ./...
 	cd ui && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
+	cd ui-ng && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm run lint && npm test
 	cd ui-hub && { [ -x node_modules/.bin/vitest ] || npm ci; } && npm test
 
 # The same suite, turned up: what .github/workflows/nightly.yml runs
@@ -362,7 +375,7 @@ test-long: frontend
 
 # ui/e2e (bwsalmon/agents#415) drives the real built frontend through a
 # real browser, over a real pkg/ui.Server -- a `grain demo` per
-# Playwright worker, started by ui/e2e/fixtures.js out of the binary
+# Playwright worker, started by ui-shared/e2e/demo.js out of the binary
 # ui/e2e/global-setup.js builds first (grain/task-292) -- unlike `test`
 # above, that needs a real browser on the machine, which `npx playwright
 # install --with-deps` fetches and apt-installs itself.
@@ -405,6 +418,19 @@ test-e2e-suite:
 	cd ui-hub && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e $${PLAYWRIGHT_PROJECT:+-- --project="$$PLAYWRIGHT_PROJECT"}
 
 test-e2e: frontend playwright-browsers test-e2e-suite
+
+# ui-ng/e2e: the Angular UI at /next/, driven the same way -- a `grain
+# demo` per Playwright worker, through the harness in ui-shared/e2e/ that
+# ui/e2e uses too -- with projects desktop (1440x900), phone (390x844,
+# touch) and dark (ui-ng/playwright.config.ts). Chromium only, out of the
+# same @playwright/test version ui/ pins, so `playwright-browsers` (which
+# installs from ui/) fetches the browser this suite drives. CI runs it as
+# the `ui-ng e2e` job; split in two for the same reason as above.
+test-e2e-ng-suite:
+	cd ui-ng && { [ -x node_modules/.bin/playwright ] || npm ci; } && npm run test:e2e $${PLAYWRIGHT_PROJECT:+-- --project="$$PLAYWRIGHT_PROJECT"}
+
+test-e2e-ng: export PLAYWRIGHT_BROWSERS ?= chromium
+test-e2e-ng: frontend playwright-browsers test-e2e-ng-suite
 
 # Screenshots of the real UI over a `grain demo` store, at desktop and
 # phone widths in light and dark, for looking at rather than asserting on
@@ -648,9 +674,11 @@ test-upgrade:
 # third_party/granule is excluded. It is a separate module of vendored
 # upstream code -- `go vet ./...` and `go test ./...` do not reach into
 # it either -- and a red build over formatting we would not be the ones
-# to fix is a gate nobody can act on.
+# to fix is a gate nobody can act on. So is anything under a
+# node_modules directory: some npm packages ship Go sources of their own
+# (ui-ng/go.mod says which), and their formatting is not ours either.
 fmt:
-	@files="$$(find . -name '*.go' -not -path './third_party/*')"; \
+	@files="$$(find . -name '*.go' -not -path './third_party/*' -not -path '*/node_modules/*')"; \
 	unformatted="$$(gofmt -l $$files)"; \
 	if [ -n "$$unformatted" ]; then \
 		echo "gofmt needed on:"; echo "$$unformatted"; echo; \
@@ -681,6 +709,7 @@ fmt:
 # be pure waste.
 fmt-frontend:
 	cd ui && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check
+	cd ui-ng && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check
 	cd ui-hub && { [ -x node_modules/.bin/prettier ] || npm ci; } && npm run format:check && npx prettier --check ../ui-shared
 
 clean:
@@ -692,6 +721,7 @@ image:
 		--build-arg GO_VERSION=$(GO_VERSION) \
 		--build-arg BUILDVCS=$(BUILDVCS) \
 		--build-arg MAIN_GRAIN=$(MAIN_grain) \
+		$(if $(MAIN_grain-agentd),--build-arg MAIN_GRAIN_AGENTD=$(MAIN_grain-agentd),) \
 		$(if $(SANDBOX_IMAGE),--build-arg SANDBOX_IMAGE=$(SANDBOX_IMAGE),) \
 		$(if $(K8S_SANDBOX_IMAGE),--build-arg K8S_SANDBOX_IMAGE=$(K8S_SANDBOX_IMAGE),) \
 		$(if $(GRAIN_IMAGE_REF),--build-arg GRAIN_IMAGE_REF=$(GRAIN_IMAGE_REF),) \

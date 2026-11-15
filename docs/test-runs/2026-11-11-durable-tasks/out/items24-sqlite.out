@@ -1,0 +1,22 @@
+== item 4: brief edits
+empty reason -> 400
+{"current_brief":"BRIEF-V1: maintain CHANGELOG.md; widget-999 is deprecated.","original_description":"ORIGINAL-DESCRIPTION: keep CHANGELOG.md in acme/widgets current.","edits":[{"by":"human alice@example.com","reason":"scope narrowed"}]}
+brief with tasks:read+dispatch:read only -> 403 external:reader holds no api grant for scope dispatch:write, which POST /api/tasks/{id}/brief needs
+compact with tasks:read+dispatch:read only -> 403 external:reader holds no api grant for scope dispatch:write, which POST /api/tasks/{id}/compact needs
+rollover with tasks:read+dispatch:read only -> 403 external:reader holds no api grant for scope dispatch:write, which POST /api/tasks/{id}/rollover needs
+context with that token -> 200
+== item 2a: grain compact with no handover sets a standing request
+compaction requested by human alice@example.com at 2026-11-12 10:42 UTC: the next run compacts first
+prompt-2-9.txt resumed=1 brief=1 original=0 request=1
+{"compacted_through":48,"handover_version":2,"compact_requested_at":null}
+== item 2b: grain compact -handover-file, then the same file again
+handover: version 3, 0 run(s) and 0 comment(s) old
+compacted through comment 50 by human alice@example.com: 49 comment(s) summarised
+{"compacted_through":52,"handover_version":3,"handover_confirmed_at":"2026-11-12T10:42:35.004831597Z","age":{"exists":true,"at":"2026-11-12T10:42:35.004831597Z","runs":0,"comments":0}}
+handover comments: ["HANDOVER-V-COM","HANDOVER-V2: b","HANDOVER-V3: w"]
+== item 3: staleness by comments (HandoverStaleComments = 30)
+{"age":{"exists":true,"at":"2026-11-12T10:42:35.004831597Z","runs":0,"comments":29},"stale":false}
+{"age":{"exists":true,"at":"2026-11-12T10:42:35.004831597Z","runs":0,"comments":30},"stale":true}
+handover: version 3, 0 run(s) and 30 comment(s) old -- stale
+[grain] This task's handover is stale: 1 run(s) and 31 comment(s) since it was written or last confirmed.
+{"v":3,"age":{"exists":true,"at":"2026-11-12T10:42:35.504466595Z","runs":0,"comments":1},"stale":false}

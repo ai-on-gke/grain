@@ -88,6 +88,10 @@ type HTTPClient struct {
 	// reason the agent API gate asks an external agent credential for
 	// on a destructive route (`grain approve -reason`).
 	ActingReason string
+	// Socket is the daemon's API socket (HostAPISocket) when HTTP dials
+	// it rather than BaseURL: the daemon then knows the caller by its uid
+	// (hostaccount.go), so no local API token is offered.
+	Socket string
 	// RetryPolicy is how long a call waits out a daemon that is not
 	// answering. nil means DefaultRetryPolicy; &NoRetry is one attempt.
 	RetryPolicy *RetryPolicy
@@ -199,7 +203,7 @@ func (c *HTTPClient) resolveToken(ctx context.Context) (string, error) {
 	// token, when this process can read it: what keeps the CLI working
 	// against a daemon that wants the access code from every caller
 	// (localtoken.go, grain/task-2078). A server elsewhere never is.
-	if IsLoopbackURL(c.BaseURL) {
+	if IsLoopbackURL(c.BaseURL) && c.Socket == "" {
 		if tok := localAPIToken(); tok != "" {
 			return tok, nil
 		}
@@ -572,6 +576,9 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 			return nil, err
 		}
 		if err := c.prepareRequest(ctx, req); err != nil {
+			if ctx.Err() != nil {
+				return nil, contextDoneError(ctx, c.BaseURL, err)
+			}
 			var own contextTokenError
 			if errors.As(err, &own) {
 				return nil, own.err // already says what it is about
@@ -581,7 +588,12 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 		resp, err := c.redirectClient().Do(req)
 		var failure error
 		switch {
-		case err != nil && retryableError(method, err) && ctx.Err() == nil:
+		case err != nil && ctx.Err() != nil:
+			// The caller's context ran out during the attempt. What the
+			// transport returned then -- a dial timeout, a refused
+			// connection -- need not wrap ctx.Err(), so say it does.
+			return nil, contextDoneError(ctx, c.BaseURL, err)
+		case err != nil && retryableError(method, err):
 			failure = err
 		case err != nil:
 			return nil, fmt.Errorf("reaching grain server at %s: %w", c.BaseURL, err)
@@ -606,13 +618,32 @@ func (c *HTTPClient) send(ctx context.Context, method string, newRequest func() 
 		select {
 		case <-time.After(sleep):
 		case <-ctx.Done():
-			return nil, fmt.Errorf("reaching grain server at %s: %w (while waiting out: %v)", c.BaseURL, ctx.Err(), failure)
+			return nil, contextDoneError(ctx, c.BaseURL, failure)
+		}
+		if ctx.Err() != nil {
+			// The wait and the context ended together and select took
+			// the timer: do not start an attempt that cannot run.
+			return nil, contextDoneError(ctx, c.BaseURL, failure)
 		}
 		wait *= 2
 		if policy.Max > 0 && wait > policy.Max {
 			wait = policy.Max
 		}
 	}
+}
+
+// contextDoneError is what send returns once ctx is done, whatever the
+// last attempt's error was: one that wraps ctx.Err(), so a caller's
+// errors.Is(err, context.DeadlineExceeded) holds however the deadline
+// landed, with last kept in the message.
+func contextDoneError(ctx context.Context, baseURL string, last error) error {
+	switch {
+	case last == nil:
+		return fmt.Errorf("reaching grain server at %s: %w", baseURL, ctx.Err())
+	case errors.Is(last, ctx.Err()):
+		return fmt.Errorf("reaching grain server at %s: %w", baseURL, last)
+	}
+	return fmt.Errorf("reaching grain server at %s: %w (while waiting out: %v)", baseURL, ctx.Err(), last)
 }
 
 // RoundTrip sends req the way every call of this client is sent:
@@ -996,6 +1027,26 @@ func (c *HTTPClient) AddCommentWithAuthor(ctx context.Context, id, body string, 
 		addCommentRequest{Body: body, Attachments: attachments, Author: author}, nil)
 }
 
+// Comment is AddComment with the rest of what the route says: reopen
+// asks for a closed task to be reopened along with the comment (Client.
+// AddCommentReopening), and notice is the server's sentence for a
+// comment that reached no agent because its task is still closed -- ""
+// when the comment was delivered as any other.
+func (c *HTTPClient) Comment(ctx context.Context, id, body string, attachments []AttachmentUpload, reopen bool) (notice string, err error) {
+	var resp struct {
+		CommentDelivery string `json:"commentDelivery"`
+		Notice          string `json:"notice"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/comments",
+		addCommentRequest{Body: body, Attachments: attachments, Reopen: reopen}, &resp); err != nil {
+		return "", err
+	}
+	if resp.CommentDelivery == CommentNotDelivered && resp.Notice == "" {
+		return CommentNotDeliveredNotice, nil
+	}
+	return resp.Notice, nil
+}
+
 // Close is Client.Close over the wire, opts and all: the flag travels as
 // the request body's own close_pull_request, which the server reads back
 // into the same CloseOptions. Sent on every call rather than only when
@@ -1033,8 +1084,13 @@ func (c *HTTPClient) RetryMerge(ctx context.Context, id string) error {
 // end -- there is no spelling of this call without one. head is the
 // commit reviewed, "" for the pull request's head as it is now.
 func (c *HTTPClient) ForceMerge(ctx context.Context, id, reason, head string) error {
+	return c.ForceMergeWithGates(ctx, id, reason, head, nil)
+}
+
+// ForceMergeWithGates is Client.ForceMergeWithGates over the wire.
+func (c *HTTPClient) ForceMergeWithGates(ctx context.Context, id, reason, head string, overrideGates []string) error {
 	return c.do(ctx, http.MethodPost, "/api/tasks/"+id+"/force-merge",
-		forceMergeRequest{Reason: reason, Head: head}, nil)
+		forceMergeRequest{Reason: reason, Head: head, OverrideGates: overrideGates}, nil)
 }
 
 // RunNow is Client.RunNow over the wire: ask for an agent to be put on
@@ -2172,8 +2228,23 @@ func (c *HTTPClient) CISharedFaults(ctx context.Context) ([]CIFault, error) {
 // run the deployment keeps rather than the newest page of them
 // (ci.RunStore.Find, grain/task-289).
 func (c *HTTPClient) FindCIRuns(ctx context.Context, f ci.RunFilter, limit int) (CIRunsResponse, error) {
+	return c.FindCIRunsPage(ctx, f, CIRunsPage{Limit: limit})
+}
+
+// CIRunsPage is which page of GET /api/ci/runs to ask for: at most Limit
+// runs (0 for the route's default), starting at Cursor (a previous
+// answer's NextCursor), keeping only runs whose id, repository, ref,
+// commit, workflow or job names contain Q.
+type CIRunsPage struct {
+	Limit  int
+	Cursor string
+	Q      string
+}
+
+// FindCIRunsPage is FindCIRuns asking for one page.
+func (c *HTTPClient) FindCIRunsPage(ctx context.Context, f ci.RunFilter, p CIRunsPage) (CIRunsResponse, error) {
 	var resp CIRunsResponse
-	if err := c.do(ctx, http.MethodGet, ciRunsPath(f, limit, ""), nil, &resp); err != nil {
+	if err := c.do(ctx, http.MethodGet, ciRunsPath(f, p, ""), nil, &resp); err != nil {
 		return CIRunsResponse{}, err
 	}
 	return resp, nil
@@ -2183,16 +2254,21 @@ func (c *HTTPClient) FindCIRuns(ctx context.Context, f ci.RunFilter, limit int) 
 // (CICompactRunsResponse): each run's identity and verdict and a line per
 // job that did not succeed, which is what a page of a week's runs fits in.
 func (c *HTTPClient) FindCIRunsCompact(ctx context.Context, f ci.RunFilter, limit int) (CICompactRunsResponse, error) {
+	return c.FindCIRunsCompactPage(ctx, f, CIRunsPage{Limit: limit})
+}
+
+// FindCIRunsCompactPage is FindCIRunsCompact asking for one page.
+func (c *HTTPClient) FindCIRunsCompactPage(ctx context.Context, f ci.RunFilter, p CIRunsPage) (CICompactRunsResponse, error) {
 	var resp CICompactRunsResponse
-	if err := c.do(ctx, http.MethodGet, ciRunsPath(f, limit, "compact"), nil, &resp); err != nil {
+	if err := c.do(ctx, http.MethodGet, ciRunsPath(f, p, "compact"), nil, &resp); err != nil {
 		return CICompactRunsResponse{}, err
 	}
 	return resp, nil
 }
 
-// ciRunsPath is GET /api/ci/runs with a filter, a limit and a view as
+// ciRunsPath is GET /api/ci/runs with a filter, a page and a view as
 // its query.
-func ciRunsPath(f ci.RunFilter, limit int, view string) string {
+func ciRunsPath(f ci.RunFilter, p CIRunsPage, view string) string {
 	query := url.Values{}
 	if repo := strings.TrimSpace(f.Repo); repo != "" {
 		query.Set("repo", repo)
@@ -2227,8 +2303,14 @@ func ciRunsPath(f ci.RunFilter, limit int, view string) string {
 	if !f.Descending {
 		query.Set("order", "asc")
 	}
-	if limit > 0 {
-		query.Set("limit", strconv.Itoa(limit))
+	if p.Limit > 0 {
+		query.Set("limit", strconv.Itoa(p.Limit))
+	}
+	if cursor := strings.TrimSpace(p.Cursor); cursor != "" {
+		query.Set("cursor", cursor)
+	}
+	if q := strings.TrimSpace(p.Q); q != "" {
+		query.Set("q", q)
 	}
 	if view != "" {
 		query.Set("view", view)
@@ -2310,6 +2392,16 @@ func (c *HTTPClient) DownloadCIArtifact(ctx context.Context, ref ci.ArtifactRef,
 		return 0, c.httpError(resp)
 	}
 	return io.Copy(w, resp.Body)
+}
+
+// RerunCIRun re-runs a GitHub Actions run (a gha: id) as its next
+// attempt: POST /api/ci/runs/{id}/rerun.
+func (c *HTTPClient) RerunCIRun(ctx context.Context, id string, req ActionsRerunRequest) (ActionsRerunResult, error) {
+	var res ActionsRerunResult
+	if err := c.do(ctx, http.MethodPost, "/api/ci/runs/"+url.PathEscape(id)+"/rerun", req, &res); err != nil {
+		return ActionsRerunResult{}, err
+	}
+	return res, nil
 }
 
 // CancelCIRun stops a run that is still going and returns it as it was

@@ -102,27 +102,30 @@ for (const [name, size] of Object.entries(SIZES)) {
     const task = await findSeededTask(request);
     expect(task, `seeded "${SEEDED_TITLE}" task`).toBeTruthy();
 
-    await page.route(new RegExp(`/api/tasks/${task.id}$`), async (route) => {
-      if (route.request().method() !== "GET") return route.fallback();
-      const headers = { ...route.request().headers() };
-      delete headers["if-none-match"];
-      const response = await route.fetch({ headers });
-      const body = await response.json();
-      const nextContext = [
-        ...(body.context || []),
-        {
-          repo: "acme/product-specs",
-          path: "design/plc/042-committed-context-architecture",
-          rev: "4d71a90cc3e8102b5f649a12d83c7e09f1b42a61",
-          placement: "read",
-        },
-      ];
-      await route.fulfill({
-        response,
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...body, context: nextContext }),
-      });
-    });
+    await page.route(
+      new RegExp(`/api/tasks/${task.id}(\\?.*)?$`),
+      async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        const headers = { ...route.request().headers() };
+        delete headers["if-none-match"];
+        const response = await route.fetch({ headers });
+        const body = await response.json();
+        const nextContext = [
+          ...(body.context || []),
+          {
+            repo: "acme/product-specs",
+            path: "design/plc/042-committed-context-architecture",
+            rev: "4d71a90cc3e8102b5f649a12d83c7e09f1b42a61",
+            placement: "read",
+          },
+        ];
+        await route.fulfill({
+          response,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...body, context: nextContext }),
+        });
+      },
+    );
 
     await page.goto(`/tasks/${task.id}`);
     const section = page.getByTestId("committed-context");

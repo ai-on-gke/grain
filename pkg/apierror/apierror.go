@@ -45,6 +45,12 @@ type Response struct {
 	Error string `json:"error"`
 	// Code classifies a server-side failure; empty for a 4xx.
 	Code string `json:"code,omitempty"`
+	// Reason is a machine-readable detail of Code, where it has one
+	// (the backend a verifier_unavailable refusal could not reach).
+	Reason string `json:"reason,omitempty"`
+	// RetryAfter is the seconds the caller should wait before retrying,
+	// mirroring the Retry-After header, where the failure is transient.
+	RetryAfter int `json:"retryAfter,omitempty"`
 	// Ref is the log reference of a sanitized server-side failure.
 	Ref string `json:"ref,omitempty"`
 }
@@ -57,6 +63,11 @@ const (
 	CodeUpstream    = "upstream_unavailable"
 	CodeStorage     = "storage"
 	CodeUnavailable = "unavailable"
+	// CodeVerifierUnavailable is a request refused because the sign-in
+	// verifier could not check its signed identity right now: the daemon
+	// is answering, so a client retries quietly rather than reporting it
+	// unreachable.
+	CodeVerifierUnavailable = "verifier_unavailable"
 )
 
 type publicError struct {
@@ -97,6 +108,14 @@ func Body(status int, err error) Response {
 		return Response{Error: pe.msg}
 	}
 	code, msg := Classify(status, err)
+	return Withheld(status, code, msg, err)
+}
+
+// Withheld returns the response body for a server-side failure the
+// handler has classified itself as code, with msg -- which must say
+// nothing about err's internals -- shown to the caller, logging err in
+// full under the reference the body carries.
+func Withheld(status int, code, msg string, err error) Response {
 	ref := newRef()
 	log.Printf("api: %d %s [ref %s]: %v", status, code, ref, err)
 	return Response{Error: msg + " (ref " + ref + ")", Code: code, Ref: ref}

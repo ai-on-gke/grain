@@ -660,6 +660,11 @@ func (m *HubManager) step(parentCtx context.Context) (time.Duration, error) {
 	if wasFailing {
 		m.opts.Logf("grain daemon: hub heartbeat to %s (%s) recovered", inputs.regCfg.URL, inputs.regCfg.Entry)
 	}
+	// The hub's name for this entry -- its display name, else its entry
+	// name -- as this deployment's default environment name, so a rename
+	// on the hub reaches it on the next heartbeat unless its operator has
+	// named it something else.
+	adoptDefaultEnvironmentName(parentCtx, m.opts.Store, resp.EnvironmentName)
 
 	m.ensureTunnel(parentCtx, inputs, initialTok, tokenSource)
 	return delay, nil

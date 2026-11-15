@@ -148,8 +148,8 @@ export default function RepoRuns({ repo, onOpenRun, showError }) {
           <Typography variant="body2" color="text.secondary">
             No CI runs for {repo} yet. Start one above, against a branch. A repo
             grain CI has not been enabled for is refused rather than run: that
-            takes the grain-ci capability, on this repo or on this
-            deployment&apos;s defaults.
+            takes this repo&apos;s CI mode set to grain CI, which grants its
+            tasks the grain#ci capability.
           </Typography>
         ) : (
           <>

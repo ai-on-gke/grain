@@ -131,7 +131,7 @@ const LinkAutoMergeAwaitsPerson LinkKind = "auto-merge-awaits-person"
 // merging itself when they take its auto-merge away. The last of them
 // going is that change's hold clearing (restoreAfterHolds).
 var autoMergeHolds = []LinkKind{LinkSecurityHold, LinkBrokenRulesHold, LinkPathTriggerHold, LinkHumanOnlyHold,
-	LinkHumanReviewHold}
+	LinkHumanReviewHold, LinkReviewFindings, LinkReviewQuestions}
 
 // AutoMergeAwaitsPerson reports whether a hold on t ended in a person's
 // decision (LinkAutoMergeAwaitsPerson).
@@ -229,16 +229,23 @@ func guardAutoMergeChange(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent,
 		Detail: autoMergeWriter()}
 	if t.AutoMerge {
 		e.Kind = TaskEventAutoMergeOn
-		if held := HumanReviewHeld(*t); AutoMergeDeclined(*t) || held {
+		held := HumanReviewHeld(*t)
+		reviewHeld := HasPendingReviewHold(*t)
+		if AutoMergeDeclined(*t) || held || reviewHeld {
 			t.AutoMerge = false
 			e.Kind = TaskEventAutoMergeKeptOff
-			if held && !AutoMergeDeclined(*t) {
-				// A human-review hold is released only by a person's
-				// Submit or Release, each of which drops it in the same
-				// write (human_review_hold.go).
-				e.Reason = "kept off: held for a person's review (" + HumanReviewSummary(*t) +
-					"), and only a person's Submit or Release ends that"
-			} else if e.Reason == "" {
+			switch {
+			case reviewHeld && !AutoMergeDeclined(*t) && !held:
+				e.Reason = "kept off: waiting for required review gates (" + strings.Join(heldBy(t.Links), ", ") + ") to pass"
+			case held && !AutoMergeDeclined(*t):
+				if HasReviewFindings(*t) {
+					e.Reason = "kept off: review left findings (" + HumanReviewSummary(*t) +
+						"), and clearing findings requires a clean re-review or a merge:force gate override"
+				} else {
+					e.Reason = "kept off: held for a person's review (" + HumanReviewSummary(*t) +
+						"), and only a person's Submit or Release ends that"
+				}
+			case e.Reason == "":
 				e.Reason = "kept off: turned off explicitly, and only a person's Submit or PATCH turns it back on"
 			}
 			// A writer retrying every cycle (a hold whose release keeps
@@ -262,18 +269,17 @@ func guardAutoMergeChange(ctx context.Context, tx *sql.Tx, t *Task) (*TaskEvent,
 // decision, approvals are still owed, or its merge rules say `never`. It
 // returns the reason to record, or "" when it left t alone.
 //
-// Nor without a clearance (LinkTrustBoundaryCleared) left on t: a change
-// with auto-merge on and no clearance is one a person let through, and
-// is merged as it stands rather than classified again
-// (orchestrator.clearedForHead). Every hold that clears through a
-// classification of the head records one; a write that drops the
-// clearance along with the hold -- a retarget dropping what was pinned
-// to the old pull request -- leaves the next head to be classified
-// before anything turns auto-merge on.
+// Nor without a clearance (LinkTrustBoundaryCleared) or a recorded human
+// Submit (LinkHumanSubmitted) left on t: a change with auto-merge on and
+// neither is unclassified, so a write that drops the clearance along with
+// the hold leaves the next head to be classified before anything turns
+// auto-merge on.
 func restoreAfterHolds(ctx context.Context, tx *sql.Tx, t *Task) (string, error) {
+	hasClearanceOrSubmit := slices.ContainsFunc(t.Links, func(l Link) bool {
+		return (l.Kind == LinkTrustBoundaryCleared || l.Kind == LinkHumanSubmitted || l.Kind == LinkHumanApproved) && l.Target != ""
+	})
 	if t.AutoMerge || AutoMergeDeclined(*t) || AutoMergeAwaitsPerson(*t) || len(heldBy(t.Links)) > 0 ||
-		len(PendingApprovals(*t)) > 0 ||
-		!slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkTrustBoundaryCleared && l.Target != "" }) ||
+		len(PendingApprovals(*t)) > 0 || !hasClearanceOrSubmit ||
 		slices.ContainsFunc(t.Links, func(l Link) bool { return l.Kind == LinkMergePolicyWithdrawn }) {
 		return "", nil
 	}

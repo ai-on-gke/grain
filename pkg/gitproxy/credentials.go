@@ -17,9 +17,12 @@ package gitproxy
 // Git credential material: the token, App, SSH key or ambient login
 // behind each credential name.
 //
+//	secrets store (credstore.go)
+//	  github-credential-bot/token        # a PAT
+//	  github-credential-ci-app/app.json  # a GitHub App installation, instead of a PAT
 //	/data/secrets/github/
-//	  bot.token            # a PAT
-//	  ci-app.app.json      # a GitHub App installation, instead of a PAT
+//	  bot.host.json        # which git host bot is for (hosts.go)
+//	  bot.token.migrated   # the pre-store file, kept one release for a rollback
 //
 // Which credential a repository is reached with is not decided here: the
 // deployment's git connections (model.TeamGitConnection, resolved by
@@ -30,40 +33,42 @@ package gitproxy
 //
 // Unlike Authorizer (authorize.go), which now reads the live task model,
 // credentials are not hot-reloaded and are not the model's concern: which
-// *secret* backs a repo is an operator decision recorded in files under
-// /data/secrets, loaded once at construction, matching docs/design.md's
-// "replace a file under /data/secrets and restart the one service that
-// reads it." A *.app.json credential is the one exception to "loaded
-// once": what's on disk is loaded once same as a *.token file, but its
-// Token is re-minted from that App's own private key roughly every hour
-// rather than read as-is -- see apptoken.go and load below.
+// *secret* backs a repo is an operator decision, read once per name and
+// cached, matching docs/design.md's "replace a credential and restart the
+// one service that reads it." A *.app.json credential is the one
+// exception to "loaded once": its stored form is loaded once same as a
+// *.token one, but its Token is re-minted from that App's own private key
+// roughly every hour rather than read as-is -- see apptoken.go and load
+// below.
 //
-// grain/task-137 asked whether this ladder should also resolve a
-// credential out of the SQLite secrets store pkg/secrets keeps (secret
-// "github", key <name>) -- the store the UI's own Secrets pane writes --
-// so that "where secrets live" had one answer. It deliberately does not,
-// and SetToken/Remove below are the other half of that decision: the UI
-// writes *these files*, rather than the proxy learning to read a second
-// store. Three reasons, recorded here because the question will come
-// back:
+// Where that material lives: the encrypted secrets store, under secret
+// github-credential-<name> (credstore.go), with the files of the old
+// layout still read for a credential the store does not hold, and
+// imported into it on the daemon's next start (MigrateFilesToStore).
 //
-//   - A GitHub App credential is three values with their own file shape
-//     (*.app.json, loadAppCredential below). Backing it with a secrets
-//     row would mean inventing a second encoding of the same thing, and
-//     then keeping the two in step forever.
-//   - This ladder is loaded by more than the daemon: `grain mcp-server`
-//     builds one too. Reading credentials out of the secrets database
-//     would put a second process on that SQLite file, for material a
-//     0600 file already holds just as well.
-//   - Two stores that can both answer "what is credential X" is a state
-//     an operator has to reason about the moment they disagree. One
-//     store cannot.
+// grain/task-137 decided the opposite -- files, not secrets-store rows --
+// and that decision is superseded by
+// design/design/secrets-key-protection.design.md §5 (Phase 3). Its three
+// reasons, and why each no longer holds:
 //
-// So the file tree is the mechanism, everywhere: scripts/setup.sh seeds
-// it, terraform/gcp/deploy/push-secrets.sh feeds that, the bootstrap
-// playbook (pkg/playbooks/github-connections.md)
-// walks a human through it, and pkg/ui's Settings pane now writes it
-// through SetToken instead of asking an operator for shell access.
+//   - A GitHub App credential is three values with their own file shape.
+//     The store holds the file's bytes as one key (app.json), so there is
+//     still one encoding, read by the same loadAppCredential.
+//   - The ladder is loaded by more than the daemon (`grain mcp-server`
+//     too). The file store is a file beside these: every such process
+//     could already read the plaintext, and it opens the same key with no
+//     database involved.
+//   - Two stores that can both answer "what is credential X". The store
+//     answers first, and a file is only read until the next start moves
+//     it in and renames it <file>.migrated, which nothing reads.
+//
+// What decided it is that a PAT and, above all, an App's private key are
+// long-lived signing material that sat in plaintext next to the one store
+// built to hold such things encrypted. scripts/setup.sh seeds through
+// `grain secrets set`, pkg/ui's Settings pane writes through SetToken /
+// SetApp / SetSSH below, and the bootstrap playbook
+// (pkg/playbooks/github-connections.md) is still the human route.
+// *.host.json and *.ambient.json hold nothing secret and stay files.
 
 import (
 	"encoding/json"
@@ -71,7 +76,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -160,6 +164,9 @@ type cacheEntry struct {
 // guards it for exactly that reason.
 type CredentialSet struct {
 	dir string
+	// creds is the secrets store this set keeps credential material in
+	// (credstore.go), or nil for one that reads and writes files only.
+	creds *credentialStore
 	// connections is how Select learns which credential covers a
 	// repository: the deployment's git connections (SetConnections). nil
 	// answers nothing. Under mu.
@@ -217,10 +224,14 @@ type CredentialSet struct {
 // the credentials.json ladder that used to say so is gone
 // (docs/single-tenant-reset.md, stage 2).
 func LoadCredentialSet(secretsDir string) (*CredentialSet, error) {
-	return &CredentialSet{
+	c := &CredentialSet{
 		dir:   secretsDir,
 		cache: map[string]cacheEntry{},
-	}, nil
+	}
+	if store := storeBeside(secretsDir); store != nil {
+		c.creds = &credentialStore{store: store}
+	}
+	return c, nil
 }
 
 // ConnectionResolver names the credential the deployment's git
@@ -354,8 +365,8 @@ func (c *CredentialSet) Get(name string) (Credential, bool) {
 }
 
 // exists is Get's "is there such a credential at all" check: a
-// <name>.token, <name>.app.json or <name>.ssh.json file, or the literal
-// "anonymous".
+// <name>.token, <name>.app.json or <name>.ssh.json held in the store or as
+// a file, a <name>.ambient.json file, or the literal "anonymous".
 //
 // The names Get and GetForRepo are handed come from task grants and team
 // config (model.Store.GitCredentialOverride), not from this directory, so
@@ -370,16 +381,15 @@ func (c *CredentialSet) exists(name string) bool {
 	if namesOneFile(name) != nil {
 		return false
 	}
-	_, tokenErr := os.Stat(filepath.Join(c.dir, name+".token"))
-	_, appErr := os.Stat(filepath.Join(c.dir, name+".app.json"))
-	_, sshErr := os.Stat(c.sshFile(name))
 	_, ambientErr := os.Stat(c.ambientFile(name))
-	return tokenErr == nil || appErr == nil || sshErr == nil || ambientErr == nil
+	return c.hasKind(name, ".token") || c.hasKind(name, ".app.json") || c.hasKind(name, ".ssh.json") ||
+		ambientErr == nil
 }
 
 // Names is every credential this deployment has configured: one per
-// <name>.token, <name>.app.json or <name>.ssh.json file in the secrets
-// directory, sorted, with a name that has several counted once (load
+// github-credential-<name> secret in the store, and per <name>.token,
+// <name>.app.json, <name>.ssh.json or <name>.ambient.json file in the
+// secrets directory, sorted, with a name that has several counted once (load
 // prefers the SSH key, then the App, so it is one credential either way).
 //
 // Read from the directory rather than from credentials.json, because the
@@ -393,6 +403,14 @@ func (c *CredentialSet) exists(name string) bool {
 // the "restart the one service that reads it" contract the rest of this
 // file keeps.
 func (c *CredentialSet) Names() []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, name := range c.storedNames() {
+		if namesOneFile(name) == nil {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
 	entries, err := os.ReadDir(c.dir)
 	if err != nil {
 		// A secrets directory that cannot be read is the same "no
@@ -400,10 +418,9 @@ func (c *CredentialSet) Names() []string {
 		// credentials.json as -- every Select then fails closed with
 		// "no credential configured," which is the failure worth
 		// surfacing, and it is surfaced where a request can see it.
-		return nil
+		sort.Strings(names)
+		return names
 	}
-	seen := map[string]bool{}
-	var names []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -445,8 +462,7 @@ func (c *CredentialSet) IsApp(name string) bool {
 	if namesOneFile(name) != nil {
 		return false
 	}
-	_, err := os.Stat(filepath.Join(c.dir, name+".app.json"))
-	return err == nil
+	return c.hasKind(name, ".app.json")
 }
 
 // ValidCredentialName reports whether name may be used for a credential
@@ -533,26 +549,7 @@ func (c *CredentialSet) SetToken(name, token string) error {
 	if c.IsAmbient(name) {
 		return fmt.Errorf("%q is an ambient credential (%s.ambient.json): save it as a token to replace it", name, name)
 	}
-	if err := os.MkdirAll(c.dir, 0o700); err != nil {
-		return fmt.Errorf("creating the GitHub secrets directory: %w", err)
-	}
-	tmp, err := os.CreateTemp(c.dir, "."+name+".token.tmp")
-	if err != nil {
-		return fmt.Errorf("writing credential %q: %w", name, err)
-	}
-	defer os.Remove(tmp.Name())
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return fmt.Errorf("writing credential %q: %w", name, err)
-	}
-	if _, err := tmp.WriteString(token + "\n"); err != nil {
-		tmp.Close()
-		return fmt.Errorf("writing credential %q: %w", name, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("writing credential %q: %w", name, err)
-	}
-	if err := os.Rename(tmp.Name(), filepath.Join(c.dir, name+".token")); err != nil {
+	if err := c.writeKind(name, ".token", []byte(token+"\n")); err != nil {
 		return fmt.Errorf("writing credential %q: %w", name, err)
 	}
 	c.forget(name)
@@ -574,14 +571,11 @@ func (c *CredentialSet) Remove(name string) error {
 	}
 	var removed bool
 	for _, suffix := range []string{".token", ".app.json", ".ssh.json", ".ambient.json"} {
-		err := os.Remove(filepath.Join(c.dir, name+suffix))
-		switch {
-		case err == nil:
-			removed = true
-		case os.IsNotExist(err):
-		default:
+		r, err := c.removeKind(name, suffix)
+		if err != nil {
 			return fmt.Errorf("removing credential %q: %w", name, err)
 		}
+		removed = removed || r
 	}
 	if !removed {
 		return fmt.Errorf("no credential named %q is configured", name)
@@ -818,8 +812,8 @@ func (c *CredentialSet) loadOn(name, host, scope string) Credential {
 		return cred
 	}
 	var token *string
-	data, err := os.ReadFile(filepath.Join(c.dir, name+".token"))
-	if err == nil {
+	data, ok, err := c.readKind(name, ".token")
+	if ok && err == nil {
 		t := strings.TrimSpace(string(data))
 		token = &t
 	}
@@ -847,8 +841,8 @@ func scopeSuffix(scope string) string {
 // "nothing is auto-merging" the way #483 was before it had a log line to
 // point at.
 func (c *CredentialSet) loadAppCredential(name string) (AppCredential, bool) {
-	data, err := os.ReadFile(filepath.Join(c.dir, name+".app.json"))
-	if err != nil {
+	data, ok, err := c.readKind(name, ".app.json")
+	if !ok || err != nil {
 		return AppCredential{}, false
 	}
 	var raw struct {

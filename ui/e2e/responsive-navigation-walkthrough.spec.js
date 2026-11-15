@@ -1355,7 +1355,7 @@ test.describe("Live Interaction Surfaces & Sessions", () => {
       page.locator(".cs-message-input__content-editor"),
     ).toBeVisible();
 
-    const sessionRead = /\/api\/tasks\/\d+$/;
+    const sessionRead = /\/api\/tasks\/\d+(\?.*)?$/;
     await page.route(sessionRead, (route) =>
       route.fulfill({
         status: 503,

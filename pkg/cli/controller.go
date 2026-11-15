@@ -147,7 +147,7 @@ func bootstrapGitHubApp(args []string) error {
 	webhookURL := fs.String("webhook-url", "", "public HTTPS URL where GitHub delivers webhook events (e.g. https://grain.example.com/webhooks/github)")
 	gitCredential := fs.String("git-credential", "", "also write <data-dir>/secrets/github/<name>.app.json as a standalone GitHub App bot git credential (uses least-privilege bot permissions unless -sandbox-permissions is set)")
 	installationID := fs.String("installation-id", "", "optional installation ID to pin in <git-credential>.app.json (empty resolves per repository automatically)")
-	sandboxPermissions := fs.Bool("sandbox-permissions", false, "include github-sandbox repository-creation permissions even when -git-credential is set")
+	sandboxPermissions := fs.Bool("sandbox-permissions", false, "include github#sandbox-repo repository-creation permissions even when -git-credential is set")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -251,13 +251,13 @@ func bootstrapGitHubApp(args []string) error {
 
 	fmt.Printf(
 		"\nWrote the %s and %s secrets to %s --\n"+
-			"the github-sandbox capability's own credentials, ready for a `grain daemon`\n"+
+			"the github#sandbox-repo capability's own credentials, ready for a `grain daemon`\n"+
 			"(or `grain secrets list`) started against the same -data-dir to pick up.\n\n"+
 			"One step left: the App exists but is not installed anywhere yet. Visit\n"+
 			"%s, choose \"Install App\", and install it on the same bot\n"+
 			"account -- \"All repositories\" (there is nothing to select yet, since this\n"+
 			"capability creates repos on demand). Nothing dispatches against\n"+
-			"github-sandbox until that install completes.\n",
+			"github#sandbox-repo until that install completes.\n",
 		githubsandbox.DefaultAppIDCredential, githubsandbox.DefaultPrivateKeyCredential, filepath.Join(*dataDir, "secrets"), converted.HTMLURL,
 	)
 	return nil

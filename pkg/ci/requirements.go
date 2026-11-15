@@ -27,10 +27,9 @@ import (
 // installs into workflows.Capabilities (workflows.go).
 
 var (
-	jobCapabilities        = workflows.JobCapabilities
-	jobSecrets             = workflows.JobSecrets
-	unmetRequirements      = workflows.UnmetRequirements
-	unmetRequirementsError = workflows.UnmetRequirementsError
+	jobCapabilities   = workflows.JobCapabilities
+	jobSecrets        = workflows.JobSecrets
+	unmetRequirements = workflows.UnmetRequirements
 )
 
 // JobSecrets is jobSecrets for a caller outside this package, for the

@@ -20,6 +20,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
 // agentdHostdAllowed strips the names a user types that may still say
@@ -54,7 +56,17 @@ func TestAgentdSaysHostNotHostd(t *testing.T) {
 	var installErr bytes.Buffer
 	install([]string{"-h"}, &bytes.Buffer{}, &installErr)
 	texts["grain-agentd install -h"] = installErr.String()
-	texts["default allowlist"] = defaultAllowlist("/home/u/.grain/hostd-stage", "https://grain.example.com", "/usr/bin/agy")
+	var allowErr bytes.Buffer
+	allow([]string{"-h"}, nil, &bytes.Buffer{}, &allowErr)
+	texts["grain-agentd allow -h"] = allowErr.String()
+	rendered, err := hostd.RenderAgentdAllowlist(Program, "https://grain.example.com", "/home/u", "/home/u/.grain/hostd-stage", []hostd.ResolvedCLI{{
+		Entry: hostd.CLITemplateEntry{Name: "agy", Candidates: []string{"agy"}, Env: []string{"HOME"}},
+		Path:  "/usr/bin/agy",
+	}}, hostd.ThisHello(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts["rendered allowlist"] = rendered
 
 	p := filepath.Join(t.TempDir(), "agentd.yaml")
 	writeFile(t, p, "clis:\n  agy:\n    path: /bin/true\ncapabilities:\n  x:\n    command: /bin/true\n", 0o644)

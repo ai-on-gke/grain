@@ -152,7 +152,7 @@ jobs:
     # row has lost the grant says which grant it lost, before the first
     # step.
     #
-    # `image-signing` -- the cosign key the push signs each image's digest
+    # `release#image-signing` -- the cosign key the push signs each image's digest
     # with (docs/image-signing.md) -- is optional, not required. It was a
     # requirement here once (d0d4ff46b), and a deployment whose build
     # predated its provider refused every release before its first step,
@@ -162,8 +162,8 @@ jobs:
     # signs every image; not granted, it publishes unsigned with a
     # WARNING. Nothing here sets REQUIRE_IMAGE_SIGNING, and nothing may
     # until the key is granted, or that warning becomes a failed release.
-    capabilities: [package-publish]
-    optional-capabilities: [image-signing]
+    capabilities: ["https://grain.dev/capabilities/release#package-publish"]
+    optional-capabilities: ["https://grain.dev/capabilities/release#image-signing"]
     env:
       # Where the build step records the three tags it built, for the two
       # suites and the push that follow it in this same sandbox. Named

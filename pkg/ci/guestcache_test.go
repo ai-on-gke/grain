@@ -355,12 +355,6 @@ func (f *fakeWarmService) Get(id string) (Run, bool) {
 	return run, true
 }
 
-func (f *fakeWarmService) requests() []Request {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]Request(nil), f.started...)
-}
-
 // warmerFor is a GuestWarmer wired to one fake service, polling fast
 // enough that a test does not wait on the fifteen-second default.
 func warmerFor(service *fakeWarmService, jobs ...string) *GuestWarmer {
@@ -370,28 +364,4 @@ func warmerFor(service *fakeWarmService, jobs ...string) *GuestWarmer {
 		Get:   service.Get,
 		Poll:  time.Millisecond,
 	}
-}
-
-func awaitStart(f *fakeWarmService) string {
-	for {
-		f.mu.Lock()
-		n := len(f.started)
-		f.mu.Unlock()
-		if n > 0 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for id := range f.runs {
-		return id
-	}
-	return ""
-}
-
-func (f *fakeWarmService) forget(id string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.runs, id)
 }

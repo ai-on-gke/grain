@@ -188,7 +188,23 @@ func OpenSecretsForConfig(cfg Config, catalogue secrets.Catalogue) (*secrets.Sto
 // an operator has to know to run.
 func OpenSecrets(dataDir string) *secrets.Store {
 	moveSecretsOutOfStateRepo(dataDir)
-	store := secrets.Open(SecretsConfig(dataDir))
+	cfg := SecretsConfig(dataDir)
+	var store *secrets.Store
+	if _, err := os.Stat(cfg.KeyFile); err == nil {
+		// The key is there, so nothing is minted: share its load with
+		// the readers that open this store through secrets.OpenShared
+		// (repository tokens, git credentials, the release-approval
+		// key), so a KMS-wrapped key is unwrapped once per process
+		// rather than once per store. ShareKey, not the shared Store
+		// itself: the daemon audits what its store resolves, and the
+		// readers' every-sync reads are not resolutions to audit.
+		store = secrets.OpenShared(cfg).ShareKey()
+	} else {
+		// A fresh install, or a key file gone missing: Open is the one
+		// that mints, or refuses to over a secrets file it cannot read.
+		// Readers never mint, so nothing shared is opened here.
+		store = secrets.Open(cfg)
+	}
 	if store.KeyCreated() {
 		log.Printf("grain: generated a new secrets key at %s -- back this file up: "+
 			"without it, %s cannot be decrypted by anyone, grain included",
@@ -198,7 +214,11 @@ func OpenSecrets(dataDir string) *secrets.Store {
 	// unreadable until the operator imports that key. Said once at startup, where it
 	// is a line about the deployment, rather than only later as a run
 	// that could not resolve a credential.
-	if err := store.Check(); err != nil {
+	if err := store.Check(); errors.Is(err, secrets.ErrKMS) {
+		log.Printf("grain: the secrets key %s could not be unwrapped: %v -- grain keeps running, but "+
+			"nothing that needs a secret works until Cloud KMS answers; the store retries with backoff",
+			store.KeyFile(), err)
+	} else if err != nil {
 		log.Printf("grain: this host cannot read %s: %v", store.File(), err)
 		if recipient, rerr := store.FileRecipient(); rerr == nil && recipient != "" {
 			log.Printf("grain: it is encrypted to %s -- install that key with "+
@@ -206,6 +226,32 @@ func OpenSecrets(dataDir string) *secrets.Store {
 		}
 	}
 	return store
+}
+
+// retrySecretsKey keeps the daemon's store trying to unwrap a key Cloud
+// KMS refused or could not be reached for at start, on the store's own
+// backoff, so that the store unlocks when KMS answers rather than on the
+// first request that happens to need a secret afterwards. A store that
+// is not waiting on KMS -- every store whose key is a plaintext file --
+// starts nothing; the loop it starts otherwise ends as soon as the key
+// loads, or the store fails for any other reason.
+func retrySecretsKey(ctx context.Context, store *secrets.Store) {
+	if !store.WaitingOnKMS() {
+		return
+	}
+	go func() {
+		for {
+			wait := max(store.KeyRetryIn(), time.Second)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			if err := store.Check(); !errors.Is(err, secrets.ErrKMS) {
+				return
+			}
+		}
+	}()
 }
 
 // moveSecretsOutOfStateRepo lifts an encrypted secrets file an earlier
@@ -361,6 +407,8 @@ func OpenStateRepo(ctx context.Context, dataDir string) (*staterepo.Repo, error)
 	if err := staterepo.EnsureIgnored(repo.Dir()); err != nil {
 		return nil, err
 	}
+	// Before the load that follows, which is the first pull.
+	repo.SetVerifier(stateRepoVerifier(dataDir, settings))
 	return repo, nil
 }
 
@@ -570,6 +618,9 @@ func reformatStateRepo(ctx context.Context, dataDir string, repo *staterepo.Repo
 func RepoToken(dataDir, remote, tokenFile string) func(context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		if tokenFile != "" {
+			if tok, ok := storedRepoToken(ctx, dataDir, tokenFile); ok {
+				return tok, nil
+			}
 			data, err := os.ReadFile(tokenFile)
 			if err != nil {
 				return "", fmt.Errorf("reading %s: %w", tokenFile, err)

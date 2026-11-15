@@ -19,8 +19,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +58,10 @@ type attributedRoute struct {
 	// recorded reads back who the write recorded. created is the
 	// response's task id, for a route that files one.
 	recorded func(t *testing.T, ctx context.Context, client *ui.Client, id, created string) model.Principal
+	// serial is a route whose client or setup swaps package-level state
+	// (figmaOAuthClient's endpoint), so its rows run one at a time
+	// rather than in parallel with the rest of the matrix.
+	serial bool
 }
 
 // sender issues one request the way a row of the matrix asks.
@@ -74,6 +76,18 @@ func fileTask(approved bool) func(*testing.T, *ui.Client, sender) string {
 		}
 		return task.ID
 	}
+}
+
+// fileDurableTask is an approved durable task: what
+// POST /api/tasks/{id}/rollover rolls over.
+func fileDurableTask(t *testing.T, client *ui.Client, _ sender) string {
+	t.Helper()
+	task, err := client.CreateTask(context.Background(), ui.CreateTaskRequest{Title: "attributed", Approved: true,
+		NoRepo: true, Admission: string(model.AdmissionDurable)})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	return task.ID
 }
 
 // taskParkedOnQuestion is a task whose run parked it on a question
@@ -363,27 +377,6 @@ func ciClient(t *testing.T) *ui.Client {
 	return client
 }
 
-// imageSourceClient is testClient's deployment on the image upgrade
-// pipeline, whose image source an operator may still change.
-func imageSourceClient(t *testing.T) *ui.Client {
-	t.Helper()
-	client, _, _ := testClient(t)
-	dir := t.TempDir()
-	refFile := filepath.Join(dir, "image-ref")
-	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=ghcr.io/acme/grain:main\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	client.Config.Upgrader = upgrade.New(upgrade.Config{
-		StatusFile: filepath.Join(dir, "upgrade-status.json"),
-		Image: &upgrade.ImageConfig{
-			Repository:         "ghcr.io/acme/grain",
-			RefFile:            refFile,
-			SourceOverrideFile: filepath.Join(dir, "upgrade-image-source.json"),
-		},
-	})
-	return client
-}
-
 // cancelledBy is who the fake runner's last cancel was asked for by.
 func cancelledBy(t *testing.T, _ context.Context, client *ui.Client, _, _ string) model.Principal {
 	t.Helper()
@@ -409,6 +402,11 @@ var attributedRoutes = map[string]attributedRoute{
 		body:        `{"pr":"acme/widgets#7","design":true}`,
 		agentGrants: []string{"api:tasks:write", "api:repos:read"},
 		recorded:    adoptedFor,
+	},
+	"POST /api/pull-requests/submit": {
+		setup:    taskWithPullRequest,
+		body:     `{"pr":"acme/widgets#42"}`,
+		recorded: noted(model.TaskEventSubmitted),
 	},
 	"POST /api/tasks": {
 		body:        `{"title":"filed","noRepo":true}`,
@@ -463,6 +461,11 @@ var attributedRoutes = map[string]attributedRoute{
 	"POST /api/tasks/{id}/close": {
 		setup:       fileTask(true),
 		agentGrants: []string{"api:tasks:write"},
+		recorded:    lastEvent,
+	},
+	"POST /api/tasks/{id}/rollover": {
+		setup:       fileDurableTask,
+		agentGrants: []string{"api:dispatch:write"},
 		recorded:    lastEvent,
 	},
 	"POST /api/tasks/{id}/reopen": {
@@ -605,14 +608,6 @@ var attributedRoutes = map[string]attributedRoute{
 		bareID:   true,
 		recorded: cancelledBy,
 	},
-	// Where image upgrades come from: an override in a file of the
-	// upgrader's, so the handler writes the config_audit row itself.
-	"PUT /api/upgrade/source": {
-		client:      imageSourceClient,
-		body:        `{"mode":"registry"}`,
-		agentGrants: []string{"api:deployment-ops"},
-		recorded:    lastConfigAudit,
-	},
 	"PUT /api/memory": {
 		body:        `{"text":"remember this"}`,
 		agentGrants: []string{"api:memory"},
@@ -639,6 +634,7 @@ var attributedRoutes = map[string]attributedRoute{
 	// secret store and writes a config_audit row naming who connected it.
 	"POST /api/capability-servers/figma-oauth-exchange": {
 		client:      figmaOAuthClient,
+		serial:      true,
 		body:        `{"id":"https://grain.dev/capabilities/figma","account":"design","code":"c0de","redirectUri":"https://grain.example/settings/capabilities"}`,
 		agentGrants: []string{"api:capabilities:admin"},
 		recorded:    lastConfigAudit,
@@ -749,6 +745,37 @@ var attributedRoutes = map[string]attributedRoute{
 			return p.By
 		},
 	},
+	"DELETE /api/upgrade/current": {
+		client: func(t *testing.T) *ui.Client {
+			t.Helper()
+			client, _, _ := testClient(t)
+			dir := t.TempDir()
+			up := upgrade.New(upgrade.Config{
+				GraceWindow: 30 * time.Second,
+				Image: &upgrade.ImageConfig{
+					Repository: "docker.io/grainai/grain",
+					RefFile:    dir + "/image.env",
+					PullCmd:    []string{"true"},
+				},
+				StatusFile: dir + "/upgrade-status.json",
+			})
+			t.Cleanup(func() { _, _ = up.Cancel("test-cleanup", "") })
+			client.Config.Upgrader = up
+			return client
+		},
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			up := client.Config.Upgrader.(*upgrade.Upgrader)
+			_, _ = up.Cancel("test-reset", "")
+			if err := up.Start("main"); err != nil {
+				t.Fatalf("starting upgrade for cancel test: %v", err)
+			}
+			return ""
+		},
+		body:        `{"reason":"started by mistake"}`,
+		agentGrants: []string{"api:deployment:upgrade"},
+		recorded:    lastConfigAudit,
+	},
 	"PUT /api/settings": {
 		setup: func(t *testing.T, client *ui.Client, _ sender) string {
 			storeSettingsRow(t, client)
@@ -808,6 +835,26 @@ var attributedRoutes = map[string]attributedRoute{
 			return model.Principal{Kind: model.PrincipalHuman, ID: acc.AcceptedBy}
 		},
 	},
+	// Revoking is a person's alone too; the revocation clears who
+	// accepted, so who revoked is read from the config audit log.
+	"POST /api/declarations/revoke": {
+		setup: func(t *testing.T, client *ui.Client, _ sender) string {
+			t.Helper()
+			ctx := context.Background()
+			gcp := `gcp#gcp-key={"permission_set":"publisher"}`
+			if _, _, err := client.Store.NoteCIJobDeclaration(ctx, model.RepoRef{Owner: "acme", Name: "widgets"},
+				"publish", "abc123", []string{gcp}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Store.AcceptDeclaration(ctx, "ci:acme/widgets:publish", "alice@example.com",
+				[]string{"capabilities:admin"}, []string{gcp}, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			return ""
+		},
+		body:     `{"id":"ci:acme/widgets:publish"}`,
+		recorded: lastConfigAudit,
+	},
 }
 
 // neverAttributedRoutes are non-GET routes that write nothing a person
@@ -826,6 +873,10 @@ var neverAttributedRoutes = map[string]bool{
 	// A read that is a POST only because its input is a body of lines:
 	// it writes nothing (handleRedactSecrets).
 	"POST /api/secrets/redact": true,
+	// Re-running a GitHub Actions run writes nothing grain keeps: the new
+	// attempt is GitHub's own, and the daemon logs who asked for it
+	// (handleRerunCIRun).
+	"POST /api/ci/runs/{id}/rerun": true,
 	// Self-authenticating Ed25519 host handshake and silent credential
 	// renewal protocol endpoints; operator approval is attributed on
 	// POST /api/hostds/pending/{id}/accept and .../reject.
@@ -845,6 +896,12 @@ var neverAttributedRoutes = map[string]bool{
 	"POST /api/deployment/git-connections/check":         true,
 	"POST /api/registry/heartbeat":                       true,
 	"POST /api/settings/plan":                            true,
+	"POST /api/repos/plan":                               true,
+	// Refreshing a connection's discovered models writes only grain's
+	// cache of what the provider said (model.AgentBackend.Discovered),
+	// which RunModelDiscovery rewrites on its own tick with no actor;
+	// nothing a person configured changes.
+	"POST /api/deployment/agent-backends/{backendId}/discover": true,
 	// The MCP endpoints are transports: each tool they serve calls one of
 	// the routes here, and is attributed there. POST /api/mcp's
 	// grain_invoke dispatches the route through s.mux with the outer
@@ -940,6 +997,8 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/state-repo/remote":                                          true,
 	"POST /api/state-repo/reset-notice":                                    true,
 	"POST /api/state-repo/secrets-key":                                     true,
+	"POST /api/state-repo/secrets-key/unwrap":                              true,
+	"POST /api/state-repo/secrets-key/wrap":                                true,
 	"POST /api/state-repo/secrets-repo":                                    true,
 	"POST /api/state-repo/sync":                                            true,
 	"POST /api/suite-runs":                                                 true,
@@ -969,6 +1028,8 @@ var notYetAttributedRoutes = map[string]bool{
 	"POST /api/tasks/{id}/local-script-approvals/{approval}/wait":          true,
 	"POST /api/tasks/{id}/messages":                                        true,
 	"POST /api/tasks/{id}/notes":                                           true,
+	"POST /api/tasks/{id}/compact":                                         true,
+	"POST /api/tasks/{id}/brief":                                           true,
 	"POST /api/tasks/{id}/notify":                                          true,
 	"POST /api/tasks/{id}/pull-request":                                    true,
 	"POST /api/tasks/{id}/resume":                                          true,
@@ -1148,6 +1209,12 @@ func TestEveryMutatingRouteIsAttributed(t *testing.T) {
 		}
 		for _, way := range ways {
 			t.Run(pattern+"/"+way.name, func(t *testing.T) {
+				// Each row builds its own store and server, so the
+				// matrix's few hundred rows run in parallel: run one
+				// after another they took most of the go job's budget.
+				if !route.serial {
+					t.Parallel()
+				}
 				var client *ui.Client
 				if route.client != nil {
 					client = route.client(t)
@@ -1244,5 +1311,23 @@ func TestABodyNeverNamesAPerson(t *testing.T) {
 				t.Errorf("%s naming mallory: %d %s, want 400", way.name, rec.Code, rec.Body)
 			}
 		}
+	}
+}
+
+func TestPutDeploymentAgentBackendMismatchID(t *testing.T) {
+	srv, _ := testServer(t)
+	body := `{"id":"body-id","framework":"antigravity"}`
+	rec := do(t, srv, "PUT", "/api/deployment/agent-backends/path-id", body)
+	if rec.Code != 400 {
+		t.Errorf("mismatched id status = %d, want 400", rec.Code)
+	}
+}
+
+func TestAddTargetRepoInvalidCloneUrl(t *testing.T) {
+	srv, _ := testServer(t)
+	body := `{"repo":"acme/widgets","cloneUrl":"invalid-url"}`
+	rec := do(t, srv, "POST", "/api/repos", body)
+	if rec.Code != 400 {
+		t.Errorf("invalid cloneUrl status = %d, want 400", rec.Code)
 	}
 }

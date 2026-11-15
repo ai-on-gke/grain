@@ -430,6 +430,9 @@ fi
 		if baseGoneFatally(result.Text, task.Base) {
 			return checkout{}, &baseGoneError{Repo: *task.Target, Base: task.Base, err: err}
 		}
+		if said, ok := gitproxy.LoginLapsed(result.Text); ok {
+			return checkout{}, &hostLoginLapsedError{Repo: *task.Target, Said: said, err: err}
+		}
 		if gitproxy.IsAccessRefusal(result.Text) {
 			return checkout{}, &accessRefusedError{Repo: *task.Target, Output: strings.TrimSpace(result.Text), err: err}
 		}
@@ -490,10 +493,6 @@ func writesConfigRepo(task model.Task) bool {
 		}
 	}
 	return false
-}
-
-func prepareDirectorState(ctx context.Context, tools []mcp.Tool, remoteBase string, task model.Task, repo model.RepoRef) checkout {
-	return prepareDirectorStateWithReuse(ctx, tools, remoteBase, task, repo, false)
 }
 
 func prepareDirectorStateWithReuse(ctx context.Context, tools []mcp.Tool, remoteBase string, task model.Task, repo model.RepoRef, reused bool) checkout {
@@ -905,6 +904,33 @@ type accessRefusedError struct {
 
 func (e *accessRefusedError) Error() string { return e.err.Error() }
 func (e *accessRefusedError) Unwrap() error { return e.err }
+
+// hostLoginLapsedError is a clone the git proxy refused because a login
+// the grain host itself holds for the repository's git host has lapsed --
+// a command-backed forge whose front end answers with its login page, or
+// an ambient credential whose tool's login no longer vouches for its
+// token (gitproxy.LoginLapsed). Nothing about the task or its credential
+// is at fault, and every task on that host fails the same way until a
+// person renews the login, so it ends the run the way a host tool's
+// expired credentials do (setupEnding, model.EnvironmentOutcome): parked
+// on what to run, and left off the task's failure streak.
+type hostLoginLapsedError struct {
+	Repo model.RepoRef
+	// Said is the proxy's own sentence, which names the login and what
+	// renews it.
+	Said string
+	err  error
+}
+
+func (e *hostLoginLapsedError) Error() string { return e.err.Error() }
+func (e *hostLoginLapsedError) Unwrap() error { return e.err }
+
+// detail is the run's detail, and the sentence the task is parked on.
+func (e *hostLoginLapsedError) detail() string {
+	return fmt.Sprintf("cloning %s was refused because the grain host's own login for %s has lapsed, "+
+		"which only renewing that login fixes. The git proxy said: %s",
+		e.Repo, e.Repo.GitHost(), strings.TrimRight(e.Said, "."))
+}
 
 // baseGoneFatally reports whether a failed clone's output is baseCheck
 // refusing to go on without base -- its first line printed and its

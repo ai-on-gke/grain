@@ -64,6 +64,10 @@ type RPCError struct {
 
 func (e *RPCError) Error() string { return fmt.Sprintf("mcp: %s (code %d)", e.Message, e.Code) }
 
+// ErrClosedOutput is a stdio server's stdout ending before it answered:
+// almost always its process exiting, so its stderr says why.
+var ErrClosedOutput = errors.New("capability server closed its output")
+
 // DialOptions are what attaching to a configured server needs beyond its
 // entry.
 type DialOptions struct {
@@ -277,7 +281,16 @@ func (c *Client) CallTool(ctx context.Context, name string, arguments map[string
 		text = res.Content[0].Text
 	}
 	if res.IsError {
-		return nil, fmt.Errorf("%s: server reported an error: %s", name, truncate(text, 4096))
+		err := fmt.Errorf("%s: server reported an error: %s", name, truncate(text, 4096))
+		var wait struct {
+			Waiting string `json:"waiting"`
+		}
+		if len(res.StructuredContent) > 0 && json.Unmarshal(res.StructuredContent, &wait) == nil {
+			if w := waitingPhrase(wait.Waiting); w != "" {
+				return nil, &WaitingError{Waiting: w, Err: err}
+			}
+		}
+		return nil, err
 	}
 	if len(res.StructuredContent) > 0 && string(res.StructuredContent) != "null" {
 		return res.StructuredContent, nil
@@ -469,7 +482,7 @@ func (t *stdioTransport) roundTrip(ctx context.Context, id int64, msg []byte) ([
 		for {
 			line, err := t.stdout.ReadBytes('\n')
 			if err != nil {
-				ch <- answer{err: fmt.Errorf("mcp: capability server closed its output: %w", err)}
+				ch <- answer{err: fmt.Errorf("mcp: %w: %w", ErrClosedOutput, err)}
 				return
 			}
 			var probe struct {

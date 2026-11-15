@@ -1,9 +1,9 @@
 # Bootstrap: GCP service account capabilities
 
-Goal: create the GCP service accounts and IAM grants the `gcp-key` and
-`gemini-key` capabilities need (`pkg/capability/gcpkey`,
-`pkg/capability/geminikey`) -- an agent account those capabilities
-mint short-lived keys for, and a minter account that mints/revokes them.
+Goal: create the GCP service accounts and IAM grants the gcp server's
+`https://grain.dev/capabilities/gcp#gcp-key` and `#gemini-key` methods
+need (`pkg/capability/gcpkey`, `pkg/capability/geminikey`) -- an agent
+account those methods mint short-lived keys for, and a minter account that mints/revokes them.
 This playbook assumes the deployment's VM and data disk already exist,
 hand-created (bwsalmon/agents#620) -- it only ever runs Terraform
 `-target`ed at the identity/IAM resources in
@@ -24,7 +24,7 @@ Confirm with whoever you're talking to:
   must match `terraform/gcp/example.tfvars`' equivalents exactly, or
   a later `terraform plan` will see the hand-created instance as
   "missing" and try to create a second one)
-- whether they want the `gemini-key` capability too (`enable_gemini_key`)
+- whether they want the `gcp#gemini-key` method too (`enable_gemini_key`)
 
 ## 2. Get a master credential onto the host -- out of band, not through chat
 

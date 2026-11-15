@@ -163,7 +163,7 @@ describe("ApiScopeSetsPanel", () => {
     ).toBeTruthy();
     expect(
       within(dialog).getByText(
-        "2 grants hold api:ops/triage, and will grant nothing once it is removed:",
+        "2 grants hold https://grain.dev/capabilities/api#ops/triage, and will grant nothing once it is removed:",
       ),
     ).toBeTruthy();
     expect(

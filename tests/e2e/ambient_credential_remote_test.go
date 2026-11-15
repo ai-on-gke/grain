@@ -392,7 +392,7 @@ func TestAmbientCredentialRemoteSurvivesLiveSandboxRecreation(t *testing.T) {
 		Framework: func(context.Context, orchestrator.AgentChoice) (agent.Framework, error) { return fw, nil },
 		Config: orchestrator.Config{
 			GitRemoteBase:      "http://127.0.0.1:1/unreachable-github-proxy",
-			Capabilities:       model.NewCapabilityRegistry(provider),
+			Capabilities:       productionLikeRegistry(provider),
 			Credentials:        resolver,
 			SandboxRecreations: recreations,
 		},

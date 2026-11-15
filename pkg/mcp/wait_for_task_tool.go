@@ -47,6 +47,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -370,17 +371,23 @@ func parkOnTasks(ctx context.Context, waiter TaskWaiter, unpushed UnpushedWorkRe
 		return *refusal
 	}
 	// resume_later(when: {task}).
-	if _, err := waiter.ResumeLater(ctx, model.ResumeOn{Tasks: ids}); err != nil {
+	taken, err := waiter.ResumeLater(ctx, model.ResumeOn{Tasks: ids})
+	if err != nil {
 		return Result{Text: "Not parked: " + err.Error(), IsError: true}
 	}
 	targets, err := waiter.WaitOn(ctx, ids, false)
 	if err != nil {
 		return Result{Text: "Not parked: " + err.Error(), IsError: true}
 	}
+	// The condition as taken goes in ahead of the targets' own words, as
+	// resume_later's does: it carries the links this park wrote
+	// (model.ResumeOn.Links), which processResult records so that the
+	// park's resumption can take them off again (ResumeLaterTaken reads it).
+	encoded, _ := json.Marshal(taken)
 	return Result{Text: parkedMarker + " This task now depends on " + joinIDs(ids) + " and is " +
 		"queued again once every one of them has closed; the next attempt's prompt says how " +
 		"each ended." + autoNote + " This ends your run: stop here and take no further " +
-		"actions.\n\n" + describeTargets(targets, false)}
+		"actions.\n" + resumeLaterTakenPrefix + string(encoded) + "\n\n" + describeTargets(targets, false)}
 }
 
 func blockOnTasks(ctx context.Context, waiter TaskWaiter, ids []string, untilMerged bool,

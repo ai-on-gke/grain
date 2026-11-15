@@ -943,18 +943,23 @@ re-attach to what is running.
    points at.
 
 The allowlist's `drain_cap` (default `1h`) bounds how long a stuck child
-can hold up the upgrade. At the cap, each remaining child is cancelled
-through the normal path, and a line naming it is logged. hostd logs the
-cap as the drain starts, and reads it again on every pass, so an edit
-made during a drain counts and a read that fails keeps the last cap read.
+can hold up an explicit drain (or a cutover to a build without handover).
+At the cap, each remaining child is cancelled with `Exit.Draining` set so
+the daemon ends the run as `interrupted` rather than `failed`, and a line
+naming it is logged. hostd logs the cap as the drain starts, and reads it
+again on every pass, so an edit made during a drain counts and a read that
+fails keeps the last cap read.
 
-Drain was chosen over having the new hostd adopt the old one's children.
-With drain, the children stay hostd's own: exit status, the deadline and
-the process-group kill are exactly what they were. With adoption, a
-process would have to outlive its parent and its unit's cgroup and be
-watched by a non-parent. A drain does not lose a child's ending either:
-a detached process that ended during the drain keeps its spool on disk
-for the next hostd to list.
+When both the running hostd and the replacement binary advertise
+`FeatureHandover` (`grain host -drain`), a local hostd hands live detached
+runs over in place instead of draining: once any protocol-1 start or
+initial detached `stdin` has finished, it closes active attach streams
+(which the daemon re-attaches from their cursors), leaves live detached
+children running, and calls `syscall.Exec` onto the new binary in the same
+PID. Keeping the PID keeps systemd's unit cgroup intact and leaves the new
+hostd as the kernel parent of every child (`loadSpools`), so exit status,
+deadlines and process-group kills stay exact with no queue block and no
+run cut short.
 
 ### The daemon's side (implemented)
 
@@ -988,7 +993,11 @@ for the next hostd to list.
   - `RecoverOrphanedRunsExcept` spares every adopted row, so a daemon
     upgrade never re-dispatches a run hostd is still running.
   - A hostd that does not answer hello decides nothing, and its rows
-    are recovered as any other.
+    are recovered as any other. The error (`HostdAwayError`) names
+    them, and the daemon cancels their processes once that hostd
+    answers again (`orchestrator.CancelWhenBack`, for up to a day), so
+    none holds a host CLI slot until its own deadline or runs beside
+    its run's next attempt.
 - **Handshake gating.**
   - An incompatible hostd (`hostd.Compatible`) starts no new host run.
     The run's resolution and Settings (`HostdStatus.Mismatch`) name the

@@ -17,11 +17,15 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/dispatchcondition"
 	"github.com/ai-on-gke/grain/pkg/hub/api"
+	"github.com/ai-on-gke/grain/pkg/mergelogins"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite/sqlitetest"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -136,12 +140,14 @@ func TestGrainHealthListsCapabilityServersOutOfUse(t *testing.T) {
 		(&printer{}).health(ui.SandboxHealthResponse{CapabilityServers: []ui.CapabilityServerDown{
 			{ID: "https://walk.example/caps/cm", State: "failed", Reason: "initialize: mcp: capability server closed its output: EOF"},
 			{ID: "https://grain.dev/capabilities/gcp", State: "needs-config", ConfigRefused: true, Reason: "gcp: permission set org: roles/owner is not grantable"},
+			{ID: "https://walk.example/caps/corp", State: "needs-config", Waiting: "a renewed host credential", Reason: "configure: the host credential expired"},
 		}})
 	})
 	for _, want := range []string{
 		"FAILING: capability servers out of use",
 		"https://walk.example/caps/cm (failed): initialize: mcp: capability server closed its output: EOF",
 		"https://grain.dev/capabilities/gcp (refused its saved config): gcp: permission set org: roles/owner is not grantable",
+		"https://walk.example/caps/corp (waiting for a renewed host credential, retried every minute): configure: the host credential expired",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("grain health output missing %q:\n%s", want, out)
@@ -149,5 +155,161 @@ func TestGrainHealthListsCapabilityServersOutOfUse(t *testing.T) {
 	}
 	if strings.Contains(out, "no counters") {
 		t.Errorf("grain health says there is nothing to report with a server down:\n%s", out)
+	}
+}
+
+func TestGrainHealthListsTargetRepoHostWarnings(t *testing.T) {
+	out := captureStdout(t, func() {
+		(&printer{}).health(ui.SandboxHealthResponse{
+			TargetRepoHostWarnings: []ui.TargetRepoHostMismatch{{
+				Repo:       "experimental/grain",
+				ResolvesTo: "github.com",
+				Candidates: []string{"git.forge.example/experimental/grain"},
+				Message:    "this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+			}},
+		})
+	})
+	for _, want := range []string{
+		"WARNING: target repositories missing their git host:",
+		"experimental/grain: this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain health output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "no counters") {
+		t.Errorf("grain health says there is nothing to report when target repo host warnings exist:\n%s", out)
+	}
+}
+
+func TestGrainHealthNamesSchedulesThatStoppedRunning(t *testing.T) {
+	last := time.Date(2026, 10, 28, 7, 37, 0, 0, time.UTC)
+	out := captureStdout(t, func() {
+		(&printer{}).health(ui.SandboxHealthResponse{StaleSchedules: []model.StaleSchedule{{
+			ID: "repo:acme/widgets:workflow.live-agent", Repo: model.RepoRef{Owner: "acme", Name: "widgets"},
+			Workflow: "live-agent", Cadence: 24 * time.Hour, LastRunAt: &last,
+			Reason: "this repository uses github CI mode, so .grain/workflows/live-agent.yml's cron is dropped at every firing",
+		}}})
+	})
+	for _, want := range []string{
+		"FAILING: schedules with no run in more than twice their cadence",
+		"repo:acme/widgets:workflow.live-agent (workflow live-agent) on acme/widgets: every 24h0m0s, last ran 2026-10-28T07:37:00Z",
+		"why: this repository uses github CI mode",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain health output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "no counters") {
+		t.Errorf("grain health says there is nothing to report with a schedule gone quiet:\n%s", out)
+	}
+}
+
+// Declarations a repository merged that this daemon would not read
+// (grain/task-4392): the files, lines and messages, and what is in force.
+func TestGrainHealthNamesRefusedDeclarations(t *testing.T) {
+	out := captureStdout(t, func() {
+		(&printer{}).health(ui.SandboxHealthResponse{RefusedDeclarations: []ui.RefusedDeclarations{{
+			Repo: "acme/widgets", InForce: "101381a0b1c2d3e4", HeldBack: true,
+			Error: ".grain/schedules/release-train.yml: yaml: unmarshal errors:\n  line 16: cannot unmarshal !!map into string",
+		}}})
+	})
+	for _, want := range []string{
+		"FAILING: repository declarations not read in full:",
+		"acme/widgets (files held back for a newer grain; in force: 101381a0b1c2)",
+		"    .grain/schedules/release-train.yml: yaml: unmarshal errors:",
+		"line 16: cannot unmarshal !!map into string",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("grain health output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "no counters") {
+		t.Errorf("grain health says there is nothing to report:\n%s", out)
+	}
+}
+
+// `grain health` exits 1 whenever it prints a FAILING section, text or
+// -json, so a monitoring script can tell a failing deployment by status
+// (docs/test-runs/2026-11-11-schedule-groups.md, F4); a WARNING alone
+// leaves it at 0.
+func TestGrainHealthExitsOneWhenACheckIsFailing(t *testing.T) {
+	last := time.Date(2026, 11, 8, 7, 37, 0, 0, time.UTC)
+	stale := ui.SandboxHealthResponse{StaleSchedules: []model.StaleSchedule{{
+		ID: "repo:schedule:acme:widgets:workflow.live", Repo: model.RepoRef{Owner: "acme", Name: "widgets"},
+		Cadence: 24 * time.Hour, LastRunAt: &last,
+	}}}
+	warning := ui.SandboxHealthResponse{MergeLoginWarnings: []mergelogins.Warning{{
+		Repo: "acme/widgets", Login: "octocat", Message: "octocat is a user account",
+	}}}
+	ciWait := ui.SandboxHealthResponse{CIWaits: []ui.CIWaitHealth{{
+		TaskID: "42", Repo: "acme/widgets", Branch: "grain/task-42", CIMode: "github", CI: "gha:acme:widgets:5001", Since: last,
+	}}}
+	alert := ui.SandboxHealthResponse{Daemon: &ui.DaemonHealth{StoreSwitch: &ui.StoreSwitch{
+		Since: last, Opened: "sqlite", Selected: "postgres", Message: "store switched underneath the running daemon",
+	}}}
+	combined := ui.SandboxHealthResponse{
+		DispatchBlocked:     []ui.DispatchCondition{{Condition: dispatchcondition.Condition{Name: "git-proxy", Error: "bind: address already in use", Since: last}, Held: "3s"}},
+		CapabilityServers:   []ui.CapabilityServerDown{{ID: "https://grain.dev/capabilities/git", State: "failed", Reason: "bind 127.0.0.1:4254"}},
+		StaleSchedules:      stale.StaleSchedules,
+		RefusedDeclarations: []ui.RefusedDeclarations{{Repo: "acme/widgets", Error: "bad yaml"}},
+	}
+	for _, tc := range []struct {
+		name     string
+		health   ui.SandboxHealthResponse
+		args     []string
+		wantExit int
+		wantOut  string
+		wantErr  string
+		forbid   string
+	}{
+		{"stale schedule", stale, []string{"health"}, exitFailed, "FAILING: schedules with no run", "grain: health: failing: 1 stale schedule(s)", "no counters"},
+		{"stale schedule -json", stale, []string{"-json", "health"}, exitFailed, `"repo:schedule:acme:widgets:workflow.live"`, "", ""},
+		{"stale schedule post-verb -json", stale, []string{"health", "-json"}, exitFailed, `"repo:schedule:acme:widgets:workflow.live"`, "", ""},
+		{"dispatch blocked", ui.SandboxHealthResponse{DispatchBlocked: []ui.DispatchCondition{{Condition: dispatchcondition.Condition{Name: "hosts", Error: "every host is disconnected"}}}}, []string{"health"}, exitFailed, "FAILING: dispatch is blocked", "grain: health: failing: dispatch is blocked", "no counters"},
+		{"capability server down", ui.SandboxHealthResponse{CapabilityServers: []ui.CapabilityServerDown{{ID: "https://walk.example/caps/cm", State: "failed"}}}, []string{"health"}, exitFailed, "FAILING: capability servers out of use", "grain: health: failing: 1 capability server(s) out of use", "no counters"},
+		{"refused declarations", ui.SandboxHealthResponse{RefusedDeclarations: []ui.RefusedDeclarations{{Repo: "acme/widgets", Error: "bad yaml"}}}, []string{"health"}, exitFailed, "FAILING: repository declarations", "grain: health: failing: 1 repository declaration set(s) not read in full", "no counters"},
+		{"all four failing", combined, []string{"health"}, exitFailed, "FAILING: dispatch is blocked", "grain: health: failing: dispatch is blocked, 1 capability server(s) out of use, 1 stale schedule(s), 1 repository declaration set(s) not read in full", "no counters"},
+		{"all four failing post-verb -json", combined, []string{"health", "-json"}, exitFailed, `"refusedDeclarations"`, "", ""},
+		{"warning only", warning, []string{"health"}, exitOK, "WARNING: reviewed-merge logins", "", "no counters"},
+		{"ci wait warning only", ciWait, []string{"health"}, exitOK, "WARNING: tasks waiting on CI", "", "no counters"},
+		{"ci wait warning -json", ciWait, []string{"health", "-json"}, exitOK, `"gha:acme:widgets:5001"`, "", ""},
+		{"store switch alert only", alert, []string{"health"}, exitOK, "ALERT (since 2026-11-08 07:37:00Z): store switched", "", "no counters"},
+		{"store switch alert -json", alert, []string{"health", "-json"}, exitOK, `"storeSwitch"`, "", ""},
+		{"healthy", ui.SandboxHealthResponse{}, []string{"health"}, exitOK, "no counters", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/sandboxes" {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(tc.health)
+			}))
+			defer ts.Close()
+			var stderr strings.Builder
+			out := captureStdout(t, func() {
+				exit := runTaskCLI(append([]string{"-server", ts.URL, "-token", "token"}, tc.args...), &stderr)
+				if exit != tc.wantExit {
+					t.Errorf("grain %s exit = %d (stderr %q), want %d", strings.Join(tc.args, " "), exit, stderr.String(), tc.wantExit)
+				}
+			})
+			if !strings.Contains(out, tc.wantOut) {
+				t.Errorf("grain %s output missing %q:\n%s", strings.Join(tc.args, " "), tc.wantOut, out)
+			}
+			if tc.forbid != "" && strings.Contains(out, tc.forbid) {
+				t.Errorf("grain %s output unexpectedly contains %q:\n%s", strings.Join(tc.args, " "), tc.forbid, out)
+			}
+			if gotErr := strings.TrimSpace(stderr.String()); gotErr != tc.wantErr {
+				t.Errorf("grain %s stderr = %q, want %q", strings.Join(tc.args, " "), gotErr, tc.wantErr)
+			}
+			if jsonRequested(tc.args) {
+				var parsed ui.SandboxHealthResponse
+				if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+					t.Errorf("grain %s stdout is not valid JSON: %v\n%s", strings.Join(tc.args, " "), err, out)
+				}
+			}
+		})
 	}
 }

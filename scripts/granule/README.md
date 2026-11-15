@@ -489,8 +489,6 @@ and name it in Settings → Sandboxes → Custom sandbox image
 it is:
 
 ```sh
-scripts/release-assets.sh fetch latest /tmp/grain-latest
-scripts/release-assets.sh load /tmp/grain-latest   # grain/guest:sha-<12 hex>
 granule guest build \
   -from docker.io/grainai/sandbox:latest \
   -setup ./my-setup.sh \

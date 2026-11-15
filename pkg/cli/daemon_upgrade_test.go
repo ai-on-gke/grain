@@ -281,7 +281,9 @@ exit 0
 	if !strings.Contains(argv, "pull "+wantRef) {
 		t.Errorf("docker was never asked to pull %s; it was asked:\n%s", wantRef, argv)
 	}
-	if !strings.Contains(argv, "run --rm "+pinned+" schema-version") {
+	// --pull=never: the image was just pulled and pinned, so a run that
+	// cannot find it locally must fail rather than fetch it implicitly.
+	if !strings.Contains(argv, "run --rm --pull=never "+pinned+" schema-version") {
 		t.Errorf("the pulled image was never health-checked; docker was asked:\n%s", argv)
 	}
 	waitForPath(t, restartMarker, "the restart that brings the new image up")
@@ -431,5 +433,28 @@ func waitForPath(t *testing.T, path, what string) {
 			t.Fatalf("the upgrade never ran %s", what)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestLegacyUpgradeSourceFlagsAreIgnoredWithoutFailingStart(t *testing.T) {
+	refFile := filepath.Join(t.TempDir(), "image.env")
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=docker.io/grainai/grain:main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, unknown, err := parseDaemonArgs([]string{
+		"-upgrade-image=docker.io/grainai/grain",
+		"-upgrade-image-ref-file=" + refFile,
+		"-upgrade-image-source=release-assets",
+		"-upgrade-image-fallback=registry",
+		"-upgrade-release-repo=github.com/ai-on-gke/grain",
+	})
+	if err != nil {
+		t.Fatalf("parseDaemonArgs with legacy upgrade flags failed: %v", err)
+	}
+	if cfg.UpgradeImage != "docker.io/grainai/grain" {
+		t.Errorf("cfg.UpgradeImage = %q, want docker.io/grainai/grain", cfg.UpgradeImage)
+	}
+	if len(unknown) != 3 {
+		t.Errorf("unknown flags = %v, want the 3 retired flags", unknown)
 	}
 }

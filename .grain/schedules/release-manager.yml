@@ -1,0 +1,20 @@
+name: Release manager (rc cut)
+# Start a release manager (.grain/templates/release-manager.yml,
+# design/playbook/releases.playbook.md section 16) when the release train
+# pushes an rc tag. Every vX.Y.Z-rc.N and vX.Y.Z-rc.N-discarded push runs
+# release-train-assets.yml, whose head branch is the tag. While a manager
+# from this schedule is open, overlap: skip drops every firing after it,
+# so one version gets one manager. A firing for a version that already
+# has one, or is already released, ends in the new task's nothing_needed.
+#
+# Not refs/heads/candidate with a git_ref trigger: candidate also names
+# the newest rc, but a manager filed on its every move cannot tell why it
+# moved, and the run's tag here names the version outright.
+template: release-manager
+base: main
+trigger:
+  github_workflow_run:
+    workflow: release-train-assets.yml
+    branches: ["v*-rc.*"]
+    conclusions: [success, failure]
+overlap: skip

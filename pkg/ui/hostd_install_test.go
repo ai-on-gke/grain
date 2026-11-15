@@ -15,15 +15,28 @@
 package ui
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ai-on-gke/grain/pkg/agent/antigravity"
+	"github.com/ai-on-gke/grain/pkg/agent/claude"
+	"github.com/ai-on-gke/grain/pkg/agent/codex"
+	agentdrelease "github.com/ai-on-gke/grain/pkg/agentd/release"
+	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
+	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
@@ -138,10 +151,16 @@ func TestRenderHostdInstallScriptDropsWhatItCannotCarry(t *testing.T) {
 
 func TestHostdInstallRoute(t *testing.T) {
 	for target, want := range map[string]bool{
-		"/api/hostd/install.sh":   true,
-		"/api/hostd/install.sh/x": false,
-		"/api/hostd/installsh":    false,
-		"/api/hostds":             false,
+		"/api/hostd/install.sh":                       true,
+		"/api/hostd/agentd/linux/amd64":               true,
+		"/api/hostd/agentd/linux/amd64/manifest.json": true,
+		"/api/hostd/agentd/linux/arm64":               true,
+		"/api/hostd/agentd/linux/arm64/manifest.json": true,
+		"/api/hostd/agentd/linux":                     false,
+		"/api/hostd/agentd/linux/amd64/extra":         false,
+		"/api/hostd/install.sh/x":                     false,
+		"/api/hostd/installsh":                        false,
+		"/api/hostds":                                 false,
 	} {
 		r := httptest.NewRequest(http.MethodGet, "http://grain.example/", nil)
 		r.URL.Path = target
@@ -442,6 +461,433 @@ func TestDefaultHostInviteInstall(t *testing.T) {
 	} {
 		if got := defaultHostInviteInstall(tc.c); strings.Join(got.Lines, "\n") != strings.Join(tc.want, "\n") || got.Note != "" {
 			t.Errorf("defaultHostInviteInstall(%+v) = %+v, want %q", tc.c, got, tc.want)
+		}
+	}
+}
+
+func TestControllerServesSignedAgentdBinaryAndManifestOffline(t *testing.T) {
+	pub, priv, err := agentdrelease.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubPEM, err := agentdrelease.FormatPublicKeyPEM(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	distDir := t.TempDir()
+	t.Setenv(agentdDistDirEnv, distDir)
+	t.Setenv(agentdReleaseURLEnv, "off")
+	t.Setenv(agentdReleasePublicKeyEnv, string(pubPEM))
+
+	binPayload := []byte("#!/bin/sh\nprintf 'agentd args: %s\\n' \"$*\"\n")
+	m, err := agentdrelease.NewManifestForBinary("v3.5.0", "linux/amd64", binPayload, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := agentdrelease.SignManifest(m, priv, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestRaw, err := json.MarshalIndent(signed, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(distDir, "grain-agentd-linux-amd64"), binPayload, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(distDir, "grain-agentd-linux-amd64.manifest.json"), manifestRaw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer(Config{LocalAPIToken: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"}, nil)
+
+	// Open without the single-tenant access code, for hosts fetching over TLS.
+	mReq := httptest.NewRequest(http.MethodGet, "https://grain.example.com/api/hostd/agentd/linux/amd64/manifest.json", nil)
+	mReq.RemoteAddr = "203.0.113.44:50000"
+	mRec := httptest.NewRecorder()
+	srv.ServeHTTP(mRec, mReq)
+	if mRec.Code != http.StatusOK {
+		t.Fatalf("GET manifest = %d: %s", mRec.Code, mRec.Body.String())
+	}
+	gotManifest, err := agentdrelease.ParseManifest(mRec.Body.Bytes())
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+
+	bReq := httptest.NewRequest(http.MethodGet, "https://grain.example.com/api/hostd/agentd/linux/amd64", nil)
+	bReq.RemoteAddr = "203.0.113.44:50000"
+	bRec := httptest.NewRecorder()
+	srv.ServeHTTP(bRec, bReq)
+	if bRec.Code != http.StatusOK {
+		t.Fatalf("GET binary = %d: %s", bRec.Code, bRec.Body.String())
+	}
+	if !bytes.Equal(bRec.Body.Bytes(), binPayload) {
+		t.Fatalf("binary payload mismatch")
+	}
+	if _, err := agentdrelease.VerifyBinary(gotManifest, bRec.Body.Bytes(), pub); err != nil {
+		t.Fatalf("VerifyBinary against pinned key: %v", err)
+	}
+
+	// Unsupported platform returns 404.
+	dReq := httptest.NewRequest(http.MethodGet, "https://grain.example.com/api/hostd/agentd/darwin/arm64", nil)
+	dReq.RemoteAddr = "203.0.113.44:50000"
+	dRec := httptest.NewRecorder()
+	srv.ServeHTTP(dRec, dReq)
+	if dRec.Code != http.StatusNotFound {
+		t.Errorf("GET darwin/arm64 = %d, want 404", dRec.Code)
+	}
+
+	// End-to-end check: hostd_install.sh --agentd downloads from controller when
+	// grain-agentd is absent from $PATH and ~/.local/bin.
+	if runtime.GOOS == "linux" && (runtime.GOARCH == "amd64" || runtime.GOARCH == "arm64") {
+		archAsset := "grain-agentd-linux-" + runtime.GOARCH
+		mArch, _ := agentdrelease.NewManifestForBinary("v3.5.0", "linux/"+runtime.GOARCH, binPayload, nil)
+		sArch, _ := agentdrelease.SignManifest(mArch, priv, nil)
+		rawArch, _ := json.MarshalIndent(sArch, "", "  ")
+		_ = os.WriteFile(filepath.Join(distDir, archAsset), binPayload, 0o755)
+		_ = os.WriteFile(filepath.Join(distDir, archAsset+".manifest.json"), rawArch, 0o644)
+
+		ts := httptest.NewServer(srv)
+		defer ts.Close()
+
+		scriptReq := httptest.NewRequest(http.MethodGet, ts.URL+"/hostd/install", nil)
+		scriptRec := httptest.NewRecorder()
+		srv.ServeHTTP(scriptRec, scriptReq)
+		scriptPath := filepath.Join(t.TempDir(), "install.sh")
+		if err := os.WriteFile(scriptPath, scriptRec.Body.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fakeHome := t.TempDir()
+		emptyPath := t.TempDir()
+		// Symlink sh/curl/tr/sed/sha256sum/shasum/chmod/mkdir/mktemp/id/uname/rm so
+		// PATH holds no pre-existing grain-agentd.
+		for _, tool := range []string{"sh", "curl", "wget", "tr", "sed", "sha256sum", "shasum", "awk", "chmod", "mkdir", "mktemp", "id", "uname", "rm", "cat", "head"} {
+			if p, err := exec.LookPath(tool); err == nil {
+				_ = os.Symlink(p, filepath.Join(emptyPath, tool))
+			}
+		}
+		cmd := exec.Command("sh", scriptPath, "--agentd", "--server", ts.URL, "--name", "ws-offline", "--no-start")
+		cmd.Env = []string{"HOME=" + fakeHome, "PATH=" + emptyPath}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("sh install.sh --agentd: %v\n%s", err, out)
+		}
+		if !strings.Contains(string(out), "agentd args: install -server "+ts.URL+" -name ws-offline -no-start") {
+			t.Errorf("unexpected output from downloaded agentd:\n%s", out)
+		}
+	}
+}
+
+func TestControllerFetchesAndCachesSignedAgentdFromReleaseURL(t *testing.T) {
+	pub, priv, _ := agentdrelease.GenerateKeyPair()
+	pubPEM, _ := agentdrelease.FormatPublicKeyPEM(pub)
+
+	binPayload := []byte("upstream-signed-agentd-binary")
+	const rel = "v9.4.2"
+	m, _ := agentdrelease.NewManifestForBinary(rel, "linux/arm64", binPayload, nil)
+	signed, _ := agentdrelease.SignManifest(m, priv, nil)
+	rawManifest, _ := json.Marshal(signed)
+
+	hits := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		switch r.URL.Path {
+		case "/releases/" + rel + "/grain-agentd-linux-arm64.manifest.json":
+			_, _ = w.Write(rawManifest)
+		case "/releases/" + rel + "/grain-agentd-linux-arm64":
+			_, _ = w.Write(binPayload)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	t.Setenv(agentdDistDirEnv, t.TempDir()) // empty local dir
+	t.Setenv(agentdReleaseURLEnv, upstream.URL+"/releases")
+	t.Setenv(agentdReleasePublicKeyEnv, string(pubPEM))
+	oldRel := cliInstallRelease
+	cliInstallRelease = func() string { return rel }
+	t.Cleanup(func() { cliInstallRelease = oldRel })
+
+	srv := NewServer(Config{}, nil)
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "https://grain.example.com/api/hostd/agentd/linux/arm64", nil)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), binPayload) {
+			t.Fatalf("iter %d: code=%d body=%q", i, rec.Code, rec.Body.String())
+		}
+	}
+	if hits != 2 {
+		t.Errorf("upstream hit %d times across 2 binary requests, want 2 (1 manifest + 1 binary, cached thereafter)", hits)
+	}
+}
+
+func TestControllerRefusesTamperedLocalAgentdManifestSignature(t *testing.T) {
+	pub, _, _ := agentdrelease.GenerateKeyPair()
+	_, wrongPriv, _ := agentdrelease.GenerateKeyPair()
+	pubPEM, _ := agentdrelease.FormatPublicKeyPEM(pub)
+
+	distDir := t.TempDir()
+	t.Setenv(agentdDistDirEnv, distDir)
+	t.Setenv(agentdReleaseURLEnv, "off")
+	t.Setenv(agentdReleasePublicKeyEnv, string(pubPEM))
+
+	binPayload := []byte("agentd-bytes")
+	m, _ := agentdrelease.NewManifestForBinary("v3.5.0", "linux/amd64", binPayload, nil)
+	badSigned, _ := agentdrelease.SignManifest(m, wrongPriv, nil)
+	raw, _ := json.Marshal(badSigned)
+	_ = os.WriteFile(filepath.Join(distDir, "grain-agentd-linux-amd64"), binPayload, 0o755)
+	_ = os.WriteFile(filepath.Join(distDir, "grain-agentd-linux-amd64.manifest.json"), raw, 0o644)
+
+	srv := NewServer(Config{}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "https://grain.example.com/api/hostd/agentd/linux/amd64/manifest.json", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("manifest signed by unpinned key returned %d, want 404", rec.Code)
+	}
+}
+
+func TestControllerRefusesUnsignedAgentdFromReleaseURL(t *testing.T) {
+	pub, _, _ := agentdrelease.GenerateKeyPair()
+	pubPEM, _ := agentdrelease.FormatPublicKeyPEM(pub)
+
+	// The hash matches, but nothing signed it: whoever serves the release
+	// URL wrote both, so it proves nothing.
+	binPayload := []byte("upstream-unsigned-agentd-binary")
+	const rel = "v9.4.3"
+	m, _ := agentdrelease.NewManifestForBinary(rel, "linux/amd64", binPayload, nil)
+	rawManifest, _ := json.Marshal(m)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/" + rel + "/grain-agentd-linux-amd64.manifest.json":
+			_, _ = w.Write(rawManifest)
+		case "/releases/" + rel + "/grain-agentd-linux-amd64":
+			_, _ = w.Write(binPayload)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	t.Setenv(agentdDistDirEnv, t.TempDir()) // empty local dir
+	t.Setenv(agentdReleaseURLEnv, upstream.URL+"/releases")
+	t.Setenv(agentdReleasePublicKeyEnv, string(pubPEM))
+	oldRel := cliInstallRelease
+	cliInstallRelease = func() string { return rel }
+	t.Cleanup(func() { cliInstallRelease = oldRel })
+
+	srv := NewServer(Config{}, nil)
+	for _, p := range []string{"/api/hostd/agentd/linux/amd64", "/api/hostd/agentd/linux/amd64/manifest.json"} {
+		req := httptest.NewRequest(http.MethodGet, "https://grain.example.com"+p, nil)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s with an unsigned upstream release = %d, want 404", p, rec.Code)
+		}
+	}
+}
+
+// The open routes remember a local asset's verification, but only while its
+// files are unchanged: a binary swapped after the first request is checked
+// again, and refused.
+func TestControllerReverifiesALocalAgentdAssetThatChanged(t *testing.T) {
+	pub, priv, _ := agentdrelease.GenerateKeyPair()
+	pubPEM, _ := agentdrelease.FormatPublicKeyPEM(pub)
+
+	distDir := t.TempDir()
+	t.Setenv(agentdDistDirEnv, distDir)
+	t.Setenv(agentdReleaseURLEnv, "off")
+	t.Setenv(agentdReleasePublicKeyEnv, string(pubPEM))
+
+	binPath := filepath.Join(distDir, "grain-agentd-linux-amd64")
+	binPayload := []byte("agentd-bytes")
+	m, _ := agentdrelease.NewManifestForBinary("v3.5.0", "linux/amd64", binPayload, nil)
+	signed, _ := agentdrelease.SignManifest(m, priv, nil)
+	raw, _ := json.Marshal(signed)
+	if err := os.WriteFile(binPath, binPayload, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(distDir, "grain-agentd-linux-amd64.manifest.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer(Config{}, nil)
+	get := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "https://grain.example.com/api/hostd/agentd/linux/amd64", nil)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+	for i := 0; i < 2; i++ {
+		if rec := get(); rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), binPayload) {
+			t.Fatalf("request %d: code=%d body=%q", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	if err := os.WriteFile(binPath, []byte("evil-agentd-bytes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Minute)
+	if err := os.Chtimes(binPath, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if rec := get(); rec.Code != http.StatusNotFound {
+		t.Fatalf("swapped binary served with %d, want 404: %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHostdInstallServesAgentdAllowlistTemplate(t *testing.T) {
+	LogToTest(t)
+	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	ctx := context.Background()
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cfg := model.DefaultConfig()
+	cfg.AgentFramework = model.AgentFrameworkCodex
+	cfg.AgentBackends = []model.AgentBackend{{
+		ID:        "claude-conn",
+		Framework: model.AgentFrameworkClaude,
+		CLIPath:   "/opt/private-team/bin/claude",
+	}}
+	if err := store.PutConfig(ctx, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(RegisterHostCLICandidates("agy", "/opt/edition/bin/agy"))
+	t.Cleanup(RegisterHostCLITemplate(hostd.CLITemplateEntry{
+		Name:       "extra-cli",
+		Candidates: []string{"extra-cli", "~/.local/bin/extra-cli"},
+		Env:        []string{"EXTRA_API_KEY"},
+		PassEnv:    []string{"HTTPS_PROXY"},
+	}))
+
+	srv := NewServer(Config{LocalAPIToken: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23-4567"}, store)
+
+	// 1. Unauthenticated caller gets the template with deployment CLI ordering,
+	// registered candidates/templates, and closed env policies -- without private CLIPath.
+	for _, target := range []string{
+		hostdInstallShortPath + "?template=agentd",
+		hostdInstallPath + "?agentd=template",
+		hostdInstallShortPath + "?agentd-template=1",
+	} {
+		req := httptest.NewRequest(http.MethodGet, "https://grain.example.com"+target, nil)
+		req.RemoteAddr = "203.0.113.9:4242"
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d: %s", target, rec.Code, rec.Body.String())
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+			t.Errorf("GET %s Content-Type = %q, want application/json", target, ct)
+		}
+		tmpl, err := hostd.ParseAllowlistTemplate(rec.Body.Bytes())
+		if err != nil {
+			t.Fatalf("GET %s invalid template: %v\n%s", target, err, rec.Body.String())
+		}
+		if wantOrder := []string{"codex", "claude", "agy", "extra-cli"}; !reflect.DeepEqual(tmpl.Names(), wantOrder) {
+			t.Errorf("GET %s names = %v, want %v", target, tmpl.Names(), wantOrder)
+		}
+		agyEntry, _ := tmpl.Lookup("antigravity")
+		if agyEntry.Name != "agy" || len(agyEntry.Candidates) == 0 || agyEntry.Candidates[0] != "/opt/edition/bin/agy" {
+			t.Errorf("agy entry = %+v, want registered candidate first", agyEntry)
+		}
+		if !reflect.DeepEqual(agyEntry.Env, antigravity.HostdEnv()) {
+			t.Errorf("agy env = %v, want %v", agyEntry.Env, antigravity.HostdEnv())
+		}
+		claudeEntry, _ := tmpl.Lookup("claude")
+		if !reflect.DeepEqual(claudeEntry.Env, claude.HostdEnv()) {
+			t.Errorf("claude env = %v, want %v", claudeEntry.Env, claude.HostdEnv())
+		}
+		if slices.Contains(claudeEntry.Candidates, "/opt/private-team/bin/claude") {
+			t.Errorf("stranger response leaked private CLIPath: %v", claudeEntry.Candidates)
+		}
+		codexEntry, _ := tmpl.Lookup("codex")
+		if !reflect.DeepEqual(codexEntry.Env, codex.HostdEnv()) {
+			t.Errorf("codex env = %v, want %v", codexEntry.Env, codex.HostdEnv())
+		}
+	}
+
+	// 2. Trusted caller also gets configured custom CLIPath appended as a candidate.
+	trustedReq := httptest.NewRequest(http.MethodGet, "https://grain.example.com"+hostdInstallShortPath+"?template=agentd", nil)
+	trustedReq.RemoteAddr = ""
+	trustedRec := httptest.NewRecorder()
+	srv.ServeHTTP(trustedRec, trustedReq)
+	trustedTmpl, err := hostd.ParseAllowlistTemplate(trustedRec.Body.Bytes())
+	if err != nil {
+		t.Fatalf("trusted template: %v", err)
+	}
+	if claudeEntry, ok := trustedTmpl.Lookup("claude"); !ok || !slices.Contains(claudeEntry.Candidates, "/opt/private-team/bin/claude") {
+		t.Errorf("trusted claude entry missing configured CLIPath: %+v", claudeEntry)
+	}
+}
+
+func TestHostdInstallScriptAgentdPassesAndPrintsTemplate(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "install.sh")
+	script := renderHostdInstallScript("https://grain.example.com", "v2.3.0", "")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// --agentd --print-template prints valid JSON AllowlistTemplate.
+	out, err := exec.Command("sh", scriptPath, "--agentd", "--print-template").CombinedOutput()
+	if err != nil {
+		t.Fatalf("sh install.sh --agentd --print-template: %v\n%s", err, out)
+	}
+	tmpl, err := hostd.ParseAllowlistTemplate(out)
+	if err != nil {
+		t.Fatalf("printed template invalid: %v\n%s", err, out)
+	}
+	if tmpl.Server != "https://grain.example.com" || len(tmpl.CLIs) < 3 {
+		t.Errorf("printed template = %+v", tmpl)
+	}
+
+	// --agentd exports GRAIN_AGENTD_TEMPLATE to the grain-agentd binary it invokes.
+	stubBin := filepath.Join(dir, "fake-grain-agentd")
+	envDump := filepath.Join(dir, "env.json")
+	stubScript := "#!/bin/sh\nprintf '%s' \"$GRAIN_AGENTD_TEMPLATE\" > '" + envDump + "'\n"
+	if err := os.WriteFile(stubBin, []byte(stubScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", scriptPath, "--agentd", "--agentd-bin", stubBin, "--no-start")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("sh install.sh --agentd --agentd-bin: %v\n%s", err, out)
+	}
+	dumped, err := os.ReadFile(envDump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hostd.ParseAllowlistTemplate(dumped); err != nil {
+		t.Fatalf("forwarded GRAIN_AGENTD_TEMPLATE invalid: %v\n%s", err, dumped)
+	}
+}
+
+// TestHostdEnvSendsNoDeniedNameButAgyHome keeps every variable the daemon
+// sends a CLI outside the host's env deny set (pkg/hostd envDenyPatterns
+// and envDenyV2), so env: ["*"] admits it: CLIEntryEnv keeps exactly the
+// denied names a closed list holds, and only agy's per-run HOME may be one.
+func TestHostdEnvSendsNoDeniedNameButAgyHome(t *testing.T) {
+	peer := hostd.Hello{Features: hostd.Features}
+	for name, tc := range map[string]struct {
+		env  []string
+		want []string
+	}{
+		"agy":    {antigravity.HostdEnv(), []string{"HOME", "*"}},
+		"claude": {claude.HostdEnv(), []string{"*"}},
+		"codex":  {codex.HostdEnv(), []string{"*"}},
+	} {
+		if got := hostd.CLIEntryEnv(tc.env, peer); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: CLIEntryEnv(%v) = %v, want %v: a name the host denies under \"*\" must be written by exact name", name, tc.env, got, tc.want)
 		}
 	}
 }

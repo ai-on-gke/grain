@@ -257,7 +257,7 @@ func refreshPlacements(listener, token, registry string) ([]model.Placement, err
 // travels in a header read from stdin rather than in argv, and nothing
 // here traces its commands.
 const HelperScript = `#!/bin/sh
-# docker-credential-grain: grain's package-publish CI capability's docker
+# docker-credential-grain: the release#package-publish CI capability's docker
 # credential helper. Every get re-mints this job's registry login through
 # grain, for this job's own repository only.
 set -eu
@@ -266,7 +266,7 @@ token_file=` + RefreshTokenPath + `
 
 ask() {
   if [ ! -r "$url_file" ] || [ ! -r "$token_file" ]; then
-    echo "docker-credential-grain: $url_file or $token_file is missing; grain places them for a job granted package-publish"
+    echo "docker-credential-grain: $url_file or $token_file is missing; grain places them for a job granted release#package-publish"
     return 1
   fi
   out=$(printf 'Authorization: Bearer %s\n' "$(cat "$token_file")" |

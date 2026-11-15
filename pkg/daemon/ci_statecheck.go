@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,7 +175,7 @@ func (s *stateCheckSandbox) Exec(ctx context.Context, cmd ci.Command) (result ci
 			result, err = ci.CommandResult{Output: out.String(), ExitCode: 1}, nil
 		}
 	}()
-	if err := statecheck.Run(ctx, &out, s.tree, statecheck.Options{PreviousAPIScopeSets: s.previousAPIScopeSets(ctx)}); err != nil {
+	if err := statecheck.Run(ctx, &out, s.tree, statecheck.Options{PreviousAPIScopeSets: s.previousAPIScopeSets(ctx), Base: s.base(ctx)}); err != nil {
 		fmt.Fprintf(&out, "error: %v\n", err)
 		return ci.CommandResult{Output: out.String(), ExitCode: 1}, nil
 	}
@@ -195,6 +196,24 @@ func (s *stateCheckSandbox) previousAPIScopeSets(ctx context.Context) []byte {
 		return []byte{}
 	}
 	return []byte(out)
+}
+
+// base reads files as the branch the change is against holds them -- the
+// clone's origin/HEAD, as previousAPIScopeSets does -- so that the check
+// refuses a typed-in capability server credential the change adds
+// (statecheck.LiteralCredentials). A clone with no origin/HEAD has no
+// base, and such a credential is only warned about.
+func (s *stateCheckSandbox) base(ctx context.Context) statecheck.BaseFile {
+	if _, err := CiRunGit(ctx, s.tree, nil, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD"); err != nil {
+		return nil
+	}
+	return func(path string) ([]byte, error) {
+		out, err := CiRunGit(ctx, s.tree, nil, "show", "refs/remotes/origin/HEAD:"+path)
+		if err != nil {
+			return nil, fmt.Errorf("origin/HEAD:%s: %w", path, fs.ErrNotExist)
+		}
+		return []byte(out), nil
+	}
 }
 
 func (s *stateCheckSandbox) Release(context.Context) error {

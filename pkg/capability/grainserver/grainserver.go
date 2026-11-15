@@ -193,11 +193,6 @@ var (
 // RepoCredentialGrant returns the canonical repo#credential grant for name.
 func RepoCredentialGrant(name string) string { return model.RepoCredentialGrant(name) }
 
-// ParseRepoCredentialGrant parses a canonical repo#credential grant.
-func ParseRepoCredentialGrant(grant string) (string, bool) {
-	return model.ParseRepoCredentialGrant(grant)
-}
-
 // ConfigureRepoCredentials sets the callback returning the deployment's
 // configured named git credentials under secrets/github (empty non-nil slice
 // when a credential directory is configured with no named credentials; nil when
@@ -464,6 +459,12 @@ func APIServer() *protocol.Server {
 // APIStatus is Status for the in-process api server.
 func APIStatus() servers.Status { return statusOf(APIID, APIServer()) }
 
+// titled is schema with a title, for a oneOf variant to be offered by.
+func titled(schema map[string]any, title string) map[string]any {
+	schema["title"] = title
+	return schema
+}
+
 // repoAccessArgs is the schema of a grant naming one repository.
 func repoAccessArgs() map[string]any {
 	return map[string]any{
@@ -491,8 +492,6 @@ func validSortedCredentialNames(names []string) []string {
 func repoCredentialArgs(configured []string) (map[string]any, []string) {
 	prop := map[string]any{
 		"type":        "string",
-		"pattern":     githubtoken.NamePattern,
-		"not":         map[string]any{"const": "anonymous"},
 		"description": "Named GitHub credential under secrets/github (<name>.token, <name>.app.json, or <name>.ssh.json) to authenticate this task's git operations with.",
 	}
 	var valid []string
@@ -503,6 +502,9 @@ func repoCredentialArgs(configured []string) (map[string]any, []string) {
 			enum[i] = n
 		}
 		prop["enum"] = enum
+	} else {
+		prop["pattern"] = githubtoken.NamePattern
+		prop["not"] = map[string]any{"const": "anonymous"}
 	}
 	return map[string]any{
 		"type":                 "object",
@@ -553,7 +555,10 @@ func buildRepoServerFor(configured []string) *protocol.Server {
 			"task branch, with the team's own git credential (formerly git-push-any-ref). Standing jobs " +
 			"declare the refs they push under `push:` in their .grain template instead.",
 		Args: map[string]any{
-			"oneOf": []any{repoAccessArgs(), taskRepoArgs(), map[string]any{
+			"title": "Kind of write",
+			// Each variant's title is what the UI's variant picker offers.
+			"oneOf": []any{titled(repoAccessArgs(), "CI push to another repo"), titled(taskRepoArgs(), "Write target (repo + base)"), map[string]any{
+				"title":                "Push any branch/tag (refs + force)",
 				"type":                 "object",
 				"additionalProperties": false,
 				"required":             []any{"refs", "force"},
@@ -841,25 +846,11 @@ func IsInProcessGrant(grant string) bool {
 	return err == nil && IsInProcessID(ref.CapabilityID)
 }
 
-// IsJournalGrant reports whether grant names grain#journal (recorded or bare)
-// or the retired bare grain-log alias.
-func IsJournalGrant(grant string) bool { return model.IsGrainJournalGrant(grant) }
-
 // HasJournal reports whether any grant in grants opens grain#journal.
 func HasJournal(grants []string) bool { return model.HasGrainJournal(grants) }
 
-// IsHealthGrant reports whether grant names grain#health (recorded or bare)
-// or the retired bare deployment-health alias.
-func IsHealthGrant(grant string) bool { return model.IsGrainHealthGrant(grant) }
-
 // HasHealth reports whether any grant in grants opens grain#health.
 func HasHealth(grants []string) bool { return model.HasGrainHealth(grants) }
-
-// IsSQLGrant reports whether grant names grain#sql (read or write) or a retired db-read/db-write alias.
-func IsSQLGrant(grant string) bool { return model.IsGrainSQLGrant(grant) }
-
-// IsSQLWriteGrant reports whether grant names grain#sql with write: true or the retired db-write alias.
-func IsSQLWriteGrant(grant string) bool { return model.IsGrainSQLWriteGrant(grant) }
 
 // HasSQL reports whether any grant in grants opens grain#sql (read or write).
 func HasSQL(grants []string) bool { return model.HasGrainSQL(grants) }
@@ -867,36 +858,34 @@ func HasSQL(grants []string) bool { return model.HasGrainSQL(grants) }
 // HasSQLWrite reports whether any grant in grants opens grain#sql with write: true.
 func HasSQLWrite(grants []string) bool { return model.HasGrainSQLWrite(grants) }
 
-// IsHostExecGrant reports whether grant names grain#host-exec or the retired self-repair alias.
+// IsHostExecGrant reports whether grant names grain#host-exec.
 func IsHostExecGrant(grant string) bool { return model.IsGrainHostExecGrant(grant) }
 
 // HasHostExec reports whether any grant in grants opens grain#host-exec.
 func HasHostExec(grants []string) bool { return model.HasGrainHostExec(grants) }
 
 // IsSourceGrant reports whether grant names grain#source (recorded or
-// bare) or the retired bare self-debug alias.
+// bare).
 func IsSourceGrant(grant string) bool { return model.IsGrainSourceGrant(grant) }
 
 // HasSource reports whether any grant in grants opens grain#source.
 func HasSource(grants []string) bool { return model.HasGrainSource(grants) }
 
-// IsCIGrant reports whether grant names grain#ci (recorded or bare) or
-// the retired grain-ci alias.
+// IsCIGrant reports whether grant names grain#ci (recorded or bare).
 func IsCIGrant(grant string) bool { return model.IsGrainCIGrant(grant) }
 
-// IsGitPushAnyRefGrant reports whether grant is GitPushAnyRefGrant or the
-// retired bare git-push-any-ref alias.
+// IsGitPushAnyRefGrant reports whether grant is GitPushAnyRefGrant.
 func IsGitPushAnyRefGrant(grant string) bool { return model.IsGitPushAnyRefGrant(grant) }
 
 // IsReadIssuesGrant reports whether grant names github#read-issues (recorded
-// or bare) or the retired bare read-issues alias.
+// or bare).
 func IsReadIssuesGrant(grant string) bool { return model.IsGitHubReadIssuesGrant(grant) }
 
 // HasReadIssues reports whether any grant in grants opens github#read-issues.
 func HasReadIssues(grants []string) bool { return model.HasGitHubReadIssues(grants) }
 
 // IsSandboxRepoGrant reports whether grant names github#sandbox-repo (recorded
-// or bare) or the retired bare github-sandbox alias.
+// or bare).
 func IsSandboxRepoGrant(grant string) bool { return model.IsGitHubSandboxRepoGrant(grant) }
 
 // HasSandboxRepo reports whether any grant in grants opens github#sandbox-repo.

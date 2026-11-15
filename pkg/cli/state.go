@@ -87,6 +87,13 @@ Commands:
   key retired delete (-all | NAME...)
                             delete replaced keys; refuses the one the secrets
                             file is still encrypted to
+  key wrap -kms KEY         wrap the private key with the Cloud KMS key KEY
+                            (projects/P/locations/L/keyRings/R/cryptoKeys/K), in
+                            the daemon when one is running; verifies the round
+                            trip before writing, and lists plaintext copies left
+  key unwrap                put the private key back in plaintext form (needs
+                            KMS); run it before downgrading past the build that
+                            wrapped it
 `
 
 func stateCmd(args []string) {
@@ -349,6 +356,15 @@ func plural(n int, one, many string) string {
 // must not create the thing it reports on.
 func reportSecretsKey(dataDir string, out io.Writer) {
 	path := daemon.SecretsConfig(dataDir).KeyFile
+	if info, err := secrets.ReadKeyFileInfo(path); err == nil && info.Protection == secrets.ProtectionKMS {
+		fmt.Fprintf(out, "secrets key: %s (wrapped by Cloud KMS key %s)\n", path, info.KMSKey)
+		fmt.Fprintf(out, "            public key %s\n", info.Public)
+		fmt.Fprintf(out, "            this file is useless without decrypt on that KMS key, and the daemon\n")
+		fmt.Fprintf(out, "            unwraps it once at start. Back it up all the same; run\n")
+		fmt.Fprintf(out, "            `grain state key unwrap` before downgrading to a build older than\n")
+		fmt.Fprintf(out, "            the one that wrapped it.\n")
+		return
+	}
 	key, err := secrets.ReadKeyFile(path)
 	switch {
 	case errors.Is(err, secrets.ErrNoKey):
@@ -538,13 +554,24 @@ func stateCheck(ctx context.Context, dataDir string, args []string) error {
 	// which the answer is still worth having.
 	migrate := fs.Bool("migrate", false,
 		"rehearse a migration: accept a dump written at another schema and report what would arrive")
+	// -base is the branch a pull request is against, which the check
+	// grain posts on its own configuration repositories reads from the
+	// clone's origin/HEAD by itself. Without it a typed-in capability
+	// server credential cannot be told new from held, and is only warned
+	// about (statecheck.LiteralCredentials).
+	base := fs.String("base", "",
+		"git revision the change is against: a typed-in capability server credential it does not hold fails the check")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "usage: grain state check [-migrate] DIR\n\n"+
+		fmt.Fprint(os.Stderr, "usage: grain state check [-migrate] [-base REV] DIR\n\n"+
 			"DIR is the root of a state repository -- the directory holding tables/ and\n"+
 			"schema-version, which for a CI step run at the top of the checkout is \".\".\n\n"+
 			"-migrate accepts a dump stamped with a different schema and imports it the way\n"+
 			"an upgrade would, so an upgrade can find out whether this build can take a\n"+
-			"deployment's rows before it takes over from the build that wrote them.\n")
+			"deployment's rows before it takes over from the build that wrote them.\n\n"+
+			"-base names the git revision the change is against (origin/main, say). A\n"+
+			"credential typed into a capability server rather than referenced as\n"+
+			"$secret:<name> fails the check when the change adds it, and is a warning when\n"+
+			"the base already held it; without -base every one is a warning.\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -559,7 +586,15 @@ func stateCheck(ctx context.Context, dataDir string, args []string) error {
 		return errors.New("check takes one directory")
 	}
 
-	return statecheck.Run(ctx, os.Stdout, dir, statecheck.Options{Migrate: *migrate, DataDir: dataDir})
+	opts := statecheck.Options{Migrate: *migrate, DataDir: dataDir}
+	if *base != "" {
+		b, err := statecheck.GitBase(dir, *base)
+		if err != nil {
+			return err
+		}
+		opts.Base = b
+	}
+	return statecheck.Run(ctx, os.Stdout, dir, opts)
 }
 
 // stateKey is the operator's view of the secrets key: the public half,
@@ -569,7 +604,13 @@ func stateCheck(ctx context.Context, dataDir string, args []string) error {
 // prints one invites it into a terminal's scrollback.
 func stateKey(dataDir string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: grain state key show|path|import|retired")
+		return errors.New("usage: grain state key show|path|import|wrap|unwrap|retired")
+	}
+	switch args[0] {
+	case "wrap", "unwrap":
+		// Before opening the store too: the daemon holds the key, and
+		// the change is made there (stateKeyWrap).
+		return stateKeyWrap(context.Background(), dataDir, args[0], args[1:], os.Stdout)
 	}
 	if args[0] == "retired" {
 		// Before opening the store, which would mint a key on a data
@@ -658,13 +699,13 @@ func stateKeyRetired(cfg secrets.Config, out io.Writer, args []string) error {
 			return fmt.Errorf("reading which key %s is encrypted to: %w", cfg.File, err)
 		}
 	}
-	live, _ := secrets.ReadKeyFile(cfg.KeyFile)
+	live, _ := secrets.ReadKeyFileInfo(cfg.KeyFile)
 	for _, name := range names {
 		rk, ok := byName[name]
 		if !ok {
 			return fmt.Errorf("no retired key %q beside %s (see `grain state key retired`)", name, cfg.KeyFile)
 		}
-		if sealedTo != "" && rk.Public == sealedTo && live.Public() != sealedTo {
+		if sealedTo != "" && rk.Public == sealedTo && live.Public != sealedTo {
 			return fmt.Errorf("refusing to delete %s: %s is encrypted to it and not to the live key -- "+
 				"install it again with `grain state key import` first", name, cfg.File)
 		}

@@ -590,3 +590,64 @@ body {
   border-color: var(--border-strong);
   border-style: dashed;
 }
+
+.reg-refresh-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.reg-refresh-failed {
+  color: var(--yellow);
+}
+
+.reg-refresh-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.reg-refresh-failed .reg-refresh-dot {
+  background: var(--yellow);
+}
+
+.reg-refresh-dot-fast {
+  animation: reg-refresh-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes reg-refresh-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reg-refresh-dot-fast {
+    animation: none;
+  }
+}
+
+.reg-server-changed {
+  color: var(--text-secondary);
+  background: var(--yellow-bg);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+}
+
+.reg-status-timeline {
+  margin-top: 12px;
+}
+
+.reg-status-timeline ol {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  max-height: 180px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}

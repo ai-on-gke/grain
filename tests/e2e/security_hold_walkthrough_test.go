@@ -317,12 +317,17 @@ func (w *holdWorld) heldOn(subject model.Task, path string, releasable bool) str
 	if got.AutoMerge {
 		w.t.Fatalf("%s kept auto-merge with a diff on %s", subject.ID, path)
 	}
-	hold := linkTarget(got, model.LinkSecurityHold)
-	if releasable && hold != trustboundary.Version {
+	// The security review is its own gate whatever else the change needs:
+	// a path only a person may release adds the human-only hold beside it.
+	if hold := linkTarget(got, model.LinkSecurityHold); hold != trustboundary.Version {
 		w.t.Fatalf("security-hold link = %q, want %q; links %+v", hold, trustboundary.Version, got.Links)
 	}
-	if !releasable && hold != "" {
-		w.t.Fatalf("a hold only a human may release carries a releasable hold link: %+v", got.Links)
+	humanOnly := linkTarget(got, model.LinkHumanOnlyHold)
+	if releasable && humanOnly != "" {
+		w.t.Fatalf("a review-releasable hold carries a human-only hold: %+v", got.Links)
+	}
+	if !releasable && humanOnly == "" {
+		w.t.Fatalf("a hold only a human may release has no human-only hold: %+v", got.Links)
 	}
 	reviewID := linkTarget(got, model.LinkSecurityReviewTask)
 	if reviewID == "" {
@@ -461,18 +466,31 @@ func TestSecurityHoldWalkthrough(t *testing.T) {
 		}
 	})
 
-	t.Run("a human Submit overrides a pending hold", func(t *testing.T) {
+	// Submit is an approval, not a bypass: the held change waits for its
+	// review, and only an explicit, reasoned gate override merges it early.
+	// The review is kept, not closed unfinished.
+	t.Run("a human Submit does not skip a pending security review; an explicit override does, and the review continues", func(t *testing.T) {
 		t.Parallel()
 		w := newHoldWorld(t, false)
 		task := w.create("touch the git proxy", true, nil)
 		w.workThenReview(task.ID, "echo '// tweak' >> pkg/gitproxy/proxy.go",
 			func(model.Task) []antigravity.Step { return askScript("still reading") })
-		w.heldOn(task, "pkg/gitproxy/proxy.go", true)
+		reviewID := w.heldOn(task, "pkg/gitproxy/proxy.go", true)
 		if err := w.ui.Submit(w.ctx, task.ID); err != nil {
 			t.Fatalf("Submit: %v", err)
 		}
+		w.notMergedWhileHeld(task, 3)
+		head := w.head(model.BranchName(task.ID))
+		if err := w.ui.ForceMergeWithGates(w.ctx, task.ID, "urgent mitigation", head,
+			[]string{model.GateSecurityReview}); err != nil {
+			t.Fatalf("ForceMergeWithGates: %v", err)
+		}
 		if !w.cycles(4, func() bool { w.markAllClean(); return w.merged(model.BranchName(task.ID)) }) {
-			t.Fatalf("Submit did not merge a held change: automerge=%v links=%+v", w.task(task.ID).AutoMerge, w.task(task.ID).Links)
+			t.Fatalf("an explicit gate override did not merge the held change: automerge=%v links=%+v",
+				w.task(task.ID).AutoMerge, w.task(task.ID).Links)
+		}
+		if c := w.comments(reviewID); strings.Contains(c, "Closing this review unfinished") {
+			t.Fatalf("the security review was closed unfinished after the override:\n%s", c)
 		}
 	})
 

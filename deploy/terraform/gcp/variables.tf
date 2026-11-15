@@ -703,6 +703,18 @@ variable "secrets_repo_branch" {
   default     = "main"
 }
 
+variable "secrets_key_kms" {
+  type        = bool
+  description = "Wrap the host's secrets private key with a Cloud KMS key this module creates (kms.tf), so a disk snapshot or a stray copy of secrets.key opens nothing without decrypt on that key, and keep the secrets-key escrow holding the wrapped form. Turning it off later stops new wraps but does not unwrap a key already wrapped: run `grain state key unwrap` on the host first."
+  default     = true
+}
+
+variable "secrets_key_kms_rotation_period" {
+  type        = string
+  description = "How often Cloud KMS rotates the key that wraps the secrets key, in seconds with an s suffix (7776000s is 90 days). The daemon rewraps under the new primary version at its next start."
+  default     = "7776000s"
+}
+
 # --------------------------------------------------------------- granule ---
 #
 # Wires the daemon's -granule-* flags (pkg/cli/daemon.go) through so

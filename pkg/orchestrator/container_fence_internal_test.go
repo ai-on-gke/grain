@@ -69,8 +69,12 @@ func TestContainerFenceInstallsTheOpenNetworkChain(t *testing.T) {
 	script := nftScript(*calls)
 	for _, want := range []string{
 		"add rule inet grain_network_none ct_grain_sandbox_1_1 ip daddr 172.20.0.1 tcp dport { 9728 } accept\n",
+		"add rule inet grain_network_none ct_grain_sandbox_1_1 ip daddr 172.20.0.1 meta l4proto { tcp, udp } th dport 53 accept\n",
+		"add rule inet grain_network_none ct_grain_sandbox_1_1 ip daddr { 0.0.0.0/8, 127.0.0.0/8, 172.20.0.0/16 } counter drop\n",
+		"add rule inet grain_network_none ct_grain_sandbox_1_1 ip6 daddr { ::1/128, ::ffff:0.0.0.0/96 } counter drop\n",
 		"add rule inet grain_network_none ct_grain_sandbox_1_1 meta l4proto { tcp, udp } th dport 53 accept\n",
-		"add rule inet grain_network_none ct_grain_sandbox_1_1 ip daddr { 127.0.0.0/8, 169.254.0.0/16, 172.20.0.0/16, 192.168.1.0/24 } counter drop\n",
+		"add rule inet grain_network_none ct_grain_sandbox_1_1 ip daddr { 0.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 172.20.0.0/16, 192.168.1.0/24 } counter drop\n",
+		"add rule inet grain_network_none ct_grain_sandbox_1_1 ip6 daddr { ::1/128, ::ffff:0.0.0.0/96, fc00::/7, fe80::/10 } counter drop\n",
 		"add rule bridge grain_network_none prerouting iifname \"veth1d9c4eb\" ether type != arp jump ct_grain_sandbox_1_1\n",
 	} {
 		if !strings.Contains(script, want) {

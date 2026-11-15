@@ -16,8 +16,10 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -43,6 +45,7 @@ func (s *Server) deploymentRoutes() {
 	s.route("POST /api/deployment/git-connections/check", s.handleCheckDeploymentGitConnection)
 	s.route("PUT /api/deployment/agent-backends/{backendId}", s.handlePutDeploymentAgentBackend)
 	s.route("DELETE /api/deployment/agent-backends/{backendId}", s.handleDeleteDeploymentAgentBackend)
+	s.route("POST /api/deployment/agent-backends/{backendId}/discover", s.handleRefreshDiscoveredModels)
 	s.route("GET /api/deployment/repos/{owner}/{name}/config", s.handleGetDeploymentRepoConfig)
 	s.route("PUT /api/deployment/repos/{owner}/{name}/config", s.handleSetDeploymentRepoConfig)
 	s.route("PUT /api/deployment/repos/{owner}/{name}/git-connection", s.handleSetDeploymentRepoGitConnection)
@@ -152,7 +155,19 @@ func (s *Server) handlePutDeploymentAgentBackend(w http.ResponseWriter, r *http.
 	if !readJSON(w, r, &req) {
 		return
 	}
+	if req.AgentBackend.ID != "" && req.AgentBackend.ID != r.PathValue("backendId") {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("connection ID in body (%s) must match path (%s)", req.AgentBackend.ID, r.PathValue("backendId")))
+		return
+	}
 	saved, err := s.tasks.PutTeamAgentBackend(r.Context(), model.DefaultTeamID, r.PathValue("backendId"), req.AgentBackend, requestPerson(r.Context()))
+	if err != nil {
+		// Strip the "agentBackends[X]: " prefix from the error message.
+		if idx := strings.Index(err.Error(), "agentBackends["); idx >= 0 {
+			if end := strings.Index(err.Error()[idx:], "]: "); end > 0 {
+				err = fmt.Errorf("%s", err.Error()[idx+end+3:])
+			}
+		}
+	}
 	writeDeploymentResult(w, saved, err)
 }
 
@@ -229,7 +244,7 @@ func (s *Server) handleGetDeploymentSecretAudit(w http.ResponseWriter, r *http.R
 	entries = filterList(entries, func(e model.SecretAuditEntry) bool {
 		return list.matches(e.SecretName, e.Key, e.Principal, e.TaskID)
 	})
-	writeList(w, entries, list)
+	writeListBy(w, entries, list, func(e model.SecretAuditEntry) string { return strconv.FormatInt(e.ID, 10) })
 }
 
 // handleGetDeploymentAuditLogs is the deployment's audit trail, newest

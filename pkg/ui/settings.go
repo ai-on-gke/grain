@@ -199,7 +199,14 @@ type Settings struct {
 	// reads as the figure in effect. The controller's live ratios, recent
 	// adjustments and OOM kills are SandboxCommitment.Budget.Overcommit.
 	SandboxOvercommit model.OvercommitSettings `json:"sandboxOvercommit"`
-	ExternalAgentAPI  bool                     `json:"externalAgentApi"`
+	// SandboxShapeLimits is model.Config.SandboxShapeLimits as stored: the
+	// deployment-wide maximum on a task's own sandbox shape and the
+	// per-role ceilings beneath it. SandboxShapeMax is the maximum in
+	// effect, grain's defaults filled into whatever the stored one leaves
+	// at zero.
+	SandboxShapeLimits model.SandboxShapeLimits `json:"sandboxShapeLimits"`
+	SandboxShapeMax    model.SandboxShape       `json:"sandboxShapeMax"`
+	ExternalAgentAPI   bool                     `json:"externalAgentApi"`
 	// SessionSandboxIdleTTL is model.Config.SessionSandboxIdleTTL: how long
 	// an interactive chat/session task's sandbox (and in-process agent run)
 	// stays warm awaiting a reply after a turn ends before being released,
@@ -548,6 +555,14 @@ type Settings struct {
 	PromptExtension  string              `json:"promptExtension"`
 	Skills           *model.SkillsConfig `json:"skills,omitempty"`
 	RepairTemplateID string              `json:"repairTemplateID"`
+	// Quality control engine and single-instance PR rollout settings (model.Config.QA).
+	QAEnabled         bool     `json:"qaEnabled"`
+	QAFlowID          string   `json:"qaFlowId"`
+	QAFlowIDs         []string `json:"qaFlowIds"`
+	QARolloutPct      int      `json:"qaRolloutPct"`
+	QAShadowOnControl bool     `json:"qaShadowOnControl"`
+	QAEpoch           int      `json:"qaEpoch"`
+	QARegimeID        int      `json:"qaRegimeId"`
 	// TaskBranchTemplate controls names assigned to newly created tasks.
 	TaskBranchTemplate string `json:"taskBranchTemplate"`
 	// DeploymentID is model.Config's own: the id {deployment} expands to
@@ -649,6 +664,11 @@ type Settings struct {
 	// vocabulary, in a picker's order.
 	AutoUpgradeOn    string   `json:"autoUpgradeOn"`
 	AutoUpgradeModes []string `json:"autoUpgradeModes"`
+	// AutoUpgradeMinIntervalHours is model.Config.AutoUpgradeMinIntervalHours:
+	// the minimum interval in hours between two completed automatic upgrades
+	// in release mode (0 = off; default AutoUpgradeMinIntervalHoursDefault).
+	AutoUpgradeMinIntervalHours        int `json:"autoUpgradeMinIntervalHours"`
+	AutoUpgradeMinIntervalHoursDefault int `json:"autoUpgradeMinIntervalHoursDefault"`
 	// OwnerTrust is the owner-trust proposal policy
 	// (model.Config.OwnerTrust): the (owner, repo) pairs -- repo "*" for
 	// every repository -- whose external agent credentials' unapproved
@@ -1050,7 +1070,8 @@ var ciStorageDefaults = func() ciStorageBoundDefaults {
 
 func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs []model.RepoConfig) Settings {
 	cfg, unrunnable := c.runnableSettings(cfg)
-	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
+	secretList := c.listSecretsBestEffort()
+	geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSetFrom(secretList)
 	sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &cfg, repoConfigs)
 	mirror := c.sandboxImageMirrorFor(cfg, granuleImgDefault)
 	effectiveGranule := c.k8sGranuleImageForWarn(cfg, granuleImgDefault, mirror)
@@ -1169,6 +1190,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		SandboxDiskOvercommitDefault:       model.DefaultDiskOvercommit,
 		SandboxMemoryReserveMBDefault:      c.sandboxMemoryReserveDefault(),
 		SandboxOvercommit:                  cfg.SandboxOvercommit.Resolved(),
+		SandboxShapeLimits:                 cfg.SandboxShapeLimits,
+		SandboxShapeMax:                    cfg.SandboxShapeLimits.ResolvedMax(),
 		ExternalAgentAPI:                   cfg.ExternalAgentAPI,
 		SessionSandboxIdleTTL:              durationSetting(cfg.SessionSandboxIdleTTL),
 		SessionSandboxIdleTTLDefault:       model.DefaultSessionSandboxIdleTTL.String(),
@@ -1191,9 +1214,16 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		PromptExtension:                    cfg.PromptExtension,
 		Skills:                             cfg.Skills.Clone(),
 		RepairTemplateID:                   cfg.RepairTemplateID,
+		QAEnabled:                          cfg.QA.Enabled,
+		QAFlowID:                           cfg.QA.FlowIDOrDefault(),
+		QAFlowIDs:                          model.QAFlowIDs(),
+		QARolloutPct:                       cfg.QA.RolloutPct,
+		QAShadowOnControl:                  cfg.QA.ShadowOnControlEnabled(),
+		QAEpoch:                            cfg.QA.EpochOrDefault(),
+		QARegimeID:                         cfg.QA.RegimeIDOrDefault(),
 		TaskBranchTemplate:                 cfg.TaskBranchTemplate,
 		DeploymentID:                       cfg.DeploymentID,
-		Capabilities:                       c.capabilityStatuses(cfg, repoConfigs),
+		Capabilities:                       c.capabilityStatusesWithSecrets(cfg, repoConfigs, secretList),
 		DefaultCapabilities:                cfg.DefaultCapabilities,
 		ApprovedByDefault:                  cfg.ApprovedByDefault,
 		AutoMergeByDefault:                 cfg.AutoMergeByDefault,
@@ -1204,6 +1234,8 @@ func (c *Client) settingsFrom(ctx context.Context, cfg model.Config, repoConfigs
 		AutoUpgradeTime:                    autoUpgradeTimeOrDefault(cfg.AutoUpgradeTime),
 		AutoUpgradeOn:                      cfg.AutoUpgradeMode(),
 		AutoUpgradeModes:                   model.AutoUpgradeModes(),
+		AutoUpgradeMinIntervalHours:        cfg.AutoUpgradeMinIntervalHours,
+		AutoUpgradeMinIntervalHoursDefault: model.DefaultAutoUpgradeMinIntervalHours,
 		OwnerTrust:                         ownerTrustOrEmpty(cfg.OwnerTrust),
 		AutoGrantContextReads:              stringsOrEmpty(cfg.AutoGrantContextReads),
 		TimeZone:                           model.TimeZoneOrDefault(cfg.TimeZone),
@@ -1378,7 +1410,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 		return Settings{}, err
 	}
 	if cfg == nil {
-		geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSet()
+		secretList := c.listSecretsBestEffort()
+		geminiKeySet, claudeTokenSet, openaiKeySet, codexAuthSet := c.agentKeysSetFrom(secretList)
 		def := capability.NewDeploymentConfig()
 		sandboxImgDefault, granuleImgDefault, buildVersion := c.resolveK8sImageDefaults(ctx, &def, repoConfigs)
 		sandboxWarn, granuleWarn := c.resolveK8sImageWarnings(
@@ -1405,6 +1438,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			SandboxDiskOvercommit:          def.SandboxDiskOvercommit,
 			SandboxDiskOvercommitDefault:   model.DefaultDiskOvercommit,
 			SandboxOvercommit:              def.SandboxOvercommit.Resolved(),
+			SandboxShapeLimits:             def.SandboxShapeLimits,
+			SandboxShapeMax:                def.SandboxShapeLimits.ResolvedMax(),
 			ExternalAgentAPI:               def.ExternalAgentAPI,
 			SessionSandboxIdleTTL:          durationSetting(def.SessionSandboxIdleTTL),
 			SessionSandboxIdleTTLDefault:   model.DefaultSessionSandboxIdleTTL.String(),
@@ -1437,7 +1472,7 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			K8sPriorityClassInteractiveDefault: model.DefaultK8sPriorityClassInteractive,
 			K8sPriorityClassAgentDefault:       model.DefaultK8sPriorityClassAgent,
 			K8sPriorityClassCIDefault:          model.DefaultK8sPriorityClassCI,
-			Capabilities:                       c.capabilityStatuses(model.Config{DefaultCapabilities: def.DefaultCapabilities}, repoConfigs),
+			Capabilities:                       c.capabilityStatusesWithSecrets(model.Config{DefaultCapabilities: def.DefaultCapabilities}, repoConfigs, secretList),
 			DefaultCapabilities:                def.DefaultCapabilities,
 			AgentKeysEnabled:                   c.Config.Secrets != nil,
 			GeminiAPIKeySet:                    geminiKeySet,
@@ -1447,6 +1482,13 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AgentKeyChecksEnabled:              c.Config.AgentKeyChecks != nil,
 			ApprovedByDefault:                  def.ApprovedByDefault,
 			AutoMergeByDefault:                 def.AutoMergeByDefault,
+			QAEnabled:                          def.QA.Enabled,
+			QAFlowID:                           def.QA.FlowIDOrDefault(),
+			QAFlowIDs:                          model.QAFlowIDs(),
+			QARolloutPct:                       def.QA.RolloutPct,
+			QAShadowOnControl:                  def.QA.ShadowOnControlEnabled(),
+			QAEpoch:                            def.QA.EpochOrDefault(),
+			QARegimeID:                         def.QA.RegimeIDOrDefault(),
 			PackageCacheEnabled:                def.PackageCacheEnabled,
 			PackageCacheSizeGB:                 def.PackageCacheSizeGB,
 			PackageCacheSizeGBDefault:          int(pkgcache.DefaultMaxBytes >> 30),
@@ -1488,6 +1530,8 @@ func (c *Client) GetSettings(ctx context.Context) (Settings, error) {
 			AutoUpgradeTime:                    autoUpgradeTimeOrDefault(def.AutoUpgradeTime),
 			AutoUpgradeOn:                      def.AutoUpgradeMode(),
 			AutoUpgradeModes:                   model.AutoUpgradeModes(),
+			AutoUpgradeMinIntervalHours:        def.AutoUpgradeMinIntervalHours,
+			AutoUpgradeMinIntervalHoursDefault: model.DefaultAutoUpgradeMinIntervalHours,
 			OwnerTrust:                         ownerTrustOrEmpty(def.OwnerTrust),
 			AutoGrantContextReads:              stringsOrEmpty(def.AutoGrantContextReads),
 			TimeZone:                           model.TimeZoneOrDefault(def.TimeZone),
@@ -1541,7 +1585,11 @@ type UpdateSettingsRequest struct {
 	SandboxDiskOvercommit   *float64 `json:"sandboxDiskOvercommit"`
 	// SandboxOvercommit replaces the whole overcommit mode and its bounds
 	// (model.OvercommitSettings); zero bounds are grain's defaults.
-	SandboxOvercommit      *model.OvercommitSettings `json:"sandboxOvercommit"`
+	SandboxOvercommit *model.OvercommitSettings `json:"sandboxOvercommit"`
+	// SandboxShapeLimits replaces the whole deployment maximum and the
+	// per-role ceilings on a task's own sandbox shape
+	// (model.SandboxShapeLimits); a zero dimension is grain's default.
+	SandboxShapeLimits     *model.SandboxShapeLimits `json:"sandboxShapeLimits"`
 	ExternalAgentAPI       *bool                     `json:"externalAgentApi"`
 	SessionSandboxIdleTTL  *string                   `json:"sessionSandboxIdleTtl"`
 	SandboxMemoryReserveMB *int                      `json:"sandboxMemoryReserveMb"`
@@ -1604,6 +1652,9 @@ type UpdateSettingsRequest struct {
 	AutoUpgradeTime    *string `json:"autoUpgradeTime"`
 	// AutoUpgradeOn is "off", "daily" or "release" (Settings.AutoUpgradeOn).
 	AutoUpgradeOn *string `json:"autoUpgradeOn"`
+	// AutoUpgradeMinIntervalHours is the minimum interval in hours between
+	// completed automatic upgrades in release mode (0 = off).
+	AutoUpgradeMinIntervalHours *int `json:"autoUpgradeMinIntervalHours"`
 	// OwnerTrust replaces the owner-trust proposal policy
 	// (Settings.OwnerTrust); an empty list turns it off.
 	OwnerTrust *[]model.OwnerTrustRule `json:"ownerTrust"`
@@ -1615,6 +1666,11 @@ type UpdateSettingsRequest struct {
 	PromptExtension       *string               `json:"promptExtension"`
 	Skills                *model.SkillsConfig   `json:"skills"`
 	RepairTemplateID      *string               `json:"repairTemplateID"`
+	QAEnabled             *bool                 `json:"qaEnabled"`
+	QAFlowID              *string               `json:"qaFlowId"`
+	QARolloutPct          *int                  `json:"qaRolloutPct"`
+	QAShadowOnControl     *bool                 `json:"qaShadowOnControl"`
+	QAEpoch               *int                  `json:"qaEpoch"`
 	TaskBranchTemplate    *string               `json:"taskBranchTemplate"`
 	DeploymentID          *string               `json:"deploymentId"`
 	DefaultCapabilities   *[]string             `json:"defaultCapabilities"`
@@ -1952,6 +2008,12 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			return model.Config{}, validationErrorf("sandboxOvercommit: %v", err)
 		}
 		cfg.SandboxOvercommit = *req.SandboxOvercommit
+	}
+	if req.SandboxShapeLimits != nil {
+		if err := req.SandboxShapeLimits.Validate(); err != nil {
+			return model.Config{}, validationErrorf("sandboxShapeLimits: %v", err)
+		}
+		cfg.SandboxShapeLimits = *req.SandboxShapeLimits
 	}
 	if req.ExternalAgentAPI != nil {
 		cfg.ExternalAgentAPI = *req.ExternalAgentAPI
@@ -2374,6 +2436,35 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 	if req.AutoMergeByDefault != nil {
 		cfg.AutoMergeByDefault = *req.AutoMergeByDefault
 	}
+	if req.QAEnabled != nil || req.QAFlowID != nil || req.QARolloutPct != nil || req.QAShadowOnControl != nil || req.QAEpoch != nil {
+		nextQA := cfg.QA.Clone()
+		if nextQA.ShadowOnControl == nil {
+			nextQA.ShadowOnControl = model.BoolPtr(cfg.QA.ShadowOnControlEnabled())
+		}
+		if req.QAEnabled != nil {
+			nextQA.Enabled = *req.QAEnabled
+		}
+		if req.QAFlowID != nil {
+			nextQA.FlowID = strings.TrimSpace(*req.QAFlowID)
+		}
+		if req.QARolloutPct != nil {
+			nextQA.RolloutPct = *req.QARolloutPct
+		}
+		if req.QAShadowOnControl != nil {
+			nextQA.ShadowOnControl = model.BoolPtr(*req.QAShadowOnControl)
+		}
+		if req.QAEpoch != nil {
+			if *req.QAEpoch < 1 {
+				return model.Config{}, validationErrorf("qaEpoch must be at least 1")
+			}
+			nextQA.Epoch = *req.QAEpoch
+		}
+		advanced, err := model.AdvanceQAConfig(before.QA, nextQA)
+		if err != nil {
+			return model.Config{}, validationErrorf("qa: %v", err)
+		}
+		cfg.QA = advanced
+	}
 	if req.UpgradeCheckMode != nil {
 		mode := strings.ToLower(strings.TrimSpace(*req.UpgradeCheckMode))
 		if !model.ValidUpgradeCheckMode(mode) {
@@ -2407,6 +2498,16 @@ func (c *Client) plannedConfig(ctx context.Context, req UpdateSettingsRequest) (
 			return model.Config{}, validationErrorf("autoUpgradeOn: %v", err)
 		}
 		cfg.AutoUpgradeOn = on
+	}
+	if req.AutoUpgradeMinIntervalHours != nil {
+		if *req.AutoUpgradeMinIntervalHours < 0 {
+			return model.Config{}, validationErrorf("autoUpgradeMinIntervalHours must be at least 0")
+		}
+		if *req.AutoUpgradeMinIntervalHours > model.MaxAutoUpgradeMinIntervalHours {
+			return model.Config{}, validationErrorf("autoUpgradeMinIntervalHours must be at most %d (about 292 years; 0 turns the minimum interval off)",
+				model.MaxAutoUpgradeMinIntervalHours)
+		}
+		cfg.AutoUpgradeMinIntervalHours = *req.AutoUpgradeMinIntervalHours
 	}
 	if req.OwnerTrust != nil {
 		rules, err := model.NormalizeOwnerTrust(*req.OwnerTrust)

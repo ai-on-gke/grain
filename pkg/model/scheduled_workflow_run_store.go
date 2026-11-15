@@ -42,6 +42,7 @@ func (s *Store) GetScheduledWorkflowRun(ctx context.Context, scheduleID string) 
 		}
 		return nil, fmt.Errorf("reading the scheduled workflow run for %s: %w", scheduleID, err)
 	}
+	r.Repo = RepoFromStored(r.Repo.Owner, r.Repo.Name)
 	r.FiredAt = firedAt.UTC()
 	r.AttemptedAt = nullableTime(attemptedAt)
 	r.FinishedAt = nullableTime(finishedAt)
@@ -67,6 +68,7 @@ func (s *Store) ListScheduledWorkflowRuns(ctx context.Context) ([]ScheduledWorkf
 				&r.Conclusion, &r.Detail, &r.Unfinished, &r.ReviewTaskID, &r.ReviewNotNeeded); err != nil {
 				return err
 			}
+			r.Repo = RepoFromStored(r.Repo.Owner, r.Repo.Name)
 			r.FiredAt = firedAt.UTC()
 			r.AttemptedAt = nullableTime(attemptedAt)
 			r.FinishedAt = nullableTime(finishedAt)
@@ -97,7 +99,7 @@ func (s *Store) PutScheduledWorkflowRun(ctx context.Context, r ScheduledWorkflow
 				"`workflow`,`run_id`,`fired_at`,`attempted_at`,`finished_at`,`attempts`,"+
 				"`conclusion`,`detail`,`unfinished`,`review_task_id`,`review_not_needed`) "+
 				"VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-			r.ScheduleID, r.Stem, r.Repo.Owner, r.Repo.Name, r.Branch, r.Workflow, r.RunID,
+			r.ScheduleID, r.Stem, r.Repo.StoredOwner(), r.Repo.Name, r.Branch, r.Workflow, r.RunID,
 			r.FiredAt.UTC(), attemptedAt, finishedAt, r.Attempts, r.Conclusion, r.Detail,
 			r.Unfinished, r.ReviewTaskID, r.ReviewNotNeeded)
 		return err

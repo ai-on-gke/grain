@@ -359,7 +359,7 @@ func (s *Server) handleListBoards(w http.ResponseWriter, r *http.Request) {
 	list = filterList(list, func(b Board) bool {
 		return page.matches(b.ID, b.Name, b.Folder)
 	})
-	writeList(w, list, page)
+	writeListBy(w, list, page, func(b Board) string { return b.ID })
 }
 
 func (s *Server) handleCreateBoard(w http.ResponseWriter, r *http.Request) {

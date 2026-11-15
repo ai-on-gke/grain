@@ -19,6 +19,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -52,7 +54,14 @@ type HeldCIResume struct {
 	Branch   string
 	CIMode   CIMode
 	TargetCI string
-	Since    time.Time
+	// Head is the branch head recorded when the wait was taken
+	// (ResumeOn.Head), "" when none was.
+	Head  string
+	Since time.Time
+	// Recovered marks a hold read back from the comment resume_later
+	// leaves (recoveredCIHolds) rather than from its suspension: one a
+	// run made before Store.HoldResumeOn, whose finish lost it.
+	Recovered bool
 }
 
 const actionsRunIDPrefix = "gha:"
@@ -94,11 +103,13 @@ func parseGitHubTargetRunID(defaultRepo, target string) (repo string, runID int6
 func (s *Store) heldResumes(ctx context.Context, taskID string) ([]heldResume, error) {
 	query := "SELECT `su`.`task_id`, `su`.`resume_on`, `t`.`deferred_at` FROM `task_suspension` AS `su` " +
 		"JOIN `task` AS `t` ON `t`.`id` = `su`.`task_id` " +
+		"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` " +
 		"JOIN `task_run` AS `r` ON `r`.`id` = `su`.`run_id` " +
-		"WHERE `su`.`resumed_at` IS NULL AND `su`.`kind` = ? AND `su`.`resume_on` IS NOT NULL " +
+		"WHERE `o`.`closed_at` IS NULL AND `su`.`resumed_at` IS NULL AND `su`.`resume_on` IS NOT NULL AND `su`.`resume_on` <> '' " +
+		"AND `r`.`finished_at` IS NOT NULL " +
 		"AND `t`.`deferred_at` IS NOT NULL AND `t`.`deferred_at` >= `r`.`started_at` " +
 		"AND `t`.`deferred_at` <= `su`.`created_at`"
-	args := []any{string(SuspendRequested)}
+	var args []any
 	if taskID != "" {
 		query += " AND `su`.`task_id` = ?"
 		args = append(args, taskID)
@@ -112,7 +123,13 @@ func (s *Store) heldResumes(ctx context.Context, taskID string) ([]heldResume, e
 		}
 		r, err := ParseResumeOn(raw)
 		if err != nil {
-			return fmt.Errorf("reading task %s's resume_on: %w", h.taskID, err)
+			// One row nobody can read is that task's problem, not every
+			// other wait's: an error here used to empty HeldCIResumes, and
+			// so stop every CI wake and the backstop behind them. The
+			// task is still seen by recoveredCIHolds if resume_later's
+			// own comment names CI.
+			log.Printf("model: task %s's resume_on %q cannot be read, passing it over: %v", h.taskID, raw, err)
+			return nil
 		}
 		h.resumeOn = r
 		out = append(out, h)
@@ -147,8 +164,7 @@ func (s *Store) TaskCIMode(ctx context.Context, task Task) (repo RepoRef, branch
 	} else {
 		mode = CIModeGitHub
 		for _, capName := range eff.DefaultCapabilities {
-			c := strings.TrimSpace(capName)
-			if c == "grain-ci" || strings.HasPrefix(c, "https://grain.dev/capabilities/ci#grain-ci") {
+			if IsGrainCIGrant(capName) {
 				mode = CIModeGrain
 				break
 			}
@@ -167,42 +183,166 @@ func (s *Store) TaskCIMode(ctx context.Context, task Task) (repo RepoRef, branch
 }
 
 // HeldCIResumes lists every task currently deferred on a resume_later CI
-// wake condition along with its resolved repository, branch, and CIMode.
+// wake condition along with its resolved repository, branch, and CIMode:
+// the ones its suspension records, and the ones only resume_later's own
+// comment still remembers (recoveredCIHolds).
+//
+// One task that cannot be resolved is logged and passed over rather than
+// failing the list: an error here used to stop every CI wake in the
+// deployment, and the stall backstop behind them, for the sake of one.
 func (s *Store) HeldCIResumes(ctx context.Context) ([]HeldCIResume, error) {
 	held, err := s.heldResumes(ctx, "")
 	if err != nil {
 		return nil, err
 	}
 	var out []HeldCIResume
+	seen := map[string]bool{}
 	for _, h := range held {
-		if h.resumeOn.CI == "" {
+		if h.resumeOn.CI == "" || seen[h.taskID] {
 			continue
 		}
-		task, err := s.GetTask(ctx, h.taskID)
+		r, ok, err := s.resolveCIHold(ctx, h.taskID, h.resumeOn, h.since)
 		if err != nil {
-			return nil, err
+			log.Printf("model: task %s's CI wake (%s) cannot be resolved, holding it for the backstop alone: %v",
+				h.taskID, h.resumeOn.CI, err)
 		}
-		if task == nil {
-			continue
+		if ok {
+			seen[h.taskID] = true
+			out = append(out, r)
 		}
-		repo, branch, mode, err := s.TaskCIMode(ctx, *task)
-		if err != nil {
-			return nil, err
+	}
+	recovered, err := s.recoveredCIHolds(ctx, seen)
+	if err != nil {
+		log.Printf("model: reading back CI waits lost before they were recorded: %v", err)
+	}
+	return append(out, recovered...), nil
+}
+
+// resolveCIHold is the HeldCIResume taskID's wait on `on` reads as. A
+// task whose CI cannot be resolved -- its repository's configuration will
+// not read, say -- is still returned, with ok and the error both: held
+// with no CIMode, which no verdict satisfies (DueCIResume), so it is the
+// backstop (orchestrator.reconcileWake) that wakes it rather than nothing.
+func (s *Store) resolveCIHold(ctx context.Context, taskID string, on ResumeOn, since time.Time) (HeldCIResume, bool, error) {
+	task, err := s.GetTask(ctx, taskID)
+	if err != nil || task == nil {
+		return HeldCIResume{}, false, err
+	}
+	repo, branch, mode, err := s.TaskCIMode(ctx, *task)
+	if err != nil {
+		h := HeldCIResume{TaskID: taskID, Branch: task.BranchName(), TargetCI: on.CI, Head: on.Head, Since: since.UTC()}
+		if task.Target != nil {
+			h.Repo = *task.Target
 		}
-		if repo == (RepoRef{}) {
-			branch = task.BranchName()
-			mode = CIModeGrain
-		}
-		out = append(out, HeldCIResume{
-			TaskID:   h.taskID,
-			Repo:     repo,
-			Branch:   branch,
-			CIMode:   mode,
-			TargetCI: h.resumeOn.CI,
-			Since:    h.since.UTC(),
+		return h, true, err
+	}
+	if repo == (RepoRef{}) {
+		branch = task.BranchName()
+		mode = CIModeGrain
+	}
+	return HeldCIResume{
+		TaskID:   taskID,
+		Repo:     repo,
+		Branch:   branch,
+		CIMode:   mode,
+		TargetCI: on.CI,
+		Head:     on.Head,
+		Since:    since.UTC(),
+	}, true, nil
+}
+
+// resumeLaterCommentPrefix opens the comment ui.Client.ResumeLater leaves
+// on a task as it defers it, and resumeLaterCICondition the CI condition
+// within it (ResumeOn.Describe).
+const (
+	resumeLaterCommentPrefix = "grain: this task's run stopped with resume_later. It goes back in the queue once "
+	resumeLaterCICondition   = "CI ("
+)
+
+// recoveredCIHolds is every task still deferred, with no wake time, by a
+// resume_later that waited on CI but that no open suspension holds on CI
+// -- skipping the tasks in seen, which one does. Its suspension row may
+// read any way at all: never written (a run made before
+// Store.HoldResumeOn, whose finish lost it), marked resumed while the
+// deferral stayed, outside heldResumes' window, or naming only some
+// other condition. The condition survives in the comment resume_later
+// left at the instant it deferred the task, and the task's latest such
+// comment is read, matched on the deferral's own instant so a deferral
+// somebody made since is not mistaken for one.
+func (s *Store) recoveredCIHolds(ctx context.Context, seen map[string]bool) ([]HeldCIResume, error) {
+	type candidate struct {
+		taskID string
+		since  time.Time
+		body   string
+		at     time.Time
+	}
+	latest := map[string]candidate{}
+	var order []string
+	err := each(ctx, s.db,
+		"SELECT `t`.`id`, `t`.`deferred_at`, `c`.`body`, `c`.`created_at` FROM `task` AS `t` "+
+			"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `t`.`id` "+
+			"JOIN `task_comment` AS `c` ON `c`.`task_id` = `t`.`id` "+
+			"WHERE `o`.`closed_at` IS NULL AND `t`.`deferred_at` IS NOT NULL AND `t`.`deferred_until` IS NULL "+
+			"AND `c`.`body` LIKE ? ORDER BY `c`.`created_at`, `c`.`id`",
+		[]any{resumeLaterCommentPrefix + "%"},
+		func(rows *sql.Rows) error {
+			var c candidate
+			if err := rows.Scan(&c.taskID, &c.since, &c.body, &c.at); err != nil {
+				return err
+			}
+			if _, ok := latest[c.taskID]; !ok {
+				order = append(order, c.taskID)
+			}
+			latest[c.taskID] = c
+			return nil
 		})
+	if err != nil {
+		return nil, err
+	}
+	var out []HeldCIResume
+	for _, id := range order {
+		c := latest[id]
+		if seen[c.taskID] {
+			continue
+		}
+		if d := c.at.Sub(c.since); d > time.Second || d < -time.Second {
+			continue
+		}
+		target, ok := ciTargetOfResumeLaterComment(c.body)
+		if !ok {
+			continue
+		}
+		r, ok, err := s.resolveCIHold(ctx, c.taskID, ResumeOn{CI: target}, c.since)
+		if err != nil {
+			log.Printf("model: task %s's lost CI wake (%s) cannot be resolved, holding it for the backstop alone: %v",
+				c.taskID, target, err)
+		}
+		if ok {
+			seen[c.taskID] = true
+			r.Recovered = true
+			out = append(out, r)
+		}
 	}
 	return out, nil
+}
+
+// ciTargetOfResumeLaterComment reads the CI target back out of the
+// comment ui.Client.ResumeLater leaves.
+func ciTargetOfResumeLaterComment(body string) (string, bool) {
+	rest, ok := strings.CutPrefix(body, resumeLaterCommentPrefix)
+	if !ok {
+		return "", false
+	}
+	i := strings.Index(rest, resumeLaterCICondition)
+	if i < 0 {
+		return "", false
+	}
+	rest = rest[i+len(resumeLaterCICondition):]
+	j := strings.Index(rest, ") has a verdict")
+	if j <= 0 {
+		return "", false
+	}
+	return strings.TrimSpace(rest[:j]), true
 }
 
 // DueCIResume reports whether h's recorded CI verdict in the store has
@@ -364,4 +504,100 @@ func (s *Store) WakeOnMessage(ctx context.Context, taskID string, now time.Time)
 		}
 	}
 	return false, nil
+}
+
+// ReleaseResumeLater undefers taskID when what holds it deferred is a
+// resume_later of its own -- a suspension holding a condition
+// (heldResumes), or the comment resume_later left at the deferral's
+// instant -- and reports whether it did. A task deferred any other way,
+// by a person or with a wake time a park chose, is left alone.
+//
+// It is for grain sending the task back to an agent: the merge queue's
+// repair, a new review thread. Those stamp Observation.RetryRequestedAt
+// and say "back in the queue", but a deferral outranks that in
+// model.StateOf, so a task resting on resume_later stayed deferred, its
+// repair never ran, and the queue gave up on it as never finished. The
+// work it is sent back for is what its own wait was waiting to find out.
+func (s *Store) ReleaseResumeLater(ctx context.Context, taskID string, now time.Time) (bool, error) {
+	task, err := s.GetTask(ctx, taskID)
+	if err != nil || task == nil || task.DeferredAt == nil {
+		return false, err
+	}
+	held, err := s.heldResumes(ctx, taskID)
+	if err != nil {
+		return false, err
+	}
+	ours := len(held) > 0
+	if !ours {
+		var at time.Time
+		err := s.db.QueryRowContext(ctx,
+			"SELECT `created_at` FROM `task_comment` WHERE `task_id` = ? AND `body` LIKE ? "+
+				"ORDER BY `created_at` DESC, `id` DESC LIMIT 1",
+			taskID, resumeLaterCommentPrefix+"%").Scan(&at)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return false, err
+		}
+		if err == nil {
+			d := at.Sub(*task.DeferredAt)
+			ours = d <= time.Second && d >= -time.Second
+		}
+	}
+	if !ours {
+		return false, nil
+	}
+	return true, s.SetDeferred(ctx, taskID, nil, nil, now)
+}
+
+// DueMessageResumes is every task a resume_later with message: true still
+// holds although somebody has posted to it since it stopped: a comment
+// after its deferral that is neither grain's own (automation on nobody's
+// behalf, such as resume_later's own note) nor its own agent's (directly,
+// or relayed by grain on its behalf), and that no run of the task has
+// already been given (Observation.DeliveredCommentID). Grain relaying
+// somebody else's words -- another task's team broadcast -- counts, as it
+// does for WakeOnMessage.
+//
+// WakeOnMessage, called as a comment is written, is the fast path, and
+// it cannot see every post. A comment written while the run that called
+// resume_later is still ending finds no finished suspension to release
+// (heldResumes), and a person's words relayed from a pull request
+// (orchestrator.deliverReplyAndWakeTask) or posted straight to the store
+// never call it at all. Either way the post would otherwise be lost and
+// the task left deferred with no wake time until somebody posted again.
+// This is the level-triggered half orchestrator.reconcileWake reads every
+// cycle, so a post is acted on whenever it was written.
+func (s *Store) DueMessageResumes(ctx context.Context) ([]string, error) {
+	held, err := s.heldResumes(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, h := range held {
+		if !h.resumeOn.Message || seen[h.taskID] {
+			continue
+		}
+		seen[h.taskID] = true
+		var one int
+		err := s.db.QueryRowContext(ctx,
+			"SELECT 1 FROM `task_comment` AS `c` "+
+				"LEFT JOIN `task_observation` AS `o` ON `o`.`task_id` = `c`.`task_id` "+
+				"WHERE `c`.`task_id` = ? AND `c`.`created_at` > ? "+
+				"AND `c`.`id` > COALESCE(`o`.`delivered_comment_id`, 0) "+
+				"AND NOT (`c`.`author_kind` = ? AND COALESCE(`c`.`author_behalf_kind`, '') = '') "+
+				"AND NOT (`c`.`author_kind` = ? AND `c`.`author_id` = ?) "+
+				"AND NOT (COALESCE(`c`.`author_behalf_kind`, '') = ? AND COALESCE(`c`.`author_behalf_id`, '') = ?) "+
+				"LIMIT 1",
+			h.taskID, h.since.UTC(), string(PrincipalAutomation),
+			string(PrincipalAgent), h.taskID, string(PrincipalAgent), h.taskID).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading task %s's posts since its resume_later: %w", h.taskID, err)
+		}
+		out = append(out, h.taskID)
+	}
+	sort.Strings(out)
+	return out, nil
 }

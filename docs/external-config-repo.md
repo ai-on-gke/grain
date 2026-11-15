@@ -7,6 +7,91 @@ and per-repo configuration are edited by pull request there, and grain
 applies what merges on its next sync. Grain's own API does not take
 configuration writes in this mode.
 
+## Who this makes an administrator
+
+**Anybody who can push to the external repository's branch is a full
+administrator of the deployment.** Grain pulls the branch and imports
+whatever is there -- capability servers in `mcp_servers` (host scripts
+among them), scope sets, capability policy, default capabilities,
+secret bindings, templates and schedules with their grants. A forge-side
+merge, or a direct push, never passes through anybody's Submit in grain,
+so none of grain's own approval gates apply to it. Treat write access to
+that branch exactly as you treat an unlimited role in grain:
+
+- protect the branch on the forge (required reviews, no direct pushes,
+  no force pushes), and keep its writers to the people you would give an
+  unlimited role;
+- or turn on `require_verified` mode (below), so grain itself refuses
+  to apply a commit it cannot vouch for.
+
+Naming or repointing the repository (`POST /api/state-repo/remote`,
+Settings → Config Repo) needs an unlimited role for the same reason
+(task 3965). An agent is held to the same bar: its run reaches the route
+only if its task holds both `api:settings:write` and, deployment-wide,
+`api:capabilities:admin` -- `settings:write` alone, or
+`capabilities:admin` limited to a repository, is refused before the
+request reaches the config repository (task 4007). The same goes for an
+external agent credential.
+
+## Require verified commits (`require_verified`)
+
+In this mode grain applies a commit from the external branch only if it
+can verify it, in one of these ways:
+
+- **an approved pull request**: the commit is the merge (or squash) commit
+  of a pull request into the branch, and at least *required approvals*
+  reviewers other than its author approved the pull request's final head
+  commit (their latest review, on that commit). Only reviewers GitHub
+  names as the repository's owner, a member of its organization or a
+  collaborator on it count, as in branch protection -- anybody may approve
+  a pull request on a public repository. Read from GitHub, so this
+  needs a `https://github.com/...` remote and a credential for it;
+- **merged by grain**: that pull request was merged by one of *grain's
+  forge accounts* -- the accounts grain's merge queue merges as, which a
+  person's Submit in grain releases;
+- **a signature**: the commit carries a good SSH signature by a key in
+  the *allowed signing keys* (an ssh `allowed_signers` file,
+  `gpg.ssh.allowedSignersFile`). OpenPGP and X.509 signatures never
+  verify, whatever keyring this host holds;
+- **accepted by an operator**: an unlimited role accepted the commit by
+  its full SHA (`acceptCommit`).
+
+Grain walks the branch's first-parent history from the last commit it
+applied and moves forward across commits that verify. The first one that
+does not is **held**: neither it nor anything after it is applied, the
+journal logs it once, and Settings → Config Repo shows a notice naming
+the commit, its subject and why it did not verify, with an **Accept**
+button. A branch whose history was rewritten (the last applied commit is
+no longer on it) is held the same way, whatever its tip is, until its
+tip is accepted by name. The first
+commit grain applies from a newly named repository is checked on its own;
+if it does not verify, nothing is imported until it is accepted. A
+rebase-merged pull request does not verify through its review (only its
+last commit is the pull request's merge commit); sign such commits, or
+use merge or squash merges.
+
+The mode's settings live in `<data-dir>/state-repo.json` on this host,
+never in the repository they guard -- a writer there must not be able to
+turn them off -- and are set through the same route as the remote, so
+they need an unlimited role (or, for an agent, `api:settings:write` and
+`api:capabilities:admin`, as above):
+
+```json
+POST /api/state-repo/remote
+{
+  "remote": "https://github.com/acme/grain-config.git",
+  "branch": "main",
+  "requireVerified": true,
+  "requiredApprovals": 2,
+  "verifiedMergers": "acme-grain[bot]",
+  "allowedSigners": "alice@example.com ssh-ed25519 AAAA...",
+  "acceptCommit": "<a held commit's full SHA>"
+}
+```
+
+Any field left out keeps its value. `GET /api/state-repo` reports the
+mode and the held commit under `verification`.
+
 ## What a refused write says
 
 Every configuration-writing route answers `409 Conflict` with a body an

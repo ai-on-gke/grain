@@ -476,6 +476,9 @@ func TestGGHDepotRefusalsNameWhatToFix(t *testing.T) {
 			t.Errorf("git endpoint 401 blamed the login (%q): %q", wrong, out)
 		}
 	}
+	if said, ok := LoginLapsed(out); ok {
+		t.Errorf("git endpoint 401 reads as a lapsed login, which the dispatcher parks on renewing: %q", said)
+	}
 	os.Remove(filepath.Join(f.state, "git-401"))
 
 	// The forgecli login itself lapsed: `forgecli api user` fails too, and forgecli's
@@ -487,6 +490,7 @@ func TestGGHDepotRefusalsNameWhatToFix(t *testing.T) {
 		!strings.Contains(out, "GH_HOST=depot.code.forge.test forgecli auth login") || strings.Contains(out, "gh auth login --hostname") {
 		t.Errorf("lapsed forgecli login said %q", out)
 	}
+	assertLoginLapsed(t, "lapsed forgecli login", out, "GH_HOST=depot.code.forge.test forgecli auth login")
 	os.Remove(filepath.Join(f.state, "logged-out"))
 
 	// The login lapsed: the front end's redirect to the forge login still says to renew it.
@@ -495,7 +499,25 @@ func TestGGHDepotRefusalsNameWhatToFix(t *testing.T) {
 	if !strings.Contains(out, "forge login needed: run `forgecli-login`") || strings.Contains(out, "auth login") {
 		t.Errorf("corp login redirect said %q", out)
 	}
+	assertLoginLapsed(t, "corp login redirect", out, "forge login needed: run `forgecli-login`")
 	assertNoTokenLogged(t)
+}
+
+// assertLoginLapsed checks that what a refused clone printed is one the
+// dispatcher parks on renewing the host's login (LoginLapsed), saying
+// what to run, rather than retrying it or reading it as the credential
+// lacking access to the repository.
+func assertLoginLapsed(t *testing.T, what, out, fix string) {
+	t.Helper()
+	said, ok := LoginLapsed(out)
+	if !ok {
+		t.Errorf("%s does not read as a lapsed login: %q", what, out)
+	} else if !strings.Contains(said, fix) || strings.Contains(said, "remote:") {
+		t.Errorf("%s's lapsed-login sentence is %q; want it to say %q, without git's own wording", what, said, fix)
+	}
+	if IsAccessRefusal(out) {
+		t.Errorf("%s reads as an access refusal: %q", what, out)
+	}
 }
 
 func TestCISandboxSingleTenantAmbientGGHOnNonDefaultHost(t *testing.T) {

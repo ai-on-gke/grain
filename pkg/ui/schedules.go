@@ -155,6 +155,21 @@ func overlapOr(p, fallback model.OverlapPolicy) model.OverlapPolicy {
 	return p
 }
 
+// parseOverlapGroup checks a wire overlap group (model.ValidateOverlapGroup)
+// against the policy it comes with: a group is a skip by definition, so
+// one beside "allow" is refused rather than one of the two ignored.
+func parseOverlapGroup(text string, policy model.OverlapPolicy) (string, error) {
+	group := strings.TrimSpace(text)
+	if err := model.ValidateOverlapGroup(group); err != nil {
+		return "", validationErrorf("overlapGroup: %v", err)
+	}
+	if group != "" && policy.Allows() {
+		return "", validationErrorf("overlapGroup: a schedule in an overlap group skips a firing while " +
+			"another in the group is running, so it cannot also be set to allow overlap")
+	}
+	return group, nil
+}
+
 // parseOverlap turns the wire value into a model.OverlapPolicy,
 // rejecting anything Validate would -- caught here, before the store is
 // touched, the same as parseRecurrence does for a cadence. An empty
@@ -264,6 +279,11 @@ type Schedule struct {
 	// UI can render the setting without knowing which of the two the
 	// blank used to mean.
 	Overlap string `json:"overlap"`
+	// OverlapGroup is the overlap group this schedule shares with the
+	// other schedules firing into its repository (model.Schedule.OverlapGroup,
+	// grain/task-3895): a firing is held while any of them has one
+	// unfinished. Empty for a schedule that checks only its own.
+	OverlapGroup string `json:"overlapGroup,omitempty"`
 	// DeclaredIn is where this schedule came from when a repository
 	// declares it rather than somebody here creating it --
 	// ui.Template.DeclaredIn's own doc comment.
@@ -342,6 +362,9 @@ type ScheduleSkip struct {
 	FiredTaskID string     `json:"firedTaskId,omitempty"`
 	// Folded is how many later occurrences the late firing absorbed.
 	Folded int `json:"folded,omitempty"`
+	// HeldByScheduleID is the other schedule in this one's overlap group
+	// that held the occurrence (grain/task-3895).
+	HeldByScheduleID string `json:"heldByScheduleId,omitempty"`
 }
 
 func scheduleSkipsFrom(skips []model.ScheduleSkip) []ScheduleSkip {
@@ -351,6 +374,7 @@ func scheduleSkipsFrom(skips []model.ScheduleSkip) []ScheduleSkip {
 			Occurrence: k.Occurrence, At: k.At, Reason: string(k.Reason), Summary: k.Summary(),
 			TaskID: k.TaskID, TaskState: string(k.TaskState), Outcome: string(k.Outcome),
 			ResolvedAt: k.ResolvedAt, FiredTaskID: k.FiredTaskID, Folded: k.Folded,
+			HeldByScheduleID: k.HeldByScheduleID,
 		})
 	}
 	return out
@@ -405,6 +429,10 @@ type ScheduleSuppression struct {
 	// -- "standingWork"'s "skipped: this deployment doesn't run <repo>'s
 	// standing work" (grain/task-3332).
 	Detail string `json:"detail,omitempty"`
+	// HeldByScheduleID is the other schedule in this one's overlap group
+	// whose unfinished firing is holding it (grain/task-3895); Detail
+	// then says so in words.
+	HeldByScheduleID string `json:"heldByScheduleId,omitempty"`
 }
 
 // suppressionFrom renders a derived suppression, or nil for a schedule
@@ -413,7 +441,8 @@ func suppressionFrom(s *model.ScheduleSuppression) *ScheduleSuppression {
 	if s == nil {
 		return nil
 	}
-	out := &ScheduleSuppression{Reason: string(s.Reason), TaskID: s.TaskID, Detail: s.Detail}
+	out := &ScheduleSuppression{Reason: string(s.Reason), TaskID: s.TaskID, Detail: s.Detail,
+		HeldByScheduleID: s.HeldByScheduleID}
 	if !s.Until.IsZero() {
 		until := s.Until
 		out.Until = &until
@@ -456,6 +485,7 @@ func scheduleFrom(s model.Schedule, templateName, suiteName string) Schedule {
 		Recurrence:           recurrenceFrom(s.Recurrence),
 		TimeZone:             s.TimeZone,
 		Overlap:              string(overlapOr(s.Overlap, model.OverlapSkip)),
+		OverlapGroup:         s.OverlapGroup,
 		Enabled:              s.Enabled,
 		NextRunAt:            s.NextRunAt,
 		LastRunAt:            s.LastRunAt,
@@ -593,6 +623,7 @@ func (c *Client) ListSchedules(ctx context.Context) ([]Schedule, error) {
 	// template or suite (the whole point of TemplateID and SuiteID
 	// existing) would otherwise repeat the same store call.
 	templateNames, suiteNames := map[string]string{}, map[string]string{}
+	templates := map[string]*model.Template{}
 	declared, err := c.declaredIn(ctx)
 	if err != nil {
 		return nil, err
@@ -631,6 +662,14 @@ func (c *Client) ListSchedules(ctx context.Context) ([]Schedule, error) {
 				suiteName = suite.Name
 				suiteNames[id] = suiteName
 			}
+		}
+		if s.TemplateID != nil {
+			tmpl, ok := templates[*s.TemplateID]
+			if !ok {
+				tmpl = c.scheduleTemplateSettings(ctx, s)
+				templates[*s.TemplateID] = tmpl
+			}
+			s = withScheduleTemplateSettings(s, tmpl)
 		}
 		sched := scheduleFrom(s, templateName, suiteName)
 		sched.DeclaredIn = declarationOf(declared, s.ID)
@@ -739,6 +778,11 @@ type CreateScheduleRequest struct {
 	// pile a second firing on top of one still running, which is what
 	// every schedule did before this was a choice at all.
 	Overlap string `json:"overlap"`
+	// OverlapGroup is the overlap group this schedule shares with the
+	// other schedules firing into its repository (model.Schedule.OverlapGroup,
+	// grain/task-3895): a firing is held while any of them has one
+	// unfinished. Empty for a schedule that checks only its own.
+	OverlapGroup string `json:"overlapGroup,omitempty"`
 	// Enabled, omitted, defaults to true -- a schedule somebody just
 	// created is normally meant to run, not to sit paused until a second
 	// click.
@@ -789,6 +833,10 @@ func (c *Client) CreateSchedule(ctx context.Context, req CreateScheduleRequest) 
 		return Schedule{}, err
 	}
 	overlap, err := parseOverlap(req.Overlap)
+	if err != nil {
+		return Schedule{}, err
+	}
+	overlapGroup, err := parseOverlapGroup(req.OverlapGroup, overlap)
 	if err != nil {
 		return Schedule{}, err
 	}
@@ -844,7 +892,10 @@ func (c *Client) CreateSchedule(ctx context.Context, req CreateScheduleRequest) 
 			return Schedule{}, err
 		}
 	case strings.TrimSpace(req.TemplateID) != "":
-		if err := refuseIgnoredScheduleContent("template", templateName, sched, contentOfferedOnCreate(req)); err != nil {
+		// Measured against what its firings will hold, the template's
+		// admission, hosting and grants among it, which the schedule
+		// itself does not store (scheduleContentFromTemplate).
+		if err := refuseIgnoredScheduleContent("template", templateName, c.scheduleView(ctx, sched), contentOfferedOnCreate(req)); err != nil {
 			return Schedule{}, err
 		}
 	}
@@ -885,13 +936,14 @@ func (c *Client) CreateSchedule(ctx context.Context, req CreateScheduleRequest) 
 	recurrence.TimeZone = tz
 	sched.Recurrence = recurrence
 	sched.Overlap = overlap
+	sched.OverlapGroup = overlapGroup
 	sched.Enabled = enabled
 	sched.NextRunAt = recurrence.Next(now, sched.Location())
 	sched.CreatedAt = now
 	if err := c.Store.PutSchedule(ctx, sched); err != nil {
 		return Schedule{}, err
 	}
-	out := scheduleFrom(sched, templateName, suiteName)
+	out := scheduleFrom(c.scheduleView(ctx, sched), templateName, suiteName)
 	if suppressed, err := c.Store.SuppressedFiring(ctx, sched, now, sched.Location()); err == nil {
 		out.Suppressed = suppressionFrom(suppressed)
 	}
@@ -1179,6 +1231,50 @@ func (c *Client) templateNameFor(ctx context.Context, id string) string {
 		return t.Name
 	}
 	return ""
+}
+
+// scheduleTemplateSettings is the template s fires as
+// withScheduleTemplateSettings reads it, or nil for a schedule that fires
+// none or one that is gone. One of grain's own templates gives its
+// admission and hosting and no grants: its grants depend on the state
+// repository, and its schedule already carries them
+// (orchestrator.applySystemContent).
+func (c *Client) scheduleTemplateSettings(ctx context.Context, s model.Schedule) *model.Template {
+	if s.TemplateID == nil || *s.TemplateID == "" {
+		return nil
+	}
+	id := *s.TemplateID
+	if model.IsSystemTemplateID(id) {
+		tmpl := model.SystemTemplate(id, model.RepoRef{})
+		if tmpl == nil {
+			return nil
+		}
+		settings := *tmpl
+		settings.Grants = nil
+		return &settings
+	}
+	if t, err := c.Store.GetTemplate(ctx, id); err == nil && t != nil {
+		return t
+	}
+	return nil
+}
+
+// withScheduleTemplateSettings is s with the admission, hosting and
+// grants its firings hold (model.Schedule.WithTemplateSettings): a
+// template-backed schedule stores only what it adds to its template, and
+// the API has always shown -- and the schedule overlay resends on
+// detaching -- what it files. tmpl is s's template
+// (scheduleTemplateSettings); nil leaves s as it is.
+func withScheduleTemplateSettings(s model.Schedule, tmpl *model.Template) model.Schedule {
+	if tmpl == nil || s.TemplateID == nil || *s.TemplateID != tmpl.ID {
+		return s
+	}
+	return s.WithTemplateSettings(*tmpl)
+}
+
+// scheduleView is s as the API shows it (withScheduleTemplateSettings).
+func (c *Client) scheduleView(ctx context.Context, s model.Schedule) model.Schedule {
+	return withScheduleTemplateSettings(s, c.scheduleTemplateSettings(ctx, s))
 }
 
 // refuseSystemScheduleContentEdit refuses an edit to a schedule grain
@@ -1521,6 +1617,12 @@ func sameCustomFields(given, current map[string]CustomFieldValue) bool {
 // one firing. Callers still set Target and Base themselves, through
 // Template.FiringTarget: a template usually has no target of its own,
 // and a bound one is the one case where those two are content too.
+//
+// Admission, Hosting and Grants are left empty: on a template-backed
+// schedule they are what the schedule adds to its template rather than a
+// copy of it (model.Schedule.Grants), and a schedule attached here adds
+// nothing. A copy would be indistinguishable from the schedule's own, and
+// would go on granting what the template no longer does.
 func scheduleContentFromTemplate(t model.Template) model.Schedule {
 	title, body := t.FilledTitleBody()
 	return model.Schedule{
@@ -1529,15 +1631,12 @@ func scheduleContentFromTemplate(t model.Template) model.Schedule {
 		AutoMerge:     t.AutoMerge,
 		Reads:         t.Reads,
 		Writes:        t.Writes,
-		Grants:        t.Grants,
 		CustomFields:  t.CustomFields,
 		NetworkAccess: t.NetworkAccess,
 		TemplateID:    &t.ID,
 
 		NothingNeededAction: t.NothingNeededAction,
 		KeepRunning:         t.KeepRunning,
-		Admission:           t.Admission,
-		Hosting:             t.Hosting,
 	}
 }
 
@@ -1621,7 +1720,10 @@ type UpdateScheduleRequest struct {
 	// caller that meant the default can say "skip" and one that sent a
 	// blank by accident should hear about it.
 	Overlap *string `json:"overlap,omitempty"`
-	Enabled *bool   `json:"enabled,omitempty"`
+	// OverlapGroup, nil-means-leave-alone too: a group name, or "" to
+	// leave the schedule's group (model.Schedule.OverlapGroup).
+	OverlapGroup *string `json:"overlapGroup,omitempty"`
+	Enabled      *bool   `json:"enabled,omitempty"`
 	// Revision, given, is the schedule's Revision as the caller last read
 	// it, and the edit is refused (staleEditError) if the schedule has been
 	// saved since. Absent applies the edit regardless.
@@ -1667,7 +1769,15 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 	// Asked first, and again inside the write below where it is decided:
 	// a stale form measured against content somebody has since changed
 	// would otherwise hear about that content, not about being stale.
-	if err := checkRevision("schedule", id, req.Revision, scheduleRevisionOf(*existing)); err != nil {
+	// The template existing fires, resolved once: a revision is of the
+	// schedule as the API showed it (scheduleView), which for a
+	// template-backed one takes its template's admission, hosting and
+	// grants -- and the write below cannot read the store for it.
+	existingTemplate := c.scheduleTemplateSettings(ctx, *existing)
+	revisionOf := func(s model.Schedule) string {
+		return scheduleRevisionOf(withScheduleTemplateSettings(s, existingTemplate))
+	}
+	if err := checkRevision("schedule", id, req.Revision, revisionOf(*existing)); err != nil {
 		return Schedule{}, err
 	}
 	// Checked before anything else is parsed: a request that may not
@@ -1676,7 +1786,7 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 	if err := c.refuseDeclaredEdit(ctx, id, "edit"); err != nil {
 		return Schedule{}, err
 	}
-	if err := refuseSystemScheduleContentEdit(*existing, req); err != nil {
+	if err := refuseSystemScheduleContentEdit(withScheduleTemplateSettings(*existing, existingTemplate), req); err != nil {
 		return Schedule{}, err
 	}
 	if req.Base != nil {
@@ -1808,9 +1918,15 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		case attaching != nil:
 			// Attaching: the content in force after this request is the
 			// template's, not the inline content still on the row, so
-			// that is what a content field is measured against.
+			// that is what a content field is measured against -- with
+			// what the schedule adds to it when it is the template the
+			// schedule already fires, which the write below keeps.
+			content := scheduleContentFromTemplate(*attaching)
+			if existing.TemplateID != nil && *existing.TemplateID == attaching.ID {
+				content.Grants, content.Admission, content.Hosting = existing.Grants, existing.Admission, existing.Hosting
+			}
 			if err := refuseIgnoredScheduleContent(
-				"template", attaching.Name, scheduleContentFromTemplate(*attaching),
+				"template", attaching.Name, content.WithTemplateSettings(*attaching),
 				contentOfferedOnUpdate(req)); err != nil {
 				return Schedule{}, err
 			}
@@ -1819,9 +1935,12 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			// its own synced copy of that template's content, so it
 			// stands in for the template here (and still does when the
 			// template row has since been deleted, where firing is nil
-			// and this schedule is left editable rather than frozen).
+			// and this schedule is left editable rather than frozen),
+			// with the template's admission, hosting and grants beside
+			// what it adds to them, as the API shows it.
 			if err := refuseIgnoredScheduleContent(
-				"template", firing.Name, *existing, contentOfferedOnUpdate(req)); err != nil {
+				"template", firing.Name, withScheduleTemplateSettings(*existing, firing),
+				contentOfferedOnUpdate(req)); err != nil {
 				return Schedule{}, err
 			}
 		}
@@ -1953,6 +2072,14 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		}
 		overlap = &p
 	}
+	var overlapGroup *string
+	if req.OverlapGroup != nil {
+		g := strings.TrimSpace(*req.OverlapGroup)
+		if err := model.ValidateOverlapGroup(g); err != nil {
+			return Schedule{}, validationErrorf("overlapGroup: %v", err)
+		}
+		overlapGroup = &g
+	}
 	var chosenModel *string
 	if req.Model != nil {
 		m, err := c.declaredModelChoice(ctx, *req.Model)
@@ -1964,7 +2091,7 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 	now := c.now()
 
 	if err := c.Store.UpdateSchedule(ctx, id, func(s *model.Schedule) error {
-		if err := checkRevision("schedule", id, req.Revision, scheduleRevisionOf(*s)); err != nil {
+		if err := checkRevision("schedule", id, req.Revision, revisionOf(*s)); err != nil {
 			return err
 		}
 		if chosenModel != nil {
@@ -1982,16 +2109,29 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			}
 		} else if attaching != nil {
 			content := scheduleContentFromTemplate(*attaching)
-			s.Title, s.Body, s.AutoMerge, s.Reads, s.Writes, s.Grants, s.CustomFields,
-				s.NetworkAccess, s.NothingNeededAction, s.KeepRunning, s.Admission, s.Hosting, s.TemplateID =
+			// Resending the template this schedule already fires, which
+			// every save from the overlay does, keeps what the schedule
+			// adds to it (model.Schedule.Grants): only attaching another
+			// template, or one to a schedule that had inline content,
+			// starts it over.
+			if s.TemplateID == nil || *s.TemplateID != attaching.ID {
+				s.Grants, s.Admission, s.Hosting = content.Grants, content.Admission, content.Hosting
+			}
+			s.Title, s.Body, s.AutoMerge, s.Reads, s.Writes, s.CustomFields,
+				s.NetworkAccess, s.NothingNeededAction, s.KeepRunning, s.TemplateID =
 				content.Title, content.Body, content.AutoMerge, content.Reads, content.Writes,
-				content.Grants, content.CustomFields, content.NetworkAccess, content.NothingNeededAction, content.KeepRunning, content.Admission, content.Hosting, content.TemplateID
+				content.CustomFields, content.NetworkAccess, content.NothingNeededAction, content.KeepRunning, content.TemplateID
 		} else {
 			// req.TemplateID != nil here means the empty-string case:
 			// detach, keeping whatever content is already on the row and
 			// still applying any of the individual field edits below in
 			// the same request.
 			if req.TemplateID != nil {
+				// Detaching keeps what the schedule's firings held, the
+				// template's admission, hosting and grants among it,
+				// as inline content of its own -- the rest of that content
+				// is already on the row as its display cache.
+				*s = withScheduleTemplateSettings(*s, existingTemplate)
 				s.TemplateID = nil
 			}
 			if req.Title != nil {
@@ -2006,7 +2146,13 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			if req.AutoApproveProposals != nil {
 				s.AutoApproveProposals = *req.AutoApproveProposals
 			}
-			if req.Capabilities != nil {
+			// Only on a schedule with no template: one that fires a
+			// template stores what it adds to it (model.Schedule.Grants),
+			// and capabilities resent here are what the API shows --
+			// the template's beside those -- which refuseIgnoredScheduleContent
+			// has already held to that. Storing them would put the copy
+			// of the template's grants back that schema 144 took off.
+			if req.Capabilities != nil && s.TemplateID == nil {
 				s.Grants = grants
 			}
 			if req.Reads != nil {
@@ -2111,6 +2257,13 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 		if overlap != nil {
 			s.Overlap = *overlap
 		}
+		if overlapGroup != nil {
+			s.OverlapGroup = *overlapGroup
+		}
+		if s.OverlapGroup != "" && s.Overlap.Allows() {
+			return validationErrorf("overlapGroup: a schedule in an overlap group skips a firing while " +
+				"another in the group is running, so it cannot also be set to allow overlap")
+		}
 		if req.Enabled != nil {
 			s.Enabled = *req.Enabled
 		}
@@ -2143,7 +2296,7 @@ func (c *Client) UpdateSchedule(ctx context.Context, id string, req UpdateSchedu
 			suiteName = suite.Name
 		}
 	}
-	out := scheduleFrom(*updated, templateName, suiteName)
+	out := scheduleFrom(c.scheduleView(ctx, *updated), templateName, suiteName)
 	if suppressed, err := c.Store.SuppressedFiring(ctx, *updated, now, updated.Location()); err == nil {
 		out.Suppressed = suppressionFrom(suppressed)
 	}
@@ -2190,9 +2343,22 @@ type scheduleBusyError struct {
 	ID       string
 	Review   string
 	Workflow bool
+	// HeldBy is the other schedule in this one's overlap group whose
+	// unfinished firing is what is holding it (grain/task-3895), and
+	// Group that group; empty when it is its own previous run.
+	HeldBy string
+	Group  string
 }
 
 func (e *scheduleBusyError) Error() string {
+	if e.HeldBy != "" {
+		msg := "schedule " + e.ID + ": schedule " + e.HeldBy + " has a run that has not finished yet, and the two " +
+			"share overlap group \"" + e.Group + "\", so they never run at the same time -- wait for it to finish"
+		if e.Review != "" {
+			msg += " (what has not finished is the review of its last run, task " + e.Review + ")"
+		}
+		return msg
+	}
 	msg := "schedule " + e.ID + ": its previous run has not finished yet, and this schedule is set to skip " +
 		"a run that would overlap one -- wait for it, or set \"If the last run has not finished\" to start it anyway"
 	if e.Workflow {
@@ -2248,7 +2414,11 @@ func (c *Client) RunScheduleNow(ctx context.Context, id string) (ScheduleRun, er
 		if sched.TemplateID != nil {
 			workflow = model.IsWorkflowReviewTemplateID(*sched.TemplateID)
 		}
-		return ScheduleRun{}, &scheduleBusyError{ID: id, Review: firing.OpenReview, Workflow: workflow}
+		busy := &scheduleBusyError{ID: id, Review: firing.OpenReview, Workflow: workflow}
+		if firing.Skip != nil && firing.Skip.HeldByScheduleID != "" {
+			busy.HeldBy, busy.Group = firing.Skip.HeldByScheduleID, sched.OverlapGroup
+		}
+		return ScheduleRun{}, busy
 	}
 	// The cadence answers this one by quietly not firing (model.Store's
 	// own suppressOffTargetRepos), because nobody is waiting on it and
@@ -2321,7 +2491,7 @@ func (c *Client) RunScheduleNow(ctx context.Context, id string) (ScheduleRun, er
 		TaskID:      firing.TaskID,
 		SuiteRunID:  firing.SuiteRunID,
 		WorkflowRun: firing.WorkflowRun,
-		Schedule:    scheduleFrom(*updated, templateName, suiteName),
+		Schedule:    scheduleFrom(c.scheduleView(ctx, *updated), templateName, suiteName),
 	}, nil
 }
 

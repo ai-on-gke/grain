@@ -92,8 +92,11 @@ workflow -- publishes unsigned and warns about it. Setting `REQUIRE_IMAGE_SIGNIN
   unsigned, and a verifying deployment refuses them. A signature covers a digest, not a tag, so the branch tag and
   the registry-side retags `promote` makes (`latest`, `vX.Y.Z`) carry the
   same signature, and nothing needs re-signing. cosign is installed from
-  the Go module proxy at a pinned version (`COSIGN_VERSION`) when the
-  sandbox does not already have it.
+  the Go module proxy at a pinned version (`COSIGN_VERSION`, a v3
+  release, `go install github.com/sigstore/cosign/v3/cmd/cosign` with
+  `GOTOOLCHAIN=auto` because v3 needs a newer Go than go.mod pins) when
+  the sandbox does not already have it. The GitHub release workflows put
+  the same version on the runner first, checked against a pinned sha256.
 - **GitHub Actions** (`.github/workflows/build-artifacts.yml`,
   `publish-grain-image`): **does not sign.** That workflow runs on every
   branch push, so any secret in it can be read by anyone who can push a
@@ -177,6 +180,39 @@ refused at its signature step, while the daemon itself runs normally. No
 `--output` flag is passed, because the Kubernetes path reads the verified
 digest out of cosign's default JSON.
 
+The release signs with cosign v3 (`COSIGN_VERSION`, v3.1.4, the same
+release the image bundles as its verifier), but in cosign's legacy
+format. Every `cosign sign` and `cosign attest` in
+`scripts/release-images.sh` passes
+`--tlog-upload=false --new-bundle-format=false --use-signing-config=false`
+(`cosign_legacy_flags`), for these reasons:
+
+- **Grain images before v3.5.0 bundle cosign v2.4.1 as their verifier,**
+  and an upgrade is verified by the image being upgraded _from_. cosign
+  v3's default `sign` writes a new-format bundle, an OCI referrer tagged
+  `sha256-<hex>` with no suffix. v2.4.1's `verify` does not look there
+  and reports "no signatures found" (exit 10), so every one of those
+  deployments would refuse its next upgrade. `--new-bundle-format=false`
+  writes the legacy `sha256-<hex>.sig` (and `.att` for attestations)
+  instead. Against a local registry, a v3.1.4 signature written this way
+  was verified by v2.4.1, v2.6.5 and v3.1.4 alike, by digest and by tag,
+  with the flags above, and each printed the same
+  `critical.image.docker-manifest-digest` JSON (`pkg/upgrade/verify.go`'s
+  `verifiedDigests`). `verify-attestation` read the reviewed-merge
+  attestation from all three, and a wrong key was still refused (exit 12).
+  `cmd/ghcr-prune` groups those same `.sig`/`.att` tags by digest.
+- **v3 refuses `--tlog-upload=false` whenever a signing config is in
+  play,** and it fetches one from TUF by default. A `--signing-config`
+  with no Rekor URLs does not help here: v3 then insists on
+  `--new-bundle-format`, which is the format v2.4.1 cannot read. So the
+  signing config is switched off with `--use-signing-config=false`.
+  v3.1.4 prints that this flag is deprecated, "an offline signing flag
+  will be added in the future"; when that flag lands, it replaces this one.
+
+The legacy format can be dropped, and the new bundle format taken, only
+once no supported upgrade starts from an image carrying a v2.4.1
+verifier (v3.4.0 and earlier).
+
 ### No verifier configured: warn, don't refuse
 
 A deployment with no `-upgrade-verify-cmd` still upgrades. The
@@ -193,6 +229,83 @@ verifier is how a deployment opts into refusing, and once it is
 configured a failure always refuses. Changing the default to refuse
 belongs after the steps below, once every supported rollback target is
 signed.
+
+### A signature is not a review
+
+A release-key signature shows that CI built the image. It does not show
+that a reviewed commit went into it. Somebody with write access to the
+repository and no grain access can merge on the forge, or push where
+branch protection allows it, and skip every grain hold. CI then builds and
+signs that commit like any other
+(`docs/security/audits/2026-11-10-insider-risk.md`, finding 3).
+`pkg/reviewedmerge` is the rule for what does count. The commit is the
+merge commit of a pull request merged into `main` or `release/v*`, and
+one of these holds:
+
+- grain merged it: the merger is one of the forge logins grain merges
+  as, which only grain's credential is;
+- the pull request carries the forge's review record: an approval of
+  the merged head by somebody other than its author, with no change
+  request outstanding. Only reviews by the repository's owner, its
+  organization's members and its collaborators count, as with the
+  forge's own required reviews: any account can approve a public
+  repository's pull request.
+
+Every first-parent commit since the last one checked must pass as well.
+Otherwise a reviewed merge on top of a self-merged one would carry the
+unreviewed change in with it.
+
+It is asked in two places:
+
+- **At release.** `release-images.sh push` runs `cmd/reviewed-merge`
+  before it signs or tags anything, and refuses an unreviewed commit. The
+  chain runs from the commit the branch's published `grain` image was
+  built from, or, on a branch with nothing published yet, from where its
+  history leaves `main`. The check reads the forge with `GITHUB_TOKEN`
+  (`pull-requests: read`) and needs the repository variable
+  `GRAIN_MERGE_LOGINS`, the logins grain merges as. Until that variable
+  is set, only forge-approved merges publish. It must name only an
+  identity no person merges as by hand -- a GitHub App grain merges
+  through, as `<slug>[bot]` -- never the login of a person whose token
+  grain pushes with, or that person's hand merges pass too; `grain health`
+  warns when it names a user account ([A merge identity of grain's
+  own](github-actions-ci.md#a-merge-identity-of-grains-own)). Setting
+  `REQUIRE_REVIEWED_MERGE=false` skips the check, and the build log says
+  so. The record of how each commit was merged is attested onto every
+  image the release signs, as in-toto predicate type
+  `https://github.com/ai-on-gke/grain/reviewed-merge/v1`
+  (`cosign verify-attestation --type ...`).
+- **At upgrade.** This check runs from the commit it checks. A commit
+  that rewrote the release workflow gets past it, and so does any
+  attestation that workflow writes. The check that holds against such a
+  commit is the deployment's own. `grain daemon
+  -upgrade-reviewed-merge-repo=owner/name` (or `host/owner/name` for a
+  GitHub Enterprise Server, asked at `https://<host>/api/v3`; with
+  `-upgrade-reviewed-merge-logins` and, for a private repository or the
+  API's rate limit, `-upgrade-reviewed-merge-token-file` -- without one,
+  a host that a command-backed ambient source claims is read through
+  that source's own tool, on the host through grain's host bridge when
+  the daemon runs in a container) reads the
+  pulled image's revision label, which the signature covers. It then
+  asks the forge how that commit was merged, and how every first-parent
+  commit since the running build's was merged. For an image of another
+  branch (a release branch, upgraded to from a `main` build) the chain
+  runs from where the two branches part. Nothing from the new
+  commit runs to decide. The check runs in the `signature` step, after
+  the signature. It needs `-upgrade-verify-cmd`: without a signature the
+  label is only what the registry says, so the check refuses when that
+  flag is missing. It covers the host image path, the Kubernetes path
+  and both release-notes previews. The Kubernetes path pulls nothing
+  before a pod runs the image, so it reads the label from the registry
+  by the digest the verifier signed off on. It holds the manifest, and
+  the config blob the manifest names, to their digests. For an index it
+  reads every platform's manifest, and all of them must name the same
+  commit.
+
+Whether a missing `-upgrade-verify-cmd` should refuse everywhere has the
+same answer as the section above. It refuses for a deployment that asked
+for the reviewed-merge check. Everywhere else it warns, until installs
+carry the release key by default.
 
 ### Signatures in the registry
 

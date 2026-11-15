@@ -88,28 +88,35 @@ func (c *Client) defaultDeploymentOwner(_ context.Context) string {
 // who posted a message to a console session task so tasks filed from that
 // session inherit that person as owner (attribution.design.md).
 func (c *Client) latestSessionHumanSender(ctx context.Context, sessionTaskID string) *model.Principal {
-	if c.Store == nil || strings.TrimSpace(sessionTaskID) == "" {
+	sessionTaskID = strings.TrimSpace(sessionTaskID)
+	if c.Store == nil || sessionTaskID == "" {
 		return nil
 	}
-	comments, err := c.Store.Comments(ctx, strings.TrimSpace(sessionTaskID))
-	if err != nil {
-		return nil
-	}
-	for i := len(comments) - 1; i >= 0; i-- {
-		if h := attributedHuman(comments[i].Author); h != nil && strings.TrimSpace(h.ID) != "" {
-			if _, nerr := model.NormalizeTaskOwner(h.ID); nerr == nil {
-				return h
+	var before int64
+	for {
+		page, more, err := c.Store.CommentsBefore(ctx, sessionTaskID, before, 50)
+		if err != nil {
+			return nil
+		}
+		for i := len(page) - 1; i >= 0; i-- {
+			if h := attributedHuman(page[i].Author); h != nil && strings.TrimSpace(h.ID) != "" {
+				if _, nerr := model.NormalizeTaskOwner(h.ID); nerr == nil {
+					return h
+				}
+			}
+			actor := page[i].Author.Actor
+			if (actor.Kind == model.PrincipalHuman || actor.Kind == model.PrincipalService) && strings.TrimSpace(actor.ID) != "" {
+				if _, nerr := model.NormalizeTaskOwner(actor.ID); nerr == nil {
+					cp := actor
+					return &cp
+				}
 			}
 		}
-		actor := comments[i].Author.Actor
-		if (actor.Kind == model.PrincipalHuman || actor.Kind == model.PrincipalService) && strings.TrimSpace(actor.ID) != "" {
-			if _, nerr := model.NormalizeTaskOwner(actor.ID); nerr == nil {
-				cp := actor
-				return &cp
-			}
+		if !more || len(page) == 0 {
+			return nil
 		}
+		before = page[0].ID
 	}
-	return nil
 }
 
 func (c *Client) resolveNewTaskOwner(ctx context.Context, req CreateTaskRequest, proposedBy *model.Task) (string, *model.Principal, error) {

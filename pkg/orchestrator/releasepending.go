@@ -525,7 +525,9 @@ func (f *promoteReleaseFailure) FormatBlock(repo model.RepoRef) string {
 	var b strings.Builder
 	b.WriteString(f.Header() + "\n")
 	if f.NeedsApprovalKey {
-		fmt.Fprintf(&b, "Remedy: set the repository variable GRAIN_RELEASE_APPROVAL_KEY on %s to the publicKey from GET /api/release-approval-key (or `grain release approval-key`), then approve or reject again.\n", repo)
+		fmt.Fprintf(&b, "Remedy: set the repository variable GRAIN_RELEASE_APPROVAL_KEY on %s to the publicKey from GET /api/release-approval-key (or `grain release approval-key`), then approve or reject again. "+
+			"Changing the deployment's signing key -- its -release-approval-kms-key, or its release-approval-key secret -- "+
+			"means updating GRAIN_RELEASE_APPROVAL_KEY to match.\n", repo)
 	}
 	if f.HTMLURL != "" {
 		fmt.Fprintf(&b, "Run URL: %s\n", f.HTMLURL)

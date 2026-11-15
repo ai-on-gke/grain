@@ -245,6 +245,8 @@ expect_eq "same-tick drop + hold: discards rc.1" "$(remote_tag v2.2.0-rc.1-disca
 expect_eq "same-tick drop + hold: holds rc.2" "$(remote_tag v2.2.0-rc.2)" ""
 expect_has "same-tick drop + hold: reports hold" "$out" "v2.2.0-rc.2 is held by grain/rc-hold"
 expect_has "same-tick drop + hold: acted on discard" "$out" "RELEASE_TRAIN_RESULT=acted"
+# A tick that stops at the rc-hold never reads main's runs (grain/task-4393).
+expect_not_has "same-tick drop + hold: reads no main runs" "$calls" "--ref main --workflow"
 
 # 3. An empty grain_app (a forge connection that is no GitHub App, such as a
 #    PAT, or one grain cannot tell) with no RELEASE_QUALIFICATION_APP set
@@ -302,7 +304,18 @@ expect_has "rc.3 from main: queries main" "$calls" "--ref main --workflow releas
 expect_not_has "rc.3 from main: no release branch" "$calls" "--ref release/v2.2.0"
 expect_eq "rc.3 from main: cuts rc.3 on c3" "$(remote_tag v2.2.0-rc.3)" "$c3"
 
-# 6. A task that cannot read CI (grain-ci stripped, no api:ci-read) fails with
+# 6. While rc.3 is still qualifying (Stage 1 has no verdict yet), the tick is
+#    a noop that reads the rc's verdicts and never main's up to 500 runs of
+#    each required workflow -- most of what a tick used to read
+#    (grain/task-4393).
+echo '{"total_count":0,"jobs":[]}' > "$work/fixtures/qual-runs.json"
+run_tick
+expect_eq "rc qualifying: exit" "$status" 0
+expect_has "rc qualifying: noop" "$out" "RELEASE_TRAIN_RESULT=noop"
+expect_has "rc qualifying: reads the rc's jobs" "$calls" "--ref v2.2.0-rc.3 --workflow nightly.yml"
+expect_not_has "rc qualifying: reads no main runs" "$calls" "--ref main --workflow"
+
+# 7. A task that cannot read CI (grain-ci stripped, no api:ci-read) fails with
 #    grain's own refusal, the command that hit it and the grant it needs.
 run_tick FAKE_CI_FORBIDDEN=1
 expect_eq "ci forbidden: exit 1" "$status" 1
@@ -311,6 +324,16 @@ expect_has "ci forbidden: names the command and status" "$out" "\`grain ci list 
 expect_has "ci forbidden: exit status" "$out" "exited 3:"
 expect_has "ci forbidden: quotes grain's stderr" "$out" "release-train-task:   grain: forbidden: grain ci:"
 expect_has "ci forbidden: names the missing grant" "$out" "api:ci-read@ai-on-gke/grain"
+
+# 8. The same refusal when it is main's runs that cannot be read, which
+#    release-from-trunk.sh reads only once it looks for a commit to cut.
+setup_repo
+run_tick FAKE_CI_FORBIDDEN=1
+expect_eq "main runs forbidden: exit 1" "$status" 1
+expect_has "main runs forbidden: result failed" "$out" "RELEASE_TRAIN_RESULT=failed"
+expect_has "main runs forbidden: names the command" "$out" "\`grain ci list --repo ai-on-gke/grain --ref main --workflow tests.yml"
+expect_has "main runs forbidden: names the missing grant" "$out" "api:ci-read@ai-on-gke/grain"
+expect_eq "main runs forbidden: one result line" "$(grep -c '^RELEASE_TRAIN_RESULT=' <<<"$out")" 1
 
 echo
 echo "$((cases - failures))/$cases passed"

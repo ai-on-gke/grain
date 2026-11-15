@@ -16,20 +16,18 @@
 // an antigravity (agy) run makes: agy forks `<grain binary> agy-tool-hook`
 // with the call on stdin, and DecisionFor's reply decides whether it runs.
 //
-// It is a leaf -- it imports nothing of grain's -- so that every binary a
-// run may name as its hook can carry it cheaply: cmd/grain, and
-// grain-agentd, which runs the agent CLIs on a machine that is not the
-// daemon's and must stay small. pkg/agent/antigravity writes the hook into
-// a run's hooks.json and re-exports this package under its old names
-// (antigravity.HookDecisionFor, antigravity.RegisterHostToolGrant, ...).
+// It is a leaf -- it imports only hookpolicy -- so that every binary a run
+// may name as its hook can carry it cheaply: cmd/grain, and grain-agentd,
+// which runs the agent CLIs on a machine that is not the daemon's and must
+// stay small. pkg/agent/antigravity writes the hook into a run's hooks.json
+// and re-exports this package under its old names (antigravity.HookDecisionFor,
+// antigravity.RegisterHostToolGrant, ...).
 //
-// What the hook admits is grain's own published MCP tools (PublishedTools,
-// a list kept here so the hook need not link pkg/mcp; antigravity's tests
-// hold it to the roster pkg/mcp actually builds), the capability MCP
-// servers' tools a run's arguments name, and the host tools of a
-// registered HostToolGrant the run holds. A build adds a HostToolGrant
-// with RegisterHostToolGrant from init(); the binary answering the hook
-// must link the same registrations as the daemon that wrote its arguments.
+// When -policy names a staged per-run policy file (hookpolicy.File), the hook
+// evaluates that file's ToolPolicy directly with a generic matcher and
+// consults no compiled-in tool roster or grant registry. When the file is
+// absent (an older daemon, or a direct call to Decision), it falls back to
+// PublishedTools and RegisteredHostToolGrants.
 package hook
 
 import (
@@ -43,6 +41,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/agent/hookpolicy"
 )
 
 // Name is what this run's hook is called in hooks.json. agy merges
@@ -63,7 +63,7 @@ const Subcommand = "agy-tool-hook"
 
 // Decision answers one PreToolUse payload: it returns the JSON agy
 // reads back on stdout, and it is the whole of what cmd/grain's
-// "agy-tool-hook" subcommand does.
+// "agy-tool-hook" subcommand does when started with no arguments.
 //
 // This hook is the fail-closed half of the boundary. It sees every tool
 // call and allows only exact, eagerly registered tools published by
@@ -81,13 +81,16 @@ func Decision(payload []byte) []byte {
 
 // Options is what one run's hook is told about that run, from the
 // arguments hookConfigJSON wrote into its command (ParseArgs). The
-// zero value is every run without a host-tool grant, and decides
-// exactly what Decision always has.
+// zero value is every run without a host-tool grant or staged policy file,
+// and decides what Decision always has.
 type Options struct {
-	// Grants are the hook-relevant grants this run holds. Only a
-	// registered HostToolGrant's Capability means anything, and what it
-	// admits is that grant's Tools -- a list in code, never in these
-	// options, so no argument can name a host tool into the allowlist.
+	// PolicyPath is the staged per-run hookpolicy.File (-policy). When
+	// present on disk, its ToolPolicy is evaluated directly and none of
+	// this binary's compiled-in rosters or registered grants are consulted.
+	PolicyPath string
+	// Grants are the hook-relevant grants this run holds in fallback mode
+	// (when no policy file is present). Only a registered HostToolGrant's
+	// Capability means anything, and what it admits is that grant's Tools.
 	Grants []string
 	// RecordPath is the JSON-lines file every admitted host-tool call is
 	// appended to before it is allowed (HostToolCall). A call that cannot
@@ -104,6 +107,7 @@ type Options struct {
 // The flags a run's hook command carries (antigravity's hookArgs
 // writes them) and ParseArgs reads.
 const (
+	FlagPolicy = "-policy"
 	FlagGrant  = "-grant"
 	FlagRecord = "-record"
 	FlagTask   = "-task"
@@ -125,6 +129,8 @@ func ParseArgs(args []string) (opts Options, ignored []string) {
 			break
 		}
 		switch args[i] {
+		case FlagPolicy:
+			opts.PolicyPath = args[i+1]
 		case FlagGrant:
 			opts.Grants = append(opts.Grants, args[i+1])
 		case FlagRecord:
@@ -167,7 +173,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) {
 }
 
 // AllowsHostTool returns the grant opts holds that admits the host tool
-// name, if there is one.
+// name in fallback mode, if there is one.
 func (opts Options) AllowsHostTool(name string) (HostToolGrant, bool) {
 	for _, g := range HeldHostToolGrants(opts.Grants) {
 		if slices.Contains(g.Tools, name) {
@@ -231,11 +237,30 @@ func hostToolQuery(args map[string]any) string {
 	return string(b)
 }
 
-// DecisionFor is Decision for a run whose hook was started with
-// opts: grain's own MCP tools get no opinion, as always; for a run holding
-// a registered HostToolGrant, the host tools it names are recorded and
-// then get no opinion too; everything else is denied.
+// DecisionFor is Decision for a run whose hook was started with opts.
+// When opts.PolicyPath names an existing hookpolicy.File with a Tool
+// section, that policy is evaluated directly with no compiled-in roster;
+// when the file is absent, DecisionFor falls back to this binary's
+// compiled-in PublishedTools and RegisteredHostToolGrants. A present file
+// that cannot be read or parsed fails closed.
 func DecisionFor(opts Options, payload []byte) []byte {
+	if opts.PolicyPath != "" {
+		file, err := hookpolicy.Load(opts.PolicyPath)
+		if err != nil {
+			return denyReason("grain could not load this run's hook policy (" + err.Error() + ").")
+		}
+		if file != nil && file.Tool != nil {
+			return EvaluatePolicy(*file.Tool, opts, payload)
+		}
+	}
+	return EvaluatePolicy(compiledToolPolicy(opts), opts, payload)
+}
+
+// EvaluatePolicy evaluates policy against one PreToolUse payload using only
+// the rules in policy (plus any -capability-tool, -record, -task and -run
+// values in opts). None of this package's compiled-in tool lists or grant
+// registrations are consulted.
+func EvaluatePolicy(policy hookpolicy.ToolPolicy, opts Options, payload []byte) []byte {
 	var in struct {
 		ToolCall struct {
 			Name string         `json:"name"`
@@ -243,61 +268,148 @@ func DecisionFor(opts Options, payload []byte) []byte {
 		} `json:"toolCall"`
 	}
 	if err := json.Unmarshal(payload, &in); err != nil {
-		return denyNonGrainTool("unrecognized tool call")
+		return denyWithSuffix("unrecognized tool call", policy.DefaultDenySuffix)
 	}
-	for _, tool := range PublishedTools {
-		if in.ToolCall.Name == agyToolName(tool) {
+	if slices.Contains(policy.AllowedTools, in.ToolCall.Name) {
+		return noOpinion
+	}
+	for _, pat := range policy.AllowedPatterns {
+		if hookpolicy.MatchWildcard(pat, in.ToolCall.Name) {
 			return noOpinion
 		}
+	}
+	for _, pref := range policy.CapabilityServerPrefixes {
+		if pref != "" && strings.HasPrefix(in.ToolCall.Name, pref) {
+			return noOpinion
+		}
+	}
+	capPrefix := policy.CapabilityToolPrefix
+	if capPrefix == "" {
+		capPrefix = "mcp_"
 	}
 	for _, st := range opts.CapabilityTools {
 		server, tool, ok := strings.Cut(st, "/")
-		if ok && server != "" && tool != "" && in.ToolCall.Name == capabilityToolName(server, tool) {
+		if ok && server != "" && tool != "" && in.ToolCall.Name == capPrefix+server+"_"+tool {
 			return noOpinion
 		}
 	}
-	if grant, ok := opts.AllowsHostTool(in.ToolCall.Name); ok {
+	if grant, ok := matchesPolicyHostGrant(policy.HostToolGrants, in.ToolCall.Name); ok {
+		recordPath := policy.RecordPath
+		if opts.RecordPath != "" {
+			recordPath = opts.RecordPath
+		}
+		taskID := policy.TaskID
+		if opts.TaskID != "" {
+			taskID = opts.TaskID
+		}
+		runID := policy.RunID
+		if opts.RunID != "" {
+			runID = opts.RunID
+		}
 		host, _ := os.Hostname()
 		call := HostToolCall{
-			At: time.Now().UTC(), Task: opts.TaskID, Run: opts.RunID, Host: host,
+			At: time.Now().UTC(), Task: taskID, Run: runID, Host: host,
 			Tool: in.ToolCall.Name, Query: hostToolQuery(in.ToolCall.Args), Args: in.ToolCall.Args,
 		}
-		if err := recordHostToolCall(opts.RecordPath, call); err != nil {
+		if err := recordHostToolCall(recordPath, call); err != nil {
 			return denyReason(in.ToolCall.Name + " is allowed by this task's " + grant.Capability +
 				" grant, but grain could not record the call (" + err.Error() + "), and an unrecorded call " +
 				"on the machine hosting this session is not one grain will let through.")
 		}
 		return noOpinion
 	}
-	switch in.ToolCall.Name {
-	case "exit_plan_mode":
-		// agy's own plan-mode handoff, not a tool that touches any
-		// machine: agy refuses edits until it is called, so denying it
-		// traps a run that started in plan mode in a read-only loop. It
-		// was 100% of its calls failing before this
-		// (design/design/sandbox-first-agent-surface.design.md §5).
-		return noOpinion
-	case "enter_plan_mode":
-		return denyReason("Plan mode is off in headless grain runs, and entering it would stop " +
-			"every edit: there is nobody to approve a plan. Carry out the steps directly with " +
-			joinNames(sandboxToolNames()) + ".")
-	case "schedule":
-		return denyReason("schedule's timers do not exist in a headless grain run: nothing wakes " +
-			"this session up again. To wait for CI, run `grain ci wait` with " +
-			agyToolName("run_command") + " (timeout 600000); to free the sandbox while " +
-			"something finishes, call " + agyToolName("resume_later") + ".")
+	if reason, ok := policy.DenyReasons[in.ToolCall.Name]; ok && reason != "" {
+		return denyReason(reason)
+	}
+	for _, dp := range policy.DenyPatterns {
+		if dp.Reason != "" && hookpolicy.MatchWildcard(dp.Pattern, in.ToolCall.Name) {
+			return denyReason(dp.Reason)
+		}
 	}
 	name := in.ToolCall.Name
 	if name == "" {
 		name = "unrecognized tool call"
 	}
-	return denyNonGrainTool(name)
+	return denyWithSuffix(name, policy.DefaultDenySuffix)
 }
 
-func denyNonGrainTool(name string) []byte {
-	return denyReason(name + " is not one of grain's sandbox-bound MCP tools and cannot run on the " +
-		"machine hosting this session. Use " + joinNames(sandboxToolNames()) +
-		" instead, or another " + agyToolName("") + "* tool.")
+// matchesPolicyHostGrant returns the staged host-tool grant that admits
+// name. Host tools run on the machine hosting the session rather than in
+// the sandbox, so a grant admits only the exact tool names it lists, as
+// AllowsHostTool always has: never a '*' pattern that could reach a tool
+// nobody granted.
+func matchesPolicyHostGrant(grants []hookpolicy.HostToolGrant, name string) (hookpolicy.HostToolGrant, bool) {
+	if name == "" {
+		return hookpolicy.HostToolGrant{}, false
+	}
+	for _, g := range grants {
+		if slices.Contains(g.Tools, name) {
+			return g, true
+		}
+	}
+	return hookpolicy.HostToolGrant{}, false
+}
+
+// compiledToolPolicy builds the fallback ToolPolicy from this binary's
+// compiled-in PublishedTools, SandboxTools and RegisteredHostToolGrants,
+// used only when no per-run policy file was staged.
+func compiledToolPolicy(opts Options) hookpolicy.ToolPolicy {
+	allowed := make([]string, 0, len(PublishedTools)+1)
+	for _, tool := range PublishedTools {
+		allowed = append(allowed, agyToolName(tool))
+	}
+	// agy's own plan-mode handoff, not a tool that touches any machine: agy
+	// refuses edits until it is called, so denying it traps a run that
+	// started in plan mode in a read-only loop
+	// (design/design/sandbox-first-agent-surface.design.md §5).
+	allowed = append(allowed, "exit_plan_mode")
+
+	held := HeldHostToolGrants(opts.Grants)
+	grants := make([]hookpolicy.HostToolGrant, len(held))
+	for i, g := range held {
+		grants[i] = hookpolicy.HostToolGrant{Capability: g.Capability, Tools: slices.Clone(g.Tools)}
+	}
+	sandbox := sandboxToolNames()
+	return hookpolicy.ToolPolicy{
+		AllowedTools:         allowed,
+		CapabilityToolPrefix: "mcp_",
+		HostToolGrants:       grants,
+		RecordPath:           opts.RecordPath,
+		TaskID:               opts.TaskID,
+		RunID:                opts.RunID,
+		DenyReasons:          DefaultDenyReasons(sandbox, agyToolName("run_command"), agyToolName("resume_later")),
+		DefaultDenySuffix:    DefaultDenySuffix(sandbox, agyToolName("")),
+	}
+}
+
+// DefaultDenyReasons returns the tool-specific denial reasons grain gives
+// native agy tools that look plausible in a headless run ("enter_plan_mode",
+// "schedule").
+func DefaultDenyReasons(qualifiedSandboxTools []string, qualifiedRunCommand, qualifiedResumeLater string) map[string]string {
+	return map[string]string{
+		"enter_plan_mode": "Plan mode is off in headless grain runs, and entering it would stop " +
+			"every edit: there is nobody to approve a plan. Carry out the steps directly with " +
+			joinNames(qualifiedSandboxTools) + ".",
+		"schedule": "schedule's timers do not exist in a headless grain run: nothing wakes " +
+			"this session up again. To wait for CI, run `grain ci wait` with " +
+			qualifiedRunCommand + " (timeout 600000); to free the sandbox while " +
+			"something finishes, call " + qualifiedResumeLater + ".",
+	}
+}
+
+// DefaultDenySuffix returns the prose appended after "<tool> " for any
+// denied non-grain tool.
+func DefaultDenySuffix(qualifiedSandboxTools []string, qualifiedNamespacePrefix string) string {
+	return "is not one of grain's sandbox-bound MCP tools and cannot run on the " +
+		"machine hosting this session. Use " + joinNames(qualifiedSandboxTools) +
+		" instead, or another " + qualifiedNamespacePrefix + "* tool."
+}
+
+func denyWithSuffix(name, suffix string) []byte {
+	if suffix == "" {
+		suffix = "is not one of grain's sandbox-bound MCP tools and cannot run on the machine hosting this session."
+	}
+	return denyReason(name + " " + suffix)
 }
 
 func denyReason(reason string) []byte {
@@ -442,9 +554,7 @@ func HeldHostToolGrants(grants []string) []HostToolGrant {
 
 // hostToolGrantKey is what grant opens a host-tool grant by: a retired bare
 // name as what it became (model.CanonicalLegacyGrant), and a capability
-// server method's grant as its reference alone, its arguments dropped. So
-// bare corp-research, a recorded corp#research={} and a bare corp#research
-// all have one key once corp-research is a registered alias of the method.
+// server method's grant as its reference alone, its arguments dropped.
 func hostToolGrantKey(grant string) string {
 	canonical := strings.TrimSpace(canonicalGrant(grant))
 	if strings.HasPrefix(canonical, "https://") {
@@ -470,10 +580,6 @@ const toolNamespace = "grain-sandbox"
 // agyToolName is how agy names one of grain's eagerly registered MCP
 // tools in a hook payload (pkg/mcp.AgyQualifiedToolName).
 func agyToolName(tool string) string { return "mcp_" + toolNamespace + "_" + tool }
-
-// capabilityToolName is how agy names a tool of a capability MCP server
-// a run was given.
-func capabilityToolName(server, tool string) string { return "mcp_" + server + "_" + tool }
 
 // sandboxToolNames is SandboxTools as agy names them.
 func sandboxToolNames() []string {
@@ -529,14 +635,15 @@ func canonicalGrant(grant string) string {
 }
 
 // PublishedTools is every tool grain's MCP server can publish to a run, by
-// bare name: what the hook admits as grain's own (agyToolName). It is
+// bare name: what the hook admits as grain's own (agyToolName) when falling
+// back without a staged policy file (hosts without FeatureHookPolicy). It is
 // pkg/agent.PublishedToolNames written out, so this package need not link
 // pkg/mcp; antigravity's TestHookToolListsMatchTheRoster fails, printing
 // the list to paste here, when the two drift.
 var PublishedTools = []string{
 	"run_command", "read_file", "edit_file", "write_file", "ask_question",
 	"request_secret", "request_access", "comment_on_issue", "nothing_needed",
-	"write_handover", "propose_task", "add_review_comment",
+	"write_handover", "compact_context", "update_brief", "propose_task", "add_review_comment",
 	"pull_request_status", "base_branch_status",
 	"reply_to_pull_request_comment", "resolve_review_thread",
 	"wait_for_checks", "list_ci_runs", "get_ci_log", "retrigger_ci",
@@ -554,5 +661,6 @@ var PublishedTools = []string{
 }
 
 // SandboxTools is the four tools that reach a run's sandbox
-// (pkg/mcp.NewSandboxTools), which a denial names as what to use instead.
+// (pkg/mcp.NewSandboxTools), which a fallback denial names as what to use
+// instead.
 var SandboxTools = []string{"run_command", "read_file", "edit_file", "write_file"}

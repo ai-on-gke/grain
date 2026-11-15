@@ -90,9 +90,9 @@ func TestPromoteOfAReleaseSinceTheHubRenamePublishesHubAndRegistry(t *testing.T)
 	}
 	cosignAsked, _ := os.ReadFile(cosignLog)
 	for _, want := range []string{
-		"sign --yes --key " + signEnv["IMAGE_SIGNING_KEY"] + " --tlog-upload=false docker.io/grainai/grain@sha256:aaaa",
-		"sign --yes --key " + signEnv["IMAGE_SIGNING_KEY"] + " --tlog-upload=false docker.io/grainai/hub@sha256:cafe",
-		"sign --yes --key " + signEnv["IMAGE_SIGNING_KEY"] + " --tlog-upload=false docker.io/grainai/registry@sha256:cafe",
+		"sign --yes --key " + signEnv["IMAGE_SIGNING_KEY"] + " --tlog-upload=false --new-bundle-format=false --use-signing-config=false docker.io/grainai/grain@sha256:aaaa",
+		"sign --yes --key " + signEnv["IMAGE_SIGNING_KEY"] + " --tlog-upload=false --new-bundle-format=false --use-signing-config=false docker.io/grainai/hub@sha256:cafe",
+		"sign --yes --key " + signEnv["IMAGE_SIGNING_KEY"] + " --tlog-upload=false --new-bundle-format=false --use-signing-config=false docker.io/grainai/registry@sha256:cafe",
 	} {
 		containsRun(t, string(cosignAsked), want)
 	}

@@ -97,7 +97,7 @@ import (
 func TestLiveClaudeResumesASessionAcrossExecs(t *testing.T) {
 	token := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")
 	if token == "" {
-		skipUnlessLiveRequired(t, "CLAUDE_CODE_OAUTH_TOKEN is not set")
+		skipUnlessLiveRequired(t, "CLAUDE_CODE_OAUTH_TOKEN is not set (set secret CLAUDE_CODE_OAUTH_TOKEN in the GitHub environment live-models)")
 	}
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {

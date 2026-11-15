@@ -171,7 +171,9 @@ type BuildConfig struct {
 	// routes act through, and what credits their waits.
 	CLIActions CLIActions
 	WaitCredit CLIWaitCreditor
-	API        http.Handler
+	// ReportChecker is GitProxy.ReportChecker.
+	ReportChecker CLIReportChecker
+	API           http.Handler
 	// CapServers is GitProxy.CapServers.
 	CapServers      *CapRegistry
 	ShutdownStarted <-chan struct{}
@@ -259,6 +261,7 @@ func BuildProxy(cfg BuildConfig) (*GitProxy, error) {
 		CLI:                 cfg.CLI,
 		Activity:            activity,
 		CLIActions:          cfg.CLIActions,
+		ReportChecker:       cfg.ReportChecker,
 		WaitCredit:          cfg.WaitCredit,
 		API:                 cfg.API,
 		CapServers:          cfg.CapServers,

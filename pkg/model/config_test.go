@@ -120,4 +120,22 @@ func TestAutoUpgradeMode(t *testing.T) {
 	if _, err := model.ParseAutoUpgradeOn("hourly"); err == nil {
 		t.Error(`ParseAutoUpgradeOn("hourly") was accepted`)
 	}
+	def := model.DefaultConfig()
+	if def.AutoUpgradeMinIntervalHours != model.DefaultAutoUpgradeMinIntervalHours {
+		t.Errorf("DefaultConfig().AutoUpgradeMinIntervalHours = %d, want %d",
+			def.AutoUpgradeMinIntervalHours, model.DefaultAutoUpgradeMinIntervalHours)
+	}
+	if got := def.AutoUpgradeMinInterval(); got != 6*time.Hour {
+		t.Errorf("DefaultConfig().AutoUpgradeMinInterval() = %s, want 6h", got)
+	}
+	for _, hours := range []int{0, -3} {
+		if got := (model.Config{AutoUpgradeMinIntervalHours: hours}).AutoUpgradeMinInterval(); got != 0 {
+			t.Errorf("AutoUpgradeMinInterval(%d) = %s, want 0", hours, got)
+		}
+	}
+	// An hour count past what a time.Duration holds stays the longest
+	// interval instead of wrapping round to a short or negative one.
+	if got := (model.Config{AutoUpgradeMinIntervalHours: 1 << 40}).AutoUpgradeMinInterval(); got != time.Duration(1<<63-1) {
+		t.Errorf("AutoUpgradeMinInterval(1<<40) = %s, want the longest time.Duration", got)
+	}
 }

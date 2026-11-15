@@ -569,7 +569,7 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 	draft, err := c.DraftScheduleComposition(ctx, ui.CreateScheduleRequest{
 		Title:        "Weekly Dependency & Vulnerability Audit",
 		Repo:         "acme/widgets",
-		Capabilities: []string{"read-issues"},
+		Capabilities: []string{model.GitHubReadIssuesGrant},
 	})
 	if err != nil {
 		t.Fatalf("composing draft schedule: %v", err)
@@ -598,7 +598,7 @@ func TestCompositionCreditsGrainCIToTheRepo(t *testing.T) {
 	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
 		Name:         "Audit",
 		Title:        "Audit",
-		Capabilities: []string{"gcp-key"},
+		Capabilities: []string{model.GCPKeySandboxAgentGrant},
 	})
 	tmplComp, err := c.TemplateComposition(ctx, tmpl.ID, "acme/widgets", "main", nil, true)
 	if err != nil {
@@ -737,23 +737,26 @@ func TestDraftScheduleCompositionKeepsAScheduleCapabilitiesBesideItsTemplates(t 
 	t.Parallel()
 	c, _, ctx := testClient(t)
 	tmpl := templateForComposition(t, c, ctx, ui.CreateTemplateRequest{
-		Name: "Audit", Title: "Audit", Capabilities: []string{"gcp-key"},
+		Name: "Audit", Title: "Audit", Capabilities: []string{model.GCPKeySandboxAgentGrant},
 	})
 	req := ui.CreateScheduleRequest{
 		TemplateID: tmpl.ID, Repo: "acme/widgets", Base: "main",
-		Capabilities: []string{"read-issues"},
+		Capabilities: []string{model.GitHubReadIssuesGrant},
 	}
 	draft, err := c.DraftScheduleComposition(ctx, req)
 	if err != nil {
 		t.Fatalf("composing a draft: %v", err)
 	}
 	caps := field(t, draft.Tasks[0], "capabilities")
-	want := []string{model.GCPKeySandboxAgentGrant, model.GitHubReadIssuesGrant}
+	// acme/widgets has no CI mode set, so GitHub CI: the repo layer adds
+	// the default api:ci-read@acme/widgets (model.DefaultCIReadGrant).
+	want := []string{model.GCPKeySandboxAgentGrant, model.GitHubReadIssuesGrant,
+		model.DefaultCIReadGrant(model.RepoRef{Owner: "acme", Name: "widgets"}).Capability}
 	if !slices.Equal(caps.Values, want) {
 		t.Errorf("draft values = %v, want %v", caps.Values, want)
 	}
-	if !slices.Equal(caps.Sources, []string{"template", "schedule"}) {
-		t.Errorf("draft sources = %v, want [template schedule]", caps.Sources)
+	if !slices.Equal(caps.Sources, []string{"template", "schedule", "repo"}) {
+		t.Errorf("draft sources = %v, want [template schedule repo]", caps.Sources)
 	}
 
 }

@@ -1,0 +1,650 @@
+[
+  {
+    "caseId": "widgets-plain",
+    "description": "acme/widgets without autoMerge",
+    "action": "approve",
+    "wantAccepted": true,
+    "rest": {
+      "status": 200,
+      "message": "{\"id\":\"3\",\"title\":\"Proposal widgets-plain-rest-approve\",\"description\":\"Test proposal for widgets-plain-rest-approve\",\"author\":\"owner@example.com\",\"authorKind\":\"human\",\"authorSource\":\"access-code\",\"authorLabel\":\"operator (access code)\",\"approvedBy\":\"carol@example.com\",\"approvedByKind\":\"human\",\"approvedBySource\":\"iap\",\"approvedByLabel\":\"carol@example.com\",\"state\":\"queued\",\"repo\":\"acme/widgets\",\"branch\":\"grain/6d5d7253/task-3-proposal-widgets-plain-rest\",\"priority\":5,\"autoMerge\":false,\"autoApproveProposals\":false,\"interactive\":false,\"admission\":\"standard\",\"hosting\":\"unattended\",\"reviewTemplateId\":\"repo:template:acme:widgets:review\",\"reviewTemplateName\":\"Default widgets review\",\"owner\":\"owner@example.com\",\"creator\":\"owner@example.com\",\"capabilities\":[],\"createdAt\":\"2026-11-10T08:03:17.736691082Z\",\"approved\":true,\"blocked\":false,\"reason\":{\"reason\":\"queued/ready\",\"class\":\"driven\",\"resource\":\"a worker slot (max_workers) and a sandbox\",\"driver\":\"reconcileDispatch\",\"control\":\"Run now\"}}",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 0,
+      "output": "4 Proposal widgets-plain-cli-approve\nstate:      queued\nreason:     queued/ready (a worker slot (max_workers) and a sandbox) [Run now]\nowner:      owner@example.com\nrepo:       acme/widgets\npriority:   5\nauto-merge: false\nreview:     Default widgets review\n\nTest proposal for widgets-plain-cli-approve",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 200,
+      "message": "",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "disabled": false,
+      "status": 200,
+      "message": "",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": null
+      }
+    }
+  },
+  {
+    "caseId": "widgets-plain",
+    "description": "acme/widgets without autoMerge",
+    "action": "run-now",
+    "wantAccepted": true,
+    "rest": {
+      "status": 200,
+      "message": "{\"id\":\"7\",\"title\":\"Proposal widgets-plain-rest-run-now\",\"description\":\"Test proposal for widgets-plain-rest-run-now\",\"author\":\"owner@example.com\",\"authorKind\":\"human\",\"authorSource\":\"access-code\",\"authorLabel\":\"operator (access code)\",\"approvedBy\":\"carol@example.com\",\"approvedByKind\":\"human\",\"approvedBySource\":\"iap\",\"approvedByLabel\":\"carol@example.com\",\"state\":\"queued\",\"repo\":\"acme/widgets\",\"branch\":\"grain/6d5d7253/task-7-proposal-widgets-plain-rest\",\"priority\":5,\"autoMerge\":false,\"autoApproveProposals\":false,\"interactive\":false,\"admission\":\"standard\",\"hosting\":\"unattended\",\"reviewTemplateId\":\"repo:template:acme:widgets:review\",\"reviewTemplateName\":\"Default widgets review\",\"owner\":\"owner@example.com\",\"creator\":\"owner@example.com\",\"capabilities\":[],\"createdAt\":\"2026-11-10T08:03:19.928441942Z\",\"approved\":true,\"blocked\":false,\"runNowAt\":\"2026-11-10T08:03:19.943205156Z\",\"reason\":{\"reason\":\"queued/ready\",\"class\":\"driven\",\"resource\":\"a worker slot (max_workers) and a sandbox\",\"driver\":\"reconcileDispatch\",\"control\":\"Run now\"}}",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": "2026-11-10T08:03:19.943205156Z"
+      }
+    },
+    "cli": {
+      "exit": 0,
+      "output": "8 Proposal widgets-plain-cli-run-now\nstate:      queued\nreason:     queued/ready (a worker slot (max_workers) and a sandbox) [Run now]\nowner:      owner@example.com\nrepo:       acme/widgets\npriority:   5\nauto-merge: false\nreview:     Default widgets review\n\nTest proposal for widgets-plain-cli-run-now",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": "2026-11-10T08:03:20.048738306Z"
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 200,
+      "message": "",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": "2026-11-10T08:03:20.934178066Z"
+      }
+    },
+    "inbox": {
+      "note": "Inbox proposed rows offer Approve/Defer/Decline (no Run now button)"
+    }
+  },
+  {
+    "caseId": "widgets-automerge",
+    "description": "acme/widgets with autoMerge",
+    "action": "approve",
+    "wantAccepted": false,
+    "rest": {
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 10 (autoMerge): auto-merge requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) cannot approve task 11 (autoMerge): auto-merge requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 12 (autoMerge): auto-merge requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 13 (autoMerge): auto-merge requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    }
+  },
+  {
+    "caseId": "widgets-automerge",
+    "description": "acme/widgets with autoMerge",
+    "action": "run-now",
+    "wantAccepted": false,
+    "rest": {
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 14 (autoMerge): auto-merge requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) cannot approve task 15 (autoMerge): auto-merge requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 16 (autoMerge): auto-merge requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "note": "Inbox proposed rows offer Approve/Defer/Decline (no Run now button)"
+    }
+  },
+  {
+    "caseId": "widgets-dangerous-grant",
+    "description": "acme/widgets with dangerous grant (api#settings:write)",
+    "action": "approve",
+    "wantAccepted": false,
+    "rest": {
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot set capabilities: https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) cannot set capabilities: https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot set capabilities: https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot set capabilities: https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    }
+  },
+  {
+    "caseId": "widgets-dangerous-grant",
+    "description": "acme/widgets with dangerous grant (api#settings:write)",
+    "action": "run-now",
+    "wantAccepted": false,
+    "rest": {
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot set capabilities: https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) cannot set capabilities: https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot set capabilities: https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "note": "Inbox proposed rows offer Approve/Defer/Decline (no Run now button)"
+    }
+  },
+  {
+    "caseId": "widgets-writes-outside",
+    "description": "acme/widgets with writes outside acme/widgets (acme/other)",
+    "action": "approve",
+    "wantAccepted": false,
+    "rest": {
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 24 (writes): role does not hold tasks:write on acme/other",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) cannot approve task 25 (writes): role does not hold tasks:write on acme/other",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 26 (writes): role does not hold tasks:write on acme/other",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 27 (writes): role does not hold tasks:write on acme/other",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    }
+  },
+  {
+    "caseId": "widgets-writes-outside",
+    "description": "acme/widgets with writes outside acme/widgets (acme/other)",
+    "action": "run-now",
+    "wantAccepted": false,
+    "rest": {
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 28 (writes): role does not hold tasks:write on acme/other",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) cannot approve task 29 (writes): role does not hold tasks:write on acme/other",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 30 (writes): role does not hold tasks:write on acme/other",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "note": "Inbox proposed rows offer Approve/Defer/Decline (no Run now button)"
+    }
+  },
+  {
+    "caseId": "widgets-nondefault-review-grant",
+    "description": "acme/widgets with non-default review template granting more than carol holds",
+    "action": "approve",
+    "wantAccepted": false,
+    "rest": {
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 31 (reviewTemplateId): https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) cannot approve task 32 (reviewTemplateId): https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 33 (reviewTemplateId): https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 34 (reviewTemplateId): https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    }
+  },
+  {
+    "caseId": "widgets-nondefault-review-grant",
+    "description": "acme/widgets with non-default review template granting more than carol holds",
+    "action": "run-now",
+    "wantAccepted": false,
+    "rest": {
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 35 (reviewTemplateId): https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) cannot approve task 36 (reviewTemplateId): https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 37 (reviewTemplateId): https://grain.dev/capabilities/api#settings:write requires an unlimited role (grain/operator)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "note": "Inbox proposed rows offer Approve/Defer/Decline (no Run now button)"
+    }
+  },
+  {
+    "caseId": "widgets-nondefault-review-writes",
+    "description": "acme/widgets with non-default review template writing outside acme/widgets",
+    "action": "approve",
+    "wantAccepted": false,
+    "rest": {
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 38 (reviewTemplateId): template template-2 grants push access to acme/other, which role's tasks:write does not reach",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) cannot approve task 39 (reviewTemplateId): template template-2 grants push access to acme/other, which role's tasks:write does not reach",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 40 (reviewTemplateId): template template-2 grants push access to acme/other, which role's tasks:write does not reach",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 41 (reviewTemplateId): template template-2 grants push access to acme/other, which role's tasks:write does not reach",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    }
+  },
+  {
+    "caseId": "widgets-nondefault-review-writes",
+    "description": "acme/widgets with non-default review template writing outside acme/widgets",
+    "action": "run-now",
+    "wantAccepted": false,
+    "rest": {
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 42 (reviewTemplateId): template template-2 grants push access to acme/other, which role's tasks:write does not reach",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) cannot approve task 43 (reviewTemplateId): template template-2 grants push access to acme/other, which role's tasks:write does not reach",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 44 (reviewTemplateId): template template-2 grants push access to acme/other, which role's tasks:write does not reach",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "note": "Inbox proposed rows offer Approve/Defer/Decline (no Run now button)"
+    }
+  },
+  {
+    "caseId": "widgets-default-review",
+    "description": "acme/widgets with the repo's default review template",
+    "action": "approve",
+    "wantAccepted": true,
+    "rest": {
+      "status": 200,
+      "message": "{\"id\":\"45\",\"title\":\"Proposal widgets-default-review-rest-approve\",\"description\":\"Test proposal for widgets-default-review-rest-approve\",\"author\":\"owner@example.com\",\"authorKind\":\"human\",\"authorSource\":\"access-code\",\"authorLabel\":\"operator (access code)\",\"approvedBy\":\"carol@example.com\",\"approvedByKind\":\"human\",\"approvedBySource\":\"iap\",\"approvedByLabel\":\"carol@example.com\",\"state\":\"queued\",\"repo\":\"acme/widgets\",\"branch\":\"grain/6d5d7253/task-45-proposal-widgets-default\",\"priority\":5,\"autoMerge\":false,\"autoApproveProposals\":false,\"interactive\":false,\"admission\":\"standard\",\"hosting\":\"unattended\",\"reviewTemplateId\":\"repo:template:acme:widgets:review\",\"reviewTemplateName\":\"Default widgets review\",\"owner\":\"owner@example.com\",\"creator\":\"owner@example.com\",\"capabilities\":[],\"createdAt\":\"2026-11-10T08:03:35.930322222Z\",\"approved\":true,\"blocked\":false,\"reason\":{\"reason\":\"queued/ready\",\"class\":\"driven\",\"resource\":\"a worker slot (max_workers) and a sandbox\",\"driver\":\"reconcileDispatch\",\"control\":\"Run now\"}}",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 0,
+      "output": "46 Proposal widgets-default-review-cli-approve\nstate:      queued\nreason:     queued/ready (a worker slot (max_workers) and a sandbox) [Run now]\nowner:      owner@example.com\nrepo:       acme/widgets\npriority:   5\nauto-merge: false\nreview:     Default widgets review\n\nTest proposal for widgets-default-review-cli-approve",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 200,
+      "message": "",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "disabled": false,
+      "status": 200,
+      "message": "",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": null
+      }
+    }
+  },
+  {
+    "caseId": "widgets-default-review",
+    "description": "acme/widgets with the repo's default review template",
+    "action": "run-now",
+    "wantAccepted": true,
+    "rest": {
+      "status": 200,
+      "message": "{\"id\":\"49\",\"title\":\"Proposal widgets-default-review-rest-run-now\",\"description\":\"Test proposal for widgets-default-review-rest-run-now\",\"author\":\"owner@example.com\",\"authorKind\":\"human\",\"authorSource\":\"access-code\",\"authorLabel\":\"operator (access code)\",\"approvedBy\":\"carol@example.com\",\"approvedByKind\":\"human\",\"approvedBySource\":\"iap\",\"approvedByLabel\":\"carol@example.com\",\"state\":\"queued\",\"repo\":\"acme/widgets\",\"branch\":\"grain/6d5d7253/task-49-proposal-widgets-default\",\"priority\":5,\"autoMerge\":false,\"autoApproveProposals\":false,\"interactive\":false,\"admission\":\"standard\",\"hosting\":\"unattended\",\"reviewTemplateId\":\"repo:template:acme:widgets:review\",\"reviewTemplateName\":\"Default widgets review\",\"owner\":\"owner@example.com\",\"creator\":\"owner@example.com\",\"capabilities\":[],\"createdAt\":\"2026-11-10T08:03:37.799506144Z\",\"approved\":true,\"blocked\":false,\"runNowAt\":\"2026-11-10T08:03:37.813615337Z\",\"reason\":{\"reason\":\"queued/ready\",\"class\":\"driven\",\"resource\":\"a worker slot (max_workers) and a sandbox\",\"driver\":\"reconcileDispatch\",\"control\":\"Run now\"}}",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": "2026-11-10T08:03:37.813615337Z"
+      }
+    },
+    "cli": {
+      "exit": 0,
+      "output": "50 Proposal widgets-default-review-cli-run-now\nstate:      queued\nreason:     queued/ready (a worker slot (max_workers) and a sandbox) [Run now]\nowner:      owner@example.com\nrepo:       acme/widgets\npriority:   5\nauto-merge: false\nreview:     Default widgets review\n\nTest proposal for widgets-default-review-cli-run-now",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": "2026-11-10T08:03:37.945026836Z"
+      }
+    },
+    "pane": {
+      "disabled": false,
+      "status": 200,
+      "message": "",
+      "after": {
+        "state": "queued",
+        "approved": true,
+        "runNowAt": "2026-11-10T08:03:38.598237892Z"
+      }
+    },
+    "inbox": {
+      "note": "Inbox proposed rows offer Approve/Defer/Decline (no Run now button)"
+    }
+  },
+  {
+    "caseId": "other-repo",
+    "description": "on acme/other",
+    "action": "approve",
+    "wantAccepted": false,
+    "rest": {
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) holds tasks:admin, but not on acme/other: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) holds tasks:admin, but not on acme/other: ask an access-code admin to assign a role that includes it (docs/access-code.md)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": true,
+      "status": 0,
+      "message": "disabled by AccessGate (tasks:admin)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "disabled": true,
+      "status": 0,
+      "message": "disabled by AccessGate (tasks:admin)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    }
+  },
+  {
+    "caseId": "other-repo",
+    "description": "on acme/other",
+    "action": "run-now",
+    "wantAccepted": false,
+    "rest": {
+      "status": 403,
+      "message": "carol@example.com (role carol-limited) cannot approve task 56: approving work needs tasks:admin on acme/other",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "cli": {
+      "exit": 3,
+      "output": "grain: carol@example.com (role carol-limited) cannot approve task 57: approving work needs tasks:admin on acme/other",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "pane": {
+      "disabled": true,
+      "status": 0,
+      "message": "disabled by AccessGate (tasks:admin)",
+      "after": {
+        "state": "proposed",
+        "approved": false,
+        "runNowAt": null
+      }
+    },
+    "inbox": {
+      "note": "Inbox proposed rows offer Approve/Defer/Decline (no Run now button)"
+    }
+  }
+]

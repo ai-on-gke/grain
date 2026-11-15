@@ -99,7 +99,7 @@ func noteOrphanedPullRequests(ctx context.Context, store *model.Store, client gi
 // reports what happened, rather than acting on it -- what
 // model.OrphanedPullRequestNote folds into the task's own copy.
 func commentOnPullRequest(client github.Client, taskID string, ref model.PullRequestRef) error {
-	_, err := client.CreateComment(ref.Repo.Owner, ref.Repo.Name, ref.Number,
+	_, err := client.CreateComment(ref.Repo.StoredOwner(), ref.Repo.Name, ref.Number,
 		model.OrphanedPullRequestComment(taskID, ref, model.PullRequestCloseOutcome{}))
 	return err
 }

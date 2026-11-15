@@ -19,9 +19,11 @@ import (
 	"log"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/capability/servers"
+	"github.com/ai-on-gke/grain/pkg/mergelogins"
 	"github.com/ai-on-gke/grain/pkg/model"
 )
 
@@ -49,12 +51,20 @@ type SandboxSnapshot struct {
 	// failure detail when it can no longer be reached.
 	TerminationReason string `json:"terminationReason"`
 	LoadAverage       string `json:"loadAverage,omitempty"`
-	MemoryUsedMB      int    `json:"memoryUsedMB,omitempty"`
-	MemoryTotalMB     int    `json:"memoryTotalMB,omitempty"`
-	SwapUsedMB        int    `json:"swapUsedMB,omitempty"`
-	SwapTotalMB       int    `json:"swapTotalMB,omitempty"`
-	DiskUsedMB        int    `json:"diskUsedMB,omitempty"`
-	DiskTotalMB       int    `json:"diskTotalMB,omitempty"`
+	// CPUCores is how many CPUs the run's own processes kept busy over
+	// the last CPUWindowMS -- orchestrator.SandboxHealth.CPUCores, set by
+	// host-directory sandboxes, whose load average is the host's. A
+	// pointer so an idle run's 0 is a reading, not an absence; nil (and
+	// omitted) when the backend gave none.
+	CPUCores *float64 `json:"cpuCores,omitempty"`
+	// CPUWindowMS is the span CPUCores is averaged over, in milliseconds.
+	CPUWindowMS   int64 `json:"cpuWindowMS,omitempty"`
+	MemoryUsedMB  int   `json:"memoryUsedMB,omitempty"`
+	MemoryTotalMB int   `json:"memoryTotalMB,omitempty"`
+	SwapUsedMB    int   `json:"swapUsedMB,omitempty"`
+	SwapTotalMB   int   `json:"swapTotalMB,omitempty"`
+	DiskUsedMB    int   `json:"diskUsedMB,omitempty"`
+	DiskTotalMB   int   `json:"diskTotalMB,omitempty"`
 	// ProbeMS is how long the probe behind this row took, in
 	// milliseconds -- orchestrator.SandboxHealth.ProbeMS, carried through
 	// for the reason that field's own comment gives: an Error on its own
@@ -445,6 +455,23 @@ type DaemonHealth struct {
 // (bwsalmon/agents#536) puts this one alongside.
 type SandboxHealthResponse struct {
 	Enabled bool `json:"enabled"`
+	// StaleSchedules is every enabled schedule -- a workflow's cron
+	// included -- that has gone more than twice its cadence without a
+	// firing that ran anything (model.Store.StaleSchedules): a nightly
+	// that went quiet says so here rather than nowhere.
+	StaleSchedules []model.StaleSchedule `json:"staleSchedules,omitempty"`
+	// CIWaits is every task resume_later has deferred on a CI verdict that
+	// has been waiting longer than CIWaitHealthAge (ciWaits): the waits
+	// whose verdict grain has not yet seen, before the orchestrator's
+	// backstop wakes them anyway.
+	CIWaits []CIWaitHealth `json:"ciWaits,omitempty"`
+	// RefusedDeclarations is every repository whose `.grain`
+	// declarations this daemon last could not read in full: the files,
+	// lines and messages (Error, the sync row's LastError), and the
+	// commit whose declarations are still in force. Without it a
+	// repository merging files for a newer grain looks exactly like one
+	// whose declarations loaded (grain/task-4392).
+	RefusedDeclarations []RefusedDeclarations `json:"refusedDeclarations,omitempty"`
 	// DispatchBlocked is every condition holding this deployment's
 	// dispatch (Config.DispatchConditions): the failing checks of this
 	// response, first because nothing below them matters while one is
@@ -535,6 +562,16 @@ type SandboxHealthResponse struct {
 	// (capabilityServersDown). Absent while every server is attached or
 	// only waiting to be configured for the first time.
 	CapabilityServers []CapabilityServerDown `json:"capabilityServers,omitempty"`
+	// TargetRepoHostWarnings lists stored hostless TargetRepos entries that
+	// resolve to the default git host while matching repositories reachable
+	// only through a non-default-host git connection.
+	TargetRepoHostWarnings []TargetRepoHostMismatch `json:"targetRepoHostWarnings,omitempty"`
+	// MergeLoginWarnings lists the logins a reviewed-merge gate trusts
+	// as grain's merges (vars.GRAIN_MERGE_LOGINS,
+	// -upgrade-reviewed-merge-logins) that are user accounts somebody
+	// signs in to, whose own hand merges therefore pass the gate
+	// (Config.MergeLoginWarnings, task 4386).
+	MergeLoginWarnings []mergelogins.Warning `json:"mergeLoginWarnings,omitempty"`
 	// Registry reports the deployment's connected-entry grain hub
 	// heartbeat status and any scope conflicts when registry self-registration
 	// is configured; nil when disabled.
@@ -1029,6 +1066,14 @@ func (c *Client) readSandboxHealth(entry *sandboxHealthEntry, stale bool) ([]San
 	return append([]SandboxSnapshot(nil), entry.sandboxes...), &SandboxReading{AgeMS: age.Milliseconds(), Stale: stale}
 }
 
+// mergeLoginWarnings is Config.MergeLoginWarnings, or nothing.
+func (c *Client) mergeLoginWarnings(ctx context.Context) []mergelogins.Warning {
+	if c.Config.MergeLoginWarnings == nil {
+		return nil
+	}
+	return c.Config.MergeLoginWarnings(ctx)
+}
+
 func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) {
 	// ?section=counters is only the layers' counters, which System →
 	// Health re-reads while it is open: an in-memory read that must not
@@ -1037,6 +1082,15 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, struct {
 			Counters []HealthCounters `json:"counters"`
 		}{Counters: healthCounterSections()})
+		return
+	}
+	// ?section=staleSchedules is only the schedules that stopped running,
+	// which the CI pane reads to say so beside the repository's runs --
+	// a store read, not worth a sandbox sweep on every poll of that pane.
+	if r.URL.Query().Get("section") == "staleSchedules" {
+		writeJSON(w, http.StatusOK, struct {
+			StaleSchedules []model.StaleSchedule `json:"staleSchedules"`
+		}{StaleSchedules: s.tasks.staleSchedules(r.Context())})
 		return
 	}
 	// Config.Daemon counts here too: a deployment whose sandbox pool and
@@ -1051,32 +1105,50 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 	// failure: it is about the host, not about the sandbox pool, and a
 	// deployment with no pool to report still has to say it.
 	hostCredentials := s.tasks.hostCredentialsWarning(r.Context())
+	var storeSwitch *StoreSwitch
+	if s.tasks.Config.StoreSwitch != nil {
+		storeSwitch = s.tasks.Config.StoreSwitch()
+	}
 	// The same goes for a stale sandbox image pin: it is in the settings,
 	// and says so whether or not a pool is wired to report on.
 	if s.tasks.Config.Sandboxes == nil && s.tasks.Config.HostStats == nil && s.tasks.Config.Daemon == nil && s.tasks.Config.StandingSandboxes == nil && s.tasks.Config.PersistentSandboxes == nil && s.tasks.Config.Overcommit == nil {
+		var daemonHealth *DaemonHealth
+		if storeSwitch != nil {
+			daemonHealth = &DaemonHealth{StoreSwitch: storeSwitch}
+		}
 		writeJSON(w, http.StatusOK, SandboxHealthResponse{Enabled: false, DispatchBlocked: s.tasks.dispatchBlocked(),
-			StateRepoSync: syncFailure, HostCredentials: hostCredentials,
+			StateRepoSync: syncFailure, HostCredentials: hostCredentials, Daemon: daemonHealth,
 			SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()), Counters: healthCounterSections(),
-			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context())})
+			CapabilityServers: s.tasks.capabilityServersDown(), Hub: s.tasks.hubHealth(r.Context()),
+			TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
+			MergeLoginWarnings:     s.tasks.mergeLoginWarnings(r.Context()),
+			StaleSchedules:         s.tasks.staleSchedules(r.Context()),
+			CIWaits:                s.tasks.ciWaits(r.Context()),
+			RefusedDeclarations:    s.tasks.refusedDeclarations(r.Context())})
 		return
 	}
 	resp := SandboxHealthResponse{
-		Enabled:              true,
-		DispatchBlocked:      s.tasks.dispatchBlocked(),
-		StateRepoSync:        syncFailure,
-		HostCredentials:      hostCredentials,
-		SandboxImage:         s.tasks.sandboxImage(),
-		SandboxImageWarnings: s.tasks.staleSandboxImagePins(r.Context()),
-		SandboxGuest:         s.tasks.sandboxGuestPublishing(r.Context()),
-		BaseBranchGates:      s.tasks.baseBranchGates(r.Context()),
-		BaseBranchPublishing: s.tasks.baseBranchPublishing(r.Context()),
-		PackageCache:         s.tasks.packageCacheStats(),
-		CIHistory:            s.tasks.ciHistoryStorage(r.Context()),
-		Lifetime:             s.tasks.sandboxLifetime(r.Context()),
-		StandingSandboxes:    s.tasks.standingSandboxes(),
-		Counters:             healthCounterSections(),
-		CapabilityServers:    s.tasks.capabilityServersDown(),
-		Hub:                  s.tasks.hubHealth(r.Context()),
+		Enabled:                true,
+		DispatchBlocked:        s.tasks.dispatchBlocked(),
+		StateRepoSync:          syncFailure,
+		HostCredentials:        hostCredentials,
+		SandboxImage:           s.tasks.sandboxImage(),
+		SandboxImageWarnings:   s.tasks.staleSandboxImagePins(r.Context()),
+		SandboxGuest:           s.tasks.sandboxGuestPublishing(r.Context()),
+		BaseBranchGates:        s.tasks.baseBranchGates(r.Context()),
+		BaseBranchPublishing:   s.tasks.baseBranchPublishing(r.Context()),
+		PackageCache:           s.tasks.packageCacheStats(),
+		CIHistory:              s.tasks.ciHistoryStorage(r.Context()),
+		Lifetime:               s.tasks.sandboxLifetime(r.Context()),
+		StandingSandboxes:      s.tasks.standingSandboxes(),
+		Counters:               healthCounterSections(),
+		CapabilityServers:      s.tasks.capabilityServersDown(),
+		Hub:                    s.tasks.hubHealth(r.Context()),
+		StaleSchedules:         s.tasks.staleSchedules(r.Context()),
+		CIWaits:                s.tasks.ciWaits(r.Context()),
+		RefusedDeclarations:    s.tasks.refusedDeclarations(r.Context()),
+		TargetRepoHostWarnings: s.tasks.targetRepoHostWarnings(r.Context()),
+		MergeLoginWarnings:     s.tasks.mergeLoginWarnings(r.Context()),
 	}
 	if ps := s.tasks.Config.PersistentSandboxes; ps != nil {
 		if list, err := ps.List(r.Context()); err == nil {
@@ -1091,13 +1163,11 @@ func (s *Server) handleGetSandboxHealth(w http.ResponseWriter, r *http.Request) 
 		daemon := s.tasks.Config.Daemon()
 		resp.Daemon = &daemon
 	}
-	if s.tasks.Config.StoreSwitch != nil {
-		if sw := s.tasks.Config.StoreSwitch(); sw != nil {
-			if resp.Daemon == nil {
-				resp.Daemon = &DaemonHealth{}
-			}
-			resp.Daemon.StoreSwitch = sw
+	if storeSwitch != nil {
+		if resp.Daemon == nil {
+			resp.Daemon = &DaemonHealth{}
 		}
+		resp.Daemon.StoreSwitch = storeSwitch
 	}
 	if s.tasks.Config.Sandboxes != nil {
 		resp.Sandboxes, resp.SandboxReading = s.tasks.sandboxHealth(r.Context())
@@ -1154,28 +1224,128 @@ type CapabilityServerDown struct {
 	State servers.State `json:"state"`
 	// ConfigRefused is the server refusing its saved config
 	// (servers.Status.ConfigRefused).
-	ConfigRefused bool   `json:"configRefused,omitempty"`
-	Reason        string `json:"reason"`
+	ConfigRefused bool `json:"configRefused,omitempty"`
+	// Waiting is what the server is waiting on outside grain
+	// (servers.Status.Waiting); it attaches by itself once that is done.
+	Waiting string `json:"waiting,omitempty"`
+	Reason  string `json:"reason"`
 }
 
 // capabilityServersDown is every capability server that failed, or
-// whose configure refused its saved config: what `grain health` lists
-// beside the alert the daemon raises for it. A built-in nobody has
-// configured yet is not among them.
+// whose configure refused its saved config or is waiting on something
+// outside grain: what `grain health` lists beside the alert the daemon
+// raises for it. A built-in nobody has configured yet is not among them.
 func (c *Client) capabilityServersDown() []CapabilityServerDown {
 	if c.Config.CapabilityServers == nil {
 		return nil
 	}
 	var out []CapabilityServerDown
 	for _, st := range c.Config.CapabilityServers.Statuses() {
-		if st.State != servers.Failed && !(st.State == servers.NeedsConfig && st.ConfigRefused) {
+		if st.State != servers.Failed && !(st.State == servers.NeedsConfig && (st.ConfigRefused || st.Waiting != "")) {
 			continue
 		}
 		reason := st.Error
 		if reason == "" {
 			reason = st.Reason
 		}
-		out = append(out, CapabilityServerDown{ID: st.ID, State: st.State, ConfigRefused: st.ConfigRefused, Reason: reason})
+		out = append(out, CapabilityServerDown{ID: st.ID, State: st.State, ConfigRefused: st.ConfigRefused, Waiting: st.Waiting, Reason: reason})
 	}
 	return out
+}
+
+// CIWaitHealthAge is how long a resume_later CI wait runs before `grain
+// health` lists it: well past a CI run's ordinary length, well short of
+// the orchestrator's backstop.
+const CIWaitHealthAge = time.Hour
+
+// CIWaitHealth is one task deferred on a resume_later CI wait.
+type CIWaitHealth struct {
+	TaskID string    `json:"taskId"`
+	Repo   string    `json:"repo,omitempty"`
+	Branch string    `json:"branch,omitempty"`
+	CIMode string    `json:"ciMode,omitempty"`
+	CI     string    `json:"ci"`
+	Since  time.Time `json:"since"`
+	// Recovered is a wait read back from resume_later's own comment
+	// rather than from its run (model.HeldCIResume.Recovered).
+	Recovered bool `json:"recovered,omitempty"`
+}
+
+// ciWaits is every resume_later CI wait older than CIWaitHealthAge,
+// oldest first, nil on a store that cannot answer.
+func (c *Client) ciWaits(ctx context.Context) []CIWaitHealth {
+	if c == nil || c.Store == nil {
+		return nil
+	}
+	held, err := c.Store.HeldCIResumes(ctx)
+	if err != nil {
+		return nil
+	}
+	now := c.now()
+	var out []CIWaitHealth
+	for _, h := range held {
+		if now.Sub(h.Since) < CIWaitHealthAge {
+			continue
+		}
+		w := CIWaitHealth{TaskID: h.TaskID, Branch: h.Branch, CIMode: string(h.CIMode), CI: h.TargetCI,
+			Since: h.Since, Recovered: h.Recovered}
+		if h.Repo != (model.RepoRef{}) {
+			w.Repo = h.Repo.String()
+		}
+		out = append(out, w)
+	}
+	slices.SortFunc(out, func(a, b CIWaitHealth) int { return a.Since.Compare(b.Since) })
+	return out
+}
+
+// staleSchedules is model.Store.StaleSchedules as of now, nil on a store
+// that cannot answer: health is read when something is already wrong, and
+// one unreadable section must not cost the rest of the pane.
+// RefusedDeclarations is one repository's declarations not being read
+// in full (SandboxHealthResponse.RefusedDeclarations).
+type RefusedDeclarations struct {
+	Repo string `json:"repo"`
+	// InForce is the commit the repository's live declarations were
+	// read at. With HeldBack, only the files Error names are older than it.
+	InForce string `json:"inForce,omitempty"`
+	// HeldBack is a partial load: everything loaded except the files
+	// Error names, which this build could not decode and kept at their
+	// last good version (repodecl.LoadForwardCompatible). False is the
+	// whole set refused.
+	HeldBack  bool      `json:"heldBack,omitempty"`
+	Error     string    `json:"error"`
+	CheckedAt time.Time `json:"checkedAt"`
+}
+
+func (c *Client) refusedDeclarations(ctx context.Context) []RefusedDeclarations {
+	if c == nil || c.Store == nil {
+		return nil
+	}
+	syncs, err := c.Store.ListRepoDeclarationSyncs(ctx)
+	if err != nil {
+		return nil
+	}
+	var out []RefusedDeclarations
+	for _, s := range syncs {
+		if s.LastError == "" {
+			continue
+		}
+		out = append(out, RefusedDeclarations{
+			Repo: s.Repo.String(), InForce: s.Commit, CheckedAt: s.CheckedAt,
+			HeldBack: strings.HasPrefix(s.LastError, model.HeldBackMarker),
+			Error:    strings.TrimPrefix(s.LastError, model.HeldBackMarker),
+		})
+	}
+	return out
+}
+
+func (c *Client) staleSchedules(ctx context.Context) []model.StaleSchedule {
+	if c == nil || c.Store == nil {
+		return nil
+	}
+	stale, err := c.Store.StaleSchedules(ctx, time.Now(), c.proposalDefaultBranches())
+	if err != nil {
+		return nil
+	}
+	return stale
 }

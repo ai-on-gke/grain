@@ -534,6 +534,12 @@ type SuiteRun struct {
 	CreatedAt   time.Time      `json:"createdAt"`
 	CompletedAt *time.Time     `json:"completedAt,omitempty"`
 	Tasks       []SuiteRunTask `json:"tasks"`
+	// TaskCount and TasksTruncated are set on a paged listing's row that
+	// carries only the first suiteRunPageTasks of the run's tasks: how
+	// many it filed, and that Tasks is not all of them. GET
+	// /api/suite-runs/{id} carries every one.
+	TaskCount      int  `json:"taskCount,omitempty"`
+	TasksTruncated bool `json:"tasksTruncated,omitempty"`
 }
 
 func suiteRunFrom(r model.SuiteRun) SuiteRun {
@@ -676,7 +682,7 @@ func (s *Server) handleListSuites(w http.ResponseWriter, r *http.Request) {
 	list = filterList(list, func(st Suite) bool {
 		return page.matches(st.ID, st.Name)
 	})
-	writeList(w, list, page)
+	writeListBy(w, list, page, func(st Suite) string { return st.ID })
 }
 
 func (s *Server) handleCreateSuite(w http.ResponseWriter, r *http.Request) {
@@ -718,7 +724,7 @@ func (s *Server) handleDeleteSuite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListSuiteRuns(w http.ResponseWriter, r *http.Request) {
-	list, err := parseListQuery(r, listPageLarge)
+	list, err := parseListQuery(r, listPageSmall)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -732,7 +738,18 @@ func (s *Server) handleListSuiteRuns(w http.ResponseWriter, r *http.Request) {
 		runs = filterList(runs, func(run SuiteRun) bool { return strings.EqualFold(run.Repo, repo) })
 	}
 	runs = filterList(runs, func(run SuiteRun) bool { return list.matches(run.SuiteName, run.SuiteID) })
-	writeList(w, runs, list)
+	writePageTrimmed(w, r, runs, list, func(run SuiteRun) string { return strconv.FormatInt(run.ID, 10) }, pagedSuiteRun)
+}
+
+// pagedSuiteRun is run as a paged row carries it: its first
+// suiteRunPageTasks tasks. A row was ~500 bytes with one task, so a
+// default page of twenty sat on the tool-result cap, and a suite of many
+// templates over several passes files dozens.
+func pagedSuiteRun(run SuiteRun) SuiteRun {
+	if tasks, cut := firstOf(run.Tasks, suiteRunPageTasks); cut {
+		run.TaskCount, run.Tasks, run.TasksTruncated = len(run.Tasks), tasks, true
+	}
+	return run
 }
 
 func (s *Server) handleCreateSuiteRun(w http.ResponseWriter, r *http.Request) {

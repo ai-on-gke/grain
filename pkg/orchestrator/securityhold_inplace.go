@@ -72,6 +72,11 @@ import (
 // earlier pull request on task can never close a review filed for ref.
 func putSecurityReview(ctx context.Context, store *model.Store, task model.Task, ref model.PullRequestRef,
 	tmpl model.Template, title, body string, now time.Time) (model.Task, error) {
+	return putSecurityReviewAt(ctx, store, task, ref, "", "", tmpl, title, body, now)
+}
+
+func putSecurityReviewAt(ctx context.Context, store *model.Store, task model.Task, ref model.PullRequestRef,
+	headSHA, since string, tmpl model.Template, title, body string, now time.Time) (model.Task, error) {
 	reviewTask, err := newReview(ctx, store, task, tmpl, title, body, true, now)
 	if err != nil {
 		return model.Task{}, err
@@ -79,6 +84,10 @@ func putSecurityReview(ctx context.Context, store *model.Store, task model.Task,
 	if ref != (model.PullRequestRef{}) {
 		reviewTask.Links = append(reviewTask.Links,
 			model.Link{Kind: model.LinkReviewsPullRequest, Target: ref.String()})
+	}
+	reviewTask.Tags = addReviewHeadTag(reviewTask.Tags, headSHA)
+	if since != "" {
+		reviewTask.Tags = append(reviewTask.Tags, reviewSinceTag(since))
 	}
 	if err := store.PutTask(ctx, reviewTask); err != nil {
 		return model.Task{}, fmt.Errorf("orchestrator: filing review task %s: %w", reviewTask.ID, err)
@@ -121,13 +130,17 @@ func recordReviewerHead(ctx context.Context, store *model.Store, client github.C
 	if reviewed == nil {
 		return false, nil
 	}
-	head, err := client.GetBranchHead(review.Target.Owner, review.Target.Name, review.BranchName())
+	head, err := client.GetBranchHead(review.Target.StoredOwner(), review.Target.Name, review.BranchName())
 	if err != nil || head == nil || head.SHA == "" {
 		log.Printf("orchestrator: review %s: reading the head it left on %s: %v -- recording none, "+
 			"so that head is classified again before it merges", review.ID, review.BranchName(), err)
 		return false, nil
 	}
-	if _, filedAt, ok := strings.Cut(linkTarget(*reviewed, model.LinkTrustBoundaryCleared), "@"); ok && filedAt == head.SHA {
+	_, filedAt, _ := strings.Cut(linkTarget(*reviewed, model.LinkTrustBoundaryCleared), "@")
+	if filedAt == "" {
+		filedAt = filedReviewHead(review)
+	}
+	if filedAt != "" && strings.EqualFold(filedAt, head.SHA) {
 		return false, nil
 	}
 	if raced, err := reviewedRanSince(ctx, store, reviewedID, review.CreatedAt); err != nil || raced {
@@ -144,6 +157,7 @@ func recordReviewerHead(ctx context.Context, store *model.Store, client github.C
 	}); err != nil {
 		return false, fmt.Errorf("orchestrator: recording the head review %s left: %w", review.ID, err)
 	}
+	refreshQueuedReviewsAfterFinish(ctx, store, client, review)
 	return true, noteOnTask(ctx, store, review.ID, fmt.Sprintf(
 		"This review pushed fixes to `%s`, the branch under review, up to `%s`. If it left no findings "+
 			"or questions, task %s is cleared at that commit and merges automatically again.",
@@ -186,7 +200,7 @@ func reviewerFixesTouchBoundary(ctx context.Context, store *model.Store, client 
 	if !ok || heldAt == "" || client == nil || task.Target == nil {
 		return true, true
 	}
-	cmp, err := client.CompareRefs(task.Target.Owner, task.Target.Name, heldAt, reviewerHead)
+	cmp, err := client.CompareRefs(task.Target.StoredOwner(), task.Target.Name, heldAt, reviewerHead)
 	if err != nil {
 		log.Printf("orchestrator: comparing %s's held head with its reviewer's: %v", task.ID, err)
 		return false, false

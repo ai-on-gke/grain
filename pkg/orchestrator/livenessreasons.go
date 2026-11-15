@@ -235,10 +235,16 @@ var mergeReasons = map[string]reasonLiveness{
 
 // The task lane's reasons.
 const (
-	taskReasonReady       = "queued/ready"
-	taskReasonBlocked     = "queued/blocked_on_task"
-	taskReasonUsagePaused = "queued/usage_limit_paused"
-	taskReasonLocalPolicy = "queued/held_by_local_policy"
+	taskReasonReady   = "queued/ready"
+	taskReasonBlocked = "queued/blocked_on_task"
+	// Waiting on a task that will not close until a person acts on it
+	// (model.BlockerHoldOf): one that failed, was never approved, is
+	// asking something, was paused or deferred indefinitely. Dispatch
+	// drives nothing here -- the blocker's own row has the control that
+	// ends it, and this one names that blocker (task 4856).
+	taskReasonBlockedOnPerson = "queued/blocked_on_person"
+	taskReasonUsagePaused     = "queued/usage_limit_paused"
+	taskReasonLocalPolicy     = "queued/held_by_local_policy"
 	// Held by its latest suspension's own resume time
 	// (model.SuspensionWaitCapability): a setup suspension waiting out
 	// its backoff, which dispatch passes over until then.
@@ -254,14 +260,17 @@ const (
 	taskReasonUnapproved      = "proposed/unapproved"
 	taskReasonQuestion        = "awaiting_reply/question"
 	taskReasonAnswered        = "awaiting_reply/answered"
-	taskReasonYourMessage     = "awaiting_reply/your_message"
-	taskReasonAccessRequest   = "awaiting_reply/access_request"
-	taskReasonStopped         = "awaiting_reply/stopped"
-	taskReasonSubmit          = "awaiting_submit/not_auto_merge"
-	taskReasonFailedRuns      = "failed/consecutive_failures"
-	taskReasonDeferredNoWake  = "deferred/no_wake_time"
-	taskReasonDeferredWake    = "deferred/wake_time"
-	taskReasonClosed          = "closed/closed"
+	// A person's comment no run has been shown (task 3803): what it
+	// waits on is a run, which Run now (or another comment) queues.
+	taskReasonUnansweredComment = "awaiting_reply/unanswered_comment"
+	taskReasonYourMessage       = "awaiting_reply/your_message"
+	taskReasonAccessRequest     = "awaiting_reply/access_request"
+	taskReasonStopped           = "awaiting_reply/stopped"
+	taskReasonSubmit            = "awaiting_submit/not_auto_merge"
+	taskReasonFailedRuns        = "failed/consecutive_failures"
+	taskReasonDeferredNoWake    = "deferred/no_wake_time"
+	taskReasonDeferredWake      = "deferred/wake_time"
+	taskReasonClosed            = "closed/closed"
 	// A goal task at rest (model.TaskGoal): deferred, waiting for its
 	// goal's condition, which reconcileTaskGoals checks every cycle. One
 	// per goal kind, "deferred/awaiting-goal/<kind>".
@@ -270,6 +279,7 @@ const (
 	taskReasonGoalTasksClosed     = "deferred/awaiting-goal/tasks-closed"
 	taskReasonGoalPersonCloses    = "deferred/awaiting-goal/person-closes"
 	taskReasonGoalPipelineHealthy = "deferred/awaiting-goal/pipeline-healthy"
+	taskReasonGoalNightlyGreen    = "deferred/awaiting-goal/nightly-green"
 )
 
 // goalReasons is each goal kind's resting reason.
@@ -279,6 +289,7 @@ var goalReasons = map[model.GoalKind]string{
 	model.GoalTasksClosed:     taskReasonGoalTasksClosed,
 	model.GoalPersonCloses:    taskReasonGoalPersonCloses,
 	model.GoalPipelineHealthy: taskReasonGoalPipelineHealthy,
+	model.GoalNightlyGreen:    taskReasonGoalNightlyGreen,
 }
 
 // taskReasons classifies every task-lane reason.
@@ -292,6 +303,13 @@ var taskReasons = map[string]reasonLiveness{
 	taskReasonBlocked: {class: livenessDriven, driver: "reconcileDispatch",
 		resource:   "the task it depends on closing",
 		escalation: stallToResource},
+	// TaskReason names the blocker and what ends its hold in the
+	// resource. What ends it is pressed on the blocker's own row (Retry,
+	// Approve, Undefer, ...), so the control names that rather than a
+	// request this row could make for itself (ui/src/state.js's
+	// REASON_CONTROLS has no entry for it, and draws no button).
+	taskReasonBlockedOnPerson: {class: livenessAwaitingPerson,
+		resource: "a person acting on the task it depends on", control: "Act on the blocker"},
 	// Paused on a connection's usage limit: the window's end is a named
 	// time, and dispatch resumes on the first cycle past it. Every
 	// connection serving the model paused for hours is still a named,
@@ -335,10 +353,12 @@ var taskReasons = map[string]reasonLiveness{
 		escalation: stallToResource},
 	// The badge still reads completed; the inbox shows it (completionPhase)
 	// with the merge lane's control.
-	taskReasonMergeGaveUp:    {class: livenessAwaitingPerson, control: "Retry merge"},
-	taskReasonUnapproved:     {class: livenessAwaitingPerson, control: "Approve"},
-	taskReasonQuestion:       {class: livenessAwaitingPerson, control: "Reply"},
-	taskReasonAnswered:       {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonMergeGaveUp: {class: livenessAwaitingPerson, control: "Retry merge"},
+	taskReasonUnapproved:  {class: livenessAwaitingPerson, control: "Approve"},
+	taskReasonQuestion:    {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonAnswered:    {class: livenessAwaitingPerson, control: "Reply"},
+	taskReasonUnansweredComment: {class: livenessAwaitingPerson,
+		resource: "a run to answer a person's comment", control: "Run now"},
 	taskReasonYourMessage:    {class: livenessAwaitingPerson, control: "Reply"},
 	taskReasonStopped:        {class: livenessAwaitingPerson, control: "Reply"},
 	taskReasonAccessRequest:  {class: livenessAwaitingPerson, control: "Grant"},
@@ -360,6 +380,8 @@ var taskReasons = map[string]reasonLiveness{
 	taskReasonGoalTasksClosed: {class: livenessDriven, driver: "reconcileTaskGoals",
 		resource: "the tasks it names closing", escalation: stallToResource, control: "Undefer"},
 	taskReasonGoalPersonCloses: {class: livenessAwaitingPerson, control: "Close"},
+	taskReasonGoalNightlyGreen: {class: livenessDriven, driver: "reconcileTaskGoals",
+		resource: "Stage 1 (nightly) going green", escalation: stallToResource, control: "Undefer"},
 	taskReasonGoalPipelineHealthy: {class: livenessDriven, driver: "reconcileTaskGoals",
 		resource: "the pipeline being healthy", escalation: stallToResource, control: "Undefer"},
 }
@@ -450,19 +472,6 @@ func waitingCIReasonOf(e queueEntry, runner ci.Runner) string {
 	return mergeReasonCINotStarted
 }
 
-// stalledDriver is the classification whose driver a stall comment names:
-// the sub-case's own where it has one, the state's otherwise.
-func stalledDriver(state stateLiveness, reason reasonLiveness) stateLiveness {
-	if reason.class == livenessAwaitingExternal {
-		state.class = livenessAwaitingExternal
-		return state
-	}
-	if reason.driver != "" && reason.driver != state.driver {
-		return stateLiveness{class: livenessDriven, driver: reason.driver}
-	}
-	return state
-}
-
 // mergeReasonOfState is the sub-case a merge-queue state is recorded with
 // when its writer did not work one out (queueStatus.reason): the state's
 // broadest reason, as mergeReasonOf gives an entry with no particulars.
@@ -492,17 +501,21 @@ func mergeReasonOfState(state string) string {
 // task could give moot, and the one a reader of a stuck task most needs.
 // Below it, an open dependency outranks a hold: the pause ends on a
 // clock, and a task still waiting on another would not be dispatched
-// when it did.
+// when it did. Of the open dependencies, one only a person can close
+// (holds, model.BlockerHoldOf) outranks the rest: the task waits on
+// that person whatever the others do.
 //
 // An awaiting_reply task's sub-case is awaitingReplyReasonOf its asked
 // facts.
 func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openDeps []string, hold queuedHold,
-	asked model.ReplyFacts) string {
+	asked model.ReplyFacts, holds []model.BlockerHold) string {
 	switch state {
 	case model.StateQueued:
 		switch {
 		case hold == holdDispatchBlocked:
 			return taskReasonDispatchBlocked
+		case len(openDeps) > 0 && len(holds) > 0:
+			return taskReasonBlockedOnPerson
 		case len(openDeps) > 0:
 			return taskReasonBlocked
 		case hold == holdUsagePaused:
@@ -548,7 +561,8 @@ func taskReasonOf(t model.Task, state model.State, obs *model.Observation, openD
 // awaitingReplyReasonOf is which ask an awaiting_reply task is parked on,
 // in the UI's askedCase order (ui/src/state.js), so the reason chip and
 // the badge beside it name the same case: a stopped turn first, then an
-// access request, then an interactive task or console session (whose
+// access request, then a person's comment no run has been shown (which
+// Run now delivers), then an interactive task or console session (whose
 // every park is a wait for its next message, a question included), then
 // a pending question or secret request, and otherwise a run that
 // answered in a comment. Each is a person's: Reply ends all of them but
@@ -559,6 +573,8 @@ func awaitingReplyReasonOf(t model.Task, asked model.ReplyFacts) string {
 		return taskReasonStopped
 	case asked.Access:
 		return taskReasonAccessRequest
+	case asked.UnansweredComment:
+		return taskReasonUnansweredComment
 	case t.Interactive:
 		return taskReasonYourMessage
 	case asked.Question:
@@ -625,14 +641,20 @@ func reasonLivenessOf(reasons map[string]reasonLiveness, reason string) ReasonLi
 // "" when it is dispatching: with one, every queued task's reason is
 // that condition, named in its resource, ahead of anything about the
 // task itself.
+//
+// holds is which of openDeps will not close until a person acts on them
+// (model.Store.BlockerHolds), nil for none: with one, a queued task's
+// reason is that person's, and its resource names the blocker.
 func TaskReason(t model.Task, state model.State, obs *model.Observation, openDeps []string,
-	wait *model.GrantWait, asked model.ReplyFacts, policyFile, dispatchBlocked string) ReasonLiveness {
+	holds []model.BlockerHold, wait *model.GrantWait, asked model.ReplyFacts, policyFile, dispatchBlocked string) ReasonLiveness {
 	hold := queuedHoldOf(wait)
 	if dispatchBlocked != "" {
 		hold = holdDispatchBlocked
 	}
-	r := reasonLivenessOf(taskReasons, taskReasonOf(t, state, obs, openDeps, hold, asked))
+	r := reasonLivenessOf(taskReasons, taskReasonOf(t, state, obs, openDeps, hold, asked, holds))
 	switch r.Reason {
+	case taskReasonBlockedOnPerson:
+		r.Resource = blockerHoldResource(holds)
 	case taskReasonLocalPolicy:
 		r.Resource = localPolicyResource(wait.Resource, policyFile)
 	case taskReasonDispatchBlocked:
@@ -641,6 +663,17 @@ func TaskReason(t model.Task, state model.State, obs *model.Observation, openDep
 		r.Resource = wait.Resource
 	}
 	return r
+}
+
+// blockerHoldResource is what a task waiting on held blockers waits on:
+// a person acting on each of them, named with its hold --
+// "a person acting on task 4822 (failed -- Retry or close it)".
+func blockerHoldResource(holds []model.BlockerHold) string {
+	parts := make([]string, 0, len(holds))
+	for _, h := range holds {
+		parts = append(parts, fmt.Sprintf("task %s (%s)", h.ID, h.Why))
+	}
+	return "a person acting on " + strings.Join(parts, "; ")
 }
 
 // dispatchBlockedResource is what a task held by a dispatch condition

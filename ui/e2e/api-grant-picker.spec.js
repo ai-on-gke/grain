@@ -52,7 +52,7 @@ test("lists the API presets before every scope, with what each preset grants", a
   const { grants, menu } = await openMenu(page, task.id);
   await expect(
     grants.locator('[data-grant="https://grain.dev/capabilities/api#ci:read"]'),
-  ).toContainText("api:ci:read");
+  ).toContainText("api#ci:read");
 
   const kinds = await menu
     .locator(".api-grant-row")
@@ -105,7 +105,13 @@ test("lists the API presets before every scope, with what each preset grants", a
   // https://grain.dev/capabilities/api#* entries are owned by the Grain API
   // groups rather than duplicated under Capability server methods.
   await page.getByLabel("Search grants").fill("merge:force");
-  await expect(menu.locator(".api-grant-row")).toHaveCount(1);
+  await expect(menu.locator(".api-grant-row")).toHaveCount(2);
+  await expect(
+    menu.locator('[data-api-grant="api:grain/operator"]'),
+  ).toHaveCount(1);
+  await expect(menu.locator('[data-api-grant="api:merge:force"]')).toHaveCount(
+    1,
+  );
   await expect(menu.locator(".method-grant-row")).toHaveCount(0);
   await page.keyboard.press("Escape");
 
@@ -158,8 +164,9 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
   page,
   request,
 }) => {
-  // 1. Verify self-debug alias and api:self-debug preset resolution via HTTP gate
-  for (const cap of ["self-debug", "api:self-debug"]) {
+  // 1. Verify api:self-debug preset resolution via HTTP gate (the retired bare
+  // self-debug is no alias any longer)
+  for (const cap of ["api:self-debug"]) {
     const t = await fileTask(request, [cap]);
     const headers = { "X-Grain-Acting-Task": String(t.id) };
 
@@ -190,7 +197,7 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
   const newTaskGroup = page.getByTestId("new-task-grants");
   // The demo's deployment defaults are what self-debug became
   // (api:self-debug and grain#source), pre-filled in the Grants section.
-  await expect(newTaskGroup).toContainText("api:self-debug");
+  await expect(newTaskGroup).toContainText("api#self-debug");
   await expect(newTaskGroup).toContainText("grain › source");
   await newTaskGroup.getByRole("button", { name: "Add grant…" }).click();
   const newTaskMenu = page.getByRole("menu", { name: "Grants to add" });

@@ -226,3 +226,52 @@ func TestGoCacheTrustSplitPreventsPoisoningTrustedBuilds(t *testing.T) {
 		t.Errorf("output bytes = %q, want %q", got, cleanBytes)
 	}
 }
+
+// TestGoCacheUntrustedJobsAndUnidentifiedCallersCannotPoisonEachOther is
+// the daemon's arrangement: identification is not required, so a task
+// sandbox presenting no token still reaches the cache, but only reads the
+// trusted namespace; and two untrusted jobs never see each other's entries.
+func TestGoCacheUntrustedJobsAndUnidentifiedCallersCannotPoisonEachOther(t *testing.T) {
+	cache, err := NewCache(t.TempDir(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := NewJobTokenSet(false)
+	tokens.Register("tok-a", JobAccess{Job: "pr/test"})
+	tokens.Register("tok-b", JobAccess{Job: "pr/test"})
+	srv := NewServer(Config{Cache: cache, JobTokens: tokens, SplitGoCacheTrust: true})
+
+	do := func(method, path, token string, body []byte) int {
+		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		if token != "" {
+			req.Header.Set("Grit-Job-Token", token)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	action := "dddd777788889999"
+	body, _ := json.Marshal(GoCacheAction{OutputID: strings.Repeat("e", 64), Size: 10})
+	for _, path := range []string{"/gocache/action/", "/gocache/trusted/action/"} {
+		if code := do(http.MethodPut, path+action, "", body); code != http.StatusForbidden {
+			t.Errorf("unidentified PUT %s = %d, want 403", path, code)
+		}
+	}
+	if code := do(http.MethodPut, "/gocache/output/"+strings.Repeat("e", 64), "", []byte("x")); code != http.StatusForbidden {
+		t.Errorf("unidentified output PUT = %d, want 403", code)
+	}
+
+	// Two jobs sharing a Job name are still scoped by their own token.
+	if code := do(http.MethodPut, "/gocache/action/"+action, "tok-a", body); code != http.StatusOK {
+		t.Fatalf("tok-a PUT = %d", code)
+	}
+	if code := do(http.MethodGet, "/gocache/action/"+action, "tok-a", nil); code != http.StatusOK {
+		t.Errorf("tok-a GET own entry = %d, want 200", code)
+	}
+	for _, token := range []string{"tok-b", ""} {
+		if code := do(http.MethodGet, "/gocache/action/"+action, token, nil); code != http.StatusNotFound {
+			t.Errorf("GET tok-a's entry with %q = %d, want 404", token, code)
+		}
+	}
+}

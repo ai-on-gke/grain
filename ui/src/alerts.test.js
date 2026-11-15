@@ -324,6 +324,28 @@ describe("the sentences", () => {
     expect(formatRemaining(-5)).toBe("less than a minute");
   });
 
+  it("names the day of a pause that does not end today", () => {
+    const now = new Date("2026-11-11T09:00:00Z");
+    const today = { ...alphaClaude, until: "2026-11-11T15:06:23Z" };
+    const later = { ...alphaClaude, until: "2026-11-14T09:13:06Z" };
+    const day = new Date(later.until).toLocaleString(undefined, {
+      timeZone: "UTC",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+    });
+    expect(pauseMessage(today, "UTC", now)).not.toContain(
+      new Date(today.until).toLocaleString(undefined, {
+        timeZone: "UTC",
+        year: "numeric",
+        month: "numeric",
+        day: "numeric",
+      }),
+    );
+    expect(pauseMessage(later, "UTC", now)).toContain(day);
+    expect(pausedUntil(later, "UTC", now)).toContain(day);
+  });
+
   it("gives the pause as a clause for a place that names what is paused", () => {
     expect(pausedUntil(alphaClaude, "UTC")).toMatch(
       /^paused until .* \(about 2h 0m\) — claude: usage limit reached/,

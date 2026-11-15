@@ -24,6 +24,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/hostd"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/postgres"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 )
 
 // NewHostdRemote is the acceptor for a grain hostd dialing in with the token
@@ -86,6 +87,11 @@ func CheckDaemonFlags(cfg Config, hasLocalSandboxes bool, checkPackageCache func
 	}
 	if err := CheckSecretsConfig(cfg.SecretsBackend, cfg.SecretsSMPrefix); err != nil {
 		return err
+	}
+	if cfg.ReleaseApprovalKMSKey != "" {
+		if err := secrets.ValidateKMSKeyVersionName(cfg.ReleaseApprovalKMSKey); err != nil {
+			return fmt.Errorf("-release-approval-kms-key: %w", err)
+		}
 	}
 	if err := CheckObjectStoreURI(cfg); err != nil {
 		return err

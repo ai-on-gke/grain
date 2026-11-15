@@ -90,6 +90,21 @@
 #           checksums.txt is left as it is. A release that does not
 #           exist fails it, or with RELEASE_CLI_SKIP_UNRELEASED=true is
 #           warned of and skipped.
+#   agentd-validate [DIR] [--require-signature]
+#           check DIR ($RELEASE_AGENTD_DIR, default /tmp/release-agentd)
+#           holds static grain-agentd-linux-{amd64,arm64} binaries and
+#           matching .manifest.json files, and verify any signature (and
+#           rotation chain) against the pinned release public key.
+#   agentd-sign [DIR]
+#           sign DIR's grain-agentd manifests with $AGENTD_RELEASE_SIGNING_KEY
+#           (OpenSSL Ed25519) and optional $AGENTD_RELEASE_ROTATIONS, then
+#           validate them with --require-signature. Warns when no signing key
+#           is configured unless REQUIRE_AGENTD_SIGNING=true.
+#   agentd-publish <release> [DIR]
+#           upload DIR's grain-agentd binaries and manifests to <release>
+#           (vX.Y.Z or vX.Y.Z-rc.N), manifests last. A release already
+#           carrying all four assets is never overwritten; one carrying only
+#           some (an interrupted upload) has them deleted and uploaded again.
 #
 # --dry-run (or DRY_RUN=true) does everything that reads and prints every
 # write it would make instead of making it.
@@ -1052,6 +1067,321 @@ cli_publish() {
   say "published the grain CLI on $release: ${cli_archives[*]} checksums.txt"
 }
 
+# --- grain-agentd per-platform binaries and signed manifests -----------------
+
+agentd_platforms=("linux/amd64" "linux/arm64")
+agentd_binaries=(grain-agentd-linux-amd64 grain-agentd-linux-arm64)
+agentd_manifests=(grain-agentd-linux-amd64.manifest.json grain-agentd-linux-arm64.manifest.json)
+default_agentd_pub="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/pkg/agentd/release/agentd-release.pub"
+
+# agentd_pubkey_to_pem INPUT OUT_PEM: write SubjectPublicKeyInfo PEM for INPUT
+# (either a PEM string/file or "ed25519:<base64>").
+agentd_pubkey_to_pem() {
+  local src="$1" out="$2" b64 padded raw_len
+  if printf '%s\n' "$src" | grep -q -- '-----BEGIN PUBLIC KEY-----'; then
+    printf '%s\n' "$src" > "$out"
+    return 0
+  fi
+  src="$(printf '%s\n' "$src" | grep -vE '^[[:space:]]*(#|$)' | head -n 1 | tr -d ' \t\r\n')"
+  [[ "$src" == ed25519:* ]] || die "invalid release public key (want PUBLIC KEY PEM or ed25519:<base64>)"
+  b64="${src#ed25519:}"
+  case $(( ${#b64} % 4 )) in
+    0) padded="$b64" ;;
+    2) padded="${b64}==" ;;
+    3) padded="${b64}=" ;;
+    *) die "invalid base64 in ed25519 public key" ;;
+  esac
+  printf '%s' "$padded" | base64 -d > "$out.raw" 2>/dev/null || die "could not base64-decode ed25519 public key"
+  raw_len="$(stat -c %s "$out.raw")"
+  [ "$raw_len" = 32 ] || die "ed25519 public key decoded to $raw_len bytes, want 32"
+  {
+    printf '%s\n' '-----BEGIN PUBLIC KEY-----'
+    (printf '\x30\x2a\x30\x05\x06\x03\x2b\x65\x70\x03\x21\x00'; cat "$out.raw") | base64 -w 64
+    printf '%s\n' '-----END PUBLIC KEY-----'
+  } > "$out"
+  rm -f "$out.raw"
+}
+
+agentd_key_id_of_pem() {
+  local der_len
+  openssl pkey -pubin -in "$1" -outform DER > "$scratch/keyid.der" 2>/dev/null || die "$1 is not a valid Ed25519 PUBLIC KEY PEM"
+  der_len="$(stat -c %s "$scratch/keyid.der")"
+  [ "$der_len" = 44 ] || die "$1 is not an Ed25519 SubjectPublicKeyInfo key (DER length $der_len, want 44)"
+  tail -c 32 "$scratch/keyid.der" | sha256sum | cut -c1-16
+}
+
+agentd_canonical_manifest() {
+  jq -r '
+    "grain-agentd-release-manifest/v1",
+    "schema: \(.schema)",
+    "version: \(.version)",
+    "platform: \(.platform)",
+    "asset: \(.asset)",
+    "sha256: \(.sha256)",
+    "size: \(.size)",
+    "min_contract_features: \(.min_contract_features | join(","))",
+    (if ((.features // []) | length) > 0 then "features: \(.features | join(","))" else empty end),
+    "key_id: \(.key_id)"
+  ' "$1"
+}
+
+agentd_decode_sig() {
+  local s="$1" out="$2" b64 padded len
+  [[ "$s" == ed25519:* ]] || die "signature must start with ed25519:"
+  b64="${s#ed25519:}"
+  case $(( ${#b64} % 4 )) in
+    0) padded="$b64" ;;
+    2) padded="${b64}==" ;;
+    3) padded="${b64}=" ;;
+    *) die "invalid base64 in ed25519 signature" ;;
+  esac
+  printf '%s' "$padded" | base64 -d > "$out" 2>/dev/null || die "could not decode ed25519 signature"
+  len="$(stat -c %s "$out")"
+  [ "$len" = 64 ] || die "ed25519 signature decoded to $len bytes, want 64"
+}
+
+agentd_resolve_pinned_pem() {
+  local out="$1"
+  if [ -n "${AGENTD_RELEASE_PUBLIC_KEY:-}" ]; then
+    agentd_pubkey_to_pem "$AGENTD_RELEASE_PUBLIC_KEY" "$out"
+  elif [ -n "${AGENTD_RELEASE_PUBLIC_KEY_FILE:-}" ]; then
+    [ -f "$AGENTD_RELEASE_PUBLIC_KEY_FILE" ] || die "no public key file $AGENTD_RELEASE_PUBLIC_KEY_FILE"
+    agentd_pubkey_to_pem "$(cat "$AGENTD_RELEASE_PUBLIC_KEY_FILE")" "$out"
+  else
+    [ -f "$default_agentd_pub" ] || die "no embedded public key at $default_agentd_pub"
+    agentd_pubkey_to_pem "$(cat "$default_agentd_pub")" "$out"
+  fi
+}
+
+agentd_verify_manifest_sig() {
+  local mf="$1" pinned_pem="$2" pinned_id target_id rot_len idx found_start prev_id old_str new_str issued sig_str old_id new_id
+  pinned_id="$(agentd_key_id_of_pem "$pinned_pem")"
+  target_id="$(jq -r '.key_id // ""' "$mf")"
+  rot_len="$(jq -r '(.rotations // []) | length' "$mf")"
+  cp "$pinned_pem" "$scratch/active-signer.pem"
+
+  if [ "$rot_len" -gt 0 ]; then
+    [ "$rot_len" -le 8 ] || die "$mf carries $rot_len key rotations (max 8)"
+    found_start=false
+    prev_id=""
+    for (( idx = 0; idx < rot_len; idx++ )); do
+      old_str="$(jq -r ".rotations[$idx].old_public_key" "$mf")"
+      new_str="$(jq -r ".rotations[$idx].new_public_key" "$mf")"
+      issued="$(jq -r ".rotations[$idx].issued_at" "$mf")"
+      sig_str="$(jq -r ".rotations[$idx].signature" "$mf")"
+      agentd_pubkey_to_pem "$old_str" "$scratch/rot-old.pem"
+      agentd_pubkey_to_pem "$new_str" "$scratch/rot-new.pem"
+      old_id="$(agentd_key_id_of_pem "$scratch/rot-old.pem")"
+      new_id="$(agentd_key_id_of_pem "$scratch/rot-new.pem")"
+      [ "$old_id" != "$new_id" ] || die "$mf rotation[$idx] has identical old and new key $old_id"
+      if [ "$idx" -gt 0 ] && [ "$old_id" != "$prev_id" ]; then
+        die "$mf rotation[$idx] old key $old_id does not chain from $prev_id"
+      fi
+      prev_id="$new_id"
+      if [ "$old_id" = "$pinned_id" ]; then
+        found_start=true
+      fi
+      printf 'grain-agentd-key-rotation/v1\nold_public_key: %s\nnew_public_key: %s\nissued_at: %s\n' \
+        "$old_str" "$new_str" "$issued" > "$scratch/rot.msg"
+      agentd_decode_sig "$sig_str" "$scratch/rot.sig"
+      openssl pkeyutl -verify -pubin -inkey "$scratch/rot-old.pem" -rawin \
+        -in "$scratch/rot.msg" -sigfile "$scratch/rot.sig" >/dev/null 2>&1 ||
+        die "$mf rotation[$idx] ($old_id -> $new_id) failed signature verification"
+    done
+    if [ "$pinned_id" = "$target_id" ]; then
+      [ "$prev_id" = "$pinned_id" ] || die "$mf rotations end at $prev_id while key_id is $target_id"
+    else
+      [ "$found_start" = true ] || die "$mf signed by $target_id does not chain from pinned key $pinned_id"
+      [ "$prev_id" = "$target_id" ] || die "$mf rotation chain ends at $prev_id, not key_id $target_id"
+      cp "$scratch/rot-new.pem" "$scratch/active-signer.pem"
+    fi
+  else
+    [ "$pinned_id" = "$target_id" ] ||
+      die "$mf is signed by key $target_id, not pinned release key $pinned_id (and carries no key rotation)"
+  fi
+
+  agentd_canonical_manifest "$mf" > "$scratch/manifest.msg"
+  agentd_decode_sig "$(jq -r '.signature' "$mf")" "$scratch/manifest.sig"
+  openssl pkeyutl -verify -pubin -inkey "$scratch/active-signer.pem" -rawin \
+    -in "$scratch/manifest.msg" -sigfile "$scratch/manifest.sig" >/dev/null 2>&1 ||
+    die "$mf failed Ed25519 signature verification for key $target_id"
+}
+
+validate_agentd() {
+  local d="${1:-${RELEASE_AGENTD_DIR:-/tmp/release-agentd}}" require_sig=false plat bin mf problems size sum sig magic
+  if [ "${2:-}" = --require-signature ]; then
+    require_sig=true
+  fi
+  need jq sha256sum openssl
+  [ -d "$d" ] || die "$d is not a directory of grain-agentd release assets (scripts/build-agentd.sh DIR)"
+
+  for plat in "${agentd_platforms[@]}"; do
+    bin="grain-agentd-${plat%/*}-${plat#*/}"
+    mf="$bin.manifest.json"
+    [ -s "$d/$bin" ] || die "$d has no $bin (scripts/build-agentd.sh writes it)"
+    [ -s "$d/$mf" ] || die "$d has no $mf (scripts/build-agentd.sh writes it)"
+
+    problems="$(jq -r --arg p "$plat" --arg a "$bin" '
+      [
+        (if type != "object" then "root must be a JSON object" else empty end),
+        (if ([keys[] | select(. as $k | ["schema","version","platform","asset","sha256","size","min_contract_features","features","key_id","signature","rotations"] | index($k) | not)] | length) > 0
+          then "manifest has unknown fields" else empty end),
+        (if .schema != 1 then "schema must be 1" else empty end),
+        (if (.version | type) != "string" or (.version | test("^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$") | not)
+          then "invalid version \(.version | tojson)" else empty end),
+        (if .platform != $p then "platform is \(.platform | tojson), want \($p | tojson)" else empty end),
+        (if .asset != $a then "asset is \(.asset | tojson), want \($a | tojson)" else empty end),
+        (if (.sha256 | type) != "string" or (.sha256 | test("^[0-9a-f]{64}$") | not)
+          then "invalid sha256" else empty end),
+        (if (.size | type) != "number" or .size <= 0 then "invalid size" else empty end),
+        (if (.min_contract_features | type) != "array" or (.min_contract_features | length) == 0
+            or ([.min_contract_features[] | (type == "string" and test("^[a-z0-9_]+$"))] | all | not)
+          then "invalid min_contract_features" else empty end),
+        (if (.features // [] | type) != "array"
+            or ([(.features // [])[] | (type == "string" and test("^[a-z0-9_]+$"))] | all | not)
+          then "invalid features" else empty end),
+        (if (.key_id // "") != "" and ((.key_id | type) != "string" or (.key_id | test("^[0-9a-f]{16}$") | not))
+          then "invalid key_id" else empty end),
+        (if ((.signature // "") == "") != ((.key_id // "") == "")
+          then "key_id and signature must either both be set or both be empty" else empty end)
+      ] | .[]' "$d/$mf" 2>&1)" || die "$d/$mf is not valid JSON: $problems"
+    [ -z "$problems" ] || die "$d/$mf does not meet the grain-agentd manifest contract: $problems"
+
+    size="$(stat -c %s "$d/$bin")"
+    [ "$size" = "$(jq -r '.size' "$d/$mf")" ] || die "$d/$bin is $size bytes, but $mf says $(jq -r '.size' "$d/$mf")"
+    sum="$(sha256sum "$d/$bin" | awk '{print $1}')"
+    [ "$sum" = "$(jq -r '.sha256' "$d/$mf")" ] || die "$d/$bin has sha256 $sum, but $mf says $(jq -r '.sha256' "$d/$mf")"
+
+    # Static ELF check: ELF magic 7f 45 4c 46, and no PT_INTERP when readelf is installed.
+    magic="$(head -c 4 "$d/$bin" | od -An -tx1 | tr -d ' \n')"
+    if [ "$magic" = "7f454c46" ] && command -v readelf >/dev/null 2>&1; then
+      if readelf -l "$d/$bin" 2>/dev/null | grep -q 'INTERP'; then
+        die "$d/$bin is dynamically linked (has PT_INTERP); grain-agentd release binaries must be static (CGO_ENABLED=0)"
+      fi
+    fi
+
+    sig="$(jq -r '.signature // ""' "$d/$mf")"
+    if [ "$require_sig" = true ] && [ -z "$sig" ]; then
+      die "$d/$mf is unsigned (--require-signature)"
+    fi
+    if [ -n "$sig" ]; then
+      agentd_resolve_pinned_pem "$scratch/pinned-agentd.pub"
+      agentd_verify_manifest_sig "$d/$mf" "$scratch/pinned-agentd.pub"
+    fi
+  done
+}
+
+agentd_sign() {
+  local d="${1:-${RELEASE_AGENTD_DIR:-/tmp/release-agentd}}" key_file="${AGENTD_RELEASE_SIGNING_KEY:-}" rot_file="${AGENTD_RELEASE_ROTATIONS:-}" require_signing=false key_id mf sig_b64 rots_json
+  need jq sha256sum openssl
+  case "${REQUIRE_AGENTD_SIGNING:-false}" in
+    1 | [Tt]rue | TRUE | [Yy]es | YES) require_signing=true ;;
+  esac
+  validate_agentd "$d"
+  if [ -z "$key_file" ]; then
+    # A dry run is never handed the signing key (the workflows keep it
+    # off the runner's disk), so it says what it would sign instead of
+    # failing REQUIRE_AGENTD_SIGNING.
+    if [ "$dry_run" = true ]; then
+      say "[dry-run] would sign grain-agentd manifests in $d with AGENTD_RELEASE_SIGNING_KEY"
+      return 0
+    fi
+    if [ "$require_signing" = true ]; then
+      die "AGENTD_RELEASE_SIGNING_KEY is not set and REQUIRE_AGENTD_SIGNING=true"
+    fi
+    echo "WARNING: AGENTD_RELEASE_SIGNING_KEY is not set; leaving grain-agentd manifests in $d unsigned" >&2
+    return 0
+  fi
+  [ -f "$key_file" ] || die "AGENTD_RELEASE_SIGNING_KEY $key_file does not exist"
+  openssl pkey -in "$key_file" -pubout -out "$scratch/signer.pub" 2>/dev/null ||
+    die "AGENTD_RELEASE_SIGNING_KEY is not a valid OpenSSL Ed25519 private key PEM"
+  key_id="$(agentd_key_id_of_pem "$scratch/signer.pub")"
+
+  rots_json="[]"
+  if [ -n "$rot_file" ]; then
+    [ -f "$rot_file" ] || die "AGENTD_RELEASE_ROTATIONS $rot_file does not exist"
+    rots_json="$(jq -c '.' "$rot_file")" || die "$rot_file is not valid JSON"
+  fi
+
+  for mf in "${agentd_manifests[@]}"; do
+    jq --arg kid "$key_id" --argjson rots "$rots_json" \
+      '.key_id = $kid | .signature = "ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" | if ($rots | length) > 0 then .rotations = $rots else del(.rotations) end' \
+      "$d/$mf" > "$d/$mf.tmp"
+    agentd_canonical_manifest "$d/$mf.tmp" > "$scratch/to-sign.msg"
+    openssl pkeyutl -sign -inkey "$key_file" -rawin -in "$scratch/to-sign.msg" -out "$scratch/signed.sig" ||
+      die "openssl pkeyutl -sign failed on $mf"
+    sig_b64="ed25519:$(base64 -w 0 < "$scratch/signed.sig")"
+    jq --arg sig "$sig_b64" '.signature = $sig' "$d/$mf.tmp" > "$d/$mf"
+    rm -f "$d/$mf.tmp"
+  done
+
+  validate_agentd "$d" --require-signature
+  say "signed grain-agentd manifests in $d with key $key_id"
+}
+
+agentd_publish() {
+  local release="${1:?agentd-publish needs a vX.Y.Z or vX.Y.Z-rc.N release}" d="${2:-${RELEASE_AGENTD_DIR:-/tmp/release-agentd}}" id id_left name listed missing already_complete=true
+  need curl jq
+  [[ "$release" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || die "$release is not a vX.Y.Z or vX.Y.Z-rc.N release: only those carry grain-agentd"
+  [ -n "$token" ] || [ "$dry_run" = true ] || die "publishing needs GITHUB_TOKEN (permissions: contents: write)"
+  validate_agentd "$d"
+  # A signed manifest names the version it was built for; one uploaded to
+  # another release would vouch for a binary under the wrong version.
+  for name in "${agentd_manifests[@]}"; do
+    [ "$(jq -r '.version' "$d/$name")" = "$release" ] ||
+      die "$d/$name is for version $(jq -r '.version' "$d/$name"), not $release"
+  done
+  upload_base=""
+  if release_json "$release"; then
+    id="$(jq -r .id "$scratch/release")"
+    upload_base="$(jq -r '.upload_url | sub("\\{.*$"; "")' "$scratch/release")"
+    asset_list "$id" > "$scratch/existing"
+  elif [ "$dry_run" = true ]; then
+    say "[dry-run] would upload grain-agentd to $release, which promote or train-tag publishes"
+    id=dry-run
+    : > "$scratch/existing"
+  elif [ "${RELEASE_AGENTD_SKIP_UNRELEASED:-${RELEASE_CLI_SKIP_UNRELEASED:-false}}" = true ]; then
+    echo "::warning::release-assets.sh: there is no release $release to carry grain-agentd; skipping it"
+    return 0
+  else
+    die "there is no release $release: publish it (promote, or train-tag for an rc) before its grain-agentd binaries"
+  fi
+
+  for name in "${agentd_binaries[@]}" "${agentd_manifests[@]}"; do
+    if ! grep -q " $name\$" "$scratch/existing"; then
+      already_complete=false
+      break
+    fi
+  done
+  if [ "$already_complete" = true ]; then
+    say "$release already carries grain-agentd (${agentd_binaries[*]}); its assets are never replaced"
+    return 0
+  fi
+
+  for name in "${agentd_binaries[@]}" "${agentd_manifests[@]}"; do
+    while read -r id_left; do
+      say "deleting partial $name an earlier run left on $release"
+      delete_asset "$id_left"
+    done < <(awk -v n="$name" '$2 == n {print $1}' "$scratch/existing")
+  done
+
+  # Upload binaries first, then manifests last so the presence of both
+  # manifests marks a complete upload.
+  for name in "${agentd_binaries[@]}" "${agentd_manifests[@]}"; do
+    dir="$d" upload "$id" "$name"
+  done
+
+  if [ "$dry_run" != true ]; then
+    listed="$(asset_list "$id" | awk '{print $2}')"
+    missing=""
+    for name in "${agentd_binaries[@]}" "${agentd_manifests[@]}"; do
+      grep -qx "$name" <<< "$listed" || missing="$missing $name"
+    done
+    [ -z "$missing" ] || die "$release is missing$missing after publishing grain-agentd"
+  fi
+  say "published grain-agentd on $release: ${agentd_binaries[*]} ${agentd_manifests[*]}"
+}
+
 case "$cmd" in
   package) package ;;
   rc | pending | discard-rc | discard-pending | retract) train_phase "$cmd" "$@" ;;
@@ -1067,8 +1397,19 @@ case "$cmd" in
   promote-version) need git && promote_version "$@" ;;
   cli-validate) validate_cli "${1:-${RELEASE_CLI_DIR:-/tmp/release-cli}}" && say "${1:-${RELEASE_CLI_DIR:-/tmp/release-cli}} holds the grain CLI: ${cli_archives[*]} checksums.txt" ;;
   cli-publish) cli_publish "$@" ;;
+  agentd-validate)
+    if [ "${1:-}" = --require-signature ]; then
+      validate_agentd "${RELEASE_AGENTD_DIR:-/tmp/release-agentd}" --require-signature
+      say "${RELEASE_AGENTD_DIR:-/tmp/release-agentd} holds signed grain-agentd: ${agentd_binaries[*]}"
+    else
+      validate_agentd "${1:-${RELEASE_AGENTD_DIR:-/tmp/release-agentd}}" "${2:-}"
+      say "${1:-${RELEASE_AGENTD_DIR:-/tmp/release-agentd}} holds grain-agentd: ${agentd_binaries[*]}"
+    fi
+    ;;
+  agentd-sign) agentd_sign "$@" ;;
+  agentd-publish) agentd_publish "$@" ;;
   *)
-    sed -n '17,92p' "$0" >&2
+    sed -n '17,110p' "$0" >&2
     exit 2
     ;;
 esac

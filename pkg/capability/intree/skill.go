@@ -899,16 +899,6 @@ func newConfigMapMethods(entries []*configMapEntry, dirSkills map[string]*skill,
 	return methods, nil
 }
 
-// ConfigMapConfigSchema returns the operator-facing configure schema of the
-// built-in config-map server.
-func ConfigMapConfigSchema() map[string]any {
-	s, err := protocol.NormalizeArgsSchema(configMapConfigSchema)
-	if err != nil {
-		return configMapConfigSchema
-	}
-	return protocol.OperatorSchema(s)
-}
-
 // NewEmbeddedBootstrapServer builds an unconfigured, stateless config-map
 // server serving exclusively this binary's embedded bootstrap playbooks --
 // both as #config-map ("bootstrap") and as #skill ("bootstrap") -- without

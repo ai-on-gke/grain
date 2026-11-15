@@ -115,23 +115,23 @@ type SchemaConfig struct {
 //
 // build is how to run the new build: the image path runs the pulled ref
 // in a container, the source path runs the binary it has just installed.
-func (u *Upgrader) schemaStep(ctx context.Context, p *progress, branch string, build schemaRunner) (string, error) {
+func (u *Upgrader) schemaStep(ctx context.Context, p *progress, branch string, build schemaRunner) (string, bool, error) {
 	cfg := u.cfg.Schema
 	if cfg == nil || cfg.Version == 0 || len(cfg.VersionArgs) == 0 {
 		p.skip(stepSchema, "this deployment does not check schema changes")
-		return "", nil
+		return "", false, nil
 	}
 	p.start(stepSchema)
 	to, err := u.newBuildSchema(ctx, p, build)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if to == cfg.Version {
 		p.done(stepSchema, fmt.Sprintf("unchanged: both builds are at schema %d", to))
-		return "", nil
+		return "", false, nil
 	}
 	if cfg.Prepare == nil {
-		return "", fmt.Errorf("the build being upgraded to is at schema %d and this one at %d, and this "+
+		return "", false, fmt.Errorf("the build being upgraded to is at schema %d and this one at %d, and this "+
 			"deployment has no way to carry its rows across -- upgrading would leave a store this build "+
 			"cannot open; re-run scripts/setup.sh on the host instead", to, cfg.Version)
 	}
@@ -149,7 +149,7 @@ func (u *Upgrader) schemaStep(ctx context.Context, p *progress, branch string, b
 		// one thing that can is Prepare, which cleans up what it wrote
 		// (see its doc comment) -- so this step does not throw away what
 		// it did not write.
-		return "", fmt.Errorf("writing this deployment's rows out to migrate them from schema %d to %d: %w",
+		return "", false, fmt.Errorf("writing this deployment's rows out to migrate them from schema %d to %d: %w",
 			cfg.Version, to, err)
 	}
 	if len(cfg.CheckArgs) > 0 {
@@ -160,16 +160,20 @@ func (u *Upgrader) schemaStep(ctx context.Context, p *progress, branch string, b
 			// it was, so this deployment goes on running the build that
 			// wrote these rows -- which is the only build that can.
 			u.discardSchemaUpgrade()
-			return "", fmt.Errorf("the build being upgraded to is at schema %d, this deployment is at %d, "+
+			return "", false, fmt.Errorf("the build being upgraded to is at schema %d, this deployment is at %d, "+
 				"and that build could not take this deployment's rows -- so nothing has changed and it is "+
 				"still running the build that can: %w", to, cfg.Version, err)
 		}
 	} else {
 		p.logf("%s: no migration check configured -- cutting over on the export alone", stepSchema)
 	}
+	if err := ctx.Err(); err != nil {
+		u.discardSchemaUpgrade()
+		return "", false, err
+	}
 	p.done(stepSchema, fmt.Sprintf("schema %d -> %d: this deployment's rows are in %s, and the new build "+
 		"imports them at its first start", cfg.Version, to, dir))
-	return fmt.Sprintf(", migrating this deployment from schema %d to %d", cfg.Version, to), nil
+	return fmt.Sprintf(", migrating this deployment from schema %d to %d", cfg.Version, to), true, nil
 }
 
 // schemaRunner is how this step reaches the build being upgraded to. The

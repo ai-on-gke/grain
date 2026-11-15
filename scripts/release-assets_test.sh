@@ -414,5 +414,60 @@ fake DRY_RUN=true bash "$assets" cli-publish v3.9.9 "$cli"
 check "a dry run with GITHUB_TOKEN plans the CLI upload when promote --dry-run left no release yet" \
   '[ "$status" = 0 ] && [ "$(grep -c "would POST .*--upload" <<< "$out")" = 5 ] && ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
 
+# grain-agentd binaries and signed manifests on vX.Y.Z and vX.Y.Z-rc.N.
+agentd_dir="$work/agentd"
+mkdir -p "$agentd_dir"
+openssl genpkey -algorithm Ed25519 -out "$work/agentd-key.pem" 2>/dev/null
+openssl pkey -in "$work/agentd-key.pem" -pubout -out "$work/agentd-pub.pem" 2>/dev/null
+for plat in linux-amd64 linux-arm64; do
+  printf 'static-agentd-%s' "$plat" > "$agentd_dir/grain-agentd-$plat"
+  sz="$(stat -c %s "$agentd_dir/grain-agentd-$plat")"
+  sh="$(sha256sum "$agentd_dir/grain-agentd-$plat" | awk '{print $1}')"
+  jq -n --arg p "${plat/-//}" --arg a "grain-agentd-$plat" --arg s "$sh" --argjson sz "$sz" \
+    '{schema: 1, version: "v3.4.0", platform: $p, asset: $a, sha256: $s, size: $sz, min_contract_features: ["start"], features: ["start","features"]}' \
+    > "$agentd_dir/grain-agentd-$plat.manifest.json"
+done
+run env -u AGENTD_RELEASE_SIGNING_KEY REQUIRE_AGENTD_SIGNING=true bash "$assets" agentd-sign "$agentd_dir"
+check "agentd-sign refuses to leave manifests unsigned under REQUIRE_AGENTD_SIGNING=true" \
+  '[ "$status" != 0 ] && grep -q "REQUIRE_AGENTD_SIGNING=true" <<< "$out"'
+run env -u AGENTD_RELEASE_SIGNING_KEY REQUIRE_AGENTD_SIGNING=true bash "$assets" --dry-run agentd-sign "$agentd_dir"
+check "a dry run, which is never handed the signing key, plans agentd-sign under REQUIRE_AGENTD_SIGNING=true" \
+  '[ "$status" = 0 ] && grep -q "\[dry-run\] would sign grain-agentd manifests" <<< "$out" &&
+   ! grep -q "\"signature\"" "$agentd_dir/grain-agentd-linux-amd64.manifest.json"'
+run env AGENTD_RELEASE_SIGNING_KEY="$work/agentd-key.pem" AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/agentd-pub.pem" \
+  bash "$assets" agentd-sign "$agentd_dir"
+check "agentd-sign signs both platform manifests and validates them against the pinned public key" \
+  '[ "$status" = 0 ] && grep -q "signed grain-agentd manifests" <<< "$out"'
+
+openssl genpkey -algorithm Ed25519 -out "$work/wrong-key.pem" 2>/dev/null
+openssl pkey -in "$work/wrong-key.pem" -pubout -out "$work/wrong-pub.pem" 2>/dev/null
+run env AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/wrong-pub.pem" \
+  bash "$assets" agentd-validate "$agentd_dir" --require-signature
+check "agentd-validate refuses a manifest signed by an unpinned key" \
+  '[ "$status" != 0 ] && grep -q "not pinned release key" <<< "$out"'
+
+bad_features_dir="$work/agentd-bad-features"
+cp -r "$agentd_dir" "$bad_features_dir"
+jq '.features = ["start,stage"]' "$agentd_dir/grain-agentd-linux-amd64.manifest.json" \
+  > "$bad_features_dir/grain-agentd-linux-amd64.manifest.json"
+run env AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/agentd-pub.pem" bash "$assets" agentd-validate "$bad_features_dir"
+check "agentd-validate refuses a features entry pkg/agentd/release would reject" \
+  '[ "$status" != 0 ] && grep -q "invalid features" <<< "$out"'
+
+printf '70 images.json\n' > "$FAKE_V7_ASSETS"
+fake AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/agentd-pub.pem" bash "$assets" agentd-publish v3.4.1 "$agentd_dir"
+check "agentd-publish refuses manifests signed for another version" \
+  '[ "$status" != 0 ] && grep -q "is for version v3.4.0, not v3.4.1" <<< "$out" && ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
+fake AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/agentd-pub.pem" bash "$assets" agentd-publish v3.4.0 "$agentd_dir"
+check "agentd-publish uploads both binaries and then both signed manifests to a promoted release" \
+  '[ "$status" = 0 ] && [ "$(grep -c "^POST .*/releases/7/assets?name=" "$FAKE_LOG")" = 4 ] &&
+   grep -q "published grain-agentd on v3.4.0" <<< "$out"'
+fake AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/agentd-pub.pem" bash "$assets" agentd-publish v3.4.0 "$agentd_dir"
+check "a release carrying all four grain-agentd assets is not overwritten" \
+  '[ "$status" = 0 ] && grep -q "already carries grain-agentd" <<< "$out" && ! grep -qE "^(POST|PATCH|DELETE) " "$FAKE_LOG"'
+fake AGENTD_RELEASE_PUBLIC_KEY_FILE="$work/agentd-pub.pem" bash "$assets" agentd-publish v3.5.0-pending "$agentd_dir"
+check "agentd-publish refuses v3.5.0-pending" \
+  '[ "$status" != 0 ] && grep -q "not a vX.Y.Z or vX.Y.Z-rc.N" <<< "$out"'
+
 echo "$((cases - failures)) of $cases passed"
 [ "$failures" = 0 ]

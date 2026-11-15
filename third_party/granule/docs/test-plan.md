@@ -131,7 +131,7 @@ Validate guest OS overlays (Debian Bookworm, Alpine Linux), boot contract integr
 - **Guest Overlay Asset Verification**:
   ```bash
   find deploy/guest-image -type f -name "*.sh" -exec bash -n {} +
-  test -f deploy/guest-image/overlay-common/etc/granule-guest-version
+  test -f deploy/guest-image/overlay-common/etc/granule/guest-contract
   test -f deploy/guest-image/overlay-debian/etc/acpi/powerbtn.sh
   test -f deploy/guest-image/overlay-alpine/etc/acpi/powerbtn.sh
   ```

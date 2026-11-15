@@ -335,6 +335,12 @@ func TestK8sSandboxesAgainstARealKindCluster(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("checking placed file: %s", result.Text)
 	}
+	// With deploy/kubernetes/networkpolicy.yaml applied on Calico, even an open-network
+	// sandbox pod cannot reach the cloud metadata server (169.254.169.254).
+	result = run.Handler(context.Background(), map[string]any{"command": "! wget -q -T 3 -O/dev/null http://169.254.169.254/computeMetadata/v1/"})
+	if result.IsError {
+		t.Fatalf("open-network Kubernetes sandbox reached cloud metadata 169.254.169.254: %s", result.Text)
+	}
 	if err := sb.Release(context.Background()); err != nil {
 		t.Fatalf("Release: %v", err)
 	}

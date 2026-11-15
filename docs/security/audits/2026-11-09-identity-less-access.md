@@ -57,7 +57,8 @@
 | `POST /api/hostd/join`, `.../join/{id}/poll`, `.../renew` | An enrollment code and the host's ed25519 key; pending joins are bounded per code and identity | 400 without a valid signature; a join waits for a person's approval |
 | Hub tunnel requests (`isHubTunnelRequest`) | The hub assertion only; the access code, its cookie, bearer codes and approval-callback tokens are refused outright | 401 |
 | Approval callback (`presentsApprovalCallbackToken`) | A per-task callback token, runs as that task | 401 without it |
-| In-process requests (no `RemoteAddr`) | Trusted as the daemon itself | Not reachable from the network: no listener in grain serves the UI on a unix socket or anything else that yields an empty `RemoteAddr` |
+| In-process requests (no `RemoteAddr`) | Trusted as the daemon itself | Not reachable from the network: no listener yields an empty `RemoteAddr`. The API socket (below) replaces the empty address net/http gives a unix peer with `unix-socket:uid=<n>` before anything reads it (task 3906) |
+| The API socket (`<data-dir>/api/grain.sock`, `ui.HostAccountHandler`, task 3906) | The peer's uid (`SO_PEERCRED`) mapped to a person by `-host-accounts`, or `-deployment-owner` for the daemon's own account; admitted through the allowlist as that person, source `host-account`. Every credential and identity header the request carries is dropped | 403 for an unmapped uid, before the route table; with no mapping at all the socket is not served. The directory is `0700` |
 | `testSourceNets` | Test-only (`export_test.go`) | Empty in production |
 | Loopback | Not trusted (grain/task-4343) | Same as any address |
 
@@ -134,10 +135,28 @@ refuse the fixture's task, not the caller).
 
 - The host CLI's name is self-asserted (`X-Grain-Access-Name`). That is
   no weaker than today, since the code holder is already the owner, but
-  it is not verified. Two pieces of work are filed as their own task:
+  it is not verified. Two pieces of work were filed as their own task:
   serving the API on a unix socket and mapping the peer's `SO_PEERCRED`
   uid to the configured owner, and having `grain login` hold a personal
-  token through IAP or a trusted identity proxy.
+  token through IAP or a trusted identity proxy. **Done in task 3906**:
+  the daemon serves the API on `<data-dir>/api/grain.sock` (`0700`
+  directory), maps each connection's uid through `-host-accounts` (the
+  daemon's own account to `-deployment-owner`), and records the request
+  as that person with source `host-account`. An unmapped uid is refused,
+  nothing a socket request carries (the code, tokens, cookies, proxy
+  headers, `X-Grain-Acting-Task`) is believed, and its `RemoteAddr` is
+  never empty, so in-process trust is unchanged and unreachable through
+  it. The host CLI dials the socket in place of a loopback `-server` and
+  sends no code there. `grain login` through IAP or a registered
+  credential source keeps a personal `gma_` token by default
+  (`--issue-token=false` declines). Pinned by `pkg/ui/hostaccount_test.go`
+  (`TestAPISocketRequestIsRecordedAsTheMappedOwner`,
+  `TestAPISocketRefusesAnUnmappedUID`,
+  `TestAPISocketTrustsNothingWithoutAMapping`),
+  `pkg/cli/hostsocket_test.go` and
+  `TestGrainLoginThroughAnIdentityProxyHoldsAPersonalToken`. The code
+  itself stays as it was for every other caller, and every run's
+  `grain mcpserver` still uses it (the finding above).
 - A Settings -> Access card that shows the access-code mode, recommends
   `recovery` and gives the command that changes it is filed as its own
   task (a UI change, with screenshots).

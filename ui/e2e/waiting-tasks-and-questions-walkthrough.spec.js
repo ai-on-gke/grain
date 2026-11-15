@@ -537,7 +537,7 @@ cat "$root/agent-stream"
     // draft is in the input and verify the draft is preserved intact.
     await page.waitForResponse(
       (res) =>
-        res.url().endsWith(`/api/tasks/${taskC.id}`) &&
+        new URL(res.url()).pathname.endsWith(`/api/tasks/${taskC.id}`) &&
         res.request().method() === "GET" &&
         res.status() === 200,
     );

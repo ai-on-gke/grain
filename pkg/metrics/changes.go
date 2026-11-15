@@ -136,7 +136,7 @@ type ChangeBucket struct {
 // argument for the reason ui passes Cycles' own the same way: this cannot
 // tell "nothing to ask" from "nothing happened", and those are different
 // answers to give an operator.
-func changesOf(w Window, buckets []Bucket, available bool, events []SettingsChange) Changes {
+func changesOf(w Window, buckets []Bucket, available bool, events []SettingsChange, reaches time.Time) Changes {
 	out := Changes{Available: available}
 	if len(buckets) > 0 {
 		out.Buckets = make([]ChangeBucket, len(buckets))
@@ -180,5 +180,12 @@ func changesOf(w Window, buckets []Bucket, available bool, events []SettingsChan
 		kept = kept[:MaxChangeEvents]
 	}
 	out.Events = kept
+	if !reaches.IsZero() && (out.Reaches == nil || reaches.Before(*out.Reaches)) {
+		// The reader's own word on how far it got, which is further than
+		// its oldest change whenever it read back through history that held
+		// nothing but bookkeeping (staterepo.SettingsHistory).
+		r := reaches
+		out.Reaches = &r
+	}
 	return out
 }

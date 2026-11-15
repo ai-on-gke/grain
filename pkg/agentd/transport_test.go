@@ -223,7 +223,7 @@ func TestTransportFlagsAndPrepareReachTheUnit(t *testing.T) {
 	// The same flag parses on grain-agentd's own command line.
 	dir := t.TempDir()
 	allow := filepath.Join(dir, "agentd.yaml")
-	writeFile(t, allow, defaultAllowlist(dir, "https://daemon.pipe.test", "/bin/true"), 0o644)
+	writeFile(t, allow, renderTestAllowlist(t, dir, "https://daemon.pipe.test", "/bin/true"), 0o644)
 	out.Reset()
 	errOut.Reset()
 	if code := run([]string{"-allowlist", allow, "-check", "-pipe-via", "/opt/other"}, &out, &errOut); code != 0 {

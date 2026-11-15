@@ -47,8 +47,15 @@
 #     The live-provider suites (CANDIDATE_GATE_ADVISORY: gcp-smoke and
 #     live-*, post-reset-e2e) are reported and never block. Every
 #     required suite found infra is reported as needing a re-run.
-#     --tasks-json and --now are accepted and ignored, for callers from
-#     before nightly.yml left LKG selection.
+#     The live real-model suites (CANDIDATE_GATE_LIVE: live-agent and
+#     live-frameworks) are also held to a freshness policy, which warns
+#     and never blocks: each one's newest verdict and newest pass on REF
+#     are printed, and a "WARNING live" line is printed when the newest
+#     verdict is not a pass, or there is no pass newer than
+#     CANDIDATE_GATE_LIVE_MAX_AGE_DAYS (3) before --now (an epoch or a
+#     date; default the clock) -- a suite that stopped running is how
+#     v3.5.0 shipped a schema Gemini refuses. --tasks-json is accepted
+#     and ignored, for callers from before nightly.yml left LKG selection.
 #
 #     Prints one line per commit it looked at and a last line
 #     "LKG <sha>", exiting 0; or "LKG none", exiting 1.
@@ -66,9 +73,14 @@
 #                 known by its id (go-long), its name ("go, shuffled and
 #                 repeated") or a matrix shard of it ("... (1)"); its shards
 #                 are one job. Each of CHECK_QUALIFICATION_JOBS must succeed
-#                 (skipped is not success); other jobs are judged when they
-#                 ran and otherwise ignored, as are
-#                 CHECK_QUALIFICATION_IGNORE (the stage-1 roll-up);
+#                 (skipped is not success); optional jobs
+#                 (CHECK_QUALIFICATION_OPTIONAL) are mapped to their ids and
+#                 judged when they ran, otherwise ignored, as are
+#                 CHECK_QUALIFICATION_IGNORE (the stage-1 roll-up). A
+#                 completed retry run in which a job awaiting a re-run
+#                 (failure or infra) ended skipped counts as an infra
+#                 attempt rather than leaving the first failure pending
+#                 forever;
 #       Stage 2   the grain/release-qualification check run on SHA
 #                 (CHECK_QUALIFICATION_CHECK), from --checks-json, GitHub's
 #                 GET /repos/{owner}/{repo}/commits/{sha}/check-runs answer
@@ -121,6 +133,8 @@ set -euo pipefail
 
 CANDIDATE_GATE_REQUIRED="${CANDIDATE_GATE_REQUIRED-tests release}"
 CANDIDATE_GATE_ADVISORY="${CANDIDATE_GATE_ADVISORY-gcp-smoke live-* post-reset-e2e}"
+CANDIDATE_GATE_LIVE="${CANDIDATE_GATE_LIVE-live-agent live-frameworks}"
+CANDIDATE_GATE_LIVE_MAX_AGE_DAYS="${CANDIDATE_GATE_LIVE_MAX_AGE_DAYS-3}"
 # Stage 1's required nightly.yml jobs, each "id=name" (the job's key in
 # the workflow and the name GitHub reports it by): the playbook's Stage 1
 # table, as nightly.yml's own stage-1 job needs them.
@@ -138,7 +152,15 @@ installer-variants=installer trixie and hostmode
 vulns=govulncheck
 image-vulns=release image vulnerabilities
 cmd-grain-stress=pkg/cli stress under load
-upgrade-test=upgrade from previous versions}"
+upgrade-test=upgrade from previous versions
+kvm-sandboxes=real KVM sandboxes
+kvm-route-stress=twenty two-VM boots
+real-kubernetes=real kubernetes}"
+# Optional nightly.yml jobs, each "id=name": judged when they ran (so a
+# failure or infra exit re-runs by id), ignored when skipped or absent,
+# because nightly.yml's stage-1 verdict job does not require them.
+CHECK_QUALIFICATION_OPTIONAL="${CHECK_QUALIFICATION_OPTIONAL-idle-gate=idle-gate
+grant-matrix-ui=grant matrix through the UI}"
 # Jobs that carry no verdict of their own: nightly.yml's roll-up of the
 # jobs above, which on a retry judges only the job retried.
 CHECK_QUALIFICATION_IGNORE="${CHECK_QUALIFICATION_IGNORE-stage-1=stage 1 qualification verdict}"
@@ -213,13 +235,14 @@ listed() { # listed <word> <space-separated globs>
 # --- select-lkg -------------------------------------------------------------
 
 select_lkg() {
-  local runs="" floor="" ref="origin/main" max=200
+  local runs="" floor="" ref="origin/main" max=200 now=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --runs-json) runs="${2:-}"; shift 2 ;;
       --floor-sha) floor="${2:-}"; shift 2 ;;
       --ref) ref="${2:-}"; shift 2 ;;
-      --tasks-json | --now) shift 2 ;;
+      --now) now="${2:-}"; shift 2 ;;
+      --tasks-json) shift 2 ;;
       --max-commits) max="${2:-}"; shift 2 ;;
       *) usage ;;
     esac
@@ -318,11 +341,54 @@ select_lkg() {
     echo "  advisory $w.yml: $v at $c (does not block)."
   done <<< "$adv"
 
+  live_freshness "$head" "$now" "$table"
+
   if [ -z "$lkg" ]; then
     echo "LKG none"
     return 1
   fi
   echo "LKG $lkg"
+}
+
+# live_freshness <head> <now> <table>: select-lkg's live-suite policy
+# (CANDIDATE_GATE_LIVE). For each suite, its newest verdict and newest pass
+# among head's ancestors, and a WARNING line when the newest is not a pass
+# or the newest pass is older than CANDIDATE_GATE_LIVE_MAX_AGE_DAYS.
+live_freshness() {
+  local head="$1" now="$2" table="$3"
+  if [ -z "$now" ]; then
+    now="$(date -u +%s)"
+  elif ! [[ "$now" =~ ^[0-9]+$ ]]; then
+    now="$(date -u -d "$now" +%s)" || die "--now $2 is neither an epoch nor a date"
+  fi
+  local limit=$((CANDIDATE_GATE_LIVE_MAX_AGE_DAYS * 86400))
+  local suite c w v t full newest newest_t pass pass_t
+  for suite in $CANDIDATE_GATE_LIVE; do
+    newest="" newest_t=0 pass="" pass_t=0
+    while IFS=$'\t' read -r c w v t; do
+      [ "$w" = "$suite" ] || continue
+      full="$(git rev-parse --verify -q "$c^{commit}" 2>/dev/null || true)"
+      [ -n "$full" ] || continue
+      git merge-base --is-ancestor "$full" "$head" 2>/dev/null || continue
+      [ "$v" != pending ] || continue
+      if [ "$t" -gt "$newest_t" ]; then newest="$v at ${full:0:12}"; newest_t="$t"; fi
+      if [ "$v" = success ] && [ "$t" -gt "$pass_t" ]; then pass="${full:0:12}"; pass_t="$t"; fi
+    done <<< "$table"
+    if [ -z "$newest" ]; then
+      echo "  WARNING live $suite.yml: no verdict on any commit of this ref; the release has no live-model verdict (does not block)."
+      continue
+    fi
+    local age=$(( (now - pass_t) / 3600 ))
+    if [ -z "$pass" ]; then
+      echo "  WARNING live $suite.yml: newest is $newest and it has never passed here (does not block)."
+    elif [ "${newest%% *}" != success ]; then
+      echo "  WARNING live $suite.yml: newest is $newest; newest pass at $pass, ${age}h old (does not block)."
+    elif [ $((now - pass_t)) -gt "$limit" ]; then
+      echo "  WARNING live $suite.yml: newest pass at $pass is ${age}h old, past ${CANDIDATE_GATE_LIVE_MAX_AGE_DAYS}d -- is its schedule still firing? (does not block)."
+    else
+      echo "  live $suite.yml: passed at $pass, ${age}h old."
+    fi
+  done
 }
 
 # --- check-qualification ----------------------------------------------------
@@ -345,9 +411,13 @@ JQ_CHECK_RUN='
 # The attempts of every job in a listing, one line per job: stage, job
 # and the class of each attempt in order (pending, success, failure,
 # infra; skipped only when the job never ran at all), comma-separated.
+# A skipped attempt after an unresolved failure or infra attempt is a
+# dispatched retry in which the job did not run (for instance because
+# inputs.jobs did not match its key), so it counts as infra rather than
+# leaving the job pending forever.
 # shellcheck disable=SC2016 # jq, not shell
 JQ_ATTEMPTS="$JQ_CHECK_RUN"'
-  def known($n): ($names + $ignore | map(. as $e | select($e.id == $n or $e.name == $n or ($n | startswith($e.name + " (")) or ($n | startswith($e.id + " ("))))
+  def known($n): ($names + $optional + $ignore | map(. as $e | select($e.id == $n or $e.name == $n or ($n | startswith($e.name + " (")) or ($n | startswith($e.id + " ("))))
     | first | .id) // ($n | sub(" \\(.*\\)$"; ""));
   def wf: ((.workflowPath // "") | split("/") | last | sub("\\.ya?ml$"; "")) as $p
     | if $p != "" then $p else (.workflow // .workflow_name // "") end;
@@ -388,7 +458,12 @@ JQ_ATTEMPTS="$JQ_CHECK_RUN"'
         elif any($cs[]; . == "infra") then "infra"
         elif any($cs[]; . == "success") then "success"
         else "skipped" end)) as $attempts
-  | ($attempts | map(select(. != "skipped"))) as $ran
+  | (reduce $attempts[] as $a ({out: [], last: null};
+      if $a != "skipped" then
+        {out: (.out + [$a]), last: $a}
+      elif .last == "failure" or .last == "infra" then
+        {out: (.out + ["infra"]), last: "infra"}
+      else . end) | .out) as $ran
   | [.[0].stage, .[0].job, ((if ($ran | length) > 0 then $ran else ["skipped"] end) | join(","))]
   | @tsv'
 
@@ -412,15 +487,32 @@ check_qualification() {
   [ -z "$checks" ] || [ -f "$checks" ] || die "--checks-json $checks is not a file"
   rc="${rc,,}"
 
-  local names ignore
+  local names optional ignore nightly_workflow nightly_ids=""
   names="$(job_names_json "$CHECK_QUALIFICATION_JOBS")" || die "CHECK_QUALIFICATION_JOBS is not id=name lines"
+  optional="$(job_names_json "$CHECK_QUALIFICATION_OPTIONAL")" || die "CHECK_QUALIFICATION_OPTIONAL is not id=name lines"
   ignore="$(job_names_json "$CHECK_QUALIFICATION_IGNORE")" || die "CHECK_QUALIFICATION_IGNORE is not id=name lines"
+  nightly_workflow="${CHECK_QUALIFICATION_WORKFLOW_FILE-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.github/workflows/nightly.yml}"
+  if [ -f "$nightly_workflow" ]; then
+    nightly_ids="$(awk '
+      /^jobs:/ { in_jobs = 1; next }
+      in_jobs && /^[^ #]/ { in_jobs = 0 }
+      in_jobs && /^  [A-Za-z0-9_-]+:[[:space:]]*(#.*)?$/ {
+        id = $1; sub(/:$/, "", id)
+        if (id != "stage-1") print id
+      }
+    ' "$nightly_workflow")"
+  fi
 
   local failed=() infra=() pending=() reruns=() flaked=()
   pass() { echo "PASS $1: $2"; }
   fail() { echo "FAIL $1: $2"; failed+=("$1"); }
   wait_for() { echo "PENDING $1: $2"; pending+=("$1"); }
-  rerun() { reruns+=("RERUN $1 $2 $3"); }
+  rerun() {
+    if [ "$1" = nightly ] && [ -n "$nightly_ids" ] && ! grep -qxF "$2" <<< "$nightly_ids"; then
+      echo "WARNING $2: not a dispatchable job key in nightly.yml; add id=$2 to CHECK_QUALIFICATION_JOBS or CHECK_QUALIFICATION_OPTIONAL so selective retries can run it"
+    fi
+    reruns+=("RERUN $1 $2 $3")
+  }
 
   # judge <stage> <job> <attempts>: one job's verdict from its attempts.
   # Sets nothing but the arrays above.
@@ -458,8 +550,8 @@ check_qualification() {
         rerun "$stage" "$job" infra
         ;;
       skipped)
-        # Only a required job has to run: one whose `if:` keeps it off
-        # hosted runners (kvm-sandboxes) carries no verdict.
+        # Only a required job has to run: one that is not
+        # (gcp-smoke's, say, were it in nightly.yml) carries no verdict.
         if jq -e --arg j "$job" 'any(.[]; .id == $j)' <<< "$names" >/dev/null; then
           fail "$job" "never ran (skipped), and qualification requires success"
         fi
@@ -473,7 +565,7 @@ check_qualification() {
   # Stage 1: nightly.yml on the RC.
   local table stage job attempts id
   table="$(jq -r --arg rc "$rc" --arg which nightly --arg check "$CHECK_QUALIFICATION_CHECK" \
-    --arg app "$CHECK_QUALIFICATION_APP" --argjson names "$names" --argjson ignore "$ignore" "$JQ_EPOCH$JQ_ATTEMPTS" "$runs")" ||
+    --arg app "$CHECK_QUALIFICATION_APP" --argjson names "$names" --argjson optional "$optional" --argjson ignore "$ignore" "$JQ_EPOCH$JQ_ATTEMPTS" "$runs")" ||
     die "--runs-json $runs is not a CI run or job listing"
   declare -A seen=()
   if [ -z "$table" ]; then
@@ -516,7 +608,7 @@ check_qualification() {
     [ -z "$foreign" ] ||
       echo "IGNORED $CHECK_QUALIFICATION_CHECK: $foreign, not $CHECK_QUALIFICATION_APP; only grain's own app is trusted"
     table="$(jq -r --arg rc "$rc" --arg which qualification --arg check "$CHECK_QUALIFICATION_CHECK" \
-      --arg app "$CHECK_QUALIFICATION_APP" --argjson names "[]" --argjson ignore "[]" "$JQ_EPOCH$JQ_ATTEMPTS" "$checks")" ||
+      --arg app "$CHECK_QUALIFICATION_APP" --argjson names "[]" --argjson optional "[]" --argjson ignore "[]" "$JQ_EPOCH$JQ_ATTEMPTS" "$checks")" ||
       die "--checks-json $checks is not a check run listing"
     if [ -z "$table" ]; then
       wait_for "$CHECK_QUALIFICATION_CHECK" "no $CHECK_QUALIFICATION_CHECK check run on ${rc:0:12} yet"

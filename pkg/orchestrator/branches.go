@@ -70,7 +70,7 @@ func SyncBranches(ctx context.Context, store *model.Store, client github.Client,
 // must not cost every other pending one this cycle" reasoning
 // syncCandidate already documents.
 func syncBranch(ctx context.Context, store *model.Store, client github.Client, b model.Branch) error {
-	owner, repo := b.Repo.Owner, b.Repo.Name
+	owner, repo := b.Repo.StoredOwner(), b.Repo.Name
 
 	existing, err := client.GetBranchHead(owner, repo, b.Name)
 	if err != nil {

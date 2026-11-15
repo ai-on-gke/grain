@@ -51,7 +51,7 @@ clis:
     path: /usr/local/bin/agy
     paths_under: [DATA]
     cwd_under: [DATA]
-    env: [HOME, AGY_CLI_DISABLE_AUTO_UPDATE, GEMINI_API_KEY, GOOGLE_API_KEY]
+    env: `+hostd.FormatEnvList(HostdEnv())+`
 `, "DATA", data)))
 	if err != nil {
 		t.Fatal(err)

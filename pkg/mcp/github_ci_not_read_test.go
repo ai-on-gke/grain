@@ -182,7 +182,7 @@ func TestARunWithNoGrainCIUnderTheGateIsToldNothingJudgesIt(t *testing.T) {
 		gatedStatus(t, redEverywhere(), nil),
 		gatedBaseStatus(t, redEverywhere(), nil),
 	} {
-		for _, want := range []string{"does not hold the grain-ci capability", "gives up and asks a person"} {
+		for _, want := range []string{"does not hold the https://grain.dev/capabilities/grain#ci capability", "gives up and asks a person"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("answer does not say %q:\n%s", want, text)
 			}

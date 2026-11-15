@@ -539,3 +539,129 @@ func TestStewardProcessResultRelaysAndChecksFiledCommentOnIssueOverFinalText(t *
 		t.Errorf("check3 = %+v, want Claims=1 Unread=1 on unread fallback FinalText", *check3)
 	}
 }
+
+// A steward reads through the in-sandbox grain CLI, and those reads are
+// stored after the run's MCP calls -- comment_on_issue included -- so they
+// must still count (model.Store.mergeWithProxyAPICalls).
+func TestStewardReportCheckCountsCLIReadsStoredAfterTheClosingReport(t *testing.T) {
+	t.Parallel()
+
+	tasks := map[string]StewardCheckTask{
+		"900": {ID: "900", State: model.StateQueued},
+		"901": {ID: "901", State: model.StateRunning},
+	}
+	calls := []model.RunAPICall{
+		{RunID: "r", Seq: 7, Tool: "comment_on_issue"},
+		{RunID: "r", Seq: 8, Tool: "read_pipeline_changes", TargetIDs: "900"},
+		{RunID: "r", Seq: 9, Tool: "read_grain_task", TargetIDs: "901"},
+	}
+	report := "- Task 900 is queued behind the dispatch pause [task 900]\n- Task 901 is running [task 901]"
+	res := stewardReportCheck("r", report, calls, tasks)
+	if res.Check.Unread != 0 || res.Check.Mismatched != 0 || res.Check.Claims != 2 {
+		t.Fatalf("check = %+v (unread %v, mismatched %v), want 2 claims and nothing unread or mismatched",
+			res.Check, res.UnreadIDs, res.MismatchLines)
+	}
+}
+
+// Claims the steward could not ground this wake go under "Unverified" and
+// are not counted; claims after the section ends are checked again.
+func TestStewardReportCheckSkipsTheUnverifiedSection(t *testing.T) {
+	t.Parallel()
+
+	tasks := map[string]StewardCheckTask{
+		"910": {ID: "910", State: model.StateQueued},
+		"911": {ID: "911", State: model.StateQueued},
+		"912": {ID: "912", State: model.StateQueued},
+	}
+	calls := []model.RunAPICall{{RunID: "r", Seq: 1, Tool: "read_grain_task", TargetIDs: "910"}}
+	for _, heading := range []string{"## Unverified", "**Unverified:**", "### Unverified (not re-read this wake)"} {
+		report := "- Task 910 is queued [task 910]\n" + heading +
+			"\n- Task 911 may be stalled; handover says so [task 911]\n## Next\n- Task 912 is running [task 912]"
+		res := stewardReportCheck("r", report, calls, tasks)
+		if res.Check.Claims != 2 {
+			t.Errorf("%q: Claims = %d, want 2 (910 and 912; 911 is unverified)", heading, res.Check.Claims)
+		}
+		if !slices.Equal(res.UnreadIDs, []string{"912"}) {
+			t.Errorf("%q: UnreadIDs = %v, want [912]", heading, res.UnreadIDs)
+		}
+		if res.Check.Mismatched != 1 {
+			t.Errorf("%q: Mismatched = %d, want 1 (912 is queued, not running)", heading, res.Check.Mismatched)
+		}
+	}
+}
+
+// A transition's source state and a task's CI failing are not claims about
+// the state the task is in; the state it is said to be in still is.
+func TestStewardReportCheckReadsOnlyTheClaimedState(t *testing.T) {
+	t.Parallel()
+
+	tasks := map[string]StewardCheckTask{
+		"920": {ID: "920", State: model.StateRunning},
+		"921": {ID: "921", State: model.StateAwaitingSubmit},
+	}
+	calls := []model.RunAPICall{{RunID: "r", Seq: 1, Tool: "read_grain_task", TargetIDs: "920,921"}}
+	for _, line := range []string{
+		"- Task 920 moved queued→running [task 920]",
+		"- Task 920 went from queued to running [task 920]",
+		"- Task 921's CI failed on go unit; re-run is in hand [task 921]",
+		"- go e2e checks failed on task 921, a known flake [task 921]",
+	} {
+		if res := stewardReportCheck("r", line, calls, tasks); res.Check.Mismatched != 0 {
+			t.Errorf("%q: Mismatched = %d, want 0", line, res.Check.Mismatched)
+		}
+	}
+	for _, line := range []string{
+		"- Task 920 moved running→queued [task 920]",
+		"- Task 921 failed and needs a retry [task 921]",
+	} {
+		if res := stewardReportCheck("r", line, calls, tasks); res.Check.Mismatched != 1 {
+			t.Errorf("%q: Mismatched = %d, want 1", line, res.Check.Mismatched)
+		}
+	}
+}
+
+// grain report check sees the reads the grain CLI made earlier in the
+// same run, and fails a draft citing a task the run never read.
+func TestCheckStewardReportDraftUsesTheRunsCLIReadsSoFar(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openInternalStore(t)
+
+	now := time.Date(2026, 11, 11, 10, 0, 0, 0, time.UTC)
+	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
+	for _, id := range []string{"768", "832", "833"} {
+		task := model.Task{
+			ID:         id,
+			Intent:     model.IntentImplement,
+			Title:      "task " + id,
+			Body:       "body",
+			Origin:     model.Origin{Attribution: model.Attribution{Actor: human}, Reason: model.ReasonDirect},
+			Approval:   &model.Attribution{Actor: human},
+			Binding:    model.BindingDirective,
+			CreatedAt:  &now,
+			ApprovedAt: &now,
+		}
+		if id == "768" {
+			task.TemplateID = model.PipelineStewardTemplateID
+		}
+		if err := store.PutTask(ctx, task); err != nil {
+			t.Fatalf("PutTask %s: %v", id, err)
+		}
+	}
+	if err := store.RecordProxyAPICall(ctx, "768-3", "read_pipeline_changes", "832", 512); err != nil {
+		t.Fatalf("RecordProxyAPICall: %v", err)
+	}
+
+	text, failed, err := CheckStewardReportDraft(ctx, store, "768", "768-3", "- Task 832 needs a person [task 832]")
+	if err != nil || failed {
+		t.Fatalf("draft citing a read task: failed=%v err=%v\n%s", failed, err, text)
+	}
+	text, failed, err = CheckStewardReportDraft(ctx, store, "768", "768-3",
+		"- Task 832 needs a person [task 832]\n- Task 833 needs a person [task 833]")
+	if err != nil || !failed {
+		t.Fatalf("draft citing an unread task: failed=%v err=%v\n%s", failed, err, text)
+	}
+	if !strings.Contains(text, "Cited but not read in this run: 833.") || !strings.Contains(text, "## Unverified") {
+		t.Errorf("failing draft's text does not name 833 and the Unverified heading:\n%s", text)
+	}
+}

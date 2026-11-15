@@ -52,6 +52,11 @@ for (const [name, viewport] of [
     await expect(save).toBeVisible();
     const notice = page.getByTestId("config-managed-notice");
     await expect(notice).toContainText("tables/qualification_config.json");
+    // One plan, so one verb for it (2026-11-11 walkthrough: it read
+    // "qualification plan live ... and are read-only").
+    await expect(notice).toContainText(
+      "acme/widgets's qualification plan lives in the config repo and is read-only here.",
+    );
     await expect(save).toBeDisabled();
     await expect(page.getByRole("button", { name: "Add item" })).toBeDisabled();
     await expect(

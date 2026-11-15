@@ -39,6 +39,11 @@ package upgrade
 // know it needed. The step says, every time, that what it is about to run
 // was not verified; configuring VerifyCmd is how a deployment opts into
 // refusing.
+//
+// A signature says CI built the image, not that a reviewed commit went
+// into it. ImageConfig.ReviewedMerge is the check that does (reviewed.go),
+// and a deployment that configures it without VerifyCmd is refused rather
+// than warned.
 
 import (
 	"context"

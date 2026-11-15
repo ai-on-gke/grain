@@ -157,6 +157,7 @@ export default function ConsoleSessionPage({
   onDraftConsumed,
   onSaved,
   onDeleted,
+  onLoadEarlier = null,
   showError,
 }) {
   // saving is the id of the capability whose box was just clicked, so
@@ -548,7 +549,12 @@ export default function ConsoleSessionPage({
               (r) => !(session.autoReads || []).includes(r),
             ),
             writes,
-            readOptions: knownRepos(config, tasks),
+            readOptions: knownRepos(config, tasks).filter(
+              (r) =>
+                !(session.autoReads || []).some(
+                  (a) => a.toLowerCase() === r.toLowerCase(),
+                ),
+            ),
             writeOptions: targetableRepos(config, tasks),
             onReadsChange: (next) => save({ reads: next }, "reads"),
             onWritesChange: setWrites,
@@ -820,7 +826,13 @@ export default function ConsoleSessionPage({
       </PageHeaderActions>
 
       <div className="console-session-body">
-        {task && <CommentDeepLink key={task.id} t={task} />}
+        {task && (
+          <CommentDeepLink
+            key={`deep-link-${task.id}`}
+            t={task}
+            onLoadEarlier={onLoadEarlier}
+          />
+        )}
         {task ? (
           <TaskChat
             // Keyed by task so switching sessions remounts the composer:
@@ -830,6 +842,7 @@ export default function ConsoleSessionPage({
             t={task}
             act={act}
             onStop={cancelTurn}
+            onLoadEarlier={onLoadEarlier}
             draftRequest={draftRequest}
             onDraftConsumed={onDraftConsumed}
             actions={

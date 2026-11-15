@@ -1,0 +1,31 @@
+# Path trigger giving every grain-opened pull request on this repository
+# a general code review (.grain/templates/pr-review.yml), as the operator
+# asked on 2026-11-11.
+#
+# This is a gating trigger rather than a `.grain/review.yml` default
+# review. The two work differently:
+#   - a default review is attached to a task and filed once, as a
+#     stacked review told to push fixes (orchestrator.fileReviewTask,
+#     reviewTaskBody);
+#   - a gating trigger's review is one per pull request head and review
+#     template, posts findings without pushing, and after a push re-reads
+#     only the new commits, debounced (docs/declarations.md, "Gating
+#     reviews").
+# Do not add a .grain/review.yml beside this file, or every task would be
+# reviewed twice.
+#
+# Gating, with human: on-findings: a clean review gives the change its
+# auto-merge back, and findings hold the merge as questions to the
+# change's owner. Review tasks, merge-queue fix tasks and tasks a trigger
+# filed are never judged (orchestrator.pullRequestTriggersApply), so a
+# review of a review is never filed
+# (TestACatchAllTriggerNeverReviewsItsOwnReview). Changes that open no
+# pull request, such as release-train ticks, are never judged either.
+# grain's security review and the other triggers here are review kinds of
+# their own and still apply beside this one.
+on: pull_request
+paths: ["**"]
+template: pr-review
+gate: true
+human: on-findings
+auto-approve: true

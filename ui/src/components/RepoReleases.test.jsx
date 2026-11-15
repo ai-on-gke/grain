@@ -1123,6 +1123,11 @@ describe("RepoReleases", () => {
 
     const notice = screen.getByTestId("config-managed-notice");
     expect(notice).toHaveTextContent("tables/qualification_config.json");
+    // One plan: the sentence agrees with it rather than reading "plan
+    // live ... and are read-only".
+    expect(notice).toHaveTextContent(
+      "acme/widgets's qualification plan lives in the config repo and is read-only here. Change it with a config pull request",
+    );
     expect(
       screen.getByLabelText(
         "Require approval before running qualification tasks",

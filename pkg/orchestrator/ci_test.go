@@ -198,18 +198,6 @@ func (f *fakeCI) EvictBaseTransitionFailures(ctx context.Context, baseCommit str
 	return 1, true, nil
 }
 
-// evictedFor is whether a base transition eviction named commit.
-func (f *fakeCI) evictedFor(commit string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, c := range f.evicted {
-		if c == commit {
-			return true
-		}
-	}
-	return false
-}
-
 // remember puts a run into this deployment's memory that nothing here
 // started -- another branch's, which is what a shared fault is made of.
 func (f *fakeCI) remember(run ci.Run) {

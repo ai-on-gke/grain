@@ -59,6 +59,9 @@ func TestHostRunsWaitWhileHostdDrains(t *testing.T) {
 		if !strings.Contains(reason, "agy runs on the host") || !strings.Contains(reason, "draining for its own upgrade") {
 			t.Errorf("Availability(%+v) while hostd drains = %q, want it waiting on hostd", choice, reason)
 		}
+		if strings.Contains(reason, "runs already going carry on") || !strings.Contains(reason, "interrupted and re-queued") {
+			t.Errorf("Availability(%+v) while hostd drains = %q, want drain_cap interruption explained rather than promising runs carry on", choice, reason)
+		}
 	}
 	for _, choice := range inContainer {
 		if reason := pool.Availability(ctx, choice); reason != "" {

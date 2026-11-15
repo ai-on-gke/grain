@@ -762,3 +762,57 @@ func gcpsetsSchemaForTest() map[string]any {
 		},
 	}
 }
+
+// A credential typed into an entry's env, headers, args or URL would be
+// stored in grain_config and exported with it, so the save is refused,
+// naming where the credential is and what to write instead, and nothing
+// is stored (docs/security/audits/2026-11-10-credential-exposure.md).
+func TestCapabilityServerSaveRefusesATypedInCredential(t *testing.T) {
+	_, hc, client, _ := configTestServer(t, &fakeProber{})
+	ctx := context.Background()
+	for name, cfg := range map[string]protocol.ServerConfig{
+		"env":    {Command: "grain", Args: []string{"capability", "cloud"}, Env: map[string]string{"API_TOKEN": "typed-in-token-value"}},
+		"args":   {Command: "grain", Args: []string{"capability", "cloud", "--key=sk-typedinkeytypedinkey0000"}},
+		"header": {ServerURL: "https://cap.example.com/mcp", Headers: map[string]string{"Authorization": "Bearer typed-in-token-value"}},
+	} {
+		_, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: "typed-in-" + name, Config: cfg})
+		if err == nil || !strings.Contains(err.Error(), "$secret:<name>") {
+			t.Errorf("%s: SetCapabilityServer = %v, want a refusal pointing at $secret:<name>", name, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "typed-in-token-value") {
+			t.Errorf("%s: the refusal echoes the credential: %v", name, err)
+		}
+	}
+	stored, _ := client.Store.GetConfig(ctx)
+	row, _ := json.Marshal(stored)
+	if strings.Contains(string(row), "typed-in-token-value") {
+		t.Errorf("a refused save was stored: %s", row)
+	}
+	// An entry saved before the rule keeps its literal through an edit of
+	// something else, and is refused a new one.
+	const legacyID = "legacy-literal"
+	if err := client.Store.UpdateConfig(ctx, func(c *model.Config) error {
+		if c.MCPServers == nil {
+			c.MCPServers = map[string]protocol.ServerConfig{}
+		}
+		c.MCPServers[legacyID] = protocol.ServerConfig{Command: "grain", Args: []string{"capability", "cloud"}, Env: map[string]string{"API_TOKEN": "legacy-token-value"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	carried := protocol.ServerConfig{Command: "grain", Args: []string{"capability", "cloud"}, Env: map[string]string{"API_TOKEN": "legacy-token-value", "REGION": "eu"}}
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: legacyID, Config: carried}); err != nil && strings.Contains(err.Error(), "typed in") {
+		t.Errorf("a stored literal carried forward was refused: %v", err)
+	}
+	carried.Env["API_TOKEN"] = "replaced-token-value"
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: legacyID, Config: carried}); err == nil || !strings.Contains(err.Error(), "typed in") {
+		t.Errorf("a replaced literal was not refused: %v", err)
+	}
+
+	// A reference, with its scheme word, is still accepted.
+	ok := protocol.ServerConfig{Command: "grain", Args: []string{"capability", "cloud"}, Env: map[string]string{"API_TOKEN": "$secret:cap-token", "REGION": "eu"}}
+	if _, err := hc.SetCapabilityServer(ctx, ui.SetCapabilityServerRequest{ID: configCap, Config: ok}); err != nil &&
+		strings.Contains(err.Error(), "typed in") {
+		t.Errorf("a $secret: reference was refused as typed in: %v", err)
+	}
+}

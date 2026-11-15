@@ -15,6 +15,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"path"
@@ -439,6 +440,38 @@ type RepoDeclarations struct {
 	// MergeRules is its `.grain/merge-rules.yml` (grain/task-1659), nil
 	// where it has none. Kept in a table of its own, like Triggers.
 	MergeRules *MergeRules
+	// Refused is every file this build could not decode and held back
+	// rather than refusing the whole set (repodecl.LoadForwardCompatible):
+	// a template, suite or schedule written for a newer grain. A sync
+	// keeps whatever version of each the deployment already has, and
+	// records them as the repository's LastError so they are seen.
+	Refused []RefusedDeclaration
+}
+
+// DeclarationRefusal marks an error as a repository's declarations being
+// refused -- a file that does not parse, a name that resolves to nothing --
+// rather than the repository being out of reach. The two are recorded the
+// same way (Store.RecordDeclarationFailure), but only a refusal is
+// somebody's to fix in the repository, and so only a refusal raises an
+// Inbox notice (orchestrator's noticeDeclarations). Its message is Err's.
+type DeclarationRefusal struct{ Err error }
+
+func (e DeclarationRefusal) Error() string { return e.Err.Error() }
+func (e DeclarationRefusal) Unwrap() error { return e.Err }
+
+// IsDeclarationRefusal reports whether err is, or wraps, a DeclarationRefusal.
+func IsDeclarationRefusal(err error) bool {
+	var r DeclarationRefusal
+	return errors.As(err, &r)
+}
+
+// RefusedDeclaration is one held-back file: which declaration it is, and
+// the decoder's own message for it (which names the file and the line).
+type RefusedDeclaration struct {
+	Kind    DeclarationKind
+	Path    string
+	Stem    string
+	Message string
 }
 
 // Empty reports whether a repository declared nothing at all, which is

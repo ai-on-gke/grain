@@ -48,7 +48,13 @@ export default function PendingQuestion({ t, act, onOpenTask }) {
   }, [t.id]);
 
   const comments = t.comments || [];
-  const question = comments[comments.length - 1];
+  // The comment the task is parked on, not merely the newest: an agent's
+  // comment after the question (a director relaying an answer in its own
+  // words) is no reply, and must not take the question's place.
+  const question =
+    (t.questionCommentId &&
+      comments.find((c) => c.id === t.questionCommentId)) ||
+    comments[comments.length - 1];
   if (
     t.state !== "awaiting_reply" ||
     t.interactive ||
@@ -124,6 +130,17 @@ export default function PendingQuestion({ t, act, onOpenTask }) {
       <div className="pending-question-header">
         <strong>Waiting for your reply</strong>
       </div>
+      {t.uncountedAgentReplyFrom && (
+        <p
+          className="pending-question-uncounted"
+          data-testid="uncounted-agent-reply"
+          role="note"
+        >
+          {t.uncountedAgentReplyFrom} relayed an answer in the conversation; a
+          person&apos;s reply is still needed. An agent&apos;s comment does not
+          answer a question.
+        </p>
+      )}
       {(question.summary || t.questionSummary) && (
         <p className="question-summary-line">
           <strong>{question.summary || t.questionSummary}</strong>

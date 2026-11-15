@@ -216,7 +216,7 @@ func TestCLIAttachedCapabilityIsMaterializedAppliedAndRevokedThroughRunCycle(t *
 	deps := orchestrator.Deps{
 		Client: client, Sandboxes: sandboxes, MaxWorkers: 1,
 		Framework: scriptedFramework(capabilityPushScript(remote, branch, task.ID, placementPath, placementContent)),
-		Config:    orchestrator.Config{Capabilities: model.NewCapabilityRegistry(provider)},
+		Config:    orchestrator.Config{Capabilities: productionLikeRegistry(provider)},
 	}
 
 	withStore(t, storeDir, func(store *model.Store, ctx context.Context) {
@@ -338,7 +338,7 @@ func TestRefusedCapabilityGrantFailsTheRunBeforeTheAgentStartsAndParksTheTask(t 
 	// Cycle is given, and the two have to be on the same timeline (see
 	// orchestrator.Config.Now).
 	cfg := orchestrator.Config{
-		Capabilities: model.NewCapabilityRegistry(cap),
+		Capabilities: productionLikeRegistry(cap),
 		Now:          func() time.Time { return clock },
 	}
 
@@ -409,4 +409,27 @@ func TestRefusedCapabilityGrantFailsTheRunBeforeTheAgentStartsAndParksTheTask(t 
 	if err != nil || len(second) != 1 || second[0].Attempt != 2 {
 		t.Fatalf("retry Cycle: %v, %+v, want attempt 2", err, second)
 	}
+}
+
+// productionLikeRegistry is a registry of providers that also answers
+// api:* grants the way the daemon's does (daemon.newCapabilityRegistryWithStore
+// registers ui.AgentAPIDynamicProvider): a task filed against a GitHub-CI
+// repository holds api:ci-read@<repo> by default (model.DefaultCIReadGrant),
+// and a bare registry would refuse it at dispatch.
+func productionLikeRegistry(providers ...model.CapabilityProvider) *model.CapabilityRegistry {
+	reg := model.NewCapabilityRegistry(providers...)
+	reg.RegisterDynamic(ui.AgentAPIDynamicProvider)
+	return reg
+}
+
+// withoutDefaultCIRead is caps minus the default api:ci-read a task on a
+// GitHub-CI repository is filed holding (model.DefaultCIReadGrant).
+func withoutDefaultCIRead(caps []string) []string {
+	out := make([]string, 0, len(caps))
+	for _, c := range caps {
+		if !strings.HasPrefix(c, model.APIRef("ci-read")+"=") {
+			out = append(out, c)
+		}
+	}
+	return out
 }

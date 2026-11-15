@@ -15,11 +15,14 @@
 package orchestrator_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
+	"github.com/ai-on-gke/grain/pkg/upgrade"
 )
 
 // operator is a person's own pause, the one thing neither half of the
@@ -240,5 +243,92 @@ func TestAnUpgradeTakesOverTheHoldAScheduledUpgradeWasKeeping(t *testing.T) {
 		t.Fatalf("GetPipelinePause: %v", err)
 	} else if pause != nil {
 		t.Errorf("still held after a failed upgrade let go: %q", pause.Reason)
+	}
+}
+
+func TestCancelledUpgradeNeverLeavesQueueHeldOrPipelinePaused(t *testing.T) {
+	t.Parallel()
+	for _, fromSchedule := range []bool{false, true} {
+		name := "manual"
+		if fromSchedule {
+			name = "from_scheduled_hold"
+		}
+		t.Run(name, func(t *testing.T) {
+			store, ctx := openStore(t)
+			dir := t.TempDir()
+			refFile := filepath.Join(dir, "image.env")
+			if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE=docker.io/grainai/grain:v3.1.0\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			pulling := filepath.Join(dir, "pulling")
+
+			if fromSchedule {
+				if err := store.SetPipelinePause(ctx, model.PipelinePause{
+					PausedAt: time.Now().UTC(),
+					Reason:   "waiting for this deployment to finish its work before upgrading to main",
+					By:       model.ScheduledUpgradePrincipal,
+				}); err != nil {
+					t.Fatalf("SetPipelinePause: %v", err)
+				}
+			}
+
+			u := upgrade.New(upgrade.Config{
+				GraceWindow: 30 * time.Second,
+				Image: &upgrade.ImageConfig{
+					Repository: "docker.io/grainai/grain",
+					RefFile:    refFile,
+					PullCmd:    []string{"sh", "-c", "touch " + pulling + "; sleep 30"},
+				},
+				Hold:       orchestrator.UpgradeHold(store),
+				StatusFile: filepath.Join(dir, "upgrade-status.json"),
+			})
+
+			var err error
+			if fromSchedule {
+				err = u.StartScheduled("main")
+			} else {
+				err = u.Start("main")
+			}
+			if err != nil {
+				t.Fatalf("starting upgrade: %v", err)
+			}
+
+			// Wait until the upgrade has actually acquired UpgradePrincipal's hold.
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				pause, perr := store.GetPipelinePause(ctx)
+				if perr == nil && pause != nil && pause.By == orchestrator.UpgradePrincipal {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("timed out waiting for upgrade hold; pause=%+v err=%v", pause, perr)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if fromSchedule {
+				for {
+					if _, serr := os.Stat(pulling); serr == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("timed out waiting for scheduled upgrade pull to start")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}
+
+			cancelled, err := u.Cancel("alice@example.com", "cancelled test")
+			if err != nil || !cancelled {
+				t.Fatalf("Cancel = (%v, %v), want (true, nil)", cancelled, err)
+			}
+
+			pause, err := store.GetPipelinePause(ctx)
+			if err != nil {
+				t.Fatalf("GetPipelinePause after cancel: %v", err)
+			}
+			if pause != nil {
+				t.Fatalf("cancelled upgrade left pipeline paused: %+v", pause)
+			}
+		})
 	}
 }

@@ -27,23 +27,62 @@ the resync that carries it lands.
 
 ## Synced at
 
-`gke-labs/granule` `main` at `1463ed6` (`1463ed6097335b986e3bbdb37f25c16c28fa1e74`,
-"Merge pull request #244 from gke-labs/grain/098073e4/task-3349-scrub-the-contributor-gcp",
-2026-11-06).
+`gke-labs/granule` `main` at `ccdbc4b` (`ccdbc4b77525a7f78e10e36f1b30efe35194f4c1`,
+"Merge pull request #256 from gke-labs/grain/098073e4/task-4451-dockervm-treat-removal-of",
+2026-11-12).
 
-The tree was replaced wholesale from a `git archive` of `1463ed6` with no
+The tree was replaced wholesale from a `git archive` of `ccdbc4b` with no
 local patches on top -- `third_party/granule` is byte-identical to upstream
-(grain task 3350). The previous sync was `b2fda8b` (`b2fda8bb`, grain task
-3024).
+(grain task 4452). The previous sync was `1e60085` (`1e60085d`, grain task
+3942).
 
-This sync carries PR #244 (`9de041c`) on top of `b2fda8b`, which drops the
-contributor GCP project default from `.github/workflows/e2e-ipv6-gke.yml`,
-`docs/github-actions-ci.md`, `docs/ipv6-dual-stack-design.md` and
-`test/e2e-ipv6.sh` (resolving `$GKE_PROJECT` from `GKE_PROJECT` or gcloud's
-configured project instead), retiring the last local patch grain carried so
-`tests/hygiene` (`TestCoreSaysNoGoogleTokens`) passes on an unmodified
-archive. Nothing touches Go code, `Dockerfile`, `go.mod`, `go.sum` or
-`vendor/`.
+This sync carries PRs #255–#256 on top of `1e60085`:
+- `pkg/dockervm`'s `docker rm -f` and `docker stop` treat docker's
+  "removal of container ... is already in progress" as a removal under
+  way, and wait (up to a minute, or until ctx ends) for `docker inspect`
+  to stop finding the container, so `granule vm delete` racing another
+  delete of the same VM clears the saved state instead of failing
+  (gke-labs/granule#256). grain's `granule.Command.Delete` dropped the
+  30×2 s retry loop it carried for this (grain task 4395); until upstream
+  granule's case-sensitive `isNotFound` (`"No such object"`) is updated for
+  Docker 28+/29's lowercase `error: no such object:` `docker inspect` output
+  (grain task 5486), `Command.Delete` and `Command.Create` re-run `granule vm`
+  once when `waitRemoved` trips on that terminal `docker inspect` after the
+  container has already vanished.
+- granule's own `.grain/` gains a gating `pr-review` trigger and template
+  (gke-labs/granule#255); it only applies to granule's repository.
+
+`go.sum` and `vendor/` are unchanged, and `pkg/guestimage`'s contract is
+untouched, so `scripts/granule/build-granule-image.sh` and
+`scripts/granule/guest-inputs.sh` need no change.
+
+### What the `1e60085` sync carried
+
+- granule's guest binaries (`granule-shim`, `granule-agent`,
+  `granule-container`, `granule-mem-agent`) are built on
+  `golang:1.26-bookworm` rather than go1.22, and `go.mod` says `go 1.25.13`
+  / `toolchain go1.26.10` (gke-labs/granule#253, #254). This is what clears
+  the sandbox image's `stdlib` findings on those binaries, which
+  `.grain/baselines/image-vulns-allowlist.yaml` waived until now.
+- Every `debian:bookworm-slim` pin in `Dockerfile`, and
+  `pkg/guestpack.DefaultPackerImage`, moves to
+  `sha256:734a72b3d614...`, the digest grain's own Dockerfiles use
+  (gke-labs/granule#252).
+- Test-script, prompt and doc changes only (`test/rootless-vm.sh`,
+  `test/sandbox-access-vm.sh`, `test/granulefiles/run.sh`,
+  `benchmarks/microbenchmarks`, the stale `docs/konturfile.md` removed;
+  gke-labs/granule#245–#251).
+
+### What the `1463ed6` sync carried
+
+The `1463ed6` sync (grain task 3350) carried PR #244 (`9de041c`) on top of
+`b2fda8b`, which drops the contributor GCP project default from
+`.github/workflows/e2e-ipv6-gke.yml`, `docs/github-actions-ci.md`,
+`docs/ipv6-dual-stack-design.md` and `test/e2e-ipv6.sh` (resolving
+`$GKE_PROJECT` from `GKE_PROJECT` or gcloud's configured project instead),
+retiring the last local patch grain carried so `tests/hygiene`
+(`TestCoreSaysNoGoogleTokens`) passes on an unmodified archive. Nothing
+touched Go code, `Dockerfile`, `go.mod`, `go.sum` or `vendor/`.
 
 ### What the `b2fda8b` sync carried
 

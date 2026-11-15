@@ -137,6 +137,10 @@ type GitProxy struct {
 	// review-comment, and grain git revert's revert-info
 	// (cli_actions.go). Nil answers each of them 501.
 	CLIActions CLIActions
+	// ReportChecker, when set, answers POST /cli/report/check (grain
+	// report check): a draft closing report checked against what the run
+	// has read so far. Nil answers it 501.
+	ReportChecker CLIReportChecker
 	// WaitCredit, when set, credits the time /cli/ci/wait and
 	// /cli/ci/run-job block back to the run's wall-clock deadline.
 	WaitCredit   CLIWaitCreditor
@@ -258,14 +262,22 @@ func (p *GitProxy) HandleRequest(ctx context.Context, method, path, query string
 	scopeOwner := req.ScopeOwner()
 
 	token, hasToken := ExtractBasicAuthToken(headers["Authorization"])
-	var sandbox string
+	var grant Grant
 	if hasToken {
-		sandbox, ok = p.Tokens.Authenticate(token)
+		grant, ok = p.Tokens.AuthenticateGrant(token)
 	}
 	if !hasToken || !ok {
 		unauthenticated := Denial(401, "authentication required")
 		unauthenticated.Headers["WWW-Authenticate"] = `Basic realm="grain-git-proxy"`
 		return unauthenticated
+	}
+	sandbox := grant.Sandbox
+	if denied, status, reason := p.checkGrantBinding(ctx, grant); denied {
+		p.audit().Record(AuditEntry{
+			Time: p.now(), Sandbox: sandbox, Host: req.Host, Owner: req.Owner, Repo: req.Repo,
+			Action: req.Action, Outcome: "denied: " + reason,
+		})
+		return Denial(status, "forbidden: "+reason)
 	}
 
 	// A per-team configuration repository's name (grain/config-<team>)
@@ -323,6 +335,15 @@ func (p *GitProxy) HandleRequest(ctx context.Context, method, path, query string
 		return Denial(500, "authorization check failed")
 	}
 	if !allowed {
+		if explainer, ok := p.Authorizer.(RemovalExplainer); ok {
+			if reason, removed := explainer.RemovedReason(ctx, sandbox, scopeOwner, req.Repo); removed {
+				p.audit().Record(AuditEntry{
+					Time: p.now(), Sandbox: sandbox, Host: req.Host, Owner: req.Owner, Repo: req.Repo,
+					Action: req.Action, Outcome: "denied: removed from the deployment",
+				})
+				return Denial(403, reason)
+			}
+		}
 		if withholder, ok := p.Authorizer.(interface {
 			WithheldReason(sandbox, owner, repo string) (string, bool)
 		}); ok {
@@ -816,6 +837,11 @@ func upstreamFailedDenial(err error, credential Credential) ProxyResponse {
 	reason := err.Error()
 	if credential.Token != nil && *credential.Token != "" {
 		reason = strings.ReplaceAll(reason, *credential.Token, "[token]")
+	}
+	if _, ok := AsLoginRedirect(err); ok {
+		// No answer from the host because a front end before it wants
+		// the grain host's own login renewed (LoginLapsedMarker).
+		return Denial(502, LoginLapsedMarker+"upstream request failed: "+reason)
 	}
 	return Denial(502, "upstream request failed: "+reason)
 }

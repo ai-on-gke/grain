@@ -749,14 +749,14 @@ describe("RepoList", () => {
       expect(status).not.toHaveTextContent("Added");
     });
 
-    // The first add waits on POST /api/settings/plan before its
+    // The first add waits on POST /api/repos/plan before its
     // confirmation can even appear (grain/task-411): that wait was the
     // most silent of all, so it is inside the pending window too, and a
     // declined confirmation hands the form back as it was.
     it("is already in progress while the first add's confirmation waits on the plan", async () => {
       let resolvePlan;
       api.mockImplementation((path) =>
-        path === "/api/settings/plan"
+        path === "/api/repos/plan"
           ? new Promise((resolve) => {
               resolvePlan = resolve;
             })
@@ -949,7 +949,7 @@ describe("RepoList", () => {
       "still in play there is parked instead of dispatched.";
     api.mockImplementation((path) =>
       Promise.resolve(
-        path === "/api/settings/plan"
+        path === "/api/repos/plan"
           ? { targetReposStranded: [{ repo: "acme/gadgets", summary }] }
           : {},
       ),
@@ -963,7 +963,7 @@ describe("RepoList", () => {
     await user.click(screen.getByRole("button", { name: "Add repo" }));
 
     // Planned as the save this click makes: the list it would write.
-    expect(api).toHaveBeenCalledWith("/api/settings/plan", {
+    expect(api).toHaveBeenCalledWith("/api/repos/plan", {
       method: "POST",
       body: JSON.stringify({ targetRepos: ["acme/widgets"] }),
     });
@@ -986,7 +986,7 @@ describe("RepoList", () => {
     await user.click(screen.getByRole("button", { name: "Add repo" }));
 
     // The plan the confirmation was built from is the one call a decline
-    // still makes, and it writes nothing (POST /api/settings/plan is a
+    // still makes, and it writes nothing (POST /api/repos/plan is a
     // computed answer about a body, not a save).
     expect(api).not.toHaveBeenCalledWith("/api/repos", expect.anything());
     expect(onRefreshConfig).not.toHaveBeenCalled();
@@ -1171,5 +1171,58 @@ describe("RepoList", () => {
       body: JSON.stringify({ repo: "acme/gadgets" }),
     });
     vi.unstubAllGlobals();
+  });
+
+  it("surfaces a warning when a stored hostless entry is reachable only on a non-default git host", async () => {
+    api.mockImplementation((path) => {
+      if (path === "/api/deployment/reachable-repos") {
+        return Promise.resolve({
+          available: true,
+          repos: [
+            { repo: "acme/widgets", push: true },
+            { repo: "git.forge.example/experimental/grain", push: true },
+          ],
+          connections: [
+            { credential: "github-token", host: "github.com", ok: true },
+            { credential: "forge-token", host: "git.forge.example", ok: true },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+    renderList({
+      config: { targetRepos: ["acme/widgets", "experimental/grain"] },
+    });
+    const alert = await screen.findByTestId("repo-host-mismatch-alert");
+    expect(alert).toHaveTextContent(
+      "experimental/grain: this entry resolves to github.com; did you mean git.forge.example/experimental/grain?",
+    );
+  });
+
+  it("honors an empty server hostMismatches array without falling back to reach.repos", async () => {
+    api.mockImplementation((path) => {
+      if (path === "/api/deployment/reachable-repos") {
+        return Promise.resolve({
+          available: true,
+          repos: [
+            { repo: "acme/widgets", push: true },
+            { repo: "git.forge.example/custom/cloned", push: true },
+          ],
+          connections: [
+            { credential: "github-token", host: "github.com", ok: true },
+            { credential: "forge-token", host: "git.forge.example", ok: true },
+          ],
+          hostMismatches: [],
+        });
+      }
+      return Promise.resolve({});
+    });
+    renderList({
+      config: { targetRepos: ["acme/widgets", "custom/cloned"] },
+    });
+    await screen.findByText("custom/cloned");
+    expect(
+      screen.queryByTestId("repo-host-mismatch-alert"),
+    ).not.toBeInTheDocument();
   });
 });

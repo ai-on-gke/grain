@@ -301,7 +301,8 @@ func (s *Store) Supersede(ctx context.Context, oldID string, replacement Task, p
 		}); err != nil {
 			return err
 		}
-		return retargetDependents(ctx, tx, oldID, replacement.ID, author, now, &result)
+		return retargetDependents(ctx, tx, oldID, replacement.ID, author, now, &result,
+			SupersedeMovedComment, SupersedeKeptComment)
 	})
 	return result, err
 }
@@ -334,8 +335,14 @@ func closeInTx(ctx context.Context, tx *sql.Tx, taskID string, now time.Time, by
 // retargetDependents is Store.Supersede's second half: every open task
 // with a blocking link to oldID gets it pointed at replacementID instead,
 // apart from the ones SupersedeResult.Kept describes.
+//
+// moved and kept write the comment each dependent's own conversation is
+// given (SupersedeMovedComment and SupersedeKeptComment for a supersede,
+// RolloverMovedComment and RolloverKeptComment for a rollover).
 func retargetDependents(ctx context.Context, tx *sql.Tx, oldID, replacementID string,
-	author Attribution, now time.Time, result *SupersedeResult) error {
+	author Attribution, now time.Time, result *SupersedeResult,
+	moved func(oldID, replacementID string) string,
+	kept func(oldID, replacementID, reason string) string) error {
 
 	var dependents []string
 	if err := each(ctx, tx,
@@ -379,7 +386,7 @@ func retargetDependents(ctx context.Context, tx *sql.Tx, oldID, replacementID st
 			if _, err := addComment(ctx, tx, Comment{
 				TaskID:    id,
 				Author:    author,
-				Body:      SupersedeKeptComment(oldID, replacementID, reason),
+				Body:      kept(oldID, replacementID, reason),
 				CreatedAt: now,
 			}); err != nil {
 				return err
@@ -400,7 +407,7 @@ func retargetDependents(ctx context.Context, tx *sql.Tx, oldID, replacementID st
 		if _, err := addComment(ctx, tx, Comment{
 			TaskID:    id,
 			Author:    author,
-			Body:      SupersedeMovedComment(oldID, replacementID),
+			Body:      moved(oldID, replacementID),
 			CreatedAt: now,
 		}); err != nil {
 			return err

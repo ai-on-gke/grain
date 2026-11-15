@@ -73,6 +73,7 @@ func configureUpgradeDemo(dir string, store *model.Store, cfg ui.Config, image s
 		Hold:            orchestrator.UpgradeHold(store),
 		StatusFile:      filepath.Join(dir, "upgrade-status.json"),
 		AllowedBranches: allowed,
+		GraceWindow:     upgrade.DefaultGraceWindow,
 	})
 	cfg.Upgrader = u
 	return cfg, nil

@@ -46,7 +46,12 @@ type PendingConfigChange struct {
 	Description string `json:"description,omitempty"`
 	// Files are the paths the change touches, Diff its unified diff
 	// against the merge base with Base.
-	Files      []string               `json:"files"`
+	Files []string `json:"files"`
+	// Columns is, for a table file the change touches whose rows could
+	// be read on both sides, the columns it alters there
+	// (trustboundary.ChangedColumns): what approving it needs is judged
+	// by them rather than by the path (trustboundary.StateScopes).
+	Columns    map[string][]string    `json:"columns,omitempty"`
 	Diff       string                 `json:"diff"`
 	Validation ConfigChangeValidation `json:"validation"`
 	CreatedAt  time.Time              `json:"createdAt"`

@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Link, Stack, Typography } from "@mui/material";
 import api from "../../api.js";
+import AccessGate from "../AccessGate.jsx";
 import { newTaskPath } from "../../paths.js";
 import {
   CustomFieldInputs,
@@ -143,9 +144,11 @@ export default function CustomFieldsSection({
           )}
           <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
             {declared.length > 0 && (
-              <Button size="small" onClick={open}>
-                Edit fields
-              </Button>
+              <AccessGate scope="tasks:write" repo={t.repo}>
+                <Button size="small" onClick={open}>
+                  Edit fields
+                </Button>
+              </AccessGate>
             )}
             <Link
               href={newTaskHref}

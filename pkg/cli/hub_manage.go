@@ -335,7 +335,7 @@ func cmdHubRotateCredential(ctx context.Context, c *ui.HTTPClient, out *printer,
 func cmdHubUpgrade(ctx context.Context, c *ui.HTTPClient, out *printer, args []string) error {
 	fs := flag.NewFlagSet("grain hub upgrade", flag.ContinueOnError)
 	tf := bindHubTargetFlags(fs)
-	ver := fs.String("version", "", "target grain release version (defaults to hub's current pinned release)")
+	ver := fs.String("version", "", "target grain release version for hosted VM replacement (defaults to hub's current pinned release; connected entries run in-place upgrades via \"grain -context <name> upgrade\")")
 
 	rest, err := parseArgs(fs, args)
 	if err != nil {

@@ -582,6 +582,10 @@ func Reconcilers() []Reconciler {
 		// Right after it, so that a branch found green this tick closes
 		// the goal tasks waiting on it on this tick (reconcileTaskGoals).
 		{Name: "task-goals", Reconcile: reconcileTaskGoals},
+		// After it, so a goal met this tick closes its task rather than
+		// rolling it over to a successor that would have to meet it again
+		// (reconcileRollover).
+		{Name: "rollover", Reconcile: reconcileRollover},
 		// Beside it, and deliberately not inside it: the work that
 		// follows a base branch without judging it -- a repository's
 		// content-addressed build cache above all -- is dispatched here,
@@ -840,6 +844,7 @@ func RunCycle(ctx context.Context, deps Deps, now time.Time) error {
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
 			deps.Config.Skills = mc.Skills.Clone()
+			deps.Config.QA = mc.QA.Clone()
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
@@ -930,6 +935,7 @@ func RunDispatchCycle(ctx context.Context, deps Deps, now time.Time) error {
 			deps.Config.MaxAgentTurns = mc.MaxAgentTurns
 			deps.Config.PromptExtension = mc.PromptExtension
 			deps.Config.Skills = mc.Skills.Clone()
+			deps.Config.QA = mc.QA.Clone()
 			deps.Config.TimeZone = mc.TimeZone
 			if deps.Config.SessionSandboxIdleTTL == 0 {
 				deps.Config.SessionSandboxIdleTTL = mc.SessionSandboxIdleTTLOr()
@@ -2218,11 +2224,6 @@ func deploymentNetworkAccess(ctx context.Context, store *model.Store) model.Netw
 	return cfg.NetworkAccess
 }
 
-// taskBaseTarget returns the primary repository and base branch the task targets.
-func taskBaseTarget(task *model.Task) (model.RepoRef, string) {
-	return model.TaskBaseBranch(*task)
-}
-
 // pendingBase is the pending branch request task's base names, if any.
 func pendingBase(task model.Task, pending []model.Branch) (model.Branch, bool) {
 	for _, b := range pending {
@@ -2370,21 +2371,13 @@ func runQueuedAt(ctx context.Context, store *model.Store, task model.Task, attem
 	}
 	if store != nil {
 		if attempt > 1 {
-			if runs, err := store.Runs(ctx, task.ID); err == nil {
-				for _, r := range runs {
-					if r.Attempt < attempt && r.FinishedAt != nil && !r.FinishedAt.After(startedAt) && r.FinishedAt.After(q) {
-						q = *r.FinishedAt
-					}
-				}
+			if finishedAt, err := store.LatestRunFinishedBefore(ctx, task.ID, attempt, startedAt); err == nil && finishedAt.After(q) {
+				q = finishedAt
 			}
 		}
 		if attempt > 1 || task.Interactive {
-			if comments, err := store.Comments(ctx, task.ID); err == nil {
-				for _, c := range comments {
-					if c.Author.Actor.Kind != model.PrincipalAgent && !c.CreatedAt.After(startedAt) && c.CreatedAt.After(q) {
-						q = c.CreatedAt
-					}
-				}
+			if saidAt, err := store.LatestNonAgentCommentAtBefore(ctx, task.ID, startedAt); err == nil && saidAt.After(q) {
+				q = saidAt
 			}
 		}
 	}
@@ -2904,7 +2897,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		tools:              tools,
 		sandboxRoot:        sandboxRoot,
 		placer:             placer,
-		mint:               deps.MintSandboxToken,
+		mint:               mintSandboxTokenFor(deps, d.TaskID, d.Attempt),
 		credentialIdentity: deps.CredentialGitIdentity,
 	})
 	defer stopRecreating()
@@ -3035,7 +3028,7 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 	obs, _ := deps.Store.GetObservation(ctx, task.ID)
 	var preRunBranchSHA string
 	if deps.Client != nil && task.Target != nil && (d.Attempt > 1 || obs.RepairInFlight() || hasFixesLink(*task)) {
-		if head, err := deps.Client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName()); err == nil && head != nil {
+		if head, err := deps.Client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName()); err == nil && head != nil {
 			preRunBranchSHA = head.SHA
 		}
 	}
@@ -3133,7 +3126,7 @@ func afterAgentRun(ctx context.Context, deps Deps, task model.Task, runID string
 			// usage-limit-paused repair as completed.
 			salvage := true
 			if preRunBranchSHA != "" && deps.Client != nil && task.Target != nil {
-				head, err := deps.Client.GetBranchHead(task.Target.Owner, task.Target.Name, task.BranchName())
+				head, err := deps.Client.GetBranchHead(task.Target.StoredOwner(), task.Target.Name, task.BranchName())
 				salvage = err == nil && head != nil && head.SHA != preRunBranchSHA
 			} else if obs, err := deps.Store.GetObservation(ctx, task.ID); err == nil && obs.RepairInFlight() {
 				salvage = false

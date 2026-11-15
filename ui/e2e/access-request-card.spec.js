@@ -80,17 +80,30 @@ async function awaitingTask(request) {
 // fakeAccessRequest answers task id's detail as parked on pendingAccess,
 // and records each decision posted rather than letting it reach the
 // store.
-async function fakeAccessRequest(page, id) {
-  await page.route(new RegExp(`/api/tasks/${id}$`), async (route) => {
+async function fakeAccessRequest(page, id, pending = pendingAccess) {
+  await page.route(new RegExp(`/api/tasks/${id}(\\?.*)?$`), async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const headers = { ...route.request().headers() };
     delete headers["if-none-match"];
-    const response = await route.fetch({ headers });
-    const body = await response.json();
+    // The page polls this route. Under load one poll's response can be
+    // disposed before it is read ("Response has been disposed"), and a
+    // throw here fails the test; let that one through unfaked instead --
+    // the next poll is faked, and the card is still asserted below.
+    let response, body;
+    try {
+      response = await route.fetch({ headers });
+      body = await response.json();
+    } catch {
+      return route.fallback().catch(() => {});
+    }
     await route.fulfill({
       response,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...body, awaitingAccess: true, pendingAccess }),
+      body: JSON.stringify({
+        ...body,
+        awaitingAccess: true,
+        pendingAccess: pending,
+      }),
     });
   });
   const decisions = [];
@@ -228,5 +241,84 @@ for (const [name, size] of Object.entries(SIZES)) {
       }
       await page.evaluate(() => localStorage.removeItem("grain.themeMode"));
     }
+  });
+}
+
+// A request parked on grain#ci (task 3950's) on a ci_mode: github repo:
+// the item cannot be granted, so the card says why and offers
+// api:ci-read@<repo> in its place (AccessRequestItemView.Substitute), and
+// Grant sends it rather than failing.
+const CI_READ =
+  'https://grain.dev/capabilities/api#ci-read={"repo":"acme/widgets"}';
+const grainCIAccess = {
+  summary: "Grant grain#ci so this run can read its CI",
+  reason: "grain ci list answered forbidden.",
+  createdAt: "2026-11-03T10:00:00Z",
+  items: [
+    {
+      kind: "grant",
+      capability: "https://grain.dev/capabilities/grain#ci",
+      error:
+        'https://grain.dev/capabilities/grain#ci (formerly grain-ci) cannot be attached by hand: grain grants it to every task on a repository whose CI Mode is "Use Grain CI" (the repo\'s page, Settings -> Repos), and to no task on any other. acme/widgets\'s CI Mode is "Use GitHub CI": `grain ci wait` and `grain pr open` need no grant there, and to read its CI runs and logs (grain ci list/show/log, grain pr status, ci://) grant https://grain.dev/capabilities/api#ci-read with {repo: "acme/widgets"} instead',
+      substitute: {
+        kind: "grant",
+        capability: "https://grain.dev/capabilities/api#ci-read",
+        with: { repo: "acme/widgets" },
+      },
+      substituteGrant: CI_READ,
+    },
+  ],
+  holds: { reads: [], writes: [], grants: [], networkAccess: "" },
+};
+
+for (const [name, size] of Object.entries(SIZES)) {
+  test(`access request card offers api:ci-read for grain#ci (${name})`, async ({
+    page,
+    request,
+  }) => {
+    await page.setViewportSize(size);
+    const task = await awaitingTask(request);
+    expect(task, `the demo's "${TITLE}" task`).toBeTruthy();
+    const decisions = await fakeAccessRequest(page, task.id, grainCIAccess);
+
+    await page.goto(`/tasks/${task.id}`);
+    const card = page.getByRole("region", {
+      name: "Access request waiting for your decision",
+    });
+    await expect(card).toBeVisible();
+    await expect(
+      card.getByText("instead of https://grain.dev/capabilities/grain#ci"),
+    ).toBeVisible();
+    await expect(card.getByTestId("access-item-error")).toContainText(
+      "in its place; Deny declines it.",
+    );
+    await expect(
+      card.getByRole("checkbox", { name: `Grant ${CI_READ}` }),
+    ).toBeChecked();
+    await expectInside(card, page, size.width);
+
+    const dir = process.env.SHOTS_DIR;
+    if (dir) {
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate(
+          (t) => localStorage.setItem("grain.themeMode", t),
+          theme,
+        );
+        await page.emulateMedia({ colorScheme: theme });
+        await page.reload();
+        await expect(card).toBeVisible();
+        await page.waitForTimeout(300);
+        await card.screenshot({
+          path: `${dir}/access-card-grain-ci-${name}-${theme}.png`,
+        });
+      }
+      await page.evaluate(() => localStorage.removeItem("grain.themeMode"));
+      await page.emulateMedia({ colorScheme: "light" });
+      await page.reload();
+    }
+
+    await card.getByRole("button", { name: "Grant all" }).click();
+    await expect.poll(() => decisions.length).toBe(1);
+    expect(decisions[0]).toEqual({ verb: "grant", body: {} });
   });
 }

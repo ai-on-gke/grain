@@ -1,0 +1,6 @@
+# grain-agentd release public key (key_id: 400c13f9474e924f)
+# Replace with your release signing key's public half (`go run ./pkg/agentd/release/cmd/grain-agentd-sign keygen`),
+# or stamp -X github.com/ai-on-gke/grain/pkg/agentd/release.ReleasePublicKey at build time.
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEA8EeGcgYpoX4kbHQSUU6dd1HpEGER63LnuroDkBUx6W8=
+-----END PUBLIC KEY-----

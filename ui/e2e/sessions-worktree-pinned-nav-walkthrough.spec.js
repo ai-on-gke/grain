@@ -565,13 +565,14 @@ test.describe("Every scenario's declarations together", () => {
     await expect(
       page.getByText(/Last read failed: .*\.grain\/triggers\/broken\.yml/),
     ).toBeVisible();
-    // The repository's own port-types findings are said twice by design
-    // (pkg/ui/repos.go): among the declarations' warnings, and again in
-    // the Ports box beside the directions they are about.
+    // The repository's own port-types findings are said once, among the
+    // declarations' warnings (pkg/ui/repos.go: "the pane already shows
+    // them"); the Ports box adds only the operator's findings, so it does
+    // not repeat them (2026-11-11 repository walkthrough).
     await expect(
       page.locator(".repo-ports").getByText(/^Warning: port-types in/),
-    ).toHaveCount(2);
-    await expect(page.getByText(/^Warning: port-types in/)).toHaveCount(4);
+    ).toHaveCount(0);
+    await expect(page.getByText(/^Warning: port-types in/)).toHaveCount(2);
     await expect(
       page.getByText(/^Warning: \.grain\/merge-rules\.yml/),
     ).not.toHaveCount(0);

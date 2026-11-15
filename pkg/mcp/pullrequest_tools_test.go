@@ -487,6 +487,12 @@ func TestPullRequestStatusWithoutAScopeSaysSo(t *testing.T) {
 			if !res.IsError {
 				t.Errorf("IsError = false, want an error result: %s", res.Text)
 			}
+			// It names what reaches the same checks from the sandbox (task 4361).
+			for _, want := range []string{"`grain pr open`", "`grain ci wait`"} {
+				if !strings.Contains(res.Text, want) {
+					t.Errorf("answer does not name %s:\n%s", want, res.Text)
+				}
+			}
 			if !strings.Contains(res.Text, "no GitHub repository configured") {
 				t.Errorf("answer does not explain why there is nothing to report:\n%s", res.Text)
 			}
@@ -986,5 +992,22 @@ func TestPullRequestToolsWithUpstreamRepoScope(t *testing.T) {
 		if r != "gke-labs/kube-agents" {
 			t.Fatalf("base_branch_status queried %q, want only gke-labs/kube-agents (repos=%v)", r, fake.repos)
 		}
+	}
+}
+
+func TestPullRequestScopePRHeadStripsHostPrefixFromStoredOwner(t *testing.T) {
+	t.Parallel()
+	scope := PullRequestScope{
+		Owner:         "ghe.example.com/sackheads",
+		Repo:          "kube-agents",
+		Branch:        "grain/task-8-fork",
+		UpstreamOwner: "ghe.example.com/gke-labs",
+		UpstreamRepo:  "kube-agents",
+	}
+	if got := scope.prOwner(); got != "ghe.example.com/gke-labs" {
+		t.Fatalf("prOwner() = %q, want %q", got, "ghe.example.com/gke-labs")
+	}
+	if got := scope.prHead(); got != "sackheads:grain/task-8-fork" {
+		t.Fatalf("prHead() = %q, want %q", got, "sackheads:grain/task-8-fork")
 	}
 }

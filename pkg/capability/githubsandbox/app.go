@@ -188,7 +188,7 @@ func (c *realAppClient) FindInstallation(ctx context.Context) (Installation, err
 			logins[i] = r.Account.Login
 		}
 		return Installation{}, fmt.Errorf(
-			"this App must be installed on exactly one account for github-sandbox to know "+
+			"this App must be installed on exactly one account for https://grain.dev/capabilities/github#sandbox-repo to know "+
 				"where to create repos; found %d (%v)", len(raw), logins,
 		)
 	}

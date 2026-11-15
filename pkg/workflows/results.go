@@ -241,6 +241,19 @@ type Run struct {
 	Provider string `json:"provider,omitempty"`
 
 	Jobs []JobRun `json:"jobs"`
+	// JobCount and JobsTruncated are set only on a row of a paged
+	// listing (GET /api/ci/runs as an agent, or with limit, cursor or
+	// q) that carries just the first few of a run's jobs: how many jobs
+	// the run has, and that Jobs is not all of them. A base-branch run
+	// over a few hundred declared workflows was 280 KB on one row. The
+	// run itself (GET /api/ci/runs/{id}) always carries every job.
+	JobCount      int  `json:"jobCount,omitempty"`
+	JobsTruncated bool `json:"jobsTruncated,omitempty"`
+	// ErrorTruncated is set only on a paged listing's row whose Error
+	// was cut short: a run with nothing to run lists every workflow the
+	// commit declares in its error, 33 KB on one row of a repository
+	// declaring a few hundred.
+	ErrorTruncated bool `json:"errorTruncated,omitempty"`
 }
 
 // The CI providers a listed run can come from (Run.Provider).

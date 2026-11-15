@@ -21,7 +21,9 @@
 #   GRANULE_IMAGE       the granule image whose cloud-hypervisor, kernel and
 #                       guest disk are booted (default
 #                       ghcr.io/gke-labs/granule/alpine:latest); its guest
-#                       needs busybox's ping, which the alpine one has
+#                       needs busybox's ping, which the alpine one has. An
+#                       image already in the local Docker store (a locally
+#                       built tag, say) is used as is, without pulling
 #   GRANULE_SHIM        a static granule-shim to boot with (default: built
 #                       from this tree, CGO_ENABLED=0, which is what is
 #                       under test; the image's own is not used)
@@ -201,15 +203,32 @@ elif ! (cd "$ROOT" && CGO_ENABLED=0 go build -trimpath -o "$W/granule-shim" ./cm
 fi
 chmod 0755 "$W/granule-shim"
 
-# In a grain K8s sandbox, grain configures the authenticated GHCR package
-# cache mirror at http://127.0.0.1:9729/v2/ghcr in
-# /etc/docker/certs.d/ghcr.io/hosts.toml, which classic dockerd (without the
-# containerd snapshotter) ignores while registry-mirrors only covers
-# docker.io. Pull ghcr.io/* through 127.0.0.1:9729/ghcr/* when that mirror is
-# present or when a direct pull of ghcr.io/* fails.
+# grain configures an authenticated GHCR package cache mirror in
+# /etc/docker/certs.d/ghcr.io/hosts.toml -- http://127.0.0.1:9729/v2/ghcr in a
+# K8s sandbox, http://192.168.9.1:9729/v2/ghcr on a VM sandbox -- which classic
+# dockerd (without the containerd snapshotter) ignores while registry-mirrors
+# only covers docker.io. Pull ghcr.io/* through <mirror host:port>/ghcr/* when
+# that mirror is configured or when a direct pull of ghcr.io/* fails.
+ghcr_mirror_host() {
+  local host
+  host=$(sed -n 's|^[[:space:]]*\[host\."https\{0,1\}://\([^/"]*\)/v2/ghcr"\].*|\1|p' \
+    /etc/docker/certs.d/ghcr.io/hosts.toml 2>/dev/null | head -n 1)
+  echo "${host:-127.0.0.1:9729}"
+}
+
 pull_granule_image() {
-  local mirror_ref="127.0.0.1:9729/ghcr/${GRANULE_IMAGE#ghcr.io/}"
-  if [[ $GRANULE_IMAGE == ghcr.io/* ]] && grep -q '127.0.0.1:9729/v2/ghcr' /etc/docker/certs.d/ghcr.io/hosts.toml 2>/dev/null; then
+  # An image already in the local store (a locally built tag, say) is used as
+  # is: pulling it would ask a registry that has never heard of it.
+  if docker image inspect "$GRANULE_IMAGE" >/dev/null 2>&1; then
+    return 0
+  fi
+  local mirror_host configured=
+  mirror_host=$(ghcr_mirror_host)
+  if grep -q "$mirror_host/v2/ghcr" /etc/docker/certs.d/ghcr.io/hosts.toml 2>/dev/null; then
+    configured=1
+  fi
+  local mirror_ref="$mirror_host/ghcr/${GRANULE_IMAGE#ghcr.io/}"
+  if [[ $GRANULE_IMAGE == ghcr.io/* && -n $configured ]]; then
     if docker pull -q "$mirror_ref" >/dev/null && docker tag "$mirror_ref" "$GRANULE_IMAGE"; then
       return 0
     fi

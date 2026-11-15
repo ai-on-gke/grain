@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -36,6 +37,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -45,6 +47,7 @@ import (
 	"github.com/ai-on-gke/grain/pkg/installtrack/installtracktest"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/sandboximage"
+	"github.com/ai-on-gke/grain/pkg/secrets"
 	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/version"
 )
@@ -311,7 +314,7 @@ func TestUpdateSettingsRoundTripsDefaultCapabilities(t *testing.T) {
 
 	// Repeated deliberately: a picker can produce a duplicate, and this
 	// is a set.
-	defaults := []string{"github-sandbox", "github-sandbox"}
+	defaults := []string{model.GitHubSandboxRepoGrant, model.GitHubSandboxRepoGrant}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &defaults})
 	if err != nil {
 		t.Fatalf("setting default capabilities: %v", err)
@@ -392,18 +395,18 @@ func TestUpdateSettingsAcceptsDroppingARetiredDefaultCapability(t *testing.T) {
 	// it can only be one that had a row when it was chosen and lost it to
 	// an upgrade since (OfferedCapabilities' own "scratch-repo", now
 	// github-sandbox).
-	putDefaultCapabilities(t, ctx, store, "github-sandbox", "scratch-repo")
+	putDefaultCapabilities(t, ctx, store, model.GitHubSandboxRepoGrant, "scratch-repo")
 
 	read, err := c.GetSettings(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(read.DefaultCapabilities, []string{"github-sandbox", "scratch-repo"}) {
+	if !reflect.DeepEqual(read.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant, "scratch-repo"}) {
 		t.Fatalf("DefaultCapabilities = %v, want it reported as stored: an operator can only clear one they can see",
 			read.DefaultCapabilities)
 	}
 
-	kept := []string{"github-sandbox"}
+	kept := []string{model.GitHubSandboxRepoGrant}
 	saved, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &kept})
 	if err != nil {
 		t.Fatalf("dropping a retired default capability: %v", err)
@@ -432,11 +435,11 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
 		t.Fatal(err)
 	}
-	deployment := []string{"github-sandbox"}
+	deployment := []string{model.GitHubSandboxRepoGrant}
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &deployment}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{"github-sandbox"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/gadgets", []string{model.GitHubSandboxRepoGrant}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -448,15 +451,15 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	for _, status := range read.Capabilities {
 		byID[status.ID] = status
 	}
-	if got := byID["github-sandbox"]; !got.Default {
+	if got := byID[model.GitHubSandboxRepoGrant]; !got.Default {
 		t.Errorf("github-sandbox Default = false, want true: the deployment defaults it")
 	}
 	// Reported even though the deployment already defaults it: dropping
 	// the deployment-wide entry leaves acme/gadgets' own standing.
-	if got := byID["github-sandbox"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
+	if got := byID[model.GitHubSandboxRepoGrant].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets"}) {
 		t.Errorf("github-sandbox DefaultRepos = %v, want [acme/gadgets]", got)
 	}
-	if got := byID["image-signing"].DefaultRepos; len(got) != 0 {
+	if got := byID[model.ImageSigningRef+"={}"].DefaultRepos; len(got) != 0 {
 		t.Errorf("image-signing DefaultRepos = %v, want none", got)
 	}
 
@@ -464,7 +467,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{DefaultCapabilities: &empty}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"github-sandbox"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{model.GitHubSandboxRepoRef}); err != nil {
 		t.Fatal(err)
 	}
 	read, err = c.GetSettings(ctx)
@@ -475,11 +478,11 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 	for _, status := range read.Capabilities {
 		byID[status.ID] = status
 	}
-	if got := byID["github-sandbox"]; got.Default {
+	if got := byID[model.GitHubSandboxRepoGrant]; got.Default {
 		t.Errorf("github-sandbox Default = true, want false: no task outside those two repos is filed with it")
 	}
 	// Sorted by repo, the order Store.ListRepoConfigs returns.
-	if got := byID["github-sandbox"].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
+	if got := byID[model.GitHubSandboxRepoGrant].DefaultRepos; !reflect.DeepEqual(got, []string{"acme/gadgets", "acme/widgets"}) {
 		t.Errorf("github-sandbox DefaultRepos = %v, want [acme/gadgets acme/widgets]", got)
 	}
 }
@@ -491,7 +494,7 @@ func TestSettingsReportsWhichLayerDefaultsACapability(t *testing.T) {
 func TestSettingsReportsRepoDefaultsBeforeAnythingIsSaved(t *testing.T) {
 	t.Parallel()
 	c, _, ctx := testClient(t)
-	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"github-sandbox"}); err != nil {
+	if _, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{model.GitHubSandboxRepoGrant}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1170,10 +1173,48 @@ func TestUpdateSettingsRoundTripsTheAutomaticUpgrade(t *testing.T) {
 	if read.AutoUpgradeOn != model.AutoUpgradeDaily {
 		t.Errorf("a channel with no mode reads back as %q, want daily", read.AutoUpgradeOn)
 	}
+	if read.AutoUpgradeMinIntervalHours != model.DefaultAutoUpgradeMinIntervalHours ||
+		read.AutoUpgradeMinIntervalHoursDefault != model.DefaultAutoUpgradeMinIntervalHours {
+		t.Errorf("default AutoUpgradeMinIntervalHours = %d (default %d), want %d",
+			read.AutoUpgradeMinIntervalHours, read.AutoUpgradeMinIntervalHoursDefault, model.DefaultAutoUpgradeMinIntervalHours)
+	}
 	release := " Release "
-	if got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &release}); err != nil ||
-		got.AutoUpgradeOn != model.AutoUpgradeOnRelease {
-		t.Fatalf("turning on release upgrades: %q, %v", got.AutoUpgradeOn, err)
+	zero := 0
+	if got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+		AutoUpgradeOn:               &release,
+		AutoUpgradeMinIntervalHours: &zero,
+	}); err != nil || got.AutoUpgradeOn != model.AutoUpgradeOnRelease || got.AutoUpgradeMinIntervalHours != 0 {
+		t.Fatalf("turning on release upgrades with min interval 0: on=%q min=%d err=%v",
+			got.AutoUpgradeOn, got.AutoUpgradeMinIntervalHours, err)
+	}
+	twelve := 12
+	if got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+		AutoUpgradeMinIntervalHours: &twelve,
+	}); err != nil || got.AutoUpgradeMinIntervalHours != 12 {
+		t.Fatalf("setting min interval to 12h: %d, %v", got.AutoUpgradeMinIntervalHours, err)
+	}
+	neg := -1
+	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+		AutoUpgradeMinIntervalHours: &neg,
+	}); err == nil {
+		t.Error("a negative autoUpgradeMinIntervalHours was accepted")
+	}
+	// The largest a time.Duration holds is accepted and reads back
+	// exactly; one hour more, or math.MaxInt (which the browser would read
+	// back rounded and could not save again), is refused
+	// (docs/test-runs/2026-11-11-upgrades.md).
+	most := model.MaxAutoUpgradeMinIntervalHours
+	if got, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+		AutoUpgradeMinIntervalHours: &most,
+	}); err != nil || got.AutoUpgradeMinIntervalHours != most {
+		t.Fatalf("setting min interval to %d: %d, %v", most, got.AutoUpgradeMinIntervalHours, err)
+	}
+	for _, huge := range []int{model.MaxAutoUpgradeMinIntervalHours + 1, math.MaxInt} {
+		if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{
+			AutoUpgradeMinIntervalHours: &huge,
+		}); err == nil || !strings.Contains(err.Error(), "at most") {
+			t.Errorf("autoUpgradeMinIntervalHours %d: err = %v, want a refusal naming the most accepted", huge, err)
+		}
 	}
 	hourly := "hourly"
 	if _, err := c.UpdateSettings(ctx, ui.UpdateSettingsRequest{AutoUpgradeOn: &hourly}); err == nil {
@@ -1874,6 +1915,73 @@ func TestCheckImageManifestHTTPServer(t *testing.T) {
 	}
 }
 
+func TestCheckImageManifestCanceledCallerDoesNotPoisonFlightOrCache(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var headCalls atomic.Int32
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"tok"}`))
+		case "/v2/acme/grain/k8s-sandbox/manifests/flight-cancel-test":
+			if r.Header.Get("Authorization") != "Bearer tok" {
+				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="%s/token",service="registry",scope="repository:acme/grain/k8s-sandbox:pull"`, srvURL))
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			headCalls.Add(1)
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+	ref := strings.TrimPrefix(srv.URL, "http://") + "/acme/grain/k8s-sandbox:flight-cancel-test"
+
+	// A pre-canceled context must fail immediately without caching a canceled result.
+	preCanceled, preCancel := context.WithCancel(context.Background())
+	preCancel()
+	if err := ui.CheckImageManifest(preCanceled, ref); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CheckImageManifest(preCanceled) = %v, want context.Canceled", err)
+	}
+
+	// Start caller 1 (cancels mid-flight) and caller 2 (waits on the same flight).
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	errCh1 := make(chan error, 1)
+	go func() {
+		errCh1 <- ui.CheckImageManifest(ctx1, ref)
+	}()
+	<-entered
+
+	errCh2 := make(chan error, 1)
+	go func() {
+		errCh2 <- ui.CheckImageManifest(context.Background(), ref)
+	}()
+
+	// Cancel caller 1 mid-flight, then allow the registry response to finish.
+	cancel1()
+	close(release)
+
+	if err := <-errCh2; err != nil {
+		t.Fatalf("waiter CheckImageManifest after leader cancel = %v, want nil", err)
+	}
+	if err := <-errCh1; err != nil {
+		t.Fatalf("leader CheckImageManifest with WithoutCancel = %v, want nil", err)
+	}
+	if got := headCalls.Load(); got != 1 {
+		t.Errorf("authorized manifest HEAD calls = %d, want 1", got)
+	}
+}
+
 // The 2026-11-01 walkthrough saved "not an email" as the GCP service
 // account email, which only failed when gcp-key next minted a key.
 func TestUpdateSettingsRefusesAGCPServiceAccountEmailThatIsNotOne(t *testing.T) {
@@ -1946,5 +2054,58 @@ func TestUpdateSettingsRefusesAGCPProjectThatIsNotAProjectID(t *testing.T) {
 		if ok && got.GCPProject != strings.TrimSpace(project) {
 			t.Errorf("UpdateSettings(gcpProject=%q) stored %q", project, got.GCPProject)
 		}
+	}
+}
+
+type countingCatalogue struct {
+	*secrets.MemoryCatalogue
+	listCalls atomic.Int32
+}
+
+func (c *countingCatalogue) ListSecretEntries(ctx context.Context) ([]secrets.CatalogueEntry, error) {
+	c.listCalls.Add(1)
+	return c.MemoryCatalogue.ListSecretEntries(ctx)
+}
+
+func TestSettingsAndConfigCallSecretsListOnce(t *testing.T) {
+	t.Parallel()
+	cat := &countingCatalogue{MemoryCatalogue: secrets.NewMemoryCatalogue()}
+	secStore := secrets.OpenSecretManager(secrets.SecretManagerConfig{
+		Prefix:    "projects/123456/secrets/grain-",
+		Catalogue: cat,
+		Token:     func(context.Context) (string, error) { return "tok", nil },
+	})
+	c, store, ctx := testClient(t)
+	c.Config.Secrets = secStore
+
+	// 1. GetSettings when no config row is stored yet (cfg == nil branch).
+	if _, err := c.GetSettings(ctx); err != nil {
+		t.Fatalf("GetSettings (nil config): %v", err)
+	}
+	if got := cat.listCalls.Load(); got != 1 {
+		t.Fatalf("GetSettings (nil config) called Secrets.List %d times, want 1", got)
+	}
+
+	// 2. GetSettings when a config row is stored (settingsFrom branch).
+	if _, err := c.UpdateSettings(ctx, firstSettings()); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+	cat.listCalls.Store(0)
+	if _, err := c.GetSettings(ctx); err != nil {
+		t.Fatalf("GetSettings (saved config): %v", err)
+	}
+	if got := cat.listCalls.Load(); got != 1 {
+		t.Fatalf("GetSettings (saved config) called Secrets.List %d times, want 1", got)
+	}
+
+	// 3. GET /api/config (calls both capabilitiesWithReadiness and ciCapabilitiesWithReadiness).
+	srv := ui.NewServerWithClient(ui.NewClient(c.Config, store))
+	cat.listCalls.Store(0)
+	rec := do(t, srv, http.MethodGet, "/api/config", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/config: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := cat.listCalls.Load(); got != 1 {
+		t.Fatalf("GET /api/config called Secrets.List %d times, want 1", got)
 	}
 }

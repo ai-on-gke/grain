@@ -165,13 +165,6 @@ func GetIAPAudience() string {
 	return strings.TrimSpace(os.Getenv("IAP_AUDIENCE"))
 }
 
-// SetIAPIssuer sets the expected issuer for Google Cloud IAP JWT verification.
-func SetIAPIssuer(issuer string) {
-	iapMu.Lock()
-	defer iapMu.Unlock()
-	iapIssuer = strings.TrimSpace(issuer)
-}
-
 // GetIAPIssuer returns the issuer a signed assertion must carry.
 func GetIAPIssuer() string {
 	iapMu.RLock()

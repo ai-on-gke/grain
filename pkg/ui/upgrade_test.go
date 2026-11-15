@@ -47,6 +47,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-on-gke/grain/pkg/installtrack"
 	"github.com/ai-on-gke/grain/pkg/installtrack/installtracktest"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
@@ -57,23 +58,40 @@ import (
 // UpgradePanel.jsx reads, spelled the same way, so a rename that broke
 // the panel would break this too.
 type upgradeResponse struct {
-	Enabled    bool            `json:"enabled"`
-	Mode       string          `json:"mode"`
-	Running    *upgradeRunning `json:"running"`
-	Channel    string          `json:"channel"`
-	Branch     string          `json:"branch"`
-	Phase      string          `json:"phase"`
-	Detail     string          `json:"detail"`
-	Unchanged  bool            `json:"unchanged"`
-	Steps      []upgradeStep   `json:"steps"`
-	StartedAt  *time.Time      `json:"startedAt"`
-	FinishedAt *time.Time      `json:"finishedAt"`
+	Enabled             bool            `json:"enabled"`
+	Mode                string          `json:"mode"`
+	Running             *upgradeRunning `json:"running"`
+	Channel             string          `json:"channel"`
+	Branch              string          `json:"branch"`
+	Phase               string          `json:"phase"`
+	Detail              string          `json:"detail"`
+	Unchanged           bool            `json:"unchanged"`
+	Steps               []upgradeStep   `json:"steps"`
+	StartedAt           *time.Time      `json:"startedAt"`
+	FinishedAt          *time.Time      `json:"finishedAt"`
+	GraceUntil          *time.Time      `json:"graceUntil"`
+	GraceWindowSeconds  int             `json:"graceWindowSeconds"`
+	Cancellable         bool            `json:"cancellable"`
+	CancelBlockedReason string          `json:"cancelBlockedReason"`
+	CancelledBy         string          `json:"cancelledBy"`
+	CancelReason        string          `json:"cancelReason"`
+	PreviousImage       string          `json:"previousImage"`
+	PreviousImageLabel  string          `json:"previousImageLabel"`
+	PreviousRelease     string          `json:"previousRelease"`
+	PreviousCommit      string          `json:"previousCommit"`
+	Cancelled           bool            `json:"cancelled"`
 
 	ImageRepo        string               `json:"imageRepo"`
 	DefaultImageRepo string               `json:"defaultImageRepo"`
 	DefaultImageRef  string               `json:"defaultImageRef"`
 	ImageRepos       []string             `json:"imageRepos"`
+	ImageRepoWarning string               `json:"imageRepoWarning"`
 	DiscardedRC      *upgrade.DiscardedRC `json:"discardedRc"`
+
+	Edition                string                      `json:"edition"`
+	OtherEditionImageRepos []upgrade.EditionRepository `json:"otherEditionImageRepos"`
+	EditionSwitchLosses    []string                    `json:"editionSwitchLosses"`
+	EditionSwitch          *upgrade.EditionSwitch      `json:"editionSwitch"`
 }
 
 // upgradeRunning is that body's "running": where the deployment already
@@ -701,6 +719,54 @@ func TestClickingUpgradeDoesNotUpgradeWhenVersionHasNotChanged(t *testing.T) {
 	}
 }
 
+// A unit still naming a host-less -upgrade-image (a release-asset-era
+// <edition>/grain) is warned of on the pane before anybody presses
+// Upgrade, beside the build's registry-qualified default, and pressing it
+// anyway is refused with the same fix rather than pulled from Docker Hub
+// (grain/task-4084).
+func TestUpgradeWarnsOfAHostlessImageRepoBeforeItIsPulled(t *testing.T) {
+	const hostless = "edition-local/grain"
+	dir := t.TempDir()
+	refFile := filepath.Join(dir, "image.env")
+	pulled := filepath.Join(dir, "pulled")
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE="+hostless+":main@"+testImageDigest+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := serverWithRealUpgrader(t, &upgrade.ImageConfig{
+		Repository: hostless,
+		Track:      installtracktest.Track,
+		RefFile:    refFile,
+		PullCmd:    []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pulled, "sh"},
+		RunCmd:     []string{"sh", "-c", "echo 7"},
+	}, dir)
+
+	got := decode[upgradeResponse](t, do(t, srv, http.MethodGet, "/api/upgrade", ""))
+	if got.ImageRepo != hostless || got.DefaultImageRepo != installtracktest.Repository {
+		t.Errorf("GET /api/upgrade image = %q, default %q; want %q, %q", got.ImageRepo, got.DefaultImageRepo, hostless, installtracktest.Repository)
+	}
+	for _, want := range []string{hostless, "no registry host", "-upgrade-image", installtracktest.Repository, "re-run the installer"} {
+		if !strings.Contains(got.ImageRepoWarning, want) {
+			t.Errorf("imageRepoWarning = %q, want it to say %q", got.ImageRepoWarning, want)
+		}
+	}
+
+	if code, _ := clickUpgrade(t, srv, "main"); code != http.StatusAccepted {
+		t.Fatalf("POST /api/upgrade = %d, want 202", code)
+	}
+	done := pollUpgrade(t, srv)
+	if done.Phase != string(upgrade.PhaseFailed) {
+		t.Fatalf("done = %+v, want a failed upgrade", done)
+	}
+	for _, want := range []string{"refusing to pull " + hostless + ":main", "-upgrade-image", installtracktest.Repository} {
+		if !strings.Contains(done.Detail, want) {
+			t.Errorf("detail = %q, want it to say %q", done.Detail, want)
+		}
+	}
+	if _, err := os.Stat(pulled); !os.IsNotExist(err) {
+		t.Errorf("PullCmd ran for a host-less repository (err=%v)", err)
+	}
+}
+
 // The pane can say exactly what the button will pull before it is
 // pressed, and an operator can point it at another known repository --
 // or a tag in one -- without touching the host's environment.
@@ -758,6 +824,71 @@ func TestUpgradeChoosesTheImageItPulls(t *testing.T) {
 	}
 }
 
+// grain/task-4153: a deployment on a registered track is not offered the
+// open-source repository among its image choices, and POST /api/upgrade
+// refuses it -- unless the request is the explicit "switch edition"
+// override, which then pulls it and records who switched what to what.
+func TestUpgradeRefusesAnotherEditionsImageWithoutTheSwitch(t *testing.T) {
+	const oss = installtrack.DefaultOSSGrainRepository
+	dir := t.TempDir()
+	pulled := filepath.Join(dir, "pulled")
+	srv := serverWithRealUpgrader(t, &upgrade.ImageConfig{
+		Repository: installtracktest.Repository,
+		Track:      installtracktest.Track,
+		RefFile:    filepath.Join(dir, "image.env"),
+		PullCmd:    []string{"sh", "-c", `printf '%s\n' "$1" >> ` + pulled, "sh"},
+		RunCmd:     []string{"sh", "-c", "echo 7"},
+	}, dir)
+
+	got := decode[upgradeResponse](t, do(t, srv, http.MethodGet, "/api/upgrade", ""))
+	if slices.Contains(got.ImageRepos, oss) {
+		t.Errorf("imageRepos = %v offers %s to an acme deployment", got.ImageRepos, oss)
+	}
+	if got.Edition != "acme" || !slices.Contains(got.OtherEditionImageRepos, upgrade.EditionRepository{Repository: oss, Edition: "oss"}) {
+		t.Errorf("edition = %q, otherEditionImageRepos = %v; want acme, with %s as oss", got.Edition, got.OtherEditionImageRepos, oss)
+	}
+	if len(got.EditionSwitchLosses) == 0 {
+		t.Error("editionSwitchLosses is empty: the switch's confirmation would name nothing lost")
+	}
+
+	for _, body := range []string{
+		`{"branch":"main","image":"` + oss + `"}`,
+		`{"branch":"main","image":"` + oss + `:main"}`,
+	} {
+		rec := do(t, srv, http.MethodPost, "/api/upgrade", body)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "switch edition") {
+			t.Errorf("POST %s = %d %s, want 400 naming the switch-edition override", body, rec.Code, rec.Body)
+		}
+	}
+	for _, body := range []string{
+		`{"branch":"main","switchEdition":true}`,
+		`{"branch":"main","image":"` + oss + `","switchEdition":true,"afterTasksFinish":true}`,
+	} {
+		if rec := do(t, srv, http.MethodPost, "/api/upgrade", body); rec.Code != http.StatusBadRequest {
+			t.Errorf("POST %s = %d %s, want 400", body, rec.Code, rec.Body)
+		}
+	}
+	if _, err := os.Stat(pulled); err == nil {
+		t.Fatalf("a refused upgrade pulled %q", readTestFile(t, pulled))
+	}
+
+	rec := do(t, srv, http.MethodPost, "/api/upgrade", `{"branch":"main","image":"`+oss+`","switchEdition":true}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("POST the switch = %d: %s", rec.Code, rec.Body)
+	}
+	final := pollUpgrade(t, srv)
+	if final.Phase != string(upgrade.PhaseOK) {
+		t.Fatalf("upgrade ended %q: %s", final.Phase, final.Detail)
+	}
+	if got := readTestFile(t, pulled); got != oss+":main\n" {
+		t.Errorf("pulled %q, want %s:main", got, oss)
+	}
+	sw := final.EditionSwitch
+	if sw == nil || sw.From != "acme" || sw.To != "oss" || sw.Repository != oss || sw.RequestedBy == "" {
+		t.Errorf("editionSwitch = %+v, want acme -> oss from %s, naming who asked", sw, oss)
+	}
+}
+
 func TestUpgradeStatusAndTargetsReportDiscardedRC(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -800,4 +931,114 @@ func TestUpgradeStatusAndTargetsReportDiscardedRC(t *testing.T) {
 		status.DiscardedRC.Latest != "v2.1.1" || status.DiscardedRC.ReplacementRC != "v2.3.0-rc.2" {
 		t.Errorf("status.DiscardedRC = %+v, want running=v2.3.0-rc.1 latest=v2.1.1 replacementRc=v2.3.0-rc.2", status.DiscardedRC)
 	}
+}
+
+func TestCancelCurrentUpgradeRouteAuditAndConflict(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	prevDigest := "sha256:" + strings.Repeat("1", 64)
+	newDigest := "sha256:" + strings.Repeat("2", 64)
+	prevRef := "docker.io/grainai/grain:v3.1.0@" + prevDigest
+	refFile := filepath.Join(dir, "image.env")
+	if err := os.WriteFile(refFile, []byte("GRAIN_IMAGE="+prevRef+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	inRestart := filepath.Join(dir, "in-restart")
+	releaseRestart := filepath.Join(dir, "release-restart")
+	stopping := make(chan struct{})
+
+	_, store, ctx := testClient(t)
+	_ = store.PutConfig(ctx, model.DefaultConfig())
+	up := upgrade.New(upgrade.Config{
+		GraceWindow: 20 * time.Second,
+		Image: &upgrade.ImageConfig{
+			Repository: "docker.io/grainai/grain",
+			RefFile:    refFile,
+			PullCmd:    []string{"true"},
+			DigestCmd:  []string{"sh", "-c", `echo "docker.io/grainai/grain@` + newDigest + `"`, "sh"},
+			RunCmd:     []string{"true"},
+			ListCmd:    []string{"true"},
+		},
+		HealthCheckArgs: []string{"schema-version"},
+		RestartCmd:      []string{"sh", "-c", `touch ` + inRestart + `; while [ ! -f ` + releaseRestart + ` ]; do sleep 0.02; done`},
+		Stopping:        stopping,
+		StatusFile:      filepath.Join(dir, "upgrade-status.json"),
+	})
+	srv := ui.NewServer(ui.Config{
+		Actor:        ui.DefaultActor("alice"),
+		Capabilities: ui.OfferedCapabilities(),
+		Upgrader:     up,
+	}, store)
+
+	// Idle cancel returns 200 with cancelled: false.
+	idleRec := do(t, srv, http.MethodDelete, "/api/upgrade/current", "")
+	if idleRec.Code != http.StatusOK {
+		t.Fatalf("idle DELETE /api/upgrade/current = %d: %s", idleRec.Code, idleRec.Body)
+	}
+	if idle := decode[upgradeResponse](t, idleRec); idle.Cancelled {
+		t.Fatalf("idle cancel reported cancelled=true")
+	}
+
+	// Start a manual upgrade: it enters the grace window and is cancellable.
+	startRec := do(t, srv, http.MethodPost, "/api/upgrade", `{"branch":"v3.2.0"}`)
+	if startRec.Code != http.StatusAccepted {
+		t.Fatalf("POST /api/upgrade = %d: %s", startRec.Code, startRec.Body)
+	}
+	started := decode[upgradeResponse](t, startRec)
+	if !started.Cancellable || started.GraceUntil == nil || started.GraceWindowSeconds != 20 {
+		t.Fatalf("started = %+v, want cancellable=true graceUntil!=nil graceWindowSeconds=20", started)
+	}
+
+	// Cancel during grace window: ends in cancelled phase and writes config_audit.
+	cancelRec := do(t, srv, http.MethodDelete, "/api/upgrade/current", `{"reason":"wrong edition"}`)
+	if cancelRec.Code != http.StatusOK {
+		t.Fatalf("DELETE /api/upgrade/current = %d: %s", cancelRec.Code, cancelRec.Body)
+	}
+	cancelled := decode[upgradeResponse](t, cancelRec)
+	if !cancelled.Cancelled || cancelled.Phase != string(upgrade.PhaseCancelled) {
+		t.Fatalf("cancelled response = %+v, want cancelled=true phase=cancelled", cancelled)
+	}
+	if !strings.Contains(cancelled.Detail, "wrong edition") {
+		t.Errorf("cancelled Detail = %q, want reason included", cancelled.Detail)
+	}
+	audits, err := store.ConfigAudit(ctx, 5)
+	if err != nil || len(audits) == 0 {
+		t.Fatalf("ConfigAudit = %+v, %v", audits, err)
+	}
+	if audits[0].Surface != "upgrade" || !strings.Contains(audits[0].Summary, "cancelled upgrade to v3.2.0 (wrong edition)") {
+		t.Errorf("audit[0] = %+v, want upgrade cancellation with reason", audits[0])
+	}
+
+	// Now start a scheduled/immediate-without-grace upgrade so it reaches stepRestart
+	// (past the point of no return), and verify 409 Conflict with the exact copy.
+	if err := up.StartScheduled("v3.2.0"); err != nil {
+		t.Fatalf("StartScheduled: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(inRestart); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for restart step")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	wantConflict := "restarting onto v3.2.0 — too late to cancel; upgrade back to docker.io/grainai/grain:v3.1.0 afterwards"
+	stDuringRestart := decode[upgradeResponse](t, do(t, srv, http.MethodGet, "/api/upgrade", ""))
+	if stDuringRestart.Cancellable || stDuringRestart.CancelBlockedReason != wantConflict {
+		t.Errorf("GET /api/upgrade during restart: cancellable=%v cancelBlockedReason=%q, want %q",
+			stDuringRestart.Cancellable, stDuringRestart.CancelBlockedReason, wantConflict)
+	}
+
+	lateRec := do(t, srv, http.MethodDelete, "/api/upgrade/current", `{"reason":"too late"}`)
+	if lateRec.Code != http.StatusConflict || !strings.Contains(lateRec.Body.String(), wantConflict) {
+		t.Errorf("late DELETE /api/upgrade/current = %d %s, want 409 %q", lateRec.Code, lateRec.Body.String(), wantConflict)
+	}
+
+	close(stopping)
+	_ = os.WriteFile(releaseRestart, []byte("1"), 0o644)
+	<-up.Done()
 }

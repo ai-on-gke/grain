@@ -272,7 +272,7 @@ const GrainCICheckName = "grain CI"
 // reason), and a merge queue that had to ask a running engine what it
 // thought would be a merge queue that stops working when the engine does.
 type GrainCI struct {
-	// Required says this task holds the grain-ci capability and therefore
+	// Required says this task holds grain#ci (formerly grain-ci) and therefore
 	// needs an exact-commit full-suite success before it may merge.
 	Required bool
 	// GitHubToo says GitHub's checks gate this commit as well as grain

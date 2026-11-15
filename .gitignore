@@ -43,3 +43,7 @@ node_modules/
 # A CI cache tests of pkg/cli start in their own directory, as above.
 /pkg/cli/state/
 /image-vulns-report/
+
+# Python bytecode left by walkthrough helpers under docs/test-runs/.
+__pycache__/
+*.pyc

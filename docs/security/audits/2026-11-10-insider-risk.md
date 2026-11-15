@@ -124,7 +124,12 @@ would read it. Grain also does not check the applied commit against
 anything -- signed commits, a required review, or a merge grain itself
 made. Filed as a follow-up: document it, and offer a `require_verified`
 mode that applies only commits grain merged or commits whose forge review
-it can verify.
+it can verify. Task 3973 did both: docs/external-config-repo.md ("Who this
+makes an administrator") and the State pane now say it, and
+`require_verified` holds any commit that is not an approved or
+grain-merged pull request's merge, signed by an allowed key, or accepted
+by an unlimited role. It also narrowed `trustboundary.StateScopes` to the
+columns a change alters in `tables/grain_config.json`.
 
 ## 2. Repo-declared grants (.grain/templates, .grain/schedules)
 
@@ -255,10 +260,13 @@ person. Two gaps remain, both profile B:
   CI built the image, not that a reviewed commit went into it, and with no
   `VerifyCmd` the check only warns. So "only images built from reviewed,
   merged commits" depends entirely on the forge's branch protection.
-  Follow-up filed: have release builds refuse a commit that did not reach
-  main through a reviewed merge (grain's merge marker, or the forge's
-  required-review record), and record that in the image's provenance for
-  the upgrade to check.
+  Follow-up (task 3972): release builds now refuse a commit, or a
+  first-parent chain, that did not reach main or release/v* through a
+  reviewed merge (grain's own merge, by its forge login, or the forge's
+  approval record; `pkg/reviewedmerge`). The record is attested onto the
+  images, and `-upgrade-reviewed-merge-repo` makes the upgrade ask the
+  forge the same question itself (`docs/image-signing.md`, "A signature
+  is not a review").
 - **A person's Submit skips the review** until #3904 lands. #3905 audits
   the six such merges; nothing more is added here.
 
