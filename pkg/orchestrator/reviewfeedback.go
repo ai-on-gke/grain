@@ -425,7 +425,7 @@ func submittedReviewBody(task model.Task, findings []reviewFinding) string {
 // indented under their own bullet so a finding that quotes code is still
 // one item rather than the list ending at its first newline. A body
 // written as GitHub's HTML (<code>, &quot;) is put in Markdown first
-// (findingMarkdown), since the conversation shows raw HTML as text.
+// (findingMarkdown), since the classic UI shows raw HTML as text.
 func findingsList(findings []reviewFinding) string {
 	var b strings.Builder
 	for _, f := range findings {

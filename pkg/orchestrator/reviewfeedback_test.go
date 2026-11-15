@@ -440,7 +440,7 @@ func TestReviewFindingsArgumentTypesAndInvalidBodies(t *testing.T) {
 
 // A reviewing run that writes its findings the way GitHub's HTML reads
 // (<code>, <strong>, &quot;, "* " bullets) still puts Markdown in front of
-// the change's owner: both UIs show a comment's raw HTML as text, so the
+// the change's owner: the classic UI shows a comment's raw HTML as text, so the
 // relayed question would otherwise read as markup.
 func TestReviewQuestionsAreRelayedAsMarkdownNotHTML(t *testing.T) {
 	t.Parallel()

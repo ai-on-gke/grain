@@ -1516,9 +1516,6 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     this.draft.set(value);
   }
 
-  // replyBlock is why Send is off for the selected row: it has left the
-  // queue, or now waits on a different question than the one the person
-  // started answering.
   // Reply in the dock: the answer is written in the conversation's
   // composer below, which this brings into view and focuses.
   protected focusComposer(): void {
@@ -1532,6 +1529,9 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     box.focus();
   }
 
+  // replyBlock is why Send is off for the selected row: it has left the
+  // queue, or now waits on a different question than the one the person
+  // started answering.
   protected replyBlock(sel: InboxEntry): string {
     const tgt = this.target();
     const id = tgt?.taskId ?? sel.taskId;

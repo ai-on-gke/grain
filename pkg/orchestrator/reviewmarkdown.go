@@ -23,10 +23,11 @@ import (
 // writes its add_review_comment bodies for GitHub, and some write them the
 // way GitHub's own HTML reads -- <code>path</code>, <strong>refuse</strong>,
 // &quot;held&quot; -- and bullet with "* ". GitHub renders that, but the
-// copy grain relays into a task's conversation is read by both UIs, which
-// show raw HTML as text by design (a comment must never inject markup).
-// So the relayed copy is put in the Markdown it meant: backticks for
-// code, ** for bold, * for emphasis, real quotes, and "- " bullets.
+// copy grain relays into a task's conversation is read by both UIs: the
+// classic UI shows raw HTML as text by design (a comment must never inject
+// markup), and ui-ng renders only a few bare inline tags. So the relayed
+// copy is put in the Markdown it meant: backticks for code, ** for bold,
+// * for emphasis, real quotes, and "- " bullets.
 //
 // Only the handful of inline tags a finding uses are converted, and only
 // in their bare, attribute-free form; anything else is left as written,
