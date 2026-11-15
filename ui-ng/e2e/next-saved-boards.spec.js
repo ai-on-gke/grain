@@ -326,6 +326,11 @@ test("the Backlog row More actions menu sits in the right-hand slot and opens on
   expect(orderBefore.length).toBeGreaterThanOrEqual(2);
   const firstId = orderBefore[0];
   const secondId = orderBefore[1];
+  // Move down may cross a priority band, which re-prioritises the moved
+  // task as well as reordering it; remember both so cleanup restores both.
+  const priorityOf = async (id) =>
+    (await (await page.request.get(`/api/tasks/${id}`)).json()).priority;
+  const firstPriority = await priorityOf(firstId);
 
   try {
     const rowBox = await firstRow.boundingBox();
@@ -372,11 +377,28 @@ test("the Backlog row More actions menu sits in the right-hand slot and opens on
       )
       .toEqual([secondId, firstId, ...orderBefore.slice(2)]);
   } finally {
-    // Restore the worker-scoped demoServer's backlog order.
-    await page.request
-      .post("/api/tasks/reorder", {
-        data: { ids: [firstId], beforeId: secondId, afterId: "" },
-      })
-      .catch(() => {});
+    // Restore the worker-scoped demoServer's backlog order (and the moved
+    // task's priority), and fail loudly if the restore did not take, so a
+    // later test in this worker never inherits a reordered backlog.
+    if ((await priorityOf(firstId)) !== firstPriority) {
+      const patched = await page.request.patch(`/api/tasks/${firstId}`, {
+        data: { priority: firstPriority },
+      });
+      expect(patched.ok()).toBe(true);
+    }
+    const restored = await page.request.post("/api/tasks/reorder", {
+      data: { ids: [firstId], beforeId: secondId, afterId: "" },
+    });
+    expect(restored.ok()).toBe(true);
+    await page.reload();
+    await expect
+      .poll(() =>
+        page
+          .locator(".backlog-row")
+          .evaluateAll((els) =>
+            els.map((el) => el.getAttribute("data-task-id")),
+          ),
+      )
+      .toEqual(orderBefore);
   }
 });

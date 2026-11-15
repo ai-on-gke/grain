@@ -17,8 +17,10 @@ import {
   ChangeDetectionStrategy,
   Component,
   DestroyRef,
+  ElementRef,
   type OnInit,
   ViewEncapsulation,
+  afterRenderEffect,
   computed,
   inject,
   signal,
@@ -33,6 +35,7 @@ import { ViewFilter } from "../services/view-filter.service";
 import { errorText } from "../sessions/session-helpers";
 import { ActorChipComponent } from "../shared/actor-chip.component";
 import {
+  type UsagePauseInput,
   effectiveDisplayTimeZone,
   formatLocalReset,
 } from "../shared/dispatch-status";
@@ -229,6 +232,37 @@ const PERSISTENT_ACTIONS: readonly {
             @if (blk.remedy) {
               <span> — Remedy: {{ blk.remedy }}</span>
             }
+          </div>
+        }
+
+        <!-- Base branches publishing nothing (pkg/model/base_branch_publishing.go):
+             a warning, as on classic System -> Health, since nothing is
+             stuck; held when a release triage task gates the branch. -->
+        @for (
+          pub of sandboxes()?.baseBranchPublishing ?? [];
+          track pub.repo + " " + pub.branch
+        ) {
+          <div
+            class="banner fleet-publishing-banner"
+            style="margin: 0"
+            role="status"
+            data-testid="fleet-publishing"
+          >
+            <g-status-icon tone="blast" kind="warning" />
+            <span class="fleet-publishing-text">
+              <strong
+                >{{ pub.gated ? "Publishing held" : "Publishing nothing" }} ·
+                <span class="tabular">{{ pub.repo }}&#64;{{ pub.branch }}</span
+                >:</strong
+              >
+              {{ pub.detail }}
+              @if (pub.gated && pub.triageTaskID) {
+                —
+                <a [routerLink]="['/task', pub.triageTaskID]"
+                  >Open triage task #{{ pub.triageTaskID }}</a
+                >
+              }
+            </span>
           </div>
         }
 
@@ -937,7 +971,7 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                           <input
                             type="text"
                             class="ops-input tabular"
-                            aria-label="New hostd name"
+                            aria-label="New host name"
                             [attr.data-testid]="'hostd-rename-input-' + h.name"
                             [value]="renameDraft()"
                             (input)="renameDraft.set($any($event.target).value)"
@@ -1544,6 +1578,18 @@ export class FleetPageComponent implements OnInit {
   private readonly router = inject(Router);
   private readonly doc = inject(DOCUMENT);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly hostEl = inject(ElementRef<HTMLElement>);
+
+  // On a phone the tab strip scrolls sideways, and a deep link, reload or
+  // legacy /system/logs redirect left Daemon Logs off screen. Bring the
+  // active tab into view whenever `tab` changes.
+  private readonly keepActiveTabInView = afterRenderEffect(() => {
+    const active = this.tab();
+    const btn = (this.hostEl.nativeElement as HTMLElement).querySelector(
+      `#fleet-tab-btn-${active}`,
+    ) as HTMLElement | null;
+    btn?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  });
 
   protected readonly Math = Math;
   protected readonly tabs = TABS;
@@ -1562,6 +1608,7 @@ export class FleetPageComponent implements OnInit {
 
   protected readonly tab = signal<FleetTab>("sandboxes");
   private readonly loadedTabs = new Set<FleetTab>();
+  private bootstrapped = false;
   protected readonly loading = signal(false);
   protected readonly loadError = signal<string | null>(null);
   protected readonly confirmReq = signal<ConfirmRequest | null>(null);
@@ -1803,13 +1850,16 @@ export class FleetPageComponent implements OnInit {
           t === "hostds" || t === "controls" || t === "logs" ? t : "sandboxes";
         if (next === this.tab()) return;
         this.tab.set(next);
-        void this.ensureTabLoaded(next);
+        if (this.bootstrapped) {
+          void this.ensureTabLoaded(next);
+        }
       });
     void this.bootstrap();
   }
 
   private async bootstrap(): Promise<void> {
     await this.loadBootstrapConfig();
+    this.bootstrapped = true;
     await this.refreshAll();
   }
 
@@ -2195,18 +2245,40 @@ export class FleetPageComponent implements OnInit {
     });
   }
 
+  private async syncGlobalDispatchStatus(refreshUsage = false): Promise<void> {
+    this.api.clearConditionalCache?.("/api/config");
+    if (refreshUsage && this.access.can("GET /api/usage")) {
+      this.api.clearConditionalCache?.("/api/usage");
+      const usage = await this.api
+        .get<UsagePauseInput>("GET /api/usage")
+        .catch(() => null);
+      if (usage && ("warnings" in usage || "scopes" in usage)) {
+        this.access.setUsage(usage);
+      }
+    }
+    this.access.tickClock();
+  }
+
   protected async pausePipeline(): Promise<void> {
     if (!this.canWriteDispatch() || this.busyDispatch()) return;
     this.busyDispatch.set(true);
+    const reason = this.pauseReasonDraft().trim();
     try {
       const res = await this.api.post<PipelinePauseResponse>(
         "POST /api/pipeline-pause",
         undefined,
-        { reason: this.pauseReasonDraft().trim() },
+        { reason },
       );
-      this.pipelinePause.set(res?.pause ?? { paused: true });
+      const next = res?.pause ?? {
+        paused: true,
+        runNowPasses: true,
+        reason,
+      };
+      this.pipelinePause.set(next);
+      this.access.patchConfig({ pipelinePause: next });
       this.pauseReasonDraft.set("");
       this.snackbar.show("Pipeline paused.");
+      void this.syncGlobalDispatchStatus(false);
     } catch (err) {
       this.snackbar.show(errorText(err));
     } finally {
@@ -2221,8 +2293,11 @@ export class FleetPageComponent implements OnInit {
       const res = await this.api.delete<PipelinePauseResponse>(
         "DELETE /api/pipeline-pause",
       );
-      this.pipelinePause.set(res?.pause ?? { paused: false });
+      const next = res?.pause ?? { paused: false };
+      this.pipelinePause.set(next);
+      this.access.patchConfig({ pipelinePause: next });
       this.snackbar.show("Pipeline resumed.");
+      void this.syncGlobalDispatchStatus(false);
     } catch (err) {
       this.snackbar.show(errorText(err));
     } finally {
@@ -2246,8 +2321,25 @@ export class FleetPageComponent implements OnInit {
         undefined,
         params.toString() || undefined,
       );
+      const next = res?.pause ?? { paused: false, pauses: [] };
       this.agentPause.set(res?.pause ?? null);
+      this.access.patchConfig({ agentPause: next });
+      const curUsage = this.access.usage();
+      if (curUsage?.scopes?.length) {
+        this.access.setUsage({
+          ...curUsage,
+          scopes: curUsage.scopes.map((s) =>
+            !next.paused ||
+            !entry ||
+            (s.connection === entry.connection &&
+              (!entry.model || s.model === entry.model))
+              ? { ...s, pausedUntil: undefined }
+              : s,
+          ),
+        });
+      }
       this.snackbar.show("Cleared usage-limit pause.");
+      void this.syncGlobalDispatchStatus(true);
     } catch (err) {
       this.snackbar.show(errorText(err));
     }

@@ -64,6 +64,10 @@ type CapabilitySyntax struct {
 	// reference is met by a repository granting the recorded grant, and
 	// the reverse. nil compares names as written.
 	Canonical func(id string) string
+	// Retired says what a retired bare name a job declares became (model's
+	// RetiredGrantRefusal), "" for any other name, so the job's refusal
+	// names the grant to declare instead. nil says nothing.
+	Retired func(id string) string
 }
 
 // sameCapability reports whether a and b name the same capability

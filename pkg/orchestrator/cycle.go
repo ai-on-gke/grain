@@ -573,6 +573,10 @@ func Reconcilers() []Reconciler {
 		// Before dispatch, so an issue imported approved this tick can be
 		// dispatched this tick (reconcileIssueImports).
 		{Name: "issue-imports", Reconcile: reconcileIssueImports},
+		// Immediately before dispatch, so a task whose goal was met while
+		// its run was live is closed rather than dispatched again once
+		// that run is gone (reconcileMetGoalCloses).
+		{Name: "goal-met-closes", Reconcile: reconcileMetGoalCloses},
 		{Name: dispatchReconciler, Reconcile: reconcileDispatch},
 		{Name: "ci", Reconcile: reconcileCI},
 		// Before "sync", so that a base branch found red this tick holds
@@ -672,6 +676,10 @@ type AgentChoice struct {
 	PreferModel     string
 	// TaskID is the task the run is for.
 	TaskID string
+	// TimeZone is model.Task.TimeZone: the IANA zone the task's requester
+	// reads the clock in, which a fallback notice names a paused model's
+	// reset time in. Empty means the deployment's own zone.
+	TimeZone string
 }
 
 // ChoiceFor is the AgentChoice task's own fields make: the one runOne
@@ -685,6 +693,7 @@ func ChoiceFor(task model.Task) AgentChoice {
 		Priority:  task.HasPriorityDispatch(),
 		Durable:   task.IsDurable(),
 		TaskID:    task.ID,
+		TimeZone:  task.TimeZone,
 	}
 }
 
@@ -2607,6 +2616,9 @@ func runOneWithFramework(ctx context.Context, deps Deps, d dispatch.Dispatch, pr
 		GrainSource: hasGrainSource(*task),
 		Class:       sandboxClassFor(*task),
 	}
+	// A size the task carries only because its template says `sandbox:`
+	// is not asked of a backend that has none to give (template_shape.go).
+	shape, _ = templateShapeDropped(ctx, deps.Store, deps.Sandboxes, *task, shape)
 	// The operator's ambient credentials (-host-sandbox-env) go to a run
 	// only on the backend that has them, and only for a task whose whole
 	// tree of work is this machine's own: anybody else's task never acts

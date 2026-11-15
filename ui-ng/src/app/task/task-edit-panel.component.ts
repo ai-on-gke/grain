@@ -595,8 +595,8 @@ export class TaskEditPanelComponent {
       this.goalTasks.set(
         t.goal.spec?.tasks?.join(", ") || t.goal.spec?.task || "",
       );
-      this.goalOnMet.set(t.goal.on_met || "close");
-      this.goalOnLimit.set(t.goal.on_limit || "hold");
+      this.goalOnMet.set(t.goal.onMet || "close");
+      this.goalOnLimit.set(t.goal.onLimit || "hold");
     } else {
       this.goalRepo.set(t.repo || "");
       this.goalBranch.set(t.base || "main");
@@ -707,11 +707,17 @@ export class TaskEditPanelComponent {
       .split(/[\s,]+/)
       .map((s) => s.replace(/^#/, "").trim())
       .filter(Boolean);
+    // Only a goal of the same kind carries over: its spec fields this
+    // form has no input for, and the progress limit it was declared with
+    // (the row's maxResumes and maxStall, in nanoseconds). The row's own
+    // fields (taskId, declaredBy, progress) are not part of a declaration.
+    const same = t.goal?.kind === kind ? t.goal : null;
     const decl: GoalDecl = {
-      ...t.goal,
       kind,
+      ...(same?.maxResumes ? { max_resumes: same.maxResumes } : {}),
+      ...(same?.maxStall ? { max_stall: `${same.maxStall / 1e9}s` } : {}),
       spec: {
-        ...(t.goal?.spec || {}),
+        ...(same?.spec || {}),
         ...(kind === "base-green"
           ? {
               repo: this.goalRepo().trim() || t.repo,

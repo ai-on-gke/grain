@@ -144,7 +144,7 @@ do not pull in an icon font.
   72px rail
 ```
 
-- **Rail order:** Inbox, Workstreams, Tasks, Agents, Sessions, Processes, CI,
+- **Rail order:** Inbox, Workstreams, Tasks, Agents, Sessions, Processes, CI, Repos,
   Telemetry, Context, Fleet; Settings pinned at the bottom. People can hide
   destinations (Customize navigation); Inbox cannot be hidden.
 - **New task button:** filled primary, 60×60 (52 on short screens), with a
@@ -182,6 +182,18 @@ Forgetting this leaves the host as an inline box. The page then sizes to
 its content, nothing scrolls, and the side drawer stops halfway down. Settings
 shipped with exactly this bug.
 
+One pane, one scroller. The scrolling element is a flex child with
+`min-height: 0; overflow-y: auto`, and the pane around it clips
+(`overflow: clip`) rather than scrolls. Give the scroller `position: relative`
+too: `.sr-only` text is `position: absolute`, and with a positioned pane above
+it, that text escapes the scroller's clip and gives the pane a second scroll
+range. The wheel then chains into that range and slides the grid under the
+footer (Agents, task 5977). When a pane can get too short for its fixed header
+plus a whole item, scroll the header away with the content in that pane
+instead. Agents does this with a size container query on the list pane (narrower
+than 480px or shorter than 700px). `e2e/next-agents-grid-scroll.spec.js`
+asserts the rule with bounding boxes.
+
 Content uses the width it is given. Do not cap a page at a fixed max-width
 (`max-width: 1560px` left half of a large screen empty on Workstreams). Cap
 only forms and reading measures that need it (Settings sections at 1180px).
@@ -195,7 +207,14 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   a draggable separator (`role="separator"`, 24px hit zone, keyboard
   arrows, Enter collapses, double-click resets) and a "Hide list" toggle.
   The choice is remembered per surface.
-- The detail pane is always there on desktop; it is not a modal.
+- The detail pane is always there on desktop; it is not a modal. The
+  exception is Agents, whose cards are a dashboard in their own right:
+  its inspector opens only on the agent `?task=` names. With none (on
+  arrival, or after the person closes it) the split drops to one
+  full-width column of cards, nothing looks selected, and j/k or a click
+  opens the inspector on an agent. It closes from "Close inspector" in
+  the split bar, the pane's ×, Escape, or a second click on the selected
+  card, and focus goes back to that card.
 - **The selected item looks selected.** Whatever the list is drawn as —
   queue rows, table rows, cards — the item the pane shows carries
   `surface-container` with a 3px `primary` leading bar (`inset 3px 0 0`),
@@ -260,7 +279,10 @@ controls use the proportional 14/20 body stack (`.s-num` aligns numeric figures
 without switching prose or human names to monospace; `.s-mono` is reserved for
 technical slugs, model IDs and paths). Tables keep row actions on one right-aligned
 line (`.s-row-actions`), separate any below-table creation/edit form with a
-`.s-subsection` divider, and collapse per-connection password inputs behind an
+`.s-subsection` divider, let long paths and ref patterns break inside their
+cells (`overflow-wrap: anywhere`) rather than scroll the table on a phone, give a
+`.s-table-wrap` that can still scroll sideways `role="region"`, `tabindex="0"`
+and a label (axe's `scrollable-region-focusable`), and collapse per-connection password inputs behind an
 on-demand `Credential` row. Search filters live inside `<form role="search"
 autocomplete="off">` and secret inputs carry `autocomplete="new-password"` inside
 `<form autocomplete="off">` so browser password managers never autofill emails
@@ -276,6 +298,15 @@ persistent topbar or bottombar status badges. Root-persistent `SettingsStateServ
 shows `.s-card` skeletons on cold load, opens warm Settings revisits immediately
 while refreshing in the background, guards child `ngOnChanges` on non-first
 `section` changes, and caches slow `reachable-repos` lookups for 60s.
+
+A settings picker offers the server's own vocabulary (for example
+`sandboxBackendOptions` and `networkAccesses` from `GET /api/settings`), never a
+hand-written list: a choice the daemon cannot use stays listed as a `disabled`
+`PillOption` with the server's reason as its `hint`. A number whose stored `0`
+means grain's default shows blank with the server's `<key>Default` as its
+placeholder, and a cleared box saves that default again. A card a link points
+at carries an `id` (`#capability-policy`, `#other-secrets`), and the page
+scrolls to the URL's fragment once the section has rendered.
 
 ### Breakpoints
 
@@ -298,7 +329,8 @@ it rather than copy it.
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
-| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links |
+| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters |
+| Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
@@ -307,6 +339,16 @@ it rather than copy it.
 
 Rules:
 
+- **Every message is Markdown.** A question, reason or alert body a person
+  reads is rendered with `[gMarkdown]` (or `g-capped-markdown` where it sits
+  above actions), never `{{ }}` into a `<p>`: interpolation runs lists and
+  code blocks into one paragraph. A one-line `summary` stays the row title.
+- **A decision's actions never leave the screen.** In the Inbox inspector
+  only the message in the resolution dock gives way (it shrinks and
+  scrolls); the dock's actions keep their height and the inspector body
+  keeps a floor of `min(240px, 25cqh)`, so the task's details are never a
+  sliver. `next-inbox-long-question.spec.js` holds this at 1280×800 and
+  2269×1079.
 - **Class names are global.** Most pages use `ViewEncapsulation.None`, so a
   class defined in one page's stylesheet applies wherever that stylesheet is
   loaded. Prefix page-specific classes, and search for a name before you use
@@ -316,6 +358,17 @@ Rules:
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).
 - **Every control has a name.** Icon buttons get `aria-label` and a `gTip`.
+- **A deployment finding that blocks nothing is a warning, not an error.**
+  Something an operator should fix while the deployment keeps working (a
+  base branch publishing nothing, `baseBranchPublishing`) is a
+  `warning-container` banner with a warning status icon on its first line
+  and `role="status"`. It sits beside the page's error banners (Dispatch
+  blocked, `role="alert"`), above the content. Use the server's `detail`
+  sentence rather than rewording it, and link the task that holds the
+  finding where there is one (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+- **Say a wire code in words.** A reason or state code from the API
+  (`publishingHeld`, `standingWork`) is mapped to words before it is shown.
+  A code nobody has mapped yet shows as itself, which beats showing nothing.
 - **A dialog fits the screen.** `.g-dialog` (and its `.is-drawer` width) is
   `box-sizing: border-box`, so its `min(520px, 100vw - 32px)` width
   includes its padding and border. That leaves a 16px margin either side
@@ -331,8 +384,28 @@ Rules:
   (`isTypingTarget`).
 - **URLs.** Every view, tab and selection that a person might share has a
   URL (`?tab=`, `?task=`, `?pane=`). Back works.
+  A list's narrowing and order are URL state too: the "Filter this view"
+  box is `?q=` (written back as it is typed, with `replaceUrl`) and a
+  sort is `?sort=`, so a reload and Back/Forward keep them. Tabs carry
+  both (`queryParamsHandling="merge"`). See
+  `ui-ng/e2e/next-processes-narrowing.spec.ts`.
+- **A custom order moves by pointer and by keyboard.** Where a list keeps
+  a person's own order (a "Custom order" sort), a row is dragged, or moved
+  one place with `Alt+ArrowUp` / `Alt+ArrowDown` (named in
+  `aria-keyshortcuts`). Each move is announced in a polite live region,
+  and focus stays on the row that moved. That order is browser state, kept
+  under the classic UI's own `grain.list-order.<list>` key and row keys,
+  so both UIs show it.
 - **Role-aware.** An action the person cannot take is hidden, or shown
   disabled with the reason. It is never shown enabled only to fail.
+- **State-aware.** The same goes for an action the item's state refuses.
+  Example: Release hold cannot clear review findings, so a hold of findings
+  alone shows no Release hold. The gate card says what does clear it and
+  offers that action (*Override review gate…*) to people who may take it
+  (`ui-ng/e2e/next-human-review-findings-hold.spec.js`).
+- **Refusals say why.** A failed action shows the server's own `error`
+  text (`errorText`). A refusal the request caused is a 4xx with a message,
+  never a 500 with only a reference id.
 - **Safety.**
   - Selection is pinned: if the selected item leaves the list, say so; do
     not jump to another item.
