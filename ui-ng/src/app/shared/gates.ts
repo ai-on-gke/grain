@@ -21,6 +21,17 @@ import type { MergeGate, Task, TaskDetail } from "../api/models";
 
 export const APPROVAL_GATE = "approval";
 
+// unsatisfiedGates are the gates a force merge may override: every gate
+// short of passed or overridden, approval aside (Submit is the person's).
+export function unsatisfiedGates(t: TaskDetail): MergeGate[] {
+  return (t.mergeGates ?? []).filter(
+    (g) =>
+      g.id !== APPROVAL_GATE &&
+      g.state !== "passed" &&
+      g.state !== "overridden",
+  );
+}
+
 export type GateRollup = "passed" | "running" | "failing" | "unknown";
 
 export interface GateSummary {

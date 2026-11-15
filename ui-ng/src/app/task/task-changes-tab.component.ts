@@ -43,7 +43,7 @@ import { SnackbarService } from "../services/snackbar.service";
 import { errorText } from "../sessions/session-helpers";
 import { parseUnifiedDiff } from "../shared/diff-parse";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
-import { APPROVAL_GATE, submitBlock } from "../shared/gates";
+import { submitBlock, unsatisfiedGates } from "../shared/gates";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskStore } from "./task.store";
 
@@ -587,12 +587,7 @@ export class TaskChangesTabComponent {
   });
 
   protected readonly unsatisfiedGates = computed<MergeGate[]>(() =>
-    (this.task().mergeGates ?? []).filter(
-      (g) =>
-        g.id !== APPROVAL_GATE &&
-        g.state !== "passed" &&
-        g.state !== "overridden",
-    ),
+    unsatisfiedGates(this.task()),
   );
 
   private lastBranchKey = "";

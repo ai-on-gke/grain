@@ -748,6 +748,54 @@ describe("TaskPageComponent", () => {
     expect(q(f, '[data-testid="act-reply"]')).toBeNull();
   });
 
+  it("offers no Release hold on review findings alone, but the gate override", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        {
+          source: "security-findings",
+          category: "security",
+          reason: "the review left findings",
+        },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+    const note = q(f, '[data-testid="hold-findings-note"]')!;
+    expect(note.textContent).toContain("cannot be released directly");
+    expect(note.textContent).toContain("merge:force");
+    expect(note.textContent).not.toContain("other reasons");
+
+    q<HTMLButtonElement>(f, '[data-testid="hold-force-merge-open"]')!.click();
+    await f.whenStable();
+    expect(q(f, '[data-testid="force-merge-dialog"]')).toBeTruthy();
+    expect(q(f, '[data-testid="override-gate-security-review"]')).toBeTruthy();
+    q<HTMLButtonElement>(f, '[data-testid="force-merge-cancel"]')!.click();
+    await f.whenStable();
+    expect(q(f, '[data-testid="force-merge-dialog"]')).toBeNull();
+  });
+
+  it("keeps Release hold for a hold of findings and other reasons", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+        { source: "requested", category: "other", reason: "intent unclear" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeTruthy();
+    expect(q(f, '[data-testid="hold-findings-note"]')!.textContent).toContain(
+      "other reasons only",
+    );
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeTruthy();
+  });
+
   it("offers Rollover for a durable idle task but not Recreate sandbox", async () => {
     const api = new FakeApi();
     api.detail = { ...api.detail, admission: "durable" } as TaskDetail;
