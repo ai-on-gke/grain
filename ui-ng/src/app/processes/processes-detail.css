@@ -220,3 +220,15 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* A skip's held-by task and what became of it, kept together on the right. */
+.proc-skip-refs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 4px 6px;
+  flex: none;
+  max-width: 50%;
+  text-align: right;
+}

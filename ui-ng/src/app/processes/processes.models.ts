@@ -409,6 +409,41 @@ export interface DeclarationAcceptanceView {
   needsScopes: string[];
 }
 
+// suppressionReasonLabel is a ScheduleSuppression.reason in words
+// (model.ScheduleSuppressionReason's vocabulary, which the wire carries
+// unchanged): the detail panel's "Suppressed" line leads with it, and the
+// server's own Detail sentence follows.
+export function suppressionReasonLabel(reason: string): string {
+  switch (reason) {
+    case "task":
+      return "previous firing still open";
+    case "suiteRun":
+      return "suite run unfinished";
+    case "workflowRun":
+      return "workflow run unfinished";
+    case "review":
+      return "review still open";
+    case "standingWork":
+      return "standing work off";
+    case "watchedRepoOffTarget":
+      return "watched repository not targeted";
+    case "publishingHeld":
+      return "publishing held";
+    default:
+      return reason;
+  }
+}
+
+// skipFolded is how many later occurrences a skip that fired late
+// absorbed, in words, or "" when it absorbed none.
+export function skipFolded(sk: ScheduleSkip): string {
+  const n = sk.folded ?? 0;
+  if (n <= 0) return "";
+  return n === 1
+    ? "1 later occurrence folded in"
+    : `${n} later occurrences folded in`;
+}
+
 export function isEventTrigger(s: Schedule): boolean {
   const k = (s.recurrence?.kind || "").toLowerCase();
   return k === "github_workflow_run" || k === "git_ref";
