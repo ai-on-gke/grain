@@ -299,6 +299,7 @@ it rather than copy it.
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
 | Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links |
+| Prompt and attributes panes | `shared/detail-panes.css` (`.g-panes`, `.g-pane`, `.g-attrs`) | what an agent is told beside the facts about it: task detail, Processes schedule and template inspectors |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
@@ -312,6 +313,16 @@ Rules:
   loaded. Prefix page-specific classes, and search for a name before you use
   it. Example: Task Detail's `.gate-card` restyled the Backlog's approval
   card until it was renamed `.intake-card`.
+- **A prompt has its own pane.** Wherever a page shows the prompt an agent
+  is (or will be) given -- task detail on the full page and in every
+  inspector pane, and the Processes schedule and template inspectors -- it
+  sits in a `.g-pane` headed "Prompt", rendered with `[gMarkdown]`, never
+  as a raw monospace text well. The facts about it (priority, repository,
+  cadence, overlap, ...) go in a second `.g-pane` below, headed
+  "Attributes" for tasks and "Configuration" for processes, as a `.g-attrs`
+  key-value list. The key column is capped at 40% of the pane and the list
+  stacks key over value when the pane is under 260px, so no value clips or
+  overlaps its key at any split width (`ui-ng/e2e/next-prompt-panes.spec.js`).
 - **One control height per toolbar.** Chips, pill selects and segmented
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).

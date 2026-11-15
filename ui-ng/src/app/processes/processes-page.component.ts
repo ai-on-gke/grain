@@ -74,6 +74,7 @@ import {
   templateSourceBadge,
 } from "./processes.models";
 import { ProcessesStore } from "./processes.store";
+import { MarkdownDirective } from "../shared/code-highlight";
 
 const TABS: readonly { id: ProcessTab; label: string; tip: string }[] = [
   {
@@ -133,6 +134,7 @@ type SuitesPaneView = "suites" | "runs";
     CompositionViewComponent,
     DialogTrapDirective,
     PillSelectComponent,
+    MarkdownDirective,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -142,6 +144,9 @@ type SuitesPaneView = "suites" | "runs";
     "../ci/ci-list.css",
     "./processes-list.css",
     "./processes-detail.css",
+    "../shared/conversation.css",
+    "../shared/code-highlight.css",
+    "../shared/detail-panes.css",
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -772,29 +777,6 @@ type SuitesPaneView = "suites" | "runs";
                     </div>
                   </div>
 
-                  <div class="proc-meta-row">
-                    <g-actor-chip
-                      [label]="s.source || 'deployment'"
-                      [kind]="s.system ? 'grain' : 'service'"
-                    />
-                    <span>{{ cadenceOf(s.recurrence, s.timeZone) }}</span>
-                    @if (s.repo) {
-                      <span class="tabular"
-                        >Repo: <strong>{{ s.repo }}</strong>
-                        {{ s.base ? "@ " + s.base : "" }}</span
-                      >
-                    }
-                    <span
-                      >Overlap: <strong>{{ s.overlap || "skip" }}</strong></span
-                    >
-                    @if (s.nextRunAt) {
-                      <span class="tabular">Next: {{ s.nextRunAt }}</span>
-                    }
-                    @if (s.lastRunAt) {
-                      <span class="tabular">Last: {{ s.lastRunAt }}</span>
-                    }
-                  </div>
-
                   @if (s.declaredIn) {
                     <p class="banner banner-info" style="margin: 6px 0 0">
                       Declared in <code>{{ s.declaredIn.repo }}</code> at
@@ -816,12 +798,81 @@ type SuitesPaneView = "suites" | "runs";
                   }
                 </div>
 
-                @if (s.description) {
-                  <div class="proc-card">
-                    <h3 class="section-title">Prompt / instructions</h3>
-                    <div class="proc-prompt-well">{{ s.description }}</div>
-                  </div>
-                }
+                <div class="g-panes">
+                  <section
+                    class="g-pane"
+                    aria-labelledby="sched-prompt-h"
+                    data-testid="sched-prompt-pane"
+                  >
+                    <h3 id="sched-prompt-h" class="g-pane-title">Prompt</h3>
+                    @if (s.description) {
+                      <div
+                        class="msg-body g-pane-prompt"
+                        data-testid="sched-prompt"
+                        [gMarkdown]="s.description"
+                      ></div>
+                    } @else {
+                      <p class="g-pane-empty">
+                        No prompt of its own{{
+                          s.templateName || s.suiteName
+                            ? " — it files from " +
+                              (s.templateName || s.suiteName)
+                            : ""
+                        }}.
+                      </p>
+                    }
+                  </section>
+                  <section
+                    class="g-pane"
+                    aria-labelledby="sched-config-h"
+                    data-testid="sched-config-pane"
+                  >
+                    <h3 id="sched-config-h" class="g-pane-title">
+                      Configuration
+                    </h3>
+                    <dl class="g-attrs">
+                      <dt>Source</dt>
+                      <dd>
+                        <g-actor-chip
+                          [label]="s.source || 'deployment'"
+                          [kind]="s.system ? 'grain' : 'service'"
+                        />
+                      </dd>
+                      <dt>Cadence</dt>
+                      <dd>{{ cadenceOf(s.recurrence, s.timeZone) }}</dd>
+                      @if (s.templateName || s.templateId) {
+                        <dt>Template</dt>
+                        <dd>{{ s.templateName || s.templateId }}</dd>
+                      }
+                      @if (s.suiteName || s.suiteId) {
+                        <dt>Suite</dt>
+                        <dd>{{ s.suiteName || s.suiteId }}</dd>
+                      }
+                      <dt>Repository</dt>
+                      <dd class="tabular">{{ s.repo || "None" }}</dd>
+                      @if (s.base) {
+                        <dt>Base</dt>
+                        <dd class="tabular">{{ s.base }}</dd>
+                      }
+                      @if (s.model) {
+                        <dt>Model</dt>
+                        <dd>{{ s.model }}</dd>
+                      }
+                      <dt>Overlap</dt>
+                      <dd>{{ s.overlap || "skip" }}</dd>
+                      <dt>Auto-merge</dt>
+                      <dd>{{ s.autoMerge ? "on" : "off" }}</dd>
+                      @if (s.nextRunAt) {
+                        <dt>Next run</dt>
+                        <dd class="tabular">{{ s.nextRunAt }}</dd>
+                      }
+                      @if (s.lastRunAt) {
+                        <dt>Last run</dt>
+                        <dd class="tabular">{{ s.lastRunAt }}</dd>
+                      }
+                    </dl>
+                  </section>
+                </div>
 
                 <g-composition-view [composition]="scheduleComposition()" />
 
@@ -945,26 +996,6 @@ type SuitesPaneView = "suites" | "runs";
                     </div>
                   </div>
 
-                  <div class="proc-meta-row">
-                    <g-actor-chip
-                      [label]="
-                        t.declaredIn?.repo ||
-                        (t.system ? 'grain' : 'deployment')
-                      "
-                      [kind]="t.system ? 'grain' : 'service'"
-                    />
-                    <span
-                      >Task title: <strong>{{ t.title }}</strong></span
-                    >
-                    @if (t.repo) {
-                      <span class="tabular"
-                        >Bound to {{ t.repo
-                        }}{{ t.base ? " @ " + t.base : "" }}</span
-                      >
-                    }
-                    <span>Auto-merge: {{ t.autoMerge ? "on" : "off" }}</span>
-                  </div>
-
                   @if (t.declaredIn) {
                     <p
                       class="banner banner-info"
@@ -979,6 +1010,68 @@ type SuitesPaneView = "suites" | "runs";
                       <code>POST /api/tasks/from-template</code>.
                     </p>
                   }
+                </div>
+
+                <div class="g-panes">
+                  <section
+                    class="g-pane"
+                    aria-labelledby="tmpl-prompt-h"
+                    data-testid="tmpl-prompt-pane"
+                  >
+                    <h3 id="tmpl-prompt-h" class="g-pane-title">Prompt</h3>
+                    @if (t.description) {
+                      <div
+                        class="msg-body g-pane-prompt"
+                        data-testid="tmpl-prompt-preview"
+                        [gMarkdown]="t.description"
+                      ></div>
+                    } @else {
+                      <p class="g-pane-empty" data-testid="tmpl-prompt-preview">
+                        Empty prompt body.
+                      </p>
+                    }
+                  </section>
+                  <section
+                    class="g-pane"
+                    aria-labelledby="tmpl-config-h"
+                    data-testid="tmpl-config-pane"
+                  >
+                    <h3 id="tmpl-config-h" class="g-pane-title">
+                      Configuration
+                    </h3>
+                    <dl class="g-attrs">
+                      <dt>Source</dt>
+                      <dd>
+                        <g-actor-chip
+                          [label]="
+                            t.declaredIn?.repo ||
+                            (t.system ? 'grain' : 'deployment')
+                          "
+                          [kind]="t.system ? 'grain' : 'service'"
+                        />
+                      </dd>
+                      <dt>Task title</dt>
+                      <dd>{{ t.title }}</dd>
+                      <dt>Repository</dt>
+                      <dd class="tabular">
+                        {{ t.repo || "Chosen at launch" }}
+                      </dd>
+                      @if (t.base) {
+                        <dt>Base</dt>
+                        <dd class="tabular">{{ t.base }}</dd>
+                      }
+                      @if (t.model) {
+                        <dt>Model</dt>
+                        <dd>{{ t.model }}</dd>
+                      }
+                      @if (t.priority) {
+                        <dt>Priority</dt>
+                        <dd class="tabular">{{ t.priority }}</dd>
+                      }
+                      <dt>Auto-merge</dt>
+                      <dd>{{ t.autoMerge ? "on" : "off" }}</dd>
+                    </dl>
+                  </section>
                 </div>
 
                 @if ((t.fields ?? []).length > 0) {
@@ -1014,16 +1107,6 @@ type SuitesPaneView = "suites" | "runs";
                     </ul>
                   </div>
                 }
-
-                <div class="proc-card">
-                  <h3 class="section-title">Prompt preview</h3>
-                  <div
-                    class="proc-prompt-well"
-                    data-testid="tmpl-prompt-preview"
-                  >
-                    {{ t.description || "(empty prompt body)" }}
-                  </div>
-                </div>
 
                 <g-composition-view [composition]="templateComposition()" />
               } @else {

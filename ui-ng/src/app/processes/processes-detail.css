@@ -58,18 +58,6 @@
   background: var(--md-sys-color-surface-container-low);
 }
 
-.proc-prompt-well {
-  padding: 12px 14px;
-  border-radius: var(--md-sys-shape-corner-small);
-  border: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface-container-lowest);
-  font-family: var(--grain-font-mono);
-  font-size: 12px;
-  line-height: 18px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .proc-yaml-editor {
   width: 100%;
   min-height: 180px;

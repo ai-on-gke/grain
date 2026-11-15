@@ -140,6 +140,7 @@ export function duration(from?: string, to?: string): string {
     "./task-detail.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/detail-panes.css",
   ],
   host: {
     "(document:click)": "onDocClick($event)",
@@ -1104,72 +1105,81 @@ export function duration(from?: string, to?: string): string {
 
         <ng-template #details>
           <div class="details" data-testid="task-details">
-            <h2 class="section-title">Details</h2>
-            @if (t.description) {
-              <div
-                class="msg-body description"
-                [gMarkdown]="t.description"
-              ></div>
-            }
-            @if (t.attachments?.length) {
-              <g-attachment-list
-                [taskId]="t.id"
-                [repo]="t.repo"
-                [attachments]="t.attachments"
-              />
-            }
-            <dl class="facts">
-              <dt>Priority</dt>
-              <dd>
-                <g-priority-chip
-                  [priority]="prio(t)"
-                  [editable]="priorityEditable()"
-                  [disabled]="store.isBusy('priority', t.id)"
-                  testid="task-priority"
-                  menuTestid="task-priority-menu"
-                  (priorityChange)="setDirectPriority($event)"
-                />
-              </dd>
-              <dt>Repository</dt>
-              <dd>{{ t.repo || "None" }}</dd>
-              @if (t.base) {
-                <dt>Base</dt>
-                <dd class="mono">{{ t.base }}</dd>
-              }
-              <dt>Model</dt>
-              <dd>{{ t.model || "Deployment default" }}</dd>
-              @if (t.agentBackendId) {
-                <dt>Connection</dt>
-                <dd class="mono">{{ t.agentBackendId }}</dd>
-              }
-              @if (t.networkAccess) {
-                <dt>Network</dt>
-                <dd>{{ t.networkAccess }}</dd>
-              }
-              <dt>Filed</dt>
-              <dd>
-                {{ filedAgo(t.createdAt) }} by
-                {{ t.authorLabel || t.author || "unknown" }}
-              </dd>
-              @if (t.approvedByLabel) {
-                <dt>Approved by</dt>
-                <dd>{{ t.approvedByLabel }}</dd>
-              }
-              @if (t.admission && t.admission !== "standard") {
-                <dt>Admission</dt>
-                <dd>{{ t.admission }} (starts past worker limits)</dd>
-              }
-              @if (t.goal; as g) {
-                <dt>Goal</dt>
-                <dd>{{ g.kind }}</dd>
-              }
-              <dt>Capabilities</dt>
-              <dd>{{ capCount() }}</dd>
-              @if (t.closedReason) {
-                <dt>Closed</dt>
-                <dd>{{ t.closedReason }}</dd>
-              }
-            </dl>
+            <div class="g-panes">
+              <section class="g-pane" data-testid="task-prompt-pane">
+                <h2 class="g-pane-title">Prompt</h2>
+                @if (t.description) {
+                  <div
+                    class="msg-body description g-pane-prompt"
+                    [gMarkdown]="t.description"
+                  ></div>
+                } @else {
+                  <p class="g-pane-empty">No prompt text.</p>
+                }
+                @if (t.attachments?.length) {
+                  <g-attachment-list
+                    [taskId]="t.id"
+                    [repo]="t.repo"
+                    [attachments]="t.attachments"
+                  />
+                }
+              </section>
+              <section class="g-pane" data-testid="task-attributes-pane">
+                <h2 class="g-pane-title">Attributes</h2>
+                <dl class="facts g-attrs">
+                  <dt>Priority</dt>
+                  <dd>
+                    <g-priority-chip
+                      [priority]="prio(t)"
+                      [editable]="priorityEditable()"
+                      [disabled]="store.isBusy('priority', t.id)"
+                      testid="task-priority"
+                      menuTestid="task-priority-menu"
+                      (priorityChange)="setDirectPriority($event)"
+                    />
+                  </dd>
+                  <dt>Repository</dt>
+                  <dd>{{ t.repo || "None" }}</dd>
+                  @if (t.base) {
+                    <dt>Base</dt>
+                    <dd class="mono">{{ t.base }}</dd>
+                  }
+                  <dt>Model</dt>
+                  <dd>{{ t.model || "Deployment default" }}</dd>
+                  @if (t.agentBackendId) {
+                    <dt>Connection</dt>
+                    <dd class="mono">{{ t.agentBackendId }}</dd>
+                  }
+                  @if (t.networkAccess) {
+                    <dt>Network</dt>
+                    <dd>{{ t.networkAccess }}</dd>
+                  }
+                  <dt>Filed</dt>
+                  <dd>
+                    {{ filedAgo(t.createdAt) }} by
+                    {{ t.authorLabel || t.author || "unknown" }}
+                  </dd>
+                  @if (t.approvedByLabel) {
+                    <dt>Approved by</dt>
+                    <dd>{{ t.approvedByLabel }}</dd>
+                  }
+                  @if (t.admission && t.admission !== "standard") {
+                    <dt>Admission</dt>
+                    <dd>{{ t.admission }} (starts past worker limits)</dd>
+                  }
+                  @if (t.goal; as g) {
+                    <dt>Goal</dt>
+                    <dd>{{ g.kind }}</dd>
+                  }
+                  <dt>Capabilities</dt>
+                  <dd>{{ capCount() }}</dd>
+                  @if (t.closedReason) {
+                    <dt>Closed</dt>
+                    <dd>{{ t.closedReason }}</dd>
+                  }
+                </dl>
+              </section>
+            </div>
 
             <!-- Capabilities & Grants Editor -->
             @if (can("POST /api/tasks/{id}/capabilities")) {

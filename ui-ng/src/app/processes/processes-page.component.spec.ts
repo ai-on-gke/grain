@@ -74,7 +74,7 @@ class FakeProcessesApi {
     {
       id: "sched-1",
       title: "Audit deps",
-      description: "Check outdated dependencies.",
+      description: "Check **outdated** dependencies.\n\n- `go.mod`",
       repo: "acme/widgets",
       base: "",
       autoMerge: true,
@@ -165,7 +165,7 @@ class FakeProcessesApi {
       id: "tmpl-deploy-1",
       name: "Go upgrade",
       title: "chore: bump {{pkg}}",
-      description: "Bump {{pkg}} version in go.mod.",
+      description: "Bump `{{pkg}}` in **go.mod**.",
       fields: [
         {
           name: "pkg",
@@ -678,6 +678,44 @@ describe("ProcessesPageComponent (D-9)", () => {
     expect(snackbar.current()?.message).toBe(
       "No concluded GitHub workflow run matched this trigger yet.",
     );
+  });
+
+  it("renders schedule and template prompts as markdown in a Prompt pane apart from a Configuration pane", async () => {
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+    root
+      .querySelector<HTMLElement>('[data-testid="sched-row-sched-1"]')!
+      .click();
+    await flush(harness);
+
+    const sPrompt = root.querySelector('[data-testid="sched-prompt-pane"]')!;
+    expect(sPrompt.querySelector(".g-pane-title")!.textContent).toContain(
+      "Prompt",
+    );
+    expect(sPrompt.querySelector("strong")!.textContent).toBe("outdated");
+    expect(sPrompt.querySelector("li code")!.textContent).toBe("go.mod");
+    const sConfig = root.querySelector('[data-testid="sched-config-pane"]')!;
+    expect(sConfig.contains(sPrompt)).toBe(false);
+    const sKeys = [...sConfig.querySelectorAll("dt")].map((d) =>
+      d.textContent!.trim(),
+    );
+    expect(sKeys).toEqual(
+      expect.arrayContaining(["Source", "Cadence", "Repository", "Overlap"]),
+    );
+
+    await harness.navigateByUrl("/processes/templates");
+    await flush(harness);
+    const tRoot = harness.routeNativeElement!;
+    tRoot
+      .querySelector<HTMLElement>('[data-testid="tmpl-row-tmpl-deploy-1"]')!
+      .click();
+    await flush(harness);
+    const tPrompt = tRoot.querySelector('[data-testid="tmpl-prompt-preview"]')!;
+    expect(tPrompt.querySelector("strong")!.textContent).toBe("go.mod");
+    expect(tPrompt.querySelector("code")!.textContent).toBe("{{pkg}}");
+    const tConfig = tRoot.querySelector('[data-testid="tmpl-config-pane"]')!;
+    expect(tConfig.querySelector("dt")!.textContent).toContain("Source");
   });
 
   it("preserves TemplateField metadata (label, default, options, required) across PATCH and launches via POST /api/tasks/from-template", async () => {
