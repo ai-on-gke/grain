@@ -270,3 +270,38 @@ test("the task page and the Inbox inspector offer the same actions", async ({
     page.getByTestId("queue-row").filter({ hasText: title }),
   ).toContainText("Fix or accept 1 review finding");
 });
+
+test("the action area fits its column, gates and buttons inside it @phone @dark", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  const id = await fileTask(demoServer, accessCode, `Fits ${Date.now()}`);
+  await overlay(page, id, CASES["auto-merge turned off after a review push"]);
+  await page.goto(`task/${id}`);
+  const area = page.getByTestId("task-action-area");
+  await expect(area.getByTestId("auto-merge-off")).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(0);
+  const box = await area.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 0.5);
+  // The sentence leads the area, the gates follow it, then the buttons.
+  const sentence = await area.getByTestId("whats-needed").boundingBox();
+  const gates = await area.getByTestId("merge-gates-list").boundingBox();
+  expect(sentence.y).toBeLessThan(gates.y);
+  for (const el of await area.locator("button, .merge-gate-row").all()) {
+    const b = await el.boundingBox();
+    expect(b.x).toBeGreaterThanOrEqual(box.x - 0.5);
+    expect(b.x + b.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
+  }
+  // The area sits above the tabs, so it is in view on every tab.
+  const tabs = await page.locator(".task-tabs").boundingBox();
+  expect(box.y + box.height).toBeLessThanOrEqual(tabs.y + 0.5);
+});

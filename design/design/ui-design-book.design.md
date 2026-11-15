@@ -296,6 +296,8 @@ it rather than copy it.
 | Status icon | `shared/status-icon.component.ts` | the shape inside every status pill |
 | Conversation | `shared/conversation/` | thread + composer (section 3) |
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
+| Action area | `shared/task-action-area.component.ts` (+ `shared/task-actions.ts`) | the one place a task's actions live: "What's needed", merge gates, every action its state allows |
+| Merge gates list | `shared/merge-gates-list.component.ts` | every gate with state, detail, link and its own actions |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
 | Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links |
@@ -322,6 +324,29 @@ Rules:
   on a phone. A fixed-position box sized against `100vw` must be
   border-box, or its padding pushes it off both edges
   (`ui-ng/e2e/next-dialog-fits-phone.spec.js`).
+
+### The action area
+
+Every task has one action area, the same component in the same place on
+every surface that offers task actions: under the header on the task
+page (so it shows on every tab, Conversation included), in the Inbox
+inspector's dock, and in the Agents and Workstreams panes, which embed
+the task view.
+
+- It opens with one "What's needed" sentence (`whatsNeeded`) naming who
+  must act and how, then why auto-merge went off when grain turned it
+  off, then the merge gates list whenever the task has gates, then the
+  park cards answering a run's request, then the action buttons.
+- Its actions come from `availableActions(task, viewer)` and nowhere
+  else. It lists only what can work now: an action the viewer may not
+  take, or the state does not allow, is not shown switched off, it is
+  left out. The one exception is a Submit waiting on CI that has not
+  reported: it shows off, with its reason under the buttons.
+- An action that settles one gate (Send findings back, Accept findings)
+  is drawn on that gate's row, not again in the button row.
+- No other control on these surfaces offers the same actions: no header
+  buttons, no More menu, no per-tab Submit. List rows say the next step
+  (`nextStep`) rather than repeat the buttons.
 
 ## 5. Interaction
 

@@ -588,10 +588,7 @@ describe("TaskPageComponent", () => {
     ).toMatchObject({ params: { id: "7" } });
 
     // Force merge requires reason AND explicit review-gate override checkbox
-    q<HTMLButtonElement>(
-      f,
-      '[data-testid="act-force-merge"]',
-    )!.click();
+    q<HTMLButtonElement>(f, '[data-testid="act-force-merge"]')!.click();
     await f.whenStable();
     const confirmBtn = q<HTMLButtonElement>(
       f,
@@ -1371,10 +1368,7 @@ describe("duration", () => {
     };
     const f = await render(api, "changes");
 
-    const openBtn = q<HTMLButtonElement>(
-      f,
-      '[data-testid="act-force-merge"]',
-    )!;
+    const openBtn = q<HTMLButtonElement>(f, '[data-testid="act-force-merge"]')!;
     openBtn.focus();
     openBtn.click();
     await settle(f);
