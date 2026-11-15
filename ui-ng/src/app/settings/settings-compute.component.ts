@@ -2322,6 +2322,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       this.editingBackendId.set("");
       await this.state.loadCore();
       this.syncBackendsFromState();
+      // An open Credential row that now holds a subscription login reads
+      // its status, as opening it would have.
+      const saved = this.backends().find((b) => b.id === backendId);
+      if (
+        this.openCredBackendId() === backendId &&
+        saved &&
+        this.isCodexSubscription(saved)
+      ) {
+        void this.loadCodexAuth(backendId);
+      }
       this.snackbar.show(`Saved model connection ${backendId}`);
     } catch (err) {
       this.state.recordError(err);
