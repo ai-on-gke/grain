@@ -374,6 +374,11 @@ func (c *CredentialSet) Get(name string) (Credential, bool) {
 // rather than being joined onto c.dir and read from wherever it points.
 // namesOneFile, not ValidCredentialName: a name already on disk in a
 // shape SetToken would no longer write is still a credential.
+// ErrNoCredential is what SetHost, Remove and the reach check wrap when
+// the credential they are given does not exist, so a caller can tell a
+// name nobody configured (the request's fault) from a failure to write.
+var ErrNoCredential = errors.New("no credential named")
+
 func (c *CredentialSet) exists(name string) bool {
 	if name == "anonymous" {
 		return true
@@ -578,7 +583,7 @@ func (c *CredentialSet) Remove(name string) error {
 		removed = removed || r
 	}
 	if !removed {
-		return fmt.Errorf("no credential named %q is configured", name)
+		return fmt.Errorf("%w %q is configured", ErrNoCredential, name)
 	}
 	if err := os.Remove(c.hostFile(name)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing credential %q's host record: %w", name, err)
