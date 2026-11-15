@@ -282,6 +282,67 @@ version, but this run could not read them: the task holds no
 They are not addressed by name here; the re-review on this push should
 say whether they still apply.
 
+## Review findings and third merge (2026-11-15 repair)
+
+The merge queue sent the branch back on 2026-11-15 after `main` moved to
+`968121418`. The only conflict was in `settings-compute.component.ts`:
+`main` (#1537) retired the Framework API keys card, so its
+`AgentKeysResponse` and `KeyCheckResult` types went too. This branch's
+Sandboxes vocabulary and labels were kept. This run also fixed the three
+findings that review task 5601 left open. Each was reproduced first on a
+`grain demo` built from the merged tree, with real requests and the
+Playwright browser.
+
+1. **Placed and failed capability servers read wrongly.**
+   - A server placed on an away host reports
+     `needs-hostd:<host>`, and the chip showed that wire value as-is. It
+     now says `needs host <host>`, as the classic `needsHostLabel` does.
+   - A server grain cannot reach reports `failed`, but its chip used the
+     neutral tone. It now uses the error tone.
+   - The chip's tooltip now falls back to `status.reason`, which is where
+     a `needs-config` server (`figma`, `gchat`) says what it is waiting for.
+   - Reproduced: adding `serverUrl: http://127.0.0.1:9/mcp` gives
+     `state: "failed"` within seconds.
+   - The demo refuses to place a server on a host ("this process does not
+     route placed capability servers to their host"). So the e2e adds one
+     `needs-hostd:away-box` row to the real `GET /api/capability-servers`
+     answer with `page.route`. That is the only stub in this run.
+2. **Reusing a stored credential dropped the host kind.**
+   - Steps: add a token connection on `git-plain.walk.example.test` as a
+     plain git host. Then add the same credential again for scope
+     `walk/one`, sending no `kind`.
+   - Before the fix: both rows read back `kind: github`, because the
+     server writes the credential's host record with an empty kind read
+     as github.
+   - `/next/` now sends the picker's kind in both credential modes. After
+     a reload, both rows show "git host".
+3. **Old section names did not scroll when reached in-app.**
+   - `/settings/engine` → `/settings/secrets` by router navigation
+     changes only the section, and the fragment stays `null`. So
+     `#other-secrets` was never scrolled to. Only a full page load
+     worked.
+   - The page now watches the section and the fragment together.
+   - Choosing another section in the rail stops a scroll still chasing
+     an anchor.
+
+The new e2e tests ("reusing a plain-host credential keeps it a git
+host"; "failed and host-placed servers read as such, and an old section
+name scrolls in-app") both failed on a build with the three components
+reverted, and pass with the fix. Three vitest cases cover the same
+ground.
+
+Results on the merged tree, at the final head:
+
+- Full ui-ng Playwright suite: 89 passed (desktop, phone, dark).
+- vitest: 465 passed.
+- eslint and prettier: clean.
+
+Found on the way, not fixed here: `POST /api/deployment/git-connections`
+naming a credential that does not exist answers **500** `internal`
+("setting credential host: no credential named … is configured")
+instead of a 4xx. Filed as a follow-up, because the fix is server-side,
+in `gitproxy` and `pkg/ui`.
+
 ## Follow-ups proposed
 
 The missing `/next/` parity listed under each section is filed as
