@@ -14,6 +14,7 @@
 
 import type { Notification, Task } from "../api/models";
 import {
+  awaitsHumanSubmit,
   buildEntries,
   classifyNotification,
   classifyTask,
@@ -332,5 +333,40 @@ describe("inbox classifier", () => {
     });
     expect(cleared.taskId).toBe("412");
     expect(cleared.taskLink).toBe("/task/412");
+  });
+
+  it("keeps an approved awaiting_submit task in awaitsHumanSubmit when held by security-findings source", () => {
+    expect(
+      awaitsHumanSubmit(
+        task({
+          state: "awaiting_submit",
+          humanApprovedBy: "alice",
+          humanReviewHold: [
+            {
+              source: "security-findings",
+              category: "security",
+              reason: "review 77 left findings",
+              at: "2026-11-15T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      awaitsHumanSubmit(
+        task({
+          state: "awaiting_submit",
+          humanApprovedBy: "alice",
+          humanReviewHold: [
+            {
+              source: "requested",
+              category: "security",
+              reason: "intent unclear",
+              at: "2026-11-15T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
   });
 });
