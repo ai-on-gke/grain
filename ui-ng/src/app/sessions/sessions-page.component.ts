@@ -17,9 +17,11 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
+  Injector,
   type OnDestroy,
   type OnInit,
   ViewEncapsulation,
+  afterNextRender,
   computed,
   effect,
   inject,
@@ -64,6 +66,7 @@ import {
   SessionCanvasComponent,
 } from "./session-canvas.component";
 import { SessionsStore } from "./sessions.store";
+import { LiveStepsComponent } from "../shared/live-steps/live-steps.component";
 
 // clock is a message's time: the time of day today, the date otherwise.
 export function clock(iso: string | undefined, now = new Date()): string {
@@ -92,6 +95,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
     GrantsPickerComponent,
     PillSelectComponent,
     SessionCanvasComponent,
+    LiveStepsComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -565,6 +569,13 @@ export function clock(iso: string | undefined, now = new Date()): string {
               data-testid="chat-log"
             >
               @for (c of comments(); track c.id) {
+                @if (c.id === stepsBefore()) {
+                  <g-live-steps
+                    class="chat-steps-done"
+                    [transcript]="lastTurn()"
+                    [finished]="true"
+                  />
+                }
                 <article
                   class="msg"
                   [class.is-human]="human(c)"
@@ -631,7 +642,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
                     <span class="msg-meta">
                       <span class="status-pill setup">Live turn</span>
                     </span>
-                    <div class="msg-body" [gMarkdown]="tr"></div>
+                    <g-live-steps [transcript]="tr" />
                   </article>
                 }
               }
@@ -900,6 +911,25 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly comments = computed<Comment[]>(
     () => this.store.selectedDetail()?.comments ?? [],
   );
+  // The Director's last finished turn, shown as an "N steps" disclosure
+  // above the reply it led to while no turn is live.
+  protected readonly lastTurn = computed(() => {
+    const row = this.store.selected();
+    const t = this.store.directorLastTurn();
+    return row?.session.id === DIRECTOR_ID &&
+      t &&
+      t.taskId === row.session.taskId
+      ? t.text
+      : null;
+  });
+  protected readonly stepsBefore = computed(() => {
+    if (!this.lastTurn() || this.store.status().live) return null;
+    const list = this.comments();
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (!isHuman(list[i])) return list[i].id;
+    }
+    return null;
+  });
   protected readonly draft = computed(() =>
     this.store.draftFor(this.store.selectedId()),
   );
@@ -985,7 +1015,10 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   });
 
   private lastCount = 0;
+  private lastLive = "";
+  private watching = false;
   private lastSession = "";
+  private readonly injector = inject(Injector);
 
   constructor() {
     effect(() => {
@@ -1013,21 +1046,40 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
         });
       });
     });
+    // The Sessions page follows the Director's live turn itself, not only
+    // when the Director drawer happens to be open beside it.
+    effect(() => {
+      const on = this.store.selectedId() === DIRECTOR_ID;
+      if (on === this.watching) return;
+      this.watching = on;
+      untracked(() => this.store.setDirectorWatch("sessions-page", on));
+    });
+    // Keep the end of the thread -- the newest message, or the live turn's
+    // newest step -- in view while the reader is at the bottom. The scroll
+    // waits for the render that adds the new content, so the row is laid out
+    // before the log is scrolled to it.
     effect(() => {
       const n = this.comments().length;
       const sid = this.store.selectedId();
+      const live = this.store.directorTranscript() ?? "";
       const el = this.log()?.nativeElement;
       if (!el) return;
       if (sid !== this.lastSession) {
         this.lastSession = sid;
         this.lastCount = 0;
+        this.lastLive = "";
       }
-      const grew = n > this.lastCount;
+      const grew = n > this.lastCount || live !== this.lastLive;
       const first = this.lastCount === 0;
       this.lastCount = n;
+      this.lastLive = live;
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
       if (grew && (first || nearBottom)) {
-        setTimeout(() => (el.scrollTop = el.scrollHeight));
+        untracked(() =>
+          afterNextRender(() => (el.scrollTop = el.scrollHeight), {
+            injector: this.injector,
+          }),
+        );
       }
     });
   }
@@ -1037,6 +1089,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    if (this.watching) this.store.setDirectorWatch("sessions-page", false);
     this.store.release("sessions-page");
   }
 

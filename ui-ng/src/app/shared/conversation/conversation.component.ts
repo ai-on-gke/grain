@@ -20,6 +20,7 @@ import {
   OnDestroy,
   ViewEncapsulation,
   afterRenderEffect,
+  computed,
   effect,
   inject,
   input,
@@ -31,6 +32,7 @@ import {
 } from "@angular/core";
 import { NgTemplateOutlet } from "@angular/common";
 import { MarkdownDirective } from "../code-highlight";
+import { LiveStepsComponent } from "../live-steps/live-steps.component";
 import { ActorChipComponent } from "../actor-chip.component";
 import { ago } from "../../tasks/task-view";
 import { isHuman } from "../../sessions/session-helpers";
@@ -70,6 +72,7 @@ export interface ComposerConfig {
   imports: [
     NgTemplateOutlet,
     MarkdownDirective,
+    LiveStepsComponent,
     ActorChipComponent,
     AttachmentListComponent,
     AttachmentPickerComponent,
@@ -158,6 +161,13 @@ export interface ComposerConfig {
         }
 
         @for (c of comments(); track c.id) {
+          @if (c.id === stepsBefore()) {
+            <g-live-steps
+              class="convo-steps-done"
+              [transcript]="finishedTranscript()"
+              [finished]="true"
+            />
+          }
           <article
             class="msg"
             [class.is-human]="human(c)"
@@ -200,11 +210,12 @@ export interface ComposerConfig {
           </p>
         }
         @if (transcript()) {
-          <pre
-            class="inbox-live-transcript"
+          <g-live-steps
+            class="convo-live-steps"
             data-testid="inbox-live-transcript"
-            aria-label="Live run transcript"
-            >{{ transcript() }}</pre>
+            aria-label="Live run steps"
+            [transcript]="transcript()"
+          />
         }
       </div>
       @if (unseen() > 0) {
@@ -316,6 +327,9 @@ export class ConversationComponent implements OnDestroy {
   readonly repo = input<string | undefined>(undefined);
   readonly comments = input<readonly Comment[]>([]);
   readonly transcript = input<string | null>(null);
+  /** The last finished turn's transcript: its steps fold into an "N steps"
+   *  disclosure above the reply it led to. Ignored while a turn is live. */
+  readonly finishedTranscript = input<string | null>(null);
   readonly config = input<ComposerConfig>();
   readonly questionCommentId = input<number | undefined>(undefined);
 
@@ -344,6 +358,17 @@ export class ConversationComponent implements OnDestroy {
     viewChild<ElementRef<HTMLTextAreaElement>>("composer");
 
   protected readonly human = isHuman;
+
+  // The reply the finished turn's steps belong to: the newest message that
+  // is not a person's. None while a turn is live, which shows its own.
+  protected readonly stepsBefore = computed(() => {
+    if (this.transcript() || !this.finishedTranscript()?.trim()) return null;
+    const list = this.comments();
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (!isHuman(list[i])) return list[i].id;
+    }
+    return null;
+  });
 
   private following = true;
   private lastCount = 0;
