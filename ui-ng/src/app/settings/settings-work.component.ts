@@ -962,8 +962,12 @@ interface SecretMetaRow {
                 (input)="secretKey.set($any($event.target).value)"
               />
               <textarea
-                class="s-textarea s-input-inline s-mono"
+                class="s-textarea s-input-inline s-mono s-masked"
                 rows="1"
+                autocomplete="off"
+                spellcheck="false"
+                data-lpignore="true"
+                data-1p-ignore="true"
                 aria-label="Secret value"
                 data-testid="input-secret-value"
                 placeholder="Secret value or PEM…"
@@ -978,6 +982,7 @@ interface SecretMetaRow {
                   !secretName().trim() ||
                   !secretKey().trim() ||
                   secretVal().length === 0 ||
+                  !secretsEnabled() ||
                   !access.can('PUT /api/secrets/{secret}/{key}')
                 "
                 (click)="putSecret()"
@@ -987,6 +992,12 @@ interface SecretMetaRow {
             </div>
           </div>
 
+          @if (!secretsEnabled()) {
+            <span class="s-hint" data-testid="secrets-store-disabled"
+              >This server has no secret store configured, so nothing can be
+              stored here yet.</span
+            >
+          }
           @if (!access.can("POST /api/secrets/redact")) {
             <span class="s-hint" data-testid="secrets-redact-restricted">{{
               access.deniedReason("POST /api/secrets/redact")
@@ -1104,6 +1115,9 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly newScopeSetScopes = signal("");
 
   protected readonly secretsList = signal<SecretMetaRow[]>([]);
+  // GET /api/secrets says enabled: false when the server has no secret
+  // store; a PUT then 404s, so the form says so instead of offering it.
+  protected readonly secretsEnabled = signal(true);
   protected readonly secretName = signal("");
   protected readonly secretKey = signal("value");
   protected readonly secretVal = signal("");
@@ -1406,9 +1420,10 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     if (this.access.can("GET /api/secrets")) {
       try {
         const sec = await this.api.get<
-          SecretMetaRow[] | { secrets?: SecretMetaRow[] }
+          SecretMetaRow[] | { secrets?: SecretMetaRow[]; enabled?: boolean }
         >("GET /api/secrets");
         this.secretsList.set(Array.isArray(sec) ? sec : (sec?.secrets ?? []));
+        this.secretsEnabled.set(Array.isArray(sec) || sec?.enabled !== false);
       } catch {
         // Non-fatal
       }
