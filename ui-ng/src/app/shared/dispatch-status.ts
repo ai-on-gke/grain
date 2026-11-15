@@ -183,18 +183,26 @@ const NOTICE_MONTHS = [
   "Dec",
 ];
 
-// Formats a UTC "HH:MM UTC" phrase inside a backend warning string into the
-// user's local timezone alongside a relative reset countdown. A phrase with
-// a date ("Nov 9 03:00 UTC", a weekly limit's reset days away) is read on
-// that date, in the year that puts it nearest now.
+// Formats a UTC clock phrase inside a backend warning string -- "14:05 UTC",
+// or the daemon's 12-hour "2:05 PM UTC" -- into the user's local timezone
+// alongside a relative reset countdown. A phrase with a date ("Nov 9 03:00
+// UTC", a weekly limit's reset days away) is read on that date, in the year
+// that puts it nearest now.
 export function formatNoticeText(
   text: string,
   nowMs = Date.now(),
   preferredTz?: string | null,
 ): string {
-  const re =
-    /\b(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2}) )?(\d{2}):(\d{2})\s*UTC\b/g;
-  return text.replace(re, (raw, mon, day, hh, mm) => {
+  const clock =
+    /\b(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{1,2}) )?(\d{1,2}):(\d{2})(?:\s*([AaPp][Mm]))?\s*UTC\b/g;
+  return text.replace(clock, (raw, mon, day, hh, mm, ampm?: string) => {
+    let hour = Number(hh);
+    if (ampm) {
+      if (hour < 1 || hour > 12) return raw;
+      hour = (hour % 12) + (ampm.toUpperCase() === "PM" ? 12 : 0);
+    } else if (hh.length !== 2) {
+      return raw;
+    }
     const cur = new Date(nowMs);
     let target: number;
     if (mon) {
@@ -203,7 +211,7 @@ export function formatNoticeText(
         cur.getUTCFullYear(),
         month,
         Number(day),
-        Number(hh),
+        hour,
         Number(mm),
       );
       // "Jan 2" read in late December is next year's.
@@ -212,7 +220,7 @@ export function formatNoticeText(
           cur.getUTCFullYear() + 1,
           month,
           Number(day),
-          Number(hh),
+          hour,
           Number(mm),
         );
       }
@@ -221,7 +229,7 @@ export function formatNoticeText(
         cur.getUTCFullYear(),
         cur.getUTCMonth(),
         cur.getUTCDate(),
-        Number(hh),
+        hour,
         Number(mm),
         0,
         0,

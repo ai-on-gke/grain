@@ -1320,6 +1320,13 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                                     : "Paused · interval limit"
                                 }}
                               </span>
+                              @if (fmtReset(s.pausedUntil); as reset) {
+                                <span
+                                  class="muted tabular usage-scope-reset"
+                                  data-testid="usage-scope-reset"
+                                  >resets {{ reset }}</span
+                                >
+                              }
                             } @else {
                               <span class="status-pill healthy">
                                 <g-status-icon tone="healthy" kind="healthy" />
@@ -1756,6 +1763,16 @@ export class TelemetryPageComponent implements OnInit {
     const list = this.clusterStats()?.directions ?? [];
     return this.showAllDirections() ? list : list.slice(0, 8);
   });
+
+  // fmtReset is a paused scope's reset on the viewer's clock, zone named,
+  // with a countdown: "11:15 AM PST (in 45m)".
+  protected readonly fmtReset = (until?: string): string =>
+    formatLocalReset(
+      until,
+      undefined,
+      this.access.clockNow(),
+      effectiveDisplayTimeZone(this.access.rawConfig()?.timeZone),
+    );
 
   protected readonly usageNotices = computed(() => {
     const u = this.usage();

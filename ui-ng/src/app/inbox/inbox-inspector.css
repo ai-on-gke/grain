@@ -65,6 +65,26 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* Of everything in the dock only a long message gives way
+     (g-capped-markdown, capped at 40% of the pane and scrolling in its
+     own box): its actions and notes keep their height, and the body
+     below keeps its floor, at any window size. */
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.resolution-dock > * {
+  flex-shrink: 0;
+}
+
+.resolution-dock > g-capped-markdown {
+  flex-shrink: 1;
+  min-height: 0;
+}
+
+/* The pane is the size container the cap is read against (cqh). */
+.inbox-split > .inspector-pane {
+  container-type: size;
 }
 
 .resolution-dock .banner {
@@ -97,13 +117,23 @@
   display: none;
 }
 
+/* The rest of the pane: the task's evidence, conversation and diff. A
+   scroll container's flex floor is 0, so without one a tall dock left
+   this a sliver; it keeps a floor of its own, whatever the dock holds. */
 .inspector-body {
   padding: 12px 20px 24px;
   overflow-y: auto;
-  flex: 1;
+  flex: 1 1 0;
+  min-height: min(240px, 25cqh);
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* "Show full question": the question takes the room, down to a lower
+   floor for the body, which still shows the start of the task's details. */
+.inspector-pane:has(.resolution-dock .capped-md.is-open) .inspector-body {
+  min-height: min(120px, 12cqh);
 }
 
 .evidence-card {
