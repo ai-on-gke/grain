@@ -65,6 +65,18 @@ describe("sanitizeMermaidSvg", () => {
     expect(out).toContain('aria-label="Diagram"');
   });
 
+  it("keeps a <style> from fetching anything remote", () => {
+    const out = sanitizeMermaidSvg(
+      '<svg id="g-mermaid-2" viewBox="0 0 1 1"><style>' +
+        "@import url(https://evil.example/a.css);" +
+        "#g-mermaid-2 .a{background:url( 'https://evil.example/p.png' )}" +
+        "#g-mermaid-2 .b{fill:url(#g-mermaid-2-grad)}" +
+        "</style></svg>",
+    );
+    expect(out).not.toContain("evil");
+    expect(out).toContain("url(#g-mermaid-2-grad)");
+  });
+
   it("refuses output that is not an SVG", () => {
     expect(() => sanitizeMermaidSvg("<p>nope</p>")).toThrow();
   });

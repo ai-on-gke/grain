@@ -139,6 +139,14 @@ export function sanitizeMermaidSvg(raw: string): string {
   for (const tag of FORBIDDEN_SVG_TAGS) {
     for (const bad of Array.from(svg.getElementsByTagName(tag))) bad.remove();
   }
+  // classDef and style directives land in the diagram's <style>; a url()
+  // there could fetch a remote image (a tracking pixel) just by being
+  // read, as Markdown images may not. Internal #references stay.
+  for (const st of Array.from(svg.getElementsByTagName("style"))) {
+    st.textContent = (st.textContent ?? "")
+      .replace(/@import[^;]*;?/gi, "")
+      .replace(/url\s*\(\s*(['"]?)(?!#)[^)]*\)/gi, "none");
+  }
   for (const el of [svg, ...Array.from(svg.querySelectorAll("*"))]) {
     for (const attr of Array.from(el.attributes)) {
       const name = attr.name.toLowerCase();
