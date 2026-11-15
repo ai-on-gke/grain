@@ -364,6 +364,11 @@ func (c *CredentialSet) Get(name string) (Credential, bool) {
 	return c.load(name, ""), true
 }
 
+// ErrNoCredential is what SetHost, Remove and the reach check wrap when
+// the credential they are given does not exist, so a caller can tell a
+// name nobody configured (the request's fault) from a failure to write.
+var ErrNoCredential = errors.New("no credential named")
+
 // exists is Get's "is there such a credential at all" check: a
 // <name>.token, <name>.app.json or <name>.ssh.json held in the store or as
 // a file, a <name>.ambient.json file, or the literal "anonymous".
@@ -374,11 +379,6 @@ func (c *CredentialSet) Get(name string) (Credential, bool) {
 // rather than being joined onto c.dir and read from wherever it points.
 // namesOneFile, not ValidCredentialName: a name already on disk in a
 // shape SetToken would no longer write is still a credential.
-// ErrNoCredential is what SetHost, Remove and the reach check wrap when
-// the credential they are given does not exist, so a caller can tell a
-// name nobody configured (the request's fault) from a failure to write.
-var ErrNoCredential = errors.New("no credential named")
-
 func (c *CredentialSet) exists(name string) bool {
 	if name == "anonymous" {
 		return true
