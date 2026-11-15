@@ -364,6 +364,35 @@ func waitForCond(t *testing.T, ok func() bool) {
 	t.Fatal("timed out")
 }
 
+// A unit installed before KillMode=mixed is given it by update, once, and
+// one that sets a KillMode of its own keeps it
+// (docs/test-runs/2026-11-14-host-stop.md, F2).
+func TestWithKillModeAddsKillModeMixedOnce(t *testing.T) {
+	old := "[Service]\nExecStartPre=-/bin/sh /g.sh\nExecStart=/x -server s\nRestart=always\n\n[Install]\nWantedBy=default.target\n"
+	got, changed := withKillMode(old)
+	want := "[Service]\nExecStartPre=-/bin/sh /g.sh\nExecStart=/x -server s\nKillMode=mixed\nRestart=always\n\n[Install]\nWantedBy=default.target\n"
+	if !changed || got != want {
+		t.Fatalf("withKillMode = %q, %v; want %q", got, changed, want)
+	}
+	if _, changed := withKillMode(got); changed {
+		t.Fatal("added twice")
+	}
+	if got, changed := withKillMode("[Service]\nExecStart=/x\nKillMode=process\n"); changed || strings.Count(got, "KillMode=") != 1 {
+		t.Fatalf("withKillMode overrode an operator's KillMode: %q", got)
+	}
+	if got, changed := withKillMode("[Service]\nExecStart=/x"); !changed || got != "[Service]\nExecStart=/x\nKillMode=mixed\n" {
+		t.Fatalf("withKillMode on a unit with no final newline = %q, %v", got, changed)
+	}
+	// What install writes today needs nothing added.
+	unit, err := renderUnit(unitConfig{Bin: "/b", Server: "https://d.example", Token: "/t", Allowlist: "/a", StateDir: "/s", Guard: "/g.sh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, changed := withKillMode(unit); changed {
+		t.Fatalf("withKillMode changed install's own unit:\n%s", unit)
+	}
+}
+
 func TestWithGuardAddsTheGuardOnce(t *testing.T) {
 	unit := "[Service]\nExecStart=/x\n"
 	got, changed := withGuard(unit, "/g.sh")
