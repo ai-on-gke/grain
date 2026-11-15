@@ -167,11 +167,17 @@ export class InboxStore implements OnDestroy {
   });
   // decisions is what is waiting on a person across the entire Inbox (used by
   // the global rail badge). scopedDecisions tracks the current ?ws= scope.
+  // An acknowledged alert keeps its row (marked so) until it is cleared,
+  // but it is no longer open, so it is not a decision waiting on anyone:
+  // the headline and the rail badge leave it out, as the classic bell
+  // does (ui/src/notifications.js notificationAlerts).
   readonly decisions = computed(() =>
-    this.liveEntries().filter((e) => !QUIET_GROUPS.has(e.groupId)),
+    this.liveEntries().filter((e) => !QUIET_GROUPS.has(e.groupId) && !e.acked),
   );
   readonly scopedDecisions = computed(() =>
-    this.scopedLiveEntries().filter((e) => !QUIET_GROUPS.has(e.groupId)),
+    this.scopedLiveEntries().filter(
+      (e) => !QUIET_GROUPS.has(e.groupId) && !e.acked,
+    ),
   );
   private readonly frozen = signal<readonly InboxEntry[] | null>(null);
   // The last version of every row seen, so a row that left still shows
