@@ -1211,4 +1211,96 @@ describe("TasksPageComponent", () => {
     // Never "Nothing in this tab" for a list it could not read.
     expect(q(f, '[data-testid="tasks-pane-empty"]')).toBeNull();
   });
+
+  it("loads saved boards and base-branch gates when tasks resolve before config on a cached reload", async () => {
+    const api = new FakeApi();
+    api.boards = [
+      {
+        id: "b1",
+        name: "Timeline Triage",
+        kind: "list",
+        query: "tab=all&view=timeline",
+      },
+    ];
+    api.gates = [
+      {
+        repo: "sidthe/grain",
+        branch: "main",
+        judged: false,
+        reason: "failing",
+        detail: "ci failed",
+      },
+    ];
+
+    let resolveConfig!: (cfg: Record<string, unknown>) => void;
+    const configPromise = new Promise<Record<string, unknown>>((r) => {
+      resolveConfig = r;
+    });
+    api.config = () => configPromise;
+
+    let resolveTasks!: (res: { body: Task[]; changed: boolean }) => void;
+    const tasksPromise = new Promise<{ body: Task[]; changed: boolean }>(
+      (r) => {
+        resolveTasks = r;
+      },
+    );
+    const baseGetIfChanged = api.getIfChanged;
+    api.getIfChanged = (route: string, params?: { id?: string }) =>
+      route === "GET /api/tasks"
+        ? tasksPromise
+        : baseGetIfChanged(route, params);
+
+    TestBed.configureTestingModule({
+      imports: [TasksPageComponent],
+      providers: [
+        provideRouter([{ path: "**", children: [] }]),
+        { provide: GrainApi, useValue: api },
+        { provide: GrainEvents, useValue: { events: () => NEVER } },
+      ],
+    });
+
+    // Simulate AppComponent starting the shared task feed while the cached
+    // TasksPageComponent chunk mounts immediately before either /api/tasks
+    // or /api/config has resolved.
+    const feed = TestBed.inject(TaskFeedStore);
+    feed.start();
+    const f = TestBed.createComponent(TasksPageComponent);
+    f.componentRef.setInput("tab", "all");
+    f.autoDetectChanges();
+
+    const store = TestBed.inject(TasksStore);
+    expect(store.boards()).toEqual([]);
+    expect(store.baseBranchGates()).toEqual([]);
+
+    // /api/tasks resolves first while /api/config is still in flight.
+    resolveTasks({ body: structuredClone(api.live), changed: true });
+    await settle(f);
+    expect(store.live().length).toBeGreaterThan(0);
+    expect(store.boards()).toEqual([]);
+    expect(store.baseBranchGates()).toEqual([]);
+
+    // Now /api/config resolves with scoped access permitting boards:read and ci:read.
+    resolveConfig({
+      access: {
+        role: "dev",
+        roles: ["dev"],
+        full: false,
+        scopes: ["tasks:read", "boards:read", "ci:read"],
+      },
+    });
+    await configPromise;
+    await settle(f);
+    await settle(f);
+
+    expect(store.boards().map((b) => b.name)).toEqual(["Timeline Triage"]);
+    expect(store.baseBranchGates().map((g) => g.repo)).toEqual([
+      "sidthe/grain",
+    ]);
+
+    q<HTMLButtonElement>(f, '[data-testid="saved-boards-btn"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="board-apply-b1"]')?.textContent).toContain(
+      "Timeline Triage",
+    );
+  });
 });
