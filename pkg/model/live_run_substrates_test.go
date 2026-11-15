@@ -25,16 +25,22 @@ import (
 // run whose CLI started in a run host or detached in grain hostd -- each
 // marked by its spool cursor -- survives the restart, and every other
 // live run, a child of the daemon or one still in setup, is lost. A
-// finished run is neither.
+// finished run is neither. A run in setup has its framework already --
+// RunDispatch records it before building the sandbox -- so Started, not
+// Framework, is what says it is in setup (task 5665).
 func TestLiveRunSubstratesSaysWhichRunsARestartLoses(t *testing.T) {
 	store, ctx := open(t)
 	at := time.Date(2026, 10, 27, 6, 0, 0, 0, time.UTC)
-	for i, r := range []struct{ id, framework string }{
-		{"in-run-host", "claude"},
-		{"in-hostd", "antigravity"},
-		{"local", "codex"},
-		{"setup", ""},
-		{"finished", "claude"},
+	for i, r := range []struct {
+		id, framework string
+		started       bool
+	}{
+		{"in-run-host", "claude", true},
+		{"in-hostd", "antigravity", true},
+		{"local", "codex", true},
+		{"setup", "antigravity", false},
+		{"no-framework", "", false},
+		{"finished", "claude", true},
 	} {
 		task := model.Task{
 			ID: r.id, Intent: model.IntentImplement, Title: r.id,
@@ -55,6 +61,11 @@ func TestLiveRunSubstratesSaysWhichRunsARestartLoses(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		if r.started {
+			if err := store.SetRunAgentStarted(ctx, run.ID, run.StartedAt.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	if err := store.SetSpoolCursor(ctx, "in-run-host-1", 0, at); err != nil {
 		t.Fatal(err)
@@ -71,10 +82,11 @@ func TestLiveRunSubstratesSaysWhichRunsARestartLoses(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []model.LiveRunSubstrate{
-		{Run: "in-run-host-1", Task: "in-run-host", Framework: "claude", Detached: true},
-		{Run: "in-hostd-1", Task: "in-hostd", Framework: "antigravity", Detached: true},
-		{Run: "local-1", Task: "local", Framework: "codex"},
-		{Run: "setup-1", Task: "setup"},
+		{Run: "in-run-host-1", Task: "in-run-host", Framework: "claude", Started: true, Detached: true},
+		{Run: "in-hostd-1", Task: "in-hostd", Framework: "antigravity", Started: true, Detached: true},
+		{Run: "local-1", Task: "local", Framework: "codex", Started: true},
+		{Run: "setup-1", Task: "setup", Framework: "antigravity"},
+		{Run: "no-framework-1", Task: "no-framework"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("live runs = %+v, want %+v", got, want)

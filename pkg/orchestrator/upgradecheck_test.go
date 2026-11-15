@@ -806,15 +806,21 @@ func TestUpgradeCheckCountsRunsThatStoppedWithTheDaemon(t *testing.T) {
 	store, ctx := openStore(t)
 	now := time.Date(2026, 10, 26, 7, 20, 0, 0, time.UTC)
 	status := upgradeDone("main", now.Add(-time.Minute))
+	// 900-2 and 5542-1 were still in setup: 5542-1 already had the
+	// framework RunDispatch records before building the sandbox, so it is
+	// its unset agent_started_at, not an empty framework, that says so
+	// (task 5665).
 	for _, r := range []struct {
 		run, task, framework string
 		finished             time.Time
+		started              bool
 	}{
-		{"969-3", "969", "claude", now.Add(-5 * time.Minute)},
-		{"876-3", "876", "codex", now.Add(-5 * time.Minute)},
-		{"900-2", "900", "", now.Add(-5 * time.Minute)},
-		{"1115-1", "1115", "antigravity", time.Time{}},
-		{"700-1", "700", "claude", now.Add(-2 * time.Hour)},
+		{"969-3", "969", "claude", now.Add(-5 * time.Minute), true},
+		{"876-3", "876", "codex", now.Add(-5 * time.Minute), true},
+		{"900-2", "900", "", now.Add(-5 * time.Minute), false},
+		{"5542-1", "5542", "antigravity", now.Add(-5 * time.Minute), false},
+		{"1115-1", "1115", "antigravity", time.Time{}, true},
+		{"700-1", "700", "claude", now.Add(-2 * time.Hour), true},
 	} {
 		if err := store.PutTask(ctx, model.Task{ID: r.task, Title: "t" + r.task}); err != nil {
 			t.Fatal(err)
@@ -825,6 +831,11 @@ func TestUpgradeCheckCountsRunsThatStoppedWithTheDaemon(t *testing.T) {
 		}
 		if r.framework != "" {
 			if err := store.SetRunModel(ctx, r.run, "m", r.framework); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if r.started {
+			if err := store.SetRunAgentStarted(ctx, r.run, now.Add(-170*time.Minute)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -839,11 +850,13 @@ func TestUpgradeCheckCountsRunsThatStoppedWithTheDaemon(t *testing.T) {
 	}, map[string]bool{"1115-1": true})
 	body := fileCheckWith(t, store, ctx, status, report, nil, now)
 	for _, want := range []string{
-		"1 adopted, 3 lost (lost by framework: claude 1, codex 1, setup 1)",
+		"1 adopted, 4 lost (lost by framework: claude 1, codex 1, setup 2)",
 		"adopted: run 1115-1 of task 1115 on antigravity (its spool went 9s unread)",
 		"lost: run 969-3 of task 969 on claude, finished as interrupted because " + orchestrator.StoppedWithTheDaemon,
 		"lost: run 876-3 of task 876 on codex, finished as interrupted because",
 		"lost: run 900-2 of task 900, finished as interrupted because it was still setting up",
+		"lost: run 5542-1 of task 5542 on antigravity, finished as interrupted because it was still setting up",
+		"2 lost run(s) were still setting up",
 		"Any lost run is a regression",
 	} {
 		if !strings.Contains(body, want) {
@@ -906,6 +919,9 @@ func TestUpgradeCheckSaysWhichLostRunsTheInstallExpects(t *testing.T) {
 		if err := store.SetRunModel(ctx, r.run, "m", r.framework); err != nil {
 			t.Fatal(err)
 		}
+		if err := store.SetRunAgentStarted(ctx, r.run, now.Add(-50*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
 		if err := store.FinishRun(ctx, r.run, now.Add(-30*time.Second), model.InterruptedOutcome, "stopped"); err != nil {
 			t.Fatal(err)
 		}
@@ -959,6 +975,9 @@ func TestUpgradeCheckCountsConsoleAndDirectorSessions(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := store.SetRunModel(ctx, r.run, "m", "claude"); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetRunAgentStarted(ctx, r.run, now.Add(-170*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 		if r.finished {
