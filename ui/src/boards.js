@@ -57,6 +57,14 @@
 // is a preference with no words in it, and asking an agent to merge a
 // pull request to move a row up one is how it came to be that nobody
 // ever moved one.
+//
+// The same argument covers /next/'s "+ Save current view…" in its
+// Boards menu: a list board whose whole content is the address already
+// on screen, created straight through POST /api/boards. It writes this
+// file's query grammar (ui-ng/src/app/tasks/board-query.ts), so the row
+// means the same thing here, and anything that needs describing is still
+// this file's task (design/design/ui-design-book.design.md, "Saved boards
+// speak one grammar").
 import { narrowingFromQuery, queryFromNarrowing } from "./paths.js";
 import { defaultColumns, normalizeColumns } from "./board.js";
 import { NO_NARROWING, defaultNarrowing } from "./taskFilters.js";

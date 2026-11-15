@@ -341,6 +341,10 @@ func (u *Upgrader) start(branch, ref string, sw *EditionSwitch) error {
 	return u.startWithOptions(branch, ref, sw, true, "")
 }
 
+// finishingUpgradeWait bounds how long a new upgrade waits for one that
+// has already recorded how it ended to let go of the Upgrader.
+const finishingUpgradeWait = 5 * time.Second
+
 // startWithOptions is start, with manual false for an upgrade that already
 // drained through a schedule (no grace window), and commit the object id
 // to check out instead of branch on the source pipeline ("" for none; only
@@ -349,6 +353,21 @@ func (u *Upgrader) startWithOptions(branch, ref string, sw *EditionSwitch, manua
 	prevImg, prevRel, prevCommit := u.snapshotPrevious()
 
 	u.mu.Lock()
+	if u.done != nil {
+		// The last upgrade records how it ended before it lets go of
+		// done (run's deferred release waits for its progress to stop
+		// first), so a click made as soon as the pane says it failed
+		// can land in between. Wait that out rather than refuse it.
+		prev := u.done
+		u.mu.Unlock()
+		if st, err := readStatus(u.cfg.StatusFile); err == nil && st.Phase != PhaseRunning {
+			select {
+			case <-prev:
+			case <-time.After(finishingUpgradeWait):
+			}
+		}
+		u.mu.Lock()
+	}
 	if u.done != nil {
 		u.mu.Unlock()
 		log.Printf("upgrade: %s: refused: %v", branch, ErrUpgradeInProgress)

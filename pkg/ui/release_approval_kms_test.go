@@ -157,7 +157,10 @@ func TestAKMSReleaseApprovalKeyThatCannotSignAfterPublicKeyCacheIsNamedInA502(t 
 		if got["code"] != apierror.CodeUpstream || !strings.Contains(got["error"], "-release-approval-kms-key") {
 			t.Fatalf("POST %s answer = %v; want code %s and an error naming -release-approval-kms-key", tc.path, got, apierror.CodeUpstream)
 		}
-		if strings.Contains(got["error"], "denied") || strings.Contains(got["error"], "403") {
+		// The answer names a random hex log ref ("ref 9aa04ddf4036"),
+		// which can hold "403" by chance: look for KMS's own words.
+		if strings.Contains(got["error"], "denied") || strings.Contains(got["error"], "HTTP 403") ||
+			strings.Contains(got["error"], "asymmetricSign") {
 			t.Fatalf("POST %s answer %q carries KMS's own answer; want it only in the log", tc.path, got["error"])
 		}
 	}
