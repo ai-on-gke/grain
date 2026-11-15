@@ -255,7 +255,8 @@ export class TaskStore {
         );
         if (this.id() !== id) return false;
         const got = page.comments ?? [];
-        if (!got.length) break;
+        // A page that does not reach further back ends the walk.
+        if (!got.length || got[0].id >= first) break;
         pages = mergeComments(got, pages);
         older = page.olderComments ?? 0;
         first = got[0].id;
