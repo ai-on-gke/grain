@@ -53,6 +53,7 @@ func (s *Server) handleHostdConnect(w http.ResponseWriter, r *http.Request) {
 	id, code, err := s.hostdConnectIdentity(r)
 	if err != nil {
 		log.Printf("grain daemon: refused a grain hostd on %s connecting from %s: %v", hostdHostOf(r), r.RemoteAddr, err)
+		w.Header().Set("Cache-Control", cacheControlNoStore)
 		if code == http.StatusServiceUnavailable {
 			w.Header().Set("Retry-After", strconv.Itoa(verifierRetryAfter))
 		}

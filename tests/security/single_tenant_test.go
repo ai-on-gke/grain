@@ -142,8 +142,9 @@ func TestASingleTenantDaemonServesOnlyItsAccessCode(t *testing.T) {
 				t.Errorf("GET %s from %s with a wrong access code: %d, want 401: %s", target, from, rec.Code, rec.Body.String())
 			}
 		}
-		// The UI itself is the login page, not the app.
-		for _, target := range []string{"/", "/tasks/1", "/index.html", "/assets/index.js"} {
+		// The UI itself is the login page, not the app (only existing
+		// content-hashed bundles in the embedded FS are exempt).
+		for _, target := range []string{"/", "/tasks/1", "/index.html", "/assets/index.js", "/next/", "/next/index.html", "/next/inbox", "/next/chunk-ZZZZZZZZ.js"} {
 			rec := serveFrom(srv, from, http.MethodGet, target, "", nil)
 			if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "Enter access code") {
 				t.Errorf("GET %s from %s without the access code: %d %q, want 401 and the access code page", target, from, rec.Code, rec.Body.String())
