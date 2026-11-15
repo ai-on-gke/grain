@@ -25,7 +25,7 @@ import { test, expect } from "./fixtures.js";
 const row = (page, prefix, text) =>
   page.locator(`[data-testid^="${prefix}"]`, { hasText: text });
 
-test("Git: a plain git host is sent as kind git, offers no GitHub App, and Remove asks first", async ({
+test("Git: a plain git host is sent as kind git, offers GitHub App disabled, and Remove asks first", async ({
   page,
 }) => {
   await page.goto("/next/settings/git");
@@ -44,7 +44,8 @@ test("Git: a plain git host is sent as kind git, offers no GitHub App, and Remov
   await expect(
     page.getByRole("option", { name: /SSH private key/ }),
   ).toBeVisible();
-  await expect(page.getByRole("option", { name: /GitHub App/ })).toHaveCount(0);
+  // A plain git host has no App API: GitHub App is offered disabled.
+  await expect(page.getByRole("option", { name: /GitHub App/ })).toBeDisabled();
   await page.keyboard.press("Escape");
 
   await page.getByTestId("input-git-conn-secret").fill("throwaway-not-a-token");
@@ -73,7 +74,7 @@ test("Git: a plain git host is sent as kind git, offers no GitHub App, and Remov
   await conn.getByRole("button", { name: "Remove" }).click();
   await page
     .getByRole("dialog")
-    .getByRole("button", { name: "Remove connection" })
+    .getByRole("button", { name: "Remove", exact: true })
     .click();
   await expect(conn).toHaveCount(0);
   await page.reload();
@@ -94,14 +95,15 @@ test("Capabilities: removing a server asks first, and the secret form masks its 
 
   await page.getByTestId(`remove-cap-server-${id}`).click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText(`Remove capability server ${id}?`);
+  await expect(dialog).toContainText("Remove capability server?");
+  await expect(dialog).toContainText(`Remove ${id}?`);
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(srv).toBeVisible();
 
   await page.getByTestId(`remove-cap-server-${id}`).click();
   await page
     .getByRole("dialog")
-    .getByRole("button", { name: "Remove server" })
+    .getByRole("button", { name: "Remove", exact: true })
     .click();
   await expect(srv).toHaveCount(0);
   await page.reload();
@@ -160,7 +162,8 @@ test("Engine: the poll placeholder is grain's default and blank boxes reset to d
     await expect(workers).toHaveValue("10");
 
     // Out of range is still refused by name.
-    await merges.fill("0");
+    // (0 reads as blank, i.e. the default; a negative count is refused.)
+    await merges.fill("-1");
     await page.getByTestId("settings-save-btn").click();
     await expect(
       page.getByText("maxMergesPerRepo must be at least 1"),

@@ -147,3 +147,15 @@ Classic pages were not changed: none of these bugs exist in classic, which alrea
 - The classic pages were only checked for anchors and redirects. Their full walkthrough (Invite hosts, schema forms, Hub scope overrides, SecretsPanel, Sandboxes budget) did not fit this run and is part of the follow-up.
 - Locked mode (config-repo lock) and role gating (`settings:write` vs `secrets:write`) were not exercised: the demo signs in as an owner and is not locked.
 - Visual review: screenshots of `/next/settings/{git,capabilities,engine}` were rendered at desktop and phone, light and dark (`ui/e2e/screenshot.mjs`), and none are committed. Nobody looked at them in this run: the sandbox file reader returns PNG bytes, and with no Gemini key `LOOK=1` cannot describe them. Layout was asserted instead. A phone-width bounding-box test checks that the new Host kind choice and the Engine hints stay inside their cards, with no horizontal overflow. No "before" screenshots were taken.
+
+## Merge with `main` (2026-11-15)
+
+While this change waited, `main` landed a parallel walkthrough (task 5389, #1487) that fixed F1, F2, F3 and part of F5 its own way. Resolving the conflicts kept `main`'s versions and dropped the duplicates from this branch:
+
+- **Git Remove** (F1): `main`'s dialog ("Remove Git connection?", button **Remove**) is kept. This branch adds back only the `remove-git-conn-<cred>` test id.
+- **Host kind** (F2): `main`'s Host kind choice is kept. It shows GitHub App **disabled with a reason** on a plain git host, where this branch hid it. The spec now expects the option to be disabled.
+- **Capability server Remove** (F3): `main`'s dialog ("Remove capability server?", button **Remove**) is kept.
+- **Engine blanks** (F5): `main`'s `setNumber`/`defaultHint` handling is kept. A blank Max workers or Max merges still resets to 10 or 5. It also turns a typed `0` into the default, so the spec now uses `-1` to check that out-of-range values are still refused by name. This branch adds back its hints and the `input-max-merges-per-repo` test id.
+- These parts of this branch are unchanged: F4 (masked secret value, no-store notice), F6 (Integrations redirects) and F7 ("host" wording).
+
+After the merge, `ui-ng/e2e/next-settings-connections.spec.js` passes 6/6 in Chromium (desktop and phone). `vitest` passes 479/479. ESLint, the production build and `prettier --check` are clean.

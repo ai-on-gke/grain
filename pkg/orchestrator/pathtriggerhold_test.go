@@ -42,7 +42,8 @@ func finishGated(t *testing.T, triggers []model.PathTrigger, paths ...string) (
 	store, ctx := openStore(t)
 	sim, client := newSim(t, "acme", "widgets", "main")
 	declareTriggers(t, ctx, store, branchSHA(t, sim.BareRepo, "main"),
-		map[string]string{"sensitive": "Check {{trigger}} on {{pr}}", "planner": "Plan"}, triggers...)
+		map[string]string{"sensitive": "Check {{trigger}} on {{pr}}", "planner": "Plan",
+			"code": "Code review: {{task_title}} ({{pr}})", "untitled": ""}, triggers...)
 	task := finishTouching(t, ctx, store, sim, "t1", paths[0], true)
 	for _, p := range paths[1:] {
 		pushFile(t, sim.BareRepo, model.BranchName(task.ID), p, "changed\n")
@@ -270,7 +271,8 @@ func TestPullRequestTriggerTasksInheritTheChangesRequester(t *testing.T) {
 	store, ctx := openStore(t)
 	sim, client := newSim(t, "acme", "widgets", "main")
 	declareTriggers(t, ctx, store, branchSHA(t, sim.BareRepo, "main"),
-		map[string]string{"sensitive": "Check {{trigger}} on {{pr}}", "planner": "Plan"},
+		map[string]string{"sensitive": "Check {{trigger}} on {{pr}}", "planner": "Plan",
+			"code": "Code review: {{task_title}} ({{pr}})", "untitled": ""},
 		gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets"),
 		model.PathTrigger{Name: "plan", On: model.TriggerOnPullRequest, Paths: []string{"docs"},
 			Template: templateID("planner"), AutoApprove: true})

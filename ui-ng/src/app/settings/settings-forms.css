@@ -378,6 +378,13 @@
   min-height: 40px;
 }
 
+/* A card a link scrolls to (#capability-policy, /settings/secrets)
+   stops clear of the sticky page header rather than under it. */
+.s-card[id],
+.s-anchor {
+  scroll-margin-top: 80px;
+}
+
 /* A secret's value is masked as it is typed (a textarea, so a PEM keeps
    its newlines), the way the GitHub token field's type="password" is. */
 .s-masked {

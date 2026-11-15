@@ -53,6 +53,7 @@ interface GitConnectionRow {
   id?: string;
   credential?: string;
   host?: string;
+  kind?: string;
   scope?: string;
   authType?: string;
   type?: string;
@@ -413,9 +414,9 @@ interface StateRepoEntryDto {
 
           @if (gitCheckMessage()) {
             <div
-              [class]="
-                's-banner ' + (gitCheckMessage() === 'OK' ? 'ok' : 'error')
-              "
+              class="s-banner"
+              [class.ok]="gitCheckOk()"
+              [class.warn]="!gitCheckOk()"
               data-testid="git-check-banner"
             >
               {{ gitCheckMessage() }}
@@ -429,6 +430,7 @@ interface StateRepoEntryDto {
                   <tr>
                     <th>Credential</th>
                     <th>Host</th>
+                    <th>Kind</th>
                     <th>Scope</th>
                     <th>Type</th>
                     <th class="s-actions-cell">Actions</th>
@@ -440,6 +442,7 @@ interface StateRepoEntryDto {
                     <tr [attr.data-testid]="'git-conn-row-' + cred">
                       <td class="s-mono">{{ cred }}</td>
                       <td class="s-mono">{{ c.host || "github.com" }}</td>
+                      <td>{{ c.kind === "git" ? "git host" : "GitHub" }}</td>
                       <td>
                         @if (c.scope) {
                           <span class="s-mono">{{ c.scope }}</span>
@@ -463,7 +466,12 @@ interface StateRepoEntryDto {
                               ) || state.sectionLocked('git')
                             "
                             [attr.data-testid]="'remove-git-conn-' + cred"
-                            (click)="confirmDeleteGitConnection(cred, c.host)"
+                            (click)="
+                              confirmDeleteGitConnection(
+                                cred,
+                                c.host || 'github.com'
+                              )
+                            "
                           >
                             Remove
                           </button>
@@ -512,7 +520,7 @@ interface StateRepoEntryDto {
                 <span class="s-label">Host kind</span>
                 <g-pill-select
                   testid="select-git-conn-kind"
-                  ariaLabel="Git host kind"
+                  ariaLabel="Host kind"
                   align="left"
                   [options]="gitKindOptions"
                   [value]="newGitKind()"
@@ -554,7 +562,7 @@ interface StateRepoEntryDto {
                     testid="select-git-conn-type"
                     ariaLabel="Git auth type"
                     align="left"
-                    [options]="gitTypeChoices()"
+                    [options]="gitTypeOptionsForKind()"
                     [value]="newGitType()"
                     (valueChange)="newGitType.set($event)"
                   />
@@ -590,6 +598,20 @@ interface StateRepoEntryDto {
                       placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
                       [value]="newGitSecret()"
                       (input)="newGitSecret.set($any($event.target).value)"
+                    ></textarea>
+                  </div>
+                  <div class="s-field">
+                    <label class="s-label" for="gc-known-hosts"
+                      >Known hosts (optional)</label
+                    >
+                    <textarea
+                      id="gc-known-hosts"
+                      class="s-textarea s-mono"
+                      rows="2"
+                      data-testid="input-git-conn-known-hosts"
+                      placeholder="git.example.com ssh-ed25519 AAAA..."
+                      [value]="newGitKnownHosts()"
+                      (input)="newGitKnownHosts.set($any($event.target).value)"
                     ></textarea>
                   </div>
                 } @else if (newGitType() === "app") {
@@ -738,13 +760,11 @@ interface StateRepoEntryDto {
                 type="number"
                 min="0"
                 data-testid="input-ci-jobs-per-run"
-                [value]="state.val('ciJobsPerRun', 4)"
+                [value]="state.defaultedNumber('ciJobsPerRun')"
+                [placeholder]="state.defaultHint('ciJobsPerRun', 'no limit')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
-                    'ciJobsPerRun',
-                    Number($any($event.target).value)
-                  )
+                  state.setNumber('ciJobsPerRun', $any($event.target).value)
                 "
               />
             </div>
@@ -754,13 +774,11 @@ interface StateRepoEntryDto {
                 id="ci-hist"
                 class="s-input s-num"
                 type="number"
-                [value]="state.val('ciRunHistory', 200)"
+                [value]="state.defaultedNumber('ciRunHistory')"
+                [placeholder]="state.defaultHint('ciRunHistory')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
-                    'ciRunHistory',
-                    Number($any($event.target).value)
-                  )
+                  state.setNumber('ciRunHistory', $any($event.target).value)
                 "
               />
             </div>
@@ -773,10 +791,11 @@ interface StateRepoEntryDto {
                 class="s-input s-num"
                 type="number"
                 min="0"
-                [value]="state.val('ciCacheMb', 2048)"
+                [value]="state.defaultedNumber('ciCacheMb')"
+                [placeholder]="state.defaultHint('ciCacheMb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField('ciCacheMb', Number($any($event.target).value))
+                  state.setNumber('ciCacheMb', $any($event.target).value)
                 "
               />
             </div>
@@ -787,13 +806,11 @@ interface StateRepoEntryDto {
                 class="s-input s-num"
                 type="number"
                 min="0"
-                [value]="state.val('ciArtifactMb', 1024)"
+                [value]="state.defaultedNumber('ciArtifactMb')"
+                [placeholder]="state.defaultHint('ciArtifactMb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
-                    'ciArtifactMb',
-                    Number($any($event.target).value)
-                  )
+                  state.setNumber('ciArtifactMb', $any($event.target).value)
                 "
               />
             </div>
@@ -805,7 +822,7 @@ interface StateRepoEntryDto {
                 id="ci-reserve"
                 class="s-input s-num"
                 type="text"
-                placeholder="5m"
+                [placeholder]="state.defaultHint('ciReserveAfter', '1m')"
                 [value]="state.val('ciReserveAfter', '')"
                 [disabled]="!canWriteSettings()"
                 (input)="
@@ -1088,29 +1105,6 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     { value: "existing", label: "Link stored credential" },
   ];
 
-  // What the host is: a GitHub (github.com or Enterprise Server, with
-  // the REST API) or a plain git host (git only). Sent as the request's
-  // kind -- left out, the server reads every host as GitHub -- and a
-  // GitHub App is offered only for a GitHub host, as the classic form
-  // does and the server insists.
-  protected readonly gitKindOptions: readonly PillOption[] = [
-    { value: "github", label: "GitHub" },
-    { value: "git", label: "Plain git host" },
-  ];
-  protected readonly newGitKind = signal<"github" | "git">("github");
-  protected readonly gitTypeChoices = computed<readonly PillOption[]>(() =>
-    this.newGitKind() === "git"
-      ? this.gitTypeOptions.filter((o) => o.value !== "app")
-      : this.gitTypeOptions,
-  );
-
-  protected setGitKind(kind: string): void {
-    this.newGitKind.set(kind === "git" ? "git" : "github");
-    if (kind === "git" && this.newGitType() === "app") {
-      this.newGitType.set("pat");
-    }
-  }
-
   protected readonly gitTypeOptions: readonly PillOption[] = [
     { value: "pat", label: "Personal access token (pat)" },
     { value: "ssh", label: "SSH private key (ssh)" },
@@ -1141,6 +1135,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
 
   protected readonly gitConnections = signal<GitConnectionRow[]>([]);
   protected readonly gitCheckMessage = signal("");
+  protected readonly gitCheckOk = signal(true);
   protected readonly gitConnMode = signal("inline");
   protected readonly newGitCred = signal("");
   protected readonly newGitHost = signal("github.com");
@@ -1149,6 +1144,33 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly newGitSecret = signal("");
   protected readonly newGitAppId = signal("");
   protected readonly newGitAppInstallId = signal("");
+  protected readonly newGitKnownHosts = signal("");
+  // newGitKind is the connection's host kind (model.GitHostKind): a
+  // GitHub host, or a plain git host with no GitHub API. The server
+  // reads an empty kind as GitHub, so a plain host has to say so.
+  protected readonly newGitKind = signal<"github" | "git">("github");
+  protected readonly gitKindOptions: readonly PillOption[] = [
+    { value: "github", label: "GitHub (github.com or Enterprise)" },
+    { value: "git", label: "Plain git host" },
+  ];
+  // A GitHub App needs a GitHub host: a plain git host has no App API,
+  // and the server refuses one there only on save.
+  protected gitTypeOptionsForKind(): PillOption[] {
+    return this.gitTypeOptions.map((o) =>
+      o.value === "app" && this.newGitKind() === "git"
+        ? {
+            ...o,
+            disabled: true,
+            hint: "Needs a GitHub host: a plain git host has no App API",
+          }
+        : o,
+    );
+  }
+  protected setGitKind(kind: string): void {
+    const k = kind === "git" ? "git" : "github";
+    this.newGitKind.set(k);
+    if (k === "git" && this.newGitType() === "app") this.newGitType.set("pat");
+  }
   protected readonly githubTokens = signal<string[]>([]);
   protected readonly ghTokenName = signal("");
   protected readonly ghTokenValue = signal("");
@@ -1571,6 +1593,9 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       payload = {
         credential: this.newGitCred().trim(),
         host,
+        // The server writes the credential's host record with this
+        // kind, and an empty one reads as github.
+        kind: this.newGitKind(),
         ...(scope ? { scope } : {}),
       };
     } else {
@@ -1585,15 +1610,20 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       if (type === "pat") {
         payload["value"] = this.newGitSecret().trim();
       } else if (type === "ssh") {
-        payload["ssh"] = { privateKey: this.newGitSecret() };
+        const knownHosts = this.newGitKnownHosts().trim();
+        payload["ssh"] = {
+          privateKey: this.newGitSecret(),
+          ...(knownHosts ? { knownHosts } : {}),
+        };
       } else if (type === "app") {
-        const appId = Math.floor(Number(this.newGitAppId()) || 0);
-        const installationId = Math.floor(
-          Number(this.newGitAppInstallId()) || 0,
-        );
+        // AppCredentialInput takes both IDs as strings: a JSON number
+        // is refused outright ("cannot unmarshal number ... of type
+        // string"), which made every App save from here fail.
+        const appId = this.newGitAppId().trim();
+        const installationId = this.newGitAppInstallId().trim();
         payload["app"] = {
           appId,
-          ...(installationId > 0 ? { installationId } : {}),
+          ...(installationId ? { installationId } : {}),
           privateKey: this.newGitSecret(),
         };
       }
@@ -1609,6 +1639,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       this.newGitSecret.set("");
       this.newGitAppId.set("");
       this.newGitAppInstallId.set("");
+      this.newGitKnownHosts.set("");
       await this.loadGitConnections();
       this.state.invalidateReachableRepos();
       this.snackbar.show(`Saved Git connection on ${host}`);
@@ -1622,6 +1653,8 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       const res = await this.api.post<{
         ok?: boolean;
         summary?: string;
+        error?: string;
+        host?: string;
         repos?: {
           repo?: string;
           read?: boolean;
@@ -1631,13 +1664,23 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       }>("POST /api/deployment/git-connections/check", undefined, {});
 
       const unreachable = res?.repos?.filter((r) => !r.read || r.error) || [];
-      if (unreachable.length > 0) {
+      this.gitCheckOk.set(res?.ok !== false && unreachable.length === 0);
+      if (res?.ok === false) {
+        // The check says what is wrong in `error` (a refused token, an
+        // unreachable host); "Check reported issues" alone left nobody
+        // able to act on it.
+        this.gitCheckMessage.set(
+          res.summary ||
+            `${res.host ? res.host + ": " : ""}${res.error || "the check reported a problem"}`,
+        );
+      } else if (unreachable.length > 0) {
         this.gitCheckMessage.set(
           `OK, but unreachable repos: ${unreachable.map((r) => r.repo + (r.error ? ` (${r.error})` : "")).join("; ")}`,
         );
       } else {
         this.gitCheckMessage.set(
-          res?.summary || (res?.ok === false ? "Check reported issues" : "OK"),
+          res?.summary ||
+            `OK${res?.host ? " — " + res.host + " answered" : ""}`,
         );
       }
     } catch (err) {
@@ -1645,13 +1688,13 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     }
   }
 
-  // Remove asks first: the connection is how tasks reach that host, and
-  // its credential goes with it.
-  protected confirmDeleteGitConnection(cred: string, host?: string): void {
+  // Removing a connection stops every clone and push through it, so it
+  // asks first, as the classic page does.
+  protected confirmDeleteGitConnection(cred: string, host: string): void {
     this.confirmReq.set({
-      title: `Remove Git connection ${cred}?`,
-      message: `Tasks stop cloning and pushing through it${host ? ` on ${host}` : ""} at once, and its stored credential is deleted.`,
-      accept: "Remove connection",
+      title: "Remove Git connection?",
+      message: `Remove ${cred} on ${host}? Repositories using it can no longer clone or push until another connection covers ${host}.`,
+      accept: "Remove",
       destructive: true,
       run: () => this.deleteGitConnection(cred),
     });

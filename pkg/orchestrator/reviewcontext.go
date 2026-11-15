@@ -850,20 +850,46 @@ func isGeneratedEarlierSection(content string) bool {
 }
 
 // neutralizeReviewSectionHeaders rewrites, in text written outside this
-// deployment (a pull request's title, description or a reviewer's request),
-// every occurrence of the headers grain later finds its own appended review
-// sections by, so none of it can be taken for one of them.
+// deployment (a pull request's title, description, task brief or reviewer's
+// request), every occurrence of the headers grain later finds its own appended
+// review sections by -- including one at the start or end of text whose
+// surrounding newlines the caller adds -- so none of it can be taken for one.
 func neutralizeReviewSectionHeaders(text string) string {
-	for _, h := range []struct{ header, replacement string }{
-		{earlierReviewsHeader, "\n\n### Earlier reviews of this pull request\n\n"},
-		{parallelReviewsHeader, "\n\n### Parallel reviews of this head\n\n"},
-		{incrementalNoteHeader, "\n**This is an incremental review**."},
+	for _, h := range []struct{ marker, replacement string }{
+		{"## Earlier reviews of this pull request", "### Earlier reviews of this pull request"},
+		{"## Parallel reviews of this head", "### Parallel reviews of this head"},
 	} {
-		for strings.Contains(text, h.header) {
-			text = strings.ReplaceAll(text, h.header, h.replacement)
-		}
+		text = neutralizeH2Marker(text, h.marker, h.replacement)
+	}
+	for strings.Contains(text, "**This is an incremental review.**") {
+		text = strings.ReplaceAll(text, "**This is an incremental review.**", "**This is an incremental review**.")
 	}
 	return text
+}
+
+func neutralizeH2Marker(text, marker, replacement string) string {
+	if !strings.Contains(text, marker) {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text) + 8)
+	off := 0
+	for {
+		idx := strings.Index(text[off:], marker)
+		if idx < 0 {
+			b.WriteString(text[off:])
+			break
+		}
+		pos := off + idx
+		if pos > 0 && text[pos-1] == '#' {
+			b.WriteString(text[off : pos+len(marker)])
+		} else {
+			b.WriteString(text[off:pos])
+			b.WriteString(replacement)
+		}
+		off = pos + len(marker)
+	}
+	return b.String()
 }
 
 // syncParallelReviewBodies refreshes the "## Parallel reviews of this head"
@@ -1098,7 +1124,7 @@ func setEarlierReviewsSection(body, section string) string {
 	if p := generatedParallelSectionAt(body); p >= 0 {
 		tail = p
 	}
-	if i := strings.LastIndex(body[:tail], incrementalNoteHeader); i >= 0 {
+	if i := generatedIncrementalNoteAt(body[:tail]); i >= 0 {
 		tail = i
 	}
 	if e := strings.LastIndex(body[:tail], earlierReviewsHeader); e >= 0 &&

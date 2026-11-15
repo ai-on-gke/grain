@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // ErrSchemaTooNew is returned when the repository was written by a build
@@ -813,7 +815,9 @@ func LoadExternal(ctx context.Context, r *Repo, db *sql.DB, version int) error {
 
 // SyncExternal pulls from the external config repository and imports any new
 // commits (or forces a re-import when force is true) into db without ever
-// exporting, committing, or pushing to origin.
+// exporting, committing, or pushing to origin. A repository stamped with a
+// schema newer than this build's is refused with ErrSchemaTooNew (wrapped in
+// ErrNotApplied) and nothing is imported.
 func SyncExternal(ctx context.Context, r *Repo, db *sql.DB, force bool) (bool, error) {
 	pulled, err := r.PullExternal(ctx)
 	if errors.Is(err, ErrHeld) {
@@ -829,6 +833,21 @@ func SyncExternal(ctx context.Context, r *Repo, db *sql.DB, force bool) (bool, e
 	}
 	if !HasDump(r.Dir()) {
 		return false, nil
+	}
+	// A dump a newer build wrote is refused here as Apply and the startup
+	// load refuse it, and left unrecorded so every tick says so again.
+	// Its rows are shaped for a schema this build does not know: an older
+	// build that reads a newer build's grants: repo#read/#write entries as
+	// opaque capabilities, rather than as the template and schedule read
+	// and write rows they are, drops every one of those rows without a
+	// word (docs/test-runs/2026-11-15-config-grants-export.md).
+	found, err := ReadSchemaVersion(r.Dir())
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", ErrNotApplied, err)
+	}
+	if found > model.SchemaVersion {
+		return false, fmt.Errorf("%w: %w: repository is at schema %d, this build knows %d",
+			ErrNotApplied, ErrSchemaTooNew, found, model.SchemaVersion)
 	}
 	marker, err := r.loadedHead(ctx)
 	if err != nil {

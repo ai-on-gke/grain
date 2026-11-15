@@ -454,8 +454,16 @@ func recordCommentEventTx(ctx context.Context, tx *sql.Tx, c Comment, commentID 
 	if err != nil || !ok {
 		return err
 	}
+	// A summary marks a question -- unless the comment is a run's
+	// comment_on_issue note, whose summary names a report nobody was
+	// asked to answer (Comment.Note): that is an ordinary task.comment.
+	// The note's summary still announces an awaiting_reply task resting
+	// on it (awaitingReplySummaryTx).
 	evType := IntegrationEventTaskComment
 	summary := clampSingleLine(c.Summary, MaxQuestionSummaryLen)
+	if c.Note {
+		summary = ""
+	}
 	if summary != "" {
 		evType = IntegrationEventTaskQuestion
 	}
