@@ -128,9 +128,6 @@ func SyncReviewThreads(ctx context.Context, store *model.Store, client github.Cl
 	return errors.Join(errs...)
 }
 
-// reviewThreadLister is the thread view github.RESTClient offers beside
-// github.Client; a client without it is read through the REST comments
-// alone.
 // openAndResumeLaterPullRequestLinks is OpenPullRequestLinks and, beside
 // them, the links of tasks resting on their own resume_later
 // (model.Store.ResumeLaterPullRequestLinks), each task once.
@@ -155,6 +152,9 @@ func openAndResumeLaterPullRequestLinks(ctx context.Context, store *model.Store)
 	return links, nil
 }
 
+// reviewThreadLister is the thread view github.RESTClient offers beside
+// github.Client; a client without it is read through the REST comments
+// alone.
 type reviewThreadLister interface {
 	ListReviewThreads(owner, repo string, number int) ([]github.ReviewThread, error)
 }
