@@ -111,6 +111,14 @@ for (const viewport of [
       // Back at the end, content that renders late (an image loading in the
       // last message, say) is followed: the body stays on the end.
       await body.evaluate((el) => (el.scrollTop = el.scrollHeight));
+      // Let that scroll's event land first: a reader is at the end before
+      // content grows, not in the same frame as it.
+      await page.evaluate(
+        () =>
+          new Promise((r) =>
+            requestAnimationFrame(() => requestAnimationFrame(r)),
+          ),
+      );
       await convo
         .locator(".convo-thread .msg")
         .last()

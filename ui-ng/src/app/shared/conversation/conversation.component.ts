@@ -408,8 +408,14 @@ export class ConversationComponent implements OnDestroy {
   private resize?: ResizeObserver;
   private resizeTarget: Element | null = null;
   private outer: HTMLElement | null = null;
+  // Where our own jump left the outer scroller. Its scroll event lands a
+  // frame later, by when the thread may have grown again; that is still
+  // following, not the reader scrolling up.
+  private jumpedTo: number | null = null;
   private readonly onOuterScroll = () => {
-    if (this.threadScrolls()) return;
+    if (this.threadScrolls() || !this.outer) return;
+    if (this.outer.scrollTop === this.jumpedTo) return;
+    this.jumpedTo = null;
     this.following = this.endBelowOuter() <= FOLLOW_SLACK_PX;
     if (this.following && this.unseen()) this.unseen.set(0);
   };
@@ -520,6 +526,7 @@ export class ConversationComponent implements OnDestroy {
       this.outer.style.scrollBehavior = "auto";
       this.outer.scrollTop += below;
       this.outer.style.scrollBehavior = prev;
+      this.jumpedTo = this.outer.scrollTop;
       return;
     }
     // Jumps are instant: a smooth scroll started before late content lands
