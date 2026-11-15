@@ -55,6 +55,16 @@ import { SettingsStateService, errText } from "./settings-state.service";
 
 // SandboxBackendOptionDto is one entry of GET /api/settings
 // sandboxBackendOptions (model.SandboxBackendOption).
+/** POST /api/sandbox-probe's answer (pkg/ui SandboxProbeResult). */
+interface SandboxProbeResult {
+  sandbox: string;
+  pod: string;
+  access: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
 interface SandboxBackendOptionDto {
   backend: string;
   available?: boolean;
@@ -1091,20 +1101,68 @@ function formatRefreshedAt(iso?: string): string {
                 compute limits.
               </p>
             </div>
-            @if (access.can("POST /api/sandbox-probe")) {
+            @if (canProbeSandbox()) {
               <button
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="run-sandbox-probe"
+                [disabled]="probing()"
                 (click)="runSandboxProbe()"
               >
-                Probe sandbox runtime
+                {{ probing() ? "Probing…" : "Probe sandbox runtime" }}
               </button>
             }
           </div>
-          @if (probeMessage()) {
-            <div class="s-banner ok" data-testid="sandbox-probe-banner">
-              {{ probeMessage() }}
+          @if (probing()) {
+            <div
+              class="s-banner readonly"
+              role="status"
+              data-testid="sandbox-probe-running"
+            >
+              Building a throwaway sandbox and running
+              <code>true</code> in it. This can take a few minutes.
+            </div>
+          }
+          @if (probeResult(); as res) {
+            <div
+              class="s-banner"
+              [class.ok]="res.exitCode === 0"
+              [class.warn]="res.exitCode !== 0"
+              role="status"
+              data-testid="sandbox-probe-result"
+            >
+              <div class="s-probe-result">
+                <span data-testid="sandbox-probe-summary">
+                  {{
+                    res.exitCode === 0
+                      ? "Sandbox ready:"
+                      : "The probe command failed:"
+                  }}
+                  <code>{{ res.sandbox }}</code>
+                  {{ res.access ? "over " + res.access + " " : "" }}exited
+                  <span class="s-num" data-testid="sandbox-probe-exit">{{
+                    res.exitCode
+                  }}</span>
+                </span>
+                <span class="s-label">stdout</span>
+                <pre class="s-code" data-testid="sandbox-probe-stdout">{{
+                  res.stdout || "(empty)"
+                }}</pre>
+                @if (res.stderr) {
+                  <span class="s-label">stderr</span>
+                  <pre class="s-code" data-testid="sandbox-probe-stderr">{{
+                    res.stderr
+                  }}</pre>
+                }
+              </div>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                data-testid="sandbox-probe-dismiss"
+                (click)="probeResult.set(null)"
+              >
+                Dismiss
+              </button>
             </div>
           }
           <div class="s-grid">
@@ -1256,6 +1314,19 @@ function formatRefreshedAt(iso?: string): string {
                   )
                 "
               />
+              @if (overcommitUnbounded("sandboxCpuOvercommit")) {
+                <span
+                  class="s-hint s-hint-warn"
+                  data-testid="cpu-overcommit-unbounded"
+                  >0 leaves vCPU bounded by the run counts alone: no vCPU budget
+                  is enforced.</span
+                >
+              } @else {
+                <span class="s-hint"
+                  >How many times the host's vCPU may be promised to sandboxes.
+                  0 means unbounded.</span
+                >
+              }
             </div>
             <div class="s-field">
               <label class="s-label" for="sb-mem-oc"
@@ -1276,6 +1347,19 @@ function formatRefreshedAt(iso?: string): string {
                   )
                 "
               />
+              @if (overcommitUnbounded("sandboxMemoryOvercommit")) {
+                <span
+                  class="s-hint s-hint-warn"
+                  data-testid="mem-overcommit-unbounded"
+                  >0 leaves memory bounded by the run counts alone: no memory
+                  budget is enforced.</span
+                >
+              } @else {
+                <span class="s-hint"
+                  >How many times the host's memory may be promised to
+                  sandboxes. 0 means unbounded.</span
+                >
+              }
             </div>
             <div class="s-field">
               <label class="s-label" for="k8s-ns">Kubernetes namespace</label>
@@ -1731,32 +1815,40 @@ function formatRefreshedAt(iso?: string): string {
                           }}
                         </td>
                         <td class="s-actions-cell">
-                          <div class="s-row-actions">
-                            <button
-                              type="button"
-                              class="btn-tonal s-btn-sm"
-                              [disabled]="
-                                !access.can(
-                                  'POST /api/hostds/enrollment-codes/{name}/rotate'
-                                ) || codeRevoked
-                              "
-                              (click)="rotateEnrollmentCode(c.name)"
+                          @if (codeRevoked) {
+                            <span
+                              class="s-hint"
+                              data-testid="enrollment-code-revoked"
+                              >No actions</span
                             >
-                              Rotate
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              [disabled]="
-                                !access.can(
-                                  'POST /api/hostds/enrollment-codes/{name}/revoke'
-                                ) || codeRevoked
-                              "
-                              (click)="revokeEnrollmentCode(c.name)"
-                            >
-                              Revoke
-                            </button>
-                          </div>
+                          } @else {
+                            <div class="s-row-actions">
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [disabled]="
+                                  !access.can(
+                                    'POST /api/hostds/enrollment-codes/{name}/rotate'
+                                  )
+                                "
+                                (click)="rotateEnrollmentCode(c.name)"
+                              >
+                                Rotate
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-text s-btn-sm"
+                                [disabled]="
+                                  !access.can(
+                                    'POST /api/hostds/enrollment-codes/{name}/revoke'
+                                  )
+                                "
+                                (click)="revokeEnrollmentCode(c.name)"
+                              >
+                                Revoke
+                              </button>
+                            </div>
+                          }
                         </td>
                       </tr>
                     }
@@ -2017,7 +2109,8 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly persistentSandboxes = signal<
     { name: string; state?: string }[]
   >([]);
-  protected readonly probeMessage = signal("");
+  protected readonly probing = signal(false);
+  protected readonly probeResult = signal<SandboxProbeResult | null>(null);
 
   protected readonly hostds = signal<HostdRow[]>([]);
   protected readonly confirmRequest = signal<ConfirmRequest | null>(null);
@@ -2509,6 +2602,15 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
+  /** A fixed ratio of 0 is accepted (pkg/ui settings.go: "leave this
+   * dimension to the run counts alone"), so the box says what it means
+   * rather than storing it silently. */
+  protected overcommitUnbounded(key: string): boolean {
+    if (this.overcommitMode() !== "fixed") return false;
+    const raw = this.state.val<unknown>(key, null);
+    return raw !== null && raw !== "" && Number(raw) === 0;
+  }
+
   protected overcommitMode(): string {
     const v = this.state.val<unknown>("sandboxOvercommit", "fixed");
     if (v && typeof v === "object" && "mode" in v) {
@@ -2529,18 +2631,43 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
+  /** The probe is offered only where the server can build one:
+   * GET /api/settings says so in sandboxProbe (pkg/ui/sandbox_probe.go). */
+  protected canProbeSandbox(): boolean {
+    return (
+      this.access.can("POST /api/sandbox-probe") &&
+      this.state.val<boolean>("sandboxProbe", false) === true
+    );
+  }
+
+  /** POST /api/sandbox-probe as `grain sandbox probe -id <id> -- true`
+   * does: a fresh id names the throwaway sandbox, and `true` is the
+   * least a sandbox that booted can run. */
   protected async runSandboxProbe(): Promise<void> {
+    if (this.probing()) return;
+    this.probing.set(true);
+    this.probeResult.set(null);
     try {
-      const res = await this.api.post<{ ok?: boolean; detail?: string }>(
+      const id = `ui-${Date.now().toString(36)}-${Math.random()
+        .toString(36)
+        .slice(2, 6)}`;
+      const res = await this.api.post<SandboxProbeResult>(
         "POST /api/sandbox-probe",
         undefined,
-        {},
+        { id, argv: ["true"] },
       );
-      this.probeMessage.set(
-        res?.detail || (res?.ok === false ? "Probe failed" : "Sandbox ready"),
-      );
+      this.probeResult.set({
+        sandbox: res?.sandbox ?? `probe-${id}`,
+        pod: res?.pod ?? "",
+        access: res?.access ?? "",
+        stdout: res?.stdout ?? "",
+        stderr: res?.stderr ?? "",
+        exitCode: Number(res?.exitCode ?? 0),
+      });
     } catch (err) {
       this.state.recordError(err);
+    } finally {
+      this.probing.set(false);
     }
   }
 

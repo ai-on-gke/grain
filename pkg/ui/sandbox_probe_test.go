@@ -134,3 +134,38 @@ func TestLoopbackWithoutTheLocalAPITokenIsRefused(t *testing.T) {
 		}
 	}
 }
+
+type unavailableSandboxProber struct{ fakeSandboxProber }
+
+func (unavailableSandboxProber) SandboxProbeAvailable() bool { return false }
+
+// GET /api/settings says whether a probe can be built here, so
+// Settings -> Sandboxes offers its button only where pressing it can
+// work: never without a prober, never where the prober says its backend
+// cannot build one, and otherwise yes.
+func TestSettingsReportWhetherASandboxProbeCanRun(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		prober ui.SandboxProber
+		want   bool
+	}{
+		{"no prober", nil, false},
+		{"backend cannot probe", &unavailableSandboxProber{}, false},
+		{"prober", &fakeSandboxProber{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := sandboxProbeClient(t, tc.prober)
+			srv := httptest.NewServer(ui.NewServerWithClient(client))
+			t.Cleanup(srv.Close)
+			got, err := accessCodeClient(client, srv.URL).GetSettings(context.Background())
+			if err != nil {
+				t.Fatalf("GetSettings: %v", err)
+			}
+			if got.SandboxProbe != tc.want {
+				t.Fatalf("sandboxProbe = %v, want %v", got.SandboxProbe, tc.want)
+			}
+		})
+	}
+}
