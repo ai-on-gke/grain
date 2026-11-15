@@ -141,7 +141,8 @@ export interface GroupDef {
 
 // GROUP_ORDER is the order groups are listed in: what blocks the most,
 // soonest, first -- the React Inbox's order with releases, access and
-// host-script approvals placed among the "Asked" groups they belong to.
+// host-script approvals placed among the "Asked" groups they belong to,
+// and the reports the React Inbox lists among its replies split out.
 export const GROUP_ORDER: GroupDef[] = [
   {
     id: "base-repair",
@@ -172,12 +173,6 @@ export const GROUP_ORDER: GroupDef[] = [
     title: "Asked: reply",
     hint: "A run stopped to ask something only a person can answer. Reply to run it again.",
     filter: "asked",
-  },
-  {
-    id: "info",
-    title: "Reports: acknowledge",
-    hint: "A run answered, reported or summed up its findings and opened no pull request. Nothing is blocked: acknowledge to close it, or reply to run it again.",
-    filter: "reports",
   },
   {
     id: "host-script",
@@ -226,6 +221,14 @@ export const GROUP_ORDER: GroupDef[] = [
     title: "Look at a stuck task",
     hint: "Grain reads these as stuck rather than busy.",
     filter: "alerts",
+  },
+  // Reports block nothing, so they wait below everything that does --
+  // but above proposals, whose honest answer is often "not now".
+  {
+    id: "info",
+    title: "Reports: acknowledge",
+    hint: "A run answered, reported or summed up its findings and opened no pull request. Nothing is blocked: acknowledge to close it, or reply to run it again.",
+    filter: "reports",
   },
   {
     id: "proposal",

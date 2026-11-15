@@ -208,6 +208,15 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
 - **Pane tabs live in `?pane=`, and the pane reads them back itself.**
   `g-task-detail` in pane mode follows `?pane=` whether or not the host
   binds `[tab]`, so a new host cannot ship tabs that do nothing.
+- **A question is not a report.** In the Inbox, a run parked on a question
+  (Question badge, `reply` tone) and a run that only answered in a comment
+  (Info badge, `neutral` tone, circled-i icon, "Reports: acknowledge"
+  group below everything that blocks a run) never share a group. A report's
+  whole answer is Acknowledge, so it sits on the row itself, in the row's
+  right-hand slot and centred on it, with Undo in the snackbar rather than
+  a confirm; its group head offers "Acknowledge all N" behind one
+  confirmation. A question offers no row-level close, and a bulk
+  acknowledgement never includes one.
 - **Empty is a state of its own.** When a surface has nothing to list and
   nothing is selected (no agents running), drop the split and show one
   centred empty state: what this place is for, and one or two ways onward.

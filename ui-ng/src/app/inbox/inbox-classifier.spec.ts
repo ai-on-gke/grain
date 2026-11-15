@@ -315,8 +315,8 @@ describe("inbox classifier", () => {
       [{ id: "a1", taskId: "2", script: "deploy.sh", args: ["--prod"] }],
     );
     expect(groupEntries(entries).map((g) => g.id)).toEqual([
-      "info",
       "host-script",
+      "info",
       "proposal",
       "notification",
     ]);
