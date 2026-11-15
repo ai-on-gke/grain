@@ -353,6 +353,10 @@ func Run(opts Options) error {
 	// rollback over -github-sim answered 500
 	// (docs/test-runs/2026-11-04-release-approval.md, F3).
 	cfg.ReleaseApprovalDir = dir
+	// Codex subscription logins (/api/agent-backends/{id}/codex-auth)
+	// live beside the throwaway store, where a deployment keeps them in
+	// its data directory: without a path the upload answered 404.
+	cfg.CodexAuthFile = daemon.ManagedCodexAuthFile(dir)
 
 	// The one piece of this demo that is not a row in the store: the
 	// System pane's Logs tab, which reads ui.Config.Logs rather than

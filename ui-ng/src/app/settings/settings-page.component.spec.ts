@@ -881,6 +881,164 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     ).toBe(true);
   });
 
+  it("offers the Codex subscription mode only for codex and manages a connection's own auth.json", async () => {
+    const api = new FakeSettingsApi();
+    (api.deploymentBody as Record<string, unknown>)["agentBackends"] = [
+      { id: "codex-sub", framework: "codex", authMode: "subscription" },
+      { id: "codex-key", framework: "codex", authMode: "api_key" },
+    ];
+    let status: Record<string, unknown> = {
+      enabled: true,
+      set: true,
+      sharedSet: true,
+      refreshError: "refresh token was revoked; upload a new auth.json",
+    };
+    const baseGet = api.get;
+    api.get = (key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/agent-backends/{id}/codex-auth") {
+        api.calls.push({ method: "GET", key, params, query });
+        return Promise.resolve(structuredClone(status));
+      }
+      return baseGet(key, params, query);
+    };
+    const basePut = api.put;
+    api.put = (key: string, params?: RouteParams, body?: unknown) => {
+      if (key === "PUT /api/agent-backends/{id}/codex-auth") {
+        api.calls.push({ method: "PUT", key, params, body });
+        status = { enabled: true, set: true };
+        return Promise.resolve(structuredClone(status));
+      }
+      return basePut(key, params, body);
+    };
+    api.delete = (key: string, params?: RouteParams) => {
+      api.calls.push({ method: "DELETE", key, params });
+      status = { enabled: true, set: false, sharedSet: true };
+      return Promise.resolve(structuredClone(status));
+    };
+    const { el, harness } = await mountSettings("/settings/models", api);
+
+    // The auth mode picker lists the subscription mode only for codex.
+    const optionLabels = () => {
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="select-new-backend-auth"]',
+      )!.click();
+      harness.fixture.detectChanges();
+      const labels = Array.from(
+        document.querySelectorAll(
+          '[data-testid="select-new-backend-auth-menu"] [role="option"]',
+        ),
+      ).map((o) => o.textContent?.trim());
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="select-new-backend-auth"]',
+      )!.click();
+      harness.fixture.detectChanges();
+      return labels;
+    };
+    expect(optionLabels()).not.toContain("ChatGPT subscription (auth.json)");
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-new-backend-fw"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    document
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="select-new-backend-fw-opt-codex"]',
+      )!
+      .click();
+    harness.fixture.detectChanges();
+    expect(optionLabels()).toContain("ChatGPT subscription (auth.json)");
+
+    // An api_key Codex connection keeps the ordinary secret field.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="toggle-cred-codex-key"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('input[aria-label="Credential for codex-key"]'),
+    ).toBeTruthy();
+    expect(el.querySelector('[data-testid="codex-auth-codex-key"]')).toBeNull();
+
+    // A subscription connection shows its own login status, read from GET.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="toggle-cred-codex-sub"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "GET /api/agent-backends/{id}/codex-auth" &&
+          c.params?.["id"] === "codex-sub",
+      ),
+    ).toBe(true);
+    expect(
+      el.querySelector('input[aria-label="Credential for codex-sub"]'),
+    ).toBeNull();
+    expect(
+      el
+        .querySelector('[data-testid="codex-auth-status-codex-sub"]')
+        ?.textContent?.trim(),
+    ).toBe("Configured");
+    expect(
+      el.querySelector('[data-testid="codex-auth-refresh-error-codex-sub"]')
+        ?.textContent,
+    ).toContain("refresh token was revoked");
+
+    const save = el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-codex-auth-codex-sub"]',
+    )!;
+    expect(save.disabled).toBe(true);
+    setInput(
+      el.querySelector<HTMLTextAreaElement>(
+        '[data-testid="input-codex-auth-codex-sub"]',
+      )!,
+      '{"tokens":{"refresh_token":"fake"}}',
+    );
+    harness.fixture.detectChanges();
+    expect(save.disabled).toBe(false);
+    save.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    const put = api.calls.find(
+      (c) => c.key === "PUT /api/agent-backends/{id}/codex-auth",
+    );
+    expect(put?.params?.["id"]).toBe("codex-sub");
+    expect(put?.body).toEqual({ value: '{"tokens":{"refresh_token":"fake"}}' });
+    expect(
+      el.querySelector<HTMLTextAreaElement>(
+        '[data-testid="input-codex-auth-codex-sub"]',
+      )!.value,
+    ).toBe("");
+    expect(
+      el.querySelector('[data-testid="codex-auth-refresh-error-codex-sub"]'),
+    ).toBeNull();
+
+    // Clearing deletes this connection's file; the shared login (sharedSet)
+    // is never shown as covering it.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="clear-codex-auth-codex-sub"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "DELETE /api/agent-backends/{id}/codex-auth" &&
+          c.params?.["id"] === "codex-sub",
+      ),
+    ).toBe(true);
+    expect(
+      el
+        .querySelector('[data-testid="codex-auth-status-codex-sub"]')
+        ?.textContent?.trim(),
+    ).toBe("Not set");
+    expect(
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="clear-codex-auth-codex-sub"]',
+      )!.disabled,
+    ).toBe(true);
+  });
+
   it("clears connection credentials, confirms connection removal, and passes Git connection scope", async () => {
     const api = new FakeSettingsApi();
     (api.deploymentBody as Record<string, unknown>)["agentBackends"] = [
