@@ -345,9 +345,9 @@ describe("SessionsPageComponent", () => {
     await vi.waitFor(async () => {
       await settle(f);
       expect(text(f, '[data-testid="staged-att-0"]')).toContain("screen.png");
-      expect(
-        (q(f, '[data-testid="send"]') as HTMLButtonElement).disabled,
-      ).toBe(false);
+      expect((q(f, '[data-testid="send"]') as HTMLButtonElement).disabled).toBe(
+        false,
+      );
     });
     const sendBtn = q(f, '[data-testid="send"]') as HTMLButtonElement;
     sendBtn.click();
