@@ -378,7 +378,9 @@ func stopOnExpiredHostCredentials(ctx context.Context, store *model.Store, task 
 // otherwise waiting on a person), so its verdict is about a head the change
 // has moved past and the newer review is the one that decides. The
 // dependency is dropped with it. A running older review is left to finish,
-// and one whose stacked pull request is merging is left to merge.
+// and one whose stacked pull request is merging is left to merge -- though
+// once it has completed, the newer review stops waiting on it all the same
+// (releaseFromCompletedReview), leaving it open to land.
 func releaseStaleReviewDependencies(ctx context.Context, store *model.Store, now time.Time) error {
 	ids, err := store.OpenTasksWithLink(ctx, model.LinkDependsOn)
 	if err != nil {
@@ -403,6 +405,10 @@ func releaseStaleReviewDependencies(ctx context.Context, store *model.Store, now
 				continue
 			}
 			if err := supersedeStaleReview(ctx, store, *review, l.Target, kindTag, now); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if err := releaseFromCompletedReview(ctx, store, review.ID, l.Target, kindTag, now); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -525,4 +531,79 @@ func supersedeStaleReview(ctx context.Context, store *model.Store, review model.
 			"finished without a stacked pull request that could land (it reads %s), and the newer review "+
 			"was waiting on it, which held the change they both review behind a verdict on a head it has "+
 			"moved past. Reopen it if that was a mistake.", review.ID, of, state), now)
+}
+
+// releaseFromCompletedReview drops reviewID's dependency on prevID, an
+// older review of the same pull request and kind, once prevID has
+// completed: its verdict is recorded, and that is all the newer review was
+// waiting for. fileCoalesced makes the newer review depend on a dispatched
+// older one so the two never run at once, but a depends_on link clears
+// only when its target closes, and a review that pushed a fix pull request
+// of its own stays open, completed, until that pull request lands --
+// which for a findings-only review's fix nothing may ever drive. Reviews
+// 4716, 4738, 4807, 5047, 5067, 5170 and 5187 sat queued for days behind
+// completed reviews like that, each holding its change's Code review gate
+// at "running" (task 6236).
+//
+// The older review is left open: its fix pull request is its own and is
+// tracked as it was. Only the newer review stops waiting on it. An
+// incremental newer review, which reads only what changed since the older
+// one's head, is widened to the whole change when the older review's fix
+// has not landed (checkIncrementalDependencies' own rule, which can no
+// longer see the older review once the link is gone); one already
+// dispatched is left for checkIncrementalDependencies to judge.
+func releaseFromCompletedReview(ctx context.Context, store *model.Store, reviewID, prevID, kindTag string,
+	now time.Time) error {
+
+	review, err := store.GetTask(ctx, reviewID)
+	if err != nil || review == nil || !hasLinkTarget(*review, model.LinkDependsOn, prevID) {
+		return err
+	}
+	prev, err := store.GetTask(ctx, prevID)
+	if err != nil || prev == nil || !isReviewTask(*prev) || !hasTag(*prev, kindTag) {
+		return err
+	}
+	state, err := store.State(ctx, prevID)
+	if err != nil || state != model.StateCompleted {
+		return err
+	}
+	obs, err := store.GetObservation(ctx, prevID)
+	if err != nil {
+		return err
+	}
+	pushed, landed, _ := reviewOutcome(*prev, obs)
+	widen := pushed && !landed && reviewSince(review.Tags) != ""
+	if widen {
+		if attempts, err := store.Attempts(ctx, reviewID); err != nil {
+			return fmt.Errorf("orchestrator: checking whether review %s has run: %w", reviewID, err)
+		} else if attempts > 0 {
+			return nil
+		}
+	}
+	if err := store.UpdateTask(ctx, reviewID, func(t *model.Task) error {
+		var kept []model.Link
+		for _, l := range t.Links {
+			if l.Kind == model.LinkDependsOn && l.Target == prevID {
+				continue
+			}
+			kept = append(kept, l)
+		}
+		t.Links = kept
+		if widen {
+			stripIncrementalReview(t)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("orchestrator: releasing review %s from completed review %s: %w", reviewID, prevID, err)
+	}
+	log.Printf("orchestrator: review %s no longer waits on review %s, which has completed", reviewID, prevID)
+	note := fmt.Sprintf("No longer waiting on review %s: it has completed and its verdict is recorded. ", prevID)
+	if pushed && !landed {
+		note += "Its fix pull request is still open and is tracked on that task. "
+	}
+	if widen {
+		note += "Because that fix has not landed, this review reads the whole change rather than only " +
+			"what changed since that review's head."
+	}
+	return reviewComment(ctx, store, reviewID, strings.TrimSpace(note), now)
 }

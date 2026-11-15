@@ -580,27 +580,63 @@ func newReview(ctx context.Context, store *model.Store, task model.Task,
 // in the title of the task or the body an agent is handed is worse than
 // the empty string a field with no default means.
 func reviewTaskTitle(tmpl model.Template, task model.Task) string {
+	return reviewTaskTitleFor(tmpl, task, reviewSubjectTitle(task))
+}
+
+// reviewTaskTitleFor is reviewTaskTitle naming the task under review as
+// subject (reviewSubjectTitleOr), for a caller that has the pull
+// request's own title to fall back on. Whatever the template's title
+// leaves unfilled, the review is never filed with a raw `{{name}}` in its
+// title: it falls back to "Review: <subject>" (filledTitleOr).
+func reviewTaskTitleFor(tmpl model.Template, task model.Task, subject string) string {
 	values := tmpl.FieldValues(nil)
-	if _, ok := values["task_title"]; !ok {
+	if strings.TrimSpace(values["task_title"]) == "" {
 		// {{task_title}}, as a gating trigger's review fills it
 		// (buildPullRequestReview), unless the template declares a field
-		// of that name itself.
+		// of that name itself with a default of its own.
 		if values == nil {
 			values = map[string]string{}
 		}
-		values["task_title"] = reviewSubjectTitle(task)
+		values["task_title"] = subject
 	}
-	if title := strings.TrimSpace(model.SubstituteFields(tmpl.Title, values)); title != "" {
-		return title
+	return filledTitleOr(model.SubstituteFields(tmpl.Title, values), "Review: "+subject,
+		"review template "+tmpl.ID)
+}
+
+// filledTitleOr is title, rendered, unless it came out empty or still
+// holds a `{{name}}` nothing supplied (model.UnfilledPlaceholders), in
+// which case it is fallback: the machinery files these tasks with nobody
+// watching, and a literal "{{task_title}}" in a task list is worse than a
+// plainer title grain builds itself (task 6235). what names the template
+// for the log line.
+func filledTitleOr(title, fallback, what string) string {
+	title = strings.TrimSpace(title)
+	if holes := model.UnfilledPlaceholders(title); len(holes) > 0 {
+		log.Printf("orchestrator: %s's title %q leaves {{%s}} unfilled; titling the task %q instead",
+			what, title, strings.Join(holes, "}}, {{"), fallback)
+		return fallback
 	}
-	return "Review: " + reviewSubjectTitle(task)
+	if title == "" {
+		return fallback
+	}
+	return title
 }
 
 // reviewSubjectTitle is how a review's title names the task under review:
 // its title, or its ID when it has none. Review templates read it as
 // {{task_title}}.
 func reviewSubjectTitle(task model.Task) string {
+	return reviewSubjectTitleOr(task, "")
+}
+
+// reviewSubjectTitleOr is reviewSubjectTitle with the reviewed pull
+// request's own title as the fallback before the task's ID, for the
+// callers that have it.
+func reviewSubjectTitleOr(task model.Task, prTitle string) string {
 	if title := strings.TrimSpace(task.Title); title != "" {
+		return title
+	}
+	if title := strings.TrimSpace(prTitle); title != "" {
 		return title
 	}
 	return task.ID

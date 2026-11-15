@@ -17,6 +17,7 @@ package model
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -295,4 +296,23 @@ func SubstituteFields(s string, values map[string]string) string {
 		}
 		return value
 	})
+}
+
+// UnfilledPlaceholders is every `{{name}}` still left in s, in the order
+// it first appears -- what SubstituteFields left alone because nothing
+// supplied it. A title the machinery files with one of these in it reads
+// as a literal "Code review: {{task_title}} (...)" (task 6235), so the
+// filing paths check their rendered titles with it and fall back to one
+// they build themselves rather than file it.
+func UnfilledPlaceholders(s string) []string {
+	if !strings.Contains(s, "{{") {
+		return nil
+	}
+	var names []string
+	for _, m := range templatePlaceholder.FindAllStringSubmatch(s, -1) {
+		if !slices.Contains(names, m[1]) {
+			names = append(names, m[1])
+		}
+	}
+	return names
 }
