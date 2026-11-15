@@ -241,7 +241,7 @@ func install(args []string, stdout, stderr io.Writer) int {
 	// 2. A registered transport's own preparation, done before contacting the
 	// controller so template fetches, enrollment and the first start can use it.
 	unit := unitConfig{Bin: p.Bin, Server: *server, Name: *name, IAPAudience: *iapAudience,
-		Token: p.Token, Allowlist: p.Allowlist, StateDir: p.StateDir}
+		Token: p.Token, Allowlist: p.Allowlist, StateDir: p.StateDir, Guard: layoutFor(home).Guard}
 	if t := transportFor(u); t != nil && t.Prepare != nil {
 		extra, err := t.Prepare(ctx, InstallConfig{Server: u, Home: home, StateDir: p.StateDir})
 		if err != nil {
@@ -344,7 +344,14 @@ func install(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	// 5. The unit.
+	// 5. The unit, and the update rollback guard it runs first.
+	if err := os.MkdirAll(layoutFor(home).Lib, 0o755); err == nil {
+		err = writeGuard(layoutFor(home))
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, Program+" install: writing the update guard: "+err.Error())
+		return 1
+	}
 	text, err := renderUnit(unit)
 	if err != nil {
 		fmt.Fprintln(stderr, Program+" install: "+err.Error())
@@ -420,6 +427,9 @@ func readTokenFile(path string) (string, error) {
 
 type unitConfig struct {
 	Bin, Server, Name, IAPAudience, Token, Key, Allowlist, StateDir string
+	// Guard is `grain-agentd update`'s rollback guard (guardScript), the
+	// unit's ExecStartPre.
+	Guard string
 	// Extra are a transport's own flags (Transport.Prepare).
 	Extra []string
 }
@@ -467,6 +477,7 @@ Description={{.Program}}: agent CLIs for the grain daemon at {{.Server}}
 After=network-online.target
 
 [Service]
+ExecStartPre=-/bin/sh {{.Guard}}
 ExecStart={{.Command}}
 KillMode=mixed
 Restart=always
@@ -479,13 +490,13 @@ WantedBy=default.target
 // renderUnit is the systemd --user unit that runs u. It refuses a value
 // that would need quoting there rather than quote it.
 func renderUnit(u unitConfig) (string, error) {
-	for _, v := range append([]string{u.Bin}, u.args()...) {
+	for _, v := range append([]string{u.Bin, u.Guard}, u.args()...) {
 		if strings.ContainsAny(v, " \t\n\"'\\%$") {
 			return "", fmt.Errorf("%q cannot go in a systemd unit as it is (spaces, quotes or %%)", v)
 		}
 	}
 	var b strings.Builder
-	err := unitTemplate.Execute(&b, struct{ Program, Server, Command string }{Program, u.Server, u.commandLine()})
+	err := unitTemplate.Execute(&b, struct{ Program, Server, Command, Guard string }{Program, u.Server, u.commandLine(), u.Guard})
 	return b.String(), err
 }
 

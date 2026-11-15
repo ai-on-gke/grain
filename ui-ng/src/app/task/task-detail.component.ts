@@ -671,6 +671,7 @@ export function duration(from?: string, to?: string): string {
           [task]="t"
           (acted)="acted.emit()"
           (replyInWordsChange)="onReplyInWords($event)"
+          (forceMerge)="forceMergeReq.set($event)"
         />
 
         <!-- Deferred Inline Task Editor (PATCH /api/tasks/{id}, Brief, Goal) -->
