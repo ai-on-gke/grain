@@ -516,6 +516,61 @@ func TestQueuedDependentReviewRefreshesOnFinishAndPreservesContextWhenStripped(t
 		}
 	})
 
+	// The cycle closing the finished review refreshes the queued one again,
+	// and reads GitHub doing it: a question resolved on the pull request
+	// since reads as answered, rather than the close rewriting the section
+	// with nothing but the store (docs/test-runs/2026-11-14-review-context.md).
+	t.Run("close-refresh-reads-github", func(t *testing.T) {
+		t.Parallel()
+		ctx, store, sim, client, task := finishGated(t,
+			[]model.PathTrigger{gateTrigger("secrets", model.TriggerHumanOnFindings, "config/secrets")},
+			"config/secrets/prod.yml")
+		firstID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+		if err := store.StartRun(ctx, model.Run{
+			ID: firstID + "-1", TaskID: firstID, Sandbox: "sb-1", Attempt: 1, StartedAt: baseTime.Add(time.Minute),
+		}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		pushFile(t, sim.BareRepo, model.BranchName(task.ID), "config/secrets/staging.yml", "next\n")
+		judgeHead(t, ctx, store, client, sim.BareRepo, task, baseTime.Add(2*time.Minute))
+		secondID := distinctGatingIDs(reloaded(t, ctx, store, task.ID))[0]
+
+		if err := store.FinishRun(ctx, firstID+"-1", baseTime.Add(3*time.Minute), "succeeded", ""); err != nil {
+			t.Fatal(err)
+		}
+		res := toolResult(
+			reviewFinding("rotate key before deploy", "config/secrets/prod.yml", 1),
+			agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "One finding."}},
+		)
+		if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, firstID),
+			res, firstID+"-1", baseTime.Add(3*time.Minute)); err != nil {
+			t.Fatalf("ProcessResult (first review): %v", err)
+		}
+		const open = "- [open] `config/secrets/prod.yml:1`: rotate key before deploy"
+		if body := reloaded(t, ctx, store, secondID).Body; !strings.Contains(body, open) {
+			t.Fatalf("queued review body missing %q:\n%s", open, body)
+		}
+
+		// A person submits the draft and resolves its thread on GitHub.
+		number := sim.PullRequests[0].Number
+		line := 1
+		sim.ReviewComments = map[int][]github.ReviewComment{number: {{
+			ID: 4200, User: "grain-agent", Path: "config/secrets/prod.yml", Line: &line, Body: "rotate key before deploy",
+		}}}
+		sim.ResolvedThreads = map[string]bool{"thread-4200": true}
+
+		if err := orchestrator.SyncReviewsWithClient(ctx, store, client, baseTime.Add(4*time.Minute)); err != nil {
+			t.Fatalf("SyncReviewsWithClient: %v", err)
+		}
+		if state, err := store.State(ctx, firstID); err != nil || state != model.StateClosed {
+			t.Fatalf("first review state = %v, %v; want closed by the cycle", state, err)
+		}
+		const answered = "- [answered] `config/secrets/prod.yml:1`: rotate key before deploy"
+		if body := reloaded(t, ctx, store, secondID).Body; !strings.Contains(body, answered) {
+			t.Errorf("queued review body after the close missing %q:\n%s", answered, body)
+		}
+	})
+
 	t.Run("strip-incremental-preserves-context", func(t *testing.T) {
 		t.Parallel()
 		store, ctx := openStore(t)

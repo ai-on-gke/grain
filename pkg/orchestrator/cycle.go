@@ -987,7 +987,7 @@ func recoverReconcile(ctx context.Context, r Reconciler, deps Deps, now time.Tim
 // (grain/task-284), from the template it names, onto the branch that
 // task's own run pushed.
 func reconcileReviews(ctx context.Context, deps Deps, now time.Time) error {
-	return SyncReviews(ctx, deps.Store, now)
+	return SyncReviewsWithClient(ctx, deps.Store, deps.Client, now)
 }
 
 // reconcileSecurityHolds gives auto-merge back to every change held for
