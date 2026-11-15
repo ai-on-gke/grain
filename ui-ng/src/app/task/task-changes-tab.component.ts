@@ -42,6 +42,7 @@ import { BranchRefsService } from "../services/branch-refs.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { errorText } from "../sessions/session-helpers";
 import { parseUnifiedDiff } from "../shared/diff-parse";
+import { autoMergeStatus, autoMergeText } from "../shared/auto-merge";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
 import { submitBlock, unsatisfiedGates } from "../shared/gates";
 import { TipDirective } from "../shared/tip.directive";
@@ -80,10 +81,10 @@ import { TaskStore } from "./task.store";
               : "Waits for someone to submit it"
           }}
         </dd>
-        @if (task().mergeQueueState) {
-          <dt>Merge queue</dt>
-          <dd>
-            {{ task().mergeQueueState }}
+        @if (autoMerge(); as am) {
+          <dt>Auto-merge</dt>
+          <dd data-testid="changes-auto-merge">
+            {{ autoMergeText(am) }}
             @if (task().mergeQueueNote) {
               <span class="muted">· {{ task().mergeQueueNote }}</span>
             }
@@ -534,6 +535,10 @@ export class TaskChangesTabComponent {
   protected readonly overrideGateIds = signal<ReadonlySet<string>>(new Set());
 
   protected readonly submitOff = computed(() => submitBlock(this.task()));
+  // What auto-merge is waiting for (shared/auto-merge.ts), absent for a
+  // task grain is not landing or one already closed.
+  protected readonly autoMerge = computed(() => autoMergeStatus(this.task()));
+  protected readonly autoMergeText = autoMergeText;
 
   protected readonly hasChangelist = computed(
     () =>

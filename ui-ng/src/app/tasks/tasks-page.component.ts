@@ -41,6 +41,7 @@ import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import { autoMergeStatus, autoMergeText } from "../shared/auto-merge";
 import { ciChip, repoShort } from "../shared/chips";
 import { isMerged, withDetailGates } from "../shared/gates";
 import {
@@ -781,7 +782,7 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                   @if (current() === "merging") {
                     <p class="muted list-hint" data-testid="merging-hint">
                       Two kinds of work: changes waiting for a person to submit,
-                      and submitted changes the merge queue is landing.
+                      and submitted changes auto-merging once they are green.
                     </p>
                   }
                   @if (current() === "closed" && !store.closedLoaded()) {
@@ -1171,6 +1172,15 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
           </span>
           @if (t.state === "running" && t.activity) {
             <span class="row-sub activity">{{ t.activity }}</span>
+          } @else {
+            @if (autoMerge(t); as am) {
+              <span
+                class="row-sub activity"
+                [attr.data-testid]="'auto-merge-' + t.id"
+                [gTip]="t.mergeQueueNote || null"
+                >{{ autoMergeText(am) }}</span
+              >
+            }
           }
         </div>
         <ng-container
@@ -1486,6 +1496,8 @@ export class TasksPageComponent implements OnInit, OnDestroy {
   protected readonly sorts = SORTS;
   protected readonly ago = ago;
   protected readonly label = stateLabel;
+  protected readonly autoMerge = autoMergeStatus;
+  protected readonly autoMergeText = autoMergeText;
   protected readonly prio = priorityOf;
   protected readonly jumps = jumpsQueue;
 

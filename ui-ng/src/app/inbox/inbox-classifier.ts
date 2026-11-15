@@ -16,6 +16,7 @@ import type { RouteKey } from "../api/generated-routes";
 import type { RouteParams } from "../api/grain-api.service";
 import type { LocalScriptApproval, Notification, Task } from "../api/models";
 import type { TaskDetail } from "../api/models";
+import { autoMergeStatus } from "../shared/auto-merge";
 import {
   gateSummary,
   isMerged,
@@ -193,7 +194,7 @@ export const GROUP_ORDER: GroupDef[] = [
   {
     id: "merge-blocked",
     title: "Unblock a merge",
-    hint: "The merge queue gave up on landing these automatically; its own comment on each says why.",
+    hint: "Auto-merge gave up on landing these; its own comment on each says why.",
     filter: "merges",
   },
   {
@@ -205,7 +206,7 @@ export const GROUP_ORDER: GroupDef[] = [
   {
     id: "merge-stalled",
     title: "Look at a stalled merge",
-    hint: "These have stood in one merge-queue state far longer than it should take.",
+    hint: "These have stood in one auto-merge state far longer than it should take.",
     filter: "merges",
   },
   {
@@ -711,7 +712,7 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     const e = taskEntry(t, "merge-blocked", "merge-blocked");
     e.pillLabel = t.mergeQueueBlockedAt ? "Merge blocked" : "Human review";
     e.pillTone = "error";
-    e.summary = "The merge queue stopped driving this pull request.";
+    e.summary = "Auto-merge stopped driving this pull request.";
     e.rationale = "Sort it out by hand, then ask the queue to try again.";
     if (t.mergeQueueBlockedAt) {
       e.actions.push(
@@ -749,8 +750,11 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     const e = taskEntry(t, "merge-stalled", "merge-stalled");
     e.pillLabel = "Stalled";
     e.pillTone = "blast";
-    e.summary = `Stuck in ${t.mergeQueueState?.replace(/_/g, " ")}.`;
-    e.rationale = "Whatever drives this merge-queue state has not moved it.";
+    const am = autoMergeStatus(t);
+    e.summary = am?.detail
+      ? `Auto-merge stuck: ${am.detail}.`
+      : "Auto-merge has not moved.";
+    e.rationale = "Whatever drives this auto-merge state has not moved it.";
     return e;
   }
   if (t.state === "failed") {

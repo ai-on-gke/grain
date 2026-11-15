@@ -145,7 +145,7 @@ interface StateRepoEntryDto {
               <h3 class="s-card-title">Target repositories</h3>
               <p class="s-card-desc">
                 Repositories managed by this Grain controller. Click any
-                repository to configure its CI workflows, merge queue, branches,
+                repository to configure its CI workflows, auto-merge, branches,
                 and releases.
               </p>
             </div>

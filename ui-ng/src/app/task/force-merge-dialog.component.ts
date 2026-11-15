@@ -61,7 +61,7 @@ export interface ForceMergeRequest {
       >
         <h2 id="force-merge-title">Force merge #{{ c.task.id }}</h2>
         <p class="muted">
-          Overrides merge-queue checks for the current head commit and records
+          Overrides auto-merge checks for the current head commit and records
           your reason permanently on the task and pull request.
         </p>
 

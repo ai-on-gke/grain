@@ -421,6 +421,15 @@ Rules:
     back the saved values.
   - A refused value is reported beside its field (`aria-invalid`) and
     clears on the next edit, not in a page-wide banner.
+- **Say "auto-merging", not "merge queue".** Pull requests merge one by
+  one, each when it is green and merges cleanly, with no batching and no
+  order between them (`docs/merge-queue-behind.md`). Show "Auto-merging"
+  and what it is waiting for, from the entry's state and note
+  (`ui-ng/src/app/shared/auto-merge.ts`): "waiting for CI", "branch
+  conflicted, repair 1 of 2", "merge refused: …". Never show a queue
+  position. API reason codes (`completed/on_merge_queue`) stay as they are.
+  A renamed tab keeps its old address as a redirect (`/merge-queue` →
+  `/auto-merge`).
 - **Live, quietly.** Server-sent events update lists in place. Never steal
   focus or scroll position on an update; hold an update while the person is
   interacting with the row.

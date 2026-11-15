@@ -71,7 +71,7 @@ test("turning on the base-repair bypass asks first; turning it off does not", as
   const key = "baseRepairBypassesHumanGates";
   expect((await settingsOf(page))[key]).toBe(false);
   try {
-    await page.goto("/next/repos/acme/widgets/merge-queue");
+    await page.goto("/next/repos/acme/widgets/auto-merge");
     const sw = page.getByRole("switch", {
       name: "Base-branch repairs bypass human review gates",
     });
