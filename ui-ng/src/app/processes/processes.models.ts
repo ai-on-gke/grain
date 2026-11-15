@@ -507,6 +507,20 @@ export function scheduleStatusBadge(s: Schedule): {
   return { label: "Enabled", tone: "healthy", iconKind: "healthy" };
 }
 
+export function formatScheduleNextRun(s: Schedule): string | null {
+  if (!s.enabled) return null;
+  if (
+    s.suppressed &&
+    (s.suppressed.reason === "watchedRepoOffTarget" || isEventTrigger(s))
+  ) {
+    return "suppressed";
+  }
+  if (isEventTrigger(s)) {
+    return s.recurrence?.kind === "git_ref" ? "on ref move" : "on workflow run";
+  }
+  return s.nextRunAt ? formatRunAt(s.nextRunAt) : null;
+}
+
 // formatRunAt renders a schedule's nextRunAt/lastRunAt for people: the
 // server sends RFC 3339 with nanoseconds ("2026-11-14T12:06:23.868Z"),
 // which is unreadable in a meta row. An unparsable value is shown as
@@ -519,19 +533,6 @@ export function formatRunAt(iso: string | undefined | null): string {
     dateStyle: "medium",
     timeStyle: "short",
   });
-}
-
-// scheduleNextRunLabel is what a schedule's "Next" says. A paused
-// schedule fires nothing, and a suppressed one (an off-target git_ref
-// watch, say) carries a far-future placeholder nextRunAt, so neither
-// shows that timestamp as if a run were due.
-export function scheduleNextRunLabel(s: Schedule): string {
-  if (!s.enabled) return "paused";
-  // An event trigger's nextRunAt is a placeholder a year out
-  // (model.Schedule), not a time it will fire. A suppressed timed schedule
-  // keeps its real next time; the suppression line beside it says why.
-  if (isEventTrigger(s)) return s.suppressed ? "suppressed" : "on event";
-  return formatRunAt(s.nextRunAt);
 }
 
 export function templateSourceBadge(t: Template): {

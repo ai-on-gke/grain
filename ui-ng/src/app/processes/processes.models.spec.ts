@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 import {
   type Schedule,
   formatRunAt,
-  scheduleNextRunLabel,
+  formatScheduleNextRun,
 } from "./processes.models";
 
 function sched(over: Partial<Schedule>): Schedule {
@@ -29,16 +29,16 @@ function sched(over: Partial<Schedule>): Schedule {
   } as Schedule;
 }
 
-describe("scheduleNextRunLabel", () => {
-  it("says an enabled event trigger fires on event, not its placeholder", () => {
+describe("formatScheduleNextRun", () => {
+  it("says an enabled git_ref trigger fires on a ref move, not its placeholder", () => {
     const s = sched({
       recurrence: { kind: "git_ref" } as Schedule["recurrence"],
     });
-    expect(scheduleNextRunLabel(s)).toBe("on event");
+    expect(formatScheduleNextRun(s)).toBe("on ref move");
   });
 
-  it("says paused for a paused schedule rather than its stale nextRunAt", () => {
-    expect(scheduleNextRunLabel(sched({ enabled: false }))).toBe("paused");
+  it("shows no next run for a paused schedule rather than its stale nextRunAt", () => {
+    expect(formatScheduleNextRun(sched({ enabled: false }))).toBeNull();
   });
 
   it("says suppressed rather than a trigger's placeholder far-future time", () => {
@@ -47,11 +47,11 @@ describe("scheduleNextRunLabel", () => {
       nextRunAt: "2027-11-15T11:52:03.650805487Z",
       suppressed: { reason: "watchedRepoOffTarget", detail: "x" },
     } as Partial<Schedule>);
-    expect(scheduleNextRunLabel(s)).toBe("suppressed");
+    expect(formatScheduleNextRun(s)).toBe("suppressed");
   });
 
   it("formats an enabled schedule's next run instead of raw RFC 3339", () => {
-    const label = scheduleNextRunLabel(sched({}));
+    const label = formatScheduleNextRun(sched({}));
     expect(label).not.toContain("T06:00");
     expect(label).not.toContain("Z");
     expect(label).toMatch(/2026/);

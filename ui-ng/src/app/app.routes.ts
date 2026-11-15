@@ -228,6 +228,29 @@ export const routes: Routes = [
       import("./ci/ci-page.component").then((m) => m.CIPageComponent),
   },
   {
+    path: "processes/suites/runs/:runId",
+    title: "Suite run · grain",
+    loadComponent: () =>
+      import("./processes/processes-page.component").then(
+        (m) => m.ProcessesPageComponent,
+      ),
+  },
+  {
+    path: "processes/schedule/:itemId",
+    redirectTo: "processes/schedules/:itemId",
+    pathMatch: "full",
+  },
+  {
+    path: "processes/template/:itemId",
+    redirectTo: "processes/templates/:itemId",
+    pathMatch: "full",
+  },
+  {
+    path: "processes/suite/:itemId",
+    redirectTo: "processes/suites/:itemId",
+    pathMatch: "full",
+  },
+  {
     path: "processes",
     title: "Processes · grain",
     loadComponent: () =>
@@ -243,20 +266,8 @@ export const routes: Routes = [
         (m) => m.ProcessesPageComponent,
       ),
   },
-  // Deep links to one item: /processes/<tab>/<id> selects it, and
-  // /processes/suites/runs/<id> opens a suite run (the `tab` route data
-  // reaches the component's tab input, as a path parameter would).
   {
-    path: "processes/suites/runs/:runId",
-    title: "Suite run · grain",
-    data: { tab: "suites" },
-    loadComponent: () =>
-      import("./processes/processes-page.component").then(
-        (m) => m.ProcessesPageComponent,
-      ),
-  },
-  {
-    path: "processes/:tab/:id",
+    path: "processes/:tab/:itemId",
     title: "Processes · grain",
     loadComponent: () =>
       import("./processes/processes-page.component").then(
@@ -264,14 +275,28 @@ export const routes: Routes = [
       ),
   },
   { path: "schedules", redirectTo: "processes/schedules", pathMatch: "full" },
+  {
+    path: "schedules/:itemId",
+    redirectTo: "processes/schedules/:itemId",
+    pathMatch: "full",
+  },
   { path: "templates", redirectTo: "processes/templates", pathMatch: "full" },
+  {
+    path: "templates/:itemId",
+    redirectTo: "processes/templates/:itemId",
+    pathMatch: "full",
+  },
   { path: "suites", redirectTo: "processes/suites", pathMatch: "full" },
-  // The classic UI's item links (/schedules/<id>, /templates/<id>,
-  // /suites/<id>, /suites/runs/<id>) land on the same item here.
-  { path: "schedules/:id", redirectTo: "processes/schedules/:id" },
-  { path: "templates/:id", redirectTo: "processes/templates/:id" },
-  { path: "suites/runs/:runId", redirectTo: "processes/suites/runs/:runId" },
-  { path: "suites/:id", redirectTo: "processes/suites/:id" },
+  {
+    path: "suites/runs/:runId",
+    redirectTo: "processes/suites/runs/:runId",
+    pathMatch: "full",
+  },
+  {
+    path: "suites/:itemId",
+    redirectTo: "processes/suites/:itemId",
+    pathMatch: "full",
+  },
   {
     path: "telemetry",
     title: "Telemetry · grain",

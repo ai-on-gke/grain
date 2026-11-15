@@ -47,13 +47,15 @@ test("a refused schedule save shows its error inside the dialog", async ({
   await dialog.locator("input[type=number]").first().fill("5");
   await page.getByTestId("sched-save-btn").click();
 
-  const err = dialog.getByTestId("dialog-error");
+  const err = dialog.getByTestId("proc-dialog-error");
   await expect(err).toContainText("at least 10");
   // It is on top: nothing (the scrim, say) covers its middle.
   const box = await err.boundingBox();
   const hit = await page.evaluate(
     ([x, y]) =>
-      !!document.elementFromPoint(x, y)?.closest("[data-testid=dialog-error]"),
+      !!document
+        .elementFromPoint(x, y)
+        ?.closest("[data-testid=proc-dialog-error]"),
     [box.x + box.width / 2, box.y + box.height / 2],
   );
   expect(hit).toBe(true);
@@ -63,12 +65,14 @@ test("a refused schedule save shows its error inside the dialog", async ({
   await page.getByTestId("sched-save-btn").click();
   await expect(dialog).toBeHidden();
   await page.getByTestId("proc-new-schedule-btn").click();
-  await expect(dialog.getByTestId("dialog-error")).toHaveCount(0);
+  await expect(dialog.getByTestId("proc-dialog-error")).toHaveCount(0);
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await deleteSchedulesTitled(page, "e2e floor check");
 });
 
-test("next-run labels: formatted, paused, suppressed", async ({ page }) => {
+test("next-run labels: formatted, suppressed, none when paused", async ({
+  page,
+}) => {
   const created = await page.request.post("/api/schedules", {
     data: {
       title: "e2e off-target watch",
@@ -96,16 +100,14 @@ test("next-run labels: formatted, paused, suppressed", async ({ page }) => {
       "Next: suppressed",
     );
 
-    // A suppressed schedule can still be paused, and then says so.
+    // A suppressed schedule can still be paused, and then claims no next
+    // run at all.
     await page.getByTestId("sched-toggle-enabled-btn").click();
     await expect(row).toContainText("Paused");
-    await expect(page.getByTestId("sched-detail-next")).toHaveText(
-      "Next: paused",
-    );
+    await expect(page.getByTestId("sched-detail-next")).toHaveCount(0);
     await page.reload();
-    await expect(page.getByTestId("sched-detail-next")).toHaveText(
-      "Next: paused",
-    );
+    await expect(row).toContainText("Paused");
+    await expect(page.getByTestId("sched-detail-next")).toHaveCount(0);
 
     // An enabled time-based schedule shows a readable time, not RFC 3339.
     await page.getByTestId("sched-row-sched-2").click();

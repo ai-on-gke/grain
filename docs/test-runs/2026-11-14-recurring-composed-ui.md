@@ -249,3 +249,18 @@ Filed as one follow-up task. All of these exist on the classic page:
 - Re-ran: ui-ng unit tests (492 pass), `next-processes-walkthrough.spec.js`
   (5 pass) and `next-full-system.spec.js` (5 pass) against a fresh
   `grain demo` build.
+
+## Merge-queue repair, 2026-11-15 (second)
+
+`main` meanwhile took a parallel Processes walkthrough (`7a7ef7db0`,
+`c095633f1`, report `2026-11-15-recurring-composed-ui.md`) that fixed the
+same bugs its own way: in-dialog errors (`proc-dialog-error`),
+`/processes/<tab>/<itemId>` deep links and `formatScheduleNextRun`
+("on ref move", "suppressed", nothing when paused). The merge keeps
+main's implementations and drops this branch's duplicates. What this
+branch still adds on top: next and last run times are formatted for
+people rather than shown as raw RFC 3339, the row and detail "next"
+spans carry test ids, and `next-processes-walkthrough.spec.js` now
+asserts main's wording. Verified locally: 494 ui-ng unit tests,
+eslint/prettier, and 16 e2e tests (both Processes walkthrough specs and
+`next-full-system.spec.js`) over a fresh `grain demo`.

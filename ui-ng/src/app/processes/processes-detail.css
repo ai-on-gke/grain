@@ -221,12 +221,6 @@
   }
 }
 
-/* A save error inside a modal dialog (the page banner sits behind the
-   scrim while a dialog is open). */
-.dialog-error {
-  margin: 12px 0 0;
-}
-
 /* A skip's held-by task and what became of it, kept together after the
    summary -- on its right, or wrapped under it where the panel is narrow. */
 .proc-skip-row {
