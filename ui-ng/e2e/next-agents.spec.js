@@ -334,11 +334,11 @@ test("Agents: the inspector closes to a full-width card view with no agent selec
       await listPane.evaluate((e) => getComputedStyle(e).borderRightWidth),
     ).toBe("0px");
   };
-  const opened = async () => {
-    await expect(page).toHaveURL(new RegExp(`[?&]task=${id}(&|$)`));
-    await expect(pane).toContainText(`Inspecting #${id}`);
+  const opened = async (which = id) => {
+    await expect(page).toHaveURL(new RegExp(`[?&]task=${which}(&|$)`));
+    await expect(pane).toContainText(`Inspecting #${which}`);
     await expect(split).toHaveClass(/has-pane/);
-    await expect(card).toHaveClass(/is-selected/);
+    await expect(page.getByTestId(`agent-${which}`)).toHaveClass(/is-selected/);
     const s = await split.boundingBox();
     const lp = await page.locator(".agents-list-pane").boundingBox();
     expect(lp.width).toBeLessThan(s.width * 0.6);
@@ -352,15 +352,19 @@ test("Agents: the inspector closes to a full-width card view with no agent selec
   });
   await axeClean(page);
 
-  // j opens the inspector on the first agent.
+  // j opens the inspector on the first card drawn, which is not always
+  // the first task the API lists (quiet runs sort first).
+  const first = (
+    await page.locator(".agent-card").first().getAttribute("data-testid")
+  ).replace("agent-", "");
   await page.locator("body").click({ position: { x: 1, y: 1 } });
   await page.keyboard.press("j");
-  await opened();
+  await opened(first);
 
   // The split bar's Close inspector button.
   await page.getByTestId("agents-pane-close").click();
   await cardOnly();
-  await expect(card).toBeFocused();
+  await expect(page.getByTestId(`agent-${first}`)).toBeFocused();
 
   // A click on the card opens it; a second click on it closes it.
   await card.locator(".agent-activity").click();

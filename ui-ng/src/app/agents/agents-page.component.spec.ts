@@ -24,6 +24,7 @@ class MockTaskDetailComponent {
   readonly tab = input<string>();
   readonly closable = input<boolean>();
   readonly closed = output<void>();
+  readonly expand = output<void>();
 }
 
 import { TaskDetailComponent } from "../task/task-detail.component";
@@ -685,6 +686,74 @@ describe("AgentsPageComponent", () => {
     }
   });
 
+  it("steps in the order the cards are drawn, not the order the API lists them", async () => {
+    const api = new FakeApi();
+    // 456 has been quiet for 20 minutes, so it sorts first on screen.
+    api.live = [run("123"), run("456", { activityAt: iso(20 * 60_000) })];
+    const f = await render(api);
+    expect(cards(f)).toEqual(["agent-456", "agent-123"]);
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    const press = (k: string) =>
+      f.componentInstance["onKey"]({
+        key: k,
+        target: document.body,
+        preventDefault: () => {},
+      } as unknown as KeyboardEvent);
+    press("j");
+    expect(nav).toHaveBeenLastCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: "456" } }),
+    );
+    f.componentRef.setInput("task", "456");
+    f.detectChanges();
+    press("j");
+    expect(nav).toHaveBeenLastCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: "123" } }),
+    );
+    // A search that hides 456 makes 123 the first agent j opens.
+    f.componentRef.setInput("task", undefined);
+    TestBed.inject(ViewFilter).query.set("Task 123");
+    f.detectChanges();
+    expect(cards(f)).toEqual(["agent-123"]);
+    press("j");
+    expect(nav).toHaveBeenLastCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: "123" } }),
+    );
+    TestBed.inject(ViewFilter).query.set("");
+  });
+
+  it("leaves the inspector open on Escape typed into a field or an inline confirmation", async () => {
+    const api = new FakeApi();
+    api.live = [run("123")];
+    const f = await render(api);
+    f.componentRef.setInput("task", "123");
+    f.detectChanges();
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    const field = document.createElement("textarea");
+    const confirm = document.createElement("div");
+    confirm.className = "confirm-inline";
+    const yes = document.createElement("button");
+    confirm.appendChild(yes);
+    el(f).append(field, confirm);
+    for (const t of [field, yes]) {
+      t.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+      );
+    }
+    expect(nav).not.toHaveBeenCalled();
+    key("Escape");
+    expect(nav).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({ queryParams: { task: null, pane: null } }),
+    );
+    field.remove();
+    confirm.remove();
+  });
+
   it("with nothing running and nothing pinned, drops the split for one full-width idle state", async () => {
     const api = new FakeApi();
     const f = await render(api);
@@ -1013,6 +1082,25 @@ describe("AgentsPageComponent selection and inspector", () => {
     // Escape with nothing in focus leaves the card view as it is.
     key("Escape");
     await shut();
+  });
+
+  it("opens the task full screen from the pane's expand button, coming back to Agents", async () => {
+    const api = new FakeApi();
+    api.live = [run("123")];
+    const { harness, router } = await renderRouted(api, "/agents?task=123");
+    const root = harness.routeNativeElement as HTMLElement;
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    root
+      .querySelector<HTMLElement>(
+        '[data-testid="agents-pane"] [data-testid="pane-expand"]',
+      )!
+      .click();
+    expect(nav).toHaveBeenCalledWith(
+      ["/task", "123"],
+      expect.objectContaining({
+        queryParams: expect.objectContaining({ from: "agents" }),
+      }),
+    );
   });
 
   it("switches inspector tabs from the embedded pane", async () => {

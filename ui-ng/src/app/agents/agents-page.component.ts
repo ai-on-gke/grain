@@ -31,7 +31,7 @@ import {
 } from "@angular/core";
 import { RouterLink, Router } from "@angular/router";
 import { AccessService } from "../services/access.service";
-import { KeyboardService } from "../services/keyboard.service";
+import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { ViewFilter } from "../services/view-filter.service";
 import { errorText } from "../sessions/session-helpers";
@@ -831,15 +831,28 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     this.selectTask(id);
   }
 
-  // step moves the inspector to the next or previous agent; with none in
-  // focus, either direction opens it on the first.
+  // order is the agents in the order the page draws them: sorted,
+  // filtered and grouped. With every card filtered away, j and k still
+  // walk the sorted whole.
+  private readonly order = computed(() => {
+    const shown = this.grouped().flatMap((g) => g.agents);
+    return shown.length ? shown : sortAgents(this.store.agents());
+  });
+
+  // step moves the inspector to the next or previous agent on screen; with
+  // none in focus, either direction opens it on the first. When the agent
+  // in focus has left the list, the one that took its place is next.
   protected step(dir: number): void {
-    const all = this.store.agents();
-    if (!all.length) return;
-    const nextIdx = this.selectedId()
-      ? Math.max(0, Math.min(all.length - 1, this.lastIndex + dir))
-      : 0;
-    this.selectTask(all[nextIdx].task.id);
+    const list = this.order();
+    if (!list.length) return;
+    const sel = this.selectedId();
+    const cur = sel ? list.findIndex((a) => a.task.id === sel) : -1;
+    const nextIdx = !sel
+      ? 0
+      : cur >= 0
+        ? Math.max(0, Math.min(list.length - 1, cur + dir))
+        : Math.max(0, Math.min(list.length - 1, this.lastIndex));
+    this.selectTask(list[nextIdx].task.id);
   }
 
   protected openFull(id: string): void {
@@ -904,7 +917,7 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
 
   constructor() {
     effect(() => {
-      const all = this.store.agents();
+      const all = this.order();
       const sel = this.selectedId();
       if (sel) {
         const idx = all.findIndex((a) => a.task.id === sel);
@@ -1143,6 +1156,10 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
       return;
     }
     if (this.doc.querySelector('[aria-modal="true"]')) return;
+    // Escape while typing (the pane's composer, the search field) or in an
+    // inline confirmation is theirs: closing the pane would drop a draft.
+    if (isTypingTarget(ev.target)) return;
+    if ((ev.target as HTMLElement | null)?.closest?.(".confirm-inline")) return;
     if (this.task()) {
       ev.preventDefault();
       this.closePane();
