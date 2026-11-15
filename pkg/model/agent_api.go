@@ -845,6 +845,22 @@ func RetiredGrantsBecame(name string) []string {
 	return []string{name}
 }
 
+// RetiredGrantRefusal says that name is a retired bare capability name,
+// which grants nothing now, and names the canonical grant(s) it became;
+// ok is false when name is not retired (RetiredGrantsBecame returns it
+// unchanged). The paths that record a grant refuse a retired name with
+// it, so whoever still writes the old spelling is told the new one rather
+// than "unknown capability".
+func RetiredGrantRefusal(name string) (msg string, became []string, ok bool) {
+	trimmed := strings.TrimSpace(name)
+	became = RetiredGrantsBecame(trimmed)
+	if len(became) == 0 || (len(became) == 1 && became[0] == trimmed) {
+		return "", nil, false
+	}
+	return fmt.Sprintf("%s is a retired capability name and grants nothing any longer: it became %s",
+		trimmed, strings.Join(became, " and ")), became, true
+}
+
 // RetiredGrantNames is every retired bare capability name
 // RetiredGrantsBecame rewrites, in no particular order.
 func RetiredGrantNames() []string {

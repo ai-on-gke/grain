@@ -398,6 +398,18 @@ func capabilityRefusal(id string) string {
 	if grainci.IsGrant(id) {
 		return grainci.Refusal("", "")
 	}
+	// A retired bare name (grain-ci, self-debug, github-credential:<name>,
+	// ...) is refused naming what it became, and why that is not granted
+	// here either when it is grain#ci or a CI-only capability.
+	if msg, became, ok := model.RetiredGrantRefusal(id); ok {
+		if len(became) == 1 && grainci.IsGrant(became[0]) {
+			return msg + ". " + grainci.Refusal("", "")
+		}
+		if len(became) == 1 && ciOnlyCapability(became[0]) {
+			return msg + ". " + model.CIOnlyRefusal(became[0])
+		}
+		return msg + "; grant that instead"
+	}
 	if ciOnlyCapability(id) {
 		return model.CIOnlyRefusal(id)
 	}
