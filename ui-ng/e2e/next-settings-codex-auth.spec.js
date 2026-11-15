@@ -122,6 +122,7 @@ test.describe("Settings → Models Codex subscription login", () => {
         expect(stored.set).toBe(true);
 
         await box.getByTestId(`clear-codex-auth-${ID}`).click();
+        await page.getByTestId("confirm-accept").click();
         await expect(status).toHaveText("Not set");
         const cleared = await (
           await request.get(`/api/agent-backends/${ID}/codex-auth`)

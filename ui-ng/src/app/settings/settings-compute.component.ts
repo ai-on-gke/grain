@@ -866,7 +866,7 @@ function formatRefreshedAt(iso?: string): string {
                                       'DELETE /api/agent-backends/{id}/codex-auth'
                                     )
                                   "
-                                  (click)="clearCodexAuth(b.id)"
+                                  (click)="confirmClearCodexAuth(b.id)"
                                 >
                                   Clear login
                                 </button>
@@ -3187,6 +3187,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     } finally {
       this.codexAuthBusy.set(false);
     }
+  }
+
+  protected confirmClearCodexAuth(id: string): void {
+    this.confirmRequest.set({
+      title: `Clear the subscription login for ${id}?`,
+      message: `The auth.json stored for ${id} is deleted. Runs on ${id} stop until a new login is uploaded: the connection never falls back to the deployment's shared login.`,
+      accept: "Clear login",
+      destructive: true,
+      run: () => this.clearCodexAuth(id),
+    });
   }
 
   protected async clearCodexAuth(id: string): Promise<void> {

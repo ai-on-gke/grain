@@ -1112,7 +1112,20 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     el.querySelector<HTMLButtonElement>(
       '[data-testid="clear-codex-auth-codex-sub"]',
     )!.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("codex-sub");
+    expect(
+      api.calls.some(
+        (c) => c.key === "DELETE /api/agent-backends/{id}/codex-auth",
+      ),
+    ).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
     await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
     harness.fixture.detectChanges();
     expect(
       api.calls.some(
