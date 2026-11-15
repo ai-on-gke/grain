@@ -85,7 +85,9 @@
   overflow-wrap: anywhere;
 }
 
+/* 24px tall border included, the height of the .status-pill beside it. */
 .hub-chip {
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   height: 24px;

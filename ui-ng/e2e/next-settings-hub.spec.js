@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import AxeBuilder from "@axe-core/playwright";
 import { test, expect } from "./fixtures.js";
 
 // Settings -> Hub at /next/settings/hub: what classic Settings -> Hub
@@ -357,6 +358,13 @@ test("Hub's cards fit the screen at every width @phone @dark", async ({
         );
       }
     }
+    // A row's chips and its role pill share one height.
+    const heights = await page
+      .locator(".hub-scope-row .hub-chip, .hub-scope-row .status-pill")
+      .evaluateAll((els) =>
+        els.map((e) => Math.round(e.getBoundingClientRect().height)),
+      );
+    expect(new Set(heights).size, String(heights)).toBe(1);
     // A scope row's role sits on the right of its row.
     const row = await page.getByTestId("registry-rule-row").boundingBox();
     const remove = await page.getByTestId("remove-hub-rule-0").boundingBox();
@@ -365,6 +373,16 @@ test("Hub's cards fit the screen at every width @phone @dark", async ({
       () => document.documentElement.scrollWidth - window.innerWidth,
     );
     expect(overflow).toBeLessThanOrEqual(0);
+
+    // No WCAG A/AA violations in the three Hub cards (contrast of the
+    // chips and pills in light and dark, names on every control).
+    const axe = await new AxeBuilder({ page })
+      .include('[data-testid="card-registry"]')
+      .include('[data-testid="card-hub-config"]')
+      .include('[data-testid="card-hub-scopes"]')
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+      .analyze();
+    expect(axe.violations).toEqual([]);
   } finally {
     await restoreHub(request, before);
   }
