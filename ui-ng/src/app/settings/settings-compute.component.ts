@@ -1662,6 +1662,15 @@ function formatRefreshedAt(iso?: string): string {
                           enrollmentSecretShown() ? "Hide code" : "Show code"
                         }}
                       </button>
+                    }
+                  </div>
+                  @if (enrollmentSecretShown() && sc.code) {
+                    <div class="s-inline">
+                      <code
+                        class="s-meta-mono hd-invite-secret"
+                        data-testid="enrollment-secret"
+                        >{{ sc.code }}</code
+                      >
                       <button
                         type="button"
                         class="btn-text s-btn-sm"
@@ -1670,14 +1679,7 @@ function formatRefreshedAt(iso?: string): string {
                       >
                         Copy code
                       </button>
-                    }
-                  </div>
-                  @if (enrollmentSecretShown() && sc.code) {
-                    <code
-                      class="s-meta-mono hd-invite-secret"
-                      data-testid="enrollment-secret"
-                      >{{ sc.code }}</code
-                    >
+                    </div>
                   }
                 }
                 <div class="s-inline" data-testid="invite-hosts-meta">
