@@ -106,6 +106,30 @@
   gap: 12px;
 }
 
+/* One pane, one scroller: inline, the conversation grows to its full length
+   and .inspector-body is the only thing that scrolls, rather than a short
+   thread window scrolling beside it on the same edge. Expand and full screen
+   still give the thread its own scroller, with nothing else beside it. The
+   composer sticks to the bottom of the body while the thread is on screen,
+   so a long thread never puts the reply box out of reach; the host clips
+   rather than hides its overflow so that it is not the sticky container. */
+.inspector-body > .g-conversation:not(.is-expanded) .convo-host {
+  overflow: clip;
+}
+
+.inspector-body > .g-conversation:not(.is-expanded) .convo-thread {
+  height: auto;
+  overflow-y: visible;
+}
+
+.inspector-body > .g-conversation:not(.is-expanded) .convo-composer {
+  position: sticky;
+  /* Flush with the pane's edge, not its 24px bottom padding, so the thread
+     does not show through below the pinned composer. */
+  bottom: -24px;
+  z-index: 1;
+}
+
 .evidence-card {
   padding: 12px 16px;
   border-radius: var(--md-sys-shape-corner-large);
