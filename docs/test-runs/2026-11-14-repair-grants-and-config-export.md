@@ -8,7 +8,7 @@
   - SQLite 3.40.1, and PostgreSQL 15.20 (`postgres://grain:grain@127.0.0.1:5432/…`, one fresh database per walk).
   - Each walk ran a real `grain daemon -sandbox-port-base=0 -disable-native-sandboxes` with `-github-webhook-addr` and `-github-host 127.0.0.1:4230 -github-insecure-http`.
   - The GitHub API was `pkg/github/githubsim` served over HTTP (`simgh/`). CI verdicts arrived as signed `workflow_job`/`workflow_run` webhooks (`send-webhook.py`).
-- **Helpers:** `docs/test-runs/2026-11-14-repair-grants-and-config-export/`. These are `start.sh`, `walk-repairs.sh`, `deny.sh`, `asrun.sh`, `simgh/` and `runproxy/`. Raw output is in `output/`.
+- **Helpers:** `docs/test-runs/2026-11-14-repair-grants-and-config-export/`. These are `start.sh`, `walk-repairs.sh`, `deny.sh`, `asrun.sh`, `simgh/` and `runproxy/`. Raw output is in `output/`. The two Go helpers are `//go:build ignore`, so `go test ./...` skips them. Build them with `go build -o /home/debian/bin/simgh <dir>/simgh/main.go`, and likewise `runproxy/main.go`.
 
 ## Summary
 
