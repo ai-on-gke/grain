@@ -328,9 +328,10 @@ export function transformMermaidTokens(tokens: Token[]): Token[] {
 }
 
 export function hasMermaidFence(src: string): boolean {
-  // A cheap prefilter: fences nested in lists or quotes count too, and a
-  // false positive only costs a token walk.
-  return /^[ \t>]*(?:`{3,}|~{3,})[ \t]*mermaid\b/im.test(src);
+  // A cheap prefilter, unanchored so a fence opening on a list marker
+  // ("1. ```mermaid") or inside a quote counts; a false positive only
+  // costs a token walk.
+  return /(?:`{3,}|~{3,})[ \t]*mermaid\b/i.test(src);
 }
 
 // ---------- Theme ----------

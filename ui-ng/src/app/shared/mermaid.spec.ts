@@ -81,6 +81,19 @@ describe("mermaid markup", () => {
     expect(host.querySelector("blockquote [data-mermaid]")).not.toBeNull();
   });
 
+  it("draws a fence that opens on a list marker", () => {
+    for (const src of [
+      "1. ```mermaid\n   graph TD; A\n   ```",
+      "- ```mermaid\n  graph TD; A\n  ```",
+      "> - ```mermaid\n>   graph TD; A\n>   ```",
+    ]) {
+      expect(
+        render(src).querySelector("li [data-mermaid]"),
+        src,
+      ).not.toBeNull();
+    }
+  });
+
   it("pairs before / after fences named in the info string", () => {
     const host = render(
       "```mermaid before: monolith\ngraph TD; A\n```\n\n```mermaid after\ngraph TD; B\n```",
