@@ -110,6 +110,7 @@ test("reads a long question as Markdown in a capped box, and keeps the actions a
   page,
   demoServer,
   accessCode,
+  axe,
 }) => {
   const title = `Long question ${Date.now()}`;
   const { id } = await apiPost(demoServer, accessCode, "/api/tasks", {
@@ -227,6 +228,18 @@ test("reads a long question as Markdown in a capped box, and keeps the actions a
         expect(reviewText, raw).not.toContain(raw);
       }
     }
+
+    // The scrolling question box is a named, focusable region, and the
+    // page is clean for axe in both themes.
+    const q = page.getByTestId("resolution-question");
+    await expect(q).toHaveAttribute("role", "region");
+    await expect(q).toHaveAttribute("tabindex", "0");
+    expect(await axe()).toEqual([]);
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.evaluate(() =>
+      document.documentElement.setAttribute("data-theme", "dark"),
+    );
+    expect(await axe()).toEqual([]);
   } finally {
     await closeQuietly(demoServer, accessCode, id);
   }

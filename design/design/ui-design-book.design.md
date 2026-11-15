@@ -298,7 +298,8 @@ it rather than copy it.
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
-| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links |
+| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters |
+| Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
@@ -307,6 +308,16 @@ it rather than copy it.
 
 Rules:
 
+- **Every message is Markdown.** A question, reason or alert body a person
+  reads is rendered with `[gMarkdown]` (or `g-capped-markdown` where it sits
+  above actions), never `{{ }}` into a `<p>`: interpolation runs lists and
+  code blocks into one paragraph. A one-line `summary` stays the row title.
+- **A decision's actions never leave the screen.** In the Inbox inspector
+  only the message in the resolution dock gives way (it shrinks and
+  scrolls); the dock's actions keep their height and the inspector body
+  keeps a floor of `min(240px, 25cqh)`, so the task's details are never a
+  sliver. `next-inbox-long-question.spec.js` holds this at 1280×800 and
+  2269×1079.
 - **Class names are global.** Most pages use `ViewEncapsulation.None`, so a
   class defined in one page's stylesheet applies wherever that stylesheet is
   loaded. Prefix page-specific classes, and search for a name before you use
