@@ -1,0 +1,22 @@
+== mcp-2.jsonl
+exit=0
+stdout:
+branch=grain/6a93f9d8/task-2-walk-plain-access
+clone acme/docs: ok
+push acme/docs grain/6a93f9d8/task-2-walk-plain-access: refused: remote: acme/docs is read-only for this sandbox: it may fetch it but not push to it fatal: unable to access 'http://127.0.0.1:45127/acme/docs.git/': The requested URL returned error: 403 
+clone acme/gadgets: ok
+push acme/gadgets grain/6a93f9d8/task-2-walk-plain-access: ok
+
+stderr:
+
+== mcp-3.jsonl
+exit=0
+stdout:
+branch=grain/6a93f9d8/task-3-walk-base-less-write
+clone acme/docs: ok
+push acme/docs grain/6a93f9d8/task-3-walk-base-less-write: refused: remote: acme/docs is read-only for this sandbox: it may fetch it but not push to it fatal: unable to access 'http://127.0.0.1:45127/acme/docs.git/': The requested URL returned error: 403 
+clone acme/gadgets: ok
+push acme/gadgets grain/6a93f9d8/task-3-walk-base-less-write: ok
+
+stderr:
+

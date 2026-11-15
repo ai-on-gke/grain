@@ -20,6 +20,7 @@ import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
 import { SettingsPageComponent } from "./settings-page.component";
 import { safeManagementUrl } from "./settings-instance.component";
+import { capServerState } from "./settings-work.component";
 
 interface RecordedCall {
   method: "GET" | "TEXT" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -43,6 +44,10 @@ class FakeSettingsApi {
       scopes: [],
     },
   };
+
+  hostdsBody: unknown[] = [
+    { name: "workstation-1", owner: "alice", status: "connected" },
+  ];
 
   upgradeBody: Record<string, unknown> = {
     currentVersion: "v3.6.0",
@@ -124,9 +129,7 @@ class FakeSettingsApi {
       return Promise.resolve("## v3.7.0\n- Faster microVM boot");
     }
     if (key === "GET /api/hostds") {
-      return Promise.resolve([
-        { name: "workstation-1", owner: "alice", status: "connected" },
-      ]);
+      return Promise.resolve(this.hostdsBody);
     }
     if (key === "GET /api/hostds/enrollment-codes") {
       return Promise.resolve([{ name: "eng-laptops", uses: 2, max_uses: 10 }]);
@@ -604,6 +607,31 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     );
   });
 
+  it("shows a host's available grain-agentd update and the command to take it", async () => {
+    const api = new FakeSettingsApi();
+    api.hostdsBody = [
+      {
+        name: "laptop",
+        owner: "alice",
+        state: "connected",
+        update: {
+          build: "v3.8.0",
+          available: "v3.9.0",
+          command: "grain-agentd update -version v3.9.0",
+        },
+      },
+      { name: "workstation-1", owner: "bob", state: "connected" },
+    ];
+    const { el } = await mountSettings("/settings/hosts", api);
+    const line = el.querySelector('[data-testid="hostd-update-laptop"]');
+    expect(line?.textContent).toContain("v3.8.0");
+    expect(line?.textContent).toContain("v3.9.0");
+    expect(line?.textContent).toContain("grain-agentd update -version v3.9.0");
+    expect(
+      el.querySelector('[data-testid="hostd-update-workstation-1"]'),
+    ).toBeNull();
+  });
+
   it("gates operator-only (scope: null) hostds enrollment-codes, pending joins, and state-repo/remote for non-operators without 403 calls", async () => {
     const api = new FakeSettingsApi();
     api.configBody.access = {
@@ -1037,5 +1065,114 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       api.calls.filter((c) => c.key === "GET /api/deployment/reachable-repos")
         .length,
     ).toBe(1);
+  });
+  it("labels capability server states in host wording, gives failed the error tone, and titles needs-config with its reason", async () => {
+    expect(
+      capServerState({ id: "p", status: { state: "needs-hostd:mac-mini" } }),
+    ).toEqual({ label: "needs host mac-mini", tone: "blast" });
+    expect(
+      capServerState({ id: "b", status: { state: "needs-hostd" } }),
+    ).toEqual({ label: "needs host", tone: "blast" });
+    expect(capServerState({ id: "f", status: { state: "failed" } })).toEqual({
+      label: "failed",
+      tone: "error",
+    });
+
+    const api = new FakeSettingsApi();
+    const baseGet = api.get;
+    api.get = (key, params, query) => {
+      if (key === "GET /api/capability-servers") {
+        return Promise.resolve([
+          {
+            id: "figma",
+            status: { state: "needs-config", reason: "Set a Figma token" },
+          },
+          { id: "host-script", status: { state: "needs-hostd:builder-1" } },
+          {
+            id: "broken-mcp",
+            status: { state: "failed", error: "connection refused" },
+          },
+        ]);
+      }
+      return baseGet(key, params, query);
+    };
+    const { el } = await mountSettings("/settings/capabilities", api);
+    const chip = (id: string) =>
+      el.querySelector<HTMLElement>(`[data-testid="cap-server-state-${id}"]`)!;
+    expect(chip("figma").textContent?.trim()).toBe("needs-configuring");
+    expect(chip("figma").getAttribute("title")).toBe("Set a Figma token");
+    expect(chip("host-script").textContent?.trim()).toBe(
+      "needs host builder-1",
+    );
+    expect(chip("host-script").classList.contains("blast")).toBe(true);
+    expect(chip("broken-mcp").textContent?.trim()).toBe("failed");
+    expect(chip("broken-mcp").classList.contains("error")).toBe(true);
+    expect(chip("broken-mcp").getAttribute("title")).toBe("connection refused");
+  });
+
+  it("sends the chosen host kind when saving a connection over an existing stored credential", async () => {
+    const { el, harness, api } = await mountSettings("/settings/git");
+    const click = (id: string) => {
+      el.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)!.click();
+      harness.fixture.detectChanges();
+    };
+    click("select-git-conn-mode");
+    click("select-git-conn-mode-opt-existing");
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-git-conn-name"]',
+      )!,
+      "git-cred-1",
+    );
+    click("select-git-conn-kind");
+    click("select-git-conn-kind-opt-git");
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-git-conn-host"]',
+      )!,
+      "git.internal.example",
+    );
+    harness.fixture.detectChanges();
+    click("save-git-conn-btn");
+    await harness.fixture.whenStable();
+    const saved = api.calls.find(
+      (c) => c.key === "POST /api/deployment/git-connections",
+    );
+    expect(saved?.body).toMatchObject({
+      credential: "git-cred-1",
+      host: "git.internal.example",
+      kind: "git",
+    });
+  });
+
+  it("scrolls to an old section name's card on in-app navigation and stops when another section is chosen", async () => {
+    const { el, harness } = await mountSettings("/settings/engine");
+    const scrolled: string[] = [];
+    const orig = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+      scrolled.push(this.id);
+    };
+    try {
+      // Same component instance; the fragment stays null -> null.
+      await harness.navigateByUrl("/settings/secrets");
+      await harness.fixture.whenStable();
+      await new Promise((r) => setTimeout(r, 140));
+      expect(scrolled).toContain("other-secrets");
+
+      // An anchor that never appears keeps the timer running until the
+      // reader picks another section.
+      await harness.navigateByUrl("/settings/capabilities#no-such-card");
+      await harness.fixture.whenStable();
+      const comp = harness.routeDebugElement?.componentInstance as {
+        anchorTimer: ReturnType<typeof setInterval> | null;
+      };
+      expect(comp.anchorTimer).not.toBeNull();
+      el.querySelector<HTMLAnchorElement>(
+        '[data-testid="settings-nav-engine"]',
+      )!.click();
+      expect(comp.anchorTimer).toBeNull();
+    } finally {
+      HTMLElement.prototype.scrollIntoView = orig;
+    }
   });
 });

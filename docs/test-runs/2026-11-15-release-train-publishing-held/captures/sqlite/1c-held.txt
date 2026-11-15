@@ -1,0 +1,19 @@
+-- tasks
+4	queued	Fix the red Stage 1 (Nightly) at 734a55c4b919
+2	queued	Fix base branch release on acme/grain main
+1	awaiting_reply	Director
+3	queued	Walkthrough tick on release/v3.5.1
+-- skips
+id  schedule_id                                          occurrence                               reason          task_id  outcome  fired_task_id  held_by_schedule_id
+--  ---------------------------------------------------  ---------------------------------------  --------------  -------  -------  -------------  -------------------
+1   repo:schedule:acme:grain:release-train               2026-11-15 06:17:25 +0000 UTC            publishingHeld  2                                                   
+2   repo:schedule:acme:grain:walk-release-v351-template  2026-11-15 06:17:25 +0000 UTC            publishingHeld  2                                                   
+3   repo:schedule:acme:grain:release-train-on-stage1     2026-11-15 07:22:36.046268834 +0000 UTC  publishingHeld  2        dropped                                    
+4   repo:schedule:acme:grain:release-train-on-stage1     2026-11-15 07:22:46.045915298 +0000 UTC  publishingHeld  2        dropped                                    
+-- schedules
+id                                                   next_run_at                             last_run_at                           
+---------------------------------------------------  --------------------------------------  --------------------------------------
+repo:schedule:acme:grain:release-train               2026-11-15 06:17:25 +0000 UTC                                                 
+repo:schedule:acme:grain:release-train-on-stage1     2027-11-16 07:22:25.04624865 +0000 UTC                                        
+repo:schedule:acme:grain:walk-release-v351           2026-11-15 07:37:25 +0000 UTC           2026-11-15 07:22:26.04579094 +0000 UTC
+repo:schedule:acme:grain:walk-release-v351-template  2026-11-15 06:17:25 +0000 UTC                                                 

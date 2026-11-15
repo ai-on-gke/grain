@@ -165,14 +165,16 @@ export const routes: Routes = [
       ),
   },
   {
-    path: "ci",
-    title: "CI · grain",
-    loadComponent: () =>
-      import("./ci/ci-page.component").then((m) => m.CIPageComponent),
-  },
-  {
-    path: "ci/runs/:id",
-    title: "CI run · grain",
+    matcher: (s): UrlMatchResult | null => {
+      if (s.length === 1 && s[0]?.path === "ci") {
+        return { consumed: s };
+      }
+      if (s.length === 3 && s[0]?.path === "ci" && s[1]?.path === "runs") {
+        return { consumed: s, posParams: { id: s[2] } };
+      }
+      return null;
+    },
+    title: (route) => (route.params["id"] ? "CI run · grain" : "CI · grain"),
     loadComponent: () =>
       import("./ci/ci-page.component").then((m) => m.CIPageComponent),
   },
