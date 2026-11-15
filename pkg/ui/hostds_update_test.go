@@ -15,8 +15,15 @@
 package ui
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	agentdrelease "github.com/ai-on-gke/grain/pkg/agentd/release"
 	"github.com/ai-on-gke/grain/pkg/hostd"
 )
 
@@ -52,5 +59,66 @@ func TestHostUpdateForOffersOnlySelfUpdatingAgents(t *testing.T) {
 	}
 	if u := hostUpdateFor(nil, latest); u != nil {
 		t.Errorf("no connection: offered %+v", u)
+	}
+}
+
+// The hosts list waits only briefly for a platform's release, but the
+// upstream fetch it starts is not cut short by that wait: it finishes and
+// is cached, rather than cached as a failure that would leave the install
+// and update routes with no release to serve for agentdFetchBackoff.
+func TestHostUpdateLookupDoesNotCutShortTheUpstreamFetch(t *testing.T) {
+	pub, priv, _ := agentdrelease.GenerateKeyPair()
+	pubPEM, _ := agentdrelease.FormatPublicKeyPEM(pub)
+	binPayload := []byte("slow-upstream-agentd-binary")
+	const rel = "v9.4.4"
+	m, _ := agentdrelease.NewManifestForBinary(rel, "linux/amd64", binPayload, nil)
+	signed, _ := agentdrelease.SignManifest(m, priv, nil)
+	rawManifest, _ := json.Marshal(signed)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases/" + rel + "/grain-agentd-linux-amd64.manifest.json":
+			_, _ = w.Write(rawManifest)
+		case "/releases/" + rel + "/grain-agentd-linux-amd64":
+			time.Sleep(300 * time.Millisecond) // longer than the list waits
+			_, _ = w.Write(binPayload)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	t.Setenv(agentdDistDirEnv, t.TempDir())
+	t.Setenv(agentdReleaseURLEnv, upstream.URL+"/releases")
+	t.Setenv(agentdReleasePublicKeyEnv, string(pubPEM))
+	oldRel := cliInstallRelease
+	cliInstallRelease = func() string { return rel }
+	t.Cleanup(func() { cliInstallRelease = oldRel })
+
+	srv := NewServer(Config{}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	if _, ok := srv.resolveAgentdReleaseFor(ctx, "linux/amd64", 20*time.Millisecond); ok {
+		t.Fatal("the lookup answered before the slow upstream did")
+	}
+	cancel() // the list's request is over
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		entry, ok := srv.resolveAgentdReleaseFor(context.Background(), "linux/amd64", time.Second)
+		if ok {
+			if entry.manifest.Version != rel {
+				t.Fatalf("resolved %q, want %q", entry.manifest.Version, rel)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the release never resolved: the list's wait cut the upstream fetch short")
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "https://grain.example.com/api/hostd/agentd/linux/amd64", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !bytes.Equal(rec.Body.Bytes(), binPayload) {
+		t.Fatalf("GET the binary after a list = %d %q", rec.Code, rec.Body.String())
 	}
 }

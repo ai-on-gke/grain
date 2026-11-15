@@ -435,9 +435,7 @@ func (s *Server) offerHostUpdates(ctx context.Context, views []HostdView) {
 		if v, ok := known[platform]; ok {
 			return v, v != ""
 		}
-		rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		defer cancel()
-		entry, ok := s.resolveAgentdRelease(rctx, platform)
+		entry, ok := s.resolveAgentdReleaseFor(ctx, platform, hostUpdateLookupWait)
 		// The host refuses an unsigned release, so none is offered.
 		if !ok || entry.manifest.Signature == "" {
 			known[platform] = ""
@@ -448,6 +446,39 @@ func (s *Server) offerHostUpdates(ctx context.Context, views []HostdView) {
 	}
 	for i := range views {
 		views[i].Update = hostUpdateFor(views[i].Connection, latest)
+	}
+}
+
+// hostUpdateLookupWait is how long the hosts list waits for a platform's
+// release before answering without an offer.
+var hostUpdateLookupWait = 3 * time.Second
+
+// resolveAgentdReleaseFor is resolveAgentdRelease, waited on for at most
+// wait. The lookup itself runs on a context detached from ctx: an upstream
+// fetch it starts must not be cut short by the list's deadline, since a
+// cut-short fetch is cached as a failure (agentdFetchBackoff) and would
+// leave the install and update routes with no release to serve. A fetch
+// that outlasts wait finishes in the background and is cached for the
+// next list.
+func (s *Server) resolveAgentdReleaseFor(ctx context.Context, platform string, wait time.Duration) (cachedAgentdRelease, bool) {
+	type result struct {
+		entry cachedAgentdRelease
+		ok    bool
+	}
+	done := make(chan result, 1)
+	go func() {
+		entry, ok := s.resolveAgentdRelease(context.WithoutCancel(ctx), platform)
+		done <- result{entry, ok}
+	}()
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case r := <-done:
+		return r.entry, r.ok
+	case <-t.C:
+		return cachedAgentdRelease{}, false
+	case <-ctx.Done():
+		return cachedAgentdRelease{}, false
 	}
 }
 
