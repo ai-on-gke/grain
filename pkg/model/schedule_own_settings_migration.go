@@ -50,10 +50,6 @@ import (
 // to tell a copy against, and it cannot fire until somebody points it at
 // another template.
 //
-// Every repository's declarations are read again on the next reconcile,
-// which writes back the grants a schedule file declares that an earlier
-// build's firing overwrote.
-//
 // Only the columns schema 144 has are read, so this runs as written from
 // any earlier store. Idempotent: a second pass finds nothing left that
 // says no more than its template.
@@ -125,14 +121,24 @@ func migrateScheduleOwnSettings(ctx context.Context, tx *sql.Tx) error {
 			return fmt.Errorf("deleting schedule %s's copy of its template's grants: %w", r.id, err)
 		}
 	}
-	// A repository schedule's own grants are not on its row any more if
-	// an earlier build fired it: that firing wrote its template's grants
-	// over the ones the schedule file declares, and the declaration sync
-	// writes those back only when the default branch moves -- so until the
-	// repository's next commit, every firing went on without them
-	// (docs/test-runs/2026-11-13-schedules-templates.md, F4). Forgetting
-	// the commit each repository was last read at has the next reconcile
-	// read every one again, which puts them back.
+	return nil
+}
+
+// rereadDeclarations is migration 147. A repository schedule's own
+// grants are not on its row any more if an earlier build fired it: that
+// firing wrote its template's grants over the ones the schedule file
+// declares, and migration 144 only deleted the copy. The declaration
+// sync writes a file's grants back only when the default branch moves,
+// so until the repository's next commit every firing went on without
+// them (docs/test-runs/2026-11-13-schedules-templates.md, F4).
+// Forgetting the commit each repository was last read at has the next
+// reconcile read every one again, which puts them back.
+//
+// It is a migration of its own, not part of 144, because v3.6.0 shipped
+// 144: a store that already ran it would never run an edit to it.
+// Idempotent: a second pass forgets a commit the reconcile already
+// read again, and costs one re-read.
+func rereadDeclarations(ctx context.Context, tx *sql.Tx) error {
 	// A store older than the table has never read a repository's
 	// declarations, and the schema creates it after this runs.
 	if exists, err := migrationTableExists(ctx, tx, "repo_declaration_sync"); err != nil {

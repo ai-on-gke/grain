@@ -229,24 +229,22 @@ func TestGrainHealthNamesRefusedDeclarations(t *testing.T) {
 	}
 }
 
-// A base branch whose publishing a release triage task holds -- which
-// also holds every schedule declaring `skip-when: publishing-held` into
-// it -- is named, with the task, as a WARNING that leaves the exit at 0
-// (docs/test-runs/2026-11-13-schedules-templates.md, F1: the response
-// carried it and the text said nothing).
-func TestGrainHealthNamesHeldBaseBranchPublishing(t *testing.T) {
-	since := time.Date(2026, 11, 13, 0, 3, 0, 0, time.UTC)
-	h := ui.SandboxHealthResponse{BaseBranchPublishing: []ui.BaseBranchPublishing{
-		{Repo: "acme/widgets", Branch: "main", Failures: 3, FailingSince: &since,
-			RunID: "run-3", TriageTaskID: "4", Gated: true},
-		{Repo: "acme/other", Branch: "main", Failures: 3, FailingSince: &since, RunID: "run-9", RunInFlight: true},
-	}}
-	out := captureStdout(t, func() { (&printer{}).health(h) })
+// A base branch publishing nothing, held by its release triage task --
+// what holds a `skip-when: publishing-held` schedule -- is said, not
+// "no counters" (docs/test-runs/2026-11-15-release-train-publishing-held.md, F1).
+func TestGrainHealthNamesBaseBranchesPublishingNothing(t *testing.T) {
+	since := time.Date(2026, 11, 15, 6, 45, 0, 0, time.UTC)
+	out := captureStdout(t, func() {
+		(&printer{}).health(ui.SandboxHealthResponse{BaseBranchPublishing: []ui.BaseBranchPublishing{
+			{Repo: "acme/grain", Branch: "main", Failures: 3, FailingSince: &since, TriageTaskID: "2", Gated: true,
+				Detail: "Further releases on this branch are held pending resolution of triage task 2."},
+			{Repo: "acme/widgets", Failures: 3, FailingSince: &since, Detail: "Run 9003 is the latest attempt to read."},
+		}})
+	})
 	for _, want := range []string{
 		"WARNING: base branches publishing nothing:",
-		"acme/widgets main: 3 release(s) published nothing since 2026-11-13T00:03:00Z; held by release triage task 4",
-		"schedules with skip-when: publishing-held into this branch, wait until it closes",
-		"acme/other main: 3 release(s) published nothing since 2026-11-13T00:03:00Z; run run-9 is in flight",
+		"acme/grain main (held by release triage task 2): Further releases on this branch are held pending resolution of triage task 2.",
+		"acme/widgets (default branch) (not held): Run 9003 is the latest attempt to read.",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("grain health output missing %q:\n%s", want, out)
@@ -254,9 +252,6 @@ func TestGrainHealthNamesHeldBaseBranchPublishing(t *testing.T) {
 	}
 	if strings.Contains(out, "no counters") {
 		t.Errorf("grain health says there is nothing to report with publishing held:\n%s", out)
-	}
-	if failing := healthFailing(h); len(failing) != 0 {
-		t.Errorf("healthFailing = %v, want none: a publishing finding is a WARNING", failing)
 	}
 }
 
@@ -304,6 +299,7 @@ func TestGrainHealthExitsOneWhenACheckIsFailing(t *testing.T) {
 		{"all four failing post-verb -json", combined, []string{"health", "-json"}, exitFailed, `"refusedDeclarations"`, "", ""},
 		{"warning only", warning, []string{"health"}, exitOK, "WARNING: reviewed-merge logins", "", "no counters"},
 		{"ci wait warning only", ciWait, []string{"health"}, exitOK, "WARNING: tasks waiting on CI", "", "no counters"},
+		{"publishing held warning only", ui.SandboxHealthResponse{BaseBranchPublishing: []ui.BaseBranchPublishing{{Repo: "acme/grain", Branch: "main", TriageTaskID: "2", Gated: true}}}, []string{"health"}, exitOK, "WARNING: base branches publishing nothing", "", "no counters"},
 		{"ci wait warning -json", ciWait, []string{"health", "-json"}, exitOK, `"gha:acme:widgets:5001"`, "", ""},
 		{"store switch alert only", alert, []string{"health"}, exitOK, "ALERT (since 2026-11-08 07:37:00Z): store switched", "", "no counters"},
 		{"store switch alert -json", alert, []string{"health", "-json"}, exitOK, `"storeSwitch"`, "", ""},

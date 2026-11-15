@@ -3821,9 +3821,7 @@ func requeueForRepair(ctx context.Context, store *model.Store,
 		return err
 	}
 
-	return observeField(ctx, store, task.ID, now, func(o *model.Observation) {
-		markRepairAsked(o, now, attempt.baseTip, attempt.failures, attempt.why)
-	})
+	return askForRepair(ctx, store, task.ID, now, attempt.baseTip, attempt.failures, attempt.why)
 }
 
 // repairAttempt is which automatic repair requeueForRepair is asking for

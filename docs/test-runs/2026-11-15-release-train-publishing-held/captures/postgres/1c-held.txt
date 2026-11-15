@@ -1,0 +1,23 @@
+-- tasks
+4	queued	Fix the red Stage 1 (Nightly) at e9ef8f250787
+2	queued	Fix base branch release on acme/grain main
+1	awaiting_reply	Director
+3	queued	Walkthrough tick on release/v3.5.1
+-- skips
+ id |                     schedule_id                     |          occurrence           |     reason     | task_id | outcome | fired_task_id | held_by_schedule_id 
+----+-----------------------------------------------------+-------------------------------+----------------+---------+---------+---------------+---------------------
+  1 | repo:schedule:acme:grain:release-train              | 2026-11-15 06:19:41.088049+00 | publishingHeld | 2       |         |               | 
+  2 | repo:schedule:acme:grain:walk-release-v351-template | 2026-11-15 06:19:41.088049+00 | publishingHeld | 2       |         |               | 
+  3 | repo:schedule:acme:grain:release-train-on-stage1    | 2026-11-15 07:24:51.407092+00 | publishingHeld | 2       | dropped |               | 
+  4 | repo:schedule:acme:grain:release-train-on-stage1    | 2026-11-15 07:25:01.406628+00 | publishingHeld | 2       | dropped |               | 
+(4 rows)
+
+-- schedules
+                         id                          |          next_run_at          |          last_run_at          
+-----------------------------------------------------+-------------------------------+-------------------------------
+ repo:schedule:acme:grain:release-train              | 2026-11-15 06:19:41.088049+00 | 
+ repo:schedule:acme:grain:release-train-on-stage1    | 2027-11-16 07:24:40.407061+00 | 
+ repo:schedule:acme:grain:walk-release-v351          | 2026-11-15 07:39:41.088049+00 | 2026-11-15 07:24:41.407321+00
+ repo:schedule:acme:grain:walk-release-v351-template | 2026-11-15 06:19:41.088049+00 | 
+(4 rows)
+

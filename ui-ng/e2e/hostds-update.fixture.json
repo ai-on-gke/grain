@@ -1,0 +1,23 @@
+[
+  {
+    "name": "local",
+    "owner": "",
+    "state": "connected"
+  },
+  {
+    "name": "laptop",
+    "owner": "alice@example.com",
+    "state": "connected",
+    "labels": { "zone": "home" },
+    "update": {
+      "build": "v3.8.0",
+      "available": "v3.9.0",
+      "command": "grain-agentd update -version v3.9.0"
+    }
+  },
+  {
+    "name": "build-box",
+    "owner": "bob@example.com",
+    "state": "offline"
+  }
+]

@@ -179,17 +179,26 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 		fmt.Println()
 	}
-	// Base branches that have stopped publishing, and whether a release
-	// triage task holds further releases (and every schedule declaring
-	// `skip-when: publishing-held` into that branch) on them. The
-	// response has carried this since grain/task-4393, but this printer
-	// never did, so `grain health` said nothing while a schedule was held
-	// (docs/test-runs/2026-11-13-schedules-templates.md, F1).
+	// Base branches that have stopped publishing (model.BaseBranchPublishing,
+	// grain/task-511), and whether a release triage task holds them --
+	// which is what holds a `skip-when: publishing-held` schedule. The
+	// response carried them, System → Health showed them, and this printer
+	// said "no counters" over a held release train
+	// (docs/test-runs/2026-11-15-release-train-publishing-held.md, F1).
+	// A WARNING: a release that publishes nothing holds no merge.
 	if len(h.BaseBranchPublishing) > 0 {
 		printed = true
 		fmt.Println("WARNING: base branches publishing nothing:")
 		for _, p := range h.BaseBranchPublishing {
-			fmt.Printf("  %s\n", basePublishingLine(p))
+			branch := p.Branch
+			if branch == "" {
+				branch = "(default branch)"
+			}
+			state := "not held"
+			if p.Gated && p.TriageTaskID != "" {
+				state = "held by release triage task " + p.TriageTaskID
+			}
+			fmt.Printf("  %s %s (%s): %s\n", p.Repo, branch, state, p.Detail)
 		}
 		fmt.Println()
 	}
@@ -263,30 +272,4 @@ func (p *printer) health(h ui.SandboxHealthResponse) {
 		}
 	}
 	_ = w.Flush()
-}
-
-// basePublishingLine is one base branch's publishing finding as `grain
-// health` prints it: what has not published since when, and -- when a
-// release triage task gates it -- that its releases and every schedule
-// declaring `skip-when: publishing-held` into it are held until that task
-// closes (model.Store.publishingHold reads the same finding).
-func basePublishingLine(p ui.BaseBranchPublishing) string {
-	branch := p.Branch
-	if branch == "" {
-		branch = "(default branch)"
-	}
-	line := fmt.Sprintf("%s %s: %d release(s) published nothing", p.Repo, branch, p.Failures)
-	if p.FailingSince != nil {
-		line += " since " + p.FailingSince.UTC().Format(time.RFC3339)
-	}
-	switch {
-	case p.Gated && p.TriageTaskID != "":
-		line += fmt.Sprintf("; held by release triage task %s -- further releases, and schedules with "+
-			"skip-when: publishing-held into this branch, wait until it closes", p.TriageTaskID)
-	case p.RunInFlight && p.RunID != "":
-		line += "; run " + p.RunID + " is in flight and clears this if it publishes"
-	case p.RunID != "":
-		line += "; latest run " + p.RunID
-	}
-	return line
 }

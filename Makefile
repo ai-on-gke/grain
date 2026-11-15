@@ -81,6 +81,13 @@ GIT_REVISION ?=
 ifeq ($(origin RELEASE),undefined)
 RELEASE := $(shell bash scripts/build-version.sh 2>/dev/null)
 endif
+# The schema version stamped onto the image (io.grain.schema-version),
+# read from pkg/model's SchemaVersion constant so an upgrading deployment
+# can tell a schema downgrade from registry metadata alone, before it
+# pulls anything (pkg/upgrade/schema.go). Empty when the constant cannot
+# be found, which leaves the label empty and the check to the pulled
+# build's own `grain schema-version`.
+SCHEMA_VERSION ?= $(shell sed -n 's/^const SchemaVersion = \([0-9][0-9]*\)$$/\1/p' pkg/model/schema.go 2>/dev/null)
 EDITION ?=
 
 # The main bin/grain is built from: cmd/grain, core grain. A build that
@@ -727,6 +734,7 @@ image:
 		$(if $(GRAIN_IMAGE_REF),--build-arg GRAIN_IMAGE_REF=$(GRAIN_IMAGE_REF),) \
 		$(if $(GIT_REVISION),--build-arg GIT_REVISION=$(GIT_REVISION),) \
 		$(if $(RELEASE),--build-arg RELEASE=$(RELEASE),) \
+		$(if $(SCHEMA_VERSION),--build-arg SCHEMA_VERSION=$(SCHEMA_VERSION),) \
 		-t $(IMAGE) -f Dockerfile .
 
 image-hub:

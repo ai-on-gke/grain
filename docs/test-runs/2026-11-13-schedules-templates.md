@@ -64,6 +64,7 @@ With the hold raised, `grain -server … health` printed only the target-repo ho
 - **After the fix:** `out/sqlite-item1.log`:
   `acme/widgets main: 3 release(s) published nothing since 2026-11-13T00:18:17Z; held by release triage task 4 -- further releases, and schedules with skip-when: publishing-held into this branch, wait until it closes`.
 - **Regression test:** `TestGrainHealthNamesHeldBaseBranchPublishing` (`pkg/cli/health_test.go`).
+- **Superseded on `main`:** the 2026-11-15 release-train walkthrough fixed the same gap independently (`docs/test-runs/2026-11-15-release-train-publishing-held.md`, F1). When this branch next merged `main`, it took that version (line format `acme/grain main (held by release triage task 2): …`, test `TestGrainHealthNamesBaseBranchesPublishingNothing`) and dropped its own.
 
 ## Item 2 — template `sandbox:` size
 
@@ -136,9 +137,10 @@ Step 1 shows the old build's firing had already overwritten `own.yml`'s `api#ci-
 So after the upgrade, every firing of `own` went out without its declared grant until somebody committed to `acme/widgets`.
 
 - **Reproduction:** `out/before-fix/*-item4.log`. The firing on HEAD lacks `api#ci-read` (via own.yml). It returned only after an unrelated commit was pushed (appended to `before-fix/sqlite-item4.log`).
-- **Fix:** migration 144 (`pkg/model/schedule_own_settings_migration.go`) also clears `repo_declaration_sync.commit`, so the next reconcile re-reads every repository and writes the declared grants back. It is guarded for stores older than that table. Stores that already ran 144 are not affected; they have very likely had a commit since.
+- **Fix:** new migration 147 (`rereadDeclarations`, `pkg/model/schedule_own_settings_migration.go`) clears `repo_declaration_sync.commit`, so the next reconcile re-reads every repository and writes the declared grants back. It is guarded for stores older than that table. The first version of this fix edited migration 144 in place. Review task 5817 pointed out that v3.6.0 shipped 144, so the stores that need the fix had already run it and would never run the edit. The fix is therefore its own schema version, and 144 is back as v3.6.0 shipped it.
 - **After the fix:** `out/sqlite-item4.log` and `out/postgres-item4.log`. The `commit` is empty after the upgrade, and `own`'s declared `api#ci-read` is back within the 2-minute declaration poll (109 s on SQLite, 101 s on PostgreSQL) with no commit. The next firing carries `api#ci-read` (own.yml) plus `api#memory` (nightly.yml).
-- **Regression test:** `TestMigration144ClearsTemplateCopiesOffSchedules` now also asserts the sync commit is forgotten (`pkg/model/schedule_own_settings_test.go`).
+- **Regression tests:** `TestMigration147RereadsDeclarationsOnAStorePast144` migrates a store already at 146 and asserts the sync commit is forgotten. `TestMigration144ClearsTemplateCopiesOffSchedules` (from 143) asserts the same thing. Both are in `pkg/model/schedule_own_settings_test.go`.
+- **Not re-walked:** the "after the fix" logs above were captured when the clear still lived in 144. The re-read the logs show is the same; only the migration number changed.
 
 The operator grant seeded on `free` is dropped by that re-read. That is expected: a repository schedule's grants are its file's, and any later commit does the same.
 

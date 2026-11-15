@@ -858,6 +858,49 @@ describe("AgentsPageComponent selection and inspector", () => {
     }
   });
 
+  it("selects the card whose CPU reading has focus on Enter, rather than opening the previously selected task", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    f.componentRef.setInput("task", "123");
+    f.detectChanges();
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    const cpu = q(f, '[data-testid="agent-456"] [data-testid="agent-cpu"]')!;
+    expect(cpu.getAttribute("tabindex")).toBe("0");
+    for (const key of ["Enter", " "]) {
+      cpu.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+    }
+    expect(nav).toHaveBeenCalledTimes(2);
+    for (const call of nav.mock.calls) {
+      expect(call[0]).toEqual([]);
+      expect(call[1]).toEqual(
+        expect.objectContaining({ queryParams: { task: "456" } }),
+      );
+    }
+  });
+
+  it("leaves Enter on a link inside a card to the link", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    f.componentRef.setInput("task", "123");
+    f.detectChanges();
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    const link = q(f, '[data-testid="agent-456"] .agent-title a')!;
+    const ev = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    link.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(nav).not.toHaveBeenCalled();
+  });
+
   it("selects and marks list rows like cards", async () => {
     const api = new FakeApi();
     api.live = two();
