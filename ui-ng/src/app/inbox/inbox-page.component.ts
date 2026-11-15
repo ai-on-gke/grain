@@ -1654,6 +1654,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
         return;
       case "accept-findings":
       case "force-merge":
+      case "defer-until":
       case "compact-open":
       case "rollover":
       case "follow-up":

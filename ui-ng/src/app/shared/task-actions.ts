@@ -51,6 +51,7 @@ export type TaskActionId =
   | "pause-immediate"
   | "stop"
   | "defer"
+  | "defer-until"
   | "withdraw"
   | "follow-up"
   | "compact-open"
@@ -206,7 +207,7 @@ export function whatsNeeded(t: AnyTask): string {
       return "A person must approve this proposal before it runs. Approve it, defer it or close it.";
     case "deferred":
       return t.deferredUntil
-        ? `Deferred until ${t.deferredUntil}. Bring it back to queue it sooner.`
+        ? "Deferred: it picks itself back up on the day set. Bring it back to queue it sooner."
         : "Deferred. Bring it back to queue it again.";
     case "queued":
       return "Queued: grain dispatches it on a coming cycle. Nothing is needed from you.";
@@ -417,7 +418,8 @@ export function availableActions(
   if (state === "deferred") {
     add({
       id: "undefer",
-      label: control(t) === "Undefer" ? "Undefer" : "Bring back",
+      // A stuck deferral's sub-case names its control "Undefer".
+      label: t.stall && control(t) === "Undefer" ? "Undefer" : "Bring back",
       route: "POST /api/tasks/{id}/undefer",
       variant: "tonal",
     });
@@ -480,6 +482,15 @@ export function availableActions(
       label: "Defer",
       route: "POST /api/tasks/{id}/defer",
       variant: "text",
+      tip: "Put it aside until you bring it back",
+      secondary: true,
+    });
+    add({
+      id: "defer-until",
+      label: "Defer until…",
+      route: "POST /api/tasks/{id}/defer",
+      variant: "text",
+      tip: "Put it aside until a day you pick",
       secondary: true,
     });
   }
