@@ -20,9 +20,11 @@ import {
   type SimpleChanges,
   ViewEncapsulation,
   computed,
+  effect,
   inject,
   input,
   signal,
+  untracked,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
@@ -2450,6 +2452,12 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   // by name (the server's own check, k8sNodeSelector "x" must be
   // key=value) before Save rather than after.
   protected readonly nodeSelectorDraft = signal<string | null>(null);
+  // Save and Discard both bump discardEpoch: the box reads the stored
+  // list again rather than keep what was typed.
+  private readonly nodeSelectorReset = effect(() => {
+    this.state.discardEpoch();
+    untracked(() => this.nodeSelectorDraft.set(null));
+  });
 
   protected nodeSelectorText(): string {
     const d = this.nodeSelectorDraft();
@@ -3164,6 +3172,13 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   }
 
   protected setOvercommitMode(mode: string): void {
+    // Fixed mode hides the auto bounds, so a refusal of one must not go
+    // on holding the Save bar out of sight.
+    if (mode !== "auto") {
+      for (const b of this.overcommitBounds) {
+        this.state.setFieldError(this.boundKey(b.field), null);
+      }
+    }
     const cur = this.state.val<unknown>("sandboxOvercommit", null);
     if (cur && typeof cur === "object") {
       this.state.setField("sandboxOvercommit", {

@@ -303,6 +303,15 @@ test("Sandboxes auto-overcommit bounds refuse an out-of-range bound by name and 
       "Auto CPU maximum (x) must be 0 (grain's default) or more",
     );
     await expect(page.getByTestId("settings-save-btn")).toBeDisabled();
+    // Back to fixed hides the bounds; a refusal there no longer holds Save.
+    await page.getByTestId("select-overcommit-mode").click();
+    await page.getByTestId("select-overcommit-mode-opt-fixed").click();
+    await expect(page.getByTestId("overcommit-auto-bounds")).toHaveCount(0);
+    await expect(page.getByTestId("settings-save-btn")).toHaveCount(0);
+    await page.getByTestId("select-overcommit-mode").click();
+    await page.getByTestId("select-overcommit-mode-opt-auto").click();
+    await expect(page.getByTestId("error-overcommit-cpuMax")).toHaveCount(0);
+    await expect(cpuMax).toHaveValue("6");
     await page.getByTestId("input-overcommit-cpuPressureTarget").fill("150");
     await expect(
       page.getByTestId("error-overcommit-cpuPressureTarget"),
@@ -405,6 +414,10 @@ test("Sandboxes Kubernetes card shows defaults, validates the node selector and 
       '"bogus" must be key=value',
     );
     await expect(page.getByTestId("settings-save-btn")).toBeDisabled();
+    // Discard puts back the stored list, not the typed text.
+    await page.getByTestId("settings-discard-btn").click();
+    await expect(sel).toHaveValue((before.k8sNodeSelector ?? []).join(", "));
+    await expect(card.getByTestId("error-k8sNodeSelector")).toHaveCount(0);
     await sel.fill("pool=sandboxes, zone=a");
     await card.getByTestId("input-k8sKubectl").fill("/usr/local/bin/kubectl");
     await card.getByTestId("input-k8sServiceAccount").fill("grain-sandbox");
