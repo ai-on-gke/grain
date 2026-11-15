@@ -3470,6 +3470,9 @@ func (s *Server) respondWithTask(w http.ResponseWriter, r *http.Request, id stri
 // --- request/response plumbing -----------------------------------------
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	if status >= http.StatusBadRequest {
+		w.Header().Set("Cache-Control", cacheControlNoStore)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)

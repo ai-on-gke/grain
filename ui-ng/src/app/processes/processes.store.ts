@@ -115,13 +115,16 @@ export class ProcessesStore {
 
   private eventSub: Subscription | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private configTask: Promise<void> | null = null;
   private activeCount = 0;
 
   start(): void {
     this.actionError.set(null);
     this.activeCount++;
     if (this.activeCount > 1) return;
-    void this.loadConfigAndRepos();
+    this.configTask = this.loadConfigAndRepos().finally(() => {
+      this.configTask = null;
+    });
     void this.refresh();
     this.eventSub = this.events.events().subscribe((ev) => {
       if (ev.type === "task.state") {
@@ -144,6 +147,16 @@ export class ProcessesStore {
     this.pollTimer = null;
   }
 
+  private ensureConfig(): Promise<void> {
+    if (this.configTask) return this.configTask;
+    if (this.access.configLoaded() || typeof this.api.config !== "function") {
+      return Promise.resolve();
+    }
+    return (this.configTask = this.loadConfigAndRepos().finally(() => {
+      this.configTask = null;
+    }));
+  }
+
   private async loadConfigAndRepos(): Promise<void> {
     try {
       const cfg = await this.api.config();
@@ -162,6 +175,10 @@ export class ProcessesStore {
 
   async refresh(): Promise<void> {
     if (this.activeCount === 0) return;
+    if (!this.access.configLoaded()) {
+      await this.ensureConfig();
+      if (this.activeCount === 0) return;
+    }
     try {
       const [schedRes, tmplRes, suiteRes, runsRes, accRes] = await Promise.all([
         this.access.can("GET /api/schedules")
@@ -506,6 +523,9 @@ export class ProcessesStore {
     if (!owner || !name) return;
     this.repoLoading.set(clean);
     try {
+      if (!this.access.configLoaded()) {
+        await this.ensureConfig();
+      }
       const [decl, wf] = await Promise.all([
         this.access.can("GET /api/repos/{owner}/{name}/declarations", clean)
           ? this.api

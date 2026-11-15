@@ -1,0 +1,112 @@
+== HEAD populates a store
+head-1 POST /api/tasks -> 201 id=2
+head-1 POST /api/tasks/2/comments -> 200 
+head-1 POST /api/settings -> 200
+head-1 POST /api/templates -> 201 id=template-1
+head-1 POST /api/suites -> 201 "id":"suite-1"
+head-2 POST /api/tasks -> 201 id=3
+head-2 POST /api/tasks/3/comments -> 200 
+head-2 POST /api/settings -> 200
+head-2 POST /api/templates -> 201 id=template-2
+head-2 POST /api/suites -> 201 "id":"suite-2"
+head-3 POST /api/tasks -> 201 id=4
+head-3 POST /api/tasks/4/comments -> 200 
+head-3 POST /api/settings -> 200
+head-3 POST /api/templates -> 201 id=template-3
+head-3 POST /api/suites -> 201 "id":"suite-3"
+head-4 POST /api/tasks -> 201 id=5
+head-4 POST /api/tasks/5/comments -> 200 
+head-4 POST /api/settings -> 200
+head-4 POST /api/templates -> 201 id=template-4
+head-4 POST /api/suites -> 201 "id":"suite-4"
+200 
+config_audit.id                                    33 t           33 ok
+integration_event.id                               12 t           12 ok
+secret_resolution_audit.id                          2 t            2 ok
+suite_item.id                                       4 t            4 ok
+suite_sequence.id                                   4 t            4 ok
+task_comment.id                                     5 t            5 ok
+task_event.id                                       1 t            1 ok
+task_sequence.number                                5 t            5 ok
+template_sequence.number                            4 t            4 ok
+== v3.8.0 rolls the store back: prepare-upgrade, then start (its rebuild)
+prepared 147 146 /home/debian/walk/seq/data/schema-upgrade
+grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+grain: imported this deployment's rows from /home/debian/walk/seq/data/schema-upgrade into a fresh store at schema 146
+grain: the config repository's dump was rewritten at schema 146 from the database it was imported into; the prior dump is the preceding commit in /home/debian/walk/seq/data/state-repo
+grain: this deployment's schema changed from 147 to 146. The store written at 147 is now postgres schema "public_schema147_20261115_123220" -- it is not deleted, and it is where anything this migratio
+-- sequences left by the v3.8.0 rebuild
+config_audit.id                                     1 f           33 BEHIND
+integration_event.id                                1 f           12 BEHIND
+secret_resolution_audit.id                          3 t            3 ok
+suite_item.id                                       1 f            4 BEHIND
+suite_sequence.id                                   1 f            4 BEHIND
+task_comment.id                                     1 f            5 BEHIND
+task_event.id                                       1 f            1 BEHIND
+task_sequence.number                                1 t            5 BEHIND
+template_sequence.number                            1 f            4 BEHIND
+-- v3.8.0 writes on its own rebuilt store (expected to hit the original bug)
+v380-after-rebuild POST /api/tasks -> 500 id={"error":"internal s
+FAILED: 500 {"error":"internal server error (ref 86695e410aa9)","code":"internal","ref":"86695e410aa9"}
+v380-after-rebuild POST /api/tasks/{"error":"internal s/comments ->  
+FAILED:  {"error":"internal server error (ref 86695e410aa9)","code":"internal","ref":"86695e410aa9"}
+v380-after-rebuild POST /api/settings -> 200
+v380-after-rebuild POST /api/templates -> 500 id=
+FAILED: 500 {"error":"internal server error (ref dccb01e97612)","code":"internal","ref":"dccb01e97612"}
+v380-after-rebuild POST /api/suites -> 400 
+FAILED: 400 {"error":"a suite item needs a template"}
+v3.8.0 write failed as above
+-- what v3.8.0 logged for those failures
+      8 SQLSTATE 23505)
+      5 duplicate key value violates unique constraint "config_audit_pkey"
+      2 duplicate key value violates unique constraint "task_sequence_pkey"
+      1 duplicate key value violates unique constraint "template_sequence_pkey"
+== HEAD first start on the v3.8.0-rebuilt store
+prepared 146 147 /home/debian/walk/seq/data/schema-upgrade
+grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+grain: migrated the store in place from schema 146 to 147
+grain: PostgreSQL sequence public.config_audit_id_seq for config_audit.id was behind (next=6, max=33); resynced to 33
+grain: PostgreSQL sequence public.integration_event_id_seq for integration_event.id was behind (next=1, max=12); resynced to 12
+grain: PostgreSQL sequence public.suite_item_id_seq for suite_item.id was behind (next=1, max=4); resynced to 4
+grain: PostgreSQL sequence public.suite_sequence_id_seq for suite_sequence.id was behind (next=1, max=4); resynced to 4
+grain: PostgreSQL sequence public.task_comment_id_seq for task_comment.id was behind (next=1, max=5); resynced to 5
+grain: PostgreSQL sequence public.task_event_id_seq for task_event.id was behind (next=1, max=1); resynced to 1
+grain: PostgreSQL sequence public.task_sequence_number_seq for task_sequence.number was behind (next=3, max=5); resynced to 5
+grain: PostgreSQL sequence public.template_sequence_number_seq for template_sequence.number was behind (next=2, max=4); resynced to 4
+grain: the store is already at schema 147 and /home/debian/walk/seq/data/schema-upgrade is still here, so the state repository has not been brought across yet -- doing that now
+grain: the config repository's dump was rewritten at schema 147 from the database it was imported into; the prior dump is the preceding commit in /home/debian/walk/seq/data/state-repo
+-- sequences after HEAD's first start
+config_audit.id                                    33 t           33 ok
+integration_event.id                               12 t           12 ok
+secret_resolution_audit.id                          6 t            6 ok
+suite_item.id                                       4 t            4 ok
+suite_sequence.id                                   4 t            4 ok
+task_comment.id                                     5 t            5 ok
+task_event.id                                       1 t            1 ok
+task_sequence.number                                5 t            5 ok
+template_sequence.number                            4 t            4 ok
+head-healed POST /api/tasks -> 201 id=7
+head-healed POST /api/tasks/7/comments -> 200 
+head-healed POST /api/settings -> 200
+head-healed POST /api/templates -> 201 id=template-5
+head-healed POST /api/suites -> 201 "id":"suite-5"
+== HEAD second start: nothing to resync, nothing rewound
+0
+23c23
+< secret_resolution_audit.id 6 t 6 ok
+---
+> secret_resolution_audit.id 9 t 9 ok
+head-second POST /api/tasks -> 201 id=8
+head-second POST /api/tasks/8/comments -> 200 
+head-second POST /api/settings -> 200
+head-second POST /api/templates -> 201 id=template-6
+head-second POST /api/suites -> 201 "id":"suite-6"
+config_audit.id                                    49 t           49 ok
+integration_event.id                               19 t           19 ok
+secret_resolution_audit.id                          9 t            9 ok
+suite_item.id                                       6 t            6 ok
+suite_sequence.id                                   6 t            6 ok
+task_comment.id                                     8 t            8 ok
+task_event.id                                       1 t            1 ok
+task_sequence.number                                8 t            8 ok
+template_sequence.number                            6 t            6 ok
