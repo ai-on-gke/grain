@@ -39,8 +39,10 @@ import type { ForceMergeRequest } from "./force-merge-dialog.component";
 import { TaskStore } from "./task.store";
 
 // The human-review hold source of review findings
-// (model.HumanReviewSecurityFindings).
+// (model.HumanReviewSecurityFindings) and the merge gate it blocks
+// (model.GateSecurityReview).
 const FINDINGS_SOURCE = "security-findings";
+const SECURITY_REVIEW_GATE = "security-review";
 
 const REVIEW_CATEGORIES = [
   { value: "other", label: "General review" },
@@ -424,9 +426,10 @@ const REVIEW_CATEGORIES = [
               <div class="gate-actions">
                 @if (
                   findingsHeld() &&
-                  reviewGateOpen() &&
+                  findingsGateOpen() &&
                   canForceMerge() &&
-                  can("POST /api/tasks/{id}/force-merge")
+                  can("POST /api/tasks/{id}/force-merge") &&
+                  access.isFullAccess()
                 ) {
                   <button
                     type="button"
@@ -464,14 +467,14 @@ const REVIEW_CATEGORIES = [
                 @if (!findingsOnly()) {
                   Release hold releases the other reasons only.
                 }
-                @if (reviewGateOpen()) {
-                  Review findings cannot be released directly; they require a
-                  passing re-review or an operator gate override under
-                  <code>merge:force</code>.
-                } @else {
+                @if (findingsGateOverridden()) {
                   The review gate has been overridden under
                   <code>merge:force</code>; these findings no longer block the
                   merge.
+                } @else {
+                  Review findings cannot be released directly; they require a
+                  passing re-review or an operator gate override under
+                  <code>merge:force</code>.
                 }
               </p>
             }
@@ -567,11 +570,19 @@ export class TaskGatesBarComponent {
     () =>
       this.task().state !== "closed" && !!this.task().humanReviewHold?.length,
   );
-  // Whether a review gate is still unsatisfied: once one is overridden the
-  // findings stay on the hold but no longer block, so there is nothing
-  // left to override.
-  protected readonly reviewGateOpen = computed(() =>
-    unsatisfiedGates(this.task()).some((g) => g.id.includes("review")),
+  // Whether the security-review gate that raised these findings is still
+  // unsatisfied so the force-merge dialog has that gate to override.
+  protected readonly findingsGateOpen = computed(() =>
+    unsatisfiedGates(this.task()).some((g) => g.id === SECURITY_REVIEW_GATE),
+  );
+  // Whether an operator explicitly overrode the security-review gate:
+  // checked directly rather than !findingsGateOpen() so an empty mergeGates
+  // list (e.g. before a pull request exists) never falsely claims an override,
+  // and a running code-review gate does not mask an overridden security gate.
+  protected readonly findingsGateOverridden = computed(() =>
+    (this.task().mergeGates ?? []).some(
+      (g) => g.id === SECURITY_REVIEW_GATE && g.state === "overridden",
+    ),
   );
   // What POST /api/tasks/{id}/force-merge accepts (ForceMergeWithGates): an
   // open task with a pull request, or a running one it can open one for.
@@ -810,7 +821,7 @@ export class TaskGatesBarComponent {
     );
     if (ok) {
       this.snackbar.show(
-        this.findingsHeld()
+        this.findingsHeld() && !this.findingsGateOverridden()
           ? `Released the human-review request on #${t.id}; review findings still hold it`
           : `Released human-review hold on #${t.id}`,
       );

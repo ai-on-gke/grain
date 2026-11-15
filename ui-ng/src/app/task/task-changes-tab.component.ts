@@ -170,7 +170,8 @@ import { TaskStore } from "./task.store";
 
         @if (
           (prUrl() || task().state === "awaiting_submit") &&
-          can("POST /api/tasks/{id}/force-merge")
+          can("POST /api/tasks/{id}/force-merge") &&
+          access.isFullAccess()
         ) {
           <button
             type="button"
@@ -468,7 +469,7 @@ import { TaskStore } from "./task.store";
 export class TaskChangesTabComponent {
   protected readonly store = inject(TaskStore);
   private readonly api = inject(GrainApi);
-  private readonly access = inject(AccessService);
+  protected readonly access = inject(AccessService);
   private readonly branchRefs = inject(BranchRefsService);
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);

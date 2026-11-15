@@ -48,7 +48,7 @@ async function fileTask(baseURL, code, title) {
   return (await res.json()).id;
 }
 
-async function holdWith(page, id, hold) {
+async function holdWith(page, id, hold, extra = {}) {
   await page.route(new RegExp(`/api/tasks/${id}(\\?.*)?$`), async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     // A poll's If-None-Match would get a bodiless 304 to rewrite.
@@ -71,6 +71,7 @@ async function holdWith(page, id, hold) {
             reviewTask: "9001",
           },
         ],
+        ...extra,
       },
     });
   });
@@ -144,4 +145,68 @@ test("a mixed hold keeps Release hold and shows the server's reason on refusal",
   await expect(page.getByTestId("task-action-error")).not.toContainText(
     "internal server error",
   );
+});
+
+test("distinguishes absent mergeGates from an overridden security-review gate @phone @dark", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  const noGatesId = await fileTask(
+    demoServer,
+    accessCode,
+    `No gates hold ${Date.now()}`,
+  );
+  await holdWith(page, noGatesId, [FINDINGS], {
+    pullRequest: "",
+    mergeGates: [],
+  });
+  await page.goto(`task/${noGatesId}`);
+
+  const card1 = page.getByTestId("human-review-hold");
+  await expect(card1).toBeVisible();
+  await expect(card1.getByTestId("hold-force-merge-open")).toHaveCount(0);
+  const note1 = card1.getByTestId("hold-findings-note");
+  await expect(note1).toContainText("cannot be released directly");
+  await expect(note1).not.toContainText("has been overridden");
+
+  const overriddenId = await fileTask(
+    demoServer,
+    accessCode,
+    `Overridden hold ${Date.now()}`,
+  );
+  await holdWith(page, overriddenId, [FINDINGS], {
+    mergeGates: [
+      {
+        id: "security-review",
+        label: "Security review",
+        state: "overridden",
+        reviewTask: "9001",
+      },
+      {
+        id: "review",
+        label: "Code review",
+        state: "running",
+        reviewTask: "9002",
+      },
+    ],
+  });
+  await page.goto(`task/${overriddenId}`);
+
+  const card2 = page.getByTestId("human-review-hold");
+  await expect(card2).toBeVisible();
+  await expect(card2.getByTestId("hold-force-merge-open")).toHaveCount(0);
+  const note2 = card2.getByTestId("hold-findings-note");
+  await expect(note2).toContainText("has been overridden");
+
+  const cardBox = await card2.boundingBox();
+  const noteBox = await note2.boundingBox();
+  expect(noteBox.x).toBeGreaterThanOrEqual(cardBox.x);
+  expect(noteBox.x + noteBox.width).toBeLessThanOrEqual(
+    cardBox.x + cardBox.width + 0.5,
+  );
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
 });
