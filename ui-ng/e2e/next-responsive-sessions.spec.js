@@ -19,6 +19,7 @@
 //  1. Agents auto-selected its first agent at every width above a phone,
 //     but below 1080px the inspector is a fixed sheet, so a tablet opened
 //     Agents with a sheet over the list and the top bar's right half.
+//     (main has since stopped pre-selecting at every width.)
 //  2. Sessions still offered and printed a team ("Team: default").
 //  3. A failed sessions read showed the error and "No sessions yet."
 //     together.
@@ -69,13 +70,17 @@ for (const [width, height] of [
   });
 }
 
-test("Agents still selects its first agent beside the list on a desktop", async ({
+test("Agents opens no agent unasked on a desktop and a click opens one beside the cards", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/next/agents");
-  await expect(page.getByTestId("agents-pane")).toBeVisible();
+  await expect(page.locator(".agent-card").first()).toBeVisible();
+  await expect(page.locator(".agent-card.is-selected")).toHaveCount(0);
+  await page.locator(".agent-card").first().click();
+  await expect(page).toHaveURL(/[?&]task=/);
   await expect(page.locator(".agent-card.is-selected")).toHaveCount(1);
+  await expect(page.getByTestId("agents-pane")).toBeVisible();
 });
 
 test(
