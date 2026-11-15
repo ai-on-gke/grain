@@ -326,4 +326,17 @@ describe("Settings → Models default and fallback models", () => {
       modelSettings: [{ model: "gemini-flash", effort: "high" }],
     });
   });
+
+  it("hides the effort picker for a model that takes no effort", async () => {
+    const { pick, q } = await mount();
+    await pick("picker-model-setting-model", "opus-5");
+    expect(q('[data-testid="model-setting-no-effort"]')?.textContent).toContain(
+      "Claude takes no reasoning effort.",
+    );
+    expect(q('[data-testid="select-model-setting-effort"]')).toBeNull();
+    expect(q('[data-testid="add-model-setting-btn"]')).toBeNull();
+    await pick("picker-model-setting-model", "gemini-flash");
+    expect(q('[data-testid="model-setting-no-effort"]')).toBeNull();
+    expect(q('[data-testid="add-model-setting-btn"]')).not.toBeNull();
+  });
 });

@@ -36,7 +36,9 @@ import {
   availabilityNote,
   containsModel,
   modelAvailability,
+  modelFramework,
   modelGroups,
+  noEffortReason,
   parseDefaultModels,
 } from "../shared/model-catalog";
 import { ModelPickerComponent } from "../shared/model-picker.component";
@@ -385,7 +387,19 @@ function formatRefreshedAt(iso?: string): string {
                     ) {
                       <tr [attr.data-testid]="'model-setting-row-' + ms.model">
                         <td class="s-mono">{{ ms.model }}</td>
-                        <td>{{ ms.effort || "default" }}</td>
+                        <td>
+                          {{ ms.effort || "default" }}
+                          @if (settingNoEffortReason(ms.model); as why) {
+                            <span
+                              class="s-meta"
+                              [attr.data-testid]="
+                                'model-setting-unused-' + ms.model
+                              "
+                            >
+                              (not applied: {{ why }})</span
+                            >
+                          }
+                        </td>
                         <td class="s-actions-cell">
                           <div class="s-row-actions">
                             <button
@@ -416,26 +430,32 @@ function formatRefreshedAt(iso?: string): string {
                 [disabled]="!canWriteDeployment()"
                 (valueChange)="newModelSettingName.set($event)"
               />
-              <g-pill-select
-                testid="select-model-setting-effort"
-                ariaLabel="Reasoning effort"
-                align="left"
-                [options]="effortOptions"
-                [value]="newModelSettingEffort()"
-                [disabled]="!canWriteDeployment()"
-                (valueChange)="newModelSettingEffort.set($event)"
-              />
-              <button
-                type="button"
-                class="btn-tonal s-btn-sm"
-                data-testid="add-model-setting-btn"
-                [disabled]="
-                  !newModelSettingName().trim() || !canWriteDeployment()
-                "
-                (click)="addModelSetting()"
-              >
-                Set model effort
-              </button>
+              @if (newModelSettingNoEffort()) {
+                <span class="s-hint" data-testid="model-setting-no-effort">
+                  {{ newModelSettingNoEffort() }}
+                </span>
+              } @else {
+                <g-pill-select
+                  testid="select-model-setting-effort"
+                  ariaLabel="Reasoning effort"
+                  align="left"
+                  [options]="effortOptions"
+                  [value]="newModelSettingEffort()"
+                  [disabled]="!canWriteDeployment()"
+                  (valueChange)="newModelSettingEffort.set($event)"
+                />
+                <button
+                  type="button"
+                  class="btn-tonal s-btn-sm"
+                  data-testid="add-model-setting-btn"
+                  [disabled]="
+                    !newModelSettingName().trim() || !canWriteDeployment()
+                  "
+                  (click)="addModelSetting()"
+                >
+                  Set model effort
+                </button>
+              }
             </div>
           </div>
         </div>
@@ -2069,6 +2089,12 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     this.modelChain().slice(1),
   );
   protected readonly modelGroups = computed(() => modelGroups(this.backends()));
+  // Why the model chosen for a new effort setting takes none (its name
+  // spells one, it is auto, or it is Claude's), so the effort picker is
+  // hidden rather than offering a setting the runner discards.
+  protected readonly newModelSettingNoEffort = computed(() =>
+    this.settingNoEffortReason(this.newModelSettingName()),
+  );
   protected readonly refreshingModels = signal(false);
   protected readonly refreshNote = signal("");
 
@@ -2223,9 +2249,14 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     return Array.isArray(v) ? (v as ModelSettingRow[]) : [];
   }
 
+  protected settingNoEffortReason(model: string): string {
+    const groups = this.modelGroups();
+    return noEffortReason(model, modelFramework(model, groups));
+  }
+
   protected addModelSetting(): void {
     const model = this.newModelSettingName().trim();
-    if (!model) return;
+    if (!model || this.newModelSettingNoEffort()) return;
     const effort = this.newModelSettingEffort().trim();
     const cur = this.modelSettingsRows().filter((r) => r.model !== model);
     const next: ModelSettingRow[] = [

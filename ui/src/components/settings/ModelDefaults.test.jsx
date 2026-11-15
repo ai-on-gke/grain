@@ -278,4 +278,32 @@ describe("ModelDefaults", () => {
       defaultModel: "gemini-3.1-pro",
     });
   });
+
+  // grain/task-5619: a model whose name spells its effort, auto, and
+  // Claude take no separate effort, so no picker is offered for them.
+  it("offers an effort picker only for models that take one", () => {
+    render(
+      <ModelDefaults
+        deployment={{ id: "default" }}
+        connections={[
+          {
+            id: "agy",
+            framework: "antigravity",
+            models: ["opus-5.5-high", "auto", "gemini-3-pro"],
+          },
+          { id: "cx", framework: "codex", models: ["gpt-5.1-codex-max"] },
+        ]}
+        efforts={{ gemini: ["low", "high"], codex: ["low", "high"] }}
+        onSave={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByTestId("model-no-effort-opus-5.5-high"),
+    ).toHaveTextContent("Effort is part of the model name: high.");
+    expect(screen.getByTestId("model-no-effort-auto")).toBeInTheDocument();
+    for (const id of ["gemini-3-pro", "gpt-5.1-codex-max"]) {
+      expect(screen.queryByTestId(`model-no-effort-${id}`)).toBeNull();
+    }
+    expect(screen.getAllByLabelText("Reasoning effort")).toHaveLength(2);
+  });
 });

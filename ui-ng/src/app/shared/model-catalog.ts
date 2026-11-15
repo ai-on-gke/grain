@@ -147,3 +147,53 @@ export function parseDefaultModels(source: unknown): string[] {
 export function containsModel(list: readonly string[], m: string): boolean {
   return list.some((x) => sameModel(x, m));
 }
+
+/**
+ * modelFramework is the framework of the first connection advertising m,
+ * or "" when none does.
+ */
+export function modelFramework(
+  m: string,
+  groups: readonly ModelGroup[],
+): string {
+  return groups.find((g) => containsModel(g.models, m))?.framework ?? "";
+}
+
+// The effort suffixes Antigravity's catalog spells into a model ID
+// (gemini-3.1-pro-high), as pkg/agent/antigravity's splitEffort reads them.
+const NAMED_EFFORTS = ["low", "medium", "high", "max"];
+
+/**
+ * namedEffort is the reasoning effort an Antigravity model ID carries in
+ * its own name ("high" for opus-5.5-high), or "" for one that carries
+ * none. Codex and Claude IDs never do: gpt-5.1-codex-max is a model, not
+ * an effort.
+ */
+export function namedEffort(m: string, framework: string): string {
+  const f = framework.trim().toLowerCase();
+  if (f === "codex" || f === "claude") return "";
+  const id = m.trim().toLowerCase();
+  return NAMED_EFFORTS.find((e) => id.endsWith(`-${e}`)) ?? "";
+}
+
+/**
+ * noEffortReason says why model m takes no separate reasoning effort, or
+ * "" when it does. It mirrors the runners: Claude has no effort flag,
+ * agy refuses --effort with "auto" (it picks the model, and with it the
+ * effort) and with a name that already spells one
+ * (antigravity.modelTakesNoEffort), so a setting for any of those is
+ * never applied.
+ */
+export function noEffortReason(m: string, framework: string): string {
+  const id = m.trim();
+  if (!id) return "";
+  if (framework.trim().toLowerCase() === "claude") {
+    return "Claude takes no reasoning effort.";
+  }
+  if (id.toLowerCase() === "auto") {
+    return "auto picks the model, and its effort, itself.";
+  }
+  const named = namedEffort(id, framework);
+  if (named) return `Effort is part of the model name: ${named}.`;
+  return "";
+}
