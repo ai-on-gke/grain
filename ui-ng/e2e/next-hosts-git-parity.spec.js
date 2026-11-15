@@ -367,3 +367,40 @@ test("No git connection: New task and Repos say so and link to Settings → Git"
   await sheetNotice.getByRole("link").click();
   await expect(page).toHaveURL(/\/next\/settings\/git$/);
 });
+
+// The new fields and banners stay inside their cards at every width: the
+// tables scroll in their own wrap, and nothing else pushes the page sideways.
+test("Hosts and Git controls fit their cards @phone @dark", async ({
+  page,
+}) => {
+  const fits = async (cards) => {
+    for (const id of cards) {
+      const card = page.getByTestId(id);
+      await expect(card).toBeVisible();
+      const outside = await card.evaluate((el) => {
+        const box = el.getBoundingClientRect();
+        const bad = [];
+        for (const n of el.querySelectorAll(
+          ".s-field, .s-banner, .s-hint, .s-subhead, form, button",
+        )) {
+          if (n.closest(".s-table-wrap")) continue;
+          const r = n.getBoundingClientRect();
+          if (r.width === 0) continue;
+          if (r.left < box.left - 1 || r.right > box.right + 1) {
+            bad.push(`${n.className || n.tagName}: ${r.left}-${r.right}`);
+          }
+        }
+        return bad;
+      });
+      expect(outside, id).toEqual([]);
+    }
+    const sideways = await page.evaluate(
+      () => document.documentElement.scrollWidth > window.innerWidth + 1,
+    );
+    expect(sideways).toBe(false);
+  };
+  await page.goto("/next/settings/hostds");
+  await fits(["card-hostds-list", "card-hostds-enrollment"]);
+  await page.goto("/next/settings/git");
+  await fits(["card-git-connections"]);
+});
