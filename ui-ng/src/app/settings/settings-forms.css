@@ -385,8 +385,70 @@
   scroll-margin-top: 80px;
 }
 
-/* A secret's value is masked as it is typed (a textarea, so a PEM keeps
-   its newlines), the way the GitHub token field's type="password" is. */
-.s-masked {
-  -webkit-text-security: disc;
+/* A card a config-repo lock makes read-only is dimmed, so what is still
+   usable beside it (stored secrets) stands out. */
+.s-dimmed {
+  opacity: 0.6;
+}
+.s-card.s-dimmed:focus-within {
+  opacity: 1;
+}
+
+.s-wrap {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Stored secrets: one row per secret, its keys as chips each with its
+   own Replace / Remove, the secret's own Remove on the right. */
+.s-secret-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.s-secret-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: 10px;
+  min-width: 0;
+}
+.s-secret-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.s-secret-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.s-secret-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 10px;
+  border-radius: 999px;
+  background: var(--md-sys-color-surface-container-high);
+  overflow-wrap: anywhere;
+}
+.s-file-btn {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.s-file-btn.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+.s-retired code {
+  font-size: 12px;
 }
