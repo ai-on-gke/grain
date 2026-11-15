@@ -314,3 +314,122 @@ test("Hosts says host, not hostd", async ({ page }) => {
   const text = await page.locator("main").innerText();
   expect(text).not.toMatch(/\bhostds?\b/i);
 });
+
+test("Git connections: reusing a plain-host credential keeps it a git host", async ({
+  page,
+  request,
+}) => {
+  const plainHost = "git-reuse.walk.example.test";
+  const cleanup = async () => {
+    const conns = await (
+      await request.get("/api/deployment/git-connections")
+    ).json();
+    const creds = new Set(
+      conns.filter((c) => c.host === plainHost).map((c) => c.credential),
+    );
+    for (const cred of creds) {
+      await request.delete(
+        "/api/deployment/git-connections/" + encodeURIComponent(cred),
+      );
+    }
+  };
+  await page.goto("/next/settings/git");
+  const rows = page.locator('table[aria-label="Git connections"] tbody tr');
+  try {
+    // A token on a plain git host.
+    await page.getByTestId("input-git-conn-host").fill(plainHost);
+    await page.getByTestId("select-git-conn-kind").click();
+    await page.getByTestId("select-git-conn-kind-opt-git").click();
+    await page.getByTestId("input-git-conn-secret").fill("walk-token-not-real");
+    await page.getByTestId("save-git-conn-btn").click();
+    await expect(rows.filter({ hasText: plainHost })).toHaveCount(1);
+    const conns = await (
+      await request.get("/api/deployment/git-connections")
+    ).json();
+    const cred = conns.find((c) => c.host === plainHost).credential;
+
+    // The same credential again, for one repository: the kind picked
+    // here reaches the server, which otherwise reads it as github and
+    // rewrites the credential's host record.
+    await page.getByTestId("select-git-conn-mode").click();
+    await page.getByTestId("select-git-conn-mode-opt-existing").click();
+    await page.getByTestId("input-git-conn-name").fill(cred);
+    await page.getByTestId("input-git-conn-host").fill(plainHost);
+    await page.getByTestId("select-git-conn-kind").click();
+    await page.getByTestId("select-git-conn-kind-opt-git").click();
+    await page.getByTestId("input-git-conn-scope").fill("walk/reuse");
+    const saved = page.waitForResponse(
+      (r) =>
+        r.url().endsWith("/api/deployment/git-connections") &&
+        r.request().method() === "POST",
+    );
+    await page.getByTestId("save-git-conn-btn").click();
+    const res = await saved;
+    expect(JSON.parse(res.request().postData())).toMatchObject({
+      credential: cred,
+      kind: "git",
+      scope: "walk/reuse",
+    });
+    expect(res.status()).toBe(200);
+    await page.reload();
+    const reused = rows.filter({ hasText: plainHost });
+    await expect(reused).toHaveCount(2);
+    for (const r of await reused.all()) {
+      await expect(r).toContainText("git host");
+    }
+  } finally {
+    await cleanup();
+  }
+});
+
+test("Capabilities: failed and host-placed servers read as such, and an old section name scrolls in-app", async ({
+  page,
+  request,
+}) => {
+  const failedId = "https://capabilities.walk.example.test/unreachable";
+  const placedId = "https://capabilities.walk.example.test/placed";
+  // The demo daemon does not route placed servers to a host, so it
+  // cannot report needs-hostd:<host> itself: this one row is added to
+  // the real server's answer (documented in the 2026-11-13 report).
+  await page.route("**/api/capability-servers", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const res = await route.fetch();
+    const body = await res.json();
+    body.push({
+      id: placedId,
+      config: { command: "walk-tool", run: "host", hostd: "away-box" },
+      status: { id: placedId, state: "needs-hostd:away-box" },
+    });
+    await route.fulfill({ response: res, json: body });
+  });
+  await request.put("/api/capability-servers", {
+    data: { id: failedId, config: { serverUrl: "http://127.0.0.1:9/mcp" } },
+  });
+  try {
+    await page.goto("/next/settings/capabilities");
+    const placed = page.getByTestId("cap-server-state-" + placedId);
+    await expect(placed).toHaveText("needs host away-box");
+    await expect(placed).toHaveClass(/blast/);
+    const failed = page.getByTestId("cap-server-state-" + failedId);
+    await expect(async () => {
+      await page.reload();
+      await expect(failed).toHaveText("failed", { timeout: 1000 });
+    }).toPass({ timeout: 15000 });
+    await expect(failed).toHaveClass(/error/);
+    await expect(failed).toHaveAttribute("title", /127\.0\.0\.1:9/);
+  } finally {
+    await request.post("/api/capability-servers/remove", {
+      data: { id: failedId },
+    });
+  }
+
+  // In-app navigation to an old section name, with no #fragment, still
+  // lands on its card: the page component is reused across sections.
+  await page.goto("/next/settings/engine");
+  await expect(page.getByTestId("input-poll-interval")).toBeVisible();
+  await page.evaluate(() => {
+    history.pushState({}, "", "/next/settings/secrets");
+    dispatchEvent(new PopStateEvent("popstate", { state: {} }));
+  });
+  await expect(page.locator("#other-secrets")).toBeInViewport();
+});
