@@ -20,9 +20,19 @@ import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
 import {
   RepoDetailPageComponent,
+  importIntervalSeconds,
+  importIntervalText,
   importOutcomeText,
   releaseActionReasons,
 } from "./repo-detail-page.component";
+import {
+  planFormOf,
+  planPayload,
+  qualifiableTemplates,
+  repeatError,
+  withoutDanglingDependencies,
+} from "./repo-qualification-plan.component";
+import { saidLabel } from "./repo-work-ownership.component";
 
 interface RepoCall {
   method: string;
@@ -35,6 +45,38 @@ class FakeRepoApi {
   calls: RepoCall[] = [];
   ciMode = "grain";
   refusePut: string | null = null;
+  refuseMessage = 'ciMode: must be "grain", "github", or "none"';
+  issueImport: Record<string, unknown> = {
+    enabled: true,
+    label: "grain-ready",
+    repo: "",
+    approved: false,
+    intervalSeconds: 600,
+    effectiveIntervalSeconds: 600,
+  };
+  ciCapabilities: string[] = ["github-token"];
+  plan: Record<string, unknown> = {
+    configured: true,
+    requireApproval: false,
+    autoPromote: true,
+    items: [{ templateId: "smoke", repeat: 1, dependsOn: [] }],
+  };
+  work: Record<string, unknown> = {
+    repo: "acme/platform",
+    default: "",
+    defaultRuns: true,
+    items: [
+      { item: "release", kind: "release", override: "", runs: true },
+      {
+        item: "nightly",
+        kind: "schedule",
+        title: "Nightly sweep",
+        override: "off",
+        runs: false,
+        declaration: { path: ".grain/schedules/nightly.yml" },
+      },
+    ],
+  };
 
   configBody: GrainConfig = {
     version: "v3.6.0",
@@ -44,7 +86,11 @@ class FakeRepoApi {
       full: true,
       scopes: [],
     },
-  };
+    ciCapabilities: [
+      { id: "github-token", name: "GitHub token", ready: true },
+      { id: "docker-hub", name: "Docker Hub push", ready: true },
+    ],
+  } as GrainConfig;
 
   config = () => Promise.resolve(structuredClone(this.configBody));
 
@@ -62,7 +108,25 @@ class FakeRepoApi {
         ciMode: this.ciMode,
         mergeOnGreen: true,
         requireBranchUpToDate: false,
+        issueImport: this.issueImport,
       });
+    }
+    if (key === "GET /api/repos/{owner}/{name}/ci-capabilities") {
+      return Promise.resolve({ ciCapabilities: this.ciCapabilities });
+    }
+    if (key === "GET /api/repos/{owner}/{name}/qualification-plan") {
+      return Promise.resolve(structuredClone(this.plan));
+    }
+    if (key === "GET /api/repos/{owner}/{name}/work-ownership") {
+      return Promise.resolve(structuredClone(this.work));
+    }
+    if (key === "GET /api/templates") {
+      return Promise.resolve([
+        { id: "smoke", name: "Smoke test" },
+        { id: "soak", name: "Soak" },
+        { id: "other-bound", name: "Bound elsewhere", repo: "acme/other" },
+        { id: "builtin", name: "Built-in", system: true },
+      ]);
     }
     if (key === "GET /api/deployment/git-connections") {
       return Promise.resolve([
@@ -105,9 +169,7 @@ class FakeRepoApi {
       // is already rejected when the component awaits it is reported
       // by zone.js as unhandled before the await attaches.
       return new Promise((_, reject) =>
-        setTimeout(() =>
-          reject(new Error('ciMode: must be "grain", "github", or "none"')),
-        ),
+        setTimeout(() => reject(new Error(this.refuseMessage))),
       );
     }
     return Promise.resolve({ ok: true });
@@ -458,5 +520,396 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       { baseRepairBypassesHumanGates: true },
       { baseRepairBypassesHumanGates: false },
     ]);
+  });
+  // 2026-11-14 repository walkthrough parity gaps: the issue-import
+  // interval, the CI capabilities card, work ownership and the
+  // qualification plan were on the classic page only.
+  it("reads, validates and saves the issue-import interval, and guards it", async () => {
+    const { el, api, harness } = await mountRepo("/repos/acme/platform");
+    const box = () =>
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-import-interval"]',
+      )!;
+    expect(box().value).toBe("10");
+    expect(box().placeholder).toBe("10");
+
+    box().value = "0";
+    box().dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-issue-import-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(box().getAttribute("aria-invalid")).toBe("true");
+    expect(box().getAttribute("aria-describedby")).toBe("imp-interval-err");
+    expect(
+      el.querySelector('[data-testid="import-interval-error"]')?.textContent,
+    ).toContain("at least 1");
+    expect(
+      api.calls.some((c) => c.key === "PUT /api/repos/{owner}/{name}/settings"),
+    ).toBe(false);
+
+    // The next edit clears the refusal.
+    box().value = "15";
+    box().dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    expect(box().getAttribute("aria-invalid")).toBeNull();
+
+    // An unsaved interval is an unsaved edit: switching tab asks.
+    el.querySelector<HTMLButtonElement>('[data-testid="repo-tab-ci"]')!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("issue import");
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-issue-import-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    const put = api.calls.find(
+      (c) => c.key === "PUT /api/repos/{owner}/{name}/settings",
+    );
+    expect(put?.body).toMatchObject({ issueImportIntervalSeconds: 900 });
+  });
+
+  it("says a server-refused interval beside its box, not in the banner", async () => {
+    const api = new FakeRepoApi();
+    api.refusePut = "PUT /api/repos/{owner}/{name}/settings";
+    api.refuseMessage =
+      "issueImportIntervalSeconds: must be 0 for the default or at least 60";
+    const { el, harness } = await mountRepo("/repos/acme/platform", api);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-issue-import-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="import-interval-error"]')?.textContent,
+    ).toContain("at least 60");
+    expect(el.querySelector('[data-testid="repo-error-banner"]')).toBeNull();
+  });
+
+  it("toggles a CI capability, and puts it back with the reason when refused", async () => {
+    const api = new FakeRepoApi();
+    const { el, harness } = await mountRepo("/repos/acme/platform/ci", api);
+    const card = el.querySelector('[data-testid="card-repo-ci-capabilities"]')!;
+    expect(card).not.toBeNull();
+    expect(el.querySelectorAll("select").length).toBe(0);
+    const pill = (id: string) =>
+      card.querySelector<HTMLButtonElement>(
+        `[data-testid="repo-ci-caps-cap-${id}"]`,
+      )!;
+    expect(pill("github-token").getAttribute("aria-pressed")).toBe("true");
+    expect(pill("docker-hub").getAttribute("aria-pressed")).toBe("false");
+
+    pill("docker-hub").click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      api.calls.filter(
+        (c) => c.key === "PUT /api/repos/{owner}/{name}/ci-capabilities",
+      )[0]?.body,
+    ).toEqual({ ciCapabilities: ["github-token", "docker-hub"] });
+
+    api.refusePut = "PUT /api/repos/{owner}/{name}/ci-capabilities";
+    api.refuseMessage = "capability github-token is not offered to CI";
+    pill("github-token").click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      card.querySelector('[data-testid="ci-capabilities-error"]')?.textContent,
+    ).toContain("not offered to CI");
+    expect(
+      card
+        .querySelector('[role="group"][aria-label="CI capabilities"]')!
+        .getAttribute("aria-invalid"),
+    ).toBe("true");
+    expect(pill("github-token").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("draws work ownership's three states and saves one item at a time", async () => {
+    const api = new FakeRepoApi();
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases",
+      api,
+    );
+    const card = el.querySelector('[data-testid="card-repo-work-ownership"]')!;
+    expect(card).not.toBeNull();
+    expect(
+      card.querySelector('[data-testid="work-item-said-nightly"]')?.textContent,
+    ).toContain("Off, set here");
+    expect(
+      card.querySelector('[data-testid="work-item-runs-nightly"]')?.textContent,
+    ).toContain("Not run");
+    expect(
+      card.querySelector('[data-testid="work-item-said-release"]')?.textContent,
+    ).toContain("Nobody has said");
+    const off = card.querySelector<HTMLButtonElement>(
+      'button[aria-label="Nightly sweep: off"]',
+    )!;
+    expect(off.getAttribute("aria-pressed")).toBe("true");
+
+    card
+      .querySelector<HTMLButtonElement>(
+        'button[aria-label="Nightly sweep: say nothing"]',
+      )!
+      .click();
+    await new Promise((r) => setTimeout(r, 10));
+    card
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="switch-work-ownership-default"]',
+      )!
+      .click();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(
+      api.calls
+        .filter((c) => c.key === "PUT /api/repos/{owner}/{name}/work-ownership")
+        .map((c) => c.body),
+    ).toEqual([{ item: "nightly", state: "" }, { default: "off" }]);
+
+    api.refusePut = "PUT /api/repos/{owner}/{name}/work-ownership";
+    api.refuseMessage = "work ownership: unknown state";
+    card
+      .querySelector<HTMLButtonElement>('button[aria-label="release: on"]')!
+      .click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    const group = card.querySelector('[role="group"][aria-label="release"]')!;
+    expect(group.getAttribute("aria-invalid")).toBe("true");
+    expect(
+      card.querySelector(`#${group.getAttribute("aria-describedby")}`)
+        ?.textContent,
+    ).toContain("unknown state");
+  });
+
+  it("edits, validates, guards and saves the qualification plan", async () => {
+    const api = new FakeRepoApi();
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases",
+      api,
+    );
+    const card = () =>
+      el.querySelector('[data-testid="card-repo-qualification-plan"]')!;
+    const save = () =>
+      card().querySelector<HTMLButtonElement>(
+        '[data-testid="save-qualification-plan"]',
+      )!;
+    expect(
+      card().querySelector('[data-testid="qualification-item-template-0"]')
+        ?.textContent,
+    ).toContain("Smoke test");
+    expect(save().disabled).toBe(true);
+    expect(el.querySelectorAll("select").length).toBe(0);
+
+    card()
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="qualification-add-item"]',
+      )!
+      .click();
+    harness.detectChanges();
+    card()
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="qualification-item-template-1"]',
+      )!
+      .click();
+    harness.detectChanges();
+    const opts = [
+      ...card().querySelectorAll<HTMLElement>(
+        '[data-testid^="qualification-item-template-1-opt-"]',
+      ),
+    ].map((o) => o.dataset["testid"]!.replace(/.*-opt-/, ""));
+    // Neither a built-in template nor one bound to another repo.
+    expect(opts).toEqual(["", "smoke", "soak"]);
+    card()
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="qualification-item-template-1-opt-soak"]',
+      )!
+      .click();
+    harness.detectChanges();
+    card()
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="qualification-item-dep-1-smoke"]',
+      )!
+      .click();
+    harness.detectChanges();
+
+    const repeat = card().querySelector<HTMLInputElement>(
+      '[data-testid="qualification-item-repeat-1"]',
+    )!;
+    repeat.value = "0";
+    repeat.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    expect(repeat.getAttribute("aria-invalid")).toBe("true");
+    expect(save().disabled).toBe(true);
+    repeat.value = "3";
+    repeat.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    expect(repeat.getAttribute("aria-invalid")).toBeNull();
+
+    // An unsaved plan is an unsaved edit; Discard puts the saved plan back.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repo-tab-branches"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("qualification plan");
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+
+    save().click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      api.calls.find(
+        (c) => c.key === "PUT /api/repos/{owner}/{name}/qualification-plan",
+      )?.body,
+    ).toEqual({
+      requireApproval: false,
+      autoPromote: true,
+      items: [
+        { templateId: "smoke", repeat: 1, dependsOn: [] },
+        { templateId: "soak", repeat: 3, dependsOn: ["smoke"] },
+      ],
+    });
+    expect(save().disabled).toBe(true);
+
+    // A refusal is said under the form and the edit stays on screen.
+    api.refusePut = "PUT /api/repos/{owner}/{name}/qualification-plan";
+    api.refuseMessage = "qualification plan has a dependency cycle";
+    card()
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="switch-qualification-require-approval"]',
+      )!
+      .click();
+    harness.detectChanges();
+    save().click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      card().querySelector('[data-testid="qualification-plan-error"]')
+        ?.textContent,
+    ).toContain("dependency cycle");
+    expect(
+      card()
+        .querySelector('[data-testid="switch-qualification-require-approval"]')!
+        .getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  it("shows the new cards read-only, with the reason, to a role that cannot write them", async () => {
+    const api = new FakeRepoApi();
+    api.configBody = {
+      ...api.configBody,
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: [
+          "repos:read",
+          "releases:read",
+          "capabilities:read",
+          "templates:read",
+          "settings:read",
+        ],
+      },
+    } as GrainConfig;
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases",
+      api,
+    );
+    const work = el.querySelector('[data-testid="card-repo-work-ownership"]')!;
+    expect(
+      [...work.querySelectorAll<HTMLButtonElement>("button")].every(
+        (b) => b.disabled,
+      ),
+    ).toBe(true);
+    expect(
+      work.querySelector('[data-testid="work-ownership-denied"]')?.textContent,
+    ).toContain("repos:write");
+    const plan = el.querySelector(
+      '[data-testid="card-repo-qualification-plan"]',
+    )!;
+    expect(
+      plan.querySelector<HTMLButtonElement>(
+        '[data-testid="save-qualification-plan"]',
+      )!.disabled,
+    ).toBe(true);
+    expect(
+      plan.querySelector('[data-testid="qualification-plan-denied"]')
+        ?.textContent,
+    ).toContain("releases:write");
+
+    el.querySelector<HTMLButtonElement>('[data-testid="repo-tab-ci"]')!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    const ci = el.querySelector('[data-testid="card-repo-ci-capabilities"]')!;
+    expect(
+      ci.querySelector<HTMLButtonElement>(
+        '[data-testid="repo-ci-caps-cap-docker-hub"]',
+      )!.disabled,
+    ).toBe(true);
+    expect(
+      ci.querySelector('[data-testid="ci-capabilities-denied"]')?.textContent,
+    ).toContain("capabilities:admin");
+    expect(api.calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  it("keeps the plan, interval and ownership helpers to the classic rules", () => {
+    expect(importIntervalText(0)).toBe("");
+    expect(importIntervalText(900)).toBe("15");
+    expect(importIntervalSeconds("")).toEqual({ seconds: 0, error: null });
+    expect(importIntervalSeconds("5")).toEqual({ seconds: 300, error: null });
+    expect(importIntervalSeconds("0.5").error).toContain("at least 1");
+    expect(importIntervalSeconds("abc").error).toContain("at least 1");
+
+    expect(saidLabel("on")).toBe("On, set here");
+    expect(saidLabel("off")).toBe("Off, set here");
+    expect(saidLabel("")).toBe("Nobody has said");
+
+    expect(repeatError("1")).toBe("");
+    expect(repeatError("0")).not.toBe("");
+    expect(repeatError("1.5")).not.toBe("");
+
+    expect(
+      withoutDanglingDependencies([
+        { templateId: "a", repeat: "1", dependsOn: ["b", "gone"] },
+        { templateId: "b", repeat: "1", dependsOn: [] },
+      ])[0].dependsOn,
+    ).toEqual(["b"]);
+
+    const form = planFormOf({
+      requireApproval: true,
+      items: [{ templateId: "a", repeat: 2, dependsOn: null }],
+    });
+    form.items.push({ templateId: "", repeat: "1", dependsOn: [] });
+    expect(planPayload(form)).toEqual({
+      requireApproval: true,
+      autoPromote: false,
+      items: [{ templateId: "a", repeat: 2, dependsOn: [] }],
+    });
+
+    expect(
+      qualifiableTemplates(
+        [
+          { id: "x", name: "x", title: "", description: "" },
+          { id: "y", name: "y", title: "", description: "", repo: "Acme/P" },
+          { id: "z", name: "z", title: "", description: "", repo: "o/q" },
+          { id: "s", name: "s", title: "", description: "", system: true },
+        ],
+        "acme/p",
+      ).map((t) => t.id),
+    ).toEqual(["x", "y"]);
   });
 });

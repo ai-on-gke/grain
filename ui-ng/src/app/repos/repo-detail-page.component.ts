@@ -25,6 +25,7 @@ import {
   inject,
   input,
   signal,
+  viewChild,
 } from "@angular/core";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Subscription } from "rxjs";
@@ -42,6 +43,10 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import type { CapabilityOption } from "../api/models";
+import { RepoCICapabilitiesComponent } from "./repo-ci-capabilities.component";
+import { RepoQualificationPlanComponent } from "./repo-qualification-plan.component";
+import { RepoWorkOwnershipComponent } from "./repo-work-ownership.component";
 
 export type RepoTabId =
   "overview" | "ci" | "merge-queue" | "agents" | "branches" | "releases";
@@ -141,6 +146,32 @@ interface ImportFields {
   label: string;
   repo: string;
   approved: boolean;
+  // interval is the "Every (minutes)" box's text, empty for the default.
+  interval: string;
+}
+
+// importIntervalText is a stored issue-import interval in the box's own
+// shape: whole minutes, empty for the default (0).
+export function importIntervalText(seconds: number | undefined): string {
+  return seconds ? String(Math.round(seconds / 60)) : "";
+}
+
+// importIntervalSeconds reads the "Every (minutes)" box: 0 for empty (the
+// default), the seconds otherwise, or an error for anything the server
+// would refuse (PUT .../settings: 0 or at least a minute).
+export function importIntervalSeconds(
+  text: string,
+): { seconds: number; error: null } | { seconds: null; error: string } {
+  const t = text.trim();
+  if (t === "") return { seconds: 0, error: null };
+  const n = Number(t);
+  if (!Number.isFinite(n) || n < 1) {
+    return {
+      seconds: null,
+      error: "Every (minutes) must be at least 1, or empty for the default.",
+    };
+  }
+  return { seconds: Math.round(n * 60), error: null };
 }
 
 interface AgentFields {
@@ -194,7 +225,14 @@ interface PendingReleaseRow {
 
 @Component({
   selector: "g-repo-detail-page",
-  imports: [RouterLink, PillSelectComponent, ConfirmDialogComponent],
+  imports: [
+    RouterLink,
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    RepoCICapabilitiesComponent,
+    RepoQualificationPlanComponent,
+    RepoWorkOwnershipComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
@@ -461,6 +499,48 @@ interface PendingReleaseRow {
                         "
                       />
                     </div>
+                    <div class="s-field">
+                      <label class="s-label" for="imp-interval"
+                        >Every (minutes)</label
+                      >
+                      <input
+                        id="imp-interval"
+                        class="s-input s-num"
+                        type="number"
+                        min="1"
+                        data-testid="input-import-interval"
+                        [placeholder]="importEffectiveMinutes()"
+                        [value]="importInterval()"
+                        [disabled]="!canWriteSettings()"
+                        [attr.aria-invalid]="
+                          importIntervalError() ? 'true' : null
+                        "
+                        [attr.aria-describedby]="
+                          importIntervalError()
+                            ? 'imp-interval-err'
+                            : 'imp-interval-hint'
+                        "
+                        (input)="
+                          importInterval.set($any($event.target).value);
+                          importIntervalError.set(null)
+                        "
+                      />
+                      @if (importIntervalError(); as ivErr) {
+                        <span
+                          id="imp-interval-err"
+                          class="s-field-error"
+                          data-testid="import-interval-error"
+                          >{{ ivErr }}</span
+                        >
+                      } @else {
+                        <span id="imp-interval-hint" class="s-caption"
+                          >Empty for the default ({{
+                            importEffectiveMinutes()
+                          }}
+                          minutes now).</span
+                        >
+                      }
+                    </div>
                   </div>
 
                   <div class="s-inline">
@@ -657,6 +737,12 @@ interface PendingReleaseRow {
                     </div>
                   </div>
                 </div>
+
+                <g-repo-ci-capabilities
+                  [repo]="repoSlug()"
+                  [configRepoOnly]="configRepoOnly()"
+                  [offered]="ciCapabilityOptions()"
+                />
               }
 
               @case ("merge-queue") {
@@ -878,6 +964,16 @@ interface PendingReleaseRow {
               }
 
               @case ("releases") {
+                <!-- Who runs this repository's standing work, directly
+                     above the card that writes one item of it: the release
+                     switch below is the release item's own override, and
+                     this is the default it is an exception to. -->
+                <g-repo-work-ownership
+                  [repo]="repoSlug()"
+                  [refreshKey]="releaseSaves()"
+                  (saved)="onWorkOwnershipSaved()"
+                />
+
                 <div class="s-card" data-testid="card-repo-release-settings">
                   <div class="s-card-head">
                     <div>
@@ -1313,6 +1409,11 @@ interface PendingReleaseRow {
                     </p>
                   }
                 </div>
+
+                <g-repo-qualification-plan
+                  [repo]="repoSlug()"
+                  [configRepoOnly]="configRepoOnly()"
+                />
               }
             }
           }
@@ -1366,6 +1467,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly importLabel = signal("");
   protected readonly importSourceRepo = signal("");
   protected readonly importApproved = signal(false);
+  protected readonly importInterval = signal("");
+  // The interval the importer runs at now, in minutes: the stored one or
+  // the deployment default, shown as the empty box's placeholder.
+  protected readonly importEffectiveMinutes = signal("");
+  protected readonly importIntervalError = signal<string | null>(null);
   protected readonly importing = signal(false);
   protected readonly importOutcome = signal<{
     error: boolean;
@@ -1394,6 +1500,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     label: "",
     repo: "",
     approved: false,
+    interval: "",
   });
   private readonly agentBaseline = signal<AgentFields>({
     setup: "",
@@ -1409,7 +1516,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       ib.enabled !== this.importEnabled() ||
       ib.label !== this.importLabel() ||
       ib.repo !== this.importSourceRepo() ||
-      ib.approved !== this.importApproved()
+      ib.approved !== this.importApproved() ||
+      ib.interval !== this.importInterval()
     ) {
       out.push("issue import");
     }
@@ -1424,6 +1532,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     if (this.workflowBaseline() !== workflowKey(this.workflows())) {
       out.push("CI workflows");
     }
+    if (this.planEditor()?.dirty()) {
+      out.push("qualification plan");
+    }
     return out;
   });
 
@@ -1436,6 +1547,13 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   protected readonly newBranchFrom = signal("main");
 
   protected readonly releaseEnabled = signal(false);
+  // releaseSaves counts saves of the release switch, which is the release
+  // item's own work-ownership override, so the ownership card re-reads.
+  protected readonly releaseSaves = signal(0);
+  private readonly planEditor = viewChild(RepoQualificationPlanComponent);
+  protected readonly ciCapabilityOptions = signal<readonly CapabilityOption[]>(
+    [],
+  );
   protected readonly baseBranchJobsText = signal("");
   protected readonly postMergeJobsText = signal("");
   protected readonly releaseSecrets = signal<RepoReleaseSecretRow[]>([]);
@@ -1580,6 +1698,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       label: this.importLabel(),
       repo: this.importSourceRepo(),
       approved: this.importApproved(),
+      interval: this.importInterval(),
     });
   }
 
@@ -1612,6 +1731,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     this.importLabel.set(ib.label);
     this.importSourceRepo.set(ib.repo);
     this.importApproved.set(ib.approved);
+    this.importInterval.set(ib.interval);
+    this.importIntervalError.set(null);
+    this.planEditor()?.revert();
     const ab = this.agentBaseline();
     this.setupCommand.set(ab.setup);
     this.promptExtension.set(ab.prompt);
@@ -1662,6 +1784,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
             rec["settingsLocked"],
           ),
         );
+        // The capabilities CI shells can be given; a server that sends
+        // no list of its own offers the task ones, as the classic page reads.
+        const ciCaps = (rec["ciCapabilities"] ?? rec["capabilities"]) as
+          CapabilityOption[] | undefined;
+        this.ciCapabilityOptions.set(Array.isArray(ciCaps) ? ciCaps : []);
       }
       await Promise.all([this.loadCoreRepo(), this.loadTabData()]);
       this.ready.set(true);
@@ -1730,6 +1857,8 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
                   label?: string;
                   repo?: string;
                   approved?: boolean;
+                  intervalSeconds?: number;
+                  effectiveIntervalSeconds?: number;
                 }
               | undefined;
             if (imp && typeof imp === "object") {
@@ -1737,6 +1866,12 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
               this.importLabel.set(String(imp.label ?? ""));
               this.importSourceRepo.set(String(imp.repo ?? ""));
               this.importApproved.set(Boolean(imp.approved));
+              this.importInterval.set(importIntervalText(imp.intervalSeconds));
+              this.importEffectiveMinutes.set(
+                imp.effectiveIntervalSeconds
+                  ? String(Math.round(imp.effectiveIntervalSeconds / 60))
+                  : "",
+              );
             }
             this.markImportSaved();
             this.agentBaseline.update((b) => ({
@@ -1988,21 +2123,34 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async saveIssueImportSettings(): Promise<void> {
+    const interval = importIntervalSeconds(this.importInterval());
+    if (interval.error !== null) {
+      this.importIntervalError.set(interval.error);
+      return;
+    }
     try {
-      await this.api.put(
-        "PUT /api/repos/{owner}/{name}/settings",
-        this.params(),
-        {
-          issueImportEnabled: this.importEnabled(),
-          issueImportLabel: this.importLabel().trim(),
-          issueImportRepo: this.importSourceRepo().trim(),
-          issueImportApproved: this.importApproved(),
-        },
-      );
+      const res = await this.api.put<{
+        issueImport?: { effectiveIntervalSeconds?: number };
+      }>("PUT /api/repos/{owner}/{name}/settings", this.params(), {
+        issueImportEnabled: this.importEnabled(),
+        issueImportLabel: this.importLabel().trim(),
+        issueImportRepo: this.importSourceRepo().trim(),
+        issueImportApproved: this.importApproved(),
+        issueImportIntervalSeconds: interval.seconds,
+      });
+      const eff = res?.issueImport?.effectiveIntervalSeconds;
+      if (eff) this.importEffectiveMinutes.set(String(Math.round(eff / 60)));
       this.markImportSaved();
       this.snackbar.show("Issue importer settings saved");
     } catch (err) {
-      this.error.set(errText(err));
+      const text = errText(err);
+      // The interval is the one field here the server refuses by name;
+      // say so beside it rather than in the page-wide banner.
+      if (/issueImportIntervalSeconds/.test(text)) {
+        this.importIntervalError.set(text);
+      } else {
+        this.error.set(text);
+      }
     }
   }
 
@@ -2193,9 +2341,26 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       if (res && typeof res === "object") {
         this.applyReleaseSettings(res);
       }
+      this.releaseSaves.update((n) => n + 1);
       this.snackbar.show("Release settings saved");
     } catch (err) {
       this.error.set(errText(err));
+    }
+  }
+
+  // onWorkOwnershipSaved re-reads the release settings: the release
+  // item's override is what the release switch shows.
+  protected async onWorkOwnershipSaved(): Promise<void> {
+    if (!this.can("GET /api/repos/{owner}/{name}/release")) return;
+    try {
+      this.applyReleaseSettings(
+        await this.api.get<Record<string, unknown>>(
+          "GET /api/repos/{owner}/{name}/release",
+          this.params(),
+        ),
+      );
+    } catch {
+      // Non-fatal: the card itself already says what was stored.
     }
   }
 
