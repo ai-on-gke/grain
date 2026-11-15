@@ -298,3 +298,21 @@ browser stayed in the loop.
   All 9 tests in the file pass.
 - **Full suites:** `vitest run src/app` passed (452 tests), and so did the
   full `ui-ng` Playwright suite, including `next-full-system.spec.js`.
+
+## Follow-up (2026-11-15): review finding on the disconnected banner
+
+Review of PR #1523 found that the `/next/` interceptor watches every
+`/api/` request, yet counted any 502/503/504 as a gateway saying the
+daemon is down. The daemon sends 502/503 of its own: a forge call that
+failed while reading a CI job log or a branch (`pkg/ui/ci_actions.go`,
+`pkg/ui/branches.go`), CI not up yet, or the verifier briefly out of
+reach. Those raised "This deployment cannot be reached" while the daemon
+was answering. Now a 502/503/504 counts only when its body is not the
+daemon's JSON error (`{"error": "..."}`, written by `writeError`).
+`connection.service.spec.ts` covers the daemon's 502 on
+`/api/ci/runs/<id>/log` and the verifier's 503, and still checks that a
+gateway's HTML 502 raises the banner. The branch was also merged with
+`main`: conflicts in `app.component.ts` (`<g-nav-progress />` next to
+the banner) and `app.config.ts` (route preloading next to the
+interceptor). After the merge, all 468 `ui-ng` unit tests and all 85
+`make test-e2e-ng` tests passed.
