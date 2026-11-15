@@ -277,3 +277,22 @@ unchanged.
 - Inline `request_access`, local-script and config-change approval cards
   on `/next/`, and the stale-tab conflict retry: not reached in the time
   available. The classic versions passed on 2026-11-13.
+
+## 2026-11-15 follow-up (merge-queue repair, attempt 2)
+
+- Merged `main` (586cfa59f) into the branch. Two conflicts in
+  `ui-ng/src/app/sessions/sessions-page.component{,.spec}.ts`: `main`
+  had removed the session team independently; kept `main`'s copy text
+  and this branch's stricter "no team anywhere" assertions.
+- `main` now carries its own `/t/<team>/` redirect (`teamPathMatcher`,
+  which also keeps the fragment), so this branch's duplicate
+  `teamLinkMatcher` route was dropped; fault 5 is covered by `main`'s
+  route and both e2e specs still pass.
+- Review question on `sessions.store.ts`: a session with no open run has
+  no `taskId`, and its edits (model, network, Reads all) still went to
+  `POST /api/settings`, which ignores them. Every edit now goes to
+  `PUT /api/console-sessions/{id}`, which works with or without an open
+  run (as the classic page does). New unit test fails on the old code.
+- Verified: `ui-ng` unit tests 505/505, production build, and the four
+  sessions/shell e2e specs (desktop, phone, dark) against a real
+  `grain demo`.
