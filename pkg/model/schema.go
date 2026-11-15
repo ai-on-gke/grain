@@ -683,7 +683,12 @@ import "strconv"
 // declarations were last read at (`repo_declaration_sync`.`commit`), so
 // the next reconcile writes back the grants a schedule file declares that
 // a firing from before 144 overwrote (rereadDeclarations, grain/task-5360).
-const SchemaVersion = 147
+// 148 changes no table: it rewrites the bare retired capability names a
+// registered alias still answers, and removes the ones that grant nothing
+// any longer, from `grain_config`.`default_capabilities` and
+// `repo_config`'s `default_capabilities` and `ci_capabilities`, where no
+// page showed them (MigrateRetiredBareCapabilityNames, grain/task-5895).
+const SchemaVersion = 148
 
 const taskQAAssignmentTable = `CREATE TABLE IF NOT EXISTS ` + "`task_qa_assignment`" + ` (
   ` + "`root_origin`" + `           TEXT     NOT NULL,
