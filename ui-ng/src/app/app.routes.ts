@@ -50,16 +50,41 @@ const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
   caches: ["/settings/caches"],
   metrics: ["/telemetry"],
   upgrade: ["/settings/upgrade"],
+  executors: ["/settings/hostds"],
+  integrations: ["/settings/capabilities"],
 };
 
 // legacy redirects to the page SYSTEM_TABS names for `tab`, keeping the
 // query the old link carried (a /system/metrics?repo=... narrowing, say).
-function legacy(tab: string): RedirectFunction {
+function legacy(tab: string, fragment?: string): RedirectFunction {
   return ({ queryParams }) => {
     const [path, fleetTab] = SYSTEM_TABS[tab] ?? ["/fleet"];
     return inject(Router).createUrlTree([path], {
       queryParams: fleetTab ? { ...queryParams, tab: fleetTab } : queryParams,
+      fragment:
+        fragment ?? (tab === "integrations" ? "credentials" : undefined),
     });
+  };
+}
+
+function settingsConfigRepoFileMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (
+    s.length < 3 ||
+    s[0]?.path !== "settings" ||
+    s[1]?.path !== "config-repo"
+  ) {
+    return null;
+  }
+  const filePath = s
+    .slice(2)
+    .map((seg) => seg.path)
+    .join("/");
+  return {
+    consumed: s,
+    posParams: {
+      section: new UrlSegment("config-repo", {}),
+      filePath: new UrlSegment(filePath, {}),
+    },
   };
 }
 
@@ -215,6 +240,23 @@ export const routes: Routes = [
     path: "system/:tab",
     redirectTo: (route) => legacy(String(route.params["tab"]))(route),
   },
+  { path: "admin", redirectTo: "settings/general", pathMatch: "full" },
+  { path: "admin/workflow", redirectTo: "settings/tasks", pathMatch: "full" },
+  {
+    path: "admin/executors",
+    redirectTo: "settings/hostds",
+    pathMatch: "full",
+  },
+  {
+    path: "admin/integrations",
+    redirectTo: legacy("integrations", "credentials"),
+    pathMatch: "full",
+  },
+  {
+    path: "admin/upgrade",
+    redirectTo: "settings/upgrade",
+    pathMatch: "full",
+  },
   { path: "admin/logs", redirectTo: legacy("logs") },
   { path: "sandboxes", redirectTo: legacy("sandboxes"), pathMatch: "full" },
   { path: "caches", redirectTo: legacy("caches"), pathMatch: "full" },
@@ -230,12 +272,22 @@ export const routes: Routes = [
   { path: "memory", redirectTo: "context" },
   { path: "config", redirectTo: "settings/config-repo", pathMatch: "full" },
   {
+    matcher: settingsConfigRepoFileMatcher,
+    title: "Settings · grain",
+    loadComponent: () =>
+      import("./settings/settings-page.component").then(
+        (m) => m.SettingsPageComponent,
+      ),
+    canDeactivate: [repoLeaveGuard],
+  },
+  {
     path: "settings",
     title: "Settings · grain",
     loadComponent: () =>
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "settings/:section",
@@ -244,6 +296,7 @@ export const routes: Routes = [
       import("./settings/settings-page.component").then(
         (m) => m.SettingsPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   // The classic UI keeps a repository's tab at
   // /repos/<owner>/<name>/settings/<tab>; pasted under /next/ that read

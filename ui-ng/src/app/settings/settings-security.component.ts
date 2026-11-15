@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -27,6 +28,7 @@ import {
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { ThemeService } from "../services/theme.service";
 import {
   ConfirmDialogComponent,
   type ConfirmRequest,
@@ -35,7 +37,7 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
-import type { SettingsSectionId } from "./settings-sections";
+import { formatInTimeZone, type SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
 interface PrincipalRow {
@@ -43,6 +45,8 @@ interface PrincipalRow {
   role: string;
   label?: string;
   addedBy?: string;
+  addedAt?: string;
+  createdAt?: string;
 }
 
 interface AccessRoleChoiceDto {
@@ -87,8 +91,7 @@ interface AuditEventRow {
 
 const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
   { value: "grain/operator", label: "grain/operator (full)" },
-  { value: "grain/admin", label: "grain/admin" },
-  { value: "grain/developer", label: "grain/developer" },
+  { value: "grain/contributor", label: "grain/contributor" },
   { value: "grain/viewer", label: "grain/viewer (read-only)" },
 ];
 
@@ -100,7 +103,33 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
   template: `
     @switch (section()) {
       @case ("access") {
-        <div class="s-card" data-testid="card-rbac-principals">
+        <div class="s-card" id="this-browser" data-testid="card-this-browser">
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">This browser</h3>
+              <p class="s-card-desc" data-testid="this-browser-summary">
+                {{ whoamiSummary() }}
+              </p>
+            </div>
+            <div class="s-inline">
+              <span
+                class="status-pill neutral s-mono"
+                data-testid="access-your-role"
+                >Your role: {{ access.roleLabel() || "operator" }}</span
+              >
+              <button
+                type="button"
+                class="btn-tonal s-btn-sm"
+                data-testid="access-sign-out-btn"
+                (click)="signOutFromAccess()"
+              >
+                Log out
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="s-card" id="principals" data-testid="card-rbac-principals">
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">RBAC allowlist &amp; roles</h3>
@@ -110,9 +139,6 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                 operators out.
               </p>
             </div>
-            <span class="status-pill neutral s-mono"
-              >Your role: {{ access.roleLabel() || "operator" }}</span
-            >
           </div>
 
           @if (!access.can("GET /api/access/principals")) {
@@ -140,6 +166,12 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                             }}</span>
                             @if (p.label) {
                               <span class="s-meta-mono">{{ p.entry }}</span>
+                            }
+                            @if (p.createdAt || p.addedAt) {
+                              <span class="s-meta s-num"
+                                >Added
+                                {{ formatTs(p.createdAt || p.addedAt) }}</span
+                              >
                             }
                           </div>
                         </td>
@@ -675,13 +707,19 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
             />
           </form>
 
+          @if (auditSourceErrors().length > 0) {
+            <div class="s-banner warn" data-testid="audit-source-errors">
+              <span>{{ auditSourceErrors().join(" · ") }}</span>
+            </div>
+          }
+
           @if (filteredAuditEvents().length === 0) {
             <p class="s-card-desc" data-testid="audit-empty">
               No matching audit events in this window.
             </p>
           } @else {
             <div class="s-table-wrap">
-              <table class="s-table" aria-label="Audit events">
+              <table class="s-table s-audit-table" aria-label="Audit events">
                 <thead>
                   <tr>
                     <th>Timestamp</th>
@@ -694,7 +732,9 @@ const DEFAULT_ROLE_OPTIONS: readonly PillOption[] = [
                 <tbody>
                   @for (ev of filteredAuditEvents(); track ev.id) {
                     <tr data-testid="audit-row">
-                      <td class="s-num">{{ ev.at }}</td>
+                      <td class="s-num" [attr.title]="ev.at">
+                        {{ formatTs(ev.at) || ev.at }}
+                      </td>
                       <td>
                         <span class="status-pill neutral">{{ ev.kind }}</span>
                       </td>
@@ -720,7 +760,9 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
   protected readonly api = inject(GrainApi);
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
+  protected readonly theme = inject(ThemeService);
   private readonly snackbar = inject(SnackbarService);
+  private readonly doc = inject(DOCUMENT);
 
   readonly section = input.required<SettingsSectionId>();
 
@@ -744,7 +786,7 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
 
   protected readonly principals = signal<PrincipalRow[]>([]);
   protected readonly newPrincipalEntry = signal("");
-  protected readonly newPrincipalRole = signal("grain/developer");
+  protected readonly newPrincipalRole = signal("grain/viewer");
   protected readonly newPrincipalReason = signal("");
 
   protected readonly tokens = signal<ExternalTokenRow[]>([]);
@@ -761,6 +803,7 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
   protected readonly newGcpKeyMinter = signal("");
 
   protected readonly auditEvents = signal<AuditEventRow[]>([]);
+  protected readonly auditSourceErrors = signal<string[]>([]);
   protected readonly auditFilterText = signal("");
   protected readonly auditKindFilter = signal("all");
   protected readonly auditTimeFilter = signal("all");
@@ -825,9 +868,55 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
 
   private loadForSection(): void {
     if (this.section() === "access") {
+      if (!this.access.whoami() && typeof this.api.whoami === "function") {
+        void this.api
+          .whoami()
+          .then((w) => {
+            if (w) this.access.setWhoami(w);
+          })
+          .catch(() => undefined);
+      }
       void this.loadAccessData();
     } else if (this.section() === "audit") {
       void this.loadAuditLogs();
+    }
+  }
+
+  protected formatTs(iso?: string | null): string {
+    return formatInTimeZone(iso, this.theme.timeZone());
+  }
+
+  protected whoamiSummary(): string {
+    const w = this.access.whoami();
+    const id = this.access.identityLabel();
+    if (w?.source === "access-code") {
+      return `Signed in with the access code. Changes made here are recorded as ${w.actor?.label || id + " (access code)"}.`;
+    }
+    if (w?.verified && w.source) {
+      return `Signed in as ${id} (verified by ${w.source}).`;
+    }
+    return `Signed in as ${id}.`;
+  }
+
+  protected async signOutFromAccess(): Promise<void> {
+    try {
+      const res =
+        typeof this.api.logout === "function"
+          ? await this.api.logout()
+          : await this.api.post<{ redirect?: string }>("POST /api/auth/logout");
+      this.api.clearConditionalCache?.();
+      const loc = this.doc.defaultView?.location;
+      const here =
+        loc && loc.pathname.startsWith("/next/")
+          ? loc.pathname + loc.search + loc.hash
+          : "/next/";
+      const dest =
+        typeof res?.redirect === "string" && /^\/(?!\/)/.test(res.redirect)
+          ? res.redirect
+          : here;
+      loc?.assign(dest);
+    } catch {
+      this.snackbar.show("Could not sign out. Try again.");
     }
   }
 
@@ -854,6 +943,12 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
                 label: r.description ? `${r.name} — ${r.description}` : r.name,
               })),
             );
+            if (!p.roles.some((r) => r.name === this.newPrincipalRole())) {
+              const nonOp = p.roles.find(
+                (r) => r.name !== "grain/operator" && !r.denies,
+              );
+              this.newPrincipalRole.set((nonOp ?? p.roles[0]).name);
+            }
           }
         }
       } catch {
@@ -903,8 +998,24 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
   }
 
   private isSelfPrincipal(entry: string): boolean {
-    const viewer = this.access.viewer().trim().toLowerCase();
-    return Boolean(viewer && entry.trim().toLowerCase() === viewer);
+    const clean = entry
+      .trim()
+      .toLowerCase()
+      .replace(/^user:/, "");
+    if (!clean) return false;
+    const candidates = [
+      this.access.viewer(),
+      this.access.identityLabel(),
+      this.access.whoami()?.actor?.id ?? "",
+    ]
+      .map((s) =>
+        s
+          .trim()
+          .toLowerCase()
+          .replace(/^(user:|access-code:)/, ""),
+      )
+      .filter(Boolean);
+    return candidates.includes(clean);
   }
 
   private isSelfConfirmRefusal(err: unknown): boolean {
@@ -975,35 +1086,53 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
     });
   }
 
-  protected async removePrincipal(entry: string): Promise<void> {
+  protected removePrincipal(entry: string): void {
     const reason = this.newPrincipalReason().trim();
-    if (this.isSelfPrincipal(entry)) {
-      this.promptSelfRemoveConfirm(entry, reason);
+    const isSelf = this.isSelfPrincipal(entry);
+    const isLast = this.principals().length <= 1;
+    if (isSelf) {
+      this.promptSelfRemoveConfirm(entry, reason, isLast);
       return;
     }
-    const q = reason ? `reason=${encodeURIComponent(reason)}` : undefined;
-    try {
-      await this.api.delete(
-        "DELETE /api/access/principals/{entry}",
-        { entry },
-        undefined,
-        q,
-      );
-      await this.loadAccessData();
-      this.snackbar.show(`Removed ${entry}`);
-    } catch (err) {
-      if (this.isSelfConfirmRefusal(err)) {
-        this.promptSelfRemoveConfirm(entry, reason);
-      } else {
-        this.state.recordError(err);
-      }
-    }
+    this.confirmRequest.set({
+      title: isLast
+        ? "Remove the last allowed principal?"
+        : `Remove ${entry} from the allowlist?`,
+      message: isLast
+        ? `Removing "${entry}" leaves the allowlist empty, which revokes verified-identity access for everyone until a principal is added again.`
+        : `Remove "${entry}" from this deployment's access allowlist?`,
+      accept: isLast ? "Remove last entry" : "Remove principal",
+      destructive: true,
+      run: async () => {
+        const q = reason ? `reason=${encodeURIComponent(reason)}` : undefined;
+        try {
+          await this.api.delete(
+            "DELETE /api/access/principals/{entry}",
+            { entry },
+            undefined,
+            q,
+          );
+          await this.loadAccessData();
+          this.snackbar.show(`Removed ${entry}`);
+        } catch (err) {
+          if (this.isSelfConfirmRefusal(err)) {
+            this.promptSelfRemoveConfirm(entry, reason, isLast);
+          } else {
+            this.state.recordError(err);
+          }
+        }
+      },
+    });
   }
 
-  private promptSelfRemoveConfirm(entry: string, reason: string): void {
+  private promptSelfRemoveConfirm(
+    entry: string,
+    reason: string,
+    isLast = false,
+  ): void {
     this.confirmRequest.set({
       title: "Remove your own access entry?",
-      message: `Removing "${entry}" revokes access matching your own signed-in identity and may lock you out immediately.`,
+      message: `Removing "${entry}" revokes access matching your own signed-in identity${isLast ? " and leaves the allowlist empty," : ""} and may lock you out immediately.`,
       accept: "Confirm self-removal",
       destructive: true,
       run: async () => {
@@ -1232,12 +1361,15 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
     };
 
     const jobs: Promise<void>[] = [];
+    const sourceErrs: string[] = [];
     if (this.access.can("GET /api/deployment/config-audit")) {
       jobs.push(
         this.api
           .get("GET /api/deployment/config-audit", undefined, "limit=100")
           .then((r) => norm(r, "config"))
-          .catch(() => undefined),
+          .catch((err) => {
+            sourceErrs.push(`Config audit could not be read (${errText(err)})`);
+          }),
       );
     }
     if (this.access.can("GET /api/deployment/audit-logs")) {
@@ -1245,14 +1377,20 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
         this.api
           .get("GET /api/deployment/audit-logs", undefined, "limit=100")
           .then((r) => norm(r, "secret"))
-          .catch(() => undefined),
+          .catch((err) => {
+            sourceErrs.push(
+              `Credential audit could not be read (${errText(err)})`,
+            );
+          }),
       );
     } else if (this.access.can("GET /api/deployment/secret-audit")) {
       jobs.push(
         this.api
           .get("GET /api/deployment/secret-audit")
           .then((r) => norm(r, "secret"))
-          .catch(() => undefined),
+          .catch((err) => {
+            sourceErrs.push(`Secret audit could not be read (${errText(err)})`);
+          }),
       );
     }
     if (this.access.can("GET /api/access/history")) {
@@ -1260,11 +1398,16 @@ export class SettingsSecurityComponent implements OnInit, OnChanges {
         this.api
           .get("GET /api/access/history")
           .then((r) => norm(r, "access"))
-          .catch(() => undefined),
+          .catch((err) => {
+            sourceErrs.push(
+              `Access history could not be read (${errText(err)})`,
+            );
+          }),
       );
     }
     await Promise.all(jobs);
     combined.sort((a, b) => (b.at || "").localeCompare(a.at || ""));
+    this.auditSourceErrors.set(sourceErrs);
     this.auditEvents.set(combined);
   }
 }

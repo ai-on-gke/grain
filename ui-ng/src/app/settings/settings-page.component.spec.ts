@@ -1038,4 +1038,150 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         .length,
     ).toBe(1);
   });
+
+  it("focuses Filter settings on '/', restores groups on Escape, and prompts before discarding dirty settings or memory", async () => {
+    const api = new FakeSettingsApi();
+    const prevGet = api.get;
+    api.get = (key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/memory") {
+        api.calls.push({ method: "GET", key, params, query });
+        return Promise.resolve([{ text: "Original deployment note" }]);
+      }
+      return prevGet(key, params, query);
+    };
+    const { el, harness } = await mountSettings("/settings/memory", api);
+
+    const filterInput = el.querySelector<HTMLInputElement>(
+      '[data-testid="settings-filter-input"]',
+    )!;
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "/", bubbles: true }),
+    );
+    expect(document.activeElement).toBe(filterInput);
+
+    setInput(filterInput, "house style");
+    harness.detectChanges();
+    expect(el.querySelectorAll(".settings-nav-item").length).toBe(1);
+
+    filterInput.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    harness.detectChanges();
+    expect(filterInput.value).toBe("");
+    expect(el.querySelectorAll(".settings-nav-item").length).toBe(20);
+
+    // Edit deployment memory -> dirty dot & save bar appear; switching section asks first.
+    const memBox = el.querySelector<HTMLTextAreaElement>(
+      '[data-testid="input-deployment-memory"]',
+    )!;
+    setInput(memBox, "Unsaved memory edit");
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="settings-dirty-dot"]')).toBeTruthy();
+    expect(el.querySelector('[data-testid="settings-save-bar"]')).toBeTruthy();
+
+    el.querySelector<HTMLAnchorElement>(
+      '[data-testid="settings-nav-general"]',
+    )!.click();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Discard unsaved changes?");
+
+    // Cancel keeps us on Memory with the edit intact.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="settings-section-heading"]')?.textContent,
+    ).toContain("Memory");
+    expect(memBox.value).toBe("Unsaved memory edit");
+
+    // Accept discards and navigates to General.
+    el.querySelector<HTMLAnchorElement>(
+      '[data-testid="settings-nav-general"]',
+    )!.click();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="settings-section-heading"]')?.textContent,
+    ).toContain("General");
+    expect(el.querySelector('[data-testid="settings-save-bar"]')).toBeNull();
+  });
+
+  it("renders workstation CLI install/login/skills, disables settings lock without a config repo, and confirms Access principal removal", async () => {
+    const api = new FakeSettingsApi();
+    api.settingsBody["externalAgentApi"] = false;
+    api.settingsBody["settingsLocked"] = true;
+    api.settingsBody["configRepoOnly"] = false;
+    const { el, harness } = await mountSettings("/settings/general", api);
+
+    // Without configRepo, settingsLocked=true does NOT lock the UI and the lock switch is disabled.
+    expect(
+      el.querySelector('[data-testid="settings-config-repo-banner"]'),
+    ).toBeNull();
+    expect(
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="switch-settings-locked"]',
+      )?.disabled,
+    ).toBe(true);
+
+    // CLI shows /cli/install.sh, login flags, external-agents warning, and all 4 agent skills.
+    await harness.navigateByUrl("/settings/cli");
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="cli-install-snippet"]')?.textContent,
+    ).toContain("/cli/install.sh | sh");
+    expect(
+      el.querySelector('[data-testid="cli-login-snippet"]')?.textContent,
+    ).toContain("--issue-token --scope-set grain/external-dev --expires 30d");
+    expect(
+      el.querySelector('[data-testid="cli-external-agent-api-off"]'),
+    ).not.toBeNull();
+    expect(
+      el.querySelector('[data-testid="cli-skill-command-jetski"]')?.textContent,
+    ).toBe("grain skill install --jetski");
+
+    // Preferences exposes Display timezone and Customize navigation trigger.
+    await harness.navigateByUrl("/settings/preferences");
+    await harness.fixture.whenStable();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="pref-select-timezone"]'),
+    ).not.toBeNull();
+    expect(
+      el.querySelector('[data-testid="pref-customize-nav-btn"]'),
+    ).not.toBeNull();
+
+    // Access confirms principal removal before calling DELETE.
+    await harness.navigateByUrl("/settings/access");
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="remove-principal-operator@example.com"]',
+    )!.click();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("operator@example.com");
+    expect(
+      api.calls.some((c) => c.key === "DELETE /api/access/principals/{entry}"),
+    ).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.some((c) => c.key === "DELETE /api/access/principals/{entry}"),
+    ).toBe(true);
+  });
 });

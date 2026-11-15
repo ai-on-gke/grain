@@ -27,6 +27,7 @@ import {
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { ThemeService } from "../services/theme.service";
 import {
   ConfirmDialogComponent,
   type ConfirmRequest,
@@ -48,7 +49,7 @@ import {
   type UsagePauseInput,
   summarizeDispatchStatus,
 } from "../shared/dispatch-status";
-import type { SettingsSectionId } from "./settings-sections";
+import { formatInTimeZone, type SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
 interface ModelSettingRow {
@@ -179,7 +180,7 @@ export function formatHostdLabels(
 }
 
 function formatRefreshedAt(iso?: string): string {
-  if (!iso) return "";
+  if (!iso || iso.startsWith("0001-01-01")) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   const months = [
@@ -217,12 +218,24 @@ function formatRefreshedAt(iso?: string): string {
             role="status"
             data-testid="models-quota-banner"
           >
-            <strong>{{ dp.headline }}</strong>
-            @if (dp.resetText) {
-              <span class="s-num"> · {{ dp.resetText }}</span>
-            }
-            @if (dp.subline) {
-              <span> — {{ dp.subline }}</span>
+            <span>
+              <strong>{{ dp.headline }}</strong>
+              @if (dp.resetText) {
+                <span class="s-num"> · {{ dp.resetText }}</span>
+              }
+              @if (dp.subline) {
+                <span> — {{ dp.subline }}</span>
+              }
+            </span>
+            @if (access.can("DELETE /api/pause")) {
+              <button
+                type="button"
+                class="btn-tonal s-btn-sm"
+                data-testid="resume-paused-models-btn"
+                (click)="resumePausedModels()"
+              >
+                Resume
+              </button>
             }
           </div>
         }
@@ -455,7 +468,12 @@ function formatRefreshedAt(iso?: string): string {
             </button>
           </div>
 
-          @if (backends().length > 0) {
+          @if (backends().length === 0) {
+            <p class="s-card-desc" data-testid="models-backends-empty">
+              No model connections configured yet. Add a connection below to
+              advertise models for agent runs.
+            </p>
+          } @else {
             <div class="s-table-wrap">
               <table class="s-table" aria-label="Model connections">
                 <thead>
@@ -501,15 +519,15 @@ function formatRefreshedAt(iso?: string): string {
                             <summary>
                               {{ b.discovered.models?.length || 0 }} models
                               discovered
-                              @if (b.discovered.refreshedAt) {
+                              @if (
+                                formatRefreshedAt(b.discovered.refreshedAt);
+                                as refLbl
+                              ) {
                                 <span
                                   class="s-meta"
                                   [attr.title]="b.discovered.refreshedAt"
                                 >
-                                  ·
-                                  {{
-                                    formatRefreshedAt(b.discovered.refreshedAt)
-                                  }}</span
+                                  · {{ refLbl }}</span
                                 >
                               }
                             </summary>
@@ -564,6 +582,7 @@ function formatRefreshedAt(iso?: string): string {
                             class="btn-tonal s-btn-sm"
                             [attr.data-testid]="'edit-backend-' + b.id"
                             [attr.aria-label]="'Edit connection ' + b.id"
+                            [disabled]="!canManageBackends()"
                             (click)="editBackend(b)"
                           >
                             Edit
@@ -576,7 +595,7 @@ function formatRefreshedAt(iso?: string): string {
                             [disabled]="
                               !access.can(
                                 'DELETE /api/deployment/agent-backends/{backendId}'
-                              )
+                              ) || state.configRepoOnly()
                             "
                             (click)="startDeleteBackend(b.id)"
                           >
@@ -698,6 +717,7 @@ function formatRefreshedAt(iso?: string): string {
                   data-testid="input-new-backend-id"
                   placeholder="claude-team-1"
                   [value]="newBackendId()"
+                  [disabled]="!canManageBackends()"
                   (input)="newBackendId.set($any($event.target).value)"
                 />
               </div>
@@ -710,6 +730,7 @@ function formatRefreshedAt(iso?: string): string {
                   data-testid="input-new-backend-name"
                   placeholder="Team Claude"
                   [value]="newBackendName()"
+                  [disabled]="!canManageBackends()"
                   (input)="newBackendName.set($any($event.target).value)"
                 />
               </div>
@@ -721,6 +742,7 @@ function formatRefreshedAt(iso?: string): string {
                   align="left"
                   [options]="frameworkOptions"
                   [value]="newBackendFw()"
+                  [disabled]="!canManageBackends()"
                   (valueChange)="newBackendFw.set($event)"
                 />
               </div>
@@ -732,6 +754,7 @@ function formatRefreshedAt(iso?: string): string {
                   align="left"
                   [options]="authModeOptions"
                   [value]="newBackendAuthMode()"
+                  [disabled]="!canManageBackends()"
                   (valueChange)="newBackendAuthMode.set($event)"
                 />
               </div>
@@ -746,6 +769,7 @@ function formatRefreshedAt(iso?: string): string {
                   data-testid="input-new-backend-models"
                   placeholder="empty = discover all"
                   [value]="newBackendModels()"
+                  [disabled]="!canManageBackends()"
                   (input)="newBackendModels.set($any($event.target).value)"
                 />
               </div>
@@ -760,6 +784,7 @@ function formatRefreshedAt(iso?: string): string {
                   data-testid="input-new-backend-hostd"
                   placeholder="workstation-01 or env=dev"
                   [value]="newBackendHostd()"
+                  [disabled]="!canManageBackends()"
                   (input)="newBackendHostd.set($any($event.target).value)"
                 />
               </div>
@@ -774,6 +799,7 @@ function formatRefreshedAt(iso?: string): string {
                   data-testid="input-new-backend-clipath"
                   placeholder="/usr/local/bin/agy"
                   [value]="newBackendCliPath()"
+                  [disabled]="!canManageBackends()"
                   (input)="newBackendCliPath.set($any($event.target).value)"
                 />
               </div>
@@ -788,6 +814,7 @@ function formatRefreshedAt(iso?: string): string {
                   min="0"
                   data-testid="input-new-backend-concurrency"
                   [value]="newBackendConcurrency()"
+                  [disabled]="!canManageBackends()"
                   (input)="
                     newBackendConcurrency.set(Number($any($event.target).value))
                   "
@@ -799,10 +826,7 @@ function formatRefreshedAt(iso?: string): string {
                 type="button"
                 class="btn-tonal"
                 data-testid="add-model-backend"
-                [disabled]="
-                  !newBackendId().trim() ||
-                  !access.can('PUT /api/deployment/agent-backends/{backendId}')
-                "
+                [disabled]="!newBackendId().trim() || !canManageBackends()"
                 (click)="saveBackend()"
               >
                 Save model connection
@@ -824,7 +848,7 @@ function formatRefreshedAt(iso?: string): string {
           }
         </div>
 
-        <div class="s-card" data-testid="card-token-budget">
+        <div class="s-card" id="usage" data-testid="card-token-budget">
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">Token budget &amp; usage guardrails</h3>
@@ -837,7 +861,7 @@ function formatRefreshedAt(iso?: string): string {
               type="button"
               class="btn-primary s-btn-sm"
               data-testid="save-token-budget"
-              [disabled]="!access.can('PUT /api/usage/settings')"
+              [disabled]="!canManageUsage()"
               (click)="saveUsageSettings()"
             >
               Save usage settings
@@ -853,7 +877,7 @@ function formatRefreshedAt(iso?: string): string {
                 align="left"
                 [options]="usageModeOptions"
                 [value]="usageMode()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (valueChange)="usageMode.set($event)"
               />
             </div>
@@ -868,7 +892,7 @@ function formatRefreshedAt(iso?: string): string {
                 min="1"
                 data-testid="input-usage-min-workers"
                 [value]="usageMinWorkers()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (input)="usageMinWorkers.set(Number($any($event.target).value))"
               />
             </div>
@@ -883,7 +907,7 @@ function formatRefreshedAt(iso?: string): string {
                 min="1"
                 data-testid="input-usage-retention-days"
                 [value]="usageRetentionDays()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (input)="
                   usageRetentionDays.set(Number($any($event.target).value))
                 "
@@ -943,7 +967,7 @@ function formatRefreshedAt(iso?: string): string {
                 data-testid="input-budget-connection"
                 placeholder="connection-id"
                 [value]="newBudgetConn()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (input)="newBudgetConn.set($any($event.target).value)"
               />
               <g-model-picker
@@ -953,7 +977,7 @@ function formatRefreshedAt(iso?: string): string {
                 placeholder="model (optional)"
                 [groups]="modelGroups()"
                 [value]="newBudgetModel()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (valueChange)="newBudgetModel.set($event)"
               />
               <input
@@ -964,7 +988,7 @@ function formatRefreshedAt(iso?: string): string {
                 data-testid="input-budget-tokens"
                 placeholder="1000000"
                 [value]="newBudgetTokens()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (input)="newBudgetTokens.set($any($event.target).value)"
               />
               <input
@@ -974,7 +998,7 @@ function formatRefreshedAt(iso?: string): string {
                 data-testid="input-budget-window"
                 placeholder="24h"
                 [value]="newBudgetWindow()"
-                [disabled]="!access.can('PUT /api/usage/settings')"
+                [disabled]="!canManageUsage()"
                 (input)="newBudgetWindow.set($any($event.target).value)"
               />
               <button
@@ -985,7 +1009,7 @@ function formatRefreshedAt(iso?: string): string {
                   !newBudgetConn().trim() ||
                   !(Number(newBudgetTokens()) > 0) ||
                   !newBudgetWindow().trim() ||
-                  !access.can('PUT /api/usage/settings')
+                  !canManageUsage()
                 "
                 (click)="addUsageBudget()"
               >
@@ -1688,6 +1712,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly api = inject(GrainApi);
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
+  protected readonly theme = inject(ThemeService);
   private readonly snackbar = inject(SnackbarService);
 
   readonly section = input.required<SettingsSectionId>();
@@ -1695,7 +1720,10 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly Number = Number;
   protected readonly Boolean = Boolean;
   protected readonly formatLabels = formatHostdLabels;
-  protected readonly formatRefreshedAt = formatRefreshedAt;
+  protected readonly formatRefreshedAt = (iso?: string): string =>
+    iso && !iso.startsWith("0001-01-01")
+      ? formatInTimeZone(iso, this.theme.timeZone()) || formatRefreshedAt(iso)
+      : "";
 
   protected readonly frameworkOptions: readonly PillOption[] = [
     { value: "antigravity", label: "Antigravity (Gemini)" },
@@ -1773,7 +1801,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       this.access.rawConfig(),
       this.usageSnapshot() ?? this.access.usage(),
       this.access.clockNow(),
-      undefined,
+      this.theme.timeZone() === "local" ? undefined : this.theme.timeZone(),
       { modelQuotaOnly: true },
     ),
   );
@@ -1851,6 +1879,31 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       !this.state.configRepoOnly() &&
       !this.state.sectionLocked(this.section())
     );
+  }
+
+  protected canManageBackends(): boolean {
+    return (
+      this.access.can("PUT /api/deployment/agent-backends/{backendId}") &&
+      !this.state.configRepoOnly()
+    );
+  }
+
+  protected canManageUsage(): boolean {
+    return (
+      this.access.can("PUT /api/usage/settings") && !this.state.configRepoOnly()
+    );
+  }
+
+  protected async resumePausedModels(): Promise<void> {
+    try {
+      await this.api.delete("DELETE /api/pause");
+      await this.state.loadCore(true);
+      this.usageSnapshot.set(null);
+      this.access.setUsage(null);
+      this.snackbar.show("Resumed model dispatch");
+    } catch (err) {
+      this.state.recordError(err);
+    }
   }
 
   protected canEditChain(): boolean {

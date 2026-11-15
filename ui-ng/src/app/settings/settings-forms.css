@@ -281,6 +281,36 @@
   border-bottom: none;
 }
 
+@media (max-width: 599px) {
+  .s-audit-table,
+  .s-audit-table tbody,
+  .s-audit-table tr,
+  .s-audit-table td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .s-audit-table thead {
+    display: none;
+  }
+
+  .s-audit-table tr {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  }
+
+  .s-audit-table tr:last-child {
+    border-bottom: none;
+  }
+
+  .s-audit-table td {
+    padding: 2px 0;
+    border-bottom: none;
+    overflow-wrap: anywhere;
+  }
+}
+
 .s-code {
   margin: 0;
   padding: 12px 14px;

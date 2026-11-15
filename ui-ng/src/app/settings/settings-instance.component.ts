@@ -31,12 +31,7 @@ import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
 import { NavConfigService } from "../services/nav-config.service";
 import { SnackbarService } from "../services/snackbar.service";
-import {
-  type ThemeMode,
-  ThemeService,
-  readStorage,
-  writeStorage,
-} from "../services/theme.service";
+import { type ThemeMode, ThemeService } from "../services/theme.service";
 import {
   ConfirmDialogComponent,
   type ConfirmRequest,
@@ -48,7 +43,25 @@ import {
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService } from "./settings-state.service";
 
-const TZ_STORAGE_KEY = "grain.timeZone";
+const CLI_SKILL_AGENTS = [
+  { id: "jetski", flag: "--jetski", label: "Jetski" },
+  { id: "claude", flag: "--claude", label: "Claude Code" },
+  { id: "codex", flag: "--codex", label: "Codex" },
+  { id: "gemini", flag: "--gemini", label: "Gemini CLI" },
+] as const;
+
+function contextSlug(origin: string): string {
+  try {
+    const host = new URL(origin).hostname;
+    const s = host
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return s || "default";
+  } catch {
+    return "default";
+  }
+}
 
 interface UpgradeTargetRow {
   name?: string;
@@ -84,7 +97,7 @@ function formatBytes(bytes: number): string {
   template: `
     @switch (section()) {
       @case ("general") {
-        <div class="s-card" data-testid="card-general">
+        <div class="s-card" id="deployment" data-testid="card-general">
           <h3 class="s-card-title">Deployment identity &amp; UI lock</h3>
           <div class="s-grid">
             <div class="s-field">
@@ -108,6 +121,7 @@ function formatBytes(bytes: number): string {
                 id="g-dep-id"
                 class="s-input s-mono"
                 type="text"
+                [placeholder]="deploymentIdPlaceholder()"
                 [value]="state.val('deploymentId', '')"
                 [disabled]="!canWriteSettings()"
                 (input)="
@@ -122,7 +136,7 @@ function formatBytes(bytes: number): string {
                 ariaLabel="Display timezone"
                 align="left"
                 [options]="timezoneOptions"
-                [value]="timeZone()"
+                [value]="theme.timeZone()"
                 (valueChange)="setTimeZone($event)"
               />
             </div>
@@ -130,13 +144,36 @@ function formatBytes(bytes: number): string {
 
           <div class="s-toggle-row">
             <div class="s-toggle-copy">
+              <span class="s-toggle-name">Show closed tasks by default</span>
+              <span class="s-hint"
+                >Include closed tasks when opening task lists by default.</span
+              >
+            </div>
+            <button
+              type="button"
+              class="g-switch"
+              role="switch"
+              data-testid="switch-show-closed-default"
+              [attr.aria-checked]="
+                Boolean(state.val('showClosedByDefault', false))
+              "
+              [disabled]="!canWriteSettings()"
+              aria-label="Show closed tasks by default"
+              (click)="
+                state.setField(
+                  'showClosedByDefault',
+                  !state.val('showClosedByDefault', false)
+                )
+              "
+            ></button>
+          </div>
+
+          <div class="s-toggle-row" id="settings-lock">
+            <div class="s-toggle-copy">
               <span class="s-toggle-name"
                 >Lock settings in UI (require config repo PRs)</span
               >
-              <span class="s-hint"
-                >Makes config-managed sections read-only outside StateRepo pull
-                requests.</span
-              >
+              <span class="s-hint">{{ settingsLockHint() }}</span>
             </div>
             <button
               type="button"
@@ -144,7 +181,7 @@ function formatBytes(bytes: number): string {
               role="switch"
               data-testid="switch-settings-locked"
               [attr.aria-checked]="Boolean(state.val('settingsLocked', false))"
-              [disabled]="!access.can('POST /api/settings')"
+              [disabled]="!canToggleSettingsLock()"
               aria-label="Lock settings in UI"
               (click)="
                 state.setField(
@@ -208,6 +245,20 @@ function formatBytes(bytes: number): string {
             </button>
           </div>
         </div>
+
+        <div class="s-card" id="about" data-testid="card-about">
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">About</h3>
+              <p class="s-card-desc">Running controller build stamp.</p>
+            </div>
+            <span
+              class="status-pill neutral s-mono"
+              data-testid="about-daemon-version"
+              >{{ currentVersion() }}</span
+            >
+          </div>
+        </div>
       }
 
       @case ("preferences") {
@@ -236,6 +287,24 @@ function formatBytes(bytes: number): string {
                 </button>
               }
             </div>
+          </div>
+
+          <div class="s-toggle-row">
+            <div class="s-toggle-copy">
+              <span class="s-toggle-name">Display timezone</span>
+              <span class="s-hint"
+                >Formats timestamps across tasks, models, access, and audit logs
+                in this browser.</span
+              >
+            </div>
+            <g-pill-select
+              testid="pref-select-timezone"
+              ariaLabel="Display timezone"
+              align="right"
+              [options]="timezoneOptions"
+              [value]="theme.timeZone()"
+              (valueChange)="setTimeZone($event)"
+            />
           </div>
 
           <div class="s-toggle-row">
@@ -283,23 +352,121 @@ function formatBytes(bytes: number): string {
                 >Show, hide, or reorder destinations on the left rail.</span
               >
             </div>
+            <button
+              type="button"
+              class="btn-tonal s-btn-sm"
+              data-testid="pref-customize-nav-btn"
+              (click)="openCustomizeNav($event)"
+            >
+              Customize…
+            </button>
           </div>
         </div>
       }
 
       @case ("cli") {
-        <div class="s-card" data-testid="card-cli">
-          <h3 class="s-card-title">
-            Workstation grain CLI &amp; agent CLI run locations
-          </h3>
-          <p class="s-card-desc">
-            Install the CLI against this Grain server ({{ serverOrigin() }}) and
-            choose where each agent CLI executes on dispatch.
-          </p>
+        <div class="s-card" id="cli-install" data-testid="card-cli">
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Install workstation CLI</h3>
+              <p class="s-card-desc">
+                Downloads
+                @if (releaseStamp(); as rel) {
+                  <code>grain {{ rel }}</code>
+                } @else {
+                  the grain release
+                }
+                from {{ serverOrigin() }}, verifies its SHA-256 checksum, and
+                installs <code>grain</code> to <code>~/.local/bin</code>.
+              </p>
+            </div>
+            <button
+              type="button"
+              class="btn-tonal s-btn-sm"
+              data-testid="copy-cli-install"
+              (click)="copyCliText(cliInstallCmd(), 'Install command')"
+            >
+              Copy
+            </button>
+          </div>
           <pre class="s-code" data-testid="cli-install-snippet">{{
-            cliSnippet()
+            cliInstallCmd()
           }}</pre>
+        </div>
 
+        <div class="s-card" id="cli-login" data-testid="card-cli-login">
+          <div class="s-card-head">
+            <div>
+              <h3 class="s-card-title">Sign in</h3>
+              <p class="s-card-desc">
+                Signs <code>grain</code> in as you and issues a 30-day token
+                scoped to <code>grain/external-dev</code>.
+              </p>
+            </div>
+            <button
+              type="button"
+              class="btn-tonal s-btn-sm"
+              data-testid="copy-cli-login"
+              (click)="copyCliText(cliLoginCmd(), 'Sign-in command')"
+            >
+              Copy
+            </button>
+          </div>
+          @if (!Boolean(state.val("externalAgentApi", true))) {
+            <div class="s-banner warn" data-testid="cli-external-agent-api-off">
+              <span>
+                External agent token sign-in is currently off, so
+                <code>--issue-token</code> cannot mint a token yet. Turn on
+                Accept external agents in
+                <a
+                  href="/next/settings/agents#external-agents"
+                  data-settings-section="agents"
+                  data-settings-fragment="external-agents"
+                  data-testid="cli-external-agent-api-link"
+                  >Settings → Agents</a
+                >
+                first.
+              </span>
+            </div>
+          }
+          <pre class="s-code" data-testid="cli-login-snippet">{{
+            cliLoginCmd()
+          }}</pre>
+        </div>
+
+        <div class="s-card" id="cli-skills" data-testid="card-cli-skills">
+          <h3 class="s-card-title">Agent skills</h3>
+          <p class="s-card-desc">
+            Writes a <code>SKILL.md</code> teaching your workstation coding
+            agent to work through <code>grain</code>.
+          </p>
+          @for (sk of cliSkillRows(); track sk.id) {
+            <div class="s-toggle-row">
+              <div class="s-toggle-copy">
+                <span class="s-toggle-name">{{ sk.label }}</span>
+                <span
+                  class="s-hint s-mono"
+                  [attr.data-testid]="'cli-skill-command-' + sk.id"
+                  >{{ sk.command }}</span
+                >
+              </div>
+              <button
+                type="button"
+                class="btn-tonal s-btn-sm"
+                [attr.data-testid]="'copy-cli-skill-' + sk.id"
+                (click)="copyCliText(sk.command, sk.label + ' skill command')"
+              >
+                Copy
+              </button>
+            </div>
+          }
+        </div>
+
+        <div class="s-card" id="cli-run" data-testid="card-cli-run">
+          <h3 class="s-card-title">Where each agent CLI runs</h3>
+          <p class="s-card-desc">
+            Choose where each agent CLI executes on dispatch.
+          </p>
           @for (fw of cliFrameworks; track fw.id) {
             <div class="s-toggle-row">
               <div class="s-toggle-copy">
@@ -478,7 +645,7 @@ function formatBytes(bytes: number): string {
                 min="1"
                 data-testid="input-max-workers"
                 [value]="state.val('maxWorkers', 4)"
-                [disabled]="!canWriteSettings()"
+                [disabled]="!canWriteBootstrapSettings()"
                 (input)="
                   state.setField(
                     'maxWorkers',
@@ -822,6 +989,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     { value: "America/Los_Angeles", label: "America/Los_Angeles (PT)" },
     { value: "America/New_York", label: "America/New_York (ET)" },
     { value: "Europe/London", label: "Europe/London" },
+    { value: "Asia/Tokyo", label: "Asia/Tokyo (JST)" },
   ];
 
   protected readonly cliFrameworks = [
@@ -860,7 +1028,6 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     { value: "auto", label: "File & queue check" },
   ];
 
-  protected readonly timeZone = signal(readStorage(TZ_STORAGE_KEY) || "local");
   protected readonly broadcastMessage = signal("");
   protected readonly broadcastRunningOnly = signal(false);
   protected readonly cliRunLocations = signal<Record<string, string>>({});
@@ -939,13 +1106,50 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     );
   }
 
+  protected canWriteBootstrapSettings(): boolean {
+    return (
+      this.access.can("POST /api/settings") && !this.state.externalConfigRepo()
+    );
+  }
+
+  protected canToggleSettingsLock(): boolean {
+    return (
+      this.access.can("POST /api/settings") &&
+      this.state.hasInternalConfigRepo()
+    );
+  }
+
+  protected settingsLockHint(): string {
+    if (this.state.externalConfigRepo()) {
+      return `Managed in external config repository (${this.state.externalConfigRepo()}).`;
+    }
+    if (!this.state.hasInternalConfigRepo()) {
+      return "Unavailable without a config repository: settings are always edited directly here.";
+    }
+    return "Makes config-managed sections read-only outside StateRepo pull requests.";
+  }
+
+  protected deploymentIdPlaceholder(): string {
+    return String(
+      this.state.settings()["deploymentIdDefault"] ??
+        this.state.settings()["sampleDeploymentId"] ??
+        "e.g. 53549e42",
+    );
+  }
+
+  protected releaseStamp(): string {
+    const v = this.state.config()?.version as VersionInfo | string | undefined;
+    if (!v || typeof v === "string") return "";
+    if (v.unversioned) return "";
+    return v.release || "";
+  }
+
   protected openCustomizeNav(ev: Event): void {
     this.navConfig.openDialog(ev.currentTarget as HTMLElement | null);
   }
 
   protected setTimeZone(tz: string): void {
-    this.timeZone.set(tz);
-    writeStorage(TZ_STORAGE_KEY, tz === "local" ? null : tz);
+    this.theme.setTimeZone(tz);
     this.access.tickClock();
   }
 
@@ -953,9 +1157,34 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     return this.doc.defaultView?.location?.origin || "http://localhost:8080";
   }
 
-  protected cliSnippet(): string {
+  protected cliInstallCmd(): string {
+    return `curl -fsSL ${this.serverOrigin()}/cli/install.sh | sh`;
+  }
+
+  protected cliLoginCmd(): string {
     const origin = this.serverOrigin();
-    return `curl -fsSL ${origin}/api/hostd/install.sh | sh\ngrain login ${origin}`;
+    return `grain login ${origin} --name ${contextSlug(origin)} --issue-token --scope-set grain/external-dev --expires 30d`;
+  }
+
+  protected cliSkillRows(): readonly {
+    id: string;
+    label: string;
+    command: string;
+  }[] {
+    return CLI_SKILL_AGENTS.map((a) => ({
+      id: a.id,
+      label: a.label,
+      command: `grain skill install ${a.flag}`,
+    }));
+  }
+
+  protected async copyCliText(text: string, label: string): Promise<void> {
+    try {
+      await this.doc.defaultView?.navigator.clipboard?.writeText(text);
+      this.snackbar.show(`Copied ${label.toLowerCase()}`);
+    } catch {
+      this.snackbar.show(`Could not copy ${label.toLowerCase()}`);
+    }
   }
 
   private loadForSection(): void {

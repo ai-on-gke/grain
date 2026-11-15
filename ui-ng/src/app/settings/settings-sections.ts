@@ -79,6 +79,9 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "effort",
           "rotation",
           "budget",
+          "fewest workers",
+          "fallback",
+          "usage",
         ],
       },
       {
@@ -237,6 +240,10 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "timeout",
           "standing",
           "skills",
+          "house style",
+          "commit identity",
+          "external agents",
+          "branch template",
         ],
       },
       {
@@ -327,14 +334,17 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "broadcast",
           "banner",
           "lock",
+          "settings lock",
+          "about",
           "timezone",
+          "time zone",
         ],
       },
       {
         id: "preferences",
         label: "Preferences",
         subtitle:
-          "Per-browser theme polarity, single-key shortcuts, default UI preference, and navigation rail order.",
+          "Per-browser theme polarity, timezone, single-key shortcuts, default UI preference, and navigation rail order.",
         keywords: [
           "preferences",
           "theme",
@@ -344,13 +354,15 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "navigation",
           "rail",
           "browser",
+          "timezone",
+          "time zone",
         ],
       },
       {
         id: "cli",
         label: "CLI",
         subtitle:
-          "Workstation grain CLI installation, sign-in commands, and CLI task execution location.",
+          "Workstation grain CLI installation, sign-in commands, agent skills, and CLI task execution location.",
         keywords: [
           "cli",
           "install",
@@ -358,6 +370,9 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "command line",
           "terminal",
           "token",
+          "skills",
+          "jetski",
+          "run location",
         ],
       },
       {
@@ -441,6 +456,41 @@ const SECTION_ALIASES: Readonly<Record<string, SettingsSectionId>> = {
   admin: "general",
 };
 
+export const SECTION_ALIAS_ANCHORS: Readonly<Record<string, string>> = {
+  credentials: "credentials",
+  "legacy-capabilities": "credentials",
+  integrations: "credentials",
+  secrets: "other-secrets",
+};
+
+export const STATELESS_SETTINGS_SECTIONS: ReadonlySet<SettingsSectionId> =
+  new Set(["upgrade", "audit", "cli", "preferences", "config-repo"]);
+
+export function formatInTimeZone(
+  iso: string | undefined | null,
+  tz: string,
+): string {
+  if (!iso || iso.startsWith("0001-01-01")) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const opts: Intl.DateTimeFormatOptions = {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZoneName: "short",
+  };
+  try {
+    return tz && tz !== "local"
+      ? new Intl.DateTimeFormat(undefined, { ...opts, timeZone: tz }).format(d)
+      : new Intl.DateTimeFormat(undefined, opts).format(d);
+  } catch {
+    return new Intl.DateTimeFormat(undefined, opts).format(d);
+  }
+}
+
 export function resolveSettingsSection(
   raw: string | null | undefined,
 ): SettingsSectionId | null {
@@ -451,6 +501,15 @@ export function resolveSettingsSection(
   const direct = ALL_SETTINGS_SECTIONS.find((s) => s.id === id);
   if (direct) return direct.id;
   return SECTION_ALIASES[id] ?? null;
+}
+
+export function resolveSettingsAliasAnchor(
+  raw: string | null | undefined,
+): string | null {
+  const id = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  return id ? (SECTION_ALIAS_ANCHORS[id] ?? null) : null;
 }
 
 export function sectionMeta(id: SettingsSectionId): SettingsSectionDef {
@@ -479,6 +538,9 @@ export const CONFIG_REPO_SECTION_PATHS: Readonly<
   ci: ["tables/grain_config.json", "tables/repo_config.json"],
   memory: ["memory/deployment.md"],
   caches: ["tables/grain_config.json"],
+  engine: ["tables/grain_config.json"],
+  registry: ["tables/grain_config.json"],
+  sandboxes: ["tables/grain_config.json"],
 };
 
 export function isConfigRepoSection(id: SettingsSectionId): boolean {

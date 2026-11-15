@@ -187,6 +187,14 @@ g-settings-instance {
   font-weight: 600;
 }
 
+.settings-dirty-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--md-sys-color-primary);
+  flex-shrink: 0;
+}
+
 .settings-stage {
   display: flex;
   flex-direction: column;

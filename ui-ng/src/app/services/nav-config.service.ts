@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Injectable, computed, signal } from "@angular/core";
+import { Injectable, type OnDestroy, computed, signal } from "@angular/core";
 import { DESTINATIONS, type Destination, SETTINGS } from "../shell/nav";
 import { readStorage, writeStorage } from "./theme.service";
 
@@ -74,7 +74,7 @@ export function parseNavHidden(raw: string | null): string[] {
 // hiding/showing and reordering non-pinned rail destinations while keeping
 // Inbox pinned first and Settings pinned at the bottom.
 @Injectable({ providedIn: "root" })
-export class NavConfigService {
+export class NavConfigService implements OnDestroy {
   private readonly _order = signal<readonly string[]>(
     parseNavOrder(
       readStorage(SIDEBAR_ORDER_KEY) ?? readStorage(LEGACY_NAV_ORDER_KEY),
@@ -88,6 +88,36 @@ export class NavConfigService {
   readonly hidden = this._hidden.asReadonly();
   readonly dialogOpen = signal(false);
   private opener: HTMLElement | null = null;
+  private readonly onStorage = (ev: StorageEvent): void => {
+    if (
+      !ev.key ||
+      ev.key === SIDEBAR_ORDER_KEY ||
+      ev.key === LEGACY_NAV_ORDER_KEY
+    ) {
+      this._order.set(
+        parseNavOrder(
+          readStorage(SIDEBAR_ORDER_KEY) ?? readStorage(LEGACY_NAV_ORDER_KEY),
+        ),
+      );
+    }
+    if (!ev.key || ev.key === SIDEBAR_HIDDEN_KEY) {
+      this._hidden.set(
+        new Set(parseNavHidden(readStorage(SIDEBAR_HIDDEN_KEY))),
+      );
+    }
+  };
+
+  constructor() {
+    if (typeof window !== "undefined") {
+      window.addEventListener?.("storage", this.onStorage);
+    }
+  }
+
+  ngOnDestroy(): void {
+    if (typeof window !== "undefined") {
+      window.removeEventListener?.("storage", this.onStorage);
+    }
+  }
 
   openDialog(opener?: HTMLElement | null): void {
     this.opener = opener ?? null;

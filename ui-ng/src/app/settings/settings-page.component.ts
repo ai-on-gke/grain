@@ -15,27 +15,38 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
+  HostListener,
   OnDestroy,
   OnInit,
   ViewEncapsulation,
+  afterRenderEffect,
   computed,
   inject,
   input,
   signal,
+  viewChild,
 } from "@angular/core";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
+import { KeyboardService } from "../services/keyboard.service";
+import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
 import { SettingsCodeComponent } from "./settings-code.component";
 import { SettingsComputeComponent } from "./settings-compute.component";
 import { SettingsInstanceComponent } from "./settings-instance.component";
 import {
   CONFIG_REPO_SECTION_PATHS,
   DEFAULT_SETTINGS_SECTION,
+  STATELESS_SETTINGS_SECTIONS,
   type SettingsGroupId,
   type SettingsSectionId,
   SETTINGS_GROUPS,
   filterSettingsGroups,
+  resolveSettingsAliasAnchor,
   resolveSettingsSection,
   sectionMeta,
 } from "./settings-sections";
@@ -47,6 +58,7 @@ import { SettingsWorkComponent } from "./settings-work.component";
   selector: "g-settings-page",
   imports: [
     RouterLink,
+    ConfirmDialogComponent,
     SettingsComputeComponent,
     SettingsCodeComponent,
     SettingsWorkComponent,
@@ -109,6 +121,7 @@ import { SettingsWorkComponent } from "./settings-work.component";
                 />
               </svg>
               <input
+                #filterInputEl
                 class="settings-filter-input"
                 type="search"
                 name="grain-settings-filter"
@@ -122,6 +135,7 @@ import { SettingsWorkComponent } from "./settings-work.component";
                 data-testid="settings-filter-input"
                 [value]="filterQuery()"
                 (input)="filterQuery.set($any($event.target).value)"
+                (keydown.escape)="onFilterEscape($event)"
               />
             </form>
           </div>
@@ -154,7 +168,7 @@ import { SettingsWorkComponent } from "./settings-work.component";
                     <li>
                       <a
                         class="settings-nav-item"
-                        [routerLink]="['/settings', sec.id]"
+                        [href]="'/next/settings/' + sec.id"
                         [class.is-active]="activeSection() === sec.id"
                         [attr.aria-current]="
                           activeSection() === sec.id ? 'page' : null
@@ -163,6 +177,13 @@ import { SettingsWorkComponent } from "./settings-work.component";
                         (click)="selectSection(sec.id, $event)"
                       >
                         <span>{{ sec.label }}</span>
+                        @if (activeSection() === sec.id && state.isDirty()) {
+                          <span
+                            class="settings-dirty-dot"
+                            data-testid="settings-dirty-dot"
+                            aria-label="Unsaved changes"
+                          ></span>
+                        }
                       </a>
                     </li>
                   }
@@ -177,8 +198,9 @@ import { SettingsWorkComponent } from "./settings-work.component";
             <div class="settings-stage-inner">
               <a
                 class="btn-text settings-mobile-back"
-                routerLink="/settings"
+                href="/next/settings"
                 data-testid="settings-mobile-back"
+                (click)="onMobileBack($event)"
                 >← All settings</a
               >
 
@@ -195,19 +217,36 @@ import { SettingsWorkComponent } from "./settings-work.component";
                     {{ activeMeta().subtitle }}
                   </p>
                 </div>
-                @if (state.sectionLocked(activeSection())) {
-                  <span
-                    class="status-pill neutral"
-                    data-testid="section-readonly-pill"
-                    >Managed in config repo</span
-                  >
-                } @else if (ready() && !access.can("POST /api/settings")) {
-                  <span
-                    class="status-pill neutral"
-                    data-testid="section-role-readonly-pill"
-                    >Read-only</span
-                  >
-                }
+                <div class="s-inline">
+                  @if (state.pendingRestart().length > 0) {
+                    <a
+                      class="status-pill warn"
+                      style="text-decoration: none"
+                      routerLink="/fleet"
+                      [queryParams]="{ tab: 'controls' }"
+                      data-testid="settings-restart-needed"
+                      >Restart needed</a
+                    >
+                  }
+                  @if (saveStatusLabel(); as statusLbl) {
+                    <span class="s-hint" data-testid="settings-save-status">{{
+                      statusLbl
+                    }}</span>
+                  }
+                  @if (state.sectionLocked(activeSection())) {
+                    <span
+                      class="status-pill neutral"
+                      data-testid="section-readonly-pill"
+                      >Managed in config repo</span
+                    >
+                  } @else if (ready() && !access.can("POST /api/settings")) {
+                    <span
+                      class="status-pill neutral"
+                      data-testid="section-role-readonly-pill"
+                      >Read-only</span
+                    >
+                  }
+                </div>
               </header>
 
               @if (state.sectionLocked(activeSection())) {
@@ -403,24 +442,63 @@ import { SettingsWorkComponent } from "./settings-work.component";
           }
         </div>
       </div>
+      @if (leaveConfirmReq(); as req) {
+        <g-confirm-dialog [request]="req" (done)="onLeaveConfirmDone($event)" />
+      }
     </section>
   `,
 })
 export class SettingsPageComponent implements OnInit, OnDestroy {
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
+  private readonly keyboard = inject(KeyboardService);
+  private readonly hostEl: ElementRef<HTMLElement> = inject(ElementRef);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
 
   readonly section = input<string | undefined>(undefined);
   readonly path = input<string | undefined>(undefined);
+  readonly filePath = input<string | undefined>(undefined);
+
+  private readonly filterInputEl =
+    viewChild<ElementRef<HTMLInputElement>>("filterInputEl");
 
   protected readonly filterQuery = signal("");
   protected readonly ready = signal(false);
+  protected readonly leaveConfirmReq = signal<ConfirmRequest | null>(null);
+  private leaveResolve: ((ok: boolean) => void) | null = null;
+  private unregisterSlash: (() => void) | null = null;
   private readonly routeSection = signal<string | null>(null);
   private readonly routeFilePath = signal<string>("");
+  private readonly routeFragment = signal<string>("");
+  private lastScrolledKey = "";
 
   private subs: Subscription[] = [];
+
+  constructor() {
+    afterRenderEffect(() => {
+      if (!this.ready()) return;
+      const sec = this.activeSection();
+      const rawSec = this.routeSection() ?? this.section();
+      const anchor =
+        this.routeFragment() || resolveSettingsAliasAnchor(rawSec) || "";
+      if (!anchor) {
+        this.lastScrolledKey = "";
+        return;
+      }
+      const key = `${sec}#${anchor}`;
+      if (key === this.lastScrolledKey) return;
+      if (this.scrollToCardAnchor(anchor)) {
+        this.lastScrolledKey = key;
+      } else {
+        setTimeout(() => {
+          if (this.scrollToCardAnchor(anchor)) {
+            this.lastScrolledKey = key;
+          }
+        }, 80);
+      }
+    });
+  }
 
   protected readonly hasExplicitSection = computed(() => {
     const raw = this.routeSection() ?? this.section();
@@ -432,8 +510,20 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     return resolveSettingsSection(raw) ?? DEFAULT_SETTINGS_SECTION;
   });
 
+  protected readonly saveStatusLabel = computed<string | null>(() => {
+    if (this.state.saving()) return "Saving…";
+    if (this.state.isDirty()) return "Unsaved changes";
+    if (
+      !this.ready() ||
+      STATELESS_SETTINGS_SECTIONS.has(this.activeSection())
+    ) {
+      return null;
+    }
+    return "All changes saved";
+  });
+
   protected readonly queryFilePath = computed(
-    () => this.path() ?? this.routeFilePath(),
+    () => this.filePath() || this.path() || this.routeFilePath(),
   );
 
   protected readonly activeMeta = computed(() =>
@@ -453,12 +543,26 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   );
 
   ngOnInit(): void {
+    this.unregisterSlash = this.keyboard.register({
+      key: "/",
+      description: "Filter settings",
+      run: () => this.filterInputEl()?.nativeElement.focus(),
+    });
     this.subs.push(
       this.route.paramMap.subscribe((pm) => {
         this.routeSection.set(pm.get("section"));
+        const fp = pm.get("filePath");
+        if (fp) this.routeFilePath.set(fp);
       }),
       this.route.queryParamMap.subscribe((qm) => {
-        this.routeFilePath.set(qm.get("path") ?? "");
+        const qp = qm.get("path");
+        if (qp !== null) this.routeFilePath.set(qp);
+        else if (!this.route.snapshot.paramMap.get("filePath")) {
+          this.routeFilePath.set("");
+        }
+      }),
+      this.route.fragment.subscribe((frag) => {
+        this.routeFragment.set((frag ?? "").trim());
       }),
     );
     if (this.state.initialized() && this.state.config() !== null) {
@@ -474,11 +578,131 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.leaveResolve?.(false);
+    this.leaveResolve = null;
+    this.unregisterSlash?.();
+    this.unregisterSlash = null;
     this.subs.forEach((s) => s.unsubscribe());
   }
 
-  protected selectSection(id: SettingsSectionId, ev: Event): void {
+  @HostListener("window:beforeunload", ["$event"])
+  protected onBeforeUnload(ev: BeforeUnloadEvent): void {
+    if (this.state.isDirty()) ev.preventDefault();
+  }
+
+  async canLeave(): Promise<boolean> {
+    if (!this.state.isDirty()) return true;
+    if (this.leaveResolve) return false;
+    const ok = await new Promise<boolean>((resolve) => {
+      this.leaveResolve = resolve;
+      this.leaveConfirmReq.set({
+        title: "Discard unsaved changes?",
+        message: `You have unsaved changes in ${this.activeMeta().label}. Leave and discard them?`,
+        accept: "Discard",
+        destructive: true,
+        run: async () => undefined,
+      });
+    });
+    if (ok) this.state.discard();
+    return ok;
+  }
+
+  protected onLeaveConfirmDone(accepted: boolean): void {
+    const res = this.leaveResolve;
+    this.leaveResolve = null;
+    this.leaveConfirmReq.set(null);
+    res?.(accepted);
+  }
+
+  protected onFilterEscape(ev: Event): void {
+    if (this.filterQuery()) {
+      ev.stopPropagation();
+      this.filterQuery.set("");
+    }
+  }
+
+  private scrollToCardAnchor(anchor: string): boolean {
+    const root = this.hostEl.nativeElement;
+    const scroller = root.querySelector<HTMLElement>(".settings-stage-scroll");
+    if (!scroller) return false;
+    const escaped =
+      typeof CSS !== "undefined" && typeof CSS.escape === "function"
+        ? CSS.escape(anchor)
+        : anchor.replace(/[^a-zA-Z0-9_-]/g, "");
+    const el =
+      (escaped ? root.querySelector<HTMLElement>(`#${escaped}`) : null) ??
+      root.querySelector<HTMLElement>(`[data-testid="${anchor}"]`);
+    if (!el) return false;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const pad = elRect.height > scroller.clientHeight - 32 ? 12 : 20;
+    const nextTop = Math.max(
+      0,
+      scroller.scrollTop + (elRect.top - scrollerRect.top) - pad,
+    );
+    scroller.scrollTop = nextTop;
+    return true;
+  }
+
+  protected async onMobileBack(ev: MouseEvent): Promise<void> {
+    if (
+      ev.button !== 0 ||
+      ev.metaKey ||
+      ev.ctrlKey ||
+      ev.shiftKey ||
+      ev.altKey
+    ) {
+      return;
+    }
     ev.preventDefault();
+    if (!(await this.canLeave())) return;
+    this.routeSection.set(null);
+    void this.router.navigate(["/settings"]);
+  }
+
+  @HostListener("click", ["$event"])
+  protected async onStageClick(ev: MouseEvent): Promise<void> {
+    if (
+      ev.defaultPrevented ||
+      ev.button !== 0 ||
+      ev.metaKey ||
+      ev.ctrlKey ||
+      ev.shiftKey ||
+      ev.altKey
+    ) {
+      return;
+    }
+    const link = (ev.target as HTMLElement | null)?.closest<HTMLAnchorElement>(
+      "a[data-settings-section]",
+    );
+    if (!link) return;
+    const raw = link.getAttribute("data-settings-section");
+    const target = resolveSettingsSection(raw);
+    if (!target) return;
+    const frag = link.getAttribute("data-settings-fragment") || undefined;
+    ev.preventDefault();
+    if (target === this.activeSection() && !frag) return;
+    if (!(await this.canLeave())) return;
+    this.routeSection.set(target);
+    void this.router.navigate(["/settings", target], { fragment: frag });
+  }
+
+  protected async selectSection(
+    id: SettingsSectionId,
+    ev: MouseEvent,
+  ): Promise<void> {
+    if (
+      ev.button !== 0 ||
+      ev.metaKey ||
+      ev.ctrlKey ||
+      ev.shiftKey ||
+      ev.altKey
+    ) {
+      return;
+    }
+    ev.preventDefault();
+    if (id === this.activeSection() && this.hasExplicitSection()) return;
+    if (!(await this.canLeave())) return;
     this.routeSection.set(id);
     void this.router.navigate(["/settings", id]);
   }
@@ -498,6 +722,9 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
       this.state.hasDeployDraft() &&
       !this.access.can("PUT /api/deployment")
     ) {
+      return false;
+    }
+    if (this.state.hasMemoryDraft() && !this.access.can("PUT /api/memory")) {
       return false;
     }
     return true;
