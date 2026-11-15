@@ -1278,6 +1278,17 @@ describe("TaskPageComponent", () => {
     });
   });
 
+  it("keeps the plain Defer a deferral with no date", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, state: "queued" };
+    const f = await render(api);
+    q<HTMLButtonElement>(f, '[data-testid="act-defer"]')!.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/defer"),
+    ).toMatchObject({ body: { deferredUntil: "" } });
+  });
+
   it("undoes on the task that was acted on, even after moving to another", async () => {
     const api = new FakeApi();
     api.detail = { ...api.detail, state: "queued" };

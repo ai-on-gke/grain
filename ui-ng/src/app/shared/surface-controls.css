@@ -163,6 +163,33 @@
   color: var(--md-sys-color-inverse-primary);
 }
 
+.batch-bar .btn-text:disabled {
+  opacity: 0.5;
+}
+
+.batch-defer-until {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.batch-defer-until label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.batch-defer-until input {
+  font: inherit;
+  padding: 2px 6px;
+  border: 1px solid var(--md-sys-color-inverse-on-surface);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  color-scheme: dark;
+}
+
 /* ---------- Shared dialogs & switches ---------- */
 .btn-text.danger {
   color: var(--md-sys-color-error);
