@@ -605,14 +605,14 @@ test("heavy Telemetry progressive disclosure stays <2400px tall with grouped quo
   await waitPageSettled(page);
 
   await expect(page.getByTestId("usage-warnings-banner")).toBeVisible();
-  await expect(
-    page.getByTestId("usage-warnings-banner").locator("li"),
-  ).toHaveCount(2);
-  await expect(
-    page.getByTestId("usage-scopes-table").locator("tbody tr"),
-  ).toHaveCount(8);
-  await expect(page.locator(".tel-dir-item")).toHaveCount(8);
-  await expect(page.getByTestId("space-actor-row")).toHaveCount(12);
+  expect(
+    await page.getByTestId("usage-warnings-banner").locator("li").count(),
+  ).toBe(2);
+  expect(
+    await page.getByTestId("usage-scopes-table").locator("tbody tr").count(),
+  ).toBe(8);
+  expect(await page.locator(".tel-dir-item").count()).toBe(8);
+  expect(await page.getByTestId("space-actor-row").count()).toBe(12);
 
   const defaultScrollHeight = await page.evaluate(
     () => document.querySelector(".ops-scroll")?.scrollHeight ?? 9999,
@@ -622,7 +622,13 @@ test("heavy Telemetry progressive disclosure stays <2400px tall with grouped quo
   await saveShot(page, "heavy-telemetry-desktop-light");
 
   // Toggle notices, People filter, and Show all.
-  await page.getByTestId("usage-warnings-toggle").click();
+  // Expanding is a signal flip and a re-render, which a loaded runner can
+  // land after a one-shot count() has already read the collapsed list:
+  // ui-ng e2e failed twice on 1dd87d1 reading 2 here. Wait for the toggle
+  // to say it has expanded, then for the list to grow.
+  const toggle = page.getByTestId("usage-warnings-toggle");
+  await toggle.click();
+  await expect(toggle).toHaveText("Show fewer");
   await expect(
     page.getByTestId("usage-warnings-banner").locator("li"),
   ).toHaveCount(12);

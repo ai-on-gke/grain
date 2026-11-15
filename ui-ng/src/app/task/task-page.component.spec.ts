@@ -329,6 +329,27 @@ describe("TaskPageComponent", () => {
     expect(root.textContent).not.toContain("classic task page");
   });
 
+  // Rollover (durable-tasks.design.md#DT-15): the predecessor banners its
+  // successor, and the successor links back.
+  it("banners a rollover on both ends", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, state: "closed", rolledOverTo: "902" };
+    let f = await render(api);
+    const to = q(f, '[data-testid="task-rolled-over-to"]')!;
+    expect(to.textContent).toContain("Rolled over to #902");
+    expect(to.querySelector("a")!.getAttribute("href")).toBe("/task/902");
+    expect(q(f, '[data-testid="task-rolled-over-from"]')).toBeNull();
+    TestBed.inject(TaskStore).close();
+    TestBed.resetTestingModule();
+
+    const next = new FakeApi();
+    next.detail = { ...next.detail, rolledOverFrom: "901" };
+    f = await render(next);
+    const from = q(f, '[data-testid="task-rolled-over-from"]')!;
+    expect(from.querySelector("a")!.getAttribute("href")).toBe("/task/901");
+    expect(q(f, '[data-testid="task-rolled-over-to"]')).toBeNull();
+  });
+
   it("sends a reply with Ctrl+Enter and uploads composer attachments", async () => {
     const api = new FakeApi();
     const f = await render(api);

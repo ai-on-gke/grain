@@ -143,8 +143,9 @@ test.describe("Settings → Models default and fallback models", () => {
       "claude-sonnet-5",
     );
     // Move it to the top of the fallbacks, drop the retired one.
-    // One move at a time: the second click must land on the re-indexed row,
-    // not on whichever row held index 1 before the first move rendered.
+    // Wait for each move to render before the next click: the row test ids
+    // are re-bound on change detection, so a second click fired before the
+    // first move lands can hit the button of the row that used to sit there.
     await card.getByTestId("fallback-up-2").click();
     await expect(card.getByTestId("fallback-row-1")).toContainText(
       "claude-sonnet-5",
@@ -158,13 +159,12 @@ test.describe("Settings → Models default and fallback models", () => {
 
     await page.getByTestId("settings-save-btn").click();
     await expect(page.getByTestId("settings-save-bar")).toBeHidden();
-    // Polled: the save bar hides as the request leaves, not once the
-    // deployment answers with what it stored.
-    const savedModels = async () =>
-      (await (await request.get("/api/deployment")).json()).defaultModels;
-    await expect
-      .poll(savedModels)
-      .toEqual(["gemini-2.5-pro", "claude-sonnet-5", "claude-opus-5"]);
+    const dep = await (await request.get("/api/deployment")).json();
+    expect(dep.defaultModels).toEqual([
+      "gemini-2.5-pro",
+      "claude-sonnet-5",
+      "claude-opus-5",
+    ]);
 
     // Promoting a fallback to default takes it out of the fallbacks.
     await card.getByTestId("picker-default-model").click();
@@ -178,13 +178,12 @@ test.describe("Settings → Models default and fallback models", () => {
     await expect(card.locator('[data-testid^="fallback-row-"]')).toHaveCount(1);
     await page.getByTestId("settings-save-btn").click();
     await expect(page.getByTestId("settings-save-bar")).toBeHidden();
-    await expect
-      .poll(savedModels)
-      .toEqual(["claude-opus-5", "claude-sonnet-5"]);
+    const after = await (await request.get("/api/deployment")).json();
+    expect(after.defaultModels).toEqual(["claude-opus-5", "claude-sonnet-5"]);
   });
 });
 
-test("Settings Models - Discovered models, clear credential, and fallback models", async ({
+test("Settings Models - Discovered models, no framework keys card, and fallback models", async ({
   page,
 }) => {
   await page.goto("/next/settings/models");
@@ -198,11 +197,9 @@ test("Settings Models - Discovered models, clear credential, and fallback models
     );
   }
 
-  // Clear credential
-  const clearBtn = page.getByTestId("clear-codex-auth");
-  if (await clearBtn.isEnabled()) {
-    await clearBtn.click();
-  }
+  // The standalone framework keys card is retired: credentials live on
+  // each connection.
+  await expect(page.getByTestId("card-agent-keys")).toHaveCount(0);
 
   // Fallback models (done in existing tests, just verifying structure)
   const addFallbackBtn = page.getByTestId("picker-add-fallback");
