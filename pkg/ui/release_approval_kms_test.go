@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -73,7 +74,7 @@ func TestAnUnreadableKMSReleaseApprovalKeyIsNamedInA502(t *testing.T) {
 	if got["code"] != apierror.CodeUpstream || !strings.Contains(got["error"], "-release-approval-kms-key") {
 		t.Fatalf("answer = %v; want code %s and an error naming -release-approval-kms-key", got, apierror.CodeUpstream)
 	}
-	if strings.Contains(got["error"], "denied") || strings.Contains(got["error"], "403") {
+	if msg := kmsAnswerRef.ReplaceAllString(got["error"], "(ref)"); strings.Contains(msg, "denied") || strings.Contains(msg, "403") {
 		t.Fatalf("answer %q carries KMS's own answer; want it only in the log", got["error"])
 	}
 }
@@ -157,7 +158,10 @@ func TestAKMSReleaseApprovalKeyThatCannotSignAfterPublicKeyCacheIsNamedInA502(t 
 		if got["code"] != apierror.CodeUpstream || !strings.Contains(got["error"], "-release-approval-kms-key") {
 			t.Fatalf("POST %s answer = %v; want code %s and an error naming -release-approval-kms-key", tc.path, got, apierror.CodeUpstream)
 		}
-		if strings.Contains(got["error"], "denied") || strings.Contains(got["error"], "403") {
+		// The answer's "(ref <12 hex>)" is random and can itself read "403",
+		// so look for KMS's answer only in the rest of the message.
+		msg := kmsAnswerRef.ReplaceAllString(got["error"], "(ref)")
+		if strings.Contains(msg, "denied") || strings.Contains(msg, "403") {
 			t.Fatalf("POST %s answer %q carries KMS's own answer; want it only in the log", tc.path, got["error"])
 		}
 	}
@@ -165,3 +169,7 @@ func TestAKMSReleaseApprovalKeyThatCannotSignAfterPublicKeyCacheIsNamedInA502(t 
 		t.Fatalf("dispatched %d workflows after KMS refused signing, want 0", forge.dispatches)
 	}
 }
+
+// kmsAnswerRef matches the "(ref 75f243dc0b29)" an upstream answer names
+// its daemon log line by.
+var kmsAnswerRef = regexp.MustCompile(`\(ref [0-9a-f]+\)`)
