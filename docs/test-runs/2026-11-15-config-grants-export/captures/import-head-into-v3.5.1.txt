@@ -1,0 +1,31 @@
+repo rc=0
+grain daemon: loading the config repository: state repository was written by a newer build of grain: repository is at schema 146, this build knows 136
+grain daemon: loading the config repository: state repository was written by a newer build of grain: repository is at schema 146, this build knows 136
+applied dfe9552f24f027ab6dc078019fba74494e659886 from file:///tmp/walk-cfg/config.git
+sync rc=0
+grain daemon: loading the config repository: state repository was written by a newer build of grain: repository is at schema 146, this build knows 136
+-- template_read
+template_id|owner|name
+template-1|acme|docs
+template-2|acme|docs
+template-2|ghe.example.com/acme|legacy
+template-3|acme|docs
+-- template_write
+template_id|owner|name|base
+template-1|acme|gadgets|main
+template-2|acme|docs|release
+template-2|acme|gadgets|
+template-3|acme|gadgets|
+-- schedule_read
+schedule_id|owner|name
+sched-1|acme|docs
+sched-1|ghe.example.com/acme|legacy
+system:infra-review|grain|config
+system:memory-agent|grain|config
+system:pipeline-steward|grain|config
+system:release-notes|grain|config
+system:steward-audit|grain|config
+-- schedule_write
+schedule_id|owner|name|base
+sched-1|acme|docs|
+sched-1|acme|gadgets|main
