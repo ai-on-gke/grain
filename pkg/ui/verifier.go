@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/webauth"
@@ -80,6 +81,10 @@ type VerifiedIdentity struct {
 	Sub   string              // normalized subject, when distinct or verified
 	Kind  model.PrincipalKind // human or service
 	Via   *DelegatingApp      // non-nil when the request is delegated on behalf of Email
+	// SessionGrace is set by a SessionBinder's Verify that admitted Email
+	// on the request's VerifierSession, its backend unreachable, rather
+	// than on a full check (VerifierSessionFromRequest).
+	SessionGrace bool
 }
 
 type registeredVerifier struct {
@@ -323,6 +328,9 @@ type callerVerification struct {
 	method         AuthMethod
 	accessCodeWins bool
 	err            error
+	// sessionTTL > 0 has serveHTTP issue a SessionBinder's session
+	// cookie for id (verifier_session.go).
+	sessionTTL time.Duration
 }
 
 func withCallerVerification(ctx context.Context, cv *callerVerification) context.Context {
@@ -369,7 +377,7 @@ func verifyCallerNow(r *http.Request) callerVerification {
 		if len(headers) > 0 && header == "" {
 			continue
 		}
-		cv, matched := verifyWithVerifier(r, v, header)
+		cv, matched := verifyWithSession(r, v, header)
 		if !matched {
 			continue
 		}
@@ -451,7 +459,7 @@ func verifyWithVerifier(r *http.Request, v IdentityVerifier, header string) (cal
 	return callerVerification{
 		present:        true,
 		verifier:       v,
-		id:             VerifiedIdentity{Email: email, Sub: id.Sub, Kind: kind, Via: id.Via},
+		id:             VerifiedIdentity{Email: email, Sub: id.Sub, Kind: kind, Via: id.Via, SessionGrace: id.SessionGrace},
 		method:         AuthMethod(v.Name()),
 		accessCodeWins: verifierAccessCodeWins(v),
 	}, true
