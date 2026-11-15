@@ -69,6 +69,8 @@ import {
   describeSuiteMode,
   formatCadence,
   isEventTrigger,
+  skipFolded,
+  suppressionReasonLabel,
   scheduleStatusBadge,
   suiteRunBadge,
   templateSourceBadge,
@@ -786,7 +788,7 @@ type SuitesPaneView = "suites" | "runs";
                   }
                   @if (s.suppressed; as sup) {
                     <div class="banner banner-error" style="margin: 6px 0 0">
-                      Suppressed ({{ sup.reason }}):
+                      Suppressed — {{ suppressionLabel(sup.reason) }}:
                       {{ sup.detail || "Previous firing is still open." }}
                       @if (sup.taskId) {
                         —
@@ -860,9 +862,17 @@ type SuitesPaneView = "suites" | "runs";
                       }
                       <dt>Overlap</dt>
                       <dd>{{ s.overlap || "skip" }}</dd>
+                      @if (s.overlapGroup) {
+                        <dt>Overlap group</dt>
+                        <dd data-testid="sched-overlap-group">
+                          {{ s.overlapGroup }}
+                        </dd>
+                      }
                       <dt>Auto-merge</dt>
                       <dd>{{ s.autoMerge ? "on" : "off" }}</dd>
-                      @if (s.nextRunAt) {
+                      <!-- An event trigger's nextRunAt is a placeholder a year
+                           out (model.Schedule), not a time it will fire. -->
+                      @if (s.nextRunAt && !isTrigger(s)) {
                         <dt>Next run</dt>
                         <dd class="tabular">{{ s.nextRunAt }}</dd>
                       }
@@ -915,13 +925,35 @@ type SuitesPaneView = "suites" | "runs";
                     </p>
                   }
                   @for (sk of (s.skips ?? []).slice(0, 5); track sk.at) {
-                    <div class="proc-kv-item">
+                    <div
+                      class="proc-kv-item proc-skip-row"
+                      data-testid="sched-skip"
+                    >
                       <span class="muted">{{ sk.summary }}</span>
-                      @if (sk.taskId) {
-                        <a [routerLink]="['/task', sk.taskId]"
-                          >#{{ sk.taskId }}</a
-                        >
-                      }
+                      <span class="proc-skip-refs">
+                        @if (sk.taskId) {
+                          <a [routerLink]="['/task', sk.taskId]"
+                            >#{{ sk.taskId }}</a
+                          >
+                        }
+                        @if (sk.outcome === "fired") {
+                          <span data-testid="sched-skip-outcome">
+                            → fired
+                            @if (sk.firedTaskId) {
+                              <a [routerLink]="['/task', sk.firedTaskId]"
+                                >#{{ sk.firedTaskId }}</a
+                              >
+                            }
+                            @if (skipFolded(sk); as folded) {
+                              · {{ folded }}
+                            }
+                          </span>
+                        } @else if (sk.outcome === "dropped") {
+                          <span data-testid="sched-skip-outcome"
+                            >→ dropped</span
+                          >
+                        }
+                      </span>
                     </div>
                   }
                 </div>
@@ -3088,6 +3120,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected tmplBadge = templateSourceBadge;
   protected cadenceOf = formatCadence;
   protected isTrigger = isEventTrigger;
+  protected suppressionLabel = suppressionReasonLabel;
+  protected skipFolded = skipFolded;
   protected suiteModeOf = describeSuiteMode;
   protected runBadgeOf = suiteRunBadge;
 

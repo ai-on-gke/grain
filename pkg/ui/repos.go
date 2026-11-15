@@ -1932,6 +1932,9 @@ func (c *Client) cleanRepoCICapabilities(ctx context.Context, repo model.RepoRef
 			canonicalID = normalized
 		} else if !slices.Contains(allowed, id) {
 			if !slices.Contains(stored, id) {
+				if msg, _, ok := model.RetiredGrantRefusal(id); ok {
+					return nil, validationErrorf("ciCapabilities: %s; list that instead", msg)
+				}
 				return nil, validationErrorf("ciCapabilities: capability %q is not supported for CI", id)
 			}
 		}

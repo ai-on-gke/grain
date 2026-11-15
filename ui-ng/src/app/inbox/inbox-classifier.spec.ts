@@ -14,6 +14,7 @@
 
 import type { Notification, Task } from "../api/models";
 import {
+  awaitsHumanSubmit,
   buildEntries,
   classifyNotification,
   classifyTask,
@@ -154,6 +155,26 @@ describe("inbox classifier", () => {
         } as Partial<Task>),
       ),
     ).toBeNull();
+  });
+
+  it("keeps a submittable CL's Submit out of Submit all and says it submits", () => {
+    const e = classifyTask(
+      task({
+        id: "31",
+        state: "awaiting_submit",
+        clSubmit: { canSubmit: true },
+      }),
+    );
+    expect(e?.groupId).toBe("submit");
+    const submit = e?.actions.find((a) => a.label === "Submit");
+    expect(submit).toBeTruthy();
+    expect(submit?.bulk).toBeFalsy();
+    expect(submit?.blocked).toBeUndefined();
+    expect(e?.summary).toContain("Submit this CL now");
+    expect(e?.rationale).not.toContain("approval before merging");
+    // A pull request's Submit, a recorded approval, still joins it.
+    const pr = classifyTask(task({ id: "32", state: "awaiting_submit" }));
+    expect(pr?.actions.find((a) => a.label === "Submit")?.bulk).toBeTruthy();
   });
 
   it("reads a pending release, its soak, breaking changes and a failed dispatch", () => {
@@ -312,5 +333,40 @@ describe("inbox classifier", () => {
     });
     expect(cleared.taskId).toBe("412");
     expect(cleared.taskLink).toBe("/task/412");
+  });
+
+  it("keeps an approved awaiting_submit task in awaitsHumanSubmit when held by security-findings source", () => {
+    expect(
+      awaitsHumanSubmit(
+        task({
+          state: "awaiting_submit",
+          humanApprovedBy: "alice",
+          humanReviewHold: [
+            {
+              source: "security-findings",
+              category: "security",
+              reason: "review 77 left findings",
+              at: "2026-11-15T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      awaitsHumanSubmit(
+        task({
+          state: "awaiting_submit",
+          humanApprovedBy: "alice",
+          humanReviewHold: [
+            {
+              source: "requested",
+              category: "security",
+              reason: "intent unclear",
+              at: "2026-11-15T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
   });
 });
