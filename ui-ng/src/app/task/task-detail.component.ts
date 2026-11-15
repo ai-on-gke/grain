@@ -110,6 +110,20 @@ function isTab(v: unknown): v is TaskTab {
 }
 
 // duration is a run's length in words ("4m 12s", "38s").
+// linkedComment reads a #comment=<id> fragment ("comment=13") as the
+// comment it links to on task, or null for any other fragment. A
+// #comment= naming no comment (truncated or mistyped on its way to the
+// address bar) is a link with a null comment, which is said, not ignored.
+export function linkedComment(
+  fragment: string | null | undefined,
+  task: string,
+): { task: string; comment: number | null; hash: string } | null {
+  const f = String(fragment ?? "").trim();
+  if (!f.startsWith("comment=")) return null;
+  const m = /^comment=(\d+)$/.exec(f);
+  return { task, comment: m ? Number(m[1]) : null, hash: `#${f.slice(0, 40)}` };
+}
+
 export function duration(from?: string, to?: string): string {
   if (!from) return "";
   const end = to ? Date.parse(to) : Date.now();
@@ -1493,6 +1507,19 @@ export class TaskDetailComponent implements OnDestroy {
   private readonly composer =
     viewChild<ElementRef<HTMLTextAreaElement>>("composer");
   private readonly moreWrap = viewChild<ElementRef<HTMLElement>>("moreWrap");
+  private readonly conversation = viewChild(ConversationComponent);
+
+  // linked is the comment the address's #comment=<id> points at, for the
+  // task that was open when it arrived, until it has been shown (or said
+  // not to be there). comment is null for a #comment= naming no comment.
+  private readonly linked = signal<{
+    task: string;
+    comment: number | null;
+    hash: string;
+  } | null>(null);
+  private readonly fragment = signal<string | null>(null);
+  private linkLoading = "";
+  private linkTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
     if (ev.key === "Escape" && this.moreMenuOpen()) {
@@ -1708,10 +1735,23 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   constructor() {
-    const paneSub = inject(ActivatedRoute).queryParamMap.subscribe((q) =>
+    const route = inject(ActivatedRoute);
+    const paneSub = route.queryParamMap.subscribe((q) =>
       this.routePane.set(q.get("pane") ?? undefined),
     );
-    inject(DestroyRef).onDestroy(() => paneSub.unsubscribe());
+    // /next/task/<id>#comment=<n> and /next/tasks?task=<id>#comment=<n>,
+    // the links grain writes into notes and notifications.
+    const fragSub = route.fragment.subscribe((f) => this.fragment.set(f));
+    inject(DestroyRef).onDestroy(() => {
+      paneSub.unsubscribe();
+      fragSub.unsubscribe();
+      if (this.linkTimer) clearTimeout(this.linkTimer);
+    });
+    effect(() => {
+      const link = linkedComment(this.fragment(), this.id());
+      untracked(() => this.linked.set(link));
+    });
+    effect(() => this.followCommentLink());
     effect(() => {
       const id = this.id();
       untracked(() => {
@@ -1758,6 +1798,69 @@ export class TaskDetailComponent implements OnDestroy {
       });
     });
     void this.loadConfigCapabilities();
+  }
+
+  // followCommentLink shows the comment linked: on the Conversation tab,
+  // after paging back to it when it is older than the comments loaded,
+  // scrolled to, focused and highlighted (ConversationComponent's
+  // revealComment). A comment that is not this task's says so in a
+  // snackbar and leaves the page where it was.
+  private followCommentLink(): void {
+    const link = this.linked();
+    const t = this.t();
+    const tab = this.current();
+    if (!link || !t || t.id !== link.task) return;
+    untracked(() => {
+      if (link.comment === null) {
+        this.linked.set(null);
+        this.snackbar.show(`This link's ${link.hash} does not name a comment.`);
+        return;
+      }
+      const id = link.comment;
+      const comments = t.comments ?? [];
+      if (!comments.some((c) => c.id === id)) {
+        const first = comments[0]?.id;
+        const key = `${t.id}:${id}`;
+        if ((t.olderComments ?? 0) > 0 && first !== undefined && id < first) {
+          if (this.linkLoading === key) return;
+          this.linkLoading = key;
+          void this.store.loadCommentsThrough(id).then((found) => {
+            if (this.linkLoading === key) this.linkLoading = "";
+            if (!found && this.linked() === link) this.notInConversation(id);
+          });
+          return;
+        }
+        if (this.linkLoading !== key) this.notInConversation(id);
+        return;
+      }
+      if (tab !== "conversation") {
+        void this.router.navigate([], {
+          queryParams: this.tabQuery("conversation"),
+          queryParamsHandling: "merge",
+          preserveFragment: true,
+          replaceUrl: true,
+        });
+        return;
+      }
+      // The thread draws a frame after the detail lands; look for the
+      // comment for up to two seconds.
+      this.linked.set(null);
+      if (this.linkTimer) clearTimeout(this.linkTimer);
+      let tries = 0;
+      const look = () => {
+        this.linkTimer = null;
+        if (this.store.detail()?.id !== link.task) return;
+        if (this.conversation()?.revealComment(id)) return;
+        if (++tries < 40) this.linkTimer = setTimeout(look, 50);
+        else this.snackbar.show(`Comment ${id} is not shown on this page.`);
+      };
+      this.linkTimer = setTimeout(look);
+    });
+  }
+
+  private notInConversation(id: number): void {
+    this.linked.set(null);
+    this.snackbar.show(`Comment ${id} is not in this task's conversation.`);
   }
 
   private async loadConfigCapabilities(): Promise<void> {

@@ -230,6 +230,52 @@ export class TaskStore {
     }
   }
 
+  // loadCommentsThrough pages back through the conversation, up to 500
+  // comments a request, until it holds comment `through` or reaches the
+  // first comment, and merges every page at once, so a #comment= link to
+  // an early comment of a long thread draws once rather than per page.
+  // It answers whether the comment is now loaded.
+  async loadCommentsThrough(through: number): Promise<boolean> {
+    const id = this.id();
+    const has = () =>
+      (this.detail()?.comments ?? []).some((c) => c.id === through);
+    if (!id || !this.detail() || has()) return has();
+    const busyKey = `${id}:older-comments`;
+    if (this.busy().has(busyKey)) return false;
+    this.mark(busyKey, true);
+    let pages: Comment[] = [];
+    let older: number | null = null;
+    let first = this.detail()?.comments?.[0]?.id;
+    try {
+      while (first !== undefined && first > through) {
+        const page = await this.api.get<TaskDetail>(
+          "GET /api/tasks/{id}",
+          { id },
+          `comments_limit=500&comments_before=${encodeURIComponent(String(first))}&attempts_limit=1`,
+        );
+        if (this.id() !== id) return false;
+        const got = page.comments ?? [];
+        if (!got.length) break;
+        pages = mergeComments(got, pages);
+        older = page.olderComments ?? 0;
+        first = got[0].id;
+        if (!older) break;
+      }
+      if (pages.length) {
+        this.pagedComments = mergeComments(pages, this.pagedComments);
+        this.pagedOlderComments = older ?? 0;
+        const latest = this.detail();
+        if (latest) this.detail.set(this.applyPagedMerge(latest));
+      }
+      return has();
+    } catch (err) {
+      if (this.id() === id) this.actionError.set(errorText(err));
+      return false;
+    } finally {
+      this.mark(busyKey, false);
+    }
+  }
+
   async loadOlderAttempts(): Promise<void> {
     const id = this.id();
     const cur = this.detail();

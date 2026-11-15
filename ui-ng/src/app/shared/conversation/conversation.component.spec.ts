@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { ComponentFixture, TestBed } from "@angular/core/testing";
-import { Component, signal } from "@angular/core";
+import { Component, signal, viewChild } from "@angular/core";
 import {
   ConversationComponent,
   ConversationMode,
@@ -51,6 +51,7 @@ class HostComponent {
   readonly mode = signal<ConversationMode>("inline");
   readonly draft = signal("");
   readonly sent: string[] = [];
+  readonly conv = viewChild.required(ConversationComponent);
 }
 
 describe("ConversationComponent", () => {
@@ -200,6 +201,43 @@ describe("ConversationComponent", () => {
     f.detectChanges();
     expect(q('[data-testid="convo-jump"]')).toBeNull();
     expect(thread.scrollTop).toBe(2000);
+  });
+
+  it("counts a page of earlier messages as nothing new", async () => {
+    f.componentInstance.comments.set([mk(5), mk(6)]);
+    f.detectChanges();
+    await f.whenStable();
+    const thread = q<HTMLElement>(".convo-thread")!;
+    Object.defineProperty(thread, "scrollHeight", {
+      configurable: true,
+      value: 2000,
+    });
+    Object.defineProperty(thread, "clientHeight", {
+      configurable: true,
+      value: 300,
+    });
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event("scroll"));
+    f.componentInstance.comments.set([mk(3), mk(4), mk(5), mk(6)]);
+    f.detectChanges();
+    await f.whenStable();
+    f.detectChanges();
+    expect(q('[data-testid="convo-jump"]')).toBeNull();
+    f.componentInstance.comments.set([mk(3), mk(4), mk(5), mk(6), mk(7)]);
+    f.detectChanges();
+    await f.whenStable();
+    f.detectChanges();
+    expect(q('[data-testid="convo-jump"]')).not.toBeNull();
+  });
+
+  it("anchors each message and reveals one by id, focused and highlighted", () => {
+    const el = q<HTMLElement>("#comment-2")!;
+    expect(el.dataset["commentId"]).toBe("2");
+    expect(f.componentInstance.conv().revealComment(99)).toBe(false);
+    expect(f.componentInstance.conv().revealComment(2)).toBe(true);
+    expect(document.activeElement).toBe(el);
+    expect(el.classList).toContain("is-linked");
+    expect(el.getAttribute("tabindex")).toBe("-1");
   });
 
   it("follows new messages without a pill when already at the bottom", async () => {

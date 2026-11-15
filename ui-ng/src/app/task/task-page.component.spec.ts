@@ -262,6 +262,7 @@ async function render(
   api: FakeApi,
   tab?: string,
   from?: string,
+  hash?: string,
 ): Promise<ComponentFixture<TaskPageComponent>> {
   TestBed.configureTestingModule({
     imports: [TaskPageComponent],
@@ -271,6 +272,7 @@ async function render(
       { provide: GrainEvents, useValue: { events: () => NEVER } },
     ],
   });
+  if (hash) await TestBed.inject(Router).navigateByUrl(`/task/7${hash}`);
   const f = TestBed.createComponent(TaskPageComponent);
   f.componentRef.setInput("id", "7");
   if (tab) f.componentRef.setInput("tab", tab);
@@ -415,6 +417,65 @@ describe("TaskPageComponent", () => {
     expect(q(f, '[data-testid="tmsg-0"]')!.textContent).toContain(
       "Earlier kickoff note",
     );
+  });
+
+  describe("#comment= links", () => {
+    async function renderAt(api: FakeApi, hash: string) {
+      const f = await render(api, undefined, undefined, hash);
+      await new Promise((r) => setTimeout(r, 30));
+      await settle(f);
+      return f;
+    }
+
+    it("anchors every comment and focuses and highlights the linked one", async () => {
+      const f = await renderAt(new FakeApi(), "#comment=1");
+      const linked = q(f, '[data-testid="tmsg-1"]')!;
+      expect(linked.id).toBe("comment-1");
+      expect(q(f, '[data-testid="tmsg-2"]')!.id).toBe("comment-2");
+      expect(linked.classList).toContain("is-linked");
+      expect(document.activeElement).toBe(linked);
+      expect(q(f, '[data-testid="tmsg-2"]')!.classList).not.toContain(
+        "is-linked",
+      );
+      expect(TestBed.inject(SnackbarService).current()).toBeNull();
+    });
+
+    it("pages back to a comment older than the ones loaded, then shows it", async () => {
+      const api = new FakeApi();
+      api.detail = { ...api.detail, olderComments: 1 };
+      const f = await renderAt(api, "#comment=0");
+      expect(
+        api.calls.filter(
+          (c) =>
+            c.route === "GET /api/tasks/{id}" &&
+            c.query?.startsWith("comments_limit=500&comments_before=1&"),
+        ),
+      ).toHaveLength(1);
+      const linked = q(f, '[data-testid="tmsg-0"]')!;
+      expect(linked.textContent).toContain("Earlier kickoff note");
+      expect(linked.classList).toContain("is-linked");
+      expect(q(f, '[data-testid="convo-jump"]')).toBeNull();
+    });
+
+    it("says so when the comment is not this task's, and when the link names none", async () => {
+      await renderAt(new FakeApi(), "#comment=99");
+      expect(TestBed.inject(SnackbarService).current()?.message).toBe(
+        "Comment 99 is not in this task's conversation.",
+      );
+      TestBed.inject(TaskStore).close();
+      TestBed.resetTestingModule();
+
+      await renderAt(new FakeApi(), "#comment=abc");
+      expect(TestBed.inject(SnackbarService).current()?.message).toBe(
+        "This link's #comment=abc does not name a comment.",
+      );
+    });
+
+    it("leaves the page alone for any other fragment", async () => {
+      const f = await renderAt(new FakeApi(), "#details");
+      expect(q(f, ".is-linked")).toBeNull();
+      expect(TestBed.inject(SnackbarService).current()).toBeNull();
+    });
   });
 
   it("handles inline pending secret, access request, config change, local-script approval, and human-review hold", async () => {
