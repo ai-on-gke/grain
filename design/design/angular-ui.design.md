@@ -76,11 +76,15 @@ everything that guards the old UI guards it too, with no change:
   so `Sec-Fetch-Site: same-origin` is what admits a write, as for the
   React UI. There is no token to carry.
 - The access-code gate and verified-identity admission. Signed out, a
-  request for `/next/inbox` gets the same "Enter access code" page with a
-  401, and signing in returns to `/next/inbox`
-  (`pkg/ui/server_next_test.go`). The session cookie is the one the old
-  UI uses, so moving between the two never asks the person to sign in
-  again.
+  request for `/next/inbox` (or `/next/` or `/next/index.html`) gets the
+  same "Enter access code" page with a 401, and signing in returns to
+  `/next/inbox` (`pkg/ui/server_next_test.go`). The session cookie is the
+  one the old UI uses, so moving between the two never asks the person to
+  sign in again. Exact-match requests for embedded content-hashed bundles
+  (`/next/<name>` and `/assets/<name>`) are served with immutable cache
+  headers before `verifyCallerNow` so a hard reload behind an
+  identity-aware proxy does not run an identity check per JS/CSS asset
+  (see [`authentication.design.md`](authentication.design.md) §4).
 - Role checks. Every API call is authorized by the server as before; the
   new UI only decides what to *offer* (see *Role-aware actions*).
 

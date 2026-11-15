@@ -16,6 +16,7 @@ package ui
 
 import (
 	"context"
+	"io/fs"
 	"net"
 	"net/http"
 	"testing"
@@ -98,4 +99,22 @@ func AccessCodeRecoveryRouteForTest(r *http.Request) bool { return accessCodeRec
 // caller's grants from.
 func WithExternalTokenForTest(ctx context.Context, tok *model.ExternalAgentToken) context.Context {
 	return withExternalToken(ctx, tok)
+}
+
+// SetFrontendFSForTest replaces s's embedded legacy (static) and Angular
+// (staticNext) filesystems so external tests in package ui_test can exercise
+// Server.ServeHTTP against controlled content-hashed bundles whether or not
+// `make frontend` has populated pkg/ui/static and pkg/ui/static-next.
+func SetFrontendFSForTest(s *Server, static, staticNext fs.FS) {
+	s.setFrontendFS(static, staticNext)
+}
+
+// FrontendGzipComputationsForTest reports how many times s's exempt bundle
+// cache has compressed a bundle to gzip.
+func FrontendGzipComputationsForTest(s *Server) int64 {
+	fa := s.frontend.Load()
+	if fa == nil {
+		return 0
+	}
+	return fa.gzipComputations.Load()
 }

@@ -40,7 +40,7 @@ func RegisterIdentityVerifier(v IdentityVerifier) (unregister func())
 
 `Server.activeVerifiers` (`pkg/ui/verifier.go`) places `NewIAPVerifier` (`Name() == "iap"`, `Headers() == ["X-Goog-IAP-JWT-Assertion"]`) first whenever `IAPConfig.Enabled()` is true, followed by verifiers registered via `RegisterIdentityVerifier` in registration order.
 
-`Server.verifyCallerNow` (`pkg/ui/server.go`, `pkg/ui/verifier.go`) runs once per HTTP request before external-agent token authentication and `singleTenantGate`, caching its `callerVerification` in the request context:
+`Server.verifyCallerNow` (`pkg/ui/server.go`, `pkg/ui/verifier.go`) runs once per HTTP request (except for exact-match content-hashed frontend bundles served by `Server.serveHashedFrontendBundle`; see §4) before external-agent token authentication and `singleTenantGate`, caching its `callerVerification` in the request context:
 
 - **First present header decides.** `verifyCaller` inspects active verifiers in order. Verifiers with none of their `Headers()` set on the request are skipped. The first verifier with a non-empty header decides the request; later verifiers are never consulted, even on error.
 - **A bad assertion fails closed (`401`).** When a verifier's header is present and `Verify` returns an error, the request is refused with `401` (`writeAssertionRefused` in `pkg/ui/principalrefusal.go`). It never falls back to the access code, to a `gma_…` external-agent token, to a session cookie, or to an unauthenticated open route (including `/api/hostd/connect`). A caller that reaches the pod directly past the Gateway cannot forge the signature, so network topology is not trusted on its own.
@@ -127,6 +127,23 @@ Browser navigations (`GET` or `HEAD` outside `/api/`) receive self-contained HTM
 - **`403` `"Not allowed on this grain"` (`writePrincipalRefusedPage`).** Rendered when a caller's assertion verifies (`cv.err == nil`) but `checkAllowedPrincipal` refuses admission. The page displays the verified email and verifier name, any underlying lookup error (for example a Cloud Identity timeout), remediation guidance from `ui.RegisterPrincipalAdvice` (defaulting to `Settings → Access` and `grain access allow user:<email>` for human callers, or `grain host register --owner <email>` for service accounts), and an `"Owner: sign in with the access code"` section that renders `<form method="post" action="/api/auth/access-code">` **only** when `AccessCodeWins()` is true—otherwise explaining that the verifier's identity takes precedence over the access code and instructing the owner to connect directly or over an SSH tunnel.
 - **`401` `"Sign-in could not be verified"` (`writeAssertionRefused`).** Rendered when a verifier header is present on a browser navigation but fails verification, naming the failure reason and configuration/clock checklist with no access-code fallback.
 - **`401` `"Sign in through <verifier>"` / `"Sign in through IAP"` (`writeVerifierRequiredPage` / `writeIAPRequiredPage`).** Rendered when `-ui-require-verifier` (or `-ui-require-iap`) refuses an unauthenticated network browser navigation, in place of the `"Enter access code"` login form.
+
+### Content-hashed frontend bundle exemption (`pkg/ui/spa.go`, `pkg/ui/server.go`)
+
+`Server.serveHashedFrontendBundle` runs at the top of `Server.serveHTTP`—after `setSecurityHeaders` and `checkCrossOrigin`, and before `verifyCallerNow` and `singleTenantGate`—and serves content-hashed frontend bundles directly from the embedded filesystem without running identity verification or the single-tenant access-code gate.
+
+A request is exempt **only if all** six conditions hold:
+
+1. The method is `GET` or `HEAD`.
+2. It is not a hub tunnel request (`isHubTunnelRequest(r)` is false); tunnelled requests keep their full verification and tunnel-ingress checks.
+3. `r.URL.RawQuery` is empty (with no bare `?` or fragment).
+4. The raw escaped path (`r.URL.EscapedPath()`) contains no percent-escapes (`%`), no `//`, no `.` or `..` segments, no trailing `/`, and equals both `path.Clean` of itself and `r.URL.Path`.
+5. The path is a two-segment path of the form `/next/<name>` (Angular UI) or `/assets/<name>` (legacy React UI) with a single segment `<name>`.
+6. `<name>` exists as a regular file in the same embedded filesystem that serves the route (`static-next/` for `/next/<name>`, `static/assets/` for `/assets/<name>`) and `isContentHashedAsset` accepts it (matching a build-time content hash and an allowlisted `.js`, `.css`, `.woff2`, `.woff`, `.ttf`, `.svg`, `.png`, `.jpg`, or `.webp` extension)—never `index.html`, never the SPA fallback, never directories, and never `.map` source maps.
+
+For an exempt request, `serveHashedFrontendBundle` serves the file from a lazy per-file cache keyed by path with `Cache-Control: private, max-age=31536000, immutable`: when the client accepts gzip, it serves a cached gzipped body computed once on first request with `Content-Encoding: gzip`, `Vary: Accept-Encoding`, and a weak `W/` ETag without re-compressing in `withCompression`; otherwise it serves the identity bytes with the strong `ETag`; `Range` headers are ignored (always `200` with the full body). It attaches no principal to the request context, neither reads nor sets cookies, logs no identity or assertion headers, and never touches the task store.
+
+**Why this is safe:** The embedded frontend bundles are deterministic build output of this open-source repository and contain no deployment state, tenant data, or configuration. Frontend bundles must never embed build-time deployment data such as env injection, secrets or hostnames, because the exemption serves them to anyone who can reach the port. Public bundle names let an unauthenticated caller fingerprint the deployed version; this is accepted, since the code is open source and `index.html` (the list of names) stays gated. Behind an identity-aware proxy that attaches a fresh single-use signed assertion to every request—where each verification costs a remote call—a hard reload otherwise triggers 15–20 redundant verifications just for JavaScript and CSS, and a transient `503` from the verifier causes the stylesheet request to return an HTML refusal page (`no-store`) and leave the UI unstyled. Because the exemption is an exact-match check on embedded content-hashed files at a single entry point before `verifyCallerNow`, HTML entry points (`/`, `/index.html`, `/next/`, `/next/index.html`), SPA client routes (`/next/inbox`, `/tasks/…`), unhashed assets, source maps, hub-tunnelled requests, and every `/api/*` route remain gated by `verifyCallerNow` and `singleTenantGate`.
 
 ## 5. How each client signs in
 
@@ -273,6 +290,7 @@ This follows [`operator-attribution.design.md`](operator-attribution.design.md)'
 - **Per-hostd registry and remote `hostd` owner verification** (`pkg/ui/hostds.go`, `pkg/ui/hostd_connect.go`, `pkg/hostd/connect_identity.go`, `pkg/hostd/remote.go`, `pkg/hostd/iap_auth.go`, `pkg/cli/hostds.go`): `/api/hostds`, `grain hostds`, `hostd.ConnectIdentity`, and `-hostd-token-owner` (tasks 2164, 2316).
 - **Operator attribution foundation** (`pkg/model/task.go`, `pkg/ui/request_actor.go`, `pkg/ui/principal_label.go`): `Principal.Source`, `Principal.Verified()`, `ui.RequestActor(ctx)`, and `*_source` database columns across mutating routes (tasks 2310, 2311).
 - **Simulated IAP end-to-end and deployment verification:** 112 checks passed, 0 failed across browser UI, CLI, external agents, and remote `hostd` (`docs/test-runs/2026-11-02-iap-end-to-end.md`, task 2510), plus Terraform/script flag rendering, refused-principal and own-audience logging, phone drawer stacked layout, and external-config-repo walkthroughs (`docs/test-runs/2026-11-03-iap-deployment.md`, task 2710).
+- **Content-hashed frontend bundle exemption** (`pkg/ui/spa.go`, `pkg/ui/server.go`): exact-match exemption before `verifyCallerNow` and `singleTenantGate` for embedded content-hashed `/next/<name>` and `/assets/<name>` bundles, served with `Cache-Control: private, max-age=31536000, immutable` without invoking registered `IdentityVerifier`s (task 509).
 
 ### Remaining
 

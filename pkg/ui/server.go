@@ -19,7 +19,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -98,6 +97,11 @@ type Server struct {
 	fsNamespace func() *namespace.Server
 	// eventsKeepalive overrides defaultEventsKeepalive in tests (events.go).
 	eventsKeepalive time.Duration
+	// frontend holds the embedded static and static-next filesystems,
+	// their precomputed strong ETags, and the "/" frontendHandler built
+	// over them (spa.go), so serveHashedFrontendBundle and "/" always
+	// read from the same embedded filesystem.
+	frontend atomic.Pointer[frontendAssets]
 }
 
 // NewServer builds a Server over a store.
@@ -212,6 +216,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.serveHashedFrontendBundle(w, r) {
+		return
+	}
 	tunnelReq := isHubTunnelRequest(r)
 	if s.tasks != nil {
 		iapCfg := IAPConfig{
@@ -900,18 +907,15 @@ func (s *Server) routes() {
 	// harnesses and built-in sessions/tasks holding api:* grants.
 	s.route("POST /api/mcp", s.handleControllerMCP)
 
-	static, err := fs.Sub(staticFS, "static")
-	if err != nil {
-		// staticFS is embedded at build time from a directory this package
-		// ships -- its absence is a build-time mistake, not a runtime
-		// condition a caller can do anything about.
-		panic("ui: embedding static/: " + err.Error())
-	}
-	staticNext, err := fs.Sub(staticNextFS, "static-next")
-	if err != nil {
-		panic("ui: embedding static-next/: " + err.Error())
-	}
-	s.mux.Handle("/", s.apiFallback(frontendHandler(static, staticNext)))
+	s.frontend.Store(defaultFrontendAssets())
+	s.mux.Handle("/", s.apiFallback(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if fa := s.frontend.Load(); fa != nil && fa.handler != nil {
+			fa.handler.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", cacheControlNoStore)
+		http.NotFound(w, r)
+	})))
 	s.patterns = append(s.patterns, "/")
 }
 
