@@ -18,6 +18,7 @@ import { provideRouter, withComponentInputBinding } from "@angular/router";
 import { RouterTestingHarness } from "@angular/router/testing";
 import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
+import { routes } from "../app.routes";
 import {
   RepoDetailPageComponent,
   importOutcomeText,
@@ -458,5 +459,135 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       { baseRepairBypassesHumanGates: true },
       { baseRepairBypassesHumanGates: false },
     ]);
+  });
+
+  // 2026-11-15 repository walkthrough:
+  // 1) A refused setting's error banner lingered after a clean save;
+  // 2) Viewer roles rendered disabled controls with no explanation;
+  // 3) Workflow edits on a zero-workflow repo (plus config and release
+  //    settings) were dropped without asking on tab switch;
+  // 4) Classic per-release links (/repos/<o>/<n>/releases/<rel>) matched
+  //    :host/:owner/:name/:tab and queried repo "acme/platform/releases".
+  it("clears the error banner as soon as a refused setting saves cleanly", async () => {
+    const api = new FakeRepoApi();
+    api.refusePut = "PUT /api/repos/{owner}/{name}/capabilities";
+    const { el, harness } = await mountRepo("/repos/acme/platform/agents", api);
+
+    const capsInput = el.querySelector<HTMLInputElement>("#rp-caps")!;
+    capsInput.value = "nosuch#bad";
+    capsInput.dispatchEvent(new Event("input", { bubbles: true }));
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-repo-agents-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="repo-error-banner"]'),
+    ).not.toBeNull();
+
+    api.refusePut = null;
+    capsInput.value = "grain#playbooks";
+    capsInput.dispatchEvent(new Event("input", { bubbles: true }));
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-repo-agents-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="repo-error-banner"]')).toBeNull();
+  });
+
+  it("explains read-only repository settings for roles without repos:write", async () => {
+    const api = new FakeRepoApi();
+    api.configBody = {
+      version: "v3.6.0",
+      access: {
+        role: "grain/viewer",
+        roles: ["grain/viewer"],
+        full: false,
+        scopes: ["repos:read", "settings:read", "releases:read"],
+      },
+    };
+    const { el } = await mountRepo("/repos/acme/platform", api);
+    const banner = el.querySelector('[data-testid="repo-role-readonly"]');
+    expect(banner?.textContent).toContain("grain/viewer");
+    expect(banner?.textContent).toContain("repos:write");
+    expect(
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="save-issue-import-btn"]',
+      )?.disabled,
+    ).toBe(true);
+  });
+
+  it("asks before dropping an unsaved workflow edit on a zero-workflow repository", async () => {
+    const { el, harness } = await mountRepo("/repos/acme/platform/ci");
+    const wfTextarea = el.querySelector<HTMLTextAreaElement>(
+      '[data-testid="input-repo-workflow"]',
+    )!;
+    wfTextarea.value = "name: smoke\non: [push]\n";
+    wfTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repo-tab-overview"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+    expect(dialog?.textContent).toContain("unsaved CI workflows changes");
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(wfTextarea.value).toBe("name: smoke\non: [push]\n");
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repo-tab-overview"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="card-repo-config"]')).not.toBeNull();
+  });
+
+  it("routes classic per-release URLs to the Releases tab and explains unknown releases in place", async () => {
+    localStorage.clear();
+    const api = new FakeRepoApi();
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(routes, withComponentInputBinding()),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: api },
+      ],
+    });
+    const harness = await RouterTestingHarness.create(
+      "/repos/acme/platform/releases/nosuch-rel",
+    );
+    harness.fixture.autoDetectChanges(true);
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 25));
+    await harness.fixture.whenStable();
+
+    const el = harness.fixture.nativeElement as HTMLElement;
+    expect(
+      el.querySelector('[data-testid="repo-detail-heading"]')?.textContent,
+    ).toContain("acme/platform");
+    expect(
+      el.querySelector('[data-testid="repo-detail-heading"]')?.textContent,
+    ).not.toContain("releases");
+    expect(
+      el.querySelector('[data-testid="stale-release-banner"]')?.textContent,
+    ).toContain('acme/platform has no release named "nosuch-rel"');
+    expect(
+      el.querySelector('[data-testid="stale-release-banner"]')?.textContent,
+    ).toContain("showing v1.2 instead");
+    expect(api.calls.some((c) => c.params?.["name"] === "releases")).toBe(
+      false,
+    );
   });
 });

@@ -1066,6 +1066,71 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         .length,
     ).toBe(1);
   });
+
+  it("shows stranded work and last-repo warnings on repository removal and reloads core state so removed repos stay gone", async () => {
+    const api = new FakeSettingsApi();
+    const origPost = api.post;
+    api.post = (key, params, body, query) => {
+      if (key === "POST /api/repos/plan") {
+        api.calls.push({ method: "POST", key, params, body, query });
+        return Promise.resolve({
+          targetReposStranded: [
+            {
+              repo: "acme/platform",
+              summary:
+                "`acme/platform` comes off this deployment's target repo list, so 3 tasks still in play there are parked instead of dispatched.",
+            },
+          ],
+        });
+      }
+      return origPost(key, params, body, query);
+    };
+    const origDelete = api.delete;
+    api.delete = (key, params, query, body) => {
+      if (key === "DELETE /api/repos/{owner}/{name}") {
+        api.calls.push({ method: "DELETE", key, params, query, body });
+        api.deploymentBody["targetRepos"] = [];
+        api.configBody["targetRepos"] = [];
+        return Promise.resolve({ ok: true });
+      }
+      return origDelete(key, params, query, body);
+    };
+
+    const { el, harness } = await mountSettings("/settings/repositories", api);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="remove-repo-acme/platform"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.fixture.detectChanges();
+
+    const dialogText =
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent ?? "";
+    expect(dialogText).toContain("leaves the allowlist empty");
+    expect(dialogText).toContain("3 tasks still in play there are parked");
+    expect(dialogText).toContain("Per-repo settings");
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 25));
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="repo-row-acme/platform"]'),
+    ).toBeNull();
+
+    // Switching to another Settings section and back keeps acme/platform removed.
+    await harness.navigateByUrl("/settings/git");
+    await harness.fixture.whenStable();
+    await harness.navigateByUrl("/settings/repositories");
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="repo-row-acme/platform"]'),
+    ).toBeNull();
+  });
+
   it("labels capability server states in host wording, gives failed the error tone, and titles needs-config with its reason", async () => {
     expect(
       capServerState({ id: "p", status: { state: "needs-hostd:mac-mini" } }),
