@@ -527,6 +527,7 @@ const ALLOWED_MD_TAGS = new Set([
   "td",
   "sup",
   "sub",
+  "kbd",
   "img",
 ]);
 
@@ -633,7 +634,8 @@ export class MarkdownDirective {
         }
         MarkdownDirective.cache.set(src, html);
       }
-      // renderMarkdown escapes all raw HTML and sanitizeMarkdownHtml enforces
+      // renderMarkdown escapes raw HTML but a few bare inline tags, and
+      // sanitizeMarkdownHtml enforces
       // a strict tag/attribute allowlist as defense-in-depth before innerHTML.
       void (this.sanitizer.bypassSecurityTrustHtml(html) as SafeHtml);
       this.el.nativeElement.innerHTML = html;

@@ -49,6 +49,10 @@ class FakeSettingsApi {
     { name: "workstation-1", owner: "alice", status: "connected" },
   ];
 
+  enrollmentCodesBody: unknown[] = [
+    { name: "eng-laptops", uses: 2, max_uses: 10 },
+  ];
+
   upgradeBody: Record<string, unknown> = {
     currentVersion: "v3.6.0",
     phase: "downloading",
@@ -132,7 +136,7 @@ class FakeSettingsApi {
       return Promise.resolve(this.hostdsBody);
     }
     if (key === "GET /api/hostds/enrollment-codes") {
-      return Promise.resolve([{ name: "eng-laptops", uses: 2, max_uses: 10 }]);
+      return Promise.resolve(structuredClone(this.enrollmentCodesBody));
     }
     if (key === "GET /api/hostds/pending") {
       return Promise.resolve([
@@ -632,6 +636,96 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     ).toBeNull();
   });
 
+  it("shows the default enrollment code's invite command with copy buttons and switches codes", async () => {
+    const api = new FakeSettingsApi();
+    api.enrollmentCodesBody = [
+      {
+        name: "eng-laptops",
+        code: "gjc_eng_secret",
+        uses: 1,
+        max_uses: 5,
+      },
+      {
+        name: "default",
+        code: "gjc_default_secret",
+        uses: 3,
+        allowed_principals: ["alice@example.com"],
+        install: {
+          lines: ["grain host join --code gjc_default_secret"],
+          note: "Needs grain v3.6 or newer.",
+        },
+      },
+      { name: "old", revoked_at: "2026-11-01T00:00:00Z" },
+    ];
+    const writes: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: (t: string) => {
+          writes.push(t);
+          return Promise.resolve();
+        },
+      },
+    });
+    try {
+      const { el, harness } = await mountSettings("/settings/hosts", api);
+      const snippet = () =>
+        el.querySelector('[data-testid="invite-hosts-snippet"]')?.textContent;
+      // "default" wins over the first code in the list.
+      expect(snippet()).toBe("grain host join --code gjc_default_secret");
+      expect(
+        el.querySelector('[data-testid="invite-hosts-note"]')?.textContent,
+      ).toContain("Needs grain v3.6 or newer.");
+      expect(
+        el.querySelector('[data-testid="invite-hosts-meta"]')?.textContent,
+      ).toContain("Allow: alice@example.com");
+
+      const copy = el.querySelector<HTMLButtonElement>(
+        '[data-testid="copy-invite-command"]',
+      );
+      expect(copy?.textContent).toContain("Copy invite command");
+      copy?.click();
+      await harness.fixture.whenStable();
+      expect(writes).toEqual(["grain host join --code gjc_default_secret"]);
+
+      // The raw secret stays hidden until asked for, and copies alone.
+      expect(el.querySelector('[data-testid="enrollment-secret"]')).toBeNull();
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="toggle-enrollment-secret"]',
+      )?.click();
+      await harness.fixture.whenStable();
+      expect(
+        el.querySelector('[data-testid="enrollment-secret"]')?.textContent,
+      ).toBe("gjc_default_secret");
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="copy-enrollment-secret"]',
+      )?.click();
+      await harness.fixture.whenStable();
+      expect(writes.at(-1)).toBe("gjc_default_secret");
+
+      // Switching to a code with no rendered install lines falls back to
+      // the standard --join command on this origin.
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="select-invite-code"]',
+      )?.click();
+      await harness.fixture.whenStable();
+      const option = [
+        ...el.querySelectorAll<HTMLElement>('[role="option"]'),
+      ].find((o) => o.textContent?.includes("eng-laptops"));
+      option?.click();
+      await harness.fixture.whenStable();
+      expect(snippet()).toBe(
+        `curl -fsSL ${window.location.origin}/hostd/install | sh -s -- --join gjc_eng_secret`,
+      );
+      expect(el.querySelector('[data-testid="enrollment-secret"]')).toBeNull();
+      expect(
+        el.querySelector('[data-testid="invite-hosts-meta"]')?.textContent,
+      ).toContain("Uses: 1 / 5");
+    } finally {
+      delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
+
   it("gates operator-only (scope: null) hostds enrollment-codes, pending joins, and state-repo/remote for non-operators without 403 calls", async () => {
     const api = new FakeSettingsApi();
     api.configBody.access = {
@@ -974,15 +1068,33 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       '[data-testid="clear-cred-claude-team"]',
     )!;
     expect(clearBtn).toBeTruthy();
-    clearBtn.click();
-    await harness.fixture.whenStable();
-    expect(
+    const cleared = () =>
       api.calls.some(
         (c) =>
           c.key === "DELETE /api/agent-backends/{id}/credential" &&
           c.params?.["id"] === "claude-team",
-      ),
-    ).toBe(true);
+      );
+    // Clearing a stored secret asks first; dismissing deletes nothing.
+    clearBtn.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Clear the credential for claude-team?");
+    expect(cleared()).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+    expect(cleared()).toBe(false);
+    clearBtn.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(cleared()).toBe(true);
 
     el.querySelector<HTMLButtonElement>(
       '[data-testid="remove-backend-claude-team"]',
@@ -1186,6 +1298,16 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       host: "git.internal.example",
       kind: "git",
     });
+  });
+
+  it("opens Models, not the phone section list, for an old /settings/connections link", async () => {
+    const { el } = await mountSettings("/settings/connections");
+    const shell = el.querySelector(".settings-shell")!;
+    expect(shell.classList).toContain("is-mobile-detail");
+    expect(shell.classList).not.toContain("is-mobile-list");
+    expect(
+      el.querySelector('[data-testid="card-model-backends"]'),
+    ).not.toBeNull();
   });
 
   it("scrolls to an old section name's card on in-app navigation and stops when another section is chosen", async () => {
