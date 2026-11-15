@@ -196,8 +196,9 @@ asserts the rule with bounding boxes.
 
 The task detail (`g-task-detail`) follows the same rule wherever it is
 hosted. It is a size container: with room for a fixed header (480px wide and
-560px tall), the page clips and only the active tab body and the aside
-scroll; in a phone-narrow or short pane the whole task scrolls and the tab
+560px tall), the header and tabs stay put and only the active tab body and
+the aside scroll (the task itself scrolls only while an open editor or
+banners above the tabs would leave them under 320px); in a phone-narrow or short pane the whole task scrolls and the tab
 body lays out flat inside it. A host that scrolls itself, such as the
 Workstreams inspector with "In this stream" above the task, makes it an
 inline-size container so the task never scrolls inside it. Panes around a

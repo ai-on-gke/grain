@@ -315,19 +315,18 @@ g-task-detail {
   font-size: 12px;
 }
 
-/* Room for a fixed header: the task clips, its tab body and aside scroll,
-   and the Conversation tab is the conversation -- it fills the tab body
-   with the composer pinned below the thread, and the thread is the one
-   thing that scrolls. The host clips rather than hides so its
+/* Room for a fixed header: the header and tabs stay put, the tab body and
+   aside scroll, and the Conversation tab is the conversation -- it fills
+   the tab body with the composer pinned below the thread, and the thread
+   is the one thing that scrolls. The host clips rather than hides so its
    content-based minimum holds: only a pane too short for a 96px thread
-   lets the tab body scroll as well. */
+   lets the tab body scroll as well. The task itself scrolls only while
+   what sits above the tabs (an open editor, the compact form, banners)
+   would leave them less than 320px, so that editor's Save stays in reach. */
 @container task-detail (min-width: 480px) and (min-height: 560px) {
-  .task-page {
-    overflow: clip;
-  }
   .task-page .task-layout {
     flex: 1;
-    min-height: 0;
+    min-height: 320px;
     grid-template-rows: minmax(0, 1fr);
   }
   .task-page .task-tab-body,
