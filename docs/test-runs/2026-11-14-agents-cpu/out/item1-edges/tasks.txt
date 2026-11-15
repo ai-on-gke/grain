@@ -1,0 +1,1 @@
+tasks: cd-tmp=2 double-fork=3 burst=4

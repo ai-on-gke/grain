@@ -679,7 +679,11 @@ import "strconv"
 // 146 adds `grain_config`.`qa` (model.Config.QA): the deployment-wide quality
 // control engine and single-instance PR rollout configuration, stored as JSON
 // and defaulting to empty (engine off).
-const SchemaVersion = 146
+// 147 changes no table: it forgets the commit every repository's
+// declarations were last read at (`repo_declaration_sync`.`commit`), so
+// the next reconcile writes back the grants a schedule file declares that
+// a firing from before 144 overwrote (rereadDeclarations, grain/task-5360).
+const SchemaVersion = 147
 
 const taskQAAssignmentTable = `CREATE TABLE IF NOT EXISTS ` + "`task_qa_assignment`" + ` (
   ` + "`root_origin`" + `           TEXT     NOT NULL,

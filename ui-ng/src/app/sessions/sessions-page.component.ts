@@ -76,6 +76,10 @@ export function clock(iso: string | undefined, now = new Date()): string {
     : d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
+// FOCUS_COMPOSER is the navigation state New session opens its chat with,
+// asking the page it lands on to focus that chat's composer.
+const FOCUS_COMPOSER = "focusComposer";
+
 // SessionsPageComponent is Sessions (spec D-8) with zero Classic fallbacks:
 // standing conversations on the left, live "Apply now" banner on run-fixed
 // edits, per-method/API grants & model settings, and file attachments.
@@ -690,8 +694,8 @@ export function clock(iso: string | undefined, now = new Date()): string {
           <h2 id="new-session-title">New session</h2>
           <p class="muted">
             A standing conversation with its own interactive agent. It starts
-            with the deployment's default grants; choose its model below, and
-            change its grants from its settings once it is open.
+            with the deployment's default grants; pick its model here and change
+            its grants once it is open.
           </p>
           <label class="field">
             <span>Name</span>
@@ -948,6 +952,15 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   private lastSession = "";
 
   constructor() {
+    // New session navigates from /sessions to /sessions/<id>, a route of
+    // its own, so the page that filed it is torn down and this one is
+    // built in its place: the navigation's state is how the chat it opens
+    // learns to take focus (create).
+    if (this.router.getCurrentNavigation()?.extras.state?.[FOCUS_COMPOSER]) {
+      this.focusWhenRendered(
+        () => (this.composer() ?? this.chatTitle())?.nativeElement,
+      );
+    }
     effect(() => {
       const id = this.id() || DIRECTOR_ID;
       untracked(() => {
@@ -1016,7 +1029,8 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   }
 
   protected toggleSettingsPanel(): void {
-    this.settingsOpen.set(!this.settingsOpen());
+    const next = !this.settingsOpen();
+    this.settingsOpen.set(next);
   }
 
   protected async saveModel(model: string): Promise<void> {
@@ -1134,12 +1148,32 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     });
     if (id) {
       this.newOpen.set(false);
-      await this.router.navigate(["/sessions", id]);
+      await this.router.navigate(["/sessions", id], {
+        state: { [FOCUS_COMPOSER]: true },
+      });
       this.snackbar.show("Session started");
-      setTimeout(() =>
-        (this.composer() ?? this.chatTitle())?.nativeElement.focus(),
+      this.focusWhenRendered(
+        () => (this.composer() ?? this.chatTitle())?.nativeElement,
       );
     }
+  }
+
+  // focusWhenRendered focuses what target returns once the page can take
+  // it. Closing a dialog drops the page's `inert` on the next render, and
+  // after an awaited navigation that render can land after a bare
+  // setTimeout, whose focus() on a still-inert element is ignored and
+  // leaves focus on <body>. So it retries each frame, for up to half a
+  // second, until focus has landed.
+  private focusWhenRendered(target: () => HTMLElement | undefined): void {
+    let tries = 30;
+    const attempt = () => {
+      const el = target();
+      el?.focus();
+      if ((!el || this.doc.activeElement !== el) && --tries > 0) {
+        requestAnimationFrame(attempt);
+      }
+    };
+    setTimeout(attempt);
   }
 
   protected async remove(): Promise<void> {
@@ -1149,7 +1183,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
       this.confirmDelete.set(false);
       this.snackbar.show(`Deleted ${row.session.title}`);
       await this.router.navigate(["/sessions"]);
-      setTimeout(() => this.chatTitle()?.nativeElement.focus());
+      this.focusWhenRendered(() => this.chatTitle()?.nativeElement);
     }
   }
 

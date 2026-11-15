@@ -1,0 +1,113 @@
+== version
+v0.0.0-20261114235409-3cc8bc207f86 (unversioned) · 3cc8bc2 · 2026-11-14 23:54Z
+== schema
+1|146
+== raw rows after HEAD opened the store
+-- task_grant
+1|https://grain.dev/capabilities/api#capabilities:detach|grain|
+1|https://grain.dev/capabilities/api#capabilities:read|grain|
+1|https://grain.dev/capabilities/api#ci-read|default|
+1|https://grain.dev/capabilities/api#deployment:read|grain|
+1|https://grain.dev/capabilities/api#dispatch:read|grain|
+1|https://grain.dev/capabilities/api#releases:read|grain|
+1|https://grain.dev/capabilities/api#repos:read|grain|
+1|https://grain.dev/capabilities/api#schedules:read|grain|
+1|https://grain.dev/capabilities/api#self-debug|grain|
+1|https://grain.dev/capabilities/api#settings:read|grain|
+1|https://grain.dev/capabilities/api#suites:read|grain|
+1|https://grain.dev/capabilities/api#task-admin|grain|
+1|https://grain.dev/capabilities/api#templates:read|grain|
+1|https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}|grain|
+1|https://grain.dev/capabilities/grain#health={}|grain|
+1|https://grain.dev/capabilities/grain#journal={}|grain|
+1|https://grain.dev/capabilities/grain#source={}|grain|
+2|https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"}|label|
+3|https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}|label|
+4|https://grain.dev/capabilities/repo#credential={"credential":"bot"}|label|
+5|https://grain.dev/capabilities/github#read-issues={}|label|
+6|https://grain.dev/capabilities/github#sandbox-repo={}|label|
+7|https://grain.dev/capabilities/api#self-debug|label|
+7|https://grain.dev/capabilities/grain#source={}|label|
+8|local-scripts:deploy|label|
+9|bootstrap-playbooks|label|
+9|claude-proxy|label|
+9|gcp-key|label|
+9|gcp-key:ops|label|
+9|gemini-key|label|
+9|github-credential:bot|label|
+9|github-sandbox|label|
+9|grain-ci|label|
+9|grain-log|label|
+9|https://grain.dev/capabilities/grain#journal={}|label|
+9|image-signing|label|
+9|local-scripts:deploy|label|
+9|read-issues|label|
+9|registry-push|label|
+9|self-debug|label|
+-- template_grant
+template-1|https://grain.dev/capabilities/api#self-debug|label|
+template-1|https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}|label|
+template-1|https://grain.dev/capabilities/github#read-issues={}|label|
+template-1|https://grain.dev/capabilities/github#sandbox-repo={}|label|
+template-1|https://grain.dev/capabilities/grain#journal={}|label|
+template-1|https://grain.dev/capabilities/grain#source={}|label|
+template-1|https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"}|label|
+template-1|https://grain.dev/capabilities/repo#credential={"credential":"bot"}|label|
+template-1|local-scripts:deploy|label|
+-- schedule_grant
+sched-1|https://grain.dev/capabilities/api#self-debug|label|
+sched-1|https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]}|label|
+sched-1|https://grain.dev/capabilities/github#read-issues={}|label|
+sched-1|https://grain.dev/capabilities/github#sandbox-repo={}|label|
+sched-1|https://grain.dev/capabilities/grain#journal={}|label|
+sched-1|https://grain.dev/capabilities/grain#source={}|label|
+sched-1|https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"}|label|
+sched-1|https://grain.dev/capabilities/repo#credential={"credential":"bot"}|label|
+sched-1|local-scripts:deploy|label|
+-- grain_config.default_capabilities
+https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"},https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]},https://grain.dev/capabilities/repo#credential={"credential":"bot"},https://grain.dev/capabilities/github#read-issues={},https://grain.dev/capabilities/github#sandbox-repo={},https://grain.dev/capabilities/api#self-debug,https://grain.dev/capabilities/grain#source={},local-scripts:deploy,https://grain.dev/capabilities/grain#journal={},grain-ci
+-- repo_config
+acme|widgets|https://grain.dev/capabilities/model-proxy#model-proxy={"vendor":"claude"},https://grain.dev/capabilities/config-map#config-map={"config_maps":["bootstrap"]},https://grain.dev/capabilities/repo#credential={"credential":"bot"},https://grain.dev/capabilities/github#read-issues={},https://grain.dev/capabilities/github#sandbox-repo={},https://grain.dev/capabilities/api#self-debug,https://grain.dev/capabilities/grain#source={},local-scripts:deploy,https://grain.dev/capabilities/grain#journal={}|grain-ci,self-debug,https://grain.dev/capabilities/release#registry-push={}
+acme|lib||https://grain.dev/capabilities/release#registry-push={}
+== GET /api/tasks/{id}
+2 {"title":"bare claude-proxy","capabilities":["https://grain.dev/capabilities/model-proxy#model-proxy={\"vendor\":\"claude\"}"],"grants":[]}
+3 {"title":"bare bootstrap-playbooks","capabilities":["https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}"],"grants":[]}
+4 {"title":"bare github-credential:bot","capabilities":["https://grain.dev/capabilities/repo#credential={\"credential\":\"bot\"}"],"grants":[]}
+5 {"title":"bare read-issues","capabilities":["https://grain.dev/capabilities/github#read-issues={}"],"grants":[]}
+6 {"title":"bare github-sandbox","capabilities":["https://grain.dev/capabilities/github#sandbox-repo={}"],"grants":[]}
+7 {"title":"bare self-debug","capabilities":["https://grain.dev/capabilities/api#self-debug","https://grain.dev/capabilities/grain#source={}"],"grants":[]}
+8 {"title":"bare local-scripts:deploy","capabilities":["local-scripts:deploy"],"grants":[]}
+9 {"title":"bare grain-log","capabilities":["bootstrap-playbooks","claude-proxy","gcp-key","gcp-key:ops","gemini-key","github-credential:bot","github-sandbox","grain-ci","grain-log","https://grain.dev/capabilities/grain#journal={}","image-signing","local-scripts:deploy","read-issues","registry-push","self-debug"],"grants":[]}
+== GET /api/templates/template-1
+{"capabilities":null,"grants":null}
+== GET /api/schedules/sched-1
+{"capabilities":null,"grants":null}
+== GET /api/config defaultCapabilities
+["https://grain.dev/capabilities/model-proxy#model-proxy={\"vendor\":\"claude\"}","https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}","https://grain.dev/capabilities/repo#credential={\"credential\":\"bot\"}","https://grain.dev/capabilities/github#read-issues={}","https://grain.dev/capabilities/github#sandbox-repo={}","https://grain.dev/capabilities/api#self-debug","https://grain.dev/capabilities/grain#source={}","https://grain.dev/capabilities/grain#journal={}"]
+== GET /api/repos/acme/widgets/settings
+{"ciMode":"github","ciCapabilities":["grain-ci","self-debug","https://grain.dev/capabilities/release#registry-push={}"],"defaultCapabilities":["https://grain.dev/capabilities/model-proxy#model-proxy={\"vendor\":\"claude\"}","https://grain.dev/capabilities/config-map#config-map={\"config_maps\":[\"bootstrap\"]}","https://grain.dev/capabilities/repo#credential={\"credential\":\"bot\"}","https://grain.dev/capabilities/github#read-issues={}","https://grain.dev/capabilities/github#sandbox-repo={}","https://grain.dev/capabilities/api#self-debug","https://grain.dev/capabilities/grain#source={}","local-scripts:deploy","https://grain.dev/capabilities/grain#journal={}"]}
+== dispatch
+null
+{"id":"4","state":"queued","error":null}
+{"id":"7","state":"queued","error":null}
+{"id":"8","state":"queued","error":null}
+{"id":"9","state":"queued","error":null}
+-- task 4
+{"tools":["ask_question","comment_on_issue","edit_file","nothing_needed","propose_task","read_file","recreate_sandbox","request_access","request_secret","resume_later","run_command","wait_for_task","write_file"]}
+{"api_routes":{"isError":false,"text":"exit=0\nstdout:\nNo agent API routes are granted to this attempt.\nexit=0\n\nstderr:\n"},"ls_src":{"isError":false,"text":"exit=0\nstdout:\ngrain: forbidden: src://pkg: that tool belongs to the \"https://grain.dev/capabilities/grain#source\" capability, and this run does not hold it (this run does not hold the \"https://grain.dev/capabilities/grain#source\" capability). Nothing you can do from inside this run will add it -- a human attaches it to the task.\nexit=0\n\nstderr:\n"},"ci_log":{"isError":false,"text":"exit=0\nstdout:\ngrain: forbidden: grain ci: this run may not read CI runs and logs. `grain ci wait` and `grain pr open` work without a grant: they report this branch's checks, GitHub Actions included, and the end of each failing job's log. For the run listings and full logs these commands read, request_access for https://grain.dev/capabilities/api#ci-read with {repo: \"acme/widgets\"}. Do not ask for https://grain.dev/capabilities/grain#ci: the repository's CI Mode grants it, never a person\nexit=0\n\nstderr:\n"},"git_push":{"isError":false,"text":"exit=0\nstdout:\nTo http://127.0.0.1:46579/acme/widgets.git\n * [new branch]      HEAD -> grain/e8c1e932/task-4-bare-github-credential-bot\nexit=0\n\nstderr:\n"},"propose_bare":{"isError":false,"text":"Recorded (1 proposed task(s) so far this run). Each is filed as a real task in grain's queue when this run finishes -- unapproved until a human approves it there, unless your own task's permission already covers it."},"request_access_bare":{"isError":true,"text":"This request cannot be relayed as it stands: requests[0] (grant self-debug): unknown capability self-debug. Fix it and call request_access again."}}
+-- task 7
+{"tools":["ask_question","comment_on_issue","edit_file","nothing_needed","propose_task","read_file","recreate_sandbox","request_access","request_secret","resume_later","run_command","wait_for_task","write_file"]}
+{"api_routes":{"isError":false,"text":"exit=0\nstdout:\nGET    /api/restart-watch                         (deployment:read)\nGET    /api/fs/task/{path...}                     (tasks:read)\nGET    /api/fs/deploy/{path...}                   (deployment:read)\nGET    /api/fs/src/{path...}                      (deployment:read)\nGET    /api/registry/status                       (deployment:read)\nGET    /api/tasks                                 (tasks:read)\nGET    /api/tasks/states                          (tasks:read)\nGET    /api/tasks/wait                            (tasks:read)\nGET    /api/inbox                                 (tasks:read)\nGET    /api/refs/{ref}/summary                    (tasks:read)\nGET    /api/events                                (tasks:read)\nGET    /api/states                                (tasks:read)\nGET    /api/tasks/{id}                            (tasks:read)\nGET    /api/tasks/{id}/attachments/{attachmentId} (tasks:read)\nGET    /api/notifications                         (tasks:read)\nGET    /api/tasks/{id}/messages                   (tasks:read)\nGET    /api/tasks/{id}/attempts/{number}/transcript (tasks:read)\nGET    /api/tasks/{id}/attempts/{number}/capability-audit (tasks:read)\nGET    /api/tasks/{id}/prompt                     (tasks:read)\nGET    /api/tasks/{id}/diff-preview               (tasks:read)\nGET    /api/tasks/{id}/tree                       (tasks:read)\nGET    /api/host/top                              (deployment:read)\nGET    /api/upgrade                               (deployment:read)\nGET    /api/upgrade/targets                       (deployment:read)\nGET    /api/upgrade/release-notes                 (deployment:read)\nGET    /api/logs                                  (deployment:read)\nGET    /api/logs/{source}                         (deployment:read)\nGET    /api/sandboxes                             (deployment:read)\nGET    /api/persistent-sandboxes                  (sandboxes:read)\nGET    /api/persistent-sandboxes/{name}/logs      (deployment:read)\nGET    /api/metrics                               (deployment:read)\nGET    /api/unmatched-failures                    (deployment:read)\nGET    /api/usage                                 (deployment:read)\nGET    /api/pipeline/changes                      (tasks:read)\nexit=0\n\nstderr:\n"},"ls_src":{"isError":false,"text":"exit=0\nstdout:\ngrain: not found: src:// is not configured on this daemon\nexit=0\n\nstderr:\n"},"ci_log":{"isError":false,"text":"exit=0\nstdout:\ngrain: not found: no CI run (GitHub in a repository this sandbox may read\ngrain: not found: ci://acme/widgets/(GitHub\nexit=0\n\nstderr:\n"},"git_push":{"isError":false,"text":"exit=0\nstdout:\nTo http://127.0.0.1:46579/acme/widgets.git\n * [new branch]      HEAD -> grain/e8c1e932/task-7-bare-self-debug\nexit=0\n\nstderr:\n"},"propose_bare":{"isError":false,"text":"Recorded (1 proposed task(s) so far this run). Each is filed as a real task in grain's queue when this run finishes -- unapproved until a human approves it there, unless your own task's permission already covers it."},"request_access_bare":{"isError":true,"text":"This request cannot be relayed as it stands: requests[0] (grant self-debug): unknown capability self-debug. Fix it and call request_access again."}}
+-- task 8
+no hook output
+-- task 9
+no hook output
+-- simulator git credentials
+      1 2026/11/15 02:20:02 ghsim git GET /acme/widgets.git/info/refs?service=git-upload-pack credential="Basic Z2hwX3dhbGt0aHJvdWdoX2JvdDo="
+      1 2026/11/15 02:20:02 ghsim git GET /acme/widgets.git/info/refs?service=git-upload-pack credential="Basic Z2hwX3dhbGt0aHJvdWdoX3N0dWI6"
+      1 2026/11/15 02:20:02 ghsim git POST /acme/widgets.git/git-upload-pack? credential="Basic Z2hwX3dhbGt0aHJvdWdoX2JvdDo="
+      1 2026/11/15 02:20:02 ghsim git POST /acme/widgets.git/git-upload-pack? credential="Basic Z2hwX3dhbGt0aHJvdWdoX3N0dWI6"
+      1 2026/11/15 02:20:03 ghsim git GET /acme/widgets.git/info/refs?service=git-receive-pack credential="Basic Z2hwX3dhbGt0aHJvdWdoX2JvdDo="
+      1 2026/11/15 02:20:03 ghsim git GET /acme/widgets.git/info/refs?service=git-receive-pack credential="Basic Z2hwX3dhbGt0aHJvdWdoX3N0dWI6"
+      1 2026/11/15 02:20:03 ghsim git POST /acme/widgets.git/git-receive-pack? credential="Basic Z2hwX3dhbGt0aHJvdWdoX2JvdDo="
+      1 2026/11/15 02:20:03 ghsim git POST /acme/widgets.git/git-receive-pack? credential="Basic Z2hwX3dhbGt0aHJvdWdoX3N0dWI6"

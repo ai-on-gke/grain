@@ -95,6 +95,7 @@ export class CIStore {
   private eventSub: Subscription | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private activeCount = 0;
+  private detailFailedId: string | null = null;
 
   start(): void {
     this.actionError.set(null);
@@ -272,8 +273,18 @@ export class CIStore {
 
       const sel = this.selectedId();
       if (sel) {
+        if (
+          this.detailFailedId === sel &&
+          this.runs().some((r) => r.id === sel)
+        ) {
+          this.detailFailedId = null;
+        }
         const cur = this.detail();
-        if (forceDetail || !cur || cur.id !== sel || isRunActive(cur)) {
+        if (
+          forceDetail ||
+          ((!cur || cur.id !== sel) && this.detailFailedId !== sel) ||
+          (cur && cur.id === sel && isRunActive(cur))
+        ) {
           await this.loadRunDetail(sel, false);
         }
       }
@@ -285,7 +296,15 @@ export class CIStore {
   }
 
   async selectRun(id: string | null): Promise<void> {
-    if (this.selectedId() === id && this.detail()?.id === id) return;
+    if (
+      this.selectedId() === id &&
+      (this.detail()?.id === id || (id !== null && this.detailFailedId === id))
+    ) {
+      return;
+    }
+    if (this.selectedId() !== id) {
+      this.detailFailedId = null;
+    }
     this.selectedId.set(id);
     this.jobLogs.set({});
     if (!id) {
@@ -312,6 +331,7 @@ export class CIStore {
       ]);
       if (this.activeCount === 0) return;
       if (this.selectedId() === id) {
+        this.detailFailedId = null;
         this.detail.set(run);
         if (artRes) {
           this.artifactsAvailable.set(!!artRes.available);
@@ -327,6 +347,7 @@ export class CIStore {
     } catch (err) {
       if (this.activeCount === 0) return;
       if (this.selectedId() === id) {
+        this.detailFailedId = id;
         this.actionError.set(errorText(err));
       }
     } finally {
