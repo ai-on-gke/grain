@@ -1305,7 +1305,7 @@ verifies the release archive against `checksums.txt`) and signed in with
 filing and reading tasks, it follows what an agent filed without polling
 task by task:
 
-- `grain inbox [-repo R] [-kind question|secret|notification|merge-held|proposal]`
+- `grain inbox [-repo R] [-kind question|answer|secret|notification|merge-held|proposal]`
   (`GET /api/inbox`, `tasks:read`) lists what the UI Inbox would show on the
   repositories the credential reads: parked questions and secret requests,
   warning and critical notifications, merge-held pull requests and

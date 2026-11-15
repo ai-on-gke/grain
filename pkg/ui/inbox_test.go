@@ -65,6 +65,13 @@ func seedInbox(t *testing.T, client *ui.Client) {
 		MergeQueueBlockedAt: &done, MergeQueueState: "merge_failed", MergeQueueNote: "conflicts with main"}); err != nil {
 		t.Fatal(err)
 	}
+	// 405 asked nothing: its run answered in a comment and opened no
+	// pull request, so it waits only to be acknowledged.
+	seedAPITask(t, client, "405", "acme/widgets")
+	approve(t, client, "405")
+	if err := client.Store.Observe(ctx, model.Observation{TaskID: "405", CompletedAt: &done}); err != nil {
+		t.Fatal(err)
+	}
 	for _, n := range []ui.RaiseNotificationRequest{
 		{Subject: "ci:widgets", Title: "main is red", Severity: "warning", Repo: "acme/widgets"},
 		{Subject: "info:widgets", Title: "just so you know", Severity: "info", Repo: "acme/widgets"},
@@ -120,7 +127,7 @@ func TestGrainInboxMatchesActionableCategoriesWithinRepoGrants(t *testing.T) {
 	}
 
 	all := get("", "")
-	if got, want := inboxKinds(all.Items), "merge-held:404 notification: proposal:403 question:400 question:402 secret:401"; got != want {
+	if got, want := inboxKinds(all.Items), "answer:405 merge-held:404 notification: proposal:403 question:400 question:402 secret:401"; got != want {
 		t.Errorf("inbox = %q, want %q", got, want)
 	}
 	for _, it := range all.Items {
@@ -140,6 +147,10 @@ func TestGrainInboxMatchesActionableCategoriesWithinRepoGrants(t *testing.T) {
 			if it.Path != "/tasks/401" {
 				t.Errorf("secret item path = %q", it.Path)
 			}
+		case ui.InboxAnswer:
+			if it.Path != "/tasks/405" || !strings.Contains(it.Summary, "acknowledge") {
+				t.Errorf("answer item = %+v", it)
+			}
 		case ui.InboxQuestion:
 			// A question links to the comment it is parked on.
 			if !regexp.MustCompile(`^/tasks/` + it.Task + `#comment=\d+$`).MatchString(it.Path) {
@@ -149,6 +160,11 @@ func TestGrainInboxMatchesActionableCategoriesWithinRepoGrants(t *testing.T) {
 	}
 	if got := inboxKinds(get("", "?kind=question").Items); got != "question:400 question:402" {
 		t.Errorf("kind=question = %q", got)
+	}
+	// An answer is told from a question: it asked nothing, so it is
+	// listed as an answer to acknowledge, linked to the task itself.
+	if got := inboxKinds(get("", "?kind=answer").Items); got != "answer:405" {
+		t.Errorf("kind=answer = %q", got)
 	}
 	if got := inboxKinds(get("", "?repo=acme/gadgets").Items); got != "question:402" {
 		t.Errorf("repo=acme/gadgets = %q", got)
@@ -161,7 +177,7 @@ func TestGrainInboxMatchesActionableCategoriesWithinRepoGrants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := inboxKinds(get(issued.Token, "").Items), "merge-held:404 notification: proposal:403 question:400 secret:401"; got != want {
+	if got, want := inboxKinds(get(issued.Token, "").Items), "answer:405 merge-held:404 notification: proposal:403 question:400 secret:401"; got != want {
 		t.Errorf("a token held to acme/widgets saw %q, want %q", got, want)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/inbox?repo=acme/gadgets", nil)

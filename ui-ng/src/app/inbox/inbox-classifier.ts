@@ -33,6 +33,7 @@ export type Tone =
 export type FilterId =
   | "all"
   | "asked"
+  | "reports"
   | "proposals"
   | "merges"
   | "approvals"
@@ -169,8 +170,14 @@ export const GROUP_ORDER: GroupDef[] = [
   {
     id: "reply",
     title: "Asked: reply",
-    hint: "A run stopped to ask something, or answered on the task itself. Reply to run it again, or acknowledge to close it.",
+    hint: "A run stopped to ask something only a person can answer. Reply to run it again.",
     filter: "asked",
+  },
+  {
+    id: "info",
+    title: "Reports: acknowledge",
+    hint: "A run answered, reported or summed up its findings and opened no pull request. Nothing is blocked: acknowledge to close it, or reply to run it again.",
+    filter: "reports",
   },
   {
     id: "host-script",
@@ -253,6 +260,26 @@ export function isTaskMerged(t: Task): boolean {
 // isStoppedTurn is a task a person stopped mid-run: Stop writes a
 // pending comment, so the server reads it as awaiting_reply, but nothing
 // was asked (reason awaiting_reply/stopped, or turnStopped).
+// isInformational is an awaiting_reply task that asked nothing: its run
+// answered in a comment and opened no pull request (state.js's askedCase
+// "answer", GET /api/inbox's kind "answer"). It waits only to be
+// acknowledged, where a question waits for a reply.
+export function isInformational(t: Task): boolean {
+  if (t.state !== "awaiting_reply") return false;
+  const why = t.reason?.reason || "";
+  if (why.startsWith("awaiting_reply/"))
+    return why === "awaiting_reply/answered";
+  return (
+    !t.questionCommentId &&
+    !t.questionSummary &&
+    !t.awaitingAccess &&
+    !t.turnStopped &&
+    !t.unansweredCommentFrom &&
+    !t.interactive &&
+    !t.consoleSession
+  );
+}
+
 export function isStoppedTurn(t: Task): boolean {
   return (
     t.state === "awaiting_reply" &&
@@ -644,10 +671,31 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
       );
       return e;
     }
+    if (isInformational(t)) {
+      // Nothing was asked: acknowledging is the answer, and a reply (the
+      // dock's composer) is there for a reader who wants more.
+      const e = taskEntry(t, "reply", "info");
+      e.pillLabel = "Info";
+      e.pillTone = "neutral";
+      e.summary = t.noteSummary || "Answered on the task itself.";
+      e.rationale =
+        "The run finished with an answer or report and asked nothing. Acknowledge it once read; reply only if you want another run.";
+      e.actions.push(
+        taskAction(
+          t,
+          "acknowledge",
+          "Acknowledge",
+          "POST /api/tasks/{id}/close",
+          "primary",
+          { bulk: true },
+        ),
+      );
+      return e;
+    }
     const e = taskEntry(t, "reply", "reply");
-    e.pillLabel = "Needs reply";
+    e.pillLabel = "Question";
     e.pillTone = "reply";
-    e.summary = t.questionSummary || "Answered on the task itself.";
+    e.summary = t.questionSummary || "Asked on the task itself.";
     e.rationale = "The run is parked until somebody answers it.";
     e.actions.push(
       taskAction(
@@ -657,8 +705,7 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
         "POST /api/tasks/{id}/close",
         "tonal",
         {
-          bulk: true,
-          confirm: `Acknowledge #${t.id}? The task is closed, and reopening puts it back.`,
+          confirm: `Acknowledge #${t.id} without answering? The task is closed, and reopening puts it back.`,
         },
       ),
     );

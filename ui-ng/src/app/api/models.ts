@@ -194,7 +194,12 @@ export interface Task {
   updatedAt?: string;
   proposedBy?: string;
   questionSummary?: string;
+  // The summary a run gave the note it answered in (comment_on_issue's
+  // summary), for an awaiting_reply task that asked nothing.
+  noteSummary?: string;
   questionCommentId?: number;
+  // Who wrote the newest person's comment no run has been shown yet.
+  unansweredCommentFrom?: string;
   awaitingAccess?: boolean;
   turnStopped?: boolean;
   reviewQuestions?: string;

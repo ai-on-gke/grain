@@ -111,6 +111,7 @@ func (s *Server) handleReplyTask(w http.ResponseWriter, r *http.Request) {
 // The kinds an InboxItem is.
 const (
 	InboxQuestion     = "question"
+	InboxAnswer       = "answer"
 	InboxSecret       = "secret"
 	InboxNotification = "notification"
 	InboxMergeHeld    = "merge-held"
@@ -119,7 +120,7 @@ const (
 
 // InboxKinds is every InboxItem.Kind, in the order GET /api/inbox lists
 // them.
-var InboxKinds = []string{InboxQuestion, InboxSecret, InboxNotification, InboxMergeHeld, InboxProposal}
+var InboxKinds = []string{InboxQuestion, InboxAnswer, InboxSecret, InboxNotification, InboxMergeHeld, InboxProposal}
 
 // InboxItem is one actionable thing the UI's Inbox surfaces. Path is the
 // root-relative UI route it is answered on.
@@ -148,7 +149,8 @@ type InboxResponse struct {
 }
 
 // handleInbox answers GET /api/inbox?repo=&kind=: the questions and
-// secret requests tasks are parked on, open warning and critical
+// secret requests tasks are parked on, the answers and reports runs
+// closed on that nobody has acknowledged yet, open warning and critical
 // notifications, pull requests held at a gate that needs a person, and
 // unapproved proposals -- only on repositories the caller may read.
 func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
@@ -217,13 +219,27 @@ func (s *Server) inboxReadable(r *http.Request) func(string) bool {
 	return func(repo string) bool { return set.Allows("tasks:read", repo) }
 }
 
+// inboxAnswer is an awaiting_reply task that asked nothing: its run
+// answered in a comment and opened no pull request (model.AwaitsAck), as
+// opposed to one parked on a question, an access request, a stopped
+// turn, a person's unanswered comment or an interactive conversation's
+// next message -- each of which needs a reply or a grant rather than an
+// acknowledgement. The UI's askedCase calls the same case "answer".
+func inboxAnswer(t Task, obs *model.Observation) bool {
+	if obs != nil && obs.PendingQuestionCommentID != nil {
+		return false
+	}
+	return t.QuestionSummary == "" && !t.AwaitingAccess && !t.TurnStopped &&
+		t.UnansweredCommentFrom == "" && !t.Interactive && t.ConsoleSession == ""
+}
+
 func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(string) bool) ([]InboxItem, error) {
 	tasks, err := cache.list(ctx, c)
 	if err != nil {
 		return nil, err
 	}
 	sortTasksByFiling(tasks)
-	var questions, secrets, held, proposals []InboxItem
+	var questions, answers, secrets, held, proposals []InboxItem
 	for _, t := range tasks {
 		if t.State == model.StateClosed || !readable(t.Repo) {
 			continue
@@ -238,6 +254,19 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 			if obs != nil && obs.PendingSecret != "" {
 				secrets = append(secrets, InboxItem{Kind: InboxSecret, Task: t.ID, Title: t.Title, Repo: t.Repo,
 					Summary: "set " + obs.PendingSecret + " in the encrypted secret input", Path: path, At: t.EndedAt})
+				continue
+			}
+			if inboxAnswer(t, obs) {
+				// Nothing was asked: the run answered in a comment and
+				// opened no pull request, so acknowledging it is all it
+				// waits for. Listed apart from the questions so a reader
+				// can tell what blocks a run from what only informs.
+				summary := t.NoteSummary
+				if summary == "" {
+					summary = "answered in a comment: acknowledge to close it, or reply to run it again"
+				}
+				answers = append(answers, InboxItem{Kind: InboxAnswer, Task: t.ID, Title: t.Title, Repo: t.Repo,
+					Summary: summary, Path: path, At: t.EndedAt})
 				continue
 			}
 			summary := t.QuestionSummary
@@ -321,8 +350,9 @@ func (c *Client) inbox(ctx context.Context, cache *taskListCache, readable func(
 		notifications = append(notifications, InboxItem{Kind: InboxNotification, Notification: n.ID, Task: n.TaskID,
 			Repo: n.Repo, Severity: string(n.Severity), Subject: n.Subject, Title: n.Title, Path: path, At: &at})
 	}
-	out := make([]InboxItem, 0, len(questions)+len(secrets)+len(notifications)+len(held)+len(proposals))
+	out := make([]InboxItem, 0, len(questions)+len(answers)+len(secrets)+len(notifications)+len(held)+len(proposals))
 	out = append(out, questions...)
+	out = append(out, answers...)
 	out = append(out, secrets...)
 	out = append(out, notifications...)
 	out = append(out, held...)

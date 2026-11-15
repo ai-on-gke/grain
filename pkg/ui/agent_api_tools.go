@@ -534,7 +534,7 @@ var routeQueries = map[string]map[string]string{
 	},
 	"GET /api/inbox": listObjectQueryDocs("task, title, repo, summary, subject or pull request", listPageLarge, map[string]string{
 		"repo": "Only this repository's (owner/name) items.",
-		"kind": "Only items of this kind: question, secret, notification, merge-held or proposal.",
+		"kind": "Only items of this kind: question, answer, secret, notification, merge-held or proposal.",
 	}),
 	"GET /api/refs/{ref}/summary": {
 		"repo": "Only this repository's (owner/name) tasks in the rollup.",

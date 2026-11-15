@@ -241,6 +241,7 @@ export class InboxStore implements OnDestroy {
     return {
       all: all.length,
       asked: n("asked"),
+      reports: n("reports"),
       proposals: n("proposals"),
       merges: n("merges"),
       approvals: n("approvals"),

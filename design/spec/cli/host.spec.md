@@ -342,7 +342,7 @@ The command has two forms:
 
 The external-agent workflow's answering and polling verbs ([external-cli #XC-20..#XC-23](../external-cli/external-cli.spec.md#XC-20)).
 - `reply <id> [<body...> | -body-file <path|->]` answers the question task `<id>`'s run parked on (`POST /api/tasks/{id}/reply`). It is refused with exit `2`, posting nothing, when no `ask_question` is parked and when the task waits on a `request_secret`, which names `/tasks/<id>` and its encrypted input instead; `comment` posts a general note either way.
-- `inbox [-repo R] [-kind question|secret|notification|merge-held|proposal]` lists what needs a person (`GET /api/inbox`) on the repositories the caller reads, one item per line with its root-relative UI path.
+- `inbox [-repo R] [-kind question|answer|secret|notification|merge-held|proposal]` lists what needs a person (`GET /api/inbox`) on the repositories the caller reads, one item per line with its root-relative UI path.
 - `wait <id...> [-until closed|merged|awaiting-reply|ci-done|any[,…]] [-timeout 30m]` re-issues `GET /api/tasks/wait` slices of at most 60 s. It exits `0` when a condition is met, `1` when `-until merged` (without `closed`) meets a task that closed unmerged or `-until closed` a failed one, and `5` when `-timeout` (the global flag, written after the verb; `30m` when unset) runs out, printing the `grain wait …` line that carries on.
 - `logs <id> [-attempt N] [-tail N] [-follow]` prints the latest (or `N`th) attempt's activity and transcript; `-follow` streams new lines until the attempt finishes, exiting `1` when it errored.
 
@@ -356,7 +356,7 @@ The external-agent workflow's answering and polling verbs ([external-cli #XC-20.
 <!-- BEGIN GENERATED FLAGS: grain inbox -->
 | Flag | Type | Default | Env | Description |
 |---|---|---|---|---|
-| `-kind` | string |  |  | only items of this kind: question, secret, notification, merge-held, proposal |
+| `-kind` | string |  |  | only items of this kind: question, answer, secret, notification, merge-held, proposal |
 | `-repo` | string |  |  | only this repository's (owner/name) items |
 <!-- END GENERATED FLAGS -->
 
