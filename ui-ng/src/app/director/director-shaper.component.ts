@@ -122,6 +122,9 @@ import {
             [taskId]="tid"
             [repo]="detail()?.repo"
             [comments]="comments()"
+            [olderCount]="olderCount()"
+            [loadingOlder]="loadingOlder()"
+            (loadEarlier)="sessions.loadOlderComments(tid)"
             [transcript]="sessions.directorTranscript()"
             [draft]="prompt()"
             (draftChange)="prompt.set($event)"
@@ -131,10 +134,15 @@ import {
               placeholder:
                 'Ask Director to tighten scope, suggest acceptance criteria, or pick repo/priority…',
               submitLabel: 'Ask Director to shape',
-              disabled: !canWrite() || sessions.isBusy('send'),
+              disabled: !canWrite(),
+              submitDisabled: sessions.isBusy('send'),
             }"
             (send)="onSend($event)"
           />
+        } @else if (sessions.loadError()) {
+          <p class="banner banner-error" role="alert">
+            {{ sessions.loadError() }}
+          </p>
         } @else if (sessions.loaded()) {
           <p class="muted" style="font-size: 13px">
             No Director session is active in this deployment yet.
@@ -167,7 +175,15 @@ export class DirectorShaperComponent implements OnInit, OnDestroy {
   protected readonly taskId = computed(
     () => this.sessions.directorRow()?.session.taskId ?? "",
   );
-  protected readonly comments = computed(() => this.detail()?.comments ?? []);
+  protected readonly comments = computed(() =>
+    this.sessions.directorComments(),
+  );
+  protected readonly olderCount = computed(() =>
+    this.sessions.olderCommentsFor(this.taskId() || undefined),
+  );
+  protected readonly loadingOlder = computed(() =>
+    this.sessions.isLoadingOlder(this.taskId() || undefined),
+  );
 
   protected readonly proposedDraft = computed(() => {
     const list = this.comments();

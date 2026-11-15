@@ -146,7 +146,7 @@ export function filesFromTransfer(dt: DataTransfer | null | undefined): File[] {
     @if (attachments()?.length && taskId()) {
       <div class="att-list" data-testid="attachment-list">
         @for (a of attachments(); track a.id) {
-          @if (canRead()) {
+          @if (canRead() && isPersistedId(a.id)) {
             <a
               class="att-card"
               [href]="href(a.id)"
@@ -161,6 +161,7 @@ export function filesFromTransfer(dt: DataTransfer | null | undefined): File[] {
                   [src]="href(a.id)"
                   [alt]="a.filename"
                   loading="lazy"
+                  decoding="async"
                 />
               }
               <span class="att-row">
@@ -200,6 +201,11 @@ export class AttachmentListComponent {
       "GET /api/tasks/{id}/attachments/{attachmentId}",
       this.repo(),
     );
+  }
+
+  protected isPersistedId(id: string | number): boolean {
+    const n = Number(id);
+    return !Number.isNaN(n) ? n > 0 : Boolean(id);
   }
 
   protected href(id: string | number): string {

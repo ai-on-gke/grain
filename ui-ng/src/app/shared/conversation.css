@@ -10,6 +10,25 @@
   gap: 12px;
 }
 
+.chat-log > .convo-older {
+  align-self: flex-start;
+}
+
+.session-transcript-well {
+  max-height: 240px;
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--md-sys-shape-corner-small);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-lowest);
+  font-family: var(--grain-font-mono, monospace);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .chat-log:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: -2px;

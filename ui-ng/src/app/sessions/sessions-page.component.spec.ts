@@ -804,4 +804,123 @@ describe("SessionsPageComponent", () => {
     expect(closedIds).toEqual(["t-2", "t-1"]);
     f.destroy();
   });
+
+  it("pages earlier comments on demand and preserves them across live refreshes", async () => {
+    const api = new FakeApi();
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 2,
+      comments: [
+        { id: 10, author: "grain", authorKind: "automation", body: "Newest" },
+      ],
+    };
+    const baseGet = api.get;
+    api.get = (route: string, ...rest: unknown[]) => {
+      const query = rest[1] as string | undefined;
+      if (
+        route === "GET /api/tasks/{id}" &&
+        query?.includes("comments_before=10")
+      ) {
+        api.calls.push({ method: "GET", route, params: rest[0], body: query });
+        return Promise.resolve({
+          id: "1",
+          title: "Director",
+          olderComments: 0,
+          comments: [
+            { id: 8, author: "ana", authorKind: "human", body: "First turn" },
+            {
+              id: 9,
+              author: "grain",
+              authorKind: "automation",
+              body: "Second turn",
+            },
+          ],
+        } as TaskDetail);
+      }
+      return baseGet(route);
+    };
+
+    const f = await render(api);
+    const loadBtn = q(
+      f,
+      '[data-testid="load-older-comments"]',
+    ) as HTMLButtonElement;
+    expect(loadBtn).toBeTruthy();
+    expect(loadBtn.textContent).toContain("Load earlier comments (2)");
+
+    loadBtn.click();
+    await settle(f);
+
+    expect(q(f, '[data-testid="load-older-comments"]')).toBeNull();
+    expect(q(f, '[data-testid="msg-8"]')?.textContent).toContain("First turn");
+    expect(q(f, '[data-testid="msg-9"]')?.textContent).toContain("Second turn");
+    expect(q(f, '[data-testid="msg-10"]')?.textContent).toContain("Newest");
+
+    // A later live refresh must keep the paged earlier turns in place.
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 2,
+      comments: [
+        { id: 10, author: "grain", authorKind: "automation", body: "Newest" },
+        {
+          id: 11,
+          author: "grain",
+          authorKind: "automation",
+          body: "Follow-up",
+        },
+      ],
+    };
+    await TestBed.inject(SessionsStore).refresh();
+    f.detectChanges();
+    await f.whenStable();
+    expect(q(f, '[data-testid="msg-8"]')?.textContent).toContain("First turn");
+    expect(q(f, '[data-testid="msg-11"]')?.textContent).toContain("Follow-up");
+    expect(q(f, '[data-testid="load-older-comments"]')).toBeNull();
+  });
+
+  it("shows optimistic sent message immediately and does not stall behind 503 polling", async () => {
+    const api = new FakeApi();
+    let releasePost!: () => void;
+    const basePost = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if (route !== "POST /api/tasks/{id}/comments") {
+        return basePost(route, params, body);
+      }
+      api.calls.push({ method: "POST", route, params, body });
+      return new Promise((r) => (releasePost = () => r({})));
+    };
+
+    const f = await render(api);
+    const store = TestBed.inject(SessionsStore);
+
+    // Simulate stalled 503 polling routes while sending.
+    let releasePoll!: () => void;
+    api.getIfChanged = () =>
+      new Promise((_, reject) => {
+        releasePoll = () =>
+          reject({ status: 503, error: { error: "verifier_unavailable" } });
+      });
+
+    const box = q(f, '[data-testid="composer"]') as HTMLTextAreaElement;
+    box.value = "Ship the patch now";
+    box.dispatchEvent(new Event("input"));
+    f.detectChanges();
+
+    (q(f, '[data-testid="send"]') as HTMLButtonElement).click();
+    f.detectChanges();
+
+    // Appears optimistically before POST settles and draft clears immediately.
+    expect(f.nativeElement.textContent).toContain("Ship the patch now");
+    expect(f.nativeElement.textContent).toContain("Sending…");
+    expect(store.draftFor("director")).toBe("");
+
+    // Once POST settles, busy('send') clears immediately even while GET poll hangs.
+    releasePost();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(store.isBusy("send")).toBe(false);
+    expect(f.nativeElement.textContent).toContain("Ship the patch now");
+
+    releasePoll?.();
+  });
 });

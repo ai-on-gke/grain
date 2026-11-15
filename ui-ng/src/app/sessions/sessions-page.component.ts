@@ -564,11 +564,27 @@ export function clock(iso: string | undefined, now = new Date()): string {
               tabindex="0"
               data-testid="chat-log"
             >
+              @if (olderCount() > 0) {
+                <button
+                  type="button"
+                  class="btn-outlined convo-older"
+                  data-testid="load-older-comments"
+                  [disabled]="loadingOlder()"
+                  (click)="loadEarlier()"
+                >
+                  {{
+                    loadingOlder()
+                      ? "Loading earlier comments…"
+                      : "Load earlier comments (" + olderCount() + ")"
+                  }}
+                </button>
+              }
               @for (c of comments(); track c.id) {
                 <article
                   class="msg"
                   [class.is-human]="human(c)"
                   [class.is-handover]="c.handover"
+                  [attr.aria-busy]="c.id < 0 ? 'true' : null"
                   [attr.data-testid]="'msg-' + c.id"
                 >
                   <span class="msg-meta">
@@ -582,7 +598,7 @@ export function clock(iso: string | undefined, now = new Date()): string {
                       <span class="status-pill neutral">Handover note</span>
                     }
                     <time class="mono" [attr.datetime]="c.createdAt">{{
-                      time(c.createdAt)
+                      c.id < 0 ? "Sending…" : time(c.createdAt)
                     }}</time>
                   </span>
                   <div class="msg-body" [gMarkdown]="c.body"></div>
@@ -618,22 +634,21 @@ export function clock(iso: string | undefined, now = new Date()): string {
                 }
               }
               @if (
-                row.session.id === director &&
-                  st.live &&
-                  store.directorTranscript();
+                row.session.id === director && st.live && boundedTranscript();
                 as tr
               ) {
-                @if (tr.trim()) {
-                  <article
-                    class="msg is-streaming"
-                    data-testid="session-live-transcript"
-                  >
-                    <span class="msg-meta">
-                      <span class="status-pill setup">Live turn</span>
-                    </span>
-                    <div class="msg-body" [gMarkdown]="tr"></div>
-                  </article>
-                }
+                <article
+                  class="msg is-streaming"
+                  data-testid="session-live-transcript"
+                >
+                  <span class="msg-meta">
+                    <span class="status-pill setup">Live turn</span>
+                  </span>
+                  <pre
+                    class="session-transcript-well"
+                    aria-label="Live run transcript"
+                    >{{ tr }}</pre>
+                </article>
               }
             </div>
 
@@ -682,6 +697,18 @@ export function clock(iso: string | undefined, now = new Date()): string {
                 </div>
               </form>
             }
+          } @else if (store.loadError()) {
+            <p class="empty-state">
+              Waiting for sessions…
+              <button
+                type="button"
+                class="btn-text"
+                data-testid="retry-sessions"
+                (click)="store.refresh()"
+              >
+                Retry
+              </button>
+            </p>
           } @else if (store.loaded()) {
             <p class="empty-state">
               That session does not exist.
@@ -706,7 +733,11 @@ export function clock(iso: string | undefined, now = new Date()): string {
     </section>
 
     @if (newOpen()) {
-      <div class="scrim" aria-hidden="true"></div>
+      <div
+        class="scrim"
+        aria-hidden="true"
+        (click)="!store.isBusy('create') && closeNew()"
+      ></div>
       <div
         class="g-dialog"
         role="dialog"
@@ -800,7 +831,11 @@ export function clock(iso: string | undefined, now = new Date()): string {
     }
 
     @if (confirmDelete()) {
-      <div class="scrim" aria-hidden="true"></div>
+      <div
+        class="scrim"
+        aria-hidden="true"
+        (click)="!store.isBusy('delete') && cancelDelete()"
+      ></div>
       <div
         class="g-dialog"
         role="alertdialog"
@@ -897,9 +932,20 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   protected readonly canCreate = computed(() =>
     this.access.can("POST /api/console-sessions"),
   );
-  protected readonly comments = computed<Comment[]>(
-    () => this.store.selectedDetail()?.comments ?? [],
+  protected readonly comments = computed<Comment[]>(() =>
+    this.store.selectedComments(),
   );
+  protected readonly olderCount = computed(() =>
+    this.store.olderCommentsFor(this.store.selected()?.session.taskId),
+  );
+  protected readonly loadingOlder = computed(() =>
+    this.store.isLoadingOlder(this.store.selected()?.session.taskId),
+  );
+  protected readonly boundedTranscript = computed(() => {
+    const tr = this.store.directorTranscript();
+    if (!tr || !tr.trim()) return "";
+    return tr.length > 16_000 ? `…${tr.slice(-16_000)}` : tr;
+  });
   protected readonly draft = computed(() =>
     this.store.draftFor(this.store.selectedId()),
   );
@@ -933,32 +979,48 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
     const a = this.extractedArtifacts();
     return a.docs.length + a.htmlMocks.length + a.plans.length;
   });
+  protected readonly artifactsByComment = computed(() => {
+    const a = this.extractedArtifacts();
+    const map = new Map<
+      number,
+      { id: string; tab: CanvasTab; label: string }[]
+    >();
+    const push = (
+      cid: number,
+      item: { id: string; tab: CanvasTab; label: string },
+    ) => {
+      const arr = map.get(cid);
+      if (arr) arr.push(item);
+      else map.set(cid, [item]);
+    };
+    for (const h of a.htmlMocks) {
+      push(h.commentId, {
+        id: h.id,
+        tab: "html",
+        label: `Preview HTML: ${h.title}`,
+      });
+    }
+    for (const p of a.plans) {
+      push(p.commentId, {
+        id: p.id,
+        tab: "plan",
+        label: `Workstream plan (${p.plan.tasks.length})`,
+      });
+    }
+    for (const d of a.docs) {
+      push(d.commentId, {
+        id: d.id,
+        tab: "docs",
+        label: `Open spec: ${d.title}`,
+      });
+    }
+    return map;
+  });
 
   protected commentArtifacts(
     commentId: number,
   ): { id: string; tab: CanvasTab; label: string }[] {
-    const a = this.extractedArtifacts();
-    const out: { id: string; tab: CanvasTab; label: string }[] = [];
-    for (const h of a.htmlMocks) {
-      if (h.commentId === commentId) {
-        out.push({ id: h.id, tab: "html", label: `Preview HTML: ${h.title}` });
-      }
-    }
-    for (const p of a.plans) {
-      if (p.commentId === commentId) {
-        out.push({
-          id: p.id,
-          tab: "plan",
-          label: `Workstream plan (${p.plan.tasks.length})`,
-        });
-      }
-    }
-    for (const d of a.docs) {
-      if (d.commentId === commentId) {
-        out.push({ id: d.id, tab: "docs", label: `Open spec: ${d.title}` });
-      }
-    }
-    return out;
+    return this.artifactsByComment().get(commentId) ?? [];
   }
 
   protected openInCanvas(tab: CanvasTab, id: string): void {
@@ -985,13 +1047,18 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   });
 
   private lastCount = 0;
+  private lastFirstId: number | undefined = undefined;
+  private lastTailId: number | undefined = undefined;
   private lastSession = "";
+  private prependAnchor: { scrollHeight: number; scrollTop: number } | null =
+    null;
 
   constructor() {
     effect(() => {
       const id = this.id() || DIRECTOR_ID;
       untracked(() => {
         this.store.select(id);
+        this.store.setDirectorWatch("sessions-page", id === DIRECTOR_ID);
         this.freshOpen.set(false);
         this.settingsOpen.set(false);
         this.confirmDelete.set(false);
@@ -1014,19 +1081,49 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
       });
     });
     effect(() => {
-      const n = this.comments().length;
+      const list = this.comments();
+      const n = list.length;
+      const firstId = list[0]?.id;
+      const tailId = n > 0 ? list[n - 1]?.id : undefined;
       const sid = this.store.selectedId();
       const el = this.log()?.nativeElement;
       if (!el) return;
       if (sid !== this.lastSession) {
         this.lastSession = sid;
         this.lastCount = 0;
+        this.lastFirstId = undefined;
+        this.lastTailId = undefined;
+        this.prependAnchor = null;
       }
-      const grew = n > this.lastCount;
       const first = this.lastCount === 0;
+      const prepended =
+        !first &&
+        this.lastFirstId !== undefined &&
+        firstId !== undefined &&
+        firstId !== this.lastFirstId &&
+        n > this.lastCount;
+      const tailGrew =
+        n > this.lastCount && !prepended && tailId !== this.lastTailId;
+      const isOptimisticSend = tailId !== undefined && tailId < 0 && tailGrew;
       this.lastCount = n;
+      this.lastFirstId = firstId;
+      this.lastTailId = tailId;
+
+      if (prepended) {
+        const anchor = this.prependAnchor;
+        this.prependAnchor = null;
+        if (anchor) {
+          setTimeout(() => {
+            el.scrollTop = Math.max(
+              0,
+              anchor.scrollTop + (el.scrollHeight - anchor.scrollHeight),
+            );
+          });
+        }
+        return;
+      }
       const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-      if (grew && (first || nearBottom)) {
+      if ((first && n > 0) || isOptimisticSend || (tailGrew && nearBottom)) {
         setTimeout(() => (el.scrollTop = el.scrollHeight));
       }
     });
@@ -1037,7 +1134,19 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.store.setDirectorWatch("sessions-page", false);
     this.store.release("sessions-page");
+  }
+
+  protected loadEarlier(): void {
+    const el = this.log()?.nativeElement;
+    if (el) {
+      this.prependAnchor = {
+        scrollHeight: el.scrollHeight,
+        scrollTop: el.scrollTop,
+      };
+    }
+    void this.store.loadOlderComments();
   }
 
   protected statusOf = sessionStatus;

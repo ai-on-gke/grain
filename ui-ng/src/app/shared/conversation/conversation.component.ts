@@ -20,6 +20,7 @@ import {
   OnDestroy,
   ViewEncapsulation,
   afterRenderEffect,
+  computed,
   effect,
   inject,
   input,
@@ -133,7 +134,7 @@ export interface ComposerConfig {
       </div>
 
       <div
-        class="convo-thread chat-log task-log"
+        class="convo-thread chat-log"
         [class.is-empty]="!comments().length && !transcript() && !olderCount()"
         role="log"
         aria-label="Conversation thread"
@@ -147,7 +148,7 @@ export interface ComposerConfig {
             class="btn-outlined convo-older"
             data-testid="load-older-comments"
             [disabled]="loadingOlder()"
-            (click)="loadEarlier.emit()"
+            (click)="onLoadEarlier()"
           >
             {{
               loadingOlder()
@@ -163,6 +164,7 @@ export interface ComposerConfig {
             [class.is-human]="human(c)"
             [class.is-handover]="c.handover"
             [class.is-question]="c.id === questionCommentId()"
+            [attr.aria-busy]="c.id < 0 ? 'true' : null"
             [attr.data-testid]="'tmsg-' + c.id"
           >
             <span class="msg-meta">
@@ -179,7 +181,9 @@ export interface ComposerConfig {
               @if (c.handover) {
                 <span class="status-pill neutral">Handover note</span>
               }
-              <span class="msg-time">{{ time(c.createdAt) }}</span>
+              <span class="msg-time">{{
+                c.id < 0 ? "Sending…" : time(c.createdAt)
+              }}</span>
             </span>
             <div class="msg-body" [gMarkdown]="c.body || ''"></div>
             @if (c.attachments?.length) {
@@ -199,12 +203,12 @@ export interface ComposerConfig {
             }
           </p>
         }
-        @if (transcript()) {
+        @if (boundedTranscript(); as tr) {
           <pre
             class="inbox-live-transcript"
             data-testid="inbox-live-transcript"
             aria-label="Live run transcript"
-            >{{ transcript() }}</pre>
+            >{{ tr }}</pre>
         }
       </div>
       @if (unseen() > 0) {
@@ -345,9 +349,21 @@ export class ConversationComponent implements OnDestroy {
 
   protected readonly human = isHuman;
 
+  // Cap live transcript DOM text to the latest 16 KB so multi-megabyte run
+  // transcripts never block layout inside the conversation pane.
+  protected readonly boundedTranscript = computed(() => {
+    const raw = this.transcript();
+    if (!raw) return null;
+    return raw.length > 16_000 ? `…${raw.slice(-16_000)}` : raw;
+  });
+
   private following = true;
   private lastCount = 0;
+  private lastFirstId: number | undefined = undefined;
+  private lastTailId: number | undefined = undefined;
   private lastTask = "";
+  private prependAnchor: { scrollHeight: number; scrollTop: number } | null =
+    null;
 
   constructor() {
     effect(() => {
@@ -355,6 +371,7 @@ export class ConversationComponent implements OnDestroy {
       untracked(() => {
         this.stagedAttachments.set([]);
         this.unseen.set(0);
+        this.prependAnchor = null;
       });
     });
 
@@ -375,9 +392,13 @@ export class ConversationComponent implements OnDestroy {
     });
 
     // Follow new messages when the reader is at the bottom; otherwise count
-    // them for the "New messages" pill. A task switch always jumps to the end.
+    // them for the "New messages" pill. A task switch always jumps to the end,
+    // while prepending older history preserves the reader's scroll position.
     afterRenderEffect(() => {
-      const n = this.comments().length;
+      const list = this.comments();
+      const n = list.length;
+      const firstId = list[0]?.id;
+      const tailId = n > 0 ? list[n - 1]?.id : undefined;
       const task = this.taskId();
       this.transcript();
       this.mode();
@@ -387,16 +408,46 @@ export class ConversationComponent implements OnDestroy {
         for (const child of Array.from(el.children)) this.resize.observe(child);
       }
       const switched = task !== this.lastTask;
-      const grew = n > this.lastCount;
-      if (switched || this.following) {
+      const prepended =
+        !switched &&
+        this.lastFirstId !== undefined &&
+        firstId !== undefined &&
+        firstId !== this.lastFirstId &&
+        n > this.lastCount;
+      const tailGrew =
+        !switched &&
+        n > this.lastCount &&
+        !prepended &&
+        tailId !== this.lastTailId;
+
+      if (switched) {
+        this.prependAnchor = null;
         this.scrollToEnd();
         this.following = true;
         if (this.unseen()) this.unseen.set(0);
-      } else if (grew) {
+      } else if (prepended && el) {
+        const anchor = this.prependAnchor;
+        this.prependAnchor = null;
+        this.following = false;
+        if (anchor) {
+          const prev = el.style.scrollBehavior;
+          el.style.scrollBehavior = "auto";
+          el.scrollTop = Math.max(
+            0,
+            anchor.scrollTop + (el.scrollHeight - anchor.scrollHeight),
+          );
+          el.style.scrollBehavior = prev;
+        }
+      } else if (this.following) {
+        this.scrollToEnd();
+        if (this.unseen()) this.unseen.set(0);
+      } else if (tailGrew) {
         this.unseen.update((u) => u + (n - this.lastCount));
       }
       this.lastTask = task;
       this.lastCount = n;
+      this.lastFirstId = firstId;
+      this.lastTailId = tailId;
     });
   }
 
@@ -458,6 +509,18 @@ export class ConversationComponent implements OnDestroy {
     this.following =
       el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_SLACK_PX;
     if (this.following && this.unseen()) this.unseen.set(0);
+  }
+
+  protected onLoadEarlier() {
+    const el = this.thread()?.nativeElement;
+    if (el) {
+      this.prependAnchor = {
+        scrollHeight: el.scrollHeight,
+        scrollTop: el.scrollTop,
+      };
+    }
+    this.following = false;
+    this.loadEarlier.emit();
   }
 
   protected jumpToLatest() {

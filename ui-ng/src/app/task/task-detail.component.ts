@@ -777,7 +777,7 @@ export function duration(from?: string, to?: string): string {
                           ? 'Reply to the agent'
                           : 'Comment on this task',
                       submitLabel: 'Send to #' + t.id,
-                      disabled: store.isBusy('send', t.id),
+                      submitDisabled: store.isBusy('send', t.id),
                       hidden:
                         t.state === 'closed' ||
                         (this.parked() && !this.allowWordsOnParked()) ||

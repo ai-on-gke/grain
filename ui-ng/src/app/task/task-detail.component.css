@@ -79,13 +79,6 @@ g-task-page {
   gap: 12px;
 }
 
-.task-log {
-  flex: none;
-  min-height: auto;
-  padding: 0;
-  overflow: visible;
-}
-
 .task-aside {
   overflow-y: auto;
   padding: 16px 20px;

@@ -82,7 +82,10 @@ export class TaskStore {
   private pagedOlderAttempts: number | null = null;
 
   private timer: ReturnType<typeof setInterval> | null = null;
-  private transcriptTimer: ReturnType<typeof setInterval> | null = null;
+  private transcriptTimer: ReturnType<typeof setTimeout> | null = null;
+  private transcriptLive = false;
+  private transcriptFailures = 0;
+  private optimisticSeq = 0;
   private eventSub: { unsubscribe(): void } | null = null;
   private eventTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -316,19 +319,15 @@ export class TaskStore {
     this.stopTranscript();
     this.transcriptFor.set(attempt);
     this.transcript.set(null);
+    this.transcriptLive = live;
+    this.transcriptFailures = 0;
     void this.loadTranscript(attempt);
-    if (live) {
-      this.zone.runOutsideAngular(() => {
-        this.transcriptTimer = setInterval(
-          () => this.zone.run(() => void this.loadTranscript(attempt)),
-          TRANSCRIPT_POLL_MS,
-        );
-      });
-    }
   }
 
   stopTranscript(): void {
-    if (this.transcriptTimer) clearInterval(this.transcriptTimer);
+    this.transcriptLive = false;
+    this.transcriptFailures = 0;
+    if (this.transcriptTimer) clearTimeout(this.transcriptTimer);
     this.transcriptTimer = null;
   }
 
@@ -341,14 +340,42 @@ export class TaskStore {
         { id, number: String(attempt) },
       );
       if (this.id() === id && this.transcriptFor() === attempt) {
+        this.transcriptFailures = 0;
         this.transcript.set(r?.transcript ?? "");
         this.transcriptError.set(null);
       }
     } catch (err) {
       if (this.id() === id && this.transcriptFor() === attempt) {
+        this.transcriptFailures++;
         this.transcriptError.set(
           `The transcript could not be read: ${errorText(err)}`,
         );
+      }
+    } finally {
+      if (
+        this.transcriptLive &&
+        this.id() === id &&
+        this.transcriptFor() === attempt
+      ) {
+        const delay =
+          this.transcriptFailures > 0
+            ? Math.min(
+                TRANSCRIPT_POLL_MS * 2 ** Math.min(this.transcriptFailures, 2),
+                20000,
+              )
+            : TRANSCRIPT_POLL_MS;
+        this.zone.runOutsideAngular(() => {
+          this.transcriptTimer = setTimeout(() => {
+            this.transcriptTimer = null;
+            if (
+              this.transcriptLive &&
+              this.id() === id &&
+              this.transcriptFor() === attempt
+            ) {
+              this.zone.run(() => void this.loadTranscript(attempt));
+            }
+          }, delay);
+        });
       }
     }
   }
@@ -385,6 +412,8 @@ export class TaskStore {
 
   // send verifies the task live before posting (as a reply when the task
   // asked), keeping anything typed and any staged attachments on failure.
+  // Standing console sessions skip blocking on a polled GET before POST and
+  // append an optimistic message immediately so slow/503 polls never stall chat.
   async send(
     expectedId: string | null = this.id(),
     refuse?: (d: TaskDetail | undefined) => string,
@@ -395,9 +424,73 @@ export class TaskStore {
     if (
       (!body && attachments.length === 0) ||
       !expectedId ||
-      this.id() !== expectedId
+      this.id() !== expectedId ||
+      this.isBusy("send", expectedId)
     ) {
       return false;
+    }
+    const cur = this.detail()?.id === expectedId ? this.detail() : null;
+    if (cur?.consoleSession) {
+      const busyKey = `${expectedId}:send`;
+      this.mark(busyKey, true);
+      this.actionError.set(null);
+      const tempId = -++this.optimisticSeq;
+      const optimistic: Comment = {
+        id: tempId,
+        author: "human",
+        authorKind: "human",
+        authorLabel: "You",
+        body,
+        createdAt: new Date().toISOString(),
+      };
+      this.detail.update((d) =>
+        d && d.id === expectedId
+          ? { ...d, comments: [...(d.comments ?? []), optimistic] }
+          : d,
+      );
+      this.draft.set("");
+      this.stagedAttachments.set([]);
+      try {
+        const res = await this.api.post<Partial<TaskDetail>>(
+          "POST /api/tasks/{id}/comments",
+          { id: expectedId },
+          { body, attachments },
+        );
+        if (this.id() === expectedId && res && Array.isArray(res.comments)) {
+          const total = res.comments.length;
+          const newest = total > 100 ? res.comments.slice(-100) : res.comments;
+          const older = Math.max(res.olderComments ?? 0, total - newest.length);
+          this.detail.set(
+            this.applyPagedMerge({
+              ...cur,
+              ...res,
+              id: expectedId,
+              comments: newest,
+              olderComments: older,
+            }),
+          );
+        }
+        void this.refresh();
+        void this.inbox.refresh();
+        return true;
+      } catch (err) {
+        this.detail.update((d) =>
+          d && d.id === expectedId
+            ? {
+                ...d,
+                comments: (d.comments ?? []).filter((c) => c.id !== tempId),
+              }
+            : d,
+        );
+        if (!this.draft()) this.draft.set(typed);
+        if (this.stagedAttachments().length === 0 && attachments.length > 0) {
+          this.stagedAttachments.set(attachments);
+        }
+        this.actionError.set(errorText(err));
+        return false;
+      } finally {
+        this.mark(busyKey, false);
+      }
     }
     return this.act(
       "send",
@@ -426,11 +519,25 @@ export class TaskStore {
         }
         const why = refuse?.(fresh);
         if (why) throw new Error(why);
-        await this.api.post(
+        const res = await this.api.post<Partial<TaskDetail>>(
           "POST /api/tasks/{id}/comments",
           { id },
           { body, attachments },
         );
+        if (this.id() === id && res && Array.isArray(res.comments)) {
+          const total = res.comments.length;
+          const newest = total > 100 ? res.comments.slice(-100) : res.comments;
+          const older = Math.max(res.olderComments ?? 0, total - newest.length);
+          this.detail.set(
+            this.applyPagedMerge({
+              ...(fresh ?? ({ id, title: "" } as TaskDetail)),
+              ...res,
+              id,
+              comments: newest,
+              olderComments: older,
+            }),
+          );
+        }
         if (this.draft() === typed) this.draft.set("");
         if (this.stagedAttachments() === attachments) {
           this.stagedAttachments.set([]);
