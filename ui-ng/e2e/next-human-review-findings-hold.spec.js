@@ -61,6 +61,7 @@ async function holdWith(page, id, hold) {
       json: {
         ...detail,
         state: "awaiting_submit",
+        pullRequest: "acme/widgets#42",
         humanReviewHold: hold,
         mergeGates: [
           {

@@ -787,6 +787,9 @@ describe("TaskPageComponent", () => {
         { source: "security-findings", reason: "the review left findings" },
         { source: "requested", category: "other", reason: "intent unclear" },
       ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
     } as TaskDetail;
     const f = await render(api);
     expect(q(f, '[data-testid="release-hold-btn"]')).toBeTruthy();
@@ -794,6 +797,46 @@ describe("TaskPageComponent", () => {
       "other reasons only",
     );
     expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeTruthy();
+  });
+
+  it("offers no override once the review gate is overridden, and says so", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: [
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "overridden",
+        },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+    expect(q(f, '[data-testid="hold-findings-note"]')!.textContent).toContain(
+      "has been overridden",
+    );
+  });
+
+  it("shows no hold card on a closed task", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "closed",
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="human-review-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
   });
 
   it("offers Rollover for a durable idle task but not Recreate sandbox", async () => {

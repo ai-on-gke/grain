@@ -411,7 +411,7 @@ const REVIEW_CATEGORIES = [
         }
 
         <!-- 5. Human-Review Hold -->
-        @if (task().humanReviewHold?.length) {
+        @if (holdOpen()) {
           <section
             class="gate-card"
             data-testid="human-review-hold"
@@ -423,7 +423,10 @@ const REVIEW_CATEGORIES = [
               </h2>
               <div class="gate-actions">
                 @if (
-                  findingsHeld() && can("POST /api/tasks/{id}/force-merge")
+                  findingsHeld() &&
+                  reviewGateOpen() &&
+                  canForceMerge() &&
+                  can("POST /api/tasks/{id}/force-merge")
                 ) {
                   <button
                     type="button"
@@ -461,9 +464,15 @@ const REVIEW_CATEGORIES = [
                 @if (!findingsOnly()) {
                   Release hold releases the other reasons only.
                 }
-                Review findings cannot be released directly; they require a
-                passing re-review or an operator gate override under
-                <code>merge:force</code>.
+                @if (reviewGateOpen()) {
+                  Review findings cannot be released directly; they require a
+                  passing re-review or an operator gate override under
+                  <code>merge:force</code>.
+                } @else {
+                  The review gate has been overridden under
+                  <code>merge:force</code>; these findings no longer block the
+                  merge.
+                }
               </p>
             }
             <ul class="gate-access-list">
@@ -553,6 +562,26 @@ export class TaskGatesBarComponent {
       (h) => h.source === FINDINGS_SOURCE,
     ),
   );
+  // A closed task's hold is history: nothing on the card can act on it.
+  protected readonly holdOpen = computed(
+    () =>
+      this.task().state !== "closed" && !!this.task().humanReviewHold?.length,
+  );
+  // Whether a review gate is still unsatisfied: once one is overridden the
+  // findings stay on the hold but no longer block, so there is nothing
+  // left to override.
+  protected readonly reviewGateOpen = computed(() =>
+    unsatisfiedGates(this.task()).some((g) => g.id.includes("review")),
+  );
+  // What POST /api/tasks/{id}/force-merge accepts (ForceMergeWithGates): an
+  // open task with a pull request, or a running one it can open one for.
+  protected readonly canForceMerge = computed(() => {
+    const t = this.task();
+    return (
+      t.state !== "closed" &&
+      (!!t.pullRequest || t.state === "running" || t.state === "awaiting_reply")
+    );
+  });
   protected readonly findingsOnly = computed(() => {
     const hold = this.task().humanReviewHold ?? [];
     return hold.length > 0 && hold.every((h) => h.source === FINDINGS_SOURCE);
@@ -565,7 +594,7 @@ export class TaskGatesBarComponent {
       t.pendingAccess ||
       t.pendingConfigChange ||
       this.pendingScripts().length ||
-      t.humanReviewHold?.length ||
+      this.holdOpen() ||
       (t.review && this.can("POST /api/tasks/{id}/human-review"))
     );
   });
