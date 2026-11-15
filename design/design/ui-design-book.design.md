@@ -207,7 +207,14 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   a draggable separator (`role="separator"`, 24px hit zone, keyboard
   arrows, Enter collapses, double-click resets) and a "Hide list" toggle.
   The choice is remembered per surface.
-- The detail pane is always there on desktop; it is not a modal.
+- The detail pane is always there on desktop; it is not a modal. The
+  exception is Agents, whose cards are a dashboard in their own right:
+  its inspector opens only on the agent `?task=` names. With none (on
+  arrival, or after the person closes it) the split drops to one
+  full-width column of cards, nothing looks selected, and j/k or a click
+  opens the inspector on an agent. It closes from "Close inspector" in
+  the split bar, the pane's ×, Escape, or a second click on the selected
+  card, and focus goes back to that card.
 - **The selected item looks selected.** Whatever the list is drawn as —
   queue rows, table rows, cards — the item the pane shows carries
   `surface-container` with a 3px `primary` leading bar (`inset 3px 0 0`),
