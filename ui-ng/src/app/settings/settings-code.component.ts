@@ -35,7 +35,11 @@ import {
   PillSelectComponent,
 } from "../shared/pill-select.component";
 import type { SettingsSectionId } from "./settings-sections";
-import { SettingsStateService, errText } from "./settings-state.service";
+import {
+  SettingsStateService,
+  errText,
+  type ReachableReposState,
+} from "./settings-state.service";
 import {
   ConfirmDialogComponent,
   bypassConfirm,
@@ -45,7 +49,9 @@ import {
 interface RepoFacts {
   ciMode?: string;
   baseBranch?: string;
-  declarationsCount?: number;
+  // Whether grain reads the repository's own .grain/ declarations:
+  // undefined while GET .../declarations is out, null when it failed.
+  declarations?: boolean | null;
   bypassGates?: boolean;
 }
 
@@ -106,13 +112,18 @@ interface StateRepoEntryDto {
           @if (repos().length === 0) {
             <p class="s-card-desc">No repositories configured yet.</p>
           } @else {
-            <div class="s-table-wrap">
-              <table class="s-table" aria-label="Configured repositories">
+            <div class="s-table-wrap s-table-stack-wrap">
+              <table
+                class="s-table s-table-stack"
+                aria-label="Configured repositories"
+              >
                 <thead>
                   <tr>
                     <th>Repository</th>
                     <th>Base branch</th>
+                    <th>Declarations</th>
                     <th>CI mode</th>
+                    <th>Git connection</th>
                     <th>Base repair bypass</th>
                     <th class="s-actions-cell">Manage</th>
                   </tr>
@@ -128,13 +139,40 @@ interface StateRepoEntryDto {
                           >{{ repo }}</a
                         >
                       </td>
-                      <td class="s-mono">{{ fact?.baseBranch || "main" }}</td>
-                      <td>
+                      <td class="s-mono" data-label="Base branch">
+                        {{ fact?.baseBranch || "main" }}
+                      </td>
+                      <td
+                        data-label="Declarations"
+                        [attr.data-testid]="'repo-declarations-' + repo"
+                      >
+                        <a
+                          [routerLink]="['/processes', 'declarations']"
+                          [queryParams]="{ repo: repo }"
+                          [attr.aria-label]="
+                            repo + ' declarations: ' + declarationsText(fact)
+                          "
+                          >{{ declarationsText(fact) }}</a
+                        >
+                      </td>
+                      <td data-label="CI mode">
                         <span class="status-pill neutral">{{
                           fact?.ciMode || "grain"
                         }}</span>
                       </td>
-                      <td>
+                      <td
+                        data-label="Git connection"
+                        [attr.data-testid]="'repo-git-' + repo"
+                      >
+                        <a
+                          [routerLink]="['/settings', 'git']"
+                          [attr.aria-label]="
+                            repo + ' Git connection: ' + connectionText(repo)
+                          "
+                          >{{ connectionText(repo) }}</a
+                        >
+                      </td>
+                      <td data-label="Base repair bypass">
                         <button
                           type="button"
                           class="g-switch"
@@ -155,7 +193,7 @@ interface StateRepoEntryDto {
                           "
                         ></button>
                       </td>
-                      <td class="s-actions-cell">
+                      <td class="s-actions-cell" data-label="Manage">
                         <div class="s-row-actions">
                           <a
                             class="btn-tonal s-btn-sm"
@@ -1131,6 +1169,10 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly reachableErrors = signal<string[]>([]);
   protected readonly reachableHostMismatches = signal<string[]>([]);
   protected readonly reachableReason = signal("");
+  // The last reachable-repos answer, for the Git connection column:
+  // null while it has not come back, false when it failed or may not
+  // be read.
+  protected readonly reach = signal<ReachableReposState | null | false>(null);
 
   protected readonly gitConnections = signal<GitConnectionRow[]>([]);
   protected readonly gitCheckMessage = signal("");
@@ -1228,7 +1270,9 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       this.reachableHostMismatches.set(data.hostMismatches);
       this.reachableReason.set(data.reason);
       this.reachableCount.set(data.repos.length);
+      this.reach.set(data);
     } catch (err) {
+      this.reach.set(false);
       this.state.error.set(errText(err));
     } finally {
       this.loadingReachableRepos.set(false);
@@ -1237,6 +1281,39 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
 
   protected configFileOptions(): PillOption[] {
     return this.configFiles().map((f) => ({ value: f, label: f }));
+  }
+
+  // The Declarations and Git connection columns say what classic
+  // Settings → Repositories says: "…" while the read is out, "Unknown"
+  // when it failed, and otherwise the fact.
+  protected declarationsText(fact: RepoFacts | undefined): string {
+    const d = fact?.declarations;
+    if (d === undefined) return "…";
+    if (d === null) return "Unknown";
+    return d ? "Read" : "Not read";
+  }
+
+  // connectionText is which of the deployment's Git connections reaches
+  // repo, by what the connections list: the connections on its host, and
+  // whether the listing gave push. The listing names repositories, not
+  // the connection each came from, so two connections on one host are
+  // both named.
+  protected connectionText(repo: string): string {
+    const reach = this.reach();
+    if (reach === null) return "…";
+    if (!reach) return "Unknown";
+    if (!reach.available) return "Not listed";
+    const host = repoHostOf(repo) || "github.com";
+    const listed = reach.repos.find(
+      (r) => r.repo.toLowerCase() === repo.toLowerCase(),
+    );
+    if (!listed) return "Not reached";
+    const names = reach.connections
+      .filter((c) => c.ok && (c.host || "github.com").toLowerCase() === host)
+      .map((c) => c.credential)
+      .filter(Boolean);
+    const via = names.length > 0 ? names.join(", ") : host;
+    return listed.push ? via : `${via} (read only)`;
   }
 
   protected repoRoute(repo: string, tab?: string): string[] {
@@ -1330,6 +1407,8 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       this.syncReposList();
       if (this.access.can("GET /api/deployment/reachable-repos")) {
         void this.loadReachableRepos();
+      } else {
+        this.reach.set(false);
       }
     } else if (sec === "git") {
       void this.loadGitConnections();
@@ -1387,11 +1466,22 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
               [repo]: {
                 ...all[repo],
                 ciMode: String(d?.["ciMode"] ?? "grain"),
+                declarations: Boolean(d?.["declarations"]),
                 bypassGates: Boolean(d?.["baseRepairBypassesHumanGates"]),
               },
             }));
           })
-          .catch(() => undefined);
+          .catch(() =>
+            this.repoFacts.update((all) => ({
+              ...all,
+              [repo]: { ...all[repo], declarations: null },
+            })),
+          );
+      } else {
+        this.repoFacts.update((all) => ({
+          ...all,
+          [repo]: { ...all[repo], declarations: null },
+        }));
       }
       if (this.access.can("GET /api/repos/{owner}/{name}/release", repo)) {
         void this.api
@@ -1909,4 +1999,24 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       }
     }
   }
+}
+
+// repoHostOf is the host a repository spec names -- the authority of a
+// URL, the host of an scp-style address, or a dotted first segment of
+// host/owner/name -- or "" for a bare owner/name (classic RepoList.jsx's
+// helper of the same name).
+export function repoHostOf(text: string): string {
+  let spec = (text || "").trim();
+  if (spec.includes("://")) {
+    spec = spec.slice(spec.indexOf("://") + 3);
+    const authority = spec.split("/")[0];
+    return authority.slice(authority.lastIndexOf("@") + 1).toLowerCase();
+  }
+  const at = spec.indexOf("@");
+  if (at >= 0 && spec.indexOf(":", at) >= 0) {
+    return spec.slice(at + 1, spec.indexOf(":", at)).toLowerCase();
+  }
+  const [first, ...rest] = spec.split("/");
+  if (rest.length > 0 && /[.:]/.test(first)) return first.toLowerCase();
+  return "";
 }

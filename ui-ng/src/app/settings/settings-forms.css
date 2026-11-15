@@ -384,3 +384,90 @@
 .s-anchor {
   scroll-margin-top: 80px;
 }
+
+/* A table that must never scroll sideways (Settings → Repositories). Wide,
+   its headers may wrap and its cells sit closer. Narrower than its columns
+   need -- a phone, but also the settings pane beside the drawer and rail
+   at medium widths -- each row becomes a card and every cell a labelled
+   line of it, its label from the cell's data-label. It collapses on the
+   wrap's own width, not the viewport's, since the pane's width is what
+   the columns have. The first cell is the row's title and keeps no
+   label. */
+.s-table-wrap.s-table-stack-wrap {
+  container: s-table-stack / inline-size;
+}
+
+.s-table-stack th {
+  white-space: normal;
+}
+
+.s-table-stack th,
+.s-table-stack td {
+  padding: 12px 10px;
+}
+
+@container s-table-stack (max-width: 879px) {
+  .s-table-stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .s-table-stack,
+  .s-table-stack tbody,
+  .s-table-stack tr,
+  .s-table-stack td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .s-table-stack tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  }
+
+  .s-table-stack tr:last-child {
+    border-bottom: none;
+  }
+
+  .s-table-stack td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 14px;
+    border-bottom: none;
+    overflow-wrap: anywhere;
+    text-align: right;
+  }
+
+  .s-table-stack td:first-child {
+    font-weight: 500;
+    text-align: left;
+  }
+
+  .s-table-stack td[data-label]::before {
+    content: attr(data-label);
+    flex: none;
+    font-size: 11.5px;
+    line-height: 16px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--md-sys-color-on-surface-variant);
+    text-align: left;
+  }
+
+  .s-table-stack td.s-actions-cell {
+    white-space: normal;
+  }
+
+  .s-table-stack td.s-actions-cell .s-row-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
