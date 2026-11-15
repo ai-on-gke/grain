@@ -48,7 +48,9 @@ scripts, and each run's capture in `out/<run>/`.
   - Fix (`pkg/ui/refs.go`, `pkg/ui/notifications.go`): the route admits such
     callers without `?repo=`. It narrows the list by the notification's repo,
     or its task's repo, the way `/api/events` does. Deployment-wide
-    notifications stay operator-only.
+    notifications reach only callers whose `tasks:read` covers every
+    repository (operators, `grain/viewer`), as on `/api/events`; review of
+    #1519 caught an earlier version hiding them from `grain/viewer` too.
   - Regression test: `TestListNotificationsNarrowsToWhatARepoScopedReaderMayRead`.
 - **F3 — `/next/inbox` cold load checked access before `/api/config` (P1).**
   `InboxStore.load()` asked `access.can("GET /api/local-script-approvals")`
