@@ -96,6 +96,13 @@ function parkedOn(t: AnyTask): "secret" | "access" | "config" | "" {
   return "";
 }
 
+// control is the button a stuck task's sub-case names (the liveness
+// reason's control, or the merge queue's): "Run now", "Cancel",
+// "Undefer" or "Retry merge".
+function control(t: AnyTask): string {
+  return t.reason?.control || t.mergeQueueReason?.control || "";
+}
+
 // blockingGates are the gates a person has to settle before Submit means
 // anything: failing, with findings, or still needed (approval aside --
 // Submit is the approval).
@@ -230,7 +237,7 @@ export function whatsNeeded(t: AnyTask): string {
   }
   if (state === "awaiting_submit") return submitSentence(t);
   // completed (and anything else grain adds later).
-  if (t.mergeQueueBlockedAt) {
+  if (t.mergeQueueBlockedAt || control(t) === "Retry merge") {
     return "The merge queue gave up on this pull request. Sort it out, then Retry merge.";
   }
   if (t.pullRequest && !t.prMergedAt) {
@@ -410,7 +417,7 @@ export function availableActions(
   if (state === "deferred") {
     add({
       id: "undefer",
-      label: "Bring back",
+      label: control(t) === "Undefer" ? "Undefer" : "Bring back",
       route: "POST /api/tasks/{id}/undefer",
       variant: "tonal",
     });
@@ -434,7 +441,7 @@ export function availableActions(
   if (state === "awaiting_submit") {
     out.push(...submitActions(t, viewer));
   }
-  if (t.mergeQueueBlockedAt) {
+  if (t.mergeQueueBlockedAt || control(t) === "Retry merge") {
     add({
       id: "retry-merge",
       label: "Retry merge",
@@ -539,12 +546,16 @@ export function availableActions(
     tip: "File a task that waits for this one, on the same repository",
     secondary: true,
   });
+  // A stuck run's sub-case can name Cancel as its way out: then it is
+  // the main action, and named so it is not mistaken for a dialog's
+  // own Cancel.
+  const cancel = control(t) === "Cancel";
   add({
     id: "close",
-    label: "Close",
+    label: cancel ? "Cancel task" : "Close",
     route: "POST /api/tasks/{id}/close",
-    variant: "text",
-    secondary: true,
+    variant: cancel ? "tonal" : "text",
+    secondary: !cancel,
   });
   return out;
 }
