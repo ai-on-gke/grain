@@ -447,22 +447,27 @@ export class InboxStore implements OnDestroy {
     this.remember();
     const needWhoami =
       !this.access.whoami() && typeof this.api.whoami === "function";
-    const [config, feedOk, notifications, scripts, who] =
-      await Promise.allSettled([
-        this.api.config(),
-        this.feed.refresh(),
-        this.api.openNotifications(),
+    const configReq = this.api.config().then((cfg) => {
+      if (cfg) {
+        this.access.setConfig(cfg);
+        this.version.set(versionLabel(cfg.version));
+      }
+      return cfg;
+    });
+    const [, feedOk, notifications, scripts, who] = await Promise.allSettled([
+      configReq,
+      this.feed.refresh(),
+      this.api.openNotifications(),
+      (this.access.configLoaded()
+        ? Promise.resolve()
+        : configReq.catch(() => null)
+      ).then(() =>
         this.access.can("GET /api/local-script-approvals")
           ? this.api.localScriptApprovals()
-          : Promise.resolve([] as LocalScriptApproval[]),
-        needWhoami
-          ? this.api.whoami().catch(() => null)
-          : Promise.resolve(null),
-      ]);
-    if (config.status === "fulfilled") {
-      this.access.setConfig(config.value);
-      this.version.set(versionLabel(config.value.version));
-    }
+          : ([] as LocalScriptApproval[]),
+      ),
+      needWhoami ? this.api.whoami().catch(() => null) : Promise.resolve(null),
+    ]);
     if (who.status === "fulfilled" && who.value) {
       this.access.setWhoami(who.value);
     }

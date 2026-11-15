@@ -1,0 +1,13 @@
+-- disable conn-a
+{"defaultModels":["walk-a","walk-b","walk-c"]}
+-- filed 2 (pinned walk-b); waiting for it to start
+-- filed 3 (unpinned) and 4 (pinned walk-b); letting dispatch run
+{"id":"2","state":"running","model":"walk-b","pinned":null,"runs":[],"waiting":null}
+{"id":"3","state":"running","model":null,"pinned":null,"runs":[],"waiting":null}
+{"id":"4","state":"queued","model":"walk-b","pinned":null,"runs":[],"waiting":null}
+{"id":"2","state":"running","attempts":["walk-b"],"activity":"holding the connection"}
+{"id":"3","state":"running","attempts":["walk-c"],"activity":"holding the connection"}
+{"id":"4","state":"queued","attempts":[],"activity":"waiting: all connections serving walk-b are busy (1 connection at its concurrency limit (1 of 1 runs)) -- the task is pinned to walk-b; it does not fall back"}
+{"id":"2","state":"closed","attempts":["walk-b"]}
+{"id":"3","state":"closed","attempts":["walk-c"]}
+{"id":"4","state":"closed","attempts":["walk-b"]}

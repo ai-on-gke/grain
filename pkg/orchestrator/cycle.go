@@ -676,6 +676,10 @@ type AgentChoice struct {
 	PreferModel     string
 	// TaskID is the task the run is for.
 	TaskID string
+	// TimeZone is model.Task.TimeZone: the IANA zone the task's requester
+	// reads the clock in, which a fallback notice names a paused model's
+	// reset time in. Empty means the deployment's own zone.
+	TimeZone string
 }
 
 // ChoiceFor is the AgentChoice task's own fields make: the one runOne
@@ -689,6 +693,7 @@ func ChoiceFor(task model.Task) AgentChoice {
 		Priority:  task.HasPriorityDispatch(),
 		Durable:   task.IsDurable(),
 		TaskID:    task.ID,
+		TimeZone:  task.TimeZone,
 	}
 }
 
