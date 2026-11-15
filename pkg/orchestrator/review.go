@@ -258,15 +258,23 @@ func closeFinishedReview(ctx context.Context, store *model.Store, client github.
 func reviewFinishedNote(task model.Task) string {
 	const closing = "Closing it: with no pull request of its own there is nothing here to merge, " +
 		"and nothing that would ever have moved it off \"Merging\" on its own."
+	// A review working on the reviewed branch itself (reviewsInPlace) may
+	// have pushed its fixes there (model.LinkReviewerHead): they are that
+	// branch's now, not a change of the review's own.
+	finished := "This review is finished and pushed no change of its own."
+	if head := linkTarget(task, model.LinkReviewerHead); head != "" {
+		finished = fmt.Sprintf("This review is finished. The fixes it pushed, up to `%s`, are on the "+
+			"branch it reviewed rather than a change of its own.", shortSHA(head))
+	}
 	for _, l := range task.Links {
 		if l.Kind == model.LinkProposedBy {
 			return fmt.Sprintf(
-				"This review is finished and pushed no change of its own. Whatever it found is "+
+				"%s Whatever it found is "+
 					"on task %s and on that task's pull request, which is where somebody reads "+
-					"it and what waits for them to. %s", l.Target, closing)
+					"it and what waits for them to. %s", finished, l.Target, closing)
 		}
 	}
-	return "This review is finished and pushed no change of its own. " + closing
+	return finished + " " + closing
 }
 
 // reviewDue reports whether task is one SyncReviews still owes a review:

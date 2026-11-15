@@ -15,9 +15,29 @@
 package orchestrator
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/model"
 )
+
+// A review that pushed its fixes onto the branch it reviewed is not closed
+// with a note saying it pushed nothing (docs/test-runs/2026-11-14-review-context.md).
+func TestReviewFinishedNoteNamesFixesPushedInPlace(t *testing.T) {
+	plain := model.Task{ID: "8", Links: []model.Link{{Kind: model.LinkProposedBy, Target: "2"}}}
+	if got := reviewFinishedNote(plain); !strings.Contains(got, "pushed no change of its own") {
+		t.Errorf("review that pushed nothing: %q", got)
+	}
+	inPlace := plain
+	inPlace.Links = append(slices.Clone(plain.Links),
+		model.Link{Kind: model.LinkReviewerHead, Target: "68059eebd52870884dbf800afc9042c481b6613e"})
+	got := reviewFinishedNote(inPlace)
+	if strings.Contains(got, "pushed no change") || !strings.Contains(got, "The fixes it pushed, up to `68059eeb") ||
+		!strings.Contains(got, "on task 2") {
+		t.Errorf("review that pushed fixes in place: %q", got)
+	}
+}
 
 // A pull request description is written by whoever opened the pull request
 // and lands in an external review's body ahead of grain's own instructions.
