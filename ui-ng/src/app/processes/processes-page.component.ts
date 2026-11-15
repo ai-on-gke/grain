@@ -3455,6 +3455,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           }
         } else if (newParam === "suite") {
           if (this.access.can("POST /api/suites")) {
+            this.suitesView.set("suites");
             this.openSuiteDialog(null);
           }
         } else if (launchParam === "1") {
@@ -3512,7 +3513,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   // newProcess is the header New menu: it narrows the page to the kind
-  // asked for and opens that kind's form over it.
+  // asked for and opens that kind's form over it. It goes through ?new=,
+  // the shell New menu's own deep link, because leaving an item's URL
+  // (or the bare /processes) makes a fresh page that would drop a form
+  // opened on this one.
   protected newProcess(kind: "schedule" | "template" | "suite"): void {
     this.openPicker.set(null);
     const tab: ProcessTab =
@@ -3521,15 +3525,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         : kind === "template"
           ? "templates"
           : "suites";
-    if (this.activeTab() !== tab || this.itemId() || this.runId()) {
-      void this.router.navigate(["/processes", tab], {
-        queryParamsHandling: "merge",
-      });
-    }
-    if (kind === "suite") this.suitesView.set("suites");
-    if (kind === "schedule") this.openScheduleDialog(null);
-    else if (kind === "template") this.openTemplateDialog(null);
-    else this.openSuiteDialog(null);
+    void this.router.navigate(["/processes", tab], {
+      queryParams: { new: kind },
+      queryParamsHandling: "merge",
+    });
   }
 
   protected setSort(raw: string): void {
