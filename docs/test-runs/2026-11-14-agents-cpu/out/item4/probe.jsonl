@@ -1,0 +1,59 @@
+{"where":"agents@1440/light","name":"first card selected by default","ok":true}
+{"where":"agents@1440/light","name":"Enter on a card selects it, page stays","ok":true,"url":"/next/agents?task=3"}
+{"where":"agents@1440/light","name":"Space on a card selects it","ok":true,"url":"/next/agents?task=2"}
+{"where":"agents@1440/light","name":"Enter on the CPU reading inside another card does not open the selected task","ok":true,"url":"/next/agents?task=3"}
+{"where":"agents@1440/light","name":"Enter on a list row selects it","ok":true,"url":"/next/agents?task=3"}
+{"where":"agents@1440/light","name":"Space on a list row selects it","ok":true,"url":"/next/agents?task=2"}
+{"where":"agents@1440/light","name":"Enter with nothing focused opens the selected task","ok":true,"url":"/next/task/2?from=agents"}
+{"where":"agents@1440/light","name":"?pane=runs opens the Runs tab","ok":true}
+{"where":"agents@1440/light","name":"?pane=runs survives reload","ok":true}
+{"where":"agents@1440/light","name":"clicking Details writes ?pane=details","ok":true,"url":"/next/agents?task=3&pane=details"}
+{"where":"agents@1440/light","name":"back returns to Runs","ok":true,"url":"/next/agents?task=3&pane=runs"}
+{"where":"agents@1440/light","name":"forward returns to Details","ok":true,"url":"/next/agents?task=3&pane=details"}
+{"where":"workstreams@1440/light","name":"?pane=runs opens the Runs tab","ok":true,"tab":"task-tab-runs","url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@1440/light","name":"?pane=runs survives reload","ok":true,"tab":"task-tab-runs","url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@1440/light","name":"clicking Details writes ?pane=details","ok":true,"url":"/next/workstreams/director:director:8?node=8&pane=details"}
+{"where":"workstreams@1440/light","name":"back returns to Runs","ok":true,"url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@1440/light","name":"forward returns to Details","ok":true,"url":"/next/workstreams/director:director:8?node=8&pane=details"}
+{"where":"workstreams@1440/light","name":"Enter on a tree node selects it, not the previous one","ok":true,"url":"/next/workstreams/director:director:8?node=11"}
+{"where":"agents@1440/dark","name":"first card selected by default","ok":true}
+{"where":"agents@1440/dark","name":"Enter on a card selects it, page stays","ok":true,"url":"/next/agents?task=3"}
+{"where":"agents@1440/dark","name":"Space on a card selects it","ok":true,"url":"/next/agents?task=2"}
+{"where":"agents@1440/dark","name":"Enter on the CPU reading inside another card does not open the selected task","ok":true,"url":"/next/agents?task=3"}
+{"where":"agents@1440/dark","name":"Enter on a list row selects it","ok":true,"url":"/next/agents?task=3"}
+{"where":"agents@1440/dark","name":"Space on a list row selects it","ok":true,"url":"/next/agents?task=2"}
+{"where":"agents@1440/dark","name":"Enter with nothing focused opens the selected task","ok":true,"url":"/next/task/2?from=agents"}
+{"where":"agents@1440/dark","name":"?pane=runs opens the Runs tab","ok":true}
+{"where":"agents@1440/dark","name":"?pane=runs survives reload","ok":true}
+{"where":"agents@1440/dark","name":"clicking Details writes ?pane=details","ok":true,"url":"/next/agents?task=3&pane=details"}
+{"where":"agents@1440/dark","name":"back returns to Runs","ok":true,"url":"/next/agents?task=3&pane=runs"}
+{"where":"agents@1440/dark","name":"forward returns to Details","ok":true,"url":"/next/agents?task=3&pane=details"}
+{"where":"workstreams@1440/dark","name":"?pane=runs opens the Runs tab","ok":true,"tab":"task-tab-runs","url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@1440/dark","name":"?pane=runs survives reload","ok":true,"tab":"task-tab-runs","url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@1440/dark","name":"clicking Details writes ?pane=details","ok":true,"url":"/next/workstreams/director:director:8?node=8&pane=details"}
+{"where":"workstreams@1440/dark","name":"back returns to Runs","ok":true,"url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@1440/dark","name":"forward returns to Details","ok":true,"url":"/next/workstreams/director:director:8?node=8&pane=details"}
+{"where":"workstreams@1440/dark","name":"Enter on a tree node selects it, not the previous one","ok":true,"url":"/next/workstreams/director:director:8?node=11"}
+{"where":"agents@390/light","name":"Enter on a card opens that card's task","ok":true,"url":"/next/task/3?from=agents"}
+{"where":"agents@390/light","name":"Space on a card opens that card's task","ok":true,"url":"/next/task/2?from=agents"}
+{"where":"agents@390/light","name":"Enter on the CPU reading opens nothing else","ok":true,"url":"/next/task/3?from=agents"}
+{"where":"agents@390/light","name":"?task=&pane= deep link loads","ok":true,"url":"/next/agents?task=3&pane=runs"}
+{"where":"workstreams@390/light","name":"?pane=runs opens the Runs tab","ok":true,"tab":"task-tab-runs","url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@390/light","name":"?pane=runs survives reload","ok":true,"tab":"task-tab-runs","url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@390/light","name":"phone inspector opened with o keeps ?pane=runs","ok":true,"tab":"task-tab-runs","url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@390/light","name":"clicking Details writes ?pane=details","ok":true,"url":"/next/workstreams/director:director:8?node=8&pane=details"}
+{"where":"workstreams@390/light","name":"back returns to Runs","ok":true,"url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@390/light","name":"forward returns to Details","ok":true,"url":"/next/workstreams/director:director:8?node=8&pane=details"}
+{"where":"workstreams@390/light","name":"Enter on a tree node selects it, not the previous one","ok":true,"url":"/next/workstreams/director:director:8?node=11"}
+{"where":"agents@390/dark","name":"Enter on a card opens that card's task","ok":true,"url":"/next/task/3?from=agents"}
+{"where":"agents@390/dark","name":"Space on a card opens that card's task","ok":true,"url":"/next/task/2?from=agents"}
+{"where":"agents@390/dark","name":"Enter on the CPU reading opens nothing else","ok":true,"url":"/next/task/3?from=agents"}
+{"where":"agents@390/dark","name":"?task=&pane= deep link loads","ok":true,"url":"/next/agents?task=3&pane=runs"}
+{"where":"workstreams@390/dark","name":"?pane=runs opens the Runs tab","ok":true,"tab":"task-tab-runs","url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@390/dark","name":"?pane=runs survives reload","ok":true,"tab":"task-tab-runs","url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@390/dark","name":"phone inspector opened with o keeps ?pane=runs","ok":true,"tab":"task-tab-runs","url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@390/dark","name":"clicking Details writes ?pane=details","ok":true,"url":"/next/workstreams/director:director:8?node=8&pane=details"}
+{"where":"workstreams@390/dark","name":"back returns to Runs","ok":true,"url":"/next/workstreams/director:director:8?node=8&pane=runs"}
+{"where":"workstreams@390/dark","name":"forward returns to Details","ok":true,"url":"/next/workstreams/director:director:8?node=8&pane=details"}
+{"where":"workstreams@390/dark","name":"Enter on a tree node selects it, not the previous one","ok":true,"url":"/next/workstreams/director:director:8?node=11"}
+{"checks":58,"failed":0}

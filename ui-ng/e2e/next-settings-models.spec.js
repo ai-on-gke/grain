@@ -183,7 +183,7 @@ test.describe("Settings → Models default and fallback models", () => {
   });
 });
 
-test("Settings Models - Discovered models, clear credential, and fallback models", async ({
+test("Settings Models - Discovered models, no framework keys card, and fallback models", async ({
   page,
 }) => {
   await page.goto("/next/settings/models");
@@ -197,11 +197,9 @@ test("Settings Models - Discovered models, clear credential, and fallback models
     );
   }
 
-  // Clear credential
-  const clearBtn = page.getByTestId("clear-codex-auth");
-  if (await clearBtn.isEnabled()) {
-    await clearBtn.click();
-  }
+  // The standalone framework keys card is retired: credentials live on
+  // each connection.
+  await expect(page.getByTestId("card-agent-keys")).toHaveCount(0);
 
   // Fallback models (done in existing tests, just verifying structure)
   const addFallbackBtn = page.getByTestId("picker-add-fallback");

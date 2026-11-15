@@ -802,11 +802,21 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     this.toggleTask(id);
   }
 
-  // pickKey is Enter or Space on the focused card or row itself. It
+  // pickKey is Enter or Space on the focused card or row, or on something
+  // focusable inside it that is not a control of its own (the CPU reading,
+  // which takes focus for its tooltip), the way pick treats a click. It
   // consumes the key so the page's Enter shortcut (open the selected task
-  // full screen) does not also act on the previously selected one.
+  // full screen) does not also act on the previously selected one. A link
+  // or button inside keeps its own Enter and Space.
   protected pickKey(ev: Event, id: string): void {
-    if (ev.target !== ev.currentTarget) return;
+    const t = ev.target as Element | null;
+    const cur = ev.currentTarget as Element | null;
+    if (t !== cur) {
+      const control = t?.closest(
+        "a, button, input, select, textarea, [contenteditable]",
+      );
+      if (control && cur?.contains(control)) return;
+    }
     ev.preventDefault();
     this.toggleTask(id);
   }
