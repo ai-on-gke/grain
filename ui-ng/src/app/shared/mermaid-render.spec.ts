@@ -19,7 +19,9 @@ import { svgSize } from "./media-viewer.component";
 import { MediaViewerService } from "./media-viewer.service";
 import {
   mermaidConfig,
+  hasImageShape,
   mermaidErrorText,
+  renderMermaidSvg,
   sanitizeMermaidSvg,
   withFreshIds,
 } from "./mermaid-render";
@@ -77,8 +79,34 @@ describe("sanitizeMermaidSvg", () => {
     expect(out).toContain("url(#g-mermaid-2-grad)");
   });
 
+  it("keeps images and non-link hrefs from fetching anything remote", () => {
+    const out = sanitizeMermaidSvg(
+      '<svg id="g-mermaid-3" viewBox="0 0 1 1">' +
+        '<image href="https://evil.example/p.png"/>' +
+        '<filter><feImage href="https://evil.example/f.png"/></filter>' +
+        '<use href="https://evil.example/u.svg#x"/>' +
+        '<use href="#g-mermaid-3_arrow"/>' +
+        "</svg>",
+    );
+    expect(out).not.toContain("evil");
+    expect(out).not.toMatch(/<image|feimage/i);
+    expect(out).toContain('href="#g-mermaid-3_arrow"');
+  });
+
   it("refuses output that is not an SVG", () => {
     expect(() => sanitizeMermaidSvg("<p>nope</p>")).toThrow();
+  });
+});
+
+describe("renderMermaidSvg", () => {
+  it("never draws a diagram with an image shape", async () => {
+    expect(hasImageShape('flowchart LR\n  A@{ img: "https://x/p.png" }')).toBe(
+      true,
+    );
+    expect(hasImageShape("flowchart LR\n  A@{ shape: rect }")).toBe(false);
+    await expect(
+      renderMermaidSvg('flowchart LR\n  A@{ img: "https://x/p.png" }', "light"),
+    ).rejects.toThrow(/images/);
   });
 });
 

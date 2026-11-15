@@ -127,6 +127,11 @@ const FORBIDDEN_SVG_TAGS = [
   "select",
   "foreignObject",
   "foreignobject",
+  // An <image> or <feImage> with a remote href loads as soon as the
+  // diagram is on screen: a tracking pixel, as Markdown images may not be.
+  "image",
+  "feImage",
+  "feimage",
 ];
 
 // sanitizeMermaidSvg is defense in depth over Mermaid's strict-mode output:
@@ -156,6 +161,12 @@ export function sanitizeMermaidSvg(raw: string): string {
         const val = attr.value.trim();
         // Markers and clip paths refer to #ids inside the SVG itself.
         if (val.startsWith("#")) continue;
+        // Only a link may point outside the diagram: on any other element
+        // (<use>, <pattern>, ...) a remote href is fetched just by drawing.
+        if (el.tagName.toLowerCase() !== "a") {
+          el.removeAttribute(attr.name);
+          continue;
+        }
         const safe = safeHref(val);
         if (!safe) el.removeAttribute(attr.name);
         else el.setAttribute(attr.name, safe);
@@ -236,6 +247,12 @@ export function withFreshIds(svg: string): string {
 let queue: Promise<unknown> = Promise.resolve();
 const RENDER_TIMEOUT_MS = 10_000;
 
+// hasImageShape reports a node written with Mermaid's image shape
+// (A@{ img: "https://...", ... }), whose URL Mermaid loads itself.
+export function hasImageShape(src: string): boolean {
+  return /@\{[^}]*\bimg\s*:/i.test(src);
+}
+
 // renderMermaidSvg resolves to sanitized SVG markup, or rejects with the
 // parse error Mermaid reported (the caller then shows the source instead).
 export function renderMermaidSvg(
@@ -244,6 +261,11 @@ export function renderMermaidSvg(
 ): Promise<string> {
   const src = String(source ?? "").trim();
   if (!src) return Promise.reject(new Error("Empty diagram"));
+  // Mermaid fetches an image shape's img: URL while it lays the node out,
+  // before any sanitizer sees the SVG, so such a diagram is never drawn.
+  if (hasImageShape(src)) {
+    return Promise.reject(new Error("Diagrams with images are not drawn"));
+  }
   const hit = cachedMermaidSvg(theme, src);
   if (hit) return Promise.resolve(withFreshIds(hit));
 
