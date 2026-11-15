@@ -533,12 +533,13 @@ interface PendingReleaseRow {
                           >{{ ivErr }}</span
                         >
                       } @else {
-                        <span id="imp-interval-hint" class="s-caption"
-                          >Empty for the default ({{
-                            importEffectiveMinutes()
-                          }}
-                          minutes now).</span
-                        >
+                        <span id="imp-interval-hint" class="s-caption">{{
+                          importEffectiveMinutes()
+                            ? "Empty for the default (" +
+                              importEffectiveMinutes() +
+                              " minutes now)."
+                            : "Empty for the default."
+                        }}</span>
                       }
                     </div>
                   </div>
