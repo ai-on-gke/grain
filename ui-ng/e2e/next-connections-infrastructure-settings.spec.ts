@@ -200,6 +200,11 @@ test("Settings -> Capabilities, Engine & Sandboxes enforce confirmations, masked
       await expect(page.getByTestId("settings-section-heading")).toHaveText(
         "Capabilities",
       );
+      if (!oldPath.endsWith("/gcp")) {
+        await expect(
+          page.getByTestId("card-scope-sets-secrets"),
+        ).toBeInViewport();
+      }
     }
     expect(await axe()).toEqual([]);
 

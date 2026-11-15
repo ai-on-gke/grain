@@ -186,3 +186,18 @@ phone, dark), `next-connections-infra-settings.spec.js` and
   secrets, `registry-registration-token`, `agent-backend-<id>` for each
   model connection, and `repo-release-*`, so none of them is offered a
   Delete there.
+
+## Second merge with `main` (attempt 4)
+
+`main` had since reworked the legacy redirects (`/admin/<tab>` to its
+Settings section, `integrations` carrying the `credentials` fragment that
+`CARD_ANCHORS` resolves to the secrets card). The `app.routes.ts` conflict
+takes `main`'s table and keeps this branch's
+`settings/capabilities/:serverId` redirect. The e2e spec now also asserts
+that the old integrations, credentials and secrets addresses scroll the
+secrets card into view. `main`'s
+`next-connections-infra-settings.spec.js` read the sandbox backend menu
+before its options rendered and failed once under a full parallel run, so
+it now waits for every option first. Re-run: ui-ng unit (490 tests), lint,
+Prettier, both connections specs (all projects) and
+`next-full-system.spec.js` pass.

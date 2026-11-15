@@ -489,6 +489,54 @@ describe("FleetPageComponent", () => {
     ).toContain("listening on :4173");
   });
 
+  it("warns of each base branch publishing nothing, linking the triage task only where it holds the branch", async () => {
+    const api = new FakeFleetApi();
+    api.healthBody.baseBranchPublishing = [
+      {
+        repo: "acme/web",
+        branch: "main",
+        failures: 3,
+        runInFlight: false,
+        triageTaskID: "2",
+        gated: true,
+        detail:
+          "acme/web@main has published nothing for 3 releases; release triage task 2 holds its next releases.",
+      },
+      {
+        repo: "acme/web",
+        branch: "release/v1.2",
+        failures: 4,
+        runInFlight: false,
+        triageTaskID: "9",
+        gated: false,
+        detail: "acme/web@release/v1.2 has published nothing for 4 releases.",
+      },
+    ];
+    const { root } = await setup(api);
+
+    const banners = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-testid="fleet-publishing"]'),
+    );
+    expect(banners.length).toBe(2);
+    expect(banners[0].getAttribute("role")).toBe("status");
+    expect(banners[0].textContent).toContain("Publishing held");
+    expect(banners[0].textContent).toContain(
+      "release triage task 2 holds its next releases.",
+    );
+    const link = banners[0].querySelector("a")!;
+    expect(link.textContent?.trim()).toBe("Open triage task #2");
+    expect(link.getAttribute("href")).toBe("/task/2");
+
+    expect(banners[1].textContent).toContain("Publishing nothing");
+    expect(banners[1].textContent).toContain("acme/web@release/v1.2");
+    expect(banners[1].querySelector("a")).toBeNull();
+  });
+
+  it("shows no publishing warning while every base branch publishes", async () => {
+    const { root } = await setup();
+    expect(root.querySelector('[data-testid="fleet-publishing"]')).toBeNull();
+  });
+
   it("disables sandbox probe when hostSandboxes=true and gates persistent Logs + Fleet tabs on RBAC scopes", async () => {
     const api = new FakeFleetApi();
     api.configBody = {
