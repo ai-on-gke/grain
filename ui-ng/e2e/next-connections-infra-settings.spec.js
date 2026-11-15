@@ -406,25 +406,14 @@ test("Capabilities: failed and host-placed servers read as such, and an old sect
   // the real server's answer (documented in the 2026-11-13 report).
   await page.route("**/api/capability-servers", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
-    // The reload loop below can cancel a request while this handler is
-    // still reading the real answer, which disposes of the response
-    // under it ("Response has been disposed"). A cancelled request has
-    // nobody to answer, so it is dropped; the reload that cancelled it
-    // asks again and is answered in full.
-    let res;
-    let body;
-    try {
-      res = await route.fetch();
-      body = await res.json();
-    } catch {
-      return;
-    }
+    const res = await route.fetch();
+    const body = await res.json();
     body.push({
       id: placedId,
       config: { command: "walk-tool", run: "host", hostd: "away-box" },
       status: { id: placedId, state: "needs-hostd:away-box" },
     });
-    await route.fulfill({ response: res, json: body }).catch(() => undefined);
+    await route.fulfill({ response: res, json: body });
   });
   await request.put("/api/capability-servers", {
     data: { id: failedId, config: { serverUrl: "http://127.0.0.1:9/mcp" } },
