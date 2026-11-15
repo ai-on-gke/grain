@@ -38,6 +38,7 @@ import type {
   CapabilityOption,
   Comment,
   GrainConfig,
+  Task,
 } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { replyRefusal } from "../inbox/departure";
@@ -67,6 +68,7 @@ import {
 } from "../shared/grants-picker.component";
 import { PriorityChipComponent } from "../shared/priority-chip.component";
 import { TipDirective } from "../shared/tip.directive";
+import { TaskFeedStore } from "../services/task-feed.service";
 import { ago, levelOf, priorityOf, stateLabel } from "../tasks/task-view";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { TaskChangesTabComponent } from "./task-changes-tab.component";
@@ -1191,7 +1193,11 @@ export function duration(from?: string, to?: string): string {
               @if (t.dependsOn?.length) {
                 <div style="display: flex; flex-wrap: wrap; gap: 6px">
                   @for (d of t.dependsOn; track d) {
-                    <span class="status-pill neutral">
+                    <span
+                      class="status-pill neutral"
+                      data-testid="details-dep-chip"
+                      [attr.title]="depTitle(t, d)"
+                    >
                       <a
                         [routerLink]="linkTo(d)"
                         [queryParams]="linkQuery(d)"
@@ -1301,6 +1307,7 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly store = inject(TaskStore);
   private readonly wsStore = inject(WorkstreamsStore);
   private readonly api = inject(GrainApi);
+  private readonly feed = inject(TaskFeedStore);
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly create = inject(CreateTaskService);
@@ -1329,6 +1336,18 @@ export class TaskDetailComponent implements OnDestroy {
   readonly openTask = output<string>();
 
   protected readonly label = stateLabel;
+
+  // depTitle is a dependency chip's hover text: the task it waits for,
+  // its title where the open-task feed knows it, its state, and whether
+  // it is what holds this task, as the classic dependency chip reads.
+  protected depTitle(t: Task, d: string): string {
+    const title = this.feed.tasks().find((x) => x.id === d)?.title;
+    const state = t.dependsOnStates?.[d];
+    let s = title ? `#${d} ${title}` : `#${d}`;
+    if (state) s += ` — ${stateLabel(state)}`;
+    if (t.blockedBy?.includes(d)) s += " (blocking this task)";
+    return s;
+  }
   protected readonly ago = ago;
   // filedAgo reads "just now" rather than "now ago" for a task filed in
   // the last minute (ago() says "now" there).
