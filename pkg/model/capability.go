@@ -695,9 +695,16 @@ func ResolveGrants(ctx context.Context, reg *CapabilityRegistry, cc CapabilityCo
 	}
 	sort.Strings(unregistered)
 	for _, name := range unregistered {
+		reason := fmt.Sprintf("no provider is registered for capability %q", name)
+		if msg, _, ok := RetiredGrantRefusal(name); ok {
+			// A row written before the name was retired: say what the
+			// task should hold instead, so whoever reads the refusal
+			// can re-grant it.
+			reason += " (" + msg + ")"
+		}
 		out = append(out, GrantResolution{
 			Grant:      granted[name],
-			Resolution: RefusedBecause(fmt.Sprintf("no provider is registered for capability %q", name)),
+			Resolution: RefusedBecause(reason),
 		})
 	}
 	return out, nil

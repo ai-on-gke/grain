@@ -67,6 +67,7 @@ import { CustomizeNavDialogComponent } from "./shell/customize-nav-dialog.compon
 import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
 import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
+import { NavProgressComponent } from "./shell/nav-progress.component";
 import { NextUpComponent } from "./shell/next-up.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
 
@@ -160,6 +161,7 @@ export class DeferErrorDirective implements OnInit {
     DeferErrorDirective,
     SnackbarComponent,
     NewTaskSheetComponent,
+    NavProgressComponent,
     NextUpComponent,
     DispatchBannerComponent,
     HelpDialogComponent,
@@ -174,6 +176,7 @@ export class DeferErrorDirective implements OnInit {
     "(document:keydown)": "onGlobalKey($event)",
   },
   template: `
+    <g-nav-progress />
     <div class="app-shell">
       <nav
         class="nav-rail"
