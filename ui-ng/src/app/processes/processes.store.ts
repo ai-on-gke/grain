@@ -27,6 +27,7 @@ import {
   type CreateSuiteRequest,
   type CreateTemplateRequest,
   type DeclarationAcceptanceView,
+  type DeclaredTrigger,
   type RepoDefaultsView,
   type RepoWorkflow,
   type RepoWorkflowsResponse,
@@ -109,6 +110,34 @@ export class ProcessesStore {
     return [...seen.values()].sort((a, b) => a.localeCompare(b));
   });
 
+  // declaringRepos is every repository whose declarations are read for
+  // triggers, as the classic page reads them (ui/src/processes.js
+  // declaringRepos): the deployment's configured repositories and each one
+  // a loaded schedule, template or suite was declared in. A repository can
+  // declare nothing but a trigger, which is why the configured ones count.
+  readonly declaringRepos = computed(() => {
+    const found = new Set(this.configuredRepos().filter(Boolean));
+    for (const list of [this.schedules(), this.templates(), this.suites()]) {
+      for (const it of list) {
+        if (it.declaredIn?.repo) found.add(it.declaredIn.repo);
+      }
+    }
+    return [...found].sort((a, b) => a.localeCompare(b));
+  });
+
+  // triggers is each .grain/triggers file a declaring repository's synced
+  // declarations name (RepoDeclarationsStatus.triggers).
+  readonly triggers = computed(() => {
+    const out: DeclaredTrigger[] = [];
+    const defaults = this.repoDefaults();
+    for (const repo of this.declaringRepos()) {
+      for (const path of defaults[repo]?.declarationsStatus?.triggers ?? []) {
+        out.push({ repo, path });
+      }
+    }
+    return out;
+  });
+
   readonly awaitingAcceptancesCount = computed(
     () => this.acceptances().filter((a) => a.awaiting).length,
   );
@@ -141,6 +170,7 @@ export class ProcessesStore {
   stop(): void {
     this.activeCount = Math.max(0, this.activeCount - 1);
     if (this.activeCount > 0) return;
+    this.declStatusAsked.clear();
     this.eventSub?.unsubscribe();
     this.eventSub = null;
     if (this.pollTimer) clearInterval(this.pollTimer);
@@ -167,6 +197,7 @@ export class ProcessesStore {
         const summary = configuredInstanceRepos(cfg);
         this.hasTargetAllowlist.set(summary.hasTargetAllowlist);
         this.configuredRepos.set(summary.repos);
+        if (this.loaded()) void this.loadDeclarationStatuses();
       }
     } catch {
       // Non-fatal.
@@ -221,6 +252,7 @@ export class ProcessesStore {
 
       this.loadError.set(null);
       this.loaded.set(true);
+      void this.loadDeclarationStatuses();
     } catch (err) {
       if (this.activeCount === 0) return;
       this.loaded.set(true);
@@ -515,6 +547,35 @@ export class ProcessesStore {
   }
 
   // --- Repo Workflows & .grain/ Declarations ---
+
+  private readonly declStatusAsked = new Set<string>();
+
+  // loadDeclarationStatuses reads, once per visit, the declarations of
+  // each declaring repository not read yet, for its triggers. Selecting a
+  // repository on the declarations tab reads it again (loadRepoInspect).
+  private async loadDeclarationStatuses(): Promise<void> {
+    const repos = this.declaringRepos().filter(
+      (r) =>
+        !this.declStatusAsked.has(r) &&
+        this.access.can("GET /api/repos/{owner}/{name}/declarations", r),
+    );
+    await Promise.all(
+      repos.map(async (repo) => {
+        const { owner, name } = splitRepo(repo);
+        if (!owner || !name) return;
+        this.declStatusAsked.add(repo);
+        const decl = await this.api
+          .get<RepoDefaultsView>("GET /api/repos/{owner}/{name}/declarations", {
+            owner,
+            name,
+          })
+          .catch(() => null);
+        if (decl && this.activeCount > 0) {
+          this.repoDefaults.update((m) => ({ ...m, [repo]: decl }));
+        }
+      }),
+    );
+  }
 
   async loadRepoInspect(repo: string): Promise<void> {
     const clean = repo.trim();
