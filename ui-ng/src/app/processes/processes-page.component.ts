@@ -1607,15 +1607,6 @@ type SuitesPaneView = "suites" | "runs";
         <h2 id="sched-dialog-title">
           {{ editingSchedule() ? "Edit schedule" : "New schedule or trigger" }}
         </h2>
-        @if (dialogError(); as derr) {
-          <p
-            class="banner banner-error"
-            role="alert"
-            data-testid="proc-dialog-error"
-          >
-            {{ derr }}
-          </p>
-        }
 
         @if (editingSchedule()?.system) {
           <p
@@ -2008,6 +1999,17 @@ type SuitesPaneView = "suites" | "runs";
           }
         }
 
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2042,15 +2044,6 @@ type SuitesPaneView = "suites" | "runs";
         (gDialogClose)="closeLaunchDialog()"
       >
         <h2 id="launch-tmpl-title">Launch task from template</h2>
-        @if (dialogError(); as derr) {
-          <p
-            class="banner banner-error"
-            role="alert"
-            data-testid="proc-dialog-error"
-          >
-            {{ derr }}
-          </p>
-        }
 
         <div class="field">
           <span>Template</span>
@@ -2161,6 +2154,17 @@ type SuitesPaneView = "suites" | "runs";
           }
         }
 
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button type="button" class="btn-text" (click)="closeLaunchDialog()">
             Cancel
@@ -2197,15 +2201,6 @@ type SuitesPaneView = "suites" | "runs";
         <h2 id="tmpl-dialog-title">
           {{ editingTemplate() ? "Edit template" : "New task template" }}
         </h2>
-        @if (dialogError(); as derr) {
-          <p
-            class="banner banner-error"
-            role="alert"
-            data-testid="proc-dialog-error"
-          >
-            {{ derr }}
-          </p>
-        }
         <div class="proc-field-grid">
           <label class="field">
             <span>Template name</span>
@@ -2325,6 +2320,17 @@ type SuitesPaneView = "suites" | "runs";
           ></button>
           <span>Auto-merge passing pull requests</span>
         </div>
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2365,15 +2371,6 @@ type SuitesPaneView = "suites" | "runs";
         <h2 id="suite-dialog-title">
           {{ editingSuite() ? "Edit suite" : "New suite" }}
         </h2>
-        @if (dialogError(); as derr) {
-          <p
-            class="banner banner-error"
-            role="alert"
-            data-testid="proc-dialog-error"
-          >
-            {{ derr }}
-          </p>
-        }
         <label class="field">
           <span>Suite name</span>
           <input
@@ -2494,6 +2491,17 @@ type SuitesPaneView = "suites" | "runs";
           </div>
         }
 
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2532,15 +2540,6 @@ type SuitesPaneView = "suites" | "runs";
         (gDialogClose)="closeRunSuiteDialog()"
       >
         <h2 id="run-suite-title">Run suite</h2>
-        @if (dialogError(); as derr) {
-          <p
-            class="banner banner-error"
-            role="alert"
-            data-testid="proc-dialog-error"
-          >
-            {{ derr }}
-          </p>
-        }
         <div class="field">
           <span>Suite</span>
           <div class="pill-dropdown">
@@ -2593,6 +2592,17 @@ type SuitesPaneView = "suites" | "runs";
             (input)="runSuiteBase.set($any($event.target).value)"
           />
         </label>
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2631,15 +2641,6 @@ type SuitesPaneView = "suites" | "runs";
         (gDialogClose)="wfEditorOpen.set(false)"
       >
         <h2 id="wf-editor-title">Workflow YAML for {{ wfEditorRepo() }}</h2>
-        @if (dialogError(); as derr) {
-          <p
-            class="banner banner-error"
-            role="alert"
-            data-testid="proc-dialog-error"
-          >
-            {{ derr }}
-          </p>
-        }
         <label class="field">
           <span>Workflow file path</span>
           <input
@@ -2661,6 +2662,17 @@ type SuitesPaneView = "suites" | "runs";
             (input)="wfEditorText.set($any($event.target).value)"
           ></textarea>
         </label>
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           @if (wfEditorOriginalPath() && canEditWorkflow()) {
             <button

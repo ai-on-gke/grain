@@ -487,10 +487,16 @@ function formatBytes(bytes: number): string {
                 [placeholder]="state.defaultHint('pollInterval', '10s')"
                 [value]="state.val('pollInterval', '')"
                 [disabled]="!canWriteSettings()"
+                aria-describedby="e-poll-hint"
                 (input)="
                   state.setField('pollInterval', $any($event.target).value)
                 "
               />
+              <span class="s-hint" id="e-poll-hint"
+                >Go duration, e.g. 10s. Blank uses grain's default ({{
+                  state.val("pollIntervalDefault", "10s")
+                }}).</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="e-workers">Max worker agents</label>
@@ -501,6 +507,7 @@ function formatBytes(bytes: number): string {
                 min="1"
                 data-testid="input-max-workers"
                 [value]="state.defaultedNumber('maxWorkers')"
+                aria-describedby="e-workers-hint"
                 [placeholder]="state.defaultHint('maxWorkers', '10')"
                 [disabled]="!canWriteSettings()"
                 (input)="
@@ -515,6 +522,10 @@ function formatBytes(bytes: number): string {
                   state.setNumber('maxWorkers', $any($event.target).value, 10)
                 "
               />
+              <span class="s-hint" id="e-workers-hint"
+                >Ordinary tasks dispatched at once (10 by default; blank
+                resets).</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="e-mpr"
@@ -525,7 +536,9 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="number"
                 min="1"
+                data-testid="input-max-merges-per-repo"
                 [value]="state.defaultedNumber('maxMergesPerRepo')"
+                aria-describedby="e-mpr-hint"
                 [placeholder]="state.defaultHint('maxMergesPerRepo', '5')"
                 [disabled]="!canWriteSettings()"
                 (input)="
@@ -544,6 +557,10 @@ function formatBytes(bytes: number): string {
                   )
                 "
               />
+              <span class="s-hint" id="e-mpr-hint"
+                >Ready pull requests merged into each branch per queue cycle (5
+                by default; blank resets).</span
+              >
             </div>
           </div>
 

@@ -503,6 +503,7 @@ interface StateRepoEntryDto {
                                 'DELETE /api/deployment/git-connections/{cred}'
                               ) || state.sectionLocked('git')
                             "
+                            [attr.data-testid]="'remove-git-conn-' + cred"
                             (click)="
                               confirmDeleteGitConnection(
                                 cred,
