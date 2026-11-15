@@ -21,6 +21,10 @@ import { chooseOption } from "./searchSelect.js";
 // priority chip and Declared row, and an edit to 7 from the pane carried
 // back to all three. Every task filed here is closed again.
 
+// Three tasks filed through New task, six page loads and an edit: more
+// than the 30s default on a loaded runner, which ran out in the cleanup.
+test.setTimeout(90_000);
+
 const sizes = [
   { name: "desktop", width: 1440, height: 900 },
   { name: "phone", width: 390, height: 844 },

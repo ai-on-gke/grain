@@ -871,3 +871,23 @@ func TestHostdInstallScriptAgentdPassesAndPrintsTemplate(t *testing.T) {
 		t.Fatalf("forwarded GRAIN_AGENTD_TEMPLATE invalid: %v\n%s", err, dumped)
 	}
 }
+
+// TestHostdEnvSendsNoDeniedNameButAgyHome keeps every variable the daemon
+// sends a CLI outside the host's env deny set (pkg/hostd envDenyPatterns
+// and envDenyV2), so env: ["*"] admits it: CLIEntryEnv keeps exactly the
+// denied names a closed list holds, and only agy's per-run HOME may be one.
+func TestHostdEnvSendsNoDeniedNameButAgyHome(t *testing.T) {
+	peer := hostd.Hello{Features: hostd.Features}
+	for name, tc := range map[string]struct {
+		env  []string
+		want []string
+	}{
+		"agy":    {antigravity.HostdEnv(), []string{"HOME", "*"}},
+		"claude": {claude.HostdEnv(), []string{"*"}},
+		"codex":  {codex.HostdEnv(), []string{"*"}},
+	} {
+		if got := hostd.CLIEntryEnv(tc.env, peer); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: CLIEntryEnv(%v) = %v, want %v: a name the host denies under \"*\" must be written by exact name", name, tc.env, got, tc.want)
+		}
+	}
+}

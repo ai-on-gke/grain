@@ -217,7 +217,9 @@ test("a section that empties and refills keeps its fold, and the rail's Inbox ch
       data: {
         title: "Inbox collapse walkthrough: local scripts",
         description: "Asks for a local script, for the Inbox's fold.",
-        capabilities: ["local-scripts:ops"],
+        capabilities: [
+          'https://grain.dev/capabilities/host-script#host-script={"script":"ops"}',
+        ],
       },
     }),
     "file the task",

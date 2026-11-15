@@ -294,3 +294,8 @@ g-tasks-page {
     padding: 8px 12px;
   }
 }
+
+.banner-warn {
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+}

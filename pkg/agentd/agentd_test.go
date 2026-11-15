@@ -161,6 +161,7 @@ func TestRenderUnit(t *testing.T) {
 		"ExecStart=/home/u/.local/bin/grain-agentd -server https://grain.example.com -token-file /home/u/.config/grain/agentd-token",
 		"-name u-1", "-iap-audience 123.apps.example", "-via /opt/helper", "WantedBy=default.target",
 		"Description=grain-agentd: agent CLIs for the grain daemon at https://grain.example.com",
+		"\nKillMode=mixed\n", "\nRestart=always\n", "\nRestartSec=10\n",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("unit lacks %q:\n%s", want, text)

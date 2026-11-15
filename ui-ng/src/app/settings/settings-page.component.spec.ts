@@ -19,6 +19,7 @@ import { RouterTestingHarness } from "@angular/router/testing";
 import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
 import { SettingsPageComponent } from "./settings-page.component";
+import { safeManagementUrl } from "./settings-instance.component";
 
 interface RecordedCall {
   method: "GET" | "TEXT" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -41,6 +42,12 @@ class FakeSettingsApi {
       full: true,
       scopes: [],
     },
+  };
+
+  upgradeBody: Record<string, unknown> = {
+    currentVersion: "v3.6.0",
+    phase: "downloading",
+    cancellable: true,
   };
 
   settingsBody: Record<string, unknown> = {
@@ -68,15 +75,6 @@ class FakeSettingsApi {
     }
     if (key === "GET /api/deployment") {
       return Promise.resolve(structuredClone(this.deploymentBody));
-    }
-    if (key === "GET /api/agent-keys") {
-      return Promise.resolve({
-        enabled: true,
-        geminiApiKeySet: true,
-        claudeOAuthTokenSet: false,
-        openaiApiKeySet: false,
-        codexAuthJSONSet: false,
-      });
     }
     if (key === "GET /api/access/principals") {
       return Promise.resolve([
@@ -114,11 +112,7 @@ class FakeSettingsApi {
       return Promise.resolve(["tables/grain_config.json"]);
     }
     if (key === "GET /api/upgrade") {
-      return Promise.resolve({
-        currentVersion: "v3.6.0",
-        phase: "downloading",
-        cancellable: true,
-      });
+      return Promise.resolve(this.upgradeBody);
     }
     if (key === "GET /api/upgrade/targets") {
       return Promise.resolve([
@@ -147,6 +141,14 @@ class FakeSettingsApi {
           arch: "amd64",
         },
       ]);
+    }
+    if (key === "GET /api/deployment/reachable-repos") {
+      return Promise.resolve({
+        repos: [{ repo: "acme/alpha", push: true }],
+        errors: ["enterprise host returned HTML"],
+        hostMismatches: ["ghe.internal mismatch"],
+        reason: "1 repository reachable",
+      });
     }
     return Promise.resolve({});
   };
@@ -177,9 +179,6 @@ class FakeSettingsApi {
         ...((body ?? {}) as Record<string, unknown>),
       };
       return Promise.resolve(structuredClone(this.settingsBody));
-    }
-    if (key === "POST /api/agent-keys/{framework}/check") {
-      return Promise.resolve({ ok: true, detail: "200 OK (models reachable)" });
     }
     if (key === "POST /api/external-agents/tokens") {
       return Promise.resolve({ token: "gma_live_secret_token_999" });
@@ -346,7 +345,7 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     expect(el.querySelector('[data-testid="settings-save-bar"]')).toBeNull();
   });
 
-  it("enforces configRepoOnly read-only chip and banner on config-managed sections while keeping API keys editable", async () => {
+  it("enforces configRepoOnly read-only chip and banner on config-managed sections", async () => {
     const api = new FakeSettingsApi();
     api.configBody.configRepoOnly = true;
     api.settingsBody["configRepoOnly"] = true;
@@ -367,61 +366,25 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         ?.hasAttribute("disabled"),
     ).toBe(true);
 
-    // Navigate to Models: secret key input stays enabled even when configRepoOnly is true!
+    // Navigate to Models: zero password inputs mount on initial load.
     await harness.navigateByUrl("/settings/models");
     await new Promise((r) => setTimeout(r, 200));
     harness.detectChanges();
-    console.log("DOM2:", el.innerHTML);
-    console.log(
-      "FOUND_INPUT_IN_HTML:",
-      el.innerHTML.includes("input-agent-key-antigravity"),
-    );
-    const keyInput = el.querySelector<HTMLInputElement>(
-      '[data-testid="input-agent-key-antigravity"]',
-    )!;
-    expect(keyInput.disabled).toBe(false);
+    expect(el.querySelectorAll('input[type="password"]').length).toBe(0);
   });
 
-  it("manages Model Connections and verifies framework API keys", async () => {
+  it("manages Model Connections without a standalone framework keys card", async () => {
     const { el, api, harness } = await mountSettings("/settings/models");
 
-    console.log("DEBUG SECOND:", el.innerHTML);
-    setInput(
-      el.querySelector<HTMLInputElement>(
-        '[data-testid="input-agent-key-claude"]',
-      )!,
-      "sk-ant-test-123",
+    expect(el.querySelectorAll('input[type="password"]').length).toBe(0);
+    // Credentials live on each connection; the deployment-wide framework
+    // keys card (and its /api/agent-keys reads) is retired from the UI.
+    expect(el.querySelector('[data-testid="card-agent-keys"]')).toBeNull();
+    expect(api.calls.some((c) => c.key.includes("/api/agent-keys"))).toBe(
+      false,
     );
-    harness.detectChanges();
-    el.querySelector<HTMLButtonElement>(
-      '[data-testid="save-agent-key-claude"]',
-    )!.click();
-    await new Promise((r) => setTimeout(r, 200));
-    harness.detectChanges();
-
-    expect(
-      api.calls.some(
-        (c) =>
-          c.key === "PUT /api/agent-keys/{framework}" &&
-          c.params?.["framework"] === "claude",
-      ),
-    ).toBe(true);
-
-    harness.detectChanges();
-    el.querySelector<HTMLButtonElement>(
-      '[data-testid="check-agent-key-antigravity"]',
-    )!.click();
-    harness.detectChanges();
-    await harness.fixture.whenStable();
-    await new Promise((r) => setTimeout(r, 200));
-    harness.detectChanges();
-    expect(
-      el.querySelector('[data-testid="key-check-result-antigravity"]')
-        ?.textContent,
-    ).toContain("200 OK");
 
     // Add a new Vertex backend connection
-    console.log("DEBUG SECOND:", el.innerHTML);
     setInput(
       el.querySelector<HTMLInputElement>(
         '[data-testid="input-new-backend-id"]',
@@ -552,11 +515,93 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       api.calls.some((c) => c.key === "DELETE /api/upgrade/scheduled"),
     ).toBe(true);
 
+    // Start upgrade asks first (2026-11-13 deployment-operations
+    // walkthrough, task 5390): Cancel sends nothing, the accept starts it.
+    const startUpgrade = () =>
+      el
+        .querySelector<HTMLButtonElement>('[data-testid="start-upgrade-btn"]')!
+        .click();
+    startUpgrade();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Upgrade grain to");
     el.querySelector<HTMLButtonElement>(
-      '[data-testid="start-upgrade-btn"]',
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(api.calls.some((c) => c.key === "POST /api/upgrade")).toBe(false);
+    startUpgrade();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
     )!.click();
     await new Promise((r) => setTimeout(r, 200));
     expect(api.calls.some((c) => c.key === "POST /api/upgrade")).toBe(true);
+  });
+
+  it("says Not available, offers no Start upgrade and reads no targets when no upgrader is configured", async () => {
+    // 2026-11-13 deployment-operations walkthrough: a demo started without
+    // -upgrade-image read "dev", drew an enabled Start upgrade and 404ed
+    // on GET /api/upgrade/targets twice.
+    const api = new FakeSettingsApi();
+    api.configBody.version = {
+      release: "v0.0.0-20261113022244-4ae6438fdcd4",
+      commit: "4ae6438fdcd4a0fc373fb3da76888724685b75fd",
+      unversioned: true,
+    };
+    api.upgradeBody = { enabled: false, mode: "", phase: "" };
+    const { el } = await mountSettings("/settings/upgrade", api);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(
+      el.querySelector('[data-testid="current-daemon-version"]')?.textContent,
+    ).toContain("4ae6438");
+    expect(
+      el.querySelector('[data-testid="upgrade-unavailable"]')?.textContent,
+    ).toContain("Not available");
+    expect(el.querySelector('[data-testid="start-upgrade-btn"]')).toBeNull();
+    expect(api.calls.some((c) => c.key === "GET /api/upgrade/targets")).toBe(
+      false,
+    );
+  });
+
+  it("shows an externally managed deployment's notice and management link instead of upgrade controls", async () => {
+    const api = new FakeSettingsApi();
+    api.configBody.version = { release: "v3.6.0", commit: "abcdef0123456" };
+    api.upgradeBody = {
+      enabled: false,
+      running: { commit: "4ae6438fdcd4a0fc373fb3da76888724685b75fd" },
+      selfUpgradeDisabled: true,
+      managementUrl: "https://console.example.com/deployments/grain-prod",
+    };
+    const { el } = await mountSettings("/settings/upgrade", api);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(
+      el.querySelector('[data-testid="current-daemon-version"]')?.textContent,
+    ).toContain("4ae6438");
+    expect(
+      el.querySelector('[data-testid="upgrade-externally-managed"]')
+        ?.textContent,
+    ).toContain("managed externally");
+    expect(
+      el
+        .querySelector('[data-testid="upgrade-management-link"]')
+        ?.getAttribute("href"),
+    ).toBe("https://console.example.com/deployments/grain-prod");
+    expect(el.querySelector('[data-testid="upgrade-unavailable"]')).toBeNull();
+    expect(el.querySelector('[data-testid="start-upgrade-btn"]')).toBeNull();
+    expect(api.calls.some((c) => c.key === "GET /api/upgrade/targets")).toBe(
+      false,
+    );
+  });
+
+  it("drops a management URL that is not an absolute http(s) link", () => {
+    expect(safeManagementUrl("javascript:alert(1)")).toBe("");
+    expect(safeManagementUrl("/relative")).toBe("");
+    expect(safeManagementUrl(42)).toBe("");
+    expect(safeManagementUrl("https://console.example.com/x")).toBe(
+      "https://console.example.com/x",
+    );
   });
 
   it("gates operator-only (scope: null) hostds enrollment-codes, pending joins, and state-repo/remote for non-operators without 403 calls", async () => {
@@ -761,5 +806,236 @@ describe("SettingsPageComponent (M13 D-12)", () => {
       el.querySelector<HTMLButtonElement>('[data-testid="pill-qa-flow"]')
         ?.disabled,
     ).toBe(true);
+  });
+
+  it("renders reachable repos errors/mismatches and confirms adding an unreachable repository via g-confirm-dialog", async () => {
+    const { el, harness, api } = await mountSettings("/settings/repositories");
+
+    const input = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-add-repo"]',
+    )!;
+    expect(input).toBeTruthy();
+    input.dispatchEvent(new Event("focus"));
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.fixture.detectChanges();
+
+    expect(
+      Array.from(el.querySelectorAll("#reachable-repos-list option")).map(
+        (o) => (o as HTMLOptionElement).value,
+      ),
+    ).toContain("acme/alpha");
+    expect(el.textContent).toContain("enterprise host returned HTML");
+    expect(el.textContent).toContain("ghe.internal mismatch");
+
+    setInput(input, "acme/unreachable-repo");
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="add-repo-btn"]',
+    )!.click();
+    harness.fixture.detectChanges();
+
+    const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+    expect(dialog?.textContent).toContain("acme/unreachable-repo");
+    expect(api.calls.some((c) => c.key === "POST /api/repos")).toBe(false);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "POST /api/repos" &&
+          (c.body as { repo?: string })?.repo === "acme/unreachable-repo",
+      ),
+    ).toBe(true);
+  });
+
+  it("clears connection credentials, confirms connection removal, and passes Git connection scope", async () => {
+    const api = new FakeSettingsApi();
+    (api.deploymentBody as Record<string, unknown>)["agentBackends"] = [
+      { id: "claude-team", framework: "claude", name: "Claude Team" },
+      {
+        id: "agy-ambient",
+        framework: "antigravity",
+        name: "Ambient",
+        authMode: "ambient",
+      },
+    ];
+    const { el, harness } = await mountSettings("/settings/models", api);
+
+    // Search filter is owned by a <form role="search" autocomplete="off"> so
+    // browser password managers never pair it with secret inputs.
+    const filterInput = el.querySelector<HTMLInputElement>(
+      '[data-testid="settings-filter-input"]',
+    )!;
+    expect(filterInput.getAttribute("autocomplete")).toBe("off");
+    expect(filterInput.closest("form")?.getAttribute("role")).toBe("search");
+    expect(filterInput.closest("form")?.getAttribute("autocomplete")).toBe(
+      "off",
+    );
+
+    // Ambient connections do not offer stored secret management, and non-ambient
+    // connections keep their password field collapsed until Credential is opened.
+    expect(
+      el.querySelector('[data-testid="toggle-cred-agy-ambient"]'),
+    ).toBeNull();
+    expect(
+      el.querySelector('[data-testid="clear-cred-claude-team"]'),
+    ).toBeNull();
+
+    const toggleCred = el.querySelector<HTMLButtonElement>(
+      '[data-testid="toggle-cred-claude-team"]',
+    )!;
+    expect(toggleCred).toBeTruthy();
+    toggleCred.click();
+    harness.fixture.detectChanges();
+
+    const credInput = el.querySelector<HTMLInputElement>(
+      'input[aria-label="Credential for claude-team"]',
+    )!;
+    expect(credInput.getAttribute("autocomplete")).toBe("new-password");
+    expect(credInput.closest("form")?.getAttribute("autocomplete")).toBe("off");
+
+    const clearBtn = el.querySelector<HTMLButtonElement>(
+      '[data-testid="clear-cred-claude-team"]',
+    )!;
+    expect(clearBtn).toBeTruthy();
+    clearBtn.click();
+    await harness.fixture.whenStable();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "DELETE /api/agent-backends/{id}/credential" &&
+          c.params?.["id"] === "claude-team",
+      ),
+    ).toBe(true);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="remove-backend-claude-team"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("claude-team");
+    expect(
+      api.calls.some(
+        (c) => c.key === "DELETE /api/deployment/agent-backends/{backendId}",
+      ),
+    ).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "DELETE /api/deployment/agent-backends/{backendId}" &&
+          c.params?.["backendId"] === "claude-team",
+      ),
+    ).toBe(true);
+
+    await harness.navigateByUrl("/settings/git");
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-git-conn-scope"]',
+      )!,
+      "acme/widgets",
+    );
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-git-conn-secret"]',
+      )!,
+      "ghp_test_token_123",
+    );
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-git-conn-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "POST /api/deployment/git-connections" &&
+          (c.body as { scope?: string })?.scope === "acme/widgets",
+      ),
+    ).toBe(true);
+  });
+
+  it("renders skeletons on cold config load, fires section fetches once per mount, and opens warm Settings synchronously across route leaves", async () => {
+    localStorage.clear();
+    const api = new FakeSettingsApi();
+    let resolveCfg!: (v: GrainConfig) => void;
+    api.config = () =>
+      new Promise<GrainConfig>((res) => {
+        resolveCfg = res;
+      });
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(
+          [
+            { path: "settings", component: SettingsPageComponent },
+            { path: "settings/:section", component: SettingsPageComponent },
+            { path: "other", children: [] },
+          ],
+          withComponentInputBinding(),
+        ),
+        { provide: APP_BASE_HREF, useValue: "/next/" },
+        { provide: GrainApi, useValue: api },
+      ],
+    });
+    const harness = await RouterTestingHarness.create("/settings/git");
+    harness.fixture.autoDetectChanges(true);
+    await harness.fixture.whenStable();
+
+    const el = harness.fixture.nativeElement as HTMLElement;
+    expect(
+      el.querySelector('[data-testid="settings-skeleton"]'),
+    ).not.toBeNull();
+
+    // Unblock cold config and switch config() back to fast resolved response for background refreshes.
+    const cfg = structuredClone(api.configBody);
+    api.config = () => Promise.resolve(structuredClone(api.configBody));
+    resolveCfg(cfg);
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    await harness.fixture.whenStable();
+
+    expect(el.querySelector('[data-testid="settings-skeleton"]')).toBeNull();
+    // Guarded ngOnChanges prevents duplicate child loadForSection() call on initial mount.
+    expect(
+      api.calls.filter((c) => c.key === "GET /api/deployment/git-connections")
+        .length,
+    ).toBe(1);
+
+    // Visiting /settings/repositories fetches reachable-repos once.
+    await harness.navigateByUrl("/settings/repositories");
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(
+      api.calls.filter((c) => c.key === "GET /api/deployment/reachable-repos")
+        .length,
+    ).toBe(1);
+
+    // Leave Settings for another route and come back: warm open renders without skeletons and hits 60s reachable-repos cache.
+    await harness.navigateByUrl("/other");
+    await harness.navigateByUrl("/settings/repositories");
+    harness.fixture.detectChanges();
+    const warmEl = harness.fixture.nativeElement as HTMLElement;
+    expect(
+      warmEl.querySelector('[data-testid="settings-skeleton"]'),
+    ).toBeNull();
+    expect(
+      warmEl.querySelector('[data-testid="input-add-repo"]'),
+    ).not.toBeNull();
+    expect(
+      api.calls.filter((c) => c.key === "GET /api/deployment/reachable-repos")
+        .length,
+    ).toBe(1);
   });
 });

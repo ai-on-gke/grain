@@ -27,6 +27,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -175,5 +176,42 @@ func TestListAgentModelsReportsWhyItCouldNotAsk(t *testing.T) {
 	}
 	if !strings.Contains(got.Error, "not installed") {
 		t.Errorf("error = %q, want the lister's own reason", got.Error)
+	}
+}
+
+// recordingModelLister answers with a catalog naming the backend it was
+// asked for, so a test can see which lister a request reached.
+type recordingModelLister struct{ prefix string }
+
+func (l recordingModelLister) ListModels(_ context.Context, backend string) (ui.AgentModelCatalog, error) {
+	return ui.AgentModelCatalog{Models: []ui.AgentModel{{ID: l.prefix + ":" + backend}}}, nil
+}
+
+// ?backend= is scoped to that connection: an id naming no connection is
+// refused (not answered with the default framework's catalog), and a
+// connection's own framework picks the lister when ?framework= is unset.
+func TestListAgentModelsIsScopedToTheNamedConnection(t *testing.T) {
+	t.Parallel()
+	srv, client := testServer(t)
+	client.Config.AgentModels = recordingModelLister{prefix: "agy"}
+	client.Config.ClaudeModels = recordingModelLister{prefix: "claude"}
+	putBackends(t, client,
+		model.AgentBackend{ID: "agy-main", Framework: model.AgentFrameworkAntigravity},
+		model.AgentBackend{ID: "claude-team", Framework: model.AgentFrameworkClaude},
+	)
+	if rec := do(t, srv, http.MethodGet, "/api/agent-models?backend=nope", ""); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown backend status = %d, want 404 (body %s)", rec.Code, rec.Body)
+	}
+	for backend, want := range map[string]string{"claude-team": "claude:claude-team", "agy-main": "agy:agy-main"} {
+		rec := do(t, srv, http.MethodGet, "/api/agent-models?backend="+backend, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, body %s", backend, rec.Code, rec.Body)
+		}
+		got := decode[struct {
+			Models []ui.AgentModel `json:"models"`
+		}](t, rec)
+		if len(got.Models) != 1 || got.Models[0].ID != want {
+			t.Errorf("%s answered %+v, want the catalog %s", backend, got.Models, want)
+		}
 	}
 }

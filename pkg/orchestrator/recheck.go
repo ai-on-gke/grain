@@ -562,6 +562,24 @@ func repairsSpentReason(spent int, rc repairCap) string {
 	return "nothing has changed since its automatic repair that a second one could be asked about"
 }
 
+// askForRepair is how every merge-queue repair sends taskID back to an
+// agent: it records the repair (markRepairAsked) and takes the task off
+// a resume_later it is resting on (sendBackFromResumeLater). Both
+// repairs go through here -- requeueForRepair's and the overlap
+// re-check's (sendRecheckFailureBack) -- because a repair recorded under
+// a resume_later deferral never runs, and the queue then gives up on it
+// as never finished.
+func askForRepair(ctx context.Context, store *model.Store, taskID string, now time.Time,
+	baseTip, failures, why string) error {
+
+	if err := observeField(ctx, store, taskID, now, func(o *model.Observation) {
+		markRepairAsked(o, now, baseTip, failures, why)
+	}); err != nil {
+		return err
+	}
+	return sendBackFromResumeLater(ctx, store, taskID, "the merge queue's repair", now)
+}
+
 // markRepairAsked is the bookkeeping every automatic repair writes beside
 // MergeQueueRepairAt: one more spent, and what it was asked about.
 func markRepairAsked(o *model.Observation, now time.Time, baseTip, failures, why string) {

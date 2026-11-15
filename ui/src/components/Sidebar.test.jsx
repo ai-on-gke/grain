@@ -51,6 +51,41 @@ describe("Sidebar", () => {
   afterEach(() => {
     localStorage.removeItem(SIDEBAR_HIDDEN_STORAGE_KEY);
   });
+  // A failed GET /api/boards is not "0 boards" (2026-11-13 saved boards
+  // walkthrough, task 5385): the Boards page explains the failure, and
+  // the rail beside it said there were none.
+  it("warns rather than counting 0 when the boards could not be loaded", () => {
+    const { rerender } = render(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={tasks}
+        view="tasks"
+        boards={[]}
+        boardsError="store unavailable"
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /^Boards/ });
+    expect(btn).toHaveAccessibleName(
+      "Boards Boards could not be loaded (store unavailable)",
+    );
+    expect(btn).not.toHaveTextContent(/0/);
+    // Boards already held keep their count through a failing refresh.
+    rerender(
+      <Sidebar
+        {...baseProps}
+        config={null}
+        tasks={tasks}
+        view="tasks"
+        boards={[{ id: "b1", name: "Triage", kind: "list" }]}
+        boardsError="store unavailable"
+      />,
+    );
+    expect(screen.getByRole("button", { name: /^Boards/ })).toHaveTextContent(
+      "Boards1",
+    );
+  });
+
   it("marks the Boards index as the current rail destination", () => {
     render(
       <Sidebar

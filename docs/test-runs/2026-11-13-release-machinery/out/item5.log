@@ -1,0 +1,16 @@
+== a. the approval key the daemon serves
+GRAIN_RELEASE_APPROVAL_KEY
+Changing the deployment's signing key -- its -release-approval-kms-key, or its release-approval-key secret -- means updating GRAIN_RELEASE_APPROVAL_KEY to match in every repository that runs promote-release.yml.
+served key == KMS getPublicKey for projects/demo-project/locations/us/keyRings/kr/cryptoKeys/k/cryptoKeyVersions/1: yes
+local key file made beside the KMS one: none
+== b. a person's Approve of v1.1.0
+signs before: 0
+approve: HTTP 202 {"version":"v1.1.0","approve":true,"run":{"id":"","key":"","repo":"","ref":"","event":"","jobs":null},"dispatched":{"repo":"acme/widgets","workflow":"promote-release.yml","ref":"main","commit":"d641153a4fb49c7d441f203ee0d090af0904ccc3","by":"debian","at":"2026-11-13T04:07:02.629210382Z","expires":"2026-11-13T04:22:02.629210382Z"}}
+signs after: 1
+dispatch: {"workflow":"promote-release.yml","ref":"main","version":"v1.1.0","decision":"approve"}
+verify with the KMS key: debian (exit 0)
+verify a tampered record: verify-release-approval: refused: the approval record's signature does not verify against GRAIN_RELEASE_APPROVAL_KEY
+verify with another key: verify-release-approval: refused: the approval record's signature does not verify against GRAIN_RELEASE_APPROVAL_KEY
+== c. a daemon given a bad key version
+-release-approval-kms-key projects/demo-project/locations/us/keyRings/kr/cryptoKeys/k: exit 2: grain daemon: -release-approval-kms-key: secrets: "projects/demo-project/locations/us/keyRings/kr/cryptoKeys/k" is not a Cloud KMS key version name (projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<n>)
+-release-approval-kms-key not-a-key-version: exit 2: grain daemon: -release-approval-kms-key: secrets: "not-a-key-version" is not a Cloud KMS key version name (projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<n>)

@@ -18,6 +18,7 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import { AccessService } from "../services/access.service";
 import { errorText } from "../sessions/session-helpers";
+import { configuredInstanceRepos } from "../shared/instance-repos";
 import {
   type ActionsCacheFlush,
   type CICacheResponse,
@@ -56,6 +57,7 @@ export class CIStore {
   readonly stored = signal(0);
   readonly actionsNote = signal("");
   readonly targetRepos = signal<string[]>([]);
+  readonly hasTargetAllowlist = signal(false);
   readonly loadError = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
 
@@ -144,10 +146,9 @@ export class CIStore {
       if (this.activeCount === 0) return;
       if (cfg) {
         this.access.setConfig(cfg);
-        const repos = Array.isArray(cfg["targetRepos"])
-          ? (cfg["targetRepos"] as string[])
-          : [];
-        this.targetRepos.set(repos);
+        const scoped = configuredInstanceRepos(cfg);
+        this.targetRepos.set(scoped.repos);
+        this.hasTargetAllowlist.set(scoped.hasTargetAllowlist);
       }
     } catch {
       // Non-fatal: page still renders CI feed.

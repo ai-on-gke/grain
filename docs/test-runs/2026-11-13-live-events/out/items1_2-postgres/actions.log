@@ -1,0 +1,21 @@
+1794547577.843070426 raise N1 warning (task 2)
+1794547578.256652182 raise N1 again, same severity (no event expected)
+1794547578.640993558 raise N1 at critical (re-raise)
+1794547579.033071470 ack N1
+flaky dropped after id 8
+1794547579.427097073 ack N1 again (no event expected)
+1794547579.779350718 clear N1
+1794547580.155120226 raise N2 repo acme/secret (viewer must not see)
+1794547580.522316906 raise N3 deployment-wide (viewer must not see)
+flaky reconnected with Last-Event-ID: 8
+1794547581.401678272 host-script A1 requested
+1794547581.861429177 A1 approved
+1794547582.253919010 host-script A2 requested
+1794547582.643222698 A2 denied
+1794547583.022868134 host-script A3 requested
+1794547583.412434553 A3 expired by its caller (/expire)
+1794547583.772848225 host-script A4 requested, 2 s deadline
+1794547587.163262184 A4 past its deadline: a task-page read (GET /api/tasks/2)
+1794547587.581981276 A4 caller gives up (/expire)
+A4 as the caller sees it: {"id":"lsa-4","status":"expired"}
+1794547587.980523592 burst: 40 concurrent raises

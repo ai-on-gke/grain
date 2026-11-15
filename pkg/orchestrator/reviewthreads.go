@@ -240,6 +240,9 @@ func sendRunForReviewThreads(ctx context.Context, store *model.Store, client git
 	}); err != nil {
 		return fmt.Errorf("orchestrator: queueing %s for its review threads: %w", task.ID, err)
 	}
+	if err := sendBackFromResumeLater(ctx, store, task.ID, "new review threads", now); err != nil {
+		return err
+	}
 	log.Printf("orchestrator: %d new review thread(s) on %s; sending %s another run", len(open), ref, task.ID)
 	return reviewComment(ctx, store, task.ID, reviewThreadsNote(ref, open, still), now)
 }
@@ -466,6 +469,9 @@ func sendRunForChangeThreads(ctx context.Context, store *model.Store, task model
 			o.RetryRequestedAt = &now
 		}); err != nil {
 			return fmt.Errorf("orchestrator: queueing %s for its CL review threads: %w", task.ID, err)
+		}
+		if err := sendBackFromResumeLater(ctx, store, task.ID, "new CL review threads", now); err != nil {
+			return err
 		}
 		log.Printf("orchestrator: %d new review thread(s) on %s; sending %s another run", len(fresh), change.Primary(task), task.ID)
 	}

@@ -2,11 +2,13 @@ package dockervm
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gke-labs/granule/pkg/dockercli"
 	"github.com/gke-labs/granule/pkg/vmspec"
@@ -351,6 +353,86 @@ func TestDelete_IdempotentWhenContainersAlreadyGone(t *testing.T) {
 	if err := Delete(context.Background(), d, "web", 40, &strings.Builder{}); err != nil {
 		t.Errorf("Delete() of already-gone containers error = %v, want nil (idempotent)", err)
 	}
+}
+
+func TestDelete_RemovalAlreadyInProgressWaitsUntilGone(t *testing.T) {
+	t.Run("rm in progress", func(t *testing.T) {
+		d, calls := testDocker(t)
+		t.Setenv("FAKEDOCKER_RM_IN_PROGRESS", "2")
+
+		if err := Delete(context.Background(), d, "web", 40, &strings.Builder{}); err != nil {
+			t.Fatalf("Delete() error = %v, want nil when removal is already in progress", err)
+		}
+
+		got := calls()
+		vmInspects, netnsInspects := 0, 0
+		for _, c := range got {
+			if c[0] != "inspect" {
+				continue
+			}
+			if containsArg(c, "granule-vm-web") {
+				vmInspects++
+			}
+			if containsArg(c, "granule-vm-web-netns") {
+				netnsInspects++
+			}
+		}
+		if vmInspects < 2 {
+			t.Errorf("Delete() polled inspect on granule-vm-web %d times, want >= 2:\n%v", vmInspects, got)
+		}
+		if netnsInspects < 2 {
+			t.Errorf("Delete() polled inspect on granule-vm-web-netns %d times, want >= 2:\n%v", netnsInspects, got)
+		}
+	})
+
+	t.Run("stop in progress", func(t *testing.T) {
+		d, calls := testDocker(t)
+		t.Setenv("FAKEDOCKER_STOP_IN_PROGRESS", "1")
+
+		if err := Delete(context.Background(), d, "web", 40, &strings.Builder{}); err != nil {
+			t.Fatalf("Delete() error = %v, want nil when stop reports removal already in progress", err)
+		}
+
+		got := calls()
+		vmInspects := 0
+		for _, c := range got {
+			if c[0] == "inspect" && containsArg(c, "granule-vm-web") {
+				vmInspects++
+			}
+		}
+		if vmInspects < 2 {
+			t.Errorf("Delete() polled inspect on granule-vm-web %d times, want >= 2:\n%v", vmInspects, got)
+		}
+	})
+}
+
+func TestDelete_RemovalInProgressBoundsWait(t *testing.T) {
+	t.Run("timeout", func(t *testing.T) {
+		d, _ := testDocker(t)
+		d.removeWaitTimeout = 25 * time.Millisecond
+		t.Setenv("FAKEDOCKER_RM_IN_PROGRESS", "-1")
+
+		err := Delete(context.Background(), d, "web", 40, &strings.Builder{})
+		if err == nil {
+			t.Fatal("Delete() error = nil, want timeout when container never disappears")
+		}
+		if !strings.Contains(err.Error(), "timed out") || !strings.Contains(err.Error(), "granule-vm-web") {
+			t.Errorf("Delete() error = %v, want it to mention timeout and granule-vm-web", err)
+		}
+	})
+
+	t.Run("context cancelled", func(t *testing.T) {
+		d, _ := testDocker(t)
+		t.Setenv("FAKEDOCKER_RM_IN_PROGRESS", "-1")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+		defer cancel()
+
+		err := Delete(ctx, d, "web", 40, &strings.Builder{})
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Delete() error = %v, want context.DeadlineExceeded", err)
+		}
+	})
 }
 
 // runOptsSpec is testSpec plus a couple of caller-supplied docker options

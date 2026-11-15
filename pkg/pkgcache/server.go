@@ -271,9 +271,9 @@ type Server struct {
 	// sandboxes starting the same job fetch it once between them
 	// (coalesce.go).
 	fetches fetchGroup
-	// readOnlyLog aggregates the log lines of refused read-only Go build
-	// cache writes (gocache.go).
-	readOnlyLog readOnlyLog
+	// goCacheReadOnlyLog rate-limits the log lines for refused readonly
+	// Go build-cache writes (gocache.go).
+	goCacheReadOnlyLog readOnlyRefusals
 }
 
 // NewServer wires a handler over cache.

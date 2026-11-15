@@ -258,11 +258,12 @@ func newEscalationRig(t *testing.T, customSets ...model.APIScopeSet) *escalation
 	}
 
 	client := ui.NewClient(ui.Config{
-		Actor:               ui.DefaultActor("operator"),
-		LocalAPIToken:       "test-operator-access-code-0123456789",
-		CapabilityServers:   newEscalationCapServers(t),
-		Consoles:            rig.consoles,
-		PersistentSandboxes: rig.persistents,
+		Actor:                 ui.DefaultActor("operator"),
+		LocalAPIToken:         "test-operator-access-code-0123456789",
+		CapabilityServers:     newEscalationCapServers(t),
+		OfferedGitCredentials: []string{"deploy-bot"},
+		Consoles:              rig.consoles,
+		PersistentSandboxes:   rig.persistents,
 		LogRedactor: func() (*grainlog.Redactor, error) {
 			var kv []grainlog.KnownValue
 			for _, v := range rig.secretVals {
@@ -479,10 +480,10 @@ func TestPath1NonAdminTaskFilingAndTemplateGrantCeilings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Positive operator control: grain/operator can file with gcp-key, host-script, dangerous api:* and networkAccess=open.
+	// Positive operator control: grain/operator can file with gcp-key, host-script, repo#credential, dangerous api:* and networkAccess=open.
 	opCode, opBody := rig.callAs("ops@example.com", http.MethodPost, "/api/tasks", fmt.Sprintf(
-		`{"title":"op task","repo":"acme/widgets","approved":true,"networkAccess":"open","capabilities":[%q,%q,"api:secrets:write"]}`,
-		escalationTestGCPGrant, escalationTestScriptGrant))
+		`{"title":"op task","repo":"acme/widgets","approved":true,"networkAccess":"open","capabilities":[%q,%q,%q,"api:secrets:write"]}`,
+		escalationTestGCPGrant, escalationTestScriptGrant, model.RepoCredentialGrant("deploy-bot")))
 	if opCode != http.StatusCreated {
 		t.Fatalf("operator filing privileged task = %d %s, want 201", opCode, opBody)
 	}
@@ -544,7 +545,12 @@ func TestPath1NonAdminTaskFilingAndTemplateGrantCeilings(t *testing.T) {
 			body: `{"title":"t","repo":"acme/widgets","capabilities":["api:ci:read@other/gadgets"]}`,
 		},
 		{
-			name: "github-credential grant on task",
+			name: "repo#credential grant on task",
+			user: "contrib@example.com",
+			body: fmt.Sprintf(`{"title":"t","repo":"acme/widgets","capabilities":[%q]}`, model.RepoCredentialGrant("deploy-bot")),
+		},
+		{
+			name: "retired github-credential grant on task",
 			user: "contrib@example.com",
 			body: `{"title":"t","repo":"acme/widgets","capabilities":["github-credential:deploy-bot"]}`,
 		},

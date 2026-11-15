@@ -135,9 +135,8 @@ func TestASettingsDocumentIsWrittenInTheAuthoringFormat(t *testing.T) {
 		"- id: tpl-1",
 		"auto-merge: true",
 		"target: bwsalmon/grain",
-		"reads:\n      - bwsalmon/notes",
-		"writes:\n      - bwsalmon/docs",
-		"grants:\n      - memory",
+		"grants:\n      - memory\n      - " + model.TaskRepoReadGrant(model.RepoRef{Owner: "bwsalmon", Name: "notes"}).Key() +
+			"\n      - " + model.TaskRepoWriteGrant(model.WriteTarget{Repo: model.RepoRef{Owner: "bwsalmon", Name: "docs"}}).Key(),
 		"custom-fields:\n      team: platform",
 		"options: [ui, api]",
 		"required: true",
@@ -145,6 +144,13 @@ func TestASettingsDocumentIsWrittenInTheAuthoringFormat(t *testing.T) {
 	} {
 		if !strings.Contains(templates, want) {
 			t.Errorf("the templates document does not hold %q:\n%s", want, templates)
+		}
+	}
+	// Plain repository access is written under grants: alone
+	// (unified-grants §3), not under reads:/writes: as well.
+	for _, unwanted := range []string{"reads:", "writes:"} {
+		if strings.Contains(templates, unwanted) {
+			t.Errorf("the templates document still holds %q:\n%s", unwanted, templates)
 		}
 	}
 	// And the five recurrence columns, four of them NULL, are one block.
@@ -296,8 +302,8 @@ func TestAHandEditOfASettingsDocumentIsApplied(t *testing.T) {
 // one key on import. A task-level repository grant under grants: lands
 // in template_read / template_write, an entry both lists name is held
 // once, {capability, with} folds into the stored reference, a legacy api:
-// spelling is stored as its reference, and the next export writes
-// grants: beside reads: and writes:, which an older binary still reads.
+// spelling is stored as its reference, and the next export writes the
+// plain repository access under grants: alone, with no reads: or writes:.
 func TestSettingsGrantsAndReadsWritesAreOneKey(t *testing.T) {
 	ctx := context.Background()
 	store, db := openDB(t)
@@ -369,13 +375,22 @@ func TestSettingsGrantsAndReadsWritesAreOneKey(t *testing.T) {
 		if entry["id"] != "tpl-1" {
 			continue
 		}
-		for _, key := range []string{"reads", "writes", "grants"} {
-			if _, ok := entry[key]; !ok {
-				t.Errorf("the export carries no %s: for the template: %v", key, entry)
+		if _, ok := entry["grants"]; !ok {
+			t.Errorf("the export carries no grants: for the template: %v", entry)
+		}
+		for _, key := range []string{"reads", "writes"} {
+			if got, ok := entry[key]; ok {
+				t.Errorf("the export still writes %s: %v for the template, whose access grants: already carries", key, got)
 			}
 		}
-		if got, want := entry["grants"], []any{model.APIGrantString("ci:read", "acme/widgets"), model.APIRef("tasks:read")}; !reflect.DeepEqual(got, want) {
-			t.Errorf("exported grants: = %#v, want %#v (the repository access stays under reads: and writes:)", got, want)
+		want := []any{
+			model.APIGrantString("ci:read", "acme/widgets"), model.APIRef("tasks:read"),
+			model.TaskRepoReadGrant(model.RepoRef{Owner: "acme", Name: "docs"}).Key(),
+			model.TaskRepoReadGrant(model.RepoRef{Owner: "acme", Name: "tools"}).Key(),
+			model.TaskRepoWriteGrant(model.WriteTarget{Repo: model.RepoRef{Owner: "acme", Name: "site"}, Base: "main"}).Key(),
+		}
+		if got := entry["grants"]; !reflect.DeepEqual(got, want) {
+			t.Errorf("exported grants: = %#v, want %#v (the grant rows, then the repository access as grants)", got, want)
 		}
 	}
 
@@ -399,6 +414,126 @@ func TestSettingsGrantsAndReadsWritesAreOneKey(t *testing.T) {
 		})
 		if _, err := staterepo.Check(ctx, db, work, model.SchemaVersion); err == nil {
 			t.Errorf("Check accepted malformed grant %#v", bad)
+		}
+	}
+}
+
+// unified-grants §3: the export writes plain reads:/writes: rows under
+// grants: alone, as …/repo#read {repo} and …/repo#write {repo, base};
+// only a row a grant cannot carry (an off-host repository) stays under
+// reads:/writes:, and an import of that export holds each repository once. Export → import → export is
+// byte-for-byte stable, and the read and write tables are what they were.
+func TestRepoAccessExportedAsGrantsRoundTrips(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, db := openDB(t)
+	offHost, err := model.ParseRepo("git.example.com/acme/mirror")
+	if err != nil {
+		t.Fatalf("parsing an off-host repository: %v", err)
+	}
+	if err := store.PutTemplate(ctx, model.Template{
+		ID: "tpl-1", Name: "nightly", Title: "Run the nightly sweep",
+		Reads: []model.RepoRef{{Owner: "acme", Name: "docs"}, offHost},
+		Writes: []model.WriteTarget{
+			{Repo: model.RepoRef{Owner: "acme", Name: "site"}, Base: "main"},
+			{Repo: model.RepoRef{Owner: "acme", Name: "wiki"}},
+		},
+		Grants:    []model.Grant{{Capability: model.APIRef("tasks:read"), Via: model.GrantByLabel}},
+		CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("putting a template: %v", err)
+	}
+	if err := store.PutSchedule(ctx, model.Schedule{
+		ID: "sched-1", Title: "Nightly", Target: model.RepoRef{Owner: "acme", Name: "widgets"},
+		Reads:      []model.RepoRef{{Owner: "acme", Name: "notes"}},
+		Writes:     []model.WriteTarget{{Repo: model.RepoRef{Owner: "acme", Name: "site"}, Base: "release"}},
+		Recurrence: model.Recurrence{Kind: model.RecurrenceDaily, TimeOfDay: 9 * 60},
+		Overlap:    model.OverlapSkip, Enabled: true, NextRunAt: now, CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("putting a schedule: %v", err)
+	}
+
+	first := t.TempDir()
+	if err := staterepo.Export(ctx, db, first); err != nil {
+		t.Fatalf("exporting: %v", err)
+	}
+	site := model.RepoRef{Owner: "acme", Name: "site"}
+	for table, want := range map[string][]any{
+		"template": {
+			model.APIRef("tasks:read"),
+			model.TaskRepoReadGrant(model.RepoRef{Owner: "acme", Name: "docs"}).Key(),
+			model.TaskRepoWriteGrant(model.WriteTarget{Repo: site, Base: "main"}).Key(),
+			model.TaskRepoWriteGrant(model.WriteTarget{Repo: model.RepoRef{Owner: "acme", Name: "wiki"}}).Key(),
+		},
+		"schedule": {
+			model.TaskRepoReadGrant(model.RepoRef{Owner: "acme", Name: "notes"}).Key(),
+			model.TaskRepoWriteGrant(model.WriteTarget{Repo: site, Base: "release"}).Key(),
+		},
+	} {
+		_, _, entries := settingsDocument(t, first, table)
+		if len(entries) != 1 {
+			t.Fatalf("%s: %d entries, want 1", table, len(entries))
+		}
+		if got := entries[0]["grants"]; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: exported grants: = %#v, want %#v (an off-host repository stays under reads: alone)", table, got, want)
+		}
+	}
+	for table, want := range map[string]map[string]any{
+		"template": {"reads": []any{offHost.String()}},
+		"schedule": {},
+	} {
+		_, _, entries := settingsDocument(t, first, table)
+		for _, key := range []string{"reads", "writes"} {
+			got, ok := entries[0][key]
+			if w, wantKey := want[key]; wantKey != ok || (ok && !reflect.DeepEqual(got, w)) {
+				t.Errorf("%s: exported %s: = %#v (present %v), want %#v (plain repositories go under grants: alone)", table, key, got, ok, w)
+			}
+		}
+	}
+
+	freshStore, freshDB := openDB(t)
+	if err := staterepo.Import(ctx, freshDB, first); err != nil {
+		t.Fatalf("importing: %v", err)
+	}
+	for _, table := range []string{"template_read", "template_write", "template_grant", "schedule_read", "schedule_write", "schedule_grant"} {
+		var was, is int
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&was); err != nil {
+			t.Fatalf("counting %s: %v", table, err)
+		}
+		if err := freshDB.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+table).Scan(&is); err != nil {
+			t.Fatalf("counting imported %s: %v", table, err)
+		}
+		if was != is {
+			t.Errorf("%s holds %d rows after the round trip, want %d", table, is, was)
+		}
+	}
+	tmplWas, _ := store.GetTemplate(ctx, "tpl-1")
+	tmplIs, err := freshStore.GetTemplate(ctx, "tpl-1")
+	if err != nil || tmplIs == nil {
+		t.Fatalf("reading the imported template: %v %v", tmplIs, err)
+	}
+	if !reflect.DeepEqual(tmplIs.Reads, tmplWas.Reads) || !reflect.DeepEqual(tmplIs.Writes, tmplWas.Writes) || !reflect.DeepEqual(tmplIs.Grants, tmplWas.Grants) {
+		t.Errorf("template access after the round trip: reads %v writes %v grants %v, want %v %v %v",
+			tmplIs.Reads, tmplIs.Writes, tmplIs.Grants, tmplWas.Reads, tmplWas.Writes, tmplWas.Grants)
+	}
+	schedWas, _ := store.GetSchedule(ctx, "sched-1")
+	schedIs, err := freshStore.GetSchedule(ctx, "sched-1")
+	if err != nil || schedIs == nil {
+		t.Fatalf("reading the imported schedule: %v %v", schedIs, err)
+	}
+	if !reflect.DeepEqual(schedIs.Reads, schedWas.Reads) || !reflect.DeepEqual(schedIs.Writes, schedWas.Writes) || !reflect.DeepEqual(schedIs.Grants, schedWas.Grants) {
+		t.Errorf("schedule access after the round trip: reads %v writes %v grants %v, want %v %v %v",
+			schedIs.Reads, schedIs.Writes, schedIs.Grants, schedWas.Reads, schedWas.Writes, schedWas.Grants)
+	}
+
+	second := t.TempDir()
+	if err := staterepo.Export(ctx, freshDB, second); err != nil {
+		t.Fatalf("exporting again: %v", err)
+	}
+	for _, table := range []string{"template", "schedule"} {
+		path := filepath.FromSlash(staterepo.DumpPath(table))
+		if a, b := read(t, filepath.Join(first, path)), read(t, filepath.Join(second, path)); a != b {
+			t.Errorf("%s: the second export differs from the first:\n--- first\n%s\n--- second\n%s", table, a, b)
 		}
 	}
 }

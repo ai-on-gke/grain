@@ -39,13 +39,16 @@ import (
 type echoReasons struct{}
 
 func (echoReasons) TaskReason(t model.Task, state model.State, obs *model.Observation, openDeps []string,
-	wait *model.GrantWait, asked model.ReplyFacts) ui.Reason {
+	holds []model.BlockerHold, wait *model.GrantWait, asked model.ReplyFacts) ui.Reason {
 	r := ui.Reason{Reason: string(state) + "/echo", Class: "driven", Control: "Run now"}
 	if asked != (model.ReplyFacts{}) {
 		r.Resource = fmt.Sprintf("asked:%+v", asked)
 	}
 	if len(openDeps) > 0 {
 		r.Resource = "deps:" + openDeps[0]
+	}
+	if len(holds) > 0 {
+		r.Resource += " held:" + holds[0].ID + "=" + string(holds[0].State)
 	}
 	if wait != nil {
 		r.Resource = "wait:" + wait.Resource
@@ -187,5 +190,51 @@ func TestNoClassifierMeansNoTaskSubCase(t *testing.T) {
 	task := create(t, client, ctx)
 	if got := listOne(t, client, ctx, task.ID).Reason; got != nil {
 		t.Errorf("Reason = %+v with no classifier wired, want nil", got)
+	}
+}
+
+// A queued task's reads hand the classifier which of its blockers only a
+// person can close (model.BlockerHolds) -- the list, the one-task read
+// and the detail read alike -- so it can tell a task waiting on a parked
+// blocker from one waiting on a blocker grain is driving (task 4856).
+func TestEveryTaskReadHandsTheClassifierItsHeldBlockers(t *testing.T) {
+	t.Parallel()
+	client, store, ctx := reasonClient(t, echoReasons{})
+	blocker := create(t, client, ctx)
+	task := create(t, client, ctx)
+	if err := store.UpdateTask(ctx, task.ID, func(tk *model.Task) error {
+		tk.Links = append(tk.Links, model.Link{Kind: model.LinkDependsOn, Target: blocker.ID})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	read := func() map[string]*ui.Reason {
+		t.Helper()
+		listed := listOne(t, client, ctx, task.ID)
+		one, err := client.Task(ctx, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		detail, err := client.GetTask(ctx, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return map[string]*ui.Reason{"list": listed.Reason, "Task": one.Reason, "GetTask": detail.Reason}
+	}
+	for name, got := range read() {
+		if got == nil || got.Resource != "deps:"+blocker.ID {
+			t.Errorf("%s Reason = %+v with its blocker queued, want deps:%s and no hold", name, got, blocker.ID)
+		}
+	}
+
+	at := baseTime
+	if err := store.SetDeferred(ctx, blocker.ID, &at, nil, at); err != nil {
+		t.Fatal(err)
+	}
+	want := "deps:" + blocker.ID + " held:" + blocker.ID + "=deferred"
+	for name, got := range read() {
+		if got == nil || got.Resource != want {
+			t.Errorf("%s Reason = %+v with its blocker deferred indefinitely, want %s", name, got, want)
+		}
 	}
 }
