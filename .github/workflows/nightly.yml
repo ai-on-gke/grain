@@ -654,9 +654,18 @@ jobs:
     needs: [idle-gate]
     if: needs.idle-gate.outputs.run == 'true' && (github.event_name != 'workflow_dispatch' || inputs.jobs == '' || contains(format(',{0},', inputs.jobs), ',scale,'))
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # make scale's own -timeout is 70m, under this so a hang is killed by
+    # go test (with every goroutine's stack) rather than by the job.
+    timeout-minutes: 90
+    # One store per runner, side by side: seeding 50,000 tasks through the
+    # store's own write path is several times slower on PostgreSQL than on
+    # SQLite, and the two in one job would not fit its timeout.
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
     concurrency:
-      group: ${{ github.workflow }}-scale-${{ github.ref }}
+      group: ${{ github.workflow }}-scale-${{ matrix.backend }}-${{ github.ref }}
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - name: Checkout
@@ -685,6 +694,7 @@ jobs:
       # the postgres half would skip; GRAIN_REQUIRE_POSTGRES below makes
       # that a failure instead.
       - name: Install PostgreSQL
+        if: matrix.backend == 'postgres'
         run: |
           sudo systemctl stop postgresql 2>/dev/null || true
           sudo systemctl disable postgresql 2>/dev/null || true
@@ -702,6 +712,7 @@ jobs:
       - name: Scale test (100 running / 1,000 waiting / 50,000 total)
         env:
           GRAIN_REQUIRE_POSTGRES: "1"
+          GRAIN_SCALE_BACKENDS: ${{ matrix.backend }}
           GRAIN_SCALE_REPORT_DIR: /tmp/scale-report
         run: |
           set +e
@@ -718,7 +729,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: scale-report
+          name: scale-report-${{ matrix.backend }}
           path: |
             /tmp/scale-report
             /tmp/scale.log

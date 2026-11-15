@@ -110,7 +110,7 @@ jobs:
       cpus: 4
       memory-mb: 16384
       disk-gb: 60
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       # Same reason as postgres-stress below: without the binaries the
       # postgres half of the scale test skips.

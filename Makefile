@@ -597,7 +597,7 @@ scalability: frontend
 # picks the stores and GRAIN_SCALE_REPORT_DIR keeps the reports. No
 # `frontend` dependency: the harness serves the API, not the UI.
 scale:
-	GRAIN_SCALE_TEST=1 ./scripts/go-test-must-pass.sh TestScale50k ./tests/e2e/ -timeout 50m
+	GRAIN_SCALE_TEST=1 ./scripts/go-test-must-pass.sh TestScale50k ./tests/e2e/ -timeout 70m
 
 # The state repository soak (pkg/staterepo/soak_test.go) turned all the
 # way up. Unlike `loadtest` above this one is not skipped by `make test`

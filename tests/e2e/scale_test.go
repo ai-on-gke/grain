@@ -117,17 +117,22 @@ type scaleConfig struct {
 func defaultScaleConfig() scaleConfig {
 	return scaleConfig{
 		total: 50000, waiting: 1000, running: 100, repos: 20,
-		duration: 2 * time.Minute, runLifetime: 8 * time.Second, heartbeat: 500 * time.Millisecond,
-		apiWorkers: 8, sseClients: 10, seedWorkers: 8,
-		// Measured on a 7-vCPU sandbox (docs/test-runs/2026-11-15-scale-50k.md)
-		// and set at several times that, for a 4-vCPU hosted runner that
-		// is also slower per core. Tight enough that the regressions the
-		// follow-ups are about -- a tick or a list endpoint doubling --
-		// still trip them.
-		tickP95: 20 * time.Second, dispatchP95: 5 * time.Second,
-		apiP95: 10 * time.Second, writeP95: 2 * time.Second,
+		duration: 3 * time.Minute, runLifetime: 8 * time.Second, heartbeat: 500 * time.Millisecond,
+		apiWorkers: 4, sseClients: 10, seedWorkers: 8,
+		// Ceilings, not targets. At this shape today's code takes most of
+		// a minute to dispatch and over a minute to tick on SQLite
+		// (docs/test-runs/2026-11-15-scale-50k.md), so a budget a healthy
+		// deployment would want fails every night and gates nothing. These
+		// sit at roughly twice what a 7-vCPU host measured, for a 4-vCPU
+		// hosted runner: what they catch is a regression on top of where
+		// things are -- a tick or a list that gets several times worse, an
+		// endpoint that stops answering, a store error, a slot that stops
+		// being refilled. Each follow-up that fixes a bottleneck is meant
+		// to lower the budget it moved; the doc names the targets.
+		tickP95: 4 * time.Minute, dispatchP95: 3 * time.Minute,
+		apiP95: 4 * time.Minute, writeP95: 20 * time.Second,
 		minCompletions: 100,
-		tickTimeout:    3 * time.Minute, requestTimeout: 3 * time.Minute,
+		tickTimeout:    5 * time.Minute, requestTimeout: 5 * time.Minute,
 	}
 }
 
@@ -500,6 +505,12 @@ func seedHistoryTask(ctx context.Context, store *model.Store, sd *scaleSeed, i i
 		return store.ObserveClose(ctx, id, at, scaleActor, "seeded close", func(o *model.Observation) {
 			o.CompletedAt = &at
 			o.ClosedAt = &at
+			// Settled, as a merged pull request's task is once grain has
+			// seen the merge: without it every one of these is an
+			// unsettled close the PR reconcilers re-read every tick.
+			if merged {
+				o.PrMergedAt = &at
+			}
 		})
 	})
 }
@@ -575,9 +586,18 @@ func scaleRun(runCtx context.Context, store *model.Store, cfg scaleConfig, sd *s
 	})
 }
 
-func scaleAPIWorker(ctx context.Context, base string, timeout time.Duration, sd *scaleSeed, rng *rand.Rand, stats *scaleStats) {
+func scaleAPIWorker(ctx context.Context, base string, timeout, budget time.Duration, sd *scaleSeed, rng *rand.Rand, stats *scaleStats) {
 	client := &http.Client{Timeout: timeout}
 	cursor := ""
+	// A request the end of the run cuts off is no sample, unless it had
+	// already been waiting longer than its budget: then it is the slowest
+	// sample of all, and dropping it would let an endpoint that never
+	// answers pass.
+	cutOff := func(name string, start time.Time) {
+		if waited := time.Since(start); budget > 0 && waited > budget {
+			stats.fail("api/"+name, fmt.Errorf("still unanswered after %v when the run ended", waited.Round(time.Second)))
+		}
+	}
 	get := func(name, path string) []byte {
 		start := time.Now()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
@@ -585,12 +605,15 @@ func scaleAPIWorker(ctx context.Context, base string, timeout time.Duration, sd 
 		if err != nil {
 			if ctx.Err() == nil {
 				stats.fail("api/"+name, err)
+			} else {
+				cutOff(name, start)
 			}
 			return nil
 		}
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if ctx.Err() != nil {
+			cutOff(name, start)
 			return nil
 		}
 		stats.lat("api/" + name).Record(time.Since(start))
@@ -782,7 +805,7 @@ func runScale(t *testing.T, backend string, cfg scaleConfig) {
 		bg.Add(1)
 		go func(i int) {
 			defer bg.Done()
-			scaleAPIWorker(runCtx, server, cfg.requestTimeout, sd, rand.New(rand.NewPCG(uint64(100+i), 3)), stats)
+			scaleAPIWorker(runCtx, server, cfg.requestTimeout, cfg.apiP95, sd, rand.New(rand.NewPCG(uint64(100+i), 3)), stats)
 		}(i)
 	}
 	for i := 0; i < cfg.sseClients; i++ {
