@@ -38,12 +38,14 @@ import type {
   CapabilityOption,
   Comment,
   GrainConfig,
+  Task,
 } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { TaskFeedStore } from "../services/task-feed.service";
 import { summarizeDispatchStatus } from "../shared/dispatch-status";
 import { isHuman } from "../sessions/session-helpers";
 
@@ -303,10 +305,14 @@ export function duration(from?: string, to?: string): string {
                 Stop
               </button>
             }
+            <!-- Not while paused: Retry never lifts an operator's pause
+                 (ui.Client.Retry refuses it), so it would be a second
+                 "Resume" beside the pause's own that always fails. -->
             @if (
               (t.state === "failed" ||
                 (t.state === "awaiting_reply" && t.turnStopped) ||
                 isStopped()) &&
+              !t.paused &&
               can("POST /api/tasks/{id}/retry")
             ) {
               <button
@@ -1030,8 +1036,13 @@ export function duration(from?: string, to?: string): string {
                             [routerLink]="linkTo(d)"
                             [queryParams]="linkQuery(d)"
                             [queryParamsHandling]="pane() ? 'merge' : ''"
+                            [attr.data-testid]="'dep-link-' + d"
+                            [gTip]="depTip(d)"
                             >#{{ d }}</a
                           >
+                          @if (depState(d); as st) {
+                            <span class="muted">{{ st }}</span>
+                          }
                           @if (can("POST /api/tasks/{id}/depends-on")) {
                             <button
                               type="button"
@@ -1196,8 +1207,13 @@ export function duration(from?: string, to?: string): string {
                         [routerLink]="linkTo(d)"
                         [queryParams]="linkQuery(d)"
                         [queryParamsHandling]="pane() ? 'merge' : ''"
+                        [attr.data-testid]="'details-dep-link-' + d"
+                        [gTip]="depTip(d)"
                         >#{{ d }}</a
                       >
+                      @if (depState(d); as st) {
+                        <span class="muted">{{ st }}</span>
+                      }
                       <button
                         type="button"
                         class="btn-text"
@@ -1300,6 +1316,7 @@ export function duration(from?: string, to?: string): string {
 export class TaskDetailComponent implements OnDestroy {
   protected readonly store = inject(TaskStore);
   private readonly wsStore = inject(WorkstreamsStore);
+  private readonly feed = inject(TaskFeedStore);
   private readonly api = inject(GrainApi);
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
@@ -1329,6 +1346,28 @@ export class TaskDetailComponent implements OnDestroy {
   readonly openTask = output<string>();
 
   protected readonly label = stateLabel;
+
+  // What the shared open-task feed knows of each task this one waits on,
+  // so a dependency chip can say its state and, on hover, its title (as
+  // the classic page's chips do). A dependency the feed does not carry
+  // -- a closed one -- is shown by its number alone.
+  private readonly depRows = computed(() => {
+    const ids = new Set(this.t()?.dependsOn ?? []);
+    const out = new Map<string, Task>();
+    if (!ids.size) return out;
+    for (const row of this.feed.tasks()) {
+      if (ids.has(row.id)) out.set(row.id, row);
+    }
+    return out;
+  });
+  protected depState(id: string): string {
+    const row = this.depRows().get(id);
+    return row ? stateLabel(row.state) : "";
+  }
+  protected depTip(id: string): string {
+    const row = this.depRows().get(id);
+    return row ? `#${id} ${row.title} (${stateLabel(row.state)})` : `#${id}`;
+  }
   protected readonly ago = ago;
   // filedAgo reads "just now" rather than "now ago" for a task filed in
   // the last minute (ago() says "now" there).
@@ -1780,15 +1819,34 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     if (!t || t.id !== this.id()) return;
     const id = t.id;
-    if (
-      await this.store.act(
-        "pause",
-        this.post("POST /api/tasks/{id}/pause", { immediate }),
-        id,
-      )
-    ) {
-      this.done(immediate ? `Paused #${id} immediately` : `Paused #${id}`);
+    const run = async () => {
+      if (
+        await this.store.act(
+          "pause",
+          this.post("POST /api/tasks/{id}/pause", { immediate }),
+          id,
+        )
+      ) {
+        this.done(immediate ? `Paused #${id} immediately` : `Paused #${id}`);
+      }
+    };
+    if (!immediate) {
+      await run();
+      return;
     }
+    // Asked first, as the classic Pause now is: unlike Pause, this one
+    // throws away whatever the run has not pushed, and Resume cannot
+    // bring that back.
+    this.confirming.set({
+      title: "Pause immediately",
+      message:
+        `Pause #${id} now? Its run is stopped at once, without the grace ` +
+        "period to push its work and write its handover; whatever it has " +
+        "not pushed is lost. Resume picks the task back up where it was left.",
+      accept: "Pause now",
+      destructive: true,
+      run,
+    });
   }
 
   protected async resumePaused(): Promise<void> {
