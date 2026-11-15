@@ -447,6 +447,13 @@ A run can ask for a grant it lacks with `request_access` ([agent-api.md](agent-a
 
 Approval rules are unchanged. The owner's own edits in the UI apply directly, as before. A grant an agent proposes for a child task still needs approval unless the parent's grants cover it (spec §2.3.4).
 
+**Deployment and repository defaults never count as escalation on their own.** Every new task, a proposal included, is filed holding this deployment's `default_capabilities` and its target repository's, recorded as `GrantByDefault`. A proposer need not hold them itself (a task filed from a template with its own grant list holds none of the deployment's; the director is `no_repo` and holds no repository's), but a default the proposal carries unchanged gives it nothing a task a person files there would not get, so it neither holds the proposal for a person nor stops it being queued on its proposer's permission (`model.ProposalEscalations`, `model.WithoutSeededDefaults`). The proposal keeps the default, and its body names it and where it came from (`model.SeededDefaultsNote`). A seeded grant still holds the proposal when:
+
+- the proposer or the proposal **asked** for it (`GrantByLabel`): only the asked capability is named in the note and the refusal;
+- it is not, `with:` arguments and all, what the deployment's or the proposal's own repository's `default_capabilities` give a new task at filing time (the default changed after the grant was seeded, or the grant carries other arguments), or it is a default of some other repository;
+- it is person-only, or the capability catalogue refuses it or marks it `requires_person` for the proposal's repository, template and kind;
+- the proposer is a standing console session other than the director that does not hold the deployment default: sessions are created holding the deployment's defaults, so one missing was removed by an operator. Removing a grant from an ordinary task leaves no record, so for an ordinary task a removed default cannot be told from one it never had, and is admitted.
+
 **Settings → Capabilities → Capability servers** lists, for each attached server's methods:
 
 - the method's description;

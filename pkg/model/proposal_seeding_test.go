@@ -101,7 +101,7 @@ func TestDirectorProposalAdmitsUnchangedSeededDefaults(t *testing.T) {
 	if got := model.EscalatedCapabilities(child, director); len(got) != 2 {
 		t.Fatalf("EscalatedCapabilities = %v, want both default references (the rule's input)", got)
 	}
-	escalated, admitted := model.ProposalEscalations(child, director, true, seeding)
+	escalated, admitted := model.ProposalEscalations(child, director, seeding)
 	if len(escalated) != 0 {
 		t.Errorf("escalated = %v, want none: every reference is an unchanged seeded default", escalated)
 	}
@@ -127,7 +127,7 @@ func TestDirectorProposalAdmitsUnchangedSeededDefaults(t *testing.T) {
 	}
 
 	// §4.4: the note names each default and where it came from.
-	note := model.SeededDefaultsNote(director.ID, admitted)
+	note := model.SeededDefaultsNote(director, admitted)
 	for _, want := range []string{
 		"task 9", "the director",
 		"`https://caps.example/host-script#host-script",
@@ -140,45 +140,192 @@ func TestDirectorProposalAdmitsUnchangedSeededDefaults(t *testing.T) {
 			t.Errorf("note = %q, want it to mention %q", note, want)
 		}
 	}
-	if note := model.SeededDefaultsNote(director.ID, nil); note != "" {
+	if note := model.SeededDefaultsNote(director, nil); note != "" {
 		t.Errorf("note for nothing admitted = %q, want empty", note)
 	}
 }
 
-// The rule is the director's, and only while it may queue its own work.
-func TestSeededDefaultsAdmittedOnlyForAQueueingDirector(t *testing.T) {
+// The rule is every proposer's, not only the director's: a default every
+// task filed there gets is not an escalation whoever proposed the task.
+// Only a proposal measured with no seeding source keeps it held.
+func TestSeededDefaultsAdmittedForEveryProposer(t *testing.T) {
 	t.Parallel()
 	child := seededChild(byDefault(seededRepoDefault))
 	seeding := seedingSource()
 	director := seedingDirector()
 
-	cases := map[string]struct {
+	admittedFor := map[string]struct {
 		parent        model.Task
 		sessionQueues bool
-		seeding       *model.ProposalSeeding
 	}{
-		"director that may not queue": {director, false, seeding},
-		"no seeding source":           {director, true, nil},
+		"director that may not queue": {director, false},
+		// A repository's default: a session is no_repo and was never
+		// seeded with it, so not holding it is no removal.
 		"another console session": {func() model.Task {
 			s := director
 			s.Tags = []string{model.ConsoleSessionTag("ops")}
 			return s
-		}(), true, seeding},
+		}(), true},
 		"task merely tagged as the director": {func() model.Task {
 			s := director
 			s.Interactive = false
 			return s
-		}(), true, seeding},
-		"ordinary task": {model.Task{ID: "3"}, true, seeding},
+		}(), true},
+		"ordinary task": {model.Task{ID: "3"}, false},
 	}
-	for name, tc := range cases {
-		escalated, admitted := model.ProposalEscalations(child, tc.parent, tc.sessionQueues, tc.seeding)
-		if len(admitted) != 0 || len(escalated) != 1 {
-			t.Errorf("%s: escalated = %v, admitted = %+v; want the default held as an escalation", name, escalated, admitted)
+	for name, tc := range admittedFor {
+		escalated, admitted := model.ProposalEscalations(child, tc.parent, seeding)
+		if len(escalated) != 0 || len(admitted) != 1 {
+			t.Errorf("%s: escalated = %v, admitted = %+v; want the default admitted", name, escalated, admitted)
 		}
-		if refusal := model.AutoApprovalRefusal(child, tc.parent, tc.sessionQueues, tc.seeding); !strings.Contains(refusal, "seeded with this deployment's default capability") {
-			t.Errorf("%s: refusal = %q, want the seeded default named", name, refusal)
+	}
+
+	escalated, admitted := model.ProposalEscalations(child, director, nil)
+	if len(admitted) != 0 || len(escalated) != 1 {
+		t.Errorf("no seeding source: escalated = %v, admitted = %+v; want the default held", escalated, admitted)
+	}
+	if refusal := model.AutoApprovalRefusal(child, director, true, nil); !strings.Contains(refusal, "as a default capability") {
+		t.Errorf("no seeding source: refusal = %q, want the seeded default named", refusal)
+	}
+}
+
+// A standing session other than the director is created holding the
+// deployment's defaults, so one it does not hold an operator removed from
+// it: the model records that removal, and a proposal carrying the
+// default stays held. The director is measured by §4.2 instead.
+func TestDeploymentDefaultRemovedFromASessionIsHeld(t *testing.T) {
+	t.Parallel()
+	session := seedingDirector()
+	session.Tags = []string{model.ConsoleSessionTag("ops")}
+	child := seededChild(byDefault(seededDeployDefault))
+	seeding := seedingSource()
+
+	escalated, admitted := model.ProposalEscalations(child, session, seeding)
+	if len(admitted) != 0 || len(escalated) != 1 {
+		t.Errorf("session: escalated = %v, admitted = %+v; want the removed default held", escalated, admitted)
+	}
+	if refusal := model.AutoApprovalRefusal(child, session, true, seeding); !strings.Contains(refusal, "as a default capability") {
+		t.Errorf("session: refusal = %q, want the seeded default named", refusal)
+	}
+	if escalated, admitted := model.ProposalEscalations(child, seedingDirector(), seeding); len(escalated) != 0 || len(admitted) != 1 {
+		t.Errorf("director: escalated = %v, admitted = %+v; want the default admitted", escalated, admitted)
+	}
+}
+
+// releaseStep is a task filed from a template with its own grant list --
+// so holding none of the deployment's default_capabilities -- that may
+// queue its own follow-ups on its branch (AutoMerge), as a scheduled
+// release step is.
+func releaseStep() model.Task {
+	target := seededTarget
+	return model.Task{
+		ID:        "6059",
+		Target:    &target,
+		AutoMerge: true,
+		Grants:    []model.Grant{{Capability: "api:ci-read@acme/widgets", Via: "template"}},
+	}
+}
+
+// A follow-up a release step proposes, carrying only the deployment's
+// default reference as every new task does, is queued: the default is
+// kept on it, is no escalation, and no note says it waits for a person.
+func TestProposalCarryingOnlyTheDeploymentDefaultIsQueued(t *testing.T) {
+	t.Parallel()
+	parent := releaseStep()
+	child := seededChild(byDefault(seededDeployDefault))
+	seeding := seedingSource()
+
+	escalated, admitted := model.ProposalEscalations(child, parent, seeding)
+	if len(escalated) != 0 {
+		t.Errorf("escalated = %v, want none: the default is what every new task gets", escalated)
+	}
+	if len(admitted) != 1 || admitted[0].Repo != nil {
+		t.Fatalf("admitted = %+v, want the deployment's default", admitted)
+	}
+	if model.AutoSubmits(child, parent) {
+		t.Fatal("AutoSubmits on the proposal as filed: want the default to fail GrantsSubsetOf (the rule's input)")
+	}
+	permitted := model.WithoutSeededDefaults(child, admitted)
+	if !model.AutoSubmits(permitted, parent) {
+		t.Errorf("AutoSubmits(WithoutSeededDefaults) = false, want the proposal queued on its proposer's permission")
+	}
+	if len(child.Grants) != 1 {
+		t.Errorf("WithoutSeededDefaults changed the proposal's own grants: %+v", child.Grants)
+	}
+	if refusal := model.AutoApprovalRefusal(child, parent, false, seeding); refusal != "" {
+		t.Errorf("AutoApprovalRefusal = %q, want none", refusal)
+	}
+	if note := model.ProposalEscalationNote(parent.ID, child, escalated); note != "" {
+		t.Errorf("escalation note = %q, want none", note)
+	}
+	note := model.SeededDefaultsNote(parent, admitted)
+	for _, want := range []string{"task 6059", "`https://caps.example/keys#key", "from this deployment's default capabilities"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("seeded-defaults note = %q, want it to mention %q", note, want)
 		}
+	}
+	if strings.Contains(note, "director") {
+		t.Errorf("seeded-defaults note = %q, want no mention of the director for an ordinary proposer", note)
+	}
+}
+
+// A seeded default beside a capability the proposal asked for: the
+// proposal is held for the asked one, and only it is named.
+func TestProposalAskingBesideTheDeploymentDefaultNamesOnlyTheAsked(t *testing.T) {
+	t.Parallel()
+	parent := releaseStep()
+	const asked = `https://caps.example/other#m={"x":1}`
+	child := seededChild(byDefault(seededDeployDefault), byLabel(asked))
+	seeding := seedingSource()
+
+	escalated, admitted := model.ProposalEscalations(child, parent, seeding)
+	if len(escalated) != 1 || !strings.HasPrefix(escalated[0], "https://caps.example/other#m") {
+		t.Errorf("escalated = %v, want only the asked reference", escalated)
+	}
+	if len(admitted) != 1 {
+		t.Errorf("admitted = %+v, want the deployment's default", admitted)
+	}
+	if model.AutoSubmits(model.WithoutSeededDefaults(child, admitted), parent) {
+		t.Error("AutoSubmits = true, want the asked capability to keep it from being queued")
+	}
+	refusal := model.AutoApprovalRefusal(child, parent, false, seeding)
+	if !strings.Contains(refusal, "it asks for `https://caps.example/other#m") || strings.Contains(refusal, "keys#key") {
+		t.Errorf("refusal = %q, want only the asked reference named", refusal)
+	}
+	note := model.ProposalEscalationNote(parent.ID, child, escalated)
+	if !strings.Contains(note, "this proposal asked for `https://caps.example/other#m") {
+		t.Errorf("escalation note = %q, want the asked reference named", note)
+	}
+	if strings.Contains(note, "keys#key") || strings.Contains(note, "as a default capability") {
+		t.Errorf("escalation note = %q, want the admitted default left out", note)
+	}
+}
+
+// A seeded default whose arguments are not the current default's -- the
+// default changed after the proposal was seeded, or it was seeded with
+// other with: arguments -- is not what every new task gets, and holds it.
+func TestProposalWithAChangedDeploymentDefaultIsHeld(t *testing.T) {
+	t.Parallel()
+	parent := releaseStep()
+	child := seededChild(byDefault(`https://caps.example/keys#key={"set":"publisher"}`))
+	seeding := seedingSource()
+
+	escalated, admitted := model.ProposalEscalations(child, parent, seeding)
+	if len(admitted) != 0 || len(escalated) != 1 {
+		t.Fatalf("escalated = %v, admitted = %+v; want the changed default held", escalated, admitted)
+	}
+	if model.AutoSubmits(model.WithoutSeededDefaults(child, admitted), parent) {
+		t.Error("AutoSubmits = true, want the changed default to keep it from being queued")
+	}
+	if refusal := model.AutoApprovalRefusal(child, parent, false, seeding); !strings.Contains(refusal, "as a default capability") {
+		t.Errorf("refusal = %q, want the seeded default named", refusal)
+	}
+	note := model.ProposalEscalationNote(parent.ID, child, escalated)
+	if !strings.Contains(note, "`https://caps.example/keys#key") || !strings.Contains(note, "differ from the current default") {
+		t.Errorf("escalation note = %q, want the changed default named as differing from the current one", note)
+	}
+	if strings.Contains(note, "this proposal asked for") {
+		t.Errorf("escalation note = %q: a seeded default is not something the proposal asked for", note)
 	}
 }
 
@@ -204,7 +351,7 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 		"default with changed arguments": {
 			child:   seededChild(byDefault(seededOtherDefault)),
 			held:    "https://caps.example/host-script#host-script",
-			refusal: "seeded with this deployment's default capability",
+			refusal: "as a default capability",
 		},
 		// The default of a repository other than the one the proposal
 		// targets: the seeding source read gadgets', not widgets'.
@@ -215,14 +362,14 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 				s.Target = &other
 			},
 			held:    "https://caps.example/host-script#host-script",
-			refusal: "seeded with this deployment's default capability",
+			refusal: "as a default capability",
 		},
 		// A repository default carried by a proposal with no repository:
 		// nothing seeded it from child's own target.
 		"repository default on a proposal with no target": {
 			child:   model.Task{Grants: []model.Grant{byDefault(seededRepoDefault)}},
 			held:    "https://caps.example/host-script#host-script",
-			refusal: "seeded with this deployment's default capability",
+			refusal: "as a default capability",
 		},
 		// A default that is not in the seeding source at all.
 		"default the source never listed": {
@@ -231,14 +378,14 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 				s.RepoDefaults = nil
 			},
 			held:    "https://caps.example/host-script#host-script",
-			refusal: "seeded with this deployment's default capability",
+			refusal: "as a default capability",
 		},
 		// A method only a person may grant (IsPersonOnlyGrant), even
 		// seeded unchanged from the target's defaults.
 		"person-only default": {
 			child:   seededChild(byDefault(seededPersonDefault)),
 			held:    "https://caps.example/seeded-person-only#approve",
-			refusal: "seeded with this deployment's default capability",
+			refusal: "as a default capability",
 		},
 		// A non-reference dangerous api grant (IsPersonOnlyGrant) seeded
 		// from the target's defaults must also stay held.
@@ -248,7 +395,7 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 				s.RepoDefaults = append(s.RepoDefaults, "api:self-upgrade")
 			},
 			held:    "api:self-upgrade",
-			refusal: "seeded with this deployment's default capability",
+			refusal: "as a default capability",
 		},
 		// An unnormalized reference with no #method cannot have its
 		// method-level person-only rules or normalized args checked, even
@@ -259,7 +406,7 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 				s.RepoDefaults = []string{"https://caps.example/seeded-person-only"}
 			},
 			held:    "https://caps.example/seeded-person-only",
-			refusal: "seeded with this deployment's default capability",
+			refusal: "as a default capability",
 		},
 		// The catalogue marks it a person's decision for this task.
 		"requires_person in the catalogue": {
@@ -271,7 +418,7 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 				}}}
 			},
 			held:    "https://caps.example/host-script#host-script",
-			refusal: "seeded with this deployment's default capability",
+			refusal: "as a default capability",
 		},
 		// requires_person for these arguments only.
 		"requires_person_when in the catalogue": {
@@ -285,7 +432,7 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 				}}}
 			},
 			held:    "https://caps.example/host-script#host-script",
-			refusal: "seeded with this deployment's default capability",
+			refusal: "as a default capability",
 		},
 		// The catalogue refuses it for this repository.
 		"refused by the catalogue for the repository": {
@@ -297,7 +444,7 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 				}}}
 			},
 			held:    "https://caps.example/host-script#host-script",
-			refusal: "seeded with this deployment's default capability",
+			refusal: "as a default capability",
 		},
 		// ... for its template.
 		"refused by the catalogue for the template": {
@@ -310,7 +457,7 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 				}}}
 			},
 			held:    "https://caps.example/host-script#host-script",
-			refusal: "seeded with this deployment's default capability",
+			refusal: "as a default capability",
 		},
 		// ... and for its kind.
 		"refused by the catalogue for the kind": {
@@ -322,7 +469,7 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 				}}}
 			},
 			held:    "https://caps.example/host-script#host-script",
-			refusal: "seeded with this deployment's default capability",
+			refusal: "as a default capability",
 		},
 	}
 	for name, tc := range cases {
@@ -330,7 +477,7 @@ func TestDirectorProposalStillHoldsEveryExcludedCase(t *testing.T) {
 		if tc.seeding != nil {
 			tc.seeding(seeding)
 		}
-		escalated, admitted := model.ProposalEscalations(tc.child, director, true, seeding)
+		escalated, admitted := model.ProposalEscalations(tc.child, director, seeding)
 		if !hasPrefixIn(escalated, tc.held) {
 			t.Errorf("%s: escalated = %v, want %s held", name, escalated, tc.held)
 		}
@@ -352,7 +499,7 @@ func TestAdmittedDefaultDoesNotHideATypedEscalation(t *testing.T) {
 	child := seededChild(byDefault(seededRepoDefault), byLabel(typed))
 	seeding := seedingSource()
 
-	escalated, admitted := model.ProposalEscalations(child, director, true, seeding)
+	escalated, admitted := model.ProposalEscalations(child, director, seeding)
 	if len(escalated) != 1 || !strings.HasPrefix(escalated[0], "https://caps.example/other#m") {
 		t.Errorf("escalated = %v, want only the typed reference", escalated)
 	}
@@ -379,7 +526,7 @@ func TestAdmittedDefaultsLeaveUngrantedReadsAndWritesHeld(t *testing.T) {
 
 	writes := seededChild(byDefault(seededRepoDefault))
 	writes.Writes = []model.WriteTarget{{Repo: seededOther}}
-	if escalated, _ := model.ProposalEscalations(writes, director, true, seeding); len(escalated) != 0 {
+	if escalated, _ := model.ProposalEscalations(writes, director, seeding); len(escalated) != 0 {
 		t.Fatalf("escalated = %v, want the default admitted", escalated)
 	}
 	if refusal := model.AutoApprovalRefusal(writes, director, true, seeding); !strings.Contains(refusal, "may land work in acme/gadgets") {
@@ -404,7 +551,7 @@ func TestSeededDefaultMatchesItsSourceInRecordedForm(t *testing.T) {
 	seeding := seedingSource()
 	seeding.RepoDefaults = []string{" " + asWritten + " "}
 	child := seededChild(byDefault(recorded))
-	escalated, admitted := model.ProposalEscalations(child, director, true, seeding)
+	escalated, admitted := model.ProposalEscalations(child, director, seeding)
 	if len(escalated) != 0 || len(admitted) != 1 {
 		t.Errorf("escalated = %v, admitted = %+v; want the default matched to its source", escalated, admitted)
 	}

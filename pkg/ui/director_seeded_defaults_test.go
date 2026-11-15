@@ -99,6 +99,33 @@ func TestDirectorProposalCarryingItsTargetsDefaultIsQueued(t *testing.T) {
 	}
 }
 
+// The rule is not the director's alone: any proposer's follow-up that
+// carries only its target repository's defaults unchanged is queued on
+// its proposer's permission, holding them, as a task a person files there
+// would. A standing session is no_repo and was never seeded with the
+// repository's defaults, so not holding them is no removal.
+func TestSessionProposalCarryingItsTargetsDefaultIsQueued(t *testing.T) {
+	t.Parallel()
+	client, _, ctx, session := seededSessionClient(t, "ops", true)
+
+	filed, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title: "ops", Description: "d", Repo: "acme/widgets", ProposedBy: session,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filed.State != model.StateQueued {
+		t.Errorf("state = %s, want queued (body: %q)", filed.State, filed.Description)
+	}
+	if !holdsSeededHostScript(filed.Capabilities) {
+		t.Errorf("capabilities = %v, want the repository's default kept", filed.Capabilities)
+	}
+	if !strings.Contains(filed.Description, "from the default capabilities of `acme/widgets`") ||
+		strings.Contains(filed.Description, "the director") {
+		t.Errorf("body = %q, want the seeded-defaults note naming the repository, not the director", filed.Description)
+	}
+}
+
 // Every case §4.2 excludes still files the director's proposal for a
 // person.
 func TestDirectorProposalOutsideTheSeededRuleWaitsForAPerson(t *testing.T) {
@@ -131,15 +158,6 @@ func TestDirectorProposalOutsideTheSeededRuleWaitsForAPerson(t *testing.T) {
 				}
 			},
 			note: "acme/gadgets",
-		},
-		// A standing session other than the director: §4.2 is the
-		// director's rule.
-		"another session": {
-			session: "ops", tasksApproved: true,
-			req: func(session string) ui.CreateTaskRequest {
-				return ui.CreateTaskRequest{Title: "ops", Description: "d", Repo: "acme/widgets", ProposedBy: session}
-			},
-			note: "default capability",
 		},
 	}
 	for name, tc := range cases {

@@ -88,10 +88,11 @@ func HeldForApprovalNote(proposer string) string {
 // it needs the store and has its own note (AutoSubmitLimitNote).
 //
 // seeding is where child's default grants came from when it was filed
-// (ProposalSeeding): a director proposal's defaults seeded unchanged
-// from its own target repository or the deployment are not escalations
-// (ProposalEscalations, director-capabilities.spec.md §4.2). nil
-// measures every default reference as EscalatedCapabilities does.
+// (ProposalSeeding): a proposal's defaults seeded unchanged from its own
+// target repository or the deployment are not escalations
+// (ProposalEscalations), and do not count against AutoSubmits either
+// (WithoutSeededDefaults). nil measures every default reference as
+// EscalatedCapabilities does.
 //
 // A proposal that would land work in this deployment's configuration
 // repository (ConfigRepoProposalHold) is refused first and whatever
@@ -100,7 +101,8 @@ func AutoApprovalRefusal(child, parent Task, sessionQueues bool, seeding *Propos
 	if why := ConfigRepoProposalHold(child); why != "" {
 		return why
 	}
-	if escalated, _ := ProposalEscalations(child, parent, sessionQueues, seeding); len(escalated) > 0 {
+	escalated, admitted := ProposalEscalations(child, parent, seeding)
+	if len(escalated) > 0 {
 		asked, seeded := SeededEscalations(child, escalated)
 		// A grant only a person may give is escalated whether or not
 		// parent holds it (CapabilityEscalationNote), so it is not said
@@ -123,9 +125,11 @@ func AutoApprovalRefusal(child, parent Task, sessionQueues bool, seeding *Propos
 				"whether or not your task holds it", "`"+strings.Join(personal, "`, `")+"`"))
 		}
 		if len(seeded) > 0 {
-			why = append(why, fmt.Sprintf("it is seeded with this deployment's default capability %s, "+
-				"which your task does not hold -- you did not ask for it, and a person can approve "+
-				"or remove it", "`"+strings.Join(seeded, "`, `")+"`"))
+			why = append(why, fmt.Sprintf("it is seeded with %s as a default capability, which your "+
+				"task does not hold and which is not what every new task filed there gets today (its "+
+				"arguments or source differ from the current default, or only a person may grant it) "+
+				"-- you did not ask for it, and a person can approve or remove it",
+				"`"+strings.Join(seeded, "`, `")+"`"))
 		}
 		return strings.Join(why, "; and ")
 	}
@@ -146,7 +150,7 @@ func AutoApprovalRefusal(child, parent Task, sessionQueues bool, seeding *Propos
 		}
 		return fmt.Sprintf("it reads %s, which your task cannot read", strings.Join(names, ", "))
 	}
-	if sessionQueues || AutoSubmits(child, parent) {
+	if sessionQueues || AutoSubmits(WithoutSeededDefaults(child, admitted), parent) {
 		return ""
 	}
 	if !parent.AutoMerge && !parent.AutoApproveProposals {
