@@ -115,6 +115,7 @@ Not needed: every surface in §3 has a `/next/` page, and nothing was changed in
   - "before" and "after" contact sheets: Settings, Inbox, Tasks, Workstreams and Context as the repo-scoped viewer, at 1440/390 in light/dark;
   - an admin heavy-data sheet: Workstreams, the expanded workstream detail, Inbox, Tasks, Telemetry and Settings.
   - Nothing moves for an unlimited caller. For the repo viewer, the only visible change is the explained "agent keys" banner.
+- **Contact sheets** (committed beside the report): [`before-contact-sheet.png`](2026-11-14-next-heavy-data/before-contact-sheet.png) and [`after-contact-sheet.png`](2026-11-14-next-heavy-data/after-contact-sheet.png) for the repo-scoped viewer, and [`admin-heavy-contact-sheet.png`](2026-11-14-next-heavy-data/admin-heavy-contact-sheet.png) for the admin heavy-data walk.
 - **Design book:** §5 "Role-aware" now states the `canGlobal` rule.
 - **Review mandate:** the author ran the three passes below; they were not independent reviewers.
   - **Design:** no token, spacing or layout change. The new banner text reuses `s-banner warn`. There is no new copy outside that sentence.
