@@ -252,3 +252,96 @@ test("Agents: selected card and row look selected, are clickable, and every insp
   await page.screenshot({ path: path.join(dir, "agents-390-light.png") });
   await axeClean(page);
 });
+
+// With no agent in focus the inspector is closed and the cards take the
+// whole width; j opens it on the first agent, and the bar button, the
+// pane's own close, Escape and a second click on the card all close it.
+test("Agents: the inspector closes to a full-width card view with no agent selected", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  test.setTimeout(120_000);
+  const tasks = await apiJson(demoServer, accessCode, "/api/tasks");
+  const list = Array.isArray(tasks) ? tasks : tasks.tasks;
+  const runningTask = list.find(
+    (t) => t.state === "running" && !t.consoleSession,
+  );
+  expect(runningTask, "grain demo seeds a running task").toBeTruthy();
+  const id = runningTask.id;
+  const dir = shotsDir();
+  await page.addInitScript(() =>
+    localStorage.setItem("grain.themeMode", "light"),
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  const split = page.locator(".agents-split");
+  const card = page.getByTestId(`agent-${id}`);
+  const pane = page.getByTestId("agents-pane");
+  const cardOnly = async () => {
+    await expect(page).not.toHaveURL(/[?&]task=/);
+    await expect(pane).toHaveCount(0);
+    await expect(page.getByTestId("agents-resizer")).toHaveCount(0);
+    await expect(split).not.toHaveClass(/has-pane/);
+    await expect(card).not.toHaveClass(/is-selected/);
+    await expect(card).not.toHaveAttribute("aria-current", /.*/);
+    const s = await split.boundingBox();
+    const g = await page.locator(".agent-grid").first().boundingBox();
+    const listPane = page.locator(".agents-list-pane");
+    const lp = await listPane.boundingBox();
+    expect(Math.abs(lp.width - s.width)).toBeLessThanOrEqual(1);
+    expect(g.width).toBeGreaterThan(s.width * 0.9);
+    expect(
+      await listPane.evaluate((e) => getComputedStyle(e).borderRightWidth),
+    ).toBe("0px");
+  };
+  const opened = async () => {
+    await expect(page).toHaveURL(new RegExp(`[?&]task=${id}(&|$)`));
+    await expect(pane).toContainText(`Inspecting #${id}`);
+    await expect(split).toHaveClass(/has-pane/);
+    await expect(card).toHaveClass(/is-selected/);
+    const s = await split.boundingBox();
+    const lp = await page.locator(".agents-list-pane").boundingBox();
+    expect(lp.width).toBeLessThan(s.width * 0.6);
+  };
+
+  await page.goto("/next/agents");
+  await expect(card).toBeVisible();
+  await cardOnly();
+  await page.screenshot({
+    path: path.join(dir, "agents-1440-light-cards.png"),
+  });
+  await axeClean(page);
+
+  // j opens the inspector on the first agent.
+  await page.locator("body").click({ position: { x: 1, y: 1 } });
+  await page.keyboard.press("j");
+  await opened();
+
+  // The split bar's Close inspector button.
+  await page.getByTestId("agents-pane-close").click();
+  await cardOnly();
+  await expect(card).toBeFocused();
+
+  // A click on the card opens it; a second click on it closes it.
+  await card.locator(".agent-activity").click();
+  await opened();
+  await card.locator(".agent-activity").click();
+  await cardOnly();
+
+  // The pane's own close button.
+  await card.locator(".agent-activity").click();
+  await opened();
+  await pane.getByTestId("pane-close").click();
+  await cardOnly();
+
+  // Escape.
+  await card.locator(".agent-activity").click();
+  await opened();
+  await page.keyboard.press("Escape");
+  await cardOnly();
+
+  await setTheme(page, "dark");
+  await page.screenshot({ path: path.join(dir, "agents-1440-dark-cards.png") });
+  await axeClean(page);
+});
