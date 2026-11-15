@@ -300,7 +300,18 @@ once with a fidelity test.**
   written once, under `grants:` (`repoGrantEntry`). `reads:`/`writes:`
   are still written for the rows a grant cannot carry -- a repository
   off the default host, or a write row whose base is NULL -- so no row is
-  lost. The import still reads `reads:`/`writes:` (`declschema`), so a
+  lost. (Both write tables declare `base TEXT NOT NULL DEFAULT ''`, so a
+  stored write with no base is `''` and goes under `grants:` as
+  `{"base":"","repo":…}`; only an off-host repository stays under
+  `reads:`/`writes:` in practice.) Reading `grants:` back into the read
+  and write tables (`projectedRepoRow`, `6f0f15cde`) shipped in `v3.5.0`,
+  so `release/v3.5.1` imports this export intact; `release/v3.1.1`
+  and the other builds before `v3.5.0` keep those entries as opaque
+  capabilities and lose every plain read and write. A build only meets a
+  newer export by importing a dump stamped with a newer schema, which
+  `SyncExternal` now refuses on every sync, as startup already did
+  (`docs/test-runs/2026-11-15-config-grants-export.md`,
+  `docs/external-config-repo.md`). The import still reads `reads:`/`writes:` (`declschema`), so a
   grain/config written by an older release keeps loading, and export →
   import → export stays byte-for-byte stable
   (`TestRepoAccessExportedAsGrantsRoundTrips`,
