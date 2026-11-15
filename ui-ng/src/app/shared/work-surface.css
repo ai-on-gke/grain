@@ -183,20 +183,10 @@ g-tasks-page .task-row.is-selected .row-title {
   }
 }
 
-g-tasks-page .tasks-detail-pane {
+/* The pane clips; the task inside it owns the one scroller (its tab body,
+   task-detail.component.css). */
+.tasks-detail-pane {
   overflow: hidden;
-}
-
-g-tasks-page .tasks-detail-pane g-task-detail {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-}
-
-g-tasks-page .tasks-detail-pane .task-page {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
 }
 
 /* The pane is the task page narrowed: Details is a tab, not a column. */

@@ -4,6 +4,27 @@ g-task-page {
   display: contents;
 }
 
+/* One pane, one scroller (design book). The task fills whatever hosts it
+   and, as a size container, picks its scroller by the room it has: in a
+   pane big enough for a fixed header plus a usable tab, only the active tab
+   body scrolls (the query at the end of this file); in a phone-narrow or
+   short pane, the header, tabs and tab body scroll together as one. A host
+   that scrolls itself (the Workstreams inspector) makes it an inline-size
+   container, so it lays out flat and lets the host be the one scroller. */
+g-task-detail {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  container: task-detail / size;
+}
+
+.task-page {
+  position: relative;
+  overflow-y: auto;
+}
+
 .task-header {
   padding-bottom: 12px;
 }
@@ -48,8 +69,6 @@ g-task-page {
 .task-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
-  flex: 1;
-  min-height: 0;
 }
 
 .task-main {
@@ -70,24 +89,15 @@ g-task-page {
 }
 
 .task-tab-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
+  position: relative;
   padding: 16px 20px 24px;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
-.task-log {
-  flex: none;
-  min-height: auto;
-  padding: 0;
-  overflow: visible;
-}
-
 .task-aside {
-  overflow-y: auto;
+  position: relative;
   padding: 16px 20px;
   border-left: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-low);
@@ -303,4 +313,43 @@ g-task-page {
 
 .defer-until-hint {
   font-size: 12px;
+}
+
+/* Room for a fixed header: the task clips, its tab body and aside scroll,
+   and the Conversation tab is the conversation -- it fills the tab body
+   with the composer pinned below the thread, and the thread is the one
+   thing that scrolls. The host clips rather than hides so its
+   content-based minimum holds: only a pane too short for a 96px thread
+   lets the tab body scroll as well. */
+@container task-detail (min-width: 480px) and (min-height: 560px) {
+  .task-page {
+    overflow: clip;
+  }
+  .task-page .task-layout {
+    flex: 1;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .task-page .task-tab-body,
+  .task-page .task-aside {
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .task-page .task-tab-body {
+    flex: 1;
+  }
+  .task-tab-body.is-conversation > .g-conversation,
+  .task-tab-body.is-conversation > .g-conversation > .convo-host {
+    flex: 1 1 0;
+    min-height: auto;
+  }
+  .task-tab-body.is-conversation > .g-conversation > .convo-host {
+    overflow: clip;
+  }
+  .task-tab-body.is-conversation .convo-host .convo-thread {
+    height: auto;
+    flex: 1 1 0;
+    min-height: 96px;
+    max-height: none;
+  }
 }

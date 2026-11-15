@@ -834,7 +834,10 @@ export function duration(from?: string, to?: string): string {
               }
             </nav>
 
-            <div class="task-tab-body">
+            <div
+              class="task-tab-body"
+              [class.is-conversation]="current() === 'conversation'"
+            >
               @switch (current()) {
                 @case ("conversation") {
                   <h2 class="sr-only">Conversation</h2>

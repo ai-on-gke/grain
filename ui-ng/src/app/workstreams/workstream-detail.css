@@ -369,14 +369,23 @@ g-workstream-detail {
   border-top: 1px solid var(--md-sys-color-outline-variant);
 }
 
+/* The inspector is one scroller: "In this stream" and the task below it
+   scroll together. The task lays out flat inside it (an inline-size
+   container, task-detail.component.css) rather than scrolling on its own. */
 .ws-insp {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
   border-left: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface);
+}
+
+.ws-insp > g-task-detail {
+  flex: none;
+  container-type: inline-size;
 }
 
 .ws-insp-mobile-bar {

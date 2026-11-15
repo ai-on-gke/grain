@@ -194,6 +194,18 @@ instead. Agents does this with a size container query on the list pane (narrower
 than 480px or shorter than 700px). `e2e/next-agents-grid-scroll.spec.js`
 asserts the rule with bounding boxes.
 
+The task detail (`g-task-detail`) follows the same rule wherever it is
+hosted. It is a size container: with room for a fixed header (480px wide and
+560px tall), the page clips and only the active tab body and the aside
+scroll; in a phone-narrow or short pane the whole task scrolls and the tab
+body lays out flat inside it. A host that scrolls itself, such as the
+Workstreams inspector with "In this stream" above the task, makes it an
+inline-size container so the task never scrolls inside it. Panes around a
+scroller clip (`.tasks-detail-pane`, `.inspector-pane`). Logs and live
+transcripts run at full length inside their pane's scroller rather than in
+fixed-height boxes; a CI log's search bar sticks to the top of the inspector.
+`e2e/next-task-one-scroller.spec.js` asserts this.
+
 Content uses the width it is given. Do not cap a page at a fixed max-width
 (`max-width: 1560px` left half of a large screen empty on Workstreams). Cap
 only forms and reading measures that need it (Settings sections at 1180px).
@@ -252,6 +264,10 @@ inspector and Task Detail. Sessions shares its message styles.
 - **Inline:** the thread fills the pane below the cards above it, between a
   floor of half the viewport and a ceiling of the viewport minus the
   chrome. An empty thread is one quiet line, not a blank box.
+- **Task Detail's Conversation tab** is the conversation: in a pane with
+  room for a fixed header it fills the tab body, the composer sits pinned
+  below the thread, and the thread is the only scroller (96px floor). In a
+  short or phone pane it keeps the inline window inside the scrolling task.
 - **Expand:** the sibling cards step aside and the thread takes the pane.
 - **Full screen:** a native modal `<dialog>` (top layer, page inert), 860px
   wide, composer pinned, Escape closes, the draft survives. Shift+F toggles
