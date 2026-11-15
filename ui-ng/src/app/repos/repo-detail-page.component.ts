@@ -1546,7 +1546,12 @@ interface PendingReleaseRow {
                     </div>
                   </div>
                   @if (pushes().length > 0) {
-                    <div class="s-table-wrap">
+                    <div
+                      class="s-table-wrap"
+                      role="region"
+                      tabindex="0"
+                      aria-label="Extra push refs, scrolls sideways"
+                    >
                       <table class="s-table" aria-label="Extra push refs">
                         <thead>
                           <tr>
@@ -1603,7 +1608,12 @@ interface PendingReleaseRow {
                       {{ (d.declaredPortBranches ?? []).join(", ") || "none" }}.
                     </p>
                     @if ((d.portDirections ?? []).length > 0) {
-                      <div class="s-table-wrap">
+                      <div
+                        class="s-table-wrap"
+                        role="region"
+                        tabindex="0"
+                        aria-label="Port directions, scrolls sideways"
+                      >
                         <table class="s-table" aria-label="Port directions">
                           <thead>
                             <tr>
