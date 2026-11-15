@@ -182,6 +182,14 @@ for (const [size, viewport] of [["1440", { width: 1440, height: 900 }], ["390", 
     const tab1 = await paneTab(w, scope);
     check(wwhere, "?pane=runs survives reload", tab1 === "task-tab-runs" && q(w, "node") === nodeId, { tab: tab1, url: rel(w) });
     const det = w.locator(`${scope} [data-testid="task-tab-details"]`).first();
+    if (phone && !(await det.isVisible().catch(() => false))) {
+      // The phone inspector is a sheet; "o" opens it on the selected node.
+      await w.evaluate(() => document.activeElement?.blur());
+      await w.keyboard.press("o");
+      await w.waitForTimeout(800);
+      const tabO = await paneTab(w, scope);
+      check(wwhere, "phone inspector opened with o keeps ?pane=runs", tabO === "task-tab-runs" && q(w, "pane") === "runs", { tab: tabO, url: rel(w) });
+    }
     if (await det.isVisible().catch(() => false)) {
       await det.click();
       await w.waitForTimeout(600);
