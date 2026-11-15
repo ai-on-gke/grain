@@ -53,10 +53,6 @@ export interface InboxAction {
   destructive?: boolean;
   // bulk is the batch bar's label when several selected rows offer it.
   bulk?: boolean;
-  // bulkOnly keeps the action out of the row's own buttons: it is
-  // offered only from the batch bar (Grant all, whose row answers with
-  // the access request's own item picker instead).
-  bulkOnly?: boolean;
   repo?: string;
   // blocked is why the action must not be taken now (Submit on a red or
   // unreported CI): the button is off with this as its tooltip, and
@@ -621,16 +617,6 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
       e.pillTone = "blast";
       e.summary = t.questionSummary || "This run asked for more access.";
       e.rationale = "Only a person can widen what a run may reach.";
-      e.actions.push(
-        taskAction(
-          t,
-          "grant",
-          "Grant",
-          "POST /api/tasks/{id}/access-request/grant",
-          "tonal",
-          { bulk: true, bulkOnly: true, body: {} },
-        ),
-      );
       return e;
     }
     if (isStoppedTurn(t)) {

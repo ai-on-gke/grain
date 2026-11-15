@@ -984,21 +984,21 @@ export class InboxStore implements OnDestroy {
     });
   }
 
-  // actByKey answers one row. A one-click answer (a grant) is checked
-  // against the queue as last read and posted at once, so a slow answer
-  // never waits on a refresh; the server's own preconditions (409 on a
-  // request already answered) refuse a stale one. An answer given through
-  // a confirm dialog (verify) reads the queue again first, since the item
-  // may have moved on while the dialog was open. Only this row is locked
-  // while the answer applies: answers to other rows may be in flight
-  // beside it. The queue is read again once it lands; concurrent reads
-  // coalesce in refresh, so answers landing together never clobber each
-  // other.
+  // actByKey answers one row. By default it reads the queue again first
+  // and checks the entry, the action, its gate (blocked) and access still
+  // hold before posting; server 409 preconditions close the remaining
+  // window. skipVerify posts at once against the queue as last read, for
+  // the slow access-request answers (Grant, Deny) whose server refuses a
+  // request already answered, so one never waits on a refresh. Only this
+  // row is locked while the answer applies: answers to other rows may be
+  // in flight beside it. The queue is read again once it lands;
+  // concurrent reads coalesce in refresh, so answers landing together
+  // never clobber each other.
   async actByKey(
     entryKey: string,
     actionOrId: string | InboxAction,
     body?: unknown,
-    opts: { verify?: boolean } = {},
+    opts: { skipVerify?: boolean } = {},
   ): Promise<boolean> {
     if (typeof actionOrId !== "string" && actionOrId.blocked) {
       this.actionError.set(actionOrId.blocked);
@@ -1009,7 +1009,7 @@ export class InboxStore implements OnDestroy {
     this.actionError.set(null);
     let label = "";
     try {
-      if (opts.verify) {
+      if (!opts.skipVerify) {
         await this.refresh();
         if (this.lastReadFailed) {
           this.actionError.set(READ_FAILED);

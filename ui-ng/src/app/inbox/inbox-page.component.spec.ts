@@ -488,42 +488,6 @@ describe("InboxPageComponent", () => {
     expect(q(f, '[data-testid="action-error"]')).toBeNull();
   });
 
-  it("grants every selected access request from the batch bar", async () => {
-    const api = new FakeApi();
-    api.taskList = [
-      accessTask(api, "3", "Needs lib"),
-      accessTask(api, "4", "Needs lib too"),
-    ];
-    const f = await render(api);
-    // The bulk-only answer stays out of the row's own buttons.
-    expect(q(f, '[data-testid="action-grant"]')).toBeNull();
-    for (const ref of ["#3", "#4"]) {
-      refRow(f, ref).querySelector<HTMLInputElement>(".row-check")!.click();
-    }
-    await f.whenStable();
-    const bulk = q(f, '[data-testid="bulk-grant"]') as HTMLButtonElement;
-    expect(bulk.textContent).toContain("Grant all (2)");
-    bulk.click();
-    await f.whenStable();
-    expect(q(f, '[data-testid="confirm-dialog"]')?.textContent).toContain(
-      "every item it asked for",
-    );
-    (q(f, '[data-testid="confirm-accept"]') as HTMLButtonElement).click();
-    await settle(f);
-    expect(api.posts).toEqual([
-      {
-        route: "POST /api/tasks/{id}/access-request/grant",
-        params: { id: "3" },
-        body: {},
-      },
-      {
-        route: "POST /api/tasks/{id}/access-request/grant",
-        params: { id: "4" },
-        body: {},
-      },
-    ]);
-  });
-
   it("disables what a viewer cannot do and says why", async () => {
     const api = new FakeApi();
     api.cfg = {
@@ -1294,6 +1258,46 @@ describe("inbox page helpers", () => {
           .filter((p) => p.route === "POST /api/tasks/{id}/submit")
           .map((p) => (p.params as { id: string }).id),
       ).toEqual(["35"]);
+    });
+
+    it("reads the queue again before Submit and refuses once CI has turned red", async () => {
+      const api = new FakeApi();
+      const pr = (ci: string): Task => ({
+        id: "35",
+        title: "Makefile",
+        state: "awaiting_submit",
+        pullRequest: "acme/web#5",
+        updatedAt:
+          ci === "passed" ? "2026-11-15T10:00:00Z" : "2026-11-15T10:05:00Z",
+        mergeGates: [
+          { id: "ci", label: "CI", state: ci },
+          { id: "approval", label: "Approval", state: "needed" },
+        ],
+      });
+      api.taskList = [pr("passed")];
+      // The detail carries no gates of its own, so the list's decide.
+      api.details["35"] = {
+        id: "35",
+        title: "Makefile",
+        state: "awaiting_submit",
+      };
+      const f = await render(api);
+      rowByRef(f, "#35").querySelector<HTMLButtonElement>(".row-main")!.click();
+      await f.whenStable();
+      const submit = q(f, '[data-testid="action-submit"]') as HTMLButtonElement;
+      expect(submit.disabled).toBe(false);
+
+      // CI goes red after the list was last read; the click re-reads it.
+      api.taskList = [pr("failing")];
+      submit.click();
+      await new Promise((r) => setTimeout(r));
+      await f.whenStable();
+      expect(
+        api.posts.filter((p) => p.route === "POST /api/tasks/{id}/submit"),
+      ).toEqual([]);
+      expect(q(f, '[data-testid="action-error"]')?.textContent).toContain(
+        "CI is failing",
+      );
     });
 
     it("puts a stopped turn in Paused, names who stopped it, and offers Resume and Close only", async () => {

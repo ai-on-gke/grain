@@ -115,7 +115,6 @@ const PAST: Record<string, string> = {
   submit: "Submitted",
   retry: "Retried",
   resume: "Resumed",
-  grant: "Granted access on",
   "retry-merge": "Retried the merge of",
 };
 
@@ -1168,7 +1167,7 @@ const ONE_KEY = new Set(["approve"]);
       </div>
 
       <ng-template #actions let-sel>
-        @for (a of rowActions(sel); track a.id) {
+        @for (a of sel.actions; track a.id) {
           <button
             type="button"
             [class]="
@@ -1659,9 +1658,11 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     key: string,
     actionOrId: string | InboxAction,
     body?: unknown,
-    verify = false,
+    skipVerify = false,
   ): Promise<boolean> {
-    const ok = await this.store.actByKey(key, actionOrId, body, { verify });
+    const ok = await this.store.actByKey(key, actionOrId, body, {
+      skipVerify,
+    });
     // The reader may have moved on to another row while this answer was
     // applying; focus follows them, not the answer that just landed.
     if (ok && this.store.selectedKey() === key) {
@@ -1698,7 +1699,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
         message: a.confirm,
         accept: a.label,
         destructive: !!a.destructive,
-        run: () => this.actAndFocus(key, aid, undefined, true),
+        run: () => this.actAndFocus(key, aid),
       });
       return;
     }
@@ -1723,12 +1724,9 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     const keys = rows.map((e) => e.key);
     this.confirming.set({
       title: label,
-      message:
-        id === "grant"
-          ? `${label}: ${n} selected ${n === 1 ? "access request" : "access requests"}? Each run is given every item it asked for; a request with an item that cannot be granted is left selected.`
-          : `${label}: ${n} selected ${n === 1 ? "item" : "items"}? Each is answered as if you had pressed its own button.`,
+      message: `${label}: ${n} selected ${n === 1 ? "item" : "items"}? Each is answered as if you had pressed its own button.`,
       accept: `${label} (${n})`,
-      destructive: id === "close" || id === "decline" || id === "grant",
+      destructive: id === "close" || id === "decline",
       scope: scopeOf(rows, this.access.viewer()),
       run: () => this.batch(id, PAST[id] ?? "Done:", keys),
     });
@@ -1939,6 +1937,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
         repo: sel.repo || undefined,
       },
       all ? {} : { items: chosen },
+      true,
     );
   }
 
@@ -1954,6 +1953,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
         repo: sel.repo || undefined,
       },
       { reason: this.draft().trim() },
+      true,
     );
     if (ok) this.denying.set(false);
   }
@@ -1986,7 +1986,6 @@ export class InboxPageComponent implements OnInit, OnDestroy {
             repo: sel.repo || undefined,
           },
           Object.keys(body).length ? body : undefined,
-          true,
         ),
     });
   }
@@ -2021,12 +2020,6 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   protected allChecked(entries: InboxEntry[]): boolean {
     const c = this.store.checked();
     return entries.length > 0 && entries.every((e) => c.has(e.key));
-  }
-
-  // rowActions is what a row's own action bar offers: everything but the
-  // batch bar's bulk-only answers.
-  protected rowActions(sel: InboxEntry): InboxAction[] {
-    return sel.actions.filter((a) => !a.bulkOnly);
   }
 
   protected approvable(entries: InboxEntry[]): number {
@@ -2184,7 +2177,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       // a host script, resuming, submitting a merge) asks first.
       const primary =
         pinned && !sel?.gone
-          ? sel && this.rowActions(sel).find((x) => x.variant === "primary")
+          ? sel?.actions.find((x) => x.variant === "primary")
           : undefined;
       if (
         sel &&
@@ -2202,7 +2195,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
             message: `${primary.label}: ${sel.title || "this item"}?`,
             accept: primary.label,
             destructive: !!primary.destructive,
-            run: () => this.actAndFocus(key, aid, undefined, true),
+            run: () => this.actAndFocus(key, aid),
           });
         }
       }
