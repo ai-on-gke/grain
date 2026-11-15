@@ -157,6 +157,18 @@ interface HostdRow {
   revokedAt?: string | null;
   labels?: Record<string, string> | null;
   capacity?: number;
+  shared?: boolean;
+  key_fingerprint?: string;
+  last_seen_at?: string | null;
+  // connection is what a host that dials in last said when it did
+  // (hostd.RemoteStatus): absent for local and for one that has not
+  // connected since the daemon started.
+  connection?: {
+    connected?: boolean;
+    host?: string;
+    principal?: string;
+    build?: string;
+  } | null;
   // update is a newer signed grain-agentd release the host's owner can
   // take by running command on the host (HostUpdate); absent when there
   // is none, and always for a root-installed `grain host`.
@@ -237,8 +249,61 @@ interface PendingHostdRow {
   key_fingerprint?: string;
   default_labels?: Record<string, string> | null;
   default_capacity?: number;
+  // rekey_hostd names the registered host a rekey request moves onto a
+  // new key: accepting it keeps that host's name.
+  rekey_hostd?: string;
+  enrollment_code?: string;
   created_at?: string;
   expires_at?: string;
+}
+
+// PendingDraft is what the owner may change on a join request before
+// accepting it: the host's name, labels and capacity.
+interface PendingDraft {
+  name: string;
+  labels: string;
+  capacity: string;
+}
+
+// HostdEdit is a host row's Edit (owner, labels, capacity) in progress.
+interface HostdEdit {
+  name: string;
+  owner: string;
+  labels: string;
+  capacity: string;
+}
+
+// hostdConnectionLine says where a host connected from, as whom and on
+// what build, as classic Settings → Hosts does: "" when there is nothing
+// more to say than its status pill.
+export function hostdConnectionLine(h: HostdRow): string {
+  if (h.revoked_at || h.revokedAt || h.state === "revoked") return "";
+  if (h.name === "local" && !h.shared) return "Co-located (socket)";
+  const c = h.connection;
+  if (!c) return "Never connected";
+  if (!c.connected) return "";
+  const parts: string[] = [];
+  if (c.host) parts.push(`from ${c.host}`);
+  if (c.principal) parts.push(`as ${c.principal}`);
+  if (c.build) parts.push(c.build);
+  return parts.join(" · ");
+}
+
+// parseHostCapacity reads a capacity field: a whole number of runs, 0
+// (unlimited) when blank, so clearing the field clears the capacity.
+export function parseHostCapacity(
+  raw: string,
+  label: string,
+): { value: number; error?: string } {
+  const s = raw.trim();
+  if (!s) return { value: 0 };
+  if (!/^\d+$/.test(s) || !Number.isSafeInteger(Number(s))) {
+    return {
+      value: 0,
+      error: `${label} "${s}" must be a non-negative whole number`,
+    };
+  }
+  return { value: Number(s) };
 }
 
 export function parseHostdLabels(raw: string): {
@@ -1593,10 +1658,15 @@ function formatRefreshedAt(iso?: string): string {
         <div class="s-card" data-testid="card-hostds-list">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">Registered workstation hosts</h3>
+              <h3 class="s-card-title">Hosts</h3>
               <p class="s-card-desc">
-                grain-agentd daemons paired with this controller for local CLI
-                tokens and workstation execution.
+                The hosts this deployment runs host work through.
+                <span class="s-mono">local</span> is co-located on this machine
+                without a handshake; every other host joins with an enrollment
+                code below (a 30-day Ed25519 key-bound credential, renewed while
+                connected) or dials in with a legacy per-host token. Revoke cuts
+                a host off; a revoked host can then be deleted, which frees its
+                name.
               </p>
             </div>
             @if (access.can("POST /api/hostds/delete-revoked")) {
@@ -1610,6 +1680,28 @@ function formatRefreshedAt(iso?: string): string {
               </button>
             }
           </div>
+
+          @if (hostdNotice(); as n) {
+            <div
+              class="s-banner"
+              [class.ok]="n.tone === 'ok'"
+              [class.warn]="n.tone === 'warn'"
+              data-testid="hostd-delete-notice"
+            >
+              <div style="flex: 1">
+                @for (l of n.lines; track $index) {
+                  <div>{{ l }}</div>
+                }
+              </div>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                (click)="hostdNotice.set(null)"
+              >
+                Dismiss
+              </button>
+            </div>
+          }
 
           @if (!access.can("GET /api/hostds")) {
             <div class="s-banner warn">
@@ -1625,7 +1717,7 @@ function formatRefreshedAt(iso?: string): string {
                     <th>Name</th>
                     <th>Owner</th>
                     <th>Status</th>
-                    <th>Labels</th>
+                    <th>Labels &amp; capacity</th>
                     <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
@@ -1634,9 +1726,74 @@ function formatRefreshedAt(iso?: string): string {
                     @let isRevoked =
                       Boolean(h.revokedAt || h.revoked_at) ||
                       h.state === "revoked";
+                    @let edit =
+                      editingHostd()?.name === h.name ? editingHostd() : null;
+                    @let renamingThis = renamingHostd()?.from === h.name;
+                    @let remote = h.name !== "local" && !isRevoked && !h.shared;
+                    @let connLine = connectionLine(h);
                     <tr [attr.data-testid]="'hostd-row-' + h.name">
-                      <td class="s-mono">{{ h.name }}</td>
-                      <td>{{ h.owner || "—" }}</td>
+                      <td class="s-mono">
+                        @if (renamingThis) {
+                          <div class="s-inline">
+                            <input
+                              class="s-input s-input-inline s-mono"
+                              type="text"
+                              aria-label="New host name"
+                              [attr.data-testid]="
+                                'rename-hostd-input-' + h.name
+                              "
+                              [value]="renamingHostd()?.to ?? ''"
+                              (input)="
+                                setRenameDraft($any($event.target).value)
+                              "
+                            />
+                            <button
+                              type="button"
+                              class="btn-primary s-btn-sm"
+                              [attr.data-testid]="'save-rename-hostd-' + h.name"
+                              [disabled]="!(renamingHostd()?.to ?? '').trim()"
+                              (click)="saveRenameHostd()"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              (click)="cancelHostdEdit()"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        } @else {
+                          {{ h.name }}
+                        }
+                      </td>
+                      <td>
+                        @if (edit) {
+                          <input
+                            class="s-input s-input-inline"
+                            type="text"
+                            aria-label="Owner"
+                            [attr.data-testid]="'edit-hostd-owner-' + h.name"
+                            [value]="edit.owner"
+                            (input)="
+                              patchHostdEdit({
+                                owner: $any($event.target).value,
+                              })
+                            "
+                          />
+                        } @else if (h.owner) {
+                          {{ h.owner }}
+                        } @else if (remote || h.shared) {
+                          <span
+                            class="s-meta"
+                            [attr.data-testid]="'hostd-owner-missing-' + h.name"
+                            >None: needed to dial in through IAP</span
+                          >
+                        } @else {
+                          —
+                        }
+                      </td>
                       <td>
                         <span
                           [class]="
@@ -1650,6 +1807,14 @@ function formatRefreshedAt(iso?: string): string {
                         >
                           {{ isRevoked ? "revoked" : h.state || "offline" }}
                         </span>
+                        @if (connLine) {
+                          <div
+                            class="s-meta"
+                            [attr.data-testid]="'hostd-connection-' + h.name"
+                          >
+                            {{ connLine }}
+                          </div>
+                        }
                         @if (h.update && !isRevoked) {
                           <div
                             class="s-meta"
@@ -1664,15 +1829,99 @@ function formatRefreshedAt(iso?: string): string {
                         }
                       </td>
                       <td class="s-mono">
-                        {{ formatLabels(h.labels) }}
+                        @if (edit) {
+                          <div class="s-inline">
+                            <input
+                              class="s-input s-input-inline s-mono"
+                              type="text"
+                              aria-label="Labels"
+                              placeholder="os=linux,gpu=true"
+                              [attr.data-testid]="'edit-hostd-labels-' + h.name"
+                              [value]="edit.labels"
+                              (input)="
+                                patchHostdEdit({
+                                  labels: $any($event.target).value,
+                                })
+                              "
+                            />
+                            <input
+                              class="s-input s-input-inline s-num s-input-narrow"
+                              type="text"
+                              inputmode="numeric"
+                              aria-label="Capacity"
+                              placeholder="Capacity"
+                              [attr.data-testid]="
+                                'edit-hostd-capacity-' + h.name
+                              "
+                              [value]="edit.capacity"
+                              (input)="
+                                patchHostdEdit({
+                                  capacity: $any($event.target).value,
+                                })
+                              "
+                            />
+                          </div>
+                        } @else {
+                          {{ formatLabels(h.labels) }}
+                          @if (h.capacity && h.capacity > 0) {
+                            <div
+                              class="s-meta"
+                              [attr.data-testid]="'hostd-capacity-' + h.name"
+                            >
+                              capacity {{ h.capacity }}
+                            </div>
+                          }
+                        }
                       </td>
                       <td class="s-actions-cell">
                         <!-- local is the co-located host: it holds no
-                             token to rotate and can be neither revoked
-                             nor deleted, so it offers none of the three
-                             (the server refuses each with a 400). -->
-                        @if (h.name !== "local") {
+                             token to rotate and can be neither renamed,
+                             revoked nor deleted, so it offers none of
+                             them (the server refuses each with a 400). -->
+                        @if (edit) {
                           <div class="s-row-actions">
+                            <button
+                              type="button"
+                              class="btn-primary s-btn-sm"
+                              [attr.data-testid]="'save-edit-hostd-' + h.name"
+                              (click)="saveHostdEdit()"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              class="btn-text s-btn-sm"
+                              (click)="cancelHostdEdit()"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        } @else if (h.name !== "local") {
+                          <div class="s-row-actions">
+                            @if (remote) {
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [attr.data-testid]="'edit-hostd-' + h.name"
+                                [disabled]="
+                                  !access.can('PATCH /api/hostds/{name}')
+                                "
+                                (click)="startHostdEdit(h)"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [attr.data-testid]="'rename-hostd-' + h.name"
+                                [disabled]="
+                                  !access.can('POST /api/hostds/{name}/rename')
+                                "
+                                (click)="startRenameHostd(h.name)"
+                              >
+                                Rename
+                              </button>
+                            }
                             <button
                               type="button"
                               class="btn-tonal s-btn-sm"
@@ -1724,13 +1973,19 @@ function formatRefreshedAt(iso?: string): string {
             </div>
           }
 
-          <div class="s-subsection">
+          <div class="s-subsection" data-testid="hostd-legacy-register">
             <div class="s-subhead">
-              <h4 class="s-subhead-title">Register workstation host</h4>
+              <h4 class="s-subhead-title">Add a host (legacy token)</h4>
             </div>
+            <p class="s-hint" data-testid="hostd-legacy-copy">
+              Prefer an enrollment code below for Ed25519 key-bound enrollment.
+              Use a per-host token only for non-interactive setups that cannot
+              wait for the owner's acceptance. The token is shown once, with the
+              command that installs the host on its machine.
+            </p>
             <div class="s-grid">
               <div class="s-field">
-                <label class="s-label" for="hd-name">New host name</label>
+                <label class="s-label" for="hd-name">Name</label>
                 <input
                   id="hd-name"
                   class="s-input s-mono"
@@ -1741,11 +1996,26 @@ function formatRefreshedAt(iso?: string): string {
                   [disabled]="!access.can('POST /api/hostds')"
                   (input)="newHostdName.set($any($event.target).value)"
                 />
+                <span class="s-hint">Lowercase letters, digits and -</span>
               </div>
               <div class="s-field">
-                <label class="s-label" for="hd-labels"
-                  >Labels (key=value pairs)</label
+                <label class="s-label" for="hd-owner">Owner</label>
+                <input
+                  id="hd-owner"
+                  class="s-input"
+                  type="text"
+                  data-testid="input-new-hostd-owner"
+                  placeholder="alice@example.com"
+                  [value]="newHostdOwner()"
+                  [disabled]="!access.can('POST /api/hostds')"
+                  (input)="newHostdOwner.set($any($event.target).value)"
+                />
+                <span class="s-hint"
+                  >The email or service account it connects as</span
                 >
+              </div>
+              <div class="s-field">
+                <label class="s-label" for="hd-labels">Labels</label>
                 <input
                   id="hd-labels"
                   class="s-input s-mono"
@@ -1756,6 +2026,7 @@ function formatRefreshedAt(iso?: string): string {
                   [disabled]="!access.can('POST /api/hostds')"
                   (input)="newHostdLabels.set($any($event.target).value)"
                 />
+                <span class="s-hint">key=value,key2=value2</span>
               </div>
             </div>
             <div class="s-inline">
@@ -1768,7 +2039,7 @@ function formatRefreshedAt(iso?: string): string {
                 "
                 (click)="createHostd()"
               >
-                Register host
+                Add host
               </button>
             </div>
           </div>
@@ -1789,12 +2060,13 @@ function formatRefreshedAt(iso?: string): string {
         <div class="s-card" data-testid="card-hostds-enrollment">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">
-                Operator enrollment codes &amp; pending joins
-              </h3>
+              <h3 class="s-card-title">Enrollment codes &amp; pending hosts</h3>
               <p class="s-card-desc">
-                Reusable enrollment codes and pending grain-agentd approval
-                queue (operator-only).
+                Share one enrollment command across machines. The code only
+                files a pending join request; each host makes its own Ed25519
+                keypair and waits for the deployment owner to accept it (the
+                request names the verified person who enrolled it) before it
+                gets a 30-day key-bound credential.
               </p>
             </div>
           </div>
@@ -1931,12 +2203,14 @@ function formatRefreshedAt(iso?: string): string {
                       <th>Code name</th>
                       <th>Uses</th>
                       <th>Expires</th>
+                      <th>Defaults</th>
                       <th class="s-actions-cell">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     @for (c of enrollmentCodes(); track c.name) {
                       @let codeRevoked = Boolean(c.revoked_at);
+                      @let defaults = codeDefaults(c);
                       <tr [attr.data-testid]="'enrollment-code-row-' + c.name">
                         <td class="s-mono">{{ c.name }}</td>
                         <td class="s-num">
@@ -1944,8 +2218,24 @@ function formatRefreshedAt(iso?: string): string {
                         </td>
                         <td class="s-num">
                           {{
-                            codeRevoked ? "revoked" : c.expires_at || "never"
+                            codeRevoked
+                              ? "revoked"
+                              : c.expires_at
+                                ? c.expires_at.slice(0, 10)
+                                : "never"
                           }}
+                        </td>
+                        <td
+                          class="s-mono"
+                          [attr.data-testid]="
+                            'enrollment-code-defaults-' + c.name
+                          "
+                        >
+                          @for (d of defaults; track d) {
+                            <div>{{ d }}</div>
+                          } @empty {
+                            —
+                          }
                         </td>
                         <td class="s-actions-cell">
                           @if (codeRevoked) {
@@ -1989,30 +2279,118 @@ function formatRefreshedAt(iso?: string): string {
                 </table>
               </div>
             }
-            <div class="s-inline">
-              <input
-                class="s-input s-input-inline s-mono"
-                type="text"
-                aria-label="Enrollment code name"
-                data-testid="input-enrollment-code-name"
-                placeholder="team-workstations"
-                [value]="newCodeName()"
-                [disabled]="!access.can('POST /api/hostds/enrollment-codes')"
-                (input)="newCodeName.set($any($event.target).value)"
-              />
-              <button
-                type="button"
-                class="btn-tonal"
-                data-testid="create-enrollment-code-btn"
-                [disabled]="
-                  !newCodeName().trim() ||
-                  !access.can('POST /api/hostds/enrollment-codes')
-                "
-                (click)="createEnrollmentCode()"
-              >
-                Create enrollment code
-              </button>
-            </div>
+            <form
+              class="s-subsection"
+              autocomplete="off"
+              data-testid="new-enrollment-code-form"
+              (submit)="$event.preventDefault(); createEnrollmentCode()"
+            >
+              <div class="s-subhead">
+                <h4 class="s-subhead-title">New enrollment code</h4>
+              </div>
+              <div class="s-grid">
+                <div class="s-field">
+                  <label class="s-label" for="ec-name">Code name</label>
+                  <input
+                    id="ec-name"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-enrollment-code-name"
+                    placeholder="team-linux"
+                    [value]="newCodeName()"
+                    [disabled]="
+                      !access.can('POST /api/hostds/enrollment-codes')
+                    "
+                    (input)="newCodeName.set($any($event.target).value)"
+                  />
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="ec-expires">Expires in</label>
+                  <input
+                    id="ec-expires"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-enrollment-code-expires"
+                    placeholder="7d or 24h"
+                    [value]="newCodeExpiresIn()"
+                    (input)="newCodeExpiresIn.set($any($event.target).value)"
+                  />
+                  <span class="s-hint">Optional; blank never expires</span>
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="ec-max-uses">Max uses</label>
+                  <input
+                    id="ec-max-uses"
+                    class="s-input s-num"
+                    type="text"
+                    inputmode="numeric"
+                    data-testid="input-enrollment-code-max-uses"
+                    placeholder="Unlimited"
+                    [value]="newCodeMaxUses()"
+                    (input)="newCodeMaxUses.set($any($event.target).value)"
+                  />
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="ec-capacity"
+                    >Default capacity</label
+                  >
+                  <input
+                    id="ec-capacity"
+                    class="s-input s-num"
+                    type="text"
+                    inputmode="numeric"
+                    data-testid="input-enrollment-code-capacity"
+                    placeholder="Unlimited"
+                    [value]="newCodeCapacity()"
+                    (input)="newCodeCapacity.set($any($event.target).value)"
+                  />
+                  <span class="s-hint">Optional max runs on each host</span>
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="ec-labels">Default labels</label>
+                  <input
+                    id="ec-labels"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-enrollment-code-labels"
+                    placeholder="os=linux,gpu=true"
+                    [value]="newCodeLabels()"
+                    (input)="newCodeLabels.set($any($event.target).value)"
+                  />
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="ec-principals"
+                    >Allowed principals</label
+                  >
+                  <input
+                    id="ec-principals"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-enrollment-code-principals"
+                    placeholder="user:a@example.com, org:acme"
+                    [value]="newCodePrincipals()"
+                    (input)="newCodePrincipals.set($any($event.target).value)"
+                  />
+                  <span class="s-hint"
+                    >Optional user:, group:, github: or org: rules, comma
+                    separated</span
+                  >
+                </div>
+              </div>
+              <div class="s-inline">
+                <button
+                  type="submit"
+                  class="btn-tonal"
+                  data-testid="create-enrollment-code-btn"
+                  [disabled]="
+                    !newCodeName().trim() ||
+                    !access.can('POST /api/hostds/enrollment-codes')
+                  "
+                >
+                  Create enrollment code
+                </button>
+              </div>
+            </form>
           }
 
           @if (!access.can("GET /api/hostds/pending")) {
@@ -2023,22 +2401,42 @@ function formatRefreshedAt(iso?: string): string {
               <span>{{ access.deniedReason("GET /api/hostds/pending") }}</span>
             </div>
           } @else if (pendingHostds().length > 0) {
+            <div class="s-subhead">
+              <h4 class="s-subhead-title">
+                Pending host requests ({{ pendingHostds().length }})
+              </h4>
+            </div>
             <div class="s-table-wrap" data-testid="hostds-pending-table">
               <table class="s-table" aria-label="Pending host requests">
                 <thead>
                   <tr>
-                    <th>ID / Hostname</th>
+                    <th>Request</th>
                     <th>Key fingerprint</th>
                     <th>Enrolled by</th>
-                    <th>Platform</th>
-                    <th>Approve / Reject</th>
+                    <th>Accept as</th>
+                    <th class="s-actions-cell">Approve / Reject</th>
                   </tr>
                 </thead>
                 <tbody>
                   @for (p of pendingHostds(); track p.id) {
+                    @let d = pendingDraft(p);
+                    @let label = p.hostname || p.id;
                     <tr [attr.data-testid]="'pending-hostd-row-' + p.id">
                       <td class="s-mono">
-                        {{ p.suggested_name || p.hostname || p.id }}
+                        {{ label }}
+                        <div class="s-meta">
+                          {{ p.os || "?" }}/{{ p.arch || "?" }}
+                          @if (p.enrollment_code) {
+                            · code {{ p.enrollment_code }}
+                          }
+                        </div>
+                        @if (p.rekey_hostd) {
+                          <span
+                            class="status-pill reply"
+                            [attr.data-testid]="'pending-rekey-' + p.id"
+                            >rekey: {{ p.rekey_hostd }}</span
+                          >
+                        }
                       </td>
                       <!-- There is no pairing code to compare: the owner
                            checks who enrolled the host and the key it
@@ -2050,30 +2448,58 @@ function formatRefreshedAt(iso?: string): string {
                         {{ p.key_fingerprint || "—" }}
                       </td>
                       <td>{{ p.enrolled_by || "—" }}</td>
-                      <td class="s-mono">
-                        {{ p.os || "?" }}/{{ p.arch || "?" }}
-                      </td>
                       <td>
                         <div class="s-inline">
                           <input
                             class="s-input s-input-inline s-mono"
                             type="text"
-                            [attr.aria-label]="
-                              'Labels for ' + (p.hostname || p.id)
+                            [attr.aria-label]="'Host name for ' + label"
+                            [attr.data-testid]="'pending-name-' + p.id"
+                            [attr.title]="
+                              p.rekey_hostd
+                                ? 'A rekey keeps the host it moves onto a new key'
+                                : null
                             "
-                            [attr.data-testid]="'pending-labels-' + p.id"
-                            placeholder="k=v (optional)"
-                            [value]="
-                              pendingLabelDrafts()[p.id] ||
-                              formatLabelsInput(p.default_labels)
-                            "
+                            placeholder="Host name"
+                            [disabled]="Boolean(p.rekey_hostd)"
+                            [value]="d.name"
                             (input)="
-                              setPendingLabelDraft(
-                                p.id,
-                                $any($event.target).value
-                              )
+                              patchPendingDraft(p, {
+                                name: $any($event.target).value,
+                              })
                             "
                           />
+                          <input
+                            class="s-input s-input-inline s-mono"
+                            type="text"
+                            [attr.aria-label]="'Host labels for ' + label"
+                            [attr.data-testid]="'pending-labels-' + p.id"
+                            placeholder="k=v (optional)"
+                            [value]="d.labels"
+                            (input)="
+                              patchPendingDraft(p, {
+                                labels: $any($event.target).value,
+                              })
+                            "
+                          />
+                          <input
+                            class="s-input s-input-inline s-num s-input-narrow"
+                            type="text"
+                            inputmode="numeric"
+                            [attr.aria-label]="'Host capacity for ' + label"
+                            [attr.data-testid]="'pending-capacity-' + p.id"
+                            placeholder="Capacity"
+                            [value]="d.capacity"
+                            (input)="
+                              patchPendingDraft(p, {
+                                capacity: $any($event.target).value,
+                              })
+                            "
+                          />
+                        </div>
+                      </td>
+                      <td class="s-actions-cell">
+                        <div class="s-row-actions">
                           <button
                             type="button"
                             class="btn-primary s-btn-sm"
@@ -2081,7 +2507,7 @@ function formatRefreshedAt(iso?: string): string {
                             [disabled]="
                               !access.can(
                                 'POST /api/hostds/pending/{id}/accept'
-                              )
+                              ) || !d.name.trim()
                             "
                             (click)="acceptPendingHostd(p)"
                           >
@@ -2107,6 +2533,11 @@ function formatRefreshedAt(iso?: string): string {
                 </tbody>
               </table>
             </div>
+          } @else {
+            <p class="s-card-desc" data-testid="hostds-pending-empty">
+              No hosts are waiting for approval. Pending requests expire after
+              24 hours.
+            </p>
           }
         </div>
       }
@@ -2259,9 +2690,15 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly confirmRequest = signal<ConfirmRequest | null>(null);
   protected readonly newHostdName = signal("");
   protected readonly newHostdLabels = signal("");
+  protected readonly newHostdOwner = signal("");
   protected readonly mintedHostdToken = signal<string | null>(null);
   protected readonly enrollmentCodes = signal<EnrollmentCodeRow[]>([]);
   protected readonly newCodeName = signal("");
+  protected readonly newCodeExpiresIn = signal("");
+  protected readonly newCodeMaxUses = signal("");
+  protected readonly newCodeCapacity = signal("");
+  protected readonly newCodeLabels = signal("");
+  protected readonly newCodePrincipals = signal("");
   protected readonly chosenEnrollmentCode = signal("");
   protected readonly enrollmentSecretShown = signal(false);
   protected readonly selectedEnrollmentCode = computed(() =>
@@ -2280,7 +2717,24 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     ).join("\n"),
   );
   protected readonly pendingHostds = signal<PendingHostdRow[]>([]);
-  protected readonly pendingLabelDrafts = signal<Record<string, string>>({});
+  protected readonly pendingDrafts = signal<Record<string, PendingDraft>>({});
+  protected readonly editingHostd = signal<HostdEdit | null>(null);
+  protected readonly renamingHostd = signal<{
+    from: string;
+    to: string;
+  } | null>(null);
+  // hostdNotice is what the last Delete or Delete revoked did: each host
+  // deleted, with the usage-limit pauses cleared with it, and each one
+  // skipped and why. A toast went before anyone could read a list.
+  protected readonly hostdNotice = signal<{
+    tone: "ok" | "warn";
+    lines: string[];
+  } | null>(null);
+  protected readonly connectionLine = hostdConnectionLine;
+  // raisedHostError is the error banner the last refused host action put
+  // up, so the save that fixes it takes it down -- and leaves a later,
+  // unrelated one alone.
+  private raisedHostError: string | null = null;
 
   // The deployment's default model list (model.Config.DefaultModels):
   // the default first, then its fallbacks, tried in that order. Settings
@@ -3020,12 +3474,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
         hostd?: HostdRow;
       }>("POST /api/hostds", undefined, {
         name,
+        ...(this.newHostdOwner().trim()
+          ? { owner: this.newHostdOwner().trim() }
+          : {}),
         ...(Object.keys(parsed.labels).length > 0
           ? { labels: parsed.labels }
           : {}),
       });
       this.newHostdName.set("");
       this.newHostdLabels.set("");
+      this.newHostdOwner.set("");
       const msg = this.formatIssuedHostdSecret(`Host token (${name})`, res);
       if (msg) this.mintedHostdToken.set(msg);
       await this.loadHostds();
@@ -3090,12 +3548,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       destructive: true,
       run: async () => {
         try {
+          this.hostdNotice.set(null);
           const out = await this.api.delete<DeletedHostdRow>(
             "DELETE /api/hostds/{name}",
             { name },
           );
           await this.loadHostds();
-          this.snackbar.show(deletedHostdLine(out ?? { name }));
+          this.hostdNotice.set({
+            tone: "ok",
+            lines: [deletedHostdLine(out ?? { name })],
+          });
         } catch (err) {
           this.state.recordError(err);
         }
@@ -3118,12 +3580,15 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
           }>("POST /api/hostds/delete-revoked", undefined, {});
           await this.loadHostds();
           const lines = (out?.deleted ?? []).map(deletedHostdLine);
-          for (const sk of out?.skipped ?? []) {
+          const skipped = out?.skipped ?? [];
+          for (const sk of skipped) {
             lines.push(`Skipped ${sk.name}: ${sk.reason}`);
           }
-          this.snackbar.show(
-            lines.length ? lines.join(" ") : "No revoked hosts to delete.",
-          );
+          if (lines.length === 0) lines.push("No revoked hosts to delete.");
+          this.hostdNotice.set({
+            tone: skipped.length > 0 ? "warn" : "ok",
+            lines,
+          });
         } catch (err) {
           this.state.recordError(err);
         }
@@ -3144,13 +3609,44 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected async createEnrollmentCode(): Promise<void> {
     const name = this.newCodeName().trim();
     if (!name) return;
+    const labels = parseHostdLabels(this.newCodeLabels());
+    const maxUses = parseHostCapacity(this.newCodeMaxUses(), "Max uses");
+    const capacity = parseHostCapacity(
+      this.newCodeCapacity(),
+      "Default capacity",
+    );
+    const invalid = labels.error || maxUses.error || capacity.error;
+    if (invalid) {
+      this.raiseHostMessage(invalid);
+      return;
+    }
+    const principals = this.newCodePrincipals()
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const expiresIn = this.newCodeExpiresIn().trim();
     try {
       const res = await this.api.post<{
         code?: string;
         token?: string;
         install?: HostdInstallDto | string;
-      }>("POST /api/hostds/enrollment-codes", undefined, { name });
+      }>("POST /api/hostds/enrollment-codes", undefined, {
+        name,
+        ...(expiresIn ? { expires_in: expiresIn } : {}),
+        ...(maxUses.value > 0 ? { max_uses: maxUses.value } : {}),
+        ...(capacity.value > 0 ? { default_capacity: capacity.value } : {}),
+        ...(Object.keys(labels.labels).length > 0
+          ? { default_labels: labels.labels }
+          : {}),
+        ...(principals.length > 0 ? { allowed_principals: principals } : {}),
+      });
+      this.settleHostError();
       this.newCodeName.set("");
+      this.newCodeExpiresIn.set("");
+      this.newCodeMaxUses.set("");
+      this.newCodeCapacity.set("");
+      this.newCodeLabels.set("");
+      this.newCodePrincipals.set("");
       this.selectEnrollmentCode(name);
       const secret = res?.code ?? res?.token;
       const msg = this.formatIssuedHostdSecret(`Enrollment code (${name})`, {
@@ -3161,8 +3657,20 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       await this.loadHostds();
       this.snackbar.show(`Created enrollment code ${name}`);
     } catch (err) {
-      this.state.recordError(err);
+      this.raiseHostError(err);
     }
+  }
+
+  // codeDefaults is what a code gives each host it enrolls, one line each.
+  protected codeDefaults(c: EnrollmentCodeRow): string[] {
+    const out: string[] = [];
+    if (c.default_capacity && c.default_capacity > 0) {
+      out.push(`capacity ${c.default_capacity}`);
+    }
+    const labels = this.formatLabelsInput(c.default_labels);
+    if (labels) out.push(labels);
+    for (const p of c.allowed_principals ?? []) out.push(`allow ${p}`);
+    return out;
   }
 
   protected rotateEnrollmentCode(name: string): void {
@@ -3222,39 +3730,163 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     return formatted === "—" ? "" : formatted;
   }
 
-  protected setPendingLabelDraft(id: string, value: string): void {
-    this.pendingLabelDrafts.update((prev) => ({ ...prev, [id]: value }));
+  protected pendingDraft(p: PendingHostdRow): PendingDraft {
+    return (
+      this.pendingDrafts()[p.id] ?? {
+        name: p.rekey_hostd || p.suggested_name || p.hostname || "",
+        labels: this.formatLabelsInput(p.default_labels),
+        capacity: p.default_capacity ? String(p.default_capacity) : "",
+      }
+    );
+  }
+
+  protected patchPendingDraft(
+    p: PendingHostdRow,
+    patch: Partial<PendingDraft>,
+  ): void {
+    const cur = this.pendingDraft(p);
+    this.pendingDrafts.update((all) => ({
+      ...all,
+      [p.id]: { ...cur, ...patch },
+    }));
   }
 
   protected async acceptPendingHostd(p: PendingHostdRow): Promise<void> {
-    const rawLabels =
-      this.pendingLabelDrafts()[p.id] ||
-      this.formatLabelsInput(p.default_labels);
-    const parsed = parseHostdLabels(rawLabels);
-    if (parsed.error) {
-      this.state.error.set(parsed.error);
+    const d = this.pendingDraft(p);
+    const labels = parseHostdLabels(d.labels);
+    const capacity = parseHostCapacity(d.capacity, "Host capacity");
+    const invalid = labels.error || capacity.error;
+    if (invalid) {
+      this.raiseHostMessage(invalid);
       return;
     }
-    const hostName = p.suggested_name || p.hostname || p.id;
+    const hostName = d.name.trim();
+    if (!hostName) return;
     try {
+      // labels and capacity are always sent: a field the owner cleared
+      // overrides the code's defaults rather than inheriting them.
       await this.api.post(
         "POST /api/hostds/pending/{id}/accept",
         { id: p.id },
+        { name: hostName, labels: labels.labels, capacity: capacity.value },
+      );
+      this.settleHostError();
+      this.pendingDrafts.update((all) => {
+        const next = { ...all };
+        delete next[p.id];
+        return next;
+      });
+      await this.loadHostds();
+      this.snackbar.show(
+        p.rekey_hostd
+          ? `Accepted the new key for ${hostName}`
+          : `Approved host ${hostName}`,
+      );
+    } catch (err) {
+      this.raiseHostError(err);
+    }
+  }
+
+  protected startHostdEdit(h: HostdRow): void {
+    this.settleHostError();
+    this.renamingHostd.set(null);
+    this.editingHostd.set({
+      name: h.name,
+      owner: h.owner ?? "",
+      labels: this.formatLabelsInput(h.labels),
+      capacity: h.capacity ? String(h.capacity) : "",
+    });
+  }
+
+  protected patchHostdEdit(patch: Partial<HostdEdit>): void {
+    this.editingHostd.update((e) => (e ? { ...e, ...patch } : e));
+  }
+
+  protected cancelHostdEdit(): void {
+    this.settleHostError();
+    this.editingHostd.set(null);
+    this.renamingHostd.set(null);
+  }
+
+  // saveHostdEdit sends owner, labels and capacity together; a blank
+  // capacity is 0, which clears it (unlimited), where leaving it out
+  // would keep the old one.
+  protected async saveHostdEdit(): Promise<void> {
+    const e = this.editingHostd();
+    if (!e) return;
+    const labels = parseHostdLabels(e.labels);
+    const capacity = parseHostCapacity(e.capacity, "Capacity");
+    const invalid = labels.error || capacity.error;
+    if (invalid) {
+      this.raiseHostMessage(invalid);
+      return;
+    }
+    try {
+      await this.api.patch(
+        "PATCH /api/hostds/{name}",
+        { name: e.name },
         {
-          name: hostName,
-          ...(Object.keys(parsed.labels).length > 0
-            ? { labels: parsed.labels }
-            : {}),
-          ...(p.default_capacity && p.default_capacity > 0
-            ? { capacity: p.default_capacity }
-            : {}),
+          owner: e.owner.trim(),
+          labels: labels.labels,
+          capacity: capacity.value,
         },
       );
+      this.settleHostError();
+      this.editingHostd.set(null);
       await this.loadHostds();
-      this.snackbar.show(`Approved host ${hostName}`);
+      this.snackbar.show(`Saved host ${e.name}`);
     } catch (err) {
-      this.state.recordError(err);
+      this.raiseHostError(err);
     }
+  }
+
+  protected startRenameHostd(name: string): void {
+    this.settleHostError();
+    this.editingHostd.set(null);
+    this.renamingHostd.set({ from: name, to: name });
+  }
+
+  protected setRenameDraft(to: string): void {
+    this.renamingHostd.update((r) => (r ? { ...r, to } : r));
+  }
+
+  protected async saveRenameHostd(): Promise<void> {
+    const r = this.renamingHostd();
+    const to = r?.to.trim() ?? "";
+    if (!r || !to) return;
+    if (to === r.from) {
+      this.renamingHostd.set(null);
+      return;
+    }
+    try {
+      await this.api.post(
+        "POST /api/hostds/{name}/rename",
+        { name: r.from },
+        { name: to },
+      );
+      this.settleHostError();
+      this.renamingHostd.set(null);
+      await this.loadHostds();
+      this.snackbar.show(`Renamed host ${r.from} to ${to}`);
+    } catch (err) {
+      this.raiseHostError(err);
+    }
+  }
+
+  private raiseHostError(err: unknown): void {
+    this.state.recordError(err);
+    this.raisedHostError = this.state.error();
+  }
+
+  private raiseHostMessage(message: string): void {
+    this.state.error.set(message);
+    this.raisedHostError = message;
+  }
+
+  private settleHostError(): void {
+    if (this.raisedHostError === null) return;
+    if (this.state.error() === this.raisedHostError) this.state.clearError();
+    this.raisedHostError = null;
   }
 
   protected rejectPendingHostd(p: PendingHostdRow): void {

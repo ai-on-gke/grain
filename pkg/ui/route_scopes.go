@@ -72,6 +72,7 @@ var routeScopes = map[string]APIScope{
 	"GET /api/registry/status":                                             "deployment:read",
 	"GET /api/tasks":                                                       "tasks:read",
 	"GET /api/tasks/states":                                                "tasks:read",
+	"GET /api/tasks/summaries":                                             "tasks:read",
 	"GET /api/tasks/wait":                                                  "tasks:read",
 	"GET /api/inbox":                                                       "tasks:read",
 	"GET /api/refs/{ref}/summary":                                          "tasks:read",

@@ -60,25 +60,37 @@ class FakeApi {
   boards: Board[] = [];
   calls: Call[] = [];
 
-  // The pane's task detail (GET /api/tasks/{id}) and the list.
-  getIfChanged = (route: string, params?: { id?: string }) =>
-    Promise.resolve(
+  // The pane's task detail (GET /api/tasks/{id}), batch summaries, and the list.
+  getIfChanged = (route: string, params?: { id?: string }, query?: string) => {
+    const detailFor = (id: string) => ({
+      ...(this.live.find((t) => t.id === id) ??
+        this.closed.find((t) => t.id === id) ?? {
+          id,
+          title: "Gone",
+          state: "closed",
+        }),
+      comments: [],
+      attempts: [],
+    });
+    if (route === "GET /api/tasks/summaries") {
+      const ids =
+        new URLSearchParams(query ?? "")
+          .get("ids")
+          ?.split(",")
+          .filter(Boolean) ?? [];
+      return Promise.resolve({
+        body: {
+          tasks: Object.fromEntries(ids.map((id) => [id, detailFor(id)])),
+        },
+        changed: true,
+      });
+    }
+    return Promise.resolve(
       route === "GET /api/tasks/{id}"
-        ? {
-            body: {
-              ...(this.live.find((t) => t.id === params?.id) ??
-                this.closed.find((t) => t.id === params?.id) ?? {
-                  id: params?.id,
-                  title: "Gone",
-                  state: "closed",
-                }),
-              comments: [],
-              attempts: [],
-            },
-            changed: true,
-          }
+        ? { body: detailFor(params?.id ?? ""), changed: true }
         : { body: structuredClone(this.live), changed: true },
     );
+  };
   queries: string[] = [];
   get = (route: string, _p?: unknown, query?: string) => {
     if (route === "GET /api/base-branch-gates") {
@@ -767,19 +779,27 @@ describe("TasksPageComponent", () => {
         }),
       );
       const baseGet = api.getIfChanged;
-      api.getIfChanged = (route: string, params?: { id?: string }) =>
-        route === "GET /api/tasks/{id}" && params?.id === "40"
+      api.getIfChanged = (
+        route: string,
+        params?: { id?: string },
+        query?: string,
+      ) =>
+        route === "GET /api/tasks/summaries"
           ? Promise.resolve({
               body: {
-                ...task("40", "awaiting_submit", 5, {
-                  mergeGates: [{ id: "ci", label: "CI", state: "failing" }],
-                }),
-                comments: [],
-                attempts: [],
+                tasks: {
+                  "40": {
+                    ...task("40", "awaiting_submit", 5, {
+                      mergeGates: [{ id: "ci", label: "CI", state: "failing" }],
+                    }),
+                    comments: [],
+                    attempts: [],
+                  },
+                },
               },
               changed: true,
             })
-          : baseGet(route, params);
+          : baseGet(route, params, query);
       const f = await render(api, "merging");
       expect(q(f, '[data-testid="ci-40"]')!.textContent).toContain("✕ CI");
 
@@ -843,7 +863,7 @@ describe("TasksPageComponent", () => {
       q<HTMLButtonElement>(f, '[data-testid="batch-close"]')!.click();
       await settle(f);
       expect(q(f, '[data-testid="close-confirm"]')!.textContent).toContain(
-        "Close 1?",
+        "Close 1 task?",
       );
 
       // Escape inside .confirm-inline should not close the pane.
@@ -1114,6 +1134,126 @@ describe("TasksPageComponent", () => {
     expect(q(f, 'button[data-testid="prio-301"]')).not.toBeNull();
     expect(q(f, 'button[data-testid="prio-302"]')).toBeNull();
     expect(q(f, '[data-testid="prio-302"].static')).not.toBeNull();
+  });
+
+  it("pluralizes batch Close (1 vs 2 tasks), dismisses on Keep and Escape without closing the pane, and reports partial failures honestly", async () => {
+    const api = new FakeApi();
+    api.live = [
+      task("20", "running", 7, { title: "Running A" }),
+      task("21", "running", 6, { title: "Running B" }),
+      task("30", "queued", 5, { title: "Queued succeeds" }),
+      task("31", "queued", 5, { title: "Queued fails" }),
+    ];
+    const f = await render(api, "running");
+    f.componentRef.setInput("task", "20");
+    await settle(f);
+    const nav = vi.spyOn(TestBed.inject(Router), "navigate");
+
+    q<HTMLInputElement>(
+      f,
+      '[data-testid="row-20"] input[type="checkbox"]',
+    )!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="batch-close"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="close-confirm"]')!.textContent).toContain(
+      "Close 1 task?",
+    );
+
+    // Escape cancels confirmClose and leaves the open inspector pane intact.
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await settle(f);
+    expect(q(f, '[data-testid="close-confirm"]')).toBeNull();
+    expect(nav).not.toHaveBeenCalled();
+
+    // 2 running tasks -> "Close 2 tasks?" and Keep cancels cleanly.
+    q<HTMLInputElement>(
+      f,
+      '[data-testid="row-21"] input[type="checkbox"]',
+    )!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="batch-close"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="close-confirm"]')!.textContent).toContain(
+      "Close 2 tasks?",
+    );
+    q<HTMLButtonElement>(f, '[data-testid="close-keep"]')!.click();
+    await settle(f);
+    expect(q(f, '[data-testid="close-confirm"]')).toBeNull();
+
+    // Partial failure on Backlog batch Close: 1 succeeds, 1 fails with 500.
+    f.componentRef.setInput("tab", "backlog");
+    await settle(f);
+    const origPost = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if (
+        route === "POST /api/tasks/{id}/close" &&
+        (params as { id?: string })?.id === "31"
+      ) {
+        return Promise.reject(new Error("simulated 500 on #31"));
+      }
+      return origPost(route, params, body);
+    };
+
+    q<HTMLInputElement>(
+      f,
+      '[data-testid="row-30"] input[type="checkbox"]',
+    )!.click();
+    q<HTMLInputElement>(
+      f,
+      '[data-testid="row-31"] input[type="checkbox"]',
+    )!.click();
+    await settle(f);
+    q<HTMLButtonElement>(f, '[data-testid="batch-close"]')!.click();
+    await settle(f);
+
+    expect(q(f, '[data-testid="action-error"]')?.textContent).toContain(
+      "1 of 2 tasks failed: simulated 500 on #31",
+    );
+    const snack = TestBed.inject(SnackbarService).current()!;
+    expect(snack.message).toBe("Closed #30");
+    expect(
+      q<HTMLInputElement>(f, '[data-testid="row-31"] input[type="checkbox"]')
+        ?.checked,
+    ).toBe(true);
+
+    // Undo reopens only #30 (the task that actually closed), never #31.
+    await snack.action!.run();
+    const reopens = api.calls
+      .filter((c) => c.route === "POST /api/tasks/{id}/reopen")
+      .map((c) => (c.params as { id: string }).id);
+    expect(reopens).toEqual(["30"]);
+  });
+
+  it("reports each concurrent batch's own landed tasks", async () => {
+    const api = new FakeApi();
+    api.live = [
+      task("40", "queued", 5),
+      task("41", "queued", 5),
+      task("42", "queued", 5),
+    ];
+    await render(api, "backlog");
+    const origPost = api.post;
+    api.post = (route: string, params?: unknown, body?: unknown) => {
+      if ((params as { id?: string })?.id === "41") {
+        return Promise.reject(new Error("simulated 403 on #41"));
+      }
+      return origPost(route, params, body);
+    };
+    const store = TestBed.inject(TasksStore);
+    // Two batches in flight at once never see each other's results.
+    const [a, b] = await Promise.all([
+      store.close(["40", "41"]),
+      store.defer(["42"]),
+    ]);
+    expect(a).toEqual({ failed: 1, landed: ["40"] });
+    expect(b).toEqual({ failed: 0, landed: ["42"] });
   });
 
   it("fills the Filter this view box from ?q= and lets typing replace it", async () => {

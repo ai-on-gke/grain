@@ -1133,6 +1133,49 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     ).toBe(true);
   });
 
+  it("shows each repository's declarations and Git connection with classic's wording, linked to their views", async () => {
+    const api = new FakeSettingsApi();
+    const get = api.get;
+    api.get = ((key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/repos/{owner}/{name}/declarations") {
+        return Promise.resolve({ declarations: true, ciMode: "github" });
+      }
+      if (key === "GET /api/deployment/reachable-repos") {
+        return Promise.resolve({
+          available: true,
+          repos: [{ repo: "acme/platform", push: false }],
+          connections: [
+            { credential: "acme-bot", host: "github.com", ok: true },
+            { credential: "broken", host: "github.com", ok: false },
+            { credential: "ghe-bot", host: "ghe.example.com", ok: true },
+          ],
+        });
+      }
+      return get(key, params, query);
+    }) as typeof api.get;
+    const { el } = await mountSettings("/settings/repositories", api);
+
+    const headers = Array.from(el.querySelectorAll("th")).map((th) =>
+      th.textContent?.trim(),
+    );
+    expect(headers).toContain("Declarations");
+    expect(headers).toContain("Git connection");
+
+    const decl = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="repo-declarations-acme/platform"] a',
+    )!;
+    expect(decl.textContent?.trim()).toBe("Read");
+    expect(decl.getAttribute("href")).toBe(
+      "/next/processes/declarations?repo=acme%2Fplatform",
+    );
+
+    const git = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="repo-git-acme/platform"] a',
+    )!;
+    expect(git.textContent?.trim()).toBe("acme-bot (read only)");
+    expect(git.getAttribute("href")).toBe("/next/settings/git");
+  });
+
   it("clears connection credentials, confirms connection removal, and passes Git connection scope", async () => {
     const api = new FakeSettingsApi();
     (api.deploymentBody as Record<string, unknown>)["agentBackends"] = [
@@ -1336,6 +1379,124 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         .length,
     ).toBe(1);
   });
+
+  it("pluralizes Broadcast delivery and counts stranded open tasks across repositories on Check stranded tasks", async () => {
+    const api = new FakeSettingsApi();
+    let broadcastDelivered = 1;
+    let strandedEntries: Array<{ repo: string; tasks: string[] }> = [
+      { repo: "acme/legacy", tasks: ["101"] },
+    ];
+    const basePost = api.post;
+    api.post = (key, params, body, query) => {
+      if (key === "POST /api/deployment/broadcast") {
+        api.calls.push({ method: "POST", key, params, body, query });
+        return Promise.resolve({ delivered_count: broadcastDelivered });
+      }
+      if (key === "POST /api/repos/plan") {
+        api.calls.push({ method: "POST", key, params, body, query });
+        return Promise.resolve({ targetReposStranded: strandedEntries });
+      }
+      return basePost(key, params, body, query);
+    };
+
+    const { el, harness } = await mountSettings("/settings/general", api);
+    const { SnackbarService } = await import("../services/snackbar.service");
+    const snackbar = TestBed.inject(SnackbarService);
+
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-broadcast-message"]',
+      )!,
+      "Pause merges",
+    );
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="send-broadcast-btn"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(snackbar.current()?.message).toBe("Broadcast delivered to 1 task");
+
+    broadcastDelivered = 3;
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-broadcast-message"]',
+      )!,
+      "Resume merges",
+    );
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="send-broadcast-btn"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    expect(snackbar.current()?.message).toBe("Broadcast delivered to 3 tasks");
+
+    await harness.navigateByUrl("/settings/repositories");
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="check-repos-plan-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      el
+        .querySelector('[data-testid="repos-plan-notice"]')
+        ?.textContent?.trim(),
+    ).toBe("1 open task would be stranded by current repository list.");
+
+    strandedEntries = [{ repo: "acme/legacy", tasks: ["101", "102"] }];
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="check-repos-plan-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      el
+        .querySelector('[data-testid="repos-plan-notice"]')
+        ?.textContent?.trim(),
+    ).toBe("2 open tasks would be stranded by current repository list.");
+
+    // A schedules-only entry strands no task, so it is never counted as one.
+    const notice = async () => {
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="check-repos-plan-btn"]',
+      )!.click();
+      await harness.fixture.whenStable();
+      harness.fixture.detectChanges();
+      return el
+        .querySelector('[data-testid="repos-plan-notice"]')
+        ?.textContent?.trim();
+    };
+    strandedEntries = [
+      { repo: "acme/cron", schedules: ["nightly"] } as unknown as {
+        repo: string;
+        tasks: string[];
+      },
+    ];
+    expect(await notice()).toBe(
+      "1 schedule would be stranded by current repository list.",
+    );
+    strandedEntries = [
+      { repo: "acme/legacy", tasks: ["101"] },
+      {
+        repo: "acme/cron",
+        schedules: ["nightly", "weekly"],
+        qualificationPlan: true,
+      } as unknown as { repo: string; tasks: string[] },
+    ];
+    expect(await notice()).toBe(
+      "1 open task, 2 schedules and 1 qualification plan would be stranded by current repository list.",
+    );
+  });
+
   it("labels capability server states in host wording, gives failed the error tone, and titles needs-config with its reason", async () => {
     expect(
       capServerState({ id: "p", status: { state: "needs-hostd:mac-mini" } }),

@@ -3002,6 +3002,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   readonly launchTemplate = input<string | undefined>(undefined);
   readonly run = input<string | undefined>(undefined);
   readonly runSuite = input<string | undefined>(undefined);
+  // ?repo=owner/name on the declarations tab opens that repository's
+  // .grain/ declarations: Settings → Repositories links each row here.
+  readonly repo = input<string | undefined>(undefined);
 
   protected readonly store = inject(ProcessesStore);
   protected readonly access = inject(AccessService);
@@ -3050,6 +3053,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly selectedSuiteRunId = signal<number | null>(null);
   protected readonly selectedDeclRepo = signal<string | null>(null);
   protected readonly mobileDetailOpen = signal(false);
+  private handledRepoLinkKey = "";
 
   protected readonly scheduleComposition = signal<Composition | null>(null);
   protected readonly templateComposition = signal<Composition | null>(null);
@@ -3535,6 +3539,25 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         ) {
           this.selectDeclRepo(repos[0], false);
         }
+      });
+    });
+
+    // Open the repository ?repo= names on the declarations tab, on any
+    // width: the link was followed for that repository, so on a phone it
+    // opens its inspector rather than the list.
+    effect(() => {
+      const tab = this.activeTab();
+      const repo = (this.repo() ?? "").trim();
+      const loaded = this.store.loaded();
+      untracked(() => {
+        if (tab !== "declarations" || !repo || !loaded) return;
+        const key = `${tab}:${repo}`;
+        if (key === this.handledRepoLinkKey) return;
+        this.handledRepoLinkKey = key;
+        const known = this.store
+          .knownRepos()
+          .find((r) => r.toLowerCase() === repo.toLowerCase());
+        this.selectDeclRepo(known ?? repo, true);
       });
     });
 
@@ -4638,7 +4661,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       destructive: true,
       run: async () => {
         const stopped = await this.store.cancelSuiteRunTasks(sr);
-        this.snackbar.show(`Closed ${stopped} active suite task(s).`);
+        this.snackbar.show(
+          `Closed ${stopped} active suite ${stopped === 1 ? "task" : "tasks"}.`,
+        );
       },
     });
   }
