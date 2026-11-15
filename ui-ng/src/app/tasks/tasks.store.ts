@@ -108,6 +108,8 @@ export class TasksStore implements OnDestroy {
   private refreshing: Promise<void> | null = null;
   private eventTimer: ReturnType<typeof setTimeout> | null = null;
   private queuedRefresh: Promise<void> | null = null;
+  private configInFlight: Promise<void> | null = null;
+  private lastAccessConfig: unknown = null;
   private readonly detailInFlight = new Set<string>();
   private started = false;
 
@@ -130,6 +132,16 @@ export class TasksStore implements OnDestroy {
         this.ownLoaded.set(true);
         if (this.started) {
           void this.ensureSubmitDetails(this.live());
+        }
+      });
+    });
+    effect(() => {
+      const cfg = this.access.rawConfig();
+      untracked(() => {
+        if (cfg === this.lastAccessConfig) return;
+        this.lastAccessConfig = cfg;
+        if (this.started && cfg !== null && !this.configInFlight) {
+          void this.loadAux();
         }
       });
     });
@@ -156,6 +168,8 @@ export class TasksStore implements OnDestroy {
       void this.refresh();
     } else if (this.feed.loaded()) {
       void this.ensureSubmitDetails(this.live());
+      void this.loadAux();
+    } else {
       void this.loadAux();
     }
     // TaskFeedStore owns task.* SSE refreshes and the 3s fast poll; here we
@@ -230,11 +244,31 @@ export class TasksStore implements OnDestroy {
     await Promise.all([this.loadBaseBranchGates(), this.loadBoards()]);
   }
 
+  private ensureConfig(): Promise<void> {
+    if (this.access.configLoaded() || typeof this.api.config !== "function") {
+      return Promise.resolve();
+    }
+    return (this.configInFlight ??= Promise.resolve()
+      .then(() => this.api.config())
+      .then((cfg) => {
+        if (cfg && !this.access.configLoaded()) {
+          this.access.setConfig(cfg);
+        }
+        this.lastAccessConfig = this.access.rawConfig();
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.configInFlight = null;
+      }));
+  }
+
   async loadBaseBranchGates(): Promise<void> {
-    if (
-      typeof this.api.get !== "function" ||
-      !this.access.can("GET /api/base-branch-gates")
-    ) {
+    if (typeof this.api.get !== "function") {
+      this.baseBranchGates.set([]);
+      return;
+    }
+    await this.ensureConfig();
+    if (!this.access.can("GET /api/base-branch-gates")) {
       this.baseBranchGates.set([]);
       return;
     }
@@ -251,10 +285,12 @@ export class TasksStore implements OnDestroy {
   }
 
   async loadBoards(): Promise<void> {
-    if (
-      typeof this.api.get !== "function" ||
-      !this.access.can("GET /api/boards")
-    ) {
+    if (typeof this.api.get !== "function") {
+      this.boards.set([]);
+      return;
+    }
+    await this.ensureConfig();
+    if (!this.access.can("GET /api/boards")) {
       this.boards.set([]);
       return;
     }
