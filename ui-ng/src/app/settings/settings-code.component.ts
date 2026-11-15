@@ -53,11 +53,13 @@ interface GitConnectionRow {
   id?: string;
   credential?: string;
   host?: string;
+  kind?: string;
+  proxy?: string;
   scope?: string;
   authType?: string;
   type?: string;
   author?: string;
-  status?: string;
+  status?: string | { proxy?: string; kind?: string };
 }
 
 interface StateRepoEntryDto {
@@ -451,6 +453,9 @@ interface StateRepoEntryDto {
                         <span class="status-pill neutral">{{
                           c.authType || c.type || "pat"
                         }}</span>
+                        @if (connProxy(c); as prx) {
+                          <span class="s-hint s-mono"> via {{ prx }}</span>
+                        }
                       </td>
                       <td class="s-actions-cell">
                         <div class="s-row-actions">
@@ -462,7 +467,12 @@ interface StateRepoEntryDto {
                                 'DELETE /api/deployment/git-connections/{cred}'
                               ) || state.sectionLocked('git')
                             "
-                            (click)="deleteGitConnection(cred)"
+                            (click)="
+                              confirmDeleteGitConnection(
+                                cred,
+                                c.host || 'github.com'
+                              )
+                            "
                           >
                             Remove
                           </button>
@@ -537,14 +547,37 @@ interface StateRepoEntryDto {
                 </div>
               } @else {
                 <div class="s-field">
+                  <span class="s-label">Host kind</span>
+                  <g-pill-select
+                    testid="select-git-conn-kind"
+                    ariaLabel="Host kind"
+                    align="left"
+                    [options]="gitKindOptions"
+                    [value]="newGitKind()"
+                    (valueChange)="onGitKindChange($event)"
+                  />
+                </div>
+                <div class="s-field">
                   <span class="s-label">Auth type</span>
                   <g-pill-select
                     testid="select-git-conn-type"
                     ariaLabel="Git auth type"
                     align="left"
-                    [options]="gitTypeOptions"
+                    [options]="gitTypeOptions()"
                     [value]="newGitType()"
                     (valueChange)="newGitType.set($event)"
+                  />
+                </div>
+                <div class="s-field">
+                  <label class="s-label" for="gc-proxy">Proxy (optional)</label>
+                  <input
+                    id="gc-proxy"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-git-conn-proxy"
+                    placeholder="http://proxy.example.com:3128"
+                    [value]="newGitProxy()"
+                    (input)="newGitProxy.set(inputVal($event))"
                   />
                 </div>
 
@@ -579,6 +612,24 @@ interface StateRepoEntryDto {
                       [value]="newGitSecret()"
                       (input)="newGitSecret.set($any($event.target).value)"
                     ></textarea>
+                  </div>
+                  <div class="s-field">
+                    <label class="s-label" for="gc-known-hosts"
+                      >Known hosts</label
+                    >
+                    <textarea
+                      id="gc-known-hosts"
+                      class="s-textarea s-mono"
+                      rows="2"
+                      data-testid="input-git-conn-known-hosts"
+                      placeholder="git.example.com ssh-ed25519 AAAA..."
+                      [value]="newGitKnownHosts()"
+                      (input)="newGitKnownHosts.set(inputVal($event))"
+                    ></textarea>
+                    <span class="s-hint"
+                      >Needed for any host except github.com: grain never trusts
+                      a host key on first use.</span
+                    >
                   </div>
                 } @else if (newGitType() === "app") {
                   <div class="s-field">
@@ -1076,13 +1127,30 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     { value: "existing", label: "Link stored credential" },
   ];
 
-  protected readonly gitTypeOptions: readonly PillOption[] = [
-    { value: "pat", label: "Personal access token (pat)" },
-    { value: "ssh", label: "SSH private key (ssh)" },
-    { value: "app", label: "GitHub App (app)" },
-    { value: "ambient", label: "Host ambient login (ambient)" },
-    { value: "none", label: "None / anonymous (none)" },
+  protected readonly gitKindOptions: readonly PillOption[] = [
+    { value: "github", label: "GitHub / GitHub Enterprise" },
+    { value: "git", label: "Plain git host" },
   ];
+
+  protected readonly gitTypeOptions = computed<readonly PillOption[]>(() => {
+    const plainGit = this.newGitKind() === "git";
+    return [
+      { value: "pat", label: "Personal access token (pat)" },
+      { value: "ssh", label: "SSH private key (ssh)" },
+      {
+        value: "app",
+        label: "GitHub App (app)",
+        ...(plainGit
+          ? {
+              disabled: true,
+              hint: "A GitHub App needs a GitHub host: a plain git host has no App API",
+            }
+          : {}),
+      },
+      { value: "ambient", label: "Host ambient login (ambient)" },
+      { value: "none", label: "None / anonymous (none)" },
+    ];
+  });
 
   protected readonly repos = signal<string[]>([]);
   protected readonly repoFacts = signal<Record<string, RepoFacts>>({});
@@ -1109,9 +1177,12 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly gitConnMode = signal("inline");
   protected readonly newGitCred = signal("");
   protected readonly newGitHost = signal("github.com");
+  protected readonly newGitKind = signal("github");
+  protected readonly newGitProxy = signal("");
   protected readonly newGitScope = signal("");
   protected readonly newGitType = signal("pat");
   protected readonly newGitSecret = signal("");
+  protected readonly newGitKnownHosts = signal("");
   protected readonly newGitAppId = signal("");
   protected readonly newGitAppInstallId = signal("");
   protected readonly githubTokens = signal<string[]>([]);
@@ -1527,6 +1598,21 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     }
   }
 
+  protected connProxy(c: GitConnectionRow): string {
+    if (c.proxy) return c.proxy;
+    if (c.status && typeof c.status === "object" && c.status.proxy) {
+      return c.status.proxy;
+    }
+    return "";
+  }
+
+  protected onGitKindChange(kind: string): void {
+    this.newGitKind.set(kind);
+    if (kind === "git" && this.newGitType() === "app") {
+      this.newGitType.set("pat");
+    }
+  }
+
   protected async saveGitConnection(): Promise<void> {
     if (!this.canSubmitGitConnection()) return;
     const host = this.newGitHost().trim() || "github.com";
@@ -1540,24 +1626,30 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       };
     } else {
       const type = this.newGitType();
+      const kind = this.newGitKind();
+      const proxy = this.newGitProxy().trim();
       payload = {
         credential: "",
         host,
+        kind,
         type,
         ...(scope ? { scope } : {}),
+        ...(proxy ? { proxy } : {}),
       };
       if (type === "pat") {
         payload["value"] = this.newGitSecret().trim();
       } else if (type === "ssh") {
-        payload["ssh"] = { privateKey: this.newGitSecret() };
+        const knownHosts = this.newGitKnownHosts().trim();
+        payload["ssh"] = {
+          privateKey: this.newGitSecret(),
+          ...(knownHosts ? { knownHosts } : {}),
+        };
       } else if (type === "app") {
-        const appId = Math.floor(Number(this.newGitAppId()) || 0);
-        const installationId = Math.floor(
-          Number(this.newGitAppInstallId()) || 0,
-        );
+        const appId = String(this.newGitAppId()).trim();
+        const installationId = String(this.newGitAppInstallId()).trim();
         payload["app"] = {
           appId,
-          ...(installationId > 0 ? { installationId } : {}),
+          ...(installationId ? { installationId } : {}),
           privateKey: this.newGitSecret(),
         };
       }
@@ -1568,9 +1660,12 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
         undefined,
         payload,
       );
+      this.state.error.set(null);
       this.newGitCred.set("");
+      this.newGitProxy.set("");
       this.newGitScope.set("");
       this.newGitSecret.set("");
+      this.newGitKnownHosts.set("");
       this.newGitAppId.set("");
       this.newGitAppInstallId.set("");
       await this.loadGitConnections();
@@ -1607,6 +1702,16 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     } catch (err) {
       this.state.error.set(errText(err));
     }
+  }
+
+  protected confirmDeleteGitConnection(cred: string, host: string): void {
+    this.confirmReq.set({
+      title: `Remove the ${host} connection ${cred}?`,
+      message: `A credential stored exclusively for ${cred} is deleted with it and cannot be read back.`,
+      accept: "Remove connection",
+      destructive: true,
+      run: () => this.deleteGitConnection(cred),
+    });
   }
 
   protected async deleteGitConnection(cred: string): Promise<void> {

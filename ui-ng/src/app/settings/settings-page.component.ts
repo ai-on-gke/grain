@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -411,6 +412,7 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   protected readonly state = inject(SettingsStateService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly doc = inject(DOCUMENT);
 
   readonly section = input<string | undefined>(undefined);
   readonly path = input<string | undefined>(undefined);
@@ -455,22 +457,63 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.subs.push(
       this.route.paramMap.subscribe((pm) => {
-        this.routeSection.set(pm.get("section"));
+        const sec = pm.get("section");
+        this.routeSection.set(sec);
+        const aliasTarget = SettingsPageComponent.aliasFragment(sec);
+        if (aliasTarget && !this.route.snapshot.fragment) {
+          this.scrollToAnchor(aliasTarget);
+        }
       }),
       this.route.queryParamMap.subscribe((qm) => {
         this.routeFilePath.set(qm.get("path") ?? "");
       }),
+      this.route.fragment.subscribe((frag) => {
+        if (frag) this.scrollToAnchor(frag);
+      }),
     );
     if (this.state.initialized() && this.state.config() !== null) {
       this.ready.set(true);
+      this.scrollInitialAnchor();
       void this.state.loadCore(true);
       return;
     }
     void this.state.loadCore().then(() => {
       if (this.state.config() !== null) {
         this.ready.set(true);
+        this.scrollInitialAnchor();
       }
     });
+  }
+
+  private static aliasFragment(raw: string | null | undefined): string | null {
+    const id = String(raw ?? "")
+      .trim()
+      .toLowerCase();
+    if (id === "secrets") return "other-secrets";
+    if (
+      id === "credentials" ||
+      id === "legacy-capabilities" ||
+      id === "integrations"
+    ) {
+      return "credentials";
+    }
+    if (id === "capability-servers") return "capability-servers";
+    return null;
+  }
+
+  private scrollInitialAnchor(): void {
+    const frag =
+      this.route.snapshot.fragment ||
+      SettingsPageComponent.aliasFragment(
+        this.routeSection() ?? this.section(),
+      );
+    if (frag) this.scrollToAnchor(frag);
+  }
+
+  private scrollToAnchor(id: string): void {
+    setTimeout(() => {
+      this.doc.getElementById(id)?.scrollIntoView({ block: "start" });
+    }, 0);
   }
 
   ngOnDestroy(): void {

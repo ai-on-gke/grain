@@ -19,6 +19,7 @@ import {
   type OnInit,
   type SimpleChanges,
   ViewEncapsulation,
+  computed,
   inject,
   input,
   signal,
@@ -26,6 +27,10 @@ import {
 import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
 import {
   type PillOption,
   PillSelectComponent,
@@ -86,16 +91,20 @@ interface MemoryRow {
 interface ScopeSetRow {
   name: string;
   scopes: string[];
+  source?: string;
 }
 
 interface SecretMetaRow {
-  name: string;
+  name?: string;
+  secret?: string;
   keys?: string[];
+  capabilityServers?: string[];
+  orphaned?: boolean;
 }
 
 @Component({
   selector: "g-settings-work",
-  imports: [PillSelectComponent],
+  imports: [PillSelectComponent, ConfirmDialogComponent],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -487,7 +496,11 @@ interface SecretMetaRow {
       }
 
       @case ("capabilities") {
-        <div class="s-card" data-testid="card-capability-servers">
+        <div
+          class="s-card"
+          id="capability-servers"
+          data-testid="card-capability-servers"
+        >
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">Capability servers (MCP)</h3>
@@ -577,7 +590,7 @@ interface SecretMetaRow {
                                   'POST /api/capability-servers/remove'
                                 ) || state.sectionLocked('capabilities')
                               "
-                              (click)="removeCapServer(srv.id)"
+                              (click)="confirmRemoveCapServer(srv.id)"
                             >
                               Remove
                             </button>
@@ -648,7 +661,11 @@ interface SecretMetaRow {
           </div>
         </div>
 
-        <div class="s-card" data-testid="card-capability-policy">
+        <div
+          class="s-card"
+          id="capability-policy"
+          data-testid="card-capability-policy"
+        >
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">Capability grant policy</h3>
@@ -792,14 +809,35 @@ interface SecretMetaRow {
           </div>
         </div>
 
-        <div class="s-card" data-testid="card-scope-sets-secrets">
-          <h3 class="s-card-title">API scope sets &amp; secret vault</h3>
+        <div
+          class="s-card"
+          id="credentials"
+          data-testid="card-scope-sets-secrets"
+        >
+          <h3 class="s-card-title" id="api-scope-sets">
+            API scope sets &amp; secret vault
+          </h3>
           @if (scopeSets().length > 0) {
             <div class="s-inline">
               @for (ss of scopeSets(); track ss.name) {
-                <span class="status-pill neutral s-mono"
-                  >{{ ss.name }} ({{ ss.scopes.length }})</span
-                >
+                <span class="status-pill neutral s-mono">
+                  {{ ss.name }} ({{ ss.scopes.length }})
+                  @if (ss.source && ss.source !== "builtin") {
+                    <button
+                      type="button"
+                      class="btn-text s-btn-sm"
+                      [attr.aria-label]="'Remove scope set ' + ss.name"
+                      [attr.data-testid]="'remove-scope-set-' + ss.name"
+                      [disabled]="
+                        !access.can('POST /api/api-scope-sets/delete') ||
+                        state.sectionLocked('capabilities')
+                      "
+                      (click)="confirmDeleteScopeSet(ss.name)"
+                    >
+                      ×
+                    </button>
+                  }
+                </span>
               }
             </div>
           }
@@ -837,54 +875,107 @@ interface SecretMetaRow {
             </button>
           </div>
 
-          <div class="s-field">
-            <span class="s-label"
-              >Stored secrets ({{ secretsList().length }}) — write-only</span
-            >
-            <div class="s-inline">
-              <input
-                class="s-input s-input-inline s-mono"
-                type="text"
-                aria-label="Secret name"
-                data-testid="input-secret-name"
-                placeholder="webhook-secret"
-                [value]="secretName()"
-                (input)="secretName.set($any($event.target).value)"
-              />
-              <input
-                class="s-input s-input-inline s-mono"
-                type="text"
-                aria-label="Secret key"
-                data-testid="input-secret-key"
-                placeholder="token"
-                [value]="secretKey()"
-                (input)="secretKey.set($any($event.target).value)"
-              />
-              <textarea
-                class="s-textarea s-input-inline s-mono"
-                rows="1"
-                aria-label="Secret value"
-                data-testid="input-secret-value"
-                placeholder="Secret value or PEM…"
-                [value]="secretVal()"
-                (input)="secretVal.set($any($event.target).value)"
-              ></textarea>
-              <button
-                type="button"
-                class="btn-tonal s-btn-sm"
-                data-testid="store-secret-btn"
-                [disabled]="
-                  !secretName().trim() ||
-                  !secretKey().trim() ||
-                  secretVal().length === 0 ||
-                  !access.can('PUT /api/secrets/{secret}/{key}')
-                "
-                (click)="putSecret()"
+          <form
+            class="s-subsection"
+            id="other-secrets"
+            autocomplete="off"
+            (submit)="$event.preventDefault(); putSecret()"
+          >
+            <div class="s-field">
+              <span class="s-label"
+                >Stored secrets ({{ otherSecrets().length }}) — write-only</span
               >
-                Store secret
-              </button>
+              @if (otherSecrets().length > 0) {
+                <div class="s-table-wrap">
+                  <table class="s-table" aria-label="Stored secrets">
+                    <thead>
+                      <tr>
+                        <th>Secret</th>
+                        <th>Keys</th>
+                        <th>Value</th>
+                        <th class="s-actions-cell">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      @for (sec of otherSecrets(); track secretRowName(sec)) {
+                        @let sName = secretRowName(sec);
+                        <tr [attr.data-testid]="'secret-row-' + sName">
+                          <td class="s-mono">{{ sName }}</td>
+                          <td class="s-mono">
+                            {{ (sec.keys || []).join(", ") || "—" }}
+                          </td>
+                          <td class="s-mono">••••••••</td>
+                          <td class="s-actions-cell">
+                            <div class="s-row-actions">
+                              <button
+                                type="button"
+                                class="btn-text s-btn-sm"
+                                [attr.data-testid]="'delete-secret-' + sName"
+                                [disabled]="
+                                  !access.can('DELETE /api/secrets/{secret}')
+                                "
+                                (click)="confirmDeleteSecret(sName)"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              }
+              <div class="s-inline">
+                <input
+                  class="s-input s-input-inline s-mono"
+                  type="text"
+                  autocomplete="off"
+                  aria-label="Secret name"
+                  data-testid="input-secret-name"
+                  placeholder="webhook-secret"
+                  [value]="secretName()"
+                  (input)="secretName.set($any($event.target).value)"
+                />
+                <input
+                  class="s-input s-input-inline s-mono"
+                  type="text"
+                  autocomplete="off"
+                  aria-label="Secret key"
+                  data-testid="input-secret-key"
+                  placeholder="token"
+                  [value]="secretKey()"
+                  (input)="secretKey.set($any($event.target).value)"
+                />
+                <input
+                  class="s-input s-input-inline"
+                  type="password"
+                  name="grain-secret-value"
+                  autocomplete="new-password"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  aria-label="Secret value"
+                  data-testid="input-secret-value"
+                  placeholder="Secret value…"
+                  [value]="secretVal()"
+                  (input)="secretVal.set($any($event.target).value)"
+                />
+                <button
+                  type="submit"
+                  class="btn-tonal s-btn-sm"
+                  data-testid="store-secret-btn"
+                  [disabled]="
+                    !secretName().trim() ||
+                    !secretKey().trim() ||
+                    secretVal().length === 0 ||
+                    !access.can('PUT /api/secrets/{secret}/{key}')
+                  "
+                >
+                  Store secret
+                </button>
+              </div>
             </div>
-          </div>
+          </form>
 
           @if (!access.can("POST /api/secrets/redact")) {
             <span class="s-hint" data-testid="secrets-redact-restricted">{{
@@ -961,6 +1052,10 @@ interface SecretMetaRow {
         </div>
       }
     }
+
+    @if (confirmRequest(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+    }
   `,
 })
 export class SettingsWorkComponent implements OnInit, OnChanges {
@@ -998,6 +1093,10 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly newScopeSetScopes = signal("");
 
   protected readonly secretsList = signal<SecretMetaRow[]>([]);
+  protected readonly otherSecrets = computed(() =>
+    this.secretsList().filter((s) => !s.capabilityServers?.length),
+  );
+  protected readonly confirmRequest = signal<ConfirmRequest | null>(null);
   protected readonly secretName = signal("");
   protected readonly secretKey = signal("value");
   protected readonly secretVal = signal("");
@@ -1339,6 +1438,28 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
+  protected secretRowName(sec: SecretMetaRow): string {
+    return sec.name || sec.secret || "";
+  }
+
+  protected async onConfirmDone(accepted: boolean): Promise<void> {
+    const req = this.confirmRequest();
+    this.confirmRequest.set(null);
+    if (accepted && req) {
+      await req.run();
+    }
+  }
+
+  protected confirmRemoveCapServer(id: string): void {
+    this.confirmRequest.set({
+      title: `Remove capability server ${id}?`,
+      message: `Removes ${id} and deletes any secret stored exclusively for it.`,
+      accept: "Remove server",
+      destructive: true,
+      run: () => this.removeCapServer(id),
+    });
+  }
+
   protected async removeCapServer(id: string): Promise<void> {
     try {
       await this.api.post("POST /api/capability-servers/remove", undefined, {
@@ -1346,6 +1467,48 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
       });
       await this.loadCapabilities();
       this.snackbar.show(`Removed ${id}`);
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  protected confirmDeleteScopeSet(name: string): void {
+    this.confirmRequest.set({
+      title: `Remove API scope set ${name}?`,
+      message: `Grants referencing https://grain.dev/capabilities/api#${name} will grant nothing once it is removed.`,
+      accept: "Remove scope set",
+      destructive: true,
+      run: () => this.deleteScopeSet(name),
+    });
+  }
+
+  protected async deleteScopeSet(name: string): Promise<void> {
+    try {
+      await this.api.post("POST /api/api-scope-sets/delete", undefined, {
+        name,
+      });
+      await this.loadCapabilities();
+      this.snackbar.show(`Removed scope set ${name}`);
+    } catch (err) {
+      this.state.recordError(err);
+    }
+  }
+
+  protected confirmDeleteSecret(secret: string): void {
+    this.confirmRequest.set({
+      title: `Delete secret ${secret}?`,
+      message: `Deletes the secret ${secret} and every key stored in it. Stored values cannot be read back.`,
+      accept: "Delete secret",
+      destructive: true,
+      run: () => this.deleteSecret(secret),
+    });
+  }
+
+  protected async deleteSecret(secret: string): Promise<void> {
+    try {
+      await this.api.delete("DELETE /api/secrets/{secret}", { secret });
+      await this.loadCapabilities();
+      this.snackbar.show(`Deleted secret ${secret}`);
     } catch (err) {
       this.state.recordError(err);
     }

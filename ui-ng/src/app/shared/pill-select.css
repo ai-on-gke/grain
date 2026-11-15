@@ -133,20 +133,35 @@ g-priority-chip {
   cursor: pointer;
   white-space: nowrap;
 }
-.pop-menu.pill-select-menu li > button:hover,
+.pop-menu.pill-select-menu li > button:not(:disabled):hover,
 .pop-menu.pill-select-menu li > button[aria-selected="true"],
 .pop-menu.pill-select-menu li > button[aria-current="true"] {
   background: var(--md-sys-color-surface-container-high);
+}
+.pop-menu.pill-select-menu li > button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .pop-menu.pill-select-menu li > button:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: -2px;
 }
-.pill-opt-label {
+.pill-opt-copy {
+  display: flex;
+  flex-direction: column;
   flex: 1;
+  min-width: 0;
+}
+.pill-opt-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.pill-opt-hint {
+  font: 400 11px/15px var(--grain-font-body);
+  color: var(--md-sys-color-on-surface-variant);
+  white-space: normal;
+  max-width: min(360px, calc(100vw - 80px));
 }
 .pill-check {
   color: var(--md-sys-color-primary);

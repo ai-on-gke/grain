@@ -461,8 +461,8 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="text"
                 data-testid="input-poll-interval"
-                placeholder="30s"
-                [value]="state.val('pollInterval', '30s')"
+                [attr.placeholder]="state.val('pollIntervalDefault', '10s')"
+                [value]="state.val('pollInterval', '10s')"
                 [disabled]="!canWriteSettings()"
                 (input)="
                   state.setField('pollInterval', $any($event.target).value)
@@ -496,7 +496,8 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="number"
                 min="1"
-                [value]="state.val('maxMergesPerRepo', 1)"
+                placeholder="5"
+                [value]="state.val('maxMergesPerRepo', 5)"
                 [disabled]="!canWriteSettings()"
                 (input)="
                   state.setField(

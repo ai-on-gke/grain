@@ -1278,8 +1278,8 @@ function formatRefreshedAt(iso?: string): string {
                 testid="select-sandbox-backend"
                 ariaLabel="Sandbox backend"
                 align="left"
-                [options]="sandboxBackendOptions"
-                [value]="state.val('sandboxBackend', 'granule')"
+                [options]="sandboxBackendOptions()"
+                [value]="state.val('sandboxBackend', 'container')"
                 [disabled]="!canWriteSettings()"
                 (valueChange)="state.setField('sandboxBackend', $event)"
               />
@@ -1291,7 +1291,7 @@ function formatRefreshedAt(iso?: string): string {
                 ariaLabel="Sandbox network access"
                 align="left"
                 [options]="networkOptions"
-                [value]="state.val('networkAccess', 'egress')"
+                [value]="state.val('networkAccess', 'open')"
                 [disabled]="!canWriteSettings()"
                 (valueChange)="state.setField('networkAccess', $event)"
               />
@@ -1966,17 +1966,52 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     { value: "auto", label: "Auto throttle" },
     { value: "off", label: "Off" },
   ];
-  protected readonly sandboxBackendOptions: readonly PillOption[] = [
-    { value: "granule", label: "Granule microVM" },
-    { value: "docker", label: "Docker container" },
-    { value: "podman", label: "Podman container" },
-    { value: "kubernetes", label: "Kubernetes pod" },
-    { value: "local", label: "Local host directory" },
-  ];
+  private static readonly SANDBOX_BACKEND_LABELS: Readonly<
+    Record<string, string>
+  > = {
+    container: "Container — local container per run",
+    granule: "Granule microVM — KVM microVM per run",
+    kubernetes: "Kubernetes — pod per run",
+    "kubernetes-granule": "Kubernetes Granule — microVM pod per run",
+    host: "Host directory — unisolated local directory",
+    none: "None (control plane only)",
+  };
+  protected readonly sandboxBackendOptions = computed<readonly PillOption[]>(
+    () => {
+      const raw = this.state.settings()["sandboxBackendOptions"];
+      if (Array.isArray(raw) && raw.length > 0) {
+        return raw
+          .filter(
+            (
+              item,
+            ): item is {
+              backend: string;
+              available?: boolean;
+              reason?: string;
+            } =>
+              Boolean(item) &&
+              typeof item === "object" &&
+              typeof (item as { backend?: unknown }).backend === "string",
+          )
+          .map((opt) => ({
+            value: opt.backend,
+            label:
+              SettingsComputeComponent.SANDBOX_BACKEND_LABELS[opt.backend] ??
+              opt.backend,
+            ...(opt.available === false ? { disabled: true } : {}),
+            ...(opt.available === false && opt.reason
+              ? { hint: opt.reason }
+              : {}),
+          }));
+      }
+      return Object.entries(
+        SettingsComputeComponent.SANDBOX_BACKEND_LABELS,
+      ).map(([value, label]) => ({ value, label }));
+    },
+  );
   protected readonly networkOptions: readonly PillOption[] = [
+    { value: "open", label: "Open (internet egress)" },
     { value: "none", label: "None (isolated)" },
-    { value: "egress", label: "Filtered egress" },
-    { value: "full", label: "Full network" },
   ];
   protected readonly overcommitOptions: readonly PillOption[] = [
     { value: "fixed", label: "Fixed multiplier" },

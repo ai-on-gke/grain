@@ -22,6 +22,7 @@ import {
   output,
   signal,
 } from "@angular/core";
+import { RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import type {
   APIScopeSetRow,
@@ -50,7 +51,7 @@ export interface GrantAttachEvent {
 
 @Component({
   selector: "g-grants-picker",
-  imports: [PillSelectComponent],
+  imports: [PillSelectComponent, RouterLink],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./grants-picker.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -192,6 +193,16 @@ export interface GrantAttachEvent {
                     (input)="methodArgsJson.set($any($event.target).value)"
                   />
                 </div>
+                @if (hasPolicyVerdicts()) {
+                  <p class="s-hint">
+                    Some capability methods are restricted by the
+                    <a
+                      [routerLink]="['/settings', 'capabilities']"
+                      fragment="capability-policy"
+                      >capability policy</a
+                    >.
+                  </p>
+                }
               }
               @case ("raw") {
                 <div class="grants-builder-row">
@@ -269,7 +280,6 @@ export class GrantsPickerComponent {
   protected readonly rawGrant = signal("");
   protected readonly checking = signal(false);
   protected readonly checkError = signal<string | null>(null);
-  private loadedCatalogue = false;
 
   protected readonly heldSet = computed(() => new Set(this.held()));
 
@@ -305,12 +315,30 @@ export class GrantsPickerComponent {
   });
 
   protected readonly methodOptions = computed<PillOption[]>(() =>
-    this.methods()
-      .filter((m) => !m.policyRefusal)
-      .map((m) => ({
+    this.methods().map((m) => {
+      const verdict = m.policy?.task;
+      const blocked =
+        verdict === "denied" ||
+        verdict === "ci_only" ||
+        (!verdict && Boolean(m.policyRefusal));
+      return {
         value: m.ref,
         label: m.description ? `${m.ref} — ${m.description}` : m.ref,
-      })),
+        ...(blocked ? { disabled: true } : {}),
+        ...(m.policyRefusal ? { hint: m.policyRefusal } : {}),
+      };
+    }),
+  );
+
+  protected readonly hasPolicyVerdicts = computed(() =>
+    this.methods().some((m) => {
+      const v = m.policy?.task;
+      return (
+        v === "denied" ||
+        v === "may_be_refused" ||
+        (!v && Boolean(m.policyRefusal))
+      );
+    }),
   );
 
   protected canReadCatalogue(): boolean {
@@ -359,8 +387,6 @@ export class GrantsPickerComponent {
   protected async openBuilder(): Promise<void> {
     this.builderOpen.set(true);
     this.checkError.set(null);
-    if (this.loadedCatalogue) return;
-    this.loadedCatalogue = true;
     const repo = this.repo();
     const query = repo
       ? `kind=task&repo=${encodeURIComponent(repo)}`
@@ -393,8 +419,12 @@ export class GrantsPickerComponent {
         ? val
         : (val?.items ?? val?.methods ?? []);
       this.methods.set(list);
-      if (!this.selectedMethod() && list[0]) {
-        this.selectedMethod.set(list[0].ref);
+      const firstEnabled = this.methodOptions().find((o) => !o.disabled);
+      const curOpt = this.methodOptions().find(
+        (o) => o.value === this.selectedMethod(),
+      );
+      if ((!curOpt || curOpt.disabled) && firstEnabled) {
+        this.selectedMethod.set(firstEnabled.value);
       }
     }
     if (!this.selectedApiSet()) {

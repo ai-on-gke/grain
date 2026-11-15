@@ -48,17 +48,19 @@ const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
   pipeline: ["/fleet", "controls"],
   power: ["/fleet", "controls"],
   caches: ["/settings/caches"],
+  integrations: ["/settings/capabilities"],
   metrics: ["/telemetry"],
   upgrade: ["/settings/upgrade"],
 };
 
 // legacy redirects to the page SYSTEM_TABS names for `tab`, keeping the
 // query the old link carried (a /system/metrics?repo=... narrowing, say).
-function legacy(tab: string): RedirectFunction {
+function legacy(tab: string, fragment?: string): RedirectFunction {
   return ({ queryParams }) => {
     const [path, fleetTab] = SYSTEM_TABS[tab] ?? ["/fleet"];
     return inject(Router).createUrlTree([path], {
       queryParams: fleetTab ? { ...queryParams, tab: fleetTab } : queryParams,
+      ...(fragment ? { fragment } : {}),
     });
   };
 }
@@ -213,9 +215,19 @@ export const routes: Routes = [
   { path: "system", redirectTo: "fleet", pathMatch: "full" },
   {
     path: "system/:tab",
-    redirectTo: (route) => legacy(String(route.params["tab"]))(route),
+    redirectTo: (route) => {
+      const tab = String(route.params["tab"]);
+      return legacy(
+        tab,
+        tab === "integrations" ? "credentials" : undefined,
+      )(route);
+    },
   },
   { path: "admin/logs", redirectTo: legacy("logs") },
+  {
+    path: "admin/integrations",
+    redirectTo: legacy("integrations", "credentials"),
+  },
   { path: "sandboxes", redirectTo: legacy("sandboxes"), pathMatch: "full" },
   { path: "caches", redirectTo: legacy("caches"), pathMatch: "full" },
   { path: "staging", redirectTo: "fleet" },
@@ -229,6 +241,10 @@ export const routes: Routes = [
   },
   { path: "memory", redirectTo: "context" },
   { path: "config", redirectTo: "settings/config-repo", pathMatch: "full" },
+  {
+    path: "settings/capabilities/:serverId",
+    redirectTo: "settings/capabilities",
+  },
   {
     path: "settings",
     title: "Settings · grain",
