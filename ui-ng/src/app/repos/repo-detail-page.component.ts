@@ -1663,6 +1663,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.routeTab.set(pm.get("tab"));
         if (this.ready()) {
           void this.loadTabData();
+          // The same page shown for another repository reads that
+          // repository's gates; unjudgedGates already drops the last one's.
+          void this.loadBaseBranchGates();
         }
       }),
     );
