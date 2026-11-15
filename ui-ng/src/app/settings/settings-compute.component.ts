@@ -450,9 +450,9 @@ function formatRefreshedAt(iso?: string): string {
               </p>
             </div>
           </div>
-          @if (!access.can("GET /api/agent-keys")) {
+          @if (!access.canGlobal("GET /api/agent-keys")) {
             <div class="s-banner warn" data-testid="agent-keys-restricted">
-              {{ access.deniedReason("GET /api/agent-keys") }}
+              {{ access.globalDeniedReason("GET /api/agent-keys") }}
             </div>
           } @else {
             @if (!agentKeysEnabled()) {
@@ -2257,10 +2257,10 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     const sec = this.section();
     if (sec === "models") {
       this.syncBackendsFromState();
-      if (this.access.can("GET /api/agent-keys")) {
+      if (this.access.canGlobal("GET /api/agent-keys")) {
         void this.loadAgentKeys();
       }
-      if (this.access.can("GET /api/usage")) {
+      if (this.access.canGlobal("GET /api/usage")) {
         void this.api
           .get<Record<string, unknown>>("GET /api/usage")
           .then((u) => {

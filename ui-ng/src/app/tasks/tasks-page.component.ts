@@ -1669,7 +1669,7 @@ export class TasksPageComponent implements OnInit, OnDestroy {
     );
   }
   protected readonly canReadBoards = computed(() =>
-    this.access.can("GET /api/boards"),
+    this.access.canGlobal("GET /api/boards"),
   );
   protected readonly canWriteBoards = computed(() =>
     this.access.can("POST /api/boards"),

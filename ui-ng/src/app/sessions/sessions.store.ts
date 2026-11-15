@@ -251,7 +251,12 @@ export class SessionsStore {
     } catch {
       // Optional model list read.
     }
-    if (typeof this.api.get !== "function") return;
+    if (
+      typeof this.api.get !== "function" ||
+      this.access.repoLimited("GET /api/agent-models")
+    ) {
+      return;
+    }
     try {
       const am = await this.api.get<AgentModelsResponse>(
         "GET /api/agent-models",
@@ -303,7 +308,10 @@ export class SessionsStore {
   private async load(): Promise<void> {
     if (
       typeof this.api.get !== "function" ||
-      typeof this.api.getIfChanged !== "function"
+      typeof this.api.getIfChanged !== "function" ||
+      // The session list is deployment-wide: a role holding sessions:read
+      // only on some repositories is refused it.
+      this.access.repoLimited("GET /api/console-sessions")
     ) {
       this.loaded.set(true);
       return;

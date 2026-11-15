@@ -441,12 +441,23 @@ export class InboxStore implements OnDestroy {
     this.remember();
     const needWhoami =
       !this.access.whoami() && typeof this.api.whoami === "function";
+    // The deployment-wide reads below are gated on the caller's role, so
+    // the first load reads it before deciding (a role limited to some
+    // repositories is refused them; access.canGlobal).
+    if (!this.access.configLoaded() && typeof this.api.config === "function") {
+      await this.api
+        .config()
+        .then((cfg) => this.access.setConfig(cfg))
+        .catch(() => undefined);
+    }
     const [config, feedOk, notifications, scripts, who] =
       await Promise.allSettled([
         this.api.config(),
         this.feed.refresh(),
-        this.api.openNotifications(),
-        this.access.can("GET /api/local-script-approvals")
+        this.access.canGlobal("GET /api/notifications")
+          ? this.api.openNotifications()
+          : Promise.resolve([] as Notification[]),
+        this.access.canGlobal("GET /api/local-script-approvals")
           ? this.api.localScriptApprovals()
           : Promise.resolve([] as LocalScriptApproval[]),
         needWhoami

@@ -333,6 +333,13 @@ Rules:
   URL (`?tab=`, `?task=`, `?pane=`). Back works.
 - **Role-aware.** An action the person cannot take is hidden, or shown
   disabled with the reason. It is never shown enabled only to fail.
+  Reads are gated the same way: a read naming no repository
+  (`/api/notifications`, `/api/settings`, `/api/boards`, ...) is gated on
+  `access.canGlobal(route)`, not `access.can(route)`, because a role
+  holding the scope only on some repositories is refused it; explain a
+  hidden panel with `access.globalDeniedReason(route)`. A page a
+  repo-limited role opens fires no request it is certain to be refused
+  (`e2e/next-repo-limited-viewer.spec.js`).
 - **Safety.**
   - Selection is pinned: if the selected item leaves the list, say so; do
     not jump to another item.

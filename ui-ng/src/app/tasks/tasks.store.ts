@@ -253,7 +253,7 @@ export class TasksStore implements OnDestroy {
   async loadBoards(): Promise<void> {
     if (
       typeof this.api.get !== "function" ||
-      !this.access.can("GET /api/boards")
+      !this.access.canGlobal("GET /api/boards")
     ) {
       this.boards.set([]);
       return;
