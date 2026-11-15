@@ -1,0 +1,106 @@
+/* Copyright 2026 Google LLC
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/* Settings -> Hub: advertised scopes and scope overrides are rows of a
+   repository (with its path-prefix chip) and its role on the right,
+   wrapping under the repository on a phone rather than overflowing. */
+.hub-endpoint {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.hub-banner {
+  justify-content: flex-start;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+}
+
+.hub-banner > .status-icon-host {
+  margin-top: 4px;
+  flex: none;
+}
+
+.hub-banner-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.hub-banner-body > p {
+  margin: 0;
+}
+
+.hub-conflict-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.hub-scope-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hub-scope-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-medium);
+  min-width: 0;
+}
+
+.hub-scope-main,
+.hub-scope-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hub-scope-meta {
+  margin-left: auto;
+}
+
+.hub-scope-repo {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.hub-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-full);
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+  overflow-wrap: anywhere;
+}
+
+.hub-field-wide {
+  grid-column: 1 / -1;
+}
+
+.hub-rule-actions {
+  margin-top: 4px;
+}

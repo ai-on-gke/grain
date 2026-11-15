@@ -31,7 +31,7 @@ export type SettingsSectionId =
   | "cli"
   | "caches"
   | "engine"
-  | "registry"
+  | "hub"
   | "upgrade";
 
 export type SettingsGroupId =
@@ -396,10 +396,10 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
         ],
       },
       {
-        id: "registry",
-        label: "Registry & Hub",
+        id: "hub",
+        label: "Hub",
         subtitle:
-          "Grain Hub directory registration, live heartbeat telemetry, advertised repo scopes, and credentials.",
+          "Grain Hub directory registration, live heartbeat telemetry, advertised repo scopes, scope overrides, and the registration credential.",
         keywords: [
           "registry",
           "hub",
@@ -408,6 +408,9 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "catalog",
           "directory",
           "connected",
+          "oidc",
+          "registration token",
+          "scope overrides",
         ],
       },
       {
@@ -441,7 +444,7 @@ const SECTION_ALIASES: Readonly<Record<string, SettingsSectionId>> = {
   hosts: "hostds",
   host: "hostds",
   state: "config-repo",
-  hub: "registry",
+  registry: "hub",
   workflow: "tasks",
   accounts: "access",
   sandbox: "sandboxes",
@@ -459,7 +462,7 @@ export const SECTION_ANCHORS: Readonly<Record<string, string>> = {
   secrets: "other-secrets",
   "legacy-capabilities": "other-secrets",
   integrations: "other-secrets",
-  hub: "registry-status",
+  registry: "registry-status",
 };
 
 // settingsAnchor is the element id a settings URL asks to be scrolled
@@ -627,6 +630,9 @@ export const SETTING_LABELS: Readonly<Record<string, string>> = {
   registryDisplayName: "Display name",
   registryPurpose: "Purpose",
   registryListed: "Listed in hub directory",
+  registryHostKind: "Host kind",
+  registryOidcAudience: "OIDC audience",
+  registryScopes: "Scope overrides",
 };
 
 export function settingLabel(field: string): string {
