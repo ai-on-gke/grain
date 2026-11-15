@@ -1596,17 +1596,6 @@ export class TelemetryPageComponent implements OnInit {
   protected readonly fmtDur = formatDurationSec;
   protected readonly fmtNum = formatCompactNum;
 
-  // A reset instant in the operator's time zone with its countdown: a
-  // weekly reset is days away, so it carries its date.
-  protected fmtReset(until?: string): string {
-    return formatLocalReset(
-      until,
-      undefined,
-      this.access.clockNow(),
-      effectiveDisplayTimeZone(this.access.rawConfig()?.timeZone),
-    );
-  }
-
   // Whether a scope's usage cell shows its weekly line (pkg/usage
   // weekly.go): a row whose week is no more than its interval keeps one
   // line, so the table stays as compact as it was.
