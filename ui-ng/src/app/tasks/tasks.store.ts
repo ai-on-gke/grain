@@ -61,6 +61,24 @@ export interface Undo {
 // in backlog order, polled with ETags as the classic UI does), the closed
 // tasks a page at a time, and the calls that act on them. Every action
 // re-reads the list; nothing is shown that the server has not said.
+// BATCH_CONCURRENCY is how many calls of a bulk action are in flight at
+// once: enough that a batch is not one round trip per task, few enough
+// that Stop still leaves most of a long one unsent.
+const BATCH_CONCURRENCY = 4;
+
+export interface BatchProgress {
+  key: string;
+  done: number;
+  total: number;
+  stopping: boolean;
+}
+
+export interface BatchOutcome {
+  done: string[];
+  failed: string[];
+  skipped: string[];
+}
+
 @Injectable({ providedIn: "root" })
 export class TasksStore implements OnDestroy {
   private readonly api = inject(GrainApi);
@@ -85,6 +103,13 @@ export class TasksStore implements OnDestroy {
   readonly loadError = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
   readonly busy = signal<ReadonlySet<string>>(new Set());
+  // batch is the bulk action under way, counted as each call settles, so
+  // the selection bar can say how far it has got and offer Stop.
+  readonly batch = signal<BatchProgress | null>(null);
+  // lastBatch is how the latest bulk action ended, per id: the page
+  // words its snackbar from what was done and keeps the rest ticked.
+  readonly lastBatch = signal<BatchOutcome | null>(null);
+  private stopRequested = false;
 
   readonly work = computed(() => this.live().filter(isWork));
   readonly backlog = computed(() =>
@@ -422,6 +447,63 @@ export class TasksStore implements OnDestroy {
     );
   }
 
+  async submit(ids: readonly string[]): Promise<number> {
+    return this.fanOut("submit", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/submit", { id }),
+    );
+  }
+
+  // retryMerge puts each pull request the merge queue gave up on back on
+  // it (ui.Client.RetryMerge); one with no pull request refuses.
+  async retryMerge(ids: readonly string[]): Promise<number> {
+    return this.fanOut("retry-merge", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/retry-merge", { id }),
+    );
+  }
+
+  // runNow starts each task ahead of the queue (ui.Client.RunNow),
+  // approving and bringing back any that need it. While the deployment
+  // is paused under a pause Run now passes, these are what start.
+  async runNow(ids: readonly string[]): Promise<number> {
+    return this.fanOut("run-now", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/run-now", { id }),
+    );
+  }
+
+  // setCapability attaches or detaches one capability on each task; the
+  // server no-ops a detach of one the task does not hold.
+  async setCapability(
+    ids: readonly string[],
+    capability: string,
+    attach: boolean,
+  ): Promise<number> {
+    return this.fanOut("capability", ids, (id) =>
+      this.api.post(
+        "POST /api/tasks/{id}/capabilities",
+        { id },
+        { id: capability, attach },
+      ),
+    );
+  }
+
+  // bulkEdit sends one PATCH body to every task. A running task refuses
+  // a change of base (ui.Client.UpdateTask) and is counted.
+  async bulkEdit(
+    ids: readonly string[],
+    patch: Record<string, unknown>,
+  ): Promise<number> {
+    return this.fanOut("edit", ids, (id) =>
+      this.api.patch("PATCH /api/tasks/{id}", { id }, patch),
+    );
+  }
+
+  // stopBatch lets the calls already sent finish and sends no more.
+  stopBatch(): void {
+    if (!this.batch()) return;
+    this.stopRequested = true;
+    this.batch.update((b) => (b ? { ...b, stopping: true } : b));
+  }
+
   async retry(ids: readonly string[]): Promise<number> {
     return this.fanOut("retry", ids, (id) =>
       this.api.post("POST /api/tasks/{id}/retry", { id }),
@@ -592,8 +674,9 @@ export class TasksStore implements OnDestroy {
     );
   }
 
-  // fanOut makes one call per task (there are no batch endpoints), reads
-  // the list once, and returns how many did not go through.
+  // fanOut makes one call per task (there are no batch endpoints), a
+  // few at a time so a long batch can be stopped part-way, reads the list
+  // once, and returns how many did not go through (failed or never sent).
   private async fanOut(
     key: string,
     ids: readonly string[],
@@ -601,22 +684,51 @@ export class TasksStore implements OnDestroy {
   ): Promise<number> {
     this.mark(key, true);
     this.actionError.set(null);
-    const results = await Promise.allSettled(ids.map(call));
-    const failures = results.filter(
-      (r): r is PromiseRejectedResult => r.status === "rejected",
+    this.stopRequested = false;
+    const out: BatchOutcome = { done: [], failed: [], skipped: [] };
+    const errors: unknown[] = [];
+    const many = ids.length > 1;
+    if (many)
+      this.batch.set({ key, done: 0, total: ids.length, stopping: false });
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < ids.length && !this.stopRequested) {
+        const id = ids[next++];
+        try {
+          await call(id);
+          out.done.push(id);
+        } catch (err) {
+          out.failed.push(id);
+          errors.push(err);
+        }
+        if (many)
+          this.batch.update((b) => (b ? { ...b, done: b.done + 1 } : b));
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(BATCH_CONCURRENCY, ids.length) }, worker),
     );
-    if (failures.length) {
-      this.actionError.set(
-        ids.length === 1
-          ? errorText(failures[0].reason)
-          : `${failures.length} of ${ids.length} did not go through: ${errorText(failures[0].reason)}`,
+    out.skipped = ids.slice(next);
+    this.stopRequested = false;
+    this.batch.set(null);
+    this.lastBatch.set(out);
+    const parts: string[] = [];
+    if (out.skipped.length)
+      parts.push(
+        `Stopped after ${out.done.length + out.failed.length} of ${ids.length}; ${out.skipped.length} left unchanged`,
       );
-    }
+    if (errors.length)
+      parts.push(
+        ids.length === 1
+          ? errorText(errors[0])
+          : `${errors.length} of ${ids.length} did not go through: ${errorText(errors[0])}`,
+      );
+    if (parts.length) this.actionError.set(parts.join(". "));
     await this.refresh();
     void this.inbox.refresh();
     if (key === "close" || key === "reopen") void this.loadClosed();
     this.mark(key, false);
-    return failures.length;
+    return out.failed.length + out.skipped.length;
   }
 
   private async run(key: string, fn: () => Promise<unknown>): Promise<boolean> {
