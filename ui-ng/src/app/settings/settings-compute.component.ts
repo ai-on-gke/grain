@@ -98,6 +98,10 @@ interface HostdRow {
   revokedAt?: string | null;
   labels?: Record<string, string> | null;
   capacity?: number;
+  // update is a newer signed grain-agentd release the host's owner can
+  // take by running command on the host (HostUpdate); absent when there
+  // is none, and always for a root-installed `grain host`.
+  update?: { build: string; available: string; command: string } | null;
 }
 
 // DeletedHostdRow is what deleting a host answers with: its name and the
@@ -1351,6 +1355,18 @@ function formatRefreshedAt(iso?: string): string {
                         >
                           {{ isRevoked ? "revoked" : h.state || "offline" }}
                         </span>
+                        @if (h.update && !isRevoked) {
+                          <div
+                            class="s-meta"
+                            [attr.data-testid]="'hostd-update-' + h.name"
+                          >
+                            Update available: {{ h.update.build }} →
+                            {{ h.update.available }}. On the host, run
+                            <span class="s-meta-mono">{{
+                              h.update.command
+                            }}</span>
+                          </div>
+                        }
                       </td>
                       <td class="s-mono">
                         {{ formatLabels(h.labels) }}

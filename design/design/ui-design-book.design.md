@@ -340,6 +340,14 @@ Rules:
   hidden panel with `access.globalDeniedReason(route)`. A page a
   repo-limited role opens fires no request it is certain to be refused
   (`e2e/next-repo-limited-viewer.spec.js`).
+- **State-aware.** The same goes for an action the item's state refuses.
+  Example: Release hold cannot clear review findings, so a hold of findings
+  alone shows no Release hold. The gate card says what does clear it and
+  offers that action (*Override review gate…*) to people who may take it
+  (`ui-ng/e2e/next-human-review-findings-hold.spec.js`).
+- **Refusals say why.** A failed action shows the server's own `error`
+  text (`errorText`). A refusal the request caused is a 4xx with a message,
+  never a 500 with only a reference id.
 - **Safety.**
   - Selection is pinned: if the selected item leaves the list, say so; do
     not jump to another item.

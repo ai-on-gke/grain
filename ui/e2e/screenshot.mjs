@@ -59,6 +59,7 @@
 //                    still answers as the access code, so this shows
 //                    which controls a role is offered, not what it may do.
 //   --merge  MERGE   "PATH=FILE.json": the page's GET PATH (any query)
+//                    (a list fixture replaces a list answer outright)
 //                    answered with the server's own answer and FILE's
 //                    top-level fields laid over it -- to shoot a state
 //                    the demo does not seed, such as a schedule that has
@@ -401,7 +402,11 @@ async function main() {
                 (u) => u.pathname === merge.pathname,
                 async (route) => {
                   const response = await route.fetch();
-                  const json = { ...(await response.json()), ...merge.json };
+                  // A list answer (GET /api/hostds) is replaced by a
+                  // list fixture rather than merged into.
+                  const json = Array.isArray(merge.json)
+                    ? merge.json
+                    : { ...(await response.json()), ...merge.json };
                   await route.fulfill({ response, json });
                 },
               );
