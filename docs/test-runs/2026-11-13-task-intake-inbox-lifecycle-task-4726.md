@@ -296,4 +296,6 @@ to the `-task-4726` suffix the 2026-11-08 reports already use.
   once. On a busy runner, the list had not re-rendered when it was read.
   It passed locally, including with `--repeat-each=3`. The read is now
   `await expect(locator).toHaveCount(12)`, which waits for the list. The
-  test's expectations are unchanged.
+  test's expectations are unchanged. On 2026-11-15, `main` landed its own
+  fix for the same flake, which also waits for the toggle to read "Show
+  fewer". The merge takes `main`'s version.

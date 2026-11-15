@@ -14,7 +14,12 @@
 
 package demo
 
-import "testing"
+import (
+	"slices"
+	"testing"
+
+	"github.com/ai-on-gke/grain/pkg/model"
+)
 
 // TestDemoDurableTaskHasEveryContextLine is the demo's durable task as
 // the task page's Context panel and brief read it (DT-15): compacted,
@@ -37,5 +42,37 @@ func TestDemoDurableTaskHasEveryContextLine(t *testing.T) {
 	}
 	if !view.HandoverStale || view.HandoverVersion != 1 {
 		t.Errorf("handover v%d stale=%v (%+v), want v1 stale", view.HandoverVersion, view.HandoverStale, view.HandoverAge)
+	}
+}
+
+// TestDemoHasARolledOverPair is the pair the rollover banner is shot
+// over (DT-15): a closed durable task forwarding to an open successor,
+// which links back.
+func TestDemoHasARolledOverPair(t *testing.T) {
+	_, store, ctx, _ := demoCLs(t)
+	tasks, err := store.ListTasks(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var from, to string
+	for _, tk := range tasks {
+		if tk.Title != DemoRolledOverTaskTitle {
+			continue
+		}
+		if next := model.RolledOverTo(tk); next != "" {
+			from, to = tk.ID, next
+		}
+	}
+	if from == "" {
+		t.Fatalf("no rolled-over %q task in the demo", DemoRolledOverTaskTitle)
+	}
+	successor, err := store.GetTask(ctx, to)
+	if err != nil || successor == nil {
+		t.Fatalf("successor %s: %v", to, err)
+	}
+	if !slices.ContainsFunc(successor.Links, func(l model.Link) bool {
+		return l.Kind == model.LinkRolledOverFrom && l.Target == from
+	}) {
+		t.Errorf("successor %s links %+v, want rolled-over-from %s", to, successor.Links, from)
 	}
 }
