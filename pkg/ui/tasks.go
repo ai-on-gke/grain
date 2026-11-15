@@ -2720,6 +2720,62 @@ func (s *Server) handleTaskStates(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// TaskSummariesResponse is GET /api/tasks/summaries's body.
+type TaskSummariesResponse struct {
+	Tasks map[string]json.RawMessage `json:"tasks"`
+}
+
+func (s *Server) handleTaskSummaries(w http.ResponseWriter, r *http.Request) {
+	q, err := parseTaskSummariesQuery(r.URL.Query())
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	tasks := make(map[string]json.RawMessage, len(q.ids))
+	if s.tasks != nil && s.tasks.Store != nil {
+		ctx := r.Context()
+		readable := s.taskReadable(r)
+		for _, id := range q.ids {
+			t, err := s.tasks.Store.GetTask(ctx, id)
+			if err != nil {
+				writeClientError(w, err)
+				return
+			}
+			if t == nil || !readable(taskRepo(t)) {
+				continue
+			}
+			entryBody, _, err := s.taskDetails.responseFor(ctx, s.tasks, id, q.page, q.paged)
+			if err != nil {
+				var nfe *NotFoundError
+				if errors.As(err, &nfe) {
+					continue
+				}
+				writeClientError(w, err)
+				return
+			}
+			tasks[id] = json.RawMessage(entryBody)
+		}
+	}
+	body, err := json.Marshal(TaskSummariesResponse{Tasks: tasks})
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	body = append(body, '\n')
+	etag := etagOf(body)
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("ETag", etag)
+	w.Header().Add("Vary", "Cookie")
+	w.Header().Add("Vary", "Authorization")
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
 func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	q := r.URL.Query()
@@ -3766,6 +3822,92 @@ func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 // maxTaskDetailPage is the most comments or runs one paged task detail
 // read answers.
 const maxTaskDetailPage = 500
+
+// maxTaskSummariesIDs is the most unique task ids one GET /api/tasks/summaries
+// request accepts.
+const maxTaskSummariesIDs = 50
+
+const taskSummariesRoute = "GET /api/tasks/summaries"
+
+func isValidTaskSummaryID(id string) bool {
+	if len(id) == 0 || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			continue
+		}
+		if i > 0 && (c == '-' || c == '_') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+type taskSummariesQuery struct {
+	ids   []string
+	page  TaskPage
+	paged bool
+}
+
+func parseTaskSummariesQuery(q url.Values) (taskSummariesQuery, error) {
+	var out taskSummariesQuery
+	rawValues := q["ids"]
+	if len(rawValues) == 0 {
+		return out, validationErrorf("ids is required")
+	}
+	seen := make(map[string]bool)
+	rawCount := 0
+	for _, raw := range rawValues {
+		for _, part := range strings.Split(raw, ",") {
+			rawCount++
+			if rawCount > maxTaskSummariesIDs*10 {
+				return out, validationErrorf("too many task ids requested; at most %d unique ids are allowed", maxTaskSummariesIDs)
+			}
+			id := strings.TrimSpace(part)
+			if !isValidTaskSummaryID(id) {
+				if id == "" {
+					return out, validationErrorf("ids must not contain empty task ids")
+				}
+				return out, validationErrorf("malformed task id %q", id)
+			}
+			if !seen[id] {
+				seen[id] = true
+				out.ids = append(out.ids, id)
+				if len(out.ids) > maxTaskSummariesIDs {
+					return out, validationErrorf("at most %d task ids may be requested at once", maxTaskSummariesIDs)
+				}
+			}
+		}
+	}
+	if len(out.ids) == 0 {
+		return out, validationErrorf("ids is required")
+	}
+	clampLimit := func(name, raw string) (int, error) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return 0, nil
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			return 0, validationErrorf("%s must be a positive integer", name)
+		}
+		return min(n, maxTaskDetailPage), nil
+	}
+	out.paged = q.Has("comments_limit") || q.Has("attempts_limit")
+	if out.paged {
+		var err error
+		if out.page.CommentsLimit, err = clampLimit("comments_limit", q.Get("comments_limit")); err != nil {
+			return out, err
+		}
+		if out.page.AttemptsLimit, err = clampLimit("attempts_limit", q.Get("attempts_limit")); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
 
 // TaskPage names a bounded slice of a task's conversation and runs on
 // GET /api/tasks/{id} (durable-tasks.design.md#DT-15).

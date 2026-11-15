@@ -156,12 +156,17 @@ func (s *Server) taskReadableContext(r *http.Request) context.Context {
 // answer to s.taskReadable(r) when no ?repo= is given, so a caller holding
 // tasks:read on a subset of repositories may call it without naming one.
 func isRepoNarrowedTasksRead(pattern string, r *http.Request) bool {
+	if pattern == taskSummariesRoute {
+		if _, isCIAPI := model.CIAPICallFromContext(r.Context()); isCIAPI {
+			return true
+		}
+	}
 	q := r.URL.Query()
 	if repos := q["repo"]; len(repos) > 1 || (len(repos) == 1 && strings.TrimSpace(repos[0]) != "") {
 		return false
 	}
 	switch pattern {
-	case refSummaryRoute:
+	case refSummaryRoute, taskSummariesRoute:
 		return true
 	case "GET /api/tasks":
 		refs := q["externalRef"]

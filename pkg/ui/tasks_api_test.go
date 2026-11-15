@@ -15,6 +15,7 @@
 package ui_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -410,5 +411,289 @@ func TestConfigETagAnd304AndVariesOnChange(t *testing.T) {
 	}
 	if etag3 := rec3.Header().Get("ETag"); etag3 == "" || etag3 == etag1 {
 		t.Errorf("ETag after pause = %q (was %q), want distinct ETag", etag3, etag1)
+	}
+}
+
+func TestTaskSummariesMatchesSingleTaskClampsLimitsAndValidatesIDs(t *testing.T) {
+	srv, client := testServer(t)
+	ctx := context.Background()
+	t1, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "first", NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t2, err := client.CreateTask(ctx, ui.CreateTaskRequest{Title: "second", NoRepo: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	for i := 0; i < 4; i++ {
+		if _, err := client.Store.AddComment(ctx, model.Comment{
+			TaskID:    t1.ID,
+			Body:      fmt.Sprintf("comment-%d", i),
+			Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+			CreatedAt: at.Add(time.Duration(i) * time.Minute),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for n := 1; n <= 3; n++ {
+		runID := t1.ID + "-" + strconv.Itoa(n)
+		if err := client.Store.StartRun(ctx, model.Run{
+			ID: runID, TaskID: t1.ID, Attempt: n, StartedAt: at.Add(time.Duration(n) * time.Hour),
+		}, model.Limits{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.Store.FinishRun(ctx, runID, at.Add(time.Duration(n)*time.Hour+time.Minute), "failed", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Each entry matches GET /api/tasks/{id} JSON byte-for-byte with the same limits,
+	// and duplicates are de-duplicated.
+	for _, tc := range []struct {
+		name        string
+		batchQuery  string
+		singleQuery string
+	}{
+		{
+			name:        "bounded",
+			batchQuery:  fmt.Sprintf("ids=%s,%s,%s&comments_limit=1&attempts_limit=1", t1.ID, t2.ID, t1.ID),
+			singleQuery: "?comments_limit=1&attempts_limit=1",
+		},
+		{
+			name:        "unbounded",
+			batchQuery:  fmt.Sprintf("ids=%s,%s", t1.ID, t2.ID),
+			singleQuery: "",
+		},
+		{
+			name:        "clamped-to-500",
+			batchQuery:  fmt.Sprintf("ids=%s,%s&comments_limit=999&attempts_limit=999", t1.ID, t2.ID),
+			singleQuery: "?comments_limit=500&attempts_limit=500",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, body := serve(t, srv, http.MethodGet, "/api/tasks/summaries?"+tc.batchQuery, "")
+			if code != http.StatusOK {
+				t.Fatalf("GET /api/tasks/summaries?%s = %d %s", tc.batchQuery, code, body)
+			}
+			var got struct {
+				Tasks map[string]json.RawMessage `json:"tasks"`
+			}
+			if err := json.Unmarshal([]byte(body), &got); err != nil {
+				t.Fatalf("decode batch: %v", err)
+			}
+			if len(got.Tasks) != 2 {
+				t.Fatalf("batch len = %d, want 2 (%s)", len(got.Tasks), body)
+			}
+			for _, id := range []string{t1.ID, t2.ID} {
+				sCode, sBody := serve(t, srv, http.MethodGet, "/api/tasks/"+id+tc.singleQuery, "")
+				if sCode != http.StatusOK {
+					t.Fatalf("GET /api/tasks/%s%s = %d %s", id, tc.singleQuery, sCode, sBody)
+				}
+				if !bytes.Equal(bytes.TrimSpace(got.Tasks[id]), bytes.TrimSpace([]byte(sBody))) {
+					t.Errorf("task %s JSON mismatch:\nbatch:  %s\nsingle: %s", id, got.Tasks[id], sBody)
+				}
+			}
+		})
+	}
+
+	// 50 unique ids (even with duplicates bringing total items to 51) succeed.
+	fifty := make([]string, 0, 51)
+	for i := 1; i <= 50; i++ {
+		fifty = append(fifty, strconv.Itoa(i))
+	}
+	fiftyWithDup := append(append([]string(nil), fifty...), t1.ID)
+	if code, body := serve(t, srv, http.MethodGet, "/api/tasks/summaries?ids="+strings.Join(fiftyWithDup, ","), ""); code != http.StatusOK {
+		t.Fatalf("50 unique ids with duplicate = %d %s, want 200", code, body)
+	}
+
+	// 51 unique ids return 400 with a clear message.
+	fiftyOne := append(append([]string(nil), fifty...), "51")
+	code, body := serve(t, srv, http.MethodGet, "/api/tasks/summaries?ids="+strings.Join(fiftyOne, ","), "")
+	if code != http.StatusBadRequest || !strings.Contains(body, "50") {
+		t.Errorf("51 unique ids = %d %s, want 400 naming 50", code, body)
+	}
+
+	// Missing, empty, and malformed ids or invalid limits return 400.
+	for _, bad := range []string{
+		"/api/tasks/summaries",
+		"/api/tasks/summaries?ids=",
+		"/api/tasks/summaries?ids=" + t1.ID + ",",
+		"/api/tasks/summaries?ids=" + t1.ID + ",," + t2.ID,
+		"/api/tasks/summaries?ids=" + t1.ID + ",bad/id",
+		"/api/tasks/summaries?ids=../1",
+		"/api/tasks/summaries?ids=bad%20id",
+		"/api/tasks/summaries?ids=" + t1.ID + "&comments_limit=0",
+		"/api/tasks/summaries?ids=" + t1.ID + "&comments_limit=-1",
+		"/api/tasks/summaries?ids=" + t1.ID + "&attempts_limit=x",
+	} {
+		if c, b := serve(t, srv, http.MethodGet, bad, ""); c != http.StatusBadRequest {
+			t.Errorf("GET %s = %d %s, want 400", bad, c, b)
+		}
+	}
+
+	// ETag + If-None-Match -> 304, then invalidation on comment -> 200 with new ETag.
+	req1 := httptest.NewRequest(http.MethodGet, "/api/tasks/summaries?ids="+t1.ID+"&comments_limit=1&attempts_limit=1", nil)
+	rec1 := httptest.NewRecorder()
+	srv.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first conditional summaries = %d %s", rec1.Code, rec1.Body.String())
+	}
+	etag1 := rec1.Header().Get("ETag")
+	if etag1 == "" {
+		t.Fatal("GET /api/tasks/summaries omitted ETag header")
+	}
+	req2 := httptest.NewRequest(http.MethodGet, "/api/tasks/summaries?ids="+t1.ID+"&comments_limit=1&attempts_limit=1", nil)
+	req2.Header.Set("If-None-Match", etag1)
+	rec2 := httptest.NewRecorder()
+	srv.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusNotModified {
+		t.Errorf("conditional summaries poll = %d, want 304", rec2.Code)
+	}
+	if _, err := client.Store.AddComment(ctx, model.Comment{
+		TaskID:    t1.ID,
+		Body:      "newest",
+		Author:    model.Attribution{Actor: model.Principal{Kind: model.PrincipalHuman, ID: "alice"}},
+		CreatedAt: at.Add(10 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	req3 := httptest.NewRequest(http.MethodGet, "/api/tasks/summaries?ids="+t1.ID+"&comments_limit=1&attempts_limit=1", nil)
+	req3.Header.Set("If-None-Match", etag1)
+	rec3 := httptest.NewRecorder()
+	srv.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Errorf("conditional summaries after comment = %d, want 200", rec3.Code)
+	}
+	if etag3 := rec3.Header().Get("ETag"); etag3 == "" || etag3 == etag1 {
+		t.Errorf("ETag after comment = %q (was %q), want distinct ETag", etag3, etag1)
+	}
+}
+
+func TestTaskSummariesAuthorizationAndOmission(t *testing.T) {
+	h := newRoleHarness(t)
+	srv, client := h.srv, h.client
+	enableExternalAgentAPI(t, client.Store)
+	ctx := context.Background()
+
+	widgets, _ := model.ParseRepo("acme/widgets")
+	secret, _ := model.ParseRepo("acme/secret")
+	for _, tk := range []model.Task{
+		{ID: "200", Intent: model.IntentImplement, Title: "Widgets summary", Target: &widgets},
+		{ID: "201", Intent: model.IntentImplement, Title: "Secret summary", Target: &secret},
+		{ID: "202", Intent: model.IntentImplement, Title: "No-repo summary"},
+	} {
+		if err := client.Store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Cleanup(func() { _ = model.InstallAPIScopeSets(nil) })
+	if err := client.PutAPIScopeSet(ctx, model.APIScopeSet{
+		Name:        "plc/widgets-read",
+		Description: "Read tasks in acme/widgets only",
+		Scopes:      []string{"tasks:read"},
+		Repos:       []string{"acme/widgets"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.PutAPIScopeSet(ctx, model.APIScopeSet{
+		Name:        "plc/ci-only",
+		Description: "CI read without tasks:read",
+		Scopes:      []string{"ci:read"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h.allow(t, "user:admin@example.com", "grain/operator")
+	h.allow(t, "user:limited@example.com", "plc/widgets-read")
+	h.allow(t, "user:ci-only@example.com", "plc/ci-only")
+
+	humanCtx := ui.WithPrincipal(ctx, model.Principal{Kind: model.PrincipalHuman, ID: "admin@example.com"})
+	noTasksTok, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name: "ci-bot", ScopeSet: "plc/ci-only", Owner: "admin@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	widgetsTok, err := client.CreateExternalAgentToken(humanCtx, ui.CreateExternalAgentTokenRequest{
+		Name: "plc-widgets", ScopeSet: "plc/widgets-read", Owner: "admin@example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seedAPITask(t, client, "caller-widgets", "acme/widgets", "api:tasks:read@acme/widgets")
+	seedAPITask(t, client, "caller-ci-only", "acme/widgets", "api:ci:read@acme/widgets")
+
+	callExt := func(tok, path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.RemoteAddr = "198.51.100.9:4242"
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	batchPath := "/api/tasks/summaries?ids=200,201,202,999999&comments_limit=1&attempts_limit=1"
+	foreignOnlyPath := "/api/tasks/summaries?ids=201&comments_limit=1&attempts_limit=1"
+	missingOnlyPath := "/api/tasks/summaries?ids=999999&comments_limit=1&attempts_limit=1"
+
+	// Callers lacking tasks:read are refused 403.
+	if rec := doWithHeaders(t, srv, http.MethodGet, batchPath, "", h.as("ci-only@example.com")); rec.Code != http.StatusForbidden {
+		t.Errorf("human without tasks:read = %d, want 403", rec.Code)
+	}
+	if code, _ := asAgent(t, srv, "caller-ci-only", http.MethodGet, batchPath, "", ""); code != http.StatusForbidden {
+		t.Errorf("agent without tasks:read = %d, want 403", code)
+	}
+	if rec := callExt(noTasksTok.Token, batchPath); rec.Code != http.StatusForbidden {
+		t.Errorf("gma_ without tasks:read = %d, want 403", rec.Code)
+	}
+
+	// Repo-limited callers (human role, acting agent, gma_ token) receive only 200;
+	// foreign-repo (201), repo-less (202), and nonexistent (999999) are silently
+	// omitted and indistinguishable from each other.
+	type callerFn func(path string) (int, string)
+	callers := map[string]callerFn{
+		"limited-human": func(path string) (int, string) {
+			rec := doWithHeaders(t, srv, http.MethodGet, path, "", h.as("limited@example.com"))
+			return rec.Code, rec.Body.String()
+		},
+		"acting-agent": func(path string) (int, string) {
+			return asAgent(t, srv, "caller-widgets", http.MethodGet, path, "", "")
+		},
+		"external-token": func(path string) (int, string) {
+			rec := callExt(widgetsTok.Token, path)
+			return rec.Code, rec.Body.String()
+		},
+	}
+	for name, call := range callers {
+		t.Run(name, func(t *testing.T) {
+			code, body := call(batchPath)
+			if code != http.StatusOK {
+				t.Fatalf("GET %s = %d %s, want 200", batchPath, code, body)
+			}
+			var resp struct {
+				Tasks map[string]ui.TaskDetail `json:"tasks"`
+			}
+			if err := json.Unmarshal([]byte(body), &resp); err != nil {
+				t.Fatalf("decode: %v (%s)", err, body)
+			}
+			if len(resp.Tasks) != 1 {
+				t.Fatalf("tasks = %v, want only 200", resp.Tasks)
+			}
+			if _, ok := resp.Tasks["200"]; !ok {
+				t.Fatalf("missing allowed task 200 in %v", resp.Tasks)
+			}
+			if strings.Contains(body, "Secret summary") || strings.Contains(body, "No-repo summary") {
+				t.Errorf("response leaked restricted task: %s", body)
+			}
+			fCode, fBody := call(foreignOnlyPath)
+			mCode, mBody := call(missingOnlyPath)
+			if fCode != http.StatusOK || mCode != http.StatusOK || fBody != mBody {
+				t.Errorf("foreign vs missing probe diverged: foreign=(%d %q) missing=(%d %q)",
+					fCode, fBody, mCode, mBody)
+			}
+		})
 	}
 }

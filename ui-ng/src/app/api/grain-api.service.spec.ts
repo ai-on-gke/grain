@@ -257,6 +257,72 @@ describe("GrainApi.getIfChanged", () => {
     taskNextReq.flush({ id: "42", stale: false });
     await taskNext;
   });
+
+  it("taskSummaries deduplicates, chunks by 50, caches ETags, and invalidates on task mutations", async () => {
+    const ids = [
+      ...Array.from({ length: 75 }, (_, i) => `t${i + 1}`),
+      "t1",
+      "t75",
+    ];
+    const p1 = api.taskSummaries(ids, 1, 3);
+    const reqs = http.match((r) => r.url.startsWith("/api/tasks/summaries?"));
+    expect(reqs.length).toBe(2);
+
+    const q1 = new URLSearchParams(reqs[0].request.url.split("?")[1]);
+    const q2 = new URLSearchParams(reqs[1].request.url.split("?")[1]);
+    expect(q1.get("ids")!.split(",").length).toBe(50);
+    expect(q2.get("ids")!.split(",").length).toBe(25);
+    expect(q1.get("comments_limit")).toBe("1");
+    expect(q1.get("attempts_limit")).toBe("3");
+
+    reqs[0].flush(
+      { tasks: { t1: { id: "t1", title: "First" } } },
+      { headers: { ETag: '"sum-1"' } },
+    );
+    reqs[1].flush(
+      { tasks: { t75: { id: "t75", title: "Last" } } },
+      { headers: { ETag: '"sum-2"' } },
+    );
+    const merged = await p1;
+    expect(Object.keys(merged)).toEqual(["t1", "t75"]);
+
+    // Subsequent identical batch sends If-None-Match.
+    const p2 = api.taskSummaries(["t1", "t2"], 1, 1);
+    const cReq = http.expectOne(
+      "/api/tasks/summaries?ids=t1,t2&comments_limit=1&attempts_limit=1",
+    );
+    cReq.flush(
+      { tasks: { t1: { id: "t1", title: "First" } } },
+      { headers: { ETag: '"sum-small"' } },
+    );
+    await p2;
+
+    const p3 = api.taskSummaries(["t1", "t2"], 1, 1);
+    const cReq2 = http.expectOne(
+      "/api/tasks/summaries?ids=t1,t2&comments_limit=1&attempts_limit=1",
+    );
+    expect(cReq2.request.headers.get("If-None-Match")).toBe('"sum-small"');
+    cReq2.flush(null, { status: 304, statusText: "Not Modified" });
+    await p3;
+
+    // A task mutation clears /api/tasks/summaries conditional cache too.
+    const postComment = api.post(
+      "POST /api/tasks/{id}/comments",
+      { id: "t1" },
+      { body: "hello" },
+    );
+    http.expectOne("/api/tasks/t1/comments").flush({ id: 99 });
+    await postComment;
+
+    const p4 = api.taskSummaries(["t1", "t2"], 1, 1);
+    const cReq3 = http.expectOne(
+      "/api/tasks/summaries?ids=t1,t2&comments_limit=1&attempts_limit=1",
+    );
+    expect(cReq3.request.headers.has("If-None-Match")).toBe(false);
+    cReq3.flush({ tasks: { t1: { id: "t1", title: "Updated" } } });
+    const afterMutation = await p4;
+    expect(afterMutation["t1"].title).toBe("Updated");
+  });
 });
 
 function verifierUnavailableOpts(retryAfter?: string) {
