@@ -540,6 +540,7 @@ export function mergeRuleSource(from?: string[]): string {
                       data-testid="path-trigger-review-link"
                       [routerLink]="linkTo(pt.task)"
                       [queryParams]="linkQuery(pt.task)"
+                      [queryParamsHandling]="pane() ? 'merge' : ''"
                       >Review task #{{ pt.task }}</a
                     >
                   }
@@ -602,6 +603,7 @@ export function mergeRuleSource(from?: string[]): string {
                 data-testid="security-review-link"
                 [routerLink]="linkTo(rt)"
                 [queryParams]="linkQuery(rt)"
+                [queryParamsHandling]="pane() ? 'merge' : ''"
                 >Security review: task #{{ rt }}</a
               >
             }

@@ -81,9 +81,13 @@ test("shows the path-trigger hold and links the review task it filed @phone @dar
   const link = hold.getByRole("link", { name: `Review task #${reviewId}` });
   await link.click();
   await expect(page).toHaveURL(new RegExp(`/next/task/${reviewId}(\\?|$)`));
-  await expect(page.locator("#task-title")).toContainText(
-    "Security review: Charge in cents",
+  const review = await apiJson(
+    demoServer,
+    accessCode,
+    "GET",
+    `/api/tasks/${reviewId}`,
   );
+  await expect(page.locator("#task-title")).toContainText(review.title);
 });
 
 test("defers a proposal until a picked day and shows when it wakes @phone", async ({
@@ -124,15 +128,18 @@ test("defers a proposal until a picked day and shows when it wakes @phone", asyn
       Math.abs(db.y + db.height / 2 - (sb.y + sb.height / 2)),
     ).toBeLessThan(2);
 
-    const [req] = await Promise.all([
-      page.waitForRequest(
+    // Wait for the server's answer, not just the request leaving: the
+    // task is read back straight after, and must already be deferred.
+    const [resp] = await Promise.all([
+      page.waitForResponse(
         (r) =>
           r.url().endsWith(`/api/tasks/${created.id}/defer`) &&
-          r.method() === "POST",
+          r.request().method() === "POST",
       ),
       submit.click(),
     ]);
-    const until = JSON.parse(req.postData() || "{}").deferredUntil;
+    expect(resp.ok()).toBe(true);
+    const until = JSON.parse(resp.request().postData() || "{}").deferredUntil;
     expect(until).toBeTruthy();
     expect(Date.parse(until)).toBeGreaterThan(Date.now());
 
