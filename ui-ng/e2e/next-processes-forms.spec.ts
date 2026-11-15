@@ -250,6 +250,34 @@ for (const tag of ["@phone", "@dark"]) {
         expect(b.x, id).toBeGreaterThanOrEqual(box.x - 0.5);
         expect(b.x + b.width, id).toBeLessThanOrEqual(box.x + box.width + 0.5);
       }
+      // Nothing in the dialog overflows it sideways.
+      expect(
+        await dlg.evaluate((d) => d.scrollWidth - d.clientWidth),
+      ).toBeLessThanOrEqual(0);
+      // No two settings overlap: measured in one pass (no scrolling in
+      // between), each control's field against every other's.
+      const overlaps = await dlg.evaluate(
+        (d, testids) => {
+          const rects = testids.map((t) => {
+            const el = d.querySelector(`[data-testid="${t}"]`)!;
+            const f = el.closest(".field") ?? el;
+            return { t, r: f.getBoundingClientRect() };
+          });
+          const out: string[] = [];
+          for (let i = 0; i < rects.length; i++) {
+            for (let j = i + 1; j < rects.length; j++) {
+              const a = rects[i].r;
+              const b = rects[j].r;
+              const x = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+              const y = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+              if (x > 1 && y > 1) out.push(`${rects[i].t}/${rects[j].t}`);
+            }
+          }
+          return out;
+        },
+        ids as readonly string[],
+      );
+      expect(overlaps).toEqual([]);
       // Admission and Hosting pills share one height.
       const a = (await page.getByTestId(ids[1]).boundingBox())!;
       const h = (await page.getByTestId(ids[2]).boundingBox())!;
