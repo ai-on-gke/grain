@@ -125,9 +125,8 @@ refused without it. The reason is written to the controller log
   that saved its own session list keeps whatever `Writes` it saved.
 - `self-debug` is retired (schema migration 115): the director holds
   what it became, the `api:self-debug` preset (`tasks:read`,
-  `deployment:read`) and `…/grain#source={}`. The bare name is a
-  one-release alias that `model.CanonicalLegacyGrants` expands to both
-  wherever a grant is recorded.
+  `deployment:read`) and `…/grain#source={}`. The bare name was an
+  alias for one release and is no longer read as either.
 - `CatalogueKindDirector` carries a **built-in Tier 3 floor**
   (`pkg/model/director_floor.go`, G7). `model.DirectorFloorRefusal`
   refuses any grant reaching `merge:force`, `settings:write`,
@@ -135,7 +134,7 @@ refused without it. The reason is written to the controller log
   (`model.DirectorForbiddenAPIScopes`) to a run of that kind, in every
   spelling `model.GrantAPIScopes` reads: `api:<scope>`, `api:<preset>`
   or a scope set expanding to one (`api:grain/operator`), either narrowed
-  with `@owner/name`, a preset alias or retired name, and the canonical
+  with `@owner/name`, a registered alias, and the canonical
   `…/api#<scope-or-preset>` reference. `CapabilityCatalogue.ValidateGrants`
   and `Refusals` apply it before the operator's
   `settings/capabilities.yml` rules and on a nil catalogue too, so an

@@ -33,12 +33,14 @@ import { AccessService } from "../services/access.service";
 import { DirectorContextService } from "../director/director-context.service";
 import { KeyboardService, isTypingTarget } from "../services/keyboard.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { MarkdownDirective } from "../shared/code-highlight";
 import {
   ConfirmDialogComponent,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
 import { repoShort } from "../shared/chips";
 import { SplitController } from "../shared/split-controller";
+import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskDetailComponent } from "../task/task-detail.component";
 import {
@@ -113,10 +115,20 @@ const MODES: { id: LayoutMode; label: string }[] = [
 
 @Component({
   selector: "g-workstream-detail",
-  imports: [TipDirective, ConfirmDialogComponent, TaskDetailComponent],
+  imports: [
+    TipDirective,
+    MarkdownDirective,
+    ConfirmDialogComponent,
+    StatusIconComponent,
+    TaskDetailComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.None,
-  styleUrls: ["./workstream-detail.css", "./workstreams-shared.css"],
+  styleUrls: [
+    "./workstream-detail.css",
+    "../shared/conversation.css",
+    "../shared/code-highlight.css",
+  ],
   host: {
     "(document:keydown)": "onKey($event)",
     "(window:resize)": "onWindowResize()",
@@ -219,21 +231,23 @@ const MODES: { id: LayoutMode; label: string }[] = [
             <span>· owner {{ s.owner }}</span>
           }
           @if (s.repos.length) {
-            <span class="mono">· {{ s.repos.map(short).join(", ") }}</span>
+            <span class="mono" [attr.title]="s.repos.map(short).join(', ')"
+              >· {{ reposSummary(s.repos) }}</span
+            >
           }
           @if (lastText(); as la) {
-            <span>· active {{ la }} ago</span>
+            <span>· active {{ la === "now" ? "now" : la + " ago" }}</span>
           }
           @if (s.paused) {
-            <span class="ws-chip-warn">Paused</span>
+            <span class="ws-chip-warn"
+              ><g-status-icon tone="warn" kind="warn" /> Paused</span
+            >
           } @else if (s.planning) {
-            <span class="ws-chip-run">Planning</span>
+            <span class="ws-chip-run"
+              ><g-status-icon tone="info" kind="info" /> Planning</span
+            >
           }
         </div>
-
-        @if (s.goal) {
-          <p class="ws-goal" data-testid="ws-goal">{{ s.goal }}</p>
-        }
 
         <div class="ws-dprog">
           <div>
@@ -333,14 +347,19 @@ const MODES: { id: LayoutMode; label: string }[] = [
             Show tree
           </button>
         }
-        @if (expandAll()) {
+        @if (treeData().foldedDoneCount > 0 || expandAll()) {
           <button
             type="button"
             class="btn-text"
-            data-testid="ws-collapse-packs"
-            (click)="expandAll.set(false)"
+            data-testid="ws-fold-done-toggle"
+            [attr.aria-expanded]="expandAll()"
+            (click)="expandAll.set(!expandAll())"
           >
-            Re-fold done leaves
+            {{
+              expandAll()
+                ? "Collapse done"
+                : "Expand all (" + treeData().foldedDoneCount + ")"
+            }}
           </button>
         }
         <span class="toolbar-spacer"></span>
@@ -520,6 +539,16 @@ const MODES: { id: LayoutMode; label: string }[] = [
                 >
                   <path d="M0 1 L7 4 L0 7 Z" fill="context-stroke" />
                 </marker>
+                @for (pn of g.nodes; track pn.id; let i = $index) {
+                  <clipPath [attr.id]="'ws-gclip-' + i">
+                    <rect
+                      [attr.x]="pn.x + 8"
+                      [attr.y]="pn.y"
+                      [attr.width]="pn.w > 16 ? pn.w - 16 : pn.w"
+                      [attr.height]="pn.h"
+                    />
+                  </clipPath>
+                }
               </defs>
               @for (e of g.edges; track e.fromId + ":" + e.toId) {
                 @if (e.onAncestorPath) {
@@ -570,7 +599,7 @@ const MODES: { id: LayoutMode; label: string }[] = [
                   </text>
                 </g>
               }
-              @for (pn of g.nodes; track pn.id) {
+              @for (pn of g.nodes; track pn.id; let i = $index) {
                 <g
                   [class]="gnodeClass(pn)"
                   tabindex="0"
@@ -583,6 +612,7 @@ const MODES: { id: LayoutMode; label: string }[] = [
                     $event.preventDefault(); onGraphNodeClick(pn)
                   "
                 >
+                  <title>{{ pn.title }}</title>
                   @if (pn.category === "run" && !pn.isPack) {
                     @for (pulse of [0, 1, 2]; track pulse) {
                       <rect
@@ -604,15 +634,29 @@ const MODES: { id: LayoutMode; label: string }[] = [
                     rx="10"
                   />
                   @if (!pn.isPack && pn.node && !pn.node.virtual) {
-                    <text class="id" [attr.x]="pn.x + 10" [attr.y]="pn.y + 16">
+                    <text
+                      class="id"
+                      [attr.x]="pn.x + 10"
+                      [attr.y]="pn.y + 16"
+                      [attr.clip-path]="'url(#ws-gclip-' + i + ')'"
+                    >
                       #{{ pn.id }} · {{ pn.node.stateText }}
                     </text>
                   } @else {
-                    <text class="id" [attr.x]="pn.x + 10" [attr.y]="pn.y + 16">
+                    <text
+                      class="id"
+                      [attr.x]="pn.x + 10"
+                      [attr.y]="pn.y + 16"
+                      [attr.clip-path]="'url(#ws-gclip-' + i + ')'"
+                    >
                       {{ pn.isPack ? "Expand" : "Goal" }}
                     </text>
                   }
-                  <text [attr.x]="pn.x + 10" [attr.y]="pn.y + 33">
+                  <text
+                    [attr.x]="pn.x + 10"
+                    [attr.y]="pn.y + 33"
+                    [attr.clip-path]="'url(#ws-gclip-' + i + ')'"
+                  >
                     {{ clipTitle(pn.title, 25) }}
                   </text>
                 </g>
@@ -675,7 +719,39 @@ const MODES: { id: LayoutMode; label: string }[] = [
             aria-label="In this stream"
             data-testid="ws-in-stream"
           >
-            <h3>In this stream</h3>
+            <div class="ws-rel-head">
+              <h3>In this stream</h3>
+              @if (s.goal && s.goal.trim()) {
+                <button
+                  type="button"
+                  class="btn-text ws-goal-toggle"
+                  data-testid="ws-goal-toggle"
+                  aria-controls="ws-goal-panel"
+                  [attr.aria-expanded]="goalExpanded()"
+                  (click)="goalExpanded.set(!goalExpanded())"
+                >
+                  {{ goalExpanded() ? "Hide goal" : "Workstream goal" }}
+                </button>
+              }
+            </div>
+            @if (s.goal && s.goal.trim()) {
+              @if (goalExpanded()) {
+                <div
+                  id="ws-goal-panel"
+                  class="msg-body ws-goal-panel"
+                  data-testid="ws-goal"
+                  [gMarkdown]="s.goal"
+                ></div>
+              } @else {
+                <p
+                  id="ws-goal-panel"
+                  class="ws-goal-preview"
+                  data-testid="ws-goal"
+                >
+                  {{ goalPreview(s.goal) }}
+                </p>
+              }
+            }
             @let rel = rels();
             @if (rel.filedBy; as fb) {
               <div class="ws-rel-group">
@@ -694,7 +770,10 @@ const MODES: { id: LayoutMode; label: string }[] = [
             @if (rel.blockingChain.length) {
               <div class="ws-rel-group">
                 <span class="ws-rel-lbl">Blocking chain</span>
-                @for (b of rel.blockingChain; track b.taskId) {
+                @for (
+                  b of visibleRel(rel.blockingChain, "blocking");
+                  track b.taskId
+                ) {
                   <button
                     type="button"
                     class="ws-rel-btn"
@@ -710,12 +789,26 @@ const MODES: { id: LayoutMode; label: string }[] = [
                     }
                   </button>
                 }
+                @if (rel.blockingChain.length > 4) {
+                  <button
+                    type="button"
+                    class="btn-text ws-rel-more"
+                    data-testid="ws-rel-more-blocking"
+                    (click)="toggleRelGroup('blocking')"
+                  >
+                    {{
+                      isRelExpanded("blocking")
+                        ? "Show fewer"
+                        : "+" + (rel.blockingChain.length - 4) + " more"
+                    }}
+                  </button>
+                }
               </div>
             }
             @if (rel.waitsOn.length) {
               <div class="ws-rel-group">
                 <span class="ws-rel-lbl">Waits on</span>
-                @for (w of rel.waitsOn; track w.taskId) {
+                @for (w of visibleRel(rel.waitsOn, "waitsOn"); track w.taskId) {
                   <button
                     type="button"
                     class="ws-rel-btn"
@@ -726,12 +819,29 @@ const MODES: { id: LayoutMode; label: string }[] = [
                     <span class="muted">{{ w.stateText }}</span>
                   </button>
                 }
+                @if (rel.waitsOn.length > 4) {
+                  <button
+                    type="button"
+                    class="btn-text ws-rel-more"
+                    data-testid="ws-rel-more-waitsOn"
+                    (click)="toggleRelGroup('waitsOn')"
+                  >
+                    {{
+                      isRelExpanded("waitsOn")
+                        ? "Show fewer"
+                        : "+" + (rel.waitsOn.length - 4) + " more"
+                    }}
+                  </button>
+                }
               </div>
             }
             @if (rel.waitedOnBy.length) {
               <div class="ws-rel-group">
                 <span class="ws-rel-lbl">Waited on by</span>
-                @for (u of rel.waitedOnBy; track u.taskId) {
+                @for (
+                  u of visibleRel(rel.waitedOnBy, "waitedOnBy");
+                  track u.taskId
+                ) {
                   <button
                     type="button"
                     class="ws-rel-btn"
@@ -742,12 +852,26 @@ const MODES: { id: LayoutMode; label: string }[] = [
                     <span class="muted">{{ u.stateText }}</span>
                   </button>
                 }
+                @if (rel.waitedOnBy.length > 4) {
+                  <button
+                    type="button"
+                    class="btn-text ws-rel-more"
+                    data-testid="ws-rel-more-waitedOnBy"
+                    (click)="toggleRelGroup('waitedOnBy')"
+                  >
+                    {{
+                      isRelExpanded("waitedOnBy")
+                        ? "Show fewer"
+                        : "+" + (rel.waitedOnBy.length - 4) + " more"
+                    }}
+                  </button>
+                }
               </div>
             }
             @if (rel.nextUp.length && !rel.waitedOnBy.length) {
               <div class="ws-rel-group">
                 <span class="ws-rel-lbl">Next up</span>
-                @for (nx of rel.nextUp; track nx.taskId) {
+                @for (nx of visibleRel(rel.nextUp, "nextUp"); track nx.taskId) {
                   <button
                     type="button"
                     class="ws-rel-btn"
@@ -756,6 +880,20 @@ const MODES: { id: LayoutMode; label: string }[] = [
                     <span class="mono">#{{ nx.taskId }}</span>
                     <span class="tt">{{ nx.title }}</span>
                     <span class="muted">{{ nx.stateText }}</span>
+                  </button>
+                }
+                @if (rel.nextUp.length > 4) {
+                  <button
+                    type="button"
+                    class="btn-text ws-rel-more"
+                    data-testid="ws-rel-more-nextUp"
+                    (click)="toggleRelGroup('nextUp')"
+                  >
+                    {{
+                      isRelExpanded("nextUp")
+                        ? "Show fewer"
+                        : "+" + (rel.nextUp.length - 4) + " more"
+                    }}
                   </button>
                 }
               </div>
@@ -777,6 +915,7 @@ const MODES: { id: LayoutMode; label: string }[] = [
             <g-task-detail
               [id]="tid"
               [pane]="true"
+              [tab]="pane()"
               [closable]="false"
               [from]="'workstreams:' + s.key"
               (openTask)="onOpenTask($event)"
@@ -804,6 +943,7 @@ export class WorkstreamDetailComponent implements OnDestroy {
 
   readonly stream = input.required<Workstream>();
   readonly nodeId = input<string | null>(null);
+  readonly pane = input<string>();
   readonly mode = input<LayoutMode>("split");
   readonly hideDone = input(false);
   readonly allDeps = input(false);
@@ -883,9 +1023,12 @@ export class WorkstreamDetailComponent implements OnDestroy {
   protected readonly modes = MODES;
   protected readonly short = repoShort;
   protected readonly expandAll = signal(false);
+  protected readonly goalExpanded = signal(false);
+  protected readonly expandedRelGroups = signal<ReadonlySet<string>>(new Set());
   protected readonly collapsedIds = signal<ReadonlySet<string>>(new Set());
   protected readonly inspMobileOpen = signal(false);
   protected readonly confirming = signal<ConfirmRequest | null>(null);
+  private lastStreamKey = "";
 
   constructor() {
     afterNextRender(() => {
@@ -900,6 +1043,12 @@ export class WorkstreamDetailComponent implements OnDestroy {
     effect(() => {
       const s = this.stream();
       untracked(() => {
+        if (s.key !== this.lastStreamKey) {
+          this.lastStreamKey = s.key;
+          this.goalExpanded.set(false);
+          this.expandedRelGroups.set(new Set());
+          this.expandAll.set(false);
+        }
         if (!s.root.virtual) {
           void this.wsStore.ensureRootDetail(s.rootId);
         }
@@ -1048,7 +1197,7 @@ export class WorkstreamDetailComponent implements OnDestroy {
     const repos = this.stream().repos;
     return repos.length
       ? repos.some((r) => this.access.can("POST /api/tasks", r))
-      : this.access.can("POST /api/tasks");
+      : this.access.canAccessTask("POST /api/tasks", null);
   });
   protected readonly approveCount = computed(
     () => this.wsStore.approvePreview(this.stream()).nodes.length,
@@ -1063,6 +1212,7 @@ export class WorkstreamDetailComponent implements OnDestroy {
   protected readonly treeData = computed(() =>
     buildTreeRows(this.stream(), {
       hideDone: this.hideDone(),
+      autoFoldDone: this.stream().nodes.length > 40 && !this.expandAll(),
       collapsedIds: this.collapsedIds(),
       selectedId: this.activeNodeId(),
     }),
@@ -1116,6 +1266,47 @@ export class WorkstreamDetailComponent implements OnDestroy {
 
   protected clipTitle(t: string, max: number): string {
     return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+  }
+
+  protected goalPreview(goal: string): string {
+    const plain = goal
+      .replace(/\r\n?/g, "\n")
+      .replace(/```[^\n]*\n?/g, " ")
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/`([^`]*)`/g, "$1")
+      .replace(/^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+|(?:[-*_]){3,}\s*$)/gm, "")
+      .replace(
+        /\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|\*([^*]+)\*/g,
+        "$1$2$3$4",
+      )
+      .replace(/\s+/g, " ")
+      .trim();
+    return plain || goal.trim();
+  }
+
+  protected reposSummary(repos: readonly string[]): string {
+    const shown = repos.slice(0, 2).map((r) => repoShort(r));
+    return repos.length > 2
+      ? `${shown.join(", ")} +${repos.length - 2}`
+      : shown.join(", ");
+  }
+
+  protected isRelExpanded(key: string): boolean {
+    return this.expandedRelGroups().has(key);
+  }
+
+  protected toggleRelGroup(key: string): void {
+    this.expandedRelGroups.update((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  protected visibleRel<T>(items: readonly T[], key: string): readonly T[] {
+    return this.isRelExpanded(key) ? items : items.slice(0, 4);
   }
 
   protected range(n: number): number[] {

@@ -37,7 +37,7 @@ const BY_ID = new Map<string, Destination>(DESTINATIONS.map((d) => [d.id, d]));
 @Component({
   selector: "g-customize-nav-dialog",
   encapsulation: ViewEncapsulation.None,
-  styleUrl: "./shell-overlays.css",
+  styleUrls: ["./shell-overlays.css", "../shared/surface-controls.css"],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="scrim" aria-hidden="true" (click)="closed.emit()"></div>

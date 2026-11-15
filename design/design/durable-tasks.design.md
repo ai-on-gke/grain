@@ -387,6 +387,12 @@ How it relates to what exists:
 - `wait_for_task(park: true)` is `resume_later(when: {task})`.
 - `wait_for_task(resume_at)` is `resume_later(when: {at})`.
 
+A park on tasks holds its task with `depends_on` links. The ones the park
+wrote itself are recorded on the suspension (`resume_on.links`), and the
+run that resumes the park removes them. A target that is reopened later
+then neither holds the task again nor shows up in later prompts as a
+declared dependency. Links the task already declared when it parked stay.
+
 Both tools keep their names and arguments, because agents and templates
 use them. Their implementation becomes one call into `Store.Suspend`, and
 `model.ParkedOutcome` becomes `suspend_kind = requested`. The new
@@ -1122,9 +1128,17 @@ for the reason under "Routes and scopes"). As built:
   task, a running one (the reconciler
   tries again once the run ends) and a console session, whose session
   tag cannot be shared and which already rolls over by being closed and
-  refiled. Telling the director it is past the limit is not built yet.
-- The UI banner on `/tasks/N` is follow-up work under the deployment's
-  screenshot rule; the API already answers with `rolledOverTo`.
+  refiled. A session past a limit is told so instead
+  (`History.RolloverDue`, `contextUpkeepSection`, grain/task-4222): its
+  prompt names the limit and asks it to write a fresh handover and say,
+  when the conversation next rests, that it is due to be closed and
+  refiled.
+- The task page banners a rolled-over task's successor, and the
+  successor links back, in both UIs (`task-rolled-over-to` /
+  `task-rolled-over-from`, grain/task-4222); the task list and board
+  carry a "rolled over to M" chip beside "superseded by". The demo seeds
+  a pair, "Watch the acme/widgets nightly build"
+  (`ui-ng/e2e/next-task-rollover.spec.js`).
 
 ### Follow-up work
 
@@ -1139,7 +1153,7 @@ for the reason under "Routes and scopes"). As built:
   badge, Compact and Write handover…, and summarised comments collapsed
   in place in the timeline (`ui/src/components/detail/TaskContext.jsx`).
 - Rollover's task-page banner, and telling a console session past the
-  limit that it should be closed and refiled.
+  limit that it should be closed and refiled. Done in grain/task-4222.
 
 ## Store and schema changes (summary)
 

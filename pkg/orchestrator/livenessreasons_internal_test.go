@@ -176,10 +176,14 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 	for _, state := range sortedStates(taskLane) {
 		for _, task := range tasks {
 			for _, obs := range observations {
-				for _, deps := range [][]string{nil, {"2"}} {
+				for _, blocked := range []struct {
+					deps  []string
+					holds []model.BlockerHold
+				}{{}, {deps: []string{"2"}}, {deps: []string{"2"}, holds: []model.BlockerHold{{ID: "2", State: model.StateFailed}}}} {
+					deps := blocked.deps
 					for _, hold := range []queuedHold{holdNone, holdUsagePaused, holdLocalPolicy, holdSuspension, holdDispatchBlocked} {
 						for _, asked := range askedFacts {
-							reason := taskReasonOf(task, model.State(state), obs, deps, hold, asked)
+							reason := taskReasonOf(task, model.State(state), obs, deps, hold, asked, blocked.holds)
 							if _, ok := taskReasons[reason]; !ok || reasonState(reason) != state {
 								t.Errorf("taskReasonOf(%q, obs %+v, deps %v, hold %v, asked %+v) = %q, which is not "+
 									"one of that state's classified reasons", state, obs, deps, hold, asked, reason)
@@ -222,12 +226,12 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 		{model.StateDeferred, model.Task{GoalKind: model.GoalBaseGreen}, nil, nil, holdNone, taskReasonGoalBaseGreen},
 		{model.StateDeferred, model.Task{GoalKind: model.GoalBaseGreen, DeferredUntil: &wake}, nil, nil, holdNone, taskReasonDeferredWake},
 	} {
-		if got := taskReasonOf(c.task, c.state, c.obs, c.deps, c.hold, model.ReplyFacts{}); got != c.want {
+		if got := taskReasonOf(c.task, c.state, c.obs, c.deps, c.hold, model.ReplyFacts{}, nil); got != c.want {
 			t.Errorf("taskReasonOf(%q, obs %+v, deps %v, hold %v) = %q, want %q",
 				c.state, c.obs, c.deps, c.hold, got, c.want)
 		}
 	}
-	if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, nil, model.ReplyFacts{}, "", ""); got.Control != "Run now" ||
+	if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, nil, nil, model.ReplyFacts{}, "", ""); got.Control != "Run now" ||
 		got.Class != string(livenessDriven) || got.Reason != taskReasonReady {
 		t.Errorf("TaskReason(queued) = %+v, want queued/ready, driven, with Run now", got)
 	}
@@ -241,6 +245,34 @@ func TestTaskReasonOfIsTotal(t *testing.T) {
 // task's next message, a question, and otherwise a run that answered in
 // a comment -- never "question" for all of them. Each names the control
 // that ends it: Grant for an access request, Reply for the rest.
+// TestTaskReasonNamesABlockerOnlyAPersonCanClose is task 4856: a queued
+// task waiting on one that failed, or that nobody has approved, waits on
+// a person rather than on dispatch, and its reason says so and names the
+// blocker -- while one waiting on a blocker grain is still driving reads
+// blocked_on_task as before, and a dispatch condition still outranks both.
+func TestTaskReasonNamesABlockerOnlyAPersonCanClose(t *testing.T) {
+	failed := model.BlockerHold{ID: "4822", State: model.StateFailed, Why: "failed -- Retry or close it"}
+	proposed := model.BlockerHold{ID: "4830", State: model.StateProposed, Why: "proposed -- Approve or close it"}
+	got := TaskReason(model.Task{}, model.StateQueued, nil, []string{"4822", "4830", "4831"},
+		[]model.BlockerHold{failed, proposed}, nil, model.ReplyFacts{}, "", "")
+	if got.Reason != taskReasonBlockedOnPerson || got.Class != string(livenessAwaitingPerson) || got.Driver != "" {
+		t.Errorf("TaskReason(queued on a failed and a proposed task) = %+v, want %s, awaiting a person, no driver",
+			got, taskReasonBlockedOnPerson)
+	}
+	for _, want := range []string{"task 4822 (failed -- Retry or close it)", "task 4830 (proposed -- Approve or close it)"} {
+		if !strings.Contains(got.Resource, want) {
+			t.Errorf("TaskReason(queued on a failed and a proposed task).Resource = %q, want it to name %q", got.Resource, want)
+		}
+	}
+	if got := TaskReason(model.Task{}, model.StateQueued, nil, []string{"4831"}, nil, nil, model.ReplyFacts{}, "", ""); got.Reason != taskReasonBlocked {
+		t.Errorf("TaskReason(queued on a driven task) = %+v, want %s", got, taskReasonBlocked)
+	}
+	if got := TaskReason(model.Task{}, model.StateQueued, nil, []string{"4822"}, []model.BlockerHold{failed}, nil,
+		model.ReplyFacts{}, "", "git proxy down"); got.Reason != taskReasonDispatchBlocked {
+		t.Errorf("TaskReason(queued on a failed task, dispatch blocked) = %+v, want %s", got, taskReasonDispatchBlocked)
+	}
+}
+
 func TestAwaitingReplyReasonNamesTheAsk(t *testing.T) {
 	plain, chat := model.Task{ID: "1"}, model.Task{ID: "1", Interactive: true}
 	for _, c := range []struct {
@@ -261,7 +293,7 @@ func TestAwaitingReplyReasonNamesTheAsk(t *testing.T) {
 		{chat, model.ReplyFacts{UnansweredComment: true}, taskReasonUnansweredComment, "Run now"},
 		{plain, model.ReplyFacts{UnansweredComment: true, Stopped: true}, taskReasonStopped, "Reply"},
 	} {
-		got := TaskReason(c.task, model.StateAwaitingReply, nil, nil, nil, c.asked, "", "")
+		got := TaskReason(c.task, model.StateAwaitingReply, nil, nil, nil, nil, c.asked, "", "")
 		if got.Reason != c.want || got.Control != c.label || got.Class != string(livenessAwaitingPerson) {
 			t.Errorf("TaskReason(awaiting_reply, interactive %v, %+v) = %+v, want %s, awaiting a person, with %q",
 				c.task.Interactive, c.asked, got, c.want, c.label)
@@ -269,7 +301,7 @@ func TestAwaitingReplyReasonNamesTheAsk(t *testing.T) {
 	}
 	// The facts are an awaiting_reply task's alone: another state's
 	// sub-case does not move for them.
-	if got := TaskReason(plain, model.StateQueued, nil, nil, nil, model.ReplyFacts{Access: true}, "", "").Reason; got != taskReasonReady {
+	if got := TaskReason(plain, model.StateQueued, nil, nil, nil, nil, model.ReplyFacts{Access: true}, "", "").Reason; got != taskReasonReady {
 		t.Errorf("TaskReason(queued, access) = %q, want %q", got, taskReasonReady)
 	}
 }
@@ -285,7 +317,7 @@ func TestTaskReasonNamesADispatchConditionOnEveryQueuedTask(t *testing.T) {
 		deps []string
 		wait *model.GrantWait
 	}{{nil, nil}, {[]string{"2"}, nil}, {nil, wait}} {
-		got := TaskReason(model.Task{}, model.StateQueued, nil, c.deps, c.wait, model.ReplyFacts{}, "", why)
+		got := TaskReason(model.Task{}, model.StateQueued, nil, c.deps, nil, c.wait, model.ReplyFacts{}, "", why)
 		if got.Reason != taskReasonDispatchBlocked || got.Class != string(livenessAwaitingExternal) || got.Control != "" {
 			t.Errorf("TaskReason(queued, deps %v, wait %v, blocked) = %+v, want %s, awaiting an external answer, no control",
 				c.deps, c.wait, got, taskReasonDispatchBlocked)
@@ -294,10 +326,10 @@ func TestTaskReasonNamesADispatchConditionOnEveryQueuedTask(t *testing.T) {
 			t.Errorf("Resource = %q, want it to say dispatch is blocked and name %q", got.Resource, why)
 		}
 	}
-	if got := TaskReason(model.Task{}, model.StateRunning, nil, nil, nil, model.ReplyFacts{}, "", why); got.Reason != taskReasonRunLive {
+	if got := TaskReason(model.Task{}, model.StateRunning, nil, nil, nil, nil, model.ReplyFacts{}, "", why); got.Reason != taskReasonRunLive {
 		t.Errorf("TaskReason(running, blocked) = %+v, want %s", got, taskReasonRunLive)
 	}
-	if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, nil, model.ReplyFacts{}, "", ""); got.Reason != taskReasonReady {
+	if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, nil, nil, model.ReplyFacts{}, "", ""); got.Reason != taskReasonReady {
 		t.Errorf("TaskReason(queued, not blocked) = %+v, want %s", got, taskReasonReady)
 	}
 }
@@ -322,7 +354,7 @@ func TestTaskReasonReadsAUsageLimitPauseOffItsWait(t *testing.T) {
 		{&model.GrantWait{Capability: model.QuotaWaitCapability, Resource: "2 worker runs are live of the 2 this cycle allows"}, taskReasonReady},
 		{&model.GrantWait{Capability: model.ModelWaitCapability, Resource: covered}, taskReasonReady},
 	} {
-		if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, c.wait, model.ReplyFacts{}, "", "").Reason; got != c.want {
+		if got := TaskReason(model.Task{}, model.StateQueued, nil, nil, nil, c.wait, model.ReplyFacts{}, "", "").Reason; got != c.want {
 			t.Errorf("TaskReason(queued, wait %+v) = %q, want %q", c.wait, got, c.want)
 		}
 	}

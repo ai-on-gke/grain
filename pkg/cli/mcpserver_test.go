@@ -152,14 +152,14 @@ func TestCIRepoScopeFollowsTheRunsOwnRepositoryAndTheWideGrant(t *testing.T) {
 		{"a task debugging grain itself", "acme/widgets", daemon.GrantNames{"grain-ci", grainserver.SourceGrant},
 			[]string{grainserver.SourceGrant},
 			mcp.CIRepoScope{Repo: "acme/widgets", AllRepos: true}},
-		// The retired bare self-debug, from a run or a daemon a release
-		// behind, still reads as grain#source.
-		{"the retired self-debug alias", "acme/widgets", daemon.GrantNames{"grain-ci", grainserver.LegacySelfDebug},
+		// The retired bare self-debug is no alias for grain#source any
+		// longer, from a run or from the daemon's wide list alike.
+		{"the retired self-debug", "acme/widgets", daemon.GrantNames{grainserver.CIGrant, grainserver.LegacySelfDebug},
 			[]string{grainserver.LegacySelfDebug},
-			mcp.CIRepoScope{Repo: "acme/widgets", AllRepos: true}},
-		{"grain#source with an older daemon's self-debug", "acme/widgets", daemon.GrantNames{"grain-ci", grainserver.SourceGrant},
+			mcp.CIRepoScope{Repo: "acme/widgets"}},
+		{"grain#source with self-debug on the wide list", "acme/widgets", daemon.GrantNames{grainserver.CIGrant, grainserver.SourceGrant},
 			[]string{grainserver.LegacySelfDebug},
-			mcp.CIRepoScope{Repo: "acme/widgets", AllRepos: true}},
+			mcp.CIRepoScope{Repo: "acme/widgets"}},
 		// grain/task-2555: a team whose grain#source is scoped to its own
 		// work reads its own repository's CI and nobody else's.
 		{"a team-scoped grain#source grant", "acme/widgets", daemon.GrantNames{"grain-ci", grainserver.SourceGrant},

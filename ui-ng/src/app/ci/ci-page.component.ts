@@ -57,6 +57,7 @@ import {
   type QuarantineTestResponse,
   cleanRef,
   extractFailedTests,
+  failedJobIds,
   faultRefCount,
   faultRunCount,
   faultSourceOf,
@@ -69,6 +70,7 @@ import {
   runBadge,
   runBranch,
   runBucket,
+  runRetryTaskId,
   runTaskId,
   runTitle,
   safeExternalUrl,
@@ -116,6 +118,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "../inbox/inbox-queue.css",
     "./ci-list.css",
     "./ci-detail.css",
@@ -537,6 +540,7 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                   [attr.data-testid]="'ci-run-row-' + r.id"
                   tabindex="0"
                   role="button"
+                  [attr.aria-label]="rowLabel(r, badge.label)"
                   [attr.aria-current]="
                     store.selectedId() === r.id ? 'true' : null
                   "
@@ -884,17 +888,29 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                                   bytesOf(ghaLog.bytes)
                                 }})</span
                               >
-                              <input
-                                type="search"
-                                class="ci-log-search"
-                                placeholder="Search log…"
-                                aria-label="Search log lines"
-                                data-testid="ci-log-search"
-                                [value]="logSearch()"
-                                (input)="
-                                  logSearch.set($any($event.target).value)
-                                "
-                              />
+                              <form
+                                role="search"
+                                autocomplete="off"
+                                style="display: contents"
+                                (submit)="$event.preventDefault()"
+                              >
+                                <input
+                                  type="search"
+                                  name="grain-ci-log-search"
+                                  autocomplete="off"
+                                  spellcheck="false"
+                                  data-lpignore="true"
+                                  data-1p-ignore="true"
+                                  class="ci-log-search"
+                                  placeholder="Search log…"
+                                  aria-label="Search log lines"
+                                  data-testid="ci-log-search"
+                                  [value]="logSearch()"
+                                  (input)="
+                                    logSearch.set($any($event.target).value)
+                                  "
+                                />
+                              </form>
                               <button
                                 type="button"
                                 class="btn-text"
@@ -980,17 +996,29 @@ const PROVIDERS: readonly { id: CIProviderFilter; label: string }[] = [
                             >
                               <div class="ci-log-bar">
                                 <span class="tabular">{{ step.name }}</span>
-                                <input
-                                  type="search"
-                                  class="ci-log-search"
-                                  placeholder="Search log…"
-                                  aria-label="Search log lines"
-                                  data-testid="ci-log-search"
-                                  [value]="logSearch()"
-                                  (input)="
-                                    logSearch.set($any($event.target).value)
-                                  "
-                                />
+                                <form
+                                  role="search"
+                                  autocomplete="off"
+                                  style="display: contents"
+                                  (submit)="$event.preventDefault()"
+                                >
+                                  <input
+                                    type="search"
+                                    name="grain-ci-step-log-search"
+                                    autocomplete="off"
+                                    spellcheck="false"
+                                    data-lpignore="true"
+                                    data-1p-ignore="true"
+                                    class="ci-log-search"
+                                    placeholder="Search log…"
+                                    aria-label="Search log lines"
+                                    data-testid="ci-log-search"
+                                    [value]="logSearch()"
+                                    (input)="
+                                      logSearch.set($any($event.target).value)
+                                    "
+                                  />
+                                </form>
                                 @if (isActive(run)) {
                                   <button
                                     type="button"
@@ -1420,7 +1448,11 @@ export class CIPageComponent implements OnInit, OnDestroy {
   protected readonly sharedFaults = computed(() => this.store.combinedFaults());
 
   protected readonly availableRepos = computed(() => {
-    const set = new Set<string>(this.store.targetRepos());
+    const configured = this.store.targetRepos();
+    if (this.store.hasTargetAllowlist() && configured.length > 0) {
+      return [...configured].sort();
+    }
+    const set = new Set<string>(configured);
     for (const r of this.store.runs()) {
       if (r.repo) set.add(r.repo);
     }
@@ -1512,15 +1544,23 @@ export class CIPageComponent implements OnInit, OnDestroy {
     });
 
     // Sync deep-linked /ci/runs/:id route parameter or auto-select top run on desktop.
+    let hadRouteId = false;
     effect(() => {
       const routeId = this.id();
       const runs = this.filteredRuns();
       const loaded = this.store.loaded();
       untracked(() => {
         if (routeId) {
+          hadRouteId = true;
           this.mobileDetailOpen.set(true);
-          void this.store.selectRun(routeId);
+          if (this.store.selectedId() !== routeId) {
+            void this.store.selectRun(routeId);
+          }
           return;
+        }
+        if (hadRouteId) {
+          hadRouteId = false;
+          this.mobileDetailOpen.set(false);
         }
         const cur = this.store.selectedId();
         if (
@@ -1653,9 +1693,15 @@ export class CIPageComponent implements OnInit, OnDestroy {
   protected openRun(runId: string, fromUserClick = false): void {
     if (fromUserClick) this.mobileDetailOpen.set(true);
     void this.store.selectRun(runId);
-    if (this.id() && this.id() !== runId) {
+    if (this.id() !== runId) {
       void this.router.navigate(["/ci", "runs", runId]);
     }
+  }
+
+  protected rowLabel(run: CIRun, statusLabel: string): string {
+    const br = runBranch(run);
+    const sha = run.commit ? ` @ ${run.commit.slice(0, 7)}` : "";
+    return `${statusLabel} ${runTitle(run)} on ${run.repo}${br ? " " + br : ""}${sha} (${run.id})`;
   }
 
   protected closeMobileDetail(): void {
@@ -1842,6 +1888,7 @@ export class CIPageComponent implements OnInit, OnDestroy {
         recheck: this.draftRecheck() || undefined,
       });
       this.runDialogOpen.set(false);
+      if (created?.id) this.openRun(created.id);
       this.snackbar.show(`Started CI run ${created?.id ?? ""}`.trim());
     } catch (err) {
       this.store.actionError.set(errorText(err));
@@ -1854,7 +1901,12 @@ export class CIPageComponent implements OnInit, OnDestroy {
     run: CIRun,
     failedOnly: boolean,
   ): Promise<void> {
-    const tid = runTaskId(run);
+    const tid = runRetryTaskId(run);
+    let jobs: string[] | undefined;
+    if (!tid && failedOnly) {
+      const failed = failedJobIds(run);
+      if (failed.length > 0) jobs = failed;
+    }
     try {
       const created = await this.store.triggerRun(
         tid
@@ -1869,10 +1921,15 @@ export class CIPageComponent implements OnInit, OnDestroy {
               repo: run.repo,
               ref: runBranch(run) || "main",
               commit: run.commit || undefined,
+              event: run.event || undefined,
+              jobs,
               recheck: true,
               recheckFailed: failedOnly || undefined,
             },
       );
+      // Follow to the run it started: on /ci/runs/<id> the route's id
+      // would otherwise pull the inspector back to the run just retried.
+      if (created?.id) this.openRun(created.id);
       this.snackbar.show(
         failedOnly
           ? `Re-running failed jobs (${created?.id ?? "started"})`

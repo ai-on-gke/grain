@@ -1067,6 +1067,12 @@ var Migrations = []Migration{
 	},
 	{
 		Version: 147,
+		Description: "have every repository's declarations read again, writing back the grants a schedule file " +
+			"declares that a firing from before 144 wrote its template's over (grain/task-5360)",
+		Up: rereadDeclarations,
+	},
+	{
+		Version: 148,
 		Description: "add github_ci_job.event and head_repo, the triggering event and head repository of a job's " +
 			"workflow run, so pull request and fork runs stay out of the default-branch readings (grain/task-4846)",
 		Statements: []string{
@@ -1077,7 +1083,7 @@ var Migrations = []Migration{
 }
 
 // schema56GitHubCIJobTable is github_ci_job as schema 56 created it, frozen
-// so migration 56 followed by migration 147's ALTER TABLE runs cleanly from
+// so migration 56 followed by migration 148's ALTER TABLE runs cleanly from
 // any earlier baseline.
 const schema56GitHubCIJobTable = `CREATE TABLE IF NOT EXISTS ` + "`github_ci_job`" + ` (
   ` + "`repo`" + `          TEXT     NOT NULL,

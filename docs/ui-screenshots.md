@@ -16,7 +16,7 @@ make ui-screenshots PAGES=/,/inbox OUT=screenshots/after
 
 This builds the frontend, installs Playwright's Chromium, builds `grain`
 from the checkout and runs `grain demo` over a throwaway store. That is
-the same seeded server the e2e suite's workers use (`ui/e2e/fixtures.js`).
+the same seeded server the e2e suite's workers use (`ui-shared/e2e/demo.js`).
 It then shoots every page in `PAGES` at desktop (1440×900) and phone
 (390×844) widths, in light and dark. The theme goes through the app's own
 `grain.themeMode` setting as well as `prefers-color-scheme`.
@@ -176,7 +176,7 @@ grain's conversation. A description a human has rewritten is left alone.
 All `/next/` routes (`ui-ng/src/app/app.routes.ts`) are covered by one Playwright + axe suite over `grain demo`:
 
 ```sh
-npm --prefix ui run test:e2e:next
+make test-e2e-ng
 ```
 
 Set `GRAIN_UI_SHOTS=/tmp/next-shots` to also save desktop (`1440×900`) and phone (`390×844`) light and dark PNGs for every `/next/` destination. `make ui-screenshots PAGES=/next/inbox,/next/tasks OUT=screenshots/after` works for `/next/` routes too when producing `contact-sheet.png`.

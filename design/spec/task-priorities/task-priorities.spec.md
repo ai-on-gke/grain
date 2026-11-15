@@ -32,7 +32,7 @@ const DefaultTaskPriority = 5
 
 (`pkg/model/task.go`).
 
-1.1.3. Valid explicit task priorities are positive integers (`Priority >= 1`). There is **no** upper bound or clamp, and the codebase defines **no** named priority bands. Tasks with `1 <= Priority < 5` sort below default-priority work; tasks with `Priority > 5` sort above it.
+1.1.3. Valid explicit task priorities are positive integers (`Priority >= 1`). There is **no** upper bound or clamp, and user, REST, CLI, MCP, and UI surfaces define **no** named priority bands (internal pipeline filing floors and constants at `7`, `8`, and `9` are specified in §3.1.2). Tasks with `1 <= Priority < 5` sort below default-priority work; tasks with `Priority > 5` sort above it.
 
 ### 1.2 Task priority input validation {#TP-2}
 
@@ -135,13 +135,27 @@ COALESCE(`t`.`approved_at`, `t`.`created_at`),
 
 ### 3.1 Filing defaults across origins {#TP-10}
 
-3.1.1. Every task creation path starts at `model.DefaultTaskPriority` (`5`) unless an explicit positive `priority` is supplied on the filing call or inherited from a template (`Template.Priority`). Specifically:
+3.1.1. Every task creation path starts at `model.DefaultTaskPriority` (`5`) unless an explicit positive `priority` is supplied on the filing call, inherited from a template (`Template.Priority`), or assigned one of the built-in pipeline priorities in §3.1.2. Specifically:
 
 - Human filings via the UI, `POST /api/tasks`, or `grain create` without `priority` get `5` (or the selected template's positive `Priority`).
-- Automated filings in `pkg/orchestrator` — base-branch CI repairs (`basebranchci.go`), base-branch release repairs (`basebranchrelease.go`), base-repair bypass filings (`baserepairbypass.go`), merge-queue fixes, upgrade checks (`upgradecheck.go`), takeovers (`takeover.go`), console sessions, automated reviews (`review.go`), path triggers (`pathtrigger.go`), GitHub event tasks (`githubevents.go`), imported GitHub issues (`issueimport.go`), inline schedule firings, and branch ports (`port.go`) — get `5` unless composed from a template with a positive `Priority`.
+- Ordinary automated filings in `pkg/orchestrator` and `pkg/model` — Grain-CI base-branch repairs (`basebranchci.go`), base-branch release triage (`basebranchrelease.go`), base-repair bypass follow-ups (`baserepairbypass.go`), post-merge review follow-ups (`mergegates.go`), merge-queue fixes, upgrade checks (`upgradecheck.go`), takeovers (`takeover.go`, `takeover_adopt.go`), console sessions (`pkg/model/console_session.go`), non-gating merge path triggers (`pathtrigger.go`), release-notes filings (`releasenotes.go`), GitHub event tasks (`githubevents.go`), imported GitHub issues (`issueimport.go`), inline schedule firings, ordinary suite runs, and branch ports (`port.go`) — get `5` unless composed from a template with a positive `Priority`.
 - Branch ports (`pkg/orchestrator/port.go`) do **not** copy the source task's `Priority`; they pass `atFront: true` and default to `5`.
 
-3.1.2. `model.Config` (`grain_config`) defines **no** `priority_defaults` map or per-origin priority configuration setting.
+3.1.2. Three automated pipeline creation paths in `pkg/orchestrator` assign fixed or inherited priorities above `DefaultTaskPriority` (`5`):
+
+- **Automated gating reviews (`pkg/orchestrator/review.go` `newReview`, `pkg/orchestrator/securityhold_inplace.go`, `pkg/orchestrator/clreviews.go`, gating pull-request trigger reviews in `pkg/orchestrator/pathtriggerreview.go` (`buildPullRequestReview`); `pkg/model/review_priority.go`, `docs/declarations.md`):** Every automated gating review — default attached reviews, in-place security reviews, CL reviews, gating `.grain/triggers` pull-request reviews, and re-reviews after pushes — MUST be filed with `atFront: true` at `model.ReviewPriority(gated)`:
+  ```go
+  const ReviewPriorityFloor = 7
+
+  func ReviewPriority(gated Task) int {
+      return max(effectivePriority(gated.Priority), ReviewPriorityFloor)
+  }
+  ```
+  (where `effectivePriority(0) == DefaultTaskPriority`). `newReview` MUST ignore `tmpl.Priority` completely (even if a review template declares a `priority` above `7` or above `gated.Priority`), so repository-declared review templates cannot lift reviews of ordinary changes into the release-gate (`8`) or repair/train (`9`) levels or raise a review's proposal ceiling (§4.2).
+- **Stage 2 release-candidate qualification suite runs (`pkg/orchestrator/releasequalification.go`, `pkg/model/release_qualification.go`):** Qualification suite runs start via `Store.CreateSuiteRunWith` with `SuiteRunOptions{Priority: model.PriorityReleaseGate}`, where `model.PriorityReleaseGate = 8`, overriding item template priorities (§3.2.2).
+- **Stage 1 (`nightly.yml`) and default-branch GitHub Actions gating-workflow repairs (`pkg/orchestrator/stage1repair.go`, `pkg/orchestrator/githubbaserepair.go`):** Red Stage 1 runs (`fileOrUpdateStage1Repair`) file repairs at `Stage1RepairPriority = 9` (`atFront: true`), and red default-branch runs of gating GitHub Actions workflows (`tests`, `test`, or `ci` on `ci_mode: github` repositories, `fileOrUpdateGitHubBaseRepair`) file repairs at `GitHubBaseRepairPriority = Stage1RepairPriority` (`9`, `atFront: true`). (Grain-CI base-branch repairs in `basebranchci.go` remain at `5` and lead priority `5` via `fixesBaseBranchOrderSQL`, §2.2.)
+
+3.1.3. `model.Config` (`grain_config`) defines **no** `priority_defaults` map or user-configurable per-origin priority setting.
 
 ### 3.2 Template composition and non-template configuration entities {#TP-11}
 
@@ -150,7 +164,7 @@ COALESCE(`t`.`approved_at`, `t`.`created_at`),
 - `*tmpl.Priority` when `tmpl.Priority != nil && *tmpl.Priority != 0`;
 - `model.DefaultTaskPriority` (`5`) otherwise.
 
-3.2.2. When `POST /api/tasks` (`ui.CreateTask` in `pkg/ui/client.go`) references a `templateId` and also supplies an explicit `req.Priority`, the explicit `req.Priority` overrides the template's `Priority`. When `req.Priority` is `nil`, the composed template's `Priority` is used.
+3.2.2. When `POST /api/tasks` (`ui.CreateTask` in `pkg/ui/client.go`) references a `templateId` and also supplies an explicit `req.Priority`, the explicit `req.Priority` overrides the template's `Priority`. When `req.Priority` is `nil`, the composed template's `Priority` is used. Likewise, when `Store.CreateSuiteRunWith` (`composeSuitePass` in `pkg/model/compose.go`) receives a non-zero `SuiteRunOptions.Priority` (such as `model.PriorityReleaseGate` in §3.1.2), `opts.Priority` overrides each suite item's composed template priority.
 
 3.2.3. Inline `ComposeScheduleTask` (a `model.Schedule` with no `TemplateID`) sets `Composition.Priority = model.DefaultTaskPriority` (`5`). `model.Schedule` and `model.Suite` carry no `Priority` field of their own.
 
@@ -162,11 +176,18 @@ COALESCE(`t`.`approved_at`, `t`.`created_at`),
 
 3.3.3. Proposals allocate `order_key` through `Store.OrderKeyForNewTask(ctx, p.AtFront)` (`at_front`), not adjacent to the parent task's `order_key` (there is no `OrderKeyAfter`).
 
-### 3.4 Dependency independence (no blocker raising) {#TP-13}
+### 3.4 Dependency independence and automatic priority propagation {#TP-13}
 
 3.4.1. Adding or removing task dependencies (`depends_on` / `Store.AddDependency`) MUST NOT alter the stored or effective `Priority` of blocking tasks. Ready queries (`Store.Ready*`) filter out tasks with open dependencies and rank the remaining ready tasks by their own `task.priority`.
 
-3.4.2. The one automatic raise is a schedule's own starved firing (`Store.EscalateStarvedScheduleBlocker` in `pkg/model/schedule_starved.go`, `docs/schedules.md`). When an `overlap: skip` schedule's held occurrence has waited `ScheduleStarvedAfter` (1h), or `ScheduleStarvedOccurrences` (3) occurrences, on the task its previous firing filed, and that task is still `queued` and has never had a run, the reconciler raises that task's `Priority` to the highest `Priority` of any other queued task. It MUST NOT lower a priority, and it MUST NOT touch `order_key`.
+3.4.2. **Starved `overlap: skip` schedule blockers (`Store.EscalateStarvedScheduleBlocker` in `pkg/model/schedule_starved.go`, `docs/schedules.md`):** When an `overlap: skip` schedule's held occurrence (`ScheduleSkipHeld`, `SuppressedByOpenTask`) has waited `ScheduleStarvedAfter` (`1h`), or `ScheduleStarvedOccurrences` (`3`) occurrences, on the open task blocking it — whether that task came from the schedule's own previous firing or from another schedule's firing holding its `overlap-group` (`ScheduleSkip.HeldByScheduleID != ""`) — and that task is still `queued` and has never had a run (`len(runs) == 0`), the reconciler raises that task's `Priority` to the highest `Priority` of any other queued task (`topQueuedPriority`). It MUST NOT lower a priority, and it MUST NOT touch `order_key`.
+
+3.4.3. **Gated-task priority propagation to open reviews (`Store.CarryPriorityToReviews` and `CarriedReviewPriority` in `pkg/model/review_priority.go`, `ui.Client.UpdateTask` in `pkg/ui/client.go`, `docs/declarations.md`):**
+
+- Directly changing the `Priority` of a gating review task (`Origin.Reason == ReasonReview`) through `ui.Client.UpdateTask` (`PATCH /api/tasks/{id}`, `grain update`) appends tag `model.ReviewPriorityHandSetTag` (`"priority-set-by-hand"`) to that review task.
+- Whenever a task's effective `Priority` changes through `ui.Client.UpdateTask`, `Store.CarryPriorityToReviews` updates every open gating review of that task (`Origin.Reason == ReasonReview` linked via `LinkProposedBy`; non-review follow-ups sharing `LinkProposedBy` MUST be left unwritten) to `want = max(effectivePriority(after), ReviewPriorityFloor)` (`7`), except that a review carrying `"priority-set-by-hand"` MAY be raised (`want > current`) and MUST NOT be lowered (`want < current`).
+
+3.4.4. **Keeping open Stage 1 and GitHub Actions default-branch repairs at repair priority (`fileOrUpdateRepair` in `pkg/orchestrator/stage1repair.go`):** When another failing run concludes while an open Stage 1 (`nightly.yml`) repair or default-branch GitHub Actions gating-workflow repair exists and its `Priority` is below `9` (`Stage1RepairPriority` / `GitHubBaseRepairPriority`), `fileOrUpdateRepair` raises `Priority` back to `9` (leaving any higher `Priority` unchanged).
 
 ## 4. Permissions, approval gates, and orthogonal ranks
 
@@ -176,24 +197,35 @@ COALESCE(`t`.`approved_at`, `t`.`created_at`),
 
 ### 4.2 Proposal approval ceiling (`PersonOnlyProposalSettings`) {#TP-15}
 
-4.2.1. `model.PersonOnlyProposalSettings(parent, child)` (`pkg/model/hold_for_approval.go`) enforces the priority escalation gate whenever an agent task or console session `parent` proposes `child`:
+4.2.1. `model.PersonOnlyProposalSettings(child, parent)` and `proposerPriorityCeiling(parent)` (`pkg/model/hold_for_approval.go`) enforce the priority escalation gate whenever an agent task or console session `parent` proposes `child`:
 
 ```go
-ceiling := max(parent.Priority, DefaultTaskPriority)
+func proposerPriorityCeiling(parent Task) int {
+    if parent.Origin.Reason == ReasonReview && parent.Priority <= ReviewPriorityFloor &&
+        !slices.Contains(parent.Tags, ReviewPriorityHandSetTag) {
+        return DefaultTaskPriority
+    }
+    return parent.Priority
+}
+
+ceiling := max(proposerPriorityCeiling(parent), DefaultTaskPriority)
 if child.Priority > ceiling {
-    reasons = append(reasons, fmt.Sprintf(
-        "priority %d is above this task's priority (%d)",
+    why = append(why, fmt.Sprintf(
+        "it asks for priority %d, above the %d its proposer may give it "+
+            "(the higher of its proposer's own priority and the default), which would dispatch it ahead "+
+            "of work a person queued",
         child.Priority, ceiling,
     ))
 }
 ```
 
-4.2.2. Because `ceiling` is `max(parent.Priority, 5)`:
+4.2.2. Because `ceiling` is `max(proposerPriorityCeiling(parent), 5)`:
 
 - A default-priority parent (`Priority == 5`) may queue proposals with `1 <= child.Priority <= 5` (when the parent's `AutoSubmits` or `ConsoleSession.TasksApproved` otherwise permits queuing) without human approval.
 - A lower-priority parent (`1 <= parent.Priority < 5`) may still queue proposals up to `DefaultTaskPriority` (`5`) without human approval.
-- A higher-priority parent (`parent.Priority > 5`, e.g. `10`) may queue proposals up to `parent.Priority` (`10`) without human approval.
-- Any proposal with `child.Priority > max(parent.Priority, 5)` MUST be held unapproved (`ApprovedAt = nil`, state `proposed`) for a person to approve, with its requested `child.Priority` preserved on the filed task and an explanatory comment `_Filed for a person to approve: priority <child> is above this task's priority (<ceiling>)._` recorded on the task.
+- A floor-lifted gating review (`Origin.Reason == ReasonReview`, `Priority <= ReviewPriorityFloor` (`7`), and without tag `"priority-set-by-hand"`) has its proposal ceiling lowered back to `DefaultTaskPriority` (`5`), because `ReviewPriorityFloor` is Grain's dispatch floor rather than human authorization for follow-up proposals to jump the queue.
+- A gating review that inherited `Priority > ReviewPriorityFloor` (such as `8` or `9`) from the change it gates, a gating review whose priority a person set (`"priority-set-by-hand"`), or any non-review higher-priority parent (`parent.Priority > 5`, e.g. `10`) may queue proposals up to `parent.Priority` without human approval.
+- Any proposal with `child.Priority > ceiling` MUST be held unapproved (`ApprovedAt = nil`, state `proposed`) for a person to approve, with its requested `child.Priority` preserved on the filed task and `_Filed for a person to approve: it asks for priority <child>, above the <ceiling> its proposer may give it (the higher of its proposer's own priority and the default), which would dispatch it ahead of work a person queued._` appended to the task body.
 
 ### 4.3 Agent API and external token permissions {#TP-16}
 
@@ -289,11 +321,12 @@ if child.Priority > ceiling {
 This specification was verified directly against:
 
 - `pkg/model/task.go` (`DefaultTaskPriority`, `Task.Priority`, `ProposedTask.Priority`, `HasPriorityDispatch`, `FixesBaseBranch`)
+- `pkg/model/review_priority.go` (`ReviewPriorityFloor`, `ReviewPriorityHandSetTag`, `ReviewPriority`, `CarriedReviewPriority`, `CarryPriorityToReviews`), `pkg/model/release_qualification.go` (`PriorityReleaseGate`), `pkg/model/schedule_starved.go` (`ScheduleStarvedAfter`, `ScheduleStarvedOccurrences`, `EscalateStarvedScheduleBlocker`)
 - `pkg/model/template.go`, `pkg/model/compose.go` (`Template.Priority`, `composeTemplate`, `ComposeScheduleTask`, `ComposeSuitePass`, `ComposeQualificationPass`)
 - `pkg/model/migrations.go` (migration 73), `pkg/model/schema.go`, `pkg/model/store.go` (`putTask`, `putTemplate`, `scanTemplate`, `taskQueueOrderSQL`, `fixesBaseBranchOrderSQL`, `ListTasks`, `Ready*`, `OrderKeyForNewTask`, `Reorder`)
-- `pkg/model/hold_for_approval.go` (`PersonOnlyProposalSettings`)
+- `pkg/model/hold_for_approval.go` (`proposerPriorityCeiling`, `PersonOnlyProposalSettings`)
 - `pkg/dispatch/dispatch.go` (`Cycle`)
-- `pkg/orchestrator/sync.go` (`queueOrder`, `showQueueAtFrontOfBacklog`), `pkg/orchestrator/finish.go` (`relayProposedTasks`), and task-filing sites across `pkg/orchestrator/*.go`
+- `pkg/orchestrator/sync.go` (`queueOrder`, `showQueueAtFrontOfBacklog`), `pkg/orchestrator/finish.go` (`relayProposedTasks`), `pkg/orchestrator/review.go` (`newReview`), `pkg/orchestrator/pathtriggerreview.go` (`buildPullRequestReview`), `pkg/orchestrator/stage1repair.go` (`Stage1RepairPriority`, `fileOrUpdateStage1Repair`, `fileOrUpdateRepair`), `pkg/orchestrator/githubbaserepair.go` (`GitHubBaseRepairPriority`, `fileOrUpdateGitHubBaseRepair`), `pkg/orchestrator/releasequalification.go` (`CreateSuiteRunWith` at `PriorityReleaseGate`), and other task-filing sites across `pkg/orchestrator/*.go`
 - `pkg/ui/client.go`, `pkg/ui/tasks.go`, `pkg/ui/templates.go`, `pkg/ui/agent_api_gate.go`, `pkg/ui/agent_api_tools.go`, `pkg/ui/sandbox_cli_actions.go`
 - `pkg/repodecl/parse.go`, `pkg/declschema/declschema.go`, `pkg/staterepo/decl.go`
 - `pkg/cli/taskcmd.go`, `pkg/cli/taskattributes.go`, `pkg/cli/taskprint.go`, `pkg/sandboxcli/task.go`, `pkg/mcp/mock_tools.go`, `pkg/mcp/task_views.go`, `pkg/mcp/task_list_cli.go`

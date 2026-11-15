@@ -1727,7 +1727,16 @@ function AppContent({ onReload = () => window.location.reload() }) {
   const loadTask = useCallback(
     async (id, fromUrl) => {
       const seq = ++openSeq.current;
-      setPendingTaskId(id);
+      // Reloading the task already on screen -- an in-page #comment= link
+      // fires popstate, which lands here -- refreshes it in place. Putting
+      // the loading pane up in front of it would unmount the pane while
+      // the fetch is out, and a remounted pane starts its own deep-link
+      // walk beside the one already paging back (CommentDeepLink;
+      // ui/e2e/comment-deep-link-long-thread.spec.js).
+      const reloading =
+        detailRef.current != null &&
+        String(detailRef.current.id) === String(id);
+      setPendingTaskId(reloading ? null : id);
       try {
         const d = await api(taskDetailPath(id));
         if (seq !== openSeq.current) return;
@@ -2601,7 +2610,9 @@ function AppContent({ onReload = () => window.location.reload() }) {
         const first = failed[0].reason;
         showError(
           new Error(
-            `${failed.length} of ${ids.length} task(s) failed: ${
+            `${failed.length} of ${ids.length} ${
+              ids.length === 1 ? "task" : "tasks"
+            } failed: ${
               isVerifierUnavailable(first)
                 ? VERIFIER_ACTION_REASON
                 : first?.message || first
@@ -3901,6 +3912,7 @@ function AppContent({ onReload = () => window.location.reload() }) {
       processTriggers={processTriggers}
       ciRuns={ciRuns}
       boards={boards}
+      boardsError={boardsError}
       openBoardId={openBoardId}
       onOpenBoard={openBoard}
       sessions={sessions}

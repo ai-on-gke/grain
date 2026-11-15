@@ -700,3 +700,20 @@ func TestGitHubSandboxLegacyRulesMatchSandboxRepo(t *testing.T) {
 		t.Errorf("allow [github-sandbox] admitted unrelated %s", readIssuesGrant)
 	}
 }
+
+func TestRegisteredAliasGlobDenyMatchesCanonicalGrant(t *testing.T) {
+	const (
+		aliasName      = "custom-research"
+		canonicalGrant = "https://example.com/capabilities/custom#research={}"
+		unrelatedGrant = "https://example.com/capabilities/custom#other={}"
+	)
+	t.Cleanup(model.RegisterLegacyGrantAlias(aliasName, canonicalGrant))
+
+	denyWild := mustParse(t, "capabilities:\n  deny: ['custom-*']\n")
+	if err := denyWild.CheckClaims(model.Task{Grants: []model.Grant{{Capability: canonicalGrant}}}, ""); err == nil {
+		t.Errorf("deny [custom-*] admitted registered alias replacement %s", canonicalGrant)
+	}
+	if err := denyWild.CheckClaims(model.Task{Grants: []model.Grant{{Capability: unrelatedGrant}}}, ""); err != nil {
+		t.Errorf("deny [custom-*] refused unrelated %s: %v", unrelatedGrant, err)
+	}
+}

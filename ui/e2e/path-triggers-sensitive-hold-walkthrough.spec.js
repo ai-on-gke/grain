@@ -57,8 +57,10 @@ test.describe("Sensitive path hold walkthrough", () => {
     await expect(page.getByTestId("approval-rule")).toContainText(
       "trigger:payments (.grain/triggers/payments.yml): waiting for ",
     );
-    await expect(page.getByTestId("merge-gate-review")).toContainText(
-      "Code review: running",
+    // A sensitive trigger with no template of its own files a targeted
+    // review, shown apart from the code review.
+    await expect(page.getByTestId("merge-gate-targeted-review")).toContainText(
+      "Targeted review: running",
     );
     await expect(page.getByTestId("merge-gate-approval")).toContainText(
       "Approval: needed",

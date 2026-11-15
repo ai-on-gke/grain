@@ -41,7 +41,7 @@
 // panel's lanes and the columns the state counts are grouped into are
 // the reader's own, exactly as they are on the full views.
 import { NO_NARROWING } from "./taskFilters.js";
-import { narrowingFromQuery, buildPath } from "./paths.js";
+import { narrowingFromQuery, buildPath, queryFromNarrowing } from "./paths.js";
 import { DAY, RANGES, normalizeView } from "./gantt.js";
 import {
   DEFAULT_REPORT_WINDOW,
@@ -495,8 +495,10 @@ function panelReportNarrowing(panel, fallback) {
 // PanelBoard.jsx -- which should not be offered where keeping would
 // change nothing on screen.
 //
-// Three of the four kinds narrow the tasks they draw, so any narrowing
-// at all is a narrowing they show and the panel is the whole question.
+// Two of the four kinds -- the list and the timeline -- narrow and order
+// the tasks they draw, so any narrowing at all is a narrowing they show
+// and the panel is the whole question. The state counts panel narrows
+// but does not order (countsQuestion below).
 //
 // The throughput panel is the one that has to be asked about the
 // narrowing as well, and it did not used to take one at all: since
@@ -523,7 +525,21 @@ function metricsQuestion(panel, narrowing) {
   return reportPath({ scope, window: panelMetricsWindow(panel, scope) });
 }
 
+// The state counts panel is the other kind that does not draw all of a
+// narrowing: it counts the tasks a narrowing admits, and a count has no
+// order. A dashboard the reader has only re-sorted is asking it exactly
+// what the board asks, so the sort is set aside on both sides before
+// they are compared. The list and the timeline do draw rows in the
+// narrowing's order, so a sort is something they show and keeping it is
+// real.
+function countsQuestion(narrowing) {
+  return queryFromNarrowing({ ...(narrowing || NO_NARROWING), sort: [] });
+}
+
 export function panelUsesNarrowing(panel, narrowing, baseline = NO_NARROWING) {
+  if (panel?.kind === "states") {
+    return countsQuestion(narrowing) !== countsQuestion(baseline);
+  }
   if (panel?.kind !== "metrics") return true;
   const scope = reportScope(narrowing);
   if (!(

@@ -32,6 +32,11 @@ ui/src/brand/grain-mark.js:renderStatic  # vendored design pack; ui/scripts/expo
 ui/src/components/AttachmentPicker.jsx:getPastedImages  # deliberate alias of getPastedFiles; TaskChat, Timeline and PendingQuestion import it
 ui/src/components/AttachmentPicker.jsx:handleImagePaste  # deliberate alias of handleFilePaste, kept beside getPastedImages and tested
 
+# Unlisted dependencies knip reports that are resolved by a Vite alias, not a package.
+ui-hub/src/App.jsx:@grain/ui-shared  # resolve.alias in ui-hub/vite.config.js points it at ../ui-shared
+ui-hub/src/App.test.jsx:@grain/ui-shared  # resolve.alias in ui-hub/vite.config.js points it at ../ui-shared
+ui-hub/src/main.jsx:@grain/ui-shared  # resolve.alias in ui-hub/vite.config.js points it at ../ui-shared
+
 # Historical records: scripts kept beside the test run that used them.
 docs/test-runs/2026-11-03-sandbox-cli-edges/task-sandbox-grepwalk.sh  # test-run record
 docs/test-runs/2026-11-09-hosted-instance-credentials/hosted-vm-walk.sh  # test-run record

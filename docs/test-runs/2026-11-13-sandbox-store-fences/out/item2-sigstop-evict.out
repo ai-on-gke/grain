@@ -1,0 +1,36 @@
+
+== 2a. daemon A takes the lease and starts writing
+2026/11/13 03:50:45 grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+fence target task: 1
+68513|grain-daemon-writer-lock|idle
+
+== 2b. SIGSTOP A for 20s (keep-alive 5s, re-acquire window 15s)
+A stopped at 2026-11-13 03:50:51.902814+00 (database clock)
+A sessions still open: 5, advisory locks held: 2
+evicting A's sessions from the database side
+5 terminated
+
+== 2c. daemon B starts while A is frozen
+B acquired the lease after 2s (database clock 2026-11-13 03:51:13.04725+00)
+2026/11/13 03:51:12 grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+
+== 2d. resume A
+A resumed at 2026-11-13 03:51:13.092126+00
+A exited after resuming
+2026/11/13 03:51:13 grain access: recording "access code: POST /api/tasks/1/comments by an unnamed access-code session from 127.0.0.1": postgres: write refused: this daemon no longer holds the single-writer lease on the store (its lock session is disconnected)
+2026/11/13 03:51:13 grain access: recording "access code: POST /api/tasks/1/comments by an unnamed access-code session from 127.0.0.1": postgres: write refused: this daemon no longer holds the single-writer lease on the store (its lock session is disconnected)
+2026/11/13 03:51:13 grain access: recording "access code: POST /api/tasks/1/comments by an unnamed access-code session from 127.0.0.1": postgres: write refused: this daemon no longer holds the single-writer lease on the store (its lock session is disconnected)
+2026/11/13 03:51:13 grain access: recording "access code: POST /api/tasks/1/comments by an unnamed access-code session from 127.0.0.1": postgres: write refused: this daemon no longer holds the single-writer lease on the store (its lock session is disconnected)
+2026/11/13 03:51:14 grain daemon: releasing PostgreSQL single-writer advisory lock (schema=public)
+2026/11/13 03:51:14 grain daemon: PostgreSQL single-writer advisory lock lost: postgres: another grain daemon holds the single-writer advisory lock: taken by pid=69209 app="grain-daemon-writer-lock" addr=127.0.0.1/32 state=idle while session was disconnected
+B serving on 4296
+
+== 2e. what reached the database
+A writer status codes:      22 000      14 200       1 500 
+B writer status codes:      10 200 
+A rows: 14, last at 2026-11-13 03:50:51.762+00
+B rows: 10, last at 2026-11-13 03:51:17.199447+00
+A rows committed after B took the lease: 0
+A rows committed after A was frozen: 0
+rows written by both (same body twice): 0
+A writes acknowledged 200: 14; A rows in the database: 14
