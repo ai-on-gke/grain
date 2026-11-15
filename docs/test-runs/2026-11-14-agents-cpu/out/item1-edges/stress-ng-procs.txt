@@ -1,0 +1,4 @@
+21028 ppid=21027 ppid_comm=bash cwd=/tmp
+21029 ppid=21028 ppid_comm=stress-ng cwd=/tmp
+21033 ppid=21032 ppid_comm=bwrap cwd=/tmp
+21034 ppid=21033 ppid_comm=stress-ng cwd=/tmp

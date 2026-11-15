@@ -1,0 +1,59 @@
+{
+  "tabs": {
+    "count": 3,
+    "secs": 60,
+    "sandboxRequests": 15
+  },
+  "cards": [
+    {
+      "id": "agent-2",
+      "title": "#2 Load one core",
+      "cpu": "CPU1.1 vCPUCPU: 1.1 vCPU. This run's own processes kept 1.10 vCPU busy over the last 13 s: 16% of this host's 7 vCPU"
+    },
+    {
+      "id": "agent-3",
+      "title": "#3 Load two cores",
+      "cpu": "CPU2.2 vCPUCPU: 2.2 vCPU. This run's own processes kept 2.19 vCPU busy over the last 13 s: 31% of this host's 7 vCPU"
+    }
+  ],
+  "shots": [
+    {
+      "file": "out/shots/agents-desktop-light.png",
+      "overflowPx": 0
+    },
+    {
+      "file": "out/shots/agents-desktop-dark.png",
+      "overflowPx": 0
+    },
+    {
+      "file": "out/shots/agents-phone-light.png",
+      "overflowPx": 0
+    },
+    {
+      "file": "out/shots/agents-phone-dark.png",
+      "overflowPx": 0
+    }
+  ],
+  "api": [
+    {
+      "sandbox": "2-1",
+      "cpuCores": 1.0952436450034986,
+      "backend": "host"
+    },
+    {
+      "sandbox": "3-1",
+      "cpuCores": 2.18745337409286,
+      "backend": "host"
+    }
+  ],
+  "apiBefore": [
+    {
+      "sandbox": "2-1",
+      "cpuCores": 0.7659352667239914
+    },
+    {
+      "sandbox": "3-1",
+      "cpuCores": 1.5373026984602098
+    }
+  ]
+}
