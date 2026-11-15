@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -80,8 +81,14 @@ func Route(r *http.Request, grant Grant, upstream Upstream) (forward *http.Reque
 	if to, ok := legacyPaths[path]; ok {
 		path = to
 	}
+	callCtx, _ := model.WithCIAPICall(r.Context(), model.CIAPICall{
+		ID:     grant.ID,
+		Repo:   grant.Repo,
+		RunID:  grant.RunID,
+		Scopes: slices.Clone(grant.Scopes),
+	})
 	if r.Method == http.MethodPost && path == "/api/notifications/release-pending" {
-		if !grant.MayFile("release-notes") {
+		if !grant.HoldsReleaseGate() {
 			return nil, fmt.Sprintf("POST /api/notifications/release-pending needs https://grain.dev/capabilities/api#release-gate-read, "+
 				"which this job's token does not hold (it holds %s)", scopeList(grant.Scopes)), http.StatusForbidden
 		}
@@ -89,7 +96,7 @@ func Route(r *http.Request, grant Grant, upstream Upstream) (forward *http.Reque
 		if reason != "" {
 			return nil, reason, http.StatusForbidden
 		}
-		return newForward(r.Context(), http.MethodPost, "/api/notifications", nil, body), "", 0
+		return newForward(callCtx, http.MethodPost, "/api/notifications", nil, body), "", 0
 	}
 	probe := newForward(r.Context(), r.Method, path, nil, nil)
 	pattern, scope, ok := upstream.APIRoute(probe)
@@ -110,13 +117,13 @@ func Route(r *http.Request, grant Grant, upstream Upstream) (forward *http.Reque
 		if reason := narrowRepo(query, grant.Repo); reason != "" {
 			return nil, reason, http.StatusForbidden
 		}
-		return newForward(r.Context(), http.MethodGet, path, query, nil), "", 0
+		return newForward(callCtx, http.MethodGet, path, query, nil), "", 0
 	case scope == "tasks:from-template":
 		body, reason := fromTemplateBody(r, grant)
 		if reason != "" {
 			return nil, reason, http.StatusForbidden
 		}
-		return newForward(r.Context(), r.Method, path, nil, body), "", 0
+		return newForward(callCtx, r.Method, path, nil, body), "", 0
 	}
 	// model.CIAPIScopeRefusal admits no other write, so this is a token
 	// minted before a rule changed, or a route whose method and scope
@@ -178,13 +185,23 @@ func narrowPath(pattern, path string, repo model.RepoRef) string {
 // serveNarrowed answers forward, a GET, with upstream's answer less
 // whatever in it belongs to a repository other than repo: an answer
 // whose own "repo" is another's is refused as not found, and a list
-// element whose "repo" is another's is dropped, to two levels deep
-// (a list, or a list in an object -- {"runs": [...]}). An answer that is
-// not a 200 holding JSON is passed on unchanged.
-func serveNarrowed(w http.ResponseWriter, upstream http.Handler, forward *http.Request, repo model.RepoRef) {
+// element whose "repo" is another's (or, on a multi-repository collection,
+// missing for a non-grain repository) is dropped, to two levels deep
+// (a list, or a list in an object -- {"runs": [...]}). A 200 answer not
+// holding JSON is passed on only when upstream's own repository-scoped
+// gate authorized the request (CIAPICall.Authorized).
+func serveNarrowed(w http.ResponseWriter, upstream Upstream, forward *http.Request, repo model.RepoRef) {
 	buf := &bufferedResponse{header: http.Header{}, status: http.StatusOK}
 	upstream.ServeHTTP(buf, forward)
 	body := buf.body.Bytes()
+	pattern, _, _ := upstream.APIRoute(forward)
+	ciCall, _ := model.CIAPICallFromContext(forward.Context())
+	if buf.status == http.StatusOK && !strings.Contains(buf.header.Get("Content-Type"), "json") {
+		if !ciCall.Authorized() {
+			writeError(w, http.StatusForbidden, fmt.Sprintf("%s is not narrowed to %s", forward.URL.Path, repo))
+			return
+		}
+	}
 	if buf.status == http.StatusOK && strings.Contains(buf.header.Get("Content-Type"), "json") {
 		dec := json.NewDecoder(bytes.NewReader(body))
 		dec.UseNumber()
@@ -197,7 +214,9 @@ func serveNarrowed(w http.ResponseWriter, upstream http.Handler, forward *http.R
 			writeError(w, http.StatusNotFound, fmt.Sprintf("not found among %s's", repo))
 			return
 		}
-		v = narrowValue(v, repo, 2)
+		requireRepo := (!repo.Same(model.GrainSourceRepo()) && !strings.Contains(pattern, "{")) ||
+			pattern == "GET /api/notifications" || pattern == "GET /api/schedules" || pattern == "GET /api/persistent-sandboxes"
+		v = narrowValue(v, repo, 2, requireRepo)
 		var out bytes.Buffer
 		enc := json.NewEncoder(&out)
 		enc.SetEscapeHTML(false)
@@ -226,7 +245,17 @@ func foreign(v any, repo model.RepoRef) bool {
 	return ok && strings.TrimSpace(name) != "" && !strings.EqualFold(strings.TrimSpace(name), repo.String())
 }
 
-func narrowValue(v any, repo model.RepoRef, depth int) any {
+// unowned reports whether v is an object that does not name repo in "repo".
+func unowned(v any, repo model.RepoRef) bool {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	name, ok := obj["repo"].(string)
+	return !ok || !strings.EqualFold(strings.TrimSpace(name), repo.String())
+}
+
+func narrowValue(v any, repo model.RepoRef, depth int, requireRepo bool) any {
 	if depth <= 0 {
 		return v
 	}
@@ -234,15 +263,22 @@ func narrowValue(v any, repo model.RepoRef, depth int) any {
 	case []any:
 		kept := make([]any, 0, len(t))
 		for _, e := range t {
-			if !foreign(e, repo) {
-				kept = append(kept, narrowValue(e, repo, depth-1))
+			if requireRepo {
+				if unowned(e, repo) {
+					continue
+				}
+			} else if foreign(e, repo) {
+				continue
 			}
+			// Once an item itself names repo, its nested lists belong to it.
+			kept = append(kept, narrowValue(e, repo, depth-1, false))
 		}
 		return kept
 	case map[string]any:
+		childRequire := requireRepo && unowned(t, repo)
 		for k, e := range t {
 			if list, ok := e.([]any); ok {
-				t[k] = narrowValue(list, repo, depth-1)
+				t[k] = narrowValue(list, repo, depth-1, childRequire)
 			}
 		}
 		return t

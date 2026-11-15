@@ -1838,9 +1838,9 @@ button.more-sheet-item {
 }
 
 .btn-outlined.danger {
-  color: var(--gm-color-error);
-  border-color: var(--gm-color-error);
+  color: var(--md-sys-color-error);
+  border-color: var(--md-sys-color-error);
 }
 .btn-outlined.danger:hover:not(:disabled) {
-  background: var(--gm-color-error-container);
+  background: var(--md-sys-color-error-container);
 }

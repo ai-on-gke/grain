@@ -1010,7 +1010,6 @@ export class AppComponent implements OnInit, OnDestroy {
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
   private readonly injector = inject(Injector);
-  private readonly usageStatus = signal<UsagePauseInput | null>(null);
 
   protected readonly icons = ICONS;
   protected readonly rosettePath = CHLADNI_ROSETTE_PATH;
@@ -1130,7 +1129,7 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly dispatchBanner = computed(() =>
     summarizeDispatchStatus(
       this.access.rawConfig(),
-      this.usageStatus(),
+      this.access.usage(),
       this.access.clockNow(),
     ),
   );
@@ -1373,7 +1372,6 @@ export class AppComponent implements OnInit, OnDestroy {
           .get<UsagePauseInput>("GET /api/usage")
           .catch(() => null);
         if (usage && ("warnings" in usage || "scopes" in usage)) {
-          this.usageStatus.set(usage);
           this.access.setUsage(usage);
         }
       }

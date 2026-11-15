@@ -316,6 +316,40 @@ export function runTaskId(run: CIRun): string | null {
   return m ? m[1] : null;
 }
 
+// runRetryTaskId names a task only when the run itself was started for one
+// (taskId, or numeric requestedBy as pkg/orchestrator sets it). A run a person
+// started by hand on a branch named grain/task-N is retried by repo and ref.
+export function runRetryTaskId(run: CIRun): string | null {
+  if (run.taskId) return run.taskId;
+  if (run.requestedBy && /^\d+$/.test(run.requestedBy.trim())) {
+    return run.requestedBy.trim();
+  }
+  return null;
+}
+
+const RETRYABLE_JOB_CONCLUSIONS = new Set([
+  "errored",
+  "failure",
+  "failed",
+  "cancelled",
+  "canceled",
+  "timed_out",
+]);
+
+// failedJobIds returns the deduplicated job IDs of a non-task run that did not
+// pass, for POST /api/ci/runs's `jobs` field (handleStartCIRun reads `recheckFailed`
+// only on task-bound runs).
+export function failedJobIds(run: CIRun): string[] {
+  const seen = new Set<string>();
+  for (const j of run.jobs ?? []) {
+    const c = (j.conclusion || "").toLowerCase();
+    if (!RETRYABLE_JOB_CONCLUSIONS.has(c)) continue;
+    const id = j.jobId || j.name;
+    if (id) seen.add(id);
+  }
+  return [...seen];
+}
+
 export function runTitle(run: CIRun): string {
   if (run.actions?.workflowName) return run.actions.workflowName;
   if (run.workflow) return run.workflow;
