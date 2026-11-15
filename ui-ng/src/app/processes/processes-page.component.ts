@@ -874,7 +874,10 @@ type SuitesPaneView = "suites" | "runs";
                     </p>
                   }
                   @for (sk of (s.skips ?? []).slice(0, 5); track sk.at) {
-                    <div class="proc-kv-item" data-testid="sched-skip">
+                    <div
+                      class="proc-kv-item proc-skip-row"
+                      data-testid="sched-skip"
+                    >
                       <span class="muted">{{ sk.summary }}</span>
                       <span class="proc-skip-refs">
                         @if (sk.taskId) {
