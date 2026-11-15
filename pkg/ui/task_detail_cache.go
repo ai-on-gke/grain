@@ -55,11 +55,8 @@ type taskDetailCacheEntry struct {
 
 const taskDetailCacheEntries = 32
 
-// response is the body and ETag for GET /api/tasks/{id} (whole or head page).
-func (c *taskDetailCache) response(ctx context.Context, client *Client, id string) ([]byte, string, error) {
-	return c.responseFor(ctx, client, id, TaskPage{}, false)
-}
-
+// responseFor is the body and ETag for GET /api/tasks/{id}: the whole
+// task, or the page of it that page names when paged is set.
 func (c *taskDetailCache) responseFor(ctx context.Context, client *Client, id string, page TaskPage, paged bool) ([]byte, string, error) {
 	cacheKey := id
 	if paged {

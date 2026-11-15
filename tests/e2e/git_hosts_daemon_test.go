@@ -359,19 +359,6 @@ func (r *daemonHostsRig) comments(t *testing.T, id string) []string {
 	return bodies
 }
 
-// ciGate is the state of task id's CI merge gate, as the UI shows it.
-func (r *daemonHostsRig) ciGate(t *testing.T, id string) string {
-	t.Helper()
-	gates, _ := r.taskJSON(t, id)["mergeGates"].([]any)
-	for _, g := range gates {
-		if m, ok := g.(map[string]any); ok && m["id"] == "ci" {
-			state, _ := m["state"].(string)
-			return state
-		}
-	}
-	return ""
-}
-
 func anyContains(list []string, sub string) bool {
 	for _, s := range list {
 		if strings.Contains(s, sub) {

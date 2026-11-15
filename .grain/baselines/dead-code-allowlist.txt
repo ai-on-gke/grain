@@ -23,6 +23,9 @@ pkg/capability/geminikey/geminikey.go:Capability.ScarceResourceProvider  # marke
 # Run from build files and CI, not imported.
 ui/e2e/screenshot.mjs  # make ui-screenshots
 ui/scripts/summarize-trace-network.mjs  # the ui e2e job in .github/workflows/tests.yml and .grain/workflows/tests.yml
+ui/e2e/grantMatrixReport.mjs  # run by hand to build docs/test-runs/<date>-grant-ui-matrix.md (see 2026-11-11-grant-ui-matrix.md)
+ui-shared/e2e/demo.js  # imported by ui-ng/e2e/fixtures.ts and global-setup.ts, outside ui-shared's knip project
+ui-shared/e2e/accesscode.js  # imported by ui-ng/e2e specs and re-exported by ui/e2e/accesscode.js
 
 # UI exports knip reports that are kept on purpose.
 ui/src/brand/grain-mark.js:DEFAULTS  # vendored verbatim from the grain-mark design pack; ui/scripts/export-mark-sheets.mjs inlines the module and reads it
@@ -31,11 +34,32 @@ ui/src/brand/grain-mark.js:overlayLines  # vendored verbatim from the grain-mark
 ui/src/brand/grain-mark.js:renderStatic  # vendored design pack; ui/scripts/export-mark-sheets.mjs inlines the module and calls it
 ui/src/components/AttachmentPicker.jsx:getPastedImages  # deliberate alias of getPastedFiles; TaskChat, Timeline and PendingQuestion import it
 ui/src/components/AttachmentPicker.jsx:handleImagePaste  # deliberate alias of handleFilePaste, kept beside getPastedImages and tested
+ui-shared/ThemeModeContext.jsx:SharedThemeModeProvider  # deliberate alias of ThemeModeProvider, both exported from ui-shared/index.js
+
+# UI exports knip reports whose symbol the same file uses: only the export
+# keyword is unused, and classic ui/ is frozen to user-facing fixes.
+ui/e2e/grantMatrix.js:PERSON_GRANTED_KEY  # used in-file
+ui/src/components/DeclarationAcceptancesPanel.jsx:DeclarationAcceptance  # used in-file
+ui/src/components/GateOverrideDialog.jsx:pullRequestNumber  # used in-file
+ui/src/components/InboxPage.jsx:preferNextInbox  # used in-file
+ui/src/components/MergeGatesList.jsx:gateId  # used in-file
+ui/src/components/MergeGatesList.jsx:hasRunningReviewGate  # used in-file
+ui/src/components/MergeGatesList.jsx:hasReviewFindingsGate  # used in-file
+ui/src/components/MergeGatesList.jsx:approvalGate  # used in-file
+ui/src/components/StaleSchedulesAlert.jsx:STALE_SCHEDULES_REFRESH_MS  # used in-file
+ui/src/components/UpgradePanel.jsx:repositoryOfImage  # used in-file
+ui/src/components/detail/TaskContext.jsx:isDurable  # used in-file
+ui/src/components/settings/RepositoriesSection.jsx:skillsText  # used in-file
+ui/src/taskDetailPages.js:TASK_COMMENTS_LIMIT  # used in-file
+ui/src/taskDetailPages.js:TASK_ATTEMPTS_LIMIT  # used in-file
+ui/src/taskDetailPages.js:TASK_DETAIL_MAX_PAGE  # used in-file and by ui/e2e/comment-deep-link-long-thread.spec.js
 
 # Unlisted dependencies knip reports that are resolved by a Vite alias, not a package.
 ui-hub/src/App.jsx:@grain/ui-shared  # resolve.alias in ui-hub/vite.config.js points it at ../ui-shared
 ui-hub/src/App.test.jsx:@grain/ui-shared  # resolve.alias in ui-hub/vite.config.js points it at ../ui-shared
 ui-hub/src/main.jsx:@grain/ui-shared  # resolve.alias in ui-hub/vite.config.js points it at ../ui-shared
+ui-shared/ThemeModeContext.jsx:react  # ui-shared has no package of its own; react resolves from the ui/ or ui-hub/ that imports it
+ui-shared/primitives.jsx:react  # ui-shared has no package of its own; react resolves from the ui/ or ui-hub/ that imports it
 
 # Historical records: scripts kept beside the test run that used them.
 docs/test-runs/2026-11-03-sandbox-cli-edges/task-sandbox-grepwalk.sh  # test-run record

@@ -334,7 +334,7 @@ mcp_config() {
 }
 
 # stop_settings is a --settings file of the shape pkg/agent/claude's
-# writeStopSettings stages for every run and session: one Stop hook. Its
+# writeStopSettingsWithPolicy stages for every run and session: one Stop hook. Its
 # command is `true`, so a probe that gets as far as a turn ends normally.
 stop_settings_path=""
 stop_settings() {
