@@ -22,7 +22,7 @@ GitHub (the sim) and the agent CLI.
 | 1(b) overlap re-check repair, 1(d) GitHub refusal | not walked live | not walked live | Unit-covered; see "Not walked" |
 | 2 backstop: verdict never arrives | PASS | PASS | Rows back-dated 6h05m |
 | 2 backstop: verdict unreadable (GitHub down) | PASS | PASS | |
-| 2 backstop: repo CI mode unresolvable | see results | SKIP | Needs an unreadable `repo_config` row, which only SQLite can store |
+| 2 backstop: repo CI mode unresolvable | PASS | SKIP | Needs an unreadable `repo_config` row, which only SQLite can store |
 | 2 `ci-wake-stalled` raised and cleared | PASS | PASS | Clears on a send-back release, or when the task closes |
 | 3 close → leaves `ciWaits` / `grain health`; reopen → hold restored, wakes on CI | PASS | PASS | |
 | 3 resting console session wakes on its first reply | PASS | PASS | |
@@ -174,7 +174,7 @@ backstop (`-ci-wake-backstop` unset, so 6h).
   error no longer skips the backstop".
 - **CI mode unresolvable:** the task is moved onto `acme/ghost-widgets`, whose `repo_config` row has `'yes'`
   in the INTEGER `merge_on_green` column. SQLite's type affinity stores it; the scan into a bool fails, so
-  `TaskCIMode` errors every cycle. Result in the SQLite table below.
+  `TaskCIMode` errors every cycle. The wake logs "task N's CI wake (my-branch) cannot be resolved, holding it for the backstop alone" each cycle, and the backstop still wakes the task (see Final runs). Dispatch then fails on the same unreadable row, as anything else reading that repository's settings would, so the scenario deletes the row afterwards.
   - PostgreSQL's typed columns refuse that row. There is no other way to make one repository's settings
     unreadable without breaking every task, so this variant is SQLite's alone.
   - An earlier attempt, a task re-targeted to a repository with no settings row, resolved to `github` and
@@ -183,8 +183,8 @@ backstop (`-ci-wake-backstop` unset, so 6h).
   - when the task it names closes (the next notifications sweep);
   - and, in `backstop_then_sendback`, at the exact instant a send-back takes the task off a later
     `resume_later`. In that scenario the backstop-woken run parks on CI again, a review thread then
-    releases it, and `sendBackFromResumeLater` clears the notification. On PostgreSQL it was `clearedAt`
-    `12:49:34.879702Z`, the release instant; on SQLite `12:44:45.214753635Z`, also the release instant.
+    releases it, and `sendBackFromResumeLater` clears the notification at the release instant
+    (`clearedAt` equal to the daemon's release log line on both stores).
 
 ## Item 3 — closed and reopened; console sessions
 
@@ -229,7 +229,31 @@ Classic was not walked: every page in scope has a `/next/` page. The CI-waits vi
 
 ## Final runs (fixed build, both stores)
 
-RESULTS_PLACEHOLDER
+`run_walkthrough.sh` with no arguments on each store (SQLite on 4280, PostgreSQL on 4290, run side by side), 12:55–13:02 UTC:
+
+```
+RESULT [sqlite] c: PASS task 2 (PR #9000) left deferred after 0.3s, runs=parked,succeeded, conversation mentions review thread x2, daemon log release lines=1
+RESULT [sqlite] c_person: PASS task 3 stayed deferred 15s after a review thread; runs=parked
+RESULT [sqlite] e: PASS task 4 left deferred after 0.3s on its owner's answer (review 5), runs=parked,succeeded, release lines=1, says decision x2
+RESULT [sqlite] e_person: PASS task 6 stayed deferred 15s after its owner's answer
+RESULT [sqlite] backstop_never: PASS task 8 woke 0.6s after back-dating 6h05m; ci-wake-stalled open after wake and after its run, cleared at 2026-11-15T12:57:39.155203464Z after close; says backstop x2
+RESULT [sqlite] backstop_unreadable: PASS task 10 woke 0.6s after back-dating 6h05m; ci-wake-stalled open after wake and after its run, cleared at 2026-11-15T12:58:50.256809853Z after close; says backstop x1
+RESULT [sqlite] backstop_nomode: PASS task 11 woke 0.6s after back-dating 6h05m; ci-wake-stalled open after wake and after its run, cleared at 2026-11-15T13:00:00.852804849Z after close; says backstop x1
+RESULT [sqlite] backstop_then_sendback: task 12 ci-wake-stalled after backstop=[{"open":true,"clearedAt":null}]; re-parked=deferred; review thread released it after 59.2s; ci-wake-stalled now=[{"open":false,"clearedAt":"2026-11-15T13:01:03.976035277Z"}]
+RESULT [sqlite] close_reopen: task 13 ciWaits before close=["13"] health=["13"]; after close=[] health=[]; reopened state=deferred ciWaits=["13"]; woke on CI after 0.3s (log: 1)
+RESULT [sqlite] console: PASS task 14 (interactive=true) woke 0.0s after its first reply
+model: task 11's CI wake (my-branch) cannot be resolved, holding it for the backstop alone: reading repo config for acme/ghost-widgets: sql: Scan error on column index 25, name "merge_on_green": sql/driver: couldn't convert "yes" into type bool   (SQLite daemon log, 12:58:53)
+RESULT [postgres] c: PASS task 2 (PR #9000) left deferred after 0.3s, runs=parked,succeeded, conversation mentions review thread x2, daemon log release lines=1
+RESULT [postgres] c_person: PASS task 3 stayed deferred 15s after a review thread; runs=parked
+RESULT [postgres] e: PASS task 4 left deferred after 0.3s on its owner's answer (review 5), runs=parked,succeeded, release lines=1, says decision x2
+RESULT [postgres] e_person: PASS task 6 stayed deferred 15s after its owner's answer
+RESULT [postgres] backstop_never: PASS task 8 woke 0.0s after back-dating 6h05m; ci-wake-stalled open after wake and after its run, cleared at 2026-11-15T12:57:54.471159Z after close; says backstop x2
+RESULT [postgres] backstop_unreadable: PASS task 10 woke 0.3s after back-dating 6h05m; ci-wake-stalled open after wake and after its run, cleared at 2026-11-15T12:59:06.238559Z after close; says backstop x1
+RESULT [postgres] backstop_nomode: SKIP on postgres (no way to store an unreadable repo_config row without breaking every task)
+RESULT [postgres] backstop_then_sendback: task 11 ci-wake-stalled after backstop=[{"open":true,"clearedAt":null}]; re-parked=deferred; review thread released it after 58.6s; ci-wake-stalled now=[{"open":false,"clearedAt":"2026-11-15T13:00:09.219931Z"}]
+RESULT [postgres] close_reopen: task 12 ciWaits before close=["12"] health=["12"]; after close=[] health=[]; reopened state=deferred ciWaits=["12"]; woke on CI after 0.3s (log: 1)
+RESULT [postgres] console: PASS task 13 (interactive=true) woke 0.0s after its first reply
+```
 
 ## Environment
 
