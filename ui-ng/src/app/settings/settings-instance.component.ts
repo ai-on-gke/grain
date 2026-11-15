@@ -729,10 +729,8 @@ function formatBytes(bytes: number): string {
                 <table class="s-table" aria-label="Advertised scopes">
                   <thead>
                     <tr>
-                      <th>Repository</th>
-                      <th>Path</th>
+                      <th>Scope</th>
                       <th>Role</th>
-                      <th>Origin</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -741,29 +739,33 @@ function formatBytes(bytes: number): string {
                       track sc.repo + ":" + (sc.pathPrefix || "")
                     ) {
                       <tr data-testid="registry-advertised-row">
-                        <td class="s-mono">{{ sc.repo }}</td>
-                        <td class="s-mono">
-                          {{
-                            sc.pathPrefix
-                              ? sc.pathPrefix + "/"
-                              : "/ (whole repo)"
-                          }}
+                        <td>
+                          <div class="s-cell-stack">
+                            <span class="s-cell-title s-mono">{{
+                              sc.repo
+                            }}</span>
+                            <span class="s-meta-mono">{{
+                              sc.pathPrefix
+                                ? sc.pathPrefix + "/"
+                                : "/ (whole repo)"
+                            }}</span>
+                          </div>
                         </td>
                         <td>
-                          <span
-                            class="status-pill"
-                            [class.healthy]="sc.role === 'primary'"
-                            [class.neutral]="sc.role !== 'primary'"
-                            >{{ sc.role }}</span
-                          >
-                        </td>
-                        <td>
-                          <span
-                            class="status-pill quiet"
-                            data-testid="registry-origin-chip"
-                            [attr.data-origin]="sc.origin || 'repo_config'"
-                            >{{ originLabel(sc.origin) }}</span
-                          >
+                          <div class="s-inline">
+                            <span
+                              class="status-pill"
+                              [class.healthy]="sc.role === 'primary'"
+                              [class.neutral]="sc.role !== 'primary'"
+                              >{{ sc.role }}</span
+                            >
+                            <span
+                              class="status-pill quiet"
+                              data-testid="registry-origin-chip"
+                              [attr.data-origin]="sc.origin || 'repo_config'"
+                              >{{ originLabel(sc.origin) }}</span
+                            >
+                          </div>
                         </td>
                       </tr>
                     }
@@ -971,6 +973,17 @@ function formatBytes(bytes: number): string {
                 Clear
               </button>
             </form>
+            @if (!secretsEnabled()) {
+              <span class="s-hint" data-testid="registry-token-no-store"
+                >This server has no secret store, so the token cannot be stored
+                here; run <code>grain hub register</code> on a daemon that has
+                one.</span
+              >
+            } @else if (!access.can("PUT /api/secrets/{secret}/{key}")) {
+              <span class="s-hint">{{
+                access.deniedReason("PUT /api/secrets/{secret}/{key}")
+              }}</span>
+            }
           </div>
         </div>
 
@@ -995,8 +1008,7 @@ function formatBytes(bytes: number): string {
               <table class="s-table" aria-label="Scope override rules">
                 <thead>
                   <tr>
-                    <th>Repository</th>
-                    <th>Path prefix</th>
+                    <th>Scope</th>
                     <th>Rule</th>
                     <th class="s-actions-cell">Actions</th>
                   </tr>
@@ -1004,9 +1016,13 @@ function formatBytes(bytes: number): string {
                 <tbody>
                   @for (r of hubRules(); track $index) {
                     <tr data-testid="registry-scope-rule">
-                      <td class="s-mono">{{ r.repo }}</td>
-                      <td class="s-mono">
-                        {{ r.pathPrefix ? r.pathPrefix + "/" : "whole repo" }}
+                      <td>
+                        <div class="s-cell-stack">
+                          <span class="s-cell-title s-mono">{{ r.repo }}</span>
+                          <span class="s-meta-mono">{{
+                            r.pathPrefix ? r.pathPrefix + "/" : "whole repo"
+                          }}</span>
+                        </div>
                       </td>
                       <td>
                         <span
@@ -1304,7 +1320,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   // registers as, so the status card re-reads GET /api/registry rather
   // than keep the snapshot from before the save.
   private readonly hubReload = effect(() => {
-    this.state.settings()["hub"];
+    void this.state.settings()["hub"];
     this.hubTokenSet();
     if (this.section() === "registry") {
       untracked(() => void this.loadRegistry());
@@ -1388,6 +1404,9 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     text: string;
   } | null>(null);
   protected readonly hubToken = signal("");
+  // GET /api/secrets' enabled: a daemon with no secret store (grain demo,
+  // a UI with no secrets directory) cannot hold the token at all.
+  protected readonly secretsEnabled = signal(true);
   protected readonly newRuleRepo = signal("");
   protected readonly newRulePrefix = signal("");
   protected readonly newRuleMode = signal("primary");
@@ -1892,6 +1911,16 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   }
 
   private async loadRegistry(): Promise<void> {
+    if (this.access.can("GET /api/secrets")) {
+      try {
+        const sec = await this.api.get<unknown[] | { enabled?: boolean }>(
+          "GET /api/secrets",
+        );
+        this.secretsEnabled.set(Array.isArray(sec) || sec?.enabled !== false);
+      } catch {
+        // Non-fatal: the PUT says so if the store is missing.
+      }
+    }
     if (!this.access.can("GET /api/registry")) return;
     try {
       const r = await this.api.get<HubSnapshot>("GET /api/registry");
@@ -1942,11 +1971,17 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   // The registration token lives in the secret store, not grain/config,
   // so a config-repo lock on the settings leaves it editable.
   protected canWriteSecrets(): boolean {
-    return this.access.can("PUT /api/secrets/{secret}/{key}");
+    return (
+      this.secretsEnabled() &&
+      this.access.can("PUT /api/secrets/{secret}/{key}")
+    );
   }
 
   protected canClearSecrets(): boolean {
-    return this.access.can("DELETE /api/secrets/{secret}/{key}");
+    return (
+      this.secretsEnabled() &&
+      this.access.can("DELETE /api/secrets/{secret}/{key}")
+    );
   }
 
   protected async saveHubToken(): Promise<void> {
