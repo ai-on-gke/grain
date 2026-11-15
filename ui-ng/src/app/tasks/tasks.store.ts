@@ -753,13 +753,17 @@ export class TasksStore implements OnDestroy {
     const worker = async (): Promise<void> => {
       while (next < ids.length && !token.stop) {
         const id = ids[next++];
-        try {
-          await Promise.resolve().then(() => call(id));
-          settled.set(id, true);
-        } catch (err) {
-          settled.set(id, false);
-          errors.push(err);
-        }
+        // The handler goes on in the same chain as the call, so a refusal
+        // is never a rejection nobody is listening to yet.
+        await Promise.resolve()
+          .then(() => call(id))
+          .then(
+            () => void settled.set(id, true),
+            (err: unknown) => {
+              settled.set(id, false);
+              errors.push(err);
+            },
+          );
         progress.done++;
         if (many)
           this.batch.update((b) =>
