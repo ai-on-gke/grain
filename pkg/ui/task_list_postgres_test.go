@@ -36,7 +36,10 @@ import (
 )
 
 // postgresListServer is a server over a Postgres store holding total
-// tasks, open of them not closed.
+// tasks, open of them not closed. Each task carries a few reads, grants,
+// links and tags, as a real one does, so a list that hydrated every
+// task's child rows and not only the open ones' would cost what that
+// costs (review 5882).
 func postgresListServer(t testing.TB, total, open int) (*ui.Server, *model.Store) {
 	t.Helper()
 	store, _ := postgrestest.Open(t)
@@ -57,6 +60,21 @@ func postgresListServer(t testing.TB, total, open int) (*ui.Server, *model.Store
 			Body:      "a description long enough to look like one a person wrote for a task of this kind",
 			Target:    &repo,
 			CreatedAt: &created,
+			Reads: []model.RepoRef{
+				{Owner: "acme", Name: "docs"},
+				{Owner: "acme", Name: "gadgets"},
+				{Owner: "acme", Name: "tools"},
+			},
+			Grants: []model.Grant{
+				{Capability: "api:ci-read", Via: model.GrantByDefault},
+				{Capability: "api:tasks:read", Via: model.GrantByLabel},
+				{Capability: "network", Via: model.GrantByDefault},
+			},
+			Links: []model.Link{
+				{Kind: model.LinkProposedBy, Target: fmt.Sprint(i + total)},
+				{Kind: model.LinkFixes, Target: fmt.Sprintf("https://github.com/acme/widgets/pull/%d", i)},
+			},
+			Tags: []string{"backlog", fmt.Sprintf("batch-%d", i%10)},
 		}
 		if err := store.PutTask(ctx, task); err != nil {
 			t.Fatal(err)
@@ -86,6 +104,15 @@ func timedList(t testing.TB, srv *ui.Server, path, ifNoneMatch string) (*httptes
 	start := time.Now()
 	srv.ServeHTTP(rec, req)
 	return rec, time.Since(start)
+}
+
+// listRow is what the live and full lists are compared on: the row and
+// the child rows hydrateTasks hangs off it.
+func listRow(task ui.Task) string {
+	if len(task.Reads) != 3 || len(task.Capabilities) == 0 {
+		return fmt.Sprintf("%s: reads %v, capabilities %v, want them hydrated", task.ID, task.Reads, task.Capabilities)
+	}
+	return fmt.Sprint(task.ID, ":", task.Title, ":", task.State, ":", task.Reads, ":", task.Capabilities)
 }
 
 func median(ds []time.Duration) time.Duration {
@@ -175,12 +202,12 @@ func TestTaskListOnPostgresIsCheapAtSixThousandTasks(t *testing.T) {
 	var want []string
 	for _, task := range decode[[]ui.Task](t, full) {
 		if task.State != model.StateClosed {
-			want = append(want, task.ID+":"+task.Title+":"+string(task.State))
+			want = append(want, listRow(task))
 		}
 	}
 	var got []string
 	for _, task := range decode[[]ui.Task](t, live) {
-		got = append(got, task.ID+":"+task.Title+":"+string(task.State))
+		got = append(got, listRow(task))
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("live list = %v\nwant the full list's open tasks %v", got, want)
