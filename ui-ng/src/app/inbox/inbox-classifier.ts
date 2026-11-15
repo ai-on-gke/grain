@@ -271,7 +271,7 @@ export function awaitsHumanSubmit(t: Task): boolean {
     t.humanApprovedBy &&
     !t.reviewQuestions &&
     !(t.reviewFindings && t.reviewFindings.length > 0) &&
-    !t.humanReviewHold?.some((r) => r.category === "security-findings")
+    !t.humanReviewHold?.some((r) => r.source === "security-findings")
   ) {
     return false;
   }
