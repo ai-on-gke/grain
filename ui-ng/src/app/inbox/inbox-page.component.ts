@@ -1681,7 +1681,11 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       .checkedEntries()
       .filter((e) =>
         e.actions.some(
-          (a) => a.id === id && !a.blocked && this.canAction(a.route, a.repo),
+          (a) =>
+            a.id === id &&
+            !!a.bulk &&
+            !a.blocked &&
+            this.canAction(a.route, a.repo),
         ),
       );
     const n = rows.length;
