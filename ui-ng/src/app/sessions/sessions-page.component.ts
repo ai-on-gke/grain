@@ -179,7 +179,12 @@ const FOCUS_COMPOSER = "focusComposer";
               </li>
             }
           </ul>
-          @if (store.loaded() && store.rows().length === 0) {
+          <!-- A failed read is reported by the load-error banner above;
+            saying "No sessions yet" beside it would claim the list is empty
+            when it was never read. -->
+          @if (
+            store.loaded() && !store.loadError() && store.rows().length === 0
+          ) {
             <p class="empty-state">No sessions yet.</p>
           }
         </nav>

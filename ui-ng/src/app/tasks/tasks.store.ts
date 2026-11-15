@@ -84,6 +84,7 @@ export class TasksStore implements OnDestroy {
   readonly details = signal<Record<string, TaskDetail>>({});
   readonly baseBranchGates = signal<BaseBranchGate[]>([]);
   readonly boards = signal<Board[]>([]);
+  readonly boardsError = signal<string | null>(null);
   readonly closed = signal<Task[]>([]);
   readonly closedCursor = signal<string | null>(null);
   readonly closedLoaded = signal(false);
@@ -302,6 +303,7 @@ export class TasksStore implements OnDestroy {
     await this.ensureConfig();
     if (!this.access.can("GET /api/boards")) {
       this.boards.set([]);
+      this.boardsError.set(null);
       return;
     }
     try {
@@ -310,8 +312,12 @@ export class TasksStore implements OnDestroy {
       >("GET /api/boards");
       const list = Array.isArray(r) ? r : (r?.items ?? r?.boards ?? []);
       this.boards.set(Array.isArray(list) ? list : []);
-    } catch {
-      // Saved boards are optional; leave previous state if read fails.
+      this.boardsError.set(null);
+    } catch (err) {
+      // Keep any boards already held through a transient poll error, and
+      // record why the read failed so an empty menu never claims there are
+      // no saved boards yet.
+      this.boardsError.set(errorText(err));
     }
   }
 

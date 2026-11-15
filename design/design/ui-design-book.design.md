@@ -215,6 +215,11 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   opens the inspector on an agent. It closes from "Close inspector" in
   the split bar, the pane's ×, Escape, or a second click on the selected
   card, and focus goes back to that card.
+- **Never open the sheet unasked.** Below 1080px (and on a short landscape
+  screen) the pane becomes a fixed sheet over the list and the top bar, so
+  a surface may pre-select its first item only where the pane sits beside
+  the list; on a tablet the list shows first and a tap opens the sheet
+  (`next-responsive-sessions.spec.js` checks Agents at 820px and 1024px).
 - **The selected item looks selected.** Whatever the list is drawn as —
   queue rows, table rows, cards — the item the pane shows carries
   `surface-container` with a 3px `primary` leading bar (`inset 3px 0 0`),
@@ -288,7 +293,12 @@ sideways: mark it `.s-table.s-table-stack` inside `.s-table-wrap.s-table-stack-w
 and give each cell after the first a `data-label` naming its column. Below
 880px of the wrap's own width (a container query, since the pane beside the
 drawer and rail is narrower than the viewport) each row becomes a card of
-labelled lines under its first cell (Settings → Repositories). Search filters live inside `<form role="search"
+labelled lines under its first cell (Settings → Repositories). A sub-row editor
+inside a table that still scrolls sideways (`.s-table-wrap.s-table-pinned`)
+carries `.s-subrow-pin`, so it stays pinned to the visible width at phone sizes
+rather than spanning the scrolled table; a Codex connection in the
+`subscription` auth mode shows its own auth.json login there in place of the
+key field. Search filters live inside `<form role="search"
 autocomplete="off">` and secret inputs carry `autocomplete="new-password"` inside
 `<form autocomplete="off">` so browser password managers never autofill emails
 into search bars. Single-choice pickers use `<g-pill-select>`; a model is always chosen
