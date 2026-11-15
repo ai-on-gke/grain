@@ -30,6 +30,7 @@ import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import type { Subscription } from "rxjs";
 import type { RouteKey } from "../api/generated-routes";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
+import type { BaseBranchGate, BaseBranchGatesResponse } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { errText } from "../settings/settings-state.service";
@@ -42,9 +43,33 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { StatusIconComponent } from "../shared/status-icon.component";
+
+// CI_MODE_ID is the CI mode control's anchor on the CI & Workflows tab,
+// which an unjudged gate's warning links to: on a repository grain CI is
+// not enabled for, that control is what enrols its watched branch.
+export const CI_MODE_ID = "repo-ci-mode";
+
+// unjudgedGatesFor is the base-branch gates nothing is judging for repo,
+// as the classic Repo page's header and Releases pane pick them out of
+// GET /api/base-branch-gates. A gate that is only late is left to the
+// release settings it sits beside, as on classic.
+export function unjudgedGatesFor(
+  gates: readonly BaseBranchGate[],
+  repo: string,
+): BaseBranchGate[] {
+  const want = repo.toLowerCase();
+  return gates.filter((g) => !g.judged && g.repo.toLowerCase() === want);
+}
 
 export type RepoTabId =
-  "overview" | "ci" | "merge-queue" | "agents" | "branches" | "releases";
+  | "overview"
+  | "ci"
+  | "merge-queue"
+  | "agents"
+  | "branches"
+  | "releases"
+  | "advanced";
 
 const REPO_TABS: readonly { id: RepoTabId; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -53,6 +78,7 @@ const REPO_TABS: readonly { id: RepoTabId; label: string }[] = [
   { id: "agents", label: "Agents & Grants" },
   { id: "branches", label: "Branches" },
   { id: "releases", label: "Releases" },
+  { id: "advanced", label: "Advanced" },
 ];
 
 function isRepoTabId(val: string | null | undefined): val is RepoTabId {
@@ -186,6 +212,89 @@ interface RepoReleaseSecretRow {
   present?: boolean;
 }
 
+// What GET /api/repos/{owner}/{name}/declarations answers with
+// (ui.RepoDefaults), the part the Advanced tab reads.
+interface DeclaredPushRow {
+  path: string;
+  refs: { ref: string; force?: boolean; delete?: boolean }[];
+}
+
+interface DeclarationsStatus {
+  commit?: string;
+  error?: string;
+  templates?: string[];
+  suites?: string[];
+  schedules?: string[];
+  triggers?: string[];
+  pushes?: DeclaredPushRow[];
+  warnings?: string[];
+}
+
+interface PortDirection {
+  from: string;
+  to: string;
+  paired?: boolean;
+  operatorTypes?: string[];
+  declaredTypes?: string[];
+  types?: string[];
+}
+
+interface RepoDeclarations {
+  declarations?: boolean;
+  declarationsStatus?: DeclarationsStatus | null;
+  portBranches?: string[];
+  declaredPortBranches?: string[];
+  pairedBranches?: string[];
+  portDirections?: PortDirection[];
+  portWarnings?: string[];
+}
+
+// declaredSummary counts what a declarations status says the repository
+// declares, the classic page's words: "1 template(s), 1 suite(s), 0
+// schedule(s), 0 trigger(s)".
+export function declaredSummary(st: DeclarationsStatus): string {
+  return (
+    `${(st.templates ?? []).length} template(s), ` +
+    `${(st.suites ?? []).length} suite(s), ` +
+    `${(st.schedules ?? []).length} schedule(s), ` +
+    `${(st.triggers ?? []).length} trigger(s)`
+  );
+}
+
+// declaredPushRef is one push entry as it reads: "refs/tags/latest
+// (force)".
+export function declaredPushRef(r: {
+  ref: string;
+  force?: boolean;
+  delete?: boolean;
+}): string {
+  const flags = [r.force && "force", r.delete && "delete"].filter(Boolean);
+  return flags.length ? `${r.ref} (${flags.join(", ")})` : r.ref;
+}
+
+// removeRepoMessage is what the Remove confirm says: what dropping repo
+// from allowed does to new work, then what POST /api/repos/plan says
+// the stored work loses (stranded, one summary each). Taking the only
+// entry off the allowlist does not narrow it to nothing: an empty
+// allowlist means unrestricted (model.RepoAllowed), and the confirm
+// says so rather than promise a narrowing that does not happen.
+export function removeRepoMessage(
+  repo: string,
+  allowed: readonly string[],
+  stranded: readonly string[],
+): string {
+  const rest = allowed.filter((r) => r.toLowerCase() !== repo.toLowerCase());
+  const unrestricts = allowed.length > 0 && rest.length === 0;
+  const consequence = unrestricts
+    ? `${repo} is the only repo this deployment allows. An empty allowlist is what means unrestricted, so removing it allows any repo again: new tasks may target any repo, ${repo} included. To stay restricted, add the repo you want first.`
+    : `New tasks won't be able to target ${repo} until it's added back, and it drops off the repos list.`;
+  const cost =
+    stranded.length === 0
+      ? "Tasks already filed there are not affected."
+      : stranded.join(" ");
+  return `${consequence} ${cost}`;
+}
+
 interface PendingReleaseRow {
   version: string;
   summary?: string;
@@ -194,7 +303,12 @@ interface PendingReleaseRow {
 
 @Component({
   selector: "g-repo-detail-page",
-  imports: [RouterLink, PillSelectComponent, ConfirmDialogComponent],
+  imports: [
+    RouterLink,
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    StatusIconComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
@@ -210,9 +324,9 @@ interface PendingReleaseRow {
           <div class="repo-top-nav">
             <a
               class="btn-text"
-              routerLink="/settings/repositories"
+              routerLink="/repos"
               data-testid="back-to-repos-link"
-              >← Repositories</a
+              >← Repos</a
             >
             <a
               class="btn-tonal s-btn-sm"
@@ -233,7 +347,8 @@ interface PendingReleaseRow {
             </h1>
             <p class="view-subtitle">
               Per-repository Git connection, CI workflows, merge gates,
-              branches, and release qualification.
+              branches, release qualification, and what the repository declares
+              for itself.
             </p>
           </div>
 
@@ -280,6 +395,43 @@ interface PendingReleaseRow {
           @if (ready()) {
             @switch (activeTab()) {
               @case ("overview") {
+                <!-- A watched base branch nothing judges (GET
+                     /api/base-branch-gates): with CI mode on GitHub or No
+                     CI, grain never enrols the branch. Classic says it on
+                     the Repo page's header and on Releases, in the
+                     server's own sentence; it blocks nothing, so it is a
+                     warning (design book, "A deployment finding that
+                     blocks nothing"). -->
+                @for (
+                  gate of unjudgedGates();
+                  track gate.repo + " " + (gate.branch ?? "")
+                ) {
+                  <div
+                    class="repo-gate-banner"
+                    role="status"
+                    data-testid="repo-base-gate-warning"
+                  >
+                    <g-status-icon tone="blast" kind="warning" />
+                    <span class="repo-gate-text">
+                      {{ gate.detail || gate.reason }}
+                      @if (gate.runID) {
+                        <a
+                          [routerLink]="['/ci', 'runs', gate.runID]"
+                          data-testid="repo-base-gate-run-link"
+                          >View CI run</a
+                        >
+                      } @else if (gate.reason === "grain-ci-off") {
+                        <a
+                          [routerLink]="ciTabLink()"
+                          [fragment]="ciModeId"
+                          data-testid="repo-base-gate-ci-mode-link"
+                          (click)="goToCiMode($event)"
+                          >Go to CI Mode</a
+                        >
+                      }
+                    </span>
+                  </div>
+                }
                 <div class="s-card" data-testid="card-repo-config">
                   <div class="s-card-head">
                     <div>
@@ -528,7 +680,7 @@ interface PendingReleaseRow {
                   </div>
 
                   <div class="s-grid">
-                    <div class="s-field">
+                    <div class="s-field" [id]="ciModeId">
                       <span class="s-label">CI mode</span>
                       <g-pill-select
                         testid="select-repo-ci-mode"
@@ -878,6 +1030,43 @@ interface PendingReleaseRow {
               }
 
               @case ("releases") {
+                <!-- A watched base branch nothing judges (GET
+                     /api/base-branch-gates): with CI mode on GitHub or No
+                     CI, grain never enrols the branch. Classic says it on
+                     the Repo page's header and on Releases, in the
+                     server's own sentence; it blocks nothing, so it is a
+                     warning (design book, "A deployment finding that
+                     blocks nothing"). -->
+                @for (
+                  gate of unjudgedGates();
+                  track gate.repo + " " + (gate.branch ?? "")
+                ) {
+                  <div
+                    class="repo-gate-banner"
+                    role="status"
+                    data-testid="repo-base-gate-warning"
+                  >
+                    <g-status-icon tone="blast" kind="warning" />
+                    <span class="repo-gate-text">
+                      {{ gate.detail || gate.reason }}
+                      @if (gate.runID) {
+                        <a
+                          [routerLink]="['/ci', 'runs', gate.runID]"
+                          data-testid="repo-base-gate-run-link"
+                          >View CI run</a
+                        >
+                      } @else if (gate.reason === "grain-ci-off") {
+                        <a
+                          [routerLink]="ciTabLink()"
+                          [fragment]="ciModeId"
+                          data-testid="repo-base-gate-ci-mode-link"
+                          (click)="goToCiMode($event)"
+                          >Go to CI Mode</a
+                        >
+                      }
+                    </span>
+                  </div>
+                }
                 <div class="s-card" data-testid="card-repo-release-settings">
                   <div class="s-card-head">
                     <div>
@@ -1314,6 +1503,316 @@ interface PendingReleaseRow {
                   }
                 </div>
               }
+              @case ("advanced") {
+                <div class="s-card" data-testid="card-repo-declarations">
+                  <div class="s-card-head">
+                    <div>
+                      <h2 class="s-card-title">.grain/ declarations</h2>
+                      <p class="s-card-desc">
+                        The templates, suites, schedules and path triggers
+                        {{ repoSlug() }} declares in its own .grain/templates,
+                        .grain/suites, .grain/schedules and .grain/triggers.
+                        Grain re-reads them within a couple of minutes of every
+                        change; they are edited in those files, not here. A
+                        declaration files work in {{ repoSlug() }} on a cadence
+                        and can never widen what that work reads, writes or
+                        holds.
+                      </p>
+                    </div>
+                  </div>
+                  @if (declarations(); as d) {
+                    <div class="s-toggle-row">
+                      <div class="s-toggle-copy">
+                        <span class="s-toggle-name"
+                          >Read this repository's declarations</span
+                        >
+                        @if (declarationsLockedReason(); as why) {
+                          <span
+                            class="s-hint"
+                            id="declarations-locked-reason"
+                            data-testid="declarations-locked-reason"
+                            >{{ why }}</span
+                          >
+                        } @else {
+                          <span class="s-hint"
+                            >Off unless somebody here turns it on: a declared
+                            schedule is a standing claim on this deployment's
+                            agents.</span
+                          >
+                        }
+                      </div>
+                      <button
+                        type="button"
+                        class="g-switch"
+                        role="switch"
+                        data-testid="switch-repo-declarations"
+                        [attr.aria-label]="declarationsSwitchLabel()"
+                        [attr.aria-checked]="!!d.declarations"
+                        [attr.aria-describedby]="
+                          declarationsLockedReason()
+                            ? 'declarations-locked-reason'
+                            : null
+                        "
+                        [disabled]="
+                          !!declarationsLockedReason() || savingDecl()
+                        "
+                        (click)="saveDeclarations(!d.declarations)"
+                      ></button>
+                    </div>
+                    @if (d.declarationsStatus; as st) {
+                      <p
+                        class="s-hint repo-adv-status"
+                        data-testid="declarations-status"
+                      >
+                        @if (st.error) {
+                          Last read failed: {{ st.error }}
+                          @if (st.commit) {
+                            — still running what
+                            {{ shortSha(st.commit) }} declared.
+                          }
+                        } @else {
+                          Read at {{ shortSha(st.commit) || "no commit" }}:
+                          {{ declaredSummary(st) }}
+                        }
+                      </p>
+                      @if (st.error && st.commit) {
+                        <p
+                          class="s-hint"
+                          data-testid="declarations-still-running"
+                        >
+                          Still running from {{ shortSha(st.commit) }}:
+                          {{ declaredSummary(st) }}
+                        </p>
+                      }
+                      @for (w of st.warnings ?? []; track w) {
+                        <p class="s-hint repo-adv-warning">Warning: {{ w }}</p>
+                      }
+                    } @else if (d.declarations) {
+                      <p class="s-hint" data-testid="declarations-status">
+                        Not read yet — grain picks this up on its next cycle.
+                      </p>
+                    } @else {
+                      <p class="s-hint" data-testid="declarations-status">
+                        Grain has never read {{ repoSlug() }}'s declarations.
+                      </p>
+                    }
+                  } @else if (declarationsError()) {
+                    <p class="s-hint repo-adv-warning" role="alert">
+                      Couldn't read the declarations: {{ declarationsError() }}
+                    </p>
+                  } @else {
+                    <p class="s-hint">Loading declarations…</p>
+                  }
+                </div>
+
+                <div class="s-card" data-testid="card-repo-triggers">
+                  <div class="s-card-head">
+                    <div>
+                      <h2 class="s-card-title">Trigger files</h2>
+                      <p class="s-card-desc">
+                        The path triggers {{ repoSlug() }} declares in
+                        .grain/triggers: a Processes trigger row names only its
+                        file, so the file is listed here.
+                      </p>
+                    </div>
+                  </div>
+                  @if (triggerFiles().length > 0) {
+                    <ul class="repo-adv-list" aria-label="Trigger files">
+                      @for (path of triggerFiles(); track path) {
+                        <li>
+                          <code class="s-mono">{{ path }}</code>
+                        </li>
+                      }
+                    </ul>
+                  } @else {
+                    <p class="s-hint" data-testid="triggers-empty">
+                      {{ emptyDeclared("path triggers") }}
+                    </p>
+                  }
+                </div>
+
+                <div class="s-card" data-testid="card-repo-push-refs">
+                  <div class="s-card-head">
+                    <div>
+                      <h2 class="s-card-title">Extra push refs</h2>
+                      <p class="s-card-desc">
+                        What the runs of tasks filed from a declared template
+                        may push in {{ repoSlug() }} beyond their own branch, as
+                        its default branch declares it in the template's push:
+                        list.
+                      </p>
+                    </div>
+                  </div>
+                  @if (pushes().length > 0) {
+                    <div
+                      class="s-table-wrap"
+                      role="region"
+                      tabindex="0"
+                      aria-label="Extra push refs table"
+                    >
+                      <table
+                        class="s-table repo-adv-table"
+                        aria-label="Extra push refs"
+                      >
+                        <thead>
+                          <tr>
+                            <th>Template file</th>
+                            <th>May also push</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          @for (p of pushes(); track p.path) {
+                            <tr>
+                              <td>
+                                <code class="s-mono">{{ p.path }}</code>
+                              </td>
+                              <td class="s-mono">{{ pushRefsText(p) }}</td>
+                            </tr>
+                          }
+                        </tbody>
+                      </table>
+                    </div>
+                  } @else {
+                    <p class="s-hint" data-testid="push-refs-empty">
+                      {{
+                        emptyDeclared(
+                          "templates that push beyond their own branch"
+                        )
+                      }}
+                    </p>
+                  }
+                </div>
+
+                <div class="s-card" data-testid="card-repo-ports">
+                  <div class="s-card-head">
+                    <div>
+                      <h2 class="s-card-title">Ports</h2>
+                      <p class="s-card-desc">
+                        Which branches grain ports each merge between, and which
+                        merges each direction carries. Set by the operator in
+                        grain/config and by {{ repoSlug() }}'s own
+                        .grain/settings.yml port-types; not editable here.
+                      </p>
+                    </div>
+                  </div>
+                  @if (declarations(); as d) {
+                    <p class="s-hint" data-testid="ports-summary">
+                      @if ((d.pairedBranches ?? []).length > 0) {
+                        Grain ports each merge between
+                        {{ (d.pairedBranches ?? []).join(", ") }}
+                      } @else {
+                        No branches are paired
+                      }
+                      — operator:
+                      {{ (d.portBranches ?? []).join(", ") || "none" }};
+                      declared in .grain/settings.yml:
+                      {{ (d.declaredPortBranches ?? []).join(", ") || "none" }}.
+                    </p>
+                    @if ((d.portDirections ?? []).length > 0) {
+                      <div
+                        class="s-table-wrap"
+                        role="region"
+                        tabindex="0"
+                        aria-label="Port directions table"
+                      >
+                        <table
+                          class="s-table repo-adv-table"
+                          aria-label="Port directions"
+                        >
+                          <thead>
+                            <tr>
+                              <th>Direction</th>
+                              <th>Operator</th>
+                              <th>Declared</th>
+                              <th>Ports</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            @for (
+                              dir of d.portDirections ?? [];
+                              track dir.from + "->" + dir.to
+                            ) {
+                              <tr>
+                                <td class="s-mono">
+                                  {{ dir.from }}→{{ dir.to }}
+                                </td>
+                                <td>
+                                  {{
+                                    (dir.operatorTypes ?? []).join(", ") || "—"
+                                  }}
+                                </td>
+                                <td>
+                                  {{
+                                    (dir.declaredTypes ?? []).join(", ") || "—"
+                                  }}
+                                </td>
+                                <td>{{ portsText(dir) }}</td>
+                              </tr>
+                            }
+                          </tbody>
+                        </table>
+                      </div>
+                    }
+                    @for (w of portWarnings(); track w) {
+                      <p class="s-hint repo-adv-warning">Warning: {{ w }}</p>
+                    }
+                  } @else {
+                    <p class="s-hint">Loading ports…</p>
+                  }
+                </div>
+
+                <div
+                  class="s-card repo-adv-danger"
+                  data-testid="card-repo-remove"
+                >
+                  <div class="s-card-head">
+                    <div>
+                      <h2 class="s-card-title">Remove repository</h2>
+                      <p class="s-card-desc" data-testid="remove-repo-desc">
+                        @switch (removeState()) {
+                          @case ("config") {
+                            {{ repoSlug() }} is this deployment's own
+                            configuration repository and cannot be removed here.
+                          }
+                          @case ("untargeted") {
+                            {{ repoSlug() }} is not one of this deployment's
+                            target repos, so there is nothing to remove.
+                          }
+                          @default {
+                            Takes {{ repoSlug() }} off this deployment's target
+                            repos. Its tasks and history stay.
+                          }
+                        }
+                      </p>
+                      @if (removeState() === "target") {
+                        @if (removeLockedReason(); as why) {
+                          <p
+                            class="s-hint"
+                            id="remove-locked-reason"
+                            data-testid="remove-locked-reason"
+                          >
+                            {{ why }}
+                          </p>
+                        }
+                      }
+                    </div>
+                    @if (removeState() === "target") {
+                      <button
+                        type="button"
+                        class="btn-tonal danger s-btn-sm"
+                        data-testid="remove-repo-btn"
+                        [attr.aria-describedby]="
+                          removeLockedReason() ? 'remove-locked-reason' : null
+                        "
+                        [disabled]="!!removeLockedReason() || removing()"
+                        (click)="askRemoveRepo()"
+                      >
+                        Remove
+                      </button>
+                    }
+                  </div>
+                </div>
+              }
             }
           }
         </div>
@@ -1373,6 +1872,11 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   } | null>(null);
 
   protected readonly ciMode = signal("grain");
+  protected readonly ciModeId = CI_MODE_ID;
+  protected readonly baseBranchGates = signal<BaseBranchGate[]>([]);
+  protected readonly unjudgedGates = computed(() =>
+    unjudgedGatesFor(this.baseBranchGates(), this.repoSlug()),
+  );
   protected readonly watchDefaultBranch = signal(false);
   protected readonly workflows = signal<RepoWorkflowRow[]>([]);
   protected readonly selectedWorkflowPath = signal(".grain/workflows/ci.yml");
@@ -1449,6 +1953,45 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   // pane does, not in the page-wide banner, and clears on the next edit
   // or a clean create.
   protected readonly newReleaseError = signal<string | null>(null);
+
+  // The Advanced tab: what GET .../declarations last said, and the
+  // allowlist and config repo /api/config last said, which decide
+  // whether this repository can be removed at all.
+  protected readonly declarations = signal<RepoDeclarations | null>(null);
+  protected readonly declarationsError = signal<string | null>(null);
+  protected readonly savingDecl = signal(false);
+  protected readonly removing = signal(false);
+  private readonly targetRepos = signal<string[]>([]);
+  private readonly configRepo = signal("");
+
+  protected readonly triggerFiles = computed(
+    () => this.declarations()?.declarationsStatus?.triggers ?? [],
+  );
+  protected readonly pushes = computed(
+    () => this.declarations()?.declarationsStatus?.pushes ?? [],
+  );
+  // Only what the declarations card has not already said: the
+  // repository's own port-types findings are among its warnings too
+  // (ui.Client.RepoDefaults appends them), and drawing them twice read
+  // as two problems (2026-11-11 repository walkthrough).
+  protected readonly portWarnings = computed(() => {
+    const d = this.declarations();
+    const shown = new Set(d?.declarationsStatus?.warnings ?? []);
+    return (d?.portWarnings ?? []).filter((w) => !shown.has(w));
+  });
+
+  // removeState is whether Remove applies: the config repo is refused
+  // (ui.Client.RemoveTargetRepoForTeam says so with a 400) and a repo
+  // off the allowlist has nothing to take off it.
+  protected readonly removeState = computed<"config" | "untargeted" | "target">(
+    () => {
+      const key = this.repoSlug().toLowerCase();
+      if (this.configRepo().toLowerCase() === key) return "config";
+      return this.targetRepos().some((r) => r.toLowerCase() === key)
+        ? "target"
+        : "untargeted";
+    },
+  );
 
   private subs: Subscription[] = [];
   private readonly hostEl = inject(ElementRef<HTMLElement>);
@@ -1560,6 +2103,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         this.routeTab.set(pm.get("tab"));
         if (this.ready()) {
           void this.loadTabData();
+          // The same page shown for another repository reads that
+          // repository's gates; unjudgedGates already drops the last one's.
+          void this.loadBaseBranchGates();
         }
       }),
     );
@@ -1655,6 +2201,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       if (cfg) {
         this.access.setConfig(cfg);
         const rec = cfg as Record<string, unknown>;
+        this.applyAllowlist(rec);
         this.configRepoOnly.set(
           Boolean(
             rec["configRepoOnly"] ||
@@ -1748,6 +2295,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
           .catch(() => undefined),
       );
     }
+    jobs.push(this.loadBaseBranchGates());
     if (this.access.can("GET /api/deployment/git-connections")) {
       jobs.push(
         this.api
@@ -1842,7 +2390,185 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
       }
     } else if (t === "releases") {
       await this.loadReleasesTab();
+    } else if (t === "advanced") {
+      await this.loadDeclarations();
     }
+  }
+
+  private applyAllowlist(cfg: Record<string, unknown>): void {
+    const t = cfg["targetRepos"];
+    this.targetRepos.set(
+      Array.isArray(t) ? t.filter((r): r is string => !!r) : [],
+    );
+    this.configRepo.set(String(cfg["configRepo"] ?? ""));
+  }
+
+  private async loadDeclarations(): Promise<void> {
+    if (!this.can("GET /api/repos/{owner}/{name}/declarations")) {
+      this.declarationsError.set(
+        `your role cannot read ${this.repoSlug()}'s settings (it needs repos:read).`,
+      );
+      return;
+    }
+    try {
+      this.declarations.set(
+        await this.api.get<RepoDeclarations>(
+          "GET /api/repos/{owner}/{name}/declarations",
+          this.params(),
+        ),
+      );
+      this.declarationsError.set(null);
+    } catch (err) {
+      this.declarationsError.set(errText(err));
+    }
+  }
+
+  // declarationsLockedReason says why the declarations switch is off
+  // for this person, or null when they may flip it.
+  protected declarationsLockedReason(): string | null {
+    if (this.configRepoOnly()) {
+      return "Repository settings are managed in the config repository, so this is switched there.";
+    }
+    if (!this.can("PUT /api/repos/{owner}/{name}/declarations")) {
+      return this.roleCannot("switch declarations on or off");
+    }
+    return null;
+  }
+
+  // removeLockedReason says why Remove is off for this person, or null.
+  protected removeLockedReason(): string | null {
+    if (this.configRepoOnly()) {
+      return "The target repo list is managed in the config repository, so a repository is removed there.";
+    }
+    if (!this.can("DELETE /api/repos/{owner}/{name}")) {
+      return this.roleCannot("remove repositories");
+    }
+    return null;
+  }
+
+  private roleCannot(what: string): string {
+    const role = this.access.roleLabel();
+    return `${role ? `Your role, ${role},` : "Your role"} cannot ${what} (it needs repos:write on ${this.repoSlug()}).`;
+  }
+
+  // saveDeclarations turns reading this repository's own declarations
+  // on or off. The request reads and removes nothing itself: the next
+  // cycle does both (orchestrator.reconcileDeclarations), which is why
+  // the status can still be empty a moment after the switch moves.
+  protected async saveDeclarations(on: boolean): Promise<void> {
+    this.savingDecl.set(true);
+    try {
+      this.declarations.set(
+        await this.api.put<RepoDeclarations>(
+          "PUT /api/repos/{owner}/{name}/declarations",
+          this.params(),
+          { declarations: on },
+        ),
+      );
+    } catch (err) {
+      this.error.set(errText(err));
+    } finally {
+      this.savingDecl.set(false);
+    }
+  }
+
+  // askRemoveRepo asks before taking this repository off the allowlist,
+  // naming what the removal strands: asked of the daemon as the very
+  // save it is (POST /api/repos/plan with this repo dropped), since the
+  // work behind a repo is the store's to count. A plan this build cannot
+  // get must not stop a removal that never depended on one.
+  protected async askRemoveRepo(): Promise<void> {
+    const repo = this.repoSlug();
+    this.removing.set(true);
+    let allowed = this.targetRepos();
+    try {
+      const cfg = await this.api.config();
+      if (cfg) {
+        this.applyAllowlist(cfg as Record<string, unknown>);
+        allowed = this.targetRepos();
+      }
+    } catch {
+      // Keep the allowlist the page loaded with.
+    }
+    if (this.removeState() !== "target") {
+      this.removing.set(false);
+      return;
+    }
+    let stranded: string[] = [];
+    try {
+      const plan = await this.api.post<{
+        targetReposStranded?: { summary?: string }[];
+      }>("POST /api/repos/plan", undefined, {
+        targetRepos: allowed.filter(
+          (r) => r.toLowerCase() !== repo.toLowerCase(),
+        ),
+      });
+      stranded = (plan?.targetReposStranded ?? [])
+        .map((x) => x.summary ?? "")
+        .filter(Boolean);
+    } catch {
+      // Said as it always was, without the stranded work.
+    }
+    this.removing.set(false);
+    this.confirmReq.set({
+      title: `Remove ${repo} from target repos?`,
+      message: removeRepoMessage(repo, allowed, stranded),
+      accept: "Remove",
+      destructive: true,
+      run: () => this.removeRepo(),
+    });
+  }
+
+  // Removing the repo leaves this page describing one the deployment
+  // no longer allows, so it goes back to the Repos list.
+  private async removeRepo(): Promise<void> {
+    this.removing.set(true);
+    try {
+      await this.api.delete("DELETE /api/repos/{owner}/{name}", this.params());
+      this.snackbar.show(`Removed ${this.repoSlug()} from target repos.`);
+      await this.router.navigate(["/repos"]);
+    } catch (err) {
+      this.error.set(errText(err));
+    } finally {
+      this.removing.set(false);
+    }
+  }
+
+  protected declarationsSwitchLabel(): string {
+    return `Read ${this.repoSlug()}'s own declarations`;
+  }
+
+  protected shortSha(sha: string | undefined): string {
+    return (sha ?? "").slice(0, 12);
+  }
+
+  protected declaredSummary(st: DeclarationsStatus): string {
+    return declaredSummary(st);
+  }
+
+  protected pushRefsText(p: DeclaredPushRow): string {
+    return (p.refs ?? []).map(declaredPushRef).join(", ");
+  }
+
+  protected portsText(d: PortDirection): string {
+    if (!d.paired) return "nothing (not a paired branch)";
+    return (d.types ?? []).length > 0
+      ? (d.types ?? []).join(", ")
+      : "every merge";
+  }
+
+  // emptyDeclared words an empty list under the declarations status: a
+  // repository grain has not read looks the same as one declaring
+  // nothing unless the line says which it is.
+  protected emptyDeclared(what: string): string {
+    const d = this.declarations();
+    if (!d) return "Loading…";
+    if (!d.declarationsStatus) {
+      return d.declarations
+        ? `Not read yet, so no ${what} are known.`
+        : `Grain does not read ${this.repoSlug()}'s declarations, so it has no ${what}.`;
+    }
+    return `${this.repoSlug()} declares no ${what}.`;
   }
 
   private applyReleaseSettings(relCfg: Record<string, unknown> | null): void {
@@ -2030,6 +2756,67 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
   }
 
+  // loadBaseBranchGates reads this repository's base-branch gates. It is
+  // asked again after every save that changes whether grain judges the
+  // branch (CI mode, Watch default branch), so the warning comes and goes
+  // with the control rather than on the next reload. A failed reading
+  // keeps the last one, as the server's own contract for it does.
+  //
+  // Readings run one after another: GrainApi.get shares a request still
+  // in flight for the same URL, so a second save's reading started
+  // beside the first's would be answered with the state before it.
+  private gatesReading: Promise<void> = Promise.resolve();
+
+  private loadBaseBranchGates(): Promise<void> {
+    this.gatesReading = this.gatesReading.then(() =>
+      this.readBaseBranchGates(),
+    );
+    return this.gatesReading;
+  }
+
+  private async readBaseBranchGates(): Promise<void> {
+    if (!this.can("GET /api/base-branch-gates")) return;
+    try {
+      const q = new URLSearchParams({
+        repo: this.repoSlug(),
+        fields: "full",
+      });
+      const r = await this.api.get<BaseBranchGatesResponse>(
+        "GET /api/base-branch-gates",
+        undefined,
+        q.toString(),
+      );
+      this.baseBranchGates.set(Array.isArray(r?.gates) ? r.gates : []);
+    } catch {
+      // Keep the previous reading.
+    }
+  }
+
+  protected ciTabLink(): string[] {
+    const h = this.resolvedHost();
+    const o = this.resolvedOwner();
+    const n = this.resolvedName();
+    return h ? ["/repos", h, o, n, "ci"] : ["/repos", o, n, "ci"];
+  }
+
+  // goToCiMode opens the CI & Workflows tab and brings its CI mode
+  // control into view, focused, as classic's "Go to CI Mode" does.
+  protected async goToCiMode(ev: Event): Promise<void> {
+    ev.preventDefault();
+    if (this.activeTab() !== "ci") {
+      if (!(await this.canLeave())) return;
+      this.routeTab.set("ci");
+      void this.router.navigate(this.ciTabLink(), { fragment: CI_MODE_ID });
+      void this.loadTabData("ci");
+    }
+    setTimeout(() => {
+      const root = this.hostEl.nativeElement as HTMLElement;
+      const el = root.querySelector<HTMLElement>(`#${CI_MODE_ID}`);
+      el?.scrollIntoView?.({ block: "center" });
+      el?.querySelector<HTMLElement>("button")?.focus();
+    });
+  }
+
   protected async saveCiMode(ciMode: string): Promise<void> {
     const previous = this.ciMode();
     this.ciMode.set(ciMode);
@@ -2040,6 +2827,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { ciMode },
       );
       this.snackbar.show(`CI mode set to ${ciMode}`);
+      void this.loadBaseBranchGates();
     } catch (err) {
       // A refused mode is not the repo's mode: put the pill back on
       // what the server still has rather than leave it naming one it
@@ -2058,6 +2846,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         { watchDefaultBranch: next },
       );
       this.watchDefaultBranch.set(next);
+      void this.loadBaseBranchGates();
     } catch (err) {
       this.error.set(errText(err));
     }
