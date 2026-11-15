@@ -293,7 +293,12 @@ sideways: mark it `.s-table.s-table-stack` inside `.s-table-wrap.s-table-stack-w
 and give each cell after the first a `data-label` naming its column. Below
 880px of the wrap's own width (a container query, since the pane beside the
 drawer and rail is narrower than the viewport) each row becomes a card of
-labelled lines under its first cell (Settings → Repositories). Search filters live inside `<form role="search"
+labelled lines under its first cell (Settings → Repositories). A sub-row editor
+inside a table that still scrolls sideways (`.s-table-wrap.s-table-pinned`)
+carries `.s-subrow-pin`, so it stays pinned to the visible width at phone sizes
+rather than spanning the scrolled table; a Codex connection in the
+`subscription` auth mode shows its own auth.json login there in place of the
+key field. Search filters live inside `<form role="search"
 autocomplete="off">` and secret inputs carry `autocomplete="new-password"` inside
 `<form autocomplete="off">` so browser password managers never autofill emails
 into search bars. Single-choice pickers use `<g-pill-select>`; a model is always chosen
