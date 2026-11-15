@@ -291,8 +291,13 @@ class FakeProcessesApi {
     schedule: this.schedules[0],
   };
 
-  calls: { method: string; route: string; params?: unknown; body?: unknown }[] =
-    [];
+  calls: {
+    method: string;
+    route: string;
+    params?: unknown;
+    body?: unknown;
+    query?: string;
+  }[] = [];
 
   config = () => Promise.resolve(this.configBody);
   tasks_ = () => Promise.resolve(this.tasks);
@@ -335,8 +340,8 @@ class FakeProcessesApi {
     }
   };
 
-  get = (route: string, params?: Record<string, unknown>) => {
-    this.calls.push({ method: "GET", route, params });
+  get = (route: string, params?: Record<string, unknown>, query?: string) => {
+    this.calls.push({ method: "GET", route, params, query });
     if (route === "GET /api/deployment/reachable-repos") {
       return Promise.resolve(["acme/widgets"]);
     }
@@ -1086,5 +1091,228 @@ describe("ProcessesPageComponent (D-9)", () => {
     expect(
       root.querySelectorAll('[data-testid^="decl-repo-row-"]').length,
     ).toBe(2);
+  });
+
+  it("renders dialog errors inside the active modal, enforces the 10-minute floor, and reopens ?new=1 after cancel", async () => {
+    const basePost = api.post;
+    api.post = async (
+      route: string,
+      params?: unknown,
+      body?: Record<string, unknown>,
+    ) => {
+      if (route === "POST /api/schedules") {
+        api.calls.push({ method: "POST", route, params, body });
+        await Promise.resolve();
+        throw new Error(
+          "recurrence.every_n_minutes must be at least 10 (got 5)",
+        );
+      }
+      return basePost(route, params, body);
+    };
+
+    const harness = await RouterTestingHarness.create(
+      "/processes/schedules?new=1",
+    );
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    let dlg = root.querySelector('[data-testid="schedule-dialog"]')!;
+    expect(dlg).not.toBeNull();
+    expect(dlg.closest("[inert]")).toBeNull();
+
+    // Switch to Every N minutes and verify min="10"
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="sched-kind-everyNMinutes"]',
+      )!
+      .click();
+    await flush(harness);
+    const minInput = dlg.querySelector<HTMLInputElement>(
+      'input[type="number"]',
+    )!;
+    expect(minInput.getAttribute("min")).toBe("10");
+
+    const titleInput = dlg.querySelector<HTMLInputElement>(
+      '[data-testid="sched-title-input"]',
+    )!;
+    titleInput.value = "Too frequent";
+    titleInput.dispatchEvent(new Event("input"));
+    minInput.value = "5";
+    minInput.dispatchEvent(new Event("input"));
+    await flush(harness);
+
+    dlg
+      .querySelector<HTMLButtonElement>('[data-testid="sched-save-btn"]')!
+      .click();
+    await flush(harness);
+
+    const dlgErr = dlg.querySelector('[data-testid="proc-dialog-error"]');
+    expect(dlgErr).not.toBeNull();
+    expect(dlgErr!.closest("[inert]")).toBeNull();
+    expect(dlgErr!.textContent).toContain("must be at least 10");
+
+    // Cancel and navigate to ?new=1 again -> must reopen because ?new= was cleared on first open.
+    Array.from(dlg.querySelectorAll("button"))
+      .find((b) => b.textContent?.trim() === "Cancel")!
+      .click();
+    await flush(harness);
+    expect(root.querySelector('[data-testid="schedule-dialog"]')).toBeNull();
+
+    await harness.navigateByUrl("/processes/schedules?new=1");
+    await flush(harness);
+    dlg = root.querySelector('[data-testid="schedule-dialog"]')!;
+    expect(dlg).not.toBeNull();
+  });
+
+  it("formats off-target git_ref next run as suppressed, confirms workflow Run now, shows default branch on baseless suite runs, and previews required template fields without 400", async () => {
+    api.schedules.unshift(
+      {
+        id: "sched-offtarget",
+        title: "Off-target ref watcher",
+        description: "Watches offlist/upstream",
+        repo: "acme/widgets",
+        autoMerge: false,
+        capabilities: [],
+        recurrence: {
+          kind: "git_ref",
+          gitRef: { repo: "offlist/upstream", ref: "refs/heads/main" },
+        },
+        overlap: "skip",
+        source: "deployment",
+        type: "task",
+        enabled: true,
+        nextRunAt: "2027-11-16T05:09:04Z",
+        suppressed: {
+          reason: "watchedRepoOffTarget",
+          detail:
+            "watches offlist/upstream, which is not on this deployment's target repo list",
+        },
+        createdAt: "2026-11-15T00:00:00Z",
+      },
+      {
+        id: "repo:schedule:acme:widgets:workflow.nightly-ci",
+        title: 'Review last night\'s "nightly-ci" workflow run',
+        description: "",
+        repo: "acme/widgets",
+        autoMerge: false,
+        capabilities: [],
+        recurrence: { kind: "daily", timeOfDay: "04:00" },
+        overlap: "skip",
+        source: "acme/widgets",
+        type: "workflow",
+        system: true,
+        declaredIn: {
+          repo: "acme/widgets",
+          path: ".grain/workflows/nightly-ci.yml",
+        },
+        enabled: true,
+        nextRunAt: "2026-11-16T04:00:00Z",
+        createdAt: "2026-11-15T00:00:00Z",
+      },
+    );
+    api.templates.unshift({
+      id: "tmpl-req-nodefault",
+      name: "req-param-tmpl",
+      title: "chore: bump {{pkg}}",
+      description: "Bump {{pkg}}",
+      repo: "acme/widgets",
+      autoMerge: false,
+      capabilities: [],
+      fields: [
+        { name: "pkg", label: "Package", required: true },
+        { name: "note", label: "Note" },
+      ],
+      createdAt: "2026-11-15T00:00:00Z",
+    });
+    api.suiteRuns.unshift({
+      id: 99,
+      suiteId: "suite-1",
+      suiteName: "Release Hardening",
+      repo: "acme/widgets",
+      base: "",
+      mode: "count",
+      count: 2,
+      status: "failed",
+      pass: 0,
+      error: "pass 1 could not be filed",
+      tasks: null,
+      createdAt: "2026-11-15T00:00:00Z",
+    });
+
+    const harness = await RouterTestingHarness.create("/processes/schedules");
+    await flush(harness);
+    const root = harness.routeNativeElement!;
+
+    // Off-target git_ref row & inspector show "suppressed" rather than 2027-11-16
+    const offRow = root.querySelector(
+      '[data-testid="sched-row-sched-offtarget"]',
+    )!;
+    expect(offRow.textContent).toContain("next: suppressed");
+    expect(offRow.textContent).not.toContain("2027-11-16");
+    const insp = root.querySelector('[data-testid="proc-inspector"]')!;
+    expect(insp.textContent).toContain("Next: suppressed");
+    expect(insp.textContent).not.toContain("2027-11-16");
+
+    // Workflow schedule asks confirmation with straight-away CI wording before running
+    root
+      .querySelector<HTMLButtonElement>(
+        '[data-testid="sched-row-repo:schedule:acme:widgets:workflow.nightly-ci"]',
+      )!
+      .click();
+    await flush(harness);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="sched-run-now-btn"]')!
+      .click();
+    await flush(harness);
+    const confirmDlg = root.querySelector('[data-testid="confirm-dialog"]')!;
+    expect(confirmDlg).not.toBeNull();
+    expect(confirmDlg.textContent).toContain(
+      "starts a CI run of the workflow it was declared in straight away",
+    );
+    expect(
+      api.calls.some((c) => c.route === "POST /api/schedules/{id}/run"),
+    ).toBe(false);
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="confirm-accept"]')!
+      .click();
+    await flush(harness);
+    expect(
+      api.calls.some((c) => c.route === "POST /api/schedules/{id}/run"),
+    ).toBe(true);
+
+    // Template with required field and no default sends placeholder {{pkg}}
+    await harness.navigateByUrl("/processes/templates");
+    await flush(harness);
+    const tmplCompCall = api.calls.find(
+      (c) =>
+        c.route === "GET /api/templates/{id}/composition" &&
+        (c.params as { id: string }).id === "tmpl-req-nodefault",
+    );
+    expect(tmplCompCall?.query).toContain("field.pkg=%7B%7Bpkg%7D%7D");
+    // An optional field with no default is left out, as a filing leaves it.
+    expect(tmplCompCall?.query).not.toContain("field.note");
+
+    // Baseless failed 0-pass suite run shows "default branch" on suite detail recent runs, run row, and run inspector, without "(pass 0)"
+    await harness.navigateByUrl("/processes/suites");
+    await flush(harness);
+    const suiteInspText = root.querySelector(
+      '[data-testid="proc-inspector"]',
+    )!.textContent!;
+    expect(suiteInspText).toContain("Run #99 · acme/widgets @ default branch");
+    expect(suiteInspText).not.toContain("pass 0");
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="suites-subview-runs"]')!
+      .click();
+    await flush(harness);
+    const run99Row = root.querySelector<HTMLButtonElement>(
+      '[data-testid="suite-run-row-99"]',
+    )!;
+    expect(run99Row.textContent).toContain("acme/widgets @ default branch");
+    run99Row.click();
+    await flush(harness);
+    expect(
+      root.querySelector('[data-testid="proc-inspector"]')!.textContent,
+    ).toContain("Target: acme/widgets @ default branch");
   });
 });
