@@ -41,6 +41,7 @@ import {
   bypassConfirm,
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
+import { NoGitConnectionNoticeComponent } from "../shared/no-git-connection-notice.component";
 
 interface RepoFacts {
   ciMode?: string;
@@ -58,7 +59,65 @@ interface GitConnectionRow {
   authType?: string;
   type?: string;
   author?: string;
-  status?: string;
+  // status is what the server says about the connection now
+  // (gitproxy.ConnectionStatus): the proxy its host is reached through,
+  // and why it cannot be used, when it cannot.
+  status?: {
+    proxy?: string;
+    error?: string;
+    ambientPending?: boolean;
+    ambientWarning?: string;
+  } | null;
+}
+
+// GitCheckResult is POST /api/deployment/git-connections/check's answer
+// for one connection (ui.CredentialCheck).
+interface GitCheckResult {
+  ok?: boolean;
+  host?: string;
+  login?: string;
+  app?: boolean;
+  installationRepos?: number;
+  scopes?: string[];
+  expires?: string;
+  error?: string;
+  summary?: string;
+  repos?: { repo?: string; read?: boolean; push?: boolean; error?: string }[];
+  skipped?: number;
+}
+
+// gitCheckLines says what testing one connection found, as classic
+// Settings → Git does: who the credential acts as, then each repository
+// it can or cannot push to.
+export function gitCheckLines(r: GitCheckResult): string[] {
+  if (!r.ok) return [r.error || r.summary || "The credential was not accepted"];
+  const who = r.app
+    ? `GitHub App installation${r.installationRepos ? ` (${r.installationRepos} repositories)` : ""}`
+    : r.login
+      ? `@${r.login}`
+      : "";
+  const lines = [
+    `Accepted${who ? ` as ${who}` : ""}${r.host ? ` by ${r.host}` : ""}`,
+  ];
+  const details: string[] = [];
+  if (r.scopes?.length) details.push(`scopes: ${r.scopes.join(", ")}`);
+  if (r.expires) details.push(`expires ${r.expires}`);
+  if (details.length) lines.push(details.join(" · "));
+  for (const repo of r.repos ?? []) {
+    lines.push(
+      `${repo.push ? "✓" : "✗"} ${repo.repo}: ${
+        repo.read
+          ? repo.push
+            ? "read, push"
+            : "read only -- cannot push or open pull requests"
+          : repo.error || "not visible to this credential"
+      }`,
+    );
+  }
+  if (r.skipped && r.skipped > 0) {
+    lines.push(`${r.skipped} more repositories were not checked.`);
+  }
+  return lines;
 }
 
 interface StateRepoEntryDto {
@@ -69,7 +128,12 @@ interface StateRepoEntryDto {
 
 @Component({
   selector: "g-settings-code",
-  imports: [RouterLink, PillSelectComponent, ConfirmDialogComponent],
+  imports: [
+    RouterLink,
+    PillSelectComponent,
+    ConfirmDialogComponent,
+    NoGitConnectionNoticeComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -194,6 +258,7 @@ interface StateRepoEntryDto {
             <div class="s-subhead">
               <h4 class="s-subhead-title">Add repository</h4>
             </div>
+            <g-no-git-connection-notice [deployment]="deploymentForNotice()" />
             <div class="s-grid">
               @if (reachableRepos().length > 0) {
                 <div class="s-field">
@@ -423,6 +488,19 @@ interface StateRepoEntryDto {
             </div>
           }
 
+          @if (gitRefusal(); as refusal) {
+            <div class="s-banner error" data-testid="git-connections-error">
+              <span>{{ refusal }}</span>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                (click)="settleGitRefusal()"
+              >
+                Dismiss
+              </button>
+            </div>
+          }
+
           @if (gitConnections().length > 0) {
             <div class="s-table-wrap">
               <table class="s-table" aria-label="Git connections">
@@ -441,7 +519,25 @@ interface StateRepoEntryDto {
                     @let cred = c.credential || c.id || "default";
                     <tr [attr.data-testid]="'git-conn-row-' + cred">
                       <td class="s-mono">{{ cred }}</td>
-                      <td class="s-mono">{{ c.host || "github.com" }}</td>
+                      <td class="s-mono">
+                        {{ c.host || "github.com" }}
+                        @if (c.status?.proxy) {
+                          <div
+                            class="s-meta"
+                            [attr.data-testid]="'git-conn-proxy-' + cred"
+                          >
+                            via proxy {{ c.status?.proxy }}
+                          </div>
+                        }
+                        @if (c.status?.error) {
+                          <div
+                            class="s-meta s-field-error"
+                            [attr.data-testid]="'git-conn-status-error-' + cred"
+                          >
+                            {{ c.status?.error }}
+                          </div>
+                        }
+                      </td>
                       <td>{{ c.kind === "git" ? "git host" : "GitHub" }}</td>
                       <td>
                         @if (c.scope) {
@@ -457,6 +553,21 @@ interface StateRepoEntryDto {
                       </td>
                       <td class="s-actions-cell">
                         <div class="s-row-actions">
+                          <button
+                            type="button"
+                            class="btn-tonal s-btn-sm"
+                            [disabled]="
+                              !access.can(
+                                'POST /api/deployment/git-connections/check'
+                              ) || testingGitCred() === cred
+                            "
+                            [attr.data-testid]="'test-git-conn-' + cred"
+                            (click)="testGitConnection(c, cred)"
+                          >
+                            {{
+                              testingGitCred() === cred ? "Testing…" : "Test"
+                            }}
+                          </button>
                           <button
                             type="button"
                             class="btn-text s-btn-sm"
@@ -483,6 +594,38 @@ interface StateRepoEntryDto {
               </table>
             </div>
           }
+
+          @if (gitTestResult(); as t) {
+            <div
+              class="s-banner"
+              [class.ok]="t.tone === 'ok'"
+              [class.warn]="t.tone === 'warn'"
+              [class.error]="t.tone === 'error'"
+              data-testid="git-conn-test-result"
+            >
+              <div style="flex: 1; min-width: 0; overflow-wrap: anywhere">
+                <strong>Test {{ t.cred }}:</strong>
+                @for (l of t.lines; track $index) {
+                  <div>{{ l }}</div>
+                }
+              </div>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                (click)="gitTestResult.set(null)"
+              >
+                Dismiss
+              </button>
+            </div>
+          }
+
+          <p class="s-hint" data-testid="git-secret-note">
+            A connection's token or key is never part of the config repo: it is
+            stored write-only, under
+            <a routerLink="/settings/capabilities" fragment="credentials"
+              >Settings → Capabilities</a
+            >, or when a task asks for it.
+          </p>
 
           <form
             class="s-subsection"
@@ -539,8 +682,38 @@ interface StateRepoEntryDto {
                   (input)="newGitScope.set(inputVal($event))"
                 />
               </div>
+              <div class="s-field">
+                <label class="s-label" for="gc-proxy">Proxy (optional)</label>
+                <input
+                  id="gc-proxy"
+                  class="s-input s-mono"
+                  type="text"
+                  data-testid="input-git-conn-proxy"
+                  placeholder="http://proxy.example.com:3128"
+                  [value]="newGitProxy()"
+                  (input)="newGitProxy.set(inputVal($event))"
+                />
+                <span class="s-hint"
+                  >An http(s)://host:port proxy every connection to this host
+                  goes through (no login in it). Other hosts are
+                  unaffected.</span
+                >
+              </div>
 
               @if (gitConnMode() === "existing") {
+                @if (reuseOptions().length > 1) {
+                  <div class="s-field">
+                    <span class="s-label">Reuse authentication from</span>
+                    <g-pill-select
+                      testid="select-git-conn-reuse"
+                      ariaLabel="Reuse authentication from"
+                      align="left"
+                      [options]="reuseOptions()"
+                      [value]="newGitCred()"
+                      (valueChange)="reuseGitCredential($event)"
+                    />
+                  </div>
+                }
                 <div class="s-field">
                   <label class="s-label" for="gc-cred"
                     >Existing stored credential name</label
@@ -1145,6 +1318,42 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly newGitAppId = signal("");
   protected readonly newGitAppInstallId = signal("");
   protected readonly newGitKnownHosts = signal("");
+  protected readonly newGitProxy = signal("");
+  protected readonly testingGitCred = signal<string | null>(null);
+  protected readonly gitTestResult = signal<{
+    cred: string;
+    tone: "ok" | "warn" | "error";
+    lines: string[];
+  } | null>(null);
+  // gitRefusal is why the last add or remove was refused, said beside the
+  // form until a save or remove goes through (or it is dismissed): the
+  // page's banner alone left the next, fixed save under the old error.
+  protected readonly gitRefusal = signal<string | null>(null);
+  // reuseOptions are the stored credentials an existing connection can
+  // name, each told apart by the hosts and scopes it already serves, so
+  // two connections on one host are not both "github.com".
+  protected readonly reuseOptions = computed<PillOption[]>(() => {
+    const byCred = new Map<string, string[]>();
+    for (const c of this.gitConnections()) {
+      const cred = (c.credential || c.id || "").trim();
+      if (!cred || cred === "anonymous") continue;
+      const where = `${c.host || "github.com"}${c.scope ? ` (${c.scope})` : ""}`;
+      byCred.set(cred, [...(byCred.get(cred) ?? []), where]);
+    }
+    return [
+      { value: "", label: "Choose a stored credential…" },
+      ...[...byCred.entries()].map(([cred, where]) => ({
+        value: cred,
+        label: `Reuse authentication from ${cred} — ${where.join(", ")}`,
+      })),
+    ];
+  });
+  // deploymentForNotice is the deployment the no-git-connection notice
+  // reads: undefined until it has loaded, so the notice does not flash.
+  protected readonly deploymentForNotice = computed(() => {
+    const d = this.state.deployment();
+    return Object.keys(d).length > 0 ? d : undefined;
+  });
   // newGitKind is the connection's host kind (model.GitHostKind): a
   // GitHub host, or a plain git host with no GitHub API. The server
   // reads an empty kind as GitHub, so a plain host has to say so.
@@ -1597,6 +1806,9 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
         // kind, and an empty one reads as github.
         kind: this.newGitKind(),
         ...(scope ? { scope } : {}),
+        ...(this.newGitProxy().trim()
+          ? { proxy: this.newGitProxy().trim() }
+          : {}),
       };
     } else {
       const type = this.newGitType();
@@ -1607,6 +1819,8 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
         type,
         ...(scope ? { scope } : {}),
       };
+      const proxy = this.newGitProxy().trim();
+      if (proxy) payload["proxy"] = proxy;
       if (type === "pat") {
         payload["value"] = this.newGitSecret().trim();
       } else if (type === "ssh") {
@@ -1640,11 +1854,86 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       this.newGitAppId.set("");
       this.newGitAppInstallId.set("");
       this.newGitKnownHosts.set("");
+      this.newGitProxy.set("");
+      this.settleGitRefusal();
       await this.loadGitConnections();
+      void this.refreshDeployment();
       this.state.invalidateReachableRepos();
       this.snackbar.show(`Saved Git connection on ${host}`);
     } catch (err) {
-      this.state.recordError(err);
+      this.raiseGitRefusal(err);
+    }
+  }
+
+  private raiseGitRefusal(err: unknown): void {
+    this.state.recordError(err);
+    this.gitRefusal.set(this.state.error() || errText(err));
+  }
+
+  // settleGitRefusal takes down the refusal, and the page banner with it
+  // when that still says the same thing.
+  protected settleGitRefusal(): void {
+    const r = this.gitRefusal();
+    if (r === null) return;
+    if (this.state.error() === r) this.state.clearError();
+    this.gitRefusal.set(null);
+  }
+
+  // The no-git-connection notice reads the deployment record, which a
+  // connection added or removed here changes.
+  private async refreshDeployment(): Promise<void> {
+    if (!this.access.can("GET /api/deployment")) return;
+    try {
+      const d = await this.api.get<Record<string, unknown>>(
+        "GET /api/deployment",
+      );
+      if (d) this.state.deployment.set(d);
+    } catch {
+      // Non-fatal: the notice catches up on the next load.
+    }
+  }
+
+  protected reuseGitCredential(cred: string): void {
+    this.newGitCred.set(cred);
+    const c = this.gitConnections().find(
+      (x) => (x.credential || x.id) === cred,
+    );
+    if (c) this.setGitKind(c.kind === "git" ? "git" : "github");
+  }
+
+  // testGitConnection checks one connection, as classic's per-row Test
+  // does: its host, credential and scope.
+  protected async testGitConnection(
+    c: GitConnectionRow,
+    cred: string,
+  ): Promise<void> {
+    this.testingGitCred.set(cred);
+    this.gitTestResult.set(null);
+    try {
+      const res = await this.api.post<GitCheckResult>(
+        "POST /api/deployment/git-connections/check",
+        undefined,
+        {
+          host: c.host || "github.com",
+          credential: cred,
+          ...(c.scope ? { scope: c.scope } : {}),
+        },
+      );
+      const r = res ?? {};
+      const repos = r.repos ?? [];
+      this.gitTestResult.set({
+        cred,
+        tone: !r.ok
+          ? "error"
+          : repos.length === 0 || repos.every((x) => x.push)
+            ? "ok"
+            : "warn",
+        lines: gitCheckLines(r),
+      });
+    } catch (err) {
+      this.gitTestResult.set({ cred, tone: "error", lines: [errText(err)] });
+    } finally {
+      this.testingGitCred.set(null);
     }
   }
 
@@ -1705,11 +1994,13 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       await this.api.delete("DELETE /api/deployment/git-connections/{cred}", {
         cred,
       });
+      this.settleGitRefusal();
       await this.loadGitConnections();
+      void this.refreshDeployment();
       this.state.invalidateReachableRepos();
       this.snackbar.show(`Removed ${cred}`);
     } catch (err) {
-      this.state.error.set(errText(err));
+      this.raiseGitRefusal(err);
     }
   }
 
