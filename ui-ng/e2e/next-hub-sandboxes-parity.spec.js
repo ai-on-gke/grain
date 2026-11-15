@@ -643,3 +643,48 @@ test("Hub and Sandboxes cards fit a phone without horizontal overflow @phone @da
     expect(spill, path).toEqual([]);
   }
 });
+
+test("Sandboxes: a cleared overcommit or floor share saves grain's default, a typed 0 stays 0", async ({
+  page,
+  request,
+}) => {
+  const before = await getSettings(request);
+  const keys = [
+    ["sb-cpu-oc", "sandboxCpuOvercommit"],
+    ["sb-mem-oc", "sandboxMemoryOvercommit"],
+    ["sb-floor-share", "sandboxDiskFloorShare"],
+  ];
+  try {
+    await page.goto("/next/settings/sandboxes");
+    // 0 is a value of its own here (unbounded / hold nothing back).
+    for (const [id] of keys) await page.locator(`#${id}`).fill("0");
+    let res = await saveBar(page);
+    expect(res.ok()).toBeTruthy();
+    for (const [, k] of keys) expect(res.request().postDataJSON()[k]).toBe(0);
+    await page.reload();
+    await expect(page.locator("#sb-cpu-oc")).toHaveValue("0");
+    await expect(page.getByTestId("cpu-overcommit-unbounded")).toBeVisible();
+
+    // A cleared box shows the default greyed, and that is what Save stores.
+    for (const [id, k] of keys) {
+      const box = page.locator(`#${id}`);
+      await box.fill("");
+      await box.blur();
+      await expect(box).toHaveAttribute(
+        "placeholder",
+        String(before[`${k}Default`]),
+      );
+    }
+    res = await saveBar(page);
+    const sent = res.request().postDataJSON();
+    const after = await getSettings(request);
+    for (const [, k] of keys) {
+      expect(sent[k]).toBe(before[`${k}Default`]);
+      expect(after[k]).toBe(before[`${k}Default`]);
+    }
+  } finally {
+    const patch = {};
+    for (const [, k] of keys) patch[k] = before[k];
+    await restore(request, patch);
+  }
+});

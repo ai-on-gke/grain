@@ -321,6 +321,11 @@ columns into the first (`.s-cell-stack`: repository over path) rather
 than scrolling sideways. A blank string setting shows `<key>Default` as
 its placeholder like a number does; a blank that means "none" (a pod
 priority class) says `none` instead.
+Where a stored `0` is a value of its own rather than "grain's default"
+(CPU or memory overcommit, where 0 is unbounded; the disk floor share,
+where 0 holds nothing back), a typed `0` saves 0 and says what it means
+beside the box, and a cleared box saves the server's `<key>Default` --
+so the greyed placeholder is always what Save stores.
 
 ### Breakpoints
 

@@ -1428,7 +1428,16 @@ function mib(mb: number): string {
                 (input)="
                   state.setNumber(
                     'sandboxCpuOvercommit',
-                    $any($event.target).value
+                    $any($event.target).value,
+                    reportedDefault('sandboxCpuOvercommit', 2),
+                    true
+                  )
+                "
+                (change)="
+                  state.setNumber(
+                    'sandboxCpuOvercommit',
+                    $any($event.target).value,
+                    reportedDefault('sandboxCpuOvercommit', 2)
                   )
                 "
               />
@@ -1462,7 +1471,16 @@ function mib(mb: number): string {
                 (input)="
                   state.setNumber(
                     'sandboxMemoryOvercommit',
-                    $any($event.target).value
+                    $any($event.target).value,
+                    reportedDefault('sandboxMemoryOvercommit', 1),
+                    true
+                  )
+                "
+                (change)="
+                  state.setNumber(
+                    'sandboxMemoryOvercommit',
+                    $any($event.target).value,
+                    reportedDefault('sandboxMemoryOvercommit', 1)
                   )
                 "
               />
@@ -1546,7 +1564,16 @@ function mib(mb: number): string {
                   (input)="
                     state.setNumber(
                       'sandboxDiskFloorShare',
-                      $any($event.target).value
+                      $any($event.target).value,
+                      reportedDefault('sandboxDiskFloorShare', 0.1),
+                      true
+                    )
+                  "
+                  (change)="
+                    state.setNumber(
+                      'sandboxDiskFloorShare',
+                      $any($event.target).value,
+                      reportedDefault('sandboxDiskFloorShare', 0.1)
                     )
                   "
                 />
@@ -2969,6 +2996,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       ...this.overcommitObject(),
       [b.field]: n,
     });
+  }
+
+  // reportedDefault is `<key>Default` as a number, for a box whose stored
+  // 0 is a value of its own (an unbounded overcommit, a floor share that
+  // holds nothing back): a cleared box saves that default, so the greyed
+  // placeholder it shows is what Save really stores, and 0 typed on
+  // purpose stays 0.
+  protected reportedDefault(key: string, fallback: number): number {
+    const d = Number(this.state.settings()[`${key}Default`]);
+    return Number.isFinite(d) && d > 0 ? d : fallback;
   }
 
   protected diskFloorMinDefault(): number {
