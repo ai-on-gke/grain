@@ -1952,6 +1952,10 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   // releaseSaves counts saves of the release switch, which is the release
   // item's own work-ownership override, so the ownership card re-reads.
   protected readonly releaseSaves = signal(0);
+  // releaseEnabledStored is the release switch as the server last said,
+  // so a re-read after a work-ownership save can tell an unsaved flip of
+  // the switch from a stale value.
+  private releaseEnabledStored = false;
   private readonly planEditor = viewChild(RepoQualificationPlanComponent);
   protected readonly ciCapabilityOptions = signal<readonly CapabilityOption[]>(
     [],
@@ -2604,6 +2608,7 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     if (!relCfg) return;
     if (relCfg["enabled"] !== undefined) {
       this.releaseEnabled.set(Boolean(relCfg["enabled"]));
+      this.releaseEnabledStored = Boolean(relCfg["enabled"]);
     }
     if (Array.isArray(relCfg["baseBranchJobs"])) {
       this.baseBranchJobsText.set(
@@ -2743,8 +2748,13 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
   }
 
   protected async saveIssueImportSettings(): Promise<void> {
+    // An untouched box is left out of the save, so a stored interval
+    // that is not a whole number of minutes (set through the API, CLI or
+    // config repo) is not rounded to what the box shows.
+    const intervalEdited =
+      this.importInterval() !== this.importBaseline().interval;
     const interval = importIntervalSeconds(this.importInterval());
-    if (interval.error !== null) {
+    if (intervalEdited && interval.error !== null) {
       this.importIntervalError.set(interval.error);
       return;
     }
@@ -2756,7 +2766,9 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
         issueImportLabel: this.importLabel().trim(),
         issueImportRepo: this.importSourceRepo().trim(),
         issueImportApproved: this.importApproved(),
-        issueImportIntervalSeconds: interval.seconds,
+        ...(intervalEdited
+          ? { issueImportIntervalSeconds: interval.seconds }
+          : {}),
       });
       const eff = res?.issueImport?.effectiveIntervalSeconds;
       if (eff) this.importEffectiveMinutes.set(String(Math.round(eff / 60)));
@@ -2968,17 +2980,24 @@ export class RepoDetailPageComponent implements OnInit, OnDestroy {
     }
   }
 
-  // onWorkOwnershipSaved re-reads the release settings: the release
-  // item's override is what the release switch shows.
+  // onWorkOwnershipSaved re-reads the release switch, which shows the
+  // release item's override. The rest of the release card is a draft
+  // that waits for its own Save, so only the switch is taken from the
+  // re-read, and only while nobody has flipped it unsaved.
   protected async onWorkOwnershipSaved(): Promise<void> {
     if (!this.can("GET /api/repos/{owner}/{name}/release")) return;
     try {
-      this.applyReleaseSettings(
-        await this.api.get<Record<string, unknown>>(
-          "GET /api/repos/{owner}/{name}/release",
-          this.params(),
-        ),
+      const rel = await this.api.get<Record<string, unknown>>(
+        "GET /api/repos/{owner}/{name}/release",
+        this.params(),
       );
+      if (rel?.["enabled"] !== undefined) {
+        const stored = Boolean(rel["enabled"]);
+        if (this.releaseEnabled() === this.releaseEnabledStored) {
+          this.releaseEnabled.set(stored);
+        }
+        this.releaseEnabledStored = stored;
+      }
     } catch {
       // Non-fatal: the card itself already says what was stored.
     }

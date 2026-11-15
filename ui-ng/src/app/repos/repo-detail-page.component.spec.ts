@@ -174,6 +174,8 @@ class FakeRepoApi {
     }
     if (key === "GET /api/repos/{owner}/{name}/release") {
       return Promise.resolve({
+        enabled: false,
+        baseBranchJobs: ["unit"],
         pendingReleases: [
           { version: "v1.3.0", summary: "Trunk release candidate" },
         ],
@@ -624,6 +626,100 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       (c) => c.key === "PUT /api/repos/{owner}/{name}/settings",
     );
     expect(put?.body).toMatchObject({ issueImportIntervalSeconds: 900 });
+  });
+
+  // Review of task 5868 (task 6153): saving the importer rounded a
+  // stored interval that is not whole minutes even when untouched.
+  it("leaves an untouched interval out of the issue-import save", async () => {
+    const api = new FakeRepoApi();
+    api.issueImport = { ...api.issueImport, intervalSeconds: 90 };
+    const { el, harness } = await mountRepo("/repos/acme/platform", api);
+    expect(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-import-interval"]',
+      )!.value,
+    ).toBe("2");
+    const label = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-import-label"]',
+    )!;
+    label.value = "triage";
+    label.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-issue-import-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    const body = api.calls.find(
+      (c) => c.key === "PUT /api/repos/{owner}/{name}/settings",
+    )?.body as Record<string, unknown>;
+    expect(body).toMatchObject({ issueImportLabel: "triage" });
+    expect(body).not.toHaveProperty("issueImportIntervalSeconds");
+  });
+
+  // Review of task 5868 (task 6153): a work-ownership save re-read the
+  // whole release card over its unsaved edits.
+  it("keeps unsaved release-card edits when work ownership is saved", async () => {
+    const { el, harness } = await mountRepo("/repos/acme/platform/releases");
+    const jobs = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-release-base-jobs"]',
+    )!;
+    jobs.value = "unit, e2e";
+    jobs.dispatchEvent(new Event("input", { bubbles: true }));
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      'button[aria-label="Nightly sweep: on"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.detectChanges();
+    expect(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-release-base-jobs"]',
+      )!.value,
+    ).toBe("unit, e2e");
+  });
+
+  // Review of task 5868 (task 6153): an edit made while the plan's Save
+  // was in flight was replaced by the snapshot that was sent.
+  it("keeps a qualification-plan edit made while Save is in flight", async () => {
+    const api = new FakeRepoApi();
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases",
+      api,
+    );
+    let release: (v: unknown) => void = () => undefined;
+    const realPut = api.put;
+    api.put = (key: string, params?: RouteParams, body?: unknown) => {
+      if (key === "PUT /api/repos/{owner}/{name}/qualification-plan") {
+        api.calls.push({ method: "PUT", key, params, body });
+        return new Promise((r) => (release = r));
+      }
+      return realPut(key, params, body);
+    };
+    const card = el.querySelector(
+      '[data-testid="card-repo-qualification-plan"]',
+    )!;
+    const sw = (id: string) =>
+      card.querySelector<HTMLButtonElement>(`[data-testid="${id}"]`)!;
+    sw("switch-qualification-require-approval").click();
+    harness.detectChanges();
+    sw("save-qualification-plan").click();
+    await new Promise((r) => setTimeout(r, 5));
+    sw("switch-qualification-auto-promote").click();
+    harness.detectChanges();
+    release({ ok: true });
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      sw("switch-qualification-auto-promote").getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(
+      card.querySelector('[data-testid="qualification-plan-unsaved"]'),
+    ).not.toBeNull();
+    expect(
+      api.calls.find(
+        (c) => c.key === "PUT /api/repos/{owner}/{name}/qualification-plan",
+      )?.body as { requireApproval?: boolean; autoPromote?: boolean },
+    ).toMatchObject({ requireApproval: true, autoPromote: true });
   });
 
   it("says a server-refused interval beside its box, not in the banner", async () => {

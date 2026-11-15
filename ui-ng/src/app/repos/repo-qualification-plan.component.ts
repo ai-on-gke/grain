@@ -603,9 +603,14 @@ export class RepoQualificationPlanComponent {
         planPayload(sent),
       );
       // What was sent is the new baseline, less the rows Save dropped
-      // for having no template.
+      // for having no template. An edit made while the request was in
+      // flight stays on screen, dirty against that baseline.
       const stored = planFormOf(planPayload(sent));
-      this.takeOn(stored);
+      if (this.form() === sent) {
+        this.takeOn(stored);
+      } else {
+        this.baseline.set(planFormKey(stored));
+      }
     } catch (err) {
       this.saveError.set(errText(err));
     } finally {
