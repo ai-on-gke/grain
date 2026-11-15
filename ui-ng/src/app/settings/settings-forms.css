@@ -452,3 +452,21 @@
 .s-retired code {
   font-size: 12px;
 }
+
+/* A scope set's scopes stay on one line and truncate, the full list in
+   the cell's title; at phone width the Source column goes, so Remove
+   stays in view without scrolling the table. */
+.s-scope-list {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 599px) {
+  .s-hide-phone {
+    display: none;
+  }
+  .s-scope-list {
+    max-width: 120px;
+  }
+}

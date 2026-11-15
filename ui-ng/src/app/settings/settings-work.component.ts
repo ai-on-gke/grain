@@ -1010,7 +1010,7 @@ export function listedSecrets(
                   <tr>
                     <th>Name</th>
                     <th>Scopes</th>
-                    <th>Source</th>
+                    <th class="s-hide-phone">Source</th>
                     <th class="s-actions-cell">Actions</th>
                   </tr>
                 </thead>
@@ -1018,10 +1018,14 @@ export function listedSecrets(
                   @for (ss of scopeSets(); track ss.name) {
                     <tr [attr.data-testid]="'scope-set-row-' + ss.name">
                       <td class="s-mono">{{ ss.name }}</td>
-                      <td class="s-mono s-wrap">
-                        {{ (ss.scopes || []).join(", ") || "—" }}
+                      @let scopeList = (ss.scopes || []).join(", ");
+                      <td
+                        class="s-mono s-scope-list"
+                        [attr.title]="scopeList || null"
+                      >
+                        {{ scopeList || "—" }}
                       </td>
-                      <td>
+                      <td class="s-hide-phone">
                         <span class="status-pill neutral">{{
                           ss.source === "config" ? "declared" : "built-in"
                         }}</span>
@@ -1378,7 +1382,12 @@ export function listedSecrets(
                   >No other secrets set.</span
                 >
               }
-              <div class="s-inline">
+              <form
+                class="s-inline"
+                autocomplete="off"
+                data-testid="secret-form"
+                (submit)="$event.preventDefault(); submitSecret()"
+              >
                 <input
                   class="s-input s-input-inline s-mono"
                   type="text"
@@ -1438,7 +1447,7 @@ export function listedSecrets(
                   />
                 </label>
                 <button
-                  type="button"
+                  type="submit"
                   class="btn-tonal s-btn-sm"
                   data-testid="store-secret-btn"
                   [disabled]="
@@ -1447,11 +1456,10 @@ export function listedSecrets(
                     secretVal().length === 0 ||
                     !canWriteSecrets()
                   "
-                  (click)="putSecret()"
                 >
                   {{ secretExists() ? "Replace secret" : "Store secret" }}
                 </button>
-              </div>
+              </form>
             }
             @if (!access.can("POST /api/secrets/redact")) {
               <span class="s-hint" data-testid="secrets-redact-restricted">{{
@@ -2260,6 +2268,20 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     } catch (err) {
       this.state.recordError(err);
     }
+  }
+
+  // submitSecret is the form's submit (the button, or Enter in a box):
+  // it stores only what the button would.
+  protected submitSecret(): void {
+    if (
+      !this.secretName().trim() ||
+      !this.secretKey().trim() ||
+      this.secretVal().length === 0 ||
+      !this.canWriteSecrets()
+    ) {
+      return;
+    }
+    void this.putSecret();
   }
 
   protected async putSecret(): Promise<void> {

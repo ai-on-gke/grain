@@ -295,8 +295,21 @@ hand-written list: a choice the daemon cannot use stays listed as a `disabled`
 `PillOption` with the server's reason as its `hint`. A number whose stored `0`
 means grain's default shows blank with the server's `<key>Default` as its
 placeholder, and a cleared box saves that default again. A card a link points
-at carries an `id` (`#capability-policy`, `#other-secrets`), and the page
+at carries an `id` (`#capability-policy`, `#credentials`, `#other-secrets`), and the page
 scrolls to the URL's fragment once the section has rendered.
+
+A card follows the scope of the routes it writes through, not its section's:
+Settings → Capabilities' Deployment credentials holds its fields to
+`settings:write` and its stored secrets to `secrets:write`, whatever
+`capabilities:admin` says. A config-repo lock disables and dims (`.s-dimmed`)
+the settings it covers but never the secrets beside them, which the API keeps
+writable. A secret is listed by name and key only, never its value. Its value
+box is `type="password"`, with "From file…" for multi-line values such as
+PEMs, never a textarea masked by CSS. Every removal of a secret, key, scope
+set or server asks first through `<g-confirm-dialog>`, saying what stops
+working. A table cell holding a list (scopes, repositories) stays on one line,
+truncates with the full list in its `title`, and drops secondary columns
+(`.s-hide-phone`) below 600px so that row actions stay in view.
 
 ### Breakpoints
 
