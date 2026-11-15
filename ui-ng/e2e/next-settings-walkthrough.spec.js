@@ -47,6 +47,10 @@ test("old Admin, System and Config Repo Browser links land on their Settings pag
       "Capabilities",
     ],
     ["/next/admin/upgrade", /\/next\/settings\/upgrade$/, "Upgrade"],
+    ["/next/admin/agents", /\/next\/settings\/agents$/, "Agents"],
+    ["/next/admin/Models", /\/next\/settings\/models$/, "Models"],
+    ["/next/admin/state", /\/next\/settings\/config-repo$/, "Config repo"],
+    ["/next/admin/no-such-tab", /\/next\/settings\/general$/, "General"],
     [
       "/next/settings/config-repo/tables/grain_config.json",
       /\/next\/settings\/config-repo\?path=tables%2Fgrain_config\.json$/,

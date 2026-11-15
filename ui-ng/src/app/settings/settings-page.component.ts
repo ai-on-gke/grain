@@ -25,7 +25,7 @@ import {
   signal,
 } from "@angular/core";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
-import type { Subscription } from "rxjs";
+import { combineLatest, type Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
 import { KeyboardService } from "../services/keyboard.service";
 import { SettingsCodeComponent } from "./settings-code.component";
@@ -39,6 +39,7 @@ import {
   SETTINGS_GROUPS,
   filterSettingsGroups,
   resolveSettingsSection,
+  settingsAnchor,
   sectionMeta,
 } from "./settings-sections";
 import { SettingsSecurityComponent } from "./settings-security.component";
@@ -445,7 +446,6 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   private subs: Subscription[] = [];
   private readonly keyboard = inject(KeyboardService);
   private unregisterSlash: (() => void) | null = null;
-  private scrollTimer: ReturnType<typeof setTimeout> | null = null;
 
   protected readonly hasExplicitSection = computed(() => {
     const raw = this.routeSection() ?? this.section();
@@ -479,29 +479,37 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.subs.push(
-      this.route.paramMap.subscribe((pm) => {
-        this.routeSection.set(pm.get("section"));
-      }),
       this.route.queryParamMap.subscribe((qm) => {
         this.routeFilePath.set(qm.get("path") ?? "");
       }),
-      this.route.fragment.subscribe((frag) => {
-        const raw = String(this.route.snapshot.paramMap.get("section") ?? "")
-          .trim()
-          .toLowerCase();
-        const legacy = LEGACY_SECTION_FRAGMENTS[raw];
-        if (!frag && legacy) {
-          // An old section address: show the card it meant, under the
-          // section's own address.
-          const section = resolveSettingsSection(raw);
-          void this.router.navigate(["/settings", section], {
-            fragment: legacy,
-            replaceUrl: true,
-          });
-          return;
-        }
-        if (frag) this.scrollToCard(frag);
-      }),
+      // A #fragment (Settings -> Capabilities#capability-policy, the
+      // links capability pickers give) or an old section name
+      // (/settings/secrets) names a card inside the section: scroll it
+      // into view once the section's own data has rendered it. The
+      // component is reused across sections, so watch the section and
+      // the fragment together: /settings/engine -> /settings/secrets
+      // changes only the section, and still has an anchor to reach.
+      combineLatest([this.route.paramMap, this.route.fragment]).subscribe(
+        ([pm, frag]) => {
+          const sec = pm.get("section");
+          const raw = String(sec ?? "")
+            .trim()
+            .toLowerCase();
+          const legacy = LEGACY_SECTION_FRAGMENTS[raw];
+          if (!frag && legacy) {
+            // An old section address: show the card it meant, under the
+            // section's own address.
+            const section = resolveSettingsSection(raw);
+            void this.router.navigate(["/settings", section], {
+              fragment: legacy,
+              replaceUrl: true,
+            });
+            return;
+          }
+          this.routeSection.set(sec);
+          this.scrollToAnchor(settingsAnchor(sec ?? this.section(), frag));
+        },
+      ),
     );
     // "/" on Settings is the Filter settings box, not the header's
     // "Filter this view", which filters nothing here.
@@ -537,7 +545,7 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.subs.forEach((s) => s.unsubscribe());
     this.unregisterSlash?.();
-    if (this.scrollTimer) clearTimeout(this.scrollTimer);
+    if (this.anchorTimer) clearInterval(this.anchorTimer);
   }
 
   // A reload or closing the tab drops the unsaved draft, which lives
@@ -551,28 +559,53 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
     ev.returnValue = "";
   }
 
-  // scrollToCard brings the card a #fragment names into view once the
-  // section has rendered it, retrying while the section loads, and aligns
-  // it to its heading.
-  private scrollToCard(frag: string, attempt = 0): void {
-    if (this.scrollTimer) clearTimeout(this.scrollTimer);
-    const testid = CARD_ANCHORS[frag] ?? `card-${frag}`;
-    const el =
-      document.getElementById(frag) ??
-      document.querySelector<HTMLElement>(`[data-testid="${testid}"]`);
-    if (el && this.ready()) {
-      el.scrollIntoView({ block: "start" });
-      return;
-    }
-    if (attempt >= 40) return;
-    this.scrollTimer = setTimeout(
-      () => this.scrollToCard(frag, attempt + 1),
-      100,
+  private anchorTimer: ReturnType<typeof setInterval> | null = null;
+
+  // anchorElement finds the card a #fragment names: an element with that
+  // id, else the card an older fragment meant (CARD_ANCHORS), else
+  // data-testid="card-<fragment>".
+  private anchorElement(id: string): HTMLElement | null {
+    const testid = CARD_ANCHORS[id] ?? `card-${id}`;
+    return (
+      document.getElementById(id) ??
+      document.querySelector<HTMLElement>(`[data-testid="${testid}"]`)
     );
+  }
+
+  // scrollToAnchor waits up to 5s for the element -- a section's cards
+  // appear only after its own requests answer -- and scrolls it into
+  // view again while cards above it are still arriving and pushing it
+  // down, stopping once it has held still for three ticks.
+  private scrollToAnchor(id: string): void {
+    if (this.anchorTimer) clearInterval(this.anchorTimer);
+    this.anchorTimer = null;
+    if (!id || typeof document === "undefined") return;
+    let tries = 0;
+    let lastTop = Number.NaN;
+    let still = 0;
+    this.anchorTimer = setInterval(() => {
+      const el = this.ready() ? this.anchorElement(id) : null;
+      if (el) {
+        const top = Math.round(el.getBoundingClientRect().top);
+        if (top === lastTop) {
+          still++;
+        } else {
+          still = 0;
+          el.scrollIntoView({ block: "start" });
+          lastTop = Math.round(el.getBoundingClientRect().top);
+        }
+      }
+      if (still >= 3 || ++tries > 50) {
+        if (this.anchorTimer) clearInterval(this.anchorTimer);
+        this.anchorTimer = null;
+      }
+    }, 100);
   }
 
   protected selectSection(id: SettingsSectionId, ev: Event): void {
     ev.preventDefault();
+    // Leaving a section stops any scroll still chasing its anchor.
+    this.scrollToAnchor("");
     this.routeSection.set(id);
     void this.router.navigate(["/settings", id]);
   }

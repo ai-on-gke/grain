@@ -299,6 +299,23 @@ are proposed as a follow-up:
   alerts need `grain daemon` with `grain/config`, which this run did not
   start.
 
+11. **`/admin/<tab>` sent most classic Admin tabs to Fleet** (review of
+    this change, 2026-11-15). `/next/admin/agents`, `/next/admin/state`
+    and any unknown tab landed on `/next/fleet`.
+    - Fix: `adminTab` in `app.routes.ts` mirrors classic
+      `oldAdminDestination`: System tabs keep going through `legacy()`,
+      the settings tab ids map to their sections (case-insensitively),
+      and anything else lands on General.
+
+## Merge with main (2026-11-15)
+
+`main` reworked `#card` scrolling (`settingsAnchor`, `scrollToAnchor`)
+in the same place this change added `scrollToCard`. The merge keeps
+main's poller and its old-section anchors, plus this change's
+`/settings/credentials` → `#credentials` URL rewrite and its fallback
+from a fragment to the card it names (`CARD_ANCHORS`, then
+`data-testid="card-<fragment>"`).
+
 ## Tests run
 
 - `npx playwright test e2e/next-settings-walkthrough.spec.js
@@ -312,3 +329,7 @@ e2e/next-settings-repos.spec.js --project=desktop`: all pass.
   light and dark. Bounding boxes found no horizontal overflow at 1440 or
   390 px. The CLI snippet wraps inside its card, and the field error sits
   left-aligned under its input.
+- After the merge (2026-11-15): `npm test` in `ui-ng/` (51 files, 479
+  tests), `npx playwright test e2e/next-settings-walkthrough.spec.js
+e2e/next-qa-settings.spec.js e2e/next-connections-infra-settings.spec.js
+e2e/next-settings-models.spec.js --project=desktop`: all pass.

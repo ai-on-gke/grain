@@ -34,7 +34,15 @@ import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { parseUnifiedDiff } from "../shared/diff-parse";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
+import { unsatisfiedGates } from "../shared/gates";
+import type { ForceMergeRequest } from "./force-merge-dialog.component";
 import { TaskStore } from "./task.store";
+
+// The human-review hold source of review findings
+// (model.HumanReviewSecurityFindings) and the merge gate it blocks
+// (model.GateSecurityReview).
+const FINDINGS_SOURCE = "security-findings";
+const SECURITY_REVIEW_GATE = "security-review";
 
 const REVIEW_CATEGORIES = [
   { value: "other", label: "General review" },
@@ -405,7 +413,7 @@ const REVIEW_CATEGORIES = [
         }
 
         <!-- 5. Human-Review Hold -->
-        @if (task().humanReviewHold?.length) {
+        @if (holdOpen()) {
           <section
             class="gate-card"
             data-testid="human-review-hold"
@@ -415,21 +423,61 @@ const REVIEW_CATEGORIES = [
               <h2 id="gate-hr-h" class="gate-card-title">
                 Held for human review
               </h2>
-              @if (
-                can("POST /api/tasks/{id}/human-review/release") &&
-                access.isFullAccess()
-              ) {
-                <button
-                  type="button"
-                  class="btn-primary"
-                  data-testid="release-hold-btn"
-                  [disabled]="store.isBusy('release-hold', task().id)"
-                  (click)="releaseHold()"
-                >
-                  Release hold
-                </button>
-              }
+              <div class="gate-actions">
+                @if (
+                  findingsHeld() &&
+                  findingsGateOpen() &&
+                  canForceMerge() &&
+                  can("POST /api/tasks/{id}/force-merge") &&
+                  access.isFullAccess()
+                ) {
+                  <button
+                    type="button"
+                    class="btn-outlined danger"
+                    data-testid="hold-force-merge-open"
+                    [disabled]="store.isBusy('force-merge', task().id)"
+                    (click)="emitForceMerge()"
+                  >
+                    Override review gate…
+                  </button>
+                }
+                @if (
+                  !findingsOnly() &&
+                  can("POST /api/tasks/{id}/human-review/release") &&
+                  access.isFullAccess()
+                ) {
+                  <button
+                    type="button"
+                    class="btn-primary"
+                    data-testid="release-hold-btn"
+                    [disabled]="store.isBusy('release-hold', task().id)"
+                    (click)="releaseHold()"
+                  >
+                    Release hold
+                  </button>
+                }
+              </div>
             </div>
+            @if (findingsHeld()) {
+              <p
+                class="muted"
+                data-testid="hold-findings-note"
+                style="margin: 0"
+              >
+                @if (!findingsOnly()) {
+                  Release hold releases the other reasons only.
+                }
+                @if (findingsGateOverridden()) {
+                  The review gate has been overridden under
+                  <code>merge:force</code>; these findings no longer block the
+                  merge.
+                } @else {
+                  Review findings cannot be released directly; they require a
+                  passing re-review or an operator gate override under
+                  <code>merge:force</code>.
+                }
+              </p>
+            }
             <ul class="gate-access-list">
               @for (h of task().humanReviewHold; track $index) {
                 <li>
@@ -457,6 +505,7 @@ export class TaskGatesBarComponent {
   readonly task = input.required<TaskDetail>();
   readonly acted = output<void>();
   readonly replyInWordsChange = output<boolean>();
+  readonly forceMerge = output<ForceMergeRequest>();
 
   protected readonly reviewCategories = REVIEW_CATEGORIES;
   protected readonly secretValue = signal("");
@@ -507,6 +556,48 @@ export class TaskGatesBarComponent {
     ),
   );
 
+  // Review findings on the hold (source security-findings) are a review
+  // gate of their own: Release hold never clears them
+  // (model.ErrFindingsRequireRereviewOrOverride), so a hold of findings
+  // alone offers no Release, only the gate override.
+  protected readonly findingsHeld = computed(() =>
+    (this.task().humanReviewHold ?? []).some(
+      (h) => h.source === FINDINGS_SOURCE,
+    ),
+  );
+  // A closed task's hold is history: nothing on the card can act on it.
+  protected readonly holdOpen = computed(
+    () =>
+      this.task().state !== "closed" && !!this.task().humanReviewHold?.length,
+  );
+  // Whether the security-review gate that raised these findings is still
+  // unsatisfied so the force-merge dialog has that gate to override.
+  protected readonly findingsGateOpen = computed(() =>
+    unsatisfiedGates(this.task()).some((g) => g.id === SECURITY_REVIEW_GATE),
+  );
+  // Whether an operator explicitly overrode the security-review gate:
+  // checked directly rather than !findingsGateOpen() so an empty mergeGates
+  // list (e.g. before a pull request exists) never falsely claims an override,
+  // and a running code-review gate does not mask an overridden security gate.
+  protected readonly findingsGateOverridden = computed(() =>
+    (this.task().mergeGates ?? []).some(
+      (g) => g.id === SECURITY_REVIEW_GATE && g.state === "overridden",
+    ),
+  );
+  // What POST /api/tasks/{id}/force-merge accepts (ForceMergeWithGates): an
+  // open task with a pull request, or a running one it can open one for.
+  protected readonly canForceMerge = computed(() => {
+    const t = this.task();
+    return (
+      t.state !== "closed" &&
+      (!!t.pullRequest || t.state === "running" || t.state === "awaiting_reply")
+    );
+  });
+  protected readonly findingsOnly = computed(() => {
+    const hold = this.task().humanReviewHold ?? [];
+    return hold.length > 0 && hold.every((h) => h.source === FINDINGS_SOURCE);
+  });
+
   protected readonly hasAnyGate = computed(() => {
     const t = this.task();
     return !!(
@@ -514,7 +605,7 @@ export class TaskGatesBarComponent {
       t.pendingAccess ||
       t.pendingConfigChange ||
       this.pendingScripts().length ||
-      t.humanReviewHold?.length ||
+      this.holdOpen() ||
       (t.review && this.can("POST /api/tasks/{id}/human-review"))
     );
   });
@@ -729,9 +820,47 @@ export class TaskGatesBarComponent {
       t.id,
     );
     if (ok) {
-      this.snackbar.show(`Released human-review hold on #${t.id}`);
+      this.snackbar.show(
+        this.findingsHeld() && !this.findingsGateOverridden()
+          ? `Released the human-review request on #${t.id}; review findings still hold it`
+          : `Released human-review hold on #${t.id}`,
+      );
       this.acted.emit();
     }
+  }
+
+  // emitForceMerge opens the force-merge dialog, as Changes & CI's Force
+  // merge… does, so an operator can override the review gate from here.
+  protected emitForceMerge(): void {
+    const t = this.task();
+    this.forceMerge.emit({
+      task: t,
+      unsatisfiedGates: unsatisfiedGates(t),
+      head: t.ci?.commit,
+      run: (reason, overrideGates, head) =>
+        this.store
+          .act(
+            "force-merge",
+            (id) =>
+              this.api.post(
+                "POST /api/tasks/{id}/force-merge",
+                { id },
+                {
+                  reason,
+                  ...(head ? { head } : {}),
+                  ...(overrideGates.length ? { overrideGates } : {}),
+                },
+              ),
+            t.id,
+          )
+          .then((ok) => {
+            if (ok) {
+              this.snackbar.show(`Force-merge queued for #${t.id}`);
+              this.acted.emit();
+            }
+            return ok;
+          }),
+    });
   }
 
   protected async requestHold(): Promise<void> {

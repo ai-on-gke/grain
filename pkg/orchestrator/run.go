@@ -2609,6 +2609,11 @@ type History struct {
 	// context_compaction.go.
 	Context     model.TaskContext
 	HandoverAge model.HandoverAge
+	// RolloverDue is the record limit a console session is past
+	// (model.RolloverRecord.PastLimit), "" for a session under every
+	// limit and for every other task: rollover refuses a session, so
+	// contextUpkeepSection tells it to be closed and refiled instead.
+	RolloverDue string
 	// AutoCompactBytes is the prompt size past which a durable task's run
 	// is asked to compact first (Config.AutoCompactBytes); zero is
 	// DefaultAutoCompactBytes.

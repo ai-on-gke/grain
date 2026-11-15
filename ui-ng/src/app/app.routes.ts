@@ -58,6 +58,48 @@ const SYSTEM_TABS: Record<string, readonly [string, string?, string?]> = {
   workflow: ["/settings/tasks"],
 };
 
+// ADMIN_SETTINGS_TABS are the classic Admin page's settings tabs and the
+// Settings section each now lives in (classic OLD_SETTINGS_TABS); any
+// other /admin/<tab> that is not a System tab lands on General.
+const ADMIN_SETTINGS_TABS: Record<string, string> = {
+  general: "general",
+  admin: "general",
+  agents: "agents",
+  models: "models",
+  git: "git",
+  workflow: "tasks",
+  access: "access",
+  accounts: "access",
+  engine: "engine",
+  sandbox: "sandboxes",
+  executors: "hostds",
+  state: "config-repo",
+  upgrade: "upgrade",
+};
+const ADMIN_SYSTEM_TABS = new Set([
+  "logs",
+  "sandboxes",
+  "caches",
+  "top",
+  "pipeline",
+  "power",
+]);
+
+// adminTab redirects /admin/<tab> the way the classic UI's
+// oldAdminDestination does: a status tab to where System's went, the
+// deployment credentials to their card, a settings tab to its section,
+// and anything else to General.
+const adminTab: RedirectFunction = (route) => {
+  const tab = String(route.params["tab"] ?? "").toLowerCase();
+  if (ADMIN_SYSTEM_TABS.has(tab) || tab === "integrations") {
+    return legacy(tab)(route);
+  }
+  return inject(Router).createUrlTree([
+    "/settings",
+    ADMIN_SETTINGS_TABS[tab] ?? "general",
+  ]);
+};
+
 // legacy redirects to the page SYSTEM_TABS names for `tab`, keeping the
 // query the old link carried (a /system/metrics?repo=... narrowing, say).
 function legacy(tab: string): RedirectFunction {
@@ -69,6 +111,32 @@ function legacy(tab: string): RedirectFunction {
     });
   };
 }
+
+function classicRepoSettingsMatcher(s: UrlSegment[]): UrlMatchResult | null {
+  if (
+    (s.length !== 4 && s.length !== 5) ||
+    s[0]?.path !== "repos" ||
+    s[3]?.path !== "settings" ||
+    /[.:]/.test(s[1].path)
+  ) {
+    return null;
+  }
+  return {
+    consumed: s,
+    posParams: {
+      owner: s[1],
+      name: s[2],
+      ...(s[4] ? { tab: s[4] } : {}),
+    },
+  };
+}
+
+// repoLeaveGuard asks the repository page before leaving it with an
+// unsaved edit (RepoDetailPageComponent.canLeave). It is duck-typed so
+// the page stays lazy: importing the component here would pull it into
+// the shell's bundle.
+const repoLeaveGuard = (page: { canLeave?: () => Promise<boolean> } | null) =>
+  page?.canLeave ? page.canLeave() : true;
 
 // Every page is lazy, so the shell's own bundle stays inside the budget
 // (angular.json) however many pages move over. A path this app does not
@@ -146,14 +214,16 @@ export const routes: Routes = [
       ),
   },
   {
-    path: "ci",
-    title: "CI · grain",
-    loadComponent: () =>
-      import("./ci/ci-page.component").then((m) => m.CIPageComponent),
-  },
-  {
-    path: "ci/runs/:id",
-    title: "CI run · grain",
+    matcher: (s): UrlMatchResult | null => {
+      if (s.length === 1 && s[0]?.path === "ci") {
+        return { consumed: s };
+      }
+      if (s.length === 3 && s[0]?.path === "ci" && s[1]?.path === "runs") {
+        return { consumed: s, posParams: { id: s[2] } };
+      }
+      return null;
+    },
+    title: (route) => (route.params["id"] ? "CI run · grain" : "CI · grain"),
     loadComponent: () =>
       import("./ci/ci-page.component").then((m) => m.CIPageComponent),
   },
@@ -198,12 +268,9 @@ export const routes: Routes = [
   },
   { path: "admin/logs", redirectTo: legacy("logs") },
   // The classic Admin page's addresses: /admin was General, and each
-  // /admin/<tab> the page SYSTEM_TABS names for it.
+  // /admin/<tab> its Settings section, or System's page for a status tab.
   { path: "admin", redirectTo: "settings/general", pathMatch: "full" },
-  {
-    path: "admin/:tab",
-    redirectTo: (route) => legacy(String(route.params["tab"]))(route),
-  },
+  { path: "admin/:tab", redirectTo: adminTab },
   { path: "sandboxes", redirectTo: legacy("sandboxes"), pathMatch: "full" },
   { path: "caches", redirectTo: legacy("caches"), pathMatch: "full" },
   { path: "staging", redirectTo: "fleet" },
@@ -256,6 +323,20 @@ export const routes: Routes = [
         (m) => m.SettingsPageComponent,
       ),
   },
+  // The classic UI keeps a repository's tab at
+  // /repos/<owner>/<name>/settings/<tab>; pasted under /next/ that read
+  // as host "owner", owner "name", repo "settings" and loaded a repo
+  // that does not exist (2026-11-14 repository walkthrough). Send it to
+  // /repos/<owner>/<name>/<tab>, the address this app uses.
+  {
+    matcher: classicRepoSettingsMatcher,
+    redirectTo: ({ params }) => {
+      const tab = params["tab"];
+      return tab && tab !== "overview"
+        ? `/repos/${params["owner"]}/${params["name"]}/${tab}`
+        : `/repos/${params["owner"]}/${params["name"]}`;
+    },
+  },
   {
     matcher: (s) =>
       s.length === 4 && s[0].path === "repos" && /[.:]/.test(s[1].path)
@@ -269,6 +350,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:owner/:name",
@@ -277,6 +359,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:owner/:name/:tab",
@@ -285,6 +368,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:host/:owner/:name",
@@ -293,6 +377,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   {
     path: "repos/:host/:owner/:name/:tab",
@@ -301,6 +386,7 @@ export const routes: Routes = [
       import("./repos/repo-detail-page.component").then(
         (m) => m.RepoDetailPageComponent,
       ),
+    canDeactivate: [repoLeaveGuard],
   },
   { path: "**", redirectTo: "inbox" },
 ];

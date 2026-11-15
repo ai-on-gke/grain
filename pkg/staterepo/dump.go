@@ -685,6 +685,18 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 	if err := plan.restore(ctx, tx); err != nil {
 		return err
 	}
+	// Bulk imports insert rows with explicit primary-key IDs across every path
+	// that lands here (Import, ImportTables, ImportMigrated, and live settings
+	// merges). SQLite AUTOINCREMENT follows explicit IDs on its own and needs
+	// nothing, whereas PostgreSQL serial sequences stay where they were unless
+	// setval moves them. Resynchronize now -- before data migrations below
+	// allocate new rows from sequences such as task_comment -- and once more
+	// before commit in case a migration wrote explicit IDs of its own.
+	if model.IsPostgresDB(db) {
+		if _, err := model.SyncPostgresSequences(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
+		}
+	}
 	// A dump from before a migration that rewrites rows (the retired
 	// capability grants, 67 onwards) gets those rewrites here, keyed by the
 	// migration's own number: the rows were never in a store that ran them.
@@ -730,6 +742,11 @@ func importInto(ctx context.Context, db *sql.DB, dir string, tables []string, wi
 		}
 		for _, c := range changes {
 			log.Printf("staterepo: host placement: %s", c)
+		}
+	}
+	if model.IsPostgresDB(db) {
+		if _, err := model.SyncPostgresSequences(ctx, tx); err != nil {
+			return fmt.Errorf("staterepo: %w", err)
 		}
 	}
 	return tx.Commit()
