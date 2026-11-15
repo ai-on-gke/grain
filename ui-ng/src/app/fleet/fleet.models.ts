@@ -147,6 +147,27 @@ export interface PackageCacheStats {
   bytes: number;
 }
 
+// BaseBranchPublishing is one base branch this deployment has stopped
+// publishing from (pkg/model/base_branch_publishing.go): releases failing
+// while merges keep landing. Gated with TriageTaskID is a release triage
+// task holding the branch's next releases -- and every `skip-when:
+// publishing-held` schedule, the release train among them -- until it
+// closes. Detail is the server's own sentence for all of it.
+export interface BaseBranchPublishing {
+  repo: string;
+  branch: string;
+  failures: number;
+  failingSince?: string;
+  failingForMS?: number;
+  conclusion?: string;
+  commit?: string;
+  runID?: string;
+  runInFlight: boolean;
+  triageTaskID?: string;
+  gated: boolean;
+  detail: string;
+}
+
 export interface SandboxHealthResponse {
   enabled: boolean;
   checkedAt?: string;
@@ -155,6 +176,7 @@ export interface SandboxHealthResponse {
   budget?: SandboxBudgetReport;
   daemon?: DaemonHealth;
   dispatchBlocked?: DispatchCondition[];
+  baseBranchPublishing?: BaseBranchPublishing[];
   standingSandboxes?: StandingSandboxStatus[];
   persistentSandboxes?: PersistentSandboxStatus[];
   packageCache?: PackageCacheStats[];
