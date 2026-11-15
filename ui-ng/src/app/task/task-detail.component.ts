@@ -45,7 +45,15 @@ import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
-import { summarizeDispatchStatus } from "../shared/dispatch-status";
+import {
+  effectiveDisplayTimeZone,
+  summarizeDispatchStatus,
+} from "../shared/dispatch-status";
+import {
+  earliestWakeDay,
+  formatWakeTime,
+  zonedDayStart,
+} from "../shared/zoned-day";
 import { isHuman } from "../sessions/session-helpers";
 
 import { ConversationComponent } from "../shared/conversation/conversation.component";
@@ -417,10 +425,65 @@ export function duration(from?: string, to?: string): string {
                 type="button"
                 class="btn-text"
                 data-testid="act-defer"
+                gTip="Put it aside until you bring it back"
                 (click)="defer()"
               >
                 Defer
               </button>
+              @if (!deferUntilOpen()) {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="act-defer-until"
+                  gTip="Put it aside until a day you pick"
+                  (click)="openDeferUntil()"
+                >
+                  Defer until…
+                </button>
+              } @else {
+                <form
+                  class="defer-until"
+                  data-testid="defer-until-form"
+                  (submit)="deferUntil($event)"
+                >
+                  <label class="defer-until-label" for="defer-until-date"
+                    >Wake on</label
+                  >
+                  <input
+                    id="defer-until-date"
+                    type="date"
+                    class="defer-until-date"
+                    data-testid="defer-until-date"
+                    required
+                    [min]="earliestWake()"
+                    [value]="deferDate()"
+                    [attr.aria-describedby]="'defer-until-hint'"
+                    (input)="deferDate.set($any($event.target).value)"
+                  />
+                  <button
+                    type="submit"
+                    class="btn-tonal"
+                    data-testid="defer-until-submit"
+                    [disabled]="!deferWakeAt() || store.isBusy('defer', t.id)"
+                  >
+                    Defer until
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="defer-until-cancel"
+                    (click)="closeDeferUntil(true)"
+                  >
+                    Cancel
+                  </button>
+                  <span
+                    id="defer-until-hint"
+                    class="muted defer-until-hint"
+                    data-testid="defer-until-hint"
+                    >{{ deferHint() }}</span
+                  >
+                </form>
+              }
             }
             @if (
               (t.state === "queued" ||
@@ -671,8 +734,24 @@ export function duration(from?: string, to?: string): string {
             }
           </p>
         }
+        @if (t.state === "deferred" && t.deferredUntil) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-deferred-until"
+          >
+            Picks itself back up on
+            {{ wakeTime(t.deferredUntil)
+            }}{{
+              t.approved
+                ? ", onto the queue."
+                : ", back into Needs approval for someone to approve."
+            }}
+          </p>
+        }
         <g-task-gates-bar
           [task]="t"
+          [pane]="pane()"
           (acted)="acted.emit()"
           (replyInWordsChange)="onReplyInWords($event)"
           (forceMerge)="forceMergeReq.set($event)"
@@ -1326,6 +1405,28 @@ export class TaskDetailComponent implements OnDestroy {
   // narrower, Details as a tab, its tab kept in ?pane=, links to other
   // tasks select them in the pane.
   readonly pane = input(false);
+
+  // "Defer until…": the day picked, in the deployment's display zone.
+  protected readonly deferUntilOpen = signal(false);
+  protected readonly deferDate = signal("");
+  protected readonly displayTz = signal(effectiveDisplayTimeZone());
+  protected readonly earliestWake = computed(() =>
+    earliestWakeDay(this.displayTz()),
+  );
+  protected readonly deferWakeAt = computed(() => {
+    const day = this.deferDate();
+    if (!day || day < this.earliestWake()) return null;
+    return zonedDayStart(day, this.displayTz());
+  });
+  protected readonly deferHint = computed(() => {
+    const at = this.deferWakeAt();
+    if (at !== null) {
+      return `Wakes ${formatWakeTime(new Date(at).toISOString(), this.displayTz())}`;
+    }
+    return this.deferDate()
+      ? "Pick a day after today"
+      : "Wakes at the start of the day you pick";
+  });
   // routePane is ?pane= as the router has it. The tab strip writes it, so
   // the pane reads it back itself: a host that does not also bind [tab]
   // (Agents, Workstreams) still switches tabs.
@@ -1622,6 +1723,8 @@ export class TaskDetailComponent implements OnDestroy {
         this.allowWordsOnParked.set(false);
         this.newDepId.set("");
         this.replyTarget.set(null);
+        this.deferUntilOpen.set(false);
+        this.deferDate.set("");
         this.store.open(id);
       });
     });
@@ -1661,6 +1764,7 @@ export class TaskDetailComponent implements OnDestroy {
     try {
       const cfg = (await this.api.config()) as GrainConfig | null;
       if (cfg?.capabilities) this.offeredCapabilities.set(cfg.capabilities);
+      this.displayTz.set(effectiveDisplayTimeZone(cfg?.timeZone));
     } catch {
       // Optional config read for capabilities list.
     }
@@ -2064,6 +2168,60 @@ export class TaskDetailComponent implements OnDestroy {
     ) {
       this.done(`Deferred #${id}`);
       this.snackbar.show(`Deferred #${id}`, {
+        label: "Undo",
+        run: async () => {
+          await this.store.act(
+            "undefer",
+            this.post("POST /api/tasks/{id}/undefer"),
+            id,
+          );
+        },
+      });
+    }
+  }
+
+  protected openDeferUntil(): void {
+    this.deferDate.set("");
+    this.deferUntilOpen.set(true);
+    // The picker replaces the button that opened it, so focus follows.
+    setTimeout(() => this.doc.getElementById("defer-until-date")?.focus());
+  }
+
+  protected closeDeferUntil(refocus = false): void {
+    this.deferUntilOpen.set(false);
+    this.deferDate.set("");
+    if (refocus) {
+      setTimeout(() =>
+        this.doc
+          .querySelector<HTMLElement>('[data-testid="act-defer-until"]')
+          ?.focus(),
+      );
+    }
+  }
+
+  protected wakeTime(iso: string): string {
+    return formatWakeTime(iso, this.displayTz());
+  }
+
+  // A picked day wakes at its start in the zone the wake time is printed
+  // in; a day before earliestWake() is refused here as the server would.
+  protected async deferUntil(ev: Event): Promise<void> {
+    ev.preventDefault();
+    const t = this.t();
+    const at = this.deferWakeAt();
+    if (!t || t.id !== this.id() || at === null) return;
+    const id = t.id;
+    const until = new Date(at).toISOString();
+    if (
+      await this.store.act(
+        "defer",
+        this.post("POST /api/tasks/{id}/defer", { deferredUntil: until }),
+        id,
+      )
+    ) {
+      this.closeDeferUntil();
+      this.done(`Deferred #${id} until ${this.wakeTime(until)}`);
+      this.snackbar.show(`Deferred #${id} until ${this.wakeTime(until)}`, {
         label: "Undo",
         run: async () => {
           await this.store.act(
