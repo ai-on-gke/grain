@@ -252,3 +252,42 @@ test("Agents: selected card and row look selected, are clickable, and every insp
   await page.screenshot({ path: path.join(dir, "agents-390-light.png") });
   await axeClean(page);
 });
+
+// Enter on the CPU reading -- focusable inside a card for its tooltip --
+// used to fall through to the page's Enter shortcut and open the task
+// already pinned in the pane full screen, not the card it sat in
+// (docs/test-runs/2026-11-14-agents-cpu.md). It selects its own card now.
+test("Agents: Enter or Space on a card's CPU reading selects that card, not the pinned task", async ({
+  page,
+  demoServer,
+  accessCode,
+}) => {
+  const tasks = await apiJson(demoServer, accessCode, "/api/tasks");
+  const list = Array.isArray(tasks) ? tasks : tasks.tasks;
+  const runningTask = list.find(
+    (t) => t.state === "running" && !t.consoleSession,
+  );
+  const other = list.find((t) => t.state !== "running");
+  expect(runningTask, "grain demo seeds a running task").toBeTruthy();
+  expect(other, "grain demo seeds a task that is not running").toBeTruthy();
+  const id = runningTask.id;
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  for (const key of ["Enter", " "]) {
+    await page.goto(`/next/agents?task=${other.id}`);
+    const card = page.getByTestId(`agent-${id}`);
+    await expect(card).toBeVisible();
+    await expect(card).not.toHaveAttribute("aria-current", /.*/);
+    const cpu = card.getByTestId("agent-cpu");
+    await cpu.focus();
+    await expect(cpu).toBeFocused();
+    await page.keyboard.press(key);
+    await expect(page).toHaveURL(
+      new RegExp(`/next/agents\\?(.*&)?task=${id}(&|$)`),
+    );
+    await expect(card).toHaveAttribute("aria-current", "true");
+    await expect(page.getByTestId("agents-pane")).toContainText(
+      `Inspecting #${id}`,
+    );
+  }
+});
