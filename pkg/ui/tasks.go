@@ -2904,6 +2904,8 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// default put in after them would be a grant neither gate saw.
 	if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalAgent {
 		// filed as the body says
+	} else if _, isCIAPI := model.CIAPICallFromContext(r.Context()); isCIAPI {
+		// filed as the template says
 	} else if a := accessRoleFromContext(r.Context()); a != nil && !a.Full {
 		// filed as the body says
 	} else if cfg, err := s.tasks.Store.GetConfig(r.Context()); err == nil && cfg != nil {
@@ -3468,6 +3470,9 @@ func (s *Server) respondWithTask(w http.ResponseWriter, r *http.Request, id stri
 // --- request/response plumbing -----------------------------------------
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	if status >= http.StatusBadRequest {
+		w.Header().Set("Cache-Control", cacheControlNoStore)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
@@ -3481,7 +3486,8 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 // writeClientError maps a Client error to a status: 400 for a
 // ValidationError (a mistake caught before the store was touched), 404
-// for a task id with nothing behind it, and 500 otherwise.
+// for a task id with nothing behind it, 409 for a Release hold of review
+// findings alone, and 500 otherwise.
 //
 // The fallback is 500 rather than the 502 this used to return. 502 was
 // right when every failure came from an upstream GitHub call; the store
@@ -3516,6 +3522,12 @@ func writeClientError(w http.ResponseWriter, err error) {
 			return
 		}
 		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	// Review findings a person tried to Release: the request conflicts
+	// with the gate's state, not a fault of the deployment.
+	if errors.Is(err, model.ErrFindingsRequireRereviewOrOverride) {
+		writeJSON(w, http.StatusConflict, apierror.Response{Error: err.Error(), Code: findingsHoldCode})
 		return
 	}
 	var ue *UnprocessableError

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -39,6 +40,7 @@ import {
   modelGroups,
   parseDefaultModels,
 } from "../shared/model-catalog";
+import { copyToClipboard } from "../shared/clipboard";
 import { ModelPickerComponent } from "../shared/model-picker.component";
 import {
   type PillOption,
@@ -51,20 +53,52 @@ import {
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
-interface AgentKeysResponse {
-  enabled?: boolean;
-  geminiApiKeySet?: boolean;
-  claudeOAuthTokenSet?: boolean;
-  openaiApiKeySet?: boolean;
-  codexAuthJSONSet?: boolean;
-  codexAuthRefreshError?: string;
+// SandboxBackendOptionDto is one entry of GET /api/settings
+// sandboxBackendOptions (model.SandboxBackendOption).
+/** POST /api/sandbox-probe's answer (pkg/ui SandboxProbeResult). */
+interface SandboxProbeResult {
+  sandbox: string;
+  pod: string;
+  access: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
 }
 
-interface KeyCheckResult {
-  ok: boolean;
-  detail: string;
-  checkedAt?: string;
+interface SandboxBackendOptionDto {
+  backend: string;
+  available?: boolean;
+  reason?: string;
 }
+
+// The same names and descriptions the classic Settings -> Sandboxes uses
+// (ui/src/components/settings/SandboxesSection.jsx).
+const SANDBOX_BACKEND_LABELS: Readonly<Record<string, string>> = {
+  none: "None (control plane only)",
+  host: "Host directories (no isolation)",
+  container: "Local Docker containers",
+  granule: "Granule virtual machines",
+  kubernetes: "Kubernetes — container pod per run (no VM)",
+  "kubernetes-granule": "Kubernetes — Granule VM per run",
+};
+
+const SANDBOX_BACKEND_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  none: "This daemon runs grain's control plane only (settings, the inbox, the config repository) and creates no sandboxes, so no task runs here: each dispatch fails at sandbox acquisition and says so. Meant for tests and walkthroughs.",
+  host: "Each run executes directly in a directory on the daemon machine with no container or VM isolation.",
+  container:
+    "Each run executes in an unprivileged local Docker container sharing the host kernel (no VM).",
+  granule:
+    "Each run boots an isolated Granule microVM with its own guest kernel on this host.",
+  kubernetes:
+    "Each run executes in a Kubernetes container pod scheduled on the cluster, sharing the node kernel (no VM).",
+  "kubernetes-granule":
+    "Each run boots a Granule microVM with its own guest kernel over /dev/kvm inside a privileged Kubernetes pod.",
+};
+
+const NETWORK_ACCESS_LABELS: Readonly<Record<string, string>> = {
+  open: "Open (full network)",
+  none: "None (isolated)",
+};
 
 interface ModelSettingRow {
   model: string;
@@ -113,6 +147,10 @@ interface HostdRow {
   revokedAt?: string | null;
   labels?: Record<string, string> | null;
   capacity?: number;
+  // update is a newer signed grain-agentd release the host's owner can
+  // take by running command on the host (HostUpdate); absent when there
+  // is none, and always for a root-installed `grain host`.
+  update?: { build: string; available: string; command: string } | null;
 }
 
 // DeletedHostdRow is what deleting a host answers with: its name and the
@@ -130,14 +168,53 @@ function deletedHostdLine(d: DeletedHostdRow): string {
   return line;
 }
 
+// EnrollmentCodeRow is one entry of GET /api/hostds/enrollment-codes
+// (HostEnrollmentCodeView): code and install are present only while the
+// code is not revoked.
 interface EnrollmentCodeRow {
   name: string;
   prefix?: string;
   code?: string;
+  install?: HostdInstallDto;
   expires_at?: string | null;
   max_uses?: number;
   uses?: number;
   revoked_at?: string | null;
+  default_labels?: Record<string, string> | null;
+  default_capacity?: number;
+  allowed_principals?: string[] | null;
+}
+
+// pickEnrollmentCode is the code Invite hosts shows: the one the operator
+// chose while it still exists, else the active "default", else the first
+// active code, else the first code at all.
+export function pickEnrollmentCode(
+  codes: EnrollmentCodeRow[],
+  chosen: string,
+): EnrollmentCodeRow | null {
+  const active = codes.filter((c) => !c.revoked_at && c.code);
+  return (
+    codes.find((c) => c.name === chosen) ??
+    active.find((c) => c.name === "default") ??
+    active[0] ??
+    codes[0] ??
+    null
+  );
+}
+
+// inviteLines is the enrollment snippet for one code: the daemon's
+// rendered install lines (RegisterHostdInstall) when it sent them, or the
+// standard /hostd/install --join command.
+export function inviteLines(
+  origin: string,
+  code: EnrollmentCodeRow | null,
+): string[] {
+  if (!code || code.revoked_at) return [];
+  if (Array.isArray(code.install?.lines) && code.install.lines.length > 0) {
+    return code.install.lines;
+  }
+  if (!code.code) return [];
+  return [`curl -fsSL ${origin}/hostd/install | sh -s -- --join ${code.code}`];
 }
 
 interface PendingHostdRow {
@@ -193,10 +270,14 @@ export function formatHostdLabels(
   return entries.map(([k, v]) => `${k}=${v}`).join(", ");
 }
 
+// formatRefreshedAt is "" for a connection whose provider has never
+// answered: the server sends Go's zero time ("0001-01-01T00:00:00Z") for
+// it, which is no time anything was refreshed.
 function formatRefreshedAt(iso?: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
+  if (d.getUTCFullYear() <= 1) return "";
   const months = [
     "Jan",
     "Feb",
@@ -440,237 +521,6 @@ function formatRefreshedAt(iso?: string): string {
           </div>
         </div>
 
-        <div class="s-card" data-testid="card-agent-keys">
-          <div class="s-card-head">
-            <div>
-              <h3 class="s-card-title">Framework API keys &amp; Codex auth</h3>
-              <p class="s-card-desc">
-                Write-only credentials stored in the secret vault; values are
-                never returned to the browser.
-              </p>
-            </div>
-          </div>
-          @if (!access.can("GET /api/agent-keys")) {
-            <div class="s-banner warn" data-testid="agent-keys-restricted">
-              {{ access.deniedReason("GET /api/agent-keys") }}
-            </div>
-          } @else {
-            @if (!agentKeysEnabled()) {
-              <div class="s-banner readonly" data-testid="agent-keys-disabled">
-                Local secrets vault is not configured on this controller.
-              </div>
-            }
-            <div class="s-table-wrap">
-              <table class="s-table" aria-label="Framework API keys">
-                <thead>
-                  <tr>
-                    <th>Framework</th>
-                    <th>Status</th>
-                    <th class="s-actions-cell">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  @for (fw of frameworks; track fw) {
-                    <tr>
-                      <td class="s-cell-title">{{ fw }}</td>
-                      <td>
-                        <span
-                          [class]="
-                            'status-pill ' +
-                            (isKeyConfigured(fw) ? 'healthy' : 'neutral')
-                          "
-                          [attr.data-testid]="'agent-key-status-' + fw"
-                        >
-                          {{ isKeyConfigured(fw) ? "Configured" : "Not set" }}
-                        </span>
-                        @if (keyChecks()[fw]; as chk) {
-                          <span
-                            [class]="
-                              'status-pill ' + (chk.ok ? 'healthy' : 'error')
-                            "
-                            [attr.data-testid]="'key-check-result-' + fw"
-                            style="margin-left: 6px"
-                          >
-                            {{ chk.ok ? "Valid" : "Failed" }}: {{ chk.detail }}
-                          </span>
-                        }
-                      </td>
-                      <td class="s-actions-cell">
-                        <div class="s-row-actions">
-                          <button
-                            type="button"
-                            class="btn-tonal s-btn-sm"
-                            [attr.data-testid]="'toggle-agent-key-' + fw"
-                            [attr.aria-expanded]="openKeyFramework() === fw"
-                            [attr.aria-label]="'Update API key for ' + fw"
-                            [disabled]="
-                              !agentKeysEnabled() ||
-                              !access.can('PUT /api/agent-keys/{framework}')
-                            "
-                            (click)="toggleKeyEditor(fw)"
-                          >
-                            Update key
-                          </button>
-                          <button
-                            type="button"
-                            class="btn-tonal s-btn-sm"
-                            [attr.data-testid]="'check-agent-key-' + fw"
-                            [disabled]="
-                              !access.can(
-                                'POST /api/agent-keys/{framework}/check'
-                              ) || busyKey() === fw
-                            "
-                            (click)="checkAgentKey(fw)"
-                          >
-                            Check
-                          </button>
-                          @if (isKeyConfigured(fw)) {
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              [attr.data-testid]="'clear-agent-key-' + fw"
-                              [disabled]="
-                                !agentKeysEnabled() ||
-                                !access.can(
-                                  'DELETE /api/agent-keys/{framework}'
-                                ) ||
-                                busyKey() === fw
-                              "
-                              (click)="clearAgentKey(fw)"
-                            >
-                              Clear
-                            </button>
-                          }
-                        </div>
-                      </td>
-                    </tr>
-                    @if (openKeyFramework() === fw) {
-                      <tr
-                        class="s-subrow"
-                        [attr.data-testid]="'agent-key-row-' + fw"
-                      >
-                        <td colspan="3">
-                          <form
-                            class="s-cred-bar"
-                            autocomplete="off"
-                            (submit)="$event.preventDefault(); saveAgentKey(fw)"
-                          >
-                            <span class="s-label"
-                              >API key for
-                              <span class="s-mono">{{ fw }}</span></span
-                            >
-                            <input
-                              class="s-input s-input-inline"
-                              type="password"
-                              [attr.name]="'grain-agent-key-' + fw"
-                              autocomplete="new-password"
-                              data-lpignore="true"
-                              data-1p-ignore="true"
-                              [attr.aria-label]="fw + ' API key'"
-                              [attr.data-testid]="'input-agent-key-' + fw"
-                              placeholder="Paste secret key…"
-                              [value]="keyDrafts()[fw] || ''"
-                              [disabled]="
-                                !agentKeysEnabled() ||
-                                !access.can('PUT /api/agent-keys/{framework}')
-                              "
-                              (input)="
-                                setKeyDraft(fw, $any($event.target).value)
-                              "
-                            />
-                            <button
-                              type="submit"
-                              class="btn-primary s-btn-sm"
-                              [attr.data-testid]="'save-agent-key-' + fw"
-                              [disabled]="
-                                !agentKeysEnabled() ||
-                                !(keyDrafts()[fw] || '').trim() ||
-                                !access.can(
-                                  'PUT /api/agent-keys/{framework}'
-                                ) ||
-                                busyKey() === fw
-                              "
-                            >
-                              Save key
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              (click)="openKeyFramework.set(null)"
-                            >
-                              Close
-                            </button>
-                          </form>
-                        </td>
-                      </tr>
-                    }
-                  }
-                </tbody>
-              </table>
-            </div>
-          }
-
-          <div class="s-subsection">
-            <div class="s-field">
-              <div class="s-inline">
-                <label class="s-label" for="f-codex-auth"
-                  >Codex auth.json (OAuth session bundle)</label
-                >
-                <span
-                  [class]="
-                    'status-pill ' +
-                    (codexAuthJsonSet() ? 'healthy' : 'neutral')
-                  "
-                  data-testid="codex-auth-status"
-                >
-                  {{ codexAuthJsonSet() ? "Configured" : "Not set" }}
-                </span>
-                @if (codexAuthRefreshError()) {
-                  <span class="status-pill error">{{
-                    codexAuthRefreshError()
-                  }}</span>
-                }
-              </div>
-              <textarea
-                id="f-codex-auth"
-                class="s-textarea s-mono"
-                rows="2"
-                data-testid="input-codex-auth"
-                placeholder='{"tokens": {...}}'
-                [value]="codexAuthDraft()"
-                [disabled]="!access.can('PUT /api/codex-auth')"
-                (input)="codexAuthDraft.set($any($event.target).value)"
-              ></textarea>
-              <div class="s-inline">
-                <button
-                  type="button"
-                  class="btn-tonal s-btn-sm"
-                  data-testid="save-codex-auth"
-                  [disabled]="
-                    !codexAuthDraft().trim() ||
-                    !access.can('PUT /api/codex-auth')
-                  "
-                  (click)="saveCodexAuth()"
-                >
-                  Save Codex auth
-                </button>
-                <button
-                  type="button"
-                  class="btn-text s-btn-sm"
-                  data-testid="clear-codex-auth"
-                  [disabled]="
-                    !this.codexAuthJsonSet() ||
-                    !access.can('DELETE /api/codex-auth')
-                  "
-                  (click)="clearCodexAuth()"
-                >
-                  Clear Codex auth
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
         @if (!modelsConfigured()) {
           <div class="s-banner readonly">
             <span
@@ -747,7 +597,9 @@ function formatRefreshedAt(iso?: string): string {
                             <summary>
                               {{ b.discovered.models?.length || 0 }} models
                               discovered
-                              @if (b.discovered.refreshedAt) {
+                              @if (
+                                formatRefreshedAt(b.discovered.refreshedAt)
+                              ) {
                                 <span
                                   class="s-meta"
                                   [attr.title]="b.discovered.refreshedAt"
@@ -775,15 +627,13 @@ function formatRefreshedAt(iso?: string): string {
                       </td>
                       <td class="s-actions-cell">
                         <div class="s-row-actions">
-                          @if (discovers(b)) {
+                          @if (discovers(b) && canRefreshModels()) {
                             <button
                               type="button"
                               class="btn-tonal s-btn-sm"
                               [attr.data-testid]="'refresh-backend-' + b.id"
                               [attr.aria-label]="'Refresh models of ' + b.id"
-                              [disabled]="
-                                !canRefreshModels() || refreshingModels()
-                              "
+                              [disabled]="refreshingModels()"
                               (click)="refreshDiscoveredModels(b.id)"
                             >
                               Refresh
@@ -894,7 +744,7 @@ function formatRefreshedAt(iso?: string): string {
                                   'DELETE /api/agent-backends/{id}/credential'
                                 )
                               "
-                              (click)="clearBackendCred(b.id)"
+                              (click)="confirmClearBackendCred(b.id)"
                             >
                               Clear stored secret
                             </button>
@@ -997,7 +847,7 @@ function formatRefreshedAt(iso?: string): string {
               </div>
               <div class="s-field">
                 <label class="s-label" for="nb-hostd"
-                  >Hostd name or label selector</label
+                  >Host name or label selector</label
                 >
                 <input
                   id="nb-hostd"
@@ -1255,20 +1105,68 @@ function formatRefreshedAt(iso?: string): string {
                 compute limits.
               </p>
             </div>
-            @if (access.can("POST /api/sandbox-probe")) {
+            @if (canProbeSandbox()) {
               <button
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="run-sandbox-probe"
+                [disabled]="probing()"
                 (click)="runSandboxProbe()"
               >
-                Probe sandbox runtime
+                {{ probing() ? "Probing…" : "Probe sandbox runtime" }}
               </button>
             }
           </div>
-          @if (probeMessage()) {
-            <div class="s-banner ok" data-testid="sandbox-probe-banner">
-              {{ probeMessage() }}
+          @if (probing()) {
+            <div
+              class="s-banner readonly"
+              role="status"
+              data-testid="sandbox-probe-running"
+            >
+              Building a throwaway sandbox and running
+              <code>true</code> in it. This can take a few minutes.
+            </div>
+          }
+          @if (probeResult(); as res) {
+            <div
+              class="s-banner"
+              [class.ok]="res.exitCode === 0"
+              [class.warn]="res.exitCode !== 0"
+              role="status"
+              data-testid="sandbox-probe-result"
+            >
+              <div class="s-probe-result">
+                <span data-testid="sandbox-probe-summary">
+                  {{
+                    res.exitCode === 0
+                      ? "Sandbox ready:"
+                      : "The probe command failed:"
+                  }}
+                  <code>{{ res.sandbox }}</code>
+                  {{ res.access ? "over " + res.access + " " : "" }}exited
+                  <span class="s-num" data-testid="sandbox-probe-exit">{{
+                    res.exitCode
+                  }}</span>
+                </span>
+                <span class="s-label">stdout</span>
+                <pre class="s-code" data-testid="sandbox-probe-stdout">{{
+                  res.stdout || "(empty)"
+                }}</pre>
+                @if (res.stderr) {
+                  <span class="s-label">stderr</span>
+                  <pre class="s-code" data-testid="sandbox-probe-stderr">{{
+                    res.stderr
+                  }}</pre>
+                }
+              </div>
+              <button
+                type="button"
+                class="btn-text s-btn-sm"
+                data-testid="sandbox-probe-dismiss"
+                (click)="probeResult.set(null)"
+              >
+                Dismiss
+              </button>
             </div>
           }
           <div class="s-grid">
@@ -1278,11 +1176,16 @@ function formatRefreshedAt(iso?: string): string {
                 testid="select-sandbox-backend"
                 ariaLabel="Sandbox backend"
                 align="left"
-                [options]="sandboxBackendOptions"
-                [value]="state.val('sandboxBackend', 'granule')"
+                [options]="sandboxBackendOptions()"
+                [value]="state.val('sandboxBackend', 'container')"
                 [disabled]="!canWriteSettings()"
                 (valueChange)="state.setField('sandboxBackend', $event)"
               />
+              @if (sandboxBackendDescription()) {
+                <span class="s-hint" data-testid="sandbox-backend-desc">{{
+                  sandboxBackendDescription()
+                }}</span>
+              }
             </div>
             <div class="s-field">
               <span class="s-label">Network access</span>
@@ -1290,8 +1193,8 @@ function formatRefreshedAt(iso?: string): string {
                 testid="select-sandbox-network"
                 ariaLabel="Sandbox network access"
                 align="left"
-                [options]="networkOptions"
-                [value]="state.val('networkAccess', 'egress')"
+                [options]="networkOptions()"
+                [value]="state.val('networkAccess', 'open')"
                 [disabled]="!canWriteSettings()"
                 (valueChange)="state.setField('networkAccess', $event)"
               />
@@ -1304,13 +1207,11 @@ function formatRefreshedAt(iso?: string): string {
                 type="number"
                 min="0"
                 data-testid="input-sandbox-cpus"
-                [value]="state.val('sandboxCpus', 4)"
+                [value]="state.defaultedNumber('sandboxCpus')"
+                [placeholder]="state.defaultHint('sandboxCpus')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
-                    'sandboxCpus',
-                    Number($any($event.target).value)
-                  )
+                  state.setNumber('sandboxCpus', $any($event.target).value)
                 "
               />
             </div>
@@ -1322,13 +1223,11 @@ function formatRefreshedAt(iso?: string): string {
                 type="number"
                 min="0"
                 data-testid="input-sandbox-memory"
-                [value]="state.val('sandboxMemoryMb', 8192)"
+                [value]="state.defaultedNumber('sandboxMemoryMb')"
+                [placeholder]="state.defaultHint('sandboxMemoryMb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
-                    'sandboxMemoryMb',
-                    Number($any($event.target).value)
-                  )
+                  state.setNumber('sandboxMemoryMb', $any($event.target).value)
                 "
               />
             </div>
@@ -1340,13 +1239,11 @@ function formatRefreshedAt(iso?: string): string {
                 type="number"
                 min="0"
                 data-testid="input-sandbox-disk"
-                [value]="state.val('sandboxDiskGb', 32)"
+                [value]="state.defaultedNumber('sandboxDiskGb')"
+                [placeholder]="state.defaultHint('sandboxDiskGb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
-                    'sandboxDiskGb',
-                    Number($any($event.target).value)
-                  )
+                  state.setNumber('sandboxDiskGb', $any($event.target).value)
                 "
               />
             </div>
@@ -1358,7 +1255,9 @@ function formatRefreshedAt(iso?: string): string {
                 id="sb-ttl"
                 class="s-input s-num"
                 type="text"
-                placeholder="30m"
+                [placeholder]="
+                  state.defaultHint('sessionSandboxIdleTtl', '30m')
+                "
                 [value]="state.val('sessionSandboxIdleTtl', '')"
                 [disabled]="!canWriteSettings()"
                 (input)="
@@ -1419,6 +1318,19 @@ function formatRefreshedAt(iso?: string): string {
                   )
                 "
               />
+              @if (overcommitUnbounded("sandboxCpuOvercommit")) {
+                <span
+                  class="s-hint s-hint-warn"
+                  data-testid="cpu-overcommit-unbounded"
+                  >0 leaves vCPU bounded by the run counts alone: no vCPU budget
+                  is enforced.</span
+                >
+              } @else {
+                <span class="s-hint"
+                  >How many times the host's vCPU may be promised to sandboxes.
+                  0 means unbounded.</span
+                >
+              }
             </div>
             <div class="s-field">
               <label class="s-label" for="sb-mem-oc"
@@ -1439,6 +1351,19 @@ function formatRefreshedAt(iso?: string): string {
                   )
                 "
               />
+              @if (overcommitUnbounded("sandboxMemoryOvercommit")) {
+                <span
+                  class="s-hint s-hint-warn"
+                  data-testid="mem-overcommit-unbounded"
+                  >0 leaves memory bounded by the run counts alone: no memory
+                  budget is enforced.</span
+                >
+              } @else {
+                <span class="s-hint"
+                  >How many times the host's memory may be promised to
+                  sandboxes. 0 means unbounded.</span
+                >
+              }
             </div>
             <div class="s-field">
               <label class="s-label" for="k8s-ns">Kubernetes namespace</label>
@@ -1447,6 +1372,7 @@ function formatRefreshedAt(iso?: string): string {
                 class="s-input s-mono"
                 type="text"
                 [value]="state.val('k8sNamespace', '')"
+                [placeholder]="state.defaultHint('k8sNamespace', 'grain')"
                 [disabled]="!canWriteSettings()"
                 (input)="
                   state.setField('k8sNamespace', $any($event.target).value)
@@ -1538,9 +1464,7 @@ function formatRefreshedAt(iso?: string): string {
         <div class="s-card" data-testid="card-hostds-list">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">
-                Registered workstation hosts (hostds)
-              </h3>
+              <h3 class="s-card-title">Registered workstation hosts</h3>
               <p class="s-card-desc">
                 grain-agentd daemons paired with this controller for local CLI
                 tokens and workstation execution.
@@ -1563,10 +1487,10 @@ function formatRefreshedAt(iso?: string): string {
               {{ access.deniedReason("GET /api/hostds") }}
             </div>
           } @else if (hostds().length === 0) {
-            <p class="s-card-desc">No hostds registered yet.</p>
+            <p class="s-card-desc">No hosts registered yet.</p>
           } @else {
             <div class="s-table-wrap">
-              <table class="s-table" aria-label="Registered hostds">
+              <table class="s-table" aria-label="Registered hosts">
                 <thead>
                   <tr>
                     <th>Name</th>
@@ -1597,6 +1521,18 @@ function formatRefreshedAt(iso?: string): string {
                         >
                           {{ isRevoked ? "revoked" : h.state || "offline" }}
                         </span>
+                        @if (h.update && !isRevoked) {
+                          <div
+                            class="s-meta"
+                            [attr.data-testid]="'hostd-update-' + h.name"
+                          >
+                            Update available: {{ h.update.build }} →
+                            {{ h.update.available }}. On the host, run
+                            <span class="s-meta-mono">{{
+                              h.update.command
+                            }}</span>
+                          </div>
+                        }
                       </td>
                       <td class="s-mono">
                         {{ formatLabels(h.labels) }}
@@ -1665,7 +1601,7 @@ function formatRefreshedAt(iso?: string): string {
             </div>
             <div class="s-grid">
               <div class="s-field">
-                <label class="s-label" for="hd-name">New hostd name</label>
+                <label class="s-label" for="hd-name">New host name</label>
                 <input
                   id="hd-name"
                   class="s-input s-mono"
@@ -1703,7 +1639,7 @@ function formatRefreshedAt(iso?: string): string {
                 "
                 (click)="createHostd()"
               >
-                Register hostd
+                Register host
               </button>
             </div>
           </div>
@@ -1744,6 +1680,120 @@ function formatRefreshedAt(iso?: string): string {
               }}</span>
             </div>
           } @else {
+            @if (selectedEnrollmentCode(); as sc) {
+              <section
+                class="hd-invite"
+                aria-labelledby="hd-invite-title"
+                data-testid="invite-hosts"
+              >
+                <div class="s-subhead">
+                  <h4 class="s-subhead-title" id="hd-invite-title">
+                    Invite hosts
+                  </h4>
+                  @if (enrollmentCodes().length > 1) {
+                    <g-pill-select
+                      testid="select-invite-code"
+                      ariaLabel="Enrollment code to invite with"
+                      prefix="Code"
+                      [options]="enrollmentCodeOptions()"
+                      [value]="sc.name"
+                      (valueChange)="selectEnrollmentCode($event)"
+                    />
+                  }
+                </div>
+                <p class="s-hint">
+                  Run this on each machine to join. The code only files a
+                  pending join request: each host makes its own key and waits
+                  for you to accept it below.
+                </p>
+                @if (sc.revoked_at) {
+                  <div class="s-banner warn" role="status">
+                    <span
+                      >Enrollment code <strong>{{ sc.name }}</strong> is revoked
+                      and can no longer file join requests. Hosts already
+                      accepted are unaffected.</span
+                    >
+                  </div>
+                } @else if (inviteSnippet()) {
+                  <pre
+                    class="s-code"
+                    data-testid="invite-hosts-snippet"
+                    aria-label="Invite command"
+                    >{{ inviteSnippet() }}</pre>
+                  @if (sc.install?.note) {
+                    <p class="s-hint" data-testid="invite-hosts-note">
+                      {{ sc.install?.note }}
+                    </p>
+                  }
+                  <div class="s-inline">
+                    <button
+                      type="button"
+                      class="btn-primary s-btn-sm"
+                      data-testid="copy-invite-command"
+                      (click)="
+                        copyInvite(inviteSnippet(), 'Copied invite command')
+                      "
+                    >
+                      Copy invite command
+                    </button>
+                    @if (sc.code) {
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        data-testid="toggle-enrollment-secret"
+                        [attr.aria-expanded]="enrollmentSecretShown()"
+                        (click)="
+                          enrollmentSecretShown.set(!enrollmentSecretShown())
+                        "
+                      >
+                        {{
+                          enrollmentSecretShown() ? "Hide code" : "Show code"
+                        }}
+                      </button>
+                    }
+                  </div>
+                  @if (enrollmentSecretShown() && sc.code) {
+                    <div class="s-inline">
+                      <code
+                        class="s-meta-mono hd-invite-secret"
+                        data-testid="enrollment-secret"
+                        >{{ sc.code }}</code
+                      >
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        data-testid="copy-enrollment-secret"
+                        (click)="copyInvite(sc.code, 'Copied enrollment code')"
+                      >
+                        Copy code
+                      </button>
+                    </div>
+                  }
+                }
+                <div class="s-inline" data-testid="invite-hosts-meta">
+                  <span class="status-pill neutral"
+                    >Uses: {{ sc.uses ?? 0
+                    }}{{ sc.max_uses ? " / " + sc.max_uses : "" }}</span
+                  >
+                  @if (sc.default_capacity) {
+                    <span class="status-pill neutral"
+                      >Default capacity: {{ sc.default_capacity }}</span
+                    >
+                  }
+                  @if (formatLabelsInput(sc.default_labels); as lbl) {
+                    <span class="status-pill neutral">Labels: {{ lbl }}</span>
+                  }
+                  @for (p of sc.allowed_principals ?? []; track p) {
+                    <span class="status-pill neutral">Allow: {{ p }}</span>
+                  }
+                  @if (sc.expires_at) {
+                    <span class="status-pill neutral"
+                      >Expires: {{ sc.expires_at.slice(0, 10) }}</span
+                    >
+                  }
+                </div>
+              </section>
+            }
             @if (enrollmentCodes().length > 0) {
               <div class="s-table-wrap">
                 <table class="s-table" aria-label="Enrollment codes">
@@ -1769,32 +1819,40 @@ function formatRefreshedAt(iso?: string): string {
                           }}
                         </td>
                         <td class="s-actions-cell">
-                          <div class="s-row-actions">
-                            <button
-                              type="button"
-                              class="btn-tonal s-btn-sm"
-                              [disabled]="
-                                !access.can(
-                                  'POST /api/hostds/enrollment-codes/{name}/rotate'
-                                ) || codeRevoked
-                              "
-                              (click)="rotateEnrollmentCode(c.name)"
+                          @if (codeRevoked) {
+                            <span
+                              class="s-hint"
+                              data-testid="enrollment-code-revoked"
+                              >No actions</span
                             >
-                              Rotate
-                            </button>
-                            <button
-                              type="button"
-                              class="btn-text s-btn-sm"
-                              [disabled]="
-                                !access.can(
-                                  'POST /api/hostds/enrollment-codes/{name}/revoke'
-                                ) || codeRevoked
-                              "
-                              (click)="revokeEnrollmentCode(c.name)"
-                            >
-                              Revoke
-                            </button>
-                          </div>
+                          } @else {
+                            <div class="s-row-actions">
+                              <button
+                                type="button"
+                                class="btn-tonal s-btn-sm"
+                                [disabled]="
+                                  !access.can(
+                                    'POST /api/hostds/enrollment-codes/{name}/rotate'
+                                  )
+                                "
+                                (click)="rotateEnrollmentCode(c.name)"
+                              >
+                                Rotate
+                              </button>
+                              <button
+                                type="button"
+                                class="btn-text s-btn-sm"
+                                [disabled]="
+                                  !access.can(
+                                    'POST /api/hostds/enrollment-codes/{name}/revoke'
+                                  )
+                                "
+                                (click)="revokeEnrollmentCode(c.name)"
+                              >
+                                Revoke
+                              </button>
+                            </div>
+                          }
                         </td>
                       </tr>
                     }
@@ -1837,7 +1895,7 @@ function formatRefreshedAt(iso?: string): string {
             </div>
           } @else if (pendingHostds().length > 0) {
             <div class="s-table-wrap" data-testid="hostds-pending-table">
-              <table class="s-table" aria-label="Pending hostd joins">
+              <table class="s-table" aria-label="Pending host requests">
                 <thead>
                   <tr>
                     <th>ID / Hostname</th>
@@ -1935,6 +1993,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
   private readonly snackbar = inject(SnackbarService);
+  private readonly doc = inject(DOCUMENT);
 
   readonly section = input.required<SettingsSectionId>();
 
@@ -1942,7 +2001,6 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly Boolean = Boolean;
   protected readonly formatLabels = formatHostdLabels;
   protected readonly formatRefreshedAt = formatRefreshedAt;
-  protected readonly frameworks = ["antigravity", "claude", "codex"] as const;
 
   protected readonly frameworkOptions: readonly PillOption[] = [
     { value: "antigravity", label: "Antigravity (Gemini)" },
@@ -1966,33 +2024,50 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     { value: "auto", label: "Auto throttle" },
     { value: "off", label: "Off" },
   ];
-  protected readonly sandboxBackendOptions: readonly PillOption[] = [
-    { value: "granule", label: "Granule microVM" },
-    { value: "docker", label: "Docker container" },
-    { value: "podman", label: "Podman container" },
-    { value: "kubernetes", label: "Kubernetes pod" },
-    { value: "local", label: "Local host directory" },
-  ];
-  protected readonly networkOptions: readonly PillOption[] = [
-    { value: "none", label: "None (isolated)" },
-    { value: "egress", label: "Filtered egress" },
-    { value: "full", label: "Full network" },
-  ];
+  // The backend and network pickers offer the server's own vocabulary
+  // (GET /api/settings sandboxBackendOptions / networkAccesses): a value
+  // the daemon does not know is refused on save, and a stored value the
+  // list lacks would show as somebody else's choice. Backends this daemon
+  // cannot run stay listed but disabled, with the server's reason.
+  protected readonly sandboxBackendOptions = computed<PillOption[]>(() => {
+    const s = this.state.settings();
+    const raw = s["sandboxBackendOptions"];
+    const list: SandboxBackendOptionDto[] =
+      Array.isArray(raw) && raw.length > 0
+        ? (raw as SandboxBackendOptionDto[])
+        : (Array.isArray(s["sandboxBackends"])
+            ? (s["sandboxBackends"] as string[])
+            : ["container"]
+          ).map((backend) => ({ backend, available: true }));
+    return list.map((o) => ({
+      value: o.backend,
+      label: SANDBOX_BACKEND_LABELS[o.backend] ?? o.backend,
+      disabled: o.available === false,
+      hint:
+        o.available === false
+          ? `Unavailable: ${o.reason || "this daemon cannot run it"}`
+          : undefined,
+    }));
+  });
+  protected readonly networkOptions = computed<PillOption[]>(() => {
+    const raw = this.state.settings()["networkAccesses"];
+    const names =
+      Array.isArray(raw) && raw.length > 0
+        ? (raw as string[])
+        : ["open", "none"];
+    return names.map((n) => ({
+      value: n,
+      label: NETWORK_ACCESS_LABELS[n] ?? n,
+    }));
+  });
+  protected sandboxBackendDescription(): string {
+    const b = String(this.state.val("sandboxBackend", "container"));
+    return SANDBOX_BACKEND_DESCRIPTIONS[b] ?? "";
+  }
   protected readonly overcommitOptions: readonly PillOption[] = [
     { value: "fixed", label: "Fixed multiplier" },
     { value: "auto", label: "Pressure-governed auto" },
-    { value: "off", label: "Disabled (1x)" },
   ];
-
-  protected readonly agentKeysEnabled = signal(true);
-  protected readonly agentKeys = signal<Record<string, boolean>>({});
-  protected readonly codexAuthJsonSet = signal(false);
-  protected readonly codexAuthRefreshError = signal("");
-  protected readonly keyDrafts = signal<Record<string, string>>({});
-  protected readonly keyChecks = signal<Record<string, KeyCheckResult>>({});
-  protected readonly busyKey = signal<string | null>(null);
-  protected readonly openKeyFramework = signal<string | null>(null);
-  protected readonly codexAuthDraft = signal("");
 
   protected readonly newModelSettingName = signal("");
   protected readonly newModelSettingEffort = signal("high");
@@ -2038,7 +2113,8 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly persistentSandboxes = signal<
     { name: string; state?: string }[]
   >([]);
-  protected readonly probeMessage = signal("");
+  protected readonly probing = signal(false);
+  protected readonly probeResult = signal<SandboxProbeResult | null>(null);
 
   protected readonly hostds = signal<HostdRow[]>([]);
   protected readonly confirmRequest = signal<ConfirmRequest | null>(null);
@@ -2047,6 +2123,23 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly mintedHostdToken = signal<string | null>(null);
   protected readonly enrollmentCodes = signal<EnrollmentCodeRow[]>([]);
   protected readonly newCodeName = signal("");
+  protected readonly chosenEnrollmentCode = signal("");
+  protected readonly enrollmentSecretShown = signal(false);
+  protected readonly selectedEnrollmentCode = computed(() =>
+    pickEnrollmentCode(this.enrollmentCodes(), this.chosenEnrollmentCode()),
+  );
+  protected readonly enrollmentCodeOptions = computed<PillOption[]>(() =>
+    this.enrollmentCodes().map((c) => ({
+      value: c.name,
+      label: c.revoked_at ? `${c.name} (revoked)` : c.name,
+    })),
+  );
+  protected readonly inviteSnippet = computed(() =>
+    inviteLines(
+      this.doc.defaultView?.location.origin ?? "",
+      this.selectedEnrollmentCode(),
+    ).join("\n"),
+  );
   protected readonly pendingHostds = signal<PendingHostdRow[]>([]);
   protected readonly pendingLabelDrafts = signal<Record<string, string>>({});
 
@@ -2257,9 +2350,6 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     const sec = this.section();
     if (sec === "models") {
       this.syncBackendsFromState();
-      if (this.access.can("GET /api/agent-keys")) {
-        void this.loadAgentKeys();
-      }
       if (this.access.can("GET /api/usage")) {
         void this.api
           .get<Record<string, unknown>>("GET /api/usage")
@@ -2302,148 +2392,6 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       this.state.deployment()["agentBackends"];
     if (Array.isArray(raw)) {
       this.backends.set(raw as BackendEntry[]);
-    }
-  }
-
-  private applyAgentKeysResponse(
-    res: AgentKeysResponse | null | undefined,
-  ): void {
-    if (!res || typeof res !== "object") return;
-    if (res.enabled !== undefined) {
-      this.agentKeysEnabled.set(Boolean(res.enabled));
-    }
-    this.agentKeys.set({
-      antigravity: Boolean(res.geminiApiKeySet),
-      gemini: Boolean(res.geminiApiKeySet),
-      claude: Boolean(res.claudeOAuthTokenSet),
-      codex: Boolean(res.openaiApiKeySet),
-    });
-    this.codexAuthJsonSet.set(Boolean(res.codexAuthJSONSet));
-    this.codexAuthRefreshError.set(res.codexAuthRefreshError ?? "");
-  }
-
-  protected async loadAgentKeys(): Promise<void> {
-    try {
-      const res = await this.api.get<AgentKeysResponse>("GET /api/agent-keys");
-      this.applyAgentKeysResponse(res);
-    } catch {
-      // Non-fatal
-    }
-  }
-
-  protected isKeyConfigured(fw: string): boolean {
-    return Boolean(this.agentKeys()[fw]);
-  }
-
-  protected setKeyDraft(fw: string, val: string): void {
-    this.keyDrafts.update((p) => ({ ...p, [fw]: val }));
-  }
-
-  protected toggleKeyEditor(fw: string): void {
-    this.openKeyFramework.update((cur) => (cur === fw ? null : fw));
-  }
-
-  protected async saveAgentKey(fw: string): Promise<void> {
-    const value = (this.keyDrafts()[fw] ?? "").trim();
-    if (!value) return;
-    this.busyKey.set(fw);
-    try {
-      const res = await this.api.put<AgentKeysResponse>(
-        "PUT /api/agent-keys/{framework}",
-        { framework: fw },
-        { value },
-      );
-      this.setKeyDraft(fw, "");
-      this.openKeyFramework.set(null);
-      if (res && "geminiApiKeySet" in res) {
-        this.applyAgentKeysResponse(res);
-      } else {
-        this.agentKeys.update((p) => ({ ...p, [fw]: true }));
-      }
-      this.snackbar.show(`Saved ${fw} API key`);
-    } catch (err) {
-      this.state.recordError(err);
-    } finally {
-      this.busyKey.set(null);
-    }
-  }
-
-  protected async clearAgentKey(fw: string): Promise<void> {
-    this.busyKey.set(fw);
-    try {
-      const res = await this.api.delete<AgentKeysResponse>(
-        "DELETE /api/agent-keys/{framework}",
-        { framework: fw },
-      );
-      if (res && "geminiApiKeySet" in res) {
-        this.applyAgentKeysResponse(res);
-      } else {
-        this.agentKeys.update((p) => ({ ...p, [fw]: false }));
-      }
-      this.snackbar.show(`Cleared ${fw} API key`);
-    } catch (err) {
-      this.state.recordError(err);
-    } finally {
-      this.busyKey.set(null);
-    }
-  }
-
-  protected async checkAgentKey(fw: string): Promise<void> {
-    this.busyKey.set(fw);
-    try {
-      const res = await this.api.post<{
-        ok?: boolean;
-        detail?: string;
-        checkedAt?: string;
-      }>("POST /api/agent-keys/{framework}/check", { framework: fw }, {});
-      this.keyChecks.update((p) => ({
-        ...p,
-        [fw]: {
-          ok: Boolean(res?.ok),
-          detail: res?.detail || (res?.ok ? "Key verified" : "Check failed"),
-          checkedAt: res?.checkedAt,
-        },
-      }));
-    } catch (err) {
-      this.keyChecks.update((p) => ({
-        ...p,
-        [fw]: { ok: false, detail: errText(err) },
-      }));
-    } finally {
-      this.busyKey.set(null);
-    }
-  }
-
-  protected async saveCodexAuth(): Promise<void> {
-    const value = this.codexAuthDraft().trim();
-    if (!value) return;
-    try {
-      const res = await this.api.put<AgentKeysResponse>(
-        "PUT /api/codex-auth",
-        undefined,
-        { value },
-      );
-      this.codexAuthDraft.set("");
-      if (res && "codexAuthJSONSet" in res) {
-        this.applyAgentKeysResponse(res);
-      }
-      this.snackbar.show("Codex auth saved");
-    } catch (err) {
-      this.state.recordError(err);
-    }
-  }
-
-  protected async clearCodexAuth(): Promise<void> {
-    try {
-      const res = await this.api.delete<AgentKeysResponse>(
-        "DELETE /api/codex-auth",
-      );
-      if (res && "codexAuthJSONSet" in res) {
-        this.applyAgentKeysResponse(res);
-      }
-      this.snackbar.show("Codex auth cleared");
-    } catch (err) {
-      this.state.recordError(err);
     }
   }
 
@@ -2525,6 +2473,18 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     } catch (err) {
       this.state.recordError(err);
     }
+  }
+
+  // Clearing a connection's secret cannot be undone short of pasting the
+  // key again, so it asks first, as removing the connection does.
+  protected confirmClearBackendCred(id: string): void {
+    this.confirmRequest.set({
+      title: `Clear the credential for ${id}?`,
+      message: `The secret stored for ${id} is deleted. Runs and model discovery on ${id} no longer use it, and only saving the key again brings it back.`,
+      accept: "Clear secret",
+      destructive: true,
+      run: () => this.clearBackendCred(id),
+    });
   }
 
   protected async clearBackendCred(id: string): Promise<void> {
@@ -2658,6 +2618,15 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
+  /** A fixed ratio of 0 is accepted (pkg/ui settings.go: "leave this
+   * dimension to the run counts alone"), so the box says what it means
+   * rather than storing it silently. */
+  protected overcommitUnbounded(key: string): boolean {
+    if (this.overcommitMode() !== "fixed") return false;
+    const raw = this.state.val<unknown>(key, null);
+    return raw !== null && raw !== "" && Number(raw) === 0;
+  }
+
   protected overcommitMode(): string {
     const v = this.state.val<unknown>("sandboxOvercommit", "fixed");
     if (v && typeof v === "object" && "mode" in v) {
@@ -2678,18 +2647,43 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     }
   }
 
+  /** The probe is offered only where the server can build one:
+   * GET /api/settings says so in sandboxProbe (pkg/ui/sandbox_probe.go). */
+  protected canProbeSandbox(): boolean {
+    return (
+      this.access.can("POST /api/sandbox-probe") &&
+      this.state.val<boolean>("sandboxProbe", false) === true
+    );
+  }
+
+  /** POST /api/sandbox-probe as `grain sandbox probe -id <id> -- true`
+   * does: a fresh id names the throwaway sandbox, and `true` is the
+   * least a sandbox that booted can run. */
   protected async runSandboxProbe(): Promise<void> {
+    if (this.probing()) return;
+    this.probing.set(true);
+    this.probeResult.set(null);
     try {
-      const res = await this.api.post<{ ok?: boolean; detail?: string }>(
+      const id = `ui-${Date.now().toString(36)}-${Math.random()
+        .toString(36)
+        .slice(2, 6)}`;
+      const res = await this.api.post<SandboxProbeResult>(
         "POST /api/sandbox-probe",
         undefined,
-        {},
+        { id, argv: ["true"] },
       );
-      this.probeMessage.set(
-        res?.detail || (res?.ok === false ? "Probe failed" : "Sandbox ready"),
-      );
+      this.probeResult.set({
+        sandbox: res?.sandbox ?? `probe-${id}`,
+        pod: res?.pod ?? "",
+        access: res?.access ?? "",
+        stdout: res?.stdout ?? "",
+        stderr: res?.stderr ?? "",
+        exitCode: Number(res?.exitCode ?? 0),
+      });
     } catch (err) {
       this.state.recordError(err);
+    } finally {
+      this.probing.set(false);
     }
   }
 
@@ -2793,10 +2787,10 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       });
       this.newHostdName.set("");
       this.newHostdLabels.set("");
-      const msg = this.formatIssuedHostdSecret(`Hostd token (${name})`, res);
+      const msg = this.formatIssuedHostdSecret(`Host token (${name})`, res);
       if (msg) this.mintedHostdToken.set(msg);
       await this.loadHostds();
-      this.snackbar.show(`Registered hostd ${name}`);
+      this.snackbar.show(`Registered host ${name}`);
     } catch (err) {
       this.state.recordError(err);
     }
@@ -2898,6 +2892,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     });
   }
 
+  protected selectEnrollmentCode(name: string): void {
+    this.chosenEnrollmentCode.set(name);
+    this.enrollmentSecretShown.set(false);
+  }
+
+  protected async copyInvite(text: string, notice: string): Promise<void> {
+    const ok = await copyToClipboard(this.doc, text);
+    this.snackbar.show(ok ? notice : "Could not copy: select the text instead");
+  }
+
   protected async createEnrollmentCode(): Promise<void> {
     const name = this.newCodeName().trim();
     if (!name) return;
@@ -2908,6 +2912,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
         install?: HostdInstallDto | string;
       }>("POST /api/hostds/enrollment-codes", undefined, { name });
       this.newCodeName.set("");
+      this.selectEnrollmentCode(name);
       const secret = res?.code ?? res?.token;
       const msg = this.formatIssuedHostdSecret(`Enrollment code (${name})`, {
         token: secret,
@@ -3007,7 +3012,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
         },
       );
       await this.loadHostds();
-      this.snackbar.show(`Approved hostd ${hostName}`);
+      this.snackbar.show(`Approved host ${hostName}`);
     } catch (err) {
       this.state.recordError(err);
     }
@@ -3028,7 +3033,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
             {},
           );
           await this.loadHostds();
-          this.snackbar.show("Rejected pending hostd");
+          this.snackbar.show("Rejected pending host request");
         } catch (err) {
           this.state.recordError(err);
         }

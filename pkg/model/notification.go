@@ -303,7 +303,8 @@ const (
 
 // levelTriggeredFamilies are the families a reconciler finds again on
 // every cycle while their condition holds and raises again when no
-// instance is open (orchestrator's ensurePipelineNotification). Clearing
+// instance is open (orchestrator's ensurePipelineNotification, which
+// fails a test that raises a family missing here). Clearing
 // one only clears the instance: the next cycle raises a new one if the
 // condition still holds. Credential notices (pkg/change's
 // credentials-expired.*) are not among them -- they are raised once,
@@ -321,7 +322,16 @@ var levelTriggeredFamilies = map[string]bool{
 	FamilyBaseRedUnattended:    true,
 	FamilyBaseNoVerdict:        true,
 	FamilyReleaseLoopIdle:      true,
-	"pipeline.task-stalled":    true,
+	FamilyRepairFailing:        true,
+	FamilyReleaseEscalated:     true,
+	FamilyFlakeBudget:          true,
+	SubjectStewardRegression:   true,
+	// orchestrator's FamilyTaskStalled and FamilyPortStale, and the
+	// steward's JudgementModelUnresolvedSubject (a subject with no ':',
+	// so its own family).
+	"pipeline.task-stalled":         true,
+	"pipeline.port-stale":           true,
+	JudgementModelUnresolvedSubject: true,
 }
 
 // LevelTriggeredFamily reports whether family is raised again after a

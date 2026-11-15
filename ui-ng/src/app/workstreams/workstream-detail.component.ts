@@ -1042,6 +1042,7 @@ export class WorkstreamDetailComponent implements OnDestroy {
     });
     effect(() => {
       const s = this.stream();
+      void this.access.rawConfig();
       untracked(() => {
         if (s.key !== this.lastStreamKey) {
           this.lastStreamKey = s.key;

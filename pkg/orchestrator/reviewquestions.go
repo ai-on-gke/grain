@@ -55,9 +55,9 @@ import (
 // store every cycle, so a reply written while the daemon was down is acted
 // on by the first cycle after it comes back.
 func SyncReviewQuestions(ctx context.Context, store *model.Store, now time.Time) error {
-	links, err := store.OpenPullRequestLinks(ctx)
+	links, err := openAndResumeLaterPullRequestLinks(ctx, store)
 	if err != nil {
-		return fmt.Errorf("orchestrator: reading open pull request links: %w", err)
+		return err
 	}
 	var errs []error
 	seen := map[string]bool{}
@@ -113,6 +113,19 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 	state, err := store.State(ctx, task.ID)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's state: %w", task.ID, err)
+	}
+	if state == model.StateDeferred {
+		// A run sent back while the questions held it, resting on its own
+		// resume_later, is still waiting on its owner: the answer takes it
+		// off the wait below (sendBackFromResumeLater). A person's Defer
+		// is parked on something else.
+		ours, err := store.RestsOnResumeLater(ctx, task.ID)
+		if err != nil {
+			return fmt.Errorf("orchestrator: reading %s's deferral: %w", task.ID, err)
+		}
+		if ours {
+			state = model.StateAwaitingSubmit
+		}
 	}
 	switch {
 	case state == model.StateClosed:
@@ -186,6 +199,9 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 		o.PendingAccess = nil
 	}); err != nil {
 		return fmt.Errorf("orchestrator: queueing %s to carry out its owner's decision: %w", task.ID, err)
+	}
+	if err := sendBackFromResumeLater(ctx, store, task.ID, "its owner's review decision", now); err != nil {
+		return err
 	}
 
 	then := "Once it has pushed, the change goes through as it would have after a clean review."

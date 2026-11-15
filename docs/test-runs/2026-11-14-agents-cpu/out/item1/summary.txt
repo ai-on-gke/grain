@@ -1,0 +1,4 @@
+2-1 samples=16 mean=0.998 min=0.971 max=1.004
+3-1 samples=16 mean=1.996 min=1.942 max=2.008
+pidstat 2-1 mean_cores=1.000 intervals=16
+pidstat 3-1 mean_cores=1.999 intervals=16

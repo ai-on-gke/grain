@@ -590,6 +590,31 @@ describe("SettingsPage", () => {
       expect(
         screen.getByRole("button", { name: "Clear credential" }),
       ).toBeEnabled();
+      // Clearing deletes the stored secret, so it asks first: declining
+      // sends nothing, accepting sends the DELETE.
+      const clearCalls = () =>
+        api.mock.calls.filter(
+          ([path, opts]) =>
+            path === "/api/agent-backends/conn-1/credential" &&
+            opts?.method === "DELETE",
+        );
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+      try {
+        await user.click(
+          screen.getByRole("button", { name: "Clear credential" }),
+        );
+        expect(confirmSpy).toHaveBeenCalledWith(
+          expect.stringContaining("Clear the credential for conn-1?"),
+        );
+        expect(clearCalls()).toHaveLength(0);
+        confirmSpy.mockReturnValue(true);
+        await user.click(
+          screen.getByRole("button", { name: "Clear credential" }),
+        );
+        await waitFor(() => expect(clearCalls()).toHaveLength(1));
+      } finally {
+        confirmSpy.mockRestore();
+      }
     });
   });
 

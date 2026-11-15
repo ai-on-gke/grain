@@ -169,11 +169,17 @@ export class InboxStore implements OnDestroy {
   });
   // decisions is what is waiting on a person across the entire Inbox (used by
   // the global rail badge). scopedDecisions tracks the current ?ws= scope.
+  // An acknowledged alert keeps its row (marked so) until it is cleared,
+  // but it is no longer open, so it is not a decision waiting on anyone:
+  // the headline and the rail badge leave it out, as the classic bell
+  // does (ui/src/notifications.js notificationAlerts).
   readonly decisions = computed(() =>
-    this.liveEntries().filter((e) => !QUIET_GROUPS.has(e.groupId)),
+    this.liveEntries().filter((e) => !QUIET_GROUPS.has(e.groupId) && !e.acked),
   );
   readonly scopedDecisions = computed(() =>
-    this.scopedLiveEntries().filter((e) => !QUIET_GROUPS.has(e.groupId)),
+    this.scopedLiveEntries().filter(
+      (e) => !QUIET_GROUPS.has(e.groupId) && !e.acked,
+    ),
   );
   private readonly frozen = signal<readonly InboxEntry[] | null>(null);
   // The last version of every row seen, so a row that left still shows
@@ -443,22 +449,27 @@ export class InboxStore implements OnDestroy {
     this.remember();
     const needWhoami =
       !this.access.whoami() && typeof this.api.whoami === "function";
-    const [config, feedOk, notifications, scripts, who] =
-      await Promise.allSettled([
-        this.api.config(),
-        this.feed.refresh(),
-        this.api.openNotifications(),
+    const configReq = this.api.config().then((cfg) => {
+      if (cfg) {
+        this.access.setConfig(cfg);
+        this.version.set(versionLabel(cfg.version));
+      }
+      return cfg;
+    });
+    const [, feedOk, notifications, scripts, who] = await Promise.allSettled([
+      configReq,
+      this.feed.refresh(),
+      this.api.openNotifications(),
+      (this.access.configLoaded()
+        ? Promise.resolve()
+        : configReq.catch(() => null)
+      ).then(() =>
         this.access.can("GET /api/local-script-approvals")
           ? this.api.localScriptApprovals()
-          : Promise.resolve([] as LocalScriptApproval[]),
-        needWhoami
-          ? this.api.whoami().catch(() => null)
-          : Promise.resolve(null),
-      ]);
-    if (config.status === "fulfilled") {
-      this.access.setConfig(config.value);
-      this.version.set(versionLabel(config.value.version));
-    }
+          : ([] as LocalScriptApproval[]),
+      ),
+      needWhoami ? this.api.whoami().catch(() => null) : Promise.resolve(null),
+    ]);
     if (who.status === "fulfilled" && who.value) {
       this.access.setWhoami(who.value);
     }

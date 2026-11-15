@@ -94,7 +94,9 @@ export class CIStore {
 
   private eventSub: Subscription | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private configTask: Promise<void> | null = null;
   private activeCount = 0;
+  private detailFailedId: string | null = null;
 
   start(): void {
     this.actionError.set(null);
@@ -135,20 +137,36 @@ export class CIStore {
   }
 
   private async bootstrap(): Promise<void> {
-    await this.loadConfig();
+    await this.ensureConfig(true);
     if (this.activeCount === 0) return;
     await this.refresh();
+  }
+
+  private ensureConfig(force = false): Promise<void> {
+    if (this.configTask) return this.configTask;
+    if (
+      !force &&
+      (this.access.configLoaded() || typeof this.api.config !== "function")
+    ) {
+      return Promise.resolve();
+    }
+    return (this.configTask = this.loadConfig().finally(() => {
+      this.configTask = null;
+    }));
   }
 
   private async loadConfig(): Promise<void> {
     try {
       const cfg = await this.api.config();
-      if (this.activeCount === 0) return;
       if (cfg) {
-        this.access.setConfig(cfg);
-        const scoped = configuredInstanceRepos(cfg);
-        this.targetRepos.set(scoped.repos);
-        this.hasTargetAllowlist.set(scoped.hasTargetAllowlist);
+        if (!this.access.configLoaded() || this.activeCount > 0) {
+          this.access.setConfig(cfg);
+        }
+        if (this.activeCount > 0) {
+          const scoped = configuredInstanceRepos(cfg);
+          this.targetRepos.set(scoped.repos);
+          this.hasTargetAllowlist.set(scoped.hasTargetAllowlist);
+        }
       }
     } catch {
       // Non-fatal: page still renders CI feed.
@@ -179,6 +197,10 @@ export class CIStore {
 
   async refresh(forceDetail = false): Promise<void> {
     if (this.activeCount === 0) return;
+    if (!this.access.configLoaded()) {
+      await this.ensureConfig();
+      if (this.activeCount === 0) return;
+    }
     if (!this.access.can("GET /api/ci/runs")) {
       this.loaded.set(true);
       this.loadError.set(this.access.deniedReason("GET /api/ci/runs"));
@@ -272,8 +294,18 @@ export class CIStore {
 
       const sel = this.selectedId();
       if (sel) {
+        if (
+          this.detailFailedId === sel &&
+          this.runs().some((r) => r.id === sel)
+        ) {
+          this.detailFailedId = null;
+        }
         const cur = this.detail();
-        if (forceDetail || !cur || cur.id !== sel || isRunActive(cur)) {
+        if (
+          forceDetail ||
+          ((!cur || cur.id !== sel) && this.detailFailedId !== sel) ||
+          (cur && cur.id === sel && isRunActive(cur))
+        ) {
           await this.loadRunDetail(sel, false);
         }
       }
@@ -285,7 +317,15 @@ export class CIStore {
   }
 
   async selectRun(id: string | null): Promise<void> {
-    if (this.selectedId() === id && this.detail()?.id === id) return;
+    if (
+      this.selectedId() === id &&
+      (this.detail()?.id === id || (id !== null && this.detailFailedId === id))
+    ) {
+      return;
+    }
+    if (this.selectedId() !== id) {
+      this.detailFailedId = null;
+    }
     this.selectedId.set(id);
     this.jobLogs.set({});
     if (!id) {
@@ -297,6 +337,7 @@ export class CIStore {
   }
 
   async loadRunDetail(id: string, showSpinner = true): Promise<void> {
+    if (!this.access.configLoaded()) await this.ensureConfig();
     if (!this.access.can("GET /api/ci/runs/{id}")) return;
     if (showSpinner) this.detailLoading.set(true);
     try {
@@ -312,6 +353,7 @@ export class CIStore {
       ]);
       if (this.activeCount === 0) return;
       if (this.selectedId() === id) {
+        this.detailFailedId = null;
         this.detail.set(run);
         if (artRes) {
           this.artifactsAvailable.set(!!artRes.available);
@@ -327,6 +369,7 @@ export class CIStore {
     } catch (err) {
       if (this.activeCount === 0) return;
       if (this.selectedId() === id) {
+        this.detailFailedId = id;
         this.actionError.set(errorText(err));
       }
     } finally {
@@ -341,6 +384,7 @@ export class CIStore {
     jobNameOrId: string,
     tail?: number,
   ): Promise<void> {
+    if (!this.access.configLoaded()) await this.ensureConfig();
     if (!this.access.can("GET /api/ci/runs/{id}/log")) return;
     const key = `${runId}:${jobNameOrId}`;
     this.jobLogLoading.set(key);
@@ -365,6 +409,7 @@ export class CIStore {
   }
 
   async fetchWorkflows(repo: string, ref: string): Promise<CIWorkflowOption[]> {
+    if (!this.access.configLoaded()) await this.ensureConfig();
     if (!repo.trim() || !this.access.can("GET /api/ci/workflows", repo)) {
       return [];
     }
