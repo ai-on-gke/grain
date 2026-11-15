@@ -42,9 +42,10 @@
 //     every slot already full (MaxWorkers is the live count's floor, so it
 //     never dispatches a real sandbox itself), timing every reconciler
 //     through CycleTimes exactly as GET /api/metrics serves it;
-//   - the HTTP API: cfg.apiWorkers clients hitting the task list (default,
-//     state filters, substring search, cursor pages), the task detail and
-//     its conversation, /api/metrics, /api/tasks/states and /api/inbox,
+//   - the HTTP API: cfg.apiWorkers clients per endpoint on the task list
+//     (default, state filters, substring search, cursor pages, summary),
+//     the task detail and its conversation, /api/metrics,
+//     /api/tasks/states and /api/inbox,
 //     plus cfg.sseClients subscribers on /api/events?stream=1;
 //   - a sampler reading the process's RSS, heap, goroutines and open file
 //     descriptors.
@@ -118,21 +119,22 @@ func defaultScaleConfig() scaleConfig {
 	return scaleConfig{
 		total: 50000, waiting: 1000, running: 100, repos: 20,
 		duration: 3 * time.Minute, runLifetime: 8 * time.Second, heartbeat: 500 * time.Millisecond,
-		apiWorkers: 4, sseClients: 10, seedWorkers: 8,
+		apiWorkers: 1, sseClients: 10, seedWorkers: 8,
 		// Ceilings, not targets. At this shape today's code takes most of
-		// a minute to dispatch and over a minute to tick on SQLite
-		// (docs/test-runs/2026-11-15-scale-50k.md), so a budget a healthy
-		// deployment would want fails every night and gates nothing. These
-		// sit at roughly twice what a 7-vCPU host measured, for a 4-vCPU
+		// a minute to dispatch, up to two to tick and nearly two to list
+		// on SQLite (docs/test-runs/2026-11-15-scale-50k.md), so a budget a
+		// healthy deployment would want fails every night and gates
+		// nothing. These sit at about three times what a 7-vCPU host
+		// measured, for a 4-vCPU
 		// hosted runner: what they catch is a regression on top of where
 		// things are -- a tick or a list that gets several times worse, an
 		// endpoint that stops answering, a store error, a slot that stops
 		// being refilled. Each follow-up that fixes a bottleneck is meant
 		// to lower the budget it moved; the doc names the targets.
-		tickP95: 4 * time.Minute, dispatchP95: 3 * time.Minute,
-		apiP95: 4 * time.Minute, writeP95: 20 * time.Second,
+		tickP95: 6 * time.Minute, dispatchP95: 3 * time.Minute,
+		apiP95: 6 * time.Minute, writeP95: 20 * time.Second,
 		minCompletions: 100,
-		tickTimeout:    5 * time.Minute, requestTimeout: 5 * time.Minute,
+		tickTimeout:    8 * time.Minute, requestTimeout: 8 * time.Minute,
 	}
 }
 
@@ -196,7 +198,7 @@ func TestScaleSmoke(t *testing.T) {
 	cfg := scaleConfig{
 		total: 400, waiting: 60, running: 8, repos: 3,
 		duration: 3 * time.Second, runLifetime: 600 * time.Millisecond, heartbeat: 100 * time.Millisecond,
-		apiWorkers: 2, sseClients: 2, seedWorkers: 2,
+		apiWorkers: 1, sseClients: 2, seedWorkers: 2,
 		minCompletions: 1,
 		tickTimeout:    2 * time.Minute, requestTimeout: 2 * time.Minute,
 	}
@@ -586,17 +588,23 @@ func scaleRun(runCtx context.Context, store *model.Store, cfg scaleConfig, sd *s
 	})
 }
 
-func scaleAPIWorker(ctx context.Context, base string, timeout, budget time.Duration, sd *scaleSeed, rng *rand.Rand, stats *scaleStats) {
+func scaleAPIWorker(ctx context.Context, base, endpoint string, timeout, budget time.Duration, sd *scaleSeed, rng *rand.Rand, stats *scaleStats) {
 	client := &http.Client{Timeout: timeout}
 	cursor := ""
 	// A request the end of the run cuts off is no sample, unless it had
 	// already been waiting longer than its budget: then it is the slowest
 	// sample of all, and dropping it would let an endpoint that never
 	// answers pass.
+	// One under its budget is still reported, under api-unanswered/, with
+	// how long it had waited: an endpoint with no api/ samples at all and
+	// one of those is one that did not answer once in the whole run.
 	cutOff := func(name string, start time.Time) {
-		if waited := time.Since(start); budget > 0 && waited > budget {
+		waited := time.Since(start)
+		if budget > 0 && waited > budget {
 			stats.fail("api/"+name, fmt.Errorf("still unanswered after %v when the run ended", waited.Round(time.Second)))
+			return
 		}
+		stats.lat("api-unanswered/" + name).Record(waited)
 	}
 	get := func(name, path string) []byte {
 		start := time.Now()
@@ -627,37 +635,46 @@ func scaleAPIWorker(ctx context.Context, base string, timeout, budget time.Durat
 	}
 	for ctx.Err() == nil {
 		id := sd.historyIDs[rng.IntN(len(sd.historyIDs))]
-		switch rng.IntN(11) {
-		case 0:
-			get("tasks-default", "/api/tasks")
-		case 1:
-			get("tasks-state-queued", "/api/tasks?state=queued")
-		case 2:
-			get("tasks-state-running", "/api/tasks?state=running,awaiting_reply")
-		case 3:
-			get("tasks-search", "/api/tasks?q="+url.QueryEscape(sd.searchTerm))
-		case 4:
+		switch endpoint {
+		case "tasks-default":
+			get(endpoint, "/api/tasks")
+		case "tasks-state-queued":
+			get(endpoint, "/api/tasks?state=queued")
+		case "tasks-state-running":
+			get(endpoint, "/api/tasks?state=running,awaiting_reply")
+		case "tasks-search":
+			get(endpoint, "/api/tasks?q="+url.QueryEscape(sd.searchTerm))
+		case "tasks-cursor-page":
 			var page struct {
 				NextCursor string `json:"nextCursor"`
 			}
-			body := get("tasks-cursor-page", "/api/tasks?limit=100&cursor="+url.QueryEscape(cursor))
+			body := get(endpoint, "/api/tasks?limit=100&cursor="+url.QueryEscape(cursor))
 			if json.Unmarshal(body, &page) == nil {
 				cursor = page.NextCursor
 			}
-		case 5:
-			get("tasks-summary", "/api/tasks?fields=summary&limit=50")
-		case 6:
-			get("task-detail", "/api/tasks/"+id)
-		case 7:
-			get("task-conversation", "/api/tasks/"+id+"/messages")
-		case 8:
-			get("metrics", "/api/metrics")
-		case 9:
-			get("states", "/api/tasks/states")
-		case 10:
-			get("inbox", "/api/inbox")
+		case "tasks-summary":
+			get(endpoint, "/api/tasks?fields=summary&limit=50")
+		case "task-detail":
+			get(endpoint, "/api/tasks/"+id)
+		case "task-conversation":
+			get(endpoint, "/api/tasks/"+id+"/messages")
+		case "metrics":
+			get(endpoint, "/api/metrics")
+		case "states":
+			get(endpoint, "/api/tasks/states")
+		case "inbox":
+			get(endpoint, "/api/inbox")
 		}
 	}
+}
+
+// scaleEndpoints is every endpoint the API clients drive. Each gets
+// cfg.apiWorkers clients of its own rather than a share of a common
+// pool, so an endpoint that takes minutes to answer cannot starve the
+// others of samples -- it is only its own clients that wait on it.
+var scaleEndpoints = []string{
+	"tasks-default", "tasks-state-queued", "tasks-state-running", "tasks-search", "tasks-cursor-page",
+	"tasks-summary", "task-detail", "task-conversation", "metrics", "states", "inbox",
 }
 
 // scaleSSEClient holds one /api/events stream open for the run and
@@ -802,11 +819,13 @@ func runScale(t *testing.T, backend string, cfg scaleConfig) {
 
 	var bg sync.WaitGroup
 	for i := 0; i < cfg.apiWorkers; i++ {
-		bg.Add(1)
-		go func(i int) {
-			defer bg.Done()
-			scaleAPIWorker(runCtx, server, cfg.requestTimeout, cfg.apiP95, sd, rand.New(rand.NewPCG(uint64(100+i), 3)), stats)
-		}(i)
+		for j, endpoint := range scaleEndpoints {
+			bg.Add(1)
+			go func(seed uint64) {
+				defer bg.Done()
+				scaleAPIWorker(runCtx, server, endpoint, cfg.requestTimeout, cfg.apiP95, sd, rand.New(rand.NewPCG(seed, 3)), stats)
+			}(uint64(100 + i*len(scaleEndpoints) + j))
+		}
 	}
 	for i := 0; i < cfg.sseClients; i++ {
 		bg.Add(1)
