@@ -319,25 +319,30 @@ function formatRefreshedAt(iso?: string): string {
                     @if (modelNote(m)) {
                       <span class="mp-flag">{{ modelNote(m) }}</span>
                     }
-                    @if (effortFor(m); as es) {
-                      @if (es.separate || modelEffort(m)) {
-                        <g-pill-select
-                          class="mp-chain-effort"
-                          [testid]="'effort-fallback-' + $index"
-                          [ariaLabel]="'Reasoning effort for ' + m"
-                          [options]="effortOptionsFor(m)"
-                          [value]="modelEffort(m)"
-                          [disabled]="!canWriteDeployment()"
-                          (valueChange)="setModelEffort(m, $event)"
-                        />
-                      } @else {
-                        <span
-                          class="mp-chain-note"
-                          [attr.data-testid]="'effort-fallback-none-' + $index"
-                          >{{ es.reason }}</span
-                        >
+                    <span class="mp-chain-effort">
+                      @if (effortFor(m); as es) {
+                        @if (es.separate || modelEffort(m)) {
+                          <g-pill-select
+                            [testid]="'effort-fallback-' + $index"
+                            [ariaLabel]="'Reasoning effort for ' + m"
+                            prefix="Effort"
+                            align="left"
+                            [options]="effortOptionsFor(m)"
+                            [value]="modelEffort(m)"
+                            [disabled]="!canWriteDeployment()"
+                            (valueChange)="setModelEffort(m, $event)"
+                          />
+                        } @else {
+                          <span
+                            class="mp-chain-note"
+                            [attr.data-testid]="
+                              'effort-fallback-none-' + $index
+                            "
+                            >{{ es.reason }}</span
+                          >
+                        }
                       }
-                    }
+                    </span>
                     <span class="mp-chain-actions">
                       <button
                         type="button"

@@ -181,6 +181,87 @@ test.describe("Settings → Models default and fallback models", () => {
     const after = await (await request.get("/api/deployment")).json();
     expect(after.defaultModels).toEqual(["claude-opus-5", "claude-sonnet-5"]);
   });
+
+  test("pairs each default and fallback model with its own reasoning effort", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(90_000);
+    const before = await (await request.get("/api/deployment")).json();
+    const codex = await request.put(
+      "/api/deployment/agent-backends/codex-team",
+      {
+        data: {
+          id: "codex-team",
+          framework: "codex",
+          models: ["gpt-5.5-codex"],
+        },
+      },
+    );
+    expect(codex.ok()).toBe(true);
+    try {
+      const dep = await request.put("/api/deployment", {
+        data: {
+          defaultModels: ["gemini-2.5-pro", "gpt-5.5-codex", "claude-opus-5"],
+          modelSettings: [],
+        },
+      });
+      expect(dep.ok()).toBe(true);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto("/next/settings/models");
+      const card = page.getByTestId("card-model-defaults");
+      await expect(card.getByTestId("fallback-row-1")).toBeVisible();
+
+      // Codex takes an effort from its own vocabulary; Claude takes none.
+      await expect(card.getByTestId("effort-fallback-1")).toHaveCount(0);
+      await expect(card.getByTestId("effort-fallback-none-1")).toHaveText(
+        "Claude takes no reasoning effort",
+      );
+      // The effort column lines up across rows.
+      const a = await card
+        .getByTestId("fallback-row-0")
+        .locator(".mp-chain-effort")
+        .boundingBox();
+      const b = await card
+        .getByTestId("fallback-row-1")
+        .locator(".mp-chain-effort")
+        .boundingBox();
+      expect(Math.abs(a.x - b.x)).toBeLessThan(1);
+      await axeClean(page);
+
+      await card.getByTestId("effort-default-model").click();
+      await page.getByTestId("effort-default-model-opt-medium").click();
+      await card.getByTestId("effort-fallback-0").click();
+      await page.getByTestId("effort-fallback-0-opt-xhigh").click();
+      await expect(card.getByTestId("effort-fallback-0")).toContainText(
+        "xhigh",
+      );
+      await page.getByTestId("settings-save-btn").click();
+      await expect(page.getByTestId("settings-save-bar")).toBeHidden();
+      const saved = await (await request.get("/api/deployment")).json();
+      expect(saved.modelSettings).toEqual([
+        { model: "gemini-2.5-pro", effort: "medium" },
+        { model: "gpt-5.5-codex", effort: "xhigh" },
+      ]);
+
+      // On a phone the effort drops under the model, inside its row.
+      await page.setViewportSize({ width: 390, height: 844 });
+      const row = await card.getByTestId("fallback-row-0").boundingBox();
+      const cell = await card
+        .getByTestId("fallback-row-0")
+        .locator(".mp-chain-effort")
+        .boundingBox();
+      expect(cell.x + cell.width).toBeLessThanOrEqual(row.x + row.width + 1);
+    } finally {
+      await request.put("/api/deployment", {
+        data: {
+          defaultModels: before.defaultModels ?? [],
+          modelSettings: before.modelSettings ?? [],
+        },
+      });
+      await request.delete("/api/deployment/agent-backends/codex-team");
+    }
+  });
 });
 
 test("Settings Models - Discovered models, clear credential, and fallback models", async ({
