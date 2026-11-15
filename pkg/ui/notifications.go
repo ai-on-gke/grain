@@ -122,6 +122,19 @@ func AgentNamespace(taskID string) string { return "agent." + taskID + ":" }
 // RaiseNotification raises req as whoever ctx's actor is. A run's agent
 // principal is held to notify_operator's rules (AgentNotify).
 func (c *Client) RaiseNotification(ctx context.Context, req RaiseNotificationRequest) (NotificationRaiseResponse, error) {
+	if ciCall, isCIAPI := model.CIAPICallFromContext(ctx); isCIAPI {
+		req.Repo = ciCall.Repo.String()
+		if c.Store != nil {
+			open, err := c.Store.OpenNotification(ctx, strings.TrimSpace(req.Subject))
+			if err != nil {
+				return NotificationRaiseResponse{}, err
+			}
+			if open != nil && !model.SameRepoText(open.Repo, ciCall.Repo.String()) {
+				return NotificationRaiseResponse{}, forbiddenErrorf("notification %s belongs to %s, not %s",
+					strings.TrimSpace(req.Subject), open.Repo, ciCall.Repo)
+			}
+		}
+	}
 	actor := c.requestActor(ctx).Actor
 	if actor.Kind == model.PrincipalAgent {
 		return c.AgentNotify(ctx, actor.ID, req)

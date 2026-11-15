@@ -453,8 +453,8 @@ export default function Actions({ t, config, act, onOpenTask }) {
           data-testid="human-review-hold"
         >
           <strong>Held for a person&apos;s review.</strong>{" "}
-          {t.humanReviewHold.every((r) => r.category === "security-findings")
-            ? "Security review left findings: this change will not merge until fixes pass a fresh security review, or an admin overrides the security-review gate."
+          {t.humanReviewHold.every((r) => r.source === "security-findings")
+            ? "Review findings cannot be released directly; they require a passing re-review or an operator gate override under merge:force."
             : "This change will not merge itself until somebody presses Submit or Release hold."}
           <ul style={{ margin: "4px 0 0", paddingLeft: "1.2em" }}>
             {t.humanReviewHold.map((r, i) => (
@@ -475,9 +475,7 @@ export default function Actions({ t, config, act, onOpenTask }) {
               </li>
             ))}
           </ul>
-          {t.humanReviewHold.some(
-            (r) => r.category !== "security-findings",
-          ) && (
+          {t.humanReviewHold.some((r) => r.source !== "security-findings") && (
             <AccessGate scope="tasks:write" repo={t.repo}>
               <Button
                 variant="outlined"
