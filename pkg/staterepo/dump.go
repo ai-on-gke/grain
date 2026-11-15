@@ -798,6 +798,13 @@ func importTable(ctx context.Context, tx *sql.Tx, dir, table string, withhold bo
 				row["task_branch_template"] = model.DefaultTaskBranchTemplate
 			}
 		}
+		if found > 0 && found < model.SchemaVersion {
+			for _, col := range retiredGrantColumns[table] {
+				if list, ok := row[col].(string); ok && list != "" {
+					row[col] = upgradeRetiredCapabilityList(list)
+				}
+			}
+		}
 		if ext, ok := externalTexts[table]; ok {
 			if ref, isRef := row[ext.column].(map[string]any); isRef {
 				rel, hasFile := ref["file"].(string)
@@ -848,6 +855,43 @@ func importTable(ctx context.Context, tx *sql.Tx, dir, table string, withhold bo
 		}
 	}
 	return nil
+}
+
+// retiredGrantColumns are the comma-separated capability columns an
+// import of a dump written by an older build (a lower schema-version)
+// upgrades through upgradeRetiredCapabilityList: the default sets
+// and a repository's CI capabilities, as tables/ holds them and as
+// settings/capabilities.yml's defaults overlay them (dumpRowsOf).
+var retiredGrantColumns = map[string][]string{
+	"grain_config": {"default_capabilities"},
+	"repo_config":  {"default_capabilities", "ci_capabilities"},
+}
+
+// upgradeRetiredCapabilityList reads each retired bare name in list as the
+// canonical grant(s) it became (model.RetiredGrantsBecame), as the
+// settings files' grant lists are read (shapeGrants in decl.go): a
+// grain/config exported, or edited by hand, before the retirement imports
+// as what the store holds now, and the next export writes only canonical
+// names. Anything else is kept as written, in order, once; a list with
+// no retired name is returned unchanged.
+func upgradeRetiredCapabilityList(list string) string {
+	var out []string
+	seen := map[string]bool{}
+	changed := false
+	for _, name := range model.SplitCapabilities(list) {
+		became := model.RetiredGrantsBecame(name)
+		changed = changed || len(became) != 1 || became[0] != name
+		for _, capID := range became {
+			if !seen[capID] {
+				seen[capID] = true
+				out = append(out, capID)
+			}
+		}
+	}
+	if !changed {
+		return list
+	}
+	return model.JoinCapabilities(out)
 }
 
 // resolveFileValue is value with a {"file": path} reference replaced by

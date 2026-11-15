@@ -102,6 +102,12 @@ func TestDefaultModelFallbackCrossesFrameworks(t *testing.T) {
 	if got := fw.FallbackReason(); !strings.Contains(got, "gemini-x is paused until ") {
 		t.Errorf("FallbackReason = %q, want it naming the paused gemini-x", got)
 	}
+	// The reset is named on the task's own clock, zone and all, rather
+	// than in UTC.
+	tokyo := orchestrator.AgentChoice{TimeZone: "Asia/Tokyo"}
+	if got := buildChecked(t, pool, tokyo, "claude-y", model.AgentFrameworkClaude).FallbackReason(); !strings.Contains(got, " JST") || strings.Contains(got, "UTC") {
+		t.Errorf("FallbackReason for a task in Asia/Tokyo = %q, want the reset in JST", got)
+	}
 	// A task with priority dispatch (a session) falls over the same way.
 	buildChecked(t, pool, orchestrator.AgentChoice{Priority: true}, "claude-y", model.AgentFrameworkClaude)
 
@@ -134,5 +140,33 @@ func TestExplicitChoicesDoNotFallBackAcrossFrameworks(t *testing.T) {
 	onConnection := orchestrator.AgentChoice{BackendID: "agy", Model: "gemini-x"}
 	if reason := pool.Availability(ctx, onConnection); !strings.Contains(reason, `pinned to gemini-x on connection "agy"; it does not fall back`) {
 		t.Errorf("Availability(connection agy) = %q, want it waiting, pinned", reason)
+	}
+}
+
+func TestPauseClockNamesTheLocalZone(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 7, 1, 17, 5, 0, 0, time.UTC)
+	if got, want := pauseClock(at, model.LoadLocation("America/Los_Angeles")), "10:05 AM PDT"; got != want {
+		t.Errorf("pauseClock in Los Angeles = %q, want %q", got, want)
+	}
+	if got, want := pauseClock(at, time.UTC), "5:05 PM UTC"; got != want {
+		t.Errorf("pauseClock in UTC = %q, want %q", got, want)
+	}
+
+	// The task's zone wins; one this build cannot load gives way to the
+	// deployment's, and no zone at all to UTC.
+	deployment := &model.Config{TimeZone: "Europe/Berlin"}
+	for _, tc := range []struct {
+		req  poolRequest
+		want string
+	}{
+		{poolRequest{timeZone: "America/Los_Angeles", settings: deployment}, "America/Los_Angeles"},
+		{poolRequest{timeZone: "Not/AZone", settings: deployment}, "Europe/Berlin"},
+		{poolRequest{settings: deployment}, "Europe/Berlin"},
+		{poolRequest{}, "UTC"},
+	} {
+		if got := tc.req.pauseClockLocation().String(); got != tc.want {
+			t.Errorf("pauseClockLocation(%q, deployment %v) = %q, want %q", tc.req.timeZone, tc.req.settings != nil, got, tc.want)
+		}
 	}
 }

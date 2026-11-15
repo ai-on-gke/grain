@@ -51,6 +51,13 @@ import {
 export const POLL_MS = 3000;
 export const CLOSED_PAGE = 50;
 
+// A batch action's outcome: how many tasks it failed on and which ones it
+// changed, so the caller reports and undoes exactly those.
+export interface BatchResult {
+  failed: number;
+  landed: readonly string[];
+}
+
 // An undo is the call that puts things back, described for the snackbar.
 export interface Undo {
   label: string;
@@ -420,13 +427,13 @@ export class TasksStore implements OnDestroy {
 
   // ---------- actions ----------
 
-  async approve(ids: readonly string[]): Promise<number> {
+  async approve(ids: readonly string[]): Promise<BatchResult> {
     return this.fanOut("approve", ids, (id) =>
       this.api.post("POST /api/tasks/{id}/approve", { id }),
     );
   }
 
-  async defer(ids: readonly string[]): Promise<number> {
+  async defer(ids: readonly string[]): Promise<BatchResult> {
     return this.fanOut("defer", ids, (id) =>
       this.api.post(
         "POST /api/tasks/{id}/defer",
@@ -436,13 +443,13 @@ export class TasksStore implements OnDestroy {
     );
   }
 
-  async undefer(ids: readonly string[]): Promise<number> {
+  async undefer(ids: readonly string[]): Promise<BatchResult> {
     return this.fanOut("undefer", ids, (id) =>
       this.api.post("POST /api/tasks/{id}/undefer", { id }),
     );
   }
 
-  async close(ids: readonly string[]): Promise<number> {
+  async close(ids: readonly string[]): Promise<BatchResult> {
     return this.fanOut("close", ids, (id) =>
       this.api.post(
         "POST /api/tasks/{id}/close",
@@ -452,13 +459,13 @@ export class TasksStore implements OnDestroy {
     );
   }
 
-  async reopen(ids: readonly string[]): Promise<number> {
+  async reopen(ids: readonly string[]): Promise<BatchResult> {
     return this.fanOut("reopen", ids, (id) =>
       this.api.post("POST /api/tasks/{id}/reopen", { id }),
     );
   }
 
-  async retry(ids: readonly string[]): Promise<number> {
+  async retry(ids: readonly string[]): Promise<BatchResult> {
     return this.fanOut("retry", ids, (id) =>
       this.api.post("POST /api/tasks/{id}/retry", { id }),
     );
@@ -469,21 +476,26 @@ export class TasksStore implements OnDestroy {
   async setPriority(
     ids: readonly string[],
     priority: number,
-  ): Promise<{ failed: number; undo: Undo }> {
+  ): Promise<BatchResult & { undo: Undo }> {
     const before = new Map(
       ids.map((id) => [id, priorityOf(this.find(id) ?? ({} as Task))]),
     );
-    const failed = await this.fanOut("priority", ids, (id) =>
+    const { failed, landed } = await this.fanOut("priority", ids, (id) =>
       this.api.patch("PATCH /api/tasks/{id}", { id }, { priority }),
     );
     return {
       failed,
+      landed,
       undo: {
         label: "Undo",
         run: async () => {
           await Promise.all(
-            [...before].map(([id, p]) =>
-              this.api.patch("PATCH /api/tasks/{id}", { id }, { priority: p }),
+            landed.map((id) =>
+              this.api.patch(
+                "PATCH /api/tasks/{id}",
+                { id },
+                { priority: before.get(id) },
+              ),
             ),
           );
           await this.refresh();
@@ -629,15 +641,20 @@ export class TasksStore implements OnDestroy {
   }
 
   // fanOut makes one call per task (there are no batch endpoints), reads
-  // the list once, and returns how many did not go through.
+  // the list once, and returns how many did not go through and which
+  // ones did. The landed ids belong to this call alone, so two batches in
+  // flight at once never report each other's tasks.
   private async fanOut(
     key: string,
     ids: readonly string[],
     call: (id: string) => Promise<unknown>,
-  ): Promise<number> {
+  ): Promise<BatchResult> {
     this.mark(key, true);
     this.actionError.set(null);
-    const results = await Promise.allSettled(ids.map(call));
+    const results = await Promise.allSettled(
+      ids.map((id) => Promise.resolve().then(() => call(id))),
+    );
+    const landed = ids.filter((_, i) => results[i].status === "fulfilled");
     const failures = results.filter(
       (r): r is PromiseRejectedResult => r.status === "rejected",
     );
@@ -645,14 +662,14 @@ export class TasksStore implements OnDestroy {
       this.actionError.set(
         ids.length === 1
           ? errorText(failures[0].reason)
-          : `${failures.length} of ${ids.length} did not go through: ${errorText(failures[0].reason)}`,
+          : `${failures.length} of ${ids.length} ${ids.length === 1 ? "task" : "tasks"} failed: ${errorText(failures[0].reason)}`,
       );
     }
     await this.refresh();
     void this.inbox.refresh();
     if (key === "close" || key === "reopen") void this.loadClosed();
     this.mark(key, false);
-    return failures.length;
+    return { failed: failures.length, landed };
   }
 
   private async run(key: string, fn: () => Promise<unknown>): Promise<boolean> {

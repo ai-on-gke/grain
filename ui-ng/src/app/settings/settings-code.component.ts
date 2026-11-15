@@ -745,7 +745,7 @@ interface StateRepoEntryDto {
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="flush-ci-cache-btn"
-                (click)="flushCiCache()"
+                (click)="confirmFlushCiCache()"
               >
                 Flush CI job cache
               </button>
@@ -1459,12 +1459,35 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected async checkReposPlan(): Promise<void> {
     try {
       const res = await this.api.post<{
-        targetReposStranded?: unknown[];
+        targetReposStranded?: Array<{
+          tasks?: unknown[];
+          schedules?: unknown[];
+          qualificationPlan?: boolean;
+        }>;
       }>("POST /api/repos/plan", undefined, { targetRepos: this.repos() });
-      const n = res?.targetReposStranded?.length ?? 0;
+      // A stranded entry lists only what it strands (the API omits empty
+      // lists), so a schedules-only repo strands no task at all.
+      const entries = res?.targetReposStranded ?? [];
+      const count = (n: number, one: string, many: string) =>
+        `${n} ${n === 1 ? one : many}`;
+      const tasks = entries.reduce((s, e) => s + (e?.tasks?.length ?? 0), 0);
+      const schedules = entries.reduce(
+        (s, e) => s + (e?.schedules?.length ?? 0),
+        0,
+      );
+      const plans = entries.filter((e) => e?.qualificationPlan).length;
+      const parts = [
+        tasks ? count(tasks, "open task", "open tasks") : "",
+        schedules ? count(schedules, "schedule", "schedules") : "",
+        plans ? count(plans, "qualification plan", "qualification plans") : "",
+      ].filter(Boolean);
+      const list =
+        parts.length > 1
+          ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
+          : parts[0];
       this.reposPlanNotice.set(
-        n > 0
-          ? `${n} open task(s) would be stranded by current repository list.`
+        list
+          ? `${list} would be stranded by current repository list.`
           : "All open tasks match active target repositories (0 stranded).",
       );
     } catch (err) {
@@ -1494,14 +1517,24 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       const plan = await this.api.post<{
         tasks?: string[];
         schedules?: string[];
+        targetReposStranded?: Array<{
+          tasks?: string[];
+          schedules?: string[];
+        }>;
       }>("POST /api/repos/plan", undefined, {
         targetRepos: this.repos().filter((r) => r !== repo),
       });
+      const fromStranded = (plan?.targetReposStranded ?? []).reduce(
+        (sum, entry) =>
+          sum + (entry?.tasks?.length ?? 0) + (entry?.schedules?.length ?? 0),
+        0,
+      );
       const stranded =
+        fromStranded ||
         (plan?.tasks?.length || 0) + (plan?.schedules?.length || 0);
       let msg = "";
       if (stranded > 0)
-        msg += `Warning: This will strand ${stranded} tasks/schedules.\n`;
+        msg += `Warning: This will strand ${stranded} ${stranded === 1 ? "task or schedule" : "tasks or schedules"}.\n`;
       msg += `Warning: Per-repo settings (setup command, prompt, grants) will be deleted.`;
       this.reposPlanNotice.set(msg);
       // Update the request with the new message
@@ -1737,6 +1770,19 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     } catch (err) {
       this.state.error.set(errText(err));
     }
+  }
+
+  // Flushing drops every repository's cached CI job state, so it asks
+  // first, as Caches' two flushes do.
+  protected confirmFlushCiCache(): void {
+    this.confirmReq.set({
+      title: "Flush CI job cache?",
+      message:
+        "Deletes the cached CI job state of every repository on this controller. The next CI run of each starts cold.",
+      accept: "Flush cache",
+      destructive: true,
+      run: () => this.flushCiCache(),
+    });
   }
 
   protected async flushCiCache(): Promise<void> {
