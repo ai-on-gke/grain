@@ -537,14 +537,16 @@ func (p *Policy) checkApproval(task model.Task, requester Requester) error {
 }
 
 // retiredGrants is the canonical grant or grants a retired capability name
-// became (model.CanonicalLegacyGrants), compared without regard to case, and
+// became (model.RetiredGrantsBecame, the migration-only copy: a policy
+// file written before a retirement still binds what the name became, as
+// the capability catalogue does), compared without regard to case, and
 // nil for any other name.
 func retiredGrants(name string) []string {
 	lower := strings.ToLower(strings.TrimSpace(name))
 	if lower == "" || model.IsCapabilityRef(lower) {
 		return nil
 	}
-	tos := model.CanonicalLegacyGrants(lower)
+	tos := model.RetiredGrantsBecame(lower)
 	if len(tos) == 0 || (len(tos) == 1 && strings.TrimSpace(tos[0]) == lower) {
 		return nil
 	}
@@ -714,7 +716,7 @@ func deniesCapabilityExpanded(patterns []string, capability string, expand bool)
 		if !matchesCapability(patterns, old) {
 			continue
 		}
-		for _, to := range model.CanonicalLegacyGrants(old) {
+		for _, to := range model.RetiredGrantsBecame(old) {
 			for _, v := range variants {
 				if becameCapability(to, v) {
 					return true

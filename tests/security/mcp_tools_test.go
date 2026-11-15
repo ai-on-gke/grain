@@ -34,7 +34,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/capability/grainci"
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/mcp"
-	"github.com/ai-on-gke/grain/pkg/model"
 )
 
 // A sandbox's tools are its authority: whatever its MCP server publishes,
@@ -382,9 +381,6 @@ func checkGrantPartition(t *testing.T, who string, bare map[string]bool, allowed
 				continue
 			}
 			for _, name := range names {
-				if strings.HasPrefix(name, "api_") && model.APIAliasPreset(grant) != "" && model.APIAliasPreset(other) != "" {
-					continue
-				}
 				if slices.Contains(otherNames, name) {
 					t.Errorf("%q is offered both to a run holding %s and to one holding %s", name, grant, other)
 				}
@@ -584,7 +580,7 @@ func TestControlRoster(t *testing.T) {
 	want := []string{"run_command", "read_file", "write_file", "edit_file",
 		"ask_question", "request_secret", "request_access", "comment_on_issue", "nothing_needed",
 		"propose_task", "wait_for_task", "resume_later", "recreate_sandbox"}
-	got := control(false, "grain-ci", "self-debug", "memory")
+	got := control(false, grainci.Grant, "api:self-debug", "https://grain.dev/capabilities/grain#source={}", "api:memory")
 	for _, name := range want {
 		if !got[name] {
 			t.Errorf("the control roster has no %q; got %v", name, got)
@@ -609,10 +605,10 @@ func TestControlRoster(t *testing.T) {
 	if host := controlWith("", false); host["wait_for_checks"] || host["pull_request_status"] || host["base_branch_status"] {
 		t.Errorf("a run with no GitHub reader is offered CI tools that can only error; got %v", host)
 	}
-	if !control(true, "grain-ci")["chat"] {
+	if !control(true, grainci.Grant)["chat"] {
 		t.Errorf("an interactive run's control roster has no chat")
 	}
-	if up := control(false, "grain-ci", "api:self-upgrade"); up["api_start_upgrade"] || up["api_cancel_scheduled_upgrade"] || up["api_get_upgrade_status"] {
+	if up := control(false, grainci.Grant, "api:self-upgrade"); up["api_start_upgrade"] || up["api_cancel_scheduled_upgrade"] || up["api_get_upgrade_status"] {
 		t.Errorf("grain-sandbox serves no api_* tools (api:* grants are served on grain-controller /api/mcp); got %v", up)
 	}
 }

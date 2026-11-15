@@ -146,9 +146,10 @@ func joinWarnings(ws ...string) string {
 }
 
 // sandboxImageLabels reads a custom image's OCI labels through
-// Config.InspectImageLabels, remembering each answer for a few minutes:
-// the Settings pane is read far more often than an image changes, and a
-// registry round trip per read would make it slow for nothing.
+// Config.InspectImageLabels, remembering each answer for a few minutes and
+// coalescing concurrent lookups for the same image: the Settings pane is read
+// far more often than an image changes, and a registry round trip per read
+// would make it slow for nothing.
 func (c *Client) sandboxImageLabels(ctx context.Context, image string) (map[string]string, error) {
 	if c == nil || c.Config.InspectImageLabels == nil {
 		return nil, errors.New("this grain has no way to inspect sandbox images configured")
@@ -160,15 +161,56 @@ func (c *Client) sandboxImageLabels(ctx context.Context, image string) (map[stri
 			return entry.labels, entry.err
 		}
 	}
-	labels, err := c.Config.InspectImageLabels(ctx, image)
-	ttl := imageLabelTTL
-	if err != nil {
-		// A failure is retried sooner: the usual one is an image not yet
-		// pushed, or not yet pulled to this host, and the operator who
-		// just fixed that is looking at this pane waiting for it.
-		ttl = imageLabelTTL / 5
+	imageLabelFlightsMu.Lock()
+	if cached, ok := imageLabelCache.Load(image); ok {
+		entry := cached.(cachedImageLabels)
+		if time.Now().Before(entry.expiresAt) {
+			imageLabelFlightsMu.Unlock()
+			return entry.labels, entry.err
+		}
 	}
-	imageLabelCache.Store(image, cachedImageLabels{labels: labels, err: err, expiresAt: now.Add(ttl)})
+	if flight, ok := imageLabelFlights[image]; ok {
+		imageLabelFlightsMu.Unlock()
+		select {
+		case <-flight.done:
+			return flight.labels, flight.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		imageLabelFlightsMu.Unlock()
+		return nil, err
+	}
+	flight := &imageLabelFlight{done: make(chan struct{})}
+	imageLabelFlights[image] = flight
+	imageLabelFlightsMu.Unlock()
+
+	var (
+		labels map[string]string
+		err    = errors.New("image label check aborted")
+	)
+	defer func() {
+		if !errors.Is(err, context.Canceled) {
+			ttl := imageLabelTTL
+			if err != nil {
+				// A failure is retried sooner: the usual one is an image not yet
+				// pushed, or not yet pulled to this host, and the operator who
+				// just fixed that is looking at this pane waiting for it.
+				ttl = imageLabelTTL / 5
+			}
+			imageLabelCache.Store(image, cachedImageLabels{labels: labels, err: err, expiresAt: time.Now().Add(ttl)})
+		}
+		imageLabelFlightsMu.Lock()
+		flight.labels, flight.err = labels, err
+		close(flight.done)
+		delete(imageLabelFlights, image)
+		imageLabelFlightsMu.Unlock()
+	}()
+
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sandboxImageProbeTimeout)
+	defer cancel()
+	labels, err = c.Config.InspectImageLabels(probeCtx, image)
 	return labels, err
 }
 
@@ -178,9 +220,22 @@ type cachedImageLabels struct {
 	expiresAt time.Time
 }
 
-var imageLabelCache sync.Map // map[string]cachedImageLabels
+type imageLabelFlight struct {
+	done   chan struct{}
+	labels map[string]string
+	err    error
+}
 
-const imageLabelTTL = 5 * time.Minute
+var (
+	imageLabelCache     sync.Map // map[string]cachedImageLabels
+	imageLabelFlightsMu sync.Mutex
+	imageLabelFlights   = map[string]*imageLabelFlight{}
+)
+
+const (
+	imageLabelTTL            = 5 * time.Minute
+	sandboxImageProbeTimeout = 2 * time.Second
+)
 
 // FetchImageLabels reads an image's OCI labels from its registry (Docker
 // Registry HTTP API v2): the manifest -- the linux/amd64 one of an index
@@ -202,7 +257,10 @@ func FetchImageLabels(ctx context.Context, imageRef string) (map[string]string, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	r := &registryReader{client: &http.Client{Timeout: 10 * time.Second, Transport: registryTransport}, base: "https://" + host + "/v2/" + repo, token: registryauth.TokenFor(ctx, host)}
+	tokCtx, tokCancel := context.WithTimeout(ctx, registryTokenTimeout)
+	googleToken := registryauth.TokenFor(tokCtx, host)
+	tokCancel()
+	r := &registryReader{client: &http.Client{Timeout: 10 * time.Second, Transport: registryTransport}, base: "https://" + host + "/v2/" + repo, token: googleToken}
 	if isLoopbackRegistryHost(host) {
 		r.base = "http://" + host + "/v2/" + repo
 	}

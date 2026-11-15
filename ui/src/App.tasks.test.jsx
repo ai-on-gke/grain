@@ -924,7 +924,7 @@ describe("App", () => {
     expect(api).toHaveBeenCalledWith("/api/tasks/2", patch);
 
     expect(
-      await screen.findByText(`1 of 2 task(s) failed: ${refusal}`),
+      await screen.findByText(`1 of 2 tasks failed: ${refusal}`),
     ).toBeInTheDocument();
 
     // Half the edit happened, and the store behind the list says which

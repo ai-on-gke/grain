@@ -1,0 +1,24 @@
+
+== 2a. daemon A takes the lease and starts writing
+2026/11/13 03:49:07 grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+fence target task: 1
+64992|grain-daemon-writer-lock|idle
+
+== 2b. SIGSTOP A for 20s (keep-alive 5s, re-acquire window 15s)
+A stopped at 2026-11-13 03:49:14.008075+00 (database clock)
+A sessions still open: 6, advisory locks held: 2
+
+== 2c. daemon B starts while A is frozen
+B did not acquire the lease within 30s; B alive=no
+2026/11/13 03:49:34 grain daemon: PostgreSQL single-writer advisory lock (schema=public) is held by pid=64992 app="grain-daemon-writer-lock" addr=127.0.0.1/32 state=idle; waiting up to 30s for drain
+2026/11/13 03:50:04 grain daemon: acquiring PostgreSQL single-writer lock: postgres: another grain daemon holds the single-writer advisory lock (schema=public, key=3409768085759000264, held by pid=64992 app="grain-daemon-writer-lock" addr=127.0.0.1/32 state=idle)
+
+== 2d. resume A
+A resumed at 2026-11-13 03:50:04.236207+00
+A still running 40s after resuming
+2026/11/13 03:49:07 grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+
+== 2e. what reached the database
+A writer status codes:      15 000     193 200 
+A rows: 193, last at 2026-11-13 03:50:44.174054+00
+A writes acknowledged 200: 193; A rows in the database: 193

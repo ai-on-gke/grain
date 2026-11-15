@@ -27,6 +27,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,6 +64,16 @@ type Server struct {
 	// AgentsOnly says, in Hello, that this host agent runs agent CLIs
 	// only (grain-agentd).
 	AgentsOnly bool
+	// SelfUpdate says, in Hello, that this host agent's owner can update
+	// it from the controller's signed release (FeatureSelfUpdate), with
+	// the allowlist's update: policy. Never set for a root-installed
+	// `grain host`: without it Hello omits the feature.
+	SelfUpdate bool
+	// OnControllerHello, when set, is called each time the controller
+	// asks for this hostd's hello over the session Remote dialed: the
+	// moment a new build knows it has reached the controller (agentd's
+	// update watchdog).
+	OnControllerHello func()
 	// CurrentLink is the installer's current link hostd was started
 	// through (CurrentLinkFor), for Hello's Running and Current; "" for
 	// none.
@@ -177,8 +189,16 @@ const (
 	killNone killKind = iota
 	killCanceled
 	killDeadline
+	// killDraining is a drain reaching drain_cap.
 	killDraining
+	// killStopping is hostd itself stopping: SIGTERM, systemd's stop or
+	// restart, or a handover whose exec failed.
+	killStopping
 )
+
+// stoppingError is Exit.Error for a process killStopping ended, so its
+// message says hostd stopped rather than drained for an upgrade.
+const stoppingError = "stopped because the host agent stopped or restarted"
 
 // proc is one process hostd started.
 type proc struct {
@@ -282,10 +302,11 @@ func (s *Server) Serve(ctx context.Context) error {
 	// hostd stopping -- systemd's stop or restart, SIGTERM, a drain's end
 	// -- kills what still runs for the host's reasons, not the run's: its
 	// exit says Draining, as loadSpools says of a run a crash left without
-	// one, so the daemon re-queues the run rather than failing it.
+	// one, so the daemon re-queues the run rather than failing it, and its
+	// Error says hostd stopped rather than drained (stoppingError).
 	stopOnCancel := context.AfterFunc(ctx, func() {
 		if !s.handedOverNow() {
-			s.cancelRunning(killDraining)
+			s.cancelRunning(killStopping)
 		}
 	})
 	defer stopOnCancel()
@@ -354,14 +375,14 @@ func (s *Server) Serve(ctx context.Context) error {
 			if err := s.Reexec(); err != nil {
 				s.logf("hostd: exec onto the new build failed (%v); stopping so systemd restarts it", err)
 				s.rewatchHandedOver()
-				s.cancelRunning(killDraining)
+				s.cancelRunning(killStopping)
 				s.waitRunningDone()
 				return err
 			}
 		}
 		return nil
 	}
-	s.cancelRunning(killDraining)
+	s.cancelRunning(killStopping)
 	s.waitRunningDone()
 	return nil
 }
@@ -903,8 +924,17 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		describeCopies(ctx, &h, s.CurrentLink)
 		h.Logins = a.ambientLogins()
 		h.AgentsOnly = s.AgentsOnly
+		h.Platform = runtime.GOOS + "/" + runtime.GOARCH
+		if s.SelfUpdate {
+			h.UpdateMode, h.UpdatePin = a.Update.EffectiveMode(), a.Update.Pin
+		} else {
+			h.Features = slices.DeleteFunc(h.Features, func(f Feature) bool { return f == FeatureSelfUpdate })
+		}
 		if sessionMux(ctx) != nil {
 			s.describeRemote(&h, a)
+			if s.OnControllerHello != nil {
+				s.OnControllerHello()
+			}
 		}
 		if req.Hello != nil {
 			if err := Compatible(h, *req.Hello); err != nil {
@@ -1208,7 +1238,7 @@ func (s *Server) run(ctx context.Context, conn net.Conn, req *Request, spec *Spe
 	// the run's (Serve's stopOnCancel).
 	if killed == killNone && ctx.Err() != nil && !errors.Is(runCtx.Err(), context.DeadlineExceeded) &&
 		cmd.ProcessState != nil && !cmd.ProcessState.Exited() {
-		killed = killDraining
+		killed = killStopping
 	}
 	exit := s.reap(cmd, err, runCtx, req, killed)
 	exitBytes, _ := json.Marshal(exit)
@@ -1254,13 +1284,15 @@ func (s *Server) reap(cmd *exec.Cmd, err error, runCtx context.Context, req *Req
 		}
 	}
 	switch {
-	case killed == killDraining:
+	case killed == killDraining || killed == killStopping:
 		exit.Draining = true
 	case killed == killDeadline || (killed == killNone && errors.Is(runCtx.Err(), context.DeadlineExceeded)):
 		exit.Deadline = true
 	}
 	if err != nil && cmd.ProcessState == nil {
 		exit.Error = err.Error()
+	} else if killed == killStopping {
+		exit.Error = stoppingError
 	}
 	exit.FinishedAt = time.Now().UTC()
 	// Whatever the CLI left in its group goes with it.

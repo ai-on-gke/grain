@@ -229,6 +229,11 @@ const (
 	// FamilyMergeStalled is a merge-queue entry handed to a person past
 	// its patience, "<task>".
 	FamilyMergeStalled = "pipeline.merge-stalled"
+	// FamilyMergeNeedsPerson is a pull request the merge queue has given
+	// up driving (merge_failed: repairs spent, checks no branch reaches,
+	// CI that never reported), "<task>" -- raised whether or not the
+	// change has been approved, so the person it was handed to hears it.
+	FamilyMergeNeedsPerson = "pipeline.merge-needs-person"
 	// FamilyMergeBatch is a merge batch that failed to answer or ran
 	// long, "<repo>@<branch>" (one batch per base branch at a time).
 	FamilyMergeBatch = "pipeline.batch"

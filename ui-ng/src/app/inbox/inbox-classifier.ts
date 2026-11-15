@@ -271,7 +271,7 @@ export function awaitsHumanSubmit(t: Task): boolean {
     t.humanApprovedBy &&
     !t.reviewQuestions &&
     !(t.reviewFindings && t.reviewFindings.length > 0) &&
-    !t.humanReviewHold?.some((r) => r.category === "security-findings")
+    !t.humanReviewHold?.some((r) => r.source === "security-findings")
   ) {
     return false;
   }
@@ -294,12 +294,28 @@ export function mergeQueueStalled(t: Task): boolean {
   return t.state !== "closed" && !!t.mergeQueueState && !!t.mergeQueueStalledAt;
 }
 
+// mergeBlocked is a pull request the merge queue has stopped driving, or
+// one a person's review holds. awaiting_submit counts as well as
+// completed: a change that is not auto-merge reads awaiting_submit even
+// after the queue spent its repairs on it and gave up, and once somebody
+// has approved it no Submit item lists it either -- task 4525 sat out of
+// the Inbox for seventeen hours that way.
 export function mergeBlocked(t: Task): boolean {
   return (
-    t.state === "completed" &&
+    (t.state === "completed" || t.state === "awaiting_submit") &&
     !!t.pullRequest &&
     (!!t.mergeQueueBlockedAt || !!t.humanReviewHold?.length)
   );
+}
+
+// approvedButGated is an approved awaiting_submit change that a merge
+// gate other than approval still blocks: approval has been given, so
+// awaitsHumanSubmit no longer lists it, but it is not going to merge
+// until somebody deals with the red or stuck gate.
+export function approvedButGated(t: Task, listOnly = false): boolean {
+  if (t.state !== "awaiting_submit" || !t.humanApprovedBy) return false;
+  const s = gateSummary(t, listOnly);
+  return s.failing.length > 0 || s.needed.length > 0;
 }
 
 const INBOX_STATES = [
@@ -494,6 +510,58 @@ function taskAction(
   };
 }
 
+// stallControl is the button a stuck task's sub-case names (the
+// orchestrator's liveness reason's control: Run now, Cancel, Undefer or
+// Retry merge), as the classic Inbox's reasonControl offers it. The
+// merge queue's own sub-case stands in when the task's names none. A
+// sub-case naming no control a row can press offers none.
+function stallControl(t: Task): InboxAction | null {
+  for (const r of [t.reason, t.mergeQueueReason]) {
+    switch (r?.control) {
+      case "Run now":
+        return taskAction(
+          t,
+          "run-now",
+          "Run now",
+          "POST /api/tasks/{id}/run-now",
+          "primary",
+        );
+      case "Cancel":
+        // "Cancel task", not the sub-case's bare "Cancel": the confirm
+        // dialog's own dismiss button is "Cancel", and two buttons of one
+        // name side by side leave a person guessing which one stops the run.
+        return taskAction(
+          t,
+          "cancel",
+          "Cancel task",
+          "POST /api/tasks/{id}/close",
+          "tonal",
+          {
+            confirm: `Cancel #${t.id}? The run in flight is stopped and the task is closed; it can be reopened later.`,
+            destructive: true,
+          },
+        );
+      case "Undefer":
+        return taskAction(
+          t,
+          "undefer",
+          "Undefer",
+          "POST /api/tasks/{id}/undefer",
+          "primary",
+        );
+      case "Retry merge":
+        return taskAction(
+          t,
+          "retry-merge",
+          "Retry merge",
+          "POST /api/tasks/{id}/retry-merge",
+          "primary",
+        );
+    }
+  }
+  return null;
+}
+
 function taskEntry(t: Task, kind: EntryKind, groupId: string): InboxEntry {
   return {
     key: `task:${t.id}:${kind}`,
@@ -598,6 +666,10 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
   }
   if (awaitsHumanSubmit(t)) {
     const review = !!t.reviewQuestions;
+    // A changelist's Submit submits it through the change system there
+    // and then, not a recorded approval, so it is pressed one row at a
+    // time and never joins "Submit all" -- as the classic Inbox keeps it.
+    const cl = !!t.clSubmit;
     const blocked = submitBlock(t, listOnly);
     const e = taskEntry(
       t,
@@ -609,10 +681,15 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     e.pillTone = review ? "blast" : red ? "error" : "healthy";
     e.summary = review
       ? "The review left questions only you can settle."
-      : blocked || "Approve the pull request; it merges once its gates pass.";
+      : blocked ||
+        (cl
+          ? "Submit this CL now: its review, presubmit and grain's reviews have all cleared."
+          : "Approve the pull request; it merges once its gates pass.");
     e.rationale = review
       ? "A fresh review clears the gate once your decision is carried out."
-      : "This repository waits for a person's approval before merging.";
+      : cl
+        ? "Submitting lands the change at once; it is not a recorded approval."
+        : "This repository waits for a person's approval before merging.";
     if (!t.humanApprovedBy) {
       e.actions.push(
         taskAction(
@@ -622,7 +699,7 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
           "POST /api/tasks/{id}/submit",
           review ? "tonal" : "primary",
           {
-            bulk: !review,
+            bulk: !review && !cl,
             ...(blocked ? { blocked } : {}),
           },
         ),
@@ -647,6 +724,17 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
         ),
       );
     }
+    return e;
+  }
+  if (approvedButGated(t, listOnly)) {
+    const s = gateSummary(t, listOnly);
+    const names = s.failing.length ? s.failing : s.needed;
+    const e = taskEntry(t, "merge-blocked", "merge-blocked");
+    e.pillLabel = s.failing.length ? "Gate failing" : "Gate blocked";
+    e.pillTone = "error";
+    e.summary = `Approved, but ${names.join(", ")} ${names.length === 1 ? "is" : "are"} ${s.failing.length ? "failing" : "still needed"}.`;
+    e.rationale =
+      "Approval has been given; this merges once the gate passes. Fix it, retry it, or close a stale review holding it.";
     return e;
   }
   if (awaitsGitHubApproval(t)) {
@@ -688,6 +776,8 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     e.pillTone = "blast";
     e.summary = t.stall;
     e.rationale = "Grain reads this as stuck rather than busy.";
+    const control = stallControl(t);
+    if (control) e.actions.push(control);
     return e;
   }
   if (t.state === "proposed") {
@@ -731,12 +821,22 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
 
 export function classifyNotification(n: Notification): InboxEntry {
   const release = pendingReleaseOf(n);
+  const taskId =
+    n.taskId || n.investigationTaskId || n.clearsWhen?.task || null;
+  const title = n.title || n.subject || "Notification";
+  const ref = release
+    ? release.version
+    : n.title && n.subject && n.subject !== n.title
+      ? n.subject
+      : taskId
+        ? `#${taskId}`
+        : n.subject || n.family || "alert";
   const base: InboxEntry = {
     key: `notification:${n.id}`,
     kind: release ? "release" : "notification",
     groupId: release ? "release" : "notification",
-    ref: release ? release.version : n.subject,
-    title: release ? `${release.version} is ready to promote` : n.subject,
+    ref,
+    title: release ? `${release.version} is ready to promote` : title,
     repo: n.repo || release?.repo || "",
     owner: "",
     summary: release ? pendingReleaseSentence(n) : notificationSentence(n),
@@ -748,14 +848,12 @@ export function classifyNotification(n: Notification): InboxEntry {
           ? "Warning"
           : "Alert",
     pillTone: release ? "blast" : n.severity === "critical" ? "error" : "blast",
-    at: n.raisedAt || null,
+    at: n.lastRaisedAt || n.raisedAt || null,
     rationale: release
       ? "Promoting tags the release, moves latest onto it and publishes its images."
       : "An alert stays open until somebody acknowledges or clears it.",
-    taskId: n.investigationTaskId || null,
-    taskLink: n.investigationTaskId
-      ? `/task/${encodeURIComponent(n.investigationTaskId)}`
-      : null,
+    taskId,
+    taskLink: taskId ? `/task/${encodeURIComponent(taskId)}` : null,
     externalLink: null,
     notification: n,
     release: release ?? undefined,

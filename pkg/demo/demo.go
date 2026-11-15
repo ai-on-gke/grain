@@ -751,7 +751,7 @@ func Run(opts Options) error {
 		return fmt.Errorf("grain demo: listening on %s: %v", opts.Addr, err)
 	}
 	// ln.Addr() rather than opts.Addr, so a demo told to listen on port 0
-	// says which port the kernel actually gave it. ui/e2e/fixtures.js
+	// says which port the kernel actually gave it. ui-shared/e2e/demo.js
 	// does exactly that -- it starts one of these per Playwright worker
 	// on 127.0.0.1:0 and reads the port back off this line, having no
 	// other way to learn it -- so the URL here is a small interface as
@@ -1835,6 +1835,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	demoDrafts.leave(clTask.ID, "cl/612400001", 2, "the run ended while its reviewer was still commenting")
 
 	if err := seedDemoDurableTask(ctx, store, create, ago); err != nil {
+		return err
+	}
+	if err := seedDemoRolledOverTask(ctx, store, create, ago); err != nil {
 		return err
 	}
 	return nil

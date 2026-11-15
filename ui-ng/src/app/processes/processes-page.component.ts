@@ -43,6 +43,10 @@ import {
   type ConfirmRequest,
 } from "../shared/confirm-dialog.component";
 import { DialogTrapDirective } from "../shared/dialog-trap.directive";
+import {
+  type PillOption,
+  PillSelectComponent,
+} from "../shared/pill-select.component";
 import { SplitController } from "../shared/split-controller";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { TipDirective } from "../shared/tip.directive";
@@ -65,6 +69,8 @@ import {
   describeSuiteMode,
   formatCadence,
   isEventTrigger,
+  skipFolded,
+  suppressionReasonLabel,
   scheduleStatusBadge,
   suiteRunBadge,
   templateSourceBadge,
@@ -128,10 +134,12 @@ type SuitesPaneView = "suites" | "runs";
     ConfirmDialogComponent,
     CompositionViewComponent,
     DialogTrapDirective,
+    PillSelectComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "../inbox/inbox-queue.css",
     "../ci/ci-list.css",
     "./processes-list.css",
@@ -548,9 +556,11 @@ type SuitesPaneView = "suites" | "runs";
                                 sr.id
                               }}</span
                             >
-                            <span class="ci-provider-tag tabular"
-                              >Pass {{ sr.pass }}</span
-                            >
+                            @if (sr.pass > 0) {
+                              <span class="ci-provider-tag tabular"
+                                >Pass {{ sr.pass }}</span
+                              >
+                            }
                           </div>
                           <div class="proc-row-sub">
                             <span class="tabular"
@@ -559,7 +569,7 @@ type SuitesPaneView = "suites" | "runs";
                             >
                             <span class="tabular"
                               >·
-                              {{ sr.taskCount ?? sr.tasks.length }}
+                              {{ sr.taskCount ?? sr.tasks?.length ?? 0 }}
                               tasks</span
                             >
                           </div>
@@ -779,7 +789,15 @@ type SuitesPaneView = "suites" | "runs";
                     <span
                       >Overlap: <strong>{{ s.overlap || "skip" }}</strong></span
                     >
-                    @if (s.nextRunAt) {
+                    @if (s.overlapGroup) {
+                      <span data-testid="sched-overlap-group"
+                        >Overlap group:
+                        <strong>{{ s.overlapGroup }}</strong></span
+                      >
+                    }
+                    <!-- An event trigger's nextRunAt is a placeholder a year
+                         out (model.Schedule), not a time it will fire. -->
+                    @if (s.nextRunAt && !isTrigger(s)) {
                       <span class="tabular">Next: {{ s.nextRunAt }}</span>
                     }
                     @if (s.lastRunAt) {
@@ -796,7 +814,7 @@ type SuitesPaneView = "suites" | "runs";
                   }
                   @if (s.suppressed; as sup) {
                     <div class="banner banner-error" style="margin: 6px 0 0">
-                      Suppressed ({{ sup.reason }}):
+                      Suppressed — {{ suppressionLabel(sup.reason) }}:
                       {{ sup.detail || "Previous firing is still open." }}
                       @if (sup.taskId) {
                         —
@@ -856,13 +874,35 @@ type SuitesPaneView = "suites" | "runs";
                     </p>
                   }
                   @for (sk of (s.skips ?? []).slice(0, 5); track sk.at) {
-                    <div class="proc-kv-item">
+                    <div
+                      class="proc-kv-item proc-skip-row"
+                      data-testid="sched-skip"
+                    >
                       <span class="muted">{{ sk.summary }}</span>
-                      @if (sk.taskId) {
-                        <a [routerLink]="['/task', sk.taskId]"
-                          >#{{ sk.taskId }}</a
-                        >
-                      }
+                      <span class="proc-skip-refs">
+                        @if (sk.taskId) {
+                          <a [routerLink]="['/task', sk.taskId]"
+                            >#{{ sk.taskId }}</a
+                          >
+                        }
+                        @if (sk.outcome === "fired") {
+                          <span data-testid="sched-skip-outcome">
+                            → fired
+                            @if (sk.firedTaskId) {
+                              <a [routerLink]="['/task', sk.firedTaskId]"
+                                >#{{ sk.firedTaskId }}</a
+                              >
+                            }
+                            @if (skipFolded(sk); as folded) {
+                              · {{ folded }}
+                            }
+                          </span>
+                        } @else if (sk.outcome === "dropped") {
+                          <span data-testid="sched-skip-outcome"
+                            >→ dropped</span
+                          >
+                        }
+                      </span>
                     </div>
                   }
                 </div>
@@ -1083,9 +1123,22 @@ type SuitesPaneView = "suites" | "runs";
                       {{ sr.base || "default" }}</span
                     >
                     <span
-                      >{{ suiteModeOf(sr.mode, sr.count, sr.maxPasses) }} ·
-                      currently on pass {{ sr.pass }}</span
-                    >
+                      >{{ suiteModeOf(sr.mode, sr.count, sr.maxPasses) }}
+                      @if (sr.pass > 0) {
+                        ·
+                        {{
+                          sr.status === "active" ? "currently on" : "ended on"
+                        }}
+                        pass {{ sr.pass }}
+                      } @else {
+                        ·
+                        {{
+                          sr.status === "active"
+                            ? "no pass filed yet"
+                            : "ended without filing a pass"
+                        }}
+                      }
+                    </span>
                     @if (sr.scheduleId) {
                       <span>Started by schedule {{ sr.scheduleId }}</span>
                     }
@@ -1683,16 +1736,31 @@ type SuitesPaneView = "suites" | "runs";
           }
 
           <div class="proc-field-grid">
-            <label class="field">
+            <div class="field">
               <span>Repository (owner/name)</span>
+              @if (store.knownRepos().length > 0) {
+                <g-pill-select
+                  [options]="schedRepoOptions()"
+                  [value]="
+                    store.knownRepos().includes(sDraftRepo())
+                      ? sDraftRepo()
+                      : ''
+                  "
+                  ariaLabel="Schedule repository"
+                  align="left"
+                  testid="sched-repo-select"
+                  (valueChange)="$event && sDraftRepo.set($event)"
+                />
+              }
               <input
                 type="text"
+                aria-label="Repository (owner/name)"
                 data-testid="sched-repo-input"
                 placeholder="acme/widgets"
                 [value]="sDraftRepo()"
                 (input)="sDraftRepo.set($any($event.target).value)"
               />
-            </label>
+            </div>
             <label class="field">
               <span>Base branch</span>
               <input
@@ -2636,6 +2704,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly sDraftTemplateId = signal("");
   protected readonly sDraftSuiteId = signal("");
   protected readonly sDraftRepo = signal("");
+  protected readonly schedRepoOptions = computed<PillOption[]>(() => [
+    { value: "", label: "Choose configured repository…" },
+    ...this.store.knownRepos().map((r) => ({ value: r, label: r })),
+  ]);
   protected readonly sDraftBase = signal("main");
   protected readonly sDraftKind = signal("daily");
   protected readonly sDraftEveryMin = signal(15);
@@ -2965,6 +3037,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected tmplBadge = templateSourceBadge;
   protected cadenceOf = formatCadence;
   protected isTrigger = isEventTrigger;
+  protected suppressionLabel = suppressionReasonLabel;
+  protected skipFolded = skipFolded;
   protected suiteModeOf = describeSuiteMode;
   protected runBadgeOf = suiteRunBadge;
 

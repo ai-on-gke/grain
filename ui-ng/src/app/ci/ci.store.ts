@@ -18,6 +18,7 @@ import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import { AccessService } from "../services/access.service";
 import { errorText } from "../sessions/session-helpers";
+import { configuredInstanceRepos } from "../shared/instance-repos";
 import {
   type ActionsCacheFlush,
   type CICacheResponse,
@@ -56,6 +57,7 @@ export class CIStore {
   readonly stored = signal(0);
   readonly actionsNote = signal("");
   readonly targetRepos = signal<string[]>([]);
+  readonly hasTargetAllowlist = signal(false);
   readonly loadError = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
 
@@ -93,6 +95,7 @@ export class CIStore {
   private eventSub: Subscription | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private activeCount = 0;
+  private detailFailedId: string | null = null;
 
   start(): void {
     this.actionError.set(null);
@@ -144,10 +147,9 @@ export class CIStore {
       if (this.activeCount === 0) return;
       if (cfg) {
         this.access.setConfig(cfg);
-        const repos = Array.isArray(cfg["targetRepos"])
-          ? (cfg["targetRepos"] as string[])
-          : [];
-        this.targetRepos.set(repos);
+        const scoped = configuredInstanceRepos(cfg);
+        this.targetRepos.set(scoped.repos);
+        this.hasTargetAllowlist.set(scoped.hasTargetAllowlist);
       }
     } catch {
       // Non-fatal: page still renders CI feed.
@@ -271,8 +273,18 @@ export class CIStore {
 
       const sel = this.selectedId();
       if (sel) {
+        if (
+          this.detailFailedId === sel &&
+          this.runs().some((r) => r.id === sel)
+        ) {
+          this.detailFailedId = null;
+        }
         const cur = this.detail();
-        if (forceDetail || !cur || cur.id !== sel || isRunActive(cur)) {
+        if (
+          forceDetail ||
+          ((!cur || cur.id !== sel) && this.detailFailedId !== sel) ||
+          (cur && cur.id === sel && isRunActive(cur))
+        ) {
           await this.loadRunDetail(sel, false);
         }
       }
@@ -284,7 +296,15 @@ export class CIStore {
   }
 
   async selectRun(id: string | null): Promise<void> {
-    if (this.selectedId() === id && this.detail()?.id === id) return;
+    if (
+      this.selectedId() === id &&
+      (this.detail()?.id === id || (id !== null && this.detailFailedId === id))
+    ) {
+      return;
+    }
+    if (this.selectedId() !== id) {
+      this.detailFailedId = null;
+    }
     this.selectedId.set(id);
     this.jobLogs.set({});
     if (!id) {
@@ -311,6 +331,7 @@ export class CIStore {
       ]);
       if (this.activeCount === 0) return;
       if (this.selectedId() === id) {
+        this.detailFailedId = null;
         this.detail.set(run);
         if (artRes) {
           this.artifactsAvailable.set(!!artRes.available);
@@ -326,6 +347,7 @@ export class CIStore {
     } catch (err) {
       if (this.activeCount === 0) return;
       if (this.selectedId() === id) {
+        this.detailFailedId = id;
         this.actionError.set(errorText(err));
       }
     } finally {

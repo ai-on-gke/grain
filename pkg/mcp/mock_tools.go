@@ -1248,6 +1248,7 @@ func proposeTaskTool(sink *MockSink, proposeRepos []string, parent string, filer
 					"a human whatever your permission covers."
 			}
 			recorded += notBeforeOutcome(task.NotBefore)
+			recorded += ciOnlyProposalGrantsOutcome(task.Capabilities)
 			if task.Supersedes != "" {
 				recorded += fmt.Sprintf(" Task %s is closed as superseded by it at the same "+
 					"moment, if it is still a task that may be -- one already dispatched, or in "+
@@ -1528,4 +1529,37 @@ func networkAccessEnum() []any {
 		out[i] = string(n)
 	}
 	return out
+}
+
+// ciOnlyProposalGrantsOutcome is what a proposal recorded for filing at run
+// end is told, at the call, about each CI capability it names
+// (model.TaskGrantCIOnlyRefusal): orchestrator.relayProposedTasks files it
+// with a repository read as reads instead, or without the grant, once
+// this run has ended -- too late for the run to hear about it any other
+// way. A grain CI grant is passed over there and so here. "" when it
+// names none.
+func ciOnlyProposalGrantsOutcome(capabilities []string) string {
+	var b strings.Builder
+	for _, c := range capabilities {
+		c = strings.TrimSpace(c)
+		if c == "" || model.IsGrainCIGrant(c) {
+			continue
+		}
+		for _, g := range model.CanonicalLegacyGrants(c) {
+			if g == "" || model.IsGrainCIGrant(g) {
+				continue
+			}
+			why := model.TaskGrantCIOnlyRefusal(g)
+			if why == "" {
+				continue
+			}
+			if repo, ok := model.RepoReadTarget(g); ok {
+				fmt.Fprintf(&b, " `%s` is a CI capability no task run is handed, so this proposal will be filed "+
+					"with reads: [%q] in its place.", c, repo.String())
+			} else {
+				fmt.Fprintf(&b, " `%s` will be left off this proposal: %s", c, why)
+			}
+		}
+	}
+	return b.String()
 }

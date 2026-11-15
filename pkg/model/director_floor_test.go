@@ -58,7 +58,7 @@ func TestGrantAPIScopesReadsEverySpelling(t *testing.T) {
 		"api:" + model.DefaultAccessRole:                      "merge:force",
 		"https://grain.dev/capabilities/api#merge:force":      "merge:force",
 		"https://grain.dev/capabilities/api#secrets:write={}": "secrets:write",
-		"self-upgrade":                                        "deployment:upgrade",
+		"api:self-upgrade":                                    "deployment:upgrade",
 	} {
 		if got := model.GrantAPIScopes(grant); !slices.Contains(got, want) {
 			t.Errorf("GrantAPIScopes(%q) = %v, want it to include %s", grant, got, want)

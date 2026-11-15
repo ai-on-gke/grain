@@ -44,15 +44,15 @@ func seedDetachRepoConfig(t *testing.T, client *ui.Client) model.RepoRef {
 	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                widgets,
-		CICapabilities:      []string{"github-sandbox", "gcp-key", "package-publish"},
-		DefaultCapabilities: []string{"github-sandbox", "gcp-key"},
+		CICapabilities:      []string{model.GitHubSandboxRepoGrant, model.GCPKeySandboxAgentGrant, model.PackagePublishRef + "={}"},
+		DefaultCapabilities: []string{model.GitHubSandboxRepoGrant, model.GCPKeySandboxAgentGrant},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	gadgets := model.RepoRef{Owner: "acme", Name: "gadgets"}
 	if err := client.Store.PutRepoConfig(ctx, model.RepoConfig{
 		Repo:                gadgets,
-		DefaultCapabilities: []string{"github-sandbox", "gcp-key"},
+		DefaultCapabilities: []string{model.GitHubSandboxRepoGrant, model.GCPKeySandboxAgentGrant},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -164,11 +164,11 @@ func TestCapabilitiesDetachNarrowsRepoLists(t *testing.T) {
 	seedAPITask(t, client, "1", "acme/widgets", "api:capabilities:detach")
 
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/capabilities",
-		`{"defaultCapabilities":["github-sandbox"]}`, "gcp-key is over-broad for every task"); code != http.StatusOK {
+		`{"defaultCapabilities":["`+model.GitHubSandboxRepoGrant+`"]}`, "gcp-key is over-broad for every task"); code != http.StatusOK {
 		t.Fatalf("narrowing defaultCapabilities answered %d: %s", code, resp)
 	}
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/ci-capabilities",
-		`{"ciCapabilities":["github-sandbox","package-publish"]}`, "CI no longer needs gcp-key"); code != http.StatusOK {
+		`{"ciCapabilities":["`+model.GitHubSandboxRepoGrant+`","`+model.PackagePublishRef+`={}"]}`, "CI no longer needs gcp-key"); code != http.StatusOK {
 		t.Fatalf("narrowing ciCapabilities answered %d: %s", code, resp)
 	}
 	rc, err := client.Store.GetRepoConfig(ctx, widgets)
@@ -178,7 +178,7 @@ func TestCapabilitiesDetachNarrowsRepoLists(t *testing.T) {
 	if !slices.Equal(rc.DefaultCapabilities, []string{model.GitHubSandboxRepoGrant}) {
 		t.Errorf("defaultCapabilities = %v, want [%s]", rc.DefaultCapabilities, model.GitHubSandboxRepoGrant)
 	}
-	if slices.Contains(rc.CICapabilities, "gcp-key") || len(rc.CICapabilities) != 2 {
+	if slices.Contains(rc.CICapabilities, model.GCPKeySandboxAgentGrant) || len(rc.CICapabilities) != 2 {
 		t.Errorf("ciCapabilities = %v, want github-sandbox and package-publish", rc.CICapabilities)
 	}
 	// An empty list is a subset too: removing everything is still a detach.
@@ -222,7 +222,7 @@ func TestCapabilitiesDetachIsHeldToItsRepositories(t *testing.T) {
 	seedAPITask(t, client, "2", "acme/gadgets", "self-debug")
 
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/gadgets/capabilities",
-		`{"defaultCapabilities":["github-sandbox"]}`, "cleanup"); code != http.StatusForbidden {
+		`{"defaultCapabilities":["`+model.GitHubSandboxRepoGrant+`"]}`, "cleanup"); code != http.StatusForbidden {
 		t.Errorf("capabilities:detach@acme/widgets narrowed acme/gadgets: %d %s", code, resp)
 	}
 	if code, resp := asAgent(t, srv, "1", http.MethodPost, "/api/tasks/2/capabilities",
@@ -230,7 +230,7 @@ func TestCapabilitiesDetachIsHeldToItsRepositories(t *testing.T) {
 		t.Errorf("capabilities:detach@acme/widgets detached from a task in acme/gadgets: %d %s", code, resp)
 	}
 	if code, resp := asAgent(t, srv, "1", http.MethodPut, "/api/repos/acme/widgets/capabilities",
-		`{"defaultCapabilities":["github-sandbox"]}`, "cleanup"); code != http.StatusOK {
+		`{"defaultCapabilities":["`+model.GitHubSandboxRepoGrant+`"]}`, "cleanup"); code != http.StatusOK {
 		t.Errorf("capabilities:detach@acme/widgets was refused acme/widgets: %d %s", code, resp)
 	}
 }

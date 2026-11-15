@@ -609,7 +609,7 @@ func likeEscape(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
-// backfillGitHubCIFailedTests is schema 147's rewrite: every recorded job
+// backfillGitHubCIFailedTests is schema 148's rewrite: every recorded job
 // with a failure tail and no failed tests gets the names its tail holds,
 // so the jobs failed before the column existed count too once their tails
 // are compacted away. Idempotent: a job that has its names is passed over.

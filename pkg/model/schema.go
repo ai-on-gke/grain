@@ -679,13 +679,17 @@ import "strconv"
 // 146 adds `grain_config`.`qa` (model.Config.QA): the deployment-wide quality
 // control engine and single-instance PR rollout configuration, stored as JSON
 // and defaulting to empty (engine off).
-// 147 adds `github_ci_job`.`failed_tests` (model.GitHubCIJob.FailedTests):
+// 147 changes no table: it forgets the commit every repository's
+// declarations were last read at (`repo_declaration_sync`.`commit`), so
+// the next reconcile writes back the grants a schedule file declares that
+// a firing from before 144 overwrote (rereadDeclarations, grain/task-5360).
+// 148 adds `github_ci_job`.`failed_tests` (model.GitHubCIJob.FailedTests):
 // the failing tests a failed job's log tail names, one per line, which a
 // pruning keeps for weeks after the tail itself is gone (GitHubCIPrune),
 // backfilled from the tails already recorded; and `history_only`, set on
 // a failure a pruning keeps past its branch's passes, which the outcome
 // rates leave out (GitHubCIOutcomes).
-const SchemaVersion = 147
+const SchemaVersion = 148
 
 const taskQAAssignmentTable = `CREATE TABLE IF NOT EXISTS ` + "`task_qa_assignment`" + ` (
   ` + "`root_origin`" + `           TEXT     NOT NULL,
@@ -1236,6 +1240,18 @@ var Tables = []string{
 	// the other task_* rows. Needs no SchemaVersion bump, for task_write's
 	// own reason: an older store reads back as no task having a template.
 	`CREATE TABLE IF NOT EXISTS ` + "`task_filed_template`" + ` (
+  ` + "`task_id`" + `     TEXT NOT NULL,
+  ` + "`template_id`" + ` TEXT NOT NULL,
+  PRIMARY KEY (` + "`task_id`" + `)
+)`,
+
+	// The template a task's content was filed from, for reporting alone
+	// (Task.SourceTemplateID, grain/task-5273): task_filed_template's
+	// rows, and besides them an agent's proposal naming a template and a
+	// port of a task filed from one. Nothing reads it to decide what a
+	// task may do. Needs no SchemaVersion bump, for task_filed_template's
+	// own reason: an older store reads back as no task recording one.
+	`CREATE TABLE IF NOT EXISTS ` + "`task_source_template`" + ` (
   ` + "`task_id`" + `     TEXT NOT NULL,
   ` + "`template_id`" + ` TEXT NOT NULL,
   PRIMARY KEY (` + "`task_id`" + `)

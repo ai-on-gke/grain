@@ -49,8 +49,10 @@ func ScheduleOverlapGroupTag(repo RepoRef, group string) string {
 	if repo == (RepoRef{}) || group == "" {
 		return ""
 	}
-	return "schedule-group:" + repo.String() + ":" + group
+	return scheduleGroupTagPrefix + repo.String() + ":" + group
 }
+
+const scheduleGroupTagPrefix = "schedule-group:"
 
 // scheduleFiringTags is the tags a task sched files carries: its own
 // firing tag, its overlap group's when it has one and is set to skip,
@@ -1322,7 +1324,17 @@ func (s *Store) fireSuiteSchedule(ctx context.Context, sched Schedule, now time.
 	if suite == nil {
 		return ScheduleFiring{}, fmt.Errorf("suite %s no longer exists", *sched.SuiteID)
 	}
-	run, err := s.CreateScheduledSuiteRun(ctx, *suite, sched.Target, sched.Base, sched.ID, now)
+	// Its tasks carry the group's tag, as a task schedule's do
+	// (scheduleFiringTags without the firing tag, which names a task
+	// schedule's own previous firing): what keeps the run holding the
+	// group once this schedule is renamed or withdrawn while it runs.
+	var groupTags []string
+	if !sched.Overlap.Allows() {
+		if gt := ScheduleOverlapGroupTag(sched.Target, sched.OverlapGroup); gt != "" {
+			groupTags = append(groupTags, gt)
+		}
+	}
+	run, err := s.CreateScheduledSuiteRun(ctx, *suite, sched.Target, sched.Base, sched.ID, now, groupTags...)
 	if err != nil {
 		return ScheduleFiring{}, fmt.Errorf("starting a run of suite %s: %w", suite.ID, err)
 	}

@@ -123,3 +123,31 @@ func migrateScheduleOwnSettings(ctx context.Context, tx *sql.Tx) error {
 	}
 	return nil
 }
+
+// rereadDeclarations is migration 147. A repository schedule's own
+// grants are not on its row any more if an earlier build fired it: that
+// firing wrote its template's grants over the ones the schedule file
+// declares, and migration 144 only deleted the copy. The declaration
+// sync writes a file's grants back only when the default branch moves,
+// so until the repository's next commit every firing went on without
+// them (docs/test-runs/2026-11-13-schedules-templates.md, F4).
+// Forgetting the commit each repository was last read at has the next
+// reconcile read every one again, which puts them back.
+//
+// It is a migration of its own, not part of 144, because v3.7.0 shipped
+// 144: a store that already ran it would never run an edit to it.
+// Idempotent: a second pass forgets a commit the reconcile already
+// read again, and costs one re-read.
+func rereadDeclarations(ctx context.Context, tx *sql.Tx) error {
+	// A store older than the table has never read a repository's
+	// declarations, and the schema creates it after this runs.
+	if exists, err := migrationTableExists(ctx, tx, "repo_declaration_sync"); err != nil {
+		return err
+	} else if !exists {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE `repo_declaration_sync` SET `commit` = ''"); err != nil {
+		return fmt.Errorf("having every repository's declarations read again: %w", err)
+	}
+	return nil
+}

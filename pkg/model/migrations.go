@@ -1067,6 +1067,12 @@ var Migrations = []Migration{
 	},
 	{
 		Version: 147,
+		Description: "have every repository's declarations read again, writing back the grants a schedule file " +
+			"declares that a firing from before 144 wrote its template's over (grain/task-5360)",
+		Up: rereadDeclarations,
+	},
+	{
+		Version: 148,
 		Description: "add github_ci_job.failed_tests, the failing tests a job's log tail names, kept after the tail " +
 			"is compacted away, and github_ci_job.history_only, marking a failure kept past its branch's passes (grain/task-5274)",
 		Statements: []string{

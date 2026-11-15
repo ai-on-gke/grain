@@ -105,7 +105,13 @@ test("lists the API presets before every scope, with what each preset grants", a
   // https://grain.dev/capabilities/api#* entries are owned by the Grain API
   // groups rather than duplicated under Capability server methods.
   await page.getByLabel("Search grants").fill("merge:force");
-  await expect(menu.locator(".api-grant-row")).toHaveCount(1);
+  await expect(menu.locator(".api-grant-row")).toHaveCount(2);
+  await expect(
+    menu.locator('[data-api-grant="api:grain/operator"]'),
+  ).toHaveCount(1);
+  await expect(menu.locator('[data-api-grant="api:merge:force"]')).toHaveCount(
+    1,
+  );
   await expect(menu.locator(".method-grant-row")).toHaveCount(0);
   await page.keyboard.press("Escape");
 
@@ -158,8 +164,9 @@ test("exercises Grain API picker across NewTaskOverlay, ConsoleSessionPage, Sche
   page,
   request,
 }) => {
-  // 1. Verify self-debug alias and api:self-debug preset resolution via HTTP gate
-  for (const cap of ["self-debug", "api:self-debug"]) {
+  // 1. Verify api:self-debug preset resolution via HTTP gate (the retired bare
+  // self-debug is no alias any longer)
+  for (const cap of ["api:self-debug"]) {
     const t = await fileTask(request, [cap]);
     const headers = { "X-Grain-Acting-Task": String(t.id) };
 

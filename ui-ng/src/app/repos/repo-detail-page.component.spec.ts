@@ -18,7 +18,11 @@ import { provideRouter, withComponentInputBinding } from "@angular/router";
 import { RouterTestingHarness } from "@angular/router/testing";
 import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
-import { RepoDetailPageComponent } from "./repo-detail-page.component";
+import {
+  RepoDetailPageComponent,
+  importOutcomeText,
+  releaseActionReasons,
+} from "./repo-detail-page.component";
 
 interface RepoCall {
   method: string;
@@ -29,6 +33,8 @@ interface RepoCall {
 
 class FakeRepoApi {
   calls: RepoCall[] = [];
+  ciMode = "grain";
+  refusePut: string | null = null;
 
   configBody: GrainConfig = {
     version: "v3.6.0",
@@ -53,7 +59,7 @@ class FakeRepoApi {
     }
     if (key === "GET /api/repos/{owner}/{name}/settings") {
       return Promise.resolve({
-        ciMode: "grain",
+        ciMode: this.ciMode,
         mergeOnGreen: true,
         requireBranchUpToDate: false,
       });
@@ -75,11 +81,18 @@ class FakeRepoApi {
       });
     }
     if (key === "GET /api/repos/{owner}/{name}/releases") {
-      return Promise.resolve([{ name: "v1.2", status: "open" }]);
+      return Promise.resolve([
+        { name: "v1.2", status: "active", prodBranch: "v1.2" },
+      ]);
     }
     if (key === "GET /api/repos/{owner}/{name}/releases/{release}/candidates") {
       return Promise.resolve([
-        { id: "rc-1", version: "v1.2.0-rc1", status: "qualifying" },
+        {
+          id: "rc-1",
+          version: "v1.2.0-rc1",
+          branch: "v1.2.rc.1",
+          status: "active",
+        },
       ]);
     }
     return Promise.resolve({});
@@ -87,6 +100,16 @@ class FakeRepoApi {
 
   put = (key: string, params?: RouteParams, body?: unknown) => {
     this.calls.push({ method: "PUT", key, params, body });
+    if (this.refusePut === key) {
+      // Rejected on a later tick, as a real refusal is: a promise that
+      // is already rejected when the component awaits it is reported
+      // by zone.js as unhandled before the await attaches.
+      return new Promise((_, reject) =>
+        setTimeout(() =>
+          reject(new Error('ciMode: must be "grain", "github", or "none"')),
+        ),
+      );
+    }
     return Promise.resolve({ ok: true });
   };
 
@@ -219,23 +242,30 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       ),
     ).toBe(true);
 
-    // Cut & promote RC + approve qualification
-    el.querySelector<HTMLButtonElement>('[data-testid="cut-rc-v1.2"]')!.click();
+    // Cut RC is off while the newest candidate is active, and says why
+    // (the classic pane's rule); Promote RC asks before it moves the
+    // prod branch.
+    expect(
+      el.querySelector<HTMLButtonElement>('[data-testid="cut-rc-v1.2"]')!
+        .disabled,
+    ).toBe(true);
+    expect(
+      el.querySelector('[data-testid="release-action-reasons"]')?.textContent,
+    ).toContain("v1.2.rc.1 is active: a new RC is cut once it is promoted.");
     el.querySelector<HTMLButtonElement>(
       '[data-testid="promote-rc-v1.2"]',
     )!.click();
+    harness.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("Promote v1.2.rc.1 to v1.2?");
+    expect(api.calls.some((c) => c.key.endsWith("/candidates/promote"))).toBe(
+      false,
+    );
     el.querySelector<HTMLButtonElement>(
-      '[data-testid="approve-qualification-rc-1"]',
+      '[data-testid="confirm-accept"]',
     )!.click();
     await new Promise((r) => setTimeout(r, 10));
-
-    expect(
-      api.calls.some(
-        (c) =>
-          c.key ===
-          "POST /api/repos/{owner}/{name}/releases/{release}/candidates",
-      ),
-    ).toBe(true);
     expect(
       api.calls.some(
         (c) =>
@@ -243,6 +273,11 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
           "POST /api/repos/{owner}/{name}/releases/{release}/candidates/promote",
       ),
     ).toBe(true);
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="approve-qualification-rc-1"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
     expect(
       api.calls.some(
         (c) =>
@@ -250,5 +285,178 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
           "POST /api/repos/{owner}/{name}/candidates/{id}/qualification/approve",
       ),
     ).toBe(true);
+  });
+
+  // 2026-11-14 repository walkthrough: Import issues now said "triggered"
+  // whatever the pass did, and Cut/Promote gave no reason when off.
+  it("words an import pass the way the classic page does", () => {
+    expect(
+      importOutcomeText(
+        {
+          source: "acme/nosuch",
+          open: 0,
+          imported: [],
+          skipped: 0,
+          error: "GitHub answered 404",
+        },
+        "acme/platform",
+      ),
+    ).toEqual({
+      error: true,
+      text: "Could not read the open issues on acme/nosuch: GitHub answered 404",
+    });
+    expect(
+      importOutcomeText(
+        { source: "acme/platform", open: 2, imported: ["7"], skipped: 1 },
+        "acme/platform",
+      ),
+    ).toEqual({
+      error: false,
+      text: "Read 2 open issues on acme/platform: imported 1, 1 already imported.",
+    });
+    expect(
+      importOutcomeText(
+        {
+          source: "acme/platform",
+          open: 1,
+          imported: [],
+          skipped: 0,
+          error: "boom",
+        },
+        "acme/platform",
+      ).text,
+    ).toBe(
+      "Read 1 open issue on acme/platform: imported 0, 0 already imported. Some could not be imported: boom",
+    );
+  });
+
+  it("says why Cut RC and Promote RC are off", () => {
+    const rel = { name: "1.0", status: "active" };
+    expect(
+      releaseActionReasons(rel, { branch: "1.0.rc.1", status: "active" }, true),
+    ).toEqual({
+      cut: "1.0.rc.1 is active: a new RC is cut once it is promoted.",
+      promote: null,
+    });
+    expect(releaseActionReasons(rel, undefined, true)).toEqual({
+      cut: null,
+      promote: "No candidate to promote yet: cut one first.",
+    });
+    expect(
+      releaseActionReasons(
+        rel,
+        { branch: "1.0.rc.1", status: "promoted" },
+        true,
+      ),
+    ).toEqual({
+      cut: null,
+      promote: "1.0.rc.1 is already promoted: a candidate is promoted once.",
+    });
+    expect(releaseActionReasons(rel, undefined, false)).toEqual({
+      cut: null,
+      promote: null,
+    });
+    expect(
+      releaseActionReasons(
+        { name: "2.0", status: "provisioning", latestBranch: "2.0.latest" },
+        undefined,
+        false,
+      ).cut,
+    ).toContain("still provisioning");
+  });
+
+  // 2026-11-13 repository walkthrough: the CI mode pill offered "both"
+  // and "off", which PUT .../ci-mode refuses, and had no "none", so a
+  // repository on no CI read as Grain CI.
+  it("offers exactly the CI modes the server accepts and shows a repo on none as No CI", async () => {
+    const api = new FakeRepoApi();
+    api.ciMode = "none";
+    const { el, harness } = await mountRepo("/repos/acme/platform/ci", api);
+    const pill = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-repo-ci-mode"]',
+    )!;
+    expect(pill.textContent).toContain("No CI");
+    pill.click();
+    harness.detectChanges();
+    const opts = [
+      ...el.querySelectorAll<HTMLElement>(
+        '[data-testid^="select-repo-ci-mode-opt-"]',
+      ),
+    ].map((o) => o.dataset["testid"]!.replace("select-repo-ci-mode-opt-", ""));
+    expect(opts).toEqual(["grain", "github", "none"]);
+  });
+
+  it("puts the CI mode pill back when the server refuses the new mode", async () => {
+    const api = new FakeRepoApi();
+    api.refusePut = "PUT /api/repos/{owner}/{name}/ci-mode";
+    const { el, harness } = await mountRepo("/repos/acme/platform/ci", api);
+    const pill = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-repo-ci-mode"]',
+    )!;
+    expect(pill.textContent).toContain("Grain CI");
+    pill.click();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-repo-ci-mode-opt-github"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(
+      api.calls.some(
+        (c) =>
+          c.key === "PUT /api/repos/{owner}/{name}/ci-mode" &&
+          (c.body as { ciMode?: string })?.ciMode === "github",
+      ),
+    ).toBe(true);
+    expect(pill.textContent).toContain("Grain CI");
+  });
+  // 2026-11-13 repository walkthrough: one click on the switch let
+  // base-branch repair PRs merge with no human; the classic page asks.
+  it("asks before letting base-branch repairs bypass the human gate, and not when turning it off", async () => {
+    const { el, api, harness } = await mountRepo(
+      "/repos/acme/platform/merge-queue",
+    );
+    const key =
+      "PUT /api/repos/{owner}/{name}/base-repair-bypasses-human-gates";
+    const sw = () =>
+      el.querySelector<HTMLButtonElement>(
+        'button[aria-label="Base-branch repairs bypass human review gates"]',
+      )!;
+    sw().click();
+    harness.detectChanges();
+    const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+    expect(dialog?.textContent).toContain(
+      "Let base-branch repair PRs in acme/platform merge without a human",
+    );
+    expect(api.calls.some((c) => c.key === key)).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+    expect(api.calls.some((c) => c.key === key)).toBe(false);
+    expect(sw().getAttribute("aria-checked")).toBe("false");
+
+    sw().click();
+    harness.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(api.calls.filter((c) => c.key === key).map((c) => c.body)).toEqual([
+      { baseRepairBypassesHumanGates: true },
+    ]);
+    expect(sw().getAttribute("aria-checked")).toBe("true");
+
+    sw().click();
+    await new Promise((r) => setTimeout(r, 10));
+    harness.detectChanges();
+    expect(el.querySelector('[data-testid="confirm-dialog"]')).toBeNull();
+    expect(api.calls.filter((c) => c.key === key).map((c) => c.body)).toEqual([
+      { baseRepairBypassesHumanGates: true },
+      { baseRepairBypassesHumanGates: false },
+    ]);
   });
 });

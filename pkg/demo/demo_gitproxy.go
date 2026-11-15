@@ -183,7 +183,7 @@ func configureGitProxyDemo(dir string, store *model.Store, repo model.RepoRef, b
 		return nil, fmt.Errorf("serving the git proxy: %w", err)
 	}
 	p.url = "http://" + proxyAddr
-	// Worded without "at http://", which ui/e2e/fixtures.js reads as the
+	// Worded without "at http://", which ui-shared/e2e/demo.js reads as the
 	// UI's own address.
 	log.Printf("grain demo: -git-proxy: grain's git proxy listens on %s, forwarding %s to a simulated GitHub on %s; "+
 		"POST /api/e2e/git-proxy/runs {\"taskId\": ...} starts a run and mints its sandbox's token",
