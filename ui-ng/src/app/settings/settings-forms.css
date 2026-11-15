@@ -179,6 +179,12 @@
   min-width: 0;
 }
 
+/* A short number beside an inline field (a host's capacity). */
+.s-input-inline.s-input-narrow {
+  flex: 0 0 96px;
+  width: 96px;
+}
+
 .s-textarea {
   min-height: 88px;
   padding: 10px 12px;
