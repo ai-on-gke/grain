@@ -2948,6 +2948,9 @@ func routeHasQuery(pattern, param string) bool {
 // repeats or comma-separates values so an unallowed second value cannot
 // ride behind an allowed first one.
 func (s *Server) queryCallRepo(r *http.Request, pattern string, allowed func(string) bool) (string, bool, error) {
+	if pattern == taskSummariesRoute && !taskSummariesRepoAllowed(r) {
+		return "", true, validationErrorf("%s", errTaskSummariesRepo)
+	}
 	if r.Method != http.MethodGet || !routeHasQuery(pattern, "repo") {
 		return "", false, nil
 	}
