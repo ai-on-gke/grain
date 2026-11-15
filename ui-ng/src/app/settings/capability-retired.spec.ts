@@ -36,6 +36,9 @@ describe("retired in-process capabilities", () => {
     expect(retiredGrant("gcp-key:deployer")?.grant).toBe(
       'https://grain.dev/capabilities/gcp#gcp-key={"permission_set":"deployer"}',
     );
+    expect(retiredGrant("git-push-any-ref")?.grant).toBe(
+      'https://grain.dev/capabilities/repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}',
+    );
     expect(retiredGrant("jira-mcp")).toBeNull();
     expect(retiredGrant("toString")).toBeNull();
   });

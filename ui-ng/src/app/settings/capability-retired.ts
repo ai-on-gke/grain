@@ -20,6 +20,8 @@
 // nothing on the new server it now means: Settings → Capabilities names
 // each such entry with the grant that replaces it, as the classic
 // CapabilityPolicyEditor's catalogue list does (catalogueSummary.js).
+// pkg/model's TestUIRetiredGrantTableNamesEveryRetiredCapability keeps
+// RETIRED_IN_PROCESS naming every name that table retires.
 
 export interface RetiredGrant {
   // grant is what a task holds in its place.
@@ -95,6 +97,12 @@ export const RETIRED_IN_PROCESS: Readonly<Record<string, RetiredGrant>> = {
   "read-issues": onServer(
     `${SERVER}/github#read-issues={}`,
     `${SERVER}/github#read-issues`,
+  ),
+  // A push to any branch or tag, force included: the repo server's write
+  // method with those refs (pkg/model's GitPushAnyRefGrant).
+  "git-push-any-ref": onServer(
+    `${SERVER}/repo#write={"force":true,"refs":["refs/heads/*","refs/tags/*"]}`,
+    `${SERVER}/repo#write`,
   ),
   "github-sandbox": onServer(
     `${SERVER}/github#sandbox-repo={}`,
