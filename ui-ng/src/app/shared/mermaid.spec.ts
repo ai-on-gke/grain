@@ -72,6 +72,15 @@ describe("mermaid markup", () => {
     );
   });
 
+  it("draws diagrams nested in lists and quotes", () => {
+    const host = render(
+      "- step\n\n  ```mermaid\n  graph TD; A\n  ```\n\n> ~~~mermaid\n> graph TD; B\n> ~~~",
+    );
+    expect(host.querySelectorAll('[data-mermaid="diagram"]').length).toBe(2);
+    expect(host.querySelector("li [data-mermaid]")).not.toBeNull();
+    expect(host.querySelector("blockquote [data-mermaid]")).not.toBeNull();
+  });
+
   it("pairs before / after fences named in the info string", () => {
     const host = render(
       "```mermaid before: monolith\ngraph TD; A\n```\n\n```mermaid after\ngraph TD; B\n```",
