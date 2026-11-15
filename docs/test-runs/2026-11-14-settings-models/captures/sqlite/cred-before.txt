@@ -1,0 +1,28 @@
+before: confirm dialog shown=false; secret agent-backend-conn-c stored=true; geminiApiKeySet=false claudeOAuthTokenSet=false openaiApiKeySet=false codexAuthJSONSet=false
+after clicking Clear stored secret: confirm dialog shown=false; secret agent-backend-conn-c stored=false; geminiApiKeySet=false claudeOAuthTokenSet=false openaiApiKeySet=false codexAuthJSONSet=false
+/next/settings/models search fields: [{"testid":"view-filter","name":"grain-view-filter","autocomplete":"off","form":{"role":"search","autocomplete":"off","passwordInputs":0},"value":""},{"testid":"settings-filter-input","name":"grain-settings-filter","autocomplete":"off","form":{"role":"search","autocomplete":"off","passwordInputs":0},"value":""}]
+/next/settings/connections search fields: [{"testid":"view-filter","name":"grain-view-filter","autocomplete":"off","form":{"role":"search","autocomplete":"off","passwordInputs":0},"value":""},{"testid":"settings-filter-input","name":"grain-settings-filter","autocomplete":"off","form":{"role":"search","autocomplete":"off","passwordInputs":0},"value":""}]
+/next/settings/secrets search fields: [{"testid":"view-filter","name":"grain-view-filter","autocomplete":"off","form":{"role":"search","autocomplete":"off","passwordInputs":0},"value":""},{"testid":"settings-filter-input","name":"grain-settings-filter","autocomplete":"off","form":{"role":"search","autocomplete":"off","passwordInputs":0},"value":""}]
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+locator.fill: Error: Element is not an <input>, <textarea>, <select> or [contenteditable] and does not have a role allowing [aria-readonly]
+Call log:
+  - waiting for getByLabel('Credential for conn-c')
+    - locator resolved to <button type="button" aria-expanded="false" class="btn-tonal s-btn-sm" data-testid="toggle-cred-conn-c" aria-label="Manage credential for conn-c"> Credential </button>
+    - fill("walk-typed-secret")
+  - attempting fill action
+    - waiting for element to be visible, enabled and editable
+
+    at /home/debian/work/docs/test-runs/2026-11-14-settings-models/ui_cred.mjs:82:48 {
+  log: [
+    "  - waiting for getByLabel('Credential for conn-c')",
+    '    - locator resolved to <button type="button" aria-expanded="false" class="btn-tonal s-btn-sm" data-testid="toggle-cred-conn-c" aria-label="Manage credential for conn-c"> Credential </button>',
+    '    - fill("walk-typed-secret")',
+    '  - attempting fill action',
+    '    - waiting for element to be visible, enabled and editable'
+  ]
+}
+
+Node.js v20.19.0

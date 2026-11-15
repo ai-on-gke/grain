@@ -346,6 +346,15 @@ describe("the sentences", () => {
     expect(pausedUntil(later, "UTC", now)).toContain(day);
   });
 
+  it("names the zone of a pause's reset time, on the deployment's clock", () => {
+    const now = new Date("2026-07-01T16:00:00Z");
+    const entry = { ...alphaClaude, until: "2026-07-01T17:05:00Z" };
+    expect(pausedUntil(entry, "America/Los_Angeles", now)).toMatch(
+      /^paused until 10:05\sAM PDT \(/,
+    );
+    expect(pauseMessage(entry, "UTC", now)).toMatch(/until 5:05\sPM UTC \(/);
+  });
+
   it("gives the pause as a clause for a place that names what is paused", () => {
     expect(pausedUntil(alphaClaude, "UTC")).toMatch(
       /^paused until .* \(about 2h 0m\) — claude: usage limit reached/,

@@ -144,7 +144,7 @@ do not pull in an icon font.
   72px rail
 ```
 
-- **Rail order:** Inbox, Workstreams, Tasks, Agents, Sessions, Processes, CI,
+- **Rail order:** Inbox, Workstreams, Tasks, Agents, Sessions, Processes, CI, Repos,
   Telemetry, Context, Fleet; Settings pinned at the bottom. People can hide
   destinations (Customize navigation); Inbox cannot be hidden.
 - **New task button:** filled primary, 60×60 (52 on short screens), with a
@@ -207,7 +207,14 @@ Inbox, Tasks and Agents share one split (`shared/split-controller.ts`,
   a draggable separator (`role="separator"`, 24px hit zone, keyboard
   arrows, Enter collapses, double-click resets) and a "Hide list" toggle.
   The choice is remembered per surface.
-- The detail pane is always there on desktop; it is not a modal.
+- The detail pane is always there on desktop; it is not a modal. The
+  exception is Agents, whose cards are a dashboard in their own right:
+  its inspector opens only on the agent `?task=` names. With none (on
+  arrival, or after the person closes it) the split drops to one
+  full-width column of cards, nothing looks selected, and j/k or a click
+  opens the inspector on an agent. It closes from "Close inspector" in
+  the split bar, the pane's ×, Escape, or a second click on the selected
+  card, and focus goes back to that card.
 - **The selected item looks selected.** Whatever the list is drawn as —
   queue rows, table rows, cards — the item the pane shows carries
   `surface-container` with a 3px `primary` leading bar (`inset 3px 0 0`),
@@ -272,8 +279,16 @@ controls use the proportional 14/20 body stack (`.s-num` aligns numeric figures
 without switching prose or human names to monospace; `.s-mono` is reserved for
 technical slugs, model IDs and paths). Tables keep row actions on one right-aligned
 line (`.s-row-actions`), separate any below-table creation/edit form with a
-`.s-subsection` divider, and collapse per-connection password inputs behind an
-on-demand `Credential` row. Search filters live inside `<form role="search"
+`.s-subsection` divider, let long paths and ref patterns break inside their
+cells (`overflow-wrap: anywhere`) rather than scroll the table on a phone, give a
+`.s-table-wrap` that can still scroll sideways `role="region"`, `tabindex="0"`
+and a label (axe's `scrollable-region-focusable`), and collapse per-connection password inputs behind an
+on-demand `Credential` row. A table too wide for a phone never scrolls
+sideways: mark it `.s-table.s-table-stack` inside `.s-table-wrap.s-table-stack-wrap`
+and give each cell after the first a `data-label` naming its column. Below
+880px of the wrap's own width (a container query, since the pane beside the
+drawer and rail is narrower than the viewport) each row becomes a card of
+labelled lines under its first cell (Settings → Repositories). Search filters live inside `<form role="search"
 autocomplete="off">` and secret inputs carry `autocomplete="new-password"` inside
 `<form autocomplete="off">` so browser password managers never autofill emails
 into search bars. Single-choice pickers use `<g-pill-select>`; a model is always chosen
@@ -319,7 +334,8 @@ it rather than copy it.
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
-| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links |
+| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links; raw HTML is text except bare `code`/`strong`/`em`/`b`/`i`/`kbd`/`sub`/`sup`/`br`, and `&quot;`-style references read as characters |
+| Capped Markdown | `shared/capped-markdown.component.ts` | a long message beside its controls (an Inbox question, an access reason, an alert): full Markdown, at most 20 lines or 40% of its pane (`cqh`), own scroll, "Show full …" in place |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
@@ -328,6 +344,16 @@ it rather than copy it.
 
 Rules:
 
+- **Every message is Markdown.** A question, reason or alert body a person
+  reads is rendered with `[gMarkdown]` (or `g-capped-markdown` where it sits
+  above actions), never `{{ }}` into a `<p>`: interpolation runs lists and
+  code blocks into one paragraph. A one-line `summary` stays the row title.
+- **A decision's actions never leave the screen.** In the Inbox inspector
+  only the message in the resolution dock gives way (it shrinks and
+  scrolls); the dock's actions keep their height and the inspector body
+  keeps a floor of `min(240px, 25cqh)`, so the task's details are never a
+  sliver. `next-inbox-long-question.spec.js` holds this at 1280×800 and
+  2269×1079.
 - **Class names are global.** Most pages use `ViewEncapsulation.None`, so a
   class defined in one page's stylesheet applies wherever that stylesheet is
   loaded. Prefix page-specific classes, and search for a name before you use
@@ -363,6 +389,18 @@ Rules:
   (`isTypingTarget`).
 - **URLs.** Every view, tab and selection that a person might share has a
   URL (`?tab=`, `?task=`, `?pane=`). Back works.
+  A list's narrowing and order are URL state too: the "Filter this view"
+  box is `?q=` (written back as it is typed, with `replaceUrl`) and a
+  sort is `?sort=`, so a reload and Back/Forward keep them. Tabs carry
+  both (`queryParamsHandling="merge"`). See
+  `ui-ng/e2e/next-processes-narrowing.spec.ts`.
+- **A custom order moves by pointer and by keyboard.** Where a list keeps
+  a person's own order (a "Custom order" sort), a row is dragged, or moved
+  one place with `Alt+ArrowUp` / `Alt+ArrowDown` (named in
+  `aria-keyshortcuts`). Each move is announced in a polite live region,
+  and focus stays on the row that moved. That order is browser state, kept
+  under the classic UI's own `grain.list-order.<list>` key and row keys,
+  so both UIs show it.
 - **Role-aware.** An action the person cannot take is hidden, or shown
   disabled with the reason. It is never shown enabled only to fail.
 - **State-aware.** The same goes for an action the item's state refuses.
@@ -397,6 +435,13 @@ Rules:
 - **Live, quietly.** Server-sent events update lists in place. Never steal
   focus or scroll position on an update; hold an update while the person is
   interacting with the row.
+- **A failed poll is not news.** A background read that fails once keeps
+  the last good answer on screen and says nothing; only failure that lasts
+  (three reads in a row, or 30 s, `services/request-trouble.ts`) puts up
+  one banner, over the stale list rather than in place of it. A read that
+  has never succeeded says so at once. The same sentence is never shown
+  twice: two surfaces reporting one failure show it once. A person's own
+  action that fails still says so immediately.
 
 ## 6. Motion
 
@@ -470,7 +515,9 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
   serve `GET /api/config` and Inbox summary hydrations with ETag `If-None-Match`
   and bounded worker pools (`<= 4`), throttle hidden-tab or unmounted-page
   polling, load inactive Fleet tabs lazily, and never block primary pickers on
-  slow `reachable-repos` discovery.
+  slow `reachable-repos` discovery. A poll that is failing backs off
+  (doubling, capped at 60 s, never sooner than `Retry-After`) and ignores
+  event wake-ups until a read succeeds again.
 - No new runtime dependency without a reason written in the pull request.
 - A click never waits silently on the network. Every lazy page chunk is
   preloaded shortly after start-up (`shell/route-preload.ts`, skipped under

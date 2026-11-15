@@ -408,3 +408,11 @@ g-telemetry-page {
   padding: 6px 0;
   font-size: 12px;
 }
+
+/* A paused scope's local reset, on the line its Paused pill sits on so a
+   table of paused scopes grows no taller. */
+.usage-scope-reset {
+  margin-left: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}

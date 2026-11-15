@@ -118,6 +118,7 @@ var routeAuthorization = map[string]authLevel{
 	"GET /api/tasks":                                                trusted,
 	"GET /api/refs/{ref}/summary":                                   trusted,
 	"GET /api/tasks/states":                                         trusted,
+	"GET /api/tasks/summaries":                                      trusted,
 	"GET /api/tasks/wait":                                           trusted,
 	"GET /api/inbox":                                                trusted,
 	"GET /api/events":                                               trusted,

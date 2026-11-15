@@ -63,6 +63,13 @@ export class SnackbarService implements OnDestroy {
     durationMs?: number,
     secondary?: SnackbarAction,
   ): Snack {
+    // The same message twice is one message: two readers surfacing one
+    // failed request (the same error and ref) keep the snack already up
+    // rather than replace it with its double.
+    const showing = this.current();
+    if (showing && showing.message === message && !action && !secondary) {
+      return showing;
+    }
     const ms = durationMs ?? (action ? ACTION_SNACK_MS : DEFAULT_SNACK_MS);
     const snack: Snack = {
       id: this.nextId++,
