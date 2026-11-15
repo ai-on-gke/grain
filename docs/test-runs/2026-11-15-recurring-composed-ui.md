@@ -77,7 +77,7 @@ Every UI gesture, validation check, and render ran in real headless Chromium aga
 ### 4. Templates
 
 - **`/next/processes/templates`:**
-  - Created parameterized template `walk-ng-param-tmpl` (`pkg, ver`, label `Package name`, default `v2.0.0`, required toggle). Initially, inspecting a template whose required field had no default triggered `400 Bad Request` on `GET /api/templates/{id}/composition` (Bug 6, fixed by supplying `{{field}}` preview placeholders).
+  - Created parameterized template `walk-ng-param-tmpl` (`pkg, ver`, label `Package name`, default `v2.0.0`, required toggle). Initially, inspecting a template whose required field had no default triggered `400 Bad Request` on `GET /api/templates/{id}/composition` (Bug 6, fixed by supplying a `{{field}}` preview placeholder for required fields only; after review task 6003, an optional field with no default is left out of the preview query as a real filing leaves it, so the preview stays the firing's own answer).
   - Launched unbound interactive template `walk-unbound-reads` (`reads: ["acme/widgets"]`) targeting `acme/widgets`: succeeded (`201 Created`, navigated to `/next/task/24`) because the server/filing path drops the chosen target repo from `reads` rather than failing.
   - Renamed `walk-ng-param-tmpl` → `walk-ng-param-tmpl-renamed` while referenced by `walk-ng-suite`: switching to `Suites & Runs` updated both `Member templates` and `Composition preview` (`· from walk-ng-param-tmpl-renamed`) without a page reload.
   - Dependency-aware delete: clicking `Delete` → `Delete template` while `walk-ng-suite` referenced it closed the confirmation modal and surfaced `template is used by 1 suite(s) ("walk-ng-suite"); remove it from those first`.

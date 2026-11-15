@@ -3243,8 +3243,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     const tmpl = this.store.templates().find((t) => t.id === id);
     if (tmpl && this.access.can("GET /api/templates/{id}/composition")) {
       const defaults: Record<string, string> = {};
+      // A preview is the firing's own answer: send what a filing would,
+      // and a {{name}} placeholder only for a required field with nothing
+      // to fall back on (the server refuses a missing required value).
       for (const f of tmpl.fields ?? []) {
-        defaults[f.name] = f.default || f.options?.[0] || `{{${f.name}}}`;
+        if (f.default || f.options?.length) {
+          defaults[f.name] = f.default || f.options![0];
+        } else if (f.required) {
+          defaults[f.name] = `{{${f.name}}}`;
+        }
       }
       void this.store
         .fetchTemplateComposition(

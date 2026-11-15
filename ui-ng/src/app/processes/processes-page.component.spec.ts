@@ -1218,7 +1218,10 @@ describe("ProcessesPageComponent (D-9)", () => {
       repo: "acme/widgets",
       autoMerge: false,
       capabilities: [],
-      fields: [{ name: "pkg", label: "Package", required: true }],
+      fields: [
+        { name: "pkg", label: "Package", required: true },
+        { name: "note", label: "Note" },
+      ],
       createdAt: "2026-11-15T00:00:00Z",
     });
     api.suiteRuns.unshift({
@@ -1286,6 +1289,8 @@ describe("ProcessesPageComponent (D-9)", () => {
         (c.params as { id: string }).id === "tmpl-req-nodefault",
     );
     expect(tmplCompCall?.query).toContain("field.pkg=%7B%7Bpkg%7D%7D");
+    // An optional field with no default is left out, as a filing leaves it.
+    expect(tmplCompCall?.query).not.toContain("field.note");
 
     // Baseless failed 0-pass suite run shows "default branch" on suite detail recent runs, run row, and run inspector, without "(pass 0)"
     await harness.navigateByUrl("/processes/suites");
