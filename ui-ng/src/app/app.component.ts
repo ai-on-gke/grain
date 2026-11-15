@@ -86,6 +86,9 @@ const ICONS: Record<string, string> = {
   ci: "M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
   processes:
     "M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z",
+  // A repository: a bound book with a ribbon (the repo glyph).
+  repos:
+    "M6 2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4v2l-2-1.5L10 22v-2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm0 2v10.17A3 3 0 0 1 7 14h11V4H6zm1 12a1 1 0 0 0 0 2h3v-2H7zm7 0v2h4v-2h-4zM8 6h2v2H8zm0 4h2v2H8z",
   telemetry: "M4 19h16v2H4zM6 10h3v7H6zm5-5h3v12h-3zm5 8h3v4h-3z",
   context:
     "M18 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM9 4h2v5l-1-.75L9 9V4zm9 16H6V4h1v9l3-2.25L13 13V4h5v16z",

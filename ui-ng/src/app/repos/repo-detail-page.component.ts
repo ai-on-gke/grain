@@ -210,9 +210,9 @@ interface PendingReleaseRow {
           <div class="repo-top-nav">
             <a
               class="btn-text"
-              routerLink="/settings/repositories"
+              routerLink="/repos"
               data-testid="back-to-repos-link"
-              >← Repositories</a
+              >← Repos</a
             >
             <a
               class="btn-tonal s-btn-sm"
