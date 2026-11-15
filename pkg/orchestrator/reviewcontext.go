@@ -415,7 +415,13 @@ func (s *prQuestionAnswerState) ensureLoaded(ctx context.Context, store *model.S
 				s.repliedComments[c.InReplyTo] = true
 				continue
 			}
-			key := fmt.Sprintf("%s:%d:%s", c.Path, c.Line, oneLineText(c.Body))
+			// c.Line is GitHub's nullable line: keyed by its value, the
+			// way isAnswered keys a finding, never by the pointer.
+			line := 0
+			if c.Line != nil {
+				line = *c.Line
+			}
+			key := fmt.Sprintf("%s:%d:%s", c.Path, line, oneLineText(c.Body))
 			s.ghRootByLocBody[key] = c.ID
 		}
 	}

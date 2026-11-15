@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/ai-on-gke/grain/pkg/agent"
+	"github.com/ai-on-gke/grain/pkg/github"
+	"github.com/ai-on-gke/grain/pkg/github/githubsim"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 )
@@ -164,6 +166,75 @@ func TestSecurityHoldReReviewNamesEarlierReviewFindingsAndIncrementalDelta(t *te
 			t.Errorf("second security review body missing answered question %q:\n%s", want, second.Body)
 		}
 	})
+}
+
+// A question answered on GitHub -- its thread resolved, or replied to -- reads
+// as answered in the next review's earlier-reviews section. GitHub's review
+// comments carry their line as a pointer, and a finding was once matched to
+// its comment by formatting that pointer, so no question answered on GitHub
+// ever read as answered (docs/test-runs/2026-11-14-review-context.md).
+func TestEarlierReviewQuestionAnsweredOnGitHubReadsAnswered(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		answer func(sim *githubsim.Sim, number, rootID int)
+	}{
+		{"resolved-thread", func(sim *githubsim.Sim, _, rootID int) {
+			sim.ResolvedThreads = map[string]bool{fmt.Sprintf("thread-%d", rootID): true}
+		}},
+		{"replied", func(sim *githubsim.Sim, number, rootID int) {
+			line := 7
+			sim.ReviewComments[number] = append(sim.ReviewComments[number], github.ReviewComment{
+				ID: rootID + 1, User: "alice", Path: "pkg/ui/server.go", Line: &line,
+				Body: "Remove it.", InReplyTo: rootID,
+			})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, ctx := openStore(t)
+			sim, client, task, firstID := heldTaskWithSim(t, ctx, store)
+			branch := model.BranchName(task.ID)
+
+			first := reloaded(t, ctx, store, firstID)
+			res := toolResult(
+				reviewFinding("keep legacy endpoint or remove it?", "pkg/ui/server.go", 7),
+				agent.ToolCall{Name: "comment_on_issue", Arguments: map[string]any{"comment": "Left one question."}},
+			)
+			if err := orchestrator.ProcessResult(ctx, store, client, first, res, firstID+"-1", baseTime.Add(10*time.Minute)); err != nil {
+				t.Fatalf("ProcessResult (first review): %v", err)
+			}
+
+			// A person submits the draft review on GitHub and answers its
+			// one thread there, not in grain.
+			number := sim.PullRequests[0].Number
+			const rootID = 4100
+			line := 7
+			if sim.ReviewComments == nil {
+				sim.ReviewComments = map[int][]github.ReviewComment{}
+			}
+			sim.ReviewComments[number] = append(sim.ReviewComments[number], github.ReviewComment{
+				ID: rootID, User: "grain-agent", Path: "pkg/ui/server.go", Line: &line,
+				Body: "keep legacy endpoint or remove it?",
+			})
+			tc.answer(sim, number, rootID)
+
+			pushFile(t, sim.BareRepo, branch, "pkg/gitproxy/proxy.go", "new proxy check\n")
+			run2 := toolResult(agent.ToolCall{Name: "run_command", Text: "pushed"})
+			if err := orchestrator.ProcessResult(ctx, store, client, reloaded(t, ctx, store, task.ID), run2, "t1-2", baseTime.Add(30*time.Minute)); err != nil {
+				t.Fatalf("ProcessResult (second push): %v", err)
+			}
+			secondID := linkOf(reloaded(t, ctx, store, task.ID), model.LinkSecurityReviewTask)
+			if secondID == "" || secondID == firstID {
+				t.Fatalf("expected new security review, got %q (first %q)", secondID, firstID)
+			}
+			body := reloaded(t, ctx, store, secondID).Body
+			if want := "- [answered] `pkg/ui/server.go:7`: keep legacy endpoint or remove it?"; !strings.Contains(body, want) {
+				t.Errorf("second security review body missing %q:\n%s", want, body)
+			}
+		})
+	}
 }
 
 // When an earlier security review pushed fixes onto the branch that touched the
