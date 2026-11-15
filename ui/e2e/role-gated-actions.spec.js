@@ -41,7 +41,9 @@ const VIEWER = {
 // rewriteJSON intercepts a GET route and rewrites its JSON body. A request
 // still in flight when the test navigates away or closes its page is
 // cancelled with the page, disposing the response ("Response has been
-// disposed"); nobody is waiting on that answer any more, so let it go.
+// disposed"), and one still in flight when the test itself finishes is
+// refused with "route.fetch: Test ended."; nobody is waiting on that
+// answer any more, so let it go.
 async function rewriteJSON(route, transform, fetchOptions) {
   if (route.request().method() !== "GET") return route.fallback();
   let response, body;
@@ -49,11 +51,12 @@ async function rewriteJSON(route, transform, fetchOptions) {
     response = await route.fetch(fetchOptions);
     body = await response.json();
   } catch (err) {
-    if (/disposed|closed|cancel/i.test(String(err))) return;
+    if (/disposed|closed|cancel|test ended/i.test(String(err))) return;
     throw err;
   }
   await route.fulfill({ response, json: transform(body) }).catch((err) => {
-    if (!/disposed|closed|cancel|handled/i.test(String(err))) throw err;
+    if (!/disposed|closed|cancel|handled|test ended/i.test(String(err)))
+      throw err;
   });
 }
 
