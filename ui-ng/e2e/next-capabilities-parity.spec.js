@@ -262,3 +262,55 @@ test("Retired in-process grants and away hosts say what to do", async ({
     .click();
   await expect(page.getByTestId("card-credentials")).toBeInViewport();
 });
+
+test("Scope set Remove and secret rows stay inside a phone viewport @phone", async ({
+  page,
+  request,
+}) => {
+  const name = "walk/phone-width-scope-set";
+  await request.put("/api/api-scope-sets", {
+    data: { set: { name, scopes: ["tasks:read", "ci:read", "memory:read"] } },
+  });
+  await request.put("/api/secrets/walk-phone/token", { data: { value: "x" } });
+  await request.put("/api/secrets/walk-phone/username", {
+    data: { value: "x" },
+  });
+  try {
+    await page.goto("/next/settings/capabilities#api-scope-sets");
+    const vw = page.viewportSize().width;
+    const remove = page.getByTestId("remove-scope-set-" + name);
+    await expect(remove).toBeVisible();
+    const rb = await remove.boundingBox();
+    expect(rb.x + rb.width).toBeLessThanOrEqual(vw);
+    // The scopes left the row, but not the page: they are its title.
+    await expect(
+      page
+        .getByTestId("scope-set-row-" + name)
+        .locator("td")
+        .first(),
+    ).toHaveAttribute("title", "tasks:read, ci:read, memory:read");
+    const row = page.getByTestId("secret-row-walk-phone");
+    await row.scrollIntoViewIfNeeded();
+    const sb = await row.boundingBox();
+    expect(sb.x).toBeGreaterThanOrEqual(0);
+    expect(sb.x + sb.width).toBeLessThanOrEqual(vw);
+    const del = await page
+      .getByTestId("remove-secret-walk-phone")
+      .boundingBox();
+    expect(del.x + del.width).toBeLessThanOrEqual(sb.x + sb.width);
+    // A key chip keeps its name and actions on one line.
+    const replace = await page
+      .getByTestId("replace-secret-walk-phone-token")
+      .boundingBox();
+    const key = await row.getByText("token", { exact: true }).boundingBox();
+    expect(Math.abs(replace.y - key.y)).toBeLessThan(key.height);
+    // ... and is not cut short when the secret holds two keys.
+    const user = row.getByText("username", { exact: true });
+    expect(
+      await user.evaluate((el) => el.scrollWidth <= el.clientWidth),
+    ).toBeTruthy();
+  } finally {
+    await request.post("/api/api-scope-sets/delete", { data: { name } });
+    await request.delete("/api/secrets/walk-phone");
+  }
+});

@@ -1009,7 +1009,7 @@ export function listedSecrets(
                 <thead>
                   <tr>
                     <th>Name</th>
-                    <th>Scopes</th>
+                    <th class="s-hide-phone">Scopes</th>
                     <th class="s-hide-phone">Source</th>
                     <th class="s-actions-cell">Actions</th>
                   </tr>
@@ -1017,10 +1017,15 @@ export function listedSecrets(
                 <tbody>
                   @for (ss of scopeSets(); track ss.name) {
                     <tr [attr.data-testid]="'scope-set-row-' + ss.name">
-                      <td class="s-mono">{{ ss.name }}</td>
                       @let scopeList = (ss.scopes || []).join(", ");
                       <td
-                        class="s-mono s-scope-list"
+                        class="s-mono s-wrap"
+                        [attr.title]="scopeList || null"
+                      >
+                        {{ ss.name }}
+                      </td>
+                      <td
+                        class="s-mono s-scope-list s-hide-phone"
                         [attr.title]="scopeList || null"
                       >
                         {{ scopeList || "—" }}
@@ -1335,7 +1340,7 @@ export function listedSecrets(
                       <span class="s-secret-keys">
                         @for (k of sec.keys || []; track k) {
                           <span class="s-secret-key">
-                            <span class="s-mono">{{ k }}</span>
+                            <span class="s-mono" [attr.title]="k">{{ k }}</span>
                             <button
                               type="button"
                               class="btn-text s-btn-sm"

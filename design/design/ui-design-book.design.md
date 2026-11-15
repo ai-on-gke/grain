@@ -309,7 +309,7 @@ PEMs, never a textarea masked by CSS. Every removal of a secret, key, scope
 set or server asks first through `<g-confirm-dialog>`, saying what stops
 working. A table cell holding a list (scopes, repositories) stays on one line,
 truncates with the full list in its `title`, and drops secondary columns
-(`.s-hide-phone`) below 600px so that row actions stay in view.
+(`.s-hide-phone`, the full list kept in the row's `title`) below 600px so that row actions stay in view.
 
 ### Breakpoints
 
