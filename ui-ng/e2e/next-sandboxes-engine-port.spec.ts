@@ -454,6 +454,7 @@ test("Sandboxes offers to clear a Kubernetes Granule pin holding the same image,
 
 test("Sandboxes: the new cards fit their width at every size @phone @dark", async ({
   page,
+  axe,
 }) => {
   await withSettings(page, {
     sandboxCommitment: COMMITMENT,
@@ -492,6 +493,50 @@ test("Sandboxes: the new cards fit their width at every size @phone @dark", asyn
       );
     }
   }
+  // No two boxes, hints or notes of a card overlap, and none spills out
+  // of the card it is in.
+  const clashes = await page.evaluate(() => {
+    const out: string[] = [];
+    const ids = [
+      "card-sandbox-overcommit",
+      "card-kubernetes",
+      "card-custom-sandbox-image",
+    ];
+    for (const id of ids) {
+      const card = document.querySelector(`[data-testid="${id}"]`)!;
+      const c = card.getBoundingClientRect();
+      const parts = [
+        ...card.querySelectorAll(
+          ".s-field, .s-banner, .s-hint, .s-code, .s-toggle-row, .s-field-error",
+        ),
+      ].map((el) => ({ el, r: el.getBoundingClientRect() }));
+      for (const { el, r } of parts) {
+        if (r.width === 0) continue;
+        if (r.left < c.left - 0.5 || r.right > c.right + 0.5) {
+          out.push(`${id}: ${el.className} spills out`);
+        }
+      }
+      const fields = parts.filter(({ el }) => el.classList.contains("s-field"));
+      for (let i = 0; i < fields.length; i++) {
+        for (let j = i + 1; j < fields.length; j++) {
+          const a = fields[i]!.r;
+          const b = fields[j]!.r;
+          if (
+            a.left < b.right - 0.5 &&
+            b.left < a.right - 0.5 &&
+            a.top < b.bottom - 0.5 &&
+            b.top < a.bottom - 0.5
+          ) {
+            out.push(`${id}: fields ${i} and ${j} overlap`);
+          }
+        }
+      }
+    }
+    return out;
+  });
+  expect(clashes).toEqual([]);
+  expect(await axe()).toEqual([]);
+
   // Reset sits on the image box's own line, to its right.
   const input = (await page.getByTestId("input-sandbox-image").boundingBox())!;
   const reset = (await page.getByTestId("sandbox-image-reset").boundingBox())!;
@@ -499,4 +544,20 @@ test("Sandboxes: the new cards fit their width at every size @phone @dark", asyn
   expect(
     Math.abs(reset.y + reset.height / 2 - (input.y + input.height / 2)),
   ).toBeLessThan(2);
+});
+
+test("Engine's commitment note reads in both themes @phone @dark", async ({
+  page,
+  axe,
+}) => {
+  await withSettings(page, { sandboxCommitment: COMMITMENT });
+  await page.goto("/next/settings/engine");
+  await expect(page.getByTestId("sandbox-commitment-note")).toBeVisible();
+  const overflow = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+  expect(await axe()).toEqual([]);
 });
