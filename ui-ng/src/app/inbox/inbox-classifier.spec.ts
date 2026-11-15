@@ -252,6 +252,19 @@ describe("inbox classifier", () => {
     expect(
       control({ state: "running", reason: { reason: "running/live_run" } }),
     ).toEqual([]);
+    // A task waiting for its pinned model's connections names no control:
+    // Run now cannot free a connection at its concurrency limit.
+    expect(
+      control({
+        state: "queued",
+        reason: {
+          reason: "queued/waiting_for_model",
+          class: "driven",
+          resource:
+            "all connections serving walk-b are busy (1 connection at its concurrency limit (1 of 1 runs)) -- the task is pinned to walk-b; it does not fall back",
+        },
+      }),
+    ).toEqual([]);
     const cancel = classifyTask(
       task({
         stall: "stuck",

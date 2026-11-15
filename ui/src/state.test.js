@@ -2745,6 +2745,9 @@ describe("liveness sub-cases", () => {
       "usage limit paused",
     );
     expect(reasonLabel(null)).toBe(null);
+    expect(reasonLabel({ reason: "queued/waiting_for_model" })).toBe(
+      "waiting for model",
+    );
     // awaiting_reply's sub-cases name the ask (orchestrator's
     // awaitingReplyReasonOf), so a finished report's chip says
     // "answered" beside its "Answered in a comment" badge rather than

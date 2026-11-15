@@ -68,3 +68,45 @@ func TestPinnedModelWaitsAtTheConcurrencyLimitInsteadOfFallingBack(t *testing.T)
 	// An unpinned task on the default list falls to gemini-y.
 	buildChecked(t, pool, orchestrator.AgentChoice{}, "gemini-y", model.AgentFrameworkAntigravity)
 }
+
+// The pinned wait above is what a queued task's structured reason says
+// too, not "a worker slot" with Run now: dispatch records the pool's
+// sentence as the task's model wait (orchestrator's grantAdmitter), and
+// TaskReason names the model and its connections' limit off it, in the
+// words the task's activity line already uses (2026-11-14 §4, item 3).
+func TestPinnedModelWaitIsTheQueuedTasksReason(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	b := model.AgentBackend{ID: "conn-b", Framework: model.AgentFrameworkAntigravity,
+		AuthMode: model.AntigravityAuthAmbient, CLIPath: "/bin/true", Models: []string{"walk-b"}, Concurrency: 1}
+	c := model.AgentBackend{ID: "conn-c", Framework: model.AgentFrameworkAntigravity,
+		AuthMode: model.AntigravityAuthAmbient, CLIPath: "/bin/true", Models: []string{"walk-c"}, Concurrency: 1}
+	pool := providerDefaultPool(t, "walk-b, walk-c", b, c)
+	pool.Pause = &orchestrator.Pause{}
+
+	held, err := pool.Build(ctx, orchestrator.AgentChoice{Model: "walk-b"})
+	if err != nil {
+		t.Fatalf("Build(pinned walk-b): %v", err)
+	}
+	defer held.(*BackendFramework).Lease.Release()
+
+	why := pool.Availability(ctx, orchestrator.AgentChoice{Model: "walk-b"})
+	if why == "" {
+		t.Fatal("Availability(pinned walk-b, its connection full) = \"\", want a wait")
+	}
+	wait := &model.GrantWait{TaskID: "2", Capability: model.ModelWaitCapability, Resource: why}
+	got := orchestrator.TaskReason(model.Task{ID: "2", Model: "walk-b"}, model.StateQueued, nil, nil, nil, wait,
+		model.ReplyFacts{}, "", "")
+	if got.Reason != "queued/waiting_for_model" {
+		t.Errorf("TaskReason(queued, pinned walk-b at its limit).Reason = %q, want queued/waiting_for_model", got.Reason)
+	}
+	for _, want := range []string{"all connections serving walk-b are busy", "1 connection at its concurrency limit (1 of 1 runs)",
+		"pinned to walk-b; it does not fall back"} {
+		if !strings.Contains(got.Resource, want) {
+			t.Errorf("Resource = %q, want it to say %q", got.Resource, want)
+		}
+	}
+	if strings.Contains(got.Resource, "max_workers") || got.Control == "Run now" {
+		t.Errorf("TaskReason = %+v, blames the worker pool or offers Run now, which cannot free walk-b's connection", got)
+	}
+}
