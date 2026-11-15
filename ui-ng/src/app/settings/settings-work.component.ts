@@ -27,6 +27,10 @@ import { GrainApi } from "../api/grain-api.service";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
 import {
+  ConfirmDialogComponent,
+  type ConfirmRequest,
+} from "../shared/confirm-dialog.component";
+import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
@@ -55,7 +59,37 @@ interface CapabilityServerRow {
   config?: CapabilityServerConfig;
   builtin?: unknown;
   inProcess?: { name?: string; summary?: string } | null;
-  status?: { attached?: boolean; error?: string } | null;
+  status?: {
+    attached?: boolean;
+    error?: string;
+    reason?: string;
+    state?: string;
+  } | null;
+}
+
+// capServerState is the chip a server row shows: disabled when an
+// operator turned it off, otherwise the server's own status.state
+// ("attached" reads as enabled; needs-config / needs-hostd say what is
+// missing, in host wording; failed reads as an error) rather than
+// "enabled" for a server that cannot attach yet.
+export function capServerState(srv: CapabilityServerRow): {
+  label: string;
+  tone: string;
+} {
+  if (srv.config?.disabled) return { label: "disabled", tone: "neutral" };
+  const st = String(srv.status?.state ?? "").trim();
+  if (!st || st === "attached") return { label: "enabled", tone: "healthy" };
+  if (st === "needs-config") {
+    return { label: "needs-configuring", tone: "blast" };
+  }
+  // needs-hostd:<selector> is wire format (daemon.NeedsHostd); the chip
+  // says host, as the classic CapabilityServersPanel's needsHostLabel does.
+  if (st === "needs-hostd" || st.startsWith("needs-hostd:")) {
+    const sel = st.slice("needs-hostd:".length).trim();
+    return { label: sel ? `needs host ${sel}` : "needs host", tone: "blast" };
+  }
+  if (st === "failed") return { label: "failed", tone: "error" };
+  return { label: st, tone: st.startsWith("needs") ? "blast" : "neutral" };
 }
 
 export interface CapabilityPolicyRule {
@@ -95,7 +129,7 @@ interface SecretMetaRow {
 
 @Component({
   selector: "g-settings-work",
-  imports: [PillSelectComponent],
+  imports: [PillSelectComponent, ConfirmDialogComponent],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -198,13 +232,31 @@ interface SecretMetaRow {
                 data-testid="input-max-autosubmit-depth"
                 [value]="state.val('maxAutoSubmitDepth', 3)"
                 [disabled]="!canWriteSettings()"
+                [attr.aria-invalid]="
+                  state.fieldErrors()['maxAutoSubmitDepth'] ? true : null
+                "
+                [attr.aria-describedby]="
+                  state.fieldErrors()['maxAutoSubmitDepth']
+                    ? 't-depth-err'
+                    : null
+                "
                 (input)="
-                  state.setField(
+                  setCount(
                     'maxAutoSubmitDepth',
-                    Number($any($event.target).value)
+                    1,
+                    'Max unreviewed follow-up depth',
+                    $event
                   )
                 "
               />
+              @if (state.fieldErrors()["maxAutoSubmitDepth"]; as countErr) {
+                <span
+                  id="t-depth-err"
+                  class="s-field-error"
+                  [attr.data-testid]="'error-t-depth-err'"
+                  >{{ countErr }}</span
+                >
+              }
             </div>
             <div class="s-field">
               <label class="s-label" for="t-fanout"
@@ -217,13 +269,31 @@ interface SecretMetaRow {
                 min="1"
                 [value]="state.val('maxAutoSubmitFanOut', 5)"
                 [disabled]="!canWriteSettings()"
+                [attr.aria-invalid]="
+                  state.fieldErrors()['maxAutoSubmitFanOut'] ? true : null
+                "
+                [attr.aria-describedby]="
+                  state.fieldErrors()['maxAutoSubmitFanOut']
+                    ? 't-fanout-err'
+                    : null
+                "
                 (input)="
-                  state.setField(
+                  setCount(
                     'maxAutoSubmitFanOut',
-                    Number($any($event.target).value)
+                    1,
+                    'Max unreviewed follow-ups per task',
+                    $event
                   )
                 "
               />
+              @if (state.fieldErrors()["maxAutoSubmitFanOut"]; as countErr) {
+                <span
+                  id="t-fanout-err"
+                  class="s-field-error"
+                  [attr.data-testid]="'error-t-fanout-err'"
+                  >{{ countErr }}</span
+                >
+              }
             </div>
             <div class="s-field">
               <label class="s-label" for="t-branch">Branch name template</label>
@@ -363,13 +433,24 @@ interface SecretMetaRow {
                 data-testid="input-max-agent-turns"
                 [value]="state.val('maxAgentTurns', 40)"
                 [disabled]="!canWriteSettings()"
+                [attr.aria-invalid]="
+                  state.fieldErrors()['maxAgentTurns'] ? true : null
+                "
+                [attr.aria-describedby]="
+                  state.fieldErrors()['maxAgentTurns'] ? 'ag-turns-err' : null
+                "
                 (input)="
-                  state.setField(
-                    'maxAgentTurns',
-                    Number($any($event.target).value)
-                  )
+                  setCount('maxAgentTurns', 0, 'Max agent turns', $event)
                 "
               />
+              @if (state.fieldErrors()["maxAgentTurns"]; as countErr) {
+                <span
+                  id="ag-turns-err"
+                  class="s-field-error"
+                  [attr.data-testid]="'error-ag-turns-err'"
+                  >{{ countErr }}</span
+                >
+              }
             </div>
             <div class="s-field">
               <label class="s-label" for="ag-caps"
@@ -522,13 +603,15 @@ interface SecretMetaRow {
                         }}
                       </td>
                       <td>
+                        @let chip = capServerState(srv);
                         <span
-                          [class]="
-                            'status-pill ' +
-                            (!isDisabled ? 'healthy' : 'neutral')
+                          [class]="'status-pill ' + chip.tone"
+                          [attr.data-testid]="'cap-server-state-' + srv.id"
+                          [attr.title]="
+                            srv.status?.error || srv.status?.reason || null
                           "
                         >
-                          {{ !isDisabled ? "enabled" : "disabled" }}
+                          {{ chip.label }}
                         </span>
                       </td>
                       <td class="s-actions-cell">
@@ -552,17 +635,22 @@ interface SecretMetaRow {
                               {{ isDisabled ? "Enable" : "Disable" }}
                             </button>
                           }
-                          <button
-                            type="button"
-                            class="btn-tonal s-btn-sm"
-                            [attr.data-testid]="'test-cap-server-' + srv.id"
-                            [disabled]="
-                              !access.can('POST /api/capability-servers/test')
-                            "
-                            (click)="testCapServer(srv.id)"
-                          >
-                            Test
-                          </button>
+                          <!-- An in-process server has no connection to
+                               probe: the server answers Test with "no
+                               capability server ... is configured". -->
+                          @if (!srv.inProcess) {
+                            <button
+                              type="button"
+                              class="btn-tonal s-btn-sm"
+                              [attr.data-testid]="'test-cap-server-' + srv.id"
+                              [disabled]="
+                                !access.can('POST /api/capability-servers/test')
+                              "
+                              (click)="testCapServer(srv.id)"
+                            >
+                              Test
+                            </button>
+                          }
                           @if (
                             !srv.builtin &&
                             !srv.config?.builtin &&
@@ -577,7 +665,7 @@ interface SecretMetaRow {
                                   'POST /api/capability-servers/remove'
                                 ) || state.sectionLocked('capabilities')
                               "
-                              (click)="removeCapServer(srv.id)"
+                              (click)="confirmRemoveCapServer(srv.id)"
                             >
                               Remove
                             </button>
@@ -592,7 +680,12 @@ interface SecretMetaRow {
           }
 
           @if (capTestNotice()) {
-            <div class="s-banner ok" data-testid="cap-test-notice">
+            <div
+              class="s-banner"
+              [class.ok]="capTestOk()"
+              [class.warn]="!capTestOk()"
+              data-testid="cap-test-notice"
+            >
               {{ capTestNotice() }}
             </div>
           }
@@ -648,7 +741,11 @@ interface SecretMetaRow {
           </div>
         </div>
 
-        <div class="s-card" data-testid="card-capability-policy">
+        <div
+          class="s-card"
+          id="capability-policy"
+          data-testid="card-capability-policy"
+        >
           <div class="s-card-head">
             <div>
               <h3 class="s-card-title">Capability grant policy</h3>
@@ -792,7 +889,11 @@ interface SecretMetaRow {
           </div>
         </div>
 
-        <div class="s-card" data-testid="card-scope-sets-secrets">
+        <div
+          class="s-card"
+          id="api-scope-sets"
+          data-testid="card-scope-sets-secrets"
+        >
           <h3 class="s-card-title">API scope sets &amp; secret vault</h3>
           @if (scopeSets().length > 0) {
             <div class="s-inline">
@@ -837,7 +938,7 @@ interface SecretMetaRow {
             </button>
           </div>
 
-          <div class="s-field">
+          <div class="s-field s-anchor" id="other-secrets">
             <span class="s-label"
               >Stored secrets ({{ secretsList().length }}) — write-only</span
             >
@@ -861,8 +962,12 @@ interface SecretMetaRow {
                 (input)="secretKey.set($any($event.target).value)"
               />
               <textarea
-                class="s-textarea s-input-inline s-mono"
+                class="s-textarea s-input-inline s-mono s-masked"
                 rows="1"
+                autocomplete="off"
+                spellcheck="false"
+                data-lpignore="true"
+                data-1p-ignore="true"
                 aria-label="Secret value"
                 data-testid="input-secret-value"
                 placeholder="Secret value or PEM…"
@@ -877,6 +982,7 @@ interface SecretMetaRow {
                   !secretName().trim() ||
                   !secretKey().trim() ||
                   secretVal().length === 0 ||
+                  !secretsEnabled() ||
                   !access.can('PUT /api/secrets/{secret}/{key}')
                 "
                 (click)="putSecret()"
@@ -886,6 +992,12 @@ interface SecretMetaRow {
             </div>
           </div>
 
+          @if (!secretsEnabled()) {
+            <span class="s-hint" data-testid="secrets-store-disabled"
+              >This server has no secret store configured, so nothing can be
+              stored here yet.</span
+            >
+          }
           @if (!access.can("POST /api/secrets/redact")) {
             <span class="s-hint" data-testid="secrets-redact-restricted">{{
               access.deniedReason("POST /api/secrets/redact")
@@ -961,6 +1073,9 @@ interface SecretMetaRow {
         </div>
       }
     }
+    @if (confirmReq(); as req) {
+      <g-confirm-dialog [request]="req" (done)="onConfirmDone($event)" />
+    }
   `,
 })
 export class SettingsWorkComponent implements OnInit, OnChanges {
@@ -986,6 +1101,8 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly newServerId = signal("");
   protected readonly newServerUrl = signal("");
   protected readonly capTestNotice = signal("");
+  protected readonly capTestOk = signal(true);
+  protected readonly capServerState = capServerState;
 
   protected readonly policyRules = signal<CapabilityPolicyRule[]>([]);
   protected readonly newRuleCap = signal("");
@@ -998,6 +1115,9 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly newScopeSetScopes = signal("");
 
   protected readonly secretsList = signal<SecretMetaRow[]>([]);
+  // GET /api/secrets says enabled: false when the server has no secret
+  // store; a PUT then 404s, so the form says so instead of offering it.
+  protected readonly secretsEnabled = signal(true);
   protected readonly secretName = signal("");
   protected readonly secretKey = signal("value");
   protected readonly secretVal = signal("");
@@ -1126,6 +1246,24 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
         );
       }
     }
+  }
+
+  // setCount stages a whole-number setting, refusing a value under min
+  // by the field's own label before anything is sent (the server would
+  // refuse it too, naming the JSON key instead), and clearing the refusal
+  // once the box holds a good value again.
+  protected setCount(key: string, min: number, label: string, ev: Event): void {
+    const raw = String((ev.target as HTMLInputElement | null)?.value ?? "");
+    const n = Number(raw.trim());
+    if (raw.trim() === "" || !Number.isInteger(n) || n < min) {
+      this.state.setFieldError(
+        key,
+        `${label} must be a whole number of at least ${min}.`,
+      );
+      return;
+    }
+    this.state.setFieldError(key, null);
+    this.state.setField(key, n);
   }
 
   protected setQAFlow(flowId: string): void {
@@ -1282,9 +1420,10 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     if (this.access.can("GET /api/secrets")) {
       try {
         const sec = await this.api.get<
-          SecretMetaRow[] | { secrets?: SecretMetaRow[] }
+          SecretMetaRow[] | { secrets?: SecretMetaRow[]; enabled?: boolean }
         >("GET /api/secrets");
         this.secretsList.set(Array.isArray(sec) ? sec : (sec?.secrets ?? []));
+        this.secretsEnabled.set(Array.isArray(sec) || sec?.enabled !== false);
       } catch {
         // Non-fatal
       }
@@ -1326,17 +1465,49 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   protected async testCapServer(id: string): Promise<void> {
     try {
-      const res = await this.api.post<{ ok?: boolean; detail?: string }>(
-        "POST /api/capability-servers/test",
-        undefined,
-        { id },
-      );
+      const res = await this.api.post<{
+        ok?: boolean;
+        detail?: string;
+        error?: string;
+        methods?: unknown[];
+      }>("POST /api/capability-servers/test", undefined, { id });
+      // The probe answers ok/error/methods; it has no `detail`, so a
+      // failure read only "failed" with the reason dropped.
+      const ok = res?.ok !== false;
+      const n = Array.isArray(res?.methods) ? res.methods.length : 0;
+      this.capTestOk.set(ok);
       this.capTestNotice.set(
-        `${id}: ${res?.detail || (res?.ok === false ? "failed" : "reachable")}`,
+        `${id}: ${
+          res?.detail ||
+          (ok
+            ? `reachable${n ? `, ${n} method${n === 1 ? "" : "s"}` : ""}`
+            : `failed — ${res?.error || "no reason given"}`)
+        }`,
       );
     } catch (err) {
       this.state.recordError(err);
     }
+  }
+
+  protected readonly confirmReq = signal<ConfirmRequest | null>(null);
+
+  protected async onConfirmDone(accepted: boolean): Promise<void> {
+    const req = this.confirmReq();
+    this.confirmReq.set(null);
+    if (!accepted || !req) return;
+    await req.run();
+  }
+
+  // Removing a server drops it from every grant naming it, so it asks
+  // first, as host and Git connection removal do.
+  protected confirmRemoveCapServer(id: string): void {
+    this.confirmReq.set({
+      title: "Remove capability server?",
+      message: `Remove ${id}? Tasks that hold a grant on it can no longer use it.`,
+      accept: "Remove",
+      destructive: true,
+      run: () => this.removeCapServer(id),
+    });
   }
 
   protected async removeCapServer(id: string): Promise<void> {
@@ -1478,8 +1649,12 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
     }
   }
 
+  // saveMemory saves both boxes the Memory card shows: the deployment
+  // memory document and, when it was edited, the standing instructions
+  // (a setting, which Save memory used to leave unsaved).
   protected async saveMemory(): Promise<void> {
     try {
+      await this.state.saveFields(["promptExtension"]);
       await this.api.put("PUT /api/memory", undefined, {
         text: this.memoryBody(),
       });

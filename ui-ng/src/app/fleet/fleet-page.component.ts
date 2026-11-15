@@ -235,6 +235,37 @@ const PERSISTENT_ACTIONS: readonly {
           </div>
         }
 
+        <!-- Base branches publishing nothing (pkg/model/base_branch_publishing.go):
+             a warning, as on classic System -> Health, since nothing is
+             stuck; held when a release triage task gates the branch. -->
+        @for (
+          pub of sandboxes()?.baseBranchPublishing ?? [];
+          track pub.repo + " " + pub.branch
+        ) {
+          <div
+            class="banner fleet-publishing-banner"
+            style="margin: 0"
+            role="status"
+            data-testid="fleet-publishing"
+          >
+            <g-status-icon tone="blast" kind="warning" />
+            <span class="fleet-publishing-text">
+              <strong
+                >{{ pub.gated ? "Publishing held" : "Publishing nothing" }} ·
+                <span class="tabular">{{ pub.repo }}&#64;{{ pub.branch }}</span
+                >:</strong
+              >
+              {{ pub.detail }}
+              @if (pub.gated && pub.triageTaskID) {
+                —
+                <a [routerLink]="['/task', pub.triageTaskID]"
+                  >Open triage task #{{ pub.triageTaskID }}</a
+                >
+              }
+            </span>
+          </div>
+        }
+
         <!-- Host & Capacity Strip -->
         @if (canReadSandboxes()) {
           <div class="fleet-host-strip" data-testid="fleet-host-strip">
@@ -940,7 +971,7 @@ sandbox={{ pr.sandbox }} pod={{ pr.pod }} exit={{ pr.exitCode }}
                           <input
                             type="text"
                             class="ops-input tabular"
-                            aria-label="New hostd name"
+                            aria-label="New host name"
                             [attr.data-testid]="'hostd-rename-input-' + h.name"
                             [value]="renameDraft()"
                             (input)="renameDraft.set($any($event.target).value)"
@@ -1577,6 +1608,7 @@ export class FleetPageComponent implements OnInit {
 
   protected readonly tab = signal<FleetTab>("sandboxes");
   private readonly loadedTabs = new Set<FleetTab>();
+  private bootstrapped = false;
   protected readonly loading = signal(false);
   protected readonly loadError = signal<string | null>(null);
   protected readonly confirmReq = signal<ConfirmRequest | null>(null);
@@ -1818,13 +1850,16 @@ export class FleetPageComponent implements OnInit {
           t === "hostds" || t === "controls" || t === "logs" ? t : "sandboxes";
         if (next === this.tab()) return;
         this.tab.set(next);
-        void this.ensureTabLoaded(next);
+        if (this.bootstrapped) {
+          void this.ensureTabLoaded(next);
+        }
       });
     void this.bootstrap();
   }
 
   private async bootstrap(): Promise<void> {
     await this.loadBootstrapConfig();
+    this.bootstrapped = true;
     await this.refreshAll();
   }
 

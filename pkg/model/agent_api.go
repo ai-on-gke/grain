@@ -16,6 +16,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -860,6 +861,38 @@ func RetiredGrantRefusal(name string) (msg string, became []string, ok bool) {
 	}
 	return fmt.Sprintf("%s is a retired capability name and grants nothing any longer: it became %s",
 		trimmed, strings.Join(became, " and ")), became, true
+}
+
+// RetiredTaskGrantRefusal is RetiredGrantRefusal for a grant named on
+// work being filed -- a propose_task call, or the proposal relayed from
+// one: a retired bare name is refused naming what it became, and
+// grain#ci, which no task names, is said to come from the target
+// repository's CI Mode. ok is false for any other name, a registered
+// alias (RegisterLegacyGrantAlias) still honoured included.
+func RetiredTaskGrantRefusal(name string) (msg string, ok bool) {
+	trimmed := strings.TrimSpace(name)
+	if _, alias := registeredLegacyAlias(trimmed); alias {
+		return "", false
+	}
+	msg, became, ok := RetiredGrantRefusal(trimmed)
+	if !ok {
+		return "", false
+	}
+	if len(became) == 1 && IsGrainCIGrant(became[0]) {
+		return msg + ", which no task names: grain grants it to every task on a repository whose CI Mode is \"Use Grain CI\", so leave it off", true
+	}
+	return msg + "; name that instead", true
+}
+
+// RefuseRetiredTaskGrants is the first RetiredTaskGrantRefusal among
+// grants, as an error, or nil when none is a retired bare name.
+func RefuseRetiredTaskGrants(grants []string) error {
+	for _, g := range grants {
+		if msg, ok := RetiredTaskGrantRefusal(g); ok {
+			return errors.New(msg)
+		}
+	}
+	return nil
 }
 
 // RetiredGrantNames is every retired bare capability name

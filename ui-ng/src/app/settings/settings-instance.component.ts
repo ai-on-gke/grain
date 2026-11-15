@@ -436,12 +436,13 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="number"
                 min="0"
-                [value]="state.val('packageCacheSizeGb', 20)"
+                [value]="state.defaultedNumber('packageCacheSizeGb')"
+                [placeholder]="state.defaultHint('packageCacheSizeGb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'packageCacheSizeGb',
-                    Number($any($event.target).value)
+                    $any($event.target).value
                   )
                 "
               />
@@ -455,12 +456,13 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="number"
                 min="0"
-                [value]="state.val('actionsCacheSizeGb', 20)"
+                [value]="state.defaultedNumber('actionsCacheSizeGb')"
+                [placeholder]="state.defaultHint('actionsCacheSizeGb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'actionsCacheSizeGb',
-                    Number($any($event.target).value)
+                    $any($event.target).value
                   )
                 "
               />
@@ -482,13 +484,19 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="text"
                 data-testid="input-poll-interval"
-                placeholder="30s"
-                [value]="state.val('pollInterval', '30s')"
+                [placeholder]="state.defaultHint('pollInterval', '10s')"
+                [value]="state.val('pollInterval', '')"
                 [disabled]="!canWriteSettings()"
+                aria-describedby="e-poll-hint"
                 (input)="
                   state.setField('pollInterval', $any($event.target).value)
                 "
               />
+              <span class="s-hint" id="e-poll-hint"
+                >Go duration, e.g. 10s. Blank uses grain's default ({{
+                  state.val("pollIntervalDefault", "10s")
+                }}).</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="e-workers">Max worker agents</label>
@@ -498,15 +506,26 @@ function formatBytes(bytes: number): string {
                 type="number"
                 min="1"
                 data-testid="input-max-workers"
-                [value]="state.val('maxWorkers', 4)"
+                [value]="state.defaultedNumber('maxWorkers')"
+                aria-describedby="e-workers-hint"
+                [placeholder]="state.defaultHint('maxWorkers', '10')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'maxWorkers',
-                    Number($any($event.target).value)
+                    $any($event.target).value,
+                    10,
+                    true
                   )
                 "
+                (change)="
+                  state.setNumber('maxWorkers', $any($event.target).value, 10)
+                "
               />
+              <span class="s-hint" id="e-workers-hint"
+                >Ordinary tasks dispatched at once (10 by default; blank
+                resets).</span
+              >
             </div>
             <div class="s-field">
               <label class="s-label" for="e-mpr"
@@ -517,15 +536,31 @@ function formatBytes(bytes: number): string {
                 class="s-input s-num"
                 type="number"
                 min="1"
-                [value]="state.val('maxMergesPerRepo', 1)"
+                data-testid="input-max-merges-per-repo"
+                [value]="state.defaultedNumber('maxMergesPerRepo')"
+                aria-describedby="e-mpr-hint"
+                [placeholder]="state.defaultHint('maxMergesPerRepo', '5')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
+                  state.setNumber(
                     'maxMergesPerRepo',
-                    Number($any($event.target).value)
+                    $any($event.target).value,
+                    5,
+                    true
+                  )
+                "
+                (change)="
+                  state.setNumber(
+                    'maxMergesPerRepo',
+                    $any($event.target).value,
+                    5
                   )
                 "
               />
+              <span class="s-hint" id="e-mpr-hint"
+                >Ready pull requests merged into each branch per queue cycle (5
+                by default; blank resets).</span
+              >
             </div>
           </div>
 
@@ -554,10 +589,10 @@ function formatBytes(bytes: number): string {
       }
 
       @case ("registry") {
-        <div class="s-card" data-testid="card-registry">
+        <div class="s-card" id="registry-status" data-testid="card-registry">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">Grain Registry &amp; Hub connection</h3>
+              <h3 class="s-card-title">Grain Hub connection</h3>
               <p class="s-card-desc">
                 Advertise repository scopes and health heartbeats to a central
                 Grain Hub directory.
@@ -865,9 +900,9 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected readonly cliLocationOptions: readonly PillOption[] = [
     { value: "", label: "Deployment default" },
-    { value: "host", label: "Host (grain hostd)" },
+    { value: "host", label: "Host (grain host)" },
     { value: "container", label: "Daemon container" },
-    { value: "detached", label: "Detached hostd session" },
+    { value: "detached", label: "Detached host session" },
   ];
 
   protected readonly hubAuthOptions: readonly PillOption[] = [
@@ -976,9 +1011,32 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     return this.doc.defaultView?.location?.origin || "http://localhost:8080";
   }
 
+  // cliSnippet is what a workstation runs to install the grain CLI, sign
+  // in and add the agent skills -- the classic Settings -> CLI lines
+  // (ui/src/components/settings/CLISection.jsx). The installer is
+  // /cli/install.sh (pkg/ui/cli_install.go), never /api/hostd/install.sh:
+  // that one installs a host, wants root and a registered name, and is
+  // no way to get the CLI onto a laptop.
   protected cliSnippet(): string {
     const origin = this.serverOrigin();
-    return `curl -fsSL ${origin}/api/hostd/install.sh | sh\ngrain login ${origin}`;
+    let host = "";
+    try {
+      host = new URL(origin).hostname;
+    } catch {
+      // An origin that is not a URL names no host; the slug is "default".
+    }
+    // The context name `grain login` gives a deployment when --name is
+    // left out (pkg/cli/login.go contextSlug).
+    const slug =
+      host
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "default";
+    return [
+      `curl -fsSL ${origin}/cli/install.sh | sh`,
+      `grain login ${origin} --name ${slug} --issue-token --scope-set grain/external-dev --expires 30d`,
+      `grain skill install --jetski   # or --claude, --codex, --gemini`,
+    ].join("\n");
   }
 
   private loadForSection(): void {

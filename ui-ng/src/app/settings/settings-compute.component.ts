@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
@@ -39,6 +40,7 @@ import {
   modelGroups,
   parseDefaultModels,
 } from "../shared/model-catalog";
+import { copyToClipboard } from "../shared/clipboard";
 import { ModelPickerComponent } from "../shared/model-picker.component";
 import {
   type PillOption,
@@ -50,6 +52,43 @@ import {
 } from "../shared/dispatch-status";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
+
+// SandboxBackendOptionDto is one entry of GET /api/settings
+// sandboxBackendOptions (model.SandboxBackendOption).
+interface SandboxBackendOptionDto {
+  backend: string;
+  available?: boolean;
+  reason?: string;
+}
+
+// The same names and descriptions the classic Settings -> Sandboxes uses
+// (ui/src/components/settings/SandboxesSection.jsx).
+const SANDBOX_BACKEND_LABELS: Readonly<Record<string, string>> = {
+  none: "None (control plane only)",
+  host: "Host directories (no isolation)",
+  container: "Local Docker containers",
+  granule: "Granule virtual machines",
+  kubernetes: "Kubernetes — container pod per run (no VM)",
+  "kubernetes-granule": "Kubernetes — Granule VM per run",
+};
+
+const SANDBOX_BACKEND_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  none: "This daemon runs grain's control plane only (settings, the inbox, the config repository) and creates no sandboxes, so no task runs here: each dispatch fails at sandbox acquisition and says so. Meant for tests and walkthroughs.",
+  host: "Each run executes directly in a directory on the daemon machine with no container or VM isolation.",
+  container:
+    "Each run executes in an unprivileged local Docker container sharing the host kernel (no VM).",
+  granule:
+    "Each run boots an isolated Granule microVM with its own guest kernel on this host.",
+  kubernetes:
+    "Each run executes in a Kubernetes container pod scheduled on the cluster, sharing the node kernel (no VM).",
+  "kubernetes-granule":
+    "Each run boots a Granule microVM with its own guest kernel over /dev/kvm inside a privileged Kubernetes pod.",
+};
+
+const NETWORK_ACCESS_LABELS: Readonly<Record<string, string>> = {
+  open: "Open (full network)",
+  none: "None (isolated)",
+};
 
 interface ModelSettingRow {
   model: string;
@@ -119,14 +158,53 @@ function deletedHostdLine(d: DeletedHostdRow): string {
   return line;
 }
 
+// EnrollmentCodeRow is one entry of GET /api/hostds/enrollment-codes
+// (HostEnrollmentCodeView): code and install are present only while the
+// code is not revoked.
 interface EnrollmentCodeRow {
   name: string;
   prefix?: string;
   code?: string;
+  install?: HostdInstallDto;
   expires_at?: string | null;
   max_uses?: number;
   uses?: number;
   revoked_at?: string | null;
+  default_labels?: Record<string, string> | null;
+  default_capacity?: number;
+  allowed_principals?: string[] | null;
+}
+
+// pickEnrollmentCode is the code Invite hosts shows: the one the operator
+// chose while it still exists, else the active "default", else the first
+// active code, else the first code at all.
+export function pickEnrollmentCode(
+  codes: EnrollmentCodeRow[],
+  chosen: string,
+): EnrollmentCodeRow | null {
+  const active = codes.filter((c) => !c.revoked_at && c.code);
+  return (
+    codes.find((c) => c.name === chosen) ??
+    active.find((c) => c.name === "default") ??
+    active[0] ??
+    codes[0] ??
+    null
+  );
+}
+
+// inviteLines is the enrollment snippet for one code: the daemon's
+// rendered install lines (RegisterHostdInstall) when it sent them, or the
+// standard /hostd/install --join command.
+export function inviteLines(
+  origin: string,
+  code: EnrollmentCodeRow | null,
+): string[] {
+  if (!code || code.revoked_at) return [];
+  if (Array.isArray(code.install?.lines) && code.install.lines.length > 0) {
+    return code.install.lines;
+  }
+  if (!code.code) return [];
+  return [`curl -fsSL ${origin}/hostd/install | sh -s -- --join ${code.code}`];
 }
 
 interface PendingHostdRow {
@@ -755,7 +833,7 @@ function formatRefreshedAt(iso?: string): string {
               </div>
               <div class="s-field">
                 <label class="s-label" for="nb-hostd"
-                  >Hostd name or label selector</label
+                  >Host name or label selector</label
                 >
                 <input
                   id="nb-hostd"
@@ -1036,11 +1114,16 @@ function formatRefreshedAt(iso?: string): string {
                 testid="select-sandbox-backend"
                 ariaLabel="Sandbox backend"
                 align="left"
-                [options]="sandboxBackendOptions"
-                [value]="state.val('sandboxBackend', 'granule')"
+                [options]="sandboxBackendOptions()"
+                [value]="state.val('sandboxBackend', 'container')"
                 [disabled]="!canWriteSettings()"
                 (valueChange)="state.setField('sandboxBackend', $event)"
               />
+              @if (sandboxBackendDescription()) {
+                <span class="s-hint" data-testid="sandbox-backend-desc">{{
+                  sandboxBackendDescription()
+                }}</span>
+              }
             </div>
             <div class="s-field">
               <span class="s-label">Network access</span>
@@ -1048,8 +1131,8 @@ function formatRefreshedAt(iso?: string): string {
                 testid="select-sandbox-network"
                 ariaLabel="Sandbox network access"
                 align="left"
-                [options]="networkOptions"
-                [value]="state.val('networkAccess', 'egress')"
+                [options]="networkOptions()"
+                [value]="state.val('networkAccess', 'open')"
                 [disabled]="!canWriteSettings()"
                 (valueChange)="state.setField('networkAccess', $event)"
               />
@@ -1062,13 +1145,11 @@ function formatRefreshedAt(iso?: string): string {
                 type="number"
                 min="0"
                 data-testid="input-sandbox-cpus"
-                [value]="state.val('sandboxCpus', 4)"
+                [value]="state.defaultedNumber('sandboxCpus')"
+                [placeholder]="state.defaultHint('sandboxCpus')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
-                    'sandboxCpus',
-                    Number($any($event.target).value)
-                  )
+                  state.setNumber('sandboxCpus', $any($event.target).value)
                 "
               />
             </div>
@@ -1080,13 +1161,11 @@ function formatRefreshedAt(iso?: string): string {
                 type="number"
                 min="0"
                 data-testid="input-sandbox-memory"
-                [value]="state.val('sandboxMemoryMb', 8192)"
+                [value]="state.defaultedNumber('sandboxMemoryMb')"
+                [placeholder]="state.defaultHint('sandboxMemoryMb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
-                    'sandboxMemoryMb',
-                    Number($any($event.target).value)
-                  )
+                  state.setNumber('sandboxMemoryMb', $any($event.target).value)
                 "
               />
             </div>
@@ -1098,13 +1177,11 @@ function formatRefreshedAt(iso?: string): string {
                 type="number"
                 min="0"
                 data-testid="input-sandbox-disk"
-                [value]="state.val('sandboxDiskGb', 32)"
+                [value]="state.defaultedNumber('sandboxDiskGb')"
+                [placeholder]="state.defaultHint('sandboxDiskGb')"
                 [disabled]="!canWriteSettings()"
                 (input)="
-                  state.setField(
-                    'sandboxDiskGb',
-                    Number($any($event.target).value)
-                  )
+                  state.setNumber('sandboxDiskGb', $any($event.target).value)
                 "
               />
             </div>
@@ -1116,7 +1193,9 @@ function formatRefreshedAt(iso?: string): string {
                 id="sb-ttl"
                 class="s-input s-num"
                 type="text"
-                placeholder="30m"
+                [placeholder]="
+                  state.defaultHint('sessionSandboxIdleTtl', '30m')
+                "
                 [value]="state.val('sessionSandboxIdleTtl', '')"
                 [disabled]="!canWriteSettings()"
                 (input)="
@@ -1205,6 +1284,7 @@ function formatRefreshedAt(iso?: string): string {
                 class="s-input s-mono"
                 type="text"
                 [value]="state.val('k8sNamespace', '')"
+                [placeholder]="state.defaultHint('k8sNamespace', 'grain')"
                 [disabled]="!canWriteSettings()"
                 (input)="
                   state.setField('k8sNamespace', $any($event.target).value)
@@ -1296,9 +1376,7 @@ function formatRefreshedAt(iso?: string): string {
         <div class="s-card" data-testid="card-hostds-list">
           <div class="s-card-head">
             <div>
-              <h3 class="s-card-title">
-                Registered workstation hosts (hostds)
-              </h3>
+              <h3 class="s-card-title">Registered workstation hosts</h3>
               <p class="s-card-desc">
                 grain-agentd daemons paired with this controller for local CLI
                 tokens and workstation execution.
@@ -1321,10 +1399,10 @@ function formatRefreshedAt(iso?: string): string {
               {{ access.deniedReason("GET /api/hostds") }}
             </div>
           } @else if (hostds().length === 0) {
-            <p class="s-card-desc">No hostds registered yet.</p>
+            <p class="s-card-desc">No hosts registered yet.</p>
           } @else {
             <div class="s-table-wrap">
-              <table class="s-table" aria-label="Registered hostds">
+              <table class="s-table" aria-label="Registered hosts">
                 <thead>
                   <tr>
                     <th>Name</th>
@@ -1435,7 +1513,7 @@ function formatRefreshedAt(iso?: string): string {
             </div>
             <div class="s-grid">
               <div class="s-field">
-                <label class="s-label" for="hd-name">New hostd name</label>
+                <label class="s-label" for="hd-name">New host name</label>
                 <input
                   id="hd-name"
                   class="s-input s-mono"
@@ -1473,7 +1551,7 @@ function formatRefreshedAt(iso?: string): string {
                 "
                 (click)="createHostd()"
               >
-                Register hostd
+                Register host
               </button>
             </div>
           </div>
@@ -1514,6 +1592,120 @@ function formatRefreshedAt(iso?: string): string {
               }}</span>
             </div>
           } @else {
+            @if (selectedEnrollmentCode(); as sc) {
+              <section
+                class="hd-invite"
+                aria-labelledby="hd-invite-title"
+                data-testid="invite-hosts"
+              >
+                <div class="s-subhead">
+                  <h4 class="s-subhead-title" id="hd-invite-title">
+                    Invite hosts
+                  </h4>
+                  @if (enrollmentCodes().length > 1) {
+                    <g-pill-select
+                      testid="select-invite-code"
+                      ariaLabel="Enrollment code to invite with"
+                      prefix="Code"
+                      [options]="enrollmentCodeOptions()"
+                      [value]="sc.name"
+                      (valueChange)="selectEnrollmentCode($event)"
+                    />
+                  }
+                </div>
+                <p class="s-hint">
+                  Run this on each machine to join. The code only files a
+                  pending join request: each host makes its own key and waits
+                  for you to accept it below.
+                </p>
+                @if (sc.revoked_at) {
+                  <div class="s-banner warn" role="status">
+                    <span
+                      >Enrollment code <strong>{{ sc.name }}</strong> is revoked
+                      and can no longer file join requests. Hosts already
+                      accepted are unaffected.</span
+                    >
+                  </div>
+                } @else if (inviteSnippet()) {
+                  <pre
+                    class="s-code"
+                    data-testid="invite-hosts-snippet"
+                    aria-label="Invite command"
+                    >{{ inviteSnippet() }}</pre>
+                  @if (sc.install?.note) {
+                    <p class="s-hint" data-testid="invite-hosts-note">
+                      {{ sc.install?.note }}
+                    </p>
+                  }
+                  <div class="s-inline">
+                    <button
+                      type="button"
+                      class="btn-primary s-btn-sm"
+                      data-testid="copy-invite-command"
+                      (click)="
+                        copyInvite(inviteSnippet(), 'Copied invite command')
+                      "
+                    >
+                      Copy invite command
+                    </button>
+                    @if (sc.code) {
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        data-testid="toggle-enrollment-secret"
+                        [attr.aria-expanded]="enrollmentSecretShown()"
+                        (click)="
+                          enrollmentSecretShown.set(!enrollmentSecretShown())
+                        "
+                      >
+                        {{
+                          enrollmentSecretShown() ? "Hide code" : "Show code"
+                        }}
+                      </button>
+                    }
+                  </div>
+                  @if (enrollmentSecretShown() && sc.code) {
+                    <div class="s-inline">
+                      <code
+                        class="s-meta-mono hd-invite-secret"
+                        data-testid="enrollment-secret"
+                        >{{ sc.code }}</code
+                      >
+                      <button
+                        type="button"
+                        class="btn-text s-btn-sm"
+                        data-testid="copy-enrollment-secret"
+                        (click)="copyInvite(sc.code, 'Copied enrollment code')"
+                      >
+                        Copy code
+                      </button>
+                    </div>
+                  }
+                }
+                <div class="s-inline" data-testid="invite-hosts-meta">
+                  <span class="status-pill neutral"
+                    >Uses: {{ sc.uses ?? 0
+                    }}{{ sc.max_uses ? " / " + sc.max_uses : "" }}</span
+                  >
+                  @if (sc.default_capacity) {
+                    <span class="status-pill neutral"
+                      >Default capacity: {{ sc.default_capacity }}</span
+                    >
+                  }
+                  @if (formatLabelsInput(sc.default_labels); as lbl) {
+                    <span class="status-pill neutral">Labels: {{ lbl }}</span>
+                  }
+                  @for (p of sc.allowed_principals ?? []; track p) {
+                    <span class="status-pill neutral">Allow: {{ p }}</span>
+                  }
+                  @if (sc.expires_at) {
+                    <span class="status-pill neutral"
+                      >Expires: {{ sc.expires_at.slice(0, 10) }}</span
+                    >
+                  }
+                </div>
+              </section>
+            }
             @if (enrollmentCodes().length > 0) {
               <div class="s-table-wrap">
                 <table class="s-table" aria-label="Enrollment codes">
@@ -1607,7 +1799,7 @@ function formatRefreshedAt(iso?: string): string {
             </div>
           } @else if (pendingHostds().length > 0) {
             <div class="s-table-wrap" data-testid="hostds-pending-table">
-              <table class="s-table" aria-label="Pending hostd joins">
+              <table class="s-table" aria-label="Pending host requests">
                 <thead>
                   <tr>
                     <th>ID / Hostname</th>
@@ -1705,6 +1897,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
   private readonly snackbar = inject(SnackbarService);
+  private readonly doc = inject(DOCUMENT);
 
   readonly section = input.required<SettingsSectionId>();
 
@@ -1735,22 +1928,49 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     { value: "auto", label: "Auto throttle" },
     { value: "off", label: "Off" },
   ];
-  protected readonly sandboxBackendOptions: readonly PillOption[] = [
-    { value: "granule", label: "Granule microVM" },
-    { value: "docker", label: "Docker container" },
-    { value: "podman", label: "Podman container" },
-    { value: "kubernetes", label: "Kubernetes pod" },
-    { value: "local", label: "Local host directory" },
-  ];
-  protected readonly networkOptions: readonly PillOption[] = [
-    { value: "none", label: "None (isolated)" },
-    { value: "egress", label: "Filtered egress" },
-    { value: "full", label: "Full network" },
-  ];
+  // The backend and network pickers offer the server's own vocabulary
+  // (GET /api/settings sandboxBackendOptions / networkAccesses): a value
+  // the daemon does not know is refused on save, and a stored value the
+  // list lacks would show as somebody else's choice. Backends this daemon
+  // cannot run stay listed but disabled, with the server's reason.
+  protected readonly sandboxBackendOptions = computed<PillOption[]>(() => {
+    const s = this.state.settings();
+    const raw = s["sandboxBackendOptions"];
+    const list: SandboxBackendOptionDto[] =
+      Array.isArray(raw) && raw.length > 0
+        ? (raw as SandboxBackendOptionDto[])
+        : (Array.isArray(s["sandboxBackends"])
+            ? (s["sandboxBackends"] as string[])
+            : ["container"]
+          ).map((backend) => ({ backend, available: true }));
+    return list.map((o) => ({
+      value: o.backend,
+      label: SANDBOX_BACKEND_LABELS[o.backend] ?? o.backend,
+      disabled: o.available === false,
+      hint:
+        o.available === false
+          ? `Unavailable: ${o.reason || "this daemon cannot run it"}`
+          : undefined,
+    }));
+  });
+  protected readonly networkOptions = computed<PillOption[]>(() => {
+    const raw = this.state.settings()["networkAccesses"];
+    const names =
+      Array.isArray(raw) && raw.length > 0
+        ? (raw as string[])
+        : ["open", "none"];
+    return names.map((n) => ({
+      value: n,
+      label: NETWORK_ACCESS_LABELS[n] ?? n,
+    }));
+  });
+  protected sandboxBackendDescription(): string {
+    const b = String(this.state.val("sandboxBackend", "container"));
+    return SANDBOX_BACKEND_DESCRIPTIONS[b] ?? "";
+  }
   protected readonly overcommitOptions: readonly PillOption[] = [
     { value: "fixed", label: "Fixed multiplier" },
     { value: "auto", label: "Pressure-governed auto" },
-    { value: "off", label: "Disabled (1x)" },
   ];
 
   protected readonly newModelSettingName = signal("");
@@ -1806,6 +2026,23 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
   protected readonly mintedHostdToken = signal<string | null>(null);
   protected readonly enrollmentCodes = signal<EnrollmentCodeRow[]>([]);
   protected readonly newCodeName = signal("");
+  protected readonly chosenEnrollmentCode = signal("");
+  protected readonly enrollmentSecretShown = signal(false);
+  protected readonly selectedEnrollmentCode = computed(() =>
+    pickEnrollmentCode(this.enrollmentCodes(), this.chosenEnrollmentCode()),
+  );
+  protected readonly enrollmentCodeOptions = computed<PillOption[]>(() =>
+    this.enrollmentCodes().map((c) => ({
+      value: c.name,
+      label: c.revoked_at ? `${c.name} (revoked)` : c.name,
+    })),
+  );
+  protected readonly inviteSnippet = computed(() =>
+    inviteLines(
+      this.doc.defaultView?.location.origin ?? "",
+      this.selectedEnrollmentCode(),
+    ).join("\n"),
+  );
   protected readonly pendingHostds = signal<PendingHostdRow[]>([]);
   protected readonly pendingLabelDrafts = signal<Record<string, string>>({});
 
@@ -2407,10 +2644,10 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
       });
       this.newHostdName.set("");
       this.newHostdLabels.set("");
-      const msg = this.formatIssuedHostdSecret(`Hostd token (${name})`, res);
+      const msg = this.formatIssuedHostdSecret(`Host token (${name})`, res);
       if (msg) this.mintedHostdToken.set(msg);
       await this.loadHostds();
-      this.snackbar.show(`Registered hostd ${name}`);
+      this.snackbar.show(`Registered host ${name}`);
     } catch (err) {
       this.state.recordError(err);
     }
@@ -2512,6 +2749,16 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
     });
   }
 
+  protected selectEnrollmentCode(name: string): void {
+    this.chosenEnrollmentCode.set(name);
+    this.enrollmentSecretShown.set(false);
+  }
+
+  protected async copyInvite(text: string, notice: string): Promise<void> {
+    const ok = await copyToClipboard(this.doc, text);
+    this.snackbar.show(ok ? notice : "Could not copy: select the text instead");
+  }
+
   protected async createEnrollmentCode(): Promise<void> {
     const name = this.newCodeName().trim();
     if (!name) return;
@@ -2522,6 +2769,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
         install?: HostdInstallDto | string;
       }>("POST /api/hostds/enrollment-codes", undefined, { name });
       this.newCodeName.set("");
+      this.selectEnrollmentCode(name);
       const secret = res?.code ?? res?.token;
       const msg = this.formatIssuedHostdSecret(`Enrollment code (${name})`, {
         token: secret,
@@ -2621,7 +2869,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
         },
       );
       await this.loadHostds();
-      this.snackbar.show(`Approved hostd ${hostName}`);
+      this.snackbar.show(`Approved host ${hostName}`);
     } catch (err) {
       this.state.recordError(err);
     }
@@ -2642,7 +2890,7 @@ export class SettingsComputeComponent implements OnInit, OnChanges {
             {},
           );
           await this.loadHostds();
-          this.snackbar.show("Rejected pending hostd");
+          this.snackbar.show("Rejected pending host request");
         } catch (err) {
           this.state.recordError(err);
         }
