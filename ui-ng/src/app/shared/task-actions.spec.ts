@@ -227,6 +227,17 @@ describe("availableActions", () => {
     expect(whatsNeeded(t)).toContain("Security review is still running");
   });
 
+  it("offers Run now on a green Submit, but not beside Send back", () => {
+    const green = task({
+      state: "awaiting_submit",
+      mergeGates: [CI_PASSED, { ...APPROVAL, state: "needed" }],
+    });
+    expect(ids(green, limited)).toContain("run-now");
+    const red = task({ state: "awaiting_submit", mergeGates: [CI_FAILING] });
+    expect(ids(red, limited)).toContain("send-back");
+    expect(ids(red, limited)).not.toContain("run-now");
+  });
+
   it("offers nothing a reader may not do", () => {
     expect(ids(task({ state: "awaiting_submit" }), reader)).toEqual([]);
     expect(ids(task({ state: "running" }), reader)).toEqual([]);

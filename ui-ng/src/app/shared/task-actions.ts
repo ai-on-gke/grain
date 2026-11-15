@@ -462,9 +462,11 @@ export function availableActions(
   }
 
   // --- the rest ---------------------------------------------------------
+  // On a task waiting on Submit, Run now sends it back to its agent on
+  // its branch; where Send back already does that it is not offered twice.
   if (
     state !== "running" &&
-    state !== "awaiting_submit" &&
+    !(state === "awaiting_submit" && out.some((a) => a.id === "send-back")) &&
     !(state === "awaiting_reply" && parkedOn(t))
   ) {
     add({
