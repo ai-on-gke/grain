@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/ai-on-gke/grain/pkg/capability/protocol"
 )
 
 // This file is slices 2-3 of design/design/unified-grants.design.md (§1-§3):
@@ -173,6 +175,26 @@ func (g Grant) Key() string {
 // CanonicalGrantKey is CanonicalGrant(s).Key(): the one key both of a
 // grant's spellings compare equal under.
 func CanonicalGrantKey(s string) string { return CanonicalGrant(s).Key() }
+
+// HeldGrantKey is CanonicalGrantKey with one more pair of spellings
+// folded together: a capability-server method granted with no arguments
+// ("server#method") and the same method granted with empty ones
+// ("server#method={}"), which protocol grant equality already treats as
+// one grant (recordedCapabilityGrant reads both as Args {}). A task's
+// recorded grants carry the second form and a declared template's the
+// first, so a check of whether one holds what the other hands out
+// (TemplateWithinTask) compares under this key. Only an empty object is
+// folded: a grant with any argument keeps it, and a methodless server
+// reference, which could name any of its methods, is left apart.
+func HeldGrantKey(s string) string {
+	g := CanonicalGrant(s)
+	if bytes.Equal(bytes.TrimSpace(g.With), []byte("{}")) && IsCapabilityRef(g.Capability) {
+		if ref, err := protocol.ParseRef(g.Capability); err == nil && ref.Method != "" {
+			g.With = nil
+		}
+	}
+	return g.Key()
+}
 
 // LegacyGrantString is the string slice 2 stores for g: api:<x>[@repo]
 // for an api reference with no arguments or exactly {repo}, and g's own

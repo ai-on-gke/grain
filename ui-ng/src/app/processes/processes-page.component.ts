@@ -68,6 +68,7 @@ import {
   buildSuiteRunPasses,
   describeSuiteMode,
   formatCadence,
+  formatScheduleNextRun,
   isEventTrigger,
   skipFolded,
   suppressionReasonLabel,
@@ -359,6 +360,9 @@ type SuitesPaneView = "suites" | "runs";
                           @if (s.repo) {
                             <span class="tabular">· {{ s.repo }}</span>
                           }
+                          @if (schedNextRunOf(s); as nr) {
+                            <span class="tabular">· next: {{ nr }}</span>
+                          }
                           <span>· overlap: {{ s.overlap || "skip" }}</span>
                         </div>
                       </button>
@@ -565,7 +569,7 @@ type SuitesPaneView = "suites" | "runs";
                           <div class="proc-row-sub">
                             <span class="tabular"
                               >{{ sr.repo }} &#64;
-                              {{ sr.base || "default" }}</span
+                              {{ sr.base || "default branch" }}</span
                             >
                             <span class="tabular"
                               >·
@@ -720,7 +724,10 @@ type SuitesPaneView = "suites" | "runs";
                           access.deniedReason(
                             'POST /api/schedules/{id}/run',
                             s.repo
-                          ) || 'Fire this schedule immediately.'
+                          ) ||
+                          (s.type === 'workflow'
+                            ? 'Starts a CI run of the declared workflow straight away, to be reviewed when it finishes.'
+                            : 'Fire this schedule immediately.')
                         "
                         (click)="runScheduleNow(s)"
                       >
@@ -776,8 +783,14 @@ type SuitesPaneView = "suites" | "runs";
 
                   <div class="proc-meta-row">
                     <g-actor-chip
-                      [label]="s.source || 'deployment'"
-                      [kind]="s.system ? 'grain' : 'service'"
+                      [label]="
+                        s.type === 'workflow'
+                          ? 'workflow'
+                          : s.source || 'deployment'
+                      "
+                      [kind]="
+                        s.system && s.type !== 'workflow' ? 'grain' : 'service'
+                      "
                     />
                     <span>{{ cadenceOf(s.recurrence, s.timeZone) }}</span>
                     @if (s.repo) {
@@ -796,9 +809,9 @@ type SuitesPaneView = "suites" | "runs";
                       >
                     }
                     <!-- An event trigger's nextRunAt is a placeholder a year
-                         out (model.Schedule), not a time it will fire. -->
-                    @if (s.nextRunAt && !isTrigger(s)) {
-                      <span class="tabular">Next: {{ s.nextRunAt }}</span>
+                         out (model.Schedule); schedNextRunOf labels it. -->
+                    @if (schedNextRunOf(s); as nr) {
+                      <span class="tabular">Next: {{ nr }}</span>
                     }
                     @if (s.lastRunAt) {
                       <span class="tabular">Last: {{ s.lastRunAt }}</span>
@@ -1120,7 +1133,7 @@ type SuitesPaneView = "suites" | "runs";
                   <div class="proc-meta-row">
                     <span class="tabular"
                       >Target: <strong>{{ sr.repo }}</strong> &#64;
-                      {{ sr.base || "default" }}</span
+                      {{ sr.base || "default branch" }}</span
                     >
                     <span
                       >{{ suiteModeOf(sr.mode, sr.count, sr.maxPasses) }}
@@ -1310,7 +1323,8 @@ type SuitesPaneView = "suites" | "runs";
                             (click)="selectSuiteRun(r.id, true)"
                           >
                             Run #{{ r.id }} · {{ r.repo }} &#64;
-                            {{ r.base }} (pass {{ r.pass }})
+                            {{ r.base || "default branch"
+                            }}{{ r.pass > 0 ? " (pass " + r.pass + ")" : "" }}
                           </button>
                           <span class="ci-provider-tag">{{ r.status }}</span>
                         </li>
@@ -1474,7 +1488,12 @@ type SuitesPaneView = "suites" | "runs";
                     }
                     @for (p of status?.triggers ?? []; track p) {
                       <li class="proc-kv-item">
-                        <code class="tabular">{{ p }}</code>
+                        <a
+                          class="tabular"
+                          [routerLink]="repoAdvancedRoute(repo)"
+                          [attr.data-testid]="'decl-trigger-link-' + p"
+                          ><code>{{ p }}</code></a
+                        >
                         <span class="ci-provider-tag">trigger</span>
                       </li>
                     }
@@ -1797,9 +1816,9 @@ type SuitesPaneView = "suites" | "runs";
               <span>Every N minutes</span>
               <input
                 type="number"
-                min="5"
+                min="10"
                 [value]="sDraftEveryMin()"
-                (input)="sDraftEveryMin.set(+$any($event.target).value || 15)"
+                (input)="sDraftEveryMin.set(+$any($event.target).value)"
               />
             </label>
           } @else if (sDraftKind() === "everyNHours") {
@@ -1980,6 +1999,17 @@ type SuitesPaneView = "suites" | "runs";
           }
         }
 
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2124,6 +2154,17 @@ type SuitesPaneView = "suites" | "runs";
           }
         }
 
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button type="button" class="btn-text" (click)="closeLaunchDialog()">
             Cancel
@@ -2279,6 +2320,17 @@ type SuitesPaneView = "suites" | "runs";
           ></button>
           <span>Auto-merge passing pull requests</span>
         </div>
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2439,6 +2491,17 @@ type SuitesPaneView = "suites" | "runs";
           </div>
         }
 
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2529,6 +2592,17 @@ type SuitesPaneView = "suites" | "runs";
             (input)="runSuiteBase.set($any($event.target).value)"
           />
         </label>
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2588,6 +2662,17 @@ type SuitesPaneView = "suites" | "runs";
             (input)="wfEditorText.set($any($event.target).value)"
           ></textarea>
         </label>
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           @if (wfEditorOriginalPath() && canEditWorkflow()) {
             <button
@@ -2632,6 +2717,10 @@ type SuitesPaneView = "suites" | "runs";
 })
 export class ProcessesPageComponent implements OnInit, OnDestroy {
   readonly tab = input<string | undefined>(undefined);
+  readonly itemId = input<string | undefined>(undefined);
+  readonly runId = input<string | undefined>(undefined);
+  readonly kind = input<string | undefined>(undefined);
+  readonly q = input<string | undefined>(undefined);
   readonly new = input<string | undefined>(undefined);
   readonly launch = input<string | undefined>(undefined);
   readonly launchTemplate = input<string | undefined>(undefined);
@@ -2691,6 +2780,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected readonly openPicker = signal<string | null>(null);
   protected readonly submitting = signal(false);
+  protected readonly dialogError = signal<string | null>(null);
   protected readonly confirming = signal<ConfirmRequest | null>(null);
 
   // Schedule dialog state
@@ -2778,6 +2868,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   });
 
   protected readonly activeTab = computed<ProcessTab>(() => {
+    if (this.runId()) return "suites";
     const raw = (this.tab() || "").toLowerCase();
     if (
       raw === "templates" ||
@@ -2787,6 +2878,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     ) {
       return raw;
     }
+    const k = (this.kind() || "").split(",")[0]?.trim().toLowerCase() || "";
+    if (k === "template" || k === "templates") return "templates";
+    if (k === "suite" || k === "suites") return "suites";
+    if (k === "declaration" || k === "declarations") return "declarations";
     return "schedules";
   });
 
@@ -2916,9 +3011,77 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   });
 
   private handledDeepLinkKey = "";
+  private handledItemLinkKey = "";
+  private lastSyncedQuery: string | undefined = undefined;
 
   constructor() {
     afterNextRender(() => this.sp.attach());
+
+    // Sync ?q= query parameter into ViewFilter when arriving on a deep link.
+    effect(() => {
+      const qParam = this.q();
+      untracked(() => {
+        if (qParam !== undefined && qParam !== this.lastSyncedQuery) {
+          this.lastSyncedQuery = qParam;
+          this.filter.query.set(qParam);
+        } else if (qParam === undefined) {
+          this.lastSyncedQuery = undefined;
+        }
+      });
+    });
+
+    // Select addressed item (:itemId or :runId) once store data loads.
+    effect(() => {
+      const loaded = this.store.loaded();
+      const tab = this.activeTab();
+      const item = this.itemId();
+      const run = this.runId();
+      const key = `${loaded}:${tab}:${item ?? ""}:${run ?? ""}`;
+      untracked(() => {
+        if (!loaded) return;
+        if (!item && !run) {
+          this.handledItemLinkKey = "";
+          return;
+        }
+        if (key === this.handledItemLinkKey) return;
+        this.handledItemLinkKey = key;
+        if (run) {
+          this.suitesView.set("runs");
+          const parsed = Number(run);
+          if (
+            Number.isFinite(parsed) &&
+            parsed > 0 &&
+            this.store.suiteRuns().some((r) => r.id === parsed)
+          ) {
+            this.selectSuiteRun(parsed, true);
+          } else {
+            this.store.actionError.set(`No suite run "${run}".`);
+          }
+          return;
+        }
+        if (!item) return;
+        if (tab === "schedules") {
+          if (this.store.schedules().some((s) => s.id === item)) {
+            this.selectSchedule(item, true);
+          } else {
+            this.store.actionError.set(`No schedule "${item}".`);
+          }
+        } else if (tab === "templates") {
+          if (this.store.templates().some((t) => t.id === item)) {
+            this.selectTemplate(item, true);
+          } else {
+            this.store.actionError.set(`No template "${item}".`);
+          }
+        } else if (tab === "suites") {
+          this.suitesView.set("suites");
+          if (this.store.suites().some((s) => s.id === item)) {
+            this.selectSuite(item, true);
+          } else {
+            this.store.actionError.set(`No suite "${item}".`);
+          }
+        }
+      });
+    });
 
     // Auto-select top item per tab on desktop when data loads.
     effect(() => {
@@ -2929,7 +3092,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const suites = this.filteredSuites();
       const repos = this.filteredDeclRepos();
       untracked(() => {
-        if (!loaded) return;
+        if (!loaded || this.itemId() || this.runId()) return;
         const isDesktop = (this.doc.defaultView?.innerWidth ?? 1280) >= 600;
         if (!isDesktop) return;
         if (tab === "schedules" && !this.selectedScheduleId() && scheds[0]) {
@@ -2964,29 +3127,43 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const newParam = this.new();
       const launchParam = this.launch() || this.launchTemplate();
       const runParam = this.run() || this.runSuite();
+      const hasAction = Boolean(newParam || launchParam || runParam);
       const key = `${loaded}:${newParam ?? ""}:${launchParam ?? ""}:${runParam ?? ""}`;
       untracked(() => {
+        if (!hasAction) {
+          this.handledDeepLinkKey = "";
+          return;
+        }
         if (!loaded || key === this.handledDeepLinkKey) return;
+        this.handledDeepLinkKey = key;
         if (newParam === "1" || newParam === "schedule") {
-          this.handledDeepLinkKey = key;
           if (this.access.can("POST /api/schedules")) {
             this.openScheduleDialog(null);
           }
         } else if (launchParam === "1") {
-          this.handledDeepLinkKey = key;
           if (this.canOpenLaunchTemplateDialog()) {
             this.openLaunchTemplateDialog(
               this.selectedTemplate() ?? this.store.templates()[0] ?? null,
             );
           }
         } else if (runParam === "1") {
-          this.handledDeepLinkKey = key;
           if (this.access.can("POST /api/suite-runs")) {
             this.openRunSuiteDialog(
               this.selectedSuite() ?? this.store.suites()[0] ?? null,
             );
           }
         }
+        void this.router.navigate([], {
+          queryParams: {
+            new: null,
+            launch: null,
+            launchTemplate: null,
+            run: null,
+            runSuite: null,
+          },
+          queryParamsHandling: "merge",
+          replaceUrl: true,
+        });
       });
     });
   }
@@ -3034,6 +3211,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected schedBadge = scheduleStatusBadge;
+  protected schedNextRunOf = formatScheduleNextRun;
   protected tmplBadge = templateSourceBadge;
   protected cadenceOf = formatCadence;
   protected isTrigger = isEventTrigger;
@@ -3041,6 +3219,11 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected skipFolded = skipFolded;
   protected suiteModeOf = describeSuiteMode;
   protected runBadgeOf = suiteRunBadge;
+
+  protected repoAdvancedRoute(repo: string): string[] {
+    const parts = repo.split("/").filter(Boolean);
+    return ["/repos", ...parts, "advanced"];
+  }
 
   protected templateNameById(id: string): string {
     const t = this.store.templates().find((x) => x.id === id);
@@ -3072,8 +3255,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     const tmpl = this.store.templates().find((t) => t.id === id);
     if (tmpl && this.access.can("GET /api/templates/{id}/composition")) {
       const defaults: Record<string, string> = {};
+      // A preview is the firing's own answer: send what a filing would,
+      // and a {{name}} placeholder only for a required field with nothing
+      // to fall back on (the server refuses a missing required value).
       for (const f of tmpl.fields ?? []) {
-        if (f.default) defaults[f.name] = f.default;
+        if (f.default || f.options?.length) {
+          defaults[f.name] = f.default || f.options![0];
+        } else if (f.required) {
+          defaults[f.name] = `{{${f.name}}}`;
+        }
       }
       void this.store
         .fetchTemplateComposition(
@@ -3213,20 +3403,39 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected closeScheduleDialog(): void {
     this.openPicker.set(null);
+    this.dialogError.set(null);
     this.schedDialogOpen.set(false);
   }
 
   protected closeLaunchDialog(): void {
     this.openPicker.set(null);
+    this.dialogError.set(null);
     this.launchDialogOpen.set(false);
   }
 
   protected closeRunSuiteDialog(): void {
     this.openPicker.set(null);
+    this.dialogError.set(null);
     this.runSuiteDialogOpen.set(false);
   }
 
-  protected async runScheduleNow(s: Schedule): Promise<void> {
+  protected runScheduleNow(s: Schedule): void {
+    if (s.type === "workflow") {
+      this.confirming.set({
+        title: "Run workflow schedule now?",
+        message:
+          `Run "${s.title || s.id}" now? It starts a CI run of the workflow it was declared in straight away, ` +
+          `to be reviewed when it finishes; the schedule's own next run is unchanged.`,
+        accept: "Run now",
+        destructive: false,
+        run: () => this.executeRunScheduleNow(s),
+      });
+      return;
+    }
+    void this.executeRunScheduleNow(s);
+  }
+
+  private async executeRunScheduleNow(s: Schedule): Promise<void> {
     try {
       const res = await this.store.runScheduleNow(s.id);
       if (res.taskId) {
@@ -3298,6 +3507,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected openScheduleDialog(existing: Schedule | null): void {
     this.openPicker.set(null);
+    this.dialogError.set(null);
     this.editingSchedule.set(existing);
     this.draftSchedComposition.set(null);
     if (existing) {
@@ -3500,18 +3710,20 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected async previewScheduleDraft(): Promise<void> {
+    this.dialogError.set(null);
     try {
       const comp = await this.store.previewDraftSchedule(
         this.buildScheduleCreatePayload(),
       );
       this.draftSchedComposition.set(comp);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     }
   }
 
   protected async saveScheduleDialog(): Promise<void> {
     if (this.submitting() || !this.canSaveSchedule()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     try {
       const editing = this.editingSchedule();
@@ -3531,7 +3743,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       }
       this.closeScheduleDialog();
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
@@ -3541,6 +3753,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected openLaunchTemplateDialog(t: Template | null): void {
     this.openPicker.set(null);
+    this.dialogError.set(null);
     const chosen = t ?? this.store.templates()[0] ?? null;
     this.launchTemplateId.set(chosen?.id ?? "");
     this.initLaunchFields(chosen);
@@ -3572,6 +3785,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected async submitLaunchTemplate(): Promise<void> {
     const tmpl = this.launchSelectedTemplate();
     if (!tmpl || this.submitting() || !this.canSubmitLaunchTemplate()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     try {
       const task = await this.store.launchTaskFromTemplate(tmpl, {
@@ -3588,13 +3802,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         this.snackbar.show("Created task from template.");
       }
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
   }
 
   protected openTemplateDialog(existing: Template | null): void {
+    this.dialogError.set(null);
     this.editingTemplate.set(existing);
     if (existing) {
       this.tDraftName.set(existing.name);
@@ -3668,6 +3883,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected async saveTemplateDialog(): Promise<void> {
     if (this.submitting() || !this.canSaveTemplate()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     const fields = structuredClone(this.tDraftFields());
     try {
@@ -3683,6 +3899,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           revision: editing.revision,
         });
         this.selectTemplate(updated.id, false);
+        const selSuite = this.selectedSuiteId();
+        if (selSuite) this.selectSuite(selSuite, false);
+        const selSched = this.selectedScheduleId();
+        if (selSched) this.selectSchedule(selSched, false);
         this.snackbar.show("Template updated.");
       } else {
         const created = await this.store.createTemplate({
@@ -3702,7 +3922,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       }
       this.tmplDialogOpen.set(false);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
@@ -3727,6 +3947,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   // --- Suite & Suite Run actions ---
 
   protected openSuiteDialog(existing: Suite | null): void {
+    this.dialogError.set(null);
     this.editingSuite.set(existing);
     this.draftSuiteComposition.set(null);
     if (existing) {
@@ -3787,18 +4008,20 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected async previewSuiteDraft(): Promise<void> {
+    this.dialogError.set(null);
     try {
       const comp = await this.store.previewDraftSuite(
         this.buildSuiteCreatePayload(),
       );
       this.draftSuiteComposition.set(comp);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     }
   }
 
   protected async saveSuiteDialog(): Promise<void> {
     if (this.submitting() || !this.canSaveSuite()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     try {
       const editing = this.editingSuite();
@@ -3809,6 +4032,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           revision: editing.revision,
         });
         this.selectSuite(updated.id, false);
+        const selSched = this.selectedScheduleId();
+        if (selSched) this.selectSchedule(selSched, false);
         this.snackbar.show("Suite updated.");
       } else {
         const created = await this.store.createSuite(payload);
@@ -3817,7 +4042,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       }
       this.suiteDialogOpen.set(false);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
@@ -3839,6 +4064,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected openRunSuiteDialog(st: Suite | null): void {
     this.openPicker.set(null);
+    this.dialogError.set(null);
     const chosen = st ?? this.store.suites()[0] ?? null;
     this.runSuiteId.set(chosen?.id ?? "");
     this.runSuiteRepo.set(
@@ -3858,6 +4084,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected async submitRunSuite(): Promise<void> {
     if (this.submitting() || !this.canSubmitRunSuite()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     try {
       const run = await this.store.startSuiteRun(
@@ -3870,7 +4097,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.selectSuiteRun(run.id, true);
       this.snackbar.show(`Started suite run #${run.id}.`);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
@@ -3920,6 +4147,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected openWorkflowEditor(repo: string, wf: RepoWorkflow | null): void {
+    this.dialogError.set(null);
     this.wfEditorRepo.set(repo);
     this.wfEditorOriginalPath.set(wf?.path ?? "");
     this.wfEditorPath.set(wf?.path ?? ".grain/workflows/ci.yml");
@@ -3932,6 +4160,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected async saveWorkflowEditor(): Promise<void> {
     if (this.submitting() || !this.canEditWorkflow()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     const repo = this.wfEditorRepo();
     const existing = this.store.repoWorkflows()[repo]?.workflows ?? [];
@@ -3948,7 +4177,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.wfEditorOpen.set(false);
       this.snackbar.show(`Saved workflow ${this.wfEditorPath().trim()}.`);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
@@ -3957,6 +4186,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected async deleteWorkflowOverride(): Promise<void> {
     const orig = this.wfEditorOriginalPath();
     if (!orig || this.submitting() || !this.canEditWorkflow()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     const repo = this.wfEditorRepo();
     const existing = this.store.repoWorkflows()[repo]?.workflows ?? [];
@@ -3966,7 +4196,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.wfEditorOpen.set(false);
       this.snackbar.show(`Removed workflow override ${orig}.`);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }

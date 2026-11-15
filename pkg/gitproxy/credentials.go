@@ -364,6 +364,11 @@ func (c *CredentialSet) Get(name string) (Credential, bool) {
 	return c.load(name, ""), true
 }
 
+// ErrNoCredential is what SetHost, Remove and the reach check wrap when
+// the credential they are given does not exist, so a caller can tell a
+// name nobody configured (the request's fault) from a failure to write.
+var ErrNoCredential = errors.New("no credential named")
+
 // exists is Get's "is there such a credential at all" check: a
 // <name>.token, <name>.app.json or <name>.ssh.json held in the store or as
 // a file, a <name>.ambient.json file, or the literal "anonymous".
@@ -578,7 +583,7 @@ func (c *CredentialSet) Remove(name string) error {
 		removed = removed || r
 	}
 	if !removed {
-		return fmt.Errorf("no credential named %q is configured", name)
+		return fmt.Errorf("%w %q is configured", ErrNoCredential, name)
 	}
 	if err := os.Remove(c.hostFile(name)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing credential %q's host record: %w", name, err)

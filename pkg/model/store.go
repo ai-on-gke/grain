@@ -6228,6 +6228,36 @@ func (s *Store) openPullRequestLinks(ctx context.Context) (kept, off []TaskPullR
 		string(LinkFixes), string(StateCompleted), string(StateAwaitingSubmit))
 }
 
+// ResumeLaterPullRequestLinks returns the fixes-links of every task
+// resting on a resume_later of its own (Store.RestsOnResumeLater), which
+// OpenPullRequestLinks leaves out unless the merge queue is repairing it:
+// a deferred task is neither completed nor awaiting Submit. Its pull
+// request is still open and still its own, and a new review thread on it,
+// or its owner's answer to its review's questions, is what grain sends it
+// back for (orchestrator.SyncReviewThreads, SyncReviewQuestions). A task a
+// person deferred is not returned.
+func (s *Store) ResumeLaterPullRequestLinks(ctx context.Context) ([]TaskPullRequestLink, error) {
+	kept, _, err := s.pullRequestLinksWhere(ctx,
+		"JOIN `task_state` AS `st` ON `st`.`task_id` = `l`.`task_id` "+
+			"LEFT JOIN `task` AS `t` ON `t`.`id` = `l`.`task_id` "+
+			"WHERE `l`.`kind` = ? AND `st`.`state` = ?",
+		string(LinkFixes), string(StateDeferred))
+	if err != nil {
+		return nil, err
+	}
+	var out []TaskPullRequestLink
+	for _, l := range kept {
+		ours, err := s.RestsOnResumeLater(ctx, l.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		if ours {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
 // ClosedUnsettledPullRequestLinks returns the fixes-links of every task
 // that closed at or after since while grain still had no word of its pull
 // request merging or closing (Observation.PrMergedAt and PrClosedAt both
