@@ -1,0 +1,66 @@
+/* g-capped-markdown: a long message in a box of capped height. */
+
+g-capped-markdown {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* About 20 lines, and never more than 40% of the pane it is in (cqh is
+   the nearest size container's height, the window's without one), so
+   the actions below a question and the task's details stay on screen.
+   It may shrink below that when its container squeezes it. */
+.capped-md {
+  box-sizing: border-box;
+  align-self: stretch;
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
+  max-height: min(400px, 40cqh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--md-sys-color-on-surface);
+}
+
+/* Open: no cap of its own; it takes what its container gives it (in the
+   Inbox, all the pane but the body's floor), so the action row under it
+   is still seen. */
+.capped-md.is-open {
+  max-height: none;
+}
+
+.capped-md:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+  border-radius: var(--md-sys-shape-corner-small);
+}
+
+.capped-md p,
+.capped-md ul,
+.capped-md ol,
+.capped-md blockquote {
+  margin: 0 0 8px;
+}
+
+.capped-md ul,
+.capped-md ol {
+  padding-left: 24px;
+}
+
+.capped-md li > ul,
+.capped-md li > ol {
+  margin: 2px 0 0;
+}
+
+.capped-md .code-card {
+  margin: 0 0 8px;
+}
+
+.capped-md-toggle {
+  flex-shrink: 0;
+}
