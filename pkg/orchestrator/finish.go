@@ -2061,6 +2061,15 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 				body += reviewOfGrantRefusedNote(cap)
 				continue
 			}
+			// A retired bare name grants nothing: the live call refused
+			// it, and a call recorded before that refusal existed is filed
+			// without it, saying what it became, rather than holding a row
+			// every dispatch would refuse after a person approved it.
+			if why, retired := model.RetiredTaskGrantRefusal(cap); retired {
+				body += fmt.Sprintf("\n\n_grain filed this proposal without `%s`: %s._", cap, why)
+				admissionChanges = append(admissionChanges, fmt.Sprintf("`%s` was left off: %s", cap, why))
+				continue
+			}
 			// grain-ci is passed over, as ui.CreateTask passes it over
 			// for the same call filed live: the target repository's CI
 			// Mode decides it (defaultTaskGrants, above), and naming it

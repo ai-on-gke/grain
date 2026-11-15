@@ -1,0 +1,57 @@
+ok  	github.com/ai-on-gke/grain/pkg/daemon	251.182s
+ok  	github.com/ai-on-gke/grain/pkg/model/postgres	156.644s
+ok  	github.com/ai-on-gke/grain/pkg/cli	94.795s
+ok  	github.com/ai-on-gke/grain/pkg/staterepo	38.451s
+
+PR #1502 tests (and other Postgres-backed tests) that ran:
+--- PASS: TestPostgresSchemaUpgradeResyncsSequences (5.35s)
+--- PASS: TestPostgresOpenStoreDetectsAndResyncsBehindSequences (1.72s)
+--- PASS: TestTheTaskIDSequenceNeverGoesBackwards (0.03s)
+--- PASS: TestSettingsRoundTripPostgresToPostgres (3.96s)
+--- PASS: TestStateRepoImportResyncsPostgresSequences (8.68s)
+--- PASS: TestSyncSequencesRespectsWriteFence (0.08s)
+--- PASS: TestPostgresSequencesAllocation (0.83s)
+--- PASS: TestImportOfAPostgresBundleChecksThePostgresDatabase (3.54s)
+--- PASS: TestPrepareUpgradeCarriesAPostgresStoreAcrossASchemaChange (14.15s)
+--- PASS: TestUpgradePostgresWithEmbeddedPostgres (4.47s)
+
+Every skipped test (none is Postgres-gated):
+--- SKIP: TestInterceptionServesASandboxFromStandInArchives (0.00s)
+--- SKIP: TestInterceptionServesARealSandboxesOwnFetches (0.00s)
+--- SKIP: TestLiveSecretsRepoARepositoryTheCredentialCannotReachFails (0.00s)
+--- SKIP: TestLiveSecretsRepoTwoDeploymentsShareOneRepository (0.00s)
+--- SKIP: TestLiveSecretsRepoRestoresARebuiltHost (0.00s)
+--- SKIP: TestLiveSecretsRepoFirstSyncLandsCiphertextOnGitHub (0.00s)
+--- SKIP: TestOpenStateRepoRefusesAReftableRepositoryActionably/real (0.00s)
+--- SKIP: TestOriginRepairScale (0.00s)
+--- SKIP: TestHostCLISpecHelper (0.00s)
+--- SKIP: TestRunHostAgentCannotReachAHostDirectorySandbox (0.00s)
+--- SKIP: TestDaemonRollAdoptsTheRunAndItOpensItsPullRequest (0.00s)
+--- SKIP: TestDaemonRollResumesADurableRunItDidNotAdopt (0.00s)
+--- SKIP: TestDaemonRollAdoptionRole (0.00s)
+--- SKIP: TestDaemonRestartAdoptsTheRunAndItOpensItsPullRequest (0.00s)
+--- SKIP: TestAnUpgradeNoteCarriesTheDeploymentsRowsAcrossASchemaChange (0.00s)
+--- SKIP: TestSessionLifecycleSoak (0.00s)
+--- SKIP: TestDaemonPushesItsDatabaseToTheStateRepository (0.00s)
+--- SKIP: TestADivergedStateRepositoryRecoversOnTheNextSync (0.00s)
+--- SKIP: TestADivergedStateRepositoryDoesNotStopTheDaemonFromStarting (0.00s)
+--- SKIP: TestAnUnreachableStateRepositoryDoesNotStopTheDaemonFromStarting (0.00s)
+--- SKIP: TestRunLiveWithGranuleAndRESTAPIOpensAPullRequest (0.00s)
+--- SKIP: TestRunLiveWithARealIsolatedSandboxAndRESTAPIOpensAPullRequest (0.00s)
+--- SKIP: TestDaemonRestartKeepsAWarmSessionSandboxOnlyUnderItsRecordedKeys (0.00s)
+--- SKIP: TestSandboxIsolationProbesOnRealGranuleVMs (0.00s)
+--- SKIP: TestSandboxIsolationProbesOnLocalContainers (0.00s)
+--- SKIP: TestRunLiveDispatchesAndOpensAPullRequest (0.00s)
+--- SKIP: TestRunLiveFailsWhenGitHubRefusesTheDeploymentsCredential (0.00s)
+--- SKIP: TestLiveCIRunsThisRepositorysOwnWorkflowInARealSandbox (0.00s)
+
+skip reasons (go test -v):
+daemon_runhost_kube_test.go:153: set GRAIN_RUNHOST_KIND=<kind cluster> to run against a real cluster
+daemon_runhost_kube_test.go:554: the in-cluster half of TestDaemonRollAdoptsTheRunAndItOpensItsPullRequest
+daemon_runhost_restart_test.go:141: set GRAIN_RUNHOST_DOCKER=1 to run against a real docker daemon
+daemon_state_repo_test.go:47: operational SQL is no longer backed up to the state repository
+daemon_state_repo_test.go:575: operational SQL is no longer backed up to the state repository
+daemon_state_repo_test.go:704: operational SQL is no longer backed up to the state repository
+daemon_true_e2e_test.go:253: GRAIN_LIVE_SANDBOX_TEST is unset; skipping the check-in live sandbox test
+packagecache_intercept_real_test.go:98: set GRAIN_REAL_INTERCEPT_TESTS=1 to run this: it binds 53, 443 and 80 on this machine's docker bridge and starts a container on it
+sandbox_isolation_real_test.go:230: GRAIN_ISOLATION_PROBE not set; this is the §6 walkthrough harness, run by hand

@@ -58,6 +58,7 @@ import { ActorChipComponent } from "../shared/actor-chip.component";
 import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
+import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
 
 import {
   type FilterId,
@@ -677,12 +678,13 @@ const ONE_KEY = new Set(["approve"]);
             >
               @switch (sel.kind) {
                 @case ("reply") {
-                  <p
+                  <g-capped-markdown
                     class="resolution-question"
-                    data-testid="resolution-question"
-                  >
-                    {{ question() }}
-                  </p>
+                    testid="resolution-question"
+                    noun="question"
+                    label="The question"
+                    [text]="question()"
+                  />
                   @if (store.selectedDetail()?.pendingSecret; as secret) {
                     <p class="muted dock-note">
                       This run asked for the credential
@@ -695,12 +697,37 @@ const ONE_KEY = new Set(["approve"]);
                       >; the value never comes back to the page.
                     </p>
                   }
+                  <div class="action-bar" data-testid="reply-actions">
+                    <div class="action-btn-group">
+                      <button
+                        type="button"
+                        class="btn-primary"
+                        data-testid="reply-focus"
+                        [disabled]="
+                          !can(commentsRoute, sel) || !!replyBlock(sel)
+                        "
+                        [title]="replyBlock(sel)"
+                        (click)="focusComposer()"
+                      >
+                        Reply
+                      </button>
+                      <ng-container
+                        *ngTemplateOutlet="actions; context: { $implicit: sel }"
+                      />
+                    </div>
+                  </div>
                 }
                 @case ("access") {
                   @if (store.selectedDetail()?.pendingAccess; as pa) {
                     <p class="resolution-question">{{ pa.summary }}</p>
                     @if (pa.reason) {
-                      <p class="dock-note">{{ pa.reason }}</p>
+                      <g-capped-markdown
+                        class="dock-note"
+                        testid="access-reason"
+                        noun="reason"
+                        label="Why the run asks"
+                        [text]="pa.reason"
+                      />
                     }
                     <ul class="access-items">
                       @for (it of pa.items; track $index) {
@@ -920,12 +947,18 @@ const ONE_KEY = new Set(["approve"]);
                   </div>
                 }
                 @default {
-                  <p
+                  <g-capped-markdown
                     class="resolution-question"
-                    data-testid="resolution-question"
-                  >
-                    {{ sel.summary }}
-                  </p>
+                    testid="resolution-question"
+                    [noun]="sel.kind === 'notification' ? 'alert' : 'message'"
+                    [label]="
+                      sel.kind === 'notification' ? 'The alert' : 'Summary'
+                    "
+                    [text]="
+                      (sel.kind === 'notification' && sel.notification?.body) ||
+                      sel.summary
+                    "
+                  />
                   <div class="action-bar">
                     <div class="action-btn-group">
                       <ng-container
@@ -1202,6 +1235,7 @@ const ONE_KEY = new Set(["approve"]);
     TipDirective,
     StatusIconComponent,
     ConversationComponent,
+    CappedMarkdownComponent,
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
@@ -1481,6 +1515,19 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       });
     }
     this.draft.set(value);
+  }
+
+  // Reply in the dock: the answer is written in the conversation's
+  // composer below, which this brings into view and focuses.
+  protected focusComposer(): void {
+    const box = (
+      this.host.nativeElement as HTMLElement
+    ).querySelector<HTMLTextAreaElement>(
+      '[data-testid="next-inbox-inspector"] [data-testid="task-composer"]',
+    );
+    if (!box) return;
+    box.scrollIntoView({ block: "nearest" });
+    box.focus();
   }
 
   // replyBlock is why Send is off for the selected row: it has left the
