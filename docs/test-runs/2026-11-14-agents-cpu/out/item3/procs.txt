@@ -1,0 +1,8 @@
+processes: 515 sentinel=28782
+sweeps during the probe: 15
+{
+  "count": 3,
+  "secs": 60,
+  "sandboxRequests": 15
+}
+smallest gaps: 2.85 2.99 3.29 
