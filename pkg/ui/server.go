@@ -291,6 +291,17 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if roleSlot.role != nil {
 		r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
+	} else if ciCall, ok := model.CIAPICallFromContext(r.Context()); ok && r.Method == http.MethodGet {
+		grants := make([]string, len(ciCall.Scopes))
+		for i, sc := range ciCall.Scopes {
+			grants[i] = APIGrantPrefix + string(sc) + "@" + ciCall.Repo.String()
+		}
+		r = r.WithContext(withAccessRole(r.Context(), &accessRole{
+			Who:    "ci:" + ciCall.Repo.String(),
+			Roles:  []string{"ci-api"},
+			grants: grants,
+			set:    APIGrantsOf(grants),
+		}))
 	}
 	if roleSlot.delegation != nil {
 		r = r.WithContext(withDelegatedIdentity(r.Context(), roleSlot.delegation))
