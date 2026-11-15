@@ -1006,6 +1006,46 @@ describe("InboxPage", () => {
       ).toEqual([]);
     });
 
+    // A question waits on an answer: Acknowledge all closes the reports
+    // beside it, never the question, and each row says which it is.
+    it("acknowledges only the reports, never a question, and badges each", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      const onActBatch = batched();
+      const user = userEvent.setup();
+      renderInbox({
+        tasks: [
+          ...crowd,
+          task({
+            id: "q1",
+            title: "Question one",
+            state: "awaiting_reply",
+            questionSummary: "Which branch?",
+          }),
+        ],
+        onActBatch,
+      });
+
+      const question = screen.getByText("Question one").closest("li");
+      const report = screen.getByText("Answer one").closest("li");
+      expect(within(question).getByText("Question")).toBeInTheDocument();
+      expect(within(report).getByText("Info")).toBeInTheDocument();
+      // A report's own answer is Acknowledge; a question's is Reply.
+      expect(
+        within(report).getByRole("button", { name: "Acknowledge" }),
+      ).toHaveClass("MuiButton-contained");
+      expect(
+        within(question).getByRole("button", { name: "Reply" }),
+      ).toHaveClass("MuiButton-contained");
+
+      await user.click(
+        screen.getByRole("button", { name: "Acknowledge all (2)" }),
+      );
+      expect(onActBatch.mock.calls[0][0]).toEqual(["a1", "a2"]);
+      expect(api).not.toHaveBeenCalledWith("/api/tasks/q1/close", {
+        method: "POST",
+      });
+    });
+
     it("acknowledges, retries and defers whole groups too", async () => {
       vi.spyOn(window, "confirm").mockReturnValue(true);
       const onActBatch = batched();

@@ -17,6 +17,7 @@ import {
   Alert,
   Button,
   Checkbox,
+  Chip,
   CircularProgress,
   FormControlLabel,
   TextField,
@@ -351,8 +352,16 @@ const GROUPS = [
   {
     id: "awaiting_reply",
     title: "Asked: reply",
-    hint: "A run stopped to ask something, you stopped its turn, or it answered on the task itself and opened no pull request. Reply to run it again, or acknowledge to close it.",
+    hint: "A run stopped to ask something, you stopped its turn, or it answered on the task itself and opened no pull request. A question needs your reply; a report marked Info only needs acknowledging.",
     match: (t) => t.state === "awaiting_reply",
+    // A report (askedCase's "answer") asked nothing: Acknowledge is its
+    // answer and Reply the lesser one, the other way round from a
+    // question. The badge says which a row is.
+    badge: (t) =>
+      isReport(t)
+        ? { label: "Info", color: "info", title: "A report: nothing was asked" }
+        : { label: "Question", color: "warning", title: "Waits on your reply" },
+    replySecondary: (t) => isReport(t),
     // Which of "Asked"'s cases this is (state.js's askedCase): a
     // question, an answer, a stopped turn, or a conversation waiting for
     // its next message. An answer whose run gave its note a summary
@@ -365,7 +374,7 @@ const GROUPS = [
     actions: [
       {
         label: "Acknowledge",
-        variant: "outlined",
+        variant: (t) => (isReport(t) ? "contained" : "outlined"),
         post: "/close",
         // Closing is what acknowledging *is* here: when there is no pull
         // request to merge and no further run to wait for, the task has
@@ -374,8 +383,11 @@ const GROUPS = [
         // as giving up on work that in fact succeeded.
         title:
           "You have read it: close the task. Reopen puts it back if you need it again.",
+        // Only the reports: a bulk close must never sweep up a question
+        // that is waiting on an answer.
         bulk: {
           label: "Acknowledge all",
+          rows: (t) => isReport(t),
           confirm: (n) =>
             `Acknowledge all ${n} answered tasks? Each is closed, and reopening puts one back.`,
         },
@@ -1202,7 +1214,21 @@ function gated(scope, repo, config, button) {
 }
 
 function bulkActions(group, rows) {
-  return (group.actions || []).filter((a) => a.bulk && rows.length >= 2);
+  return (group.actions || []).filter(
+    (a) => a.bulk && bulkRows(a, rows).length >= 2,
+  );
+}
+
+// bulkRows is the rows one bulk action answers: all of them, or those its
+// `rows` predicate admits.
+function bulkRows(action, rows) {
+  return action.bulk.rows ? rows.filter(action.bulk.rows) : rows;
+}
+
+// isReport is an awaiting_reply task that asked nothing and answered in a
+// comment (askedCase's "answer", GET /api/inbox's kind "answer").
+function isReport(t) {
+  return askedCase(t)?.kind === "answer";
 }
 
 // NotificationSwitch is the header's switch for desktop notifications
@@ -1348,7 +1374,8 @@ export default function InboxPage({
   // reports how many failed rather than stopping at the first -- one
   // proposal that is no longer a proposal by the time the click lands
   // should not hold up the other seven (App.jsx's actBatch).
-  const runAll = (rows, action) => {
+  const runAll = (all, action) => {
+    const rows = bulkRows(action, all);
     if (!confirm(action.bulk.confirm(rows.length))) return;
     onActBatch(
       rows.map((t) => t.id),
@@ -1447,7 +1474,7 @@ export default function InboxPage({
                         variant="outlined"
                         onClick={() => runAll(rows, action)}
                       >
-                        {action.bulk.label} ({rows.length})
+                        {action.bulk.label} ({bulkRows(action, rows).length})
                       </Button>,
                     ),
                   )
@@ -1496,6 +1523,16 @@ export default function InboxPage({
                         {t.changelists?.length > 0 && t.clSubmit && (
                           <BehindBadge submit={t.clSubmit} />
                         )}
+                        {group.badge?.(t) && (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            className="inbox-kind"
+                            color={group.badge(t).color}
+                            label={group.badge(t).label}
+                            title={group.badge(t).title}
+                          />
+                        )}
                         {group.reply &&
                           gated(
                             "tasks:write",
@@ -1504,7 +1541,9 @@ export default function InboxPage({
                             <Button
                               size="small"
                               variant={
-                                replyTo === t.id ? "outlined" : "contained"
+                                replyTo === t.id || group.replySecondary?.(t)
+                                  ? "outlined"
+                                  : "contained"
                               }
                               onClick={() =>
                                 setReplyTo(replyTo === t.id ? null : t.id)
@@ -1547,7 +1586,11 @@ export default function InboxPage({
                                 <Button
                                   key={label}
                                   size="small"
-                                  variant={action.variant || "outlined"}
+                                  variant={
+                                    (typeof action.variant === "function"
+                                      ? action.variant(t)
+                                      : action.variant) || "outlined"
+                                  }
                                   color={action.color}
                                   title={action.title}
                                   onClick={() =>
