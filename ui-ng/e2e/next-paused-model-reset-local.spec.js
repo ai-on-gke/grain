@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // A paused model's reset is printed on the viewer's clock with the zone
-// named and a countdown beside it -- "Resets 11:15 AM PST (in 2h 15m)" --
+// named and a countdown beside it -- "resets 11:15 AM PST (in 2h 15m)" --
 // rather than in UTC for somebody to translate. The paused usage scope on
 // Telemetry, and the dispatch banner that reads it, are laid over the
 // demo's own GET /api/usage, since a demo has spent no quota. Set
@@ -86,15 +86,25 @@ for (const size of SIZES) {
       const abbrev = zoneAbbrev(until);
       await expect(reset).toContainText(
         new RegExp(
-          `Resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
-      // Under its Paused pill, not beside it pushing the table wider.
+      // Beside its Paused pill, on the pill's own line, so a table of
+      // paused scopes grows no taller (prod-heavy-polish's height budget).
       const pill = reset.locator("xpath=..").locator(".status-pill");
       const pillBox = await pill.boundingBox();
       const resetBox = await reset.boundingBox();
-      expect(resetBox.y).toBeGreaterThanOrEqual(pillBox.y + pillBox.height - 1);
+      if (size.name === "desktop") {
+        expect(resetBox.x).toBeGreaterThanOrEqual(pillBox.x + pillBox.width);
+        expect(resetBox.y).toBeLessThan(pillBox.y + pillBox.height);
+      }
+      const sideways = await page.evaluate(
+        () =>
+          document.documentElement.scrollWidth -
+          document.documentElement.clientWidth,
+      );
+      expect(sideways).toBe(0);
       if (SHOTS) {
         fs.mkdirSync(SHOTS, { recursive: true });
         await reset.scrollIntoViewIfNeeded();

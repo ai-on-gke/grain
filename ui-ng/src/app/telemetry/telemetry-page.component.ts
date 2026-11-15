@@ -1252,13 +1252,11 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                                 Paused
                               </span>
                               @if (fmtReset(s.pausedUntil); as reset) {
-                                <div
-                                  class="muted tabular"
+                                <span
+                                  class="muted tabular usage-scope-reset"
                                   data-testid="usage-scope-reset"
-                                  style="margin-top: 4px"
+                                  >resets {{ reset }}</span
                                 >
-                                  Resets {{ reset }}
-                                </div>
                               }
                             } @else {
                               <span class="status-pill healthy">
