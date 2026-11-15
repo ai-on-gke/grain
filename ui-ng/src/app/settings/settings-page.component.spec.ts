@@ -975,6 +975,49 @@ describe("SettingsPageComponent (M13 D-12)", () => {
     ).toBe(true);
   });
 
+  it("shows each repository's declarations and Git connection with classic's wording, linked to their views", async () => {
+    const api = new FakeSettingsApi();
+    const get = api.get;
+    api.get = ((key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/repos/{owner}/{name}/declarations") {
+        return Promise.resolve({ declarations: true, ciMode: "github" });
+      }
+      if (key === "GET /api/deployment/reachable-repos") {
+        return Promise.resolve({
+          available: true,
+          repos: [{ repo: "acme/platform", push: false }],
+          connections: [
+            { credential: "acme-bot", host: "github.com", ok: true },
+            { credential: "broken", host: "github.com", ok: false },
+            { credential: "ghe-bot", host: "ghe.example.com", ok: true },
+          ],
+        });
+      }
+      return get(key, params, query);
+    }) as typeof api.get;
+    const { el } = await mountSettings("/settings/repositories", api);
+
+    const headers = Array.from(el.querySelectorAll("th")).map((th) =>
+      th.textContent?.trim(),
+    );
+    expect(headers).toContain("Declarations");
+    expect(headers).toContain("Git connection");
+
+    const decl = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="repo-declarations-acme/platform"] a',
+    )!;
+    expect(decl.textContent?.trim()).toBe("Read");
+    expect(decl.getAttribute("href")).toBe(
+      "/next/processes/declarations?repo=acme%2Fplatform",
+    );
+
+    const git = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="repo-git-acme/platform"] a',
+    )!;
+    expect(git.textContent?.trim()).toBe("acme-bot (read only)");
+    expect(git.getAttribute("href")).toBe("/next/settings/git");
+  });
+
   it("clears connection credentials, confirms connection removal, and passes Git connection scope", async () => {
     const api = new FakeSettingsApi();
     (api.deploymentBody as Record<string, unknown>)["agentBackends"] = [

@@ -195,9 +195,11 @@ export class AgentsStore implements OnDestroy {
       this.record(this.tasks());
       this.loadError.set(null);
       this.ownLoaded.set(true);
-    } else {
+    } else if (this.feed.loadError()) {
+      // Only the feed's banner-worthy failures: one failed poll keeps
+      // the last good list and says nothing (request-trouble.ts).
       this.loadError.set(
-        `Running tasks could not be read: ${this.feed.loadError() ?? "The request failed."}. This page tries again on its own.`,
+        `Running tasks could not be read: ${this.feed.loadError()}. This page tries again on its own.`,
       );
     }
     this.now.set(Date.now());

@@ -200,9 +200,20 @@ func (c *taskListCache) response(ctx context.Context, client *Client, repo strin
 			return body, etag, nil
 		}
 	}
+	// whole is whether tasks is every task, which the cache may keep for
+	// the other views to cut from, rather than only the open ones.
+	whole := true
 	if tasks == nil {
 		c.builds.Add(1)
-		all, err := client.ListTasks(ctx)
+		// The live view reads only the open tasks: on a store of six
+		// thousand that is the difference between a tenth of a second
+		// and half a second per rebuild, and a rebuild is what nearly
+		// every poll is while runs are live (grain task 5812).
+		read := client.ListTasks
+		if view == taskListLive {
+			read, whole = client.ListOpenTasks, false
+		}
+		all, err := read(ctx)
 		if err != nil {
 			return nil, "", err
 		}
@@ -237,11 +248,14 @@ func (c *taskListCache) response(ctx context.Context, client *Client, repo strin
 	etag := etagOf(body)
 	if token != "" {
 		c.mu.Lock()
-		if c.token != token || c.bodies == nil {
-			if c.token != token {
-				c.token, c.tasks = token, tasks
-			}
+		if c.token != token {
+			c.token, c.tasks, c.bodies = token, nil, map[string]taskListBody{}
+		}
+		if c.bodies == nil {
 			c.bodies = map[string]taskListBody{}
+		}
+		if whole && c.tasks == nil {
+			c.tasks = tasks
 		}
 		c.bodies[key] = taskListBody{body: body, etag: etag}
 		c.mu.Unlock()

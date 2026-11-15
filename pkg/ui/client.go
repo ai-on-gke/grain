@@ -781,7 +781,20 @@ func (r redBaseLookup) forTask(t model.Task) string {
 // (Store.OrderKeyForNewTask, Client.CreateTask). Either way the list is
 // this one order.
 func (c *Client) ListTasks(ctx context.Context) ([]Task, error) {
-	tasks, err := c.Store.ListTasks(ctx)
+	return c.listTasks(ctx, c.Store.ListTasks)
+}
+
+// ListOpenTasks is ListTasks without the closed tasks, read without
+// them rather than read and dropped: what GET /api/tasks' live list
+// holds (taskListLive). Every row says the same as it would in
+// ListTasks -- the states, blockers and holds it is projected with are
+// still read for the whole store.
+func (c *Client) ListOpenTasks(ctx context.Context) ([]Task, error) {
+	return c.listTasks(ctx, c.Store.ListOpenTasks)
+}
+
+func (c *Client) listTasks(ctx context.Context, read func(context.Context) ([]model.Task, error)) ([]Task, error) {
+	tasks, err := read(ctx)
 	if err != nil {
 		return nil, err
 	}
