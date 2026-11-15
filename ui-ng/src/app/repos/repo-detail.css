@@ -116,3 +116,34 @@
     letter-spacing: 0;
   }
 }
+
+/* An unjudged base-branch gate (GET /api/base-branch-gates) on Overview
+   and Releases: a warning-container banner with its status icon on the
+   first line, as the design book's "A deployment finding that blocks
+   nothing" says. */
+.repo-gate-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 16px;
+  border-radius: var(--md-sys-shape-corner-medium);
+  border: 1px solid var(--md-sys-color-warning);
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  font-size: 14px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.repo-gate-banner g-status-icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.repo-gate-text a {
+  margin-left: 4px;
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  white-space: nowrap;
+}

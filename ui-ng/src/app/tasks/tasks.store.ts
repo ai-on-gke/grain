@@ -234,9 +234,11 @@ export class TasksStore implements OnDestroy {
     const ok = await this.feed.refresh();
     if (ok) {
       this.loadError.set(null);
-    } else {
+    } else if (this.feed.loadError()) {
+      // Only the feed's banner-worthy failures: one failed poll keeps
+      // the last good list and says nothing (request-trouble.ts).
       this.loadError.set(
-        `The task list could not be read: ${this.feed.loadError() ?? "The request failed."}. This page tries again on its own.`,
+        `The task list could not be read: ${this.feed.loadError()}. This page tries again on its own.`,
       );
     }
     this.ownLoaded.set(true);
