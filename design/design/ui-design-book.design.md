@@ -298,6 +298,20 @@ placeholder, and a cleared box saves that default again. A card a link points
 at carries an `id` (`#capability-policy`, `#other-secrets`), and the page
 scrolls to the URL's fragment once the section has rendered.
 
+A setting kept in the secret store rather than in grain/config (the Hub's
+`grc_…` registration token) stays editable while a config-repo lock
+disables the fields around it, says when the daemon has no secret store
+instead of offering a box that cannot save, and is cleared only after a
+confirm. A value checked by its form (an `owner/name` repository, a
+`key=value` node selector, an auto-overcommit bound) is refused by name in
+an `.s-field-error` under its box and holds the Save bar; what only the
+server can judge (a minimum above its maximum) is left to its refusal in
+the error banner. A settings table that must fit a phone folds secondary
+columns into the first (`.s-cell-stack`: repository over path) rather
+than scrolling sideways. A blank string setting shows `<key>Default` as
+its placeholder like a number does; a blank that means "none" (a pod
+priority class) says `none` instead.
+
 ### Breakpoints
 
 `< 600px` phone, `600–839px` compact, `840–1279px` medium, `≥ 1280px`
