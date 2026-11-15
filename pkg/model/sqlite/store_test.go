@@ -1319,8 +1319,8 @@ func TestGitScopeFollowsTheLiveRunOnASandbox(t *testing.T) {
 // SandboxNamespaceScope is what /fs/ on the sandbox proxy authorizes
 // against (pkg/gitproxy/namespace.go), so it is pinned here against the
 // real store rather than only through gitproxy's fake: no grant reads no
-// CI; grain-ci reads the run's own repositories; a repository-limited api
-// grant adds that one repository; only self-debug reads src:// and only
+// CI; grain#ci reads the run's own repositories; a repository-limited api
+// grant adds that one repository; only grain#source reads src:// and only
 // a grant for every repository reads all CI. A grant name that is not an
 // api grant ParseAPIGrant accepts grants nothing, and an idle sandbox
 // resolves to no scope at all.
@@ -1336,14 +1336,14 @@ func TestSandboxNamespaceScopeFollowsTheLiveRunsGrants(t *testing.T) {
 	}
 	none := task("a1b2", true)
 	grainCI := task("c3d4", true)
-	grainCI.Grants = grants("grain-ci")
+	grainCI.Grants = grants(model.GrainCIGrant)
 	grainCI.Reads = []model.RepoRef{{Owner: "owner", Name: "shared-lib"}}
 	limited := task("e5f6", true)
 	limited.Grants = grants("api:ci-read@other/repo")
 	bogus := task("a7b8", true)
 	bogus.Grants = grants("api:ci-read:other/repo", "api:ci:read:other/repo", "ci-read")
 	debug := task("c9d0", true)
-	debug.Grants = grants(model.SelfDebugCapability)
+	debug.Grants = grants(model.SelfDebugGrants()...)
 	wide := task("e1f2", true)
 	wide.Grants = grants("api:ci-read")
 	for i, tk := range []model.Task{none, grainCI, limited, bogus, debug, wide} {
@@ -1388,10 +1388,11 @@ func TestSandboxNamespaceScopeFollowsTheLiveRunsGrants(t *testing.T) {
 			}
 		}
 	}
-	// self-debug opens the task, config, metrics and pipeline reads its
-	// MCP tools give (and, through its api:self-debug preset's
-	// deployment:read, health) -- and not memory, issues, SQL or the
-	// grain log, each of which is a grant of its own.
+	// What self-debug became -- api:self-debug and grain#source -- opens
+	// the task, config, metrics and pipeline reads its MCP tools gave
+	// (and, through the preset's deployment:read, health) -- and not
+	// memory, issues, SQL or the grain log, each of which is a grant of
+	// its own.
 	scope, _, err := store.SandboxNamespaceScope(ctx, "sandbox-4")
 	if err != nil {
 		t.Fatal(err)

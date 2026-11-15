@@ -777,7 +777,7 @@ func TestWhatASessionProposesWaitsUnlessTheDeploymentSaysOtherwise(t *testing.T)
 		{"asking for a capability the session holds", nil, []any{model.GrainSourceGrant}, model.StateQueued},
 		// grain#2409: the trust is in what the session may queue, not in
 		// what it may grant -- a capability it never held waits for a person.
-		{"asking for a capability the session lacks", nil, []any{"self-repair"}, model.StateProposed},
+		{"asking for a capability the session lacks", nil, []any{model.GrainHostExecGrant}, model.StateProposed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, ctx := openStore(t)
@@ -825,7 +825,7 @@ func TestWhatASessionProposesWaitsUnlessTheDeploymentSaysOtherwise(t *testing.T)
 				t.Fatalf("the proposal reads %q, want %q", state, tc.want)
 			}
 			noted := strings.Contains(proposal.Body, "`"+model.GrainHostExecGrant+"`")
-			if want := slices.Contains(tc.caps, any("self-repair")); noted != want {
+			if want := slices.Contains(tc.caps, any(model.GrainHostExecGrant)); noted != want {
 				t.Errorf("escalation note in body = %v, want %v: %q", noted, want, proposal.Body)
 			}
 		})

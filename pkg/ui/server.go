@@ -291,6 +291,17 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if roleSlot.role != nil {
 		r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
+	} else if ciCall, ok := model.CIAPICallFromContext(r.Context()); ok && r.Method == http.MethodGet {
+		grants := make([]string, len(ciCall.Scopes))
+		for i, sc := range ciCall.Scopes {
+			grants[i] = APIGrantPrefix + string(sc) + "@" + ciCall.Repo.String()
+		}
+		r = r.WithContext(withAccessRole(r.Context(), &accessRole{
+			Who:    "ci:" + ciCall.Repo.String(),
+			Roles:  []string{"ci-api"},
+			grants: grants,
+			set:    APIGrantsOf(grants),
+		}))
 	}
 	if roleSlot.delegation != nil {
 		r = r.WithContext(withDelegatedIdentity(r.Context(), roleSlot.delegation))
@@ -925,11 +936,12 @@ var timedRoutes = map[string]bool{
 	"GET /api/config":   true,
 	"GET /api/settings": true,
 	"PUT /api/settings": true,
-	"PUT /api/deployment/agent-backends/{backendId}":    true,
-	"DELETE /api/deployment/agent-backends/{backendId}": true,
-	"GET /api/agent-models":                             true,
-	"PUT /api/agent-backends/{id}/credential":           true,
-	"DELETE /api/agent-backends/{id}/credential":        true,
+	"PUT /api/deployment/agent-backends/{backendId}":           true,
+	"DELETE /api/deployment/agent-backends/{backendId}":        true,
+	"POST /api/deployment/agent-backends/{backendId}/discover": true,
+	"GET /api/agent-models":                                    true,
+	"PUT /api/agent-backends/{id}/credential":                  true,
+	"DELETE /api/agent-backends/{id}/credential":               true,
 }
 
 const slowRequestThreshold = time.Second

@@ -1192,6 +1192,10 @@ type HostSandboxes struct {
 	mu       sync.Mutex
 	live     map[string]*hostSandbox
 	building map[string]bool
+
+	// cpu turns each live run's process-tree CPU time into the rate
+	// Health reports (SandboxHealth.CPUCores).
+	cpu hostCPUSampler
 }
 
 // NewHostSandboxes returns a HostSandboxes rooted at baseDir, which must

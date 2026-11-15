@@ -149,4 +149,107 @@ describe("GrainApi.getIfChanged", () => {
     delReq.flush({ ok: true });
     await delP;
   });
+
+  it("coalesces concurrent get and getIfChanged calls, caches config() briefly without ETag, and invalidates on mutations", async () => {
+    // Concurrent get() shares one HTTP request.
+    const [g1, g2] = [
+      api.get<{ ok: boolean }>("GET /api/settings"),
+      api.get<{ ok: boolean }>("GET /api/settings"),
+    ];
+    const reqSet = http.expectOne("/api/settings");
+    reqSet.flush({ ok: true });
+    expect(await g1).toEqual({ ok: true });
+    expect(await g2).toEqual({ ok: true });
+
+    // config() shares concurrent calls and short-TTL cached reads without sending If-None-Match;
+    // POST /api/settings evicts the /api/config cache immediately.
+    const [c1, c2] = [api.config(), api.config()];
+    const cfg1 = http.expectOne("/api/config");
+    expect(cfg1.request.headers.has("If-None-Match")).toBe(false);
+    cfg1.flush({ version: "v1" });
+    expect(await c1).toEqual({ version: "v1" });
+    expect(await c2).toEqual({ version: "v1" });
+
+    const c3 = api.config();
+    http.expectNone("/api/config");
+    expect(await c3).toEqual({ version: "v1" });
+
+    const save = api.post("POST /api/settings", undefined, { maxWorkers: 2 });
+    http.expectOne("/api/settings").flush({ maxWorkers: 2 });
+    await save;
+
+    const c4 = api.config();
+    const cfg3 = http.expectOne("/api/config");
+    expect(cfg3.request.headers.has("If-None-Match")).toBe(false);
+    cfg3.flush({ version: "v2" });
+    expect(await c4).toEqual({ version: "v2" });
+
+    // taskSummary uses comments_limit=1&attempts_limit=1 and is invalidated by task comment mutation.
+    const sum1 = api.taskSummary("42");
+    http
+      .expectOne("/api/tasks/42?comments_limit=1&attempts_limit=1")
+      .flush({ id: "42" }, { headers: { ETag: '"t42-1"' } });
+    expect(await sum1).toEqual({ id: "42" });
+
+    // Unrelated prefix clear does not drop task 42's ETag.
+    api.clearConditionalCache("/api/tasks/4");
+    const sum2 = api.taskSummary("42");
+    const sumReq2 = http.expectOne(
+      "/api/tasks/42?comments_limit=1&attempts_limit=1",
+    );
+    expect(sumReq2.request.headers.get("If-None-Match")).toBe('"t42-1"');
+    sumReq2.flush(null, { status: 304, statusText: "Not Modified" });
+    await sum2;
+
+    const comment = api.post(
+      "POST /api/tasks/{id}/comments",
+      { id: "42" },
+      { body: "hi" },
+    );
+    http.expectOne("/api/tasks/42/comments").flush({ id: "42" });
+    await comment;
+
+    const sum3 = api.taskSummary("42");
+    const sumReq3 = http.expectOne(
+      "/api/tasks/42?comments_limit=1&attempts_limit=1",
+    );
+    expect(sumReq3.request.headers.has("If-None-Match")).toBe(false);
+    sumReq3.flush({ id: "42" });
+    await sum3;
+  });
+
+  it("scopes prefix clearConditionalCache invalidation without clobbering unrelated in-flight ETags", async () => {
+    const cfgInflight = api.getIfChanged("GET /api/config");
+    const taskCond = api.getIfChanged("GET /api/tasks/{id}", { id: "42" });
+    const taskGet = api.get("GET /api/tasks/{id}", { id: "42" });
+
+    api.clearConditionalCache("/api/tasks/42");
+
+    http
+      .expectOne("/api/config")
+      .flush({ version: "v1" }, { headers: { ETag: '"cfg-ok"' } });
+    const oldCondReq = http.match(
+      (r) =>
+        r.url === "/api/tasks/42" && r.headers.has("If-None-Match") === false,
+    );
+    expect(oldCondReq.length).toBeGreaterThanOrEqual(1);
+    for (const r of oldCondReq) {
+      r.flush({ id: "42", stale: true }, { headers: { ETag: '"t42-stale"' } });
+    }
+    await Promise.all([cfgInflight, taskCond, taskGet]);
+
+    // /api/config retained its ETag despite the prefixed task clear.
+    const cfgNext = api.getIfChanged("GET /api/config");
+    const cfgNextReq = http.expectOne("/api/config");
+    expect(cfgNextReq.request.headers.get("If-None-Match")).toBe('"cfg-ok"');
+    cfgNextReq.flush(null, { status: 304, statusText: "Not Modified" });
+    await cfgNext;
+
+    // /api/tasks/42 did NOT store '"t42-stale"' and does not reuse evicted inflight get.
+    const taskNext = api.getIfChanged("GET /api/tasks/{id}", { id: "42" });
+    const taskNextReq = http.expectOne("/api/tasks/42");
+    expect(taskNextReq.request.headers.has("If-None-Match")).toBe(false);
+    taskNextReq.flush({ id: "42", stale: false });
+    await taskNext;
+  });
 });

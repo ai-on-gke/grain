@@ -2235,7 +2235,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		writeClientError(w, err)
 		return
 	}
-	deployment, err := s.tasks.GetTeam(r.Context(), model.DefaultTeamID)
+	deployment, err := s.tasks.getTeamWithRepoWorkflows(r.Context(), model.DefaultTeamID, repoWorkflows)
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -2261,6 +2261,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	authMethod, _ := s.authMethod(r)
+	secretList := s.tasks.listSecretsBestEffort()
 	resp := configResponse{
 		Access:              accessRoleInfo(r.Context()),
 		AuthMethod:          authMethod,
@@ -2272,9 +2273,9 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		IdentityNotAccepted: identityNotAccepted(r, authenticated),
 		ListenPort:          requestLocalPort(r),
 		Proxied:             relayedByProxy(r),
-		Capabilities:        s.tasks.capabilitiesWithReadiness(cfg, repoConfigs),
+		Capabilities:        s.tasks.capabilitiesWithReadinessFrom(cfg, repoConfigs, secretList),
 		CapabilityMethods:   len(s.tasks.ListCapabilityMethods(r.Context())),
-		CICapabilities:      s.tasks.ciCapabilitiesWithReadiness(cfg, repoConfigs),
+		CICapabilities:      s.tasks.ciCapabilitiesWithReadinessFrom(cfg, repoConfigs, secretList),
 		RebootEnabled:       s.tasks.Config.Reboot != nil,
 		ShutdownEnabled:     s.tasks.Config.Shutdown != nil,
 		RestartEnabled:      s.tasks.Config.Restart != nil,
@@ -2477,7 +2478,47 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if call, ok := agentCallFromContext(r.Context()); ok {
 		narrowConfigForAgentCall(&resp, call)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	etagResp := resp
+	if resp.AgentPause != nil {
+		pauseCopy := *resp.AgentPause
+		pauseCopy.SecondsRemaining = 0
+		if len(pauseCopy.Pauses) > 0 {
+			entries := append([]AgentPauseEntry(nil), pauseCopy.Pauses...)
+			for i := range entries {
+				entries[i].SecondsRemaining = 0
+			}
+			pauseCopy.Pauses = entries
+		}
+		etagResp.AgentPause = &pauseCopy
+	}
+	body, err := json.Marshal(etagResp)
+	if err != nil {
+		writeClientError(w, err)
+		return
+	}
+	body = append(body, '\n')
+	etag := etagOf(body)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("ETag", etag)
+	w.Header().Add("Vary", "Cookie")
+	w.Header().Add("Vary", "Authorization")
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if resp.AgentPause != nil {
+		body, err = json.Marshal(resp)
+		if err != nil {
+			writeClientError(w, err)
+			return
+		}
+		body = append(body, '\n')
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(body)
+	}
 }
 
 func narrowConfigForAgentCall(resp *configResponse, call agentCall) {
@@ -2863,6 +2904,8 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// default put in after them would be a grant neither gate saw.
 	if p, ok := PrincipalFromContext(r.Context()); ok && p.Kind == model.PrincipalAgent {
 		// filed as the body says
+	} else if _, isCIAPI := model.CIAPICallFromContext(r.Context()); isCIAPI {
+		// filed as the template says
 	} else if a := accessRoleFromContext(r.Context()); a != nil && !a.Full {
 		// filed as the body says
 	} else if cfg, err := s.tasks.Store.GetConfig(r.Context()); err == nil && cfg != nil {
@@ -3440,7 +3483,8 @@ func writeError(w http.ResponseWriter, status int, err error) {
 
 // writeClientError maps a Client error to a status: 400 for a
 // ValidationError (a mistake caught before the store was touched), 404
-// for a task id with nothing behind it, and 500 otherwise.
+// for a task id with nothing behind it, 409 for a Release hold of review
+// findings alone, and 500 otherwise.
 //
 // The fallback is 500 rather than the 502 this used to return. 502 was
 // right when every failure came from an upstream GitHub call; the store
@@ -3475,6 +3519,12 @@ func writeClientError(w http.ResponseWriter, err error) {
 			return
 		}
 		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	// Review findings a person tried to Release: the request conflicts
+	// with the gate's state, not a fault of the deployment.
+	if errors.Is(err, model.ErrFindingsRequireRereviewOrOverride) {
+		writeJSON(w, http.StatusConflict, apierror.Response{Error: err.Error(), Code: findingsHoldCode})
 		return
 	}
 	var ue *UnprocessableError

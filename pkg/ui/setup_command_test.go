@@ -69,7 +69,7 @@ func TestSetupCommandSurvivesTheOtherRepoSaves(t *testing.T) {
 	if _, err := c.SetRepoSetupCommand(ctx, "acme/widgets", "make deps"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{"gcp-key"})
+	got, err := c.SetRepoDefaultCapabilities(ctx, "acme/widgets", []string{model.GCPKeySandboxAgentGrant})
 	if err != nil {
 		t.Fatal(err)
 	}

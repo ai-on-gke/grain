@@ -16,8 +16,9 @@ import { DOCUMENT } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
-  OnChanges,
-  OnInit,
+  type OnChanges,
+  type OnInit,
+  type SimpleChanges,
   ViewEncapsulation,
   computed,
   inject,
@@ -44,6 +45,7 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { TipDirective } from "../shared/tip.directive";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService } from "./settings-state.service";
 
@@ -77,7 +79,7 @@ function formatBytes(bytes: number): string {
 
 @Component({
   selector: "g-settings-instance",
-  imports: [PillSelectComponent, ConfirmDialogComponent],
+  imports: [PillSelectComponent, ConfirmDialogComponent, TipDirective],
   encapsulation: ViewEncapsulation.None,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -105,7 +107,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="g-dep-id">Deployment ID</label>
               <input
                 id="g-dep-id"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 [value]="state.val('deploymentId', '')"
                 [disabled]="!canWriteSettings()"
@@ -341,8 +343,18 @@ function formatBytes(bytes: number): string {
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="flush-package-cache-btn"
-                [disabled]="!access.can('POST /api/package-cache/flush')"
-                (click)="flushPackageCache()"
+                [disabled]="
+                  !packageCacheLive() ||
+                  !access.can('POST /api/package-cache/flush')
+                "
+                [gTip]="
+                  !access.can('POST /api/package-cache/flush')
+                    ? access.deniedReason('POST /api/package-cache/flush')
+                    : !packageCacheLive()
+                      ? 'Proxy cache is not running on this daemon.'
+                      : 'Flush cached packages'
+                "
+                (click)="confirmFlushPackageCache()"
               >
                 Flush proxy cache
               </button>
@@ -350,8 +362,18 @@ function formatBytes(bytes: number): string {
                 type="button"
                 class="btn-tonal s-btn-sm"
                 data-testid="flush-actions-cache-btn"
-                [disabled]="!access.can('POST /api/actions-cache/flush')"
-                (click)="flushActionsCache()"
+                [disabled]="
+                  !actionsCacheLive() ||
+                  !access.can('POST /api/actions-cache/flush')
+                "
+                [gTip]="
+                  !access.can('POST /api/actions-cache/flush')
+                    ? access.deniedReason('POST /api/actions-cache/flush')
+                    : !actionsCacheLive()
+                      ? 'Actions cache is not running on this daemon.'
+                      : 'Flush GitHub Actions cache archives'
+                "
+                (click)="confirmFlushActionsCache()"
               >
                 Flush Actions cache
               </button>
@@ -411,7 +433,7 @@ function formatBytes(bytes: number): string {
               >
               <input
                 id="c-pkg-gb"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 [value]="state.val('packageCacheSizeGb', 20)"
@@ -430,7 +452,7 @@ function formatBytes(bytes: number): string {
               >
               <input
                 id="c-act-gb"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="0"
                 [value]="state.val('actionsCacheSizeGb', 20)"
@@ -457,7 +479,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="e-poll">Poll interval</label>
               <input
                 id="e-poll"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="text"
                 data-testid="input-poll-interval"
                 placeholder="30s"
@@ -472,7 +494,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="e-workers">Max worker agents</label>
               <input
                 id="e-workers"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="1"
                 data-testid="input-max-workers"
@@ -492,7 +514,7 @@ function formatBytes(bytes: number): string {
               >
               <input
                 id="e-mpr"
-                class="s-input tabular"
+                class="s-input s-num"
                 type="number"
                 min="1"
                 [value]="state.val('maxMergesPerRepo', 1)"
@@ -543,7 +565,7 @@ function formatBytes(bytes: number): string {
             </div>
             <div class="s-inline">
               <span
-                class="status-pill neutral tabular"
+                class="status-pill neutral s-mono"
                 data-testid="registry-status-pill"
               >
                 {{ registryStateLabel() }}
@@ -565,7 +587,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="reg-url">Hub URL</label>
               <input
                 id="reg-url"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 data-testid="input-hub-url"
                 placeholder="https://hub.grain.internal"
@@ -578,7 +600,7 @@ function formatBytes(bytes: number): string {
               <label class="s-label" for="reg-entry">Entry name</label>
               <input
                 id="reg-entry"
-                class="s-input tabular"
+                class="s-input s-mono"
                 type="text"
                 data-testid="input-hub-entry"
                 placeholder="dco-core"
@@ -625,7 +647,7 @@ function formatBytes(bytes: number): string {
               </p>
             </div>
             <span
-              class="status-pill healthy tabular"
+              class="status-pill healthy s-mono"
               data-testid="current-daemon-version"
             >
               {{ currentVersion() }}
@@ -764,7 +786,7 @@ function formatBytes(bytes: number): string {
                 Start upgrade
               </button>
               @if (dbBackendLabel()) {
-                <span class="s-hint tabular"
+                <span class="s-hint s-num"
                   >Database: {{ dbBackendLabel() }}</span
                 >
               }
@@ -776,7 +798,7 @@ function formatBytes(bytes: number): string {
               }}</pre>
             }
           } @else if (dbBackendLabel()) {
-            <span class="s-hint tabular" data-testid="upgrade-database"
+            <span class="s-hint s-num" data-testid="upgrade-database"
               >Database: {{ dbBackendLabel() }}</span
             >
           }
@@ -864,6 +886,8 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected readonly broadcastRunningOnly = signal(false);
   protected readonly cliRunLocations = signal<Record<string, string>>({});
 
+  protected readonly packageCacheLive = signal(false);
+  protected readonly actionsCacheLive = signal(false);
   protected readonly packageCacheSummary = signal("Shared package proxy cache");
   protected readonly actionsCacheSummary = signal(
     "Workflow step & dependency cache",
@@ -924,8 +948,10 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     this.loadForSection();
   }
 
-  ngOnChanges(): void {
-    this.loadForSection();
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes["section"] && !changes["section"].firstChange) {
+      this.loadForSection();
+    }
   }
 
   protected canWriteSettings(): boolean {
@@ -943,6 +969,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
   protected setTimeZone(tz: string): void {
     this.timeZone.set(tz);
     writeStorage(TZ_STORAGE_KEY, tz === "local" ? null : tz);
+    this.access.tickClock();
   }
 
   protected serverOrigin(): string {
@@ -976,11 +1003,17 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
       if (this.access.can("GET /api/package-cache")) {
         void this.api
           .get<{
+            enabled?: boolean;
             available?: boolean;
             cache?: { kind: string; entries?: number; bytes?: number }[];
           }>("GET /api/package-cache")
           .then((p) => {
-            if (Array.isArray(p?.cache)) {
+            const live =
+              p?.enabled !== false &&
+              p?.available !== false &&
+              Array.isArray(p?.cache);
+            this.packageCacheLive.set(live);
+            if (live && Array.isArray(p?.cache)) {
               let entries = 0;
               let bytes = 0;
               for (const item of p.cache) {
@@ -990,7 +1023,7 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
               this.packageCacheSummary.set(
                 `${entries} cached packages · ${formatBytes(bytes)}`,
               );
-            } else if (p?.available === false) {
+            } else if (p?.enabled === false || p?.available === false) {
               this.packageCacheSummary.set("Proxy cache not enabled on daemon");
             }
           })
@@ -1000,8 +1033,22 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
         void this.api
           .get<Record<string, unknown>>("GET /api/actions-cache")
           .then((a) => {
-            if (a?.["entries"] !== undefined) {
-              this.actionsCacheSummary.set(`Cached entries: ${a["entries"]}`);
+            const live =
+              Boolean(a) &&
+              a?.["enabled"] !== false &&
+              a?.["available"] !== false;
+            this.actionsCacheLive.set(live);
+            if (!live) {
+              this.actionsCacheSummary.set(
+                "Actions cache not enabled on daemon",
+              );
+            } else if (a?.["entries"] !== undefined) {
+              const bytes = Number(a["bytes"]) || 0;
+              this.actionsCacheSummary.set(
+                bytes > 0
+                  ? `Cached entries: ${a["entries"]} · ${formatBytes(bytes)}`
+                  : `Cached entries: ${a["entries"]}`,
+              );
             }
           })
           .catch(() => undefined);
@@ -1083,6 +1130,28 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
     }
   }
 
+  protected confirmFlushPackageCache(): void {
+    this.confirmRequest.set({
+      title: "Flush package proxy cache?",
+      message:
+        "Deletes all cached packages across apt, npm, PyPI, Go, and Docker on this controller. Active runs remain safe and fetch from upstream on cache miss.",
+      accept: "Flush cache",
+      destructive: true,
+      run: () => this.flushPackageCache(),
+    });
+  }
+
+  protected confirmFlushActionsCache(): void {
+    this.confirmRequest.set({
+      title: "Flush GitHub Actions cache?",
+      message:
+        "Empties cached CI build archives across all repositories on this controller.",
+      accept: "Flush cache",
+      destructive: true,
+      run: () => this.flushActionsCache(),
+    });
+  }
+
   protected async flushPackageCache(): Promise<void> {
     try {
       const res = await this.api.post<{
@@ -1107,7 +1176,19 @@ export class SettingsInstanceComponent implements OnInit, OnChanges {
 
   protected async flushActionsCache(): Promise<void> {
     try {
-      await this.api.post("POST /api/actions-cache/flush", undefined, {});
+      const res = await this.api.post<{
+        cache?: { entries?: number; bytes?: number };
+      }>("POST /api/actions-cache/flush", undefined, {});
+      if (res?.cache?.entries !== undefined) {
+        const bytes = Number(res.cache.bytes) || 0;
+        this.actionsCacheSummary.set(
+          bytes > 0
+            ? `Cached entries: ${res.cache.entries} · ${formatBytes(bytes)}`
+            : `Cached entries: ${res.cache.entries}`,
+        );
+      } else {
+        this.actionsCacheSummary.set("Cached entries: 0");
+      }
       this.snackbar.show("Actions cache flushed");
     } catch (err) {
       this.state.recordError(err);

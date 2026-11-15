@@ -38,8 +38,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/agent/codex"
 )
 
-// The host CLI's spec (design/spec/cli/host.spec.md) carries one generated
-// flag table per command, between
+// The host CLI's spec (design/spec/cli/host.spec.md) carries a top-level
+// command index (#CLI-20) and one generated flag table per command, between
 //
 //	<!-- BEGIN GENERATED FLAGS: grain <path> -->
 //	<!-- END GENERATED FLAGS -->
@@ -47,9 +47,10 @@ import (
 // TestHostCLISpecCoversEveryCommandAndFlag walks the commands this binary
 // registers -- the argv[1] switches in Main and dispatchCLI, read out of
 // main.go so a new command cannot be missed, plus hostSpecSubcommands --
-// runs each with -h in a child of this test binary, and reads the flags
-// out of the flag package's own PrintDefaults output. A command or flag
-// the code has and the spec does not, or the reverse, fails it.
+// checks #CLI-20's command index against the top-level switches, runs each
+// command with -h in a child of this test binary, and reads the flags out of
+// the flag package's own PrintDefaults output. A command or flag the code has
+// and the spec does not, or the reverse, fails it.
 //
 // GRAIN_UPDATE_CLI_SPEC=1 rewrites the tables in place (a command the
 // spec has no table for is appended under "Unplaced commands", to be moved
@@ -59,7 +60,7 @@ const hostSpecPath = "../../design/spec/cli/host.spec.md"
 // hostSpecSubcommands are the verbs a command takes as its own first
 // argument, each with a flag set of its own.
 var hostSpecSubcommands = map[string][]string{
-	"access-code":        {"show", "rotate"},
+	"access-code":        {"show", "rotate", "mode"},
 	"capability-servers": {"list", "add", "remove", "enable", "disable", "bind-secret"},
 	"ci":                 {"run", "list", "show", "watch", "wait", "retrigger", "test-history", "cancel", "cache", "faults", "artifact"},
 	"connections":        {"import"},
@@ -474,16 +475,98 @@ func compareSpecBlocks(t *testing.T, specPath, spec string, want map[string][]st
 	}
 }
 
-func TestHostCLISpecCoversEveryCommandAndFlag(t *testing.T) {
-	if testing.Short() {
-		t.Skip("runs the grain binary once per command")
+var (
+	commandIndexSection = regexp.MustCompile(`(?ms)^## 1\. Command index \{#CLI-20\}\n(.*?)(?:\n---|\n## )`)
+	inlineCodeSpan      = regexp.MustCompile("`([^`]+)`")
+)
+
+// specCommandIndex reads the top-level command words listed in #CLI-20's
+// Command index table: the first whitespace-separated token of every
+// backticked span in the Commands column.
+func specCommandIndex(t *testing.T, specPath, spec string) []string {
+	t.Helper()
+	m := commandIndexSection.FindStringSubmatch(spec)
+	if m == nil {
+		t.Fatalf("%s: missing ## 1. Command index {#CLI-20} section", specPath)
 	}
-	tables := hostSpecTables(t)
+	seen := map[string]bool{}
+	for _, line := range strings.Split(m[1], "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") {
+			continue
+		}
+		inner := strings.Trim(line, "|")
+		kind, cmds, ok := strings.Cut(inner, "|")
+		if !ok {
+			continue
+		}
+		kind = strings.TrimSpace(kind)
+		if kind == "" || kind == "Kind" || strings.Trim(kind, "-") == "" {
+			continue
+		}
+		for _, cm := range inlineCodeSpan.FindAllStringSubmatch(cmds, -1) {
+			if fields := strings.Fields(cm[1]); len(fields) > 0 {
+				seen[fields[0]] = true
+			}
+		}
+	}
+	var names []string
+	for n := range seen {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// compareCommandIndex checks #CLI-20's Command index table against the
+// top-level commands main.go's two switches register.
+func compareCommandIndex(t *testing.T, specPath, spec string, want []string) ([]string, []string) {
+	t.Helper()
+	got := specCommandIndex(t, specPath, spec)
+	var missing, extra []string
+	for _, cmd := range want {
+		if !slices.Contains(got, cmd) {
+			missing = append(missing, cmd)
+		}
+	}
+	for _, cmd := range got {
+		if !slices.Contains(want, cmd) {
+			extra = append(extra, cmd)
+		}
+	}
+	return missing, extra
+}
+
+func TestCommandIndexParserCatchesDrift(t *testing.T) {
+	sample := "## 1. Command index {#CLI-20}\n\n" +
+		"| Kind | Commands |\n|---|---|\n" +
+		"| Task CLI: tasks | `list`, `get`/`show`, `close`/`delete` |\n" +
+		"| Task CLI: deployment | `upgrade …`, `release approve\\|reject\\|rollback` |\n\n---\n"
+	missing, extra := compareCommandIndex(t, "sample.spec.md", sample, []string{"list", "get", "show", "close", "delete", "upgrade", "qa"})
+	if !slices.Equal(missing, []string{"qa"}) || !slices.Equal(extra, []string{"release"}) {
+		t.Fatalf("compareCommandIndex = missing %v, extra %v; want [qa], [release]", missing, extra)
+	}
+}
+
+func TestHostCLISpecCoversEveryCommandAndFlag(t *testing.T) {
 	raw, err := os.ReadFile(hostSpecPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	spec := string(raw)
+	if os.Getenv("GRAIN_UPDATE_CLI_SPEC") != "1" {
+		missing, extra := compareCommandIndex(t, hostSpecPath, spec, hostSpecTopLevel(t))
+		for _, cmd := range missing {
+			t.Errorf("%s: #CLI-20 Command index omits %q, which main.go registers", hostSpecPath, cmd)
+		}
+		for _, cmd := range extra {
+			t.Errorf("%s: #CLI-20 Command index lists %q, which main.go does not register", hostSpecPath, cmd)
+		}
+	}
+	if testing.Short() {
+		t.Skip("runs the grain binary once per command")
+	}
+	tables := hostSpecTables(t)
 	if os.Getenv("GRAIN_UPDATE_CLI_SPEC") == "1" {
 		rendered := map[string]string{}
 		for path, flags := range tables {

@@ -727,4 +727,97 @@ describe("FleetPageComponent", () => {
       root.querySelector('[data-testid="logs-viewer"]')?.textContent,
     ).toContain("certificate renewed");
   });
+
+  it("defers controls and logs fetches until their tabs are activated", async () => {
+    const { fixture, root, api } = await setup();
+
+    const calledRoutes = () => new Set(api.calls.map((c) => c.route));
+    expect(calledRoutes().has("GET /api/sandboxes")).toBe(true);
+    expect(calledRoutes().has("GET /api/hostds")).toBe(true);
+    expect(calledRoutes().has("GET /api/pipeline-pause")).toBe(false);
+    expect(calledRoutes().has("GET /api/pause")).toBe(false);
+    expect(calledRoutes().has("GET /api/package-cache")).toBe(false);
+    expect(calledRoutes().has("GET /api/actions-cache")).toBe(false);
+    expect(calledRoutes().has("GET /api/logs")).toBe(false);
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-controls"]')!
+      .click();
+    await settle(fixture);
+    expect(calledRoutes().has("GET /api/pipeline-pause")).toBe(true);
+    expect(calledRoutes().has("GET /api/logs")).toBe(false);
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-logs"]')!
+      .click();
+    await settle(fixture);
+    expect(calledRoutes().has("GET /api/logs")).toBe(true);
+    expect(calledRoutes().has("GET /api/logs/{source}")).toBe(true);
+  });
+
+  it("patches AccessService immediately when pausing, resuming, or lifting usage-limit pauses", async () => {
+    const { fixture, root, api } = await setup();
+    const access = TestBed.inject(AccessService);
+    access.setUsage({
+      scopes: [
+        {
+          connection: "gemini-pro",
+          model: "gemini-2.5-pro",
+          pausedUntil: "2026-11-15T12:00:00Z",
+        },
+      ],
+    });
+    api.agentPauseBody = {
+      pause: {
+        paused: true,
+        pauses: [
+          {
+            connection: "gemini-pro",
+            connectionName: "Gemini 2.5 Pro",
+            model: "gemini-2.5-pro",
+            until: "2026-11-15T12:00:00Z",
+            reason: "quota reached",
+            canLift: true,
+          },
+        ],
+      },
+    };
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="fleet-tab-controls"]')!
+      .click();
+    await settle(fixture);
+
+    // Pause pipeline -> AccessService.rawConfig().pipelinePause becomes paused immediately.
+    const reasonInput = root.querySelector<HTMLInputElement>(
+      '[data-testid="pipeline-pause-reason"]',
+    )!;
+    reasonInput.value = "deploy freeze";
+    reasonInput.dispatchEvent(new Event("input"));
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="pipeline-pause-btn"]')!
+      .click();
+    await settle(fixture);
+    expect(access.rawConfig()?.pipelinePause?.paused).toBe(true);
+    expect(access.rawConfig()?.pipelinePause?.reason).toBe("deploy freeze");
+
+    // Resume pipeline -> AccessService.rawConfig().pipelinePause clears immediately.
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="pipeline-resume-btn"]')!
+      .click();
+    await settle(fixture);
+    expect(access.rawConfig()?.pipelinePause?.paused).toBe(false);
+
+    // Lift model usage-limit pause -> AccessService.rawConfig().agentPause and cached scope pausedUntil clear.
+    const liftBtn = Array.from(
+      root.querySelectorAll<HTMLButtonElement>(
+        '[data-testid="fleet-usage-pauses-card"] button',
+      ),
+    ).find((b) => b.textContent?.includes("Lift pause"))!;
+    expect(liftBtn).toBeDefined();
+    liftBtn.click();
+    await settle(fixture);
+    expect(access.rawConfig()?.agentPause?.paused).toBe(false);
+    expect(access.usage()?.scopes?.[0]?.pausedUntil).toBeUndefined();
+  });
 });

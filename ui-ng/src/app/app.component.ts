@@ -38,8 +38,9 @@ import {
   RouterLinkActive,
   RouterOutlet,
 } from "@angular/router";
-import type { RouteKey } from "./api/generated-routes";
-import { GrainApi } from "./api/grain-api.service";
+import { type RouteKey } from "./api/generated-routes";
+import { GrainApi, routeScope } from "./api/grain-api.service";
+import { GrainEvents } from "./api/grain-events.service";
 import { CreateTaskService } from "./create/create-task.service";
 import type { NewTaskDraft } from "./create/new-task-form";
 import { NewTaskSheetComponent } from "./create/new-task-sheet.component";
@@ -56,11 +57,17 @@ import { TaskFeedStore } from "./services/task-feed.service";
 import { ThemeService } from "./services/theme.service";
 import { ViewFilter } from "./services/view-filter.service";
 import { CHLADNI_ROSETTE_PATH, MARK_SHEET_32_URL } from "./shared/brand-mark";
-import { TipDirective } from "./shared/tip.directive";
+import {
+  summarizeDispatchStatus,
+  type UsagePauseInput,
+} from "./shared/dispatch-status";
+import { TipDirective, dismissActiveTooltip } from "./shared/tip.directive";
 import { AccountPopoverComponent } from "./shell/account-popover.component";
 import { CustomizeNavDialogComponent } from "./shell/customize-nav-dialog.component";
 import { HelpDialogComponent } from "./shell/help-dialog.component";
 import { type Destination, SETTINGS, hrefFor } from "./shell/nav";
+import { DispatchBannerComponent } from "./shell/dispatch-banner.component";
+import { NavProgressComponent } from "./shell/nav-progress.component";
 import { NextUpComponent } from "./shell/next-up.component";
 import { SnackbarComponent } from "./shell/snackbar.component";
 
@@ -153,7 +160,9 @@ export class DeferErrorDirective implements OnInit {
     DeferErrorDirective,
     SnackbarComponent,
     NewTaskSheetComponent,
+    NavProgressComponent,
     NextUpComponent,
+    DispatchBannerComponent,
     HelpDialogComponent,
     AccountPopoverComponent,
     CustomizeNavDialogComponent,
@@ -166,6 +175,7 @@ export class DeferErrorDirective implements OnInit {
     "(document:keydown)": "onGlobalKey($event)",
   },
   template: `
+    <g-nav-progress />
     <div class="app-shell">
       <nav
         class="nav-rail"
@@ -486,20 +496,31 @@ export class DeferErrorDirective implements OnInit {
           <g-next-up />
           <a
             class="live-pill tabular"
-            [class.is-idle]="feed.runningCount() === 0"
+            [class.is-idle]="feed.runningCount() === 0 && !dispatchBanner()"
+            [class.is-paused-warn]="dispatchBanner()?.tone === 'warn'"
+            [class.is-paused-error]="dispatchBanner()?.tone === 'error'"
             routerLink="/agents"
             data-testid="live-pill"
             [gTip]="livePillTip()"
           >
             <span
               class="live-dot"
-              [class.is-idle]="feed.runningCount() === 0"
+              [class.is-idle]="feed.runningCount() === 0 && !dispatchBanner()"
               aria-hidden="true"
             ></span>
-            <span class="live-pill-text"
-              >{{ feed.runningCount() }}
-              {{ feed.runningCount() === 1 ? "agent" : "agents" }} running</span
-            >
+            @if (dispatchBanner(); as db) {
+              <span class="live-pill-text">{{
+                feed.runningCount() > 0
+                  ? feed.runningCount() + " running · " + db.shortLabel
+                  : db.shortLabel
+              }}</span>
+            } @else {
+              <span class="live-pill-text"
+                >{{ feed.runningCount() }}
+                {{ feed.runningCount() === 1 ? "agent" : "agents" }}
+                running</span
+              >
+            }
           </a>
           <button
             #directorBtn
@@ -528,7 +549,12 @@ export class DeferErrorDirective implements OnInit {
               <span class="live-dot" aria-hidden="true"></span>
             }
           </button>
-          <label class="search-box">
+          <form
+            class="search-box"
+            role="search"
+            autocomplete="off"
+            (submit)="$event.preventDefault()"
+          >
             <span class="search-icon" aria-hidden="true">
               <svg width="18" height="18" viewBox="0 0 24 24">
                 <path [attr.d]="icons['search']" fill="currentColor" />
@@ -538,6 +564,12 @@ export class DeferErrorDirective implements OnInit {
               #searchInput
               class="search-input"
               type="search"
+              name="grain-view-filter"
+              autocomplete="off"
+              spellcheck="false"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              data-form-type="other"
               placeholder="Filter this view"
               aria-label="Filter this view"
               data-testid="view-filter"
@@ -552,7 +584,7 @@ export class DeferErrorDirective implements OnInit {
                 >/</span
               >
             }
-          </label>
+          </form>
           <button
             type="button"
             class="icon-btn"
@@ -610,6 +642,11 @@ export class DeferErrorDirective implements OnInit {
           id="main"
           [attr.inert]="modalOpen() ? '' : null"
         >
+          @defer (when dispatchBanner()) {
+            @if (dispatchBanner(); as db) {
+              <g-dispatch-banner [banner]="db" />
+            }
+          }
           <router-outlet />
         </main>
         @defer (when directorCtx.isOpen()) {
@@ -934,6 +971,7 @@ export class AppComponent implements OnInit, OnDestroy {
   private readonly sessionsRef = signal<SessionsStore | null>(null);
   private destroyed = false;
   private readonly api = inject(GrainApi);
+  private readonly events = inject(GrainEvents);
   private readonly router = inject(Router);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
@@ -1054,11 +1092,24 @@ export class AppComponent implements OnInit, OnDestroy {
       !this.spriteFailed(),
   );
 
+  protected readonly dispatchBanner = computed(() =>
+    summarizeDispatchStatus(
+      this.access.rawConfig(),
+      this.access.usage(),
+      this.access.clockNow(),
+    ),
+  );
+
   protected readonly livePillTip = computed(() => {
     const n = this.feed.runningCount();
-    return n > 0
-      ? `${n} active agent ${n === 1 ? "run" : "runs"}. Open Live Agents.`
-      : "No agents running right now. Open Live Agents.";
+    const base =
+      n > 0
+        ? `${n} active agent ${n === 1 ? "run" : "runs"}. Open Live Agents.`
+        : "No agents running right now. Open Live Agents.";
+    const db = this.dispatchBanner();
+    return db
+      ? `${base} · ${db.headline}${db.resetText ? ` (${db.resetText})` : ""}`
+      : base;
   });
 
   protected readonly avatarTip = computed(() => {
@@ -1091,6 +1142,19 @@ export class AppComponent implements OnInit, OnDestroy {
 
   private unregister: (() => void)[] = [];
   private navSub: { unsubscribe(): void } | null = null;
+  private dispatchEventSub: { unsubscribe(): void } | null = null;
+  private dispatchPollTimer: ReturnType<typeof setInterval> | null = null;
+  private dispatchTickTimer: ReturnType<typeof setInterval> | null = null;
+  private lastConfigAt = 0;
+  private lastUsageAt = 0;
+  private dispatchReading = false;
+  private spriteProbed = false;
+  private readonly onVisibilityChange = (): void => {
+    if (this.doc.visibilityState === "visible") {
+      this.access.tickClock();
+      void this.refreshDispatchStatus(Date.now() - this.lastUsageAt >= 10_000);
+    }
+  };
   private motionMql: MediaQueryList | null = null;
   private readonly onMotionChange = (e: MediaQueryListEvent): void => {
     this.zone.run(() => this.prefersReducedMotion.set(e.matches));
@@ -1113,7 +1177,19 @@ export class AppComponent implements OnInit, OnDestroy {
       this.prefersReducedMotion.set(this.motionMql.matches);
       this.motionMql.addEventListener?.("change", this.onMotionChange);
     }
-    this.probeBrandSprite();
+    effect(
+      () => {
+        if (
+          this.feed.runningCount() > 0 &&
+          !this.prefersReducedMotion() &&
+          !this.spriteProbed
+        ) {
+          this.spriteProbed = true;
+          this.probeBrandSprite();
+        }
+      },
+      { injector: this.injector },
+    );
 
     if (!this.access.configLoaded() && typeof this.api.config === "function") {
       void this.api
@@ -1188,7 +1264,7 @@ export class AppComponent implements OnInit, OnDestroy {
       runInInjectionContext(this.injector, () => {
         const s = inject(InboxStore);
         this.inboxRef.set(s);
-        s.start();
+        s.start(true);
       });
     });
 
@@ -1201,8 +1277,15 @@ export class AppComponent implements OnInit, OnDestroy {
     });
 
     this.directorCtx.setRoute(this.router.url);
+    void this.refreshDispatchStatus(true);
+    this.dispatchEventSub = this.events.events().subscribe(() => {
+      if (Date.now() - this.lastConfigAt >= 10_000) {
+        void this.refreshDispatchStatus(true);
+      }
+    });
     this.navSub = this.router.events.subscribe((e) => {
       if (e instanceof NavigationStart) {
+        dismissActiveTooltip();
         this.closeMenus();
         this.accountOpen.set(false);
       }
@@ -1212,15 +1295,56 @@ export class AppComponent implements OnInit, OnDestroy {
         this.onSessions.set(
           url.startsWith("/sessions") || url.startsWith("/task/"),
         );
+        if (Date.now() - this.lastConfigAt >= 5_000) {
+          void this.refreshDispatchStatus(false);
+        }
       }
     });
 
     this.zone.runOutsideAngular(() => {
+      this.doc.addEventListener("visibilitychange", this.onVisibilityChange);
+      this.dispatchPollTimer = setInterval(() => {
+        if (this.doc.visibilityState !== "hidden") {
+          this.zone.run(() => void this.refreshDispatchStatus(false));
+        }
+      }, 60_000);
+      this.dispatchTickTimer = setInterval(() => {
+        if (this.doc.visibilityState !== "hidden" && this.dispatchBanner()) {
+          this.zone.run(() => this.access.tickClock());
+        }
+      }, 30_000);
       this.doc.defaultView?.addEventListener("resize", this.onViewportChange);
       this.doc
         .querySelector(".nav-rail")
         ?.addEventListener("scroll", this.onViewportChange);
     });
+  }
+
+  private async refreshDispatchStatus(forceUsage: boolean): Promise<void> {
+    if (this.destroyed || this.dispatchReading) return;
+    this.dispatchReading = true;
+    const now = Date.now();
+    this.lastConfigAt = now;
+    try {
+      const cfg = await this.api.config().catch(() => null);
+      if (cfg) this.access.setConfig(cfg);
+      if (
+        (forceUsage || now - this.lastUsageAt >= 60_000) &&
+        typeof this.api.get === "function" &&
+        this.access.canGlobalScope(routeScope("GET /api/usage"))
+      ) {
+        this.lastUsageAt = now;
+        const usage = await this.api
+          .get<UsagePauseInput>("GET /api/usage")
+          .catch(() => null);
+        if (usage && ("warnings" in usage || "scopes" in usage)) {
+          this.access.setUsage(usage);
+        }
+      }
+      this.access.tickClock();
+    } finally {
+      this.dispatchReading = false;
+    }
   }
 
   ngOnDestroy(): void {
@@ -1230,6 +1354,10 @@ export class AppComponent implements OnInit, OnDestroy {
     this.inboxRef()?.stop();
     this.unregister.forEach((u) => u());
     this.navSub?.unsubscribe();
+    this.dispatchEventSub?.unsubscribe();
+    if (this.dispatchPollTimer) clearInterval(this.dispatchPollTimer);
+    if (this.dispatchTickTimer) clearInterval(this.dispatchTickTimer);
+    this.doc.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.motionMql?.removeEventListener?.("change", this.onMotionChange);
     this.doc.defaultView?.removeEventListener("resize", this.onViewportChange);
     this.doc

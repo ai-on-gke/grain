@@ -16,6 +16,7 @@ import { DOCUMENT, NgTemplateOutlet } from "@angular/common";
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
   NgZone,
   type OnDestroy,
@@ -29,7 +30,7 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
-import { Router, RouterLink } from "@angular/router";
+import { ActivatedRoute, Router, RouterLink } from "@angular/router";
 import { GrainApi } from "../api/grain-api.service";
 import type {
   AttachmentUpload,
@@ -37,12 +38,14 @@ import type {
   CapabilityOption,
   Comment,
   GrainConfig,
+  Task,
 } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import { summarizeDispatchStatus } from "../shared/dispatch-status";
 import { isHuman } from "../sessions/session-helpers";
 
 import { ConversationComponent } from "../shared/conversation/conversation.component";
@@ -65,6 +68,7 @@ import {
 } from "../shared/grants-picker.component";
 import { PriorityChipComponent } from "../shared/priority-chip.component";
 import { TipDirective } from "../shared/tip.directive";
+import { TaskFeedStore } from "../services/task-feed.service";
 import { ago, levelOf, priorityOf, stateLabel } from "../tasks/task-view";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { TaskChangesTabComponent } from "./task-changes-tab.component";
@@ -134,6 +138,7 @@ export function duration(from?: string, to?: string): string {
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "./task-detail.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
@@ -607,28 +612,66 @@ export function duration(from?: string, to?: string): string {
           </p>
         }
 
-        <!-- Inline Pending Approval / Gate Panels -->
-
-        @if (store.actionError(); as err) {
+        <!-- Rollover (durable-tasks.design.md#DT-15): a closed durable
+             task's work goes on under another number, said before the
+             rest of the page so an old link leads somewhere. -->
+        @if (t.rolledOverTo; as next) {
           <p
-            class="banner banner-error"
-            role="alert"
-            data-testid="task-action-error"
+            class="banner banner-info"
+            role="status"
+            data-testid="task-rolled-over-to"
           >
-            {{ err }}
-            <button
-              type="button"
-              class="btn-text"
-              (click)="store.actionError.set(null)"
+            <strong
+              >Rolled over to
+              <a
+                [routerLink]="linkTo(next)"
+                [queryParams]="linkQuery(next)"
+                [queryParamsHandling]="pane() ? 'merge' : ''"
+                (click)="onTreeNodeClick($event, next)"
+                >#{{ next }}</a
+              >.</strong
             >
-              Dismiss
-            </button>
+            This durable task passed its record limit, so its work carries on in
+            the successor, with its brief, handover, pull request and waits.
+            This record is kept as it was.
+          </p>
+        }
+        @if (t.rolledOverFrom; as prev) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-rolled-over-from"
+          >
+            Carries on the work of
+            <a
+              [routerLink]="linkTo(prev)"
+              [queryParams]="linkQuery(prev)"
+              [queryParamsHandling]="pane() ? 'merge' : ''"
+              (click)="onTreeNodeClick($event, prev)"
+              >#{{ prev }}</a
+            >, rolled over when it passed its record limit; its earlier
+            conversation and runs are there.
+          </p>
+        }
+
+        <!-- Inline Pending Approval / Gate Panels -->
+        @if (queuedPauseNotice(); as qpn) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-dispatch-paused"
+          >
+            {{ qpn.headline }}
+            @if (qpn.resetText) {
+              · {{ qpn.resetText }}
+            }
           </p>
         }
         <g-task-gates-bar
           [task]="t"
           (acted)="acted.emit()"
           (replyInWordsChange)="onReplyInWords($event)"
+          (forceMerge)="forceMergeReq.set($event)"
         />
 
         <!-- Deferred Inline Task Editor (PATCH /api/tasks/{id}, Brief, Goal) -->
@@ -688,6 +731,7 @@ export function duration(from?: string, to?: string): string {
                   [routerLink]="[]"
                   [queryParams]="tabQuery(tab.id)"
                   queryParamsHandling="merge"
+                  [preserveFragment]="!!pane()"
                   [attr.aria-current]="
                     current() === tab.id ? (pane() ? 'true' : 'page') : null
                   "
@@ -1107,7 +1151,7 @@ export function duration(from?: string, to?: string): string {
               }
               <dt>Filed</dt>
               <dd>
-                {{ ago(t.createdAt) }} ago by
+                {{ filedAgo(t.createdAt) }} by
                 {{ t.authorLabel || t.author || "unknown" }}
               </dd>
               @if (t.approvedByLabel) {
@@ -1150,7 +1194,11 @@ export function duration(from?: string, to?: string): string {
               @if (t.dependsOn?.length) {
                 <div style="display: flex; flex-wrap: wrap; gap: 6px">
                   @for (d of t.dependsOn; track d) {
-                    <span class="status-pill neutral">
+                    <span
+                      class="status-pill neutral"
+                      data-testid="details-dep-chip"
+                      [attr.title]="depTitle(t, d)"
+                    >
                       <a
                         [routerLink]="linkTo(d)"
                         [queryParams]="linkQuery(d)"
@@ -1260,6 +1308,7 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly store = inject(TaskStore);
   private readonly wsStore = inject(WorkstreamsStore);
   private readonly api = inject(GrainApi);
+  private readonly feed = inject(TaskFeedStore);
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly create = inject(CreateTaskService);
@@ -1269,9 +1318,14 @@ export class TaskDetailComponent implements OnDestroy {
 
   readonly id = input.required<string>();
   readonly tab = input<string>();
-  // pane is the Tasks right-hand pane: narrower, Details as a tab, its
-  // tab kept in ?pane=, links to other tasks select them in the pane.
+  // pane is a list | detail right-hand pane (Tasks, Agents, Workstreams):
+  // narrower, Details as a tab, its tab kept in ?pane=, links to other
+  // tasks select them in the pane.
   readonly pane = input(false);
+  // routePane is ?pane= as the router has it. The tab strip writes it, so
+  // the pane reads it back itself: a host that does not also bind [tab]
+  // (Agents, Workstreams) still switches tabs.
+  private readonly routePane = signal<string | undefined>(undefined);
   readonly closable = input(true);
   readonly from = input<string>();
   readonly back = input<BackLink | null>(null);
@@ -1283,7 +1337,26 @@ export class TaskDetailComponent implements OnDestroy {
   readonly openTask = output<string>();
 
   protected readonly label = stateLabel;
+
+  // depTitle is a dependency chip's hover text: the task it waits for,
+  // its title where the open-task feed knows it, its state, and whether
+  // it is what holds this task, as the classic dependency chip reads.
+  protected depTitle(t: Task, d: string): string {
+    const title = this.feed.tasks().find((x) => x.id === d)?.title;
+    const state = t.dependsOnStates?.[d];
+    let s = title ? `#${d} ${title}` : `#${d}`;
+    if (state) s += ` — ${stateLabel(state)}`;
+    if (t.blockedBy?.includes(d)) s += " (blocking this task)";
+    return s;
+  }
   protected readonly ago = ago;
+  // filedAgo reads "just now" rather than "now ago" for a task filed in
+  // the last minute (ago() says "now" there).
+  protected filedAgo(iso: string | undefined): string {
+    const a = ago(iso);
+    if (!a) return "";
+    return a === "now" ? "just now" : `${a} ago`;
+  }
   protected readonly dur = duration;
   protected readonly prio = priorityOf;
   protected readonly level = levelOf;
@@ -1330,7 +1403,9 @@ export class TaskDetailComponent implements OnDestroy {
     return id ? (this.wsStore.taskToStream().get(id) ?? null) : null;
   });
   protected readonly current = computed<TaskTab>(() => {
-    const v = this.tab();
+    const rp =
+      this.pane() && isTab(this.routePane()) ? this.routePane() : undefined;
+    const v = rp ?? this.tab();
     if (
       v === "details" &&
       !this.pane() &&
@@ -1478,6 +1553,15 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     return t ? submitBlock(t) : "";
   });
+  protected readonly queuedPauseNotice = computed(() =>
+    this.t()?.state === "queued"
+      ? summarizeDispatchStatus(
+          this.access.rawConfig(),
+          this.access.usage(),
+          this.access.clockNow(),
+        )
+      : null,
+  );
 
   protected actorLabel(c: Comment): string {
     if (c.authorKind === "automation" && c.author === "console-session") {
@@ -1519,6 +1603,10 @@ export class TaskDetailComponent implements OnDestroy {
   }
 
   constructor() {
+    const paneSub = inject(ActivatedRoute).queryParamMap.subscribe((q) =>
+      this.routePane.set(q.get("pane") ?? undefined),
+    );
+    inject(DestroyRef).onDestroy(() => paneSub.unsubscribe());
     effect(() => {
       const id = this.id();
       untracked(() => {
@@ -1576,11 +1664,11 @@ export class TaskDetailComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
-    this.store.close();
+    this.store.close(this.id());
   }
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
-    return this.access.can(route, this.t()?.repo || undefined);
+    return this.access.canAccessTask(route, this.t()?.repo ?? null);
   }
 
   protected val(ev: Event): string {
@@ -1691,6 +1779,7 @@ export class TaskDetailComponent implements OnDestroy {
       .navigate([], {
         queryParams: this.tabQuery("conversation"),
         queryParamsHandling: "merge",
+        ...(this.pane() ? { preserveFragment: true } : {}),
       })
       .then(() => setTimeout(() => this.composer()?.nativeElement.focus()));
   }
