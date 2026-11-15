@@ -221,13 +221,6 @@
   }
 }
 
-/* An action's error, shown inside the dialog that caused it (the page's
-   own banner is behind the dialog's scrim). */
-.dialog-error {
-  margin: 0 0 12px;
-  overflow-wrap: anywhere;
-}
-
 /* A skip's held-by task and what became of it, kept together after the
    summary -- on its right, or wrapped under it where the panel is narrow. */
 .proc-skip-row {
@@ -247,4 +240,11 @@
   gap: 4px 6px;
   margin-left: auto;
   max-width: 100%;
+}
+
+/* An action's error, shown inside the dialog that caused it just above its
+   actions (the page's own banner is behind the dialog's scrim). */
+.dialog-error {
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
 }

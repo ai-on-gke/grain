@@ -40,7 +40,7 @@ function workstreamMultiSegmentMatcher(
 // classic UI lands on the page that has the same content rather than
 // falling through to the Inbox. Each entry is the path and, for Fleet,
 // the ?tab= that shows it.
-const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
+const SYSTEM_TABS: Record<string, readonly [string, string?, string?]> = {
   health: ["/fleet"],
   sandboxes: ["/fleet"],
   top: ["/fleet"],
@@ -50,15 +50,64 @@ const SYSTEM_TABS: Record<string, readonly [string, string?]> = {
   caches: ["/settings/caches"],
   metrics: ["/telemetry"],
   upgrade: ["/settings/upgrade"],
+  // Settings pages the classic UI kept under System and Admin: hosts
+  // (once "executors") and the deployment credentials (once
+  // "integrations"), whose third element is the card to scroll to.
+  executors: ["/settings/hostds"],
+  integrations: ["/settings/capabilities", undefined, "credentials"],
+  workflow: ["/settings/tasks"],
+};
+
+// ADMIN_SETTINGS_TABS are the classic Admin page's settings tabs and the
+// Settings section each now lives in (classic OLD_SETTINGS_TABS); any
+// other /admin/<tab> that is not a System tab lands on General.
+const ADMIN_SETTINGS_TABS: Record<string, string> = {
+  general: "general",
+  admin: "general",
+  agents: "agents",
+  models: "models",
+  git: "git",
+  workflow: "tasks",
+  access: "access",
+  accounts: "access",
+  engine: "engine",
+  sandbox: "sandboxes",
+  executors: "hostds",
+  state: "config-repo",
+  upgrade: "upgrade",
+};
+const ADMIN_SYSTEM_TABS = new Set([
+  "logs",
+  "sandboxes",
+  "caches",
+  "top",
+  "pipeline",
+  "power",
+]);
+
+// adminTab redirects /admin/<tab> the way the classic UI's
+// oldAdminDestination does: a status tab to where System's went, the
+// deployment credentials to their card, a settings tab to its section,
+// and anything else to General.
+const adminTab: RedirectFunction = (route) => {
+  const tab = String(route.params["tab"] ?? "").toLowerCase();
+  if (ADMIN_SYSTEM_TABS.has(tab) || tab === "integrations") {
+    return legacy(tab)(route);
+  }
+  return inject(Router).createUrlTree([
+    "/settings",
+    ADMIN_SETTINGS_TABS[tab] ?? "general",
+  ]);
 };
 
 // legacy redirects to the page SYSTEM_TABS names for `tab`, keeping the
 // query the old link carried (a /system/metrics?repo=... narrowing, say).
 function legacy(tab: string): RedirectFunction {
   return ({ queryParams }) => {
-    const [path, fleetTab] = SYSTEM_TABS[tab] ?? ["/fleet"];
+    const [path, fleetTab, fragment] = SYSTEM_TABS[tab] ?? ["/fleet"];
     return inject(Router).createUrlTree([path], {
       queryParams: fleetTab ? { ...queryParams, tab: fleetTab } : queryParams,
+      ...(fragment ? { fragment } : {}),
     });
   };
 }
@@ -179,6 +228,29 @@ export const routes: Routes = [
       import("./ci/ci-page.component").then((m) => m.CIPageComponent),
   },
   {
+    path: "processes/suites/runs/:runId",
+    title: "Suite run · grain",
+    loadComponent: () =>
+      import("./processes/processes-page.component").then(
+        (m) => m.ProcessesPageComponent,
+      ),
+  },
+  {
+    path: "processes/schedule/:itemId",
+    redirectTo: "processes/schedules/:itemId",
+    pathMatch: "full",
+  },
+  {
+    path: "processes/template/:itemId",
+    redirectTo: "processes/templates/:itemId",
+    pathMatch: "full",
+  },
+  {
+    path: "processes/suite/:itemId",
+    redirectTo: "processes/suites/:itemId",
+    pathMatch: "full",
+  },
+  {
     path: "processes",
     title: "Processes · grain",
     loadComponent: () =>
@@ -194,21 +266,8 @@ export const routes: Routes = [
         (m) => m.ProcessesPageComponent,
       ),
   },
-  // One item, deep-linked: /processes/<tab>/<id> selects that schedule,
-  // template or suite, and /processes/suites/runs/<id> that suite run --
-  // the classic UI's own URL for a run, so a link written for either UI
-  // lands on the run here rather than falling through to the inbox.
   {
-    path: "processes/suites/runs/:runId",
-    title: "Processes · grain",
-    data: { tab: "suites" },
-    loadComponent: () =>
-      import("./processes/processes-page.component").then(
-        (m) => m.ProcessesPageComponent,
-      ),
-  },
-  {
-    path: "processes/:tab/:id",
+    path: "processes/:tab/:itemId",
     title: "Processes · grain",
     loadComponent: () =>
       import("./processes/processes-page.component").then(
@@ -216,11 +275,28 @@ export const routes: Routes = [
       ),
   },
   { path: "schedules", redirectTo: "processes/schedules", pathMatch: "full" },
+  {
+    path: "schedules/:itemId",
+    redirectTo: "processes/schedules/:itemId",
+    pathMatch: "full",
+  },
   { path: "templates", redirectTo: "processes/templates", pathMatch: "full" },
+  {
+    path: "templates/:itemId",
+    redirectTo: "processes/templates/:itemId",
+    pathMatch: "full",
+  },
   { path: "suites", redirectTo: "processes/suites", pathMatch: "full" },
-  { path: "schedules/:id", redirectTo: "processes/schedules/:id" },
-  { path: "templates/:id", redirectTo: "processes/templates/:id" },
-  { path: "suites/:id", redirectTo: "processes/suites/:id" },
+  {
+    path: "suites/runs/:runId",
+    redirectTo: "processes/suites/runs/:runId",
+    pathMatch: "full",
+  },
+  {
+    path: "suites/:itemId",
+    redirectTo: "processes/suites/:itemId",
+    pathMatch: "full",
+  },
   {
     path: "telemetry",
     title: "Telemetry · grain",
@@ -242,6 +318,10 @@ export const routes: Routes = [
     redirectTo: (route) => legacy(String(route.params["tab"]))(route),
   },
   { path: "admin/logs", redirectTo: legacy("logs") },
+  // The classic Admin page's addresses: /admin was General, and each
+  // /admin/<tab> its Settings section, or System's page for a status tab.
+  { path: "admin", redirectTo: "settings/general", pathMatch: "full" },
+  { path: "admin/:tab", redirectTo: adminTab },
   { path: "sandboxes", redirectTo: legacy("sandboxes"), pathMatch: "full" },
   { path: "caches", redirectTo: legacy("caches"), pathMatch: "full" },
   { path: "staging", redirectTo: "fleet" },
@@ -255,6 +335,29 @@ export const routes: Routes = [
   },
   { path: "memory", redirectTo: "context" },
   { path: "config", redirectTo: "settings/config-repo", pathMatch: "full" },
+  // The classic Config Repo Browser's /settings/config-repo/<file> is
+  // the file viewer's ?path=<file> here.
+  {
+    matcher: (s) =>
+      s.length > 2 && s[0].path === "settings" && s[1].path === "config-repo"
+        ? {
+            consumed: s,
+            posParams: {
+              file: new UrlSegment(
+                s
+                  .slice(2)
+                  .map((x) => x.path)
+                  .join("/"),
+                {},
+              ),
+            },
+          }
+        : null,
+    redirectTo: ({ params }) =>
+      inject(Router).createUrlTree(["/settings", "config-repo"], {
+        queryParams: { path: String(params["file"] ?? "") },
+      }),
+  },
   {
     path: "settings",
     title: "Settings · grain",

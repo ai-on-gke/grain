@@ -137,3 +137,19 @@ All six are in `ui-ng/src/app/processes/processes-page.component.ts` and `ui-ng/
 - **A failed declarations read is not retried when the branch moves.** It stayed failed until the declarations switch was flipped again.
 - **`/next/` parity gaps.** See "Which UI each step ran against". A follow-up task was proposed for these.
 - **The `/next/` dialogs were not reviewed by three independent reviewers.** The design book's review mandate asks for that, but this run had no separate reviewer agents. The change is small (routing, an error line inside existing dialogs, and labels) and follows the existing `banner banner-error` style.
+
+## Addendum, 2026-11-15: reconciled with task 5889
+
+Task 5889 (`docs/test-runs/2026-11-15-recurring-composed-ui.md`) landed on
+`main` the same fixes this branch carried: in-dialog errors, the deep links,
+the ten-minute floor, `suppressed` for off-target `git_ref` schedules, and
+"default branch" on base-less runs. Its regression spec is
+`ui-ng/e2e/next-processes-walkthrough.spec.ts`. The merge takes `main`'s code
+for all of these and drops this branch's duplicate `.spec.js`.
+
+One difference survived. `main` renders each Processes dialog's error at the
+top of the dialog. At phone width the dialog has scrolled by the time Save is
+tapped, so a refused save's reason is out of view (Playwright
+`toBeInViewport` gives viewport ratio 0). The error now sits just above the
+dialog's actions in all six dialogs. The phone test `a refused schedule save
+is in view beside its actions` covers it: it fails on `main` and passes here.
