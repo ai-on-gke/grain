@@ -81,9 +81,9 @@ The same data seeded with `-ws-last` (subtasks closed newest) shows "45/48 done"
 | Director drawer | also `/api/agent-models`, `/api/console-sessions` |
 
 - **Cause:** the server refuses a deployment-wide read naming no repository to a role that holds the scope only on some repositories (`authorizeRoleCall`). `/next/` gated these reads with `access.can(route)`, which is true when the scope is held on any repository. A plain `grain/viewer` gets 200 on the same routes.
-- **Fix:** `AccessService.canGlobal(route)` (wrapping the existing `canGlobalScope`, already used for `/api/usage` in the shell), `repoLimited(route)` and `globalDeniedReason(route)`. They now gate `InboxStore` (notifications and approvals), `SettingsStateService` (settings, deployment), Settings → Models (agent keys, usage), `TasksStore`/`TasksPage` (boards) and `SessionsStore` (agent models and the session list, skipped only when the role is repo-limited).
+- **Fix:** `AccessService.canGlobal(route)` (wrapping the existing `canGlobalScope`, already used for `/api/usage` in the shell), `repoLimited(route)` and `globalDeniedReason(route)`. They now gate `InboxStore` (notifications and approvals), `SettingsStateService` (settings, deployment), Settings → Models (usage; the agent-keys card it also gated was later removed on `main`), `TasksStore`/`TasksPage` (boards) and `SessionsStore` (agent models and the session list, skipped only when the role is repo-limited).
 - **First-load race:** the inbox store's first load could fire before the role was known. It now reads `/api/config` first when `configLoaded()` is false (shared with the shell's own read).
-- **Result:** after the fix all 28 repo-viewer page views are clean. Settings → Models explains the hidden vault: "Your role widgets/viewer holds secrets:read only on acme/widgets, and this reads the whole deployment."
+- **Result:** after the fix all 28 repo-viewer page views are clean. (Settings → Models explained the hidden vault with `globalDeniedReason` until `main` removed the agent-keys card from that page; the merge took that removal and dropped the banner assertion from the e2e spec.)
 
 **Deployment with no repositories** (fresh daemon, no `-repo`, `/api/config` `repos: null`): all 24 page views are clean (there are no workstreams, so no detail page).
 
@@ -114,7 +114,7 @@ Not needed: every surface in §3 has a `/next/` page, and nothing was changed in
 - **Screenshots:**
   - "before" and "after" contact sheets: Settings, Inbox, Tasks, Workstreams and Context as the repo-scoped viewer, at 1440/390 in light/dark;
   - an admin heavy-data sheet: Workstreams, the expanded workstream detail, Inbox, Tasks, Telemetry and Settings.
-  - Nothing moves for an unlimited caller. For the repo viewer, the only visible change is the explained "agent keys" banner.
+  - Nothing moves for an unlimited caller. For the repo viewer nothing visible changes now that `main` has removed the agent-keys card; the contact sheets were taken before that.
 - **Contact sheets** (committed beside the report): [`before-contact-sheet.png`](2026-11-14-next-heavy-data/before-contact-sheet.png) and [`after-contact-sheet.png`](2026-11-14-next-heavy-data/after-contact-sheet.png) for the repo-scoped viewer, and [`admin-heavy-contact-sheet.png`](2026-11-14-next-heavy-data/admin-heavy-contact-sheet.png) for the admin heavy-data walk.
 - **Design book:** §5 "Role-aware" now states the `canGlobal` rule.
 - **Review mandate:** the author ran the three passes below; they were not independent reviewers.

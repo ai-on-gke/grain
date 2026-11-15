@@ -433,6 +433,14 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
   polling, load inactive Fleet tabs lazily, and never block primary pickers on
   slow `reachable-repos` discovery.
 - No new runtime dependency without a reason written in the pull request.
+- A click never waits silently on the network. Every lazy page chunk is
+  preloaded shortly after start-up (`shell/route-preload.ts`, skipped under
+  Save-Data), so navigation does not stall behind a slow origin. A
+  navigation still pending after 120 ms shows the shell's top progress bar
+  (`shell/nav-progress.component.ts`), which takes no pointer events. Routes
+  have no resolvers or guards that wait on polled reads; a page loads its own
+  data and shows its loading state. `e2e/next-task-page-stall.spec.js`
+  covers this.
 
 ## 10. How to test a UI change
 

@@ -92,10 +92,4 @@ test("a repo-limited viewer's pages fire no deployment-wide reads it would be re
   await expect(page.getByTestId("director-drawer")).toBeVisible();
 
   expect(fired).toEqual([]);
-
-  // Settings -> Models says why the vault is not shown.
-  await page.goto("/next/settings/models");
-  await expect(page.getByTestId("agent-keys-restricted")).toContainText(
-    "secrets:read only on acme/widgets",
-  );
 });
