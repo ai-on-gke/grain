@@ -95,6 +95,11 @@ const md = new Marked({
         : escapeHtml(token.text);
     },
     code({ text, lang }) {
+      // [gMarkdown] draws a ```mermaid fence as a diagram once Mermaid has
+      // loaded, and keeps the code card as the fallback and the Source view.
+      if ((lang || "").trim().split(/\s+/)[0].toLowerCase() === "mermaid") {
+        return `<div class="mermaid-block">${renderCodeCard(text, "mermaid")}</div>`;
+      }
       return renderCodeCard(text, lang);
     },
     // Links open in a new tab and only to web or mail addresses; images

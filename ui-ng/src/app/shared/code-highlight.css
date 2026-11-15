@@ -195,3 +195,69 @@ mark.diff-word {
 :root[data-theme="dark"] .diff-line-del mark.diff-word {
   background: rgba(242, 139, 130, 0.28);
 }
+
+/* ```mermaid fences ([gMarkdown] + shared/mermaid-render.ts) */
+.mermaid-block {
+  margin: 8px 0;
+}
+
+.mermaid-block > .code-card {
+  margin: 0;
+}
+
+.mermaid-diagram {
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-surface-container-lowest);
+  overflow: hidden;
+}
+
+.mermaid-block.is-source .mermaid-diagram {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.mermaid-block.is-source > .code-card {
+  border-top: none;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.mermaid-canvas {
+  display: block;
+  width: 100%;
+  padding: 12px;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+  overflow-x: auto;
+}
+
+.mermaid-canvas svg {
+  display: block;
+  margin: 0 auto;
+}
+
+.mermaid-status,
+.mermaid-note {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.mermaid-note {
+  padding: 6px 10px;
+  border-radius: var(--md-sys-shape-corner-small);
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+}
+
+.mermaid-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.mermaid-actions .code-copy-btn {
+  height: 24px;
+}

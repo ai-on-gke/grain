@@ -319,7 +319,8 @@ it rather than copy it.
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
-| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links |
+| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links, ```` ```mermaid ```` diagrams |
+| Media viewer | `shared/media-viewer.component.ts` (`MediaViewerService.open`) | full-screen attached images and diagrams: paging, zoom, Download |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
@@ -337,6 +338,16 @@ Rules:
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).
 - **Every control has a name.** Icon buttons get `aria-label` and a `gTip`.
+- **Pictures open full screen in one viewer.** An attached image or a
+  Mermaid diagram opens in `g-media-viewer` (deferred in the shell), never
+  a new tab: X, a backdrop click or Escape closes it and focus goes back;
+  arrows page with an `i / N` counter; `+` / `-` / `0` zoom from fit;
+  Download saves it. A modified click on an attachment still opens the
+  file. ```` ```mermaid ```` fences draw through `shared/mermaid-render.ts`,
+  which imports Mermaid lazily (no page pays for it until a diagram is on
+  screen), takes its palette from the colour tokens, and keeps an invalid
+  diagram's source under a note saying why
+  (`ui-ng/e2e/next-task-media-viewer.spec.js`).
 - **A dialog fits the screen.** `.g-dialog` (and its `.is-drawer` width) is
   `box-sizing: border-box`, so its `min(520px, 100vw - 32px)` width
   includes its padding and border. That leaves a 16px margin either side

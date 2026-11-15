@@ -1,0 +1,178 @@
+/* Full-screen image and diagram viewer (shared/media-viewer.component.ts). */
+
+.mv-dialog {
+  box-sizing: border-box;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: none;
+  overflow: hidden;
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+}
+
+.mv-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  animation: mv-fade 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.mv-dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+.mv-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: env(safe-area-inset-top, 0px) 8px 0 16px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.mv-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mv-count {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.mv-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.mv-actions .icon-btn:disabled {
+  color: var(--md-sys-color-outline);
+  cursor: default;
+  background: transparent;
+}
+
+.mv-zoom {
+  min-width: 56px;
+  height: 40px;
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+.mv-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.mv-stage {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 16px 64px calc(16px + env(safe-area-inset-bottom, 0px));
+}
+
+/* margin: auto centres the item but, unlike justify-content, leaves every
+   side of a zoomed item reachable by scrolling. */
+.mv-media {
+  margin: auto;
+}
+
+.mv-media {
+  flex-shrink: 0;
+}
+
+.mv-img {
+  display: block;
+  object-fit: contain;
+  background: var(--md-sys-color-surface-container-lowest);
+  border-radius: var(--md-sys-shape-corner-small);
+}
+
+/* The component sizes .mv-svg; the diagram fills it. */
+/* Until the image has loaded and been measured, keep it on screen. */
+.mv-img.is-sizing {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.mv-svg svg {
+  display: block;
+  width: 100%;
+  max-width: none !important;
+  height: 100%;
+}
+
+.mv-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 48px;
+  height: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-full);
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+  cursor: pointer;
+  box-shadow: var(--md-sys-elevation-dialog);
+}
+
+.mv-nav:hover {
+  background: var(--md-sys-color-surface-container-highest);
+}
+
+.mv-nav.is-prev {
+  left: 8px;
+}
+
+.mv-nav.is-next {
+  right: 8px;
+}
+
+@media (max-width: 599px) {
+  .mv-stage {
+    padding-inline: 8px;
+  }
+
+  .mv-nav {
+    width: 40px;
+    height: 40px;
+  }
+
+  .mv-nav.is-prev {
+    left: 4px;
+  }
+
+  .mv-nav.is-next {
+    right: 4px;
+  }
+}
+
+@keyframes mv-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mv-dialog[open] {
+    animation: none;
+  }
+}
