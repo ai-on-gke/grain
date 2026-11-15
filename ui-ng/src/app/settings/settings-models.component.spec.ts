@@ -65,11 +65,16 @@ class FakeApi {
     },
   };
 
+  access: Record<string, unknown> = {
+    role: "grain/operator",
+    full: true,
+    scopes: [],
+  };
   config = () =>
     Promise.resolve({
       version: "v3.6.0",
       configRepoOnly: false,
-      access: { role: "grain/operator", full: true, scopes: [] },
+      access: this.access,
     });
   get = (key: string) => {
     this.calls.push({ method: "GET", key });
@@ -295,6 +300,45 @@ describe("Settings → Models default and fallback models", () => {
     // A pinned connection has nothing to discover.
     expect(q('[data-testid="refresh-backend-claude"]')).toBeNull();
     expect(await offered("picker-default-model")).toContain("gemini-ultra");
+  });
+
+  it("gives no refresh time for a connection whose provider never answered", async () => {
+    const api = new FakeApi();
+    api.settingsBody["agentBackends"] = [
+      {
+        id: "agy",
+        framework: "antigravity",
+        discovered: {
+          refreshedAt: "0001-01-01T00:00:00Z",
+          error: "antigravity: agy models printed no model names",
+        },
+      },
+    ];
+    const { q } = await mount(api);
+    const summary = q(".s-disc-details summary")!.textContent ?? "";
+    expect(summary).toContain("0 models");
+    expect(summary).not.toContain("Jan 1");
+    expect(summary).not.toContain("UTC");
+    expect(q('[data-testid="card-model-backends"]')!.textContent).toContain(
+      "printed no model names",
+    );
+  });
+
+  it("offers no Refresh to a person who cannot ask providers for their models", async () => {
+    const api = new FakeApi();
+    api.access = {
+      role: "grain/viewer",
+      full: false,
+      scopes: ["settings:read", "connections:read", "deployment:read"],
+    };
+    const { q, el } = await mount(api);
+    expect(q('[data-testid="refresh-backend-agy"]')).toBeNull();
+    q<HTMLButtonElement>('[data-testid="picker-default-model"]')!.click();
+    await new Promise((r) => setTimeout(r, 20));
+    const refresh = [...el.querySelectorAll("button")].filter((b) =>
+      /refresh/i.test(b.textContent ?? ""),
+    );
+    expect(refresh).toEqual([]);
   });
 
   it("refreshes every discovering connection from inside the picker", async () => {
