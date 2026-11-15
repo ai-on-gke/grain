@@ -142,6 +142,7 @@ CHECK_QUALIFICATION_JOBS="${CHECK_QUALIFICATION_JOBS-go-long=go, shuffled and re
 staterepo-soak=state repository soak
 loadtest=sustained load
 scalability=metadata and model scalability
+scale=deployment scale 50k
 merge-stress=merge liveness stress
 long-term-test=end-to-end long term tests
 long-sim=long randomized cluster simulation

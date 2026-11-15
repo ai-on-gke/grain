@@ -178,7 +178,7 @@ IMAGE ?= grain:dev
 # IMAGE_HUB is the tag `make image-hub` builds; IMAGE_REGISTRY its
 # pre-rename name, honoured for a release (as is `make image-registry`).
 IMAGE_HUB ?= $(or $(IMAGE_REGISTRY),grain-hub:dev)
-.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-ng test-e2e-ng-suite test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli dist-agentd $(CMDS) $(EXTRA_CMDS)
+.PHONY: all build test test-long test-e2e test-e2e-suite test-e2e-ng test-e2e-ng-suite test-e2e-long playwright-browsers ui-screenshots vet vuln scan-images security fmt fmt-frontend clean builder container-build image image-hub image-registry frontend loadtest scalability scale soak merge-stress postgres-stress tunnel-stress long-term-test long-sim cli dist-cli dist-agentd $(CMDS) $(EXTRA_CMDS)
 
 all: vet test build
 
@@ -586,6 +586,18 @@ loadtest: frontend
 # TestScalabilitySmoke runs on standard test suites to prevent test rot.
 scalability: frontend
 	GRAIN_SCALABILITY_TEST=1 ./scripts/go-test-must-pass.sh TestScalabilityLimits ./tests/e2e/ -timeout 30m
+
+# The deployment-shape scale test (tests/e2e/scale_test.go): 100 running,
+# 1,000 waiting and 50,000 total tasks against a real store and HTTP
+# server, on SQLite and then PostgreSQL, with p95 budgets on the tick,
+# dispatch, run writes and every API endpoint it drives. Skipped by `test`
+# above (GRAIN_SCALE_TEST unset); TestScaleSmoke runs the same harness at
+# a few hundred tasks there instead. Every GRAIN_SCALE_* env var sizes it
+# up or tightens a budget (see scaleConfigFromEnv); GRAIN_SCALE_BACKENDS
+# picks the stores and GRAIN_SCALE_REPORT_DIR keeps the reports. No
+# `frontend` dependency: the harness serves the API, not the UI.
+scale:
+	GRAIN_SCALE_TEST=1 ./scripts/go-test-must-pass.sh TestScale50k ./tests/e2e/ -timeout 50m
 
 # The state repository soak (pkg/staterepo/soak_test.go) turned all the
 # way up. Unlike `loadtest` above this one is not skipped by `make test`

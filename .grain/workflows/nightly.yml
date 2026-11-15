@@ -103,6 +103,34 @@ jobs:
       - name: Scalability limits test
         run: make scalability
 
+  scale:
+    capabilities: []
+    name: deployment scale 50k
+    sandbox:
+      cpus: 4
+      memory-mb: 16384
+      disk-gb: 60
+    timeout-minutes: 60
+    steps:
+      # Same reason as postgres-stress below: without the binaries the
+      # postgres half of the scale test skips.
+      - name: Install PostgreSQL
+        infrastructure: true
+        run: |
+          if ! ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then
+            if [ ! -e /usr/sbin/policy-rc.d ]; then
+              printf '#!/bin/sh\nexit 101\n' | sudo tee /usr/sbin/policy-rc.d >/dev/null
+              sudo chmod +x /usr/sbin/policy-rc.d
+            fi
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql >/dev/null
+          fi
+          ls /usr/lib/postgresql/*/bin/initdb
+      - name: Scale test (100 running / 1,000 waiting / 50,000 total)
+        env:
+          GRAIN_REQUIRE_POSTGRES: "1"
+        run: make scale
+
   merge-stress:
     capabilities: []
     name: merge liveness stress
