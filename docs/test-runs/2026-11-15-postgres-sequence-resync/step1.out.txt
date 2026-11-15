@@ -1,0 +1,115 @@
+== v3.8.0 populates the store
+v380-1 POST /api/tasks -> 201 id=2
+v380-1 POST /api/tasks/2/comments -> 200 
+v380-1 POST /api/settings -> 200
+v380-1 POST /api/templates -> 201 id=template-1
+v380-1 POST /api/suites -> 201 "id":"suite-1"
+v380-2 POST /api/tasks -> 201 id=3
+v380-2 POST /api/tasks/3/comments -> 200 
+v380-2 POST /api/settings -> 200
+v380-2 POST /api/templates -> 201 id=template-2
+v380-2 POST /api/suites -> 201 "id":"suite-2"
+v380-3 POST /api/tasks -> 201 id=4
+v380-3 POST /api/tasks/4/comments -> 200 
+v380-3 POST /api/settings -> 200
+v380-3 POST /api/templates -> 201 id=template-3
+v380-3 POST /api/suites -> 201 "id":"suite-3"
+v380-4 POST /api/tasks -> 201 id=5
+v380-4 POST /api/tasks/5/comments -> 200 
+v380-4 POST /api/settings -> 200
+v380-4 POST /api/templates -> 201 id=template-4
+v380-4 POST /api/suites -> 201 "id":"suite-4"
+v380-5 POST /api/tasks -> 201 id=6
+v380-5 POST /api/tasks/6/comments -> 200 
+v380-5 POST /api/settings -> 200
+v380-5 POST /api/templates -> 201 id=template-5
+v380-5 POST /api/suites -> 201 "id":"suite-5"
+200 
+200 
+-- sequences after v3.8.0 (before HEAD)
+config_audit.id                                    42 t           42 ok
+integration_event.id                               15 t           15 ok
+secret_resolution_audit.id                          2 t            2 ok
+suite_item.id                                       5 t            5 ok
+suite_sequence.id                                   5 t            5 ok
+task_comment.id                                     6 t            6 ok
+task_event.id                                       1 t            1 ok
+task_sequence.number                                6 t            6 ok
+template_sequence.number                            5 t            5 ok
+== (a) HEAD: grain state prepare-upgrade, then start
+prepared 146 147 /home/debian/walk/seq/data/schema-upgrade
+grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+grain daemon: releasing PostgreSQL single-writer advisory lock (schema=public)
+grain: migrated the store in place from schema 146 to 147
+grain: the config repository's dump was rewritten at schema 147 from the database it was imported into; the prior dump is the preceding commit in /home/debian/walk/seq/data/state-repo
+grain: the store is already at schema 147 and /home/debian/walk/seq/data/schema-upgrade is still here, so the state repository has not been brought across yet -- doing that now
+-- sequences after the HEAD start (before writes)
+config_audit.id                                    42 t           42 ok
+integration_event.id                               15 t           15 ok
+secret_resolution_audit.id                          5 t            5 ok
+suite_item.id                                       5 t            5 ok
+suite_sequence.id                                   5 t            5 ok
+task_comment.id                                     6 t            6 ok
+task_event.id                                       1 t            1 ok
+task_sequence.number                                6 t            6 ok
+template_sequence.number                            5 t            5 ok
+head-a1 POST /api/tasks -> 201 id=7
+head-a1 POST /api/tasks/7/comments -> 200 
+head-a1 POST /api/settings -> 200
+head-a1 POST /api/templates -> 201 id=template-6
+head-a1 POST /api/suites -> 201 "id":"suite-6"
+head-a2 POST /api/tasks -> 201 id=8
+head-a2 POST /api/tasks/8/comments -> 200 
+head-a2 POST /api/settings -> 200
+head-a2 POST /api/templates -> 201 id=template-7
+head-a2 POST /api/suites -> 201 "id":"suite-7"
+-- sequences after HEAD writes
+config_audit.id                                    58 t           58 ok
+integration_event.id                               21 t           21 ok
+secret_resolution_audit.id                          5 t            5 ok
+suite_item.id                                       7 t            7 ok
+suite_sequence.id                                   7 t            7 ok
+task_comment.id                                     8 t            8 ok
+task_event.id                                       1 t            1 ok
+task_sequence.number                                8 t            8 ok
+template_sequence.number                            7 t            7 ok
+== (b) forced rebuild: the store stamped one schema ahead of HEAD (a rollback from a
+   newer build), HEAD's prepare-upgrade writes the note, HEAD's start archives the store and
+   rebuilds a fresh one with staterepo.ImportMigrated
+prepared 148 147 /home/debian/walk/seq/data/schema-upgrade
+grain daemon: acquired PostgreSQL single-writer advisory lock (schema=public, key=3409768085759000264)
+grain: imported this deployment's rows from /home/debian/walk/seq/data/schema-upgrade into a fresh store at schema 147
+grain: this deployment's schema changed from 148 to 147. The store written at 148 is now postgres schema "public_schema148_20261115_123026" -- it is not deleted, and it is where anything this migration cannot carry stays
+-- archived schemas
+information_schema
+public_schema148_20261115_123026
+-- sequences in the rebuilt store (before writes)
+config_audit.id                                    58 t           58 ok
+integration_event.id                               21 t           21 ok
+secret_resolution_audit.id                          8 t            8 ok
+suite_item.id                                       7 t            7 ok
+suite_sequence.id                                   7 t            7 ok
+task_comment.id                                     8 t            8 ok
+task_event.id                                       1 t            1 ok
+task_sequence.number                                8 t            8 ok
+template_sequence.number                            7 t            7 ok
+head-b1 POST /api/tasks -> 201 id=9
+head-b1 POST /api/tasks/9/comments -> 200 
+head-b1 POST /api/settings -> 200
+head-b1 POST /api/templates -> 201 id=template-8
+head-b1 POST /api/suites -> 201 "id":"suite-8"
+head-b2 POST /api/tasks -> 201 id=10
+head-b2 POST /api/tasks/10/comments -> 200 
+head-b2 POST /api/settings -> 200
+head-b2 POST /api/templates -> 201 id=template-9
+head-b2 POST /api/suites -> 201 "id":"suite-9"
+-- sequences after writes on the rebuilt store
+config_audit.id                                    74 t           74 ok
+integration_event.id                               25 t           25 ok
+secret_resolution_audit.id                          8 t            8 ok
+suite_item.id                                       9 t            9 ok
+suite_sequence.id                                   9 t            9 ok
+task_comment.id                                    10 t           10 ok
+task_event.id                                       1 t            1 ok
+task_sequence.number                               10 t           10 ok
+template_sequence.number                            9 t            9 ok
