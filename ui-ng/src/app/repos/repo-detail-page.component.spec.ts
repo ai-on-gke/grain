@@ -28,6 +28,7 @@ import {
   importOutcomeText,
   releaseActionReasons,
   removeRepoMessage,
+  unjudgedGatesFor,
 } from "./repo-detail-page.component";
 
 interface RepoCall {
@@ -35,12 +36,38 @@ interface RepoCall {
   key: string;
   params?: RouteParams;
   body?: unknown;
+  query?: string;
 }
+
+// The server's sentence for a watched default branch grain CI is not
+// enabled for (pkg/ui/basebranchgate.go), cut short.
+const CI_OFF_DETAIL =
+  "Nothing is testing acme/platform's default branch, and the merge queue is merging onto it anyway.";
 
 class FakeRepoApi {
   calls: RepoCall[] = [];
   ciMode = "grain";
   refusePut: string | null = null;
+  // gates answers GET /api/base-branch-gates from the stored CI mode, as
+  // the server does for a watched branch it has never enrolled.
+  gates = (): unknown[] =>
+    this.ciMode === "grain"
+      ? []
+      : [
+          {
+            repo: "acme/platform",
+            judged: false,
+            reason: "grain-ci-off",
+            detail: CI_OFF_DETAIL,
+          },
+          // Another repository's gate is not this page's.
+          {
+            repo: "acme/other",
+            judged: false,
+            reason: "grain-ci-off",
+            detail: "Nothing is testing acme/other's default branch.",
+          },
+        ];
 
   configBody: GrainConfig = {
     version: "v3.6.0",
@@ -80,8 +107,11 @@ class FakeRepoApi {
 
   config = () => Promise.resolve(structuredClone(this.configBody));
 
-  get = (key: string, params?: RouteParams) => {
-    this.calls.push({ method: "GET", key, params });
+  get = (key: string, params?: RouteParams, query?: string) => {
+    this.calls.push({ method: "GET", key, params, query });
+    if (key === "GET /api/base-branch-gates") {
+      return Promise.resolve({ gates: this.gates() });
+    }
     if (key === "GET /api/repos/{owner}/{name}/declarations") {
       return Promise.resolve(structuredClone(this.declarationsBody));
     }
@@ -144,6 +174,9 @@ class FakeRepoApi {
           reject(new Error('ciMode: must be "grain", "github", or "none"')),
         ),
       );
+    }
+    if (key === "PUT /api/repos/{owner}/{name}/ci-mode") {
+      this.ciMode = String((body as { ciMode?: string })?.ciMode);
     }
     return Promise.resolve({ ok: true });
   };
@@ -415,6 +448,120 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
   // 2026-11-13 repository walkthrough: the CI mode pill offered "both"
   // and "off", which PUT .../ci-mode refuses, and had no "none", so a
   // repository on no CI read as Grain CI.
+  it("keeps only this repository's unjudged gates", () => {
+    const gate = (repo: string, judged: boolean) => ({
+      repo,
+      judged,
+      reason: judged ? "run-unfinished" : "grain-ci-off",
+    });
+    expect(
+      unjudgedGatesFor(
+        [
+          gate("acme/platform", false),
+          gate("Acme/Platform", false),
+          gate("acme/platform", true),
+          gate("acme/other", false),
+        ],
+        "acme/platform",
+      ).map((g) => g.repo),
+    ).toEqual(["acme/platform", "Acme/Platform"]);
+  });
+
+  // 2026-11-14 repository walkthrough, item 5: classic warns on Overview
+  // and on Releases when CI mode leaves the watched base branch unjudged.
+  it("warns on Overview and Releases while CI mode is github or none, and clears on grain without a reload", async () => {
+    const api = new FakeRepoApi();
+    api.ciMode = "github";
+    const { el, harness } = await mountRepo("/repos/acme/platform", api);
+    const warnings = () => [
+      ...el.querySelectorAll<HTMLElement>(
+        '[data-testid="repo-base-gate-warning"]',
+      ),
+    ];
+    const settle = async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      harness.detectChanges();
+      await harness.fixture.whenStable();
+    };
+
+    expect(warnings()).toHaveLength(1);
+    expect(warnings()[0]!.getAttribute("role")).toBe("status");
+    expect(warnings()[0]!.textContent).toContain(CI_OFF_DETAIL);
+    expect(warnings()[0]!.textContent).not.toContain("acme/other");
+    const read = api.calls.find((c) => c.key === "GET /api/base-branch-gates");
+    expect(new URLSearchParams(read!.query).get("repo")).toBe("acme/platform");
+    expect(new URLSearchParams(read!.query).get("fields")).toBe("full");
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repo-tab-releases"]',
+    )!.click();
+    await settle();
+    expect(warnings()).toHaveLength(1);
+    expect(
+      el.querySelector('[data-testid="card-repo-release-settings"]'),
+    ).not.toBeNull();
+
+    // The CI tab carries the control, not the warning.
+    el.querySelector<HTMLButtonElement>('[data-testid="repo-tab-ci"]')!.click();
+    await settle();
+    expect(warnings()).toHaveLength(0);
+    const pick = async (mode: string) => {
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="select-repo-ci-mode"]',
+      )!.click();
+      harness.detectChanges();
+      el.querySelector<HTMLButtonElement>(
+        `[data-testid="select-repo-ci-mode-opt-${mode}"]`,
+      )!.click();
+      await settle();
+    };
+    const toTab = async (id: string) => {
+      el.querySelector<HTMLButtonElement>(
+        `[data-testid="repo-tab-${id}"]`,
+      )!.click();
+      await settle();
+    };
+
+    await pick("grain");
+    await toTab("overview");
+    expect(warnings()).toHaveLength(0);
+    await toTab("releases");
+    expect(warnings()).toHaveLength(0);
+
+    await toTab("ci");
+    await pick("none");
+    await toTab("overview");
+    expect(warnings()).toHaveLength(1);
+  });
+
+  it("links the warning to the CI tab's CI mode control", async () => {
+    const api = new FakeRepoApi();
+    api.ciMode = "none";
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases",
+      api,
+    );
+    const link = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="repo-base-gate-ci-mode-link"]',
+    )!;
+    expect(link.textContent?.trim()).toBe("Go to CI Mode");
+    expect(link.getAttribute("href")).toBe(
+      "/next/repos/acme/platform/ci#repo-ci-mode",
+    );
+    link.click();
+    await new Promise((r) => setTimeout(r, 30));
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    const control = el.querySelector<HTMLElement>("#repo-ci-mode");
+    expect(control).not.toBeNull();
+    expect(
+      control!.querySelector('[data-testid="select-repo-ci-mode"]'),
+    ).not.toBeNull();
+    expect(document.activeElement).toBe(
+      control!.querySelector('[data-testid="select-repo-ci-mode"]'),
+    );
+  });
+
   it("offers exactly the CI modes the server accepts and shows a repo on none as No CI", async () => {
     const api = new FakeRepoApi();
     api.ciMode = "none";
