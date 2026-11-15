@@ -613,11 +613,15 @@ const FRAMEWORKS: readonly PillOption[] = [
           <div class="field">
             <span>{{ f.label || "Repository" }}</span>
             <g-pill-select
+              #repoSelect
               [options]="repoOptions()"
               [value]="draft().repo"
+              placeholder="Select a repository…"
               ariaLabel="Repository"
               align="left"
               testid="nt-repo"
+              [invalid]="error()?.field === 'repo'"
+              [describedBy]="error()?.field === 'repo' ? 'new-task-error' : ''"
               (valueChange)="pickRepo($event)"
             />
           </div>
@@ -1085,6 +1089,7 @@ export class NewTaskSheetComponent {
   private readonly sheet = viewChild<ElementRef<HTMLElement>>("sheet");
   private readonly titleInput =
     viewChild<ElementRef<HTMLInputElement>>("titleInput");
+  private readonly repoSelect = viewChild<PillSelectComponent>("repoSelect");
   private readonly branchInput =
     viewChild<ElementRef<HTMLInputElement>>("branchInput");
   private readonly foundInInput =
@@ -1167,10 +1172,12 @@ export class NewTaskSheetComponent {
   protected readonly repoOptions = computed<PillOption[]>(() => {
     const f = this.fields().repo;
     const out: PillOption[] = [];
-    if (!this.defaultTarget()) {
-      out.push({ value: "", label: "Deployment default target" });
+    const def = this.defaultTarget().trim();
+    const list = this.repos();
+    if (def && !list.some((r) => r.toLowerCase() === def.toLowerCase())) {
+      out.push({ value: "", label: `Deployment default (${def})` });
     }
-    for (const r of this.repos()) {
+    for (const r of list) {
       out.push({ value: r, label: r });
     }
     if (f.allowNoRepo !== false) {
@@ -1440,6 +1447,12 @@ export class NewTaskSheetComponent {
   protected pickTemplate(id: string): void {
     this.selectedTemplateId.set(id);
     this.composition.set(null);
+    if (
+      this.error()?.field === "title" ||
+      this.error()?.field === "templateField"
+    ) {
+      this.error.set(null);
+    }
     const tmpl = this.templates().find((t) => t.id === id);
     if (!tmpl) {
       this.templateValues.set({});
@@ -1459,6 +1472,7 @@ export class NewTaskSheetComponent {
   }
 
   protected setTemplateField(name: string, value: string): void {
+    if (this.error()?.field === "templateField") this.error.set(null);
     this.templateValues.update((m) => ({ ...m, [name]: value }));
     void this.refreshComposition();
   }
@@ -1568,6 +1582,15 @@ export class NewTaskSheetComponent {
   protected set<K extends keyof NewTaskDraft>(k: K, v: NewTaskDraft[K]): void {
     this.edited.add(k);
     this.draft.update((d) => ({ ...d, [k]: v }));
+    const curErr = this.error();
+    if (
+      (k === "title" && curErr?.field === "title") ||
+      ((k === "newBranch" || k === "newBranchName") &&
+        curErr?.field === "newBranchName") ||
+      (k === "foundIn" && curErr?.field === "foundIn")
+    ) {
+      this.error.set(null);
+    }
     if ((k === "base" || k === "approved") && this.selectedTemplate()) {
       void this.refreshComposition();
     }
@@ -1596,6 +1619,7 @@ export class NewTaskSheetComponent {
   }
 
   protected pickRepo(repo: string): void {
+    if (this.error()?.field === "repo") this.error.set(null);
     const tasks = this.inbox.tasks();
     const baseEdited = this.edited.has("base");
     this.edited.add("repo");
@@ -1728,11 +1752,11 @@ export class NewTaskSheetComponent {
   }
 
   private async file(): Promise<void> {
-    if (this.busy()) return;
+    if (this.busy() || !this.canFile()) return;
     const d = this.draft();
     const tmpl = this.selectedTemplate();
     const tvals = this.templateValues();
-    const problem = validate(d, this.fields(), tmpl, tvals);
+    const problem = validate(d, this.fields(), tmpl, tvals, this.config());
     if (problem) {
       this.error.set(problem);
       if (problem.field === "foundIn") {
@@ -1740,11 +1764,12 @@ export class NewTaskSheetComponent {
           this.moreOpen.set(true);
         }
         queueMicrotask(() => this.foundInInput()?.nativeElement.focus());
-      } else {
-        (problem.field === "title"
-          ? this.titleInput()
-          : this.branchInput()
-        )?.nativeElement.focus();
+      } else if (problem.field === "repo") {
+        this.repoSelect()?.focus();
+      } else if (problem.field === "title") {
+        this.titleInput()?.nativeElement.focus();
+      } else if (problem.field === "newBranchName") {
+        this.branchInput()?.nativeElement.focus();
       }
       return;
     }

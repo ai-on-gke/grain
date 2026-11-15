@@ -4638,7 +4638,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       destructive: true,
       run: async () => {
         const stopped = await this.store.cancelSuiteRunTasks(sr);
-        this.snackbar.show(`Closed ${stopped} active suite task(s).`);
+        this.snackbar.show(
+          `Closed ${stopped} active suite ${stopped === 1 ? "task" : "tasks"}.`,
+        );
       },
     });
   }
