@@ -573,6 +573,10 @@ func Reconcilers() []Reconciler {
 		// Before dispatch, so an issue imported approved this tick can be
 		// dispatched this tick (reconcileIssueImports).
 		{Name: "issue-imports", Reconcile: reconcileIssueImports},
+		// Immediately before dispatch, so a task whose goal was met while
+		// its run was live is closed rather than dispatched again once
+		// that run is gone (reconcileMetGoalCloses).
+		{Name: "goal-met-closes", Reconcile: reconcileMetGoalCloses},
 		{Name: dispatchReconciler, Reconcile: reconcileDispatch},
 		{Name: "ci", Reconcile: reconcileCI},
 		// Before "sync", so that a base branch found red this tick holds

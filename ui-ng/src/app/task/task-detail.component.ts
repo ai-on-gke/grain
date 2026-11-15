@@ -1711,15 +1711,34 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     if (!t || t.id !== this.id()) return;
     const id = t.id;
-    if (
-      await this.store.act(
-        "pause",
-        this.post("POST /api/tasks/{id}/pause", { immediate }),
-        id,
-      )
-    ) {
-      this.done(immediate ? `Paused #${id} immediately` : `Paused #${id}`);
+    const run = async () => {
+      if (
+        await this.store.act(
+          "pause",
+          this.post("POST /api/tasks/{id}/pause", { immediate }),
+          id,
+        )
+      ) {
+        this.done(immediate ? `Paused #${id} immediately` : `Paused #${id}`);
+      }
+    };
+    if (!immediate) {
+      await run();
+      return;
     }
+    // Asked first, as the classic Pause now is: unlike Pause, this one
+    // throws away whatever the run has not pushed, and Resume cannot
+    // bring that back.
+    this.confirming.set({
+      title: "Pause immediately",
+      message:
+        `Pause #${id} now? Its run is stopped at once, without the grace ` +
+        "period to push its work and write its handover; whatever it has " +
+        "not pushed is lost. Resume picks the task back up where it was left.",
+      accept: "Pause now",
+      destructive: true,
+      run,
+    });
   }
 
   protected async resumePaused(): Promise<void> {

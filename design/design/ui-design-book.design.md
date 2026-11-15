@@ -182,6 +182,18 @@ Forgetting this leaves the host as an inline box. The page then sizes to
 its content, nothing scrolls, and the side drawer stops halfway down. Settings
 shipped with exactly this bug.
 
+One pane, one scroller. The scrolling element is a flex child with
+`min-height: 0; overflow-y: auto`, and the pane around it clips
+(`overflow: clip`) rather than scrolls. Give the scroller `position: relative`
+too: `.sr-only` text is `position: absolute`, and with a positioned pane above
+it, that text escapes the scroller's clip and gives the pane a second scroll
+range. The wheel then chains into that range and slides the grid under the
+footer (Agents, task 5977). When a pane can get too short for its fixed header
+plus a whole item, scroll the header away with the content in that pane
+instead. Agents does this with a size container query on the list pane (narrower
+than 480px or shorter than 700px). `e2e/next-agents-grid-scroll.spec.js`
+asserts the rule with bounding boxes.
+
 Content uses the width it is given. Do not cap a page at a fixed max-width
 (`max-width: 1560px` left half of a large screen empty on Workstreams). Cap
 only forms and reading measures that need it (Settings sections at 1180px).
@@ -276,6 +288,15 @@ persistent topbar or bottombar status badges. Root-persistent `SettingsStateServ
 shows `.s-card` skeletons on cold load, opens warm Settings revisits immediately
 while refreshing in the background, guards child `ngOnChanges` on non-first
 `section` changes, and caches slow `reachable-repos` lookups for 60s.
+
+A settings picker offers the server's own vocabulary (for example
+`sandboxBackendOptions` and `networkAccesses` from `GET /api/settings`), never a
+hand-written list: a choice the daemon cannot use stays listed as a `disabled`
+`PillOption` with the server's reason as its `hint`. A number whose stored `0`
+means grain's default shows blank with the server's `<key>Default` as its
+placeholder, and a cleared box saves that default again. A card a link points
+at carries an `id` (`#capability-policy`, `#other-secrets`), and the page
+scrolls to the URL's fragment once the section has rendered.
 
 ### Breakpoints
 
