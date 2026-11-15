@@ -429,6 +429,13 @@ Rules:
 - **Live, quietly.** Server-sent events update lists in place. Never steal
   focus or scroll position on an update; hold an update while the person is
   interacting with the row.
+- **A failed poll is not news.** A background read that fails once keeps
+  the last good answer on screen and says nothing; only failure that lasts
+  (three reads in a row, or 30 s, `services/request-trouble.ts`) puts up
+  one banner, over the stale list rather than in place of it. A read that
+  has never succeeded says so at once. The same sentence is never shown
+  twice: two surfaces reporting one failure show it once. A person's own
+  action that fails still says so immediately.
 
 ## 6. Motion
 
@@ -502,7 +509,9 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
   serve `GET /api/config` and Inbox summary hydrations with ETag `If-None-Match`
   and bounded worker pools (`<= 4`), throttle hidden-tab or unmounted-page
   polling, load inactive Fleet tabs lazily, and never block primary pickers on
-  slow `reachable-repos` discovery.
+  slow `reachable-repos` discovery. A poll that is failing backs off
+  (doubling, capped at 60 s, never sooner than `Retry-After`) and ignores
+  event wake-ups until a read succeeds again.
 - No new runtime dependency without a reason written in the pull request.
 - A click never waits silently on the network. Every lazy page chunk is
   preloaded shortly after start-up (`shell/route-preload.ts`, skipped under
