@@ -25,8 +25,6 @@ test.use({ demoArgs: ["-notifications"] });
 //     first, as the classic Pause now does;
 //   - a paused task that was also stopped offers one Resume, not a second
 //     that calls Retry, which the server always refuses while paused;
-//   - a dependency chip says the state of the task it waits on, and its
-//     title on hover;
 //   - the goal editor reads the goal it is editing (the task row's
 //     camelCase onLimit, not the declaration's on_limit), so saving it
 //     again does not quietly turn "notify" back into "hold", and Clear
@@ -125,35 +123,6 @@ test("a stopped task that is also paused offers only the pause's Resume", async 
     .toBe("queued");
 });
 
-test("a dependency chip says its task's state, and its title on hover", async ({
-  page,
-  demoServer,
-  accessCode,
-}) => {
-  const t = await taskByTitle(demoServer, accessCode, "Fix flaky retry test");
-  const dep = await taskByTitle(
-    demoServer,
-    accessCode,
-    "Replace the settings pane with a form library",
-  );
-  await page.goto(`/next/task/${t.id}`);
-  await page.getByTestId("details-dep-input").fill(dep.id);
-  await page.getByTestId("details-dep-add").click();
-
-  const chip = page.getByTestId(`details-dep-link-${dep.id}`);
-  await expect(chip).toHaveText(`#${dep.id}`);
-  await expect(chip.locator("xpath=..")).toContainText("Deferred");
-  await chip.hover();
-  await expect(page.getByRole("tooltip")).toContainText(
-    "Replace the settings pane with a form library",
-  );
-
-  await page
-    .getByRole("button", { name: `Remove dependency #${dep.id}` })
-    .click();
-  await expect(chip).toHaveCount(0);
-});
-
 test("the goal editor keeps a goal's at-limit choice across a re-save, and Clear goal clears it", async ({
   page,
   demoServer,
@@ -187,9 +156,15 @@ test("the goal editor keeps a goal's at-limit choice across a re-save, and Clear
   await expect(page.getByTestId("edit-goal-on-limit")).toContainText(
     "Notify & back off",
   );
+  // Wait for the re-save itself to answer, rather than for a fixed time:
+  // the stored goal is read only once the PUT has landed.
+  const put = page.waitForResponse(
+    (r) =>
+      r.request().method() === "PUT" &&
+      r.url().endsWith(`/api/tasks/${t.id}/goal`),
+  );
   await page.getByTestId("edit-goal-save").click();
-  await expect(page.getByTestId("edit-goal-save")).toBeEnabled();
-  await page.waitForTimeout(500);
+  expect((await put).ok()).toBe(true);
   const resaved = await goalOf();
   expect(resaved?.kind).toBe("base-green");
   expect(resaved?.onLimit).toBe("notify");

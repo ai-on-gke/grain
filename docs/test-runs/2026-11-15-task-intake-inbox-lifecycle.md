@@ -164,13 +164,14 @@ was left alone.
 **Reproduction:** `/next/task/2` → add dependency `9` → the chip reads
 `#9`, with nothing on hover.
 
-**Fix:** both dependency lists (Details and the Workstream tab) read the
-shared `TaskFeedStore` for each dependency: they show its state beside
-the number and give "#N <title> (<state>)" as its `gTip`. A closed
-dependency the open-task feed does not carry stays `#N`.
+**Fix:** superseded. `main` fixed the same fault independently in
+`02fdfc741` ("name a dependency chip's task and state on hover"), with the
+Details chip's title reading the server's `dependsOnStates` and
+`blockedBy`, so it covers closed dependencies too. When this branch was
+merged with `main`, the branch's own feed-based chip labels were dropped
+in favour of that fix.
 
-**Coverage:** "a dependency chip says its task's state, and its title on
-hover". Fails on the base build.
+**Coverage:** `ui-ng/e2e/next-intake-walkthrough.spec.js` (from `main`).
 
 ### Bug 4 — the goal editor reset `on_limit` / `on_met` on every re-save
 
@@ -218,7 +219,8 @@ its row stays marked". Fails on the base build (badge 14, expected 13).
 - `npx vitest run src/app/inbox src/app/task src/app/tasks` in `ui-ng/`:
   7 files, 133 tests pass.
 - `npx playwright test e2e/next-task-lifecycle-regressions.spec.js
-  --project=desktop`: 5 pass. Each test was run against the unfixed
+  --project=desktop`: 5 pass (4 once the dependency test was dropped in
+  favour of `main`'s). Each test was run against the unfixed
   frontend and failed there.
 - `npx playwright test e2e/next-full-system.spec.js
   e2e/next-task-interactions.spec.js e2e/next-intake-lifecycle.spec.js

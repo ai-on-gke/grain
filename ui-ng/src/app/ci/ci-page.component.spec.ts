@@ -13,7 +13,11 @@
 // limitations under the License.
 
 import { TestBed } from "@angular/core/testing";
-import { provideRouter, withComponentInputBinding } from "@angular/router";
+import {
+  Router,
+  provideRouter,
+  withComponentInputBinding,
+} from "@angular/router";
 import { RouterTestingHarness } from "@angular/router/testing";
 import { Subject } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
@@ -384,8 +388,22 @@ describe("CIPageComponent (D-26)", () => {
       providers: [
         provideRouter(
           [
-            { path: "ci", component: CIPageComponent },
-            { path: "ci/runs/:id", component: CIPageComponent },
+            {
+              matcher: (s) => {
+                if (s.length === 1 && s[0]?.path === "ci") {
+                  return { consumed: s };
+                }
+                if (
+                  s.length === 3 &&
+                  s[0]?.path === "ci" &&
+                  s[1]?.path === "runs"
+                ) {
+                  return { consumed: s, posParams: { id: s[2] } };
+                }
+                return null;
+              },
+              component: CIPageComponent,
+            },
             { path: "task/:id", component: CIPageComponent },
           ],
           withComponentInputBinding(),
@@ -681,5 +699,69 @@ describe("CIPageComponent (D-26)", () => {
     expect(
       root.querySelector('[data-testid="ci-quarantine-dialog"]'),
     ).toBeNull();
+  });
+
+  it("updates URL when selecting runs from /ci, names each row uniquely, and passes failed job IDs on non-task Re-run failed", async () => {
+    api.runs.unshift({
+      id: "run-main-fail-0",
+      provider: "grain",
+      repo: "acme/widgets",
+      ref: "refs/heads/main",
+      commit: "eee555566667777",
+      event: "push",
+      requestedBy: "alice@example.com",
+      conclusion: "failure",
+      startedAt: "2026-11-12T00:08:00Z",
+      finishedAt: "2026-11-12T00:09:00Z",
+      jobs: [
+        { jobId: "lint", name: "lint", conclusion: "success", steps: [] },
+        { jobId: "unit", name: "unit", conclusion: "failure", steps: [] },
+        { jobId: "deploy", name: "deploy", conclusion: "skipped", steps: [] },
+      ],
+    });
+
+    const harness = await RouterTestingHarness.create("/ci");
+    await flush(harness);
+    const router = TestBed.inject(Router);
+    const root = harness.routeNativeElement!;
+
+    const rowLabels = Array.from(
+      root.querySelectorAll<HTMLElement>(".ci-run-row"),
+    ).map((el) => el.getAttribute("aria-label") ?? "");
+    expect(new Set(rowLabels).size).toBe(rowLabels.length);
+    expect(rowLabels[0]).toContain("run-main-fail-0");
+
+    // Selecting a row from /ci updates the URL to /ci/runs/<id> while keeping the component alive.
+    root
+      .querySelector<HTMLElement>('[data-testid="ci-run-row-run-failed-2"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/ci/runs/run-failed-2");
+
+    // Switch back to the non-task failed run and click Re-run failed -> sends jobs: ["unit"] and event: "push".
+    root
+      .querySelector<HTMLElement>('[data-testid="ci-run-row-run-main-fail-0"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/ci/runs/run-main-fail-0");
+
+    root
+      .querySelector<HTMLButtonElement>('[data-testid="ci-rerun-failed-btn"]')!
+      .click();
+    await flush(harness);
+    expect(router.url).toBe("/ci/runs/run-triggered-99");
+    const retryCall = api.postCalls.find(
+      (c) => c.route === "POST /api/ci/runs",
+    );
+    expect(retryCall?.body).toEqual(
+      expect.objectContaining({
+        repo: "acme/widgets",
+        ref: "main",
+        commit: "eee555566667777",
+        event: "push",
+        jobs: ["unit"],
+        recheck: true,
+      }),
+    );
   });
 });

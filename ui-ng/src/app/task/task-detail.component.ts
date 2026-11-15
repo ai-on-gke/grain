@@ -45,7 +45,6 @@ import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
-import { TaskFeedStore } from "../services/task-feed.service";
 import { summarizeDispatchStatus } from "../shared/dispatch-status";
 import { isHuman } from "../sessions/session-helpers";
 
@@ -69,6 +68,7 @@ import {
 } from "../shared/grants-picker.component";
 import { PriorityChipComponent } from "../shared/priority-chip.component";
 import { TipDirective } from "../shared/tip.directive";
+import { TaskFeedStore } from "../services/task-feed.service";
 import { ago, levelOf, priorityOf, stateLabel } from "../tasks/task-view";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { TaskChangesTabComponent } from "./task-changes-tab.component";
@@ -675,6 +675,7 @@ export function duration(from?: string, to?: string): string {
           [task]="t"
           (acted)="acted.emit()"
           (replyInWordsChange)="onReplyInWords($event)"
+          (forceMerge)="forceMergeReq.set($event)"
         />
 
         <!-- Deferred Inline Task Editor (PATCH /api/tasks/{id}, Brief, Goal) -->
@@ -1036,13 +1037,8 @@ export function duration(from?: string, to?: string): string {
                             [routerLink]="linkTo(d)"
                             [queryParams]="linkQuery(d)"
                             [queryParamsHandling]="pane() ? 'merge' : ''"
-                            [attr.data-testid]="'dep-link-' + d"
-                            [gTip]="depTip(d)"
                             >#{{ d }}</a
                           >
-                          @if (depState(d); as st) {
-                            <span class="muted">{{ st }}</span>
-                          }
                           @if (can("POST /api/tasks/{id}/depends-on")) {
                             <button
                               type="button"
@@ -1202,18 +1198,17 @@ export function duration(from?: string, to?: string): string {
               @if (t.dependsOn?.length) {
                 <div style="display: flex; flex-wrap: wrap; gap: 6px">
                   @for (d of t.dependsOn; track d) {
-                    <span class="status-pill neutral">
+                    <span
+                      class="status-pill neutral"
+                      data-testid="details-dep-chip"
+                      [attr.title]="depTitle(t, d)"
+                    >
                       <a
                         [routerLink]="linkTo(d)"
                         [queryParams]="linkQuery(d)"
                         [queryParamsHandling]="pane() ? 'merge' : ''"
-                        [attr.data-testid]="'details-dep-link-' + d"
-                        [gTip]="depTip(d)"
                         >#{{ d }}</a
                       >
-                      @if (depState(d); as st) {
-                        <span class="muted">{{ st }}</span>
-                      }
                       <button
                         type="button"
                         class="btn-text"
@@ -1316,8 +1311,8 @@ export function duration(from?: string, to?: string): string {
 export class TaskDetailComponent implements OnDestroy {
   protected readonly store = inject(TaskStore);
   private readonly wsStore = inject(WorkstreamsStore);
-  private readonly feed = inject(TaskFeedStore);
   private readonly api = inject(GrainApi);
+  private readonly feed = inject(TaskFeedStore);
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly create = inject(CreateTaskService);
@@ -1347,26 +1342,16 @@ export class TaskDetailComponent implements OnDestroy {
 
   protected readonly label = stateLabel;
 
-  // What the shared open-task feed knows of each task this one waits on,
-  // so a dependency chip can say its state and, on hover, its title (as
-  // the classic page's chips do). A dependency the feed does not carry
-  // -- a closed one -- is shown by its number alone.
-  private readonly depRows = computed(() => {
-    const ids = new Set(this.t()?.dependsOn ?? []);
-    const out = new Map<string, Task>();
-    if (!ids.size) return out;
-    for (const row of this.feed.tasks()) {
-      if (ids.has(row.id)) out.set(row.id, row);
-    }
-    return out;
-  });
-  protected depState(id: string): string {
-    const row = this.depRows().get(id);
-    return row ? stateLabel(row.state) : "";
-  }
-  protected depTip(id: string): string {
-    const row = this.depRows().get(id);
-    return row ? `#${id} ${row.title} (${stateLabel(row.state)})` : `#${id}`;
+  // depTitle is a dependency chip's hover text: the task it waits for,
+  // its title where the open-task feed knows it, its state, and whether
+  // it is what holds this task, as the classic dependency chip reads.
+  protected depTitle(t: Task, d: string): string {
+    const title = this.feed.tasks().find((x) => x.id === d)?.title;
+    const state = t.dependsOnStates?.[d];
+    let s = title ? `#${d} ${title}` : `#${d}`;
+    if (state) s += ` — ${stateLabel(state)}`;
+    if (t.blockedBy?.includes(d)) s += " (blocking this task)";
+    return s;
   }
   protected readonly ago = ago;
   // filedAgo reads "just now" rather than "now ago" for a task filed in
