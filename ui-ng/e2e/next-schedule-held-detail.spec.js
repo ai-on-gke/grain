@@ -161,7 +161,7 @@ for (const size of SIZES) {
   }
 }
 
-test("an event trigger shows no Next run: its nextRunAt is a placeholder", async ({
+test("an event trigger says when it runs, not its placeholder nextRunAt", async ({
   page,
 }) => {
   const trigger = {
@@ -192,6 +192,9 @@ test("an event trigger shows no Next run: its nextRunAt is a placeholder", async
     page
       .getByTestId("sched-config-pane")
       .locator("dt", { hasText: "Next run" }),
-  ).toHaveCount(0);
+  ).toHaveCount(1);
+  await expect(
+    page.getByTestId("sched-config-pane").getByText("on workflow run"),
+  ).toBeVisible();
   await expect(page.getByText("2027-11-15T09:00:00Z")).toHaveCount(0);
 });
