@@ -43,13 +43,19 @@ import { SnackbarService } from "../services/snackbar.service";
 import { errorText } from "../sessions/session-helpers";
 import { parseUnifiedDiff } from "../shared/diff-parse";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
-import { submitBlock, unsatisfiedGates } from "../shared/gates";
+import { unsatisfiedGates } from "../shared/gates";
+import { MergeGatesListComponent } from "../shared/merge-gates-list.component";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskStore } from "./task.store";
 
 @Component({
   selector: "g-task-changes-tab",
-  imports: [RouterLink, DiffViewerComponent, TipDirective],
+  imports: [
+    RouterLink,
+    DiffViewerComponent,
+    TipDirective,
+    MergeGatesListComponent,
+  ],
   encapsulation: ViewEncapsulation.None,
   styleUrl: "./task-changes-tab.css",
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -96,21 +102,7 @@ import { TaskStore } from "./task.store";
       </dl>
 
       @if (task().mergeGates?.length) {
-        <div
-          class="gates-chip-row"
-          role="group"
-          aria-label="Merge gates"
-          data-testid="merge-gates-list"
-        >
-          @for (g of task().mergeGates; track g.id) {
-            <span
-              [class]="'status-pill ' + gateTone(g)"
-              [gTip]="g.detail || g.state"
-            >
-              {{ g.label || g.id }}: {{ g.state }}
-            </span>
-          }
-        </div>
+        <g-merge-gates-list [task]="task()" />
       }
 
       <!-- PR, Merge & Changelist Actions -->
@@ -132,55 +124,6 @@ import { TaskStore } from "./task.store";
             (click)="openPr()"
           >
             Open pull request
-          </button>
-        }
-
-        @if (
-          (prUrl() || task().state === "awaiting_submit") &&
-          can("POST /api/tasks/{id}/submit")
-        ) {
-          <button
-            type="button"
-            class="btn-primary"
-            data-testid="changes-submit"
-            [gTip]="
-              submitOff() || 'Submit the pull request; review gates still apply'
-            "
-            [disabled]="store.isBusy('submit', task().id) || !!submitOff()"
-            (click)="submitPr()"
-          >
-            Submit
-          </button>
-        }
-
-        @if (
-          (prUrl() || task().mergeQueueBlockedAt || task().mergeQueueState) &&
-          can("POST /api/tasks/{id}/retry-merge")
-        ) {
-          <button
-            type="button"
-            class="btn-outlined"
-            data-testid="changes-retry-merge"
-            [disabled]="store.isBusy('retry-merge', task().id)"
-            (click)="retryMerge()"
-          >
-            Retry merge
-          </button>
-        }
-
-        @if (
-          (prUrl() || task().state === "awaiting_submit") &&
-          can("POST /api/tasks/{id}/force-merge") &&
-          access.isFullAccess()
-        ) {
-          <button
-            type="button"
-            class="btn-outlined danger"
-            data-testid="changes-force-merge-open"
-            [disabled]="store.isBusy('force-merge', task().id)"
-            (click)="emitForceMerge()"
-          >
-            Force merge…
           </button>
         }
 
@@ -496,44 +439,7 @@ export class TaskChangesTabComponent {
   protected readonly ciLoading = signal(false);
   protected readonly ciError = signal<string | null>(null);
 
-  readonly forceMerge =
-    output<import("./force-merge-dialog.component").ForceMergeRequest>();
-
-  protected emitForceMerge(): void {
-    const t = this.task();
-    this.forceMerge.emit({
-      task: t,
-      unsatisfiedGates: this.unsatisfiedGates(),
-      head: this.preview()?.head || t.ci?.commit,
-      run: (reason, overrideGates, head) =>
-        this.store
-          .act(
-            "force-merge",
-            (id) =>
-              this.api.post(
-                "POST /api/tasks/{id}/force-merge",
-                { id },
-                {
-                  reason,
-                  ...(head ? { head } : {}),
-                  ...(overrideGates.length ? { overrideGates } : {}),
-                },
-              ),
-            t.id,
-          )
-          .then((ok) => {
-            if (ok) {
-              this.snackbar.show(`Force-merge queued for #${t.id}`);
-              this.acted.emit();
-            }
-            return ok;
-          }),
-    });
-  }
-
   protected readonly overrideGateIds = signal<ReadonlySet<string>>(new Set());
-
-  protected readonly submitOff = computed(() => submitBlock(this.task()));
 
   protected readonly hasChangelist = computed(
     () =>
@@ -829,33 +735,6 @@ export class TaskChangesTabComponent {
     );
     if (ok) {
       this.snackbar.show(`Opened pull request for #${t.id}`);
-      this.acted.emit();
-    }
-  }
-
-  protected async submitPr(): Promise<void> {
-    const t = this.task();
-    if (submitBlock(t)) return;
-    const ok = await this.store.act(
-      "submit",
-      (id) => this.api.post("POST /api/tasks/{id}/submit", { id }),
-      t.id,
-    );
-    if (ok) {
-      this.snackbar.show(`Submitted #${t.id}`);
-      this.acted.emit();
-    }
-  }
-
-  protected async retryMerge(): Promise<void> {
-    const t = this.task();
-    const ok = await this.store.act(
-      "retry-merge",
-      (id) => this.api.post("POST /api/tasks/{id}/retry-merge", { id }),
-      t.id,
-    );
-    if (ok) {
-      this.snackbar.show(`Retrying merge for #${t.id}`);
       this.acted.emit();
     }
   }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { nextStep } from "../shared/task-actions";
 import type { RouteKey } from "../api/generated-routes";
 import type { RouteParams } from "../api/grain-api.service";
 import type { LocalScriptApproval, Notification, Task } from "../api/models";
@@ -681,10 +682,10 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     e.pillTone = review ? "blast" : red ? "error" : "healthy";
     e.summary = review
       ? "The review left questions only you can settle."
-      : blocked ||
-        (cl
-          ? "Submit this CL now: its review, presubmit and grain's reviews have all cleared."
-          : "Approve the pull request; it merges once its gates pass.");
+      : cl
+        ? blocked ||
+          "Submit this CL now: its review, presubmit and grain's reviews have all cleared."
+        : `${nextStep(t, listOnly)}.`;
     e.rationale = review
       ? "A fresh review clears the gate once your decision is carried out."
       : cl

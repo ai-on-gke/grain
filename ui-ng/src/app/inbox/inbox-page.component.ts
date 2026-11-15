@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { TaskActionAreaComponent } from "../shared/task-action-area.component";
+import { sendBackComment, type TaskAction } from "../shared/task-actions";
 import { Router, RouterLink } from "@angular/router";
 import { SnackbarService } from "../services/snackbar.service";
 import { SplitController } from "../shared/split-controller";
@@ -925,14 +927,28 @@ const ONE_KEY = new Set(["approve"]);
                   >
                     {{ sel.summary }}
                   </p>
-                  <div class="action-bar">
-                    <div class="action-btn-group">
-                      <ng-container
-                        *ngTemplateOutlet="actions; context: { $implicit: sel }"
-                      />
+                  @if (!sel.task) {
+                    <div class="action-bar">
+                      <div class="action-btn-group">
+                        <ng-container
+                          *ngTemplateOutlet="
+                            actions;
+                            context: { $implicit: sel }
+                          "
+                        />
+                      </div>
                     </div>
-                  </div>
+                  }
                 }
+              }
+              @if (sel.task && !sel.gone && sel.kind !== "access") {
+                <g-task-action-area
+                  [task]="areaTask(sel)"
+                  [busy]="!!store.busy()"
+                  [omit]="areaOmit"
+                  testidPrefix="action-"
+                  (run)="runArea(sel, $event)"
+                />
               }
               @if (firstDenied(sel); as reason) {
                 <p class="rbac-note" data-testid="rbac-denied">{{ reason }}</p>
@@ -1194,6 +1210,7 @@ const ONE_KEY = new Set(["approve"]);
     }
   `,
   imports: [
+    TaskActionAreaComponent,
     ActorChipComponent,
     NgTemplateOutlet,
     RouterLink,
@@ -1611,6 +1628,92 @@ export class InboxPageComponent implements OnInit, OnDestroy {
         ) as HTMLElement | null
       )?.focus();
     });
+  }
+
+  // The Inbox has no composer for Compact or the gate-override dialog,
+  // so those open on the task page; everything else runs here.
+  protected readonly areaOmit: readonly string[] = [];
+
+  // areaTask is the selected task with its detail laid over the list row
+  // (the detail's merge gates are the verified ones).
+  protected areaTask(sel: InboxEntry): TaskDetail | Task {
+    const d = this.store.selectedDetail();
+    return d && d.id === sel.taskId ? { ...sel.task!, ...d } : sel.task!;
+  }
+
+  // runArea carries out the shared action area's button for this row:
+  // the same set the task page offers, through the Inbox's own runner.
+  protected runArea(sel: InboxEntry, a: TaskAction): void {
+    const t = this.areaTask(sel);
+    const id = t.id;
+    switch (a.id) {
+      case "reply":
+        setTimeout(() =>
+          (this.replyBox() ?? this.talkBox())?.nativeElement.focus(),
+        );
+        return;
+      case "accept-findings":
+      case "force-merge":
+      case "compact-open":
+      case "rollover":
+      case "follow-up":
+        void this.router.navigate(["/task", id], {
+          queryParams: { from: "inbox", ...(a.gate ? { tab: "changes" } : {}) },
+        });
+        return;
+    }
+    // The row's own action for the same call keeps its confirm wording
+    // and its place in batches ("Decline", "Acknowledge", "Resume").
+    const legacy = sel.actions.find(
+      (x) => x.route === a.route && a.id !== "pause-immediate",
+    );
+    if (legacy && a.id !== "send-back") {
+      this.run(sel, legacy);
+      return;
+    }
+    const action: InboxAction = {
+      id: a.id,
+      label: a.label,
+      route: a.route,
+      params: { id },
+      variant: a.variant,
+      repo: t.repo,
+      ...(a.disabled ? { blocked: a.disabled } : {}),
+      ...(a.id === "pause" || a.id === "pause-immediate"
+        ? { body: { immediate: a.id === "pause-immediate" } }
+        : {}),
+    };
+    if (a.id === "close") {
+      action.confirm = `Close #${id}? The task is closed, and reopening puts it back.`;
+      action.destructive = true;
+    } else if (a.id === "retry" && t.state !== "failed") {
+      action.confirm = `Resume #${id}? A person stopped this run.`;
+    }
+    if (a.id === "send-back") {
+      const body = sendBackComment(t);
+      const key = sel.key;
+      this.confirming.set({
+        title: a.label,
+        message: `Send #${id} back to its agent? The findings are added to the conversation and the task runs again on its branch.`,
+        accept: a.label,
+        destructive: false,
+        run: async () => {
+          try {
+            await this.api.post(
+              "POST /api/tasks/{id}/comments",
+              { id },
+              { body },
+            );
+          } catch (err) {
+            this.store.actionError.set(String((err as Error)?.message ?? err));
+            return false;
+          }
+          return this.actAndFocus(key, action);
+        },
+      });
+      return;
+    }
+    this.run(sel, action);
   }
 
   protected run(sel: InboxEntry, a: InboxAction): void {

@@ -525,6 +525,7 @@ describe("TaskPageComponent", () => {
     api.detail = {
       ...api.detail,
       state: "awaiting_submit",
+      mergeQueueBlockedAt: "2026-11-15T00:00:00Z",
       mergeGates: [
         { id: "ci", label: "CI", state: "failing" },
         { id: "security-review", label: "Security review", state: "needed" },
@@ -580,7 +581,7 @@ describe("TaskPageComponent", () => {
     ).toMatchObject({ body: { taskId: "7" } });
 
     // Retry merge
-    q<HTMLButtonElement>(f, '[data-testid="changes-retry-merge"]')!.click();
+    q<HTMLButtonElement>(f, '[data-testid="act-retry-merge"]')!.click();
     await settle(f);
     expect(
       api.calls.find((c) => c.route === "POST /api/tasks/{id}/retry-merge"),
@@ -589,7 +590,7 @@ describe("TaskPageComponent", () => {
     // Force merge requires reason AND explicit review-gate override checkbox
     q<HTMLButtonElement>(
       f,
-      '[data-testid="changes-force-merge-open"]',
+      '[data-testid="act-force-merge"]',
     )!.click();
     await f.whenStable();
     const confirmBtn = q<HTMLButtonElement>(
@@ -1229,7 +1230,7 @@ describe("duration", () => {
       expect(backFrom("tasks:nonsense", "7").label).toBe("Tasks");
     });
 
-    it("turns Submit off while CI is failing and shows CI in the header", async () => {
+    it("offers Send back instead of Submit while CI is failing and shows CI in the header", async () => {
       const api = new FakeApi();
       api.detail = {
         ...api.detail,
@@ -1240,11 +1241,13 @@ describe("duration", () => {
         ],
       };
       const f = await render(api);
-      const submit = q<HTMLButtonElement>(f, '[data-testid="act-submit"]')!;
-      expect(submit.disabled).toBe(true);
+      // A Submit that cannot work is not offered; what can is.
+      expect(q(f, '[data-testid="act-submit"]')).toBeNull();
+      expect(q(f, '[data-testid="whats-needed"]')!.textContent).toContain(
+        "CI is failing",
+      );
+      expect(q(f, '[data-testid="gate-ci-send-back"]')).toBeTruthy();
       expect(q(f, '[data-testid="task-ci"]')!.textContent?.trim()).toBe("✕ CI");
-      submit.click();
-      await settle(f);
       expect(api.calls.filter((c) => c.method === "POST")).toEqual([]);
     });
 
@@ -1370,7 +1373,7 @@ describe("duration", () => {
 
     const openBtn = q<HTMLButtonElement>(
       f,
-      '[data-testid="changes-force-merge-open"]',
+      '[data-testid="act-force-merge"]',
     )!;
     openBtn.focus();
     openBtn.click();
