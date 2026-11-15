@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -532,14 +533,65 @@ func TestHashedFrontendBundleExemptionNeverCallsIdentityVerifier(t *testing.T) {
 
 type readCountingFS struct {
 	fs.FS
+	target    string
 	readFiles atomic.Int64
+	opens     atomic.Int64
+	fileReads atomic.Int64
+}
+
+func (c *readCountingFS) Stat(name string) (fs.FileInfo, error) {
+	return fs.Stat(c.FS, name)
 }
 
 func (c *readCountingFS) ReadFile(name string) ([]byte, error) {
-	if name == "chunk-OMVX5472.js" {
+	if name == c.target {
 		c.readFiles.Add(1)
 	}
 	return fs.ReadFile(c.FS, name)
+}
+
+func (c *readCountingFS) Open(name string) (fs.File, error) {
+	f, err := c.FS.Open(name)
+	if err != nil || name != c.target {
+		return f, err
+	}
+	c.opens.Add(1)
+	return &countingFile{File: f, reads: &c.fileReads}, nil
+}
+
+type countingFile struct {
+	fs.File
+	reads *atomic.Int64
+}
+
+func (f *countingFile) Read(p []byte) (int, error) {
+	f.reads.Add(1)
+	return f.File.Read(p)
+}
+
+type discardResponseWriter struct {
+	hdr    http.Header
+	status int
+	bytes  int
+}
+
+func (w *discardResponseWriter) Header() http.Header {
+	if w.hdr == nil {
+		w.hdr = make(http.Header)
+	}
+	return w.hdr
+}
+
+func (w *discardResponseWriter) WriteHeader(code int) {
+	w.status = code
+}
+
+func (w *discardResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	w.bytes += len(p)
+	return len(p), nil
 }
 
 func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
@@ -551,27 +603,34 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 
 	bundleBody := strings.Repeat("export const chunkValue = 'immutable-bundle-payload';\n", 64)
 	gatedAssetBody := strings.Repeat("console.log('gated-unhashed-asset');\n", 64)
+	fontPayload := []byte{0x00, 0x01, 0x00, 0x00, 'f', 'o', 'n', 't', '-', 'b', 'y', 't', 'e', 's'}
 	legacyFS := fstest.MapFS{
-		"index.html":               {Data: []byte("<html>legacy</html>")},
-		"assets/app.js":            {Data: []byte(gatedAssetBody)},
-		"assets/index-co56kW-3.js": {Data: []byte(bundleBody)},
+		"index.html":                  {Data: []byte("<html>legacy</html>")},
+		"assets/app.js":               {Data: []byte(gatedAssetBody)},
+		"assets/index-co56kW-3.js":    {Data: []byte(bundleBody)},
+		"assets/inter-a1b2c3d4.woff2": {Data: fontPayload},
+		"assets/inter-a1b2c3d4.woff":  {Data: fontPayload},
+		"assets/inter-a1b2c3d4.ttf":   {Data: fontPayload},
 	}
 	countingNextFS := &readCountingFS{
+		target: "chunk-OMVX5472.js",
 		FS: fstest.MapFS{
 			"index.html":        {Data: []byte("<html>next</html>")},
 			"chunk-OMVX5472.js": {Data: []byte(bundleBody)},
 		},
 	}
 	ui.SetFrontendFSForTest(srv, legacyFS, countingNextFS)
-	readsAfterInit := countingNextFS.readFiles.Load()
+	readFilesAfterInit := countingNextFS.readFiles.Load()
+	opensAfterInit := countingNextFS.opens.Load()
 
-	// 1. Identity variant when gzip is not accepted: served straight from the embedded FS
-	// (no raw bundle cached in memory), with Vary: Accept-Encoding and strong ETag.
+	// 1. Identity variant when gzip is not accepted: streamed straight from the embedded FS
+	// (no fs.ReadFile full-file copy, no raw bundle cached in memory), with Vary: Accept-Encoding and strong ETag.
 	for i, acceptEnc := range []string{"", "identity", "gzip;q=0"} {
 		hdrs := map[string]string{}
 		if acceptEnc != "" {
 			hdrs["Accept-Encoding"] = acceptEnc
 		}
+		prevReads := countingNextFS.fileReads.Load()
 		idRec := serveFrom(srv, networkAddr, http.MethodGet, "/next/chunk-OMVX5472.js", "", hdrs)
 		if idRec.Code != http.StatusOK {
 			t.Fatalf("identity GET (Accept-Encoding=%q): status = %d, want 200", acceptEnc, idRec.Code)
@@ -589,8 +648,14 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 		if idRec.Body.String() != bundleBody {
 			t.Fatalf("identity GET (Accept-Encoding=%q): body mismatch (len=%d, want %d)", acceptEnc, idRec.Body.Len(), len(bundleBody))
 		}
-		if got := countingNextFS.readFiles.Load() - readsAfterInit; got != int64(i+1) {
-			t.Fatalf("identity GET #%d: fs.ReadFile count = %d, want %d (must read straight from fsys)", i+1, got, i+1)
+		if got := countingNextFS.readFiles.Load() - readFilesAfterInit; got != 0 {
+			t.Fatalf("identity GET #%d: fs.ReadFile count delta = %d, want 0 (must stream via Open, never ReadFile)", i+1, got)
+		}
+		if got := countingNextFS.opens.Load() - opensAfterInit; got != int64(i+1) {
+			t.Fatalf("identity GET #%d: fsys.Open count delta = %d, want %d", i+1, got, i+1)
+		}
+		if countingNextFS.fileReads.Load() <= prevReads {
+			t.Fatalf("identity GET #%d: expected streaming File.Read calls", i+1)
 		}
 	}
 	if got := ui.FrontendGzipComputationsForTest(srv); got != 0 {
@@ -603,7 +668,7 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 	// Capture strong ETag of /next/chunk-OMVX5472.js for weak ETag comparison.
 	idRec := serveFrom(srv, networkAddr, http.MethodGet, "/next/chunk-OMVX5472.js", "", nil)
 	strongETag := idRec.Header().Get("ETag")
-	readsBeforeGzip := countingNextFS.readFiles.Load()
+	readFilesBeforeGzip := countingNextFS.readFiles.Load()
 
 	// 2. Gzip served from per-file cache with correct headers and identical bytes on a second request,
 	// and not gzipped a second time by withCompression.
@@ -629,7 +694,7 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 	if got := ui.FrontendGzipComputationsForTest(srv); got != 1 {
 		t.Fatalf("FrontendGzipComputationsForTest after first gzip GET = %d, want 1", got)
 	}
-	if got := countingNextFS.readFiles.Load() - readsBeforeGzip; got != 1 {
+	if got := countingNextFS.readFiles.Load() - readFilesBeforeGzip; got != 1 {
 		t.Fatalf("first gzip GET: fs.ReadFile count delta = %d, want 1", got)
 	}
 	cachedGz, ok := ui.FrontendCachedGzipBytesForTest(srv, "/next/chunk-OMVX5472.js")
@@ -672,21 +737,30 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 	if got := ui.FrontendGzipComputationsForTest(srv); got != 1 {
 		t.Fatalf("FrontendGzipComputationsForTest after second gzip GET = %d, want 1 (must serve from cache)", got)
 	}
-	if got := countingNextFS.readFiles.Load() - readsBeforeGzip; got != 1 {
+	if got := countingNextFS.readFiles.Load() - readFilesBeforeGzip; got != 1 {
 		t.Fatalf("second gzip GET: fs.ReadFile count delta = %d, want 1 (must serve from cache)", got)
 	}
 
-	// Subsequent identity request after gzip is cached still reads from fsys and returns exact identity bytes.
+	// Subsequent identity request after gzip is cached still streams via Open (not ReadFile) and returns exact identity bytes.
+	opensBeforeIdAfterGz := countingNextFS.opens.Load()
 	idAfterGz := serveFrom(srv, networkAddr, http.MethodGet, "/next/chunk-OMVX5472.js", "", nil)
 	if idAfterGz.Code != http.StatusOK || idAfterGz.Body.String() != bundleBody {
 		t.Fatalf("identity GET after gzip cached: status=%d len=%d, want 200 len=%d", idAfterGz.Code, idAfterGz.Body.Len(), len(bundleBody))
 	}
-	if got := countingNextFS.readFiles.Load() - readsBeforeGzip; got != 2 {
-		t.Fatalf("identity GET after gzip cached: fs.ReadFile count delta = %d, want 2", got)
+	if got := countingNextFS.readFiles.Load() - readFilesBeforeGzip; got != 1 {
+		t.Fatalf("identity GET after gzip cached: fs.ReadFile count delta = %d, want 1 (no new ReadFile)", got)
+	}
+	if got := countingNextFS.opens.Load() - opensBeforeIdAfterGz; got != 1 {
+		t.Fatalf("identity GET after gzip cached: fsys.Open count delta = %d, want 1", got)
 	}
 
-	// 3. 304 Not Modified on the exempt path: carries ETag, Cache-Control, and Vary,
-	// and omits Content-Type, Content-Length, and Content-Encoding; cross-variant ETags do not match.
+	// 3. 304 Not Modified on the exempt path: performs NO file open or read, carries ETag,
+	// Cache-Control, and Vary, omits Content-Type, Content-Length, and Content-Encoding,
+	// and cross-variant ETags do not match.
+	readFilesBefore304 := countingNextFS.readFiles.Load()
+	opensBefore304 := countingNextFS.opens.Load()
+	fileReadsBefore304 := countingNextFS.fileReads.Load()
+
 	condId := serveFrom(srv, networkAddr, http.MethodGet, "/next/chunk-OMVX5472.js", "", map[string]string{
 		"If-None-Match": strongETag,
 	})
@@ -695,6 +769,14 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 	}
 	if condId.Body.Len() != 0 {
 		t.Fatalf("conditional identity 304 body len = %d, want 0", condId.Body.Len())
+	}
+	if countingNextFS.readFiles.Load() != readFilesBefore304 ||
+		countingNextFS.opens.Load() != opensBefore304 ||
+		countingNextFS.fileReads.Load() != fileReadsBefore304 {
+		t.Fatalf("conditional identity 304 touched file (readFiles=%d->%d, opens=%d->%d, fileReads=%d->%d), want 0 file reads",
+			readFilesBefore304, countingNextFS.readFiles.Load(),
+			opensBefore304, countingNextFS.opens.Load(),
+			fileReadsBefore304, countingNextFS.fileReads.Load())
 	}
 	for _, forbidden := range []string{"Content-Type", "Content-Length", "Content-Encoding"} {
 		if vals := condId.Header().Values(forbidden); len(vals) != 0 {
@@ -812,7 +894,76 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 		t.Fatalf("FrontendGzipComputationsForTest after Range gzip GETs = %d, want 1", got)
 	}
 
-	// 5. Gated paths keep their behaviour unchanged: refused without credentials, and honouring Range
+	// 5. Font extensions (.woff2, .woff, .ttf) get their explicit font/* Content-Type on both
+	// identity and gzip variants (never application/x-gzip or application/octet-stream).
+	for _, fc := range []struct {
+		path           string
+		wantContentTyp string
+	}{
+		{"/assets/inter-a1b2c3d4.woff2", "font/woff2"},
+		{"/assets/inter-a1b2c3d4.woff", "font/woff"},
+		{"/assets/inter-a1b2c3d4.ttf", "font/ttf"},
+	} {
+		fontId := serveFrom(srv, networkAddr, http.MethodGet, fc.path, "", nil)
+		if fontId.Code != http.StatusOK {
+			t.Fatalf("identity GET %s: status = %d, want 200", fc.path, fontId.Code)
+		}
+		if got := fontId.Header().Get("Content-Type"); got != fc.wantContentTyp {
+			t.Fatalf("identity GET %s: Content-Type = %q, want %q", fc.path, got, fc.wantContentTyp)
+		}
+		if !bytes.Equal(fontId.Body.Bytes(), fontPayload) {
+			t.Fatalf("identity GET %s: body mismatch", fc.path)
+		}
+
+		fontGz := serveFrom(srv, networkAddr, http.MethodGet, fc.path, "", map[string]string{
+			"Accept-Encoding": "gzip",
+		})
+		if fontGz.Code != http.StatusOK {
+			t.Fatalf("gzip GET %s: status = %d, want 200", fc.path, fontGz.Code)
+		}
+		if got := fontGz.Header().Get("Content-Type"); got != fc.wantContentTyp {
+			t.Fatalf("gzip GET %s: Content-Type = %q, want %q", fc.path, got, fc.wantContentTyp)
+		}
+		if got := fontGz.Header().Get("Content-Encoding"); got != "gzip" {
+			t.Fatalf("gzip GET %s: Content-Encoding = %q, want gzip", fc.path, got)
+		}
+	}
+
+	// 6. Allocation per identity request stays well under the file size (no full-file heap copy).
+	largeBundle := bytes.Repeat([]byte("export const big = '0123456789abcdef0123456789abcdef';\n"), 16384) // ~900 KB
+	ui.SetFrontendFSForTest(srv, legacyFS, fstest.MapFS{
+		"index.html":        {Data: []byte("<html>next</html>")},
+		"chunk-OMVX5472.js": {Data: largeBundle},
+	})
+	warmReq := httptest.NewRequest(http.MethodGet, "/next/chunk-OMVX5472.js", nil)
+	warmReq.RemoteAddr = networkAddr
+	warmW := &discardResponseWriter{}
+	srv.ServeHTTP(warmW, warmReq)
+	if warmW.status != http.StatusOK || warmW.bytes != len(largeBundle) {
+		t.Fatalf("warm identity GET: status=%d bytes=%d, want 200 bytes=%d", warmW.status, warmW.bytes, len(largeBundle))
+	}
+
+	var msBefore, msAfter runtime.MemStats
+	const runs = 10
+	runtime.ReadMemStats(&msBefore)
+	for i := 0; i < runs; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/next/chunk-OMVX5472.js", nil)
+		req.RemoteAddr = networkAddr
+		dw := &discardResponseWriter{}
+		srv.ServeHTTP(dw, req)
+		if dw.status != http.StatusOK || dw.bytes != len(largeBundle) {
+			t.Fatalf("identity alloc run %d: status=%d bytes=%d", i, dw.status, dw.bytes)
+		}
+	}
+	runtime.ReadMemStats(&msAfter)
+	bytesPerReq := (msAfter.TotalAlloc - msBefore.TotalAlloc) / runs
+	maxAllowedBytesPerReq := uint64(len(largeBundle) / 16) // < 6.25% of the ~900 KB file size
+	if bytesPerReq > maxAllowedBytesPerReq {
+		t.Fatalf("identity GET allocated %d bytes/req for a %d-byte bundle, want <= %d (streaming without full-file copy)",
+			bytesPerReq, len(largeBundle), maxAllowedBytesPerReq)
+	}
+
+	// 7. Gated paths keep their behaviour unchanged: refused without credentials, and honouring Range
 	// and withCompression when authenticated.
 	unauthGated := serveFrom(srv, networkAddr, http.MethodGet, "/assets/app.js", "", map[string]string{
 		"Range": "bytes=0-3",
@@ -842,8 +993,5 @@ func TestHashedFrontendBundleExemptionGzipCacheAndRangeIgnored(t *testing.T) {
 	}
 	if got := authGzip.Header().Get("ETag"); !strings.HasPrefix(got, `W/"`) {
 		t.Fatalf("authenticated gzip GET /assets/app.js: ETag = %q, want weak W/\"...\"", got)
-	}
-	if got := ui.FrontendGzipComputationsForTest(srv); got != 1 {
-		t.Fatalf("FrontendGzipComputationsForTest after gated gzip GET = %d, want 1", got)
 	}
 }

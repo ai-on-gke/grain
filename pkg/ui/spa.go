@@ -19,7 +19,6 @@ import (
 	"compress/gzip"
 	"io"
 	"io/fs"
-	"mime"
 	"net/http"
 	"path"
 	"regexp"
@@ -51,6 +50,25 @@ var hashedAssetExtensions = map[string]bool{
 	".png":   true,
 	".jpg":   true,
 	".webp":  true,
+}
+
+var hashedAssetContentTypes = map[string]string{
+	".js":    "text/javascript; charset=utf-8",
+	".css":   "text/css; charset=utf-8",
+	".woff2": "font/woff2",
+	".woff":  "font/woff",
+	".ttf":   "font/ttf",
+	".svg":   "image/svg+xml",
+	".png":   "image/png",
+	".jpg":   "image/jpeg",
+	".webp":  "image/webp",
+}
+
+func hashedAssetContentType(relPath string) string {
+	if ct, ok := hashedAssetContentTypes[path.Ext(relPath)]; ok {
+		return ct
+	}
+	return "application/octet-stream"
 }
 
 var (
@@ -250,19 +268,45 @@ func (s *Server) serveHashedFrontendBundle(w http.ResponseWriter, r *http.Reques
 	if err != nil || info.IsDir() || !info.Mode().IsRegular() {
 		return false
 	}
-	fa.serveExemptBundle(w, r, rawPath, fsys, relPath, etags[relPath])
+	fa.serveExemptBundle(w, r, rawPath, fsys, relPath, info.Size(), etags[relPath])
 	return true
 }
 
+var copyBufPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 32*1024)
+		return &buf
+	},
+}
+
 // serveExemptBundle serves an exempt content-hashed bundle, ignoring Range
-// headers (always 200 with the full body), serving the identity variant
-// straight from fsys, and caching only the gzipped representation (computed
-// once on first gzip request, keyed by rawPath) so unauthenticated callers
-// cannot trigger repeated per-request compression, multipart range work, or
-// duplicate heap copies of raw bundles.
-func (fa *frontendAssets) serveExemptBundle(w http.ResponseWriter, r *http.Request, rawPath string, fsys fs.FS, relPath, precomputedETag string) {
-	var body []byte
+// headers (always 200 with the full body), answering conditional 304 requests
+// from the precomputed ETag before opening the file, streaming the identity
+// variant straight from fsys without a full-file heap copy, and caching only
+// the gzipped representation (computed once on first gzip request, keyed by
+// rawPath).
+func (fa *frontendAssets) serveExemptBundle(w http.ResponseWriter, r *http.Request, rawPath string, fsys fs.FS, relPath string, size int64, precomputedETag string) {
 	wantGzip := acceptsGzip(r)
+	etag := precomputedETag
+	if wantGzip && etag != "" && !strings.HasPrefix(etag, "W/") {
+		etag = "W/" + etag
+	}
+
+	h := w.Header()
+	h.Set("Cache-Control", cacheControlImmutable)
+	setVaryAcceptEncoding(h)
+	if etag != "" {
+		h.Set("ETag", etag)
+	}
+	if r.Header.Get("Range") == "" && exemptETagMatches(r.Header.Get("If-None-Match"), etag) {
+		h.Del("Content-Type")
+		h.Del("Content-Length")
+		h.Del("Content-Encoding")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	ct := hashedAssetContentType(relPath)
 	if wantGzip {
 		v, _ := fa.gzipBundles.LoadOrStore(rawPath, &cachedGzipBundle{})
 		entry := v.(*cachedGzipBundle)
@@ -282,55 +326,39 @@ func (fa *frontendAssets) serveExemptBundle(w http.ResponseWriter, r *http.Reque
 			fa.gzipComputations.Add(1)
 		})
 		if entry.err != nil {
-			w.Header().Set("Cache-Control", cacheControlNoStore)
+			h.Del("ETag")
+			h.Del("Vary")
+			h.Set("Cache-Control", cacheControlNoStore)
 			http.Error(w, "reading embedded asset", http.StatusInternalServerError)
 			return
 		}
-		body = entry.gz
-	} else {
-		raw, readErr := fs.ReadFile(fsys, relPath)
-		if readErr != nil {
-			w.Header().Set("Cache-Control", cacheControlNoStore)
-			http.Error(w, "reading embedded asset", http.StatusInternalServerError)
-			return
-		}
-		body = raw
-	}
-
-	ct := mime.TypeByExtension(path.Ext(relPath))
-	if ct == "" {
-		ct = http.DetectContentType(body)
-	}
-	strongETag := precomputedETag
-	if strongETag == "" && !wantGzip {
-		strongETag = etagOf(body)
-	}
-	etag := strongETag
-	if wantGzip && etag != "" && !strings.HasPrefix(etag, "W/") {
-		etag = "W/" + etag
-	}
-
-	h := w.Header()
-	h.Set("Content-Type", ct)
-	h.Set("Cache-Control", cacheControlImmutable)
-	setVaryAcceptEncoding(h)
-	if wantGzip {
+		h.Set("Content-Type", ct)
 		h.Set("Content-Encoding", "gzip")
-	}
-	if etag != "" {
-		h.Set("ETag", etag)
-	}
-	if r.Header.Get("Range") == "" && exemptETagMatches(r.Header.Get("If-None-Match"), etag) {
-		h.Del("Content-Type")
-		h.Del("Content-Length")
-		h.Del("Content-Encoding")
-		w.WriteHeader(http.StatusNotModified)
+		h.Set("Content-Length", strconv.Itoa(len(entry.gz)))
+		w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(entry.gz)
+		}
 		return
 	}
-	h.Set("Content-Length", strconv.Itoa(len(body)))
+
+	f, openErr := fsys.Open(relPath)
+	if openErr != nil {
+		h.Del("ETag")
+		h.Del("Vary")
+		h.Set("Cache-Control", cacheControlNoStore)
+		http.Error(w, "reading embedded asset", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	h.Set("Content-Type", ct)
+	h.Set("Content-Length", strconv.FormatInt(size, 10))
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
-		_, _ = w.Write(body)
+		bufp := copyBufPool.Get().(*[]byte)
+		_, _ = io.CopyBuffer(w, f, *bufp)
+		copyBufPool.Put(bufp)
 	}
 }
 
