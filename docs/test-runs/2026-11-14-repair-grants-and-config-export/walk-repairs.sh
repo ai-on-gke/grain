@@ -27,16 +27,16 @@ name=$1 driver=$2 dsn=${3:-} mode=${4:-github}
 "$here/start.sh" "$name" "$driver" "$dsn"
 T=$(cat "$WT/$name/local-api-token")
 api() { curl -fsS -H "Authorization: Bearer $T" -H 'Content-Type: application/json' "$@"; }
-sim() { curl -fsS -d "$1" http://127.0.0.1:4320/_sim/runs >/dev/null; }
-hook() { python3 "$here/send-webhook.py" 127.0.0.1:4311 s3cret acme/widgets "$@" >/dev/null; }
+sim() { curl -fsS -d "$1" http://127.0.0.1:4230/_sim/runs >/dev/null; }
+hook() { python3 "$here/send-webhook.py" 127.0.0.1:4233 s3cret acme/widgets "$@" >/dev/null; }
 waitlog() { for _ in $(seq 40); do grep -q "$1" "$WT/$name.log" && return 0; sleep 1; done; echo "timed out waiting for: $1"; return 1; }
-grants() { api "http://127.0.0.1:4310/api/tasks/$1" | jq -c '{id,title,capabilities}'; }
+grants() { api "http://127.0.0.1:4232/api/tasks/$1" | jq -c '{id,title,capabilities}'; }
 stop() { for p in $(pgrep -f '^/home/debian/bin/grain daemon' || true); do kill "$p"; done; sleep 3; }
 asrun() { "$here/asrun.sh" "$WT/$name" "$1" "$driver" "$dsn"; }
 
-api -X PUT -d "{\"ciMode\":\"$mode\"}" http://127.0.0.1:4310/api/repos/acme/widgets/ci-mode | jq -c '{repo,ciMode}'
+api -X PUT -d "{\"ciMode\":\"$mode\"}" http://127.0.0.1:4232/api/repos/acme/widgets/ci-mode | jq -c '{repo,ciMode}'
 api -X POST -d '{"title":"Stage 1 (nightly on rc tags)","description":"Qualify a release candidate.","repo":"acme/widgets","base":"main","enabled":true,"capabilities":[],"recurrence":{"kind":"github_workflow_run","githubWorkflowRun":{"workflow":"nightly.yml","branches":["v*-rc.*"]}}}' \
-  http://127.0.0.1:4310/api/schedules | jq -c '{id,title}'
+  http://127.0.0.1:4232/api/schedules | jq -c '{id,title}'
 
 echo "== red Tests push on main (run 9002)"
 sim '{"ID":9002,"Name":"Tests","Path":".github/workflows/tests.yml","HeadBranch":"main","Event":"push","Jobs":[{"Name":"go","Conclusion":"failure","Log":"--- FAIL: TestWidgetCount"},{"Name":"lint","Conclusion":"success","Log":"ok"}]}'

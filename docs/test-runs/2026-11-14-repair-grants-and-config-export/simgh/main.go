@@ -17,9 +17,9 @@
 // daemon's GitHub client reads a simulated acme/widgets (default branch main)
 // and the jobs of the workflow runs a walkthrough adds:
 //
-//	go run ./docs/test-runs/2026-11-14-repair-grants-and-config-export/simgh -addr 127.0.0.1:4320 -dir /tmp/sim
+//	go run ./docs/test-runs/2026-11-14-repair-grants-and-config-export/simgh -addr 127.0.0.1:4230 -dir /tmp/sim
 //	curl -d '{"ID":9001,"Name":"Tests","Path":".github/workflows/tests.yml","HeadBranch":"main","Event":"push",
-//	  "Jobs":[{"Name":"go","Conclusion":"failure","Log":"--- FAIL: TestX"}]}' http://127.0.0.1:4320/_sim/runs
+//	  "Jobs":[{"Name":"go","Conclusion":"failure","Log":"--- FAIL: TestX"}]}' http://127.0.0.1:4230/_sim/runs
 package main
 
 import (
@@ -35,7 +35,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "127.0.0.1:4320", "listen address")
+	addr := flag.String("addr", "127.0.0.1:4230", "listen address")
 	dir := flag.String("dir", "", "scratch directory for the bare repository")
 	owner := flag.String("owner", "acme", "repository owner")
 	name := flag.String("repo", "widgets", "repository name")

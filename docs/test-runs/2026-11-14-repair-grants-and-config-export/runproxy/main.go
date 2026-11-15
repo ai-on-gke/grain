@@ -68,7 +68,7 @@ func main() {
 	if err := os.WriteFile(filepath.Join(*scratch, "secrets", "sandbox-tokens.json"), raw, 0o600); err != nil {
 		log.Fatal(err)
 	}
-	url, _, stop, err := daemon.StartGitProxy(*scratch, store, "127.0.0.1:4320", true, daemon.NewDirect(""), nil)
+	url, _, stop, err := daemon.StartGitProxy(*scratch, store, "127.0.0.1:4230", true, daemon.NewDirect(""), nil)
 	if err != nil {
 		log.Fatal(err)
 	}
