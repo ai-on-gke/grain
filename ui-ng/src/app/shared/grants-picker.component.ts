@@ -135,7 +135,9 @@ export interface GrantAttachEvent {
               class="grant-pill"
               [class.has-policy]="!!pv"
               [attr.aria-pressed]="on"
-              [disabled]="disabled() || (!on && pv?.badge === 'denied by policy')"
+              [disabled]="
+                disabled() || (!on && pv?.badge === 'denied by policy')
+              "
               [attr.title]="pv?.note || null"
               [attr.data-testid]="(testid() || 'gp') + '-cap-' + c.id"
               (click)="onToggle(c.id, !on)"
@@ -197,7 +199,8 @@ export interface GrantAttachEvent {
         >
           @for (n of heldVerdicts(); track n.grant) {
             <li>
-              <code>{{ shortGrant(n.grant) }}</code>: {{ n.verdict.note }}
+              <code>{{ shortGrant(n.grant) }}</code
+              >: {{ n.verdict.note }}
             </li>
           }
         </ul>

@@ -2077,99 +2077,105 @@ const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
           </div>
 
           @if (schedTargetKind() !== "suite") {
-          <div class="field">
-            <span>Model</span>
-            <div class="proc-model-row">
-              <g-model-picker
-                [groups]="modelGroups()"
-                [value]="sDraftModel()"
-                [placeholder]="schedModelPlaceholder()"
-                ariaLabel="Model"
-                testid="sched-model"
-                (valueChange)="sDraftModel.set($event)"
-              />
-              @if (sDraftModel()) {
-                <button
-                  type="button"
-                  class="btn-text"
-                  data-testid="sched-model-clear"
-                  (click)="sDraftModel.set('')"
-                >
-                  Use default
-                </button>
-              }
+            <div class="field">
+              <span>Model</span>
+              <div class="proc-model-row">
+                <g-model-picker
+                  [groups]="modelGroups()"
+                  [value]="sDraftModel()"
+                  [placeholder]="schedModelPlaceholder()"
+                  ariaLabel="Model"
+                  testid="sched-model"
+                  (valueChange)="sDraftModel.set($event)"
+                />
+                @if (sDraftModel()) {
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="sched-model-clear"
+                    (click)="sDraftModel.set('')"
+                  >
+                    Use default
+                  </button>
+                }
+              </div>
+              <p class="muted proc-field-help">
+                The model every task this schedule files asks for.
+              </p>
             </div>
-            <p class="muted proc-field-help">
-              The model every task this schedule files asks for.
-            </p>
-          </div>
           }
           @if (schedTargetKind() === "prompt") {
-          <div class="switch-row" style="margin-top: 14px">
-            <button
-              type="button"
-              role="switch"
-              class="g-switch"
-              aria-label="Keep running"
-              data-testid="sched-keep-running"
-              [attr.aria-checked]="sDraftKeepRunning()"
-              (click)="sDraftKeepRunning.set(!sDraftKeepRunning())"
-            ></button>
-            <span
-              >Keep running
-              <span class="muted"
-                >— restart every task this schedule files when its run exits,
-                instead of completing or parking it</span
-              ></span
-            >
-          </div>
-          <div class="proc-field-grid">
-            <div class="field">
-              <span>Admission</span>
-              <g-pill-select
-                [options]="admissionOptions"
-                [value]="sDraftAdmission()"
-                ariaLabel="Admission"
-                align="left"
-                testid="sched-admission"
-                (valueChange)="sDraftAdmission.set($event)"
-              />
-              <p class="muted proc-field-help" data-testid="sched-admission-help">
-                {{ admissionHelp(sDraftAdmission()) }} Applies to every task this
-                schedule files.
-              </p>
+            <div class="switch-row" style="margin-top: 14px">
+              <button
+                type="button"
+                role="switch"
+                class="g-switch"
+                aria-label="Keep running"
+                data-testid="sched-keep-running"
+                [attr.aria-checked]="sDraftKeepRunning()"
+                (click)="sDraftKeepRunning.set(!sDraftKeepRunning())"
+              ></button>
+              <span
+                >Keep running
+                <span class="muted"
+                  >— restart every task this schedule files when its run exits,
+                  instead of completing or parking it</span
+                ></span
+              >
+            </div>
+            <div class="proc-field-grid">
+              <div class="field">
+                <span>Admission</span>
+                <g-pill-select
+                  [options]="admissionOptions"
+                  [value]="sDraftAdmission()"
+                  ariaLabel="Admission"
+                  align="left"
+                  testid="sched-admission"
+                  (valueChange)="sDraftAdmission.set($event)"
+                />
+                <p
+                  class="muted proc-field-help"
+                  data-testid="sched-admission-help"
+                >
+                  {{ admissionHelp(sDraftAdmission()) }} Applies to every task
+                  this schedule files.
+                </p>
+              </div>
+              <div class="field">
+                <span>Hosting</span>
+                <g-pill-select
+                  [options]="hostingOptions"
+                  [value]="sDraftHosting()"
+                  ariaLabel="Hosting"
+                  align="left"
+                  testid="sched-hosting"
+                  (valueChange)="sDraftHosting.set($event)"
+                />
+                <p
+                  class="muted proc-field-help"
+                  data-testid="sched-hosting-help"
+                >
+                  {{ hostingHelp(sDraftHosting()) }} Applies to every task this
+                  schedule files.
+                </p>
+              </div>
             </div>
             <div class="field">
-              <span>Hosting</span>
-              <g-pill-select
-                [options]="hostingOptions"
-                [value]="sDraftHosting()"
-                ariaLabel="Hosting"
-                align="left"
-                testid="sched-hosting"
-                (valueChange)="sDraftHosting.set($event)"
+              <span>Grants</span>
+              <g-grants-picker
+                testid="sched-grants"
+                [offered]="offeredCapabilities()"
+                [held]="sDraftCaps()"
+                [repo]="sDraftRepo().trim() || undefined"
+                [policyVerdicts]="true"
+                (heldChange)="sDraftCaps.set($event)"
               />
-              <p class="muted proc-field-help" data-testid="sched-hosting-help">
-                {{ hostingHelp(sDraftHosting()) }} Applies to every task this
-                schedule files.
-              </p>
             </div>
-          </div>
-          <div class="field">
-            <span>Grants</span>
-            <g-grants-picker
-              testid="sched-grants"
-              [offered]="offeredCapabilities()"
-              [held]="sDraftCaps()"
-              [repo]="sDraftRepo().trim() || undefined"
-              [policyVerdicts]="true"
-              (heldChange)="sDraftCaps.set($event)"
-            />
-          </div>
           } @else if (schedTargetKind() === "template") {
             <p class="muted proc-field-help" data-testid="sched-template-note">
-              Admission, hosting, grants and keep running come from the
-              selected template, and stay in sync with it.
+              Admission, hosting, grants and keep running come from the selected
+              template, and stay in sync with it.
             </p>
           }
         }

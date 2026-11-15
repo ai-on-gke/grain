@@ -18,7 +18,7 @@ import { RouterTestingHarness } from "@angular/router/testing";
 import { NEVER } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
-import type { GrainConfig, Task } from "../api/models";
+import type { CapabilityMethod, GrainConfig, Task } from "../api/models";
 import { SnackbarService } from "../services/snackbar.service";
 import { ProcessesPageComponent } from "./processes-page.component";
 import type {
@@ -299,6 +299,8 @@ class FakeProcessesApi {
     query?: string;
   }[] = [];
 
+  capabilityMethods: CapabilityMethod[] = [];
+
   config = () => Promise.resolve(this.configBody);
   tasks_ = () => Promise.resolve(this.tasks);
   clearConditionalCache = () => undefined;
@@ -342,6 +344,11 @@ class FakeProcessesApi {
 
   get = (route: string, params?: Record<string, unknown>, query?: string) => {
     this.calls.push({ method: "GET", route, params, query });
+    if (route === "GET /api/capability-methods") {
+      return Promise.resolve({
+        items: structuredClone(this.capabilityMethods),
+      });
+    }
     if (route === "GET /api/deployment/reachable-repos") {
       return Promise.resolve(["acme/widgets"]);
     }
@@ -1359,5 +1366,315 @@ describe("ProcessesPageComponent (D-9)", () => {
       .click();
     await flush(harness);
     expect(root.querySelector('[data-testid^="trigger-row-"]')).not.toBeNull();
+  });
+
+  describe("schedule and template settings (admission, hosting, keep running, grants, model)", () => {
+    function settingsConfig(): void {
+      api.configBody = {
+        ...api.configBody,
+        agentBackends: [
+          {
+            id: "claude-main",
+            name: "Claude",
+            framework: "claude",
+            models: ["claude-opus-5-5", "claude-sonnet-5-5"],
+          },
+        ],
+        capabilities: [
+          { id: "github#read-issues", name: "Read issues" },
+        ] as GrainConfig["capabilities"],
+      };
+    }
+
+    async function pick(
+      harness: RouterTestingHarness,
+      testid: string,
+      value: string,
+    ): Promise<void> {
+      const root = harness.routeNativeElement!;
+      root.querySelector<HTMLElement>(`[data-testid="${testid}"]`)!.click();
+      await flush(harness);
+      root
+        .querySelector<HTMLElement>(`[data-testid="${testid}-opt-${value}"]`)!
+        .click();
+      await flush(harness);
+    }
+
+    async function pickModel(
+      harness: RouterTestingHarness,
+      testid: string,
+      model: string,
+    ): Promise<void> {
+      const root = harness.routeNativeElement!;
+      root.querySelector<HTMLElement>(`[data-testid="${testid}"]`)!.click();
+      await flush(harness);
+      root
+        .querySelector<HTMLElement>(
+          `[data-testid="${testid}-opt"][data-model="${model}"]`,
+        )!
+        .click();
+      await flush(harness);
+    }
+
+    function lastBody(route: string): Record<string, unknown> {
+      const found = api.calls.filter((c) => c.route === route).pop();
+      expect(found, route).toBeTruthy();
+      return found!.body as Record<string, unknown>;
+    }
+
+    function click(root: HTMLElement, testid: string): void {
+      root.querySelector<HTMLElement>(`[data-testid="${testid}"]`)!.click();
+    }
+
+    it("files a new inline schedule with every setting, and previews them all", async () => {
+      settingsConfig();
+      const harness = await RouterTestingHarness.create(
+        "/processes/schedules?new=1",
+      );
+      await flush(harness);
+      const root = harness.routeNativeElement!;
+      const title = root.querySelector<HTMLInputElement>(
+        '[data-testid="sched-title-input"]',
+      )!;
+      title.value = "Nightly audit";
+      title.dispatchEvent(new Event("input"));
+      await flush(harness);
+
+      await pickModel(harness, "sched-model", "claude-sonnet-5-5");
+      click(root, "sched-keep-running");
+      await pick(harness, "sched-admission", "durable");
+      expect(
+        root.querySelector('[data-testid="sched-admission-help"]')!.textContent,
+      ).toContain("no wall-clock deadline");
+      await pick(harness, "sched-hosting", "console");
+      click(root, "sched-grants-cap-github#read-issues");
+      await flush(harness);
+
+      click(root, "sched-preview-composition-btn");
+      await flush(harness);
+      expect(lastBody("POST /api/schedules/composition")).toMatchObject({
+        model: "claude-sonnet-5-5",
+        admission: "durable",
+        hosting: "console",
+        keepRunning: true,
+        capabilities: ["github#read-issues"],
+      });
+
+      click(root, "sched-save-btn");
+      await flush(harness);
+      expect(lastBody("POST /api/schedules")).toMatchObject({
+        title: "Nightly audit",
+        model: "claude-sonnet-5-5",
+        admission: "durable",
+        hosting: "console",
+        keepRunning: true,
+        capabilities: ["github#read-issues"],
+      });
+    });
+
+    it("leaves a default admission and hosting off a new schedule, and asks the template for the rest", async () => {
+      settingsConfig();
+      const harness = await RouterTestingHarness.create(
+        "/processes/schedules?new=1",
+      );
+      await flush(harness);
+      const root = harness.routeNativeElement!;
+      const title = root.querySelector<HTMLInputElement>(
+        '[data-testid="sched-title-input"]',
+      )!;
+      title.value = "Plain";
+      title.dispatchEvent(new Event("input"));
+      await flush(harness);
+      click(root, "sched-save-btn");
+      await flush(harness);
+      const body = lastBody("POST /api/schedules");
+      expect(body).not.toHaveProperty("admission");
+      expect(body).not.toHaveProperty("hosting");
+      expect(body).not.toHaveProperty("model");
+      expect(body["keepRunning"]).toBe(false);
+      expect(body["capabilities"]).toEqual([]);
+
+      // A template-backed schedule edits only its model; the template
+      // decides admission, hosting, grants and keep running.
+      await harness.navigateByUrl("/processes/schedules?new=1");
+      await flush(harness);
+      const r2 = harness.routeNativeElement!;
+      click(r2, "sched-target-template");
+      await flush(harness);
+      expect(r2.querySelector('[data-testid="sched-model"]')).not.toBeNull();
+      expect(r2.querySelector('[data-testid="sched-admission"]')).toBeNull();
+      expect(r2.querySelector('[data-testid="sched-grants"]')).toBeNull();
+      expect(
+        r2.querySelector('[data-testid="sched-template-note"]'),
+      ).not.toBeNull();
+    });
+
+    it("PATCHes a schedule's settings only when they changed", async () => {
+      settingsConfig();
+      Object.assign(api.schedules[1], {
+        model: "claude-opus-5-5",
+        admission: "bypass",
+        hosting: "console",
+        keepRunning: true,
+        capabilities: ["github#read-issues"],
+      });
+      const harness = await RouterTestingHarness.create("/processes/schedules");
+      await flush(harness);
+      const root = harness.routeNativeElement!;
+      click(root, "sched-row-sched-gitref");
+      await flush(harness);
+      click(root, "sched-edit-btn");
+      await flush(harness);
+
+      // Seeded from the saved row.
+      expect(
+        root.querySelector('[data-testid="sched-admission"]')!.textContent,
+      ).toContain("Bypass queue");
+      expect(
+        root.querySelector('[data-testid="sched-hosting"]')!.textContent,
+      ).toContain("Interactive console");
+      expect(
+        root
+          .querySelector('[data-testid="sched-keep-running"]')!
+          .getAttribute("aria-checked"),
+      ).toBe("true");
+      expect(
+        root.querySelector('[data-testid="sched-model"]')!.textContent,
+      ).toContain("claude-opus-5-5");
+
+      // The preview carries what is in force even though nothing changed.
+      click(root, "sched-preview-composition-btn");
+      await flush(harness);
+      expect(lastBody("POST /api/schedules/composition")).toMatchObject({
+        model: "claude-opus-5-5",
+        admission: "bypass",
+        hosting: "console",
+      });
+
+      click(root, "sched-save-btn");
+      await flush(harness);
+      const unchanged = lastBody("PATCH /api/schedules/{id}");
+      for (const k of [
+        "model",
+        "admission",
+        "hosting",
+        "keepRunning",
+        "capabilities",
+      ]) {
+        expect(unchanged, k).not.toHaveProperty(k);
+      }
+
+      click(root, "sched-edit-btn");
+      await flush(harness);
+      await pick(harness, "sched-admission", "standard");
+      click(root, "sched-model-clear");
+      await flush(harness);
+      click(root, "sched-grants-cap-github#read-issues");
+      await flush(harness);
+      click(root, "sched-save-btn");
+      await flush(harness);
+      const changed = lastBody("PATCH /api/schedules/{id}");
+      expect(changed).toMatchObject({
+        admission: "standard",
+        model: "",
+        capabilities: [],
+      });
+      expect(changed).not.toHaveProperty("hosting");
+      expect(changed).not.toHaveProperty("keepRunning");
+    });
+
+    it("flags a held grant the capability policy denies this schedule's repository", async () => {
+      settingsConfig();
+      api.schedules[1].capabilities = ["github#read-issues"];
+      api.capabilityMethods = [
+        {
+          ref: "github#read-issues",
+          capability: "github",
+          method: "read-issues",
+          policyRefusal:
+            "the capability policy denies github#read-issues to acme/widgets",
+        },
+      ];
+      const harness = await RouterTestingHarness.create("/processes/schedules");
+      await flush(harness);
+      const root = harness.routeNativeElement!;
+      click(root, "sched-row-sched-gitref");
+      await flush(harness);
+      click(root, "sched-edit-btn");
+      await flush(harness);
+      await new Promise((r) => setTimeout(r, 300));
+      await flush(harness);
+
+      const listing = api.calls.find(
+        (c) => c.route === "GET /api/capability-methods",
+      );
+      expect(listing?.query).toBe("kind=task&repo=acme%2Fwidgets");
+      expect(
+        root.querySelector(
+          '[data-testid="sched-grants-policy-github#read-issues"]',
+        )!.textContent,
+      ).toContain("denied by policy");
+      expect(
+        root.querySelector('[data-testid="sched-grants-policy-notes"]')!
+          .textContent,
+      ).toContain("denies github#read-issues to acme/widgets");
+    });
+
+    it("round-trips a template's settings through create and a change-only PATCH", async () => {
+      settingsConfig();
+      Object.assign(api.templates[1], {
+        model: "claude-opus-5-5",
+        admission: "bypass",
+        keepRunning: false,
+      });
+      const harness = await RouterTestingHarness.create("/processes/templates");
+      await flush(harness);
+      const root = harness.routeNativeElement!;
+      click(root, "tmpl-row-tmpl-deploy-1");
+      await flush(harness);
+      click(root, "tmpl-edit-btn");
+      await flush(harness);
+      expect(
+        root.querySelector('[data-testid="tmpl-admission"]')!.textContent,
+      ).toContain("Bypass queue");
+      await pick(harness, "tmpl-hosting", "console");
+      click(root, "tmpl-save-btn");
+      await flush(harness);
+      const patch = lastBody("PATCH /api/templates/{id}");
+      expect(patch["hosting"]).toBe("console");
+      for (const k of ["model", "admission", "keepRunning", "capabilities"]) {
+        expect(patch, k).not.toHaveProperty(k);
+      }
+
+      await harness.navigateByUrl("/processes/templates?new=template");
+      await flush(harness);
+      const r2 = harness.routeNativeElement!;
+      const setText = (testid: string, v: string) => {
+        const el = r2.querySelector<HTMLInputElement>(
+          `[data-testid="${testid}"]`,
+        )!;
+        el.value = v;
+        el.dispatchEvent(new Event("input"));
+      };
+      setText("tmpl-name-input", "Weekly cleanup");
+      setText("tmpl-title-input", "chore: weekly cleanup");
+      await flush(harness);
+      await pickModel(harness, "tmpl-model", "claude-sonnet-5-5");
+      await pick(harness, "tmpl-admission", "durable");
+      click(r2, "tmpl-keep-running");
+      click(r2, "tmpl-grants-cap-github#read-issues");
+      await flush(harness);
+      click(r2, "tmpl-save-btn");
+      await flush(harness);
+      const created = lastBody("POST /api/templates");
+      expect(created).toMatchObject({
+        name: "Weekly cleanup",
+        model: "claude-sonnet-5-5",
+        admission: "durable",
+        keepRunning: true,
+        capabilities: ["github#read-issues"],
+      });
+      expect(created).not.toHaveProperty("hosting");
+    });
   });
 });
