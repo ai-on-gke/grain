@@ -338,17 +338,33 @@ test("No git connection: New task and Repos say so and link to Settings → Git"
     d.hasGitCredential = false;
     return d;
   };
+  // A request still in flight when the page navigates away (Repos to the
+  // Inbox below) has its response disposed under the handler. That one no
+  // longer matters to anything on screen, so it is dropped rather than
+  // failing the test; every other error still does.
+  const gone = (err) =>
+    /disposed|closed|Target page, context or browser has been closed/.test(
+      String(err?.message ?? err),
+    );
+  const rewrite = (edit) => async (route) => {
+    try {
+      const res = await route.fetch();
+      await route.fulfill({ response: res, json: edit(await res.json()) });
+    } catch (err) {
+      if (!gone(err)) throw err;
+    }
+  };
   await page.route("**/api/deployment", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
-    const res = await route.fetch();
-    await route.fulfill({ response: res, json: strip(await res.json()) });
+    return rewrite(strip)(route);
   });
-  await page.route("**/api/config", async (route) => {
-    const res = await route.fetch();
-    const cfg = await res.json();
-    strip(cfg.deployment);
-    await route.fulfill({ response: res, json: cfg });
-  });
+  await page.route(
+    "**/api/config",
+    rewrite((cfg) => {
+      strip(cfg.deployment);
+      return cfg;
+    }),
+  );
 
   await page.goto("/next/settings/repositories");
   const notice = page.getByTestId("no-git-connection");
