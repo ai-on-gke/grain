@@ -319,7 +319,7 @@ it rather than copy it.
 | Task detail | `task/task-detail.component.ts` | the one task view, full page and in panes |
 | Split controller | `shared/split-controller.ts` | list|detail sizing and persistence |
 | Confirm dialog | `shared/confirm-dialog.component.ts` | wide or destructive actions, with scope |
-| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links |
+| Markdown | `shared/code-highlight.ts` (`[gMarkdown]`) | agent output: sanitised, code copy, links, Mermaid diagrams (`shared/mermaid.ts`) |
 | Diff viewer | `shared/diff-viewer.component.ts` | line-numbered, word-level, syntax coloured |
 | Tooltip | `shared/tip.directive.ts` (`gTip`) | every icon button and every non-obvious control |
 | Director drawer | `director/director-drawer.component.ts` | global coplanar (`>= 1080px`) or dialog overlay (`< 1080px`) Director panel |
@@ -345,6 +345,16 @@ Rules:
   blocked, `role="alert"`), above the content. Use the server's `detail`
   sentence rather than rewording it, and link the task that holds the
   finding where there is one (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+- **A Mermaid fence is a diagram, not code.** `[gMarkdown]` draws
+  ```` ```mermaid ```` fences in the active theme with a Diagram / Source
+  toggle, and pairs Before / After fences (named in the info string or by
+  matching headings) into one block with Side by side / Before / After /
+  Stacked / Source (Before alone on a phone). `mermaid` is imported only
+  when a message holds a diagram, and its SVG passes `sanitizeMermaidSvg`
+  before it reaches the DOM. A diagram never shrinks below 75% of its
+  natural size; on a phone a wide one scrolls inside its canvas, which
+  takes keyboard focus. A source that does not parse says why and shows
+  the source (`ui-ng/e2e/next-mermaid-diagrams.spec.ts`).
 - **Say a wire code in words.** A reason or state code from the API
   (`publishingHeld`, `standingWork`) is mapped to words before it is shown.
   A code nobody has mapped yet shows as itself, which beats showing nothing.

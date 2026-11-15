@@ -177,9 +177,9 @@ function pane(source: string, pane: string, label: string): string {
       ? ""
       : `<span class="mermaid-state-tag mermaid-state-${pane}">${esc(label)}</span>`;
   return (
-    `<div class="mermaid-pane" data-mermaid-pane="${pane}">` +
+    `<div class="mermaid-pane" data-mermaid-pane="${pane}"${pane === "only" ? "" : ` role="group" aria-label="${esc(label)}"`}>` +
     tag +
-    `<div class="mermaid-canvas" data-mermaid-canvas="1">` +
+    `<div class="mermaid-canvas" data-mermaid-canvas="1" role="group" aria-label="${esc(label)} diagram">` +
     `<span class="mermaid-note" role="status">Rendering diagram…</span>` +
     `</div>` +
     `<pre class="mermaid-source" aria-label="${esc(label)} source"><code class="language-mermaid">${esc(source.replace(/\n$/, ""))}</code></pre>` +
@@ -526,15 +526,21 @@ export function sanitizeMermaidSvg(
     if (/@import|url\s*\(\s*['"]?\s*(?!#)/i.test(css)) style.remove();
   }
 
-  // Scale down to the pane rather than overflow it.
+  // Scale down to the pane rather than overflow it, but not below three
+  // quarters of natural size: past that labels stop being legible, so a
+  // wide diagram on a phone scrolls inside its canvas instead.
   svg.removeAttribute("height");
-  const existing = svg.getAttribute("style") || "";
-  if (!/max-width/i.test(existing)) {
-    svg.setAttribute(
-      "style",
-      `${existing ? `${existing}; ` : ""}max-width: 100%; height: auto;`,
-    );
+  let style = svg.getAttribute("style") || "";
+  if (!/max-width/i.test(style)) {
+    style = `${style ? `${style}; ` : ""}max-width: 100%; height: auto;`;
   }
+  const natural = Number(
+    (svg.getAttribute("viewBox") || "").trim().split(/[\s,]+/)[2],
+  );
+  if (natural > 0 && !/min-width/i.test(style)) {
+    style = `${style}; min-width: ${Math.round(natural * 0.75)}px;`;
+  }
+  svg.setAttribute("style", style.replace(/;\s*;/g, ";"));
   return svg.outerHTML;
 }
 
@@ -685,6 +691,8 @@ function renderPane(pane: HTMLElement, mode: MermaidMode, doc: Document) {
     if (!canvas.isConnected || canvas.dataset["mode"] !== mode) return;
     // Safe: svg came out of Mermaid's strict mode and sanitizeMermaidSvg.
     canvas.innerHTML = svg;
+    // A diagram wider than a phone scrolls; keyboards must reach it too.
+    canvas.tabIndex = 0;
     pane.classList.remove("is-error");
   };
   const cached = cachedMermaidSvg(mode, source);
@@ -703,6 +711,7 @@ function renderPane(pane: HTMLElement, mode: MermaidMode, doc: Document) {
     note.setAttribute("role", "status");
     note.textContent = `Diagram could not be rendered (${why}). Showing the Mermaid source.`;
     canvas.replaceChildren(note);
+    canvas.removeAttribute("tabindex");
     pane.classList.add("is-error");
   });
 }

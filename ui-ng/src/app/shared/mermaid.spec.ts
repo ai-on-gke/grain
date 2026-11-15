@@ -170,6 +170,16 @@ describe("sanitizeMermaidSvg", () => {
     expect(host.querySelector("use")?.getAttribute("href")).toBe("#arrowhead");
   });
 
+  it("keeps a diagram legible rather than shrinking it to fit", () => {
+    const host = document.createElement("div");
+    host.innerHTML = sanitizeMermaidSvg(
+      '<svg viewBox="0 0 800 100" style="max-width: 800px;"></svg>',
+    );
+    const style = host.querySelector("svg")!.getAttribute("style")!;
+    expect(style).toContain("max-width: 800px");
+    expect(style).toContain("min-width: 600px");
+  });
+
   it("refuses output that is not an SVG", () => {
     expect(() => sanitizeMermaidSvg("<p>nope</p>")).toThrow(/SVG/);
   });
