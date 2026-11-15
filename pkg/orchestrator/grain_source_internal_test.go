@@ -30,7 +30,7 @@ import (
 var selfDebugTask = model.Task{
 	ID:     "task-selfdebug",
 	Target: &model.RepoRef{Owner: "acme", Name: "proj"},
-	Grants: []model.Grant{{Capability: model.SelfDebugCapability}},
+	Grants: []model.Grant{{Capability: model.GrainSourceGrant}},
 }
 
 // bakeSource stages a baked copy the way the image build does: a small

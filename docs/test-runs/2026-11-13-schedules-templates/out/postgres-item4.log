@@ -1,0 +1,75 @@
+=== schema 139 daemon (postgres)
+environment up (postgres): http://127.0.0.1:4273 (token in /var/tmp/walk-sched-upgrade-postgres/data/local-api-token)
+--- own after the 139 build fired it
+               id               | admission | hosting 
+--------------------------------+-----------+---------
+ repo:schedule:acme:widgets:own | durable   | 
+(1 row)
+
+          schedule_id           |                capability                 |             via              
+--------------------------------+-------------------------------------------+------------------------------
+ repo:schedule:acme:widgets:own | https://grain.dev/capabilities/api#memory | .grain/templates/nightly.yml
+(1 row)
+
+--- seed the rest in SQL
+               id                |            template_id             | admission | hosting 
+---------------------------------+------------------------------------+-----------+---------
+ repo:schedule:acme:widgets:big  | repo:template:acme:widgets:big     | durable   | 
+ repo:schedule:acme:widgets:free | repo:template:acme:widgets:plain   | bypass    | console
+ repo:schedule:acme:widgets:held | repo:template:acme:widgets:plain   |           | 
+ repo:schedule:acme:widgets:own  | repo:template:acme:widgets:nightly | durable   | 
+(4 rows)
+
+           schedule_id           |                capability                 |             via              
+---------------------------------+-------------------------------------------+------------------------------
+ repo:schedule:acme:widgets:free | https://grain.dev/capabilities/api#memory | operator
+ repo:schedule:acme:widgets:own  | https://grain.dev/capabilities/api#memory | .grain/templates/nightly.yml
+(2 rows)
+
+=== upgrade in place to HEAD
+daemon restarted: http://127.0.0.1:4273
+2026/11/13 04:24:50 grain: migrated the store in place from schema 139 to 146
+               id                |            template_id             | admission | hosting | skip_when 
+---------------------------------+------------------------------------+-----------+---------+-----------
+ repo:schedule:acme:widgets:big  | repo:template:acme:widgets:big     | durable   |         | 
+ repo:schedule:acme:widgets:free | repo:template:acme:widgets:plain   | bypass    | console | 
+ repo:schedule:acme:widgets:held | repo:template:acme:widgets:plain   |           |         | 
+ repo:schedule:acme:widgets:own  | repo:template:acme:widgets:nightly |           |         | 
+(4 rows)
+
+           schedule_id           |                capability                 |   via    
+---------------------------------+-------------------------------------------+----------
+ repo:schedule:acme:widgets:free | https://grain.dev/capabilities/api#memory | operator
+(1 row)
+
+                 id                 | sandbox 
+------------------------------------+---------
+ repo:template:acme:widgets:big     | 
+ repo:template:acme:widgets:nightly | 
+ repo:template:acme:widgets:plain   | 
+(3 rows)
+
+=== migration 144 forgot each repository's last-read commit: the next sync (within the 2-minute poll) re-reads
+ owner |  name   | commit | last_error 
+-------+---------+--------+------------
+ acme  | widgets |        | 
+(1 row)
+
+own's declared grant back after 101s
+          schedule_id           |                 capability                 |           via            
+--------------------------------+--------------------------------------------+--------------------------
+ repo:schedule:acme:widgets:own | https://grain.dev/capabilities/api#ci-read | .grain/schedules/own.yml
+(1 row)
+
+=== own fires on HEAD: template's durable + api#memory, plus its own api#ci-read
+ id | admission |  hosting   
+----+-----------+------------
+ 3  | durable   | unattended
+(1 row)
+
+                 capability                 |             via              
+--------------------------------------------+------------------------------
+ https://grain.dev/capabilities/api#ci-read | .grain/schedules/own.yml
+ https://grain.dev/capabilities/api#memory  | .grain/templates/nightly.yml
+(2 rows)
+

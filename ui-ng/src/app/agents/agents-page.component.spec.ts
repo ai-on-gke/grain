@@ -21,6 +21,7 @@ import { Component, input } from "@angular/core";
 class MockTaskDetailComponent {
   readonly id = input<string>();
   readonly pane = input<boolean>();
+  readonly tab = input<string>();
 }
 
 import { TaskDetailComponent } from "../task/task-detail.component";
@@ -857,6 +858,49 @@ describe("AgentsPageComponent selection and inspector", () => {
     }
   });
 
+  it("selects the card whose CPU reading has focus on Enter, rather than opening the previously selected task", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    f.componentRef.setInput("task", "123");
+    f.detectChanges();
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    const cpu = q(f, '[data-testid="agent-456"] [data-testid="agent-cpu"]')!;
+    expect(cpu.getAttribute("tabindex")).toBe("0");
+    for (const key of ["Enter", " "]) {
+      cpu.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+    }
+    expect(nav).toHaveBeenCalledTimes(2);
+    for (const call of nav.mock.calls) {
+      expect(call[0]).toEqual([]);
+      expect(call[1]).toEqual(
+        expect.objectContaining({ queryParams: { task: "456" } }),
+      );
+    }
+  });
+
+  it("leaves Enter on a link inside a card to the link", async () => {
+    const api = new FakeApi();
+    api.live = two();
+    const f = await render(api);
+    f.componentRef.setInput("task", "123");
+    f.detectChanges();
+    const router = TestBed.inject(Router);
+    const nav = vi.spyOn(router, "navigate").mockResolvedValue(true);
+    const link = q(f, '[data-testid="agent-456"] .agent-title a')!;
+    const ev = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    link.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+    expect(nav).not.toHaveBeenCalled();
+  });
+
   it("selects and marks list rows like cards", async () => {
     const api = new FakeApi();
     api.live = two();
@@ -1012,5 +1056,14 @@ describe("AgentsPageComponent CPU", () => {
     expect(
       q(f, '[data-testid="agent-1"] [data-testid="quiet-line"]')!.textContent,
     ).toContain("CPU busy, probably building or testing");
+  });
+
+  it("forwards ?pane= to the embedded g-task-detail [tab] input", async () => {
+    const api = new FakeApi();
+    api.live = [run("123")];
+    const { harness } = await renderRouted(api, "/agents?task=123&pane=runs");
+    const el = harness.routeNativeElement as HTMLElement;
+    const current = el.querySelector("g-task-detail .task-tabs [aria-current]");
+    expect(current?.getAttribute("data-testid")).toBe("task-tab-runs");
   });
 });

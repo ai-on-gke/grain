@@ -46,12 +46,58 @@ export interface AgentBackendOption {
   team?: string;
 }
 
+export interface AgentPauseEntry {
+  connection?: string;
+  connectionName?: string;
+  model?: string;
+  labels?: string[];
+  escalated?: string;
+  team?: string;
+  framework?: string;
+  until?: string;
+  reason?: string;
+  secondsRemaining?: number;
+  canLift?: boolean;
+}
+
+export interface AgentPauseStatus {
+  paused: boolean;
+  until?: string;
+  reason?: string;
+  secondsRemaining?: number;
+  pauses?: AgentPauseEntry[];
+}
+
+export interface PipelinePauseStatus {
+  paused: boolean;
+  since?: string;
+  reason?: string;
+  byKind?: string;
+  byId?: string;
+  bySource?: string;
+  byLabel?: string;
+  untilTask?: string;
+  runNowPasses?: boolean;
+  cancelledUpgrade?: string;
+}
+
+export interface DispatchCondition {
+  name?: string;
+  error?: string;
+  since?: string;
+  remedy?: string;
+  held?: boolean | string;
+  check?: boolean | string;
+}
+
 export interface GrainConfig {
   access?: AccessInfo | null;
   viewerOwner?: string;
   actor?: string;
   // The build stamp (api/version.ts); a string on older servers.
   version?: string | Record<string, unknown>;
+  configRepo?: string;
+  gitCredentialsConfigured?: boolean;
   stateRepoSyncFailure?: unknown;
   capabilities?: CapabilityOption[];
   defaultCapabilities?: string[];
@@ -61,6 +107,12 @@ export interface GrainConfig {
   models?: string[];
   defaultModel?: string;
   customFields?: CustomFieldDeclaration[];
+  agentPause?: AgentPauseStatus | null;
+  pipelinePause?: PipelinePauseStatus | null;
+  dispatchBlocked?: DispatchCondition[] | null;
+  reconcilerDown?: boolean;
+  timeZone?: string;
+  deployment?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -90,6 +142,39 @@ export interface HumanReviewView {
   reviewTask?: string;
   run?: string;
   at?: string;
+}
+
+// ApprovalView is one rule a change waits on a named approver's Submit
+// for (pkg/ui/approvals.go): a sensitive trigger with `human: required`,
+// or grain's own guard over the repository's triggers.
+export interface ApprovalView {
+  rule: string;
+  source?: string;
+  approvers?: string[];
+  approvedBy?: string;
+}
+
+// PolicyRequirement is one line of a change's effective merge policy
+// and the rules that caused it (model.PolicyRequirement).
+export interface PolicyRequirement {
+  Field: string;
+  Value: string;
+  From?: string[];
+}
+
+// EffectiveMergePolicy is what the repository's merge rules
+// (.grain/merge-rules.yml) require of a change's head
+// (model.EffectiveMergePolicy); its fields keep their Go names.
+export interface EffectiveMergePolicy {
+  Head?: string;
+  Rules?: string;
+  Mode?: string;
+  GrainJobs?: string[];
+  GrainFullSuite?: boolean;
+  GitHubChecks?: string[];
+  GitHubAllChecks?: boolean;
+  Matched?: string[];
+  Requirements?: PolicyRequirement[];
 }
 
 export interface TaskPaused {
@@ -125,11 +210,26 @@ export interface GoalDecl {
   max_stall?: string;
 }
 
-export interface TaskGoalView extends GoalDecl {
+// TaskGoalView is a task's goal as GET /api/tasks/{id} returns it: the
+// task_goal row (model.TaskGoal), whose fields are camelCase -- unlike
+// GoalDecl, the snake_case body PUT /api/tasks/{id}/goal takes.
+export interface TaskGoalView {
+  taskId?: string;
+  kind: string;
+  spec: GoalSpec;
+  onMet?: string;
+  onLimit?: string;
+  declaredBy?: string;
+  declaredAt?: string;
   metAt?: string;
-  limitNotifiedAt?: string;
-  resumesWithoutProgress?: number;
+  evidence?: string;
   outcome?: string;
+  progressAt?: string;
+  resumesSinceProgress?: number;
+  maxResumes?: number;
+  // A Go time.Duration: nanoseconds.
+  maxStall?: number;
+  limitNotifiedAt?: string;
   [key: string]: unknown;
 }
 
@@ -149,6 +249,16 @@ export interface Task {
   reviewFindings?: unknown[];
   humanApprovedBy?: string;
   humanReviewHold?: HumanReviewView[];
+  // Holds the repository's own rules put on the change (pkg/ui/tasks.go):
+  // the strictest `human` setting of the gating triggers holding it and
+  // the review each filed ("<trigger>=<task>"), a security hold, the
+  // approvals it still owes, and what its merge rules require.
+  pathTriggerHold?: string;
+  pathTriggerTasks?: string[];
+  securityHold?: string;
+  approvals?: ApprovalView[];
+  repoRules?: string;
+  mergePolicy?: EffectiveMergePolicy;
   autoMerge?: boolean;
   pullRequest?: PullRequestRef | string | null;
   prClosedAt?: string;
@@ -249,7 +359,13 @@ export interface Task {
     canMail?: boolean;
     [key: string]: unknown;
   };
-  clSubmit?: { canSync?: boolean; [key: string]: unknown };
+  clSubmit?: {
+    canSubmit?: boolean;
+    canSync?: boolean;
+    reasons?: string[];
+    target?: string;
+    [key: string]: unknown;
+  };
   derivedFrom?: string[];
   designs?: string[];
   // Open dependencies and the state of each (GET /api/tasks).
@@ -260,6 +376,10 @@ export interface Task {
   // Why the task is where it is (orchestrator liveness reason), e.g.
   // {reason: "awaiting_reply/stopped", class: "awaiting a person"}.
   reason?: { reason: string; class?: string; control?: string };
+  // The merge queue's own sub-case for this task's pull request, when it
+  // is on the queue; its control (Retry merge on merge_failed) stands in
+  // when the task's own sub-case names none.
+  mergeQueueReason?: { reason: string; class?: string; control?: string };
 }
 
 export type MergeGateState =
@@ -594,6 +714,11 @@ export interface ConsoleSessionList {
 export interface Notification {
   id: number;
   subject: string;
+  title?: string;
+  taskId?: string;
+  lastRaisedAt?: string;
+  ackedBy?: string;
+  clearsWhen?: { kind?: string; task?: string };
   family?: string;
   severity?: string;
   body?: string;

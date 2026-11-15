@@ -175,16 +175,30 @@ class FakeApi {
   };
   calls: Call[] = [];
   transcripts: string[] = [];
+  remoteBranches: string[] | null = null;
 
   getIfChanged = () =>
     Promise.resolve({ body: structuredClone(this.detail), changed: true });
-  diffPreview = () => Promise.resolve(structuredClone(this.preview));
+  diffPreview = () => {
+    this.calls.push({
+      method: "GET",
+      route: "GET /api/tasks/{id}/diff-preview",
+      params: { id: this.detail.id },
+    });
+    return Promise.resolve(structuredClone(this.preview));
+  };
   get = (
     route: string,
     params?: { id?: string; number?: string; owner?: string; name?: string },
     query?: string,
   ) => {
     this.calls.push({ method: "GET", route, params, query });
+    if (route === "GET /api/repos/{owner}/{name}/github-branches") {
+      return Promise.resolve({ branches: this.remoteBranches ?? undefined });
+    }
+    if (route === "GET /api/repos/{owner}/{name}/branches") {
+      return Promise.resolve({ branches: this.remoteBranches ?? undefined });
+    }
     if (route === "GET /api/tasks/{id}/tree") return Promise.resolve(this.tree);
     if (
       route === "GET /api/tasks/{id}" &&
@@ -230,9 +244,11 @@ class FakeApi {
   patch = (r: string, p?: unknown, b?: unknown) => this.rec("PATCH", r, p, b);
   put = (r: string, p?: unknown, b?: unknown) => this.rec("PUT", r, p, b);
   delete = (r: string, p?: unknown) => this.rec("DELETE", r, p);
+  timeZone?: string;
   config = () =>
     Promise.resolve({
       access: null,
+      timeZone: this.timeZone,
       models: ["fast", "smart"],
       defaultModel: "smart",
       capabilities: [{ id: "self-debug", name: "Self debug", ready: true }],
@@ -315,6 +331,27 @@ describe("TaskPageComponent", () => {
     expect(root.querySelectorAll("select")).toHaveLength(0);
     expect(root.querySelector('a[href="/tasks/7"]')).toBeNull();
     expect(root.textContent).not.toContain("classic task page");
+  });
+
+  // Rollover (durable-tasks.design.md#DT-15): the predecessor banners its
+  // successor, and the successor links back.
+  it("banners a rollover on both ends", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, state: "closed", rolledOverTo: "902" };
+    let f = await render(api);
+    const to = q(f, '[data-testid="task-rolled-over-to"]')!;
+    expect(to.textContent).toContain("Rolled over to #902");
+    expect(to.querySelector("a")!.getAttribute("href")).toBe("/task/902");
+    expect(q(f, '[data-testid="task-rolled-over-from"]')).toBeNull();
+    TestBed.inject(TaskStore).close();
+    TestBed.resetTestingModule();
+
+    const next = new FakeApi();
+    next.detail = { ...next.detail, rolledOverFrom: "901" };
+    f = await render(next);
+    const from = q(f, '[data-testid="task-rolled-over-from"]')!;
+    expect(from.querySelector("a")!.getAttribute("href")).toBe("/task/901");
+    expect(q(f, '[data-testid="task-rolled-over-to"]')).toBeNull();
   });
 
   it("sends a reply with Ctrl+Enter and uploads composer attachments", async () => {
@@ -713,6 +750,298 @@ describe("TaskPageComponent", () => {
     } as never);
     await settle(f);
     expect(q(f, '[data-testid="act-reply"]')).toBeNull();
+  });
+
+  it("offers no Release hold on review findings alone, but the gate override", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        {
+          source: "security-findings",
+          category: "security",
+          reason: "the review left findings",
+        },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+    const note = q(f, '[data-testid="hold-findings-note"]')!;
+    expect(note.textContent).toContain("cannot be released directly");
+    expect(note.textContent).toContain("merge:force");
+    expect(note.textContent).not.toContain("other reasons");
+
+    q<HTMLButtonElement>(f, '[data-testid="hold-force-merge-open"]')!.click();
+    await f.whenStable();
+    expect(q(f, '[data-testid="force-merge-dialog"]')).toBeTruthy();
+    expect(q(f, '[data-testid="override-gate-security-review"]')).toBeTruthy();
+    q<HTMLButtonElement>(f, '[data-testid="force-merge-cancel"]')!.click();
+    await f.whenStable();
+    expect(q(f, '[data-testid="force-merge-dialog"]')).toBeNull();
+  });
+
+  it("keeps Release hold for a hold of findings and other reasons", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+        { source: "requested", category: "other", reason: "intent unclear" },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeTruthy();
+    expect(q(f, '[data-testid="hold-findings-note"]')!.textContent).toContain(
+      "other reasons only",
+    );
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeTruthy();
+  });
+
+  it("offers no override once the review gate is overridden, even while code review runs, and says so", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: [
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "overridden",
+        },
+        {
+          id: "review",
+          label: "Code review",
+          state: "running",
+        },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+    expect(q(f, '[data-testid="hold-findings-note"]')!.textContent).toContain(
+      "has been overridden",
+    );
+  });
+
+  it("does not claim the review gate was overridden when mergeGates is absent", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      pullRequest: undefined,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: undefined,
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+    const note = q(f, '[data-testid="hold-findings-note"]')!.textContent!;
+    expect(note).toContain("cannot be released directly");
+    expect(note).not.toContain("has been overridden");
+  });
+
+  it("hides the gate override from a limited role even when it holds merge:force on the repo", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeTruthy();
+
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        full: false,
+        role: "widgets-force-merger",
+        scopes: ["tasks:read", "tasks:write", "merge:force"],
+        repoLimits: { "merge:force": ["acme/web"] },
+      },
+    } as never);
+    await settle(f);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+  });
+
+  it("shows no hold card on a closed task", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "closed",
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="human-review-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+  });
+
+  it("shows a path-trigger hold with its review task, approvals, security hold and merge rules", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      autoMerge: false,
+      pathTriggerHold: "required",
+      pathTriggerTasks: ["payments=28"],
+      approvals: [
+        {
+          rule: "trigger:payments",
+          source: "repository trigger",
+          approvers: ["ana", "ben"],
+        },
+      ],
+      repoRules: "rules@0f1e2d3c",
+      securityHold: "pkg/access",
+      securityReviewTask: "29",
+      mergePolicy: {
+        Head: "abcdef0123456789",
+        Mode: "grain",
+        GrainJobs: ["unit"],
+        Matched: ["payments-strict"],
+        Requirements: [
+          { Field: "auto_merge", Value: "never", From: ["payments-strict"] },
+          { Field: "ci.mode", Value: "grain", From: ["defaults"] },
+        ],
+      },
+    };
+    const f = await render(api);
+    const hold = q(f, '[data-testid="path-trigger-hold"]')!;
+    expect(hold.textContent).toContain(
+      "Held by this repository's gating triggers",
+    );
+    expect(hold.textContent).toContain("human: required");
+    expect(hold.textContent).toContain(".grain/triggers/payments.yml");
+    const link = q<HTMLAnchorElement>(
+      f,
+      '[data-testid="path-trigger-review-link"]',
+    )!;
+    expect(link.textContent).toContain("Review task #28");
+    expect(link.getAttribute("href")).toBe("/task/28");
+    expect(q(f, '[data-testid="approval-rule"]')!.textContent).toContain(
+      "Waiting for ana or ben",
+    );
+    expect(hold.textContent).toContain("rules@0f1e2d3c");
+
+    const sec = q(f, '[data-testid="security-hold"]')!;
+    expect(sec.textContent).toContain("Security hold: pkg/access");
+    expect(
+      q(f, '[data-testid="security-review-link"]')!.getAttribute("href"),
+    ).toBe("/task/29");
+
+    const policy = q(f, '[data-testid="merge-policy"]')!;
+    expect(policy.textContent).toContain("matched payments-strict");
+    expect(policy.textContent).toContain("abcdef012345");
+    const reqs = [
+      ...(f.nativeElement as HTMLElement).querySelectorAll(
+        '[data-testid="merge-requirement"]',
+      ),
+    ].map(
+      (el) =>
+        [...el.children].map((c) => c.textContent!.trim()).join(" | ") ||
+        el.textContent!.trim(),
+    );
+    expect(reqs).toEqual([
+      "auto_merge: never | from rule payments-strict",
+      "ci.mode: grain | from defaults",
+      "grain CI is narrowed to unit",
+    ]);
+  });
+
+  it("drops the hold callouts once the task closes or merges itself", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "closed",
+      pathTriggerHold: "required",
+      pathTriggerTasks: ["payments=28"],
+      securityReviewTask: "29",
+      mergePolicy: { Requirements: [{ Field: "port", Value: "no" }] },
+    };
+    let f = await render(api);
+    expect(q(f, '[data-testid="path-trigger-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="security-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="merge-policy"]')).toBeNull();
+    TestBed.inject(TaskStore).close();
+    TestBed.resetTestingModule();
+    api.detail = { ...api.detail, state: "awaiting_submit", autoMerge: true };
+    f = await render(api);
+    expect(q(f, '[data-testid="path-trigger-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="merge-policy"]')).toBeTruthy();
+  });
+
+  it("defers until a picked day, at its start in the deployment's zone, and shows the wake time", async () => {
+    const api = new FakeApi();
+    api.timeZone = "Asia/Tokyo";
+    api.detail = { ...api.detail, state: "proposed" };
+    const f = await render(api);
+    expect(q(f, '[data-testid="act-defer"]')).toBeTruthy();
+    q<HTMLButtonElement>(f, '[data-testid="act-defer-until"]')!.click();
+    await settle(f);
+    const date = q<HTMLInputElement>(f, '[data-testid="defer-until-date"]')!;
+    const submit = q<HTMLButtonElement>(
+      f,
+      '[data-testid="defer-until-submit"]',
+    )!;
+    expect(submit.disabled).toBe(true);
+    expect(date.min > "2026-01-01").toBe(true);
+
+    // A day already past is refused here, as the server would.
+    date.value = "2020-01-01";
+    date.dispatchEvent(new Event("input"));
+    await settle(f);
+    expect(submit.disabled).toBe(true);
+    expect(q(f, '[data-testid="defer-until-hint"]')!.textContent).toContain(
+      "after today",
+    );
+
+    date.value = "2030-01-15";
+    date.dispatchEvent(new Event("input"));
+    await settle(f);
+    expect(submit.disabled).toBe(false);
+    expect(q(f, '[data-testid="defer-until-hint"]')!.textContent).toContain(
+      "2030",
+    );
+    submit.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/defer"),
+    ).toMatchObject({
+      params: { id: "7" },
+      body: { deferredUntil: "2030-01-14T15:00:00.000Z" },
+    });
+    expect(q(f, '[data-testid="defer-until-form"]')).toBeNull();
+
+    TestBed.inject(TaskStore).close();
+    TestBed.resetTestingModule();
+    api.detail = {
+      ...api.detail,
+      state: "deferred",
+      approved: true,
+      deferredUntil: "2030-01-14T15:00:00Z",
+    };
+    const g = await render(api);
+    const wake = q(g, '[data-testid="task-deferred-until"]')!;
+    expect(wake.textContent).toContain("Picks itself back up on");
+    expect(wake.textContent).toContain("Jan 15, 2030");
+    expect(wake.textContent).toContain("onto the queue");
+    expect(q(g, '[data-testid="act-undefer"]')).toBeTruthy();
   });
 
   it("offers Rollover for a durable idle task but not Recreate sandbox", async () => {
@@ -1210,12 +1539,57 @@ describe("duration", () => {
     const section = q(f, "section.view-panel")!;
     expect(section.hasAttribute("inert")).toBe(true);
 
-    // Press escape
-    dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    // Press escape even with focus outside the dialog element.
+    const externalFocus = document.createElement("button");
+    document.body.appendChild(externalFocus);
+    externalFocus.focus();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+    );
     await settle(f);
+    externalFocus.remove();
 
     expect(q(f, '[data-testid="force-merge-dialog"]')).toBeNull();
     expect(section.hasAttribute("inert")).toBe(false);
     expect(document.activeElement).toBe(openBtn);
+  });
+
+  it("renders actionError once, ignores page Escape when modal is open, skips missing remote branches, and guards close(expectedId)", async () => {
+    const api = new FakeApi();
+    api.remoteBranches = ["main"]; // excludes grain/task-7
+    const f = await render(api, "changes");
+    const store = TestBed.inject(TaskStore);
+    const router = TestBed.inject(Router);
+    const navSpy = vi.spyOn(router, "navigate").mockResolvedValue(true);
+
+    // 1) actionError shows a single banner (no duplicate below gates bar).
+    store.actionError.set("Failed to run action");
+    await settle(f);
+    expect(
+      (f.nativeElement as HTMLElement).querySelectorAll(
+        '[data-testid="task-action-error"]',
+      ),
+    ).toHaveLength(1);
+
+    // 2) Skipped diffPreview & compare when branch is absent from remote.
+    expect(
+      api.calls.some((c) => c.route === "GET /api/tasks/{id}/diff-preview"),
+    ).toBe(false);
+    expect(q(f, '[data-testid="load-full-diff"]')).toBeNull();
+    expect(q(f, '[data-testid="task-diff-skipped"]')?.textContent).toContain(
+      "no longer present",
+    );
+
+    // 3) TaskStore.close(otherId) does not stop active task #7, and Escape is ignored over modal.
+    store.close("999");
+    expect(store.id()).toBe("7");
+    const fakeModal = document.createElement("div");
+    fakeModal.setAttribute("aria-modal", "true");
+    document.body.appendChild(fakeModal);
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+    );
+    expect(navSpy).not.toHaveBeenCalled();
+    fakeModal.remove();
   });
 });

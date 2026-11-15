@@ -24,7 +24,7 @@ import {
   signal,
 } from "@angular/core";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
-import type { Subscription } from "rxjs";
+import { combineLatest, type Subscription } from "rxjs";
 import { AccessService } from "../services/access.service";
 import { SettingsCodeComponent } from "./settings-code.component";
 import { SettingsComputeComponent } from "./settings-compute.component";
@@ -37,6 +37,7 @@ import {
   SETTINGS_GROUPS,
   filterSettingsGroups,
   resolveSettingsSection,
+  settingsAnchor,
   sectionMeta,
 } from "./settings-sections";
 import { SettingsSecurityComponent } from "./settings-security.component";
@@ -53,10 +54,10 @@ import { SettingsWorkComponent } from "./settings-work.component";
     SettingsSecurityComponent,
     SettingsInstanceComponent,
   ],
-  providers: [SettingsStateService],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "../shared/pill-select.css",
     "./settings-layout.css",
     "./settings-forms.css",
@@ -90,7 +91,12 @@ import { SettingsWorkComponent } from "./settings-work.component";
                 >
               }
             </div>
-            <label class="settings-filter-wrap">
+            <form
+              class="settings-filter-wrap"
+              role="search"
+              autocomplete="off"
+              (submit)="$event.preventDefault()"
+            >
               <svg
                 class="settings-filter-icon"
                 width="16"
@@ -106,13 +112,19 @@ import { SettingsWorkComponent } from "./settings-work.component";
               <input
                 class="settings-filter-input"
                 type="search"
+                name="grain-settings-filter"
+                autocomplete="off"
+                spellcheck="false"
+                data-lpignore="true"
+                data-1p-ignore="true"
+                data-form-type="other"
                 placeholder="Filter settings…"
                 aria-label="Filter settings"
                 data-testid="settings-filter-input"
                 [value]="filterQuery()"
                 (input)="filterQuery.set($any($event.target).value)"
               />
-            </label>
+            </form>
           </div>
 
           <nav class="settings-drawer-scroll" aria-label="Settings categories">
@@ -279,9 +291,9 @@ import { SettingsWorkComponent } from "./settings-work.component";
                         @for (r of rows; track r.field) {
                           <tr data-testid="settings-plan-row">
                             <td>{{ r.label }}</td>
-                            <td class="tabular">{{ r.was }}</td>
-                            <td class="tabular">{{ r.becomes }}</td>
-                            <td class="tabular">
+                            <td class="s-mono">{{ r.was }}</td>
+                            <td class="s-mono">{{ r.becomes }}</td>
+                            <td class="s-meta">
                               {{
                                 r.typed
                                   ? "from " + r.typed
@@ -319,6 +331,18 @@ import { SettingsWorkComponent } from "./settings-work.component";
                     <g-settings-instance [section]="activeSection()" />
                   }
                 }
+              } @else if (!state.error()) {
+                <div class="settings-skeleton" data-testid="settings-skeleton">
+                  <div class="s-card">
+                    <div class="s-skel-line s-skel-title"></div>
+                    <div class="s-skel-line"></div>
+                    <div class="s-skel-line s-skel-short"></div>
+                  </div>
+                  <div class="s-card">
+                    <div class="s-skel-line s-skel-title"></div>
+                    <div class="s-skel-line"></div>
+                  </div>
+                </div>
               }
             </div>
           </div>
@@ -330,7 +354,7 @@ import { SettingsWorkComponent } from "./settings-work.component";
               aria-label="Unsaved settings changes"
               data-testid="settings-save-bar"
             >
-              <span class="tabular">
+              <span class="s-num">
                 {{ state.dirtyCount() }} unsaved
                 {{ state.dirtyCount() === 1 ? "change" : "changes" }}
               </span>
@@ -431,13 +455,29 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.subs.push(
-      this.route.paramMap.subscribe((pm) => {
-        this.routeSection.set(pm.get("section"));
-      }),
       this.route.queryParamMap.subscribe((qm) => {
         this.routeFilePath.set(qm.get("path") ?? "");
       }),
+      // A #fragment (Settings -> Capabilities#capability-policy, the
+      // links capability pickers give) or an old section name
+      // (/settings/secrets) names a card inside the section: scroll it
+      // into view once the section's own data has rendered it. The
+      // component is reused across sections, so watch the section and
+      // the fragment together: /settings/engine -> /settings/secrets
+      // changes only the section, and still has an anchor to reach.
+      combineLatest([this.route.paramMap, this.route.fragment]).subscribe(
+        ([pm, frag]) => {
+          const sec = pm.get("section");
+          this.routeSection.set(sec);
+          this.scrollToAnchor(settingsAnchor(sec ?? this.section(), frag));
+        },
+      ),
     );
+    if (this.state.initialized() && this.state.config() !== null) {
+      this.ready.set(true);
+      void this.state.loadCore(true);
+      return;
+    }
     void this.state.loadCore().then(() => {
       if (this.state.config() !== null) {
         this.ready.set(true);
@@ -447,10 +487,45 @@ export class SettingsPageComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.subs.forEach((s) => s.unsubscribe());
+    if (this.anchorTimer) clearInterval(this.anchorTimer);
+  }
+
+  private anchorTimer: ReturnType<typeof setInterval> | null = null;
+
+  // scrollToAnchor waits up to 5s for the element -- a section's cards
+  // appear only after its own requests answer -- and scrolls it into
+  // view again while cards above it are still arriving and pushing it
+  // down, stopping once it has held still for three ticks.
+  private scrollToAnchor(id: string): void {
+    if (this.anchorTimer) clearInterval(this.anchorTimer);
+    this.anchorTimer = null;
+    if (!id || typeof document === "undefined") return;
+    let tries = 0;
+    let lastTop = Number.NaN;
+    let still = 0;
+    this.anchorTimer = setInterval(() => {
+      const el = document.getElementById(id);
+      if (el) {
+        const top = Math.round(el.getBoundingClientRect().top);
+        if (top === lastTop) {
+          still++;
+        } else {
+          still = 0;
+          el.scrollIntoView({ block: "start" });
+          lastTop = Math.round(el.getBoundingClientRect().top);
+        }
+      }
+      if (still >= 3 || ++tries > 50) {
+        if (this.anchorTimer) clearInterval(this.anchorTimer);
+        this.anchorTimer = null;
+      }
+    }, 100);
   }
 
   protected selectSection(id: SettingsSectionId, ev: Event): void {
     ev.preventDefault();
+    // Leaving a section stops any scroll still chasing its anchor.
+    this.scrollToAnchor("");
     this.routeSection.set(id);
     void this.router.navigate(["/settings", id]);
   }

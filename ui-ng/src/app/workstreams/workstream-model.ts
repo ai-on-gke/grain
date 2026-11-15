@@ -251,9 +251,7 @@ function waitsOnHuman(t: Task): boolean {
     (!t.humanApprovedBy ||
       Boolean(t.reviewQuestions) ||
       Boolean(t.reviewFindings?.length) ||
-      Boolean(
-        t.humanReviewHold?.some((h) => h.category === "security-findings"),
-      ))
+      Boolean(t.humanReviewHold?.some((h) => h.source === "security-findings")))
   ) {
     return true;
   }
@@ -1253,6 +1251,17 @@ export function progressSummaryText(s: Workstream): string {
     }
   }
   return `${s.counts.done} of ${s.counts.total} done${parts.length ? `; ${parts.join(", ")}` : ""}`;
+}
+
+export function compactProgressText(s: Workstream): string {
+  if (s.planning) return "Planning first run";
+  const parts = [`${s.counts.done}/${s.counts.total} done`];
+  if (s.counts.run) parts.push(`${s.counts.run} running`);
+  if (s.counts.person) parts.push(`${s.counts.person} waiting`);
+  const blocked = s.counts.blocked + s.counts.failed;
+  if (blocked) parts.push(`${blocked} blocked`);
+  if (s.counts.queued) parts.push(`${s.counts.queued} queued`);
+  return parts.join(" · ");
 }
 
 export function lastActivityLabel(s: Workstream, now = Date.now()): string {

@@ -162,6 +162,12 @@ do not pull in an icon font.
   `/admin/logs`, `/sandboxes`, `/caches`, `/metrics`) redirects to it with
   its query kept (`app.routes.ts`), rather than falling through to the
   Inbox.
+- **Dispatch & quota alerts:** when dispatch is paused or model quotas are
+  exhausted (`shared/dispatch-status.ts`), a lazy `@defer`-loaded global banner
+  (`shell/dispatch-banner.component.ts`) mounts below the top bar with a
+  `Details (N)` breakdown, paired with status on the topbar live pill and
+  contextual queue/settings notices formatted in the configured or local
+  timezone with relative countdowns.
 
 ### Destinations fill the stage
 
@@ -175,6 +181,18 @@ g-my-page { display: contents; }   /* or: display: block; height: 100%; */
 Forgetting this leaves the host as an inline box. The page then sizes to
 its content, nothing scrolls, and the side drawer stops halfway down. Settings
 shipped with exactly this bug.
+
+One pane, one scroller. The scrolling element is a flex child with
+`min-height: 0; overflow-y: auto`, and the pane around it clips
+(`overflow: clip`) rather than scrolls. Give the scroller `position: relative`
+too: `.sr-only` text is `position: absolute`, and with a positioned pane above
+it, that text escapes the scroller's clip and gives the pane a second scroll
+range. The wheel then chains into that range and slides the grid under the
+footer (Agents, task 5977). When a pane can get too short for its fixed header
+plus a whole item, scroll the header away with the content in that pane
+instead. Agents does this with a size container query on the list pane (narrower
+than 480px or shorter than 700px). `e2e/next-agents-grid-scroll.spec.js`
+asserts the rule with bounding boxes.
 
 Content uses the width it is given. Do not cap a page at a fixed max-width
 (`max-width: 1560px` left half of a large screen empty on Workstreams). Cap
@@ -213,6 +231,18 @@ Three columns: tree (≈21%), graph (flexible, minimum 280px), and task detail
 (`clamp(440px, 40%, 580px)`). The detail column gets room first; the graph
 takes what is left. Below 1280px it becomes two panes.
 
+- **Heavy-data progressive disclosure:** Workstreams list rows summarize
+  progress cleanly (`N/M done`, full counts in tooltip), cap repository lists
+  at two plus `+N`, keep the detail header free of async description text (`0px`
+  height shift when root task details load) by rendering the workstream goal
+  inside the right-hand inspector's `In this stream` section as a 1-line
+  plain-text preview with a toggle into a bounded (`max-height: 240px`)
+  Markdown view, fold completed leaves above 40 nodes by default, and clip SVG
+  node labels to node bounds. Telemetry groups quota notices into one collapsible banner, slices
+  heavy sections initially (`8` scopes/templates/directions, `12` contributors
+  with `All | People` filter and `2 +K` repos), and always keeps contributors
+  alphabetical (`A–Z`).
+
 ### The conversation
 
 One component, `shared/conversation/` (`g-conversation`), is the thread and
@@ -236,12 +266,37 @@ inspector and Task Detail. Sessions shares its message styles.
 ### Settings
 
 Settings uses a 280px grouped section drawer beside flat `.s-card` forms capped
-at 1180px. Single-choice pickers use `<g-pill-select>`, booleans use `.g-switch`
+at 1180px, stacked with 24px vertical rhythm (`g-settings-*` flex hosts) and
+24px internal padding. Inputs, descriptions, table cells and `<g-pill-select>`
+controls use the proportional 14/20 body stack (`.s-num` aligns numeric figures
+without switching prose or human names to monospace; `.s-mono` is reserved for
+technical slugs, model IDs and paths). Tables keep row actions on one right-aligned
+line (`.s-row-actions`), separate any below-table creation/edit form with a
+`.s-subsection` divider, and collapse per-connection password inputs behind an
+on-demand `Credential` row. Search filters live inside `<form role="search"
+autocomplete="off">` and secret inputs carry `autocomplete="new-password"` inside
+`<form autocomplete="off">` so browser password managers never autofill emails
+into search bars. Single-choice pickers use `<g-pill-select>`; a model is always chosen
+with `<g-model-picker>` over what the connections advertise, never typed into a
+text field. Ordered lists (the fallback models) are rows with Up / Down /
+Remove buttons and an add picker that excludes what is already listed. Booleans use `.g-switch`
 (`role="switch"`), and edits stage into `.settings-save-bar` (`Discard` /
 `Save changes` with a `POST /api/settings/plan` diff preview). Opt-in workflow
 controls (such as quality control PR rollout in `Settings -> Tasks`) live inside
 their section's `.s-card` with dependent fields disabled while off — never as
-persistent topbar or bottombar status badges.
+persistent topbar or bottombar status badges. Root-persistent `SettingsStateService`
+shows `.s-card` skeletons on cold load, opens warm Settings revisits immediately
+while refreshing in the background, guards child `ngOnChanges` on non-first
+`section` changes, and caches slow `reachable-repos` lookups for 60s.
+
+A settings picker offers the server's own vocabulary (for example
+`sandboxBackendOptions` and `networkAccesses` from `GET /api/settings`), never a
+hand-written list: a choice the daemon cannot use stays listed as a `disabled`
+`PillOption` with the server's reason as its `hint`. A number whose stored `0`
+means grain's default shows blank with the server's `<key>Default` as its
+placeholder, and a cleared box saves that default again. A card a link points
+at carries an `id` (`#capability-policy`, `#other-secrets`), and the page
+scrolls to the URL's fragment once the section has rendered.
 
 ### Breakpoints
 
@@ -256,6 +311,7 @@ it rather than copy it.
 | Component | File | Use |
 |---|---|---|
 | Pill select | `shared/pill-select.component.ts` | every single-choice dropdown (no native `<select>`) |
+| Model picker | `shared/model-picker.component.ts` (+ `shared/model-catalog.ts`) | every model choice: searchable, grouped by connection, keeps and flags a value no connection advertises, optional *Refresh models* |
 | Priority chip | `shared/priority-chip.component.ts` | named priority levels with grain's number |
 | Actor chip | `shared/actor-chip.component.ts` | who did something, shape-coded, "on behalf of" |
 | Status icon | `shared/status-icon.component.ts` | the shape inside every status pill |
@@ -281,6 +337,17 @@ Rules:
   buttons in one row share a height (36px in toolbars). Reset inherited
   margins (`.filter-strip` carries a top margin for page headers).
 - **Every control has a name.** Icon buttons get `aria-label` and a `gTip`.
+- **A deployment finding that blocks nothing is a warning, not an error.**
+  Something an operator should fix while the deployment keeps working (a
+  base branch publishing nothing, `baseBranchPublishing`) is a
+  `warning-container` banner with a warning status icon on its first line
+  and `role="status"`. It sits beside the page's error banners (Dispatch
+  blocked, `role="alert"`), above the content. Use the server's `detail`
+  sentence rather than rewording it, and link the task that holds the
+  finding where there is one (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+- **Say a wire code in words.** A reason or state code from the API
+  (`publishingHeld`, `standingWork`) is mapped to words before it is shown.
+  A code nobody has mapped yet shows as itself, which beats showing nothing.
 - **A dialog fits the screen.** `.g-dialog` (and its `.is-drawer` width) is
   `box-sizing: border-box`, so its `min(520px, 100vw - 32px)` width
   includes its padding and border. That leaves a 16px margin either side
@@ -298,12 +365,29 @@ Rules:
   URL (`?tab=`, `?task=`, `?pane=`). Back works.
 - **Role-aware.** An action the person cannot take is hidden, or shown
   disabled with the reason. It is never shown enabled only to fail.
+- **State-aware.** The same goes for an action the item's state refuses.
+  Example: Release hold cannot clear review findings, so a hold of findings
+  alone shows no Release hold. The gate card says what does clear it and
+  offers that action (*Override review gate…*) to people who may take it
+  (`ui-ng/e2e/next-human-review-findings-hold.spec.js`).
+- **Refusals say why.** A failed action shows the server's own `error`
+  text (`errorText`). A refusal the request caused is a 4xx with a message,
+  never a 500 with only a reference id.
 - **Safety.**
   - Selection is pinned: if the selected item leaves the list, say so; do
     not jump to another item.
   - The composer is locked to its target task.
   - Batch actions name their scope (repos, owners) in the confirmation.
   - Undo for reversible actions.
+  - An action that moves a branch, opens a pull request on someone's
+    behalf or drops a record (promote, merge back, delete) asks first in
+    the confirm dialog, naming what it touches.
+  - A form that waits for a Save button asks before its edits are
+    dropped, whether by a tab switch, a link, the rail or browser Back
+    (a `canDeactivate` guard plus the page's own tab bar). Discard puts
+    back the saved values.
+  - A refused value is reported beside its field (`aria-invalid`) and
+    clears on the next edit, not in a page-wide banner.
 - **Live, quietly.** Server-sent events update lists in place. Never steal
   focus or scroll position on an update; hold an update while the person is
   interacting with the row.
@@ -382,7 +466,20 @@ Enforced by `ui-ng/angular.json`; a build with warnings is a failed build.
   small; use `@defer` for overlays.
 - Each component stylesheet under 8 kB. Do not re-import shared CSS in a
   parent that a child component already loads; it duplicates the bytes.
+- Request efficiency: coalesce concurrent identical GET/conditional reads,
+  serve `GET /api/config` and Inbox summary hydrations with ETag `If-None-Match`
+  and bounded worker pools (`<= 4`), throttle hidden-tab or unmounted-page
+  polling, load inactive Fleet tabs lazily, and never block primary pickers on
+  slow `reachable-repos` discovery.
 - No new runtime dependency without a reason written in the pull request.
+- A click never waits silently on the network. Every lazy page chunk is
+  preloaded shortly after start-up (`shell/route-preload.ts`, skipped under
+  Save-Data), so navigation does not stall behind a slow origin. A
+  navigation still pending after 120 ms shows the shell's top progress bar
+  (`shell/nav-progress.component.ts`), which takes no pointer events. Routes
+  have no resolvers or guards that wait on polled reads; a page loads its own
+  data and shows its loading state. `e2e/next-task-page-stall.spec.js`
+  covers this.
 
 ## 10. How to test a UI change
 

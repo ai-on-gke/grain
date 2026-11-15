@@ -87,7 +87,7 @@ export class ThemeService {
         const png = document.getElementById(
           "grain-favicon-png",
         ) as HTMLLinkElement | null;
-        png?.setAttribute("href", `/grain-mark-${polarity}.png`);
+        png?.setAttribute("href", `grain-mark-${polarity}.png`);
       }
     });
   }

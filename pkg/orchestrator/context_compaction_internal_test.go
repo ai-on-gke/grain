@@ -395,3 +395,33 @@ func TestSuspendedPromptCarriesTheBriefAndContextUpkeep(t *testing.T) {
 		t.Errorf("a resumed prompt does not flag a handover %d runs old as stale:\n%s", model.HandoverStaleRuns, prompt)
 	}
 }
+
+// A console session past a rollover limit is told to be closed and
+// refiled, since rollover refuses it (model.RolloverRefusal); a durable
+// task that is not a session, past the same limit, is not -- grain rolls
+// it over itself (reconcileRollover).
+func TestConsoleSessionPastRolloverLimitIsToldToBeRefiled(t *testing.T) {
+	store, ctx := openTestStore(t)
+	old := time.Now().Add(-2 * model.RolloverAgeLimit)
+	session := durableTask("director")
+	session.Tags = []string{model.ConsoleSessionTag(model.DirectorSessionID)}
+	session.CreatedAt = &old
+	plain := durableTask("hub")
+	plain.CreatedAt = &old
+	fresh := durableTask("young")
+	fresh.Tags = []string{model.ConsoleSessionTag("other")}
+	for _, tk := range []model.Task{session, plain, fresh} {
+		if err := store.PutTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if prompt := promptFor(ctx, t, store, session); !strings.Contains(prompt, "past a durable task's record limit: it has been open since") ||
+		!strings.Contains(prompt, "closed, and grain files it again") {
+		t.Errorf("an old session's prompt does not say it is due to be refiled:\n%s", prompt)
+	}
+	for _, tk := range []model.Task{plain, fresh} {
+		if prompt := promptFor(ctx, t, store, tk); strings.Contains(prompt, "record limit") {
+			t.Errorf("task %s's prompt says it is past a record limit:\n%s", tk.ID, prompt)
+		}
+	}
+}

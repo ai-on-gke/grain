@@ -318,7 +318,7 @@ func TestEveryModelProxyIsBothRegisteredAndGrantable(t *testing.T) {
 		if slices.Contains(registered, name) {
 			t.Errorf("capabilityProviders still registers the retired %q: %v", name, registered)
 		}
-		if got := model.CanonicalLegacyGrant(name); got != model.ModelProxyGrant(vendor.Name) {
+		if got := model.RetiredGrantsBecame(name)[0]; got != model.ModelProxyGrant(vendor.Name) {
 			t.Errorf("%s is an alias for %q, want %q", name, got, model.ModelProxyGrant(vendor.Name))
 		}
 	}

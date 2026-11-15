@@ -162,7 +162,7 @@ func TestWalkthroughWaitForChecksFollowsASupersedingRecheckToTheCombinedVerdict(
 	repo := model.RepoRef{Owner: "acme", Name: "widgets"}
 	if err := store.PutTask(ctx, model.Task{
 		ID: "7", Intent: model.IntentImplement, Title: "test it", Target: &repo,
-		Grants: []model.Grant{{Capability: "grain-ci"}},
+		Grants: []model.Grant{{Capability: model.GrainCIGrant}},
 	}); err != nil {
 		t.Fatal(err)
 	}

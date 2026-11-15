@@ -38,12 +38,22 @@ import type {
   CapabilityOption,
   Comment,
   GrainConfig,
+  Task,
 } from "../api/models";
 import { CreateTaskService } from "../create/create-task.service";
 import { replyRefusal } from "../inbox/departure";
 import { stopperOf } from "../inbox/inbox.store";
 import { AccessService } from "../services/access.service";
 import { SnackbarService } from "../services/snackbar.service";
+import {
+  effectiveDisplayTimeZone,
+  summarizeDispatchStatus,
+} from "../shared/dispatch-status";
+import {
+  earliestWakeDay,
+  formatWakeTime,
+  zonedDayStart,
+} from "../shared/zoned-day";
 import { isHuman } from "../sessions/session-helpers";
 
 import { ConversationComponent } from "../shared/conversation/conversation.component";
@@ -66,6 +76,7 @@ import {
 } from "../shared/grants-picker.component";
 import { PriorityChipComponent } from "../shared/priority-chip.component";
 import { TipDirective } from "../shared/tip.directive";
+import { TaskFeedStore } from "../services/task-feed.service";
 import { ago, levelOf, priorityOf, stateLabel } from "../tasks/task-view";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { TaskChangesTabComponent } from "./task-changes-tab.component";
@@ -135,6 +146,7 @@ export function duration(from?: string, to?: string): string {
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
     "../shared/work-surface.css",
+    "../shared/surface-controls.css",
     "./task-detail.component.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
@@ -303,10 +315,14 @@ export function duration(from?: string, to?: string): string {
                 Stop
               </button>
             }
+            <!-- Not while paused: Retry never lifts an operator's pause
+                 (ui.Client.Retry refuses it), so it would be a second
+                 "Resume" beside the pause's own that always fails. -->
             @if (
               (t.state === "failed" ||
                 (t.state === "awaiting_reply" && t.turnStopped) ||
                 isStopped()) &&
+              !t.paused &&
               can("POST /api/tasks/{id}/retry")
             ) {
               <button
@@ -411,10 +427,65 @@ export function duration(from?: string, to?: string): string {
                 type="button"
                 class="btn-text"
                 data-testid="act-defer"
+                gTip="Put it aside until you bring it back"
                 (click)="defer()"
               >
                 Defer
               </button>
+              @if (!deferUntilOpen()) {
+                <button
+                  type="button"
+                  class="btn-text"
+                  data-testid="act-defer-until"
+                  gTip="Put it aside until a day you pick"
+                  (click)="openDeferUntil()"
+                >
+                  Defer until…
+                </button>
+              } @else {
+                <form
+                  class="defer-until"
+                  data-testid="defer-until-form"
+                  (submit)="deferUntil($event)"
+                >
+                  <label class="defer-until-label" for="defer-until-date"
+                    >Wake on</label
+                  >
+                  <input
+                    id="defer-until-date"
+                    type="date"
+                    class="defer-until-date"
+                    data-testid="defer-until-date"
+                    required
+                    [min]="earliestWake()"
+                    [value]="deferDate()"
+                    [attr.aria-describedby]="'defer-until-hint'"
+                    (input)="deferDate.set($any($event.target).value)"
+                  />
+                  <button
+                    type="submit"
+                    class="btn-tonal"
+                    data-testid="defer-until-submit"
+                    [disabled]="!deferWakeAt() || store.isBusy('defer', t.id)"
+                  >
+                    Defer until
+                  </button>
+                  <button
+                    type="button"
+                    class="btn-text"
+                    data-testid="defer-until-cancel"
+                    (click)="closeDeferUntil(true)"
+                  >
+                    Cancel
+                  </button>
+                  <span
+                    id="defer-until-hint"
+                    class="muted defer-until-hint"
+                    data-testid="defer-until-hint"
+                    >{{ deferHint() }}</span
+                  >
+                </form>
+              }
             }
             @if (
               (t.state === "queued" ||
@@ -610,22 +681,74 @@ export function duration(from?: string, to?: string): string {
           </p>
         }
 
-        <!-- Inline Pending Approval / Gate Panels -->
-
-        @if (store.actionError(); as err) {
+        <!-- Rollover (durable-tasks.design.md#DT-15): a closed durable
+             task's work goes on under another number, said before the
+             rest of the page so an old link leads somewhere. -->
+        @if (t.rolledOverTo; as next) {
           <p
-            class="banner banner-error"
-            role="alert"
-            data-testid="task-action-error"
+            class="banner banner-info"
+            role="status"
+            data-testid="task-rolled-over-to"
           >
-            {{ err }}
-            <button
-              type="button"
-              class="btn-text"
-              (click)="store.actionError.set(null)"
+            <strong
+              >Rolled over to
+              <a
+                [routerLink]="linkTo(next)"
+                [queryParams]="linkQuery(next)"
+                [queryParamsHandling]="pane() ? 'merge' : ''"
+                (click)="onTreeNodeClick($event, next)"
+                >#{{ next }}</a
+              >.</strong
             >
-              Dismiss
-            </button>
+            This durable task passed its record limit, so its work carries on in
+            the successor, with its brief, handover, pull request and waits.
+            This record is kept as it was.
+          </p>
+        }
+        @if (t.rolledOverFrom; as prev) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-rolled-over-from"
+          >
+            Carries on the work of
+            <a
+              [routerLink]="linkTo(prev)"
+              [queryParams]="linkQuery(prev)"
+              [queryParamsHandling]="pane() ? 'merge' : ''"
+              (click)="onTreeNodeClick($event, prev)"
+              >#{{ prev }}</a
+            >, rolled over when it passed its record limit; its earlier
+            conversation and runs are there.
+          </p>
+        }
+
+        <!-- Inline Pending Approval / Gate Panels -->
+        @if (queuedPauseNotice(); as qpn) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-dispatch-paused"
+          >
+            {{ qpn.headline }}
+            @if (qpn.resetText) {
+              · {{ qpn.resetText }}
+            }
+          </p>
+        }
+        @if (t.state === "deferred" && t.deferredUntil) {
+          <p
+            class="banner banner-info"
+            role="status"
+            data-testid="task-deferred-until"
+          >
+            Picks itself back up on
+            {{ wakeTime(t.deferredUntil)
+            }}{{
+              t.approved
+                ? ", onto the queue."
+                : ", back into Needs approval for someone to approve."
+            }}
           </p>
         }
         <g-task-gates-bar
@@ -633,6 +756,7 @@ export function duration(from?: string, to?: string): string {
           [pane]="pane()"
           (acted)="acted.emit()"
           (replyInWordsChange)="onReplyInWords($event)"
+          (forceMerge)="forceMergeReq.set($event)"
         />
 
         <!-- Deferred Inline Task Editor (PATCH /api/tasks/{id}, Brief, Goal) -->
@@ -695,6 +819,7 @@ export function duration(from?: string, to?: string): string {
                   [routerLink]="[]"
                   [queryParams]="tabQuery(tab.id)"
                   queryParamsHandling="merge"
+                  [preserveFragment]="!!pane()"
                   [attr.aria-current]="
                     current() === tab.id ? (pane() ? 'true' : 'page') : null
                   "
@@ -1134,7 +1259,7 @@ export function duration(from?: string, to?: string): string {
               }
               <dt>Filed</dt>
               <dd>
-                {{ ago(t.createdAt) }} ago by
+                {{ filedAgo(t.createdAt) }} by
                 {{ t.authorLabel || t.author || "unknown" }}
               </dd>
               @if (t.approvedByLabel) {
@@ -1187,7 +1312,11 @@ export function duration(from?: string, to?: string): string {
               @if (t.dependsOn?.length) {
                 <div style="display: flex; flex-wrap: wrap; gap: 6px">
                   @for (d of t.dependsOn; track d) {
-                    <span class="status-pill neutral">
+                    <span
+                      class="status-pill neutral"
+                      data-testid="details-dep-chip"
+                      [attr.title]="depTitle(t, d)"
+                    >
                       <a
                         [routerLink]="linkTo(d)"
                         [queryParams]="linkQuery(d)"
@@ -1302,6 +1431,7 @@ export class TaskDetailComponent implements OnDestroy {
   protected readonly store = inject(TaskStore);
   private readonly wsStore = inject(WorkstreamsStore);
   private readonly api = inject(GrainApi);
+  private readonly feed = inject(TaskFeedStore);
   private readonly access = inject(AccessService);
   private readonly snackbar = inject(SnackbarService);
   private readonly create = inject(CreateTaskService);
@@ -1320,6 +1450,28 @@ export class TaskDetailComponent implements OnDestroy {
   readonly sectionLevel = computed(() => (this.pane() ? 3 : null));
   // subsectionLevel keeps the h3s under those sections one further down.
   readonly subsectionLevel = computed(() => (this.pane() ? 4 : null));
+
+  // "Defer until…": the day picked, in the deployment's display zone.
+  protected readonly deferUntilOpen = signal(false);
+  protected readonly deferDate = signal("");
+  protected readonly displayTz = signal(effectiveDisplayTimeZone());
+  protected readonly earliestWake = computed(() =>
+    earliestWakeDay(this.displayTz()),
+  );
+  protected readonly deferWakeAt = computed(() => {
+    const day = this.deferDate();
+    if (!day || day < this.earliestWake()) return null;
+    return zonedDayStart(day, this.displayTz());
+  });
+  protected readonly deferHint = computed(() => {
+    const at = this.deferWakeAt();
+    if (at !== null) {
+      return `Wakes ${formatWakeTime(new Date(at).toISOString(), this.displayTz())}`;
+    }
+    return this.deferDate()
+      ? "Pick a day after today"
+      : "Wakes at the start of the day you pick";
+  });
   // routePane is ?pane= as the router has it. The tab strip writes it, so
   // the pane reads it back itself: a host that does not also bind [tab]
   // (Agents, Workstreams) still switches tabs.
@@ -1335,7 +1487,26 @@ export class TaskDetailComponent implements OnDestroy {
   readonly openTask = output<string>();
 
   protected readonly label = stateLabel;
+
+  // depTitle is a dependency chip's hover text: the task it waits for,
+  // its title where the open-task feed knows it, its state, and whether
+  // it is what holds this task, as the classic dependency chip reads.
+  protected depTitle(t: Task, d: string): string {
+    const title = this.feed.tasks().find((x) => x.id === d)?.title;
+    const state = t.dependsOnStates?.[d];
+    let s = title ? `#${d} ${title}` : `#${d}`;
+    if (state) s += ` — ${stateLabel(state)}`;
+    if (t.blockedBy?.includes(d)) s += " (blocking this task)";
+    return s;
+  }
   protected readonly ago = ago;
+  // filedAgo reads "just now" rather than "now ago" for a task filed in
+  // the last minute (ago() says "now" there).
+  protected filedAgo(iso: string | undefined): string {
+    const a = ago(iso);
+    if (!a) return "";
+    return a === "now" ? "just now" : `${a} ago`;
+  }
   protected readonly dur = duration;
   protected readonly prio = priorityOf;
   protected readonly level = levelOf;
@@ -1382,7 +1553,9 @@ export class TaskDetailComponent implements OnDestroy {
     return id ? (this.wsStore.taskToStream().get(id) ?? null) : null;
   });
   protected readonly current = computed<TaskTab>(() => {
-    const v = (this.pane() ? this.routePane() : undefined) ?? this.tab();
+    const rp =
+      this.pane() && isTab(this.routePane()) ? this.routePane() : undefined;
+    const v = rp ?? this.tab();
     if (
       v === "details" &&
       !this.pane() &&
@@ -1530,6 +1703,15 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     return t ? submitBlock(t) : "";
   });
+  protected readonly queuedPauseNotice = computed(() =>
+    this.t()?.state === "queued"
+      ? summarizeDispatchStatus(
+          this.access.rawConfig(),
+          this.access.usage(),
+          this.access.clockNow(),
+        )
+      : null,
+  );
 
   protected actorLabel(c: Comment): string {
     if (c.authorKind === "automation" && c.author === "console-session") {
@@ -1586,6 +1768,8 @@ export class TaskDetailComponent implements OnDestroy {
         this.allowWordsOnParked.set(false);
         this.newDepId.set("");
         this.replyTarget.set(null);
+        this.deferUntilOpen.set(false);
+        this.deferDate.set("");
         this.store.open(id);
       });
     });
@@ -1625,6 +1809,7 @@ export class TaskDetailComponent implements OnDestroy {
     try {
       const cfg = (await this.api.config()) as GrainConfig | null;
       if (cfg?.capabilities) this.offeredCapabilities.set(cfg.capabilities);
+      this.displayTz.set(effectiveDisplayTimeZone(cfg?.timeZone));
     } catch {
       // Optional config read for capabilities list.
     }
@@ -1632,11 +1817,11 @@ export class TaskDetailComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     this.doc.removeEventListener("keydown", this.onCaptureKeydown, true);
-    this.store.close();
+    this.store.close(this.id());
   }
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
-    return this.access.can(route, this.t()?.repo || undefined);
+    return this.access.canAccessTask(route, this.t()?.repo ?? null);
   }
 
   protected val(ev: Event): string {
@@ -1747,6 +1932,7 @@ export class TaskDetailComponent implements OnDestroy {
       .navigate([], {
         queryParams: this.tabQuery("conversation"),
         queryParamsHandling: "merge",
+        ...(this.pane() ? { preserveFragment: true } : {}),
       })
       .then(() => setTimeout(() => this.composer()?.nativeElement.focus()));
   }
@@ -1767,15 +1953,34 @@ export class TaskDetailComponent implements OnDestroy {
     const t = this.t();
     if (!t || t.id !== this.id()) return;
     const id = t.id;
-    if (
-      await this.store.act(
-        "pause",
-        this.post("POST /api/tasks/{id}/pause", { immediate }),
-        id,
-      )
-    ) {
-      this.done(immediate ? `Paused #${id} immediately` : `Paused #${id}`);
+    const run = async () => {
+      if (
+        await this.store.act(
+          "pause",
+          this.post("POST /api/tasks/{id}/pause", { immediate }),
+          id,
+        )
+      ) {
+        this.done(immediate ? `Paused #${id} immediately` : `Paused #${id}`);
+      }
+    };
+    if (!immediate) {
+      await run();
+      return;
     }
+    // Asked first, as the classic Pause now is: unlike Pause, this one
+    // throws away whatever the run has not pushed, and Resume cannot
+    // bring that back.
+    this.confirming.set({
+      title: "Pause immediately",
+      message:
+        `Pause #${id} now? Its run is stopped at once, without the grace ` +
+        "period to push its work and write its handover; whatever it has " +
+        "not pushed is lost. Resume picks the task back up where it was left.",
+      accept: "Pause now",
+      destructive: true,
+      run,
+    });
   }
 
   protected async resumePaused(): Promise<void> {
@@ -2008,6 +2213,60 @@ export class TaskDetailComponent implements OnDestroy {
     ) {
       this.done(`Deferred #${id}`);
       this.snackbar.show(`Deferred #${id}`, {
+        label: "Undo",
+        run: async () => {
+          await this.store.act(
+            "undefer",
+            this.post("POST /api/tasks/{id}/undefer"),
+            id,
+          );
+        },
+      });
+    }
+  }
+
+  protected openDeferUntil(): void {
+    this.deferDate.set("");
+    this.deferUntilOpen.set(true);
+    // The picker replaces the button that opened it, so focus follows.
+    setTimeout(() => this.doc.getElementById("defer-until-date")?.focus());
+  }
+
+  protected closeDeferUntil(refocus = false): void {
+    this.deferUntilOpen.set(false);
+    this.deferDate.set("");
+    if (refocus) {
+      setTimeout(() =>
+        this.doc
+          .querySelector<HTMLElement>('[data-testid="act-defer-until"]')
+          ?.focus(),
+      );
+    }
+  }
+
+  protected wakeTime(iso: string): string {
+    return formatWakeTime(iso, this.displayTz());
+  }
+
+  // A picked day wakes at its start in the zone the wake time is printed
+  // in; a day before earliestWake() is refused here as the server would.
+  protected async deferUntil(ev: Event): Promise<void> {
+    ev.preventDefault();
+    const t = this.t();
+    const at = this.deferWakeAt();
+    if (!t || t.id !== this.id() || at === null) return;
+    const id = t.id;
+    const until = new Date(at).toISOString();
+    if (
+      await this.store.act(
+        "defer",
+        this.post("POST /api/tasks/{id}/defer", { deferredUntil: until }),
+        id,
+      )
+    ) {
+      this.closeDeferUntil();
+      this.done(`Deferred #${id} until ${this.wakeTime(until)}`);
+      this.snackbar.show(`Deferred #${id} until ${this.wakeTime(until)}`, {
         label: "Undo",
         run: async () => {
           await this.store.act(

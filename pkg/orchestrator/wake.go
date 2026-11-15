@@ -108,8 +108,11 @@ func reconcileWake(ctx context.Context, deps Deps, now time.Time) error {
 	for _, h := range held {
 		verdictReady, _, evalErr := evaluateCIResume(ctx, deps, h, now)
 		if evalErr != nil {
+			// Reported, and not a reason to skip the backstop below: a
+			// verdict grain cannot read, cycle after cycle, is exactly the
+			// wait it exists for.
 			errs = append(errs, fmt.Errorf("orchestrator: checking CI wake for task %s: %w", h.TaskID, evalErr))
-			continue
+			verdictReady = false
 		}
 		if verdictReady {
 			if err := deps.Store.SetDeferred(ctx, h.TaskID, nil, nil, now); err != nil {
@@ -501,4 +504,21 @@ func recordConcludedActionsRunJob(ctx context.Context, store *model.Store, repo 
 		Via:         "poll",
 		UpdatedAt:   now,
 	})
+}
+
+// sendBackFromResumeLater undefers task when it is resting on its own
+// resume_later and grain is sending it back to an agent (why: the merge
+// queue's repair, new review threads): model.Store.ReleaseResumeLater.
+// Without it the send-back's RetryRequestedAt sat under the deferral, so
+// nothing ran, and the queue gave up on a repair it had never started.
+func sendBackFromResumeLater(ctx context.Context, store *model.Store, taskID, why string, now time.Time) error {
+	released, err := store.ReleaseResumeLater(ctx, taskID, now)
+	if err != nil {
+		return fmt.Errorf("orchestrator: taking %s off its resume_later for %s: %w", taskID, why, err)
+	}
+	if released {
+		_ = clearPipelineNotification(ctx, store, model.NotificationSubject(model.FamilyCIWakeStalled, taskID), wakeNotifier)
+		log.Printf("orchestrator: task %s was resting on resume_later; %s sends it back to an agent now", taskID, why)
+	}
+	return nil
 }
