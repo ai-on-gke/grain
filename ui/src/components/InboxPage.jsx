@@ -1787,7 +1787,11 @@ function Responder({ t, open, onAct, onOpenTask, onSent, showError }) {
   if (effectiveDetail.pendingAccess) {
     return (
       <div className="inbox-responder" onClick={handleQuestionClick}>
+        {/* Keyed by task, so a grant still applying on one task leaves
+            the next task's card answerable rather than sharing its busy
+            state. */}
         <PendingAccess
+          key={effectiveDetail.id}
           t={effectiveDetail}
           act={async (fn) => {
             const done = await onAct(fn);

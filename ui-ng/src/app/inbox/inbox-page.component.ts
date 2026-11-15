@@ -114,6 +114,7 @@ const PAST: Record<string, string> = {
   submit: "Submitted",
   retry: "Retried",
   resume: "Resumed",
+  grant: "Granted access on",
   "retry-merge": "Retried the merge of",
 };
 
@@ -318,7 +319,6 @@ const ONE_KEY = new Set(["approve"]);
                       [attr.aria-label]="
                         'Approve all ' + n + ' in ' + group.title
                       "
-                      [disabled]="!!store.busy()"
                       (click)="approveGroup(group)"
                     >
                       Approve all {{ n }}
@@ -378,6 +378,18 @@ const ONE_KEY = new Set(["approve"]);
                               @if (e.acked) {
                                 <span class="muted row-acked"
                                   >acknowledged</span
+                                >
+                              }
+                              @if (store.isInFlight(e.key)) {
+                                <span
+                                  class="row-applying"
+                                  role="status"
+                                  data-testid="row-applying"
+                                  ><span
+                                    class="row-applying-ring"
+                                    aria-hidden="true"
+                                  ></span
+                                  >Applying…</span
                                 >
                               }
                             </span>
@@ -459,7 +471,7 @@ const ONE_KEY = new Set(["approve"]);
                       ? 'btn-primary'
                       : 'btn-tonal'
                   "
-                  [disabled]="!!store.busy() || b.allowed === 0"
+                  [disabled]="b.allowed === 0"
                   [attr.data-testid]="'bulk-' + b.id"
                   (click)="confirmBulk(b.id, b.label)"
                 >
@@ -745,7 +757,7 @@ const ONE_KEY = new Set(["approve"]);
                             data-testid="grant-access"
                             [disabled]="
                               chosenItems(pa.items).length === 0 ||
-                              !!store.busy() ||
+                              store.isInFlight(sel.key) ||
                               !can(grantRoute, sel)
                             "
                             (click)="grant(sel, pa.items)"
@@ -773,7 +785,9 @@ const ONE_KEY = new Set(["approve"]);
                             type="button"
                             class="btn-primary"
                             data-testid="confirm-deny"
-                            [disabled]="!draft().trim() || !!store.busy()"
+                            [disabled]="
+                              !draft().trim() || store.isInFlight(sel.key)
+                            "
                             (click)="deny(sel)"
                           >
                             Deny with this reason
@@ -872,7 +886,8 @@ const ONE_KEY = new Set(["approve"]);
                           class="btn-primary"
                           data-testid="approve-release"
                           [disabled]="
-                            !!store.busy() || !can(releaseApproveRoute, sel)
+                            store.isInFlight(sel.key) ||
+                            !can(releaseApproveRoute, sel)
                           "
                           (click)="decideRelease(sel, true)"
                         >
@@ -883,7 +898,8 @@ const ONE_KEY = new Set(["approve"]);
                           class="btn-tonal"
                           data-testid="reject-release"
                           [disabled]="
-                            !!store.busy() || !can(releaseRejectRoute, sel)
+                            store.isInFlight(sel.key) ||
+                            !can(releaseRejectRoute, sel)
                           "
                           (click)="decideRelease(sel, false)"
                         >
@@ -1117,7 +1133,7 @@ const ONE_KEY = new Set(["approve"]);
       </div>
 
       <ng-template #actions let-sel>
-        @for (a of sel.actions; track a.id) {
+        @for (a of rowActions(sel); track a.id) {
           <button
             type="button"
             [class]="
@@ -1129,7 +1145,9 @@ const ONE_KEY = new Set(["approve"]);
             "
             [attr.data-testid]="'action-' + a.id"
             [disabled]="
-              !!store.busy() || !canAction(a.route, a.repo) || !!a.blocked
+              store.isInFlight(sel.key) ||
+              !canAction(a.route, a.repo) ||
+              !!a.blocked
             "
             [title]="a.blocked || deniedAction(a.route, a.repo)"
             (click)="run(sel, a)"
@@ -1280,7 +1298,8 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   >(() => {
     const sel = this.store.selected();
     if (!sel || sel.gone) return "idle";
-    if (this.store.busy()) return "processing";
+    if (this.store.busy() || this.store.isInFlight(sel.key))
+      return "processing";
     if (this.respondingPulse()) return "responding";
     if (this.draft().length > 0 || this.talkDraft().length > 0)
       return "receiving";
@@ -1345,6 +1364,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     for (const e of this.store.checkedEntries()) {
       for (const a of e.actions) {
         if (!a.bulk) continue;
+        if (this.store.isInFlight(e.key)) continue;
         const b = byId.get(a.id) ?? {
           id: a.id,
           label: `${a.label} all`,
@@ -1586,9 +1606,12 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     key: string,
     actionOrId: string | InboxAction,
     body?: unknown,
+    verify = false,
   ): Promise<boolean> {
-    const ok = await this.store.actByKey(key, actionOrId, body);
-    if (ok) {
+    const ok = await this.store.actByKey(key, actionOrId, body, { verify });
+    // The reader may have moved on to another row while this answer was
+    // applying; focus follows them, not the answer that just landed.
+    if (ok && this.store.selectedKey() === key) {
       this.pulseResponding();
       this.focusAfterAction();
     }
@@ -1622,7 +1645,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
         message: a.confirm,
         accept: a.label,
         destructive: !!a.destructive,
-        run: () => this.actAndFocus(key, aid),
+        run: () => this.actAndFocus(key, aid, undefined, true),
       });
       return;
     }
@@ -1635,19 +1658,24 @@ export class InboxPageComponent implements OnInit, OnDestroy {
   protected confirmBulk(id: string, label: string): void {
     const rows = this.store
       .checkedEntries()
-      .filter((e) =>
-        e.actions.some(
-          (a) => a.id === id && !a.blocked && this.canAction(a.route, a.repo),
-        ),
+      .filter(
+        (e) =>
+          !this.store.isInFlight(e.key) &&
+          e.actions.some(
+            (a) => a.id === id && !a.blocked && this.canAction(a.route, a.repo),
+          ),
       );
     const n = rows.length;
     if (!n) return;
     const keys = rows.map((e) => e.key);
     this.confirming.set({
       title: label,
-      message: `${label}: ${n} selected ${n === 1 ? "item" : "items"}? Each is answered as if you had pressed its own button.`,
+      message:
+        id === "grant"
+          ? `${label}: ${n} selected ${n === 1 ? "access request" : "access requests"}? Each run is given every item it asked for; a request with an item that cannot be granted is left selected.`
+          : `${label}: ${n} selected ${n === 1 ? "item" : "items"}? Each is answered as if you had pressed its own button.`,
       accept: `${label} (${n})`,
-      destructive: id === "close" || id === "decline",
+      destructive: id === "close" || id === "decline" || id === "grant",
       scope: scopeOf(rows, this.access.viewer()),
       run: () => this.batch(id, PAST[id] ?? "Done:", keys),
     });
@@ -1905,6 +1933,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
             repo: sel.repo || undefined,
           },
           Object.keys(body).length ? body : undefined,
+          true,
         ),
     });
   }
@@ -1941,10 +1970,17 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     return entries.length > 0 && entries.every((e) => c.has(e.key));
   }
 
+  // rowActions is what a row's own action bar offers: everything but the
+  // batch bar's bulk-only answers.
+  protected rowActions(sel: InboxEntry): InboxAction[] {
+    return sel.actions.filter((a) => !a.bulkOnly);
+  }
+
   protected approvable(entries: InboxEntry[]): number {
     return entries.filter(
       (e) =>
         !e.gone &&
+        !this.store.isInFlight(e.key) &&
         e.actions.some(
           (a) => a.id === "approve" && this.canAction(a.route, a.repo),
         ),
@@ -1962,6 +1998,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
     const rows = group.entries.filter(
       (e) =>
         !e.gone &&
+        !this.store.isInFlight(e.key) &&
         e.actions.some(
           (a) => a.id === "approve" && this.canAction(a.route, a.repo),
         ),
@@ -2094,7 +2131,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       // a host script, resuming, submitting a merge) asks first.
       const primary =
         pinned && !sel?.gone
-          ? sel?.actions.find((x) => x.variant === "primary")
+          ? sel && this.rowActions(sel).find((x) => x.variant === "primary")
           : undefined;
       if (
         sel &&
@@ -2112,7 +2149,7 @@ export class InboxPageComponent implements OnInit, OnDestroy {
             message: `${primary.label}: ${sel.title || "this item"}?`,
             accept: primary.label,
             destructive: !!primary.destructive,
-            run: () => this.actAndFocus(key, aid),
+            run: () => this.actAndFocus(key, aid, undefined, true),
           });
         }
       }

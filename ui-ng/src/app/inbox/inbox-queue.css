@@ -282,6 +282,38 @@ g-inbox-page {
   font-size: 12px;
 }
 
+/* A row whose answer is still being applied: only this row is locked, the
+   rest of the list stays answerable. */
+.row-applying {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--md-sys-color-primary);
+}
+
+.row-applying-ring {
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: row-applying-spin 0.8s linear infinite;
+}
+
+@keyframes row-applying-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-applying-ring {
+    animation: none;
+  }
+}
+
 .key-list kbd {
   display: inline-block;
   min-width: 18px;

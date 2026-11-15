@@ -409,6 +409,121 @@ describe("InboxPageComponent", () => {
     ).toBe(true);
   });
 
+  function accessTask(api: FakeApi, id: string, title: string): Task {
+    api.details[id] = {
+      id,
+      title,
+      state: "awaiting_reply",
+      pendingAccess: {
+        summary: "Read acme/lib",
+        reason: "to vendor it",
+        createdAt: "",
+        items: [{ kind: "read", repo: "acme/lib" }],
+      },
+    };
+    return { id, title, state: "awaiting_reply", awaitingAccess: true };
+  }
+
+  function refRow(f: ComponentFixture<unknown>, ref: string): HTMLElement {
+    return [
+      ...(f.nativeElement as HTMLElement).querySelectorAll<HTMLElement>(
+        ".queue-row",
+      ),
+    ].find((r) => r.querySelector(".row-ref")?.textContent?.trim() === ref)!;
+  }
+
+  async function settle(f: ComponentFixture<unknown>): Promise<void> {
+    await new Promise((r) => setTimeout(r));
+    await f.whenStable();
+  }
+
+  it("grants on one task while another task's grant is still applying", async () => {
+    const api = new FakeApi();
+    api.taskList = [
+      accessTask(api, "3", "Needs lib"),
+      accessTask(api, "4", "Needs lib too"),
+    ];
+    const pending: (() => void)[] = [];
+    api.post = (route, params, body) => {
+      api.posts.push({ route, params, body });
+      return new Promise((resolve) => pending.push(() => resolve({})));
+    };
+    const f = await render(api);
+    const grant = () =>
+      q(f, '[data-testid="grant-access"]') as HTMLButtonElement;
+
+    refRow(f, "#3").querySelector<HTMLButtonElement>(".row-main")!.click();
+    await settle(f);
+    grant().click();
+    await settle(f);
+    // The grant is posted at once, and only its own row is locked.
+    expect(api.posts.map((p) => p.params)).toEqual([{ id: "3" }]);
+    expect(grant().disabled).toBe(true);
+    expect(
+      refRow(f, "#3").querySelector('[data-testid="row-applying"]'),
+    ).not.toBeNull();
+    expect(
+      refRow(f, "#4").querySelector('[data-testid="row-applying"]'),
+    ).toBeNull();
+
+    refRow(f, "#4").querySelector<HTMLButtonElement>(".row-main")!.click();
+    await settle(f);
+    expect(grant().disabled).toBe(false);
+    grant().click();
+    await settle(f);
+    expect(api.posts.map((p) => p.params)).toEqual([{ id: "3" }, { id: "4" }]);
+    expect(
+      (f.nativeElement as HTMLElement).querySelectorAll(
+        '[data-testid="row-applying"]',
+      ),
+    ).toHaveLength(2);
+
+    // Both land; the queue read after them shows neither.
+    api.taskList = [];
+    pending.splice(0).forEach((r) => r());
+    await settle(f);
+    await settle(f);
+    expect(TestBed.inject(InboxStore).inFlight().size).toBe(0);
+    expect(q(f, '[data-testid="row-applying"]')).toBeNull();
+    expect(q(f, '[data-testid="action-error"]')).toBeNull();
+  });
+
+  it("grants every selected access request from the batch bar", async () => {
+    const api = new FakeApi();
+    api.taskList = [
+      accessTask(api, "3", "Needs lib"),
+      accessTask(api, "4", "Needs lib too"),
+    ];
+    const f = await render(api);
+    // The bulk-only answer stays out of the row's own buttons.
+    expect(q(f, '[data-testid="action-grant"]')).toBeNull();
+    for (const ref of ["#3", "#4"]) {
+      refRow(f, ref).querySelector<HTMLInputElement>(".row-check")!.click();
+    }
+    await f.whenStable();
+    const bulk = q(f, '[data-testid="bulk-grant"]') as HTMLButtonElement;
+    expect(bulk.textContent).toContain("Grant all (2)");
+    bulk.click();
+    await f.whenStable();
+    expect(q(f, '[data-testid="confirm-dialog"]')?.textContent).toContain(
+      "every item it asked for",
+    );
+    (q(f, '[data-testid="confirm-accept"]') as HTMLButtonElement).click();
+    await settle(f);
+    expect(api.posts).toEqual([
+      {
+        route: "POST /api/tasks/{id}/access-request/grant",
+        params: { id: "3" },
+        body: {},
+      },
+      {
+        route: "POST /api/tasks/{id}/access-request/grant",
+        params: { id: "4" },
+        body: {},
+      },
+    ]);
+  });
+
   it("disables what a viewer cannot do and says why", async () => {
     const api = new FakeApi();
     api.cfg = {
