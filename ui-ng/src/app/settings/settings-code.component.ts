@@ -54,11 +54,12 @@ interface GitConnectionRow {
   credential?: string;
   host?: string;
   kind?: string;
+  proxy?: string;
   scope?: string;
   authType?: string;
   type?: string;
   author?: string;
-  status?: string;
+  status?: string | { proxy?: string; kind?: string };
 }
 
 interface StateRepoEntryDto {
@@ -454,6 +455,9 @@ interface StateRepoEntryDto {
                         <span class="status-pill neutral">{{
                           c.authType || c.type || "pat"
                         }}</span>
+                        @if (connProxy(c); as prx) {
+                          <span class="s-hint s-mono"> via {{ prx }}</span>
+                        }
                       </td>
                       <td class="s-actions-cell">
                         <div class="s-row-actions">
@@ -567,6 +571,19 @@ interface StateRepoEntryDto {
                   />
                 </div>
 
+                <div class="s-field">
+                  <label class="s-label" for="gc-proxy">Proxy (optional)</label>
+                  <input
+                    id="gc-proxy"
+                    class="s-input s-mono"
+                    type="text"
+                    data-testid="input-git-conn-proxy"
+                    placeholder="http://proxy.example.com:3128"
+                    [value]="newGitProxy()"
+                    (input)="newGitProxy.set(inputVal($event))"
+                  />
+                </div>
+
                 @if (newGitType() === "pat") {
                   <div class="s-field">
                     <label class="s-label" for="gc-val"
@@ -601,7 +618,7 @@ interface StateRepoEntryDto {
                   </div>
                   <div class="s-field">
                     <label class="s-label" for="gc-known-hosts"
-                      >Known hosts (optional)</label
+                      >Known hosts</label
                     >
                     <textarea
                       id="gc-known-hosts"
@@ -612,6 +629,10 @@ interface StateRepoEntryDto {
                       [value]="newGitKnownHosts()"
                       (input)="newGitKnownHosts.set($any($event.target).value)"
                     ></textarea>
+                    <span class="s-hint"
+                      >Needed for any host except github.com: grain never trusts
+                      a host key on first use.</span
+                    >
                   </div>
                 } @else if (newGitType() === "app") {
                   <div class="s-field">
@@ -1141,6 +1162,7 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
   protected readonly newGitScope = signal("");
   protected readonly newGitType = signal("pat");
   protected readonly newGitSecret = signal("");
+  protected readonly newGitProxy = signal("");
   protected readonly newGitAppId = signal("");
   protected readonly newGitAppInstallId = signal("");
   protected readonly newGitKnownHosts = signal("");
@@ -1583,6 +1605,14 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
     }
   }
 
+  protected connProxy(c: GitConnectionRow): string {
+    if (c.proxy) return c.proxy;
+    if (c.status && typeof c.status === "object" && c.status.proxy) {
+      return c.status.proxy;
+    }
+    return "";
+  }
+
   protected async saveGitConnection(): Promise<void> {
     if (!this.canSubmitGitConnection()) return;
     const host = this.newGitHost().trim() || "github.com";
@@ -1599,12 +1629,14 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
       };
     } else {
       const type = this.newGitType();
+      const proxy = this.newGitProxy().trim();
       payload = {
         credential: "",
         host,
         kind: this.newGitKind(),
         type,
         ...(scope ? { scope } : {}),
+        ...(proxy ? { proxy } : {}),
       };
       if (type === "pat") {
         payload["value"] = this.newGitSecret().trim();
@@ -1633,7 +1665,10 @@ export class SettingsCodeComponent implements OnInit, OnChanges {
         undefined,
         payload,
       );
+      // A save that went through answers the refusal that was showing.
+      this.state.error.set(null);
       this.newGitCred.set("");
+      this.newGitProxy.set("");
       this.newGitScope.set("");
       this.newGitSecret.set("");
       this.newGitAppId.set("");

@@ -507,6 +507,7 @@ export interface CapabilityMethod {
   args?: Record<string, unknown>;
   requiresArgs?: boolean;
   releasable?: boolean;
+  policy?: { task?: string; process?: string; ci?: string };
   policyRefusal?: string;
   aliasOf?: string[];
 }

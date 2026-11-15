@@ -543,17 +543,22 @@ func (h *CapabilityPasses) heldDeps(runID string, deps Deps) Deps {
 // minted for (§4.3.5): an attempt whose budget was extended past what
 // admission minted for.
 func (h *CapabilityPasses) Extend(ctx context.Context, runID string, deadline time.Time) error {
+	// held.deadline is written under h.mu below, by whichever run renews
+	// it, so it is read under h.mu too; only the Renew call goes unlocked.
 	h.mu.Lock()
 	held := h.passes[runID]
+	stale := held != nil && deadline.After(held.deadline)
 	h.mu.Unlock()
-	if held == nil || !deadline.After(held.deadline) {
+	if !stale {
 		return nil
 	}
 	if err := held.pass.Renew(ctx, deadline); err != nil {
 		return err
 	}
 	h.mu.Lock()
-	held.deadline = deadline
+	if deadline.After(held.deadline) {
+		held.deadline = deadline
+	}
 	h.mu.Unlock()
 	return nil
 }

@@ -1066,6 +1066,237 @@ describe("SettingsPageComponent (M13 D-12)", () => {
         .length,
     ).toBe(1);
   });
+
+  it("renders real sandbox backends/networks, string GitHub App IDs, plain-git App gating, masked secrets, and confirm dialogs across Git & Capabilities", async () => {
+    const api = new FakeSettingsApi();
+    api.settingsBody = {
+      ...api.settingsBody,
+      pollInterval: "10s",
+      pollIntervalDefault: "10s",
+      maxMergesPerRepo: 5,
+      sandboxBackend: "container",
+      networkAccess: "open",
+      sandboxBackendOptions: [
+        { backend: "container", available: true },
+        {
+          backend: "none",
+          available: false,
+          reason: "needs -disable-native-sandboxes at daemon startup",
+        },
+      ],
+    };
+    const baseGet = api.get;
+    api.get = (key: string, params?: RouteParams, query?: string) => {
+      if (key === "GET /api/deployment/git-connections") {
+        return Promise.resolve([
+          {
+            credential: "conn-1",
+            host: "git.example.test",
+            authType: "pat",
+            proxy: "http://proxy.example.test:3128",
+          },
+        ]);
+      }
+      if (key === "GET /api/api-scope-sets") {
+        return Promise.resolve({
+          sets: [
+            { name: "tasks-read", scopes: ["tasks:read"], source: "builtin" },
+            { name: "team/custom", scopes: ["ci:read"], source: "config" },
+          ],
+        });
+      }
+      if (key === "GET /api/secrets") {
+        return Promise.resolve({
+          secrets: [
+            { name: "user-sec", keys: ["token"] },
+            { name: "registry-registration-token", keys: ["value"] },
+            { name: "agent-backend-vertex-main", keys: ["value"] },
+            { name: "repo-release-acme-app", keys: ["cosign"] },
+            {
+              name: "srv-sec",
+              keys: ["apiToken"],
+              capabilityServers: ["github-mcp"],
+            },
+          ],
+        });
+      }
+      return baseGet(key, params, query);
+    };
+
+    const { el, harness } = await mountSettings("/settings/sandboxes", api);
+
+    // Sandbox backend & network options match Grain's real vocabulary and disable unavailable backends with their reason.
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-sandbox-backend"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    const noneOpt = el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-sandbox-backend-opt-none"]',
+    )!;
+    expect(noneOpt.getAttribute("aria-disabled")).toBe("true");
+    expect(noneOpt.textContent).toContain("None (control plane only)");
+    expect(noneOpt.textContent).toContain("disable-native-sandboxes");
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-sandbox-network"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="select-sandbox-network-opt-open"]'),
+    ).not.toBeNull();
+    expect(
+      el.querySelector('[data-testid="select-sandbox-network-opt-egress"]'),
+    ).toBeNull();
+
+    // Engine uses 10s pollIntervalDefault placeholder and 5 maxMergesPerRepo placeholder.
+    await harness.navigateByUrl("/settings/engine");
+    await harness.fixture.whenStable();
+    harness.fixture.detectChanges();
+    expect(
+      el
+        .querySelector<HTMLInputElement>('[data-testid="input-poll-interval"]')
+        ?.getAttribute("placeholder"),
+    ).toBe("10s");
+    expect(
+      el.querySelector<HTMLInputElement>("#e-mpr")?.getAttribute("placeholder"),
+    ).toBe("5");
+
+    // Git: Plain git disables GitHub App; GitHub App sends string IDs; Remove confirms first.
+    await harness.navigateByUrl("/settings/git");
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.fixture.detectChanges();
+
+    expect(
+      el.querySelector('[data-testid="git-conn-row-conn-1"]')?.textContent,
+    ).toContain("via http://proxy.example.test:3128");
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="git-conn-row-conn-1"] button',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("conn-1");
+    expect(
+      api.calls.some(
+        (c) => c.key === "DELETE /api/deployment/git-connections/{cred}",
+      ),
+    ).toBe(false);
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-cancel"]',
+    )!.click();
+    harness.fixture.detectChanges();
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-git-conn-kind"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-git-conn-kind-opt-git"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-git-conn-type"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(
+      el
+        .querySelector<HTMLButtonElement>(
+          '[data-testid="select-git-conn-type-opt-app"]',
+        )
+        ?.getAttribute("aria-disabled"),
+    ).toBe("true");
+
+    // Switch back to GitHub kind and submit GitHub App with string appId & installationId
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-git-conn-kind"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-git-conn-kind-opt-github"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-git-conn-type"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="select-git-conn-type-opt-app"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    setInput(
+      el.querySelector<HTMLInputElement>('[data-testid="input-git-app-id"]')!,
+      "12345",
+    );
+    setInput(
+      el.querySelector<HTMLInputElement>(
+        '[data-testid="input-git-app-install-id"]',
+      )!,
+      "67890",
+    );
+    setInput(
+      el.querySelector<HTMLTextAreaElement>(
+        '[data-testid="input-git-app-private-key"]',
+      )!,
+      "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----",
+    );
+    harness.fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="save-git-conn-btn"]',
+    )!.click();
+    await harness.fixture.whenStable();
+    const appPost = api.calls.find(
+      (c) => c.key === "POST /api/deployment/git-connections",
+    );
+    expect(
+      (appPost?.body as { app?: { appId?: unknown; installationId?: unknown } })
+        ?.app?.appId,
+    ).toBe("12345");
+    expect(
+      (appPost?.body as { app?: { installationId?: unknown } })?.app
+        ?.installationId,
+    ).toBe("67890");
+
+    // Capabilities: secret value is masked password input; server-owned secrets omitted from table; Remove server confirms first.
+    await harness.navigateByUrl("/settings/capabilities");
+    await harness.fixture.whenStable();
+    await new Promise((r) => setTimeout(r, 20));
+    harness.fixture.detectChanges();
+
+    const secInput = el.querySelector<HTMLInputElement>(
+      '[data-testid="input-secret-value"]',
+    )!;
+    expect(secInput.tagName).toBe("INPUT");
+    expect(secInput.type).toBe("password");
+    expect(secInput.getAttribute("autocomplete")).toBe("new-password");
+    expect(
+      el.querySelector('[data-testid="secret-row-user-sec"]'),
+    ).not.toBeNull();
+    expect(el.querySelector('[data-testid="secret-row-srv-sec"]')).toBeNull();
+    // Secrets another control owns stay out of the table and its Delete.
+    for (const owned of [
+      "registry-registration-token",
+      "agent-backend-vertex-main",
+      "repo-release-acme-app",
+    ]) {
+      expect(
+        el.querySelector(`[data-testid="secret-row-${owned}"]`),
+      ).toBeNull();
+    }
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="remove-cap-server-github-mcp"]',
+    )!.click();
+    harness.fixture.detectChanges();
+    expect(
+      el.querySelector('[data-testid="confirm-dialog"]')?.textContent,
+    ).toContain("github-mcp");
+    expect(
+      api.calls.some((c) => c.key === "POST /api/capability-servers/remove"),
+    ).toBe(false);
+  });
+
   it("labels capability server states in host wording, gives failed the error tone, and titles needs-config with its reason", async () => {
     expect(
       capServerState({ id: "p", status: { state: "needs-hostd:mac-mini" } }),

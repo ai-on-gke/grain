@@ -284,6 +284,33 @@ func TestAdmissionRefusesWhatTheCapabilityPolicyDoesNotAdmit(t *testing.T) {
 	}
 }
 
+// Extend is called from each run's own goroutine, so two renewing the
+// same pass at once must not race on its deadline (go test -race), and
+// the later deadline wins whichever finishes last.
+func TestExtendIsSafeFromConcurrentRuns(t *testing.T) {
+	caller := &mintCaller{}
+	deps, _, ctx, now := passHarness(t, caller)
+	if adm, err := capabilityAdmitter(deps, admitAll)(ctx, dispatch.Candidate{TaskID: "7", RunID: "7-1", Attempt: 1}); err != nil || !adm.Admitted {
+		t.Fatalf("admit = %+v, %v", adm, err)
+	}
+	passes := deps.CapabilityPasses
+	base := capabilityDeadline(*now, deps.Config.maxRunRuntime())
+	var wg sync.WaitGroup
+	for i := 1; i <= 8; i++ {
+		wg.Add(1)
+		go func(d time.Time) {
+			defer wg.Done()
+			if err := passes.Extend(ctx, "7-1", d); err != nil {
+				t.Errorf("extend: %v", err)
+			}
+		}(base.Add(time.Duration(i) * time.Hour))
+	}
+	wg.Wait()
+	if _, got := passes.held("7-1"); !got.Equal(base.Add(8 * time.Hour)) {
+		t.Errorf("deadline = %v, want the latest asked for, %v", got, base.Add(8*time.Hour))
+	}
+}
+
 func TestExtendRenewsAPassOnlyPastItsDeadline(t *testing.T) {
 	caller := &mintCaller{}
 	deps, _, ctx, now := passHarness(t, caller)

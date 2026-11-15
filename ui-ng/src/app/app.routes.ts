@@ -358,6 +358,11 @@ export const routes: Routes = [
         queryParams: { path: String(params["file"] ?? "") },
       }),
   },
+  // The classic UI's per-server address opens the servers list.
+  {
+    path: "settings/capabilities/:serverId",
+    redirectTo: "settings/capabilities",
+  },
   {
     path: "settings",
     title: "Settings · grain",

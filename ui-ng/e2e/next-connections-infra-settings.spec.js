@@ -56,12 +56,12 @@ test("Sandboxes offers the server's backend and network vocabulary and saves it"
   const opts = page
     .getByTestId("select-sandbox-backend-menu")
     .getByRole("option");
-  const values = await page
-    .getByTestId("select-sandbox-backend-menu")
-    .getByRole("option")
-    .evaluateAll((els) =>
-      els.map((e) => e.dataset.testid.replace(/^.*-opt-/, "")),
-    );
+  // The menu renders after the click: wait for every option before
+  // reading them, or a loaded runner reads an empty list.
+  await expect(opts).toHaveCount(before.sandboxBackendOptions.length);
+  const values = await opts.evaluateAll((els) =>
+    els.map((e) => e.dataset.testid.replace(/^.*-opt-/, "")),
+  );
   expect(values).toEqual(before.sandboxBackendOptions.map((o) => o.backend));
   // A backend this daemon cannot run is listed, disabled, with the reason.
   const none = page.getByTestId("select-sandbox-backend-opt-none");
