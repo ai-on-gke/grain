@@ -122,9 +122,12 @@ echo "package ci // second head" >>"$WORK_DIR/push2/pkg/ci/t${A}.go"
 echo "second head" >>"$WORK_DIR/push2/docs/t${A}.md"
 git -C "$WORK_DIR/push2" -c user.name="Walk Seed" -c user.email="seed@example.com" commit -qam "fix: second head"
 git -C "$WORK_DIR/push2" push -q origin "$branch"
-# Path-trigger re-reviews are debounced 3m (reviewDebounce); the security
-# re-review follows the new head's classification.
-wait_for 420 all_closed "$A" 3
+# Path-trigger re-reviews are debounced 3m (reviewDebounce). The security
+# hold classifies a new head when the change is about to merge -- on Submit
+# here, auto-merge being off -- so Submit once they are in.
+wait_for 420 all_closed "$A" 2
+api POST "/api/tasks/$A/submit" '{}' >/dev/null
+wait_for 240 all_closed "$A" 3
 check_reviews item2 "$A" --expect-brief yes --expect-designs 3 --marker "**This is an incremental review.**" \
 	--marker "## Earlier reviews of this pull request"
 AFTER=0
@@ -155,7 +158,7 @@ wait_for 240 all_closed "$E" 4
 check_reviews item4 "$E" --expect-brief no --expect-designs 0
 
 echo "$A $H $H2 $E" >"$WORK_DIR/reviewed-ids"
-jq -c '{label, ok, counts, quoted_in_brief, fence, brief_bytes, replacement_chars, designs, failures}' "$RESULTS" >"$WORK_DIR/results-summary.jsonl"
+jq -c '{label: .label, ok: .ok, counts: .counts, quoted_in_brief: .quoted_in_brief, fence: .fence, brief_bytes: .brief_bytes, replacement_chars: .replacement_chars, designs: .designs, failures: .failures}' "$RESULTS" >"$WORK_DIR/results-summary.jsonl"
 if ((fail)); then
 	echo "[$STORE] walkthrough FAILED"
 	exit 1

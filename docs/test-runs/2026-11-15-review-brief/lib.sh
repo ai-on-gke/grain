@@ -51,10 +51,10 @@ PY
 ]}
 EOF
 	if [[ -n "$spec" ]]; then
-		store_exec "INSERT INTO task_link (task_id, kind, target, blocks) VALUES ('$id', 'implements-spec', '$spec', 0);" >/dev/null
+		store_exec "INSERT INTO task_link (task_id, kind, target, blocks) VALUES ('$id', 'implements-spec', '$spec', false);" >/dev/null
 	fi
 	if [[ -n "$design_doc" ]]; then
-		store_exec "INSERT INTO task_link (task_id, kind, target, blocks) VALUES ('$id', 'design-doc', '$design_doc', 0);" >/dev/null
+		store_exec "INSERT INTO task_link (task_id, kind, target, blocks) VALUES ('$id', 'design-doc', '$design_doc', false);" >/dev/null
 	fi
 	api POST "/api/tasks/$id/approve" '{}' >/dev/null
 	echo "$id"
