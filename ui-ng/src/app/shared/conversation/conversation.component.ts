@@ -51,6 +51,11 @@ export type ConversationMode = "inline" | "expanded" | "fullscreen";
 // messages; further up, new messages raise the jump pill instead.
 const FOLLOW_SLACK_PX = 48;
 
+function scrolls(el: Element): boolean {
+  const oy = getComputedStyle(el).overflowY;
+  return oy === "auto" || oy === "scroll";
+}
+
 export interface ComposerConfig {
   placeholder?: string;
   submitLabel?: string;
@@ -402,6 +407,12 @@ export class ConversationComponent implements OnDestroy {
 
   private resize?: ResizeObserver;
   private resizeTarget: Element | null = null;
+  private outer: HTMLElement | null = null;
+  private readonly onOuterScroll = () => {
+    if (this.threadScrolls()) return;
+    this.following = this.endBelowOuter() <= FOLLOW_SLACK_PX;
+    if (this.following && this.unseen()) this.unseen.set(0);
+  };
 
   // Markdown renders after the first paint and images load later still, so
   // the thread keeps growing after we scrolled it. While the reader follows
@@ -417,6 +428,37 @@ export class ConversationComponent implements OnDestroy {
     this.resize.observe(el);
     for (const child of Array.from(el.children)) this.resize.observe(child);
     this.resizeTarget = el;
+    this.watchOuter();
+  }
+
+  // Where the page lays the thread out at full length (the Inbox
+  // inspector), the thread is not a scroller and the pane around it is:
+  // follow the end there instead.
+  private watchOuter() {
+    let p = this.host.nativeElement.parentElement;
+    while (p && !scrolls(p)) p = p.parentElement;
+    if (p === this.outer) return;
+    this.outer?.removeEventListener("scroll", this.onOuterScroll);
+    this.outer = p;
+    p?.addEventListener("scroll", this.onOuterScroll, { passive: true });
+  }
+
+  private threadScrolls(): boolean {
+    const el = this.thread()?.nativeElement;
+    return !el || scrolls(el);
+  }
+
+  // How far the end of the conversation (its composer included) sits below
+  // the bottom of the outer scroller's content box.
+  private endBelowOuter(): number {
+    const end = this.thread()?.nativeElement.closest(".convo-host");
+    const outer = this.outer;
+    if (!end || !outer) return 0;
+    const pad = parseFloat(getComputedStyle(outer).paddingBottom) || 0;
+    return (
+      end.getBoundingClientRect().bottom -
+      (outer.getBoundingClientRect().bottom - pad)
+    );
   }
 
   // The full-screen view is a native <dialog> opened with showModal(): the
@@ -424,6 +466,7 @@ export class ConversationComponent implements OnDestroy {
   // inert, so it stays where Angular rendered it (no manual DOM moves).
   ngOnDestroy() {
     this.resize?.disconnect();
+    this.outer?.removeEventListener("scroll", this.onOuterScroll);
     const el = this.modal()?.nativeElement;
     if (el?.open) el.close();
   }
@@ -469,6 +512,16 @@ export class ConversationComponent implements OnDestroy {
   private scrollToEnd() {
     const el = this.thread()?.nativeElement;
     if (!el) return;
+    if (!scrolls(el) && this.outer) {
+      // Only ever down: a short thread already in view stays put.
+      const below = this.endBelowOuter();
+      if (below <= 0) return;
+      const prev = this.outer.style.scrollBehavior;
+      this.outer.style.scrollBehavior = "auto";
+      this.outer.scrollTop += below;
+      this.outer.style.scrollBehavior = prev;
+      return;
+    }
     // Jumps are instant: a smooth scroll started before late content lands
     // stops short of the real end.
     const prev = el.style.scrollBehavior;

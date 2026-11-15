@@ -18,8 +18,9 @@ import { test, expect } from "./fixtures.js";
 // Inbox inspector's body scrolls, so its inline conversation thread must
 // not scroll too. A short thread window used to scroll beside the body's
 // own scrollbar on the same right edge, and nobody could tell which one the
-// wheel would move. Expanding the conversation still hands the thread its
-// own scroller, with the rest of the body set aside.
+// wheel would move. The body follows the end of the thread the way the
+// thread's own scroller did. Expand and full screen still hand the thread
+// its own scroller, with the rest of the body set aside.
 
 async function apiPost(baseURL, code, path, data) {
   const res = await fetch(`${baseURL}${path}`, {
@@ -83,9 +84,11 @@ for (const viewport of [
       await row.locator(".row-main").click();
       const convo = page.getByTestId("inspector-conversation");
       await expect(convo.getByText("Progress note 14:")).toBeAttached();
+      // Opening the task lands on the newest message, as the thread's own
+      // scroller did: the body follows the end of the conversation.
       await expect(
         convo.getByText("Last message in the thread."),
-      ).toBeAttached();
+      ).toBeInViewport();
 
       const thread = convo.locator(".convo-thread");
       await expect
@@ -105,16 +108,57 @@ for (const viewport of [
         ),
       ).toBeLessThanOrEqual(2);
 
-      // The thread's last message is reached by scrolling the body.
+      // Back at the end, content that renders late (an image loading in the
+      // last message, say) is followed: the body stays on the end.
       await body.evaluate((el) => (el.scrollTop = el.scrollHeight));
-      await expect(
-        convo.getByText("Last message in the thread."),
-      ).toBeInViewport();
+      await convo
+        .locator(".convo-thread .msg")
+        .last()
+        .evaluate((el) => {
+          const late = document.createElement("div");
+          late.style.height = "300px";
+          late.textContent = "Late-rendered content.";
+          el.append(late);
+        });
+      await expect(convo.locator(".convo-composer")).toBeInViewport({
+        ratio: 1,
+      });
+      await expect
+        .poll(() =>
+          body.evaluate(
+            (el) => el.scrollHeight - el.scrollTop - el.clientHeight,
+          ),
+        )
+        .toBeLessThanOrEqual(2);
 
       // Expanded, the thread is the one scroller instead.
       await convo.getByTestId("convo-expand").click();
       await expect(convo).toHaveClass(/is-expanded/);
       await expect.poll(() => scrollers(page)).toEqual(["convo-thread"]);
+      await convo.getByTestId("convo-expand").click();
+      await expect(convo).not.toHaveClass(/is-expanded/);
+
+      // Full screen, the dialog's thread scrolls and the composer sits
+      // inside the dialog: the inline rules above do not reach it.
+      await convo.getByTestId("convo-fullscreen").click();
+      const modal = page.getByTestId("convo-modal");
+      await expect(modal).toBeVisible();
+      const modalThread = modal.locator(".convo-thread");
+      expect(
+        await modalThread.evaluate((el) => ({
+          overflowY: getComputedStyle(el).overflowY,
+          overflows: el.scrollHeight > el.clientHeight + 1,
+        })),
+      ).toEqual({ overflowY: "auto", overflows: true });
+      const modalBox = await modal.boundingBox();
+      const modalComposer = await modal
+        .locator(".convo-composer")
+        .boundingBox();
+      expect(modalComposer.y + modalComposer.height).toBeLessThanOrEqual(
+        modalBox.y + modalBox.height + 1,
+      );
+      await page.keyboard.press("Escape");
+      await expect(modal).toBeHidden();
     } finally {
       await fetch(`${demoServer}/api/tasks/${id}/close`, {
         method: "POST",

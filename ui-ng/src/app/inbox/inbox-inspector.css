@@ -143,16 +143,22 @@
    composer sticks to the bottom of the body while the thread is on screen,
    so a long thread never puts the reply box out of reach; the host clips
    rather than hides its overflow so that it is not the sticky container. */
-.inspector-body > .g-conversation:not(.is-expanded) .convo-host {
+.inspector-body > .g-conversation > .convo-host:not(.is-expanded) {
   overflow: clip;
 }
 
-.inspector-body > .g-conversation:not(.is-expanded) .convo-thread {
+.inspector-body
+  > .g-conversation
+  > .convo-host:not(.is-expanded)
+  .convo-thread {
   height: auto;
   overflow-y: visible;
 }
 
-.inspector-body > .g-conversation:not(.is-expanded) .convo-composer {
+.inspector-body
+  > .g-conversation
+  > .convo-host:not(.is-expanded)
+  .convo-composer {
   position: sticky;
   /* Flush with the pane's edge, not its 24px bottom padding, so the thread
      does not show through below the pinned composer. */
