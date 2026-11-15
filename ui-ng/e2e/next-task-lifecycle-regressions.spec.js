@@ -14,9 +14,12 @@
 
 import { test, expect } from "./fixtures.js";
 
+// -notifications seeds the Inbox's alerts; the tasks are the stock demo's.
+test.use({ demoArgs: ["-notifications"] });
+
 // Regressions from the 2026-11-15 task intake, Inbox and lifecycle
 // walkthrough (docs/test-runs/2026-11-15-task-intake-inbox-lifecycle.md),
-// all on the /next/ task page:
+// on the /next/ task page and Inbox:
 //
 //   - Pause immediately throws away what a run has not pushed, so it asks
 //     first, as the classic Pause now does;
@@ -27,7 +30,9 @@ import { test, expect } from "./fixtures.js";
 //   - the goal editor reads the goal it is editing (the task row's
 //     camelCase onLimit, not the declaration's on_limit), so saving it
 //     again does not quietly turn "notify" back into "hold", and Clear
-//     goal leaves no stale Goal line behind.
+//     goal leaves no stale Goal line behind;
+//   - an acknowledged alert is no longer open, so it leaves the Inbox
+//     headline and the rail badge, though its row stays, marked.
 
 async function taskByTitle(demoServer, accessCode, title) {
   const res = await fetch(`${demoServer}/api/tasks?fields=list`, {
@@ -195,4 +200,30 @@ test("the goal editor keeps a goal's at-limit choice across a re-save, and Clear
   await expect(
     page.getByRole("definition").filter({ hasText: "base-green" }),
   ).toHaveCount(0);
+});
+
+test("acknowledging an alert takes it out of the Inbox count, and its row stays marked", async ({
+  page,
+}) => {
+  await page.goto("/next/inbox");
+  const badge = page.getByTestId("rail-inbox-count");
+  const headline = page.locator("main .view-headline").first();
+  await expect(headline).toContainText("waiting on you");
+  const count = async () => Number((await badge.innerText()).trim());
+  const before = await count();
+  await expect(headline).toHaveText(`${before} decisions waiting on you`);
+
+  const row = page
+    .getByTestId("inbox-group-notification")
+    .getByTestId("queue-row")
+    .filter({ hasText: "A merge has been stalled" });
+  await row.locator(".row-main").click();
+  await page.getByTestId("action-ack").click();
+  await expect(row.locator(".row-acked")).toHaveText("acknowledged");
+  await expect(badge).toHaveText(String(before - 1));
+  await expect(headline).toHaveText(`${before - 1} decisions waiting on you`);
+
+  await page.reload();
+  await expect(badge).toHaveText(String(before - 1));
+  await expect(row).toHaveCount(1);
 });
