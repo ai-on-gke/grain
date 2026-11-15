@@ -57,6 +57,9 @@ const SandboxAccess = 4244
 
 // 4251-4259: built-in capability servers' loopback data planes.
 const (
+	BuiltinCapabilityMin = 4251
+	BuiltinCapabilityMax = 4259
+
 	// Figma is the figma capability server's loopback data-plane port.
 	Figma = 4253
 	// Git is the git capability server's loopback data-plane port, and
@@ -64,6 +67,16 @@ const (
 	// too. It was 9728 once: the daemon's own git proxy, which held it
 	// first, so the built-in never started in a daemon.
 	Git = 4254
+)
+
+// 4260-4269: downstream editions' host-only capability servers'
+// loopback data planes; core allocates nothing here. On a host where the
+// daemon and the host agent share 127.0.0.1, an edition's servers in
+// this band cannot collide with core's built-ins in 4251-4259. Core
+// imports nothing from any edition; the band is only kept free.
+const (
+	EditionMin = 4260
+	EditionMax = 4269
 )
 
 // 4280-4289: persistent sandboxes' host_port (model.PersistentSandbox),

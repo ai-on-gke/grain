@@ -14,14 +14,21 @@
 
 import { APP_BASE_HREF } from "@angular/common";
 import { TestBed } from "@angular/core/testing";
-import { provideRouter, withComponentInputBinding } from "@angular/router";
+import {
+  Router,
+  provideRouter,
+  withComponentInputBinding,
+} from "@angular/router";
 import { RouterTestingHarness } from "@angular/router/testing";
 import { GrainApi, type RouteParams } from "../api/grain-api.service";
 import type { GrainConfig } from "../api/models";
 import {
   RepoDetailPageComponent,
+  declaredPushRef,
   importOutcomeText,
   releaseActionReasons,
+  removeRepoMessage,
+  unjudgedGatesFor,
 } from "./repo-detail-page.component";
 
 interface RepoCall {
@@ -29,12 +36,38 @@ interface RepoCall {
   key: string;
   params?: RouteParams;
   body?: unknown;
+  query?: string;
 }
+
+// The server's sentence for a watched default branch grain CI is not
+// enabled for (pkg/ui/basebranchgate.go), cut short.
+const CI_OFF_DETAIL =
+  "Nothing is testing acme/platform's default branch, and the merge queue is merging onto it anyway.";
 
 class FakeRepoApi {
   calls: RepoCall[] = [];
   ciMode = "grain";
   refusePut: string | null = null;
+  // gates answers GET /api/base-branch-gates from the stored CI mode, as
+  // the server does for a watched branch it has never enrolled.
+  gates = (): unknown[] =>
+    this.ciMode === "grain"
+      ? []
+      : [
+          {
+            repo: "acme/platform",
+            judged: false,
+            reason: "grain-ci-off",
+            detail: CI_OFF_DETAIL,
+          },
+          // Another repository's gate is not this page's.
+          {
+            repo: "acme/other",
+            judged: false,
+            reason: "grain-ci-off",
+            detail: "Nothing is testing acme/other's default branch.",
+          },
+        ];
 
   configBody: GrainConfig = {
     version: "v3.6.0",
@@ -46,10 +79,42 @@ class FakeRepoApi {
     },
   };
 
+  declarationsBody: Record<string, unknown> = {
+    declarations: true,
+    declarationsStatus: {
+      commit: "0f1e2d3c4b5a69788796",
+      templates: [".grain/templates/nightly.yml"],
+      triggers: [".grain/triggers/payments.yml"],
+      pushes: [
+        {
+          path: ".grain/templates/nightly.yml",
+          refs: [{ ref: "refs/tags/nightly-*", force: true }],
+        },
+      ],
+      warnings: ["port-types: main->candidtae is not paired"],
+    },
+    pairedBranches: ["main", "candidate"],
+    portBranches: ["main", "candidate"],
+    portDirections: [
+      { from: "main", to: "candidate", paired: true, types: ["fix"] },
+      { from: "main", to: "candidtae", paired: false, types: ["fix"] },
+    ],
+    portWarnings: [
+      "port-types: main->candidtae is not paired",
+      "operator: candidate->main names nothing",
+    ],
+  };
+
   config = () => Promise.resolve(structuredClone(this.configBody));
 
-  get = (key: string, params?: RouteParams) => {
-    this.calls.push({ method: "GET", key, params });
+  get = (key: string, params?: RouteParams, query?: string) => {
+    this.calls.push({ method: "GET", key, params, query });
+    if (key === "GET /api/base-branch-gates") {
+      return Promise.resolve({ gates: this.gates() });
+    }
+    if (key === "GET /api/repos/{owner}/{name}/declarations") {
+      return Promise.resolve(structuredClone(this.declarationsBody));
+    }
     if (key === "GET /api/deployment/repos/{owner}/{name}/config") {
       return Promise.resolve({
         baseBranch: "main",
@@ -110,11 +175,25 @@ class FakeRepoApi {
         ),
       );
     }
+    if (key === "PUT /api/repos/{owner}/{name}/ci-mode") {
+      this.ciMode = String((body as { ciMode?: string })?.ciMode);
+    }
     return Promise.resolve({ ok: true });
   };
 
   post = (key: string, params?: RouteParams, body?: unknown) => {
     this.calls.push({ method: "POST", key, params, body });
+    if (key === "POST /api/repos/plan") {
+      return Promise.resolve({
+        targetReposStranded: [
+          {
+            repo: "acme/platform",
+            summary:
+              "`acme/platform` comes off this deployment's target repo list, so 2 tasks still in play there are parked.",
+          },
+        ],
+      });
+    }
     return Promise.resolve({ ok: true });
   };
 
@@ -139,6 +218,7 @@ async function mountRepo(url: string, api = new FakeRepoApi()) {
             component: RepoDetailPageComponent,
           },
           { path: "settings/repositories", children: [] },
+          { path: "repos", children: [] },
           { path: "tasks", children: [] },
         ],
         withComponentInputBinding(),
@@ -368,6 +448,120 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
   // 2026-11-13 repository walkthrough: the CI mode pill offered "both"
   // and "off", which PUT .../ci-mode refuses, and had no "none", so a
   // repository on no CI read as Grain CI.
+  it("keeps only this repository's unjudged gates", () => {
+    const gate = (repo: string, judged: boolean) => ({
+      repo,
+      judged,
+      reason: judged ? "run-unfinished" : "grain-ci-off",
+    });
+    expect(
+      unjudgedGatesFor(
+        [
+          gate("acme/platform", false),
+          gate("Acme/Platform", false),
+          gate("acme/platform", true),
+          gate("acme/other", false),
+        ],
+        "acme/platform",
+      ).map((g) => g.repo),
+    ).toEqual(["acme/platform", "Acme/Platform"]);
+  });
+
+  // 2026-11-14 repository walkthrough, item 5: classic warns on Overview
+  // and on Releases when CI mode leaves the watched base branch unjudged.
+  it("warns on Overview and Releases while CI mode is github or none, and clears on grain without a reload", async () => {
+    const api = new FakeRepoApi();
+    api.ciMode = "github";
+    const { el, harness } = await mountRepo("/repos/acme/platform", api);
+    const warnings = () => [
+      ...el.querySelectorAll<HTMLElement>(
+        '[data-testid="repo-base-gate-warning"]',
+      ),
+    ];
+    const settle = async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      harness.detectChanges();
+      await harness.fixture.whenStable();
+    };
+
+    expect(warnings()).toHaveLength(1);
+    expect(warnings()[0]!.getAttribute("role")).toBe("status");
+    expect(warnings()[0]!.textContent).toContain(CI_OFF_DETAIL);
+    expect(warnings()[0]!.textContent).not.toContain("acme/other");
+    const read = api.calls.find((c) => c.key === "GET /api/base-branch-gates");
+    expect(new URLSearchParams(read!.query).get("repo")).toBe("acme/platform");
+    expect(new URLSearchParams(read!.query).get("fields")).toBe("full");
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repo-tab-releases"]',
+    )!.click();
+    await settle();
+    expect(warnings()).toHaveLength(1);
+    expect(
+      el.querySelector('[data-testid="card-repo-release-settings"]'),
+    ).not.toBeNull();
+
+    // The CI tab carries the control, not the warning.
+    el.querySelector<HTMLButtonElement>('[data-testid="repo-tab-ci"]')!.click();
+    await settle();
+    expect(warnings()).toHaveLength(0);
+    const pick = async (mode: string) => {
+      el.querySelector<HTMLButtonElement>(
+        '[data-testid="select-repo-ci-mode"]',
+      )!.click();
+      harness.detectChanges();
+      el.querySelector<HTMLButtonElement>(
+        `[data-testid="select-repo-ci-mode-opt-${mode}"]`,
+      )!.click();
+      await settle();
+    };
+    const toTab = async (id: string) => {
+      el.querySelector<HTMLButtonElement>(
+        `[data-testid="repo-tab-${id}"]`,
+      )!.click();
+      await settle();
+    };
+
+    await pick("grain");
+    await toTab("overview");
+    expect(warnings()).toHaveLength(0);
+    await toTab("releases");
+    expect(warnings()).toHaveLength(0);
+
+    await toTab("ci");
+    await pick("none");
+    await toTab("overview");
+    expect(warnings()).toHaveLength(1);
+  });
+
+  it("links the warning to the CI tab's CI mode control", async () => {
+    const api = new FakeRepoApi();
+    api.ciMode = "none";
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/releases",
+      api,
+    );
+    const link = el.querySelector<HTMLAnchorElement>(
+      '[data-testid="repo-base-gate-ci-mode-link"]',
+    )!;
+    expect(link.textContent?.trim()).toBe("Go to CI Mode");
+    expect(link.getAttribute("href")).toBe(
+      "/next/repos/acme/platform/ci#repo-ci-mode",
+    );
+    link.click();
+    await new Promise((r) => setTimeout(r, 30));
+    harness.detectChanges();
+    await harness.fixture.whenStable();
+    const control = el.querySelector<HTMLElement>("#repo-ci-mode");
+    expect(control).not.toBeNull();
+    expect(
+      control!.querySelector('[data-testid="select-repo-ci-mode"]'),
+    ).not.toBeNull();
+    expect(document.activeElement).toBe(
+      control!.querySelector('[data-testid="select-repo-ci-mode"]'),
+    );
+  });
+
   it("offers exactly the CI modes the server accepts and shows a repo on none as No CI", async () => {
     const api = new FakeRepoApi();
     api.ciMode = "none";
@@ -458,5 +652,156 @@ describe("RepoDetailPageComponent (/next/repos/:owner/:name)", () => {
       { baseRepairBypassesHumanGates: true },
       { baseRepairBypassesHumanGates: false },
     ]);
+  });
+
+  it("shows what acme/platform declares on the Advanced tab and switches declarations off", async () => {
+    const { el, api, harness } = await mountRepo("/repos/acme/platform");
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="repo-tab-advanced"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+    expect(TestBed.inject(Router).url).toBe("/repos/acme/platform/advanced");
+
+    const card = (id: string) =>
+      el.querySelector(`[data-testid="card-repo-${id}"]`)?.textContent ?? "";
+    expect(card("declarations")).toContain(
+      "Read at 0f1e2d3c4b5a: 1 template(s), 0 suite(s), 0 schedule(s), 1 trigger(s)",
+    );
+    expect(card("triggers")).toContain(".grain/triggers/payments.yml");
+    expect(card("push-refs")).toContain("refs/tags/nightly-* (force)");
+    expect(card("ports")).toContain(
+      "Grain ports each merge between main, candidate",
+    );
+    expect(card("ports")).toContain("nothing (not a paired branch)");
+    // The repository's own port finding is said once, in the
+    // declarations card; the operator's is said under Ports.
+    expect(card("ports")).not.toContain("main->candidtae is not paired");
+    expect(card("ports")).toContain("operator: candidate->main names nothing");
+
+    const sw = el.querySelector<HTMLButtonElement>(
+      '[data-testid="switch-repo-declarations"]',
+    )!;
+    expect(sw.getAttribute("aria-checked")).toBe("true");
+    sw.click();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(
+      api.calls
+        .filter((c) => c.key === "PUT /api/repos/{owner}/{name}/declarations")
+        .map((c) => c.body),
+    ).toEqual([{ declarations: false }]);
+  });
+
+  it("asks before Remove, naming what it strands, then removes and goes to the Repos list", async () => {
+    const api = new FakeRepoApi();
+    api.configBody.targetRepos = ["acme/platform", "acme/other"];
+    const { el, harness } = await mountRepo(
+      "/repos/acme/platform/advanced",
+      api,
+    );
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="remove-repo-btn"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 15));
+    harness.detectChanges();
+    expect(
+      api.calls.find((c) => c.key === "POST /api/repos/plan")?.body,
+    ).toEqual({ targetRepos: ["acme/other"] });
+    const dialog = el.querySelector('[data-testid="confirm-dialog"]');
+    expect(dialog?.textContent).toContain(
+      "Remove acme/platform from target repos?",
+    );
+    expect(dialog?.textContent).toContain(
+      "2 tasks still in play there are parked",
+    );
+    expect(api.calls.some((c) => c.method === "DELETE")).toBe(false);
+
+    el.querySelector<HTMLButtonElement>(
+      '[data-testid="confirm-accept"]',
+    )!.click();
+    await new Promise((r) => setTimeout(r, 15));
+    expect(
+      api.calls.filter((c) => c.key === "DELETE /api/repos/{owner}/{name}"),
+    ).toEqual([
+      {
+        method: "DELETE",
+        key: "DELETE /api/repos/{owner}/{name}",
+        params: { owner: "acme", name: "platform" },
+      },
+    ]);
+    expect(TestBed.inject(Router).url).toBe("/repos");
+  });
+
+  it("offers no Remove on the config repo or an untargeted repo, and disables it with the reason for a role without repos:write", async () => {
+    const api = new FakeRepoApi();
+    api.configBody.targetRepos = ["acme/platform"];
+    api.configBody.configRepo = "acme/platform";
+    const { el } = await mountRepo("/repos/acme/platform/advanced", api);
+    expect(el.querySelector('[data-testid="remove-repo-btn"]')).toBeNull();
+    expect(
+      el.querySelector('[data-testid="remove-repo-desc"]')?.textContent,
+    ).toContain("configuration repository and cannot be removed");
+    TestBed.resetTestingModule();
+
+    const other = new FakeRepoApi();
+    other.configBody.targetRepos = ["acme/elsewhere"];
+    const untargeted = await mountRepo("/repos/acme/platform/advanced", other);
+    expect(
+      untargeted.el.querySelector('[data-testid="remove-repo-btn"]'),
+    ).toBeNull();
+    expect(
+      untargeted.el.querySelector('[data-testid="remove-repo-desc"]')
+        ?.textContent,
+    ).toContain("not one of this deployment's target repos");
+    TestBed.resetTestingModule();
+
+    const viewer = new FakeRepoApi();
+    viewer.configBody.targetRepos = ["acme/platform"];
+    viewer.configBody.access = {
+      role: "grain/viewer",
+      roles: ["grain/viewer"],
+      full: false,
+      scopes: ["repos:read"],
+    };
+    const limited = await mountRepo("/repos/acme/platform/advanced", viewer);
+    const btn = limited.el.querySelector<HTMLButtonElement>(
+      '[data-testid="remove-repo-btn"]',
+    )!;
+    expect(btn.disabled).toBe(true);
+    expect(btn.getAttribute("aria-describedby")).toBe("remove-locked-reason");
+    expect(
+      limited.el.querySelector('[data-testid="remove-locked-reason"]')
+        ?.textContent,
+    ).toContain("Your role, grain/viewer, cannot remove repositories");
+    expect(
+      limited.el.querySelector<HTMLButtonElement>(
+        '[data-testid="switch-repo-declarations"]',
+      )!.disabled,
+    ).toBe(true);
+    expect(
+      limited.el.querySelector('[data-testid="declarations-locked-reason"]')
+        ?.textContent,
+    ).toContain("cannot switch declarations on or off");
+  });
+});
+
+describe("removeRepoMessage and declaredPushRef", () => {
+  it("says removing the only allowed repo unrestricts the deployment", () => {
+    expect(removeRepoMessage("acme/a", ["Acme/A"], [])).toContain(
+      "An empty allowlist is what means unrestricted",
+    );
+    expect(removeRepoMessage("acme/a", ["acme/a", "acme/b"], [])).toBe(
+      "New tasks won't be able to target acme/a until it's added back, and it drops off the repos list. Tasks already filed there are not affected.",
+    );
+    expect(
+      removeRepoMessage("acme/a", ["acme/a", "acme/b"], ["3 tasks parked."]),
+    ).toMatch(/repos list\. 3 tasks parked\.$/);
+  });
+
+  it("words a push ref with its flags", () => {
+    expect(declaredPushRef({ ref: "refs/tags/v*" })).toBe("refs/tags/v*");
+    expect(
+      declaredPushRef({ ref: "refs/heads/rel", force: true, delete: true }),
+    ).toBe("refs/heads/rel (force, delete)");
   });
 });

@@ -76,11 +76,49 @@ g-agents-page {
   min-height: 36px;
 }
 
+/* One scroller in the list pane (task 5977). With room, it is the grid
+   body (.agents-body), sized to what the header leaves of the pane, and
+   the header stays put. In a narrow or short pane (the Director docked
+   beside a 30/70 split, a laptop screen) the header wraps to half the
+   pane or more and would leave the body shorter than one card, so there
+   .agents-scroll -- header and grid together -- scrolls instead and the
+   header scrolls away.
+
+   The pane clips rather than scrolls, and .agents-body is positioned so
+   the cards' sr-only text (position: absolute) has it, not the pane, as
+   its containing block. Without that the text escapes the body's clip,
+   the pane grows a second scroll range the wheel chains into, and the
+   grid slides under the status footer with no scrollbar of its own. */
+.agents-list-pane {
+  overflow: clip;
+  container: agents-list / size;
+}
+
+.agents-scroll {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overscroll-behavior: contain;
+}
+
 .agents-body {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding-bottom: 24px;
+}
+
+@container agents-list (max-width: 479.98px) or (max-height: 699.98px) {
+  .agents-scroll {
+    overflow-y: auto;
+  }
+  .agents-body {
+    flex: none;
+    overflow: visible;
+  }
 }
 
 .agent-group + .agent-group {
@@ -432,6 +470,16 @@ body.agents-wall .agent-title {
     width: calc(100% - 24px);
     margin: 12px;
   }
+}
+
+/* No agent in focus: the inspector is closed and the cards take the
+   whole width, wall-of-cards style. */
+.agents-split:not(.has-pane) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.agents-split:not(.has-pane) .queue-pane {
+  border-right: 0;
 }
 
 /* Nothing running: no split, no empty inspector; one centred state. */

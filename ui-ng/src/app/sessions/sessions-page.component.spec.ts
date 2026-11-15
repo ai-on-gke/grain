@@ -387,7 +387,7 @@ describe("SessionsPageComponent", () => {
     expect(q(f, '[data-testid="apply-now-banner"]')).toBeNull();
   });
 
-  it("edits API-scope grants, model, and team visibility in the session settings drawer", async () => {
+  it("edits API-scope grants and model in the session settings drawer, with no team field", async () => {
     const api = new FakeApi();
     const f = await render(api);
 
@@ -399,22 +399,9 @@ describe("SessionsPageComponent", () => {
     expect(drawer).toBeTruthy();
     expect(drawer.querySelectorAll("select")).toHaveLength(0);
 
-    // Save team visibility
-    const teamIn = q(
-      f,
-      '[data-testid="session-team-input"]',
-    ) as HTMLInputElement;
-    teamIn.value = "platform";
-    teamIn.dispatchEvent(new Event("input"));
-    (q(f, '[data-testid="session-team-save"]') as HTMLButtonElement).click();
-    await settle(f);
-    expect(
-      api.calls.find(
-        (c) =>
-          c.method === "PUT" &&
-          (c.body as { team?: string })?.team === "platform",
-      ),
-    ).toBeTruthy();
+    // Sessions have no team: grain is single-tenant, and the server's
+    // vestigial session team gates nothing, so there is no field for it.
+    expect(q(f, '[data-testid="session-team-input"]')).toBeNull();
 
     // Add API scope grant via <g-grants-picker>
     (
@@ -529,7 +516,7 @@ describe("SessionsPageComponent", () => {
     });
   });
 
-  it("starts a new session from the dialog with optional team", async () => {
+  it("starts a new session from the dialog, with no team field", async () => {
     const api = new FakeApi();
     const f = await render(api);
     (q(f, '[data-testid="new-session"]') as HTMLButtonElement).click();
@@ -540,15 +527,13 @@ describe("SessionsPageComponent", () => {
     const name = q(f, '[data-testid="new-session-name"]') as HTMLInputElement;
     name.value = "New one";
     name.dispatchEvent(new Event("input"));
-    const team = q(f, '[data-testid="new-session-team"]') as HTMLInputElement;
-    team.value = "sre";
-    team.dispatchEvent(new Event("input"));
+    expect(q(f, '[data-testid="new-session-team"]')).toBeNull();
     (q(f, '[data-testid="new-session-create"]') as HTMLButtonElement).click();
     await settle(f);
     expect(
       api.calls.find((c) => c.route === "POST /api/console-sessions"),
     ).toMatchObject({
-      body: { title: "New one", team: "sre", attachments: [] },
+      body: { title: "New one", attachments: [] },
     });
     expect(q(f, '[data-testid="new-session-dialog"]')).toBeNull();
   });
@@ -876,6 +861,22 @@ describe("SessionsPageComponent", () => {
     expect(q(f, '[data-testid="msg-8"]')?.textContent).toContain("First turn");
     expect(q(f, '[data-testid="msg-11"]')?.textContent).toContain("Follow-up");
     expect(q(f, '[data-testid="load-older-comments"]')).toBeNull();
+
+    // The live page slides forward past #10 and #11: neither may vanish.
+    api.details["1"] = {
+      ...api.details["1"],
+      olderComments: 4,
+      comments: [
+        { id: 12, author: "ana", authorKind: "human", body: "Third turn" },
+        { id: 13, author: "grain", authorKind: "automation", body: "Reply" },
+      ],
+    };
+    await TestBed.inject(SessionsStore).refresh();
+    f.detectChanges();
+    await f.whenStable();
+    for (const id of [8, 9, 10, 11, 12, 13]) {
+      expect(q(f, `[data-testid="msg-${id}"]`)).toBeTruthy();
+    }
   });
 
   it("shows optimistic sent message immediately and does not stall behind 503 polling", async () => {

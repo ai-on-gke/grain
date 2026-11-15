@@ -541,9 +541,17 @@ export class SessionsStore {
   private applyPagedMerge(id: string, fresh: TaskDetail): TaskDetail {
     const paged = this.pagedComments.get(id);
     if (!paged?.length) return fresh;
+    // Once older history is loaded, every comment seen stays: each poll
+    // answers only the newest page, so a window that slides forward would
+    // otherwise drop the comments between the paged history and it.
+    const all = mergeComments(
+      paged,
+      (fresh.comments ?? []).filter((c) => c.id > 0),
+    );
+    this.pagedComments.set(id, all);
     return {
       ...fresh,
-      comments: mergeComments(paged, fresh.comments ?? []),
+      comments: mergeComments(all, fresh.comments ?? []),
       olderComments:
         this.pagedOlderComments.get(id) ?? fresh.olderComments ?? 0,
     };
@@ -672,9 +680,13 @@ export class SessionsStore {
         { id },
         `comments_limit=${COMMENTS_PAGE_SIZE}&comments_before=${encodeURIComponent(String(first.id))}&attempts_limit=1`,
       );
+      const live = (this.details()[id]?.comments ?? []).filter((c) => c.id > 0);
       this.pagedComments.set(
         id,
-        mergeComments(page.comments ?? [], this.pagedComments.get(id) ?? []),
+        mergeComments(
+          page.comments ?? [],
+          mergeComments(this.pagedComments.get(id) ?? [], live),
+        ),
       );
       this.pagedOlderComments.set(id, page.olderComments ?? 0);
       const latest = this.details()[id];

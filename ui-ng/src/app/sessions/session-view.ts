@@ -74,25 +74,57 @@ export function safeHref(href: string): string | null {
   }
 }
 
+// escapeText is escapeHtml for prose, which leaves character references
+// (&quot;, &amp;, &#39;) whole, so they read as the characters they name --
+// as CommonMark, GitHub and the classic UI read them -- rather than as
+// "&quot;". The browser only ever decodes one into text, never markup.
+const CHAR_REF_RE =
+  /&(?![A-Za-z][A-Za-z0-9]{1,31};|#\d{1,7};|#[xX][0-9A-Fa-f]{1,6};)/g;
+
+function escapeText(s: string): string {
+  return s
+    .replace(CHAR_REF_RE, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// The raw HTML a message may use, as GitHub allows it in a comment: a few
+// inline tags, bare -- written with no attribute at all -- so nothing can
+// ride in on one (no href, no src, no on*, no style). Any other tag, or one
+// of these with an attribute, is shown as text.
+const INLINE_HTML_RE =
+  /^<(\/?)(code|strong|em|b|i|kbd|sub|sup)\s*>$|^<br\s*\/?>$/i;
+
+function inlineHtml(raw: string): string | null {
+  const m = INLINE_HTML_RE.exec(raw);
+  if (!m) return null;
+  return m[2] ? `<${m[1]}${m[2].toLowerCase()}>` : "<br>";
+}
+
 function isLocal(href: string): boolean {
   return href.startsWith("/") || href.startsWith("#");
 }
 
-// Raw HTML in a message is shown as text, so a message can only ever
-// produce Markdown's own elements; leaf text is always escaped even when
-// Marked v15 sets inRawBlock (e.g. after <kbd>), and code blocks render
-// inside syntax-colored .code-card containers with a Copy button.
+// Raw HTML in a message is shown as text, except the bare inline tags
+// above, so a message can only ever produce Markdown's own elements and
+// those; leaf text is always escaped even when Marked v15 sets inRawBlock
+// (e.g. after <kbd>), and code blocks render inside syntax-colored
+// .code-card containers with a Copy button.
 const md = new Marked({
   gfm: true,
   breaks: true,
   renderer: {
     html({ text }) {
-      return escapeHtml(text);
+      return text.replace(
+        /<[^<>]*>|[^<]+|</g,
+        (piece) => inlineHtml(piece) ?? escapeText(piece),
+      );
     },
     text(token) {
       return "tokens" in token && token.tokens
         ? this.parser.parseInline(token.tokens)
-        : escapeHtml(token.text);
+        : escapeText(token.text);
     },
     code({ text, lang }) {
       return renderCodeCard(text, lang);

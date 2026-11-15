@@ -399,8 +399,12 @@ sandbox:
   path trigger, qualification run or release-notes filing firing a template above the
   deployment's maximum files nothing, and the firing fails saying so. On a deployment whose sandboxes are host directories, which
   have no shape, the form and the API leave the template's shape off. A
-  schedule firing there files the shape anyway, and the run fails at
-  sandbox setup, so don't declare `sandbox:` for such a deployment.
+  schedule, suite or trigger firing there still files the shape on the
+  task, but dispatch drops it when every dimension matches the
+  template's (the size came from the template, not from a person) and
+  logs `not asking for template …'s sandbox size`, so the run starts on
+  the host's own directory. A dimension somebody stated on the filing
+  that differs from the template's is still refused at sandbox setup.
 - The template's shape shows on its page (opened from its row on the
   Processes page), in
   `GET /api/templates` (`sandbox: {cpus, memoryMb, diskGb}`), and in the

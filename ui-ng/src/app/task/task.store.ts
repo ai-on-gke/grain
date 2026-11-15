@@ -26,6 +26,7 @@ import type {
 } from "../api/models";
 import { InboxStore } from "../inbox/inbox.store";
 import { errorText } from "../sessions/session-helpers";
+import { ReadTrouble } from "../services/request-trouble";
 
 export type { TreeNode, WorkTree };
 
@@ -82,6 +83,11 @@ export class TaskStore {
   private pagedOlderAttempts: number | null = null;
 
   private timer: ReturnType<typeof setInterval> | null = null;
+  // trouble is the detail poll's run of failed reads: silent until it is
+  // sustained, and the poll backs off (pollAfter) while it lasts
+  // (request-trouble.ts).
+  private readonly trouble = new ReadTrouble();
+  private pollAfter = 0;
   private transcriptTimer: ReturnType<typeof setTimeout> | null = null;
   private transcriptLive = false;
   private transcriptFailures = 0;
@@ -105,10 +111,12 @@ export class TaskStore {
       this.pagedOlderAttempts = null;
       this.resetTranscript();
       this.resetAudit();
+      this.trouble.ok();
+      this.pollAfter = 0;
     }
     void this.refresh();
     this.eventSub ??= this.events.events().subscribe(() => {
-      if (this.eventTimer) return;
+      if (this.eventTimer || this.trouble.failing) return;
       this.eventTimer = setTimeout(() => {
         this.eventTimer = null;
         void this.refresh();
@@ -116,10 +124,10 @@ export class TaskStore {
     });
     if (!this.timer) {
       this.zone.runOutsideAngular(() => {
-        this.timer = setInterval(
-          () => this.zone.run(() => void this.refresh()),
-          POLL_MS,
-        );
+        this.timer = setInterval(() => {
+          if (Date.now() < this.pollAfter) return;
+          this.zone.run(() => void this.refresh());
+        }, POLL_MS);
       });
     }
   }
@@ -156,6 +164,14 @@ export class TaskStore {
     const hasPagedComments = this.pagedComments.length > 0;
     const hasPagedAttempts = this.pagedAttempts.length > 0;
     if (!hasPagedComments && !hasPagedAttempts) return fresh;
+    // Once older history is loaded every comment seen stays, so a live
+    // window sliding forward cannot drop the ones between it and history.
+    if (hasPagedComments) {
+      this.pagedComments = mergeComments(
+        this.pagedComments,
+        (fresh.comments ?? []).filter((c) => c.id > 0),
+      );
+    }
     return {
       ...fresh,
       ...(hasPagedComments
@@ -192,9 +208,17 @@ export class TaskStore {
         this.detail.set(this.applyPagedMerge(r.body));
       }
       this.loadError.set(null);
+      this.trouble.ok();
+      this.pollAfter = 0;
     } catch (err) {
       if (this.id() !== id) return;
       const status = (err as { status?: number })?.status;
+      const sustained = this.trouble.fail(err);
+      this.pollAfter = Date.now() + this.trouble.nextDelay(POLL_MS) - POLL_MS;
+      // One failed poll keeps the detail already on screen and says
+      // nothing; a missing task, a page with nothing to show yet, or
+      // failure that lasts says so.
+      if (status !== 404 && !sustained && this.detail()) return;
       this.loadError.set(
         status === 404
           ? `There is no task #${id}.`
@@ -217,9 +241,13 @@ export class TaskStore {
         `comments_limit=50&comments_before=${encodeURIComponent(String(first.id))}&attempts_limit=1`,
       );
       if (this.id() !== id) return;
+      // Keep the live window that was on screen too: later polls only
+      // answer the newest page, so without it the window's oldest
+      // comments would drop out as new ones arrive.
+      const live = (this.detail()?.comments ?? []).filter((c) => c.id > 0);
       this.pagedComments = mergeComments(
         page.comments ?? [],
-        this.pagedComments,
+        mergeComments(this.pagedComments, live),
       );
       this.pagedOlderComments = page.olderComments ?? 0;
       const latest = this.detail();
@@ -431,6 +459,14 @@ export class TaskStore {
     }
     const cur = this.detail()?.id === expectedId ? this.detail() : null;
     if (cur?.consoleSession) {
+      // The fast path skips the live re-read, but still honours the
+      // caller's guard against the detail already in hand, so a session
+      // known to be closed or stopped keeps the typed text.
+      const why = refuse?.(cur);
+      if (why) {
+        this.actionError.set(why);
+        return false;
+      }
       const busyKey = `${expectedId}:send`;
       this.mark(busyKey, true);
       this.actionError.set(null);
