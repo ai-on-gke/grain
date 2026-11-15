@@ -1824,8 +1824,10 @@ export class TelemetryPageComponent implements OnInit {
     const w = qp.get("window");
     if (w === "24h" || w === "7d" || w === "30d") {
       this.window.set(w);
+    } else if (w === "90d") {
+      this.window.set("30d");
     }
-    const r = qp.get("repo");
+    const r = qp.get("repo") || parseLegacyMetricsRepoFilter(qp.getAll("f"));
     if (r) this.selectedRepo.set(r);
     const a = qp.get("author");
     if (a) this.selectedAuthor.set(a);
@@ -2149,4 +2151,19 @@ export class TelemetryPageComponent implements OnInit {
       this.savingUsage.set(false);
     }
   }
+}
+
+// Classic System → Metrics encodes repository narrowing as `?f=repo:any:<owner/name>`
+// (or `f=repo:is:<owner/name>`). Extract the first repository when a classic link
+// is redirected here with its query kept.
+export function parseLegacyMetricsRepoFilter(
+  filters: readonly string[],
+): string {
+  for (const raw of filters) {
+    for (const token of raw.split(";")) {
+      const m = /^repo:(?:any:|is:)?([^,;\s]+)/i.exec(token.trim());
+      if (m?.[1]) return m[1];
+    }
+  }
+  return "";
 }

@@ -251,9 +251,7 @@ function waitsOnHuman(t: Task): boolean {
     (!t.humanApprovedBy ||
       Boolean(t.reviewQuestions) ||
       Boolean(t.reviewFindings?.length) ||
-      Boolean(
-        t.humanReviewHold?.some((h) => h.category === "security-findings"),
-      ))
+      Boolean(t.humanReviewHold?.some((h) => h.source === "security-findings")))
   ) {
     return true;
   }

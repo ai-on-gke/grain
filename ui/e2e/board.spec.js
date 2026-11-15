@@ -18,7 +18,7 @@ import { test, expect } from "./fixtures.js";
 // real browser -- see tasks.spec.js's own doc comment for what this
 // suite is and what `grain demo` has already seeded by the time it runs
 // (one task in every state, "Spike: websocket transport" being the
-// closed one, "Replace the settings pane with a form library" the
+// closed one beside the rolled-over durable task, "Replace the settings pane with a form library" the
 // deferred one).
 //
 // The columns are a saved board now rather than a fixed entry on the
@@ -209,13 +209,16 @@ test("keeps an edited column layout across a reload", async ({ page }) => {
   await expect(
     archive.locator(".board-card", { hasText: "Spike: websocket transport" }),
   ).toBeVisible({ timeout: COLD_LOAD_MS });
-  // A column of one card has nowhere to move its lone card to, so its
-  // move handle is disabled rather than offering a pickup with no slots.
+  // The column also holds the demo's rolled-over durable task, closed
+  // when its successor was filed (pkg/demo/demo_durable.go), so the
+  // spike has a slot to move to and its handle is live. A lone card's
+  // disabled handle is TaskBoard.test.jsx's to check.
+  await expect(archive.locator(".board-card")).toHaveCount(2);
   await expect(
     archive
       .locator(".board-card", { hasText: "Spike: websocket transport" })
       .getByRole("button", { name: /^Move task / }),
-  ).toBeDisabled();
+  ).toBeEnabled();
 
   await page.reload();
 

@@ -99,6 +99,13 @@ const (
 	// which only an exact name admits. A daemon never needs to check it:
 	// it sends none of them, and an exact name is admitted by every host.
 	FeatureEnvDenyV2 Feature = "env_deny_v2"
+	// FeatureSelfUpdate: a rootless host agent (grain-agentd) whose owner
+	// can update it with `grain-agentd update` from the signed release the
+	// controller serves; Hello.Platform and Hello.UpdateMode/UpdatePin say
+	// what to offer it. Only a host agent started with Server.SelfUpdate
+	// lists it: a root-installed `grain host` never does, and is never
+	// offered an update by the controller.
+	FeatureSelfUpdate Feature = "self_update"
 )
 
 // Features is every feature this build implements, in the order they
@@ -119,6 +126,7 @@ var Features = []Feature{
 	FeatureHookPolicy,
 	FeatureHandover,
 	FeatureEnvDenyV2,
+	FeatureSelfUpdate,
 }
 
 // legacyFeatures is what a peer that predates Hello.Features is credited

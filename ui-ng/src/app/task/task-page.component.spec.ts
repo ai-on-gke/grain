@@ -331,6 +331,27 @@ describe("TaskPageComponent", () => {
     expect(root.textContent).not.toContain("classic task page");
   });
 
+  // Rollover (durable-tasks.design.md#DT-15): the predecessor banners its
+  // successor, and the successor links back.
+  it("banners a rollover on both ends", async () => {
+    const api = new FakeApi();
+    api.detail = { ...api.detail, state: "closed", rolledOverTo: "902" };
+    let f = await render(api);
+    const to = q(f, '[data-testid="task-rolled-over-to"]')!;
+    expect(to.textContent).toContain("Rolled over to #902");
+    expect(to.querySelector("a")!.getAttribute("href")).toBe("/task/902");
+    expect(q(f, '[data-testid="task-rolled-over-from"]')).toBeNull();
+    TestBed.inject(TaskStore).close();
+    TestBed.resetTestingModule();
+
+    const next = new FakeApi();
+    next.detail = { ...next.detail, rolledOverFrom: "901" };
+    f = await render(next);
+    const from = q(f, '[data-testid="task-rolled-over-from"]')!;
+    expect(from.querySelector("a")!.getAttribute("href")).toBe("/task/901");
+    expect(q(f, '[data-testid="task-rolled-over-to"]')).toBeNull();
+  });
+
   it("sends a reply with Ctrl+Enter and uploads composer attachments", async () => {
     const api = new FakeApi();
     const f = await render(api);
@@ -727,6 +748,146 @@ describe("TaskPageComponent", () => {
     } as never);
     await settle(f);
     expect(q(f, '[data-testid="act-reply"]')).toBeNull();
+  });
+
+  it("offers no Release hold on review findings alone, but the gate override", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        {
+          source: "security-findings",
+          category: "security",
+          reason: "the review left findings",
+        },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+    const note = q(f, '[data-testid="hold-findings-note"]')!;
+    expect(note.textContent).toContain("cannot be released directly");
+    expect(note.textContent).toContain("merge:force");
+    expect(note.textContent).not.toContain("other reasons");
+
+    q<HTMLButtonElement>(f, '[data-testid="hold-force-merge-open"]')!.click();
+    await f.whenStable();
+    expect(q(f, '[data-testid="force-merge-dialog"]')).toBeTruthy();
+    expect(q(f, '[data-testid="override-gate-security-review"]')).toBeTruthy();
+    q<HTMLButtonElement>(f, '[data-testid="force-merge-cancel"]')!.click();
+    await f.whenStable();
+    expect(q(f, '[data-testid="force-merge-dialog"]')).toBeNull();
+  });
+
+  it("keeps Release hold for a hold of findings and other reasons", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+        { source: "requested", category: "other", reason: "intent unclear" },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeTruthy();
+    expect(q(f, '[data-testid="hold-findings-note"]')!.textContent).toContain(
+      "other reasons only",
+    );
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeTruthy();
+  });
+
+  it("offers no override once the review gate is overridden, even while code review runs, and says so", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: [
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "overridden",
+        },
+        {
+          id: "review",
+          label: "Code review",
+          state: "running",
+        },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+    expect(q(f, '[data-testid="hold-findings-note"]')!.textContent).toContain(
+      "has been overridden",
+    );
+  });
+
+  it("does not claim the review gate was overridden when mergeGates is absent", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      pullRequest: undefined,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: undefined,
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+    expect(q(f, '[data-testid="release-hold-btn"]')).toBeNull();
+    const note = q(f, '[data-testid="hold-findings-note"]')!.textContent!;
+    expect(note).toContain("cannot be released directly");
+    expect(note).not.toContain("has been overridden");
+  });
+
+  it("hides the gate override from a limited role even when it holds merge:force on the repo", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeTruthy();
+
+    TestBed.inject(AccessService).setConfig({
+      access: {
+        full: false,
+        role: "widgets-force-merger",
+        scopes: ["tasks:read", "tasks:write", "merge:force"],
+        repoLimits: { "merge:force": ["acme/web"] },
+      },
+    } as never);
+    await settle(f);
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
+  });
+
+  it("shows no hold card on a closed task", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "closed",
+      humanReviewHold: [
+        { source: "security-findings", reason: "the review left findings" },
+      ],
+      mergeGates: [
+        { id: "security-review", label: "Security review", state: "findings" },
+      ],
+    } as TaskDetail;
+    const f = await render(api);
+    expect(q(f, '[data-testid="human-review-hold"]')).toBeNull();
+    expect(q(f, '[data-testid="hold-force-merge-open"]')).toBeNull();
   });
 
   it("shows a path-trigger hold with its review task, approvals, security hold and merge rules", async () => {

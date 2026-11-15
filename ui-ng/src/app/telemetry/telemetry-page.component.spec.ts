@@ -20,7 +20,10 @@ import { GrainEvents } from "../api/grain-events.service";
 import type { GrainConfig, Task } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
-import { TelemetryPageComponent } from "./telemetry-page.component";
+import {
+  TelemetryPageComponent,
+  parseLegacyMetricsRepoFilter,
+} from "./telemetry-page.component";
 import type {
   ClusterStats,
   MetricsReport,
@@ -933,5 +936,15 @@ describe("TelemetryPageComponent", () => {
     expect(peopleNames).not.toContain("system:nightly-bot");
     expect(peopleNames).not.toContain("Grain");
     expect(peopleNames).toContain("Alice");
+  });
+
+  it("parses classic System → Metrics ?f=repo:any:<owner/name> filters", () => {
+    expect(parseLegacyMetricsRepoFilter(["repo:any:acme/widgets"])).toBe(
+      "acme/widgets",
+    );
+    expect(
+      parseLegacyMetricsRepoFilter(["status:is:done;repo:is:acme/web"]),
+    ).toBe("acme/web");
+    expect(parseLegacyMetricsRepoFilter(["author:any:alice"])).toBe("");
   });
 });
