@@ -1198,6 +1198,105 @@ describe("duration", () => {
     });
   });
 
+  it("offers Accept findings only on an acceptable findings gate, and posts its gate, review and reason", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      mergeGates: [
+        { id: "ci", label: "CI", state: "passed" },
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "findings",
+          detail: "security review left findings",
+          reviewTask: "4710",
+          acceptable: true,
+        },
+        // Held by a record no review stands behind: nothing to accept.
+        {
+          id: "review",
+          label: "Code review",
+          state: "findings",
+          detail: "filing gating review failed",
+        },
+      ],
+    };
+    const f = await render(api, "changes");
+
+    expect(q(f, '[data-testid="accept-findings-review"]')).toBeNull();
+    expect(q(f, '[data-testid="accept-findings-ci"]')).toBeNull();
+    const open = q<HTMLButtonElement>(
+      f,
+      '[data-testid="accept-findings-security-review"]',
+    )!;
+    expect(open).toBeTruthy();
+    open.click();
+    await settle(f);
+
+    const dialog = q(f, '[data-testid="accept-findings-dialog"]')!;
+    expect(dialog).toBeTruthy();
+    expect(dialog.closest("[inert]")).toBeNull();
+    expect(dialog.textContent).toContain("Review task 4710");
+    const confirm = q<HTMLButtonElement>(
+      f,
+      '[data-testid="accept-findings-confirm"]',
+    )!;
+    expect(confirm.disabled).toBe(true);
+    const reason = q<HTMLTextAreaElement>(
+      f,
+      '[data-testid="accept-findings-reason"]',
+    )!;
+    reason.value = "merge as-is; follow-up filed";
+    reason.dispatchEvent(new Event("input"));
+    await f.whenStable();
+    expect(confirm.disabled).toBe(false);
+    confirm.click();
+    await settle(f);
+
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks/{id}/accept-findings"),
+    ).toMatchObject({
+      params: { id: "7" },
+      body: {
+        gate: "security-review",
+        reviewTask: "4710",
+        reason: "merge as-is; follow-up filed",
+      },
+    });
+    expect(q(f, '[data-testid="accept-findings-dialog"]')).toBeNull();
+  });
+
+  it("points Force merge at Accept findings when a gate holds acceptable findings", async () => {
+    const api = new FakeApi();
+    api.detail = {
+      ...api.detail,
+      state: "awaiting_submit",
+      mergeGates: [
+        {
+          id: "security-review",
+          label: "Security review",
+          state: "findings",
+          reviewTask: "4710",
+          acceptable: true,
+        },
+      ],
+    };
+    const f = await render(api, "changes");
+    q<HTMLButtonElement>(
+      f,
+      '[data-testid="changes-force-merge-open"]',
+    )!.click();
+    await settle(f);
+    expect(
+      q(f, '[data-testid="force-merge-accept-findings-hint"]')!.textContent,
+    ).toContain("Accept findings");
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+    );
+    await settle(f);
+  });
+
   it("opens force-merge dialog outside inert section, traps focus, and closes on Escape", async () => {
     const api = new FakeApi();
     api.detail = {

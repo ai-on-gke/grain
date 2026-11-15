@@ -105,10 +105,23 @@ import { TaskStore } from "./task.store";
           @for (g of task().mergeGates; track g.id) {
             <span
               [class]="'status-pill ' + gateTone(g)"
+              [attr.data-testid]="'merge-gate-' + g.id"
               [gTip]="g.detail || g.state"
             >
               {{ g.label || g.id }}: {{ g.state }}
             </span>
+            @if (offersAcceptFindings(g)) {
+              <button
+                type="button"
+                class="btn-text"
+                [attr.data-testid]="'accept-findings-' + g.id"
+                gTip="Merge over this review's findings as they are, with a reason. Clears this gate's findings only: CI, the other gates and approvals still apply."
+                [disabled]="store.isBusy('accept-findings', task().id)"
+                (click)="emitAcceptFindings(g)"
+              >
+                Accept findings…
+              </button>
+            }
           }
         </div>
       }
@@ -176,6 +189,7 @@ import { TaskStore } from "./task.store";
             type="button"
             class="btn-outlined danger"
             data-testid="changes-force-merge-open"
+            gTip="Override every gate you tick and merge now, with a reason. To merge over one review's findings as they are, use Accept findings… on that gate instead."
             [disabled]="store.isBusy('force-merge', task().id)"
             (click)="emitForceMerge()"
           >
@@ -497,6 +511,59 @@ export class TaskChangesTabComponent {
 
   readonly forceMerge =
     output<import("./force-merge-dialog.component").ForceMergeRequest>();
+  readonly acceptFindings =
+    output<
+      import("./accept-findings-dialog.component").AcceptFindingsRequest
+    >();
+
+  // A person's decision to merge over one review's findings on one gate
+  // (accept-findings-dialog.component.ts). Offered only where the server
+  // says the findings are a review's to accept (MergeGate.acceptable), on
+  // an open task, to a caller the route lets through.
+  protected offersAcceptFindings(g: MergeGate): boolean {
+    return (
+      g.state === "findings" &&
+      !!g.acceptable &&
+      this.task().state !== "closed" &&
+      this.can("POST /api/tasks/{id}/accept-findings")
+    );
+  }
+
+  protected emitAcceptFindings(g: MergeGate): void {
+    const t = this.task();
+    const head = this.preview()?.head || t.ci?.commit;
+    this.acceptFindings.emit({
+      task: t,
+      gate: g,
+      head,
+      run: (reason) =>
+        this.store
+          .act(
+            "accept-findings",
+            (id) =>
+              this.api.post(
+                "POST /api/tasks/{id}/accept-findings",
+                { id },
+                {
+                  gate: g.id,
+                  ...(g.reviewTask ? { reviewTask: g.reviewTask } : {}),
+                  reason,
+                  ...(head ? { head } : {}),
+                },
+              ),
+            t.id,
+          )
+          .then((ok) => {
+            if (ok) {
+              this.snackbar.show(
+                `Accepted ${g.label || g.id} findings on #${t.id}`,
+              );
+              this.acted.emit();
+            }
+            return ok;
+          }),
+    });
+  }
 
   protected emitForceMerge(): void {
     const t = this.task();
