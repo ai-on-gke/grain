@@ -348,6 +348,17 @@ Rules:
   screen), takes its palette from the colour tokens, and keeps an invalid
   diagram's source under a note saying why
   (`ui-ng/e2e/next-task-media-viewer.spec.js`).
+- **A deployment finding that blocks nothing is a warning, not an error.**
+  Something an operator should fix while the deployment keeps working (a
+  base branch publishing nothing, `baseBranchPublishing`) is a
+  `warning-container` banner with a warning status icon on its first line
+  and `role="status"`. It sits beside the page's error banners (Dispatch
+  blocked, `role="alert"`), above the content. Use the server's `detail`
+  sentence rather than rewording it, and link the task that holds the
+  finding where there is one (`ui-ng/e2e/next-fleet-publishing-held.spec.js`).
+- **Say a wire code in words.** A reason or state code from the API
+  (`publishingHeld`, `standingWork`) is mapped to words before it is shown.
+  A code nobody has mapped yet shows as itself, which beats showing nothing.
 - **A dialog fits the screen.** `.g-dialog` (and its `.is-drawer` width) is
   `box-sizing: border-box`, so its `min(520px, 100vw - 32px)` width
   includes its padding and border. That leaves a 16px margin either side
