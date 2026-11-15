@@ -14,6 +14,7 @@
 
 import type { Notification, Task } from "../api/models";
 import {
+  awaitsHumanSubmit,
   buildEntries,
   classifyNotification,
   classifyTask,
@@ -156,6 +157,26 @@ describe("inbox classifier", () => {
     ).toBeNull();
   });
 
+  it("keeps a submittable CL's Submit out of Submit all and says it submits", () => {
+    const e = classifyTask(
+      task({
+        id: "31",
+        state: "awaiting_submit",
+        clSubmit: { canSubmit: true },
+      }),
+    );
+    expect(e?.groupId).toBe("submit");
+    const submit = e?.actions.find((a) => a.label === "Submit");
+    expect(submit).toBeTruthy();
+    expect(submit?.bulk).toBeFalsy();
+    expect(submit?.blocked).toBeUndefined();
+    expect(e?.summary).toContain("Submit this CL now");
+    expect(e?.rationale).not.toContain("approval before merging");
+    // A pull request's Submit, a recorded approval, still joins it.
+    const pr = classifyTask(task({ id: "32", state: "awaiting_submit" }));
+    expect(pr?.actions.find((a) => a.label === "Submit")?.bulk).toBeTruthy();
+  });
+
   it("reads a pending release, its soak, breaking changes and a failed dispatch", () => {
     const n: Notification = {
       id: 7,
@@ -195,6 +216,51 @@ describe("inbox classifier", () => {
     expect(
       pendingReleaseOf({ id: 1, subject: "release.pending:v2.4.1" }),
     ).toBeNull();
+  });
+
+  it("offers a stuck task the control its sub-case names, and none where it names none", () => {
+    const control = (over: Partial<Task>) =>
+      classifyTask(task({ stall: "stuck", ...over }))?.actions.map((a) => [
+        a.id,
+        a.route,
+      ]);
+    expect(
+      control({
+        state: "queued",
+        reason: { reason: "queued/ready", control: "Run now" },
+      }),
+    ).toEqual([["run-now", "POST /api/tasks/{id}/run-now"]]);
+    expect(
+      control({
+        state: "running",
+        reason: { reason: "running/live_run", control: "Cancel" },
+      }),
+    ).toEqual([["cancel", "POST /api/tasks/{id}/close"]]);
+    expect(
+      control({
+        state: "deferred",
+        reason: { reason: "deferred/wake_time", control: "Undefer" },
+      }),
+    ).toEqual([["undefer", "POST /api/tasks/{id}/undefer"]]);
+    expect(
+      control({
+        state: "queued",
+        reason: { reason: "queued/ready" },
+        mergeQueueReason: { reason: "merge_failed", control: "Retry merge" },
+      }),
+    ).toEqual([["retry-merge", "POST /api/tasks/{id}/retry-merge"]]);
+    expect(
+      control({ state: "running", reason: { reason: "running/live_run" } }),
+    ).toEqual([]);
+    const cancel = classifyTask(
+      task({
+        stall: "stuck",
+        state: "running",
+        reason: { reason: "r", control: "Cancel" },
+      }),
+    )?.actions[0];
+    expect(cancel?.confirm).toContain("Cancel #1?");
+    expect(cancel?.destructive).toBe(true);
   });
 
   it("offers acknowledge, investigate and clear on an alert", () => {
@@ -267,5 +333,40 @@ describe("inbox classifier", () => {
     });
     expect(cleared.taskId).toBe("412");
     expect(cleared.taskLink).toBe("/task/412");
+  });
+
+  it("keeps an approved awaiting_submit task in awaitsHumanSubmit when held by security-findings source", () => {
+    expect(
+      awaitsHumanSubmit(
+        task({
+          state: "awaiting_submit",
+          humanApprovedBy: "alice",
+          humanReviewHold: [
+            {
+              source: "security-findings",
+              category: "security",
+              reason: "review 77 left findings",
+              at: "2026-11-15T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      awaitsHumanSubmit(
+        task({
+          state: "awaiting_submit",
+          humanApprovedBy: "alice",
+          humanReviewHold: [
+            {
+              source: "requested",
+              category: "security",
+              reason: "intent unclear",
+              at: "2026-11-15T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
   });
 });

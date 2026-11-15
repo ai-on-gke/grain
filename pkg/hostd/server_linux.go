@@ -27,6 +27,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,6 +64,16 @@ type Server struct {
 	// AgentsOnly says, in Hello, that this host agent runs agent CLIs
 	// only (grain-agentd).
 	AgentsOnly bool
+	// SelfUpdate says, in Hello, that this host agent's owner can update
+	// it from the controller's signed release (FeatureSelfUpdate), with
+	// the allowlist's update: policy. Never set for a root-installed
+	// `grain host`: without it Hello omits the feature.
+	SelfUpdate bool
+	// OnControllerHello, when set, is called each time the controller
+	// asks for this hostd's hello over the session Remote dialed: the
+	// moment a new build knows it has reached the controller (agentd's
+	// update watchdog).
+	OnControllerHello func()
 	// CurrentLink is the installer's current link hostd was started
 	// through (CurrentLinkFor), for Hello's Running and Current; "" for
 	// none.
@@ -912,8 +924,17 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 		describeCopies(ctx, &h, s.CurrentLink)
 		h.Logins = a.ambientLogins()
 		h.AgentsOnly = s.AgentsOnly
+		h.Platform = runtime.GOOS + "/" + runtime.GOARCH
+		if s.SelfUpdate {
+			h.UpdateMode, h.UpdatePin = a.Update.EffectiveMode(), a.Update.Pin
+		} else {
+			h.Features = slices.DeleteFunc(h.Features, func(f Feature) bool { return f == FeatureSelfUpdate })
+		}
 		if sessionMux(ctx) != nil {
 			s.describeRemote(&h, a)
+			if s.OnControllerHello != nil {
+				s.OnControllerHello()
+			}
 		}
 		if req.Hello != nil {
 			if err := Compatible(h, *req.Hello); err != nil {

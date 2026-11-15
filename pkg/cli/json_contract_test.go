@@ -75,7 +75,7 @@ func TestEveryExternalVerbSupportsJSONOutput(t *testing.T) {
 		{"capability-servers", server, []string{"capability-servers", "list"}},
 		{"gcp-key", server, []string{"gcp-key", "list"}},
 		{"sandbox-budget", server, []string{"sandbox-budget"}},
-		{"capability", server, []string{"capability", "1", "self-debug", "attach"}},
+		{"capability", server, []string{"capability", "1", "api:self-debug", "attach"}},
 		{"retry", server, []string{"retry", "1"}},
 		{"run-now", server, []string{"run-now", "2"}},
 		{"broadcast", server, []string{"broadcast", "hello"}},

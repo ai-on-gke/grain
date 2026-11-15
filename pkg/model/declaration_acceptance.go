@@ -116,11 +116,6 @@ func DeclaredItemScopes(item string) []APIScope {
 	if g, ok, err := ParseAPIGrant(item); ok && err == nil && len(g.Scopes) > 0 {
 		return slices.Clone(g.Scopes)
 	}
-	if preset, ok := apiAliasCapabilities[strings.TrimSpace(item)]; ok {
-		if g, ok, err := ParseAPIGrant(APIGrantPrefix + preset); ok && err == nil && len(g.Scopes) > 0 {
-			return slices.Clone(g.Scopes)
-		}
-	}
 	return []APIScope{"capabilities:admin"}
 }
 
@@ -380,6 +375,29 @@ func (s *Store) NoteCIJobDeclaration(ctx context.Context, repo RepoRef, job, com
 		return nil
 	})
 	return accepted, items, err
+}
+
+// NoteDeclaredTemplateHold records what a repository-declared template id asks
+// for (DeclaredCompositionHold) and reports whether a person's acceptance
+// covers it, plus whether a prior acceptance existed and was widened past.
+func (s *Store) NoteDeclaredTemplateHold(ctx context.Context, id string, items []string, now time.Time) (accepted bool, widened bool, err error) {
+	if len(items) == 0 || !IsRepoDeclaredID(id) {
+		return true, false, nil
+	}
+	err = s.write(ctx, "note what declared template "+id+" asks for", func(tx *sql.Tx) error {
+		prior, err := getDeclarationAcceptance(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		widened = prior != nil && prior.AcceptedAt != nil
+		hold := &DeclarationHold{ID: id, Kind: DeclaredTemplate, Items: items}
+		if err := noteDeclarationHold(ctx, tx, hold, now); err != nil {
+			return err
+		}
+		accepted = prior.Covers(items)
+		return nil
+	})
+	return accepted, widened, err
 }
 
 // ErrDeclarationMoved is AcceptDeclaration's refusal when the set the

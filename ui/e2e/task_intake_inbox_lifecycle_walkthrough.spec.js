@@ -627,7 +627,9 @@ test.describe("Task Intake, Inbox, and Lifecycle Operator Walkthrough", () => {
     const taskRes = await page.request.post("/api/tasks", {
       data: {
         title: `Cached pane local-script ${Date.now()}`,
-        capabilities: ["local-scripts:ops"],
+        capabilities: [
+          'https://grain.dev/capabilities/host-script#host-script={"script":"ops"}',
+        ],
       },
     });
     expect(taskRes.ok()).toBe(true);
