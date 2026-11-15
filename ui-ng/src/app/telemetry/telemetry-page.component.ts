@@ -37,6 +37,7 @@ import {
 } from "../shared/actor-chip.component";
 import {
   effectiveDisplayTimeZone,
+  formatLocalReset,
   formatNoticeText,
 } from "../shared/dispatch-status";
 import { StatusIconComponent } from "../shared/status-icon.component";
@@ -1250,6 +1251,15 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                                 <g-status-icon tone="error" kind="blocked" />
                                 Paused
                               </span>
+                              @if (fmtReset(s.pausedUntil); as reset) {
+                                <div
+                                  class="muted tabular"
+                                  data-testid="usage-scope-reset"
+                                  style="margin-top: 4px"
+                                >
+                                  Resets {{ reset }}
+                                </div>
+                              }
                             } @else {
                               <span class="status-pill healthy">
                                 <g-status-icon tone="healthy" kind="healthy" />
@@ -1660,6 +1670,16 @@ export class TelemetryPageComponent implements OnInit {
     const list = this.clusterStats()?.directions ?? [];
     return this.showAllDirections() ? list : list.slice(0, 8);
   });
+
+  // fmtReset is a paused scope's reset on the viewer's clock, zone named,
+  // with a countdown: "11:15 AM PST (in 45m)".
+  protected readonly fmtReset = (until?: string): string =>
+    formatLocalReset(
+      until,
+      undefined,
+      this.access.clockNow(),
+      effectiveDisplayTimeZone(this.access.rawConfig()?.timeZone),
+    );
 
   protected readonly usageNotices = computed(() => {
     const u = this.usage();

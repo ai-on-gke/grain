@@ -64,6 +64,24 @@ export function formatMoment(value, zone, now = new Date()) {
     : formatDateTime(value, zone);
 }
 
+// formatResetMoment is formatMoment for a time somebody plans around --
+// a usage-limit pause lifting -- with the zone named ("3:40 PM PDT") and
+// no seconds, so nobody has to wonder which clock it is on.
+export function formatResetMoment(value, zone, now = new Date()) {
+  const day = (v) =>
+    format(v, zone, { year: "numeric", month: "numeric", day: "numeric" });
+  const on = day(value);
+  if (!on) return "";
+  const clock = { hour: "numeric", minute: "2-digit", timeZoneName: "short" };
+  return format(
+    value,
+    zone,
+    on === day(now)
+      ? clock
+      : { year: "numeric", month: "numeric", day: "numeric", ...clock },
+  );
+}
+
 function format(value, zone, options) {
   const at = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(at.getTime())) return "";
