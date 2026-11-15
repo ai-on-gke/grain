@@ -177,6 +177,29 @@ export const routes: Routes = [
       import("./ci/ci-page.component").then((m) => m.CIPageComponent),
   },
   {
+    path: "processes/suites/runs/:runId",
+    title: "Suite run · grain",
+    loadComponent: () =>
+      import("./processes/processes-page.component").then(
+        (m) => m.ProcessesPageComponent,
+      ),
+  },
+  {
+    path: "processes/schedule/:itemId",
+    redirectTo: "processes/schedules/:itemId",
+    pathMatch: "full",
+  },
+  {
+    path: "processes/template/:itemId",
+    redirectTo: "processes/templates/:itemId",
+    pathMatch: "full",
+  },
+  {
+    path: "processes/suite/:itemId",
+    redirectTo: "processes/suites/:itemId",
+    pathMatch: "full",
+  },
+  {
     path: "processes",
     title: "Processes · grain",
     loadComponent: () =>
@@ -192,9 +215,37 @@ export const routes: Routes = [
         (m) => m.ProcessesPageComponent,
       ),
   },
+  {
+    path: "processes/:tab/:itemId",
+    title: "Processes · grain",
+    loadComponent: () =>
+      import("./processes/processes-page.component").then(
+        (m) => m.ProcessesPageComponent,
+      ),
+  },
   { path: "schedules", redirectTo: "processes/schedules", pathMatch: "full" },
+  {
+    path: "schedules/:itemId",
+    redirectTo: "processes/schedules/:itemId",
+    pathMatch: "full",
+  },
   { path: "templates", redirectTo: "processes/templates", pathMatch: "full" },
+  {
+    path: "templates/:itemId",
+    redirectTo: "processes/templates/:itemId",
+    pathMatch: "full",
+  },
   { path: "suites", redirectTo: "processes/suites", pathMatch: "full" },
+  {
+    path: "suites/runs/:runId",
+    redirectTo: "processes/suites/runs/:runId",
+    pathMatch: "full",
+  },
+  {
+    path: "suites/:itemId",
+    redirectTo: "processes/suites/:itemId",
+    pathMatch: "full",
+  },
   {
     path: "telemetry",
     title: "Telemetry · grain",

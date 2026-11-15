@@ -472,6 +472,20 @@ export function scheduleStatusBadge(s: Schedule): {
   return { label: "Enabled", tone: "healthy", iconKind: "healthy" };
 }
 
+export function formatScheduleNextRun(s: Schedule): string | null {
+  if (!s.enabled) return null;
+  if (
+    s.suppressed &&
+    (s.suppressed.reason === "watchedRepoOffTarget" || isEventTrigger(s))
+  ) {
+    return "suppressed";
+  }
+  if (isEventTrigger(s)) {
+    return s.recurrence?.kind === "git_ref" ? "on ref move" : "on workflow run";
+  }
+  return s.nextRunAt || null;
+}
+
 export function templateSourceBadge(t: Template): {
   label: string;
   tone: "proposal" | "reply" | "neutral";
