@@ -293,7 +293,7 @@ func TestSecurityHoldReReviewSupersedingUnfinishedReviewReadsInFull(t *testing.T
 // When two review kinds are filed for the same head -- grain's security review
 // beside pr-review, or two distinct gating triggers -- each review's body names
 // the other review task and instructs the reviewer to check existing PR review
-// threads with `grain pr open` rather than re-raising duplicate questions.
+// threads with `grain pr threads` rather than re-raising duplicate questions.
 func TestParallelReviewsOfSameHeadNameEachOtherInEachBody(t *testing.T) {
 	t.Parallel()
 
@@ -329,7 +329,7 @@ func TestParallelReviewsOfSameHeadNameEachOtherInEachBody(t *testing.T) {
 			"## Parallel reviews of this head",
 			fmt.Sprintf("Task %s (`pr-review`)", prReviewID),
 			fmt.Sprintf("Do not re-raise a question or finding that task %s has already posted", prReviewID),
-			"`grain pr open`",
+			"`grain pr threads`",
 		} {
 			if !strings.Contains(secReview.Body, want) {
 				t.Errorf("security review body missing %q:\n%s", want, secReview.Body)
@@ -339,7 +339,7 @@ func TestParallelReviewsOfSameHeadNameEachOtherInEachBody(t *testing.T) {
 			"## Parallel reviews of this head",
 			fmt.Sprintf("Task %s (`security-review`)", secID),
 			fmt.Sprintf("Do not re-raise a question or finding that task %s has already posted", secID),
-			"`grain pr open`",
+			"`grain pr threads`",
 		} {
 			if !strings.Contains(prReview.Body, want) {
 				t.Errorf("pr-review body missing %q:\n%s", want, prReview.Body)
@@ -381,10 +381,10 @@ func TestParallelReviewsOfSameHeadNameEachOtherInEachBody(t *testing.T) {
 		}
 		r0 := reloaded(t, ctx, store, ids[0])
 		r1 := reloaded(t, ctx, store, ids[1])
-		if !strings.Contains(r0.Body, fmt.Sprintf("Task %s", r1.ID)) || !strings.Contains(r0.Body, "`grain pr open`") {
+		if !strings.Contains(r0.Body, fmt.Sprintf("Task %s", r1.ID)) || !strings.Contains(r0.Body, "`grain pr threads`") {
 			t.Errorf("first trigger review body does not name sibling %s:\n%s", r1.ID, r0.Body)
 		}
-		if !strings.Contains(r1.Body, fmt.Sprintf("Task %s", r0.ID)) || !strings.Contains(r1.Body, "`grain pr open`") {
+		if !strings.Contains(r1.Body, fmt.Sprintf("Task %s", r0.ID)) || !strings.Contains(r1.Body, "`grain pr threads`") {
 			t.Errorf("second trigger review body does not name sibling %s:\n%s", r0.ID, r1.Body)
 		}
 	})
@@ -445,7 +445,7 @@ func TestEarlierReviewsIncludeAllKindsAndCapQuestionsAtAboutTwoKB(t *testing.T) 
 		if !strings.Contains(review.Body, fmt.Sprintf("Task %s (`pr-review`", pr1ID)) {
 			t.Errorf("%s missing earlier pr-review %s:\n%s", label, pr1ID, review.Body)
 		}
-		if !strings.Contains(review.Body, "omitted; read full threads with `grain pr open`") {
+		if !strings.Contains(review.Body, "omitted; read full threads with `grain pr threads`") {
 			t.Errorf("%s did not cap 20 verbose questions with omitted notice:\n%s", label, review.Body)
 		}
 		_, afterEarlier, ok := strings.Cut(review.Body, "## Earlier reviews of this pull request\n\n")

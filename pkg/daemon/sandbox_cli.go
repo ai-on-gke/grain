@@ -239,10 +239,29 @@ func (o *PullRequestOpener) reviewTool(ctx context.Context, taskID, name string,
 
 // ThreadsForTask is ui.PullRequestThreadLister's listing: the review
 // threads on taskID's own pull request, for `grain pr threads`.
+//
+// A review that posts its findings on the pull request it reviews rather
+// than opening one of its own (a path trigger's pr-review) has no pull
+// request on its branch: it reads the threads of the one it was filed for
+// (model.LinkReviewsPullRequest), which is where a parallel review of the
+// same head posts what it must not repeat. Only this read-only listing
+// falls back; replying and resolving stay on the task's own pull request.
 func (o *PullRequestOpener) ThreadsForTask(ctx context.Context, taskID string, unresolvedOnly bool) (string, bool, error) {
 	scope, err := o.reviewScope(ctx, taskID)
 	if err != nil {
 		return "", false, err
+	}
+	if scope.PullRequestNumber == 0 {
+		if task, err := o.Store.GetTask(ctx, taskID); err == nil && task != nil && task.Target != nil {
+			for _, l := range task.Links {
+				if l.Kind != model.LinkReviewsPullRequest {
+					continue
+				}
+				if ref, err := model.ParsePullRequestRef(l.Target); err == nil && ref.Repo.Same(*task.Target) {
+					scope.PullRequestNumber = ref.Number
+				}
+			}
+		}
 	}
 	res := mcp.ReviewThreadsText(o.Client, scope, unresolvedOnly)
 	return res.Text, res.IsError, nil

@@ -571,14 +571,14 @@ func earlierReviewsSection(ctx context.Context, store *model.Store, client githu
 			continue
 		}
 		if cappedOut {
-			fmt.Fprintf(&b, "; %s omitted (cap reached; read full threads with `grain pr open`).\n",
+			fmt.Fprintf(&b, "; %s omitted (cap reached; read full threads with `grain pr threads`).\n",
 				countOf(len(e.findings), "question"))
 			continue
 		}
 		b.WriteString("; questions:\n")
 		for _, f := range e.findings {
 			remaining := totalQuestions - renderedQuestions
-			omittedFooter := fmt.Sprintf("  - ... (%s omitted; read full threads with `grain pr open`)\n",
+			omittedFooter := fmt.Sprintf("  - ... (%s omitted; read full threads with `grain pr threads`)\n",
 				countOf(remaining, "more question"))
 			reserve := 0
 			if remaining > 1 {
@@ -595,7 +595,7 @@ func earlierReviewsSection(ctx context.Context, store *model.Store, client githu
 				}
 				left := totalQuestions - renderedQuestions
 				if left > 0 {
-					fmt.Fprintf(&b, "  - ... (%s omitted; read full threads with `grain pr open`)\n",
+					fmt.Fprintf(&b, "  - ... (%s omitted; read full threads with `grain pr threads`)\n",
 						countOf(left, "more question"))
 				}
 				cappedOut = true
@@ -795,12 +795,12 @@ func parallelReviewsSection(peers []model.Task) string {
 	if len(peers) == 1 {
 		return fmt.Sprintf("%s%s is also reviewing this pull request at this commit. "+
 			"Do not re-raise a question or finding that task %s has already posted -- "+
-			"check the pull request's review threads with `grain pr open`.\n",
+			"check the pull request's review threads with `grain pr threads`.\n",
 			parallelReviewsHeader, capitalizeFirst(names[0]), peers[0].ID)
 	}
 	return fmt.Sprintf("%sAlso reviewing this pull request at this commit: %s. "+
 		"Do not re-raise a question or finding another review has already posted -- "+
-		"check the pull request's review threads with `grain pr open`.\n",
+		"check the pull request's review threads with `grain pr threads`.\n",
 		parallelReviewsHeader, strings.Join(names, ", "))
 }
 
@@ -822,7 +822,9 @@ func setParallelReviewsSection(body, section string) string {
 // generatedParallelSectionAt returns where the "## Parallel reviews of this
 // head" section parallelReviewsSection appended to body starts, or -1. Only
 // the last occurrence of the header, followed by exactly the one line
-// parallelReviewsSection writes, is grain's own: an earlier occurrence --
+// parallelReviewsSection writes (or wrote: it pointed at `grain pr open`,
+// which refuses in every review sandbox, until the review-context
+// walkthrough of 2026-11-14), is grain's own: an earlier occurrence --
 // one quoted from a pull request's description, say -- is left alone, so
 // refreshing the section can never cut away the instructions that follow it.
 func generatedParallelSectionAt(body string) int {
@@ -832,7 +834,8 @@ func generatedParallelSectionAt(body string) int {
 	}
 	rest := body[idx+len(parallelReviewsHeader):]
 	line, ok := strings.CutSuffix(rest, "\n")
-	if !ok || strings.Contains(line, "\n") || !strings.HasSuffix(line, "`grain pr open`.") {
+	if !ok || strings.Contains(line, "\n") ||
+		!(strings.HasSuffix(line, "`grain pr threads`.") || strings.HasSuffix(line, "`grain pr open`.")) {
 		return -1
 	}
 	return idx

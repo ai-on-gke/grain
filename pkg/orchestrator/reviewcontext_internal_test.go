@@ -39,6 +39,26 @@ func TestReviewFinishedNoteNamesFixesPushedInPlace(t *testing.T) {
 	}
 }
 
+// The parallel-reviews note points at `grain pr threads`, which answers in
+// every review sandbox; `grain pr open` refuses in all of them. A body
+// filed with the old pointer is still grain's own section to a refresh,
+// which replaces it rather than appending a second one.
+func TestParallelReviewsSectionPointsAtPRThreadsAndReplacesTheOldPointer(t *testing.T) {
+	peer := model.Task{ID: "9", SourceTemplateID: model.SecurityReviewTemplateID, Title: "Security review: x"}
+	section := parallelReviewsSection([]model.Task{peer})
+	if !strings.Contains(section, "`grain pr threads`") || strings.Contains(section, "`grain pr open`") {
+		t.Fatalf("parallelReviewsSection = %q, want it to point at `grain pr threads` only", section)
+	}
+	legacy := parallelReviewsHeader + "Task 9 (`security-review`) is also reviewing this pull request at this commit. " +
+		"Do not re-raise a question or finding that task 9 has already posted -- " +
+		"check the pull request's review threads with `grain pr open`.\n"
+	const brief = "Review this change."
+	got := setParallelReviewsSection(brief+legacy, section)
+	if got != brief+section {
+		t.Fatalf("refreshing a body with the old pointer = %q, want %q", got, brief+section)
+	}
+}
+
 // A pull request description is written by whoever opened the pull request
 // and lands in an external review's body ahead of grain's own instructions.
 // Quoting a section header grain later finds its appended sections by must
