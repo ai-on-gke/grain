@@ -446,6 +446,17 @@ const BATCH_PRIORITY_OPTIONS: readonly PillOption[] = LEVELS.map((l) => ({
                               >Repair</span
                             >
                           }
+                          @if (t.rolledOverTo) {
+                            <span
+                              class="status-pill neutral"
+                              [attr.data-testid]="'rolled-over-' + t.id"
+                              [gTip]="
+                                'Closed by rollover past its record limit; its work carries on in #' +
+                                t.rolledOverTo
+                              "
+                              >Rolled over to #{{ t.rolledOverTo }}</span
+                            >
+                          }
                           <g-priority-chip
                             [priority]="prio(t)"
                             [editable]="false"
