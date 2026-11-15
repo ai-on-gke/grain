@@ -703,3 +703,54 @@ func TestCatalogueRetiredGitHubSandboxBindsSandboxRepo(t *testing.T) {
 		}
 	}
 }
+
+// TestCatalogueHasNoSayOverGrainCI is task 6142: grain#ci is a
+// repository's CI Mode's to give, so neither in_process.grain-ci (the
+// retired name it replaced) nor a grain server entry withdraws it, and
+// Validate says so of the in_process entry rather than keeping it as if
+// it did something.
+func TestCatalogueHasNoSayOverGrainCI(t *testing.T) {
+	cat := &model.CapabilityCatalogue{
+		InProcess: map[string]model.CatalogueInProcess{
+			model.GrainCICapability: {Enabled: boolp(false)},
+		},
+		Servers: []model.CatalogueServer{{
+			ID:      model.GrainCapabilityServerID,
+			Methods: []model.CatalogueMethod{{Name: "journal"}},
+		}},
+	}
+	for _, g := range []string{model.GrainCIGrant, model.GrainCIRef} {
+		for _, kind := range []string{model.CatalogueKindTask, model.CatalogueKindCI, model.CatalogueKindReview} {
+			gc := model.GrantContext{Repo: repo("acme/widgets"), Kind: kind, Grants: []string{g}}
+			if _, err := cat.ValidateGrants(gc); err != nil {
+				t.Errorf("ValidateGrants(%s, %s) = %v, want admitted: CI Mode decides grain#ci", g, kind, err)
+			}
+			if r := cat.Refusals(gc); len(r) != 0 {
+				t.Errorf("Refusals(%s, %s) = %+v, want none", g, kind, r)
+			}
+		}
+		if reason, ok := cat.DisabledReason(g); ok {
+			t.Errorf("DisabledReason(%s) = %q, want not disabled", g, reason)
+		}
+	}
+	// Everything else on the grain server is judged as before.
+	if _, err := cat.ValidateGrants(model.GrantContext{Kind: model.CatalogueKindTask, Grants: []string{model.GrainHealthGrant}}); err == nil {
+		t.Error("grain#health admitted by a grain server entry listing only journal")
+	}
+
+	err := cat.Validate()
+	if err == nil {
+		t.Fatal("Validate admitted in_process.grain-ci")
+	}
+	for _, want := range []string{"in_process.grain-ci has no effect", model.GrainCIGrant, "CI Mode", "ci_mode"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Validate = %v, want it to say %q", err, want)
+		}
+	}
+	enabled := &model.CapabilityCatalogue{InProcess: map[string]model.CatalogueInProcess{
+		model.GrainCICapability: {Restrictions: &model.CapabilityRestrictions{Repos: model.Patterns{"acme/lib"}}},
+	}}
+	if err := enabled.Validate(); err == nil || !strings.Contains(err.Error(), "has no effect") {
+		t.Errorf("Validate(in_process.grain-ci with restrictions) = %v, want the no-effect refusal", err)
+	}
+}

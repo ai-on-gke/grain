@@ -137,6 +137,9 @@ func TestCapabilitiesFileRefusals(t *testing.T) {
 		"default refused":     {"defaults:\n  task: [gcp-key]\nin_process:\n  gcp-key:\n    restrictions:\n      ci_only: true\n", "defaults.task"},
 		"duplicate server":    {"servers:\n  - id: https://x.example/s\n    url: https://x.example/s\n  - id: https://x.example/s\n    url: https://x.example/s\n", "listed twice"},
 		"bad scope in preset": {"api_scopes:\n  presets:\n    mine:\n      scopes: [nope:never]\n", "api_scopes.presets"},
+		// grain#ci is a repository's CI Mode's to give (task 6142).
+		"grain-ci disabled":   {"in_process:\n  grain-ci:\n    enabled: false\n", "in_process.grain-ci has no effect"},
+		"grain-ci restricted": {"in_process:\n  grain-ci:\n    restrictions:\n      repos: [acme/lib]\n", "CI Mode"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := ValidateCapabilitiesFile([]byte(tc.text))
@@ -268,6 +271,30 @@ func TestCheckCapabilitiesJudgesTemplateGrants(t *testing.T) {
 		!strings.Contains(err.Error(), "template template-1 grants https://grain.dev/capabilities/grain#source={}") ||
 		!strings.Contains(err.Error(), "in_process.self-debug") {
 		t.Fatalf("checkCapabilities = %v", err)
+	}
+}
+
+// An in_process.grain-ci entry is checked as the no-op it is: grain state
+// check names it and points at CI Mode, and does not claim it disables the
+// grain#ci a template holds (task 6142, finding F8 of
+// docs/test-runs/2026-11-14-retired-capability-aliases.md).
+func TestCheckCapabilitiesSaysInProcessGrainCIHasNoEffect(t *testing.T) {
+	dir := t.TempDir()
+	writeCapabilities(t, dir, "in_process:\n  grain-ci:\n    enabled: false\n")
+	if err := os.WriteFile(filepath.Join(dir, SettingsDir, "templates.yml"), []byte(`templates:
+  - id: template-1
+    name: nightly
+    target: acme/widgets
+    grants: ['`+model.GrainCIGrant+`']
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := checkCapabilities(dir)
+	if err == nil || !strings.Contains(err.Error(), model.InProcessGrainCIRefusal) {
+		t.Fatalf("checkCapabilities = %v, want %q", err, model.InProcessGrainCIRefusal)
+	}
+	if strings.Contains(err.Error(), "is disabled") {
+		t.Errorf("checkCapabilities = %v: it says grain#ci is disabled, which the entry does not do", err)
 	}
 }
 

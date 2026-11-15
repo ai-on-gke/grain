@@ -498,7 +498,7 @@ func TestReleaseNotesHoldsCatalogueRequiresPersonDeclaredPushAndKeepRunningForHu
 		},
 		Servers: []model.CatalogueServer{{
 			ID:      "https://grain.dev/capabilities/grain",
-			Methods: []model.CatalogueMethod{{Name: "source"}}, // omits grain#ci
+			Methods: []model.CatalogueMethod{{Name: "source"}}, // omits grain#ci, which it has no say over
 		}},
 	}
 	if err := store.PutConfig(ctx, cfg); err != nil {
@@ -580,9 +580,12 @@ func TestReleaseNotesHoldsCatalogueRequiresPersonDeclaredPushAndKeepRunningForHu
 	}
 	grainTask := byRepo[grainCIRepo.String()]
 	if grainTask.Approval == nil {
-		t.Errorf("%s clean template landed unapproved after stripping default grain#ci grant", grainCIRepo)
+		t.Errorf("%s clean template landed unapproved", grainCIRepo)
 	}
-	if len(grainTask.Grants) != 0 {
-		t.Errorf("%s grants = %+v, want catalogue-refused default grain#ci stripped", grainCIRepo, grainTask.Grants)
+	// grain#ci is the repository's CI Mode's to give, not the catalogue's
+	// (model.CatalogueJudges, task 6142): the default is kept, as dispatch
+	// would attach it again anyway.
+	if len(grainTask.Grants) != 1 || !model.IsGrainCIGrant(grainTask.Grants[0].Capability) || grainTask.Grants[0].Via != model.GrantByDefault {
+		t.Errorf("%s grants = %+v, want the default grain#ci CI Mode gives", grainCIRepo, grainTask.Grants)
 	}
 }
