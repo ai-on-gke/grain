@@ -26,6 +26,7 @@ import type {
 } from "../api/models";
 import { InboxStore } from "../inbox/inbox.store";
 import { errorText } from "../sessions/session-helpers";
+import { ReadTrouble } from "../services/request-trouble";
 
 export type { TreeNode, WorkTree };
 
@@ -82,6 +83,11 @@ export class TaskStore {
   private pagedOlderAttempts: number | null = null;
 
   private timer: ReturnType<typeof setInterval> | null = null;
+  // trouble is the detail poll's run of failed reads: silent until it is
+  // sustained, and the poll backs off (pollAfter) while it lasts
+  // (request-trouble.ts).
+  private readonly trouble = new ReadTrouble();
+  private pollAfter = 0;
   private transcriptTimer: ReturnType<typeof setInterval> | null = null;
   private eventSub: { unsubscribe(): void } | null = null;
   private eventTimer: ReturnType<typeof setTimeout> | null = null;
@@ -102,10 +108,12 @@ export class TaskStore {
       this.pagedOlderAttempts = null;
       this.resetTranscript();
       this.resetAudit();
+      this.trouble.ok();
+      this.pollAfter = 0;
     }
     void this.refresh();
     this.eventSub ??= this.events.events().subscribe(() => {
-      if (this.eventTimer) return;
+      if (this.eventTimer || this.trouble.failing) return;
       this.eventTimer = setTimeout(() => {
         this.eventTimer = null;
         void this.refresh();
@@ -113,10 +121,10 @@ export class TaskStore {
     });
     if (!this.timer) {
       this.zone.runOutsideAngular(() => {
-        this.timer = setInterval(
-          () => this.zone.run(() => void this.refresh()),
-          POLL_MS,
-        );
+        this.timer = setInterval(() => {
+          if (Date.now() < this.pollAfter) return;
+          this.zone.run(() => void this.refresh());
+        }, POLL_MS);
       });
     }
   }
@@ -189,9 +197,17 @@ export class TaskStore {
         this.detail.set(this.applyPagedMerge(r.body));
       }
       this.loadError.set(null);
+      this.trouble.ok();
+      this.pollAfter = 0;
     } catch (err) {
       if (this.id() !== id) return;
       const status = (err as { status?: number })?.status;
+      const sustained = this.trouble.fail(err);
+      this.pollAfter = Date.now() + this.trouble.nextDelay(POLL_MS) - POLL_MS;
+      // One failed poll keeps the detail already on screen and says
+      // nothing; a missing task, a page with nothing to show yet, or
+      // failure that lasts says so.
+      if (status !== 404 && !sustained && this.detail()) return;
       this.loadError.set(
         status === 404
           ? `There is no task #${id}.`
