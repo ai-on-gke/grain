@@ -38,6 +38,7 @@ export type FieldId =
   | "fixesBaseBranch"
   | "foundIn"
   | "grants"
+  | "admission"
   | "model"
   | "dependsOn"
   | "agentBackendId"
@@ -96,6 +97,7 @@ const BUILTIN: Record<FieldId, { visibility: Visibility; order: number }> = {
   noPort: { visibility: "more", order: 175 },
   fixesBaseBranch: { visibility: "more", order: 180 },
   foundIn: { visibility: "more", order: 185 },
+  admission: { visibility: "more", order: 190 },
   agentBackendId: { visibility: "more", order: 200 },
   networkAccess: { visibility: "more", order: 210 },
   nothingNeededAction: { visibility: "more", order: 220 },
@@ -384,7 +386,8 @@ export interface NewTaskDraft {
   // The account responsible for the task; "" files it as the caller's.
   owner: string;
   keepRunning: boolean;
-  // model.Admission: "" (standard), "bypass" or "durable".
+  // model.Admission: "standard", "bypass" or "durable". Starts on what
+  // the server would file with none given (defaultAdmissionForRepo).
   admission: string;
   origin?: string;
   parentId?: string;
@@ -394,6 +397,37 @@ export interface NewTaskDraft {
 }
 
 export const DEFAULT_PRIORITY = 5;
+
+// The admission values in rank order, standard < bypass < durable
+// (model.Admission.Rank).
+export const ADMISSIONS = ["standard", "bypass", "durable"];
+
+// defaultAdmissionForRepo is the admission the server files a task with
+// when the request names none (defaultTaskAdmission in pkg/ui/client.go):
+// the higher of the deployment's defaultAdmission and the repo's own.
+// "" is the deployment's default target; NO_REPO has only the
+// deployment's.
+export function defaultAdmissionForRepo(
+  config: GrainConfig | null,
+  repo: string,
+): string {
+  const rank = (a: unknown) => ADMISSIONS.indexOf(String(a ?? "").trim());
+  let best = Math.max(0, rank(config?.["defaultAdmission"]));
+  const target =
+    repo === NO_REPO
+      ? ""
+      : repo || String(config?.["defaultTarget"] ?? "").trim();
+  const byRepo = config?.["repoDefaultAdmissions"];
+  if (target && byRepo && typeof byRepo === "object") {
+    const key = Object.keys(byRepo).find(
+      (k) => k.toLowerCase() === target.toLowerCase(),
+    );
+    if (key) {
+      best = Math.max(best, rank((byRepo as Record<string, unknown>)[key]));
+    }
+  }
+  return ADMISSIONS[best];
+}
 
 // templatePriority is what Task priority starts on with a template
 // picked: the template's own priority, which is what it files at, or 5.
@@ -450,7 +484,9 @@ export function emptyDraft(
     priority: String(DEFAULT_PRIORITY),
     owner: "",
     keepRunning: false,
-    admission: "",
+    admission: ADMISSIONS.includes(String(f.admission.default))
+      ? String(f.admission.default)
+      : defaultAdmissionForRepo(config, repo),
     ...prefill,
   };
 }
@@ -472,7 +508,15 @@ export function buildPayload(
   // missing priority from the template, so leaving out the 5 somebody
   // chose filed the template's instead.
   const priority = taskPriority(d.priority);
+  // Admission is said whenever it is not what the server would pick on
+  // its own -- "standard" included, on a deployment or repo whose default
+  // is higher -- and whenever a template is picked, whose own admission
+  // would otherwise be filed instead of the one chosen.
   const admission = d.admission.trim();
+  const sayAdmission =
+    ADMISSIONS.includes(admission) &&
+    (!!templateOpts ||
+      admission !== defaultAdmissionForRepo(config, none ? NO_REPO : d.repo));
   return {
     title: d.title.trim(),
     description: d.description,
@@ -519,7 +563,7 @@ export function buildPayload(
       : {}),
     ...(d.owner.trim() ? { owner: d.owner.trim() } : {}),
     ...(d.keepRunning ? { keepRunning: true } : {}),
-    ...(admission && admission !== "standard" ? { admission } : {}),
+    ...(sayAdmission ? { admission } : {}),
     ...(d.origin !== undefined ? { origin: d.origin } : {}),
     ...(d.parentId ? { parentId: d.parentId } : {}),
     ...(d.autoApproveProposals !== undefined
@@ -531,6 +575,7 @@ export function buildPayload(
 export interface Problem {
   field:
     | "title"
+    | "repo"
     | "newBranchName"
     | "templateField"
     | "foundIn"
@@ -547,6 +592,7 @@ export function validate(
   fields?: Record<FieldId, FieldConfig>,
   template?: Template | null,
   templateValues?: Record<string, string>,
+  config?: GrainConfig | null,
 ): Problem | null {
   if (template) {
     for (const tf of template.fields ?? []) {
@@ -559,6 +605,23 @@ export function validate(
     }
   } else if (!d.title.trim()) {
     return { field: "title", message: "Give the task a title." };
+  }
+  const repoShown = !fields || fields.repo.visibility !== "hidden";
+  const hasDefaultTarget = !!String(config?.["defaultTarget"] ?? "").trim();
+  if (
+    repoShown &&
+    !hasDefaultTarget &&
+    !d.repo.trim() &&
+    !template?.repo &&
+    !template?.declaredIn?.repo
+  ) {
+    return {
+      field: "repo",
+      message:
+        fields?.repo.allowNoRepo === false
+          ? "Pick a repository."
+          : "Pick a repository, or choose No repository.",
+    };
   }
   const branchShown = !fields || fields.newBranch.visibility !== "hidden";
   if (

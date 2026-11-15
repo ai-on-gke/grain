@@ -93,6 +93,35 @@ describe("DetailOverlay actions", () => {
     });
   });
 
+  it("offers no Release hold when the hold is review findings alone", () => {
+    render(
+      <DetailOverlay
+        task={{
+          ...baseTask,
+          state: "awaiting_submit",
+          pullRequest: "acme/widgets#42",
+          autoMerge: false,
+          humanReviewHold: [
+            {
+              source: "security-findings",
+              category: "security",
+              reason: "The review left findings",
+              reviewTask: "77",
+            },
+          ],
+        }}
+        tasks={[]}
+        config={config}
+        onClose={() => {}}
+        onOpenTask={() => {}}
+        act={vi.fn()}
+      />,
+    );
+    const banner = screen.getByTestId("human-review-hold");
+    expect(banner.textContent).toContain("cannot be released directly");
+    expect(screen.queryByRole("button", { name: "Release hold" })).toBeNull();
+  });
+
   it("shows a Withdraw approval button for a queued task, wired to the withdraw endpoint", async () => {
     const act = vi.fn();
     const user = userEvent.setup();

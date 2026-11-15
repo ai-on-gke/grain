@@ -17,6 +17,7 @@ import {
   NO_REPO,
   buildPayload,
   defaultCapabilitiesForRepo,
+  defaultAdmissionForRepo,
   directorMessage,
   emptyDraft,
   forkHeadProblem,
@@ -148,7 +149,7 @@ describe("new task form", () => {
       },
       "sidthe/grain",
     );
-    expect(Object.keys(f)).toHaveLength(24);
+    expect(Object.keys(f)).toHaveLength(25);
     expect(f.approved.default).toBe(true);
     expect(f.autoMerge.default).toBe(false);
     expect(f.model).toMatchObject({ visibility: "more", default: "fast" });
@@ -328,6 +329,36 @@ describe("new task form", () => {
       },
     });
     expect(validate({ ...d, title: "t", newBranch: true }, hidden)).toBeNull();
+
+    // Missing repository when the deployment has no defaultTarget:
+    const noDefaultCfg: GrainConfig = { access: null };
+    const noRepoChosen = emptyDraft(noDefaultCfg, tasks, { title: "t" });
+    expect(validate(noRepoChosen, undefined, null, {}, noDefaultCfg)).toEqual({
+      field: "repo",
+      message: "Pick a repository, or choose No repository.",
+    });
+    const disallowNoRepo = resolveFields({
+      access: null,
+      newTaskForm: {
+        default: { fields: { repo: { allow_no_repo: false } } },
+      },
+    });
+    expect(
+      validate(noRepoChosen, disallowNoRepo, null, {}, noDefaultCfg),
+    ).toEqual({
+      field: "repo",
+      message: "Pick a repository.",
+    });
+    expect(
+      validate(
+        { ...noRepoChosen, repo: NO_REPO },
+        undefined,
+        null,
+        {},
+        noDefaultCfg,
+      ),
+    ).toBeNull();
+    expect(validate(noRepoChosen, undefined, null, {}, config)).toBeNull();
   });
 
   it("phrases the draft as a request to the Director", () => {
@@ -388,7 +419,7 @@ describe("new task form", () => {
       priority: "5",
       owner: "",
       keepRunning: false,
-      admission: "",
+      admission: "standard",
     });
     // The defaults say nothing: the server's own are the same.
     const plain = buildPayload(d, config);
@@ -424,6 +455,55 @@ describe("new task form", () => {
     ).toMatchObject({ priority: 5 });
     expect(templatePriority({ id: "t", priority: 8 } as Template)).toBe("8");
     expect(templatePriority(null)).toBe("5");
+  });
+
+  it("starts Admission on the server's own default and says Standard when it is not", () => {
+    // The higher of the deployment's and the repo's, as
+    // defaultTaskAdmission in pkg/ui/client.go picks it.
+    const cfg: GrainConfig = {
+      ...config,
+      defaultAdmission: "bypass",
+      repoDefaultAdmissions: {
+        "Acme/Web": "durable",
+        "sidthe/grain": "standard",
+      },
+    };
+    expect(defaultAdmissionForRepo(config, "acme/web")).toBe("standard");
+    expect(defaultAdmissionForRepo(cfg, "acme/web")).toBe("durable");
+    expect(defaultAdmissionForRepo(cfg, "sidthe/grain")).toBe("bypass");
+    expect(defaultAdmissionForRepo(cfg, NO_REPO)).toBe("bypass");
+    // "" is the default target, SIDTHE/grain here.
+    expect(defaultAdmissionForRepo(cfg, "")).toBe("bypass");
+
+    const durable: GrainConfig = { ...config, defaultAdmission: "durable" };
+    const d = emptyDraft(durable, tasks, { title: "x", repo: "acme/web" });
+    expect(d.admission).toBe("durable");
+    // Left on the default, nothing is said and the server files durable.
+    expect(buildPayload(d, durable)).not.toHaveProperty("admission");
+    // Standard picked on a durable deployment is said, or the task would
+    // be filed durable anyway.
+    expect(
+      buildPayload({ ...d, admission: "standard" }, durable),
+    ).toMatchObject({ admission: "standard" });
+    // A template picked always hears it: its own would win otherwise.
+    expect(
+      buildPayload({ ...d, admission: "durable" }, durable, {
+        templateId: "t",
+        fields: {},
+      }),
+    ).toMatchObject({ admission: "durable" });
+
+    // settings/new-task-form.yml places Admission like any other field.
+    const placed: GrainConfig = {
+      ...config,
+      newTaskForm: {
+        default: {
+          fields: { admission: { visibility: "hidden", default: "bypass" } },
+        },
+      },
+    };
+    expect(resolveFields(placed).admission.visibility).toBe("hidden");
+    expect(emptyDraft(placed, tasks, { title: "x" }).admission).toBe("bypass");
   });
 
   it("refuses a zero, negative or non-whole priority before submit", () => {

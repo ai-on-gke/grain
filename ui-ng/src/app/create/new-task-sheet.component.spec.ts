@@ -512,6 +512,61 @@ describe("NewTaskSheetComponent", () => {
     expect(
       q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.disabled,
     ).toBe(true);
+
+    // Ctrl+Enter must also respect !canFile() instead of bypassing the disabled submit button.
+    type('[data-testid="nt-title"]', "Attempt forbidden Ctrl+Enter");
+    q<HTMLInputElement>('[data-testid="nt-title"]')!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await settle(f);
+    expect(api.calls.filter((c) => c.route === "POST /api/tasks")).toHaveLength(
+      0,
+    );
+  });
+
+  it("validates a missing repository inline without claiming a deployment default target when none is configured", async () => {
+    const api = new FakeApi();
+    delete api.cfg["defaultTarget"];
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    const repoBtn = q<HTMLButtonElement>('[data-testid="nt-repo"]')!;
+    expect(repoBtn.textContent).toContain("Select a repository…");
+    expect(repoBtn.textContent).not.toContain("Deployment default target");
+
+    type('[data-testid="nt-title"]', "Check repo validation");
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    expect(q('[data-testid="new-task-error"]')?.textContent).toContain(
+      "Pick a repository, or choose No repository.",
+    );
+    expect(repoBtn.classList.contains("is-invalid")).toBe(true);
+    expect(repoBtn.getAttribute("aria-describedby")).toBe("new-task-error");
+    expect(document.activeElement).toBe(repoBtn);
+    expect(api.calls.filter((c) => c.route === "POST /api/tasks")).toHaveLength(
+      0,
+    );
+
+    await pickPill(f, "nt-repo", "__none__");
+    await settle(f);
+    expect(q('[data-testid="new-task-error"]')).toBeNull();
+    expect(repoBtn.classList.contains("is-invalid")).toBe(false);
+
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+    const created = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(created?.body).toMatchObject({
+      title: "Check repo validation",
+      repo: "",
+      noRepo: true,
+    });
   });
 
   it("opens in Start a workstream mode, records the started root, and opens Workstreams", async () => {
@@ -820,5 +875,63 @@ describe("NewTaskSheetComponent", () => {
       templateId: "declared:template:sidthe:grain:bugfix",
       priority: 3,
     });
+  });
+
+  it("starts Admission on a durable default and files Standard when it is picked", async () => {
+    const api = new FakeApi();
+    api.cfg = { ...api.cfg, defaultAdmission: "durable" };
+    const f = await render(api);
+    await open(f);
+    type('[data-testid="nt-title"]', "Standard on purpose");
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    expect(q('[data-testid="nt-admission"]')!.textContent).toContain("Durable");
+    await pickPill(f, "nt-admission", "standard");
+    await settle(f);
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+    expect(
+      api.calls.find((c) => c.route === "POST /api/tasks")?.body,
+    ).toMatchObject({ admission: "standard" });
+  });
+
+  it("leaves Admission out when settings/new-task-form.yml hides it", async () => {
+    const api = new FakeApi();
+    api.cfg = {
+      ...api.cfg,
+      newTaskForm: {
+        default: { fields: { admission: { visibility: "hidden" } } },
+      },
+    };
+    const f = await render(api);
+    await open(f);
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    expect(q('[data-testid="nt-priority"]')).not.toBeNull();
+    expect(q('[data-testid="nt-admission"]')).toBeNull();
+  });
+
+  it("keeps a template's priority and admission when the template picks its repo", async () => {
+    const api = new FakeApi();
+    api.templates = [
+      {
+        id: "stored-urgent",
+        name: "Urgent",
+        title: "Urgent",
+        repo: "acme/web",
+        priority: 9,
+        admission: "bypass",
+      } as Template,
+    ];
+    const f = await render(api);
+    await open(f);
+    q<HTMLButtonElement>('[data-testid="more-options"]')!.click();
+    await settle(f);
+    await pickPill(f, "nt-template", "stored-urgent");
+    await settle(f);
+    expect(q<HTMLInputElement>('[data-testid="nt-priority"]')!.value).toBe("9");
+    expect(q('[data-testid="nt-admission"]')!.textContent).toContain(
+      "Bypass queue",
+    );
   });
 });

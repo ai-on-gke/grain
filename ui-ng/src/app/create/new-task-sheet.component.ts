@@ -59,6 +59,7 @@ import { CreateTaskService } from "./create-task.service";
 import { forkHeadHelp, parseForkHead } from "../shared/fork-head";
 import { PRIORITY_REFUSAL, taskPriority } from "../shared/task-priority";
 import {
+  ADMISSIONS,
   DEFAULT_PRIORITY,
   type FieldId,
   NO_REPO,
@@ -339,9 +340,10 @@ const FRAMEWORKS: readonly PillOption[] = [
                         [ngTemplateOutletContext]="{ $implicit: id }"
                       />
                     }
-                    <!-- Task priority, Owner, Keep running and Admission:
-                         not configurable in settings/new-task-form.yml,
-                         as on the classic form. -->
+                    <!-- Task priority, Owner and Keep running: not fields
+                         settings/new-task-form.yml places, as on the
+                         classic form. Admission is one, drawn through
+                         fieldTpl with the rest. -->
                     <label class="field">
                       <span>Task priority</span>
                       <input
@@ -396,22 +398,6 @@ const FRAMEWORKS: readonly PillOption[] = [
                       >Restart the task as soon as its run exits, instead of
                       completing or parking it.</small
                     >
-                    <div class="field">
-                      <span id="nt-admission-label">Admission</span>
-                      <g-pill-select
-                        [options]="admissionOptions"
-                        [value]="draft().admission || 'standard'"
-                        ariaLabel="Admission"
-                        align="left"
-                        testid="nt-admission"
-                        (valueChange)="
-                          set('admission', $event === 'standard' ? '' : $event)
-                        "
-                      />
-                      <small class="muted" data-testid="nt-admission-help">{{
-                        admissionHelp()
-                      }}</small>
-                    </div>
 
                     <!-- Reviewers & Auto-approve proposals -->
                     <div class="field">
@@ -707,11 +693,15 @@ const FRAMEWORKS: readonly PillOption[] = [
           <div class="field">
             <span>{{ f.label || "Repository" }}</span>
             <g-pill-select
+              #repoSelect
               [options]="repoOptions()"
               [value]="draft().repo"
+              placeholder="Select a repository…"
               ariaLabel="Repository"
               align="left"
               testid="nt-repo"
+              [invalid]="error()?.field === 'repo'"
+              [describedBy]="error()?.field === 'repo' ? 'new-task-error' : ''"
               (valueChange)="pickRepo($event)"
             />
           </div>
@@ -1135,6 +1125,22 @@ const FRAMEWORKS: readonly PillOption[] = [
             }
           </label>
         }
+        @case ("admission") {
+          <div class="field">
+            <span>{{ f.label || "Admission" }}</span>
+            <g-pill-select
+              [options]="admissionOptions"
+              [value]="draft().admission"
+              [ariaLabel]="f.label || 'Admission'"
+              align="left"
+              testid="nt-admission"
+              (valueChange)="set('admission', $event)"
+            />
+            <small class="muted" data-testid="nt-admission-help">{{
+              f.helpText || admissionHelp()
+            }}</small>
+          </div>
+        }
         @case ("promptExtension") {
           <label class="field">
             <span>{{ f.label || "Extra instructions for the agent" }}</span>
@@ -1205,6 +1211,7 @@ export class NewTaskSheetComponent {
   private readonly sheet = viewChild<ElementRef<HTMLElement>>("sheet");
   private readonly titleInput =
     viewChild<ElementRef<HTMLInputElement>>("titleInput");
+  private readonly repoSelect = viewChild<PillSelectComponent>("repoSelect");
   private readonly branchInput =
     viewChild<ElementRef<HTMLInputElement>>("branchInput");
   private readonly foundInInput =
@@ -1230,7 +1237,7 @@ export class NewTaskSheetComponent {
           "Admitted past the worker and merger limits and a pipeline pause; still charged to the sandbox budget.",
         durable:
           "Bypass queue, plus no wall-clock deadline: suspended when idle and counted under the durable limit.",
-      })[this.draft().admission || "standard"] ?? "",
+      })[this.draft().admission] ?? "",
   );
 
   protected readonly priorityBad = computed(
@@ -1355,10 +1362,12 @@ export class NewTaskSheetComponent {
   protected readonly repoOptions = computed<PillOption[]>(() => {
     const f = this.fields().repo;
     const out: PillOption[] = [];
-    if (!this.defaultTarget()) {
-      out.push({ value: "", label: "Deployment default target" });
+    const def = this.defaultTarget().trim();
+    const list = this.repos();
+    if (def && !list.some((r) => r.toLowerCase() === def.toLowerCase())) {
+      out.push({ value: "", label: `Deployment default (${def})` });
     }
-    for (const r of this.repos()) {
+    for (const r of list) {
       out.push({ value: r, label: r });
     }
     if (f.allowNoRepo !== false) {
@@ -1628,12 +1637,20 @@ export class NewTaskSheetComponent {
   protected pickTemplate(id: string): void {
     this.selectedTemplateId.set(id);
     this.composition.set(null);
+    if (
+      this.error()?.field === "title" ||
+      this.error()?.field === "templateField"
+    ) {
+      this.error.set(null);
+    }
     const tmpl = this.templates().find((t) => t.id === id);
     if (!tmpl) {
       this.templateValues.set({});
-      if (!this.edited.has("priority")) {
-        this.draft.update((d) => ({ ...d, priority: templatePriority(null) }));
-      }
+      this.reseed(
+        emptyDraft(this.config(), this.inbox.tasks(), {
+          repo: this.draft().repo,
+        }),
+      );
       return;
     }
     const vals: Record<string, string> = {};
@@ -1641,10 +1658,9 @@ export class NewTaskSheetComponent {
       vals[f.name] = f.default ?? "";
     }
     this.templateValues.set(vals);
-    // Task priority follows the picked template until it is edited.
-    if (!this.edited.has("priority")) {
-      this.draft.update((d) => ({ ...d, priority: templatePriority(tmpl) }));
-    }
+    // Task priority and Admission follow the picked template until they
+    // are edited.
+    this.draft.update((d) => this.withTemplateDefaults(d));
     if (tmpl.repo) {
       this.pickRepo(tmpl.repo);
     } else if (tmpl.declaredIn?.repo && !this.draft().repo) {
@@ -1654,6 +1670,7 @@ export class NewTaskSheetComponent {
   }
 
   protected setTemplateField(name: string, value: string): void {
+    if (this.error()?.field === "templateField") this.error.set(null);
     this.templateValues.update((m) => ({ ...m, [name]: value }));
     void this.refreshComposition();
   }
@@ -1692,12 +1709,27 @@ export class NewTaskSheetComponent {
 
   private reseed(fresh: NewTaskDraft): void {
     this.draft.update((d) => {
-      const next = { ...fresh };
+      const next = this.withTemplateDefaults({ ...fresh });
       for (const k of this.edited) {
-        (next as Record<string, unknown>)[k] = d[k];
+        (next as unknown as Record<string, unknown>)[k] = d[k];
       }
       return next;
     });
+  }
+
+  // withTemplateDefaults starts Task priority and Admission on the picked
+  // template's own, which is what it files at, as classic does. Applied
+  // by reseed too, so picking a repo (the template's own included) does
+  // not put them back to the repo's defaults.
+  private withTemplateDefaults(d: NewTaskDraft): NewTaskDraft {
+    const tmpl = this.selectedTemplate();
+    const next = { ...d };
+    if (!this.edited.has("priority")) next.priority = templatePriority(tmpl);
+    const adm = String(tmpl?.admission ?? "").trim();
+    if (!this.edited.has("admission") && ADMISSIONS.includes(adm)) {
+      next.admission = adm;
+    }
+    return next;
   }
 
   protected modelOptions(offered?: string[]): PillOption[] {
@@ -1763,6 +1795,15 @@ export class NewTaskSheetComponent {
   protected set<K extends keyof NewTaskDraft>(k: K, v: NewTaskDraft[K]): void {
     this.edited.add(k);
     this.draft.update((d) => ({ ...d, [k]: v }));
+    const curErr = this.error();
+    if (
+      (k === "title" && curErr?.field === "title") ||
+      ((k === "newBranch" || k === "newBranchName") &&
+        curErr?.field === "newBranchName") ||
+      (k === "foundIn" && curErr?.field === "foundIn")
+    ) {
+      this.error.set(null);
+    }
     if ((k === "base" || k === "approved") && this.selectedTemplate()) {
       void this.refreshComposition();
     }
@@ -1791,6 +1832,7 @@ export class NewTaskSheetComponent {
   }
 
   protected pickRepo(repo: string): void {
+    if (this.error()?.field === "repo") this.error.set(null);
     const tasks = this.inbox.tasks();
     const baseEdited = this.edited.has("base");
     this.edited.add("repo");
@@ -1923,11 +1965,11 @@ export class NewTaskSheetComponent {
   }
 
   private async file(): Promise<void> {
-    if (this.busy()) return;
+    if (this.busy() || !this.canFile()) return;
     const d = this.draft();
     const tmpl = this.selectedTemplate();
     const tvals = this.templateValues();
-    const problem = validate(d, this.fields(), tmpl, tvals);
+    const problem = validate(d, this.fields(), tmpl, tvals, this.config());
     if (problem) {
       this.error.set(problem);
       if (problem.field === "foundIn") {
@@ -1940,11 +1982,12 @@ export class NewTaskSheetComponent {
         setTimeout(() => this.priorityInput()?.nativeElement.focus());
       } else if (problem.field === "base") {
         this.baseInput()?.nativeElement.focus();
-      } else {
-        (problem.field === "title"
-          ? this.titleInput()
-          : this.branchInput()
-        )?.nativeElement.focus();
+      } else if (problem.field === "repo") {
+        this.repoSelect()?.focus();
+      } else if (problem.field === "title") {
+        this.titleInput()?.nativeElement.focus();
+      } else if (problem.field === "newBranchName") {
+        this.branchInput()?.nativeElement.focus();
       }
       return;
     }
@@ -1991,7 +2034,6 @@ export class NewTaskSheetComponent {
         "customFields",
         "owner",
         "keepRunning",
-        "admission",
       ];
       const hasExtraTaskOverrides =
         d.attachments.length > 0 ||
@@ -2001,6 +2043,10 @@ export class NewTaskSheetComponent {
         d.capabilities !== null ||
         (d.priority.trim() !== "" &&
           d.priority.trim() !== templatePriority(tmpl)) ||
+        d.admission !==
+          (ADMISSIONS.includes(String(tmpl?.admission ?? ""))
+            ? tmpl!.admission
+            : fresh.admission) ||
         OVERRIDE_KEYS.some((k) => differs(d[k], fresh[k]));
 
       const canOnlyPostFromTemplate =

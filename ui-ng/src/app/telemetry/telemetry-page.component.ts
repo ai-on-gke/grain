@@ -37,6 +37,7 @@ import {
 } from "../shared/actor-chip.component";
 import {
   effectiveDisplayTimeZone,
+  formatLocalReset,
   formatNoticeText,
 } from "../shared/dispatch-status";
 import { StatusIconComponent } from "../shared/status-icon.component";
@@ -1250,6 +1251,13 @@ const BUDGET_WINDOWS: readonly string[] = ["5h", "24h", "168h"];
                                 <g-status-icon tone="error" kind="blocked" />
                                 Paused
                               </span>
+                              @if (fmtReset(s.pausedUntil); as reset) {
+                                <span
+                                  class="muted tabular usage-scope-reset"
+                                  data-testid="usage-scope-reset"
+                                  >resets {{ reset }}</span
+                                >
+                              }
                             } @else {
                               <span class="status-pill healthy">
                                 <g-status-icon tone="healthy" kind="healthy" />
@@ -1661,6 +1669,16 @@ export class TelemetryPageComponent implements OnInit {
     return this.showAllDirections() ? list : list.slice(0, 8);
   });
 
+  // fmtReset is a paused scope's reset on the viewer's clock, zone named,
+  // with a countdown: "11:15 AM PST (in 45m)".
+  protected readonly fmtReset = (until?: string): string =>
+    formatLocalReset(
+      until,
+      undefined,
+      this.access.clockNow(),
+      effectiveDisplayTimeZone(this.access.rawConfig()?.timeZone),
+    );
+
   protected readonly usageNotices = computed(() => {
     const u = this.usage();
     if (!u) return { total: 0, hasError: false, items: [] };
@@ -1824,8 +1842,10 @@ export class TelemetryPageComponent implements OnInit {
     const w = qp.get("window");
     if (w === "24h" || w === "7d" || w === "30d") {
       this.window.set(w);
+    } else if (w === "90d") {
+      this.window.set("30d");
     }
-    const r = qp.get("repo");
+    const r = qp.get("repo") || parseLegacyMetricsRepoFilter(qp.getAll("f"));
     if (r) this.selectedRepo.set(r);
     const a = qp.get("author");
     if (a) this.selectedAuthor.set(a);
@@ -2149,4 +2169,19 @@ export class TelemetryPageComponent implements OnInit {
       this.savingUsage.set(false);
     }
   }
+}
+
+// Classic System → Metrics encodes repository narrowing as `?f=repo:any:<owner/name>`
+// (or `f=repo:is:<owner/name>`). Extract the first repository when a classic link
+// is redirected here with its query kept.
+export function parseLegacyMetricsRepoFilter(
+  filters: readonly string[],
+): string {
+  for (const raw of filters) {
+    for (const token of raw.split(";")) {
+      const m = /^repo:(?:any:|is:)?([^,;\s]+)/i.exec(token.trim());
+      if (m?.[1]) return m[1];
+    }
+  }
+  return "";
 }

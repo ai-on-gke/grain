@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -336,6 +337,9 @@ func (c *Client) AddTeamGitConnection(ctx context.Context, id string, req AddTea
 		Proxy:   proxy,
 		Author:  author,
 	}); err != nil {
+		if errors.Is(err, gitproxy.ErrNoCredential) {
+			return Team{}, validationErrorf("no stored credential named %q: add it under Settings → Git or pick an existing one", credName)
+		}
 		return Team{}, fmt.Errorf("setting credential host: %w", err)
 	}
 	if req.SignAs && author == "" {

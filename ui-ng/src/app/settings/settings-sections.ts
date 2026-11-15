@@ -105,7 +105,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
         id: "hostds",
         label: "Hosts",
         subtitle:
-          "Registered workstation hostds, grain-agentd pairing, enrollment codes, and pending join requests.",
+          "Registered workstation hosts, grain-agentd pairing, enrollment codes, and pending host requests.",
         keywords: [
           "host",
           "hosts",
@@ -234,6 +234,8 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "sessions",
           "director",
           "turns",
+          "max agent turns",
+          "default capabilities",
           "timeout",
           "standing",
           "skills",
@@ -328,6 +330,9 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "banner",
           "lock",
           "timezone",
+          "time zone",
+          "deployment id",
+          "settings lock",
         ],
       },
       {
@@ -358,6 +363,8 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDef[] = [
           "command line",
           "terminal",
           "token",
+          "skill",
+          "grain skill install",
         ],
       },
       {
@@ -439,7 +446,35 @@ const SECTION_ALIASES: Readonly<Record<string, SettingsSectionId>> = {
   accounts: "access",
   sandbox: "sandboxes",
   admin: "general",
+  // Model connections are a card on Models; classic Settings' old
+  // connections tab opened it too (docs/connections-and-models.md).
+  connections: "models",
 };
+
+// SECTION_ANCHORS is where an old link that now lands inside a bigger
+// section points within it, when the link carries no #fragment of its
+// own: /settings/secrets opens Capabilities at its stored secrets.
+export const SECTION_ANCHORS: Readonly<Record<string, string>> = {
+  credentials: "other-secrets",
+  secrets: "other-secrets",
+  "legacy-capabilities": "other-secrets",
+  integrations: "other-secrets",
+  hub: "registry-status",
+};
+
+// settingsAnchor is the element id a settings URL asks to be scrolled
+// to: its #fragment, else its old section name's anchor, else none.
+export function settingsAnchor(
+  rawSection: string | null | undefined,
+  fragment: string | null | undefined,
+): string {
+  const f = String(fragment ?? "").trim();
+  if (f) return f;
+  const id = String(rawSection ?? "")
+    .trim()
+    .toLowerCase();
+  return SECTION_ANCHORS[id] ?? "";
+}
 
 export function resolveSettingsSection(
   raw: string | null | undefined,

@@ -3512,7 +3512,7 @@ func externalTemplateWithin(tok *model.ExternalAgentToken, held []string, tmpl m
 	heldKeys := make([]string, 0, len(held))
 	for _, h := range held {
 		for _, c := range model.CanonicalLegacyGrants(h) {
-			heldKeys = append(heldKeys, model.CanonicalGrantKey(c))
+			heldKeys = append(heldKeys, model.HeldGrantKey(c))
 		}
 	}
 	for _, g := range tmpl.Grants {
@@ -3523,7 +3523,7 @@ func externalTemplateWithin(tok *model.ExternalAgentToken, held []string, tmpl m
 			if model.IsPersonOnlyGrant(needed) {
 				return fmt.Errorf("template %s grants %s, which only a person may give", tmpl.ID, g.Capability)
 			}
-			if !slices.Contains(heldKeys, model.CanonicalGrantKey(needed)) {
+			if !slices.Contains(heldKeys, model.HeldGrantKey(needed)) {
 				return fmt.Errorf("template %s grants %s, which external agent %q does not hold", tmpl.ID, g.Capability, tok.Name)
 			}
 		}
