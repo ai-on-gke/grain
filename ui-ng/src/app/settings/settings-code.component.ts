@@ -830,7 +830,58 @@ interface StateRepoEntryDto {
                 "
               />
             </div>
+            <div class="s-field">
+              <label class="s-label" for="ci-age-boost"
+                >CI queue age boost</label
+              >
+              <input
+                id="ci-age-boost"
+                class="s-input s-num"
+                type="text"
+                data-testid="input-ciAgeBoost"
+                [placeholder]="state.defaultHint('ciAgeBoost')"
+                [value]="state.val('ciAgeBoost', '')"
+                [disabled]="!canWriteSettings()"
+                (input)="
+                  state.setField('ciAgeBoost', $any($event.target).value)
+                "
+              />
+              <span class="s-hint"
+                >How long a waiting job queues to gain one step of rank, so
+                higher-priority work cannot starve the rest.</span
+              >
+            </div>
           </div>
+          @for (group of ciRetentionGroups; track group.title) {
+            <div class="s-subsection">
+              <div class="s-subhead">
+                <h4 class="s-subhead-title">{{ group.title }}</h4>
+              </div>
+              <div class="s-grid">
+                @for (f of group.fields; track f.key) {
+                  <div class="s-field">
+                    <label class="s-label" [attr.for]="'ci-' + f.key">{{
+                      f.label
+                    }}</label>
+                    <input
+                      class="s-input s-num"
+                      type="number"
+                      [id]="'ci-' + f.key"
+                      [attr.min]="f.min"
+                      [attr.data-testid]="'input-' + f.key"
+                      [value]="state.defaultedNumber(f.key)"
+                      [placeholder]="state.defaultHint(f.key)"
+                      [disabled]="!canWriteSettings()"
+                      (input)="
+                        state.setNumber(f.key, $any($event.target).value)
+                      "
+                    />
+                    <span class="s-hint">{{ f.hint }}</span>
+                  </div>
+                }
+              </div>
+            </div>
+          }
           @if (ciFaultCount() > 0) {
             <p class="s-hint s-num">
               {{ ciFaultCount() }} shared CI fault classification rule(s)
@@ -1089,6 +1140,83 @@ interface StateRepoEntryDto {
   `,
 })
 export class SettingsCodeComponent implements OnInit, OnChanges {
+  // The CI history, output, artifact and job-cache limits: each stores 0
+  // for grain's default and reports it as <key>Default, which the blank
+  // box shows as its placeholder (the Settings rule in the design book).
+  protected readonly ciRetentionGroups: readonly {
+    title: string;
+    fields: readonly {
+      key: string;
+      label: string;
+      hint: string;
+      min: number;
+    }[];
+  }[] = [
+    {
+      title: "Step output",
+      fields: [
+        {
+          key: "ciStepOutputMb",
+          label: "Step output kept (MiB)",
+          min: -1,
+          hint: "Ceiling on step output across the whole history; the oldest runs' logs go first. -1 keeps every byte.",
+        },
+        {
+          key: "ciStepOutputDays",
+          label: "Step output age (days)",
+          min: -1,
+          hint: "How long a run's step output lives whatever room is left. -1 bounds it by size alone.",
+        },
+        {
+          key: "ciRunOutputKb",
+          label: "Output per run (KiB)",
+          min: 0,
+          hint: "Most step output one run may store, spent on the steps a reader opens first.",
+        },
+      ],
+    },
+    {
+      title: "Artifacts",
+      fields: [
+        {
+          key: "ciArtifactRunMb",
+          label: "Artifacts per run (MiB)",
+          min: 0,
+          hint: "Ceiling on what one run's artifacts may come to.",
+        },
+        {
+          key: "ciArtifactFileMb",
+          label: "Largest artifact (MiB)",
+          min: 0,
+          hint: "Largest single artifact kept; a job's sandbox refuses one past it before sending.",
+        },
+        {
+          key: "ciArtifactDays",
+          label: "Artifacts age (days)",
+          min: 0,
+          hint: "How long a run's artifacts are kept.",
+        },
+      ],
+    },
+    {
+      title: "Job cache",
+      fields: [
+        {
+          key: "ciCacheEntries",
+          label: "Job cache entries",
+          min: 0,
+          hint: "Ceiling on how many entries the cache holds, alongside its size.",
+        },
+        {
+          key: "ciCacheDays",
+          label: "Job cache age (days)",
+          min: 0,
+          hint: "How long a result nobody asks for again is kept.",
+        },
+      ],
+    },
+  ];
+
   protected readonly api = inject(GrainApi);
   protected readonly access = inject(AccessService);
   protected readonly state = inject(SettingsStateService);
