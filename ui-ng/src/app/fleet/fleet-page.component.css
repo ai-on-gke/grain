@@ -134,3 +134,25 @@ g-fleet-page {
   color: var(--md-sys-color-primary);
   border-bottom-color: var(--md-sys-color-primary);
 }
+
+/* A base branch publishing nothing: a warning, like classic System -> Health. */
+.fleet-publishing-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--md-sys-color-warning-container);
+  color: var(--md-sys-color-on-warning-container);
+  border: 1px solid var(--md-sys-color-warning);
+  overflow-wrap: anywhere;
+}
+
+.fleet-publishing-banner g-status-icon {
+  flex: none;
+  margin-top: 2px;
+}
+
+.fleet-publishing-text a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+}
