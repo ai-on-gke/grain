@@ -296,6 +296,17 @@ func TestAccessCodeModeRouteShowsTheModeAndItsCommand(t *testing.T) {
 		!strings.Contains(rec.Body.String(), "DELETE /api/pipeline-pause") {
 		t.Errorf("GET /api/access/history: %d %s, want the access-code use listed", rec.Code, rec.Body)
 	}
+
+	spacedDir := filepath.Join(t.TempDir(), "grain data $(id);'x'")
+	if err := os.MkdirAll(spacedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	client.Config.LocalAPITokenFile = filepath.Join(spacedDir, ui.LocalAPITokenFileName)
+	quoted := "'" + strings.ReplaceAll(spacedDir, "'", `'\''`) + "'"
+	if v := read(); !strings.Contains(v.Command, " -data-dir "+quoted+" mode recovery") ||
+		!strings.Contains(v.OnCommand, " -data-dir "+quoted+" mode on") {
+		t.Errorf("commands for metacharacter dir = %q / %q, want quoted -data-dir %s", v.Command, v.OnCommand, quoted)
+	}
 }
 
 // Settings -> Access's history lists what a code session changed beside

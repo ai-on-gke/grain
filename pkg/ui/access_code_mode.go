@@ -437,11 +437,29 @@ func (s *Server) handleAccessCodeMode(w http.ResponseWriter, r *http.Request) {
 	if s.tasks != nil {
 		if tok := s.tasks.Config.LocalAPITokenFile; tok != "" {
 			view.Account = FileOwner(tok)
-			cmd += " -data-dir " + filepath.Dir(tok)
+			cmd += " -data-dir " + shellQuoteWord(filepath.Dir(tok))
 		}
 	}
-	prefix := "sudo -u " + view.Account + " " + cmd + " mode "
+	prefix := "sudo -u " + shellQuoteWord(view.Account) + " " + cmd + " mode "
 	view.Command = prefix + string(AccessCodeRecovery)
 	view.OnCommand = prefix + string(AccessCodeOn)
 	writeJSON(w, http.StatusOK, view)
+}
+
+// shellQuoteWord quotes s as a single POSIX shell word when it contains
+// whitespace or shell metacharacters, leaving ordinary paths and account
+// names unquoted.
+func shellQuoteWord(s string) string {
+	if s == "" {
+		return "''"
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '.' || r == '/' || r == ':' || r == '@' || r == '=':
+		default:
+			return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+		}
+	}
+	return s
 }
