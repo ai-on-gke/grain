@@ -933,7 +933,7 @@ export class DeferErrorDirective implements OnInit {
       </ng-template>
 
       <!-- Loaded on demand so shell modals and popovers stay out of the initial bundle. -->
-      @defer (when createTask.isOpen(); prefetch on idle) {
+      @defer (when createTask.isOpen(); prefetch when preloadCreateSheet) {
         <g-new-task-sheet />
       } @error {
         @if (createTask.isOpen()) {
@@ -1094,6 +1094,9 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly railMorePos = signal({ top: 0, left: 0 });
   protected readonly moreOpen = signal(false);
   protected readonly accountOpen = signal(false);
+  protected readonly preloadCreateSheet = !(
+    globalThis.navigator as { connection?: { saveData?: boolean } }
+  )?.connection?.saveData;
   protected readonly prefersReducedMotion = signal(false);
   protected readonly spriteFailed = signal(false);
 
@@ -1166,7 +1169,6 @@ export class AppComponent implements OnInit, OnDestroy {
   private unregister: (() => void)[] = [];
   private navSub: { unsubscribe(): void } | null = null;
   private dispatchEventSub: { unsubscribe(): void } | null = null;
-  private dispatchPollTimer: ReturnType<typeof setInterval> | null = null;
   private dispatchTickTimer: ReturnType<typeof setInterval> | null = null;
   private lastConfigAt = 0;
   private lastUsageAt = 0;
@@ -1175,7 +1177,11 @@ export class AppComponent implements OnInit, OnDestroy {
   private readonly onVisibilityChange = (): void => {
     if (this.doc.visibilityState === "visible") {
       this.access.tickClock();
-      void this.refreshDispatchStatus(Date.now() - this.lastUsageAt >= 10_000);
+      if (Date.now() - this.lastConfigAt >= 60_000) {
+        void this.refreshDispatchStatus(
+          Date.now() - this.lastUsageAt >= 60_000,
+        );
+      }
     }
   };
   private motionMql: MediaQueryList | null = null;
@@ -1213,15 +1219,6 @@ export class AppComponent implements OnInit, OnDestroy {
       },
       { injector: this.injector },
     );
-
-    if (!this.access.configLoaded() && typeof this.api.config === "function") {
-      void this.api
-        .config()
-        .then((c) => {
-          if (c && !this.access.configLoaded()) this.access.setConfig(c);
-        })
-        .catch(() => undefined);
-    }
 
     if (typeof this.api.whoami === "function") {
       void this.api
@@ -1291,19 +1288,37 @@ export class AppComponent implements OnInit, OnDestroy {
       });
     });
 
-    void import("./sessions/sessions.store").then(({ SessionsStore }) => {
-      if (this.destroyed) return;
-      runInInjectionContext(this.injector, () => {
-        const s = inject(SessionsStore);
-        this.sessionsRef.set(s);
-      });
-    });
+    let sessionsRequested = false;
+    effect(
+      () => {
+        if (
+          sessionsRequested ||
+          (!this.directorCtx.isOpen() &&
+            !this.currentPath().startsWith("/sessions"))
+        ) {
+          return;
+        }
+        sessionsRequested = true;
+        void import("./sessions/sessions.store").then(({ SessionsStore }) => {
+          if (this.destroyed) return;
+          runInInjectionContext(this.injector, () => {
+            const s = inject(SessionsStore);
+            this.sessionsRef.set(s);
+          });
+        });
+      },
+      { injector: this.injector },
+    );
 
     this.currentPath.set(this.router.url.split(/[?#]/, 1)[0]);
     this.directorCtx.setRoute(this.router.url);
     void this.refreshDispatchStatus(true);
-    this.dispatchEventSub = this.events.events().subscribe(() => {
-      if (Date.now() - this.lastConfigAt >= 10_000) {
+    this.dispatchEventSub = this.events.events().subscribe((ev) => {
+      if (this.doc.visibilityState === "hidden") return;
+      if (
+        (ev.type === "task.state" || ev.type.startsWith("notification.")) &&
+        Date.now() - this.lastConfigAt >= 60_000
+      ) {
         void this.refreshDispatchStatus(true);
       }
     });
@@ -1320,19 +1335,11 @@ export class AppComponent implements OnInit, OnDestroy {
         this.onSessions.set(
           url.startsWith("/sessions") || url.startsWith("/task/"),
         );
-        if (Date.now() - this.lastConfigAt >= 5_000) {
-          void this.refreshDispatchStatus(false);
-        }
       }
     });
 
     this.zone.runOutsideAngular(() => {
       this.doc.addEventListener("visibilitychange", this.onVisibilityChange);
-      this.dispatchPollTimer = setInterval(() => {
-        if (this.doc.visibilityState !== "hidden") {
-          this.zone.run(() => void this.refreshDispatchStatus(false));
-        }
-      }, 60_000);
       this.dispatchTickTimer = setInterval(() => {
         if (this.doc.visibilityState !== "hidden" && this.dispatchBanner()) {
           this.zone.run(() => this.access.tickClock());
@@ -1347,11 +1354,21 @@ export class AppComponent implements OnInit, OnDestroy {
 
   private async refreshDispatchStatus(forceUsage: boolean): Promise<void> {
     if (this.destroyed || this.dispatchReading) return;
+    if (
+      typeof this.api.backoffRemainingMs === "function" &&
+      this.api.backoffRemainingMs() > 0 &&
+      this.access.configLoaded()
+    ) {
+      return;
+    }
     this.dispatchReading = true;
     const now = Date.now();
     this.lastConfigAt = now;
     try {
-      const cfg = await this.api.config().catch(() => null);
+      const cfg =
+        typeof this.api.config === "function"
+          ? await this.api.config().catch(() => null)
+          : null;
       if (cfg) this.access.setConfig(cfg);
       if (
         (forceUsage || now - this.lastUsageAt >= 60_000) &&
@@ -1380,7 +1397,6 @@ export class AppComponent implements OnInit, OnDestroy {
     this.unregister.forEach((u) => u());
     this.navSub?.unsubscribe();
     this.dispatchEventSub?.unsubscribe();
-    if (this.dispatchPollTimer) clearInterval(this.dispatchPollTimer);
     if (this.dispatchTickTimer) clearInterval(this.dispatchTickTimer);
     this.doc.removeEventListener("visibilitychange", this.onVisibilityChange);
     this.motionMql?.removeEventListener?.("change", this.onMotionChange);

@@ -23,8 +23,10 @@ import {
   ViewEncapsulation,
   afterRenderEffect,
   computed,
+  effect,
   inject,
   signal,
+  untracked,
 } from "@angular/core";
 import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
 import { ActivatedRoute, Router, RouterLink } from "@angular/router";
@@ -32,6 +34,7 @@ import { filter } from "rxjs";
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import { AccessService } from "../services/access.service";
+import { LiveRefreshService } from "../services/live-refresh.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { ViewFilter } from "../services/view-filter.service";
@@ -76,11 +79,13 @@ import {
   parseArgv,
 } from "./fleet.models";
 
-// How often GET /api/sandboxes is read again while the page is visible,
-// and on every task.state event besides: the live sandboxes, the capacity
-// strip and the CI waits all follow it, so a task closed while it waits on
-// CI drops out of the list, and one reopened comes back, without a reload.
-export const SANDBOXES_POLL_MS = 10000;
+// GET /api/sandboxes is read again on every task.state event and on the
+// shared LiveRefreshService pulse (30s, paused while the tab is hidden and
+// during a 503/429 backoff): the live sandboxes, the capacity strip and the
+// CI waits all follow it, so a task closed while it waits on CI drops out of
+// the list, and one reopened comes back, without a reload. The pulse keeps
+// the page inside its request budget (ui-ng/e2e/request-budgets.ts).
+export const SANDBOXES_POLL_MS = 30000;
 
 const TABS: readonly { id: FleetTab; label: string }[] = [
   { id: "sandboxes", label: "Sandboxes" },
@@ -1687,6 +1692,11 @@ export class FleetPageComponent implements OnInit {
   private readonly hostEl = inject(ElementRef<HTMLElement>);
   private readonly events = inject(GrainEvents);
   private readonly zone = inject(NgZone);
+  private readonly liveRefresh = inject(LiveRefreshService);
+  private readonly pulseEffect = effect(() => {
+    if (this.liveRefresh.pulse() === 0) return;
+    untracked(() => void this.pollSandboxes());
+  });
   // The latest GET /api/sandboxes asked for: an older answer arriving after
   // a newer one is dropped, so a slow poll cannot put a closed task's CI
   // wait back. pollAgain is a poll asked for while one was in flight.
@@ -1974,13 +1984,8 @@ export class FleetPageComponent implements OnInit {
       });
     void this.bootstrap();
 
-    this.zone.runOutsideAngular(() => {
-      const timer = setInterval(
-        () => this.zone.run(() => void this.pollSandboxes()),
-        SANDBOXES_POLL_MS,
-      );
-      this.destroyRef.onDestroy(() => clearInterval(timer));
-    });
+    const releasePulse = this.liveRefresh.retainPulse();
+    this.destroyRef.onDestroy(releasePulse);
     this.events
       .events()
       .pipe(

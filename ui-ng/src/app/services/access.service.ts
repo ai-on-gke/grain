@@ -104,6 +104,15 @@ export class AccessService {
   });
 
   setConfig(config: GrainConfig | null): void {
+    const prev = this.config();
+    if (
+      prev !== null &&
+      config !== null &&
+      JSON.stringify(prev) === JSON.stringify(config)
+    ) {
+      this.configLoaded.set(true);
+      return;
+    }
     this.config.set(config);
     this.configLoaded.set(config !== null);
   }

@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Injectable, NgZone, OnDestroy, inject } from "@angular/core";
+import { DOCUMENT } from "@angular/common";
+import { Injectable, NgZone, OnDestroy, inject, signal } from "@angular/core";
 import { Observable, Subject } from "rxjs";
 import { routePath } from "./grain-api.service";
 
@@ -46,27 +47,44 @@ export type EventSourceFactory = (url: string) => EventSource;
 @Injectable({ providedIn: "root" })
 export class GrainEvents implements OnDestroy {
   private readonly zone = inject(NgZone);
+  private readonly doc = inject(DOCUMENT);
   private readonly subject = new Subject<GrainEvent>();
   private readonly ac = new AbortController();
   private source: EventSource | null = null;
   private retry: ReturnType<typeof setTimeout> | null = null;
   private backoff = 1000;
   private subscribers = 0;
+  readonly connected = signal(false);
   factory: EventSourceFactory = (url) =>
     new EventSource(url, { withCredentials: true });
 
   constructor() {
     if (typeof window !== "undefined") {
-      const { signal } = this.ac;
-      // Close the SSE stream on pagehide (navigation/BFCache) so HTTP/1.1
-      // connections are not exhausted across reloads.
-      window.addEventListener("pagehide", () => this.disconnect(), { signal });
+      const { signal: abortSignal } = this.ac;
+      // Close the SSE stream on pagehide or while hidden so background tabs
+      // hold no open stream and make zero reconnect attempts.
+      window.addEventListener("pagehide", () => this.disconnect(), {
+        signal: abortSignal,
+      });
       window.addEventListener(
         "pageshow",
         () => {
-          if (this.subscribers > 0 && !this.source) this.connect();
+          if (this.subscribers > 0 && !this.source && !this.doc.hidden) {
+            this.connect();
+          }
         },
-        { signal },
+        { signal: abortSignal },
+      );
+      this.doc.addEventListener(
+        "visibilitychange",
+        () => {
+          if (this.doc.hidden) {
+            this.disconnect();
+          } else if (this.subscribers > 0 && !this.source) {
+            this.connect();
+          }
+        },
+        { signal: abortSignal },
       );
     }
   }
@@ -77,7 +95,7 @@ export class GrainEvents implements OnDestroy {
     return new Observable<GrainEvent>((observer) => {
       const sub = this.subject.subscribe(observer);
       this.subscribers++;
-      if (!this.source) this.connect();
+      if (!this.source && !this.doc.hidden) this.connect();
       return () => {
         sub.unsubscribe();
         this.subscribers--;
@@ -87,6 +105,7 @@ export class GrainEvents implements OnDestroy {
   }
 
   private connect(): void {
+    if (this.doc.hidden) return;
     if (typeof EventSource === "undefined" && this.factory === undefined) {
       return;
     }
@@ -99,6 +118,10 @@ export class GrainEvents implements OnDestroy {
         return;
       }
       this.source = src;
+      src.onopen = () => {
+        this.backoff = 1000;
+        this.zone.run(() => this.connected.set(true));
+      };
       const emit = (type: string) => (e: MessageEvent) => {
         let data: unknown = e.data;
         try {
@@ -107,7 +130,10 @@ export class GrainEvents implements OnDestroy {
           // Not JSON: hand the raw text on.
         }
         this.backoff = 1000;
-        this.zone.run(() => this.subject.next({ type, data }));
+        this.zone.run(() => {
+          this.connected.set(true);
+          this.subject.next({ type, data });
+        });
       };
       src.onmessage = emit("message");
       for (const t of GRAIN_EVENT_TYPES) {
@@ -116,6 +142,7 @@ export class GrainEvents implements OnDestroy {
       src.onerror = () => {
         if (src.readyState === 2 /* CLOSED */) {
           this.source = null;
+          this.zone.run(() => this.connected.set(false));
           this.scheduleReconnect();
         }
       };
@@ -123,10 +150,12 @@ export class GrainEvents implements OnDestroy {
   }
 
   private scheduleReconnect(): void {
-    if (this.retry || this.subscribers === 0) return;
+    if (this.retry || this.subscribers === 0 || this.doc.hidden) return;
     this.retry = setTimeout(() => {
       this.retry = null;
-      if (this.subscribers > 0 && !this.source) this.connect();
+      if (this.subscribers > 0 && !this.source && !this.doc.hidden) {
+        this.connect();
+      }
     }, this.backoff);
     this.backoff = Math.min(this.backoff * 2, 30000);
   }
@@ -137,6 +166,7 @@ export class GrainEvents implements OnDestroy {
     this.backoff = 1000;
     this.source?.close();
     this.source = null;
+    this.connected.set(false);
   }
 
   ngOnDestroy(): void {

@@ -17,11 +17,12 @@ import {
   NgZone,
   OnDestroy,
   computed,
+  effect,
   inject,
   signal,
+  untracked,
 } from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
-import { GrainEvents } from "../api/grain-events.service";
 import type { RouteKey } from "../api/generated-routes";
 import type {
   DiffPreview,
@@ -32,6 +33,10 @@ import type {
 } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { BranchRefsService } from "../services/branch-refs.service";
+import {
+  LiveRefreshService,
+  type TranscriptPollerHandle,
+} from "../services/live-refresh.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { versionLabel } from "../api/version";
 import { ViewFilter } from "../services/view-filter.service";
@@ -114,7 +119,7 @@ function errorText(err: unknown): string {
 @Injectable({ providedIn: "root" })
 export class InboxStore implements OnDestroy {
   private readonly api = inject(GrainApi);
-  private readonly events = inject(GrainEvents);
+  private readonly liveRefresh = inject(LiveRefreshService);
   private readonly access = inject(AccessService);
   private readonly branchRefs = inject(BranchRefsService);
   private readonly feed = inject(TaskFeedStore);
@@ -296,8 +301,19 @@ export class InboxStore implements OnDestroy {
     return id ? (this.details()[id] ?? null) : null;
   });
   readonly selectedTranscript = signal<string | null>(null);
-  private transcriptTimer: ReturnType<typeof setInterval> | null = null;
-  private transcriptKey = "";
+  private readonly transcriptPoller: TranscriptPollerHandle =
+    this.liveRefresh.createTranscriptPoller({
+      fetch: async (taskId, attempt) => {
+        if (typeof this.api.get !== "function") return "";
+        const r = await this.api.get<{ transcript?: string }>(
+          "GET /api/tasks/{id}/attempts/{number}/transcript",
+          { id: taskId, number: String(attempt) },
+        );
+        return r?.transcript ?? "";
+      },
+      onText: (text) => this.selectedTranscript.set(text),
+      isActive: () => this.isInspectorActive(),
+    });
   // selectedDiff is the selected entry's preview: undefined while it is
   // being read or when the entry is not about a change.
   readonly selectedDiff = computed<DiffPreview | null | undefined>(() => {
@@ -310,28 +326,42 @@ export class InboxStore implements OnDestroy {
     return this.entries().filter((e) => c.has(e.key));
   });
 
-  private timer: ReturnType<typeof setInterval> | null = null;
   private refreshing: Promise<void> | null = null;
   private queuedRefresh: Promise<void> | null = null;
-  private eventSub: { unsubscribe(): void } | null = null;
+  private unsubEvents: (() => void) | null = null;
+  private lastVisiblePulse = 0;
   private started = false;
   private shellBackground = false;
   private pageWaiters = 0;
   private readonly summaryInFlight = new Set<string>();
   private readonly summaryUpdatedAt = new Map<string, string>();
   private readonly fullDetailLoaded = new Set<string>();
-  private readonly onVisibility = (): void => {
-    if (
-      this.started &&
-      typeof document !== "undefined" &&
-      document.visibilityState === "visible"
-    ) {
-      this.scheduleRefresh();
-    }
-  };
 
   constructor() {
     this.feed.onBeforeChange(() => this.remember());
+    effect(() => {
+      const rev = this.feed.revision();
+      untracked(() => {
+        if (!this.started || rev === 0) return;
+        this.lastReadFailed = Boolean(this.feed.lastError());
+        this.trackIndex();
+        if (this.isInspectorActive()) {
+          void this.hydrateActiveInspector();
+        } else {
+          this.stopSelectedTranscript();
+        }
+      });
+    });
+    effect(() => {
+      const vp = this.liveRefresh.visiblePulse();
+      untracked(() => {
+        if (vp === this.lastVisiblePulse) return;
+        this.lastVisiblePulse = vp;
+        if (this.started) {
+          void this.refreshAux();
+        }
+      });
+    });
   }
 
   retainPage(): void {
@@ -372,38 +402,29 @@ export class InboxStore implements OnDestroy {
     }
     if (!this.started) {
       this.started = true;
+      this.lastVisiblePulse = this.liveRefresh.visiblePulse();
       this.feed.start(false);
-      if (typeof document !== "undefined") {
-        document.addEventListener("visibilitychange", this.onVisibility);
-      }
     }
-    void this.refresh();
-    if (!this.eventSub) {
-      this.eventSub = this.events
-        .events()
-        .subscribe(() => this.scheduleRefresh());
+    if (!this.loaded() && !this.refreshing) {
+      void this.refresh(true);
+    } else if (!shellOnly && this.isInspectorActive()) {
+      void this.hydrateActiveInspector();
     }
-    if (!this.timer) {
-      this.zone.runOutsideAngular(() => {
-        this.timer = setInterval(() => {
-          if (
-            typeof document === "undefined" ||
-            document.visibilityState !== "hidden"
-          ) {
-            this.zone.run(() => void this.refresh());
-          }
-        }, POLL_MS);
-      });
-    }
+    this.unsubEvents ??= this.liveRefresh.subscribeEvents(
+      (ev) =>
+        Boolean(
+          ev.type?.startsWith("notification.") ||
+          ev.type?.startsWith("local_script."),
+        ),
+      () => void this.refreshAux(),
+      250,
+    );
   }
 
   stop(): void {
     if (this.started) {
       this.started = false;
       this.feed.stop(false);
-      if (typeof document !== "undefined") {
-        document.removeEventListener("visibilitychange", this.onVisibility);
-      }
     }
     this.shellBackground = false;
     this.pageWaiters = 0;
@@ -415,10 +436,24 @@ export class InboxStore implements OnDestroy {
       clearTimeout(this.debounce);
       this.debounce = null;
     }
-    this.eventSub?.unsubscribe();
-    this.eventSub = null;
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.unsubEvents?.();
+    this.unsubEvents = null;
+  }
+
+  private async refreshAux(): Promise<void> {
+    if (!this.started) return;
+    const [notifications, scripts] = await Promise.allSettled([
+      this.api.openNotifications(),
+      this.access.can("GET /api/local-script-approvals")
+        ? this.api.localScriptApprovals()
+        : Promise.resolve([] as LocalScriptApproval[]),
+    ]);
+    if (notifications.status === "fulfilled") {
+      this.notifications.set(notifications.value);
+    }
+    if (scripts.status === "fulfilled") {
+      this.localScripts.set(scripts.value);
+    }
   }
 
   ngOnDestroy(): void {
@@ -439,9 +474,9 @@ export class InboxStore implements OnDestroy {
   // refresh reads everything again. Concurrent calls wait on a fresh read
   // started after the active one finishes so callers never observe stale
   // pre-mutation state.
-  refresh(): Promise<void> {
+  refresh(shareInFlightFeed = false): Promise<void> {
     if (!this.refreshing) {
-      this.refreshing = this.load().finally(() => {
+      this.refreshing = this.load(shareInFlightFeed).finally(() => {
         this.refreshing = null;
       });
       return this.refreshing;
@@ -454,7 +489,7 @@ export class InboxStore implements OnDestroy {
       }));
   }
 
-  private async load(): Promise<void> {
+  private async load(shareInFlightFeed = false): Promise<void> {
     this.remember();
     const needWhoami =
       !this.access.whoami() && typeof this.api.whoami === "function";
@@ -467,7 +502,7 @@ export class InboxStore implements OnDestroy {
     });
     const [, feedOk, notifications, scripts, who] = await Promise.allSettled([
       configReq,
-      this.feed.refresh(),
+      shareInFlightFeed ? this.feed.refreshIfStale() : this.feed.refresh(),
       this.api.openNotifications(),
       (this.access.configLoaded()
         ? Promise.resolve()
@@ -792,10 +827,13 @@ export class InboxStore implements OnDestroy {
       this.stopSelectedTranscript();
       return;
     }
+    const prev = this.details()[e.taskId];
+    const entryUpdatedAt = e.task?.updatedAt ?? "";
     if (
       !force &&
-      this.details()[e.taskId] &&
-      this.fullDetailLoaded.has(e.taskId)
+      prev &&
+      this.fullDetailLoaded.has(e.taskId) &&
+      (!entryUpdatedAt || prev.updatedAt === entryUpdatedAt)
     ) {
       this.syncSelectedTranscript();
       return;
@@ -809,11 +847,7 @@ export class InboxStore implements OnDestroy {
   }
 
   private stopSelectedTranscript(): void {
-    if (this.transcriptTimer) {
-      clearInterval(this.transcriptTimer);
-      this.transcriptTimer = null;
-    }
-    this.transcriptKey = "";
+    this.transcriptPoller.stop();
     this.selectedTranscript.set(null);
   }
 
@@ -824,6 +858,7 @@ export class InboxStore implements OnDestroy {
     const running =
       !!taskId &&
       !e?.gone &&
+      this.isInspectorActive() &&
       (e?.task?.state === "running" || d?.state === "running");
     if (!running || !taskId) {
       this.stopSelectedTranscript();
@@ -847,45 +882,7 @@ export class InboxStore implements OnDestroy {
       this.stopSelectedTranscript();
       return;
     }
-    const key = `${taskId}:${attemptNo}`;
-    if (this.transcriptKey === key && this.transcriptTimer) return;
-    this.stopSelectedTranscript();
-    this.transcriptKey = key;
-    void this.pollSelectedTranscript(taskId, attemptNo, key);
-    this.zone.runOutsideAngular(() => {
-      this.transcriptTimer = setInterval(
-        () =>
-          this.zone.run(
-            () => void this.pollSelectedTranscript(taskId, attemptNo, key),
-          ),
-        LIVE_TRANSCRIPT_POLL_MS,
-      );
-    });
-  }
-
-  private async pollSelectedTranscript(
-    taskId: string,
-    attemptNo: number,
-    key: string,
-  ): Promise<void> {
-    if (
-      typeof this.api.get !== "function" ||
-      !this.isInspectorActive() ||
-      (typeof document !== "undefined" && document.visibilityState === "hidden")
-    ) {
-      return;
-    }
-    try {
-      const r = await this.api.get<{ transcript?: string }>(
-        "GET /api/tasks/{id}/attempts/{number}/transcript",
-        { id: taskId, number: String(attemptNo) },
-      );
-      if (this.transcriptKey === key) {
-        this.selectedTranscript.set(r?.transcript ?? "");
-      }
-    } catch {
-      // Transient transcript errors leave existing partial output intact.
-    }
+    this.transcriptPoller.watch(taskId, attemptNo, true);
   }
 
   // select pins a row. Choosing a row holds the list's order, so nothing

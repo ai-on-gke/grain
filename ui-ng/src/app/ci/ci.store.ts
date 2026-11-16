@@ -12,11 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
-import type { Subscription } from "rxjs";
+import {
+  Injectable,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
-import { GrainEvents } from "../api/grain-events.service";
 import { AccessService } from "../services/access.service";
+import { LiveRefreshService } from "../services/live-refresh.service";
 import { errorText } from "../sessions/session-helpers";
 import { configuredInstanceRepos } from "../shared/instance-repos";
 import {
@@ -40,14 +46,11 @@ import {
   isRunActive,
 } from "./ci.models";
 
-const POLL_MS = 5000;
-
 @Injectable({ providedIn: "root" })
 export class CIStore {
   private readonly api = inject(GrainApi);
-  private readonly events = inject(GrainEvents);
+  private readonly liveRefresh = inject(LiveRefreshService);
   private readonly access = inject(AccessService);
-  private readonly zone = inject(NgZone);
 
   readonly loaded = signal(false);
   readonly enabled = signal(true);
@@ -92,36 +95,63 @@ export class CIStore {
     return [...map.values()];
   });
 
-  private eventSub: Subscription | null = null;
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private unsubEvents: (() => void) | null = null;
+  private releasePulse: (() => void) | null = null;
+  private lastPulse = 0;
+  private lastVisiblePulse = 0;
+  private lastRefreshAt = 0;
   private configTask: Promise<void> | null = null;
   private activeCount = 0;
   private detailFailedId: string | null = null;
+
+  constructor() {
+    effect(() => {
+      const p = this.liveRefresh.pulse();
+      untracked(() => {
+        if (p === this.lastPulse) return;
+        this.lastPulse = p;
+        if (this.activeCount === 0 || this.liveRefresh.hidden()) return;
+        const hasActive = this.runs().some(isRunActive);
+        const minInterval = hasActive ? 30_000 : 60_000;
+        if (Date.now() - this.lastRefreshAt >= minInterval) {
+          void this.refresh();
+        }
+      });
+    });
+    effect(() => {
+      const vp = this.liveRefresh.visiblePulse();
+      untracked(() => {
+        if (vp === this.lastVisiblePulse) return;
+        this.lastVisiblePulse = vp;
+        if (this.activeCount > 0 && Date.now() - this.lastRefreshAt >= 15_000) {
+          void this.refresh();
+        }
+      });
+    });
+  }
 
   start(): void {
     this.actionError.set(null);
     this.activeCount++;
     if (this.activeCount > 1) return;
+    this.lastPulse = this.liveRefresh.pulse();
+    this.lastVisiblePulse = this.liveRefresh.visiblePulse();
+    this.releasePulse = this.liveRefresh.retainPulse();
     void this.bootstrap();
-    this.eventSub = this.events.events().subscribe((ev) => {
-      if (ev.type === "task.ci" || ev.type === "task.state") {
-        void this.refresh();
-      }
-    });
-    this.zone.runOutsideAngular(() => {
-      this.pollTimer = setInterval(() => {
-        this.zone.run(() => void this.refresh());
-      }, POLL_MS);
-    });
+    this.unsubEvents = this.liveRefresh.subscribeEvents(
+      (ev) => ev.type === "task.ci" || ev.type === "task.state",
+      () => void this.refresh(),
+      250,
+    );
   }
 
   stop(): void {
     this.activeCount = Math.max(0, this.activeCount - 1);
     if (this.activeCount > 0) return;
-    this.eventSub?.unsubscribe();
-    this.eventSub = null;
-    if (this.pollTimer) clearInterval(this.pollTimer);
-    this.pollTimer = null;
+    this.unsubEvents?.();
+    this.unsubEvents = null;
+    this.releasePulse?.();
+    this.releasePulse = null;
   }
 
   setQueryScope(repo: string, provider: CIProviderFilter): void {
@@ -291,6 +321,7 @@ export class CIStore {
 
       this.loadError.set(null);
       this.loaded.set(true);
+      this.lastRefreshAt = Date.now();
 
       const sel = this.selectedId();
       if (sel) {

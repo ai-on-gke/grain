@@ -12,9 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
+import {
+  Injectable,
+  NgZone,
+  type OnDestroy,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from "@angular/core";
 import { GrainApi } from "../api/grain-api.service";
-import { GrainEvents } from "../api/grain-events.service";
 import type {
   AgentModel,
   AgentModelsResponse,
@@ -28,6 +36,13 @@ import type {
 } from "../api/models";
 import type { GrainPlanBlock } from "../director/director-draft";
 import { AccessService } from "../services/access.service";
+import {
+  INITIAL_TRANSCRIPT_POLL_MS,
+  LiveRefreshService,
+  eventTaskId,
+} from "../services/live-refresh.service";
+import { ReadTrouble } from "../services/request-trouble";
+import { TaskFeedStore } from "../services/task-feed.service";
 import { topologicalPlanOrder } from "./session-artifacts";
 import {
   DIRECTOR_ID,
@@ -37,11 +52,10 @@ import {
   sessionStatus,
 } from "./session-helpers";
 
-// POLL_MS is the classic UI's refresh: every 3 s with ETags, so a reply
-// shows up without the reader doing anything, events or not.
 export const POLL_MS = 3000;
-export const TRANSCRIPT_POLL_MS = 1500;
+export const TRANSCRIPT_POLL_MS = INITIAL_TRANSCRIPT_POLL_MS;
 export const COMMENTS_QUERY = "comments_limit=50&attempts_limit=20";
+const FAILURE_RETRY_MS = 5000;
 
 function rowKey(t: Task | undefined): string {
   return t ? `${t.state}|${t.updatedAt ?? ""}|${t.activityAt ?? ""}` : "";
@@ -94,10 +108,11 @@ const RUN_FIXED_KEYS: (keyof UpdateSessionPatch)[] = [
 ];
 
 @Injectable({ providedIn: "root" })
-export class SessionsStore {
+export class SessionsStore implements OnDestroy {
   private readonly api = inject(GrainApi);
-  private readonly events = inject(GrainEvents);
   private readonly access = inject(AccessService);
+  private readonly feed = inject(TaskFeedStore);
+  private readonly liveRefresh = inject(LiveRefreshService);
   private readonly zone = inject(NgZone);
 
   readonly sessions = signal<ConsoleSession[]>([]);
@@ -179,21 +194,72 @@ export class SessionsStore {
     return recorded === live || recorded === "live" || live === "live";
   });
 
-  private readonly fetchedFor = new Map<string, string>();
+  private readonly fullFetchedFor = new Map<string, string>();
+  private readonly summaryFetchedFor = new Map<string, string>();
+  private readonly detailInFlight = new Map<string, Promise<void>>();
   private configLoaded = false;
+  private started = false;
+  private feedRetained = false;
 
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private transcriptTimer: ReturnType<typeof setInterval> | null = null;
-  private transcriptKey = "";
   private readonly retainers = new Set<string>();
   private readonly directorWatchers = new Set<string>();
-  private eventSub: { unsubscribe(): void } | null = null;
+  private eventDispose: (() => void) | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly trouble = new ReadTrouble();
   private refreshing: Promise<void> | null = null;
   private pending = false;
 
+  private readonly transcriptPoller = this.liveRefresh.createTranscriptPoller({
+    fetch: async (taskId, attemptNo) => {
+      const r = await this.api.get<{ transcript?: string }>(
+        "GET /api/tasks/{id}/attempts/{number}/transcript",
+        { id: taskId, number: attemptNo },
+      );
+      return r?.transcript ?? "";
+    },
+    onText: (text) => {
+      this.directorTranscript.set(text);
+    },
+    isActive: () => this.started && this.directorWatchers.size > 0,
+  });
+
+  constructor() {
+    effect(() => {
+      const rev = this.feed.revision();
+      const list = this.feed.tasks();
+      if (rev === 0 && list.length === 0) return;
+      untracked(() => {
+        const map: Record<string, Task> = {};
+        for (const t of list) map[t.id] = t;
+        this.tasks.set(map);
+        if (this.started && this.sessions().length > 0) {
+          void this.loadDetails(false).then(() => {
+            this.pruneFinishedStaleRuns();
+            this.syncDirectorTranscript();
+          });
+        }
+      });
+    });
+
+    effect(() => {
+      const vp = this.liveRefresh.visiblePulse();
+      if (vp > 0 && untracked(() => this.started)) {
+        untracked(() => void this.refresh());
+      }
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.retainers.clear();
+    this.directorWatchers.clear();
+    this.stopTimers();
+  }
+
   retain(token: string): void {
     this.retainers.add(token);
-    this.start();
+    if (!this.started) {
+      this.start();
+    }
   }
 
   release(token: string): void {
@@ -205,9 +271,15 @@ export class SessionsStore {
 
   setDirectorWatch(token: string, on: boolean): void {
     if (on) {
+      const added = !this.directorWatchers.has(token);
+      const wasStarted = this.started;
       this.directorWatchers.add(token);
       this.retain(`watch:${token}`);
-      this.syncDirectorTranscript();
+      if (added && wasStarted) {
+        void this.refresh();
+      } else {
+        this.syncDirectorTranscript();
+      }
     } else {
       this.directorWatchers.delete(token);
       if (this.directorWatchers.size === 0) {
@@ -218,24 +290,105 @@ export class SessionsStore {
   }
 
   start(): void {
-    void this.refresh();
+    const firstStart = !this.started;
+    this.started = true;
+    if (!this.feedRetained) {
+      this.feedRetained = true;
+      this.feed.start(false);
+      if (this.feed.loaded()) {
+        const map: Record<string, Task> = {};
+        for (const t of this.feed.tasks()) map[t.id] = t;
+        this.tasks.set(map);
+      }
+    }
     if (!this.configLoaded) {
       this.configLoaded = true;
       void this.loadConfigModels();
     }
-    if (!this.eventSub) {
-      this.eventSub = this.events.events().subscribe(() => {
-        void this.refresh();
-      });
+    if (!this.eventDispose) {
+      this.eventDispose = this.liveRefresh.subscribeEvents(
+        (ev) =>
+          ev.type.startsWith("console_session.") || ev.type.startsWith("task."),
+        (batch) => {
+          if (!this.started) return;
+          if (batch.some((ev) => ev.type.startsWith("console_session."))) {
+            void this.refresh();
+            return;
+          }
+          const sessionIds = new Set(
+            this.sessions()
+              .map((s) => s.taskId)
+              .filter((t): t is string => !!t),
+          );
+          let hasUntargeted = false;
+          let needsConsoleList = false;
+          const touched = new Set<string>();
+          for (const ev of batch) {
+            const tid = eventTaskId(ev);
+            if (!tid) {
+              hasUntargeted = true;
+            } else if (sessionIds.has(tid)) {
+              touched.add(tid);
+              if (ev.type === "task.closed") {
+                needsConsoleList = true;
+              }
+            }
+          }
+          if (needsConsoleList || (hasUntargeted && sessionIds.size > 0)) {
+            void this.refresh();
+            return;
+          }
+          if (touched.size > 0) {
+            void this.refreshTouchedDetails(touched);
+          }
+        },
+        250,
+      );
     }
-    if (!this.timer) {
-      this.zone.runOutsideAngular(() => {
-        this.timer = setInterval(
-          () => this.zone.run(() => void this.refresh()),
-          POLL_MS,
-        );
-      });
+    if (firstStart) {
+      void this.ensureInitialLoad();
+    } else {
+      void this.refresh();
     }
+  }
+
+  private ensureInitialLoad(): Promise<void> {
+    if (this.refreshing) return this.refreshing;
+    return this.runLoad("ifStale", true);
+  }
+
+  private async refreshTouchedDetails(ids: ReadonlySet<string>): Promise<void> {
+    const sel = this.selected()?.session.taskId;
+    const dir =
+      this.directorWatchers.size > 0
+        ? this.directorRow()?.session.taskId
+        : undefined;
+    const tasks = this.tasks();
+    await Promise.all(
+      [...ids].map(async (id) => {
+        if (
+          id === sel ||
+          id === dir ||
+          typeof this.api.taskSummaries !== "function"
+        ) {
+          try {
+            await this.loadDetail(id, rowKey(tasks[id]));
+            if (id === sel) this.detailError.set(null);
+          } catch (err) {
+            if (id === sel) {
+              this.detailError.set(
+                `This conversation could not be read: ${errorText(err)}`,
+              );
+            }
+          }
+        } else {
+          this.summaryFetchedFor.delete(id);
+        }
+      }),
+    );
+    await this.loadDetails(false);
+    this.pruneFinishedStaleRuns();
+    this.syncDirectorTranscript();
   }
 
   private async loadConfigModels(): Promise<void> {
@@ -270,27 +423,67 @@ export class SessionsStore {
     this.stopTimers();
   }
 
+  private clearRetryTimer(): void {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  private scheduleRetry(): void {
+    this.clearRetryTimer();
+    if (!this.started || this.liveRefresh.hidden()) return;
+    const backoffMs =
+      typeof this.api.backoffRemainingMs === "function"
+        ? this.api.backoffRemainingMs()
+        : 0;
+    const delay = Math.max(this.trouble.nextDelay(FAILURE_RETRY_MS), backoffMs);
+    this.zone.runOutsideAngular(() => {
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null;
+        if (!this.started || this.liveRefresh.hidden()) return;
+        this.zone.run(() => void this.refresh());
+      }, delay);
+    });
+  }
+
   private stopTimers(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.started = false;
+    this.clearRetryTimer();
+    this.trouble.ok();
     this.stopDirectorTranscript();
-    this.eventSub?.unsubscribe();
-    this.eventSub = null;
+    this.eventDispose?.();
+    this.eventDispose = null;
+    if (this.feedRetained) {
+      this.feedRetained = false;
+      this.feed.stop(false);
+    }
   }
 
   select(id: string): void {
     if (this.selectedId() === id) return;
     this.selectedId.set(id);
     this.actionError.set(null);
-    void this.refresh();
+    if (!this.started) return;
+    void this.loadDetails(true).then(() => {
+      this.pruneFinishedStaleRuns();
+      this.syncDirectorTranscript();
+    });
   }
 
   refresh(): Promise<void> {
+    return this.runLoad("always", true);
+  }
+
+  private runLoad(
+    feedMode: "always" | "ifStale",
+    forceSelected: boolean,
+  ): Promise<void> {
     if (this.refreshing) {
       this.pending = true;
       return this.refreshing;
     }
-    this.refreshing = this.load().finally(() => {
+    this.refreshing = this.load(feedMode, forceSelected).finally(() => {
       this.refreshing = null;
       if (this.pending) {
         this.pending = false;
@@ -300,7 +493,10 @@ export class SessionsStore {
     return this.refreshing;
   }
 
-  private async load(): Promise<void> {
+  private async load(
+    feedMode: "always" | "ifStale",
+    forceSelected: boolean,
+  ): Promise<void> {
     if (
       typeof this.api.get !== "function" ||
       typeof this.api.getIfChanged !== "function"
@@ -308,28 +504,35 @@ export class SessionsStore {
       this.loaded.set(true);
       return;
     }
-    const [list, tasks] = await Promise.allSettled([
-      this.api.get<ConsoleSessionList>("GET /api/console-sessions"),
-      this.api.getIfChanged<Task[]>("GET /api/tasks"),
-    ]);
-    if (list.status === "fulfilled") {
-      this.applyList(list.value);
-      this.loadError.set(null);
-    } else {
-      this.loadError.set(
-        `Sessions could not be read: ${errorText(list.reason)}. This page tries again on its own.`,
+    this.clearRetryTimer();
+    const wasStarted = this.started;
+    const listReq = this.api
+      .get<ConsoleSessionList>("GET /api/console-sessions")
+      .then(
+        (val) => {
+          this.applyList(val);
+          this.loadError.set(null);
+          this.trouble.ok();
+        },
+        (reason) => {
+          this.trouble.fail(reason);
+          this.loadError.set(
+            `Sessions could not be read: ${errorText(reason)}. This page tries again on its own.`,
+          );
+          this.scheduleRetry();
+        },
       );
-    }
-    if (
-      tasks.status === "fulfilled" &&
-      (tasks.value.changed || Object.keys(this.tasks()).length === 0)
-    ) {
+    const feedReq =
+      feedMode === "ifStale" ? this.feed.refreshIfStale() : this.feed.refresh();
+    await Promise.allSettled([listReq, feedReq]);
+    if (this.feed.loaded()) {
       const map: Record<string, Task> = {};
-      for (const t of tasks.value.body ?? []) map[t.id] = t;
+      for (const t of this.feed.tasks()) map[t.id] = t;
       this.tasks.set(map);
     }
     this.loaded.set(true);
-    await this.loadDetails();
+    if (wasStarted && !this.started) return;
+    await this.loadDetails(forceSelected);
     this.pruneFinishedStaleRuns();
     this.syncDirectorTranscript();
   }
@@ -376,48 +579,98 @@ export class SessionsStore {
     }
   }
 
-  private async loadDetails(): Promise<void> {
+  private async loadDetails(forceSelected: boolean): Promise<void> {
     const sel = this.selected()?.session.taskId;
     const dir =
       this.directorWatchers.size > 0
         ? this.directorRow()?.session.taskId
         : undefined;
     const tasks = this.tasks();
-    const ids = this.sessions()
+    const allIds = this.sessions()
       .map((s) => s.taskId)
-      .filter(
-        (t): t is string =>
-          !!t &&
-          (t === sel ||
-            t === dir ||
-            this.fetchedFor.get(t) !== rowKey(tasks[t])),
-      );
-    await Promise.all(
-      ids.map(async (id) => {
-        try {
-          await this.loadDetail(id, rowKey(tasks[id]));
-          if (id === sel) this.detailError.set(null);
-        } catch (err) {
-          if (id === sel) {
-            this.detailError.set(
-              `This conversation could not be read: ${errorText(err)}`,
-            );
-          }
+      .filter((t): t is string => !!t);
+
+    const fullIds: string[] = [];
+    const summaryIds: string[] = [];
+    for (const id of allIds) {
+      const key = rowKey(tasks[id]);
+      if (id === sel || id === dir) {
+        if (forceSelected || this.fullFetchedFor.get(id) !== key) {
+          fullIds.push(id);
         }
-      }),
-    );
+      } else if (this.summaryFetchedFor.get(id) !== key) {
+        if (typeof this.api.taskSummaries === "function") {
+          summaryIds.push(id);
+        } else {
+          fullIds.push(id);
+        }
+      }
+    }
+
+    const ops: Promise<void>[] = fullIds.map(async (id) => {
+      try {
+        await this.loadDetail(id, rowKey(tasks[id]));
+        if (id === sel) this.detailError.set(null);
+      } catch (err) {
+        if (id === sel) {
+          this.detailError.set(
+            `This conversation could not be read: ${errorText(err)}`,
+          );
+        }
+      }
+    });
+
+    if (summaryIds.length > 0 && typeof this.api.taskSummaries === "function") {
+      ops.push(this.loadBatchSummaries(summaryIds, tasks));
+    }
+
+    await Promise.all(ops);
   }
 
-  private async loadDetail(id: string, key: string): Promise<void> {
-    const r = await this.api.getIfChanged<TaskDetail>(
-      "GET /api/tasks/{id}",
-      { id },
-      COMMENTS_QUERY,
-    );
-    this.fetchedFor.set(id, key);
-    if (r.changed || !this.details()[id]) {
-      this.details.update((m) => ({ ...m, [id]: r.body }));
+  private async loadBatchSummaries(
+    ids: string[],
+    tasks: Record<string, Task>,
+  ): Promise<void> {
+    try {
+      const batch = await this.api.taskSummaries(ids, 1, 1);
+      this.details.update((prev) => {
+        const next = { ...prev };
+        for (const id of ids) {
+          const key = rowKey(tasks[id]);
+          this.summaryFetchedFor.set(id, key);
+          if (this.fullFetchedFor.get(id) !== key) {
+            this.fullFetchedFor.delete(id);
+            if (batch[id]) {
+              next[id] = batch[id];
+            }
+          }
+        }
+        return next;
+      });
+    } catch {
+      // Sidebar preview degrades cleanly to task.activity when batch summary fails.
     }
+  }
+
+  private loadDetail(id: string, key: string): Promise<void> {
+    const inflight = this.detailInFlight.get(id);
+    if (inflight) return inflight;
+    const p = (async () => {
+      const r = await this.api.getIfChanged<TaskDetail>(
+        "GET /api/tasks/{id}",
+        { id },
+        COMMENTS_QUERY,
+      );
+      this.fullFetchedFor.set(id, key);
+      this.summaryFetchedFor.set(id, key);
+      if (r.changed || !this.details()[id]) {
+        this.details.update((m) => ({ ...m, [id]: r.body }));
+      }
+    })().finally(() => {
+      this.detailInFlight.delete(id);
+    });
+    this.detailInFlight.set(id, p);
+    return p;
   }
 
   isBusy(name: string): boolean {
@@ -503,6 +756,7 @@ export class SessionsStore {
     const row = this.directorRow();
     const detail = this.directorDetail();
     if (
+      !this.started ||
       this.directorWatchers.size === 0 ||
       !row?.session.taskId ||
       row.task?.state !== "running" ||
@@ -516,49 +770,12 @@ export class SessionsStore {
       this.stopDirectorTranscript();
       return;
     }
-    const taskId = row.session.taskId;
-    const attemptNo = open.number;
-    const key = `${taskId}:${attemptNo}`;
-    if (this.transcriptKey === key && this.transcriptTimer) return;
-    this.stopDirectorTranscript();
-    this.transcriptKey = key;
-    void this.pollDirectorTranscript(taskId, attemptNo, key);
-    this.zone.runOutsideAngular(() => {
-      this.transcriptTimer = setInterval(
-        () =>
-          this.zone.run(
-            () => void this.pollDirectorTranscript(taskId, attemptNo, key),
-          ),
-        TRANSCRIPT_POLL_MS,
-      );
-    });
+    this.transcriptPoller.watch(row.session.taskId, open.number, true);
   }
 
   private stopDirectorTranscript(): void {
-    if (this.transcriptTimer) {
-      clearInterval(this.transcriptTimer);
-      this.transcriptTimer = null;
-    }
-    this.transcriptKey = "";
+    this.transcriptPoller.stop();
     this.directorTranscript.set(null);
-  }
-
-  private async pollDirectorTranscript(
-    taskId: string,
-    attemptNo: number,
-    key: string,
-  ): Promise<void> {
-    try {
-      const r = await this.api.get<{ transcript?: string }>(
-        "GET /api/tasks/{id}/attempts/{number}/transcript",
-        { id: taskId, number: attemptNo },
-      );
-      if (this.transcriptKey === key) {
-        this.directorTranscript.set(r?.transcript ?? "");
-      }
-    } catch {
-      // Transient transcript polling errors preserve existing partial output.
-    }
   }
 
   // Apply now stops the in-flight turn (POST /api/console-sessions/{id}/cancel)

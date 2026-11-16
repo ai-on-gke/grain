@@ -25,6 +25,7 @@ import {
 } from "@angular/core";
 import { GrainApi, loadTaskSummaryBatches } from "../api/grain-api.service";
 import type { Task, TaskDetail, TaskSummariesResponse } from "../api/models";
+import { LiveRefreshService } from "../services/live-refresh.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import {
   type Agent,
@@ -51,6 +52,7 @@ type Host = { cpus?: number; loadAverage1?: number };
 export class AgentsStore implements OnDestroy {
   private readonly api = inject(GrainApi);
   private readonly feed = inject(TaskFeedStore);
+  private readonly liveRefresh = inject(LiveRefreshService);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
 
@@ -76,12 +78,14 @@ export class AgentsStore implements OnDestroy {
   });
 
   private active = false;
-  private slowTimer: ReturnType<typeof setInterval> | null = null;
+  private releasePulse: (() => void) | null = null;
+  private lastPulse = 0;
   private refreshing: Promise<void> | null = null;
   private pending = false;
   private slowRefreshing: Promise<void> | null = null;
   private readonly detailInFlight = new Set<string>();
   private readonly detailFailedAt = new Map<string, number>();
+  private readonly detailRevision = new Map<string, string>();
 
   private readonly onVisibility = (): void => {
     if (!this.active) return;
@@ -93,9 +97,6 @@ export class AgentsStore implements OnDestroy {
   };
 
   constructor() {
-    // React to TaskFeedStore's monotonic revision and loadError so sparkline
-    // history and missing details stay in sync without duplicate 3s polls or
-    // duplicate task.* SSE refresh stampedes.
     effect(() => {
       const rev = this.feed.revision();
       const err = this.feed.loadError();
@@ -120,6 +121,20 @@ export class AgentsStore implements OnDestroy {
         }
       });
     });
+    effect(() => {
+      const p = this.liveRefresh.pulse();
+      untracked(() => {
+        if (p === this.lastPulse) return;
+        this.lastPulse = p;
+        if (this.active && !this.doc.hidden) {
+          const live = running(this.tasks());
+          this.fetchMissingDetails(live);
+          if (live.length > 0) {
+            void this.loadReadings();
+          }
+        }
+      });
+    });
   }
 
   start(): void {
@@ -127,6 +142,7 @@ export class AgentsStore implements OnDestroy {
     const wasActive = this.active;
     if (!this.active) {
       this.active = true;
+      this.lastPulse = this.liveRefresh.pulse();
       this.feed.start(false);
       this.feed.acquireFast();
     }
@@ -135,7 +151,6 @@ export class AgentsStore implements OnDestroy {
       if (!wasActive && this.feed.loaded()) {
         this.fetchMissingDetails(this.tasks());
       }
-      void this.refreshSlow();
     } else {
       this.resume(!wasActive);
     }
@@ -156,22 +171,28 @@ export class AgentsStore implements OnDestroy {
   }
 
   private resume(firstActivation = false): void {
-    if (this.slowTimer) return;
-    if (firstActivation && this.feed.loaded()) {
-      void this.refresh();
+    if (!this.releasePulse) {
+      this.lastPulse = this.liveRefresh.pulse();
+      this.releasePulse = this.liveRefresh.retainPulse();
     }
-    void this.refreshSlow();
-    this.zone.runOutsideAngular(() => {
-      this.slowTimer = setInterval(
-        () => this.zone.run(() => void this.refreshSlow()),
-        SLOW_POLL_MS,
-      );
-    });
+    const feedStale =
+      !!this.feed.lastError() ||
+      Date.now() - (this.feed.lastUpdatedAt() ?? 0) >= 3_000;
+    if (firstActivation && this.feed.loaded() && feedStale) {
+      void this.refresh();
+    } else if (this.feed.loaded()) {
+      this.record(this.tasks());
+      this.ownLoaded.set(true);
+    }
+    this.fetchMissingDetails(this.tasks());
+    if (running(this.tasks()).length > 0 || firstActivation) {
+      void this.loadReadings();
+    }
   }
 
   private pause(): void {
-    if (this.slowTimer) clearInterval(this.slowTimer);
-    this.slowTimer = null;
+    this.releasePulse?.();
+    this.releasePulse = null;
   }
 
   refresh(): Promise<void> {
@@ -206,11 +227,16 @@ export class AgentsStore implements OnDestroy {
     this.fetchMissingDetails(this.tasks());
   }
 
+  private taskRev(t: Task): string {
+    return `${t.updatedAt ?? ""}:${t.activityAt ?? ""}:${t.state}`;
+  }
+
   private fetchMissingDetails(list: readonly Task[]): void {
     const now = Date.now();
     const missing = running(list).filter(
       (t) =>
-        !this.details()[t.id] &&
+        (!this.details()[t.id] ||
+          this.detailRevision.get(t.id) !== this.taskRev(t)) &&
         now - (this.detailFailedAt.get(t.id) ?? 0) >= SLOW_POLL_MS,
     );
     if (missing.length) void this.loadDetails(missing);
@@ -227,6 +253,8 @@ export class AgentsStore implements OnDestroy {
   }
 
   private async loadDetails(list: readonly Task[]): Promise<void> {
+    const revById = new Map<string, string>();
+    for (const t of list) revById.set(t.id, this.taskRev(t));
     const todo = [
       ...new Set(
         list.filter((t) => !this.detailInFlight.has(t.id)).map((t) => t.id),
@@ -248,6 +276,8 @@ export class AgentsStore implements OnDestroy {
         got = res.tasks;
         for (const id of Object.keys(got)) {
           this.detailFailedAt.delete(id);
+          const rev = revById.get(id);
+          if (rev !== undefined) this.detailRevision.set(id, rev);
         }
         const now = Date.now();
         for (const id of res.failedIds) {
@@ -264,6 +294,9 @@ export class AgentsStore implements OnDestroy {
     }
     for (const id of this.detailFailedAt.keys()) {
       if (!live.has(id)) this.detailFailedAt.delete(id);
+    }
+    for (const id of this.detailRevision.keys()) {
+      if (!live.has(id)) this.detailRevision.delete(id);
     }
     this.details.set(merged);
   }

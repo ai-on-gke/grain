@@ -12,12 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Injectable, NgZone, computed, inject, signal } from "@angular/core";
-import type { Subscription } from "rxjs";
+import {
+  Injectable,
+  computed,
+  effect,
+  inject,
+  signal,
+  untracked,
+} from "@angular/core";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
-import { GrainEvents } from "../api/grain-events.service";
 import type { TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { LiveRefreshService } from "../services/live-refresh.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { errorText } from "../sessions/session-helpers";
 import { configuredInstanceRepos } from "../shared/instance-repos";
@@ -41,8 +47,6 @@ import {
   type UpdateTemplateRequest,
 } from "./processes.models";
 
-const POLL_MS = 10000;
-
 function unwrapList<T>(raw: unknown, key?: string): T[] {
   if (Array.isArray(raw)) return raw as T[];
   if (raw && typeof raw === "object") {
@@ -57,10 +61,9 @@ function unwrapList<T>(raw: unknown, key?: string): T[] {
 @Injectable({ providedIn: "root" })
 export class ProcessesStore {
   private readonly api = inject(GrainApi);
-  private readonly events = inject(GrainEvents);
+  private readonly liveRefresh = inject(LiveRefreshService);
   private readonly access = inject(AccessService);
   private readonly taskFeed = inject(TaskFeedStore);
-  private readonly zone = inject(NgZone);
 
   readonly loaded = signal(false);
   readonly loadError = signal<string | null>(null);
@@ -142,39 +145,97 @@ export class ProcessesStore {
     () => this.acceptances().filter((a) => a.awaiting).length,
   );
 
-  private eventSub: Subscription | null = null;
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private unsubEvents: (() => void) | null = null;
+  private releasePulse: (() => void) | null = null;
+  private lastPulse = 0;
+  private lastVisiblePulse = 0;
+  private lastDynamicRefreshAt = 0;
   private configTask: Promise<void> | null = null;
   private activeCount = 0;
+
+  constructor() {
+    effect(() => {
+      const p = this.liveRefresh.pulse();
+      untracked(() => {
+        if (p === this.lastPulse) return;
+        this.lastPulse = p;
+        if (
+          this.activeCount > 0 &&
+          !this.liveRefresh.hidden() &&
+          Date.now() - this.lastDynamicRefreshAt >= 60_000
+        ) {
+          void this.refreshDynamic();
+        }
+      });
+    });
+    effect(() => {
+      const vp = this.liveRefresh.visiblePulse();
+      untracked(() => {
+        if (vp === this.lastVisiblePulse) return;
+        this.lastVisiblePulse = vp;
+        if (
+          this.activeCount > 0 &&
+          Date.now() - this.lastDynamicRefreshAt >= 30_000
+        ) {
+          void this.refreshDynamic();
+        }
+      });
+    });
+  }
 
   start(): void {
     this.actionError.set(null);
     this.activeCount++;
     if (this.activeCount > 1) return;
+    this.lastPulse = this.liveRefresh.pulse();
+    this.lastVisiblePulse = this.liveRefresh.visiblePulse();
+    this.releasePulse = this.liveRefresh.retainPulse();
     this.configTask = this.loadConfigAndRepos().finally(() => {
       this.configTask = null;
     });
     void this.refresh();
-    this.eventSub = this.events.events().subscribe((ev) => {
-      if (ev.type === "task.state") {
-        void this.refresh();
-      }
-    });
-    this.zone.runOutsideAngular(() => {
-      this.pollTimer = setInterval(() => {
-        this.zone.run(() => void this.refresh());
-      }, POLL_MS);
-    });
+    this.unsubEvents = this.liveRefresh.subscribeEvents(
+      (ev) => ev.type === "task.state",
+      () => void this.refresh(),
+      400,
+    );
   }
 
   stop(): void {
     this.activeCount = Math.max(0, this.activeCount - 1);
     if (this.activeCount > 0) return;
     this.declStatusAsked.clear();
-    this.eventSub?.unsubscribe();
-    this.eventSub = null;
-    if (this.pollTimer) clearInterval(this.pollTimer);
-    this.pollTimer = null;
+    this.unsubEvents?.();
+    this.unsubEvents = null;
+    this.releasePulse?.();
+    this.releasePulse = null;
+  }
+
+  // Refreshes only dynamic schedule / suite-run status on the 60s background
+  // pulse; static template/suite/declaration definitions only change on
+  // edits or `task.state` merges.
+  private async refreshDynamic(): Promise<void> {
+    if (this.activeCount === 0 || !this.loaded()) return;
+    this.lastDynamicRefreshAt = Date.now();
+    try {
+      const [schedRes, runsRes] = await Promise.all([
+        this.access.can("GET /api/schedules")
+          ? this.api.getIfChanged<unknown>("GET /api/schedules")
+          : Promise.resolve({ body: null, changed: false }),
+        this.access.can("GET /api/suite-runs")
+          ? this.api.getIfChanged<unknown>("GET /api/suite-runs")
+          : Promise.resolve({ body: null, changed: false }),
+      ]);
+      if (this.activeCount === 0) return;
+      if (schedRes.body !== null) {
+        this.schedules.set(unwrapList<Schedule>(schedRes.body, "schedules"));
+      }
+      if (runsRes.body !== null) {
+        this.suiteRuns.set(unwrapList<SuiteRun>(runsRes.body, "runs"));
+      }
+    } catch {
+      // Transient background pulse error keeps previous state.
+    }
   }
 
   private ensureConfig(): Promise<void> {
@@ -252,6 +313,7 @@ export class ProcessesStore {
 
       this.loadError.set(null);
       this.loaded.set(true);
+      this.lastDynamicRefreshAt = Date.now();
       void this.loadDeclarationStatuses();
     } catch (err) {
       if (this.activeCount === 0) return;

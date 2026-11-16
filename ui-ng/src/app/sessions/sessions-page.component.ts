@@ -966,6 +966,10 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
       const id = this.id() || DIRECTOR_ID;
       untracked(() => {
         this.store.select(id);
+        this.store.setDirectorWatch(
+          "sessions-page-director",
+          id === DIRECTOR_ID,
+        );
         this.freshOpen.set(false);
         this.settingsOpen.set(false);
         this.confirmDelete.set(false);
@@ -1007,6 +1011,7 @@ export class SessionsPageComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this.store.setDirectorWatch("sessions-page-director", false);
     this.store.release("sessions-page");
   }
 
