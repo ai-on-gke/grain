@@ -77,7 +77,7 @@ test("Hub shows heartbeat health, advertised scopes and a visible heartbeat resu
   await expect(row).toHaveCount(1);
   await expect(row).toContainText("acme/widgets");
   await expect(row).toContainText("/ (whole repo)");
-  await expect(row).toContainText("primary");
+  await expect(row).toContainText("Primary");
   await expect(row.getByTestId("registry-origin-chip")).toHaveText(
     "from repo config",
   );
@@ -175,7 +175,7 @@ test("Hub catalog fields and Scope overrides save and read back", async ({
       "pkg/api/",
     );
     await expect(page.getByTestId("registry-scope-rule").nth(1)).toContainText(
-      "excluded",
+      "Excluded",
     );
 
     const res = await saveBar(page);
