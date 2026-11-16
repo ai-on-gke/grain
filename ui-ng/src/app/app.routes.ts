@@ -408,6 +408,17 @@ export const routes: Routes = [
         (m) => m.SettingsPageComponent,
       ),
   },
+  // One capability server's page, /settings/capabilities/<encoded id>
+  // as the classic serverPath gives it: the id is a URL, so it is one
+  // %2F-escaped segment.
+  {
+    path: "settings/:section/:item",
+    title: "Capability server · Settings · grain",
+    loadComponent: () =>
+      import("./settings/settings-page.component").then(
+        (m) => m.SettingsPageComponent,
+      ),
+  },
   {
     path: "repos",
     pathMatch: "full",

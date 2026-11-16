@@ -37,6 +37,12 @@ import {
   PillSelectComponent,
 } from "../shared/pill-select.component";
 import { type CapabilityCatalogue, retiredNotices } from "./capability-retired";
+import {
+  type CapabilityHolder,
+  type HolderLink,
+  holderLink,
+  serverPath,
+} from "./capability-server";
 import type { SettingsSectionId } from "./settings-sections";
 import { SettingsStateService, errText } from "./settings-state.service";
 
@@ -655,7 +661,13 @@ export function listedSecrets(
                   @for (srv of capServers(); track srv.id) {
                     @let isDisabled = Boolean(srv.config?.disabled);
                     <tr [attr.data-testid]="'cap-server-row-' + srv.id">
-                      <td class="s-mono">{{ srv.id }}</td>
+                      <td class="s-mono s-wrap">
+                        <a
+                          [routerLink]="serverPath(srv.id)"
+                          [attr.data-testid]="'open-cap-server-' + srv.id"
+                          >{{ srv.id }}</a
+                        >
+                      </td>
                       <td class="s-mono">
                         {{
                           srv.config?.serverUrl ||
@@ -1366,11 +1378,9 @@ export function listedSecrets(
                             track id;
                             let last = $last
                           ) {
-                            <a
-                              class="s-mono"
-                              [routerLink]="[]"
-                              fragment="capability-servers"
-                              >{{ id }}</a
+                            <a class="s-mono" [routerLink]="serverPath(id)">{{
+                              id
+                            }}</a
                             >{{ last ? "" : ", " }}
                           }
                         </span>
@@ -1634,6 +1644,7 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
   protected readonly capTestNotice = signal("");
   protected readonly capTestOk = signal(true);
   protected readonly capServerState = capServerState;
+  protected readonly serverPath = serverPath;
 
   protected readonly policyRules = signal<CapabilityPolicyRule[]>([]);
   protected readonly newRuleCap = signal("");
@@ -2108,10 +2119,28 @@ export class SettingsWorkComponent implements OnInit, OnChanges {
 
   // Removing a server drops it from every grant naming it, so it asks
   // first, as host and Git connection removal do.
-  protected confirmRemoveCapServer(id: string): void {
+  // The confirm lists what holds a grant on the server, each linked to
+  // where it is changed, as the server's own page does.
+  protected async confirmRemoveCapServer(id: string): Promise<void> {
+    let items: HolderLink[] = [];
+    if (this.access.can("GET /api/capability-servers/usage")) {
+      try {
+        const rows = await this.api.get<
+          { id: string; holders?: CapabilityHolder[] }[]
+        >("GET /api/capability-servers/usage");
+        const mine = (Array.isArray(rows) ? rows : []).find((u) => u.id === id);
+        items = (mine?.holders ?? []).map(holderLink);
+      } catch {
+        // The confirm still asks without them.
+      }
+    }
     this.confirmReq.set({
       title: "Remove capability server?",
-      message: `Remove ${id}? Tasks that hold a grant on it can no longer use it.`,
+      message: items.length
+        ? `Remove ${id}? Its own secrets go with it, and these grants can no longer be used:`
+        : `Remove ${id}? Nothing grants it now. Its own secrets go with it.`,
+      items,
+      itemsLabel: "Grants on this server",
       accept: "Remove",
       destructive: true,
       run: () => this.removeCapServer(id),
