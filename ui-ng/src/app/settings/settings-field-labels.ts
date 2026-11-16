@@ -106,7 +106,7 @@ export const SECTION_FIELD_LABELS: Readonly<
     "Proxy (optional)",
     "Auth type",
     "Personal access token",
-    "Named GitHub personal/bot tokens (default)",
+    "Named GitHub personal/bot tokens",
   ],
   ci: [
     "CI runner & retention defaults",

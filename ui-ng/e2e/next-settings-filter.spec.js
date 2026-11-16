@@ -68,9 +68,16 @@ test("every label a section shows finds that section in Filter settings", async 
         .map((l) => l.trim().replace(/\s+/g, " ").replace(/:$/, ""))
         .filter((l) => l && l.length < 70),
     );
+    const finds = async (text) => {
+      await filter.fill(text);
+      return (await page.getByTestId(`settings-nav-${section}`).count()) > 0;
+    };
     for (const label of labels) {
-      await filter.fill(label);
-      if ((await page.getByTestId(`settings-nav-${section}`).count()) === 0) {
+      // A title can carry live data in brackets ("Named GitHub
+      // personal/bot tokens (default, <connection>)"): the words in
+      // front of it are what has to find the section.
+      const fixed = label.replace(/\s+\(.*$/, "");
+      if (!(await finds(label)) && !(fixed && (await finds(fixed)))) {
         misses.push(`${section}: ${label}`);
       }
     }
