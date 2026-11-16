@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { vi } from "vitest";
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { Component, signal } from "@angular/core";
 import {
@@ -253,5 +254,33 @@ describe("ConversationComponent", () => {
     await f.whenStable();
     f.detectChanges();
     expect(q('[data-testid="convo-jump"]')).not.toBeNull();
+  });
+
+  it("animates only the linked comment's fade, not every message", async () => {
+    vi.useFakeTimers();
+    try {
+      f.componentInstance.comments.set([mk(1), mk(2)]);
+      f.componentInstance.targetComment.set({ id: 1, seq: 1 });
+      f.detectChanges();
+      // The reveal runs after render and sets the highlight; draw it.
+      f.detectChanges();
+      const target = q<HTMLElement>('[data-comment-id="1"]')!;
+      expect(target.classList.contains("comment-highlight")).toBe(true);
+      expect(target.classList.contains("comment-fading")).toBe(false);
+
+      vi.advanceTimersByTime(4000);
+      f.detectChanges();
+      expect(target.classList.contains("comment-highlight")).toBe(false);
+      expect(target.classList.contains("comment-fading")).toBe(true);
+      expect(
+        q('[data-comment-id="2"]')!.classList.contains("comment-fading"),
+      ).toBe(false);
+
+      vi.advanceTimersByTime(600);
+      f.detectChanges();
+      expect(target.classList.contains("comment-fading")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

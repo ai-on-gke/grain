@@ -43,6 +43,19 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
+// sameDay reports whether ms falls on the same calendar day in ZONE as
+// now. A reset on a later day is printed with its date ("Nov 16, 12:07
+// AM PST"), so the spec expects one exactly when the 2h 15m lands past
+// midnight on ZONE's clock.
+function sameDay(ms) {
+  const day = (t) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: ZONE,
+      dateStyle: "short",
+    }).format(new Date(t));
+  return day(ms) === day(Date.now());
+}
+
 for (const size of SIZES) {
   for (const theme of THEMES) {
     test(`a paused model's reset reads on the local clock — ${size.name}, ${theme}`, async ({
@@ -86,7 +99,7 @@ for (const size of SIZES) {
       const abbrev = zoneAbbrev(until);
       await expect(reset).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${sameDay(until) ? "" : "[A-Z][a-z]{2} \\d{1,2}, "}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
@@ -116,7 +129,7 @@ for (const size of SIZES) {
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${sameDay(until) ? "" : "[A-Z][a-z]{2} \\d{1,2}, "}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
     });

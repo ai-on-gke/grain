@@ -55,8 +55,10 @@ export interface CommentTarget {
   seq: number;
 }
 
-// How long a deep-linked comment keeps its highlight.
+// How long a deep-linked comment keeps its highlight, and how long the
+// highlight then takes to fade (conversation.css's .comment-fading).
 const HIGHLIGHT_MS = 4000;
+const FADE_MS = 600;
 
 // Pixels from the bottom within which the thread counts as "following" new
 // messages; further up, new messages raise the jump pill instead.
@@ -180,6 +182,7 @@ export interface ComposerConfig {
             [class.is-handover]="c.handover"
             [class.is-question]="c.id === questionCommentId()"
             [class.comment-highlight]="c.id === highlightedCommentId()"
+            [class.comment-fading]="c.id === fadingCommentId()"
             [attr.data-comment-id]="c.id"
             [attr.data-testid]="'tmsg-' + c.id"
             [attr.tabindex]="c.id === highlightedCommentId() ? -1 : null"
@@ -360,6 +363,7 @@ export class ConversationComponent implements OnDestroy {
   /** Messages that arrived while the reader was scrolled up. */
   protected readonly unseen = signal(0);
   protected readonly highlightedCommentId = signal<number | null>(null);
+  protected readonly fadingCommentId = signal<number | null>(null);
 
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly modal = viewChild<ElementRef<HTMLDialogElement>>("modal");
@@ -374,6 +378,7 @@ export class ConversationComponent implements OnDestroy {
   private lastTask = "";
   private appliedTargetSeq = 0;
   private highlightTimer: ReturnType<typeof setTimeout> | null = null;
+  private fadeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     effect(() => {
@@ -454,12 +459,15 @@ export class ConversationComponent implements OnDestroy {
       `article.msg[data-comment-id="${id}"]`,
     );
     if (!el) return false;
+    this.clearFade();
     this.highlightedCommentId.set(id);
     if (this.highlightTimer) clearTimeout(this.highlightTimer);
     this.highlightTimer = setTimeout(() => {
       this.highlightTimer = null;
       if (this.highlightedCommentId() === id) {
         this.highlightedCommentId.set(null);
+        this.fadingCommentId.set(id);
+        this.fadeTimer = setTimeout(() => this.clearFade(), FADE_MS);
       }
     }, HIGHLIGHT_MS);
     if (typeof el.scrollIntoView === "function") {
@@ -474,6 +482,13 @@ export class ConversationComponent implements OnDestroy {
     if (this.highlightTimer) clearTimeout(this.highlightTimer);
     this.highlightTimer = null;
     this.highlightedCommentId.set(null);
+    this.clearFade();
+  }
+
+  private clearFade(): void {
+    if (this.fadeTimer) clearTimeout(this.fadeTimer);
+    this.fadeTimer = null;
+    this.fadingCommentId.set(null);
   }
 
   private resize?: ResizeObserver;
@@ -545,6 +560,7 @@ export class ConversationComponent implements OnDestroy {
     this.resize?.disconnect();
     this.outer?.removeEventListener("scroll", this.onOuterScroll);
     if (this.highlightTimer) clearTimeout(this.highlightTimer);
+    if (this.fadeTimer) clearTimeout(this.fadeTimer);
     const el = this.modal()?.nativeElement;
     if (el?.open) el.close();
   }
