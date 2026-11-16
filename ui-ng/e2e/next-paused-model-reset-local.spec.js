@@ -43,20 +43,11 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
-// resetPattern is what a reset at `until` reads as in ZONE: the time of
-// day, preceded by the date ("Nov 16, ") when it falls on a later local
-// day than now -- which a reset 2h15m away does in the evening's last
-// 2h15m, and the spec must hold whatever time of day it runs.
-function resetPattern(until) {
+// otherLocalDay is whether a and b (ms) fall on different days in ZONE.
+function otherLocalDay(a, b) {
   const day = (ms) =>
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: ZONE,
-      dateStyle: "short",
-    }).format(new Date(ms));
-  const date = day(until) === day(Date.now()) ? "" : "[A-Z][a-z]{2} \\d{1,2}, ";
-  return new RegExp(
-    `resets ${date}\\d{1,2}:\\d{2}\\s[AP]M ${zoneAbbrev(until)} \\(in 2h 1[45]m\\)`,
-  );
+    new Date(ms).toLocaleDateString("en-US", { timeZone: ZONE });
+  return day(a) !== day(b);
 }
 
 for (const size of SIZES) {
@@ -99,7 +90,17 @@ for (const size of SIZES) {
       await page.goto("/next/telemetry");
       const reset = page.getByTestId("usage-scope-reset");
       await expect(reset).toHaveCount(1);
-      await expect(reset).toContainText(resetPattern(until));
+      const abbrev = zoneAbbrev(until);
+      // A reset that falls on another local day is dated ("Nov 16,
+      // 12:19 AM PST"), so a run late in the evening sees the date too.
+      const day = otherLocalDay(Date.now(), until)
+        ? "[A-Z][a-z]{2} \\d{1,2}, "
+        : "";
+      await expect(reset).toContainText(
+        new RegExp(
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+        ),
+      );
       await expect(reset).not.toContainText("UTC");
       // Beside its Paused pill, on the pill's own line, so a table of
       // paused scopes grows no taller (prod-heavy-polish's height budget).
@@ -126,7 +127,9 @@ for (const size of SIZES) {
 
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
-        resetPattern(until),
+        new RegExp(
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+        ),
       );
     });
   }

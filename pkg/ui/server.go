@@ -295,6 +295,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.singleTenantGate(w, r, cfg) {
 		return
 	}
+	if !tunnelReq && !singleTenantOpenRoute(r) {
+		// Admitted, so a SessionBinder's identity may skip Verify for a
+		// while (verifier_session.go).
+		issueVerifierSession(w, r, cv)
+	}
 	if roleSlot.role != nil {
 		r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
 	} else if ciCall, ok := model.CIAPICallFromContext(r.Context()); ok && r.Method == http.MethodGet {
