@@ -18,6 +18,11 @@ import { GrainApi, splitRepo } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { TaskDetail } from "../api/models";
 import { AccessService } from "../services/access.service";
+import {
+  ReadTrouble,
+  ServerTrouble,
+  isVerifierUnavailable,
+} from "../services/request-trouble";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { errorText } from "../sessions/session-helpers";
 import { configuredInstanceRepos } from "../shared/instance-repos";
@@ -144,6 +149,9 @@ export class ProcessesStore {
 
   private eventSub: Subscription | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly serverTrouble = inject(ServerTrouble);
+  private readonly trouble = new ReadTrouble();
+  private pollAfter = 0;
   private configTask: Promise<void> | null = null;
   private activeCount = 0;
 
@@ -156,12 +164,15 @@ export class ProcessesStore {
     });
     void this.refresh();
     this.eventSub = this.events.events().subscribe((ev) => {
+      if (this.trouble.failing || this.serverTrouble.coolingDown()) return;
       if (ev.type === "task.state") {
         void this.refresh();
       }
     });
     this.zone.runOutsideAngular(() => {
       this.pollTimer = setInterval(() => {
+        const now = Date.now();
+        if (now < this.pollAfter || this.serverTrouble.coolingDown(now)) return;
         this.zone.run(() => void this.refresh());
       }, POLL_MS);
     });
@@ -175,6 +186,8 @@ export class ProcessesStore {
     this.eventSub = null;
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
+    this.trouble.ok();
+    this.pollAfter = 0;
   }
 
   private ensureConfig(): Promise<void> {
@@ -252,11 +265,19 @@ export class ProcessesStore {
 
       this.loadError.set(null);
       this.loaded.set(true);
+      this.trouble.ok();
+      this.pollAfter = 0;
       void this.loadDeclarationStatuses();
     } catch (err) {
       if (this.activeCount === 0) return;
+      const now = Date.now();
+      const sustained = this.trouble.fail(err, now);
+      this.pollAfter = now + this.trouble.nextDelay(POLL_MS) - POLL_MS;
+      const cold = !this.loaded();
       this.loaded.set(true);
-      this.loadError.set(errorText(err));
+      if (!isVerifierUnavailable(err) && (sustained || cold)) {
+        this.loadError.set(errorText(err));
+      }
     }
   }
 

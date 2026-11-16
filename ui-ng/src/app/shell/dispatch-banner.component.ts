@@ -106,7 +106,7 @@ import type { DispatchStatusBanner } from "../shared/dispatch-status";
       [class.is-error]="db.tone === 'error'"
       [class.is-warn]="db.tone === 'warn'"
       role="status"
-      data-testid="global-dispatch-banner"
+      [attr.data-testid]="testid()"
     >
       <div class="dispatch-banner-row">
         <div class="dispatch-banner-main">
@@ -142,7 +142,7 @@ import type { DispatchStatusBanner } from "../shared/dispatch-status";
               }}
             </button>
           }
-          @if (!hideTelemetry()) {
+          @if (showLinks() && !hideTelemetry()) {
             <a
               class="btn-text"
               routerLink="/telemetry"
@@ -150,7 +150,7 @@ import type { DispatchStatusBanner } from "../shared/dispatch-status";
               >Telemetry</a
             >
           }
-          @if (!hideControls()) {
+          @if (showLinks() && !hideControls()) {
             <a
               class="btn-text"
               routerLink="/fleet"
@@ -180,6 +180,8 @@ export class DispatchBannerComponent {
   private readonly router = inject(Router, { optional: true });
   private readonly destroyRef = inject(DestroyRef);
   readonly banner = input.required<DispatchStatusBanner>();
+  readonly testid = input("global-dispatch-banner");
+  readonly showLinks = input(true);
   protected readonly expanded = signal(false);
   private readonly currentUrl = signal(this.router?.url ?? "");
 

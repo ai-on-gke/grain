@@ -24,7 +24,11 @@ import {
 import { GrainApi } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import type { Task } from "../api/models";
-import { ReadTrouble } from "./request-trouble";
+import {
+  ReadTrouble,
+  ServerTrouble,
+  isVerifierUnavailable,
+} from "./request-trouble";
 
 export const FAST_POLL_MS = 3000;
 export const IDLE_POLL_MS = 15000;
@@ -56,6 +60,7 @@ export class TaskFeedStore implements OnDestroy {
   private readonly events = inject(GrainEvents);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
+  private readonly serverTrouble = inject(ServerTrouble);
 
   readonly tasks = signal<Task[]>([]);
   readonly loaded = signal(false);
@@ -274,10 +279,13 @@ export class TaskFeedStore implements OnDestroy {
       this.loadError.set(null);
       this.loaded.set(true);
       this.trouble.ok();
+      this.serverTrouble.recordSuccess();
       return true;
     } catch (err) {
       this.lastError.set(err);
-      if (this.trouble.fail(err) || !this.loaded()) {
+      const sustained = this.trouble.fail(err);
+      this.serverTrouble.recordFailure(err, FAST_POLL_MS);
+      if (!this.loaded() || (sustained && !isVerifierUnavailable(err))) {
         this.loadError.set(extractError(err));
       }
       this.now.set(Date.now());

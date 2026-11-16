@@ -52,6 +52,11 @@ import { AccessService } from "./services/access.service";
 import { HelpService } from "./services/help.service";
 import { KeyboardService } from "./services/keyboard.service";
 import { NavConfigService } from "./services/nav-config.service";
+import {
+  ReadTrouble,
+  ServerTrouble,
+  verifierSustainedReason,
+} from "./services/request-trouble";
 import { SnackbarService } from "./services/snackbar.service";
 import { TaskFeedStore } from "./services/task-feed.service";
 import { ThemeService } from "./services/theme.service";
@@ -662,7 +667,14 @@ export class DeferErrorDirective implements OnInit {
           id="main"
           [attr.inert]="modalOpen() ? '' : null"
         >
-          @defer (when dispatchBanner()) {
+          @defer (when dispatchBanner() || verifierBanner()) {
+            @if (verifierBanner(); as vb) {
+              <g-dispatch-banner
+                [banner]="vb"
+                testid="verifier-trouble-banner"
+                [showLinks]="false"
+              />
+            }
             @if (dispatchBanner(); as db) {
               <g-dispatch-banner [banner]="db" />
             }
@@ -987,6 +999,7 @@ export class AppComponent implements OnInit, OnDestroy {
   protected readonly help = inject(HelpService);
   protected readonly keyboard = inject(KeyboardService);
   protected readonly directorCtx = inject(DirectorContextService);
+  private readonly serverTrouble = inject(ServerTrouble);
   private readonly snackbar = inject(SnackbarService);
   private readonly inboxRef = signal<InboxStore | null>(null);
   private readonly sessionsRef = signal<SessionsStore | null>(null);
@@ -1123,6 +1136,22 @@ export class AppComponent implements OnInit, OnDestroy {
     ),
   );
 
+  protected readonly verifierBanner = computed(() => {
+    if (!this.serverTrouble.verifierSustained()) return null;
+    const since = this.serverTrouble.verifierSince();
+    if (since === null) return null;
+    const now = Math.max(this.access.clockNow(), this.feed.now(), Date.now());
+    return {
+      key: "verifier",
+      tone: "warn" as const,
+      shortLabel: "Sign-in degraded",
+      headline: verifierSustainedReason(since, now),
+      subline: "",
+      resetText: "",
+      details: [],
+    };
+  });
+
   protected readonly livePillTip = computed(() => {
     const n = this.feed.runningCount();
     const base =
@@ -1168,6 +1197,8 @@ export class AppComponent implements OnInit, OnDestroy {
   private dispatchEventSub: { unsubscribe(): void } | null = null;
   private dispatchPollTimer: ReturnType<typeof setInterval> | null = null;
   private dispatchTickTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly dispatchTrouble = new ReadTrouble();
+  private dispatchAfter = 0;
   private lastConfigAt = 0;
   private lastUsageAt = 0;
   private dispatchReading = false;
@@ -1175,6 +1206,9 @@ export class AppComponent implements OnInit, OnDestroy {
   private readonly onVisibilityChange = (): void => {
     if (this.doc.visibilityState === "visible") {
       this.access.tickClock();
+      if (this.serverTrouble.coolingDown() || Date.now() < this.dispatchAfter) {
+        return;
+      }
       void this.refreshDispatchStatus(Date.now() - this.lastUsageAt >= 10_000);
     }
   };
@@ -1303,7 +1337,12 @@ export class AppComponent implements OnInit, OnDestroy {
     this.directorCtx.setRoute(this.router.url);
     void this.refreshDispatchStatus(true);
     this.dispatchEventSub = this.events.events().subscribe(() => {
-      if (Date.now() - this.lastConfigAt >= 10_000) {
+      const now = Date.now();
+      if (
+        now - this.lastConfigAt >= 10_000 &&
+        !this.dispatchTrouble.failing &&
+        !this.serverTrouble.coolingDown(now)
+      ) {
         void this.refreshDispatchStatus(true);
       }
     });
@@ -1320,7 +1359,12 @@ export class AppComponent implements OnInit, OnDestroy {
         this.onSessions.set(
           url.startsWith("/sessions") || url.startsWith("/task/"),
         );
-        if (Date.now() - this.lastConfigAt >= 5_000) {
+        const now = Date.now();
+        if (
+          now - this.lastConfigAt >= 5_000 &&
+          now >= this.dispatchAfter &&
+          !this.serverTrouble.coolingDown(now)
+        ) {
           void this.refreshDispatchStatus(false);
         }
       }
@@ -1329,12 +1373,20 @@ export class AppComponent implements OnInit, OnDestroy {
     this.zone.runOutsideAngular(() => {
       this.doc.addEventListener("visibilitychange", this.onVisibilityChange);
       this.dispatchPollTimer = setInterval(() => {
-        if (this.doc.visibilityState !== "hidden") {
+        const now = Date.now();
+        if (
+          this.doc.visibilityState !== "hidden" &&
+          now >= this.dispatchAfter &&
+          !this.serverTrouble.coolingDown(now)
+        ) {
           this.zone.run(() => void this.refreshDispatchStatus(false));
         }
       }, 60_000);
       this.dispatchTickTimer = setInterval(() => {
-        if (this.doc.visibilityState !== "hidden" && this.dispatchBanner()) {
+        if (
+          this.doc.visibilityState !== "hidden" &&
+          (this.dispatchBanner() || this.verifierBanner())
+        ) {
           this.zone.run(() => this.access.tickClock());
         }
       }, 30_000);
@@ -1351,9 +1403,20 @@ export class AppComponent implements OnInit, OnDestroy {
     const now = Date.now();
     this.lastConfigAt = now;
     try {
-      const cfg = await this.api.config().catch(() => null);
+      let cfgOk = true;
+      const cfg = await this.api.config().catch((err) => {
+        cfgOk = false;
+        this.dispatchTrouble.fail(err, now);
+        this.dispatchAfter = now + this.dispatchTrouble.nextDelay(60_000);
+        return null;
+      });
+      if (cfgOk) {
+        this.dispatchTrouble.ok();
+        this.dispatchAfter = 0;
+      }
       if (cfg) this.access.setConfig(cfg);
       if (
+        cfgOk &&
         (forceUsage || now - this.lastUsageAt >= 60_000) &&
         typeof this.api.get === "function" &&
         this.access.canGlobalScope(routeScope("GET /api/usage"))

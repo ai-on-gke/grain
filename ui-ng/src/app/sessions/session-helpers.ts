@@ -18,6 +18,10 @@ import type {
   ConsoleSession,
   Task,
 } from "../api/models";
+import {
+  VERIFIER_ACTION_REASON,
+  isVerifierUnavailable,
+} from "../services/request-trouble";
 
 export const DIRECTOR_ID = "director";
 
@@ -168,6 +172,7 @@ export function isStaleEdit(err: unknown): boolean {
 }
 
 export function errorText(err: unknown): string {
+  if (isVerifierUnavailable(err)) return VERIFIER_ACTION_REASON;
   const e = err as {
     error?: { error?: string; message?: string } | string;
     message?: string;

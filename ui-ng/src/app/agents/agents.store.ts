@@ -25,6 +25,7 @@ import {
 } from "@angular/core";
 import { GrainApi, loadTaskSummaryBatches } from "../api/grain-api.service";
 import type { Task, TaskDetail, TaskSummariesResponse } from "../api/models";
+import { ReadTrouble, ServerTrouble } from "../services/request-trouble";
 import { TaskFeedStore } from "../services/task-feed.service";
 import {
   type Agent,
@@ -51,6 +52,7 @@ type Host = { cpus?: number; loadAverage1?: number };
 export class AgentsStore implements OnDestroy {
   private readonly api = inject(GrainApi);
   private readonly feed = inject(TaskFeedStore);
+  private readonly serverTrouble = inject(ServerTrouble);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
 
@@ -77,6 +79,8 @@ export class AgentsStore implements OnDestroy {
 
   private active = false;
   private slowTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly slowTrouble = new ReadTrouble();
+  private slowAfter = 0;
   private refreshing: Promise<void> | null = null;
   private pending = false;
   private slowRefreshing: Promise<void> | null = null;
@@ -162,16 +166,19 @@ export class AgentsStore implements OnDestroy {
     }
     void this.refreshSlow();
     this.zone.runOutsideAngular(() => {
-      this.slowTimer = setInterval(
-        () => this.zone.run(() => void this.refreshSlow()),
-        SLOW_POLL_MS,
-      );
+      this.slowTimer = setInterval(() => {
+        const now = Date.now();
+        if (now < this.slowAfter || this.serverTrouble.coolingDown(now)) return;
+        this.zone.run(() => void this.refreshSlow());
+      }, SLOW_POLL_MS);
     });
   }
 
   private pause(): void {
     if (this.slowTimer) clearInterval(this.slowTimer);
     this.slowTimer = null;
+    this.slowTrouble.ok();
+    this.slowAfter = 0;
   }
 
   refresh(): Promise<void> {
@@ -274,11 +281,15 @@ export class AgentsStore implements OnDestroy {
         sandboxes?: SandboxReading[];
         host?: Host;
       }>("GET /api/sandboxes");
+      this.slowTrouble.ok();
+      this.slowAfter = 0;
       this.readings.set(r?.sandboxes ?? []);
       this.host.set(r?.host ?? null);
-    } catch {
-      this.readings.set([]);
-      this.host.set(null);
+    } catch (err) {
+      const now = Date.now();
+      this.slowTrouble.fail(err, now);
+      this.slowAfter =
+        now + this.slowTrouble.nextDelay(SLOW_POLL_MS) - SLOW_POLL_MS;
     }
   }
 

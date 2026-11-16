@@ -417,6 +417,105 @@ describe("InboxStore", () => {
     expect(postCalls).toEqual([]);
   });
 
+  it("batches >20 queue summaries in one call, cools down omitted IDs, skips unchanged select detail refetches, and backs off live transcript 503s", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = new FakeApi();
+      const batchCalls: string[][] = [];
+      let transcriptCalls = 0;
+      let failTranscript = false;
+      (api as unknown as Record<string, unknown>)["taskSummaries"] = (
+        ids: readonly string[],
+      ) => {
+        batchCalls.push([...ids]);
+        const out: Record<string, unknown> = {};
+        for (const id of ids) {
+          if (id === "305") continue; // omitted entry should cool down
+          out[id] = { id, updatedAt: "2026-11-16T00:00:00Z" };
+        }
+        return Promise.resolve(out);
+      };
+      api.task = (id: string) => {
+        api.taskDetailCalls.push(id);
+        return Promise.resolve({
+          id,
+          state: "running",
+          updatedAt: "2026-11-16T00:00:00Z",
+          attempts: [{ number: 1 }],
+        } as unknown as { id: string });
+      };
+      api.get = <T>(route: string) => {
+        if (route === "GET /api/tasks/{id}/attempts/{number}/transcript") {
+          transcriptCalls++;
+          if (failTranscript) {
+            return Promise.reject({
+              status: 503,
+              headers: { get: () => "10" },
+              error: { error: "proxy busy" },
+            });
+          }
+          return Promise.resolve({ transcript: "working..." } as T);
+        }
+        return Promise.resolve([] as T);
+      };
+      // 30 submit rows + 1 selected running question row: all 30 non-selected
+      // rows fit inside a single TASK_SUMMARIES_BATCH_SIZE (50) call.
+      api.tasksList = [
+        {
+          id: "300",
+          title: "Running question",
+          state: "awaiting_reply",
+          questionSummary: "Proceed?",
+          questionCommentId: 1,
+          repo: "acme/web",
+          updatedAt: "2026-11-16T00:00:00Z",
+        },
+        ...Array.from({ length: 30 }, (_, i) => ({
+          id: String(301 + i),
+          title: `Submit ${301 + i}`,
+          state: "awaiting_submit",
+          repo: "acme/web",
+          pullRequest: `acme/web#${301 + i}`,
+          updatedAt: "2026-11-16T00:00:00Z",
+        })),
+      ];
+
+      TestBed.configureTestingModule({
+        providers: [{ provide: GrainApi, useValue: api }],
+      });
+      const store = TestBed.inject(InboxStore);
+      store.retainPage();
+      store.start();
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(batchCalls.length).toBe(1);
+      expect(batchCalls[0].length).toBe(30);
+      expect(api.taskDetailCalls).toEqual(["300"]);
+
+      // Re-selecting the same unchanged row does not refetch full detail,
+      // and a refresh within POLL_MS skips both cached and omitted (305) rows.
+      const firstKey = store.ordered()[0]!.key;
+      store.select(firstKey);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(api.taskDetailCalls).toEqual(["300"]);
+
+      await store.refresh();
+      expect(batchCalls.length).toBe(1);
+
+      // Live transcript backs off for Retry-After (10s) when 503s hit.
+      failTranscript = true;
+      const beforeFail = transcriptCalls;
+      await vi.advanceTimersByTimeAsync(1_600);
+      expect(transcriptCalls).toBe(beforeFail + 1);
+      // Next 4 ticks (6s < 10s Retry-After) make zero transcript calls.
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(transcriptCalls).toBe(beforeFail + 1);
+      store.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("settles /api/config before deciding on host-script approvals on a cold load, so a repo-scoped reader never asks for them", async () => {
     localStorage.clear();
     let localScriptCalls = 0;

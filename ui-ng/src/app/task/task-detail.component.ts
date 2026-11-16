@@ -173,7 +173,7 @@ export function duration(from?: string, to?: string): string {
         confirming() || forceMergeReq() || acceptFindingsReq() ? '' : null
       "
     >
-      @if (store.loadError(); as err) {
+      @if (visibleLoadError(); as err) {
         <div class="stage-header">
           @if (back(); as b) {
             <a
@@ -1420,6 +1420,18 @@ export function duration(from?: string, to?: string): string {
 })
 export class TaskDetailComponent implements OnDestroy {
   protected readonly store = inject(TaskStore);
+  protected readonly visibleLoadError = computed(() => {
+    const err = this.store.loadError();
+    if (!err) return null;
+    if (
+      this.pane() &&
+      this.feed.loadError() &&
+      !err.startsWith("There is no task ")
+    ) {
+      return null;
+    }
+    return err;
+  });
   private readonly wsStore = inject(WorkstreamsStore);
   private readonly api = inject(GrainApi);
   private readonly feed = inject(TaskFeedStore);

@@ -13,6 +13,11 @@
 // limitations under the License.
 
 import { Injectable, NgZone, OnDestroy, inject, signal } from "@angular/core";
+import {
+  VERIFIER_ACTION_REASON,
+  isVerifierUnavailable,
+  normalizeSnackMessage,
+} from "./request-trouble";
 
 export interface SnackbarAction {
   label: string;
@@ -36,6 +41,7 @@ export const DEFAULT_SNACK_MS = 5000;
 export const ACTION_SNACK_MS = 10000;
 
 function errorText(err: unknown): string {
+  if (isVerifierUnavailable(err)) return VERIFIER_ACTION_REASON;
   const e = err as { error?: { error?: string } | string; message?: string };
   if (typeof e?.error === "string" && e.error) return e.error;
   if (e?.error && typeof e.error === "object" && e.error.error) {
@@ -63,11 +69,18 @@ export class SnackbarService implements OnDestroy {
     durationMs?: number,
     secondary?: SnackbarAction,
   ): Snack {
-    // The same message twice is one message: two readers surfacing one
-    // failed request (the same error and ref) keep the snack already up
-    // rather than replace it with its double.
+    // The same message twice (including two verifier/gateway errors that
+    // differ only in their `(ref …)` id) is one message: keep the snack
+    // already up rather than replace it with its double.
     const showing = this.current();
-    if (showing && showing.message === message && !action && !secondary) {
+    if (
+      showing &&
+      !action &&
+      !secondary &&
+      (showing.message === message ||
+        normalizeSnackMessage(showing.message) ===
+          normalizeSnackMessage(message))
+    ) {
       return showing;
     }
     const ms = durationMs ?? (action ? ACTION_SNACK_MS : DEFAULT_SNACK_MS);
