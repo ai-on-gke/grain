@@ -43,6 +43,26 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
+// dayPrefix is what the reset says before its time when it falls on
+// another day than today on ZONE's clock -- "Nov 16, " -- and "" when it
+// is today: the spec runs at any hour, and two hours from late evening is
+// tomorrow.
+function dayPrefix(now, ms) {
+  const day = (t) =>
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: ZONE,
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    }).format(new Date(t));
+  if (day(now) === day(ms)) return "";
+  return `${new Intl.DateTimeFormat("en-US", {
+    timeZone: ZONE,
+    month: "short",
+    day: "numeric",
+  }).format(new Date(ms))}, `;
+}
+
 for (const size of SIZES) {
   for (const theme of THEMES) {
     test(`a paused model's reset reads on the local clock — ${size.name}, ${theme}`, async ({
@@ -56,7 +76,8 @@ for (const size of SIZES) {
         },
         [theme, ZONE],
       );
-      const until = Date.now() + (2 * 60 + 15) * 60 * 1000;
+      const now = Date.now();
+      const until = now + (2 * 60 + 15) * 60 * 1000;
       await page.route(/\/api\/usage(\?.*)?$/, async (route) => {
         const res = await route.fetch();
         const body = await res.json();
@@ -86,7 +107,7 @@ for (const size of SIZES) {
       const abbrev = zoneAbbrev(until);
       await expect(reset).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${dayPrefix(now, until)}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
@@ -116,7 +137,7 @@ for (const size of SIZES) {
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
         new RegExp(
-          `resets \\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${dayPrefix(now, until)}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
     });
