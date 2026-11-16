@@ -13,7 +13,8 @@
         "release",
         "source_type",
         "version",
-        "schema_digest"
+        "schema_digest",
+        "config_revision"
       ],
       "properties": {
         "id": {
@@ -37,6 +38,11 @@
           "maxLength": 512
         },
         "schema_digest": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "config_revision": {
           "type": "string",
           "minLength": 1,
           "maxLength": 512
