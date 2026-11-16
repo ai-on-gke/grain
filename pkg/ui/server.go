@@ -295,6 +295,11 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.singleTenantGate(w, r, cfg) {
 		return
 	}
+	if !tunnelReq && !singleTenantOpenRoute(r) {
+		// Admitted, so a SessionBinder's identity may skip Verify for a
+		// while (verifier_session.go).
+		issueVerifierSession(w, r, cv)
+	}
 	if roleSlot.role != nil {
 		r = r.WithContext(withAccessRole(r.Context(), roleSlot.role))
 	} else if ciCall, ok := model.CIAPICallFromContext(r.Context()); ok && r.Method == http.MethodGet {
@@ -433,6 +438,7 @@ func (s *Server) routes() {
 	s.route("GET /api/registry/status", s.handleGetHubInstanceStatus)
 	s.route("GET /api/tasks", s.handleListTasks)
 	s.route("GET /api/tasks/states", s.handleTaskStates)
+	s.route("GET /api/tasks/summaries", s.handleTaskSummaries)
 	s.route("GET /api/tasks/wait", s.handleTasksWait)
 	s.route("GET /api/inbox", s.handleInbox)
 	s.route("GET /api/refs/{ref}/summary", s.handleRefSummary)
@@ -510,6 +516,10 @@ func (s *Server) routes() {
 	s.route("POST /api/tasks/{id}/rollover", s.handleRolloverTask)
 	s.route("POST /api/tasks/{id}/human-review", s.handleRequestHumanReview)
 	s.route("POST /api/tasks/{id}/human-review/release", s.handleReleaseHumanReview)
+	// A person's decision to merge over one review's findings on one gate
+	// (accept_findings.go): between Submit, which never clears findings,
+	// and force-merge, which overrides every gate it names.
+	s.route("POST /api/tasks/{id}/accept-findings", s.handleAcceptFindings)
 	s.route("POST /api/tasks/{id}/notify", s.handleAgentNotify)
 	s.route("POST /api/notifications", s.handleRaiseNotification)
 	s.route("GET /api/notifications", s.handleListNotifications)

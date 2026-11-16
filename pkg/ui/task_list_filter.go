@@ -177,6 +177,21 @@ func parseListTime(s string) *time.Time {
 	return &at
 }
 
+// openOnly reports whether q can match no closed task -- it names
+// states and closed is not one of them -- so that the open tasks are all
+// it has to read.
+func (q taskListQuery) openOnly() bool {
+	if len(q.states) == 0 || q.closedSince != nil || q.closedBefore != nil {
+		return false
+	}
+	for _, st := range q.states {
+		if strings.EqualFold(st, string(model.StateClosed)) {
+			return false
+		}
+	}
+	return true
+}
+
 func (q taskListQuery) matches(t Task) bool {
 	if q.repo != "" && !strings.EqualFold(t.Repo, q.repo) {
 		return false
@@ -283,7 +298,7 @@ type taskListSummary struct {
 // handleFilteredTaskList answers a narrowed GET /api/tasks: the matching
 // tasks, the newest limit of them by filing time, oldest first.
 func (s *Server) handleFilteredTaskList(w http.ResponseWriter, r *http.Request, q taskListQuery) {
-	all, err := s.taskList.list(r.Context(), s.tasks)
+	all, err := s.taskList.list(r.Context(), s.tasks, q.openOnly())
 	if err != nil {
 		writeClientError(w, err)
 		return
@@ -492,8 +507,10 @@ func sortTasksByFiling(tasks []Task) {
 
 // list is every task, from the cache when the store says nothing has been
 // committed since it was built and from the store otherwise. The copy is
-// the caller's to reorder.
-func (c *taskListCache) list(ctx context.Context, client *Client) ([]Task, error) {
+// the caller's to reorder. With openOnly a caller that will drop every
+// closed task anyway lets a miss read only the open ones, which is not
+// kept: the cache holds the whole list or nothing.
+func (c *taskListCache) list(ctx context.Context, client *Client, openOnly bool) ([]Task, error) {
 	token := ""
 	if client.Store != nil {
 		if t, err := client.Store.ChangeToken(ctx); err == nil {
@@ -510,14 +527,22 @@ func (c *taskListCache) list(ctx context.Context, client *Client) ([]Task, error
 		}
 	}
 	c.builds.Add(1)
+	if openOnly {
+		return client.ListOpenTasks(ctx)
+	}
 	tasks, err := client.ListTasks(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if token != "" {
 		c.mu.Lock()
-		if c.token != token {
+		switch {
+		case c.token != token:
 			c.token, c.tasks, c.bodies = token, tasks, map[string]taskListBody{}
+		case c.tasks == nil:
+			// Only the live view had been built at this token, which
+			// holds the open tasks alone: keep the whole list beside it.
+			c.tasks = tasks
 		}
 		c.mu.Unlock()
 	}

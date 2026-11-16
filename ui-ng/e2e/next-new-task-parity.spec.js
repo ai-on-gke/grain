@@ -112,28 +112,28 @@ test("holds Create on a malformed fork head in Base branch and explains a well-f
   await expect(sheet.getByTestId("nt-new-branch")).not.toBeChecked();
 
   await base.fill("bad:label:here");
-  await expect(sheet.getByTestId("nt-base-error")).toHaveText(
+  await expect(sheet.getByTestId("nt-fork-head-error")).toHaveText(
     `"bad:label:here" has more than one ':': a fork head is <owner>:<branch>`,
   );
   await expect(base).toHaveAttribute("aria-invalid", "true");
   await expect(submit).toBeDisabled();
 
   await base.fill("  :nope");
-  await expect(sheet.getByTestId("nt-base-error")).toContainText(
+  await expect(sheet.getByTestId("nt-fork-head-error")).toContainText(
     "it needs both an owner and a branch",
   );
   await expect(submit).toBeDisabled();
 
   await base.fill("octo:fix-login");
-  await expect(sheet.getByTestId("nt-base-error")).toHaveCount(0);
-  await expect(sheet.getByTestId("nt-base-help")).toContainText(
+  await expect(sheet.getByTestId("nt-fork-head-error")).toHaveCount(0);
+  await expect(sheet.getByTestId("nt-fork-head-help")).toContainText(
     "GitHub fork head: branch fix-login on octo's fork.",
   );
   await expect(submit).toBeEnabled();
 
   // The helper sits under the box, inside the sheet, not over its neighbours.
   const boxRect = await base.boundingBox();
-  const helpRect = await sheet.getByTestId("nt-base-help").boundingBox();
+  const helpRect = await sheet.getByTestId("nt-fork-head-help").boundingBox();
   const sheetRect = await sheet.boundingBox();
   expect(helpRect.y).toBeGreaterThanOrEqual(boxRect.y + boxRect.height - 1);
   expect(helpRect.x + helpRect.width).toBeLessThanOrEqual(

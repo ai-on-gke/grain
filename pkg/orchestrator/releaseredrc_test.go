@@ -894,6 +894,96 @@ func TestADiscardedStage1FailureRaisesRCFailedFromTheTag(t *testing.T) {
 	}
 }
 
+// When release-train-on-stage1.yml tags <rc>-discarded before watchStage1
+// polls the concluded run, syncDiscardedStage1 still counts v.retried
+// toward pipeline.flake-budget, and does not double-count if watchStage1
+// already noted the candidate while its retry was running.
+func TestADiscardedStage1FailureCountsFlakeRetriesWithoutDoubleCounting(t *testing.T) {
+	t.Parallel()
+
+	t.Run("discarded before watchStage1 polls", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, _, forge := newStage1Repo(t)
+		forge.nightly = "failure"
+		forge.anySHA = true
+		forge.tags = append(forge.tags, github.Tag{Name: rqTag + "-discarded", SHA: rqSHA})
+		forge.jobs[rqSHA] = []github.ActionsRunJob{
+			nightlyJob(rqSHA, "pkg/cli stress under load", 1, "failure"),
+			nightlyJob(rqSHA, "pkg/cli stress under load", 2, "success"),
+			nightlyJob(rqSHA, "sustained load", 1, "failure"),
+			nightlyJob(rqSHA, "sustained load", 2, "failure"),
+		}
+
+		syncStage1(t, ctx, store, forge, baseTime)
+		rcFailed := openNotification(t, ctx, store, model.FamilyRCFailed, rqTag)
+		if rcFailed == nil || !strings.Contains(rcFailed.Body, "sustained load: failed again on its retry (failure,failure): confirmed red") {
+			t.Fatalf("rc-failed is %+v, want confirmed-red job line on %s", rcFailed, rqTag)
+		}
+		subject := "acme/widgets:pkg/cli stress under load"
+		if n := openNotification(t, ctx, store, model.FamilyFlakeBudget, subject); n != nil {
+			t.Fatalf("one discarded candidate's flake retry raised %+v, want budget to hold", n)
+		}
+
+		// A second candidate spends a flake retry on the same job within 24h:
+		// together with the discarded rc.2's retry, the budget is now spent.
+		rc3 := strings.Repeat("4", 40)
+		forge.nightly = "success"
+		forge.tags = append(forge.tags, github.Tag{Name: "v1.4.0-rc.3", SHA: rc3})
+		forge.jobs[rc3] = []github.ActionsRunJob{
+			nightlyJob(rc3, "pkg/cli stress under load", 1, "failure"),
+			nightlyJob(rc3, "pkg/cli stress under load", 2, "success"),
+		}
+		syncStage1(t, ctx, store, forge, baseTime.Add(time.Hour))
+		n := openNotification(t, ctx, store, model.FamilyFlakeBudget, subject)
+		if n == nil {
+			t.Fatalf("no pipeline.flake-budget:%s after discarded rc.2 + rc.3 retried the job", subject)
+		}
+		if !strings.Contains(n.Body, "retried 2 times") || !strings.Contains(n.Body, "Stage 1 (nightly)") {
+			t.Errorf("flake-budget body is %q", n.Body)
+		}
+	})
+
+	t.Run("already noted by watchStage1 before discarded tag", func(t *testing.T) {
+		t.Parallel()
+		store, ctx, _, forge := newStage1Repo(t)
+		forge.nightly = "in_progress"
+		pending := func(name string) github.ActionsRunJob {
+			j := nightlyJob(rqSHA, name, 2, "")
+			j.Status = "in_progress"
+			return j
+		}
+		forge.jobs[rqSHA] = []github.ActionsRunJob{
+			nightlyJob(rqSHA, "pkg/cli stress under load", 1, "failure"),
+			pending("pkg/cli stress under load"),
+			nightlyJob(rqSHA, "sustained load", 1, "failure"),
+			pending("sustained load"),
+		}
+		// watchStage1 runs while attempt 2 is in progress and notes both retries.
+		syncStage1(t, ctx, store, forge, baseTime)
+
+		// Attempt 2 finishes red on sustained load, and the train tags
+		// -discarded before the next poll.
+		forge.nightly = "failure"
+		forge.tags = append(forge.tags, github.Tag{Name: rqTag + "-discarded", SHA: rqSHA})
+		forge.jobs[rqSHA] = []github.ActionsRunJob{
+			nightlyJob(rqSHA, "pkg/cli stress under load", 1, "failure"),
+			nightlyJob(rqSHA, "pkg/cli stress under load", 2, "success"),
+			nightlyJob(rqSHA, "sustained load", 1, "failure"),
+			nightlyJob(rqSHA, "sustained load", 2, "failure"),
+		}
+		syncStage1(t, ctx, store, forge, baseTime.Add(time.Minute))
+
+		if rcFailed := openNotification(t, ctx, store, model.FamilyRCFailed, rqTag); rcFailed == nil {
+			t.Fatalf("no pipeline.rc-failed:%s raised after -discarded", rqTag)
+		}
+		for _, job := range []string{"pkg/cli stress under load", "sustained load"} {
+			if n := openNotification(t, ctx, store, model.FamilyFlakeBudget, "acme/widgets:"+job); n != nil {
+				t.Fatalf("watchStage1 + syncDiscardedStage1 double-counted %s on one candidate: %+v", job, n)
+			}
+		}
+	})
+}
+
 // A forge connection grain cannot name an App for (a PAT) posts no check
 // run, but a red Stage 1 still raises pipeline.rc-failed in grain.
 func TestARedStage1RaisesRCFailedWithoutAGitHubApp(t *testing.T) {

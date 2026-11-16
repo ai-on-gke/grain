@@ -25,6 +25,7 @@ import {
   untracked,
   viewChild,
 } from "@angular/core";
+import { type ForkHead, forkHeadHelp, parseForkHead } from "./fork-head";
 import { Router } from "@angular/router";
 import { GrainApi, splitRepo } from "../api/grain-api.service";
 import type {
@@ -54,9 +55,9 @@ import {
   type PillOption,
   PillSelectComponent,
 } from "../shared/pill-select.component";
+import { NoGitConnectionNoticeComponent } from "../shared/no-git-connection-notice.component";
 import { WorkstreamsStore } from "../workstreams/workstreams.store";
 import { CreateTaskService } from "./create-task.service";
-import { forkHeadHelp, parseForkHead } from "../shared/fork-head";
 import { PRIORITY_REFUSAL, taskPriority } from "../shared/task-priority";
 import {
   ADMISSIONS,
@@ -117,6 +118,7 @@ const FRAMEWORKS: readonly PillOption[] = [
     AttachmentPickerComponent,
     GrantsPickerComponent,
     DirectorShaperComponent,
+    NoGitConnectionNoticeComponent,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -705,6 +707,10 @@ const FRAMEWORKS: readonly PillOption[] = [
               (valueChange)="pickRepo($event)"
             />
           </div>
+          <g-no-git-connection-notice
+            [deployment]="config() ? (config()?.deployment ?? {}) : undefined"
+            (navigated)="svc.close(false)"
+          />
         }
         @case ("base") {
           @if (draft().repo !== noRepo) {
@@ -718,32 +724,28 @@ const FRAMEWORKS: readonly PillOption[] = [
                 data-testid="nt-base"
                 placeholder="The repository's default branch"
                 spellcheck="false"
-                [attr.aria-invalid]="forkHeadError() ? 'true' : null"
-                [attr.aria-describedby]="
-                  forkHeadError()
-                    ? 'nt-base-error'
-                    : forkHeadNote()
-                      ? 'nt-base-help'
-                      : null
-                "
                 [value]="draft().base"
+                [attr.aria-invalid]="forkHead()?.error ? 'true' : null"
+                [attr.aria-describedby]="forkHead() ? 'nt-fork-head' : null"
                 (input)="set('base', val($event))"
               />
-              @if (forkHeadError(); as msg) {
-                <small
-                  id="nt-base-error"
-                  class="nt-field-error"
-                  role="alert"
-                  data-testid="nt-base-error"
-                  >{{ msg }}</small
-                >
-              } @else if (forkHeadNote()) {
-                <small
-                  id="nt-base-help"
-                  class="muted"
-                  data-testid="nt-base-help"
-                  >{{ forkHeadNote() }}</small
-                >
+              @if (forkHead(); as fh) {
+                @if (fh.error) {
+                  <small
+                    id="nt-fork-head"
+                    class="nt-field-error"
+                    role="alert"
+                    data-testid="nt-fork-head-error"
+                    >{{ fh.error }}</small
+                  >
+                } @else {
+                  <small
+                    id="nt-fork-head"
+                    class="muted"
+                    data-testid="nt-fork-head-help"
+                    >{{ forkHeadText(fh) }}</small
+                  >
+                }
               }
             </label>
             @if (repoBranches().length) {
@@ -1251,19 +1253,6 @@ export class NewTaskSheetComponent {
       : "default 5; higher numbers run first";
   });
 
-  // What the Base branch box holds, read as a fork head label: an error
-  // for a malformed one, a note saying what a well-formed one means.
-  protected readonly forkHeadError = computed(
-    () => forkHeadProblem(this.draft(), this.fields())?.message ?? "",
-  );
-  protected readonly forkHeadNote = computed(() => {
-    const d = this.draft();
-    if (d.repo === NO_REPO || d.newBranch) return "";
-    const fh = parseForkHead(d.base);
-    if (!fh || "error" in fh) return "";
-    return forkHeadHelp(fh, d.repo || this.defaultTarget());
-  });
-
   // The reason Create is held, said in the foot when the field at fault
   // is tucked into a collapsed More options, where its own message cannot
   // be seen (design book, section 5).
@@ -1492,6 +1481,19 @@ export class NewTaskSheetComponent {
     const r = this.selectedTemplate()?.repo || this.draft().repo;
     return r && r !== NO_REPO ? r : undefined;
   });
+
+  // forkHead is the Base branch read as a GitHub fork head label
+  // ("<fork-owner>:<branch>"), which the server takes only for a task
+  // that creates no branch of its own: null when the box holds none.
+  protected readonly forkHead = computed(() => {
+    const d = this.draft();
+    if (d.repo === NO_REPO || d.newBranch) return null;
+    return parseForkHead(d.base);
+  });
+
+  protected forkHeadText(h: ForkHead): string {
+    return "owner" in h ? forkHeadHelp(h, this.draft().repo) : h.error;
+  }
 
   protected readonly canFile = computed(() => {
     const repo = this.repoForAccess();
@@ -1965,7 +1967,7 @@ export class NewTaskSheetComponent {
   }
 
   private async file(): Promise<void> {
-    if (this.busy() || !this.canFile()) return;
+    if (this.busy() || !this.canFile() || this.forkHead()?.error) return;
     const d = this.draft();
     const tmpl = this.selectedTemplate();
     const tvals = this.templateValues();

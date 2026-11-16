@@ -30,7 +30,7 @@ import {
   templatePriority,
   validate,
 } from "./new-task-form";
-import { forkHeadHelp, parseForkHead } from "../shared/fork-head";
+import { forkHeadHelp, parseForkHead } from "./fork-head";
 import {
   PRIORITY_REFUSAL,
   taskPriority,

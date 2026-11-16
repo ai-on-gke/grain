@@ -13,20 +13,22 @@
 // limitations under the License.
 
 // A GitHub fork head label, "<fork-owner>:<branch>" -- what a pull
-// request's page shows as its head, and what people paste into a task's
-// branch. The server resolves it to the open pull request it heads
-// (pkg/forkhead). This is ui/src/forkHead.js ported, and so the twin of
-// model.ParseForkHead: the form says what a label means, or what is
-// wrong with it, before submit, in the server's own words.
+// request from a fork names as its head. Typed as the Base branch of a
+// task that does not create a branch of its own, the server files the
+// task against the open pull request it heads (pkg/forkhead). This is
+// classic's ui/src/forkHead.js, so both sheets explain a well-formed
+// label and refuse a malformed one before it is sent, in the server's
+// own words.
 
-// Shaped like an attempt at a label: a ':' among nothing but the
-// characters of a login and a branch. Anything else is left to the plain
-// branch-name check.
+export type ForkHead =
+  { owner: string; branch: string; error?: undefined } | { error: string };
+
+// SHAPE is the text a fork head is read from at all: branch-name
+// characters around at least one ':'. Anything else is an ordinary
+// branch name and none of this file's business.
 const SHAPE = /^[A-Za-z0-9._/:-]*:[A-Za-z0-9._/:-]*$/;
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
-
-export type ForkHead = { owner: string; branch: string } | { error: string };
 
 function validBranchName(name: string): boolean {
   return (
@@ -37,9 +39,9 @@ function validBranchName(name: string): boolean {
   );
 }
 
-// parseForkHead returns null for anything that is not shaped like a label
-// (a plain branch, which stays as typed), {owner, branch} for a
-// well-formed one, and {error} for a malformed one.
+// parseForkHead reads text as a fork head label: null when it is not
+// shaped like one, the owner and branch when it is a good one, and the
+// server's refusal when it is shaped like one but malformed.
 export function parseForkHead(
   text: string | null | undefined,
 ): ForkHead | null {
@@ -71,14 +73,14 @@ export function parseForkHead(
   return { owner, branch };
 }
 
-// forkHeadHelp is what a branch box says about a well-formed label.
+// forkHeadHelp is the line under the box for a well-formed label.
 export function forkHeadHelp(
-  { owner, branch }: { owner: string; branch: string },
-  repo?: string,
+  head: { owner: string; branch: string },
+  repo: string,
 ): string {
   const on = repo ? ` on ${repo}` : "";
   return (
-    `GitHub fork head: branch ${branch} on ${owner}'s fork. ` +
+    `GitHub fork head: branch ${head.branch} on ${head.owner}'s fork. ` +
     `grain files this task against the open pull request${on} it heads.`
   );
 }

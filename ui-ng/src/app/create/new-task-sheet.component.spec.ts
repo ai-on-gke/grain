@@ -809,21 +809,21 @@ describe("NewTaskSheetComponent", () => {
       type('[data-testid="nt-base"]', bad);
       await settle(f);
       expect(submit.disabled).toBe(true);
-      expect(q('[data-testid="nt-base-error"]')!.textContent).toContain(
+      expect(q('[data-testid="nt-fork-head-error"]')!.textContent).toContain(
         "fork head",
       );
       expect(q('[data-testid="nt-base"]')!.getAttribute("aria-invalid")).toBe(
         "true",
       );
     }
-    expect(q('[data-testid="nt-base-error"]')!.textContent).toBe(
+    expect(q('[data-testid="nt-fork-head-error"]')!.textContent).toBe(
       `"bad:label:here" has more than one ':': a fork head is <owner>:<branch>`,
     );
 
     type('[data-testid="nt-base"]', "octo:fix-login");
     await settle(f);
-    expect(q('[data-testid="nt-base-error"]')).toBeNull();
-    expect(q('[data-testid="nt-base-help"]')!.textContent).toBe(
+    expect(q('[data-testid="nt-fork-head-error"]')).toBeNull();
+    expect(q('[data-testid="nt-fork-head-help"]')!.textContent).toBe(
       "GitHub fork head: branch fix-login on octo's fork. grain files this task against the open pull request on sidthe/grain it heads.",
     );
     expect(submit.disabled).toBe(false);
@@ -834,7 +834,7 @@ describe("NewTaskSheetComponent", () => {
     nb.checked = true;
     nb.dispatchEvent(new Event("change"));
     await settle(f);
-    expect(q('[data-testid="nt-base-error"]')).toBeNull();
+    expect(q('[data-testid="nt-fork-head-error"]')).toBeNull();
   });
 
   it("keeps a template's priority on Task priority until it is edited", async () => {

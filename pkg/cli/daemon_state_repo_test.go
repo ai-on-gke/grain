@@ -815,10 +815,15 @@ func gitIn(t *testing.T, dir string, args ...string) {
 
 func waitForUI(t *testing.T, ctx context.Context, client *ui.HTTPClient) {
 	t.Helper()
+	// One attempt per poll: the client's own retry backoff grows to
+	// seconds, which overshoots the moment the server comes up.
+	probe := ui.NewHTTPClient(client.BaseURL)
+	probe.Token, probe.User, probe.HTTP = client.Token, client.User, client.HTTP
+	probe.RetryPolicy = &ui.RetryPolicy{}
 	deadline := time.Now().Add(daemonWaitLimit)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		if _, err := client.ListTasks(ctx); err == nil {
+		if _, err := probe.ListTasks(ctx); err == nil {
 			return
 		} else {
 			lastErr = err

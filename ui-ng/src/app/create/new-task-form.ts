@@ -18,7 +18,7 @@ import type {
   Task,
   Template,
 } from "../api/models";
-import { parseForkHead } from "../shared/fork-head";
+import { parseForkHead } from "./fork-head";
 import { taskPriority } from "../shared/task-priority";
 
 // The builtin fields of ui/src/newTaskForm.js, plus foundIn, which only
@@ -666,7 +666,7 @@ export function forkHeadProblem(
   const branchShown = !fields || fields.newBranch.visibility !== "hidden";
   if (branchShown && d.newBranch) return null;
   const fh = parseForkHead(d.base);
-  if (fh && "error" in fh) return { field: "base", message: fh.error };
+  if (fh?.error) return { field: "base", message: fh.error };
   return null;
 }
 
