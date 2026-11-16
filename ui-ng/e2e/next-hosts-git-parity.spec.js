@@ -311,9 +311,8 @@ test("Git: per-connection Test, proxy, Reuse authentication from, and the refusa
     await page.getByTestId("select-git-conn-mode-opt-existing").click();
     await page.getByTestId("select-git-conn-reuse").click();
     const opt = page.getByTestId("select-git-conn-reuse-opt-" + cred);
-    await expect(opt).toContainText(
-      `Reuse authentication from ${cred} — ${host}`,
-    );
+    await expect(opt).toContainText(`${host} · git host · all repos (pat)`);
+    await expect(opt).toContainText(cred);
     await opt.click();
     await expect(page.getByTestId("input-git-conn-name")).toHaveValue(cred);
 
