@@ -143,6 +143,10 @@ func TestAgentFrameworksBlameAMissingConnectionCLIOnTheConnection(t *testing.T) 
 }
 
 // codexCatalogStub is a codex app-server answering with one model, id.
+// Call it before t.Parallel(): a parallel test's fork can inherit the
+// stub's still-open write descriptor, and exec of a file open for writing
+// fails with ETXTBSY ("text file busy"). Until t.Parallel() returns, no
+// parallel test is running to fork.
 func codexCatalogStub(t *testing.T, id string) string {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "codex")
@@ -163,6 +167,9 @@ echo '{"id":2,"result":{"data":[{"id":"` + id + `","model":"` + id + `","display
 // Discovery asks each connection's own binary, so two connections of one
 // framework can report two different model lists.
 func TestCodexModelListerAsksEachConnectionsOwnCLI(t *testing.T) {
+	flagCLI := codexCatalogStub(t, "flag-model")
+	oldCLI := codexCatalogStub(t, "old-model")
+	newCLI := codexCatalogStub(t, "new-model")
 	t.Parallel()
 	creds := testSecrets(t)
 	for _, id := range []string{"old", "new"} {
@@ -171,10 +178,10 @@ func TestCodexModelListerAsksEachConnectionsOwnCLI(t *testing.T) {
 		}
 	}
 	lister := &daemon.CodexModelLister{Live: testLiveConfig(daemon.Config{
-		CodexPath: codexCatalogStub(t, "flag-model"),
+		CodexPath: flagCLI,
 		AgentBackends: []model.AgentBackend{
-			{ID: "old", Framework: model.AgentFrameworkCodex, AuthMode: model.CodexAuthAPIKey, CLIPath: codexCatalogStub(t, "old-model")},
-			{ID: "new", Framework: model.AgentFrameworkCodex, AuthMode: model.CodexAuthAPIKey, CLIPath: codexCatalogStub(t, "new-model")},
+			{ID: "old", Framework: model.AgentFrameworkCodex, AuthMode: model.CodexAuthAPIKey, CLIPath: oldCLI},
+			{ID: "new", Framework: model.AgentFrameworkCodex, AuthMode: model.CodexAuthAPIKey, CLIPath: newCLI},
 		},
 	}), Creds: creds}
 	for id, want := range map[string]string{"old": "old-model", "new": "new-model"} {
@@ -192,13 +199,14 @@ func TestCodexModelListerAsksEachConnectionsOwnCLI(t *testing.T) {
 // connection, rather than falling back to the deployment's binary and
 // listing models it would not run.
 func TestCodexModelListerDoesNotFallBackPastAConnectionPath(t *testing.T) {
+	flagCLI := codexCatalogStub(t, "flag-model")
 	t.Parallel()
 	creds := testSecrets(t)
 	if err := creds.Set(secrets.AgentBackendCredentialSecret("gone"), secrets.AgentCredentialKey, []byte("sk-gone")); err != nil {
 		t.Fatal(err)
 	}
 	lister := &daemon.CodexModelLister{Live: testLiveConfig(daemon.Config{
-		CodexPath: codexCatalogStub(t, "flag-model"),
+		CodexPath: flagCLI,
 		AgentBackends: []model.AgentBackend{
 			{ID: "gone", Framework: model.AgentFrameworkCodex, AuthMode: model.CodexAuthAPIKey, CLIPath: filepath.Join(t.TempDir(), "codex")},
 		},
@@ -215,6 +223,9 @@ func TestCodexModelListerDoesNotFallBackPastAConnectionPath(t *testing.T) {
 // PATH's codex ("the Codex CLI is not installed") and a changed CLIPath
 // of the old binary (grain/task-3945).
 func TestCodexModelListerAsksAConnectionsCLIBeforeTheNextTick(t *testing.T) {
+	oldBinary := codexCatalogStub(t, "old-binary-model")
+	newBinary := codexCatalogStub(t, "new-binary-model")
+	savedNow := codexCatalogStub(t, "saved-now-model")
 	t.Parallel()
 	ctx := context.Background()
 	store := testStore(t)
@@ -227,11 +238,11 @@ func TestCodexModelListerAsksAConnectionsCLIBeforeTheNextTick(t *testing.T) {
 	// What the daemon applied at its last tick: "repointed" on its old
 	// binary, and "saved-now" not saved yet.
 	live := daemon.NewLiveConfig(store, nil, daemon.Config{AgentBackends: []model.AgentBackend{
-		{ID: "repointed", Framework: model.AgentFrameworkCodex, AuthMode: model.CodexAuthAPIKey, CLIPath: codexCatalogStub(t, "old-binary-model")},
+		{ID: "repointed", Framework: model.AgentFrameworkCodex, AuthMode: model.CodexAuthAPIKey, CLIPath: oldBinary},
 	}}, nil)
 	if err := store.PutConfig(ctx, model.Config{AgentBackends: []model.AgentBackend{
-		{ID: "repointed", Framework: model.AgentFrameworkCodex, AuthMode: model.CodexAuthAPIKey, CLIPath: codexCatalogStub(t, "new-binary-model")},
-		{ID: "saved-now", Framework: model.AgentFrameworkCodex, AuthMode: model.CodexAuthAPIKey, CLIPath: codexCatalogStub(t, "saved-now-model")},
+		{ID: "repointed", Framework: model.AgentFrameworkCodex, AuthMode: model.CodexAuthAPIKey, CLIPath: newBinary},
+		{ID: "saved-now", Framework: model.AgentFrameworkCodex, AuthMode: model.CodexAuthAPIKey, CLIPath: savedNow},
 	}}); err != nil {
 		t.Fatal(err)
 	}

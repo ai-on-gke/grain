@@ -334,6 +334,55 @@ func reconcileTaskGoals(ctx context.Context, deps Deps, now time.Time) error {
 	return errors.Join(errs...)
 }
 
+// reconcileMetGoalCloses closes, ahead of "dispatch", every open task whose
+// close-on-met goal reconcileTaskGoals has already seen met (MetAt set)
+// while a run was live, now that the run is gone. meetGoal closes a task
+// that is not running the moment its goal is met, so a stored MetAt on a
+// task that is open and not running means exactly that: the run it warned
+// was stopped (errGoalMet) or finished on its own, and the task is back in
+// the queue. "task-goals" runs after "dispatch" in the cycle, so without
+// this the next tick's dispatch starts a new attempt only for "task-goals"
+// to stop it a second later. It closes on the verdict the run was told
+// about rather than reading the goal again, which "task-goals" goes on to
+// do for every goal this leaves open.
+func reconcileMetGoalCloses(ctx context.Context, deps Deps, now time.Time) error {
+	if deps.Store == nil {
+		return nil
+	}
+	goals, err := deps.Store.OpenTaskGoals(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, g := range goals {
+		if g.MetAt == nil || g.OnMet == model.GoalRestOnMet || g.Outcome == model.GoalMetOutcome {
+			continue
+		}
+		state, err := deps.Store.State(ctx, g.TaskID)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if state == model.StateClosed || state == model.StateRunning || state == "" {
+			continue
+		}
+		task, err := deps.Store.GetTask(ctx, g.TaskID)
+		if err != nil || task == nil {
+			errs = append(errs, err)
+			continue
+		}
+		g.Outcome = model.GoalMetOutcome
+		if err := deps.Store.SaveTaskGoalProgress(ctx, g); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := closeOnGoal(ctx, deps.Store, *task, g, now); err != nil {
+			errs = append(errs, fmt.Errorf("orchestrator: task %s's goal: %w", g.TaskID, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // ensureRepairGoals declares base-green, on_met close, on every open
 // base-branch repair -- grain's own and every fixes_base_branch one --
 // that has no goal yet: the one-time pass the design's migration asks

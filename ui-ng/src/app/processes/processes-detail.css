@@ -58,18 +58,6 @@
   background: var(--md-sys-color-surface-container-low);
 }
 
-.proc-prompt-well {
-  padding: 12px 14px;
-  border-radius: var(--md-sys-shape-corner-small);
-  border: 1px solid var(--md-sys-color-outline-variant);
-  background: var(--md-sys-color-surface-container-lowest);
-  font-family: var(--grain-font-mono);
-  font-size: 12px;
-  line-height: 18px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 .proc-yaml-editor {
   width: 100%;
   min-height: 180px;
@@ -219,4 +207,32 @@
   .tmpl-field-editor-row {
     grid-template-columns: 1fr;
   }
+}
+
+/* A skip's held-by task and what became of it, kept together after the
+   summary -- on its right, or wrapped under it where the panel is narrow. */
+.proc-skip-row {
+  flex-wrap: wrap;
+}
+
+.proc-skip-row > .muted {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.proc-skip-refs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 4px 6px;
+  margin-left: auto;
+  max-width: 100%;
+}
+
+/* An action's error, shown inside the dialog that caused it just above its
+   actions (the page's own banner is behind the dialog's scrim). */
+.dialog-error {
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
 }

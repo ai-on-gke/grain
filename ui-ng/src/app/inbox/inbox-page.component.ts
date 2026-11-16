@@ -58,6 +58,8 @@ import { ActorChipComponent } from "../shared/actor-chip.component";
 import { annotateDiffHunk } from "../shared/code-highlight";
 import { StatusIconComponent } from "../shared/status-icon.component";
 import { ConversationComponent } from "../shared/conversation/conversation.component";
+import { CappedMarkdownComponent } from "../shared/capped-markdown.component";
+import { TaskGoalCardComponent } from "../task/task-goal-card.component";
 
 import {
   type FilterId,
@@ -140,6 +142,7 @@ const ONE_KEY = new Set(["approve"]);
     "./inbox-inspector.css",
     "../shared/conversation.css",
     "../shared/code-highlight.css",
+    "../shared/mermaid.css",
   ],
   template: `
     <section
@@ -207,7 +210,9 @@ const ONE_KEY = new Set(["approve"]);
           {{ err }}
         </p>
       }
-      @if (store.actionError(); as err) {
+      <!-- Never the same sentence twice: an action refused because the
+           list could not be read says what the banner above already does. -->
+      @if (actionErrorShown(); as err) {
         <p class="banner banner-error" role="alert" data-testid="action-error">
           {{ err }}
           <button
@@ -677,12 +682,13 @@ const ONE_KEY = new Set(["approve"]);
             >
               @switch (sel.kind) {
                 @case ("reply") {
-                  <p
+                  <g-capped-markdown
                     class="resolution-question"
-                    data-testid="resolution-question"
-                  >
-                    {{ question() }}
-                  </p>
+                    testid="resolution-question"
+                    noun="question"
+                    label="The question"
+                    [text]="question()"
+                  />
                   @if (store.selectedDetail()?.pendingSecret; as secret) {
                     <p class="muted dock-note">
                       This run asked for the credential
@@ -695,12 +701,43 @@ const ONE_KEY = new Set(["approve"]);
                       >; the value never comes back to the page.
                     </p>
                   }
+                  <div class="action-bar" data-testid="reply-actions">
+                    <div class="action-btn-group">
+                      <button
+                        type="button"
+                        class="btn-primary"
+                        data-testid="reply-focus"
+                        [disabled]="
+                          !can(commentsRoute, sel) || !!replyBlock(sel)
+                        "
+                        [title]="replyBlock(sel)"
+                        (click)="focusComposer()"
+                      >
+                        Reply
+                      </button>
+                      <ng-container
+                        *ngTemplateOutlet="actions; context: { $implicit: sel }"
+                      />
+                    </div>
+                  </div>
                 }
                 @case ("access") {
                   @if (store.selectedDetail()?.pendingAccess; as pa) {
-                    <p class="resolution-question">{{ pa.summary }}</p>
+                    <g-capped-markdown
+                      class="resolution-question"
+                      testid="access-summary"
+                      noun="request"
+                      label="Access request"
+                      [text]="pa.summary"
+                    />
                     @if (pa.reason) {
-                      <p class="dock-note">{{ pa.reason }}</p>
+                      <g-capped-markdown
+                        class="dock-note"
+                        testid="access-reason"
+                        noun="reason"
+                        label="Why the run asks"
+                        [text]="pa.reason"
+                      />
                     }
                     <ul class="access-items">
                       @for (it of pa.items; track $index) {
@@ -790,13 +827,25 @@ const ONE_KEY = new Set(["approve"]);
                       </div>
                     </div>
                   } @else {
-                    <p class="resolution-question">{{ sel.summary }}</p>
+                    <g-capped-markdown
+                      class="resolution-question"
+                      testid="access-summary"
+                      noun="request"
+                      label="Access request"
+                      [text]="sel.summary"
+                    />
                     <p class="muted dock-note">Reading the request…</p>
                   }
                 }
                 @case ("release") {
                   @if (sel.release; as r) {
-                    <p class="resolution-question">{{ sel.summary }}</p>
+                    <g-capped-markdown
+                      class="resolution-question"
+                      testid="release-summary"
+                      noun="summary"
+                      label="Release summary"
+                      [text]="sel.summary"
+                    />
                     @if (r.dispatchFailure; as df) {
                       <div
                         class="banner banner-error"
@@ -806,7 +855,12 @@ const ONE_KEY = new Set(["approve"]);
                         <strong>The last promotion did not start:</strong>
                         {{ df.message }}
                         @if (df.remedy) {
-                          <div>{{ df.remedy }}</div>
+                          <g-capped-markdown
+                            testid="release-remedy"
+                            noun="remedy"
+                            label="Remedy"
+                            [text]="df.remedy"
+                          />
                         }
                         @if (df.runUrl) {
                           <a
@@ -920,12 +974,18 @@ const ONE_KEY = new Set(["approve"]);
                   </div>
                 }
                 @default {
-                  <p
+                  <g-capped-markdown
                     class="resolution-question"
-                    data-testid="resolution-question"
-                  >
-                    {{ sel.summary }}
-                  </p>
+                    testid="resolution-question"
+                    [noun]="sel.kind === 'notification' ? 'alert' : 'message'"
+                    [label]="
+                      sel.kind === 'notification' ? 'The alert' : 'Summary'
+                    "
+                    [text]="
+                      (sel.kind === 'notification' && sel.notification?.body) ||
+                      sel.summary
+                    "
+                  />
                   <div class="action-bar">
                     <div class="action-btn-group">
                       <ng-container
@@ -945,6 +1005,16 @@ const ONE_KEY = new Set(["approve"]);
                 <h3 class="section-title">Why this needs a person</h3>
                 <p class="muted evidence-text">{{ sel.rationale }}</p>
               </div>
+
+              @if (store.selectedDetail() ?? sel.task; as inspTask) {
+                <g-task-goal-card
+                  [task]="inspTask"
+                  [attemptsCount]="
+                    store.selectedDetail()?.attempts?.length ?? 0
+                  "
+                  (acted)="store.reloadSelectedDetail()"
+                />
+              }
 
               @if (sel.taskId) {
                 <g-conversation
@@ -1202,10 +1272,16 @@ const ONE_KEY = new Set(["approve"]);
     TipDirective,
     StatusIconComponent,
     ConversationComponent,
+    CappedMarkdownComponent,
+    TaskGoalCardComponent,
   ],
 })
 export class InboxPageComponent implements OnInit, OnDestroy {
   protected readonly store = inject(InboxStore);
+  protected readonly actionErrorShown = computed(() => {
+    const err = this.store.actionError();
+    return err && err !== this.store.loadError() ? err : null;
+  });
   protected readonly wsStore = inject(WorkstreamsStore);
   protected readonly access = inject(AccessService);
   private readonly directorCtx = inject(DirectorContextService);
@@ -1481,6 +1557,19 @@ export class InboxPageComponent implements OnInit, OnDestroy {
       });
     }
     this.draft.set(value);
+  }
+
+  // Reply in the dock: the answer is written in the conversation's
+  // composer below, which this brings into view and focuses.
+  protected focusComposer(): void {
+    const box = (
+      this.host.nativeElement as HTMLElement
+    ).querySelector<HTMLTextAreaElement>(
+      '[data-testid="next-inbox-inspector"] [data-testid="task-composer"]',
+    );
+    if (!box) return;
+    box.scrollIntoView({ block: "nearest" });
+    box.focus();
   }
 
   // replyBlock is why Send is off for the selected row: it has left the

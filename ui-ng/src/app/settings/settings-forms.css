@@ -153,7 +153,8 @@
   text-overflow: ellipsis;
 }
 
-.s-field > g-pill-select .pill-select-btn:disabled {
+.s-field > g-pill-select .pill-select-btn:disabled,
+.s-inline > g-pill-select .pill-select-btn:disabled {
   opacity: 1;
   cursor: not-allowed;
   background: var(--md-sys-color-surface-container-low);
@@ -179,6 +180,12 @@
   min-width: 0;
 }
 
+/* A short number beside an inline field (a host's capacity). */
+.s-input-inline.s-input-narrow {
+  flex: 0 0 96px;
+  width: 96px;
+}
+
 .s-textarea {
   min-height: 88px;
   padding: 10px 12px;
@@ -199,6 +206,10 @@
   font-size: 13px;
   line-height: 18px;
   color: var(--md-sys-color-on-surface-variant);
+}
+
+.s-hint.s-hint-warn {
+  color: var(--md-sys-color-warning);
 }
 
 .s-row {
@@ -336,6 +347,14 @@
   color: var(--md-sys-color-on-tertiary-container);
 }
 
+.s-probe-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
 .s-plan-panel {
   padding: 18px 22px;
   border-radius: var(--md-sys-shape-corner-large);
@@ -376,4 +395,127 @@
 .s-inline > g-pill-select .pill-select-btn {
   height: 40px;
   min-height: 40px;
+}
+
+/* A card a link scrolls to (#capability-policy, /settings/secrets)
+   stops clear of the sticky page header rather than under it. */
+.s-card[id],
+.s-anchor {
+  scroll-margin-top: 80px;
+}
+
+/* A locked or read-only card is de-emphasised with a colour, never
+   opacity (the book's "Dim with a colour, not opacity"). */
+.s-dimmed,
+.s-dimmed .s-card-title,
+.s-dimmed .s-subhead-title,
+.s-dimmed .s-label,
+.s-dimmed .s-toggle-name,
+.s-dimmed td {
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.s-wrap {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* A table that must never scroll sideways (Settings → Repositories). Wide,
+   its headers may wrap and its cells sit closer. Narrower than its columns
+   need -- a phone, but also the settings pane beside the drawer and rail
+   at medium widths -- each row becomes a card and every cell a labelled
+   line of it, its label from the cell's data-label. It collapses on the
+   wrap's own width, not the viewport's, since the pane's width is what
+   the columns have. The first cell is the row's title and keeps no
+   label. */
+.s-table-wrap.s-table-stack-wrap {
+  container: s-table-stack / inline-size;
+}
+
+.s-table-stack th {
+  white-space: normal;
+}
+
+.s-table-stack th,
+.s-table-stack td {
+  padding: 12px 10px;
+}
+
+@container s-table-stack (max-width: 879px) {
+  .s-table-stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .s-table-stack,
+  .s-table-stack tbody,
+  .s-table-stack tr,
+  .s-table-stack td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .s-table-stack tr {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
+  }
+
+  .s-table-stack tr:last-child {
+    border-bottom: none;
+  }
+
+  .s-table-stack td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 14px;
+    border-bottom: none;
+    overflow-wrap: anywhere;
+    text-align: right;
+  }
+
+  .s-table-stack td:first-child {
+    font-weight: 500;
+    text-align: left;
+  }
+
+  .s-table-stack td[data-label]::before {
+    content: attr(data-label);
+    flex: none;
+    font-size: 11.5px;
+    line-height: 16px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--md-sys-color-on-surface-variant);
+    text-align: left;
+  }
+
+  .s-table-stack td.s-actions-cell {
+    white-space: normal;
+  }
+
+  .s-table-stack td.s-actions-cell .s-row-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+/* Settings -> Sandboxes -> Custom sandbox image: the contract versions. */
+.s-contract {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.s-contract code,
+.s-hint code {
+  font-family: var(--grain-font-mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
 }

@@ -1480,8 +1480,9 @@ const (
 	// LinkReviewFindings records that a required review of this task's pull
 	// request failed its gate -- left findings or open questions, had fixes
 	// closed without merging, or could not be filed (-> ReviewFindingsRecord
-	// JSON). Cleared only by a clean re-review after fixes or an explicit
-	// merge:force gate override, never by Submit.
+	// JSON). Cleared by a clean re-review after fixes, by a person accepting
+	// that review's findings (LinkReviewFindingsAccepted), or by an explicit
+	// merge:force gate override -- never by Submit.
 	LinkReviewFindings LinkKind = "review-findings"
 	// LinkGateOverride records an operator's explicit merge:force override
 	// of named merge gates for one commit SHA (-> GateOverrideRecord JSON).
@@ -1649,6 +1650,15 @@ const (
 	// read-only grant (orchestrator.SyncCLReviews). Only grain writes it,
 	// and it is what a clean finish clears (LinkCLReviewCleared).
 	LinkCLReviewOf LinkKind = "cl-review-of"
+	// LinkGoalMode stores the compact JSON GoalModeConfig for a task running
+	// in autonomous goal posture. Blocks nothing.
+	LinkGoalMode LinkKind = "goal-mode"
+	// LinkGoalAssumption stores one compact JSON GoalAssumption recorded by an
+	// autonomous goal run. Blocks nothing.
+	LinkGoalAssumption LinkKind = "goal-assumption"
+	// LinkGoalScorecard stores the compact JSON GoalScorecard summarizing
+	// multi-pass verification progress and deliverables. Blocks nothing.
+	LinkGoalScorecard LinkKind = "goal-scorecard"
 )
 
 // CLThreadsPrincipal is who tells a task about new review threads on its

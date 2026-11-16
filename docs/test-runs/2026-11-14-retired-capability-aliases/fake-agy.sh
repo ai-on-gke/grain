@@ -36,5 +36,22 @@ if [[ -f "$WALK_DIR/hook.py" && ! -f "$WALK_DIR/runs/hook-$TASK_ID.json" ]]; the
   python3 "$WALK_DIR/hook.py" "$MCP_CFG" "$TASK_ID" "$WALK_DIR/runs/hook-$TASK_ID.json" >>"$WALK_DIR/runs/hook-$TASK_ID.log" 2>&1 || true
 fi
 printf '%s\n' '{"event":"init","conversation_id":"fake-agy-walk","init":{"tools":[],"permission_mode":"always-proceed"}}'
+# The orchestrator relays proposals from the transcript's tool steps, not
+# from the MCP server (task 5896, F5): replay hook.py's propose_task call
+# as the ACTIVE and DONE/ERROR steps a real agy stream carries for it.
+python3 - "$WALK_DIR/runs/hook-$TASK_ID.json" <<'EOF' 2>/dev/null || true
+import json, sys
+h = json.load(open(sys.argv[1]))
+p = h.get("propose_bare")
+if p:
+    info = {"name": "propose_task", "parameters": {"title": "walk: bare names", "body": "walkthrough",
+                                                   "capabilities": ["self-debug", "grain-ci"]}}
+    step = {"conversation_id": "fake-agy-walk", "step_index": 3, "step_type": "tool", "tool_info": info}
+    print(json.dumps({"event": "step_update", "step_update": dict(step, state="ACTIVE")}))
+    done = dict(info, output=p["text"])
+    if p["isError"]:
+        done["error"] = {"message": p["text"]}
+    print(json.dumps({"event": "step_update", "step_update": dict(step, state="ERROR" if p["isError"] else "DONE", tool_info=done)}))
+EOF
 printf '%s\n' '{"event":"step_update","step_update":{"conversation_id":"fake-agy-walk","step_index":9,"step_type":"agent_response","state":"DONE","text_delta":"walkthrough run complete"}}'
 printf '%s\n' '{"event":"result","result":{"conversation_id":"fake-agy-walk","status":"SUCCESS","response":"walkthrough run complete","num_turns":1}}'

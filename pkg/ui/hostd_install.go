@@ -732,11 +732,13 @@ func (s *Server) serveHostdAgentdRelease(w http.ResponseWriter, r *http.Request,
 
 	platform := r.PathValue("os") + "/" + r.PathValue("arch")
 	if !slices.Contains(agentdrelease.Platforms, platform) {
+		w.Header().Set("Cache-Control", cacheControlNoStore)
 		http.NotFound(w, r)
 		return
 	}
 	entry, ok := s.resolveAgentdRelease(r.Context(), platform)
 	if !ok {
+		w.Header().Set("Cache-Control", cacheControlNoStore)
 		http.Error(w, "no grain-agentd release asset available for "+platform, http.StatusNotFound)
 		return
 	}

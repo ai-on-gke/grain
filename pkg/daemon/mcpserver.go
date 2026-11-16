@@ -2226,28 +2226,6 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 	// gets to say: which repositories a proposal may be filed against,
 	// which only the daemon's store knows and which propose_task's own
 	// `repo` argument could otherwise only describe in the abstract.
-	escapeSink := &mcp.MockSink{}
-	registry.Register(mcp.NewMockTools(escapeSink, proposeRepoList.Nameable())...)
-	// open_pull_request, recreate_sandbox and update_status are the three
-	// tools here that act while the run is still going, and all three do
-	// it by asking the daemon rather than from this process, so all three
-	// are registered only when this process was actually told which
-	// daemon and which task it serves -- a run driven from a bare `grain
-	// mcpserver -sandbox-root` (pkg/mcp's own tests, tests/e2e/) has no
-	// daemon to ask and is better off not advertising tools that could
-	// only ever refuse.
-	//
-	// The same pair is what lets every tool call narrate itself onto that
-	// row -- not a tool of its own, but a line written from the name of
-	// whatever the run is calling, and from run_command's own
-	// description where it wrote one.
-	//
-	// The client is built before the pull-request tools below rather than
-	// alongside the tools that use it, because one of those reads goes
-	// through it too: grain CI's verdict on this run's own branch is a
-	// row on the task, so pull_request_status asks the daemon for it
-	// (daemonGrainCI) exactly as update_status asks the daemon to write
-	// one.
 	var client *ui.HTTPClient
 	var taskDetail ui.TaskDetail
 	switch {
@@ -2265,6 +2243,21 @@ func ServeMCPServer(in io.Reader, out io.Writer, args []string) error {
 		grants = GrantNames(taskDetail.Task.Capabilities)
 	}
 	warnUnknownGrants(grants)
+
+	escapeSink := &mcp.MockSink{}
+	var mockToolsOpts mcp.MockToolsOptions
+	if taskDetail.Task.GoalMode != nil && taskDetail.Task.GoalMode.Enabled {
+		mockToolsOpts = mcp.MockToolsOptions{
+			AutonomousGoal:     true,
+			MockMissingSecrets: taskDetail.Task.GoalMode.MockMissingSecrets,
+		}
+	}
+	if mockToolsOpts.AutonomousGoal {
+		registry.Register(mcp.NewMockToolsWithOptions(escapeSink, proposeRepoList.Nameable(), mockToolsOpts)...)
+		registry.Register(mcp.NewGoalTools(escapeSink)...)
+	} else {
+		registry.Register(mcp.NewMockTools(escapeSink, proposeRepoList.Nameable())...)
+	}
 
 	// An attachment comment_on_issue or ask_question is given by path is
 	// read out of this run's sandbox when the call is made, and held in

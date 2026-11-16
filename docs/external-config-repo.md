@@ -149,6 +149,32 @@ Sandboxes: the refusal names `grain/config` (`"internal": true`), and
 opens a validated pull request there, held for a person to submit
 (`design/design/config-repo-settings.design.md`, section 4.1.1).
 
+## Sharing one repository across grain versions
+
+A configuration repository is stamped with the schema of the build that
+exported it (`schema-version`). A deployment applies a repository at its
+own schema, or at an older one it migrates on import; one stamped newer
+is refused with "state repository was written by a newer build of grain:
+repository is at schema N, this build knows M", in Settings → Config
+Repo and in `grain state sync`, and nothing in it is imported. That
+holds at startup and, from `v3.10.0`, on every sync of a running
+deployment as well.
+
+Before that, a running deployment, or `grain state sync`, imported a
+newer build's push without checking the stamp. That is how a repository
+written by a current build loses access on an old one: since `v3.8.0`
+the export writes a template's or schedule's plain `owner/name` reads
+and writes as `https://grain.dev/capabilities/repo#read` / `#write`
+entries under `grants:` (and, from `v3.9.0`, there alone), and builds
+before `v3.5.0` -- `release/v3.1.1` among them -- read those entries as
+opaque capabilities, not as the read and write rows they are, so every
+such row is dropped without a word
+(`docs/test-runs/2026-11-15-config-grants-export.md`).
+
+**Run every deployment that reads one configuration repository on the
+same release**, and upgrade the deployments that only read it before
+the one that writes it.
+
 ## Trying it
 
 `grain demo -external-config-repo https://github.com/acme/grain-config.git`

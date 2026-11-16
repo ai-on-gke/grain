@@ -15,8 +15,9 @@
 import { ComponentFixture, TestBed } from "@angular/core/testing";
 import { Component, signal } from "@angular/core";
 import {
+  type CommentTarget,
   ConversationComponent,
-  ConversationMode,
+  type ConversationMode,
 } from "./conversation.component";
 import type { Comment } from "../../api/models";
 
@@ -38,6 +39,7 @@ function mk(id: number, body = `message ${id}`): Comment {
       <g-conversation
         [taskId]="'42'"
         [comments]="comments()"
+        [targetComment]="targetComment()"
         [(mode)]="mode"
         [(draft)]="draft"
         [config]="{ placeholder: 'Type here', submitLabel: 'Send to #42' }"
@@ -48,6 +50,7 @@ function mk(id: number, body = `message ${id}`): Comment {
 })
 class HostComponent {
   readonly comments = signal<Comment[]>([mk(1), mk(2)]);
+  readonly targetComment = signal<CommentTarget | null>(null);
   readonly mode = signal<ConversationMode>("inline");
   readonly draft = signal("");
   readonly sent: string[] = [];
@@ -208,5 +211,47 @@ describe("ConversationComponent", () => {
     await f.whenStable();
     f.detectChanges();
     expect(q('[data-testid="convo-jump"]')).toBeNull();
+  });
+
+  it("does not raise New messages when older history is paged in above, and reveals, focuses and highlights a linked comment", async () => {
+    const thread = q<HTMLElement>(".convo-thread")!;
+    Object.defineProperty(thread, "scrollHeight", {
+      configurable: true,
+      value: 2400,
+    });
+    Object.defineProperty(thread, "clientHeight", {
+      configurable: true,
+      value: 300,
+    });
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event("scroll"));
+
+    f.componentInstance.comments.set([mk(-2), mk(-1), mk(0), mk(1), mk(2)]);
+    f.detectChanges();
+    await f.whenStable();
+    f.detectChanges();
+    expect(q('[data-testid="convo-jump"]')).toBeNull();
+
+    f.componentInstance.targetComment.set({ id: 0, seq: 1 });
+    f.detectChanges();
+    await f.whenStable();
+    f.detectChanges();
+    const target = q<HTMLElement>('[data-comment-id="0"]')!;
+    expect(target.classList.contains("comment-highlight")).toBe(true);
+    expect(document.activeElement).toBe(target);
+
+    // A new message at the end still counts while reading the linked one.
+    f.componentInstance.comments.set([
+      mk(-2),
+      mk(-1),
+      mk(0),
+      mk(1),
+      mk(2),
+      mk(3),
+    ]);
+    f.detectChanges();
+    await f.whenStable();
+    f.detectChanges();
+    expect(q('[data-testid="convo-jump"]')).not.toBeNull();
   });
 });

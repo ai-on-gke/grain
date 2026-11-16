@@ -18,6 +18,7 @@ import {
   Component,
   ElementRef,
   HostListener,
+  Injector,
   NgZone,
   type OnDestroy,
   type OnInit,
@@ -37,6 +38,7 @@ import { SnackbarService } from "../services/snackbar.service";
 import { TaskFeedStore } from "../services/task-feed.service";
 import { ViewFilter } from "../services/view-filter.service";
 import { errorText } from "../sessions/session-helpers";
+import { formatStamp } from "../shared/dispatch-status";
 import { ActorChipComponent } from "../shared/actor-chip.component";
 import {
   ConfirmDialogComponent,
@@ -54,6 +56,9 @@ import { CompositionViewComponent } from "./composition-view.component";
 import {
   type Composition,
   type CreateScheduleRequest,
+  type DeclaredTrigger,
+  type DerivedRuns,
+  type ProcessSort,
   type CreateSuiteRequest,
   type DeclarationAcceptanceView,
   type ProcessTab,
@@ -65,15 +70,25 @@ import {
   type Template,
   type TemplateField,
   type UpdateScheduleRequest,
+  PROCESS_SORTS,
   buildSuiteRunPasses,
+  derivedRuns,
   describeSuiteMode,
   formatCadence,
+  formatScheduleNextRun,
   isEventTrigger,
+  movedOrder,
+  parseProcessSort,
+  scheduleKindOf,
+  skipFolded,
+  sortProcessRows,
+  suppressionReasonLabel,
   scheduleStatusBadge,
   suiteRunBadge,
   templateSourceBadge,
 } from "./processes.models";
 import { ProcessesStore } from "./processes.store";
+import { MarkdownDirective } from "../shared/code-highlight";
 
 const TABS: readonly { id: ProcessTab; label: string; tip: string }[] = [
   {
@@ -121,6 +136,48 @@ const CADENCE_KINDS: readonly { id: string; label: string }[] = [
 type SchedFilter = "all" | "active" | "paused" | "triggers" | "suppressed";
 type TmplFilter = "all" | "deployment" | "declared" | "system";
 type SuitesPaneView = "suites" | "runs";
+type OrderedList = "schedules" | "templates" | "suites";
+
+// The custom order is browser state, kept under the classic Processes
+// page's own key (ui/src/listOrder.js, list "processes") with its row
+// keys ("schedule:<id>", "template:<id>", "suite:<id>"), so a row moved
+// on either page sits in the same place on the other.
+const ORDER_KEY = "grain.list-order.processes";
+
+function loadOrder(): string[] {
+  try {
+    const raw = globalThis.localStorage?.getItem(ORDER_KEY);
+    const ids: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(ids)
+      ? ids.filter((x): x is string => typeof x === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveOrder(ids: readonly string[]): void {
+  try {
+    if (ids.length === 0) globalThis.localStorage?.removeItem(ORDER_KEY);
+    else globalThis.localStorage?.setItem(ORDER_KEY, JSON.stringify(ids));
+  } catch {
+    // Storage denied: the order lasts as long as the page does.
+  }
+}
+
+// A row of the Schedules & Triggers list: a schedule, or a trigger a
+// repository declares in .grain/triggers.
+interface SchedTabRow {
+  key: string;
+  schedule?: Schedule;
+  trigger?: DeclaredTrigger;
+}
+
+function triggerName(path: string): string {
+  return path.replace(/^\.grain\/triggers\//, "");
+}
+
+const NO_RUNS: DerivedRuns = { lastRunAt: null, nextRunAt: null };
 
 @Component({
   selector: "g-processes-page",
@@ -133,6 +190,7 @@ type SuitesPaneView = "suites" | "runs";
     CompositionViewComponent,
     DialogTrapDirective,
     PillSelectComponent,
+    MarkdownDirective,
   ],
   encapsulation: ViewEncapsulation.None,
   styleUrls: [
@@ -142,6 +200,10 @@ type SuitesPaneView = "suites" | "runs";
     "../ci/ci-list.css",
     "./processes-list.css",
     "./processes-detail.css",
+    "../shared/conversation.css",
+    "../shared/code-highlight.css",
+    "../shared/detail-panes.css",
+    "../shared/mermaid.css",
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
@@ -161,18 +223,6 @@ type SuitesPaneView = "suites" | "runs";
           </h1>
           <div class="headline-actions">
             @switch (activeTab()) {
-              @case ("schedules") {
-                @if (access.can("POST /api/schedules")) {
-                  <button
-                    type="button"
-                    class="btn-primary"
-                    data-testid="proc-new-schedule-btn"
-                    (click)="openScheduleDialog(null)"
-                  >
-                    New schedule
-                  </button>
-                }
-              }
               @case ("templates") {
                 @if (
                   store.templates().length > 0 && canOpenLaunchTemplateDialog()
@@ -184,16 +234,6 @@ type SuitesPaneView = "suites" | "runs";
                     (click)="openLaunchTemplateDialog(selectedTemplate())"
                   >
                     Launch from template
-                  </button>
-                }
-                @if (access.can("POST /api/templates")) {
-                  <button
-                    type="button"
-                    class="btn-primary"
-                    data-testid="proc-new-template-btn"
-                    (click)="openTemplateDialog(null)"
-                  >
-                    New template
                   </button>
                 }
               }
@@ -211,17 +251,76 @@ type SuitesPaneView = "suites" | "runs";
                     Run suite
                   </button>
                 }
-                @if (access.can("POST /api/suites")) {
-                  <button
-                    type="button"
-                    class="btn-primary"
-                    data-testid="proc-new-suite-btn"
-                    (click)="openSuiteDialog(null)"
-                  >
-                    New suite
-                  </button>
-                }
               }
+            }
+            @if (canCreateAny()) {
+              <div class="pill-dropdown">
+                <button
+                  type="button"
+                  class="btn-primary"
+                  data-testid="proc-new-menu-btn"
+                  aria-haspopup="menu"
+                  [attr.aria-expanded]="openPicker() === 'newMenu'"
+                  (click)="togglePicker('newMenu', $event)"
+                >
+                  New ▾
+                </button>
+                @if (openPicker() === "newMenu") {
+                  <ul
+                    class="pop-menu align-right proc-new-menu"
+                    role="menu"
+                    aria-label="New"
+                    aria-describedby="proc-new-menu-hint"
+                    data-testid="proc-new-menu"
+                  >
+                    @if (access.can("POST /api/schedules")) {
+                      <li role="none">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="proc-new-schedule"
+                          (click)="newProcess('schedule')"
+                        >
+                          Schedule
+                        </button>
+                      </li>
+                    }
+                    @if (access.can("POST /api/templates")) {
+                      <li role="none">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="proc-new-template"
+                          (click)="newProcess('template')"
+                        >
+                          Template
+                        </button>
+                      </li>
+                    }
+                    @if (access.can("POST /api/suites")) {
+                      <li role="none">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          data-testid="proc-new-suite"
+                          (click)="newProcess('suite')"
+                        >
+                          Suite
+                        </button>
+                      </li>
+                    }
+                    <li
+                      role="none"
+                      id="proc-new-menu-hint"
+                      class="proc-new-menu-hint"
+                      data-testid="proc-new-menu-hint"
+                    >
+                      Workflow schedules and triggers are declared in a
+                      repository's <code>.grain/</code>, not created here.
+                    </li>
+                  </ul>
+                }
+              </div>
             }
           </div>
         </div>
@@ -235,6 +334,7 @@ type SuitesPaneView = "suites" | "runs";
             <a
               class="tab-link"
               [routerLink]="['/processes', t.id]"
+              queryParamsHandling="merge"
               [attr.aria-current]="activeTab() === t.id ? 'page' : null"
               [attr.data-testid]="'proc-tab-' + t.id"
               [gTip]="t.tip"
@@ -293,6 +393,9 @@ type SuitesPaneView = "suites" | "runs";
           aria-label="Process items"
           data-testid="proc-list-pane"
         >
+          <p class="sr-only" aria-live="polite" data-testid="proc-move-note">
+            {{ moveNote() }}
+          </p>
           @switch (activeTab()) {
             @case ("schedules") {
               <div
@@ -311,56 +414,144 @@ type SuitesPaneView = "suites" | "runs";
                     {{ sf.label }}
                   </button>
                 }
+                <g-pill-select
+                  class="proc-sort"
+                  prefix="Sort"
+                  [options]="sortOptions()"
+                  [value]="activeSort()"
+                  ariaLabel="Sort"
+                  testid="proc-sort"
+                  (valueChange)="setSort($event)"
+                />
               </div>
-              @if (store.loaded() && filteredSchedules().length === 0) {
+              @if (store.loaded() && scheduleRows().length === 0) {
                 <div class="empty-state" data-testid="schedules-empty">
                   <p>No schedules or event triggers match this view.</p>
                 </div>
               } @else {
                 <ul class="proc-list">
-                  @for (s of filteredSchedules(); track s.id) {
-                    @let badge = schedBadge(s);
-                    <li class="proc-li">
-                      <button
-                        type="button"
-                        class="proc-row"
-                        [class.is-selected]="selectedScheduleId() === s.id"
-                        [attr.aria-current]="
-                          selectedScheduleId() === s.id ? 'true' : null
+                  @for (r of scheduleRows(); track r.key) {
+                    @if (r.trigger; as tr) {
+                      <li
+                        class="proc-li"
+                        [class.is-drop-target]="dropKey() === r.key"
+                        [attr.draggable]="
+                          activeSort() === 'custom' ? 'true' : null
                         "
-                        [attr.data-testid]="'sched-row-' + s.id"
-                        (click)="selectSchedule(s.id, true)"
-                        (keydown.space)="
-                          selectSchedule(s.id, true); $event.preventDefault()
-                        "
+                        (dragstart)="onDragStart($event, r.key)"
+                        (dragover)="onDragOver($event, r.key)"
+                        (dragleave)="onDragLeave(r.key)"
+                        (drop)="onDrop($event, 'schedules', r.key)"
+                        (dragend)="onDragEnd()"
                       >
-                        <div class="proc-row-top">
-                          <span [class]="'status-pill ' + badge.tone">
-                            <g-status-icon
-                              [tone]="badge.tone"
-                              [kind]="badge.iconKind"
-                            />
-                            {{ badge.label }}
-                          </span>
-                          <span class="proc-row-title">{{
-                            s.title || s.templateName || s.suiteName || s.id
-                          }}</span>
-                          @if (isTrigger(s)) {
+                        <a
+                          class="proc-row"
+                          draggable="false"
+                          [routerLink]="repoAdvancedRoute(tr.repo)"
+                          [attr.data-testid]="'trigger-row-' + r.key"
+                          [attr.aria-keyshortcuts]="
+                            activeSort() === 'custom'
+                              ? 'Alt+ArrowUp Alt+ArrowDown'
+                              : null
+                          "
+                          [gTip]="
+                            'Open the Advanced tab of ' +
+                            tr.repo +
+                            ', where its triggers are'
+                          "
+                          (keydown)="onRowKey($event, 'schedules', r.key)"
+                        >
+                          <div class="proc-row-top">
+                            <span class="status-pill reply">
+                              <g-status-icon tone="reply" kind="reply" />
+                              Declared
+                            </span>
+                            <span class="proc-row-title">{{
+                              triggerName(tr.path)
+                            }}</span>
                             <span class="ci-provider-tag">Trigger</span>
-                          }
-                          @if (s.declaredIn) {
                             <span class="ci-provider-tag">.grain</span>
-                          }
-                        </div>
-                        <div class="proc-row-sub">
-                          <span>{{ cadenceOf(s.recurrence, s.timeZone) }}</span>
-                          @if (s.repo) {
-                            <span class="tabular">· {{ s.repo }}</span>
-                          }
-                          <span>· overlap: {{ s.overlap || "skip" }}</span>
-                        </div>
-                      </button>
-                    </li>
+                          </div>
+                          <div class="proc-row-sub">
+                            <span class="tabular">{{ tr.repo }}</span>
+                            <span class="tabular">· {{ tr.path }}</span>
+                            <span>· next: on change</span>
+                          </div>
+                        </a>
+                      </li>
+                    }
+                    @if (r.schedule; as s) {
+                      @let badge = schedBadge(s);
+                      <li
+                        class="proc-li"
+                        [class.is-drop-target]="
+                          dropKey() === 'schedule:' + s.id
+                        "
+                        [attr.draggable]="
+                          activeSort() === 'custom' ? 'true' : null
+                        "
+                        (dragstart)="onDragStart($event, 'schedule:' + s.id)"
+                        (dragover)="onDragOver($event, 'schedule:' + s.id)"
+                        (dragleave)="onDragLeave('schedule:' + s.id)"
+                        (drop)="onDrop($event, 'schedules', 'schedule:' + s.id)"
+                        (dragend)="onDragEnd()"
+                      >
+                        <button
+                          type="button"
+                          class="proc-row"
+                          [class.is-selected]="selectedScheduleId() === s.id"
+                          [attr.aria-current]="
+                            selectedScheduleId() === s.id ? 'true' : null
+                          "
+                          [attr.data-testid]="'sched-row-' + s.id"
+                          [attr.aria-keyshortcuts]="
+                            activeSort() === 'custom'
+                              ? 'Alt+ArrowUp Alt+ArrowDown'
+                              : null
+                          "
+                          (click)="selectSchedule(s.id, true)"
+                          (keydown)="
+                            onRowKey($event, 'schedules', 'schedule:' + s.id)
+                          "
+                          (keydown.space)="
+                            selectSchedule(s.id, true); $event.preventDefault()
+                          "
+                        >
+                          <div class="proc-row-top">
+                            <span [class]="'status-pill ' + badge.tone">
+                              <g-status-icon
+                                [tone]="badge.tone"
+                                [kind]="badge.iconKind"
+                              />
+                              {{ badge.label }}
+                            </span>
+                            <span class="proc-row-title">{{
+                              s.title || s.templateName || s.suiteName || s.id
+                            }}</span>
+                            @if (isTrigger(s)) {
+                              <span class="ci-provider-tag">Trigger</span>
+                            }
+                            @if (s.declaredIn) {
+                              <span class="ci-provider-tag">.grain</span>
+                            }
+                          </div>
+                          <div class="proc-row-sub">
+                            <span>{{
+                              cadenceOf(s.recurrence, s.timeZone)
+                            }}</span>
+                            @if (s.repo) {
+                              <span class="tabular">· {{ s.repo }}</span>
+                            }
+                            @if (schedNextRunOf(s); as nr) {
+                              <span class="tabular"
+                                >· next: {{ stamp(nr) }}</span
+                              >
+                            }
+                            <span>· overlap: {{ s.overlap || "skip" }}</span>
+                          </div>
+                        </button>
+                      </li>
+                    }
                   }
                 </ul>
               }
@@ -383,6 +574,15 @@ type SuitesPaneView = "suites" | "runs";
                     {{ tf.label }}
                   </button>
                 }
+                <g-pill-select
+                  class="proc-sort"
+                  prefix="Sort"
+                  [options]="sortOptions()"
+                  [value]="activeSort()"
+                  ariaLabel="Sort"
+                  testid="proc-sort"
+                  (valueChange)="setSort($event)"
+                />
               </div>
               @if (store.loaded() && filteredTemplates().length === 0) {
                 <div class="empty-state" data-testid="templates-empty">
@@ -390,9 +590,21 @@ type SuitesPaneView = "suites" | "runs";
                 </div>
               } @else {
                 <ul class="proc-list">
-                  @for (t of filteredTemplates(); track t.id) {
+                  @for (t of sortedTemplates(); track t.id) {
                     @let badge = tmplBadge(t);
-                    <li class="proc-li">
+                    @let runs = templateRuns().get(t.id) ?? noRuns;
+                    <li
+                      class="proc-li"
+                      [class.is-drop-target]="dropKey() === 'template:' + t.id"
+                      [attr.draggable]="
+                        activeSort() === 'custom' ? 'true' : null
+                      "
+                      (dragstart)="onDragStart($event, 'template:' + t.id)"
+                      (dragover)="onDragOver($event, 'template:' + t.id)"
+                      (dragleave)="onDragLeave('template:' + t.id)"
+                      (drop)="onDrop($event, 'templates', 'template:' + t.id)"
+                      (dragend)="onDragEnd()"
+                    >
                       <button
                         type="button"
                         class="proc-row"
@@ -401,7 +613,15 @@ type SuitesPaneView = "suites" | "runs";
                           selectedTemplateId() === t.id ? 'true' : null
                         "
                         [attr.data-testid]="'tmpl-row-' + t.id"
+                        [attr.aria-keyshortcuts]="
+                          activeSort() === 'custom'
+                            ? 'Alt+ArrowUp Alt+ArrowDown'
+                            : null
+                        "
                         (click)="selectTemplate(t.id, true)"
+                        (keydown)="
+                          onRowKey($event, 'templates', 'template:' + t.id)
+                        "
                         (keydown.space)="
                           selectTemplate(t.id, true); $event.preventDefault()
                         "
@@ -418,9 +638,9 @@ type SuitesPaneView = "suites" | "runs";
                             t.name || t.title || t.id
                           }}</span>
                           @if ((t.fields ?? []).length > 0) {
-                            <span class="ci-provider-tag tabular"
-                              >{{ (t.fields ?? []).length }} params</span
-                            >
+                            <span class="ci-provider-tag tabular">{{
+                              countOf((t.fields ?? []).length, "param")
+                            }}</span>
                           }
                         </div>
                         <div class="proc-row-sub">
@@ -434,6 +654,23 @@ type SuitesPaneView = "suites" | "runs";
                           } @else if (t.repo) {
                             <span class="tabular">· bound to {{ t.repo }}</span>
                           }
+                          @if (runs.lastRunAt; as lr) {
+                            <span
+                              class="tabular"
+                              [attr.data-testid]="'tmpl-last-' + t.id"
+                              >· last: {{ stamp(lr) }}</span
+                            >
+                          }
+                          <span
+                            class="tabular"
+                            [attr.data-testid]="'tmpl-next-' + t.id"
+                            >·
+                            {{
+                              runs.nextRunAt
+                                ? "next: " + stamp(runs.nextRunAt)
+                                : "on demand"
+                            }}</span
+                          >
                         </div>
                       </button>
                     </li>
@@ -462,6 +699,17 @@ type SuitesPaneView = "suites" | "runs";
                     Suite runs ({{ filteredSuiteRuns().length }})
                   </button>
                 </div>
+                @if (suitesView() === "suites") {
+                  <g-pill-select
+                    class="proc-sort"
+                    prefix="Sort"
+                    [options]="sortOptions()"
+                    [value]="activeSort()"
+                    ariaLabel="Sort"
+                    testid="proc-sort"
+                    (valueChange)="setSort($event)"
+                  />
+                }
               </div>
 
               @if (suitesView() === "suites") {
@@ -471,8 +719,20 @@ type SuitesPaneView = "suites" | "runs";
                   </div>
                 } @else {
                   <ul class="proc-list">
-                    @for (st of filteredSuites(); track st.id) {
-                      <li class="proc-li">
+                    @for (st of sortedSuites(); track st.id) {
+                      @let runs = suiteRunsById().get(st.id) ?? noRuns;
+                      <li
+                        class="proc-li"
+                        [class.is-drop-target]="dropKey() === 'suite:' + st.id"
+                        [attr.draggable]="
+                          activeSort() === 'custom' ? 'true' : null
+                        "
+                        (dragstart)="onDragStart($event, 'suite:' + st.id)"
+                        (dragover)="onDragOver($event, 'suite:' + st.id)"
+                        (dragleave)="onDragLeave('suite:' + st.id)"
+                        (drop)="onDrop($event, 'suites', 'suite:' + st.id)"
+                        (dragend)="onDragEnd()"
+                      >
                         <button
                           type="button"
                           class="proc-row"
@@ -487,7 +747,15 @@ type SuitesPaneView = "suites" | "runs";
                               : null
                           "
                           [attr.data-testid]="'suite-row-' + st.id"
+                          [attr.aria-keyshortcuts]="
+                            activeSort() === 'custom'
+                              ? 'Alt+ArrowUp Alt+ArrowDown'
+                              : null
+                          "
                           (click)="selectSuite(st.id, true)"
+                          (keydown)="
+                            onRowKey($event, 'suites', 'suite:' + st.id)
+                          "
                           (keydown.space)="
                             selectSuite(st.id, true); $event.preventDefault()
                           "
@@ -503,15 +771,32 @@ type SuitesPaneView = "suites" | "runs";
                             }
                           </div>
                           <div class="proc-row-sub">
-                            <span class="tabular"
-                              >{{ st.items.length }} templates</span
-                            >
+                            <span class="tabular">{{
+                              countOf(st.items.length, "template")
+                            }}</span>
                             @if (st.autoMerge) {
                               <span>· auto-merge</span>
                             }
                             @if (st.requireApproval) {
                               <span>· requires approval</span>
                             }
+                            @if (runs.lastRunAt; as lr) {
+                              <span
+                                class="tabular"
+                                [attr.data-testid]="'suite-last-' + st.id"
+                                >· last: {{ stamp(lr) }}</span
+                              >
+                            }
+                            <span
+                              class="tabular"
+                              [attr.data-testid]="'suite-next-' + st.id"
+                              >·
+                              {{
+                                runs.nextRunAt
+                                  ? "next: " + stamp(runs.nextRunAt)
+                                  : "on demand"
+                              }}</span
+                            >
                           </div>
                         </button>
                       </li>
@@ -563,12 +848,16 @@ type SuitesPaneView = "suites" | "runs";
                           <div class="proc-row-sub">
                             <span class="tabular"
                               >{{ sr.repo }} &#64;
-                              {{ sr.base || "default" }}</span
+                              {{ sr.base || "default branch" }}</span
                             >
                             <span class="tabular"
                               >·
-                              {{ sr.taskCount ?? sr.tasks?.length ?? 0 }}
-                              tasks</span
+                              {{
+                                countOf(
+                                  sr.taskCount ?? sr.tasks?.length ?? 0,
+                                  "task"
+                                )
+                              }}</span
                             >
                           </div>
                         </button>
@@ -718,7 +1007,10 @@ type SuitesPaneView = "suites" | "runs";
                           access.deniedReason(
                             'POST /api/schedules/{id}/run',
                             s.repo
-                          ) || 'Fire this schedule immediately.'
+                          ) ||
+                          (s.type === 'workflow'
+                            ? 'Starts a CI run of the declared workflow straight away, to be reviewed when it finishes.'
+                            : 'Fire this schedule immediately.')
                         "
                         (click)="runScheduleNow(s)"
                       >
@@ -772,29 +1064,6 @@ type SuitesPaneView = "suites" | "runs";
                     </div>
                   </div>
 
-                  <div class="proc-meta-row">
-                    <g-actor-chip
-                      [label]="s.source || 'deployment'"
-                      [kind]="s.system ? 'grain' : 'service'"
-                    />
-                    <span>{{ cadenceOf(s.recurrence, s.timeZone) }}</span>
-                    @if (s.repo) {
-                      <span class="tabular"
-                        >Repo: <strong>{{ s.repo }}</strong>
-                        {{ s.base ? "@ " + s.base : "" }}</span
-                      >
-                    }
-                    <span
-                      >Overlap: <strong>{{ s.overlap || "skip" }}</strong></span
-                    >
-                    @if (s.nextRunAt) {
-                      <span class="tabular">Next: {{ s.nextRunAt }}</span>
-                    }
-                    @if (s.lastRunAt) {
-                      <span class="tabular">Last: {{ s.lastRunAt }}</span>
-                    }
-                  </div>
-
                   @if (s.declaredIn) {
                     <p class="banner banner-info" style="margin: 6px 0 0">
                       Declared in <code>{{ s.declaredIn.repo }}</code> at
@@ -803,9 +1072,16 @@ type SuitesPaneView = "suites" | "runs";
                     </p>
                   }
                   @if (s.suppressed; as sup) {
-                    <div class="banner banner-error" style="margin: 6px 0 0">
-                      Suppressed ({{ sup.reason }}):
-                      {{ sup.detail || "Previous firing is still open." }}
+                    <div
+                      class="banner banner-error"
+                      style="margin: 6px 0 0"
+                      data-testid="sched-suppressed-banner"
+                    >
+                      <!-- The server's Detail sentence follows the reason
+                           when it sent one; without one the reason stands
+                           alone rather than borrowing another reason's. -->
+                      Suppressed — {{ suppressionLabel(sup.reason)
+                      }}{{ sup.detail ? ": " + sup.detail : "." }}
                       @if (sup.taskId) {
                         —
                         <a [routerLink]="['/task', sup.taskId]"
@@ -816,12 +1092,101 @@ type SuitesPaneView = "suites" | "runs";
                   }
                 </div>
 
-                @if (s.description) {
-                  <div class="proc-card">
-                    <h3 class="section-title">Prompt / instructions</h3>
-                    <div class="proc-prompt-well">{{ s.description }}</div>
-                  </div>
-                }
+                <div class="g-panes">
+                  <section
+                    class="g-pane"
+                    aria-labelledby="sched-prompt-h"
+                    data-testid="sched-prompt-pane"
+                  >
+                    <h3 id="sched-prompt-h" class="g-pane-title">Prompt</h3>
+                    @if (s.description) {
+                      <div
+                        class="msg-body g-pane-prompt"
+                        data-testid="sched-prompt"
+                        [gMarkdown]="s.description"
+                      ></div>
+                    } @else {
+                      <p class="g-pane-empty">
+                        No prompt of its own{{
+                          s.templateName || s.suiteName
+                            ? " — it files from " +
+                              (s.templateName || s.suiteName)
+                            : ""
+                        }}.
+                      </p>
+                    }
+                  </section>
+                  <section
+                    class="g-pane"
+                    aria-labelledby="sched-config-h"
+                    data-testid="sched-config-pane"
+                  >
+                    <h3 id="sched-config-h" class="g-pane-title">
+                      Configuration
+                    </h3>
+                    <dl class="g-attrs">
+                      <dt>Source</dt>
+                      <dd>
+                        <g-actor-chip
+                          [label]="
+                            s.type === 'workflow'
+                              ? 'workflow'
+                              : s.source || 'deployment'
+                          "
+                          [kind]="
+                            s.system && s.type !== 'workflow'
+                              ? 'grain'
+                              : 'service'
+                          "
+                        />
+                      </dd>
+                      <dt>Cadence</dt>
+                      <dd>{{ cadenceOf(s.recurrence, s.timeZone) }}</dd>
+                      @if (s.templateName || s.templateId) {
+                        <dt>Template</dt>
+                        <dd>{{ s.templateName || s.templateId }}</dd>
+                      }
+                      @if (s.suiteName || s.suiteId) {
+                        <dt>Suite</dt>
+                        <dd>{{ s.suiteName || s.suiteId }}</dd>
+                      }
+                      <dt>Repository</dt>
+                      <dd class="tabular">{{ s.repo || "None" }}</dd>
+                      @if (s.base) {
+                        <dt>Base</dt>
+                        <dd class="tabular">{{ s.base }}</dd>
+                      }
+                      @if (s.model) {
+                        <dt>Model</dt>
+                        <dd>{{ s.model }}</dd>
+                      }
+                      <dt>Overlap</dt>
+                      <dd>{{ s.overlap || "skip" }}</dd>
+                      @if (s.overlapGroup) {
+                        <dt>Overlap group</dt>
+                        <dd data-testid="sched-overlap-group">
+                          {{ s.overlapGroup }}
+                        </dd>
+                      }
+                      <dt>Auto-merge</dt>
+                      <dd>{{ s.autoMerge ? "on" : "off" }}</dd>
+                      <!-- An event trigger's nextRunAt is a placeholder a year
+                           out (model.Schedule); schedNextRunOf labels it. -->
+                      @if (schedNextRunOf(s); as nr) {
+                        <dt>Next run</dt>
+                        <dd class="tabular" data-testid="sched-next-run">
+                          {{ stamp(nr) }}
+                        </dd>
+                      }
+                      @if (s.lastRunAt) {
+                        <dt>Last run</dt>
+                        <dd class="tabular" data-testid="sched-last-run">
+                          {{ stamp(s.lastRunAt) }}
+                        </dd>
+                      }
+                    </dl>
+                  </section>
+                </div>
 
                 <g-composition-view [composition]="scheduleComposition()" />
 
@@ -864,13 +1229,35 @@ type SuitesPaneView = "suites" | "runs";
                     </p>
                   }
                   @for (sk of (s.skips ?? []).slice(0, 5); track sk.at) {
-                    <div class="proc-kv-item">
+                    <div
+                      class="proc-kv-item proc-skip-row"
+                      data-testid="sched-skip"
+                    >
                       <span class="muted">{{ sk.summary }}</span>
-                      @if (sk.taskId) {
-                        <a [routerLink]="['/task', sk.taskId]"
-                          >#{{ sk.taskId }}</a
-                        >
-                      }
+                      <span class="proc-skip-refs">
+                        @if (sk.taskId) {
+                          <a [routerLink]="['/task', sk.taskId]"
+                            >#{{ sk.taskId }}</a
+                          >
+                        }
+                        @if (sk.outcome === "fired") {
+                          <span data-testid="sched-skip-outcome">
+                            → fired
+                            @if (sk.firedTaskId) {
+                              <a [routerLink]="['/task', sk.firedTaskId]"
+                                >#{{ sk.firedTaskId }}</a
+                              >
+                            }
+                            @if (skipFolded(sk); as folded) {
+                              · {{ folded }}
+                            }
+                          </span>
+                        } @else if (sk.outcome === "dropped") {
+                          <span data-testid="sched-skip-outcome"
+                            >→ dropped</span
+                          >
+                        }
+                      </span>
                     </div>
                   }
                 </div>
@@ -945,26 +1332,6 @@ type SuitesPaneView = "suites" | "runs";
                     </div>
                   </div>
 
-                  <div class="proc-meta-row">
-                    <g-actor-chip
-                      [label]="
-                        t.declaredIn?.repo ||
-                        (t.system ? 'grain' : 'deployment')
-                      "
-                      [kind]="t.system ? 'grain' : 'service'"
-                    />
-                    <span
-                      >Task title: <strong>{{ t.title }}</strong></span
-                    >
-                    @if (t.repo) {
-                      <span class="tabular"
-                        >Bound to {{ t.repo
-                        }}{{ t.base ? " @ " + t.base : "" }}</span
-                      >
-                    }
-                    <span>Auto-merge: {{ t.autoMerge ? "on" : "off" }}</span>
-                  </div>
-
                   @if (t.declaredIn) {
                     <p
                       class="banner banner-info"
@@ -979,6 +1346,68 @@ type SuitesPaneView = "suites" | "runs";
                       <code>POST /api/tasks/from-template</code>.
                     </p>
                   }
+                </div>
+
+                <div class="g-panes">
+                  <section
+                    class="g-pane"
+                    aria-labelledby="tmpl-prompt-h"
+                    data-testid="tmpl-prompt-pane"
+                  >
+                    <h3 id="tmpl-prompt-h" class="g-pane-title">Prompt</h3>
+                    @if (t.description) {
+                      <div
+                        class="msg-body g-pane-prompt"
+                        data-testid="tmpl-prompt-preview"
+                        [gMarkdown]="t.description"
+                      ></div>
+                    } @else {
+                      <p class="g-pane-empty" data-testid="tmpl-prompt-preview">
+                        Empty prompt body.
+                      </p>
+                    }
+                  </section>
+                  <section
+                    class="g-pane"
+                    aria-labelledby="tmpl-config-h"
+                    data-testid="tmpl-config-pane"
+                  >
+                    <h3 id="tmpl-config-h" class="g-pane-title">
+                      Configuration
+                    </h3>
+                    <dl class="g-attrs">
+                      <dt>Source</dt>
+                      <dd>
+                        <g-actor-chip
+                          [label]="
+                            t.declaredIn?.repo ||
+                            (t.system ? 'grain' : 'deployment')
+                          "
+                          [kind]="t.system ? 'grain' : 'service'"
+                        />
+                      </dd>
+                      <dt>Task title</dt>
+                      <dd>{{ t.title }}</dd>
+                      <dt>Repository</dt>
+                      <dd class="tabular">
+                        {{ t.repo || "Chosen at launch" }}
+                      </dd>
+                      @if (t.base) {
+                        <dt>Base</dt>
+                        <dd class="tabular">{{ t.base }}</dd>
+                      }
+                      @if (t.model) {
+                        <dt>Model</dt>
+                        <dd>{{ t.model }}</dd>
+                      }
+                      @if (t.priority) {
+                        <dt>Priority</dt>
+                        <dd class="tabular">{{ t.priority }}</dd>
+                      }
+                      <dt>Auto-merge</dt>
+                      <dd>{{ t.autoMerge ? "on" : "off" }}</dd>
+                    </dl>
+                  </section>
                 </div>
 
                 @if ((t.fields ?? []).length > 0) {
@@ -1014,16 +1443,6 @@ type SuitesPaneView = "suites" | "runs";
                     </ul>
                   </div>
                 }
-
-                <div class="proc-card">
-                  <h3 class="section-title">Prompt preview</h3>
-                  <div
-                    class="proc-prompt-well"
-                    data-testid="tmpl-prompt-preview"
-                  >
-                    {{ t.description || "(empty prompt body)" }}
-                  </div>
-                </div>
 
                 <g-composition-view [composition]="templateComposition()" />
               } @else {
@@ -1088,7 +1507,7 @@ type SuitesPaneView = "suites" | "runs";
                   <div class="proc-meta-row">
                     <span class="tabular"
                       >Target: <strong>{{ sr.repo }}</strong> &#64;
-                      {{ sr.base || "default" }}</span
+                      {{ sr.base || "default branch" }}</span
                     >
                     <span
                       >{{ suiteModeOf(sr.mode, sr.count, sr.maxPasses) }}
@@ -1126,7 +1545,7 @@ type SuitesPaneView = "suites" | "runs";
                     <h3 class="section-title">
                       Pass {{ p.pass }}
                       <span class="muted tabular"
-                        >({{ p.items.length }} tasks)</span
+                        >({{ countOf(p.items.length, "task") }})</span
                       >
                     </h3>
                     <ul class="proc-kv-list">
@@ -1278,7 +1697,8 @@ type SuitesPaneView = "suites" | "runs";
                             (click)="selectSuiteRun(r.id, true)"
                           >
                             Run #{{ r.id }} · {{ r.repo }} &#64;
-                            {{ r.base }} (pass {{ r.pass }})
+                            {{ r.base || "default branch"
+                            }}{{ r.pass > 0 ? " (pass " + r.pass + ")" : "" }}
                           </button>
                           <span class="ci-provider-tag">{{ r.status }}</span>
                         </li>
@@ -1317,7 +1737,7 @@ type SuitesPaneView = "suites" | "runs";
                           type="button"
                           role="switch"
                           class="g-switch"
-                          aria-label="Sync .grain/ declarations"
+                          attr.aria-label="Read {{ repo }}'s own declarations"
                           data-testid="decl-toggle-switch"
                           [disabled]="
                             !access.can(
@@ -1330,7 +1750,9 @@ type SuitesPaneView = "suites" | "runs";
                             toggleRepoDeclarations(repo, !def.declarations)
                           "
                         ></button>
-                        <span>Sync <code>.grain/</code> declarations</span>
+                        <span
+                          >Read its own <code>.grain/</code> declarations</span
+                        >
                       </div>
                     }
                   </div>
@@ -1346,7 +1768,7 @@ type SuitesPaneView = "suites" | "runs";
                     }
                     @if (status?.checkedAt) {
                       <span class="tabular"
-                        >Checked: {{ status!.checkedAt }}</span
+                        >Checked: {{ stamp(status!.checkedAt!) }}</span
                       >
                     }
                   </div>
@@ -1354,7 +1776,7 @@ type SuitesPaneView = "suites" | "runs";
                   @if (status?.error) {
                     <p
                       class="banner banner-error"
-                      style="margin: 6px 0 0"
+                      style="margin: 6px 0 0; white-space: pre-line"
                       data-testid="decl-sync-error"
                     >
                       Sync / validation error: {{ status!.error }}
@@ -1442,7 +1864,12 @@ type SuitesPaneView = "suites" | "runs";
                     }
                     @for (p of status?.triggers ?? []; track p) {
                       <li class="proc-kv-item">
-                        <code class="tabular">{{ p }}</code>
+                        <a
+                          class="tabular"
+                          [routerLink]="repoAdvancedRoute(repo)"
+                          [attr.data-testid]="'decl-trigger-link-' + p"
+                          ><code>{{ p }}</code></a
+                        >
                         <span class="ci-provider-tag">trigger</span>
                       </li>
                     }
@@ -1765,9 +2192,9 @@ type SuitesPaneView = "suites" | "runs";
               <span>Every N minutes</span>
               <input
                 type="number"
-                min="5"
+                min="10"
                 [value]="sDraftEveryMin()"
-                (input)="sDraftEveryMin.set(+$any($event.target).value || 15)"
+                (input)="sDraftEveryMin.set(+$any($event.target).value)"
               />
             </label>
           } @else if (sDraftKind() === "everyNHours") {
@@ -1948,6 +2375,17 @@ type SuitesPaneView = "suites" | "runs";
           }
         }
 
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2092,6 +2530,17 @@ type SuitesPaneView = "suites" | "runs";
           }
         }
 
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button type="button" class="btn-text" (click)="closeLaunchDialog()">
             Cancel
@@ -2247,6 +2696,17 @@ type SuitesPaneView = "suites" | "runs";
           ></button>
           <span>Auto-merge passing pull requests</span>
         </div>
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2326,9 +2786,11 @@ type SuitesPaneView = "suites" | "runs";
             <input
               type="number"
               min="1"
+              [attr.max]="maxSuitePasses"
+              step="1"
               data-testid="suite-count-input"
               [value]="stDraftCount()"
-              (input)="stDraftCount.set(+$any($event.target).value || 1)"
+              (input)="stDraftCount.set(+$any($event.target).value)"
             />
           </label>
         } @else {
@@ -2337,9 +2799,11 @@ type SuitesPaneView = "suites" | "runs";
             <input
               type="number"
               min="1"
+              [attr.max]="maxSuitePasses"
+              step="1"
               data-testid="suite-max-passes-input"
               [value]="stDraftMaxPasses()"
-              (input)="stDraftMaxPasses.set(+$any($event.target).value || 3)"
+              (input)="stDraftMaxPasses.set(+$any($event.target).value)"
             />
           </label>
         }
@@ -2407,6 +2871,17 @@ type SuitesPaneView = "suites" | "runs";
           </div>
         }
 
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2497,6 +2972,17 @@ type SuitesPaneView = "suites" | "runs";
             (input)="runSuiteBase.set($any($event.target).value)"
           />
         </label>
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           <button
             type="button"
@@ -2556,6 +3042,17 @@ type SuitesPaneView = "suites" | "runs";
             (input)="wfEditorText.set($any($event.target).value)"
           ></textarea>
         </label>
+        <!-- Beside the actions, so a refused save is in view where the
+             Save was pressed, on a phone as on a desktop. -->
+        @if (dialogError(); as derr) {
+          <p
+            class="banner banner-error dialog-error"
+            role="alert"
+            data-testid="proc-dialog-error"
+          >
+            {{ derr }}
+          </p>
+        }
         <div class="dialog-actions">
           @if (wfEditorOriginalPath() && canEditWorkflow()) {
             <button
@@ -2600,11 +3097,19 @@ type SuitesPaneView = "suites" | "runs";
 })
 export class ProcessesPageComponent implements OnInit, OnDestroy {
   readonly tab = input<string | undefined>(undefined);
+  readonly itemId = input<string | undefined>(undefined);
+  readonly runId = input<string | undefined>(undefined);
+  readonly kind = input<string | undefined>(undefined);
+  readonly q = input<string | undefined>(undefined);
+  readonly sort = input<string | undefined>(undefined);
   readonly new = input<string | undefined>(undefined);
   readonly launch = input<string | undefined>(undefined);
   readonly launchTemplate = input<string | undefined>(undefined);
   readonly run = input<string | undefined>(undefined);
   readonly runSuite = input<string | undefined>(undefined);
+  // ?repo=owner/name on the declarations tab opens that repository's
+  // .grain/ declarations: Settings → Repositories links each row here.
+  readonly repo = input<string | undefined>(undefined);
 
   protected readonly store = inject(ProcessesStore);
   protected readonly access = inject(AccessService);
@@ -2614,6 +3119,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
+  private readonly injector = inject(Injector);
 
   private readonly onCaptureKeydown = (ev: KeyboardEvent): void => {
     if (ev.key === "Escape" && this.openPicker()) {
@@ -2652,6 +3158,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly selectedSuiteRunId = signal<number | null>(null);
   protected readonly selectedDeclRepo = signal<string | null>(null);
   protected readonly mobileDetailOpen = signal(false);
+  private handledRepoLinkKey = "";
 
   protected readonly scheduleComposition = signal<Composition | null>(null);
   protected readonly templateComposition = signal<Composition | null>(null);
@@ -2659,6 +3166,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected readonly openPicker = signal<string | null>(null);
   protected readonly submitting = signal(false);
+  protected readonly dialogError = signal<string | null>(null);
   protected readonly confirming = signal<ConfirmRequest | null>(null);
 
   // Schedule dialog state
@@ -2718,6 +3226,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected readonly stDraftMode = signal("count");
   protected readonly stDraftCount = signal(1);
   protected readonly stDraftMaxPasses = signal(3);
+  // model.MaxSuitePasses: the most passes a suite may run.
+  protected readonly maxSuitePasses = 100;
   protected readonly stDraftTemplateIds = signal<string[]>([]);
   protected readonly stDraftRequireApproval = signal(false);
   protected readonly stDraftAutoMerge = signal(true);
@@ -2746,6 +3256,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   });
 
   protected readonly activeTab = computed<ProcessTab>(() => {
+    if (this.runId()) return "suites";
     const raw = (this.tab() || "").toLowerCase();
     if (
       raw === "templates" ||
@@ -2755,6 +3266,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     ) {
       return raw;
     }
+    const k = (this.kind() || "").split(",")[0]?.trim().toLowerCase() || "";
+    if (k === "template" || k === "templates") return "templates";
+    if (k === "suite" || k === "suites") return "suites";
+    if (k === "declaration" || k === "declarations") return "declarations";
     return "schedules";
   });
 
@@ -2849,6 +3364,131 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       .filter((r) => !q || r.toLowerCase().includes(q));
   });
 
+  // ?sort= names the order; with none the list is in its custom order,
+  // which is name order until somebody moves a row.
+  // Suites have no kinds, so a Kind sort carried onto their tab reads as
+  // the custom order it falls back to.
+  protected readonly activeSort = computed<ProcessSort>(() => {
+    const sort = parseProcessSort(this.sort());
+    return sort === "kind" && this.activeTab() === "suites" ? "custom" : sort;
+  });
+  protected readonly customOrder = signal<string[]>(loadOrder());
+  protected readonly noRuns = NO_RUNS;
+  protected readonly moveNote = signal("");
+  protected readonly dropKey = signal<string | null>(null);
+  private dragKey: string | null = null;
+
+  protected readonly sortOptions = computed<PillOption[]>(() =>
+    PROCESS_SORTS.filter(
+      (o) => o.id !== "kind" || this.activeTab() !== "suites",
+    ).map((o) => ({ value: o.id, label: o.label })),
+  );
+
+  protected readonly templateRuns = computed(() => {
+    const scheds = this.store.schedules();
+    return new Map(
+      this.store
+        .templates()
+        .map((t) => [t.id, derivedRuns(scheds, "templateId", t.id)] as const),
+    );
+  });
+
+  protected readonly suiteRunsById = computed(() => {
+    const scheds = this.store.schedules();
+    const runs = this.store.suiteRuns();
+    return new Map(
+      this.store
+        .suites()
+        .map(
+          (st) => [st.id, derivedRuns(scheds, "suiteId", st.id, runs)] as const,
+        ),
+    );
+  });
+
+  // A declared trigger is listed beside the schedules, as the classic
+  // page lists it: under All and Event triggers, never paused or
+  // suppressed, and with nothing to run until its files change.
+  protected readonly filteredTriggers = computed(() => {
+    const f = this.schedFilter();
+    if (f !== "all" && f !== "triggers") return [];
+    const q = this.filter.query().trim().toLowerCase();
+    return this.store
+      .triggers()
+      .filter((t) => !q || `${t.repo} ${t.path}`.toLowerCase().includes(q));
+  });
+
+  protected readonly scheduleRows = computed(() =>
+    sortProcessRows<SchedTabRow>(
+      [
+        ...this.filteredSchedules().map((s) => ({
+          key: `schedule:${s.id}`,
+          name: s.title || s.templateName || s.suiteName || s.id,
+          kind: scheduleKindOf(s),
+          lastRunAt: s.lastRunAt || null,
+          nextRunAt:
+            s.enabled && !s.suppressed && !isEventTrigger(s)
+              ? s.nextRunAt || null
+              : null,
+          item: { key: `schedule:${s.id}`, schedule: s },
+        })),
+        ...this.filteredTriggers().map((t) => {
+          const key = `trigger:${t.repo}:${t.path}`;
+          return {
+            key,
+            name: triggerName(t.path),
+            kind: "trigger",
+            lastRunAt: null,
+            nextRunAt: null,
+            item: { key, trigger: t },
+          };
+        }),
+      ],
+      this.activeSort(),
+      this.customOrder(),
+    ).map((r) => r.item),
+  );
+
+  protected readonly sortedSchedules = computed(() =>
+    this.scheduleRows().flatMap((r) => (r.schedule ? [r.schedule] : [])),
+  );
+
+  protected readonly sortedTemplates = computed(() => {
+    const runs = this.templateRuns();
+    return sortProcessRows(
+      this.filteredTemplates().map((t) => ({
+        key: `template:${t.id}`,
+        name: t.name || t.title || t.id,
+        kind: templateSourceBadge(t).label,
+        ...(runs.get(t.id) ?? NO_RUNS),
+        item: t,
+      })),
+      this.activeSort(),
+      this.customOrder(),
+    ).map((r) => r.item);
+  });
+
+  protected readonly sortedSuites = computed(() => {
+    const runs = this.suiteRunsById();
+    return sortProcessRows(
+      this.filteredSuites().map((st) => ({
+        key: `suite:${st.id}`,
+        name: st.name || st.id,
+        kind: "suite",
+        ...(runs.get(st.id) ?? NO_RUNS),
+        item: st,
+      })),
+      this.activeSort(),
+      this.customOrder(),
+    ).map((r) => r.item);
+  });
+
+  protected readonly canCreateAny = computed(
+    () =>
+      this.access.can("POST /api/schedules") ||
+      this.access.can("POST /api/templates") ||
+      this.access.can("POST /api/suites"),
+  );
+
   protected readonly selectedSchedule = computed(() => {
     const id = this.selectedScheduleId();
     return this.store.schedules().find((s) => s.id === id) ?? null;
@@ -2884,20 +3524,104 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   });
 
   private handledDeepLinkKey = "";
+  private handledItemLinkKey = "";
 
   constructor() {
     afterNextRender(() => this.sp.attach());
+
+    // ?q= (a shared link, a reload, Back and Forward) fills the "Filter
+    // this view" box, and what is typed there goes back into ?q=, the way
+    // the Tasks page keeps it. While one of this page's own ?q= writes is
+    // in flight, the ?q= it passes through is an echo of what was typed,
+    // possibly already overtaken by the next keystroke, so it must not
+    // refill the box.
+    let writingQ = 0;
+    effect(() => {
+      const q = this.q() ?? "";
+      untracked(() => {
+        if (writingQ === 0 && q !== this.filter.query()) {
+          this.filter.query.set(q);
+        }
+      });
+    });
+    effect(() => {
+      const typed = this.filter.query();
+      untracked(() => {
+        if (typed === (this.q() ?? "")) return;
+        writingQ++;
+        void this.router
+          .navigate([], {
+            queryParams: { q: typed || null },
+            queryParamsHandling: "merge",
+            replaceUrl: true,
+          })
+          .finally(() => writingQ--);
+      });
+    });
+
+    // Select addressed item (:itemId or :runId) once store data loads.
+    effect(() => {
+      const loaded = this.store.loaded();
+      const tab = this.activeTab();
+      const item = this.itemId();
+      const run = this.runId();
+      const key = `${loaded}:${tab}:${item ?? ""}:${run ?? ""}`;
+      untracked(() => {
+        if (!loaded) return;
+        if (!item && !run) {
+          this.handledItemLinkKey = "";
+          return;
+        }
+        if (key === this.handledItemLinkKey) return;
+        this.handledItemLinkKey = key;
+        if (run) {
+          this.suitesView.set("runs");
+          const parsed = Number(run);
+          if (
+            Number.isFinite(parsed) &&
+            parsed > 0 &&
+            this.store.suiteRuns().some((r) => r.id === parsed)
+          ) {
+            this.selectSuiteRun(parsed, true);
+          } else {
+            this.store.actionError.set(`No suite run "${run}".`);
+          }
+          return;
+        }
+        if (!item) return;
+        if (tab === "schedules") {
+          if (this.store.schedules().some((s) => s.id === item)) {
+            this.selectSchedule(item, true);
+          } else {
+            this.store.actionError.set(`No schedule "${item}".`);
+          }
+        } else if (tab === "templates") {
+          if (this.store.templates().some((t) => t.id === item)) {
+            this.selectTemplate(item, true);
+          } else {
+            this.store.actionError.set(`No template "${item}".`);
+          }
+        } else if (tab === "suites") {
+          this.suitesView.set("suites");
+          if (this.store.suites().some((s) => s.id === item)) {
+            this.selectSuite(item, true);
+          } else {
+            this.store.actionError.set(`No suite "${item}".`);
+          }
+        }
+      });
+    });
 
     // Auto-select top item per tab on desktop when data loads.
     effect(() => {
       const tab = this.activeTab();
       const loaded = this.store.loaded();
-      const scheds = this.filteredSchedules();
-      const tmpls = this.filteredTemplates();
-      const suites = this.filteredSuites();
+      const scheds = this.sortedSchedules();
+      const tmpls = this.sortedTemplates();
+      const suites = this.sortedSuites();
       const repos = this.filteredDeclRepos();
       untracked(() => {
-        if (!loaded) return;
+        if (!loaded || this.itemId() || this.runId()) return;
         const isDesktop = (this.doc.defaultView?.innerWidth ?? 1280) >= 600;
         if (!isDesktop) return;
         if (tab === "schedules" && !this.selectedScheduleId() && scheds[0]) {
@@ -2925,6 +3649,25 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       });
     });
 
+    // Open the repository ?repo= names on the declarations tab, on any
+    // width: the link was followed for that repository, so on a phone it
+    // opens its inspector rather than the list.
+    effect(() => {
+      const tab = this.activeTab();
+      const repo = (this.repo() ?? "").trim();
+      const loaded = this.store.loaded();
+      untracked(() => {
+        if (tab !== "declarations" || !repo || !loaded) return;
+        const key = `${tab}:${repo}`;
+        if (key === this.handledRepoLinkKey) return;
+        this.handledRepoLinkKey = key;
+        const known = this.store
+          .knownRepos()
+          .find((r) => r.toLowerCase() === repo.toLowerCase());
+        this.selectDeclRepo(known ?? repo, true);
+      });
+    });
+
     // Handle deep-link query params from shell New menu:
     // ?new=1 | ?new=schedule, ?launch=1 | ?launchTemplate=1, ?run=1 | ?runSuite=1
     effect(() => {
@@ -2932,29 +3675,52 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       const newParam = this.new();
       const launchParam = this.launch() || this.launchTemplate();
       const runParam = this.run() || this.runSuite();
+      const hasAction = Boolean(newParam || launchParam || runParam);
       const key = `${loaded}:${newParam ?? ""}:${launchParam ?? ""}:${runParam ?? ""}`;
       untracked(() => {
+        if (!hasAction) {
+          this.handledDeepLinkKey = "";
+          return;
+        }
         if (!loaded || key === this.handledDeepLinkKey) return;
+        this.handledDeepLinkKey = key;
         if (newParam === "1" || newParam === "schedule") {
-          this.handledDeepLinkKey = key;
           if (this.access.can("POST /api/schedules")) {
             this.openScheduleDialog(null);
           }
+        } else if (newParam === "template") {
+          if (this.access.can("POST /api/templates")) {
+            this.openTemplateDialog(null);
+          }
+        } else if (newParam === "suite") {
+          if (this.access.can("POST /api/suites")) {
+            this.suitesView.set("suites");
+            this.openSuiteDialog(null);
+          }
         } else if (launchParam === "1") {
-          this.handledDeepLinkKey = key;
           if (this.canOpenLaunchTemplateDialog()) {
             this.openLaunchTemplateDialog(
               this.selectedTemplate() ?? this.store.templates()[0] ?? null,
             );
           }
         } else if (runParam === "1") {
-          this.handledDeepLinkKey = key;
           if (this.access.can("POST /api/suite-runs")) {
             this.openRunSuiteDialog(
               this.selectedSuite() ?? this.store.suites()[0] ?? null,
             );
           }
         }
+        void this.router.navigate([], {
+          queryParams: {
+            new: null,
+            launch: null,
+            launchTemplate: null,
+            run: null,
+            runSuite: null,
+          },
+          queryParamsHandling: "merge",
+          replaceUrl: true,
+        });
       });
     });
   }
@@ -2985,10 +3751,114 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     this.openPicker.set(this.openPicker() === name ? null : name);
   }
 
+  // newProcess is the header New menu: it narrows the page to the kind
+  // asked for and opens that kind's form over it. It goes through ?new=,
+  // the shell New menu's own deep link, because leaving an item's URL
+  // (or the bare /processes) makes a fresh page that would drop a form
+  // opened on this one.
+  protected newProcess(kind: "schedule" | "template" | "suite"): void {
+    this.openPicker.set(null);
+    const tab: ProcessTab =
+      kind === "schedule"
+        ? "schedules"
+        : kind === "template"
+          ? "templates"
+          : "suites";
+    void this.router.navigate(["/processes", tab], {
+      queryParams: { new: kind },
+      queryParamsHandling: "merge",
+    });
+  }
+
+  protected setSort(raw: string): void {
+    const sort: ProcessSort = parseProcessSort(raw);
+    if (sort === this.activeSort()) return;
+    void this.router.navigate([], {
+      queryParams: { sort: sort === "custom" ? null : sort },
+      queryParamsHandling: "merge",
+    });
+  }
+
+  // countOf is "1 task", "2 tasks": a count with its noun.
+  protected countOf(n: number, noun: string): string {
+    return `${n} ${noun}${n === 1 ? "" : "s"}`;
+  }
+
+  protected stamp(at: string): string {
+    return formatStamp(at);
+  }
+
+  private visibleKeys(list: OrderedList): string[] {
+    switch (list) {
+      case "schedules":
+        return this.scheduleRows().map((r) => r.key);
+      case "templates":
+        return this.sortedTemplates().map((t) => `template:${t.id}`);
+      case "suites":
+        return this.sortedSuites().map((st) => `suite:${st.id}`);
+    }
+  }
+
+  private moveRow(list: OrderedList, key: string, delta: number): boolean {
+    const visible = this.visibleKeys(list);
+    const next = movedOrder(this.customOrder(), visible, key, delta);
+    if (!next) return false;
+    this.customOrder.set(next);
+    saveOrder(next);
+    const at = next.indexOf(key) + 1;
+    this.moveNote.set(`Moved to position ${at} of ${visible.length}.`);
+    return true;
+  }
+
+  // Alt+ArrowUp / Alt+ArrowDown move the focused row one place in the
+  // custom order, keeping focus on it.
+  protected onRowKey(ev: KeyboardEvent, list: OrderedList, key: string): void {
+    if (!ev.altKey || (ev.key !== "ArrowUp" && ev.key !== "ArrowDown")) return;
+    if (this.activeSort() !== "custom") return;
+    ev.preventDefault();
+    const btn = ev.currentTarget as HTMLElement | null;
+    if (this.moveRow(list, key, ev.key === "ArrowUp" ? -1 : 1)) {
+      afterNextRender(() => btn?.focus(), { injector: this.injector });
+    }
+  }
+
+  protected onDragStart(ev: DragEvent, key: string): void {
+    if (this.activeSort() !== "custom") return;
+    this.dragKey = key;
+    ev.dataTransfer?.setData("text/plain", key);
+    if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "move";
+  }
+
+  protected onDragOver(ev: DragEvent, key: string): void {
+    if (!this.dragKey || this.dragKey === key) return;
+    ev.preventDefault();
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+    this.dropKey.set(key);
+  }
+
+  protected onDragLeave(key: string): void {
+    if (this.dropKey() === key) this.dropKey.set(null);
+  }
+
+  protected onDrop(ev: DragEvent, list: OrderedList, key: string): void {
+    const from = this.dragKey;
+    this.onDragEnd();
+    if (!from || from === key) return;
+    ev.preventDefault();
+    const visible = this.visibleKeys(list);
+    const delta = visible.indexOf(key) - visible.indexOf(from);
+    this.moveRow(list, from, delta);
+  }
+
+  protected onDragEnd(): void {
+    this.dragKey = null;
+    this.dropKey.set(null);
+  }
+
   protected tabCount(tab: ProcessTab): number {
     switch (tab) {
       case "schedules":
-        return this.store.schedules().length;
+        return this.store.schedules().length + this.store.triggers().length;
       case "templates":
         return this.store.templates().length;
       case "suites":
@@ -3002,11 +3872,20 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected schedBadge = scheduleStatusBadge;
+  protected triggerName = triggerName;
+  protected schedNextRunOf = formatScheduleNextRun;
   protected tmplBadge = templateSourceBadge;
   protected cadenceOf = formatCadence;
   protected isTrigger = isEventTrigger;
+  protected suppressionLabel = suppressionReasonLabel;
+  protected skipFolded = skipFolded;
   protected suiteModeOf = describeSuiteMode;
   protected runBadgeOf = suiteRunBadge;
+
+  protected repoAdvancedRoute(repo: string): string[] {
+    const parts = repo.split("/").filter(Boolean);
+    return ["/repos", ...parts, "advanced"];
+  }
 
   protected templateNameById(id: string): string {
     const t = this.store.templates().find((x) => x.id === id);
@@ -3038,8 +3917,15 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     const tmpl = this.store.templates().find((t) => t.id === id);
     if (tmpl && this.access.can("GET /api/templates/{id}/composition")) {
       const defaults: Record<string, string> = {};
+      // A preview is the firing's own answer: send what a filing would,
+      // and a {{name}} placeholder only for a required field with nothing
+      // to fall back on (the server refuses a missing required value).
       for (const f of tmpl.fields ?? []) {
-        if (f.default) defaults[f.name] = f.default;
+        if (f.default || f.options?.length) {
+          defaults[f.name] = f.default || f.options![0];
+        } else if (f.required) {
+          defaults[f.name] = `{{${f.name}}}`;
+        }
       }
       void this.store
         .fetchTemplateComposition(
@@ -3179,20 +4065,39 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected closeScheduleDialog(): void {
     this.openPicker.set(null);
+    this.dialogError.set(null);
     this.schedDialogOpen.set(false);
   }
 
   protected closeLaunchDialog(): void {
     this.openPicker.set(null);
+    this.dialogError.set(null);
     this.launchDialogOpen.set(false);
   }
 
   protected closeRunSuiteDialog(): void {
     this.openPicker.set(null);
+    this.dialogError.set(null);
     this.runSuiteDialogOpen.set(false);
   }
 
-  protected async runScheduleNow(s: Schedule): Promise<void> {
+  protected runScheduleNow(s: Schedule): void {
+    if (s.type === "workflow") {
+      this.confirming.set({
+        title: "Run workflow schedule now?",
+        message:
+          `Run "${s.title || s.id}" now? It starts a CI run of the workflow it was declared in straight away, ` +
+          `to be reviewed when it finishes; the schedule's own next run is unchanged.`,
+        accept: "Run now",
+        destructive: false,
+        run: () => this.executeRunScheduleNow(s),
+      });
+      return;
+    }
+    void this.executeRunScheduleNow(s);
+  }
+
+  private async executeRunScheduleNow(s: Schedule): Promise<void> {
     try {
       const res = await this.store.runScheduleNow(s.id);
       if (res.taskId) {
@@ -3264,6 +4169,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected openScheduleDialog(existing: Schedule | null): void {
     this.openPicker.set(null);
+    this.dialogError.set(null);
     this.editingSchedule.set(existing);
     this.draftSchedComposition.set(null);
     if (existing) {
@@ -3466,18 +4372,20 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected async previewScheduleDraft(): Promise<void> {
+    this.dialogError.set(null);
     try {
       const comp = await this.store.previewDraftSchedule(
         this.buildScheduleCreatePayload(),
       );
       this.draftSchedComposition.set(comp);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     }
   }
 
   protected async saveScheduleDialog(): Promise<void> {
     if (this.submitting() || !this.canSaveSchedule()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     try {
       const editing = this.editingSchedule();
@@ -3497,7 +4405,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       }
       this.closeScheduleDialog();
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
@@ -3507,6 +4415,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected openLaunchTemplateDialog(t: Template | null): void {
     this.openPicker.set(null);
+    this.dialogError.set(null);
     const chosen = t ?? this.store.templates()[0] ?? null;
     this.launchTemplateId.set(chosen?.id ?? "");
     this.initLaunchFields(chosen);
@@ -3538,6 +4447,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected async submitLaunchTemplate(): Promise<void> {
     const tmpl = this.launchSelectedTemplate();
     if (!tmpl || this.submitting() || !this.canSubmitLaunchTemplate()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     try {
       const task = await this.store.launchTaskFromTemplate(tmpl, {
@@ -3554,13 +4464,14 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
         this.snackbar.show("Created task from template.");
       }
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
   }
 
   protected openTemplateDialog(existing: Template | null): void {
+    this.dialogError.set(null);
     this.editingTemplate.set(existing);
     if (existing) {
       this.tDraftName.set(existing.name);
@@ -3634,6 +4545,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected async saveTemplateDialog(): Promise<void> {
     if (this.submitting() || !this.canSaveTemplate()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     const fields = structuredClone(this.tDraftFields());
     try {
@@ -3649,6 +4561,10 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           revision: editing.revision,
         });
         this.selectTemplate(updated.id, false);
+        const selSuite = this.selectedSuiteId();
+        if (selSuite) this.selectSuite(selSuite, false);
+        const selSched = this.selectedScheduleId();
+        if (selSched) this.selectSchedule(selSched, false);
         this.snackbar.show("Template updated.");
       } else {
         const created = await this.store.createTemplate({
@@ -3668,7 +4584,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       }
       this.tmplDialogOpen.set(false);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
@@ -3693,6 +4609,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   // --- Suite & Suite Run actions ---
 
   protected openSuiteDialog(existing: Suite | null): void {
+    this.dialogError.set(null);
     this.editingSuite.set(existing);
     this.draftSuiteComposition.set(null);
     if (existing) {
@@ -3740,31 +4657,58 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
     );
   }
 
+  // suitePassesProblem says what is wrong with the pass count the dialog
+  // holds -- the one its stopping mode reads -- before it is sent: the
+  // field keeps what was typed rather than swapping in a default, so a 0,
+  // an empty field or a fraction is refused here, in the server's own
+  // range (model.MaxSuitePasses), instead of being saved as 1 or 3.
+  protected suitePassesProblem(): string | null {
+    const untilClean = this.stDraftMode() === "until_clean";
+    const n = untilClean ? this.stDraftMaxPasses() : this.stDraftCount();
+    if (Number.isInteger(n) && n >= 1 && n <= this.maxSuitePasses) {
+      return null;
+    }
+    const what = untilClean ? "Maximum passes" : "Number of passes";
+    return `${what} must be a whole number from 1 to ${this.maxSuitePasses}.`;
+  }
+
   private buildSuiteCreatePayload(): CreateSuiteRequest {
+    // suitePassesProblem checks the mode's own number; the other one is
+    // sent too but read by nobody, so a stale 0 or 2.5 left in it goes as
+    // its default rather than failing the request's decoding.
+    const untilClean = this.stDraftMode() === "until_clean";
+    const whole = (n: number, dflt: number) =>
+      Number.isInteger(n) && n >= 1 ? n : dflt;
     return {
       name: this.stDraftName().trim(),
       templateIds: this.stDraftTemplateIds(),
       mode: this.stDraftMode(),
-      count: this.stDraftCount(),
-      maxPasses: this.stDraftMaxPasses(),
+      count: untilClean ? whole(this.stDraftCount(), 1) : this.stDraftCount(),
+      maxPasses: untilClean
+        ? this.stDraftMaxPasses()
+        : whole(this.stDraftMaxPasses(), 3),
       requireApproval: this.stDraftRequireApproval(),
       autoMerge: this.stDraftAutoMerge(),
     };
   }
 
   protected async previewSuiteDraft(): Promise<void> {
+    this.dialogError.set(this.suitePassesProblem());
+    if (this.dialogError()) return;
     try {
       const comp = await this.store.previewDraftSuite(
         this.buildSuiteCreatePayload(),
       );
       this.draftSuiteComposition.set(comp);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     }
   }
 
   protected async saveSuiteDialog(): Promise<void> {
     if (this.submitting() || !this.canSaveSuite()) return;
+    this.dialogError.set(this.suitePassesProblem());
+    if (this.dialogError()) return;
     this.submitting.set(true);
     try {
       const editing = this.editingSuite();
@@ -3775,6 +4719,8 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
           revision: editing.revision,
         });
         this.selectSuite(updated.id, false);
+        const selSched = this.selectedScheduleId();
+        if (selSched) this.selectSchedule(selSched, false);
         this.snackbar.show("Suite updated.");
       } else {
         const created = await this.store.createSuite(payload);
@@ -3783,7 +4729,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       }
       this.suiteDialogOpen.set(false);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
@@ -3805,6 +4751,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected openRunSuiteDialog(st: Suite | null): void {
     this.openPicker.set(null);
+    this.dialogError.set(null);
     const chosen = st ?? this.store.suites()[0] ?? null;
     this.runSuiteId.set(chosen?.id ?? "");
     this.runSuiteRepo.set(
@@ -3824,6 +4771,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected async submitRunSuite(): Promise<void> {
     if (this.submitting() || !this.canSubmitRunSuite()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     try {
       const run = await this.store.startSuiteRun(
@@ -3836,7 +4784,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.selectSuiteRun(run.id, true);
       this.snackbar.show(`Started suite run #${run.id}.`);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
@@ -3850,7 +4798,9 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       destructive: true,
       run: async () => {
         const stopped = await this.store.cancelSuiteRunTasks(sr);
-        this.snackbar.show(`Closed ${stopped} active suite task(s).`);
+        this.snackbar.show(
+          `Closed ${stopped} active suite ${stopped === 1 ? "task" : "tasks"}.`,
+        );
       },
     });
   }
@@ -3886,6 +4836,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   }
 
   protected openWorkflowEditor(repo: string, wf: RepoWorkflow | null): void {
+    this.dialogError.set(null);
     this.wfEditorRepo.set(repo);
     this.wfEditorOriginalPath.set(wf?.path ?? "");
     this.wfEditorPath.set(wf?.path ?? ".grain/workflows/ci.yml");
@@ -3898,6 +4849,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
 
   protected async saveWorkflowEditor(): Promise<void> {
     if (this.submitting() || !this.canEditWorkflow()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     const repo = this.wfEditorRepo();
     const existing = this.store.repoWorkflows()[repo]?.workflows ?? [];
@@ -3914,7 +4866,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.wfEditorOpen.set(false);
       this.snackbar.show(`Saved workflow ${this.wfEditorPath().trim()}.`);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }
@@ -3923,6 +4875,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
   protected async deleteWorkflowOverride(): Promise<void> {
     const orig = this.wfEditorOriginalPath();
     if (!orig || this.submitting() || !this.canEditWorkflow()) return;
+    this.dialogError.set(null);
     this.submitting.set(true);
     const repo = this.wfEditorRepo();
     const existing = this.store.repoWorkflows()[repo]?.workflows ?? [];
@@ -3932,7 +4885,7 @@ export class ProcessesPageComponent implements OnInit, OnDestroy {
       this.wfEditorOpen.set(false);
       this.snackbar.show(`Removed workflow override ${orig}.`);
     } catch (err) {
-      this.store.actionError.set(errorText(err));
+      this.dialogError.set(errorText(err));
     } finally {
       this.submitting.set(false);
     }

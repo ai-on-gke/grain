@@ -29,7 +29,7 @@ import {
 // is unit-tested on its own and shared by every view of the queue.
 
 export type Tone =
-  "reply" | "proposal" | "blast" | "error" | "healthy" | "neutral";
+  "reply" | "proposal" | "blast" | "warn" | "error" | "healthy" | "neutral";
 export type FilterId =
   | "all"
   | "asked"
@@ -329,12 +329,34 @@ const INBOX_STATES = [
   "proposed",
 ];
 
+function isSilentGoalQuestion(t: Task): boolean {
+  return (
+    !!t.goalMode?.enabled &&
+    t.state === "awaiting_reply" &&
+    !t.awaitingAccess &&
+    !isStoppedTurn(t)
+  );
+}
+
+function isSilentGoalProposal(t: Task): boolean {
+  return (
+    t.state === "proposed" &&
+    !!t.goalMode?.enabled &&
+    !!t.proposedBy &&
+    !!t.autoApproveProposals
+  );
+}
+
 export function waitsOnUser(t: Task): boolean {
   if (t.consoleSession) return false;
+  const stateWait =
+    INBOX_STATES.includes(t.state) &&
+    !isSilentGoalQuestion(t) &&
+    !isSilentGoalProposal(t);
   return (
     waitingBaseRepair(t) ||
     awaitsHumanSubmit(t) ||
-    INBOX_STATES.includes(t.state) ||
+    stateWait ||
     awaitsGitHubApproval(t) ||
     mergeQueueStalled(t) ||
     !!t.stall ||
@@ -427,14 +449,24 @@ export function pendingReleaseOf(n: Notification): PendingRelease | null {
   };
 }
 
-function plain(line: string): string {
-  return line
+// plainMarkdownSummary strips common inline Markdown syntax and collapses
+// excess whitespace so left-rail queue rows stay clean single-line text.
+export function plainMarkdownSummary(text: string): string {
+  return text
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
     .replace(/\[([^\]\n]+)\]\([^)\s]+\)/g, "$1")
-    .replace(/`([^`\n]+)`/g, "$1");
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/`/g, "")
+    .replace(/\*\*(\S(?:[^\n]*?\S)?)\*\*/g, "$1")
+    .replace(/__(\S(?:[^\n]*?\S)?)__/g, "$1")
+    .replace(/\*(\S(?:[^\n]*?\S)?)\*/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function notificationSentence(n: Notification): string {
-  const body = plain((n.body || "").trim().split("\n")[0]);
+  const body = plainMarkdownSummary((n.body || "").trim().split("\n")[0]);
   const again = (n.raiseCount ?? 0) > 1 ? ` Raised ${n.raiseCount} times.` : "";
   return `${body || n.subject}${again}`;
 }
@@ -451,7 +483,7 @@ export function pendingReleaseSentence(n: Notification): string {
           !l.startsWith("Remedy: ") &&
           !l.startsWith("Run URL: "),
       ) || "";
-  return plain(line) || n.subject;
+  return plainMarkdownSummary(line) || n.subject;
 }
 
 export function approveReleaseLabel(r: {
@@ -614,12 +646,14 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     }
     return e;
   }
-  if (t.state === "awaiting_reply") {
+  if (t.state === "awaiting_reply" && !isSilentGoalQuestion(t)) {
     if (t.awaitingAccess) {
       const e = taskEntry(t, "access", "access");
       e.pillLabel = "Access request";
       e.pillTone = "blast";
-      e.summary = t.questionSummary || "This run asked for more access.";
+      e.summary =
+        plainMarkdownSummary(t.questionSummary || "") ||
+        "This run asked for more access.";
       e.rationale = "Only a person can widen what a run may reach.";
       return e;
     }
@@ -655,13 +689,15 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
       e.pillLabel = "Note";
       e.pillTone = "neutral";
       e.iconKind = "note";
-      e.summary = t.noteSummary;
+      e.summary = plainMarkdownSummary(t.noteSummary) || t.noteSummary;
       e.rationale =
         "The run finished with a note and asked nothing. Acknowledge to close it, or reply to run it again.";
     } else {
       e.pillLabel = "Needs reply";
       e.pillTone = "reply";
-      e.summary = t.questionSummary || "Answered on the task itself.";
+      e.summary =
+        plainMarkdownSummary(t.questionSummary || "") ||
+        "Answered on the task itself.";
       e.rationale = "The run is parked until somebody answers it.";
     }
     e.actions.push(
@@ -692,8 +728,24 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
       review ? "review" : "submit",
     );
     const red = gateSummary(t, listOnly).state === "failing";
-    e.pillLabel = review ? "Review questions" : red ? "CI failing" : "Submit";
-    e.pillTone = review ? "blast" : red ? "error" : "healthy";
+    e.pillLabel = review
+      ? "Review questions"
+      : red
+        ? "CI failing"
+        : t.goalScorecard?.verified
+          ? "Goal ready"
+          : t.goalScorecard?.stoppedAtCap
+            ? "Goal capped"
+            : "Submit";
+    e.pillTone = review
+      ? "blast"
+      : red
+        ? "error"
+        : t.goalScorecard?.verified
+          ? "healthy"
+          : t.goalScorecard?.stoppedAtCap
+            ? "warn"
+            : "healthy";
     e.summary = review
       ? "The review left questions only you can settle."
       : blocked ||
@@ -789,13 +841,13 @@ export function classifyTask(t: Task, listOnly = false): InboxEntry | null {
     const e = taskEntry(t, "stalled", "stalled");
     e.pillLabel = "Stuck";
     e.pillTone = "blast";
-    e.summary = t.stall;
+    e.summary = plainMarkdownSummary(t.stall) || t.stall;
     e.rationale = "Grain reads this as stuck rather than busy.";
     const control = stallControl(t);
     if (control) e.actions.push(control);
     return e;
   }
-  if (t.state === "proposed") {
+  if (t.state === "proposed" && !isSilentGoalProposal(t)) {
     const e = taskEntry(t, "proposal", "proposal");
     e.pillLabel = "Proposal";
     e.pillTone = "proposal";

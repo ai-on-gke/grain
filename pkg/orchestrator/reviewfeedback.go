@@ -423,11 +423,13 @@ func submittedReviewBody(task model.Task, findings []reviewFinding) string {
 // findingsList renders findings as one markdown bullet each, prefixed
 // with the line they are about when they name one. Multi-line bodies are
 // indented under their own bullet so a finding that quotes code is still
-// one item rather than the list ending at its first newline.
+// one item rather than the list ending at its first newline. A body
+// written as GitHub's HTML (<code>, &quot;) is put in Markdown first
+// (findingMarkdown), since the classic UI shows raw HTML as text.
 func findingsList(findings []reviewFinding) string {
 	var b strings.Builder
 	for _, f := range findings {
-		body := strings.TrimSpace(f.Body)
+		body := findingMarkdown(strings.TrimSpace(f.Body))
 		if f.Located {
 			body = fmt.Sprintf("`%s:%d` -- %s", f.Path, f.Line, body)
 		}
@@ -538,8 +540,8 @@ func noteFindingsOnReviewedTask(ctx context.Context, store *model.Store, review,
 			"Reply here (or on task %s) with your decision, and grain sends another run on "+
 			"this task to carry it out -- it fixes what you decided and a clean re-review "+
 			"clears the gate. Pressing Submit records your approval only and will not merge "+
-			"over open findings; merging without fixing them requires a force-merge override "+
-			"with a reason. The same questions are on %s as %s, on the lines they are about.",
+			"over open findings; to merge without fixing them, accept them with **Accept findings** "+
+			"(`grain accept-findings`, a reason required) rather than Force merge. The same questions are on %s as %s, on the lines they are about.",
 		review.ID, countOf(len(findings), "open question"), ref, findingsList(findings),
 		review.ID, ref, kind)
 	commentID, err := store.AddComment(ctx, model.Comment{
