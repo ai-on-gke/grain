@@ -1,0 +1,35 @@
+=== Item 1 (postgres): seeding a store ===
+template=template-1 scratch=2 from_template=3
+schema version: 146
+task_source_template present after drop: 0
+=== Item 1 (postgres): this build's daemon on the old store ===
+after Init: task_source_template present=1 schema=146
+task 2: list={"templateId":null} detail={"templateId":null}
+task 3: list={"templateId":"template-1"} detail={"templateId":"template-1"}
+proposal 4: task_filed_template rows=0 task_source_template=template-1
+=== Item 1 (postgres): state-repo export, grain state check, round-trip ===
+already up to date, nothing to commit
+schema:  146, which is what this build of grain knows
+loaded:  31 rows across 6 tables
+  grain_config                 1
+  schedule                     5
+  schedule_grant               18
+  schedule_read                5
+  template                     1
+  template_sequence            1
+ok: grain can load this
+verified: the state repository carries no task_source_template
+using external config repository /tmp/walk-st-item1-postgres/ext-settings.git (read-only IaC mode; grain/config is not hosted locally).
+mode:       external (read-only IaC) -- /tmp/walk-st-item1-postgres/ext-settings.git (branch main)
+schema:  146, which is what this build of grain knows
+loaded:  32 rows across 6 tables
+  grain_config                 1
+  schedule                     5
+  schedule_grant               18
+  schedule_read                5
+  template                     2
+  template_sequence            1
+ok: grain can load this
+applied 47bb8e324ceb384d0f8ff2df8f94d0946e325333 from /tmp/walk-st-item1-postgres/ext-settings.git
+after round-trip: proposal list=template-1 detail=template-1 filed_rows=0 source=template-1 ext-added=1
+PASS: Item 1 (postgres)

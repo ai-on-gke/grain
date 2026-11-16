@@ -63,6 +63,7 @@ var tablePrimaryKeys = map[string][]string{
 	"task_read":                      {"task_id", "owner", "name"},
 	"task_write":                     {"task_id", "owner", "name", "base"},
 	"task_filed_template":            {"task_id"},
+	"task_source_template":           {"task_id"},
 	"task_grant":                     {"task_id", "capability"},
 	"task_grant_wait":                {"task_id"},
 	"task_pause":                     {"task_id"},
@@ -245,6 +246,8 @@ type adaptedDriver struct {
 	cfg   Config
 	fence *writeFence
 }
+
+func (d *adaptedDriver) IsPostgresDriver() bool { return true }
 
 func (d *adaptedDriver) Open(name string) (driver.Conn, error) {
 	conn, err := d.inner.Open(name)

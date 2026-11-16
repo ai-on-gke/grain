@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-on-gke/grain/pkg/capability/dbaccess"
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -56,7 +55,7 @@ func TestWalkthroughDBReadBypassesAreRefusedThroughTheToolAndHTTP(t *testing.T) 
 
 	reader := model.Task{
 		ID: "dbr", Title: "reads the database",
-		Grants: []model.Grant{{Capability: dbaccess.CapabilityDBRead, Via: model.GrantByLabel}},
+		Grants: []model.Grant{{Capability: model.GrainSQLReadGrant, Via: model.GrantByLabel}},
 	}
 	for _, task := range []model.Task{reader, {ID: "bystander", Title: "untouched"}} {
 		if err := store.PutTask(ctx, task); err != nil {
@@ -80,7 +79,7 @@ func TestWalkthroughDBReadBypassesAreRefusedThroughTheToolAndHTTP(t *testing.T) 
 	client := accessCodeClient(srv.URL)
 
 	var query mcp.Tool
-	for _, tool := range daemon.GrantedDaemonTools(daemon.GrantNames{dbaccess.CapabilityDBRead}, "", "", "", reader.ID, client) {
+	for _, tool := range daemon.GrantedDaemonTools(daemon.GrantNames{model.GrainSQLReadGrant}, "", "", "", reader.ID, client) {
 		if tool.Name == "execute_grain_db" {
 			t.Fatal("a db-read grant was given execute_grain_db")
 		}

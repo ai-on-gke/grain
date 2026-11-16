@@ -55,9 +55,9 @@ import (
 // store every cycle, so a reply written while the daemon was down is acted
 // on by the first cycle after it comes back.
 func SyncReviewQuestions(ctx context.Context, store *model.Store, now time.Time) error {
-	links, err := store.OpenPullRequestLinks(ctx)
+	links, err := openAndResumeLaterPullRequestLinks(ctx, store)
 	if err != nil {
-		return fmt.Errorf("orchestrator: reading open pull request links: %w", err)
+		return err
 	}
 	var errs []error
 	seen := map[string]bool{}
@@ -113,6 +113,19 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 	state, err := store.State(ctx, task.ID)
 	if err != nil {
 		return fmt.Errorf("orchestrator: reading %s's state: %w", task.ID, err)
+	}
+	if state == model.StateDeferred {
+		// A run sent back while the questions held it, resting on its own
+		// resume_later, is still waiting on its owner: the answer takes it
+		// off the wait below (sendBackFromResumeLater). A person's Defer
+		// is parked on something else.
+		ours, err := store.RestsOnResumeLater(ctx, task.ID)
+		if err != nil {
+			return fmt.Errorf("orchestrator: reading %s's deferral: %w", task.ID, err)
+		}
+		if ours {
+			state = model.StateAwaitingSubmit
+		}
 	}
 	switch {
 	case state == model.StateClosed:
@@ -187,6 +200,9 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 	}); err != nil {
 		return fmt.Errorf("orchestrator: queueing %s to carry out its owner's decision: %w", task.ID, err)
 	}
+	if err := sendBackFromResumeLater(ctx, store, task.ID, "its owner's review decision", now); err != nil {
+		return err
+	}
 
 	then := "Once it has pushed, the change goes through as it would have after a clean review."
 	switch {
@@ -206,8 +222,12 @@ func settleReviewQuestions(ctx context.Context, store *model.Store, task model.T
 	body := fmt.Sprintf(
 		"The owner answered the open questions from review task %s, so this task is back in the "+
 			"queue: the next run carries out that decision -- fix what was decided, %s, "+
-			"and leave nothing it could have fixed as a comment. %s",
-		questions.ReviewTaskID, publish, then)
+			"and leave nothing it could have fixed as a comment. %s "+
+			"Findings the owner decided to merge as they are need nothing pushed, and resolving their "+
+			"threads does not clear them: only the owner's own **Accept findings** on the merge-gates "+
+			"panel (`grain accept-findings -gate <gate> %s <reason>`) does, so ask them to press it "+
+			"(ask_question). Do not recommend Force merge for this: it overrides every gate.",
+		questions.ReviewTaskID, publish, then, task.ID)
 	log.Printf("orchestrator: %s's owner answered the questions from review %s; redispatching it",
 		task.ID, questions.ReviewTaskID)
 	return reviewComment(ctx, store, task.ID, body, now)

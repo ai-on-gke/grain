@@ -659,9 +659,9 @@ type Grant struct {
 //
 // Both sides are read through CanonicalGrant into the spelling slice 2
 // stores (StoredGrantSpelling), so an api reference and the api:<scope>
-// it stands for compare equal, and retired one-release aliases match
-// the canonical grant(s) they became (CanonicalLegacyGrants) in either
-// direction.
+// it stands for compare equal, and a name a build outside core
+// registered as an alias matches the grant it became
+// (CanonicalLegacyGrants) in either direction.
 func GrantsSubsetOf(grants, allowed []Grant) bool {
 	grants, allowed = storedGrantSpellings(grants), storedGrantSpellings(allowed)
 	have := heldNonRefGrants(allowed)
@@ -1071,9 +1071,10 @@ func AutoSubmits(child, parent Task) bool {
 		LandsWhereGranted(child, parent)
 }
 
-// GitCredentialCapabilityPrefix is the retired one-release alias prefix for a
-// per-task git credential override (now RepoCredentialGrant on the in-process
-// repo server, https://grain.dev/capabilities/repo#credential).
+// GitCredentialCapabilityPrefix is the retired bare prefix for a per-task git
+// credential override (now RepoCredentialGrant on the in-process repo server,
+// https://grain.dev/capabilities/repo#credential; schema migration 120 rewrote
+// stored rows and RetiredGrantsBecame upgrades older exports).
 const GitCredentialCapabilityPrefix = "github-credential:"
 
 // GitCredentialCapability is the canonical capability grant standing for "use
@@ -1090,14 +1091,11 @@ func LegacyGitCredentialName(capability string) (name string, ok bool) {
 	return name, ok && name != ""
 }
 
-// GitCredentialName returns the credential name a git credential override grant
-// selects -- canonical RepoCredentialGrant or the one-release legacy
-// github-credential:<name> prefix -- and false for any other capability string.
+// GitCredentialName returns the credential name a canonical RepoCredentialGrant
+// git credential override grant selects, and false for any other capability
+// string. The retired github-credential:<name> spelling is no longer an alias.
 func GitCredentialName(capability string) (name string, ok bool) {
-	if name, ok := ParseRepoCredentialGrant(capability); ok {
-		return name, true
-	}
-	return LegacyGitCredentialName(capability)
+	return ParseRepoCredentialGrant(capability)
 }
 
 // ReleaseGateReadCapability is the CI capability a release workflow's job
@@ -1114,9 +1112,9 @@ const ReleaseGateReadCapability = "release-gate-read"
 // deployment status) and GrainSourceGrant, which places the deployment's
 // own baked-in source at grain-src/ in the sandbox (orchestrator's
 // placeGrainSource) and opens src://. Schema migration 115 rewrote the
-// stored grants; the bare name stays readable as an alias for one release
-// (CanonicalLegacyGrants, IsGrainSourceGrant, apiAliasCapabilities). The
-// source grant reaches no repository through the git proxy, and implies
+// stored grants, and an import rewrites an older grain/config
+// (RetiredGrantsBecame); the bare name was an alias for one release and
+// is not any longer. The source grant reaches no repository through the git proxy, and implies
 // none (CapabilityRepos).
 const SelfDebugCapability = "self-debug"
 
@@ -1183,14 +1181,13 @@ func GCPKeyGrant(name string) Grant {
 }
 
 // ErrConflictingGitCredentials is returned when a task holds more than one
-// distinct git credential override grant (repo#credential or legacy
-// github-credential:<name>).
+// distinct git credential override grant (repo#credential).
 var ErrConflictingGitCredentials = errors.New("task holds conflicting git credential grants")
 
-// GitCredentialOverride returns the credential name a repo#credential (or
-// legacy github-credential:<name>) grant among grants selects, if any. If
-// grants hold more than one distinct git credential override, it returns
-// ErrConflictingGitCredentials rather than picking a winner silently.
+// GitCredentialOverride returns the credential name a repo#credential grant
+// among grants selects, if any. If grants hold more than one distinct git
+// credential override, it returns ErrConflictingGitCredentials rather than
+// picking a winner silently.
 func GitCredentialOverride(grants []Grant) (name string, ok bool, err error) {
 	for _, g := range grants {
 		n, isOverride := GitCredentialName(g.Capability)
@@ -1433,6 +1430,13 @@ const (
 	// for this task's change (-> "<trigger>=<task ID>"). A gated hold
 	// is released only once every gating one has finished.
 	LinkPathTriggerTask LinkKind = "path-trigger-task"
+	// LinkTargetedReviewTrigger names one gating trigger on this task's
+	// change whose review is a targeted review -- a sensitive trigger with
+	// no template of its own, reviewed with grain's security review brief
+	// (-> the trigger's name). Written and dropped with
+	// LinkPathTriggerTask, so the merge gates can show that trigger's
+	// review apart from the code review (ComputeMergeGates).
+	LinkTargetedReviewTrigger LinkKind = "targeted-review-trigger"
 	// LinkPathTriggersRead records the head commit grain last judged
 	// this task's pull request against its repository's pull-request
 	// triggers at (-> the sha), so a head that moves is judged again.
@@ -1476,8 +1480,9 @@ const (
 	// LinkReviewFindings records that a required review of this task's pull
 	// request failed its gate -- left findings or open questions, had fixes
 	// closed without merging, or could not be filed (-> ReviewFindingsRecord
-	// JSON). Cleared only by a clean re-review after fixes or an explicit
-	// merge:force gate override, never by Submit.
+	// JSON). Cleared by a clean re-review after fixes, by a person accepting
+	// that review's findings (LinkReviewFindingsAccepted), or by an explicit
+	// merge:force gate override -- never by Submit.
 	LinkReviewFindings LinkKind = "review-findings"
 	// LinkGateOverride records an operator's explicit merge:force override
 	// of named merge gates for one commit SHA (-> GateOverrideRecord JSON).
@@ -2257,6 +2262,18 @@ type Task struct {
 	// may push (Store.GitDeclaredPush). Never inherited by a proposal: an
 	// agent cannot hand its own push set on to work it files.
 	TemplateID string
+	// SourceTemplateID is the template this task's content was filed
+	// from, for reporting alone (grain/task-5273): what the code-quality
+	// report splits change failure rate, first-push CI and review findings
+	// by. It is TemplateID wherever that is set, and besides it records
+	// what TemplateID deliberately does not: an agent's proposal naming a
+	// template_id, and a port of a task filed from one. It grants nothing
+	// -- no push set, no template-restricted capability, no goal -- which
+	// is what lets it be recorded where TemplateID may not be. Stored in
+	// task_source_template; putTask writes TemplateID there when this is
+	// empty, so a firing that sets only TemplateID is recorded too, and a
+	// task rewritten on redispatch keeps whatever was recorded at filing.
+	SourceTemplateID string
 	// Owner is the account responsible for this task (attribution.design.md):
 	// fixed at creation from the filer / on-behalf-of / schedule owner /
 	// deployment fallback, inherited along DerivedFrom, and reassignable by
@@ -3071,6 +3088,12 @@ type Comment struct {
 	// FiledVia is the sanitized X-Grain-Client label of the tool the
 	// comment was posted from, as Task.FiledVia is the task's.
 	FiledVia string
+	// Note marks a run's comment_on_issue note, whose Summary
+	// (Store.NoteSummary) names a report rather than a question: GET
+	// /api/events records it as task.comment, not task.question
+	// (design/design/integration-events.design.md §3.2). Only read as the
+	// comment is written; it is not stored.
+	Note bool
 }
 
 // Attachment is one file carried alongside a task -- bwsalmon/agents#522's

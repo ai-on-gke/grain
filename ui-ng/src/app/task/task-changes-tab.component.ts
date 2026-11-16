@@ -38,11 +38,12 @@ import type {
   TaskDetail,
 } from "../api/models";
 import { AccessService } from "../services/access.service";
+import { BranchRefsService } from "../services/branch-refs.service";
 import { SnackbarService } from "../services/snackbar.service";
 import { errorText } from "../sessions/session-helpers";
 import { parseUnifiedDiff } from "../shared/diff-parse";
 import { DiffViewerComponent } from "../shared/diff-viewer.component";
-import { APPROVAL_GATE, submitBlock } from "../shared/gates";
+import { submitBlock, unsatisfiedGates } from "../shared/gates";
 import { TipDirective } from "../shared/tip.directive";
 import { TaskStore } from "./task.store";
 
@@ -104,10 +105,23 @@ import { TaskStore } from "./task.store";
           @for (g of task().mergeGates; track g.id) {
             <span
               [class]="'status-pill ' + gateTone(g)"
+              [attr.data-testid]="'merge-gate-' + g.id"
               [gTip]="g.detail || g.state"
             >
               {{ g.label || g.id }}: {{ g.state }}
             </span>
+            @if (offersAcceptFindings(g)) {
+              <button
+                type="button"
+                class="btn-text"
+                [attr.data-testid]="'accept-findings-' + g.id"
+                gTip="Merge over this review's findings as they are, with a reason. Clears this gate's findings only: CI, the other gates and approvals still apply."
+                [disabled]="store.isBusy('accept-findings', task().id)"
+                (click)="emitAcceptFindings(g)"
+              >
+                Accept findings…
+              </button>
+            }
           }
         </div>
       }
@@ -169,12 +183,14 @@ import { TaskStore } from "./task.store";
 
         @if (
           (prUrl() || task().state === "awaiting_submit") &&
-          can("POST /api/tasks/{id}/force-merge")
+          can("POST /api/tasks/{id}/force-merge") &&
+          access.isFullAccess()
         ) {
           <button
             type="button"
             class="btn-outlined danger"
             data-testid="changes-force-merge-open"
+            gTip="Override every gate you tick and merge now, with a reason. To merge over one review's findings as they are, use Accept findings… on that gate instead."
             [disabled]="store.isBusy('force-merge', task().id)"
             (click)="emitForceMerge()"
           >
@@ -445,6 +461,10 @@ import { TaskStore } from "./task.store";
 
         @if (diffError(); as err) {
           <p class="banner banner-error" role="alert">{{ err }}</p>
+        } @else if (diffSkipReason()) {
+          <p class="muted" style="margin: 0" data-testid="task-diff-skipped">
+            {{ diffSkipReason() }}
+          </p>
         } @else if (diffLoading() && activeDiffFiles().length === 0) {
           <p class="muted" style="margin: 0">Reading diff…</p>
         } @else if (activeDiffFiles().length === 0) {
@@ -463,7 +483,8 @@ import { TaskStore } from "./task.store";
 export class TaskChangesTabComponent {
   protected readonly store = inject(TaskStore);
   private readonly api = inject(GrainApi);
-  private readonly access = inject(AccessService);
+  protected readonly access = inject(AccessService);
+  private readonly branchRefs = inject(BranchRefsService);
   private readonly snackbar = inject(SnackbarService);
   private readonly doc = inject(DOCUMENT);
   private readonly zone = inject(NgZone);
@@ -479,6 +500,8 @@ export class TaskChangesTabComponent {
   protected readonly diffLoading = signal(false);
   protected readonly fullDiffLoading = signal(false);
   protected readonly diffError = signal<string | null>(null);
+  protected readonly diffSkipReason = signal<string | null>(null);
+  protected readonly branchPresent = signal<boolean | null>(null);
 
   protected readonly ciRuns = signal<CIRun[]>([]);
   protected readonly runDetails = signal<Record<string, CIRun | undefined>>({});
@@ -489,6 +512,59 @@ export class TaskChangesTabComponent {
 
   readonly forceMerge =
     output<import("./force-merge-dialog.component").ForceMergeRequest>();
+  readonly acceptFindings =
+    output<
+      import("./accept-findings-dialog.component").AcceptFindingsRequest
+    >();
+
+  // A person's decision to merge over one review's findings on one gate
+  // (accept-findings-dialog.component.ts). Offered only where the server
+  // says the findings are a review's to accept (MergeGate.acceptable), on
+  // an open task, to a caller the route lets through.
+  protected offersAcceptFindings(g: MergeGate): boolean {
+    return (
+      g.state === "findings" &&
+      !!g.acceptable &&
+      this.task().state !== "closed" &&
+      this.can("POST /api/tasks/{id}/accept-findings")
+    );
+  }
+
+  protected emitAcceptFindings(g: MergeGate): void {
+    const t = this.task();
+    const head = this.preview()?.head || t.ci?.commit;
+    this.acceptFindings.emit({
+      task: t,
+      gate: g,
+      head,
+      run: (reason) =>
+        this.store
+          .act(
+            "accept-findings",
+            (id) =>
+              this.api.post(
+                "POST /api/tasks/{id}/accept-findings",
+                { id },
+                {
+                  gate: g.id,
+                  ...(g.reviewTask ? { reviewTask: g.reviewTask } : {}),
+                  reason,
+                  ...(head ? { head } : {}),
+                },
+              ),
+            t.id,
+          )
+          .then((ok) => {
+            if (ok) {
+              this.snackbar.show(
+                `Accepted ${g.label || g.id} findings on #${t.id}`,
+              );
+              this.acted.emit();
+            }
+            return ok;
+          }),
+    });
+  }
 
   protected emitForceMerge(): void {
     const t = this.task();
@@ -536,9 +612,13 @@ export class TaskChangesTabComponent {
 
   protected readonly canCompare = computed(() => {
     const t = this.task();
+    const parts = (t.repo ?? "").trim().split("/").filter(Boolean);
     return !!(
       t.repo &&
+      parts.length === 2 &&
       t.branch &&
+      (t.state !== "proposed" || this.branchPresent() === true) &&
+      this.branchPresent() !== false &&
       this.can("GET /api/repos/{owner}/{name}/compare")
     );
   });
@@ -575,32 +655,38 @@ export class TaskChangesTabComponent {
   });
 
   protected readonly unsatisfiedGates = computed<MergeGate[]>(() =>
-    (this.task().mergeGates ?? []).filter(
-      (g) =>
-        g.id !== APPROVAL_GATE &&
-        g.state !== "passed" &&
-        g.state !== "overridden",
-    ),
+    unsatisfiedGates(this.task()),
   );
+
+  private lastBranchKey = "";
 
   constructor() {
     effect(() => {
-      const id = this.task().id;
+      const t = this.task();
+      const id = t.id;
+      const branchKey = `${id}|${t.branch ?? ""}|${t.base ?? ""}`;
+      void [t.pullRequest, t.prMergedAt, t.ci?.runId];
       untracked(() => {
-        this.preview.set(null);
-        this.fullDiffFiles.set(null);
-        this.fullDiffLoaded.set(false);
+        const branchChanged = this.lastBranchKey !== branchKey;
+        this.lastBranchKey = branchKey;
+        if (branchChanged) {
+          this.preview.set(null);
+          this.fullDiffFiles.set(null);
+          this.fullDiffLoaded.set(false);
+          this.ciRuns.set([]);
+          this.expandedRunId.set(null);
+          this.ciError.set(null);
+        }
         this.diffError.set(null);
-        this.ciRuns.set([]);
-        this.expandedRunId.set(null);
-        this.ciError.set(null);
+        this.diffSkipReason.set(null);
+        this.branchPresent.set(null);
         void this.loadInitial(id);
       });
     });
   }
 
   protected can(route: Parameters<AccessService["can"]>[0]): boolean {
-    return this.access.can(route, this.task().repo || undefined);
+    return this.access.canAccessTask(route, this.task().repo ?? null);
   }
 
   protected gateTone(g: MergeGate): string {
@@ -624,7 +710,42 @@ export class TaskChangesTabComponent {
   }
 
   private async loadInitial(id: string): Promise<void> {
+    const t0 = this.task();
+    let skipDiff: string | null = null;
+    if (!t0.branch && !t0.changelists?.length && !t0.pullRequest) {
+      skipDiff =
+        t0.state === "proposed"
+          ? "Proposals do not have a branch diff yet."
+          : "No branch associated with this task yet.";
+    } else if (t0.repo && t0.branch) {
+      const present = await this.branchRefs.hasBranch(t0.repo, t0.branch);
+      if (this.task().id !== id) return;
+      this.branchPresent.set(present);
+      if (present === false) {
+        skipDiff = t0.prMergedAt
+          ? "Pull request merged; branch is no longer present."
+          : t0.state === "proposed"
+            ? "Proposals do not have a branch diff yet."
+            : "Branch is no longer present on the remote.";
+      } else if (
+        t0.state === "proposed" &&
+        present !== true &&
+        !t0.pullRequest &&
+        !t0.changelists?.length
+      ) {
+        skipDiff = "Proposals do not have a branch diff yet.";
+      } else if (present === null && t0.prMergedAt) {
+        skipDiff = "Pull request already merged.";
+      }
+    } else if (t0.state === "proposed") {
+      skipDiff = "Proposals do not have a branch diff yet.";
+    } else if (t0.prMergedAt) {
+      skipDiff = "Pull request already merged.";
+    }
+    this.diffSkipReason.set(skipDiff);
+
     if (
+      !skipDiff &&
       typeof this.api.diffPreview === "function" &&
       this.can("GET /api/tasks/{id}/diff-preview")
     ) {
@@ -632,8 +753,16 @@ export class TaskChangesTabComponent {
       try {
         const p = await this.api.diffPreview(id, 12);
         if (this.task().id === id) this.preview.set(p);
-      } catch {
-        // Task may have no branch/diff yet; leave empty quietly unless compare fails.
+      } catch (err: unknown) {
+        const status = (err as { status?: number } | null)?.status;
+        const msg = errorText(err);
+        if (
+          this.task().id === id &&
+          status !== 404 &&
+          !/not found|no branch|missing/i.test(msg)
+        ) {
+          this.diffError.set(`Diff preview could not be loaded: ${msg}`);
+        }
       } finally {
         if (this.task().id === id) this.diffLoading.set(false);
       }

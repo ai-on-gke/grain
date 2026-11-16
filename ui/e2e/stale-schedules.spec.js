@@ -140,3 +140,26 @@ test("the CI pane narrowed to one repo shows only that repo's", async ({
     "workflow-acme-widgets-live-agent",
   );
 });
+
+// A reader without deployment:read is refused the stale-schedules read
+// (403, route_scopes.go), and the CI pane shows no banner rather than an
+// error (§10 walkthrough, docs/test-runs/2026-11-11-schedule-groups.md).
+test("a reader without deployment:read sees no stale-schedules banner", async ({
+  page,
+}) => {
+  let asked = false;
+  await page.route(
+    (u) => u.pathname === "/api/sandboxes",
+    async (route) => {
+      asked = true;
+      await route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        json: { error: "forbidden: needs deployment:read" },
+      });
+    },
+  );
+  await page.goto("/ci");
+  await expect.poll(() => asked).toBe(true);
+  await expect(page.getByTestId("stale-schedules")).toHaveCount(0);
+});

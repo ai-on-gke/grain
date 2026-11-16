@@ -17,6 +17,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,6 +29,8 @@ import (
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
 	"github.com/ai-on-gke/grain/pkg/model/sqlite"
+	"github.com/ai-on-gke/grain/pkg/namespace"
+	"github.com/ai-on-gke/grain/pkg/redact"
 	"github.com/ai-on-gke/grain/pkg/ui"
 )
 
@@ -534,5 +537,499 @@ func TestCIAPIReposOffersTheAPIToTheReposItLists(t *testing.T) {
 		if !r.Resolution.Refused {
 			t.Errorf("a listed repository's job was granted %s: %+v", r.Grant.Capability, r)
 		}
+	}
+}
+
+// A non-grain repository opted in via ci_api_repos gets a real API token
+// held strictly to its own repository across grain's actual ui.Server and
+// namespace handlers (including /api/fs/task, /api/tasks/{id}/* sub-routes,
+// attachments, events, states, and repository-less tasks), and its
+// POST /api/tasks/from-template filings obey DeclarationAcceptance holds,
+// person-only settings, and repository bounds.
+func TestAListedRepositorysCIAPITokenIsIsolatedEndToEnd(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	db, err := sqlite.Open(sqlite.DefaultConfig(dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := model.New(db)
+	if err := store.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	grainRepo := model.GrainSourceRepo()
+	widgets := model.RepoRef{Owner: "acme", Name: "widgets"}
+	now := time.Now().UTC()
+
+	api := &inProcessAPI{}
+	ns := &namespace.Server{
+		NewRedactor: func() *redact.Redactor { return BuildNamespaceRedactor(dataDir) },
+	}
+	WireSandboxNamespace(ns, SandboxNamespaceConfig{
+		DataDir:      dataDir,
+		Store:        store,
+		InsecureHTTP: true,
+		API:          api,
+	})
+	client := ui.NewClient(ui.Config{
+		DataDir:      dataDir,
+		Actor:        ui.DefaultActor("operator"),
+		Capabilities: ui.OfferedCapabilities(),
+		PullRequests: PullRequestGate{},
+	}, store)
+	uiSrv := ui.NewServerWithClient(client)
+	uiSrv.SetNamespace(func() *namespace.Server { return ns })
+	api.Set(uiSrv)
+
+	detailOf := func(id string) ui.TaskDetail {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/tasks/"+id, nil)
+		req.RemoteAddr = ""
+		w := httptest.NewRecorder()
+		uiSrv.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("in-process GET /api/tasks/%s = %d %s", id, w.Code, w.Body)
+		}
+		var d ui.TaskDetail
+		if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+
+	// Seed a grain task (with an attachment and comment), a repository-less
+	// standalone task, and an acme/widgets task.
+	grainTask, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:       "Grain secret task",
+		Description: "sensitive grain prompt body",
+		Repo:        grainRepo.String(),
+		Attachments: []ui.AttachmentUpload{{Filename: "secret.txt", ContentType: "text/plain", Content: "Z3JhaW4tc2VjcmV0"}},
+	})
+	if err != nil {
+		t.Fatalf("creating grain task: %v", err)
+	}
+	grainDetail := detailOf(grainTask.ID)
+	if len(grainDetail.Attachments) != 1 {
+		t.Fatalf("grain task attachments = %+v", grainDetail.Attachments)
+	}
+	noRepoTask, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:       "Standalone operator task",
+		Description: "sensitive standalone body",
+		NoRepo:      true,
+	})
+	if err != nil {
+		t.Fatalf("creating no-repo task: %v", err)
+	}
+	widgetsTask, err := client.CreateTask(ctx, ui.CreateTaskRequest{
+		Title:       "Widgets own task",
+		Description: "widgets task body",
+		Repo:        widgets.String(),
+		Attachments: []ui.AttachmentUpload{{Filename: "widgets.txt", ContentType: "text/plain", Content: "d2lkZ2V0cy1kYXRh"}},
+	})
+	if err != nil {
+		t.Fatalf("creating widgets task: %v", err)
+	}
+	widgetsDetail := detailOf(widgetsTask.ID)
+	if len(widgetsDetail.Attachments) != 1 {
+		t.Fatalf("widgets task attachments = %+v", widgetsDetail.Attachments)
+	}
+
+	// Declare templates in acme/widgets: one plain, one asking for a
+	// dangerous scope, one asking for bypass admission, one with keep_running,
+	// one carrying a declared push set, and one reaching ai-on-gke/grain.
+	adminGrant := "api:capabilities:admin"
+	adminTmplID := model.RepoDeclaredID(model.DeclaredTemplate, widgets, "admin-op")
+	if _, err := store.SyncRepoDeclarations(ctx, widgets, "c1", model.RepoDeclarations{
+		Templates: []model.DeclaredTemplateFile{
+			{
+				Path: model.TemplateDeclarationDir + "/triage.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "triage"),
+					Name:   "triage",
+					Title:  "Triage {{item}}",
+					Body:   "Triage {{item}}",
+					Target: &widgets,
+					Fields: []model.TemplateField{{Name: "item", Required: true}},
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/admin-op.yml",
+				Template: model.Template{
+					ID:     adminTmplID,
+					Name:   "admin-op",
+					Title:  "Admin task",
+					Body:   "Needs admin",
+					Target: &widgets,
+					Grants: []model.Grant{{Capability: adminGrant}},
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/bypass-op.yml",
+				Template: model.Template{
+					ID:        model.RepoDeclaredID(model.DeclaredTemplate, widgets, "bypass-op"),
+					Name:      "bypass-op",
+					Title:     "Bypass task",
+					Body:      "Needs bypass",
+					Target:    &widgets,
+					Admission: model.AdmissionBypass,
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/standing.yml",
+				Template: model.Template{
+					ID:          model.RepoDeclaredID(model.DeclaredTemplate, widgets, "standing"),
+					Name:        "standing",
+					Title:       "Keep running task",
+					Body:        "Stays running",
+					Target:      &widgets,
+					KeepRunning: true,
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/tagger.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "tagger"),
+					Name:   "tagger",
+					Title:  "Push tags",
+					Body:   "Tags release",
+					Target: &widgets,
+				},
+				Push: model.RefPushSet{{Pattern: "refs/tags/v*"}},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/cross-write.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "cross-write"),
+					Name:   "cross-write",
+					Title:  "Touch grain",
+					Body:   "Cross-repo write",
+					Target: &widgets,
+					Writes: []model.WriteTarget{{Repo: grainRepo}},
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/cross-read.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "cross-read"),
+					Name:   "cross-read",
+					Title:  "Read grain",
+					Body:   "Cross-repo read",
+					Target: &widgets,
+					Reads:  []model.RepoRef{grainRepo},
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/cross-grant.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "cross-grant"),
+					Name:   "cross-grant",
+					Title:  "Grant grain read",
+					Body:   "Cross-repo api grant",
+					Target: &widgets,
+					Grants: []model.Grant{{Capability: "api:tasks:read@" + grainRepo.String()}},
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/unscoped-read.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "unscoped-read"),
+					Name:   "unscoped-read",
+					Title:  "Deployment-wide tasks:read",
+					Body:   "Unscoped api grant",
+					Target: &widgets,
+					Grants: []model.Grant{{Capability: "api:tasks:read"}},
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/repo-write-api.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "repo-write-api"),
+					Name:   "repo-write-api",
+					Title:  "Repo settings write",
+					Body:   "Non-CI api write scope",
+					Target: &widgets,
+					Grants: []model.Grant{{Capability: "api:repos:write@" + widgets.String()}},
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/grain-source.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "grain-source"),
+					Name:   "grain-source",
+					Title:  "Grain source",
+					Body:   "Deployment daemon capability",
+					Target: &widgets,
+					Grants: []model.Grant{{Capability: model.GrainSourceGrant}},
+				},
+			},
+			{
+				Path: model.TemplateDeclarationDir + "/own-ci-read.yml",
+				Template: model.Template{
+					ID:     model.RepoDeclaredID(model.DeclaredTemplate, widgets, "own-ci-read"),
+					Name:   "own-ci-read",
+					Title:  "Own CI read",
+					Body:   "Repo-narrowed CI read",
+					Target: &widgets,
+					Grants: []model.Grant{{Capability: "api:ci:read@" + widgets.String()}},
+				},
+			},
+		},
+	}, now, time.UTC); err != nil {
+		t.Fatalf("syncing widgets declarations: %v", err)
+	}
+
+	gate := ciapi.NewEndpoint()
+	gate.Log = func(string, ...any) {}
+	gate.SetURL("http://192.0.2.1:9000")
+	gate.SetUpstream(uiSrv)
+	_, token, err := gate.Tokens.Mint(ciapi.Grant{
+		Repo:        widgets,
+		RunID:       "ci-widgets-1",
+		Expires:     now.Add(time.Hour),
+		Scopes:      []model.APIScope{"tasks:read", "tasks:from-template", "ci:read", "releases:read", "repos:read", "dispatch:read"},
+		AnyTemplate: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	do := func(method, target, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		var r *strings.Reader
+		if body != "" {
+			r = strings.NewReader(body)
+		} else {
+			r = strings.NewReader("")
+		}
+		req := httptest.NewRequest(method, target, r)
+		req.RemoteAddr = "10.0.0.5:4242"
+		req.Header.Set("Authorization", "Bearer "+token)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		w := httptest.NewRecorder()
+		gate.ServeHTTP(w, req)
+		return w
+	}
+
+	// 1. GET /api/tasks returns only acme/widgets' own task, never grain's or no-repo's.
+	listW := do(http.MethodGet, "/api/tasks", "")
+	if listW.Code != http.StatusOK {
+		t.Fatalf("GET /api/tasks = %d %s", listW.Code, listW.Body)
+	}
+	var listedTasks []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(listW.Body.Bytes(), &listedTasks); err != nil {
+		t.Fatalf("decoding /api/tasks: %v (%s)", err, listW.Body)
+	}
+	if len(listedTasks) != 1 || listedTasks[0].ID != widgetsTask.ID {
+		t.Errorf("GET /api/tasks = %+v, want only widgets task %s", listedTasks, widgetsTask.ID)
+	}
+
+	// 2. Cross-repo and no-repo task sub-routes, namespace files, attachments,
+	// and un-narrowed deployment routes are all 403 Forbidden.
+	for _, blocked := range []string{
+		"/api/tasks/" + grainTask.ID,
+		"/api/tasks/" + grainTask.ID + "/prompt",
+		"/api/tasks/" + grainTask.ID + "/messages",
+		"/api/tasks/" + grainTask.ID + "/diff-preview",
+		"/api/tasks/" + grainTask.ID + "/tree",
+		"/api/tasks/" + grainTask.ID + "/attempts/1/transcript",
+		"/api/tasks/" + grainTask.ID + "/attempts/1/capability-audit",
+		fmt.Sprintf("/api/tasks/%s/attachments/%d", grainTask.ID, grainDetail.Attachments[0].ID),
+		"/api/tasks/" + grainTask.ID + "/context",
+		"/api/fs/task/" + grainTask.ID + "/record.md",
+		"/api/tasks/" + noRepoTask.ID,
+		"/api/tasks/" + noRepoTask.ID + "/prompt",
+		"/api/fs/task/" + noRepoTask.ID + "/record.md",
+		"/api/fs/ci/ai-on-gke/grain",
+		"/api/ci/runs/gha:ai-on-gke:grain:123/log",
+		"/api/tasks/states",
+		"/api/states",
+		"/api/tasks/wait?ids=" + grainTask.ID + "&timeout=1",
+		"/api/release-approval-key",
+		"/api/git-ambient-sources",
+		"/api/pause",
+		"/api/pipeline-pause",
+	} {
+		if w := do(http.MethodGet, blocked, ""); w.Code != http.StatusForbidden {
+			t.Errorf("GET %s = %d %s, want 403 Forbidden", blocked, w.Code, w.Body)
+		}
+	}
+
+	// Meanwhile acme/widgets' own task, prompt, attachment, namespace record,
+	// and event feed remain readable and narrowed to acme/widgets.
+	for _, allowed := range []string{
+		"/api/tasks/" + widgetsTask.ID,
+		"/api/tasks/" + widgetsTask.ID + "/prompt",
+		fmt.Sprintf("/api/tasks/%s/attachments/%d", widgetsTask.ID, widgetsDetail.Attachments[0].ID),
+		"/api/fs/task/" + widgetsTask.ID + "/record.md",
+		"/api/events",
+	} {
+		w := do(http.MethodGet, allowed, "")
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %s = %d %s, want 200 OK", allowed, w.Code, w.Body)
+		}
+		if strings.Contains(w.Body.String(), "Grain secret task") || strings.Contains(w.Body.String(), "Standalone operator task") {
+			t.Errorf("GET %s leaked foreign task content: %s", allowed, w.Body)
+		}
+	}
+
+	// Batch task summaries narrow per task: widgetsTask is returned, while
+	// grainTask (foreign repo), noRepoTask (repo-less), and missing ids are
+	// silently omitted and indistinguishable.
+	sumW := do(http.MethodGet, fmt.Sprintf("/api/tasks/summaries?ids=%s,%s,%s,999999&comments_limit=1&attempts_limit=1",
+		widgetsTask.ID, grainTask.ID, noRepoTask.ID), "")
+	if sumW.Code != http.StatusOK {
+		t.Fatalf("GET /api/tasks/summaries = %d %s", sumW.Code, sumW.Body)
+	}
+	var sumResp struct {
+		Tasks map[string]ui.TaskDetail `json:"tasks"`
+	}
+	if err := json.Unmarshal(sumW.Body.Bytes(), &sumResp); err != nil {
+		t.Fatalf("decoding /api/tasks/summaries: %v (%s)", err, sumW.Body)
+	}
+	if len(sumResp.Tasks) != 1 {
+		t.Fatalf("GET /api/tasks/summaries = %+v, want only widgetsTask %s", sumResp.Tasks, widgetsTask.ID)
+	}
+	if _, ok := sumResp.Tasks[widgetsTask.ID]; !ok {
+		t.Fatalf("GET /api/tasks/summaries missing widgetsTask %s", widgetsTask.ID)
+	}
+	if fSum, mSum := do(http.MethodGet, "/api/tasks/summaries?ids="+grainTask.ID, ""), do(http.MethodGet, "/api/tasks/summaries?ids=999999", ""); fSum.Code != http.StatusOK || mSum.Code != http.StatusOK || fSum.Body.String() != mSum.Body.String() {
+		t.Errorf("CI summaries foreign vs missing diverged: foreign=(%d %q) missing=(%d %q)",
+			fSum.Code, fSum.Body.String(), mSum.Code, mSum.Body.String())
+	}
+	if badRepoW := do(http.MethodGet, "/api/tasks/summaries?ids="+grainTask.ID+"&repo=ai-on-gke/grain", ""); badRepoW.Code != http.StatusForbidden {
+		t.Errorf("CI summaries with foreign ?repo= = %d %s, want 403", badRepoW.Code, badRepoW.Body)
+	}
+
+	// 3. Plain template files approved and records automation attribution
+	// rather than claiming a human operator filed it.
+	plainW := do(http.MethodPost, "/api/tasks/from-template", `{"template":"triage","fields":{"item":"bug-1"}}`)
+	if plainW.Code != http.StatusCreated {
+		t.Fatalf("filing plain triage template = %d %s, want 201", plainW.Code, plainW.Body)
+	}
+	var plainCreated ui.Task
+	if err := json.Unmarshal(plainW.Body.Bytes(), &plainCreated); err != nil {
+		t.Fatal(err)
+	}
+	if !plainCreated.Approved || plainCreated.State != model.StateQueued {
+		t.Errorf("plain template filed as approved=%v state=%s, want approved queued", plainCreated.Approved, plainCreated.State)
+	}
+	storedPlain, err := store.GetTask(ctx, plainCreated.ID)
+	if err != nil || storedPlain == nil {
+		t.Fatalf("reading stored plain task: %v", err)
+	}
+	if storedPlain.Origin.Attribution.Actor.Kind != model.PrincipalAutomation || storedPlain.Origin.Attribution.Actor.ID != "ci-api" {
+		t.Errorf("plain task Origin.Attribution = %+v, want automation:ci-api", storedPlain.Origin.Attribution)
+	}
+
+	// 4. Templates reaching another repository via reads, writes, or API grants are refused (403).
+	for _, stem := range []string{"cross-write", "cross-read", "cross-grant"} {
+		if w := do(http.MethodPost, "/api/tasks/from-template", `{"template":"`+stem+`"}`); w.Code != http.StatusForbidden {
+			t.Errorf("filing %s = %d %s, want 403 Forbidden", stem, w.Code, w.Body)
+		}
+	}
+
+	// Meanwhile a template carrying a repo-narrowed CI-admitted API grant on
+	// acme/widgets itself still lands approved.
+	ownCIW := do(http.MethodPost, "/api/tasks/from-template", `{"template":"own-ci-read"}`)
+	if ownCIW.Code != http.StatusCreated {
+		t.Fatalf("filing own-ci-read = %d %s, want 201 Created", ownCIW.Code, ownCIW.Body)
+	}
+	var ownCITask ui.Task
+	if err := json.Unmarshal(ownCIW.Body.Bytes(), &ownCITask); err != nil {
+		t.Fatal(err)
+	}
+	if !ownCITask.Approved || ownCITask.State != model.StateQueued {
+		t.Errorf("own-ci-read landed approved=%v state=%s, want approved queued", ownCITask.Approved, ownCITask.State)
+	}
+
+	// 5. Templates asking for unaccepted person-held grants, deployment-wide or
+	// non-CI API/daemon grants, admission bypass, keep_running, or a declared
+	// push set land unapproved (StateProposed) waiting for a person rather than
+	// self-approving.
+	for _, stem := range []string{"admin-op", "unscoped-read", "repo-write-api", "grain-source", "bypass-op", "standing", "tagger"} {
+		w := do(http.MethodPost, "/api/tasks/from-template", `{"template":"`+stem+`"}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("filing %s = %d %s, want 201 Created (held unapproved)", stem, w.Code, w.Body)
+		}
+		var created ui.Task
+		if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+			t.Fatal(err)
+		}
+		if created.Approved || created.State != model.StateProposed {
+			t.Errorf("unaccepted %s landed approved=%v state=%s, want unapproved proposed", stem, created.Approved, created.State)
+		}
+	}
+
+	// 6. POST /api/notifications/release-pending requires the full release-gate-read
+	// scopes (including sandboxes:read), and even with them cannot overwrite an open
+	// pending-release notification belonging to another repository.
+	if w := do(http.MethodPost, "/api/notifications/release-pending", `{"version":"v2.4.0","body":"spoof"}`); w.Code != http.StatusForbidden {
+		t.Errorf("release-pending without sandboxes:read = %d %s, want 403 Forbidden", w.Code, w.Body)
+	}
+	grainSubj := model.NotificationSubject(model.FamilyReleasePending, "v2.4.0")
+	if _, err := store.RaiseNotification(ctx, model.Notification{
+		Subject:  grainSubj,
+		Severity: model.NotificationWarning,
+		Title:    "v2.4.0 is ready to promote",
+		Body:     "official grain soak summary",
+		Repo:     grainRepo.String(),
+		RaisedBy: "automation:grain",
+		Actions:  model.ReleasePendingActions,
+	}); err != nil {
+		t.Fatalf("seeding grain release-pending notification: %v", err)
+	}
+	_, widgetsGateToken, err := gate.Tokens.Mint(ciapi.Grant{
+		Repo:      widgets,
+		RunID:     "ci-widgets-gate",
+		Expires:   now.Add(time.Hour),
+		Scopes:    []model.APIScope{"ci:read", "tasks:read", "sandboxes:read", "tasks:from-template"},
+		Templates: []string{"release-notes"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spoofReq := httptest.NewRequest(http.MethodPost, "/api/notifications/release-pending",
+		strings.NewReader(`{"version":"v2.4.0","body":"spoofed widgets body"}`))
+	spoofReq.RemoteAddr = "10.0.0.5:4242"
+	spoofReq.Header.Set("Authorization", "Bearer "+widgetsGateToken)
+	spoofReq.Header.Set("Content-Type", "application/json")
+	spoofW := httptest.NewRecorder()
+	gate.ServeHTTP(spoofW, spoofReq)
+	if spoofW.Code != http.StatusForbidden {
+		t.Errorf("cross-repo release-pending overwrite = %d %s, want 403 Forbidden", spoofW.Code, spoofW.Body)
+	}
+	openGrainNotif, err := store.OpenNotification(ctx, grainSubj)
+	if err != nil || openGrainNotif == nil {
+		t.Fatalf("reading open grain notification: %+v (%v)", openGrainNotif, err)
+	}
+	if openGrainNotif.Repo != grainRepo.String() || openGrainNotif.Body != "official grain soak summary" {
+		t.Errorf("grain release-pending notification after spoof attempt = %+v, want untouched grain body", openGrainNotif)
+	}
+
+	// Once a person accepts admin-op's declaration set, subsequent CI filings
+	// within that accepted set land approved.
+	acc, err := store.GetDeclarationAcceptance(ctx, adminTmplID)
+	if err != nil || acc == nil || !acc.Awaiting() {
+		t.Fatalf("admin-op declaration acceptance record = %+v (%v), want awaiting acceptance", acc, err)
+	}
+	if _, err := store.AcceptDeclaration(ctx, adminTmplID, "alice@example.com", []string{"capabilities:admin"}, acc.Requested, now); err != nil {
+		t.Fatalf("accepting admin-op declaration: %v", err)
+	}
+	acceptedW := do(http.MethodPost, "/api/tasks/from-template", `{"template":"admin-op"}`)
+	if acceptedW.Code != http.StatusCreated {
+		t.Fatalf("filing accepted admin-op = %d %s, want 201", acceptedW.Code, acceptedW.Body)
+	}
+	var acceptedTask ui.Task
+	if err := json.Unmarshal(acceptedW.Body.Bytes(), &acceptedTask); err != nil {
+		t.Fatal(err)
+	}
+	if !acceptedTask.Approved || acceptedTask.State != model.StateQueued {
+		t.Errorf("accepted admin-op landed approved=%v state=%s, want approved queued", acceptedTask.Approved, acceptedTask.State)
 	}
 }

@@ -512,6 +512,61 @@ describe("NewTaskSheetComponent", () => {
     expect(
       q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.disabled,
     ).toBe(true);
+
+    // Ctrl+Enter must also respect !canFile() instead of bypassing the disabled submit button.
+    type('[data-testid="nt-title"]', "Attempt forbidden Ctrl+Enter");
+    q<HTMLInputElement>('[data-testid="nt-title"]')!.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    await settle(f);
+    expect(api.calls.filter((c) => c.route === "POST /api/tasks")).toHaveLength(
+      0,
+    );
+  });
+
+  it("validates a missing repository inline without claiming a deployment default target when none is configured", async () => {
+    const api = new FakeApi();
+    delete api.cfg["defaultTarget"];
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    const repoBtn = q<HTMLButtonElement>('[data-testid="nt-repo"]')!;
+    expect(repoBtn.textContent).toContain("Select a repository…");
+    expect(repoBtn.textContent).not.toContain("Deployment default target");
+
+    type('[data-testid="nt-title"]', "Check repo validation");
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+
+    expect(q('[data-testid="new-task-error"]')?.textContent).toContain(
+      "Pick a repository, or choose No repository.",
+    );
+    expect(repoBtn.classList.contains("is-invalid")).toBe(true);
+    expect(repoBtn.getAttribute("aria-describedby")).toBe("new-task-error");
+    expect(document.activeElement).toBe(repoBtn);
+    expect(api.calls.filter((c) => c.route === "POST /api/tasks")).toHaveLength(
+      0,
+    );
+
+    await pickPill(f, "nt-repo", "__none__");
+    await settle(f);
+    expect(q('[data-testid="new-task-error"]')).toBeNull();
+    expect(repoBtn.classList.contains("is-invalid")).toBe(false);
+
+    q<HTMLButtonElement>('[data-testid="new-task-submit"]')!.click();
+    await settle(f);
+    const created = api.calls.find((c) => c.route === "POST /api/tasks");
+    expect(created?.body).toMatchObject({
+      title: "Check repo validation",
+      repo: "",
+      noRepo: true,
+    });
   });
 
   it("opens in Start a workstream mode, records the started root, and opens Workstreams", async () => {
@@ -645,5 +700,42 @@ describe("NewTaskSheetComponent", () => {
     await settle(f);
     expect(q('[data-testid="nt-repo-opt-acme/web"]')).toBeTruthy();
     expect(q('[data-testid="nt-repo-opt-acme/api"]')).toBeNull();
+  });
+
+  it("loads templates and branches immediately without blocking on slow reachable-repos", async () => {
+    const api = new FakeApi();
+    const baseGet = api.get;
+    api.get = ((route: string, params?: unknown, query?: string) => {
+      if (route === "GET /api/deployment/reachable-repos") {
+        api.calls.push({ route });
+        return new Promise(() => undefined);
+      }
+      if (route === "GET /api/repos/{owner}/{name}/branches") {
+        api.calls.push({ route, params, query });
+        return Promise.resolve({
+          branches: [{ name: "main" }, { name: "release/v1" }],
+        });
+      }
+      return baseGet(route, params, query);
+    }) as typeof api.get;
+
+    const f = await render(api);
+    await open(f);
+    await settle(f);
+
+    expect(api.calls.some((c) => c.route === "GET /api/templates")).toBe(true);
+    expect(
+      api.calls.some(
+        (c) => c.route === "GET /api/repos/{owner}/{name}/branches",
+      ),
+    ).toBe(true);
+    // Template option populated even while reachable-repos is still pending.
+    q<HTMLButtonElement>('[data-testid="nt-template"]')!.click();
+    await settle(f);
+    expect(
+      q(
+        '[data-testid="nt-template-opt-declared:template:sidthe:grain:bugfix"]',
+      ),
+    ).toBeTruthy();
   });
 });

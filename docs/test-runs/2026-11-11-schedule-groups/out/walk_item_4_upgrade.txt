@@ -1,0 +1,46 @@
+=== schema 131 daemon, legacy schedule files (overlap: skip, no group)
+environment up: http://127.0.0.1:4263 (token in /var/tmp/walk-sched-upgrade/data/local-api-token)
+id                                         last_run_at                            
+-----------------------------------------  ---------------------------------------
+repo:schedule:acme:widgets:workflow.check                                         
+repo:schedule:acme:widgets:workflow.live                                          
+repo:schedule:acme:other:tidy              2026-11-11 21:07:51.525260182 +0000 UTC
+repo:schedule:acme:widgets:a-task          2026-11-11 21:07:51.525260182 +0000 UTC
+repo:schedule:acme:widgets:b-suite         2026-11-11 21:07:51.525260182 +0000 UTC
+repo:schedule:acme:widgets:c-workflow      2026-11-11 21:07:51.525260182 +0000 UTC
+id  tags                                      
+--  ------------------------------------------
+1   console-session:director                  
+2   schedule:repo:schedule:acme:other:tidy    
+3   schedule:repo:schedule:acme:widgets:a-task
+4                                             
+id  schedule_id                         status
+--  ----------------------------------  ------
+1   repo:schedule:acme:widgets:b-suite  active
+=== upgrade in place to HEAD
+daemon restarted: http://127.0.0.1:4263
+2026/11/11 21:08:01 grain: migrated the store in place from schema 131 to 141
+id                                         overlap  overlap_group
+-----------------------------------------  -------  -------------
+repo:schedule:acme:widgets:workflow.check  skip                  
+repo:schedule:acme:widgets:workflow.live   skip                  
+repo:schedule:acme:other:tidy              skip                  
+repo:schedule:acme:widgets:a-task          skip                  
+repo:schedule:acme:widgets:b-suite         skip                  
+repo:schedule:acme:widgets:c-workflow      skip                  
+id                                     last_run_at                            
+-------------------------------------  ---------------------------------------
+repo:schedule:acme:other:tidy          2026-11-11 21:07:51.525260182 +0000 UTC
+repo:schedule:acme:widgets:a-task      2026-11-11 21:07:51.525260182 +0000 UTC
+repo:schedule:acme:widgets:b-suite     2026-11-11 21:07:51.525260182 +0000 UTC
+repo:schedule:acme:widgets:c-workflow  2026-11-11 21:08:11.768804137 +0000 UTC
+schedule_id                         reason    task_id  held_by_schedule_id
+----------------------------------  --------  -------  -------------------
+repo:schedule:acme:other:tidy       task      2                           
+repo:schedule:acme:widgets:a-task   task      3                           
+repo:schedule:acme:widgets:b-suite  suiteRun                              
+id                conclusion
+----------------  ----------
+bb196b5d9a86c096  success   
+b11b111b1505301f  success   
+exit=0

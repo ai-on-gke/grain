@@ -27,7 +27,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -36,7 +35,6 @@ import (
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/mcp"
 	"github.com/ai-on-gke/grain/pkg/model"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 	"github.com/ai-on-gke/grain/pkg/orchestrator"
 	"github.com/ai-on-gke/grain/pkg/ui"
 	"github.com/ai-on-gke/grain/pkg/upgrade"
@@ -63,15 +61,7 @@ func (f *fakeDeploymentUpgrader) Running() (upgrade.Running, error) {
 
 func upgradeToolDeployment(t *testing.T, up ui.Upgrader, grants ...string) (string, *model.Store) {
 	t.Helper()
-	db, err := sqlite.Open(sqlite.DefaultConfig(filepath.Join(t.TempDir(), "data")))
-	if err != nil {
-		t.Fatalf("opening embedded sqlite: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store := model.New(db)
-	if err := store.Init(context.Background()); err != nil {
-		t.Fatalf("applying schema: %v", err)
-	}
+	store := testStore(t)
 	_ = store.PutConfig(context.Background(), model.Config{PollInterval: model.DefaultPollInterval})
 	human := model.Principal{Kind: model.PrincipalHuman, ID: "alice"}
 	var taskGrants []model.Grant
@@ -211,7 +201,7 @@ func TestTheUpgradeToolsNeedTheirOwnGrant(t *testing.T) {
 	wanted := []string{"api_get_upgrade_status", "api_start_upgrade", "api_cancel_scheduled_upgrade"}
 	client := ui.NewHTTPClient("http://127.0.0.1:1")
 
-	for _, grant := range []string{"api:self-upgrade", "self-upgrade"} {
+	for _, grant := range []string{"api:self-upgrade", model.APIRef("self-upgrade")} {
 		// grain-sandbox no longer exposes generated api_* tools directly.
 		sandboxTools := toolNames(daemon.GrantedDaemonTools(daemon.GrantNames{grant}, "", "", "", "335", client))
 		for _, name := range wanted {
@@ -230,7 +220,7 @@ func TestTheUpgradeToolsNeedTheirOwnGrant(t *testing.T) {
 	}
 
 	withoutURL, _ := upgradeToolDeployment(t, &fakeDeploymentUpgrader{},
-		"self-debug", "grain-log", "deployment-health", "bootstrap-playbooks", "self-repair")
+		model.GrainSourceGrant, model.GrainJournalGrant, model.GrainHealthGrant, model.BootstrapPlaybooksGrant, model.GrainHostExecGrant)
 	without := exploredDeploymentTools(t, withoutURL, "335")
 	for _, name := range []string{"api_start_upgrade", "api_cancel_scheduled_upgrade"} {
 		if slices.Contains(without, name) {
@@ -325,7 +315,7 @@ func TestSchedulingAnUpgradeThroughTheToolHoldsTheQueueAndWaitsForTheAgentItself
 
 func TestTheStatusToolReportsTheLiveCIRunsAnUpgradeIsWaitingFor(t *testing.T) {
 	t.Parallel()
-	serverURL, store := upgradeToolDeployment(t, &fakeDeploymentUpgrader{}, "self-upgrade")
+	serverURL, store := upgradeToolDeployment(t, &fakeDeploymentUpgrader{}, "api:self-upgrade")
 	ctx := context.Background()
 	now := time.Now().UTC()
 

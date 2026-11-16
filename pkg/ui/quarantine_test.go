@@ -76,8 +76,15 @@ func TestQuarantineTestRouteAuthorizationAndProposal(t *testing.T) {
 		t.Errorf("follow-up description missing root-relative link: %q", followUp.Description)
 	}
 
-	// Preset and bare legacy alias both authorize, including on the sandbox-cli channel, and fileFollowUp=false skips filing.
-	for _, id := range []string{"12", "13"} {
+	// The retired bare test-quarantine name no longer authorizes.
+	if rec := doWithHeaders(t, srv, http.MethodPost, "/api/tests/quarantine",
+		`{"testName":"pkg/bar.TestOther","reason":"contended","fileFollowUp":false}`,
+		map[string]string{ui.ActingTaskHeader: "13", ui.ChannelHeader: ui.SandboxCLIChannel, "Content-Type": "application/json"},
+	); rec.Code != http.StatusForbidden {
+		t.Fatalf("task 13 holding bare test-quarantine: got %d %s, want 403", rec.Code, rec.Body.String())
+	}
+	// The preset authorizes, including on the sandbox-cli channel, and fileFollowUp=false skips filing.
+	for _, id := range []string{"12"} {
 		rec := doWithHeaders(t, srv, http.MethodPost, "/api/tests/quarantine",
 			`{"testName":"pkg/bar.TestOther","reason":"contended","fileFollowUp":false}`,
 			map[string]string{

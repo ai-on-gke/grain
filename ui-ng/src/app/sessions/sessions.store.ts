@@ -27,6 +27,7 @@ import type {
   TaskDetail,
 } from "../api/models";
 import type { GrainPlanBlock } from "../director/director-draft";
+import { AccessService } from "../services/access.service";
 import { topologicalPlanOrder } from "./session-artifacts";
 import {
   DIRECTOR_ID,
@@ -96,6 +97,7 @@ const RUN_FIXED_KEYS: (keyof UpdateSessionPatch)[] = [
 export class SessionsStore {
   private readonly api = inject(GrainApi);
   private readonly events = inject(GrainEvents);
+  private readonly access = inject(AccessService);
   private readonly zone = inject(NgZone);
 
   readonly sessions = signal<ConsoleSession[]>([]);
@@ -239,6 +241,9 @@ export class SessionsStore {
   private async loadConfigModels(): Promise<void> {
     try {
       const cfg = (await this.api.config()) as GrainConfig | null;
+      if (cfg && !this.access.configLoaded()) {
+        this.access.setConfig(cfg);
+      }
       if (Array.isArray(cfg?.models)) this.models.set(cfg.models);
       if (typeof cfg?.defaultModel === "string") {
         this.defaultModel.set(cfg.defaultModel);
@@ -690,11 +695,14 @@ export class SessionsStore {
         delete p.tasksApproved;
         if (Object.keys(p).length === 0) return;
       }
-      if (!sessionObj?.taskId || p.readsAll !== undefined) {
-        await this.api.post("POST /api/settings", undefined, p);
-      } else {
-        await this.api.put("PUT /api/console-sessions/{id}", { id }, p);
-      }
+      // Every setting here is the session's own row, which
+      // PUT /api/console-sessions/{id} edits whether or not a run is open
+      // (as the classic page does). A session between runs has no taskId;
+      // its edits used to go to POST /api/settings, the deployment's
+      // settings, which ignored them, so a ticked box or a picked model
+      // reverted on the next read.
+      if (!id) return;
+      await this.api.put("PUT /api/console-sessions/{id}", { id }, p);
     });
   }
 

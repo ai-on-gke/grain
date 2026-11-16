@@ -79,6 +79,7 @@ var contractTypes = []contractType{
 	{RenewReply{}, "json"},
 	{Allowlist{}, "yaml"},
 	{Entry{}, "yaml"},
+	{UpdatePolicy{}, "yaml"},
 }
 
 // contractFields is the feature every field of contractTypes ships under,
@@ -104,6 +105,7 @@ var contractFields = map[string]Feature{
 	"Hello.logins":        FeatureLogins,
 	"Hello.login_targets": FeatureLoginsMap,
 	"Hello.agents_only":   FeatureAgentsOnly, "Hello.features": FeatureFeatures,
+	"Hello.platform": FeatureSelfUpdate, "Hello.update_mode": FeatureSelfUpdate, "Hello.update_pin": FeatureSelfUpdate,
 
 	"Process.id": FeatureDetach, "Process.run": FeatureDetach, "Process.task": FeatureDetach,
 	"Process.kind": FeatureDetach, "Process.name": FeatureDetach, "Process.pid": FeatureDetach,
@@ -133,8 +135,9 @@ var contractFields = map[string]Feature{
 
 	"Allowlist.clis": FeatureStart, "Allowlist.capabilities": FeatureStart,
 	"Allowlist.drain_cap": FeatureDrain, "Allowlist.capacity": FeatureStart, "Allowlist.labels": FeatureStart,
-	"Allowlist.logins": FeatureLoginsMap,
-	"Entry.path":       FeatureStart, "Entry.command": FeatureStart, "Entry.args": FeatureStart,
+	"Allowlist.logins": FeatureLoginsMap, "Allowlist.update": FeatureSelfUpdate,
+	"UpdatePolicy.mode": FeatureSelfUpdate, "UpdatePolicy.pin": FeatureSelfUpdate,
+	"Entry.path": FeatureStart, "Entry.command": FeatureStart, "Entry.args": FeatureStart,
 	"Entry.extra_args": FeatureStart, "Entry.paths_under": FeatureStart, "Entry.cwd_under": FeatureStart,
 	"Entry.env": FeatureStart, "Entry.pass_env": FeatureStart, "Entry.set_env": FeatureStart,
 	"Entry.max_duration": FeatureStart,
@@ -317,6 +320,9 @@ func renderContract(t *testing.T) (string, []string) {
 	}
 	for _, v := range envDenyPatterns() {
 		fmt.Fprintf(&b, "env_deny %s\n", v)
+	}
+	for _, v := range envDenyV2 {
+		fmt.Fprintf(&b, "env_deny_v2 %s\n", v)
 	}
 	fmt.Fprintf(&b, "max_frame %d\n", maxFrame)
 	fmt.Fprintf(&b, "max_stage_data %d\n", MaxStageData)

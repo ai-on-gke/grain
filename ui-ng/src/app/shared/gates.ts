@@ -21,6 +21,17 @@ import type { MergeGate, Task, TaskDetail } from "../api/models";
 
 export const APPROVAL_GATE = "approval";
 
+// unsatisfiedGates are the gates a force merge may override: every gate
+// short of passed or overridden, approval aside (Submit is the person's).
+export function unsatisfiedGates(t: TaskDetail): MergeGate[] {
+  return (t.mergeGates ?? []).filter(
+    (g) =>
+      g.id !== APPROVAL_GATE &&
+      g.state !== "passed" &&
+      g.state !== "overridden",
+  );
+}
+
 export type GateRollup = "passed" | "running" | "failing" | "unknown";
 
 export interface GateSummary {
@@ -112,7 +123,18 @@ export function gateSummary(t: Task, listOnly = false): GateSummary {
 // while CI is unknown or still being checked against the task detail. A
 // verified running gate does not block: Submit records the approval and
 // the change merges once its gates pass.
+//
+// A changelist task has no merge gates: the change system says whether
+// it may be submitted (clSubmit, pkg/ui ChangeSubmit), so its answer and
+// reasons are the ones read out, as the classic Inbox does.
 export function submitBlock(t: Task, listOnly = false): string {
+  if (t.clSubmit && !t.mergeGates?.length) {
+    if (t.clSubmit.canSubmit) return "";
+    const reasons = (t.clSubmit.reasons ?? []).filter(Boolean);
+    return reasons.length
+      ? `Not submittable yet: ${reasons.join("; ")}.`
+      : "Not submittable yet.";
+  }
   const s = gateSummary(t, listOnly);
   if (s.failing.length) {
     return `Submit is off: ${s.failing.join(", ")} ${s.failing.length === 1 ? "is" : "are"} failing. Fix it or override the gate on the task page.`;

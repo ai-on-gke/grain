@@ -41,6 +41,7 @@ This document describes the GitHub Actions ports in `.github/workflows/` of the 
 | `host-script-container` | `host-script container` | Builds `Dockerfile.k8s-sandbox` (without agent CLIs) and runs `TestHostScriptGrantInARealContainerSandbox` | Same commands against the runner's Docker daemon | Active (`ubuntu-latest`) |
 | `frontend` | `frontend` | Runs `make frontend`, `make fmt-frontend`, and `npm test -- --maxWorkers=4` | Same commands on `ubuntu-latest` with `actions/setup-node` and npm/`ui/node_modules` caching | Active (`ubuntu-latest`) |
 | `ui-e2e` | `ui e2e` | Builds frontend, installs Playwright Chromium (`make playwright-browsers`), runs `make test-e2e-suite`, collects `ui/test-results` | Same commands on `ubuntu-latest` with third-party apt source cleanup, `/var/cache/playwright` caching, and `actions/upload-artifact` on failure | Active (`ubuntu-latest`) |
+| `ui-ng-e2e` | `ui-ng e2e` | — (GitHub Actions only) | Builds frontend, installs Playwright Chromium, runs `make test-e2e-ng-suite` (`ui-ng/e2e`, projects desktop/phone/dark) and uploads `ui-ng/test-results` on failure. Not a required check for its first week | Active (`ubuntu-latest`) |
 | `lint` | `lint` | Runs `shellcheck` over `git ls-files -- 'scripts/*.sh' 'deploy/terraform/*.sh'` | Runs `actionlint` over `.github/workflows/` and `shellcheck` over tracked shell scripts | Active (`ubuntu-latest`) |
 | `terraform` | `terraform` | Runs `terraform fmt -check`, `init -backend=false`, and `validate` for `deploy/terraform/gcp` | Pins Terraform `1.9.8` via `hashicorp/setup-terraform` and runs the same format/init/validate steps | Active (`ubuntu-latest`) |
 | `installer-e2e` | `installer` | Assembles `grain-installer:test` via `scripts/installer-test-image.sh` and runs `./tests/installer` (`GRAIN_INSTALLER_E2E=1`) | Same commands on `ubuntu-latest` (pulls from `docker.io/grainai/*`, authenticated when `DOCKER_PAT` is set, and uses host systemd/Docker) | Active (`ubuntu-latest`) |
@@ -60,6 +61,7 @@ Because GitHub Actions only supports native `paths:` / `paths-ignore:` filters a
   - **`frontend`** (gates `frontend`): `true` when any changed file matches `ui/**`, `Makefile`, `scripts/warm-npm-cache.sh`, or `.github/workflows/tests.yml`.
   - **`lint`** (gates `lint`): `true` when any changed file matches `scripts/**/*.sh`, `deploy/terraform/**/*.sh`, or `.github/workflows/tests.yml`.
   - **`terraform`** (gates `terraform`): `true` when any changed file matches `deploy/terraform/**` or `.github/workflows/tests.yml`.
+  - **`ui-ng-e2e`** (gates `ui-ng e2e`, a job-level filter rather than a group): `true` when any changed file matches `ui-ng/**`, `ui-shared/**`, `pkg/ui/**`, `pkg/demo/**`, or the job's own plumbing -- `Makefile`, `scripts/warm-npm-cache.sh`, `ui/package.json`, `ui/package-lock.json` (whose Playwright `make playwright-browsers` installs the browser from) and `.github/workflows/tests.yml` -- or whenever `go_backend` is `true` (the /next/ specs drive the whole Go server, as they did inside `ui e2e`), so only a change to the rest of `ui/**` or `ui-hub/**` alone skips it. GitHub-only: grain CI has no counterpart job.
 - **Full suite on `push` and `merge_group`**: When `github.event_name` is `push` or `merge_group` (or when `git diff` against the PR base cannot be resolved cleanly), `scripts/github-ci-changes.sh` fails open (`true` for every group and job).
 - **Subset selection on `workflow_dispatch` (`inputs.jobs`)**: Operators or agents can pass a comma-separated list of job IDs (e.g. `go-model,postgres`) via the `jobs` workflow input to run only those jobs on a branch; leaving `jobs` empty runs all active jobs. Grain's GitHub check reader (`pkg/forge/health.go`, `HealthFrom`) treats `"skipped"` check runs as passing (`PrClean`).
 
@@ -135,7 +137,7 @@ These `.grain/workflows/` files have no Actions counterpart, because they need s
 | `kvm-route-stress.yml` | `workflow_dispatch` | The grain-sandbox form of the stress run; the scheduled form is `nightly.yml`'s `kvm-route-stress` job. |
 | `live-secrets-repo.yml` | `.grain/schedules/live-secrets-repo.yml` (05:53 UTC, `grain-ci: true`), `workflow_dispatch` | It needs the `https://grain.dev/capabilities/github#sandbox-repo` capability (formerly `github-sandbox`): a GitHub token with Contents: write on a private repository, which is deliberately kept out of GitHub Actions secrets. Its own `on: schedule` cron is dropped in a `ci_mode: github` repository; it stays because a schedule can only run a workflow that answers a schedule event. The schedule file's `grain-ci: true` (`docs/declarations.md`) is what runs it nightly. |
 
-A scheduled grain CI workflow in a `ci_mode: github` repository does not run by itself; `tests/deploy/scheduled_workflows_test.go` requires a `grain-ci: true` schedule for every `.grain/workflows` file that declares `on: schedule`. `grain health` reports any scheduled workflow or schedule that has gone more than twice its cadence without a run, by name (`stale-schedules`).
+A scheduled grain CI workflow in a `ci_mode: github` repository does not run by itself; `tests/deploy/scheduled_workflows_test.go` requires a `grain-ci: true` schedule for every `.grain/workflows` file that declares `on: schedule`. `grain health` reports any scheduled workflow or schedule that has gone more than twice its cadence without a run, by name (`stale-schedules`), and exits 1 while one does.
 
 ## What Was Emulated from the Grain Sandbox Image (`Granulefile`)
 
@@ -233,7 +235,7 @@ The cost is that a superseded commit has no `docker.io/grainai/*:sha-<short>` im
 
 ## Mapping Grain CI Capabilities to GitHub Actions
 
-On grain CI these are methods of the in-process release server (`https://grain.dev/capabilities/release#package-publish`, `#image-signing`, `#registry-push`; the bare names are one-release aliases, see [ci-capabilities.md](ci-capabilities.md)). The names below are those grain CI capabilities; GitHub Actions has no capability grants and maps each to secrets and permissions instead.
+On grain CI these are methods of the in-process release server (`https://grain.dev/capabilities/release#package-publish`, `#image-signing`, `#registry-push`; the retired bare names are no longer accepted, see [ci-capabilities.md](ci-capabilities.md)). The names below are those grain CI capabilities; GitHub Actions has no capability grants and maps each to secrets and permissions instead.
 
 1. **`release#package-publish`**:
    - Mapped via `scripts/configure-dockerhub-auth.sh` to `PACKAGE_PUBLISH_REGISTRY` (default `docker.io`), `PACKAGE_PUBLISH_USERNAME` (from `vars.DOCKERHUB_USERNAME`, default `grainai`), and `PACKAGE_PUBLISH_TOKEN` (from `secrets.DOCKER_PAT`). Missing `DOCKER_PAT` or a failed `docker login` fails fast before any build or push step runs.
@@ -514,3 +516,18 @@ How the reads behave:
   a `gha:` id names whichever repository its caller wrote.
 - `grain ci wait` on a task's branch waits on the GitHub checks that
   gate it.
+- `grain ci retrigger` and `grain ci run-job <job>` on a `ci_mode: github`
+  task re-run the Actions runs at the head of the task's own pull request
+  (`--all` every job; `--jobs` or `run-job` one job) without pushing a
+  commit, up to 3 re-runs per run at one commit
+  (`ui.MaxActionsRerunsPerHead`, automatic runner-fault re-runs included).
+  Re-running any other `gha:` run is `POST /api/ci/runs/{id}/rerun` (or
+  the host CLI's `grain ci retrigger <gha:...>`), under `ci:write`.
+- On the default branch of any `ci_mode: github` repository, a concluded
+  `failure` of a gating workflow (`tests.yml`, `test.yml` or `ci.yml`)
+  automatically files one priority-9 repair task tagged
+  `github-base-repair:<repo>` (`pkg/orchestrator/githubbaserepair.go`),
+  appends further red runs to it, closes it on the next fully green push
+  run (`nightly-green` goal), and raises `pipeline.base-red-unattended`
+  when unattended or `pipeline.base-no-verdict` after 6 hours with runs in
+  flight and no finished verdict.

@@ -353,6 +353,10 @@ func Run(opts Options) error {
 	// rollback over -github-sim answered 500
 	// (docs/test-runs/2026-11-04-release-approval.md, F3).
 	cfg.ReleaseApprovalDir = dir
+	// Codex subscription logins (/api/agent-backends/{id}/codex-auth)
+	// live beside the throwaway store, where a deployment keeps them in
+	// its data directory: without a path the upload answered 404.
+	cfg.CodexAuthFile = daemon.ManagedCodexAuthFile(dir)
 
 	// The one piece of this demo that is not a row in the store: the
 	// System pane's Logs tab, which reads ui.Config.Logs rather than
@@ -751,7 +755,7 @@ func Run(opts Options) error {
 		return fmt.Errorf("grain demo: listening on %s: %v", opts.Addr, err)
 	}
 	// ln.Addr() rather than opts.Addr, so a demo told to listen on port 0
-	// says which port the kernel actually gave it. ui/e2e/fixtures.js
+	// says which port the kernel actually gave it. ui-shared/e2e/demo.js
 	// does exactly that -- it starts one of these per Playwright worker
 	// on 127.0.0.1:0 and reads the port back off this line, having no
 	// other way to learn it -- so the URL here is a small interface as
@@ -1670,6 +1674,9 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 				// so the template page shows a sized template.
 				Sandbox: model.SandboxShape{DiskGB: 100},
 			},
+			// A declared `push:` list (grain/task-2536), so the repository
+			// page's Advanced tab has an extra push ref to show.
+			Push: []model.RefPush{{Pattern: "refs/tags/nightly-*", Force: true}},
 		}},
 		Suites: []model.DeclaredSuiteFile{{
 			Path: model.SuiteDeclarationDir + "/smoke.yml",
@@ -1835,6 +1842,12 @@ func seedDemo(ctx context.Context, store *model.Store, cfg ui.Config) error {
 	demoDrafts.leave(clTask.ID, "cl/612400001", 2, "the run ended while its reviewer was still commenting")
 
 	if err := seedDemoDurableTask(ctx, store, create, ago); err != nil {
+		return err
+	}
+	if err := seedDemoRolledOverTask(ctx, store, create, ago); err != nil {
+		return err
+	}
+	if err := seedDemoCIWait(ctx, store, create, ago); err != nil {
 		return err
 	}
 	return nil

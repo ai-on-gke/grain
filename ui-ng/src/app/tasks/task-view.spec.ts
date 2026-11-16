@@ -13,8 +13,10 @@
 // limitations under the License.
 
 import type { Task } from "../api/models";
+import { taskPriority } from "./batch-edit-dialog.component";
 import {
   ago,
+  heldForRunNow,
   bands,
   inTab,
   levelOf,
@@ -22,6 +24,7 @@ import {
   placement,
   planMove,
   sorted,
+  timelineEndMs,
 } from "./task-view";
 
 const t = (id: string, priority: number, extra: Partial<Task> = {}): Task =>
@@ -145,5 +148,74 @@ describe("task view", () => {
     expect(ago("2026-11-11T09:00:00Z", now)).toBe("3h");
     expect(ago("2026-11-08T12:00:00Z", now)).toBe("3d");
     expect(ago(undefined, now)).toBe("");
+  });
+});
+
+describe("timelineEndMs", () => {
+  const now = Date.parse("2026-11-14T12:00:00Z");
+  const task = (state: string, extra: Partial<Task> = {}): Task =>
+    ({
+      id: "1",
+      title: "t",
+      state,
+      createdAt: "2026-11-14T08:00:00Z",
+      ...extra,
+    }) as Task;
+
+  it("runs a still-open task to now", () => {
+    for (const state of [
+      "queued",
+      "proposed",
+      "awaiting_reply",
+      "deferred",
+      "running",
+    ]) {
+      expect(timelineEndMs(task(state), now)).toBe(now);
+    }
+  });
+
+  it("ends a task where its work ended", () => {
+    const ended = "2026-11-14T09:00:00Z";
+    expect(
+      timelineEndMs(task("awaiting_submit", { endedAt: ended }), now),
+    ).toBe(Date.parse(ended));
+    expect(timelineEndMs(task("closed", { closedAt: ended }), now)).toBe(
+      Date.parse(ended),
+    );
+  });
+
+  it("ends a finished task with no end recorded at its filing", () => {
+    expect(timelineEndMs(task("completed"), now)).toBe(
+      Date.parse("2026-11-14T08:00:00Z"),
+    );
+  });
+});
+
+describe("heldForRunNow", () => {
+  const manual = { paused: true, runNowPasses: true };
+  it("marks a queued task only while a pause Run now passes holds it", () => {
+    expect(heldForRunNow(manual, t("1", 5))).toBe(true);
+    expect(heldForRunNow({ paused: true }, t("1", 5))).toBe(false);
+    expect(heldForRunNow(null, t("1", 5))).toBe(false);
+    expect(heldForRunNow(manual, t("1", 5, { state: "running" }))).toBe(false);
+  });
+  it("drops the marker once the task has been asked to run", () => {
+    expect(heldForRunNow(manual, t("1", 5, { runNowAt: "x" }))).toBe(false);
+  });
+  it("leaves blocked, admitted and awaited tasks unmarked", () => {
+    expect(heldForRunNow(manual, t("1", 5, { blocked: true }))).toBe(false);
+    expect(heldForRunNow(manual, t("1", 5, { admission: "bypass" }))).toBe(
+      false,
+    );
+    expect(heldForRunNow({ ...manual, untilTask: "1" }, t("1", 5))).toBe(false);
+  });
+});
+
+describe("taskPriority", () => {
+  it("takes whole numbers from 1 up and refuses the rest", () => {
+    expect(taskPriority("7")).toBe(7);
+    expect(taskPriority(" 12 ")).toBe(12);
+    for (const bad of ["0", "-1", "1e3", "2.5", "", "abc"])
+      expect(taskPriority(bad)).toBeNaN();
   });
 });

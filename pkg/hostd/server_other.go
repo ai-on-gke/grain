@@ -35,8 +35,12 @@ type Server struct {
 	Logf            func(format string, args ...any)
 	Build           string
 	CurrentLink     string
-	ExitedRetention time.Duration
-	Poll            time.Duration
+	AgentsOnly      bool
+	SelfUpdate      bool
+
+	OnControllerHello func()
+	ExitedRetention   time.Duration
+	Poll              time.Duration
 
 	Remote                             func(ctx context.Context) (net.Conn, error)
 	RemoteMinBackoff, RemoteMaxBackoff time.Duration

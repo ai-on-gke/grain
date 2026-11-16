@@ -1,0 +1,75 @@
+NOTICE:  database "walk_wl_browser_postgres" does not exist, skipping
+inbox walk 1440-light ...
+inbox walk 1440-dark ...
+inbox walk 390-light ...
+inbox walk 390-dark ...
+seeding 3000 comments on task 3 ...
+== inbox 1440-light
+    291 ms  reads=4  notification raised (warning)
+      3 ms  reads=-  viewer sees the widgets notification
+    285 ms  reads=3  notification re-raised (critical)
+    290 ms  reads=3  notification acked (list re-read)
+    286 ms  reads=3  notification cleared
+    292 ms  reads=3  acme/secret notification raised
+    297 ms  reads=3  deployment-wide notification raised
+    236 ms  reads=4  host-script pending (deploy)
+    262 ms  reads=4  approved
+    287 ms  reads=3  host-script pending (rollback)
+    270 ms  reads=4  denied
+    292 ms  reads=3  host-script pending (migrate)
+    272 ms  reads=3  caller /expire
+    291 ms  reads=3  host-script pending (slow, 2 s deadline)
+    275 ms  reads=5  sweep expiry (a task read sweeps it)
+== inbox 1440-dark
+    297 ms  reads=4  notification raised (warning)
+     32 ms  reads=-  viewer sees the widgets notification
+    289 ms  reads=3  notification re-raised (critical)
+    321 ms  reads=3  notification acked (list re-read)
+    321 ms  reads=3  notification cleared
+    295 ms  reads=3  acme/secret notification raised
+    319 ms  reads=3  deployment-wide notification raised
+    260 ms  reads=4  host-script pending (deploy)
+    318 ms  reads=4  approved
+    320 ms  reads=3  host-script pending (rollback)
+    373 ms  reads=4  denied
+    296 ms  reads=3  host-script pending (migrate)
+    279 ms  reads=3  caller /expire
+    301 ms  reads=4  host-script pending (slow, 2 s deadline)
+    260 ms  reads=5  sweep expiry (a task read sweeps it)
+== inbox 390-light
+    346 ms  reads=4  notification raised (warning)
+     16 ms  reads=-  viewer sees the widgets notification
+    293 ms  reads=3  notification re-raised (critical)
+    293 ms  reads=3  notification acked (list re-read)
+    325 ms  reads=3  notification cleared
+    279 ms  reads=3  acme/secret notification raised
+    290 ms  reads=3  deployment-wide notification raised
+    208 ms  reads=4  host-script pending (deploy)
+    261 ms  reads=4  approved
+    290 ms  reads=3  host-script pending (rollback)
+    274 ms  reads=4  denied
+    290 ms  reads=3  host-script pending (migrate)
+    289 ms  reads=3  caller /expire
+    286 ms  reads=3  host-script pending (slow, 2 s deadline)
+    275 ms  reads=5  sweep expiry (a task read sweeps it)
+== inbox 390-dark
+    302 ms  reads=4  notification raised (warning)
+      3 ms  reads=-  viewer sees the widgets notification
+    289 ms  reads=3  notification re-raised (critical)
+    308 ms  reads=3  notification acked (list re-read)
+    292 ms  reads=3  notification cleared
+    293 ms  reads=3  acme/secret notification raised
+    290 ms  reads=3  deployment-wide notification raised
+    234 ms  reads=4  host-script pending (deploy)
+    277 ms  reads=4  approved
+    290 ms  reads=3  host-script pending (rollback)
+    260 ms  reads=4  denied
+    287 ms  reads=3  host-script pending (migrate)
+    282 ms  reads=3  caller /expire
+    288 ms  reads=3  host-script pending (slow, 2 s deadline)
+    265 ms  reads=5  sweep expiry (a task read sweeps it)
+== next-task: 6 comment reads (5 comments_before pages), renders 3000, highlighted=true inView=true focused=true scrollAfter=0 2434 ms url=/next/task/3#comment=19
+== next-tasks-redirect: 6 comment reads (5 comments_before pages), renders 3000, highlighted=true inView=true focused=true scrollAfter=0 1501 ms url=/next/task/3#comment=19
+== next-in-page-hash: 6 comment reads (6 comments_before pages), renders 100->3000, highlighted=true inView=true focused=true scrollAfter=0 1909 ms url=/next/task/3#comment=29
+== classic-tasks: 7 comment reads (6 comments_before pages), renders 50->3000, highlighted=true inView=true focused=true scrollAfter=0 7427 ms url=/tasks/3#comment=19
+all checks passed

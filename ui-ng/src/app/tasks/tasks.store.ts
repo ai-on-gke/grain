@@ -22,7 +22,7 @@ import {
   signal,
   untracked,
 } from "@angular/core";
-import { GrainApi } from "../api/grain-api.service";
+import { GrainApi, loadTaskSummaryBatches } from "../api/grain-api.service";
 import { GrainEvents } from "../api/grain-events.service";
 import { InboxStore } from "../inbox/inbox.store";
 import type {
@@ -32,6 +32,7 @@ import type {
   CreateBoardRequest,
   Task,
   TaskDetail,
+  TaskSummariesResponse,
 } from "../api/models";
 import { AccessService } from "../services/access.service";
 import { TaskFeedStore } from "../services/task-feed.service";
@@ -50,6 +51,30 @@ import {
 
 export const POLL_MS = 3000;
 export const CLOSED_PAGE = 50;
+
+// A batch action's outcome: how many tasks it failed on and which ones it
+// changed, so the caller reports and undoes exactly those.
+export interface BatchResult {
+  failed: number;
+  landed: readonly string[];
+  // Never sent, because Stop was pressed before their turn.
+  skipped: readonly string[];
+}
+
+// BATCH_CONCURRENCY is how many calls of a bulk action are in flight at
+// once: enough that a batch is not one round trip per task, few enough
+// that Stop still leaves most of a long one unsent.
+const BATCH_CONCURRENCY = 4;
+
+// BatchProgress is the bulk action the selection bar is showing, counted
+// as each call settles, so the bar can say how far it has got.
+export interface BatchProgress {
+  seq: number;
+  key: string;
+  done: number;
+  total: number;
+  stopping: boolean;
+}
 
 // An undo is the call that puts things back, described for the snackbar.
 export interface Undo {
@@ -76,6 +101,7 @@ export class TasksStore implements OnDestroy {
   readonly details = signal<Record<string, TaskDetail>>({});
   readonly baseBranchGates = signal<BaseBranchGate[]>([]);
   readonly boards = signal<Board[]>([]);
+  readonly boardsError = signal<string | null>(null);
   readonly closed = signal<Task[]>([]);
   readonly closedCursor = signal<string | null>(null);
   readonly closedLoaded = signal(false);
@@ -85,6 +111,11 @@ export class TasksStore implements OnDestroy {
   readonly loadError = signal<string | null>(null);
   readonly actionError = signal<string | null>(null);
   readonly busy = signal<ReadonlySet<string>>(new Set());
+  // batch is the latest multi-task action still under way; Stop
+  // (stopBatch) reaches every one in flight through its own token.
+  readonly batch = signal<BatchProgress | null>(null);
+  private readonly running = new Set<{ stop: boolean }>();
+  private batchSeq = 0;
 
   readonly work = computed(() => this.live().filter(isWork));
   readonly backlog = computed(() =>
@@ -108,6 +139,8 @@ export class TasksStore implements OnDestroy {
   private refreshing: Promise<void> | null = null;
   private eventTimer: ReturnType<typeof setTimeout> | null = null;
   private queuedRefresh: Promise<void> | null = null;
+  private configInFlight: Promise<void> | null = null;
+  private lastAccessConfig: unknown = null;
   private readonly detailInFlight = new Set<string>();
   private started = false;
 
@@ -133,6 +166,16 @@ export class TasksStore implements OnDestroy {
         }
       });
     });
+    effect(() => {
+      const cfg = this.access.rawConfig();
+      untracked(() => {
+        if (cfg === this.lastAccessConfig) return;
+        this.lastAccessConfig = cfg;
+        if (this.started && cfg !== null && !this.configInFlight) {
+          void this.loadAux();
+        }
+      });
+    });
   }
 
   start(): void {
@@ -142,10 +185,22 @@ export class TasksStore implements OnDestroy {
       this.feed.start(false);
       this.feed.acquireFast();
     }
+    // The shell's rail reads the feed before this page starts, so a cold
+    // failure may already stand -- and a retry failing the same way sets
+    // the same string, which the effect above never sees. Say so now
+    // rather than showing an empty list as if nothing were there.
+    const standing = this.feed.loadError();
+    if (!this.feed.loaded() && standing) {
+      this.loadError.set(
+        `The task list could not be read: ${standing}. This page tries again on its own.`,
+      );
+    }
     if (!wasStarted && this.feed.loaded()) {
       void this.refresh();
     } else if (this.feed.loaded()) {
       void this.ensureSubmitDetails(this.live());
+      void this.loadAux();
+    } else {
       void this.loadAux();
     }
     // TaskFeedStore owns task.* SSE refreshes and the 3s fast poll; here we
@@ -202,9 +257,11 @@ export class TasksStore implements OnDestroy {
     const ok = await this.feed.refresh();
     if (ok) {
       this.loadError.set(null);
-    } else {
+    } else if (this.feed.loadError()) {
+      // Only the feed's banner-worthy failures: one failed poll keeps
+      // the last good list and says nothing (request-trouble.ts).
       this.loadError.set(
-        `The task list could not be read: ${this.feed.loadError() ?? "The request failed."}. This page tries again on its own.`,
+        `The task list could not be read: ${this.feed.loadError()}. This page tries again on its own.`,
       );
     }
     this.ownLoaded.set(true);
@@ -220,11 +277,31 @@ export class TasksStore implements OnDestroy {
     await Promise.all([this.loadBaseBranchGates(), this.loadBoards()]);
   }
 
+  private ensureConfig(): Promise<void> {
+    if (this.access.configLoaded() || typeof this.api.config !== "function") {
+      return Promise.resolve();
+    }
+    return (this.configInFlight ??= Promise.resolve()
+      .then(() => this.api.config())
+      .then((cfg) => {
+        if (cfg && !this.access.configLoaded()) {
+          this.access.setConfig(cfg);
+        }
+        this.lastAccessConfig = this.access.rawConfig();
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.configInFlight = null;
+      }));
+  }
+
   async loadBaseBranchGates(): Promise<void> {
-    if (
-      typeof this.api.get !== "function" ||
-      !this.access.can("GET /api/base-branch-gates")
-    ) {
+    if (typeof this.api.get !== "function") {
+      this.baseBranchGates.set([]);
+      return;
+    }
+    await this.ensureConfig();
+    if (!this.access.can("GET /api/base-branch-gates")) {
       this.baseBranchGates.set([]);
       return;
     }
@@ -241,11 +318,14 @@ export class TasksStore implements OnDestroy {
   }
 
   async loadBoards(): Promise<void> {
-    if (
-      typeof this.api.get !== "function" ||
-      !this.access.can("GET /api/boards")
-    ) {
+    if (typeof this.api.get !== "function") {
       this.boards.set([]);
+      return;
+    }
+    await this.ensureConfig();
+    if (!this.access.can("GET /api/boards")) {
+      this.boards.set([]);
+      this.boardsError.set(null);
       return;
     }
     try {
@@ -254,8 +334,12 @@ export class TasksStore implements OnDestroy {
       >("GET /api/boards");
       const list = Array.isArray(r) ? r : (r?.items ?? r?.boards ?? []);
       this.boards.set(Array.isArray(list) ? list : []);
-    } catch {
-      // Saved boards are optional; leave previous state if read fails.
+      this.boardsError.set(null);
+    } catch (err) {
+      // Keep any boards already held through a transient poll error, and
+      // record why the read failed so an empty menu never claims there are
+      // no saved boards yet.
+      this.boardsError.set(errorText(err));
     }
   }
 
@@ -309,36 +393,44 @@ export class TasksStore implements OnDestroy {
         return next;
       });
     }
-    const ids = tasks
-      .filter(
-        (t) =>
-          isWork(t) &&
-          !this.detailInFlight.has(t.id) &&
-          (t.state === "awaiting_submit" ||
-            t.reason?.reason === "base_repair" ||
-            t.reason?.reason === "awaiting_submit" ||
-            !!t.mergeGates?.some(isListCiPlaceholder)),
-      )
-      .map((t) => t.id)
-      .slice(0, 20);
-    await Promise.all(ids.map((id) => this.readSubmitDetail(id)));
+    const ids = [
+      ...new Set(
+        tasks
+          .filter(
+            (t) =>
+              isWork(t) &&
+              !this.detailInFlight.has(t.id) &&
+              (t.state === "awaiting_submit" ||
+                t.reason?.reason === "base_repair" ||
+                t.reason?.reason === "awaiting_submit" ||
+                !!t.mergeGates?.some(isListCiPlaceholder)),
+          )
+          .map((t) => t.id),
+      ),
+    ];
+    await this.readSubmitDetails(ids);
   }
 
-  private async readSubmitDetail(id: string): Promise<void> {
-    this.detailInFlight.add(id);
+  private async readSubmitDetails(ids: readonly string[]): Promise<void> {
+    if (ids.length === 0) return;
+    for (const id of ids) this.detailInFlight.add(id);
     try {
-      const d = await this.api.getIfChanged<TaskDetail>(
-        "GET /api/tasks/{id}",
-        { id },
-        "comments_limit=1&attempts_limit=1",
+      const { tasks } = await loadTaskSummaryBatches(ids, 1, 1, (query) =>
+        this.api
+          .getIfChanged<TaskSummariesResponse>(
+            "GET /api/tasks/summaries",
+            undefined,
+            query,
+          )
+          .then((r) => r?.body?.tasks),
       );
-      if (d?.body) {
-        this.details.update((m) => ({ ...m, [id]: d.body! }));
+      if (Object.keys(tasks).length > 0) {
+        this.details.update((m) => ({ ...m, ...tasks }));
       }
     } catch {
       // Leave cached/list gates when detail fails.
     } finally {
-      this.detailInFlight.delete(id);
+      for (const id of ids) this.detailInFlight.delete(id);
     }
   }
 
@@ -374,13 +466,13 @@ export class TasksStore implements OnDestroy {
 
   // ---------- actions ----------
 
-  async approve(ids: readonly string[]): Promise<number> {
+  async approve(ids: readonly string[]): Promise<BatchResult> {
     return this.fanOut("approve", ids, (id) =>
       this.api.post("POST /api/tasks/{id}/approve", { id }),
     );
   }
 
-  async defer(ids: readonly string[]): Promise<number> {
+  async defer(ids: readonly string[]): Promise<BatchResult> {
     return this.fanOut("defer", ids, (id) =>
       this.api.post(
         "POST /api/tasks/{id}/defer",
@@ -390,13 +482,13 @@ export class TasksStore implements OnDestroy {
     );
   }
 
-  async undefer(ids: readonly string[]): Promise<number> {
+  async undefer(ids: readonly string[]): Promise<BatchResult> {
     return this.fanOut("undefer", ids, (id) =>
       this.api.post("POST /api/tasks/{id}/undefer", { id }),
     );
   }
 
-  async close(ids: readonly string[]): Promise<number> {
+  async close(ids: readonly string[]): Promise<BatchResult> {
     return this.fanOut("close", ids, (id) =>
       this.api.post(
         "POST /api/tasks/{id}/close",
@@ -406,13 +498,71 @@ export class TasksStore implements OnDestroy {
     );
   }
 
-  async reopen(ids: readonly string[]): Promise<number> {
+  async reopen(ids: readonly string[]): Promise<BatchResult> {
     return this.fanOut("reopen", ids, (id) =>
       this.api.post("POST /api/tasks/{id}/reopen", { id }),
     );
   }
 
-  async retry(ids: readonly string[]): Promise<number> {
+  async submit(ids: readonly string[]): Promise<BatchResult> {
+    return this.fanOut("submit", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/submit", { id }),
+    );
+  }
+
+  // retryMerge puts each pull request the merge queue gave up on back on
+  // it (ui.Client.RetryMerge); one with no pull request refuses.
+  async retryMerge(ids: readonly string[]): Promise<BatchResult> {
+    return this.fanOut("retry-merge", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/retry-merge", { id }),
+    );
+  }
+
+  // runNow starts each task ahead of the queue (ui.Client.RunNow),
+  // approving and bringing back any that need it. While the deployment
+  // is paused under a pause Run now passes, these are what start.
+  async runNow(ids: readonly string[]): Promise<BatchResult> {
+    return this.fanOut("run-now", ids, (id) =>
+      this.api.post("POST /api/tasks/{id}/run-now", { id }),
+    );
+  }
+
+  // setCapability attaches or detaches one capability on each task; the
+  // server no-ops a detach of one the task does not hold.
+  async setCapability(
+    ids: readonly string[],
+    capability: string,
+    attach: boolean,
+  ): Promise<BatchResult> {
+    return this.fanOut("capability", ids, (id) =>
+      this.api.post(
+        "POST /api/tasks/{id}/capabilities",
+        { id },
+        { id: capability, attach },
+      ),
+    );
+  }
+
+  // bulkEdit sends one PATCH body to every task. A running task refuses
+  // a change of base (ui.Client.UpdateTask) and is counted.
+  async bulkEdit(
+    ids: readonly string[],
+    patch: Record<string, unknown>,
+  ): Promise<BatchResult> {
+    return this.fanOut("edit", ids, (id) =>
+      this.api.patch("PATCH /api/tasks/{id}", { id }, patch),
+    );
+  }
+
+  // stopBatch lets the calls already sent finish and sends no more, for
+  // every bulk action in flight.
+  stopBatch(): void {
+    if (!this.running.size) return;
+    for (const token of this.running) token.stop = true;
+    this.batch.update((b) => (b ? { ...b, stopping: true } : b));
+  }
+
+  async retry(ids: readonly string[]): Promise<BatchResult> {
     return this.fanOut("retry", ids, (id) =>
       this.api.post("POST /api/tasks/{id}/retry", { id }),
     );
@@ -423,21 +573,29 @@ export class TasksStore implements OnDestroy {
   async setPriority(
     ids: readonly string[],
     priority: number,
-  ): Promise<{ failed: number; undo: Undo }> {
+  ): Promise<BatchResult & { undo: Undo }> {
     const before = new Map(
       ids.map((id) => [id, priorityOf(this.find(id) ?? ({} as Task))]),
     );
-    const failed = await this.fanOut("priority", ids, (id) =>
-      this.api.patch("PATCH /api/tasks/{id}", { id }, { priority }),
+    const { failed, landed, skipped } = await this.fanOut(
+      "priority",
+      ids,
+      (id) => this.api.patch("PATCH /api/tasks/{id}", { id }, { priority }),
     );
     return {
       failed,
+      landed,
+      skipped,
       undo: {
         label: "Undo",
         run: async () => {
           await Promise.all(
-            [...before].map(([id, p]) =>
-              this.api.patch("PATCH /api/tasks/{id}", { id }, { priority: p }),
+            landed.map((id) =>
+              this.api.patch(
+                "PATCH /api/tasks/{id}",
+                { id },
+                { priority: before.get(id) },
+              ),
             ),
           );
           await this.refresh();
@@ -582,31 +740,78 @@ export class TasksStore implements OnDestroy {
     );
   }
 
-  // fanOut makes one call per task (there are no batch endpoints), reads
-  // the list once, and returns how many did not go through.
+  // fanOut makes one call per task (there are no batch endpoints), a
+  // few at a time so a long batch can be stopped part-way, reads the list
+  // once, and returns how many did not go through and which ones did or
+  // were never sent. The ids and the stop token belong to this call
+  // alone, so two batches in flight at once never report each other's
+  // tasks.
   private async fanOut(
     key: string,
     ids: readonly string[],
     call: (id: string) => Promise<unknown>,
-  ): Promise<number> {
+  ): Promise<BatchResult> {
     this.mark(key, true);
     this.actionError.set(null);
-    const results = await Promise.allSettled(ids.map(call));
-    const failures = results.filter(
-      (r): r is PromiseRejectedResult => r.status === "rejected",
+    const token = { stop: false };
+    this.running.add(token);
+    const many = ids.length > 1;
+    const progress: BatchProgress = {
+      seq: ++this.batchSeq,
+      key,
+      done: 0,
+      total: ids.length,
+      stopping: false,
+    };
+    if (many) this.batch.set(progress);
+    const settled = new Map<string, boolean>();
+    const errors: unknown[] = [];
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < ids.length && !token.stop) {
+        const id = ids[next++];
+        // The handler goes on in the same chain as the call, so a refusal
+        // is never a rejection nobody is listening to yet.
+        await Promise.resolve()
+          .then(() => call(id))
+          .then(
+            () => void settled.set(id, true),
+            (err: unknown) => {
+              settled.set(id, false);
+              errors.push(err);
+            },
+          );
+        progress.done++;
+        if (many)
+          this.batch.update((b) =>
+            b?.seq === progress.seq ? { ...b, done: progress.done } : b,
+          );
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(BATCH_CONCURRENCY, ids.length) }, worker),
     );
-    if (failures.length) {
-      this.actionError.set(
-        ids.length === 1
-          ? errorText(failures[0].reason)
-          : `${failures.length} of ${ids.length} did not go through: ${errorText(failures[0].reason)}`,
+    this.running.delete(token);
+    if (many) this.batch.update((b) => (b?.seq === progress.seq ? null : b));
+    const landed = ids.filter((id) => settled.get(id) === true);
+    const skipped = ids.slice(next);
+    const parts: string[] = [];
+    if (skipped.length)
+      parts.push(
+        `Stopped after ${settled.size} of ${ids.length}; ${skipped.length} left unchanged`,
       );
-    }
+    if (errors.length)
+      parts.push(
+        ids.length === 1
+          ? errorText(errors[0])
+          : `${errors.length} of ${ids.length} ${ids.length === 1 ? "task" : "tasks"} failed: ${errorText(errors[0])}`,
+      );
+    if (parts.length) this.actionError.set(parts.join(". "));
     await this.refresh();
     void this.inbox.refresh();
     if (key === "close" || key === "reopen") void this.loadClosed();
     this.mark(key, false);
-    return failures.length;
+    return { failed: errors.length, landed, skipped };
   }
 
   private async run(key: string, fn: () => Promise<unknown>): Promise<boolean> {
