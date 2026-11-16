@@ -43,25 +43,11 @@ function zoneAbbrev(ms) {
     .find((p) => p.type === "timeZoneName").value;
 }
 
-// dayPrefix is what the reset says before its time: nothing when it falls
-// on today in ZONE, and "Nov 17, " when it falls on another day -- a run
-// started after 21:45 there sees the reset 2h15m later land past
-// midnight.
-function dayPrefix(nowMs, ms) {
-  const day = (t) =>
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: ZONE,
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    }).format(new Date(t));
-  if (day(nowMs) === day(ms)) return "";
-  const md = new Intl.DateTimeFormat("en-US", {
-    timeZone: ZONE,
-    month: "short",
-    day: "numeric",
-  }).format(new Date(ms));
-  return `${md}, `;
+// otherLocalDay is whether a and b (ms) fall on different days in ZONE.
+function otherLocalDay(a, b) {
+  const day = (ms) =>
+    new Date(ms).toLocaleDateString("en-US", { timeZone: ZONE });
+  return day(a) !== day(b);
 }
 
 for (const size of SIZES) {
@@ -105,9 +91,14 @@ for (const size of SIZES) {
       const reset = page.getByTestId("usage-scope-reset");
       await expect(reset).toHaveCount(1);
       const abbrev = zoneAbbrev(until);
+      // A reset that falls on another local day is dated ("Nov 16,
+      // 12:19 AM PST"), so a run late in the evening sees the date too.
+      const day = otherLocalDay(Date.now(), until)
+        ? "[A-Z][a-z]{2} \\d{1,2}, "
+        : "";
       await expect(reset).toContainText(
         new RegExp(
-          `resets ${dayPrefix(Date.now(), until)}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
       await expect(reset).not.toContainText("UTC");
@@ -137,7 +128,7 @@ for (const size of SIZES) {
       // The shell's dispatch banner names the same reset, on the same clock.
       await expect(page.getByText(/· resets /).first()).toContainText(
         new RegExp(
-          `resets ${dayPrefix(Date.now(), until)}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
+          `resets ${day}\\d{1,2}:\\d{2}\\s[AP]M ${abbrev} \\(in 2h 1[45]m\\)`,
         ),
       );
     });

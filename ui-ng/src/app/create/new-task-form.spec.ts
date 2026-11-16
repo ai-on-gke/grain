@@ -389,4 +389,50 @@ describe("new task form", () => {
     expect(childPayload).toMatchObject({ origin: "task:12" });
     expect(childPayload).not.toHaveProperty("autoApproveProposals");
   });
+
+  it("omits goalMode on supervised drafts and emits normalized goalMode on autonomous goal drafts", () => {
+    const supervised = emptyDraft(config, tasks);
+    expect(supervised.goalMode).toBeNull();
+    expect(buildPayload(supervised, config)).not.toHaveProperty("goalMode");
+
+    const disabledGoal = emptyDraft(config, tasks, {
+      goalMode: { enabled: false },
+    });
+    expect(buildPayload(disabledGoal, config)).not.toHaveProperty("goalMode");
+
+    const goalDefault = emptyDraft(config, tasks, {
+      goalMode: { enabled: true },
+    });
+    expect(buildPayload(goalDefault, config)).toMatchObject({
+      goalMode: {
+        enabled: true,
+        maxPasses: 8,
+        wallClockMinutes: 120,
+      },
+    });
+    expect(
+      (
+        buildPayload(goalDefault, config)["goalMode"] as Record<string, unknown>
+      )["mockMissingSecrets"],
+    ).toBeUndefined();
+
+    const goalCustom = emptyDraft(config, tasks, {
+      goalMode: {
+        enabled: true,
+        maxPasses: 12,
+        wallClockMinutes: 240,
+        mockMissingSecrets: true,
+      },
+      autoApproveProposals: true,
+    });
+    expect(buildPayload(goalCustom, config)).toMatchObject({
+      goalMode: {
+        enabled: true,
+        maxPasses: 12,
+        wallClockMinutes: 240,
+        mockMissingSecrets: true,
+      },
+      autoApproveProposals: true,
+    });
+  });
 });

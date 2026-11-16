@@ -231,6 +231,21 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	if err := relayProposedTasks(withRelayingRunID(ctx, runID), store, reach, client, task, result, now); err != nil {
 		return err
 	}
+	if _, ok := model.GoalModeOf(task); ok {
+		if assumptions := extractPassAssumptions(result, 1, now); len(assumptions) > 0 {
+			for _, a := range assumptions {
+				_ = model.AppendGoalAssumption(&task, a)
+			}
+			if store != nil && task.ID != "" {
+				_ = store.UpdateTask(ctx, task.ID, func(t *model.Task) error {
+					for _, a := range assumptions {
+						_ = model.AppendGoalAssumption(t, a)
+					}
+					return nil
+				})
+			}
+		}
+	}
 
 	// Relayed up front, before either ending that used to return past it.
 	// What a comment_on_issue call means for the task's *state* depends on
@@ -242,9 +257,11 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// each call (mcp.AttachmentFiles) -- the calls' own arguments name
 	// the path and carry no bytes.
 	staged := stagedAttachments(ctx, store, runID)
+	goalSection := goalMarkdownSection(ctx, store, task)
 
 	comment, hasComment := effectiveCommentOnIssue(result)
 	if hasComment {
+		comment = appendGoalMarkdownToComment(comment, goalSection)
 		attachments, dropped := mcp.ResponseAttachmentsTolerant(firstToolCallArgs(result, "comment_on_issue"), staged)
 		// The note's own one line, when the run gave one: what the inbox
 		// and the task row show of a task resting on it (ui.Task.NoteSummary).
@@ -498,7 +515,7 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 			}
 			if goal != nil {
 				if finalText {
-					posted := strings.TrimSpace(result.FinalText)
+					posted := appendGoalMarkdownToComment(strings.TrimSpace(result.FinalText), goalSection)
 					if _, err := relayCommentWithAttachments(ctx, store, task, posted, nil, now); err != nil {
 						return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 					}
@@ -556,8 +573,8 @@ func processResultFrom(ctx context.Context, store *model.Store, reach *gitproxy.
 	// When comment_on_issue was absent, but the run completed an investigation /
 	// non-code task with a final assistant response (and did not push a branch or
 	// ask a question), use the final assistant text as the closing note.
-	if !relayedInProcess && !hasComment && !hasNothingNeeded && result != nil && strings.TrimSpace(result.FinalText) != "" {
-		comment := strings.TrimSpace(result.FinalText)
+	if !relayedInProcess && !hasComment && !hasNothingNeeded && result != nil && (strings.TrimSpace(result.FinalText) != "" || goalSection != "") {
+		comment := appendGoalMarkdownToComment(strings.TrimSpace(result.FinalText), goalSection)
 		if _, err := relayCommentWithAttachments(ctx, store, task, comment, nil, now); err != nil {
 			return fmt.Errorf("orchestrator: posting closing comment for %s: %w", task.ID, err)
 		}
@@ -1167,6 +1184,13 @@ func relayParkingCalls(ctx context.Context, store *model.Store, task model.Task,
 	question, _ := firstToolCallArg(result, "ask_question", "question")
 	_, proposed := firstToolCallArg(result, "propose_config_change", "summary")
 	access := accessRequestOf(result, now)
+	if gm, ok := model.GoalModeOf(task); ok && gm.Enabled {
+		question = ""
+		access = nil
+		if gm.MockMissingSecrets {
+			secret = ""
+		}
+	}
 	if secret == "" && question == "" && !proposed && access == nil {
 		return false, nil
 	}
@@ -2324,6 +2348,9 @@ func relayProposedTasks(ctx context.Context, store *model.Store, reach *gitproxy
 		}
 		model.SetFoundIn(&proposal, foundIn)
 		model.ApplyDerivedFoundIn(&proposal)
+		if gm, ok := model.GoalModeOf(task); ok && gm.Enabled {
+			_ = model.SetGoalMode(&proposal, &gm)
+		}
 		// The proposing task's root requester's work, as ui.CreateTask
 		// records the identical call filed live.
 		model.InheritRequester(&proposal, task)
@@ -4019,6 +4046,7 @@ func ensurePullRequest(ctx context.Context, store *model.Store, client github.Cl
 		title = "grain: " + task.ID
 	}
 	body := withLineage(pullRequestBody(describeCommits(commits), task.ID, task.Issue), taskLineage(ctx, store, task))
+	body = withGoalSummary(body, goalMarkdownSection(ctx, store, task))
 	if landed.partial() {
 		body = landed.partialSentence() + "\n\n" + body
 	}

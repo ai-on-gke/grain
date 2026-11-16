@@ -78,11 +78,7 @@ func TestReconcileDispatchesWhileAnEarlierRunIsStillLive(t *testing.T) {
 	runLive(t, seed, "git", "commit", "-q", "--allow-empty", "-m", "seed")
 	runLive(t, seed, "git", "push", "-q", "origin", "main")
 
-	store, db, err := daemon.OpenStore("sqlite", "", t.TempDir())
-	if err != nil {
-		t.Fatalf("opening the store: %v", err)
-	}
-	defer db.Close()
+	store := testStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -193,11 +189,7 @@ func TestDrainInFlightWaitsForACancelledRunToReleaseItsSandbox(t *testing.T) {
 	runLive(t, seed, "git", "commit", "-q", "--allow-empty", "-m", "seed")
 	runLive(t, seed, "git", "push", "-q", "origin", "main")
 
-	store, db, err := daemon.OpenStore("sqlite", "", t.TempDir())
-	if err != nil {
-		t.Fatalf("opening the store: %v", err)
-	}
-	defer db.Close()
+	store := testStore(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

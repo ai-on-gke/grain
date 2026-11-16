@@ -5386,19 +5386,27 @@ func liveRunCounts(ctx context.Context, q querier) (RunCounts, error) {
 // AgentStartedAt is read as well, because it is where a run's own clock
 // started (orchestrator.RunDispatch): a daemon adopting the run carries
 // its deadline from there rather than from StartedAt, which would charge
-// the run its setup a second time (orchestrator.ResumeAdoptedRun).
+// the run its setup a second time (orchestrator.ResumeAdoptedRun). So
+// are Model and AgentFramework (Store.SetRunModel): the adopting daemon
+// reads the run's stream with the framework the run is on, and a task
+// that names none would otherwise get whatever its default model list
+// rotates to -- a claude parser reading an antigravity stream, which
+// finds no result event and loses the run and its transcript.
 func (s *Store) LiveRuns(ctx context.Context) ([]Run, error) {
 	var out []Run
 	err := each(ctx, s.db,
-		"SELECT `id`,`task_id`,`sandbox`,`attempt`,`started_at`,`agent_started_at` "+
+		"SELECT `id`,`task_id`,`sandbox`,`attempt`,`started_at`,`agent_started_at`,`model`,`agent_framework` "+
 			"FROM `task_run` WHERE `finished_at` IS NULL ORDER BY `id`", nil,
 		func(rows *sql.Rows) error {
 			var r Run
 			var agentStarted sql.NullTime
-			if err := rows.Scan(&r.ID, &r.TaskID, &r.Sandbox, &r.Attempt, &r.StartedAt, &agentStarted); err != nil {
+			var runModel, runFramework sql.NullString
+			if err := rows.Scan(&r.ID, &r.TaskID, &r.Sandbox, &r.Attempt, &r.StartedAt, &agentStarted,
+				&runModel, &runFramework); err != nil {
 				return err
 			}
 			r.AgentStartedAt = timePtr(agentStarted)
+			r.Model, r.AgentFramework = runModel.String, runFramework.String
 			out = append(out, r)
 			return nil
 		})
