@@ -30,7 +30,6 @@ import (
 
 	"github.com/ai-on-gke/grain/pkg/daemon"
 	"github.com/ai-on-gke/grain/pkg/dispatch"
-	"github.com/ai-on-gke/grain/pkg/model/sqlite"
 
 	"github.com/ai-on-gke/grain/pkg/ci"
 	"github.com/ai-on-gke/grain/pkg/model"
@@ -437,18 +436,8 @@ func TestSharedSandboxBudgetContentionHoldsCIJobsAndAdmitsStuckWaitForChecksJob(
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	db, err := sqlite.Open(sqlite.DefaultConfig(t.TempDir()))
-	if err != nil {
-		t.Fatalf("sqlite.Open: %v", err)
-	}
-	t.Cleanup(func() {
-		cancel()
-		db.Close()
-	})
-	store := model.New(db)
-	if err := store.Init(ctx); err != nil {
-		t.Fatalf("store.Init: %v", err)
-	}
+	t.Cleanup(cancel)
+	store := testStore(t)
 
 	ledger := &model.Ledger{}
 	cfg := daemon.Config{
